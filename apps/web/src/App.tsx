@@ -9414,6 +9414,7 @@ export function App() {
     scope: AccountDeletionScope,
     confirmation: string
   ) {
+    const departingSession = sessionRef.current;
     setSettingsBusy(true);
     setSettingsMessage(
       scope === 'projects'
@@ -9436,15 +9437,28 @@ export function App() {
       }
       await cloudSettingsAutosaveRef.current?.flushPending();
 
-      const deleted = await api.deleteAccountData(scope, confirmation);
+      if (sessionRef.current !== departingSession)
+        throw new Error('The signed-in account changed. Try deleting again.');
+      const erase = () => api.deleteAccountData(scope, confirmation);
+      const deleted =
+        scope === 'projects'
+          ? await erase()
+          : await (
+              await import('./lib/e2ee/accountErasure')
+            ).eraseAccountWithKeyCleanup({
+              userId: departingSession?.userId ?? null,
+              isCurrentSession: () => sessionRef.current === departingSession,
+              erase,
+              onSignedOut: () => {
+                endCloudSettingsSession();
+                projectController?.closeProject();
+              }
+            });
       if (deleted.signedOut) {
-        projectController?.closeProject();
+        if (sessionRef.current !== null) return;
         const listed = await loadProjectSummaries(false);
+        if (sessionRef.current !== null) return;
         remoteVersionsRef.current.clear();
-        // The successful response invalidated the browser cookie (and the
-        // desktop proxy drops its Keychain credential). Mirror that immediately
-        // in React so no signed-in UI or account state survives the deletion.
-        endCloudSettingsSession();
         setCloudAvailable(false);
         setProjects(listed.projects);
         setCloudProjectIds(new Set());

@@ -44,6 +44,8 @@ export interface DeviceKeyStore {
   /** Keep the existing private keys when setup races or a response is lost. */
   getOrCreateDevice(candidate: StoredDevice): Promise<StoredDevice>;
   deleteDevice(userId: string): Promise<void>;
+  /** Clear only the canceled request, preserving a newer request or device. */
+  clearApprovalIfCurrent(userId: string, approvalId: string): Promise<void>;
   /** The newest device-list entry this browser accepted for the account. */
   loadPin(userId: string): Promise<DeviceListPin | null>;
   /** Atomically accept only a verified descendant of the currently stored pin. */
@@ -52,6 +54,59 @@ export interface DeviceKeyStore {
     list: VerifiedDeviceList,
     options?: PinUpdateOptions
   ): Promise<void>;
+  /** Retire only the identity captured before a confirmed account erasure. */
+  forgetErasedIdentity(
+    userId: string,
+    expected: DeviceListPin | null
+  ): Promise<void>;
+}
+
+interface StoredPin {
+  pin: DeviceListPin | null;
+  /** Prevent an in-flight old response from restoring deliberately erased trust. */
+  erasedIdentities: Uint8Array[];
+}
+
+function storedPin(value?: StoredPin | DeviceListPin): StoredPin {
+  return value && 'pin' in value
+    ? value
+    : { pin: value ?? null, erasedIdentities: [] };
+}
+
+function retireIdentity(
+  current: StoredPin,
+  expected: DeviceListPin | null
+): StoredPin {
+  if (!expected) return current;
+  const erasedIdentities = current.erasedIdentities.map(
+    (hash) => new Uint8Array(hash)
+  );
+  if (
+    !erasedIdentities.some((hash) => sameBytes(hash, expected.identityKeyHash))
+  )
+    erasedIdentities.push(new Uint8Array(expected.identityKeyHash));
+  return {
+    pin:
+      current.pin &&
+      sameBytes(current.pin.identityKeyHash, expected.identityKeyHash)
+        ? null
+        : current.pin,
+    erasedIdentities
+  };
+}
+
+function acceptPin(
+  current: StoredPin,
+  next: ReturnType<typeof pinUpdate>
+): StoredPin {
+  if (
+    current.erasedIdentities.some((hash) =>
+      sameBytes(hash, next.pin.identityKeyHash)
+    )
+  )
+    throw new DeviceListPinConflict('identity');
+  checkPinUpdate(current.pin, next);
+  return { pin: next.pin, erasedIdentities: current.erasedIdentities };
 }
 
 export interface PinUpdateOptions {
@@ -130,7 +185,7 @@ function checkPinUpdate(
 
 export function memoryDeviceStore(): DeviceKeyStore {
   const devices = new Map<string, StoredDevice>();
-  const pins = new Map<string, DeviceListPin>();
+  const pins = new Map<string, StoredPin>();
   return {
     loadDevice: async (userId) => devices.get(userId) ?? null,
     saveDevice: async (device) => {
@@ -145,14 +200,21 @@ export function memoryDeviceStore(): DeviceKeyStore {
     deleteDevice: async (userId) => {
       devices.delete(userId);
     },
+    clearApprovalIfCurrent: async (userId, approvalId) => {
+      const device = devices.get(userId);
+      if (device?.approval?.id === approvalId)
+        devices.set(userId, { ...device, approval: null });
+    },
     loadPin: async (userId) => {
-      const pin = pins.get(userId);
+      const pin = pins.get(userId)?.pin;
       return pin ? copyPin(pin) : null;
     },
     savePin: async (userId, list, options = {}) => {
       const next = pinUpdate(userId, list, options);
-      checkPinUpdate(pins.get(userId) ?? null, next);
-      pins.set(userId, next.pin);
+      pins.set(userId, acceptPin(storedPin(pins.get(userId)), next));
+    },
+    forgetErasedIdentity: async (userId, expected) => {
+      pins.set(userId, retireIdentity(storedPin(pins.get(userId)), expected));
     }
   };
 }
@@ -245,9 +307,41 @@ export function indexedDbDeviceStore(): DeviceKeyStore {
     deleteDevice: async (userId) => {
       await inStore(DEVICES, 'readwrite', (s) => s.delete(userId));
     },
-    loadPin: async (userId) =>
-      ((await inStore(PINS, 'readonly', (s) => s.get(userId))) as
-        DeviceListPin | undefined) ?? null,
+    clearApprovalIfCurrent: async (userId, approvalId) => {
+      const db = await openDatabase();
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(DEVICES, 'readwrite');
+        const objects = tx.objectStore(DEVICES);
+        tx.oncomplete = () => resolve();
+        tx.onabort = tx.onerror = () =>
+          reject(tx.error ?? new Error('IndexedDB approval update failed'));
+        const read = objects.get(userId);
+        read.onsuccess = () => {
+          const device = read.result as StoredDevice | undefined;
+          if (device?.approval?.id === approvalId)
+            objects.put({ ...device, approval: null });
+        };
+      });
+    },
+    loadPin: async (userId) => {
+      const value = await inStore(PINS, 'readonly', (s) => s.get(userId));
+      const pin = storedPin(value as StoredPin | DeviceListPin | undefined).pin;
+      return pin ? copyPin(pin) : null;
+    },
+    forgetErasedIdentity: async (userId, expected) => {
+      const snapshot = expected ? copyPin(expected) : null;
+      const db = await openDatabase();
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(PINS, 'readwrite');
+        const objects = tx.objectStore(PINS);
+        tx.oncomplete = () => resolve();
+        tx.onabort = tx.onerror = () =>
+          reject(tx.error ?? new Error('IndexedDB pin erasure failed'));
+        const read = objects.get(userId);
+        read.onsuccess = () =>
+          objects.put(retireIdentity(storedPin(read.result), snapshot), userId);
+      });
+    },
     savePin: async (userId, list, options = {}) => {
       const next = pinUpdate(userId, list, options);
       const db = await openDatabase();
@@ -268,11 +362,7 @@ export function indexedDbDeviceStore(): DeviceKeyStore {
             // IndexedDB serializes readwrite transactions across connections
             // and tabs. Check the actual pin and write in this one transaction;
             // crypto verification has already finished outside it.
-            checkPinUpdate(
-              (read.result as DeviceListPin | undefined) ?? null,
-              next
-            );
-            objects.put(next.pin, userId);
+            objects.put(acceptPin(storedPin(read.result), next), userId);
           } catch (error) {
             conflict =
               error instanceof Error

@@ -27,6 +27,7 @@ import {
   advanceApprovalAsNewDevice,
   approveDevice,
   confirmApprovalCode,
+  cancelApprovalRequest,
   approverComparisonCode,
   beginCompareApproval,
   deviceScanCode,
@@ -53,6 +54,7 @@ import {
 } from '../apps/web/src/lib/e2ee/deviceStore';
 import type { E2eeSetupRequest } from '@openzcad/shared';
 import { d1Database, migratedDatabase } from './d1-sqlite';
+import { eraseAccountWithKeyCleanup } from '../apps/web/src/lib/e2ee/accountErasure';
 
 const USER = 'user_alice';
 
@@ -779,6 +781,43 @@ describe('replacing the recovery key', () => {
 });
 
 describe('device approval', () => {
+  it.each(['cancel failure', 'read failure', 'still live'] as const)(
+    'approval cancellation preserves its retry ID and keys after %s',
+    async (fault) => {
+      const srv = server();
+      await setUp(srv);
+      const phone = device(srv);
+      const requested = await requestApproval(phone, null, 'Phone');
+      if (requested.step !== 'waiting') throw new Error('Expected request');
+      const before = await phone.store.loadDevice(USER);
+      const retry = {
+        ...phone,
+        api: {
+          ...phone.api,
+          cancelApproval: async () => {
+            if (fault === 'cancel failure')
+              throw new Error('Network unavailable');
+            return { ok: true as const };
+          },
+          getApproval: async (id: string) => {
+            if (fault === 'read failure')
+              throw new E2eeApiError(401, 'Session expired');
+            return phone.api.getApproval(id);
+          }
+        }
+      };
+      await expect(cancelApprovalRequest(retry)).rejects.toThrow();
+      expect(await phone.store.loadDevice(USER)).toEqual(before);
+      expect((await phone.api.getApproval(requested.approval.id)).state).toBe(
+        requested.approval.state
+      );
+      await cancelApprovalRequest(phone);
+      expect((await phone.store.loadDevice(USER))?.approval).toBeNull();
+      await expect(
+        phone.api.getApproval(requested.approval.id)
+      ).rejects.toHaveProperty('status', 404);
+    }
+  );
   it.each([
     'retained',
     'legacy pruned',
@@ -1832,6 +1871,145 @@ describe('session teardown', () => {
 });
 
 describe('profile deletion', () => {
+  it('does not tear down a replacement session after an older erasure response', async () => {
+    const srv = server();
+    const { laptop } = await setUp(srv);
+    let current = true;
+    let ended = false;
+    await eraseAccountWithKeyCleanup({
+      userId: USER,
+      store: laptop.store,
+      isCurrentSession: () => current,
+      erase: async () => {
+        current = false;
+        return { signedOut: true };
+      },
+      onSignedOut: () => {
+        ended = true;
+      }
+    });
+    expect(ended).toBe(false);
+    expect(unlockedEncryptionKey(USER)).toBeNull();
+    expect(await laptop.store.loadPin(USER)).toBeNull();
+  });
+
+  it.each(['profile', 'all'] as const)(
+    'allows fresh encryption setup after confirmed %s erasure',
+    async (scope) => {
+      const srv = server();
+      const { laptop } = await setUp(srv);
+      const oldPin = await laptop.store.loadPin(USER);
+      expect(oldPin).not.toBeNull();
+      expect(unlockedEncryptionKey(USER)).not.toBeNull();
+      const { deleteAccountData } =
+        await import('../apps/web/worker/accountDeletion');
+      let signedOut = false;
+      await eraseAccountWithKeyCleanup({
+        userId: USER,
+        store: laptop.store,
+        isCurrentSession: () => true,
+        erase: () =>
+          deleteAccountData(
+            {
+              userId: USER as never,
+              displayName: 'Alice',
+              mode: 'development'
+            },
+            {
+              scope,
+              confirmation:
+                scope === 'profile'
+                  ? 'DELETE CLOUD PROFILE'
+                  : 'DELETE ALL CLOUD DATA'
+            },
+            {
+              DB: d1Database(srv.db),
+              PROJECT_STORAGE: {
+                put: async () => {},
+                get: async () => null,
+                delete: async () => {}
+              } as never,
+              PROJECT_ROOM: {} as never
+            },
+            { deleteOwnedProjects: async () => [] } as never
+          ),
+        onSignedOut: () => {
+          expect(unlockedEncryptionKey(USER)).toBeNull();
+          signedOut = true;
+        }
+      });
+      expect(signedOut).toBe(true);
+      expect(await laptop.store.loadPin(USER)).toBeNull();
+      expect(await loadEncryption(laptop)).toMatchObject({
+        kind: 'not-set-up'
+      });
+      const recovery = await generateRecoveryKey();
+      expect(
+        ready(
+          await setUpEncryption(laptop, {
+            recoverySecret: recovery.secret,
+            label: 'Same browser'
+          })
+        ).unlocked
+      ).toBe(true);
+      expect(await laptop.store.loadPin(USER)).not.toEqual(oldPin);
+    }
+  );
+
+  it('locks the raw key and ends the session before fallible local erasure cleanup', async () => {
+    const srv = server();
+    const { laptop } = await setUp(srv);
+    let ended = false;
+    await expect(
+      eraseAccountWithKeyCleanup({
+        userId: USER,
+        store: {
+          ...laptop.store,
+          forgetErasedIdentity: async () => {
+            expect(ended).toBe(true);
+            expect(unlockedEncryptionKey(USER)).toBeNull();
+            throw new Error('IndexedDB unavailable');
+          }
+        },
+        isCurrentSession: () => true,
+        erase: async () => ({ signedOut: true }),
+        onSignedOut: () => {
+          ended = true;
+        }
+      })
+    ).rejects.toThrow('IndexedDB unavailable');
+    expect(unlockedEncryptionKey(USER)).toBeNull();
+  });
+
+  it('retains trusted state after a failed erasure and refuses a replacement session before the request', async () => {
+    const srv = server();
+    const { laptop } = await setUp(srv);
+    const before = await laptop.store.loadPin(USER);
+    let current = true,
+      requests = 0;
+    const input = {
+      userId: USER,
+      store: laptop.store,
+      isCurrentSession: () => current,
+      erase: async () => {
+        requests++;
+        throw new Error('Server unavailable');
+      },
+      onSignedOut: () => {
+        throw new Error('Unexpected teardown');
+      }
+    };
+    await expect(eraseAccountWithKeyCleanup(input)).rejects.toThrow(
+      'Server unavailable'
+    );
+    expect(await laptop.store.loadPin(USER)).toEqual(before);
+    expect(unlockedEncryptionKey(USER)).not.toBeNull();
+    current = false;
+    await expect(eraseAccountWithKeyCleanup(input)).rejects.toThrow(
+      'account changed'
+    );
+    expect(requests).toBe(1);
+  });
   it('still deletes a profile before the E2EE schema exists', async () => {
     const srv = server();
     srv.db.exec(

@@ -53,6 +53,7 @@ import type {
   E2eeWrapRecord
 } from '@openzcad/shared';
 import type { E2eeApi } from './e2eeApi';
+import { confirmApprovalCancellation } from './approvalCancellation';
 import {
   DeviceListPinConflict,
   type DeviceKeyStore,
@@ -1451,8 +1452,8 @@ async function finishApproval(
 export async function cancelApprovalRequest(ctx: E2eeContext): Promise<void> {
   const device = await ctx.store.loadDevice(ctx.userId);
   if (!device?.approval) return;
-  await ctx.api.cancelApproval(device.approval.id).catch(() => undefined);
-  await ctx.store.saveDevice({ ...device, approval: null });
+  await confirmApprovalCancellation(ctx.api, device.approval.id);
+  await ctx.store.clearApprovalIfCurrent(ctx.userId, device.approval.id);
 }
 
 // --- Device approval: the approving device --------------------------------

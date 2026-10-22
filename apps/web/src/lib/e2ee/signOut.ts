@@ -1,6 +1,7 @@
 import { lockAccount } from './unlockedKeys';
 import { indexedDbDeviceStore } from './deviceStore';
-import { createE2eeApi, E2eeApiError } from './e2eeApi';
+import { createE2eeApi } from './e2eeApi';
+import { confirmApprovalCancellation } from './approvalCancellation';
 
 export interface DeviceKeySignOutChoice {
   readonly userId: string;
@@ -27,24 +28,11 @@ export async function endKeySession(
     if (device?.approval) {
       // Keep the request ID and keys if cancellation cannot finish; the user
       // can retry without leaving an approvable request for discarded keys.
-      const api = createE2eeApi();
-      await api.cancelApproval(device.approval.id);
-      requireCurrentSession();
-      // Cancellation is idempotent, including when a revoked authorization
-      // cannot change the row. Confirm that the request is now unavailable
-      // before discarding the only local copy of its keys and request ID.
-      let cancelled = false;
-      try {
-        await api.getApproval(device.approval.id);
-      } catch (error) {
-        if (!(error instanceof E2eeApiError) || error.status !== 404)
-          throw error;
-        cancelled = true;
-      }
-      requireCurrentSession();
-      if (!cancelled) {
-        throw new Error('Device approval could not be canceled. Try again.');
-      }
+      await confirmApprovalCancellation(
+        createE2eeApi(),
+        device.approval.id,
+        requireCurrentSession
+      );
     }
     await store.deleteDevice(userId);
   }
