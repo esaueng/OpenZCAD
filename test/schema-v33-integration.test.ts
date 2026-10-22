@@ -108,7 +108,7 @@ describe('serial v31/v32/v33 to v34 integration', () => {
         })
       );
       const withFolder = saved(filing.document);
-      expect(withFolder.schemaVersion).toBe(34);
+      expect(withFolder.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
       expect(withFolder.objectFolders?.folders[0]?.name).toBe('References');
       expect(withFolder.nodes).toEqual(withProjection.nodes);
       expect(withFolder.drawings).toEqual(withProjection.drawings);
