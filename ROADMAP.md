@@ -119,10 +119,9 @@ delivered; qualify the vertex-source recovery slice (#802) before adding the
 remaining reference constructors. [U05](#u05)
 keyboard/command coherence and the [F05](#f05) expression-field regression audit
 can run independently; use their current row evidence to select a remainder. [S01](#s01) saved driving-label placement is complete. Current
-open implementations already own S03 clickable glyphs (#779), U05/U06 search and
-folders (#780), U07 viewport conventions (#751), I01 projection (#781), I05
-reference images (#782) and D01/D02 drawing slices (#777/#778); refresh their
-heads and ownership before assigning overlapping work. U01/U02 and L01 can
+open implementations already own U05/U06 search and folders (#780), I01
+projection (#781) and I05 reference images (#782); refresh their heads and
+ownership before assigning overlapping work. U01/U02 and L01 can
 proceed when ownership permits. Live acceptance needing credentials/source data
 stays pending without blocking independent foundation work. This sequence
 replaces the conflicting next lists in older plans.
