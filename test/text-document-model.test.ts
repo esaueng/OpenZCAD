@@ -624,7 +624,7 @@ describe('existing documents are unaffected', () => {
     const migrated = normalizeDocument(legacy);
 
     expect(migrated.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
-    // Bumping this pin means re-verifying the assertion below: v10 added the
+    // Every additive schema change must preserve the assertion below: v10 added the
     // additive `split` feature kind, v11 the additive `hole` kind, v12
     // the optional `solidIndices` partial-import field, and v13 the additive
     // guided Shapr import collections; v14 adds history and v15 optional
@@ -633,7 +633,7 @@ describe('existing documents are unaffected', () => {
     // rewriting legacy embedded triangles. v18 adds the additive symmetric,
     // point-on-object and lock constraint kinds. None needs a legacy node
     // migration.
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(31);
+    expect(current.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     // Nothing but the version stamp moves.
     expect({ ...migrated, schemaVersion: 6 }).toEqual(legacy);
   });

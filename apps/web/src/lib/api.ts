@@ -48,6 +48,7 @@ import {
   withoutDerivedProjection
 } from '@openzcad/document-core';
 import { createId, toProjectId } from '@openzcad/shared';
+import { splitProjectStorageUpload } from '@openzcad/persistence';
 import { desktopFetch, isDesktopApp } from './desktopBridge';
 
 /**
@@ -164,6 +165,28 @@ async function requestJson<T>(
   return (await response.json()) as T;
 }
 
+/**
+ * The request with `field`'s embedded import payloads split out into
+ * `storageAssets` (ADR-024 Phase 1): the account stores the payloads under
+ * their content-addressed keys and the projection as sent, without splitting
+ * the document itself.
+ */
+async function withSplitStorage<T extends object, K extends keyof T & string>(
+  request: T,
+  field: K
+): Promise<
+  Omit<T, K> & Record<K, unknown> & Pick<SaveRevisionRequest, 'storageAssets'>
+> {
+  const split = await splitProjectStorageUpload(
+    request[field] as ProjectDocument
+  );
+  return {
+    ...request,
+    [field]: split.document,
+    storageAssets: split.storageAssets
+  };
+}
+
 export const api = {
   health: () => requestJson<HealthResponse>('/api/health'),
   authConfig: () => requestJson<AuthConfigResponse>('/api/auth/config'),
@@ -223,10 +246,14 @@ export const api = {
       body: JSON.stringify({ scope, confirmation })
     }),
   listProjects: () => requestJson<ListProjectsResponse>('/api/projects'),
-  createProject: (payload: CreateProjectRequest) =>
+  createProject: async (payload: CreateProjectRequest) =>
     requestJson<CreateProjectResponse>('/api/projects', {
       method: 'POST',
-      body: JSON.stringify(payload)
+      body: JSON.stringify(
+        payload.initialDocument
+          ? await withSplitStorage(payload, 'initialDocument')
+          : payload
+      )
     }),
   /**
    * Gives an existing device-local project an account record and its cloud identity.
@@ -252,7 +279,7 @@ export const api = {
     const prepared = normalized.editHistory
       ? normalizeDocumentHistory(document, normalized)
       : normalized;
-    const send = (): Promise<CreateProjectResponse> => {
+    const send = async (): Promise<CreateProjectResponse> => {
       const adopted = adoptProjectDocument(
         reidentifyProjectDocument(prepared, toProjectId(createId('proj'))),
         ownerUserId,
@@ -260,15 +287,20 @@ export const api = {
       );
       return requestJson<CreateProjectResponse>('/api/projects', {
         method: 'POST',
-        body: JSON.stringify({
-          name: prepared.name,
-          adoptionProtocolVersion: 2,
-          localProjectId: prepared.projectId,
-          ...(options.sourceArtifactIds?.length
-            ? { sourceArtifactIds: options.sourceArtifactIds }
-            : {}),
-          document: withoutDerivedProjection(adopted)
-        })
+        body: JSON.stringify(
+          await withSplitStorage(
+            {
+              name: prepared.name,
+              adoptionProtocolVersion: 2,
+              localProjectId: prepared.projectId,
+              ...(options.sourceArtifactIds?.length
+                ? { sourceArtifactIds: options.sourceArtifactIds }
+                : {}),
+              document: withoutDerivedProjection(adopted)
+            },
+            'document'
+          )
+        )
       });
     };
     // A minted id that already names a project is a one-in-2^122 collision:
@@ -292,29 +324,35 @@ export const api = {
    * Phase 1) and lists the archived imports the account copies for it;
    * without, the account builds it (the pre-Phase 1 contract).
    */
-  duplicateProject: (
+  duplicateProject: async (
     projectId: string,
     options: Omit<DuplicateProjectRequest, 'projectId'> = {}
-  ) =>
-    requestJson<DuplicateProjectResponse>(
+  ) => {
+    const request = {
+      ...(options.name === undefined ? {} : { name: options.name }),
+      ...(options.revisionId === undefined
+        ? {}
+        : { revisionId: options.revisionId }),
+      ...(options.document === undefined
+        ? {}
+        : {
+            document: withoutDerivedProjection(options.document),
+            documentDigest: options.documentDigest,
+            importSources: options.importSources ?? []
+          })
+    };
+    return requestJson<DuplicateProjectResponse>(
       `/api/projects/${encodeURIComponent(projectId)}/duplicate`,
       {
         method: 'POST',
-        body: JSON.stringify({
-          ...(options.name === undefined ? {} : { name: options.name }),
-          ...(options.revisionId === undefined
-            ? {}
-            : { revisionId: options.revisionId }),
-          ...(options.document === undefined
-            ? {}
-            : {
-                document: withoutDerivedProjection(options.document),
-                documentDigest: options.documentDigest,
-                importSources: options.importSources ?? []
-              })
-        })
+        body: JSON.stringify(
+          request.document
+            ? await withSplitStorage(request, 'document')
+            : request
+        )
       }
-    ),
+    );
+  },
   /** The project's retained save states, newest first, without documents. */
   listRevisions: (projectId: string) =>
     requestJson<ListRevisionsResponse>(
@@ -378,7 +416,7 @@ export const api = {
    * (ADR-024 Phase 1). The reason is trimmed first because the server compares
    * the minted records with the trimmed reason it receives.
    */
-  saveRevision: (payload: SaveRevisionRequest) => {
+  saveRevision: async (payload: SaveRevisionRequest) => {
     const reason = payload.reason.trim();
     const document =
       payload.savedRevisionId === undefined
@@ -388,13 +426,18 @@ export const api = {
       `/api/projects/${encodeURIComponent(payload.projectId)}/revisions`,
       {
         method: 'POST',
-        body: JSON.stringify({
-          ...payload,
-          reason,
-          document,
-          savedRevisionId:
-            payload.savedRevisionId ?? document.revisions.at(-1)!.revisionId
-        } satisfies SaveRevisionRequest)
+        body: JSON.stringify(
+          await withSplitStorage(
+            {
+              ...payload,
+              reason,
+              document,
+              savedRevisionId:
+                payload.savedRevisionId ?? document.revisions.at(-1)!.revisionId
+            } satisfies SaveRevisionRequest,
+            'document'
+          )
+        )
       }
     );
   },
@@ -407,11 +450,11 @@ export const api = {
    * body fits. An oversized document falls back to a plain fetch, which is
    * exactly the pre-keepalive behaviour.
    */
-  saveProjectDocument: (
+  saveProjectDocument: async (
     payload: SaveProjectDocumentRequest,
     options?: { keepalive?: boolean }
   ) => {
-    const body = JSON.stringify(payload);
+    const body = JSON.stringify(await withSplitStorage(payload, 'document'));
     return requestJson<SaveProjectDocumentResponse>(
       `/api/projects/${encodeURIComponent(payload.projectId)}/document`,
       {
@@ -511,7 +554,7 @@ export const api = {
   discardMeshPayload: (
     projectId: string,
     artifactId: string,
-    kind?: 'stl-import' | 'mesh-import'
+    kind?: 'stl-import' | 'mesh-import' | 'reference-image'
   ) =>
     requestJson<{ deleted: boolean }>(
       `/api/artifacts/${encodeURIComponent(artifactId)}/discard-unreferenced`,

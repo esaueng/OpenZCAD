@@ -1,5 +1,6 @@
 import {
   createSketchReferenceAnnotationId,
+  documentNodesWithHistory,
   isSketchReferenceDimension,
   isSketchReferenceDimensionData,
   resolveSketchReferenceDimension,
@@ -31,6 +32,68 @@ export interface SketchReferenceLabelPositionInput extends SketchReferenceDimens
   position: SketchDimensionLabelPosition;
 }
 
+const REFERENCE_DISTANCE_MODE_SCHEMA_VERSION = 35;
+
+function assertReferenceDataSchema(
+  data: SketchReferenceDimensionData,
+  schemaVersion: number | undefined
+): void {
+  if (
+    data.dimensionKind === 'distance' &&
+    data.distanceMode !== undefined &&
+    (typeof schemaVersion !== 'number' ||
+      !Number.isSafeInteger(schemaVersion) ||
+      schemaVersion < REFERENCE_DISTANCE_MODE_SCHEMA_VERSION)
+  )
+    throw new Error(
+      'Reference distance modes require project schema v35 or newer.'
+    );
+}
+
+/** Validate replay targets, including log copies retained only by readable history. */
+export function assertReferenceCommandSchema(
+  document: Pick<
+    ProjectDocument,
+    'schemaVersion' | 'commandLog' | 'editHistory'
+  >
+): void {
+  const record = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value);
+  const pending: unknown[] = [document.commandLog];
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (change.field === 'commandLog')
+        pending.push(change.before, change.after);
+  const seen = new Set<object>();
+  while (pending.length) {
+    const command = pending.pop();
+    if (Array.isArray(command)) {
+      if (seen.has(command)) continue;
+      seen.add(command);
+      for (const child of command) pending.push(child);
+      continue;
+    }
+    if (!record(command) || seen.has(command)) continue;
+    seen.add(command);
+    if (command.kind === 'transaction') pending.push(command.payload);
+    if (command.kind !== 'reference-dimension.add') continue;
+    if (
+      !record(command.payload) ||
+      !isSketchReferenceDimensionData(command.payload.data)
+    )
+      throw new Error('Reference dimension replay targets are malformed.');
+    assertReferenceDataSchema(command.payload.data, document.schemaVersion);
+  }
+}
+
+/** Call only after validating or dropping unreadable history at the entry boundary. */
+export function assertReferenceDocumentSchema(document: ProjectDocument): void {
+  assertReferenceCommandSchema(document);
+  for (const node of documentNodesWithHistory(document))
+    if (node.kind === 'sketch')
+      assertSketchReferenceDimensions(node, document.schemaVersion);
+}
+
 function requireSketch(document: ProjectDocument, sketchId: SketchId) {
   const sketch = findSketch(document, sketchId);
   if (!sketch) throw new Error(`Sketch ${sketchId} not found.`);
@@ -51,7 +114,10 @@ export function referenceDimensionObjectIds(
 }
 
 /** Invalid targets remain repairable; malformed/driving payloads never become annotations. */
-export function assertSketchReferenceDimensions(sketch: SketchNode) {
+export function assertSketchReferenceDimensions(
+  sketch: SketchNode,
+  schemaVersion?: number
+) {
   if (sketch.referenceDimensions === undefined) return;
   if (!Array.isArray(sketch.referenceDimensions))
     throw new Error('Reference dimensions must be a list.');
@@ -69,6 +135,7 @@ export function assertSketchReferenceDimensions(sketch: SketchNode) {
         'Reference dimensions need unique annotation identities and measured targets, without driving values.'
       );
     }
+    assertReferenceDataSchema(reference.data, schemaVersion);
     seen.add(reference.annotationId);
   }
 }
@@ -85,10 +152,13 @@ export function addSketchReferenceDimension(
   const annotationId =
     input.ids?.annotationId ?? createSketchReferenceAnnotationId();
   const reference = { annotationId, data: input.data };
-  assertSketchReferenceDimensions({
-    ...sketch,
-    referenceDimensions: [...(sketch.referenceDimensions ?? []), reference]
-  });
+  assertSketchReferenceDimensions(
+    {
+      ...sketch,
+      referenceDimensions: [...(sketch.referenceDimensions ?? []), reference]
+    },
+    document.schemaVersion
+  );
   const objects = new Map(
     sketch.objectIds.flatMap((id) => {
       const node = document.nodes[id];

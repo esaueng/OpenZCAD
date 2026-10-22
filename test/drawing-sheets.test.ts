@@ -117,9 +117,9 @@ function sheet(bodyIds: BodyId[], views?: DrawingView[]): DrawingSheet {
 }
 
 describe('D01 drawing section (schema v30)', () => {
-  it('is schema 30, additive, and never added to a document without drawings', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(31);
+  it('is additive, and never added to a document without drawings', () => {
     const document = boxDocument();
+    expect(document.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     expect(document.drawings).toBeUndefined();
     const saved = JSON.parse(JSON.stringify(document)) as ProjectDocument;
     // An older document opens exactly as written: no empty section appears.

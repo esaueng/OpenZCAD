@@ -16,12 +16,14 @@ import { localizeImportedSourceArtifacts } from './imported-source-artifacts';
 export { localizeImportedSourceArtifacts } from './imported-source-artifacts';
 import {
   assertNoReferenceDimensionDependents,
+  assertReferenceCommandSchema,
   assertSketchReferenceDimensions
 } from './sketch-reference-dimensions';
 export * from './sketch-reference-dimensions';
 import { assertSketchComposites, compositesWithout } from './sketch-composites';
 export * from './sketch-composites';
 export * from './drawings';
+export * from './reference-images';
 export {
   constantRigidTransform,
   rigidImportedSource
@@ -46,6 +48,7 @@ import {
   createId,
   deepClone,
   assertDrawingSet,
+  assertReferenceImageSet,
   featureColor,
   isProjectCheckpoint,
   isRevisionRecord,
@@ -858,11 +861,15 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
     );
   }
   const document = withReadableHistory(input);
-  // Schema v30 drawings: validated as written, never synthesized or rewritten.
+  assertReferenceCommandSchema(document);
+  // Schema v30 drawings (v31 annotations): validated as written, never
+  // synthesized or rewritten.
   assertDrawingSet(document.drawings);
+  // Schema v32 reference images: the same — validated, never rewritten.
+  assertReferenceImageSet(document.referenceImages);
   for (const node of documentNodesWithHistory(document)) {
     if (node.kind === 'sketch') {
-      assertSketchReferenceDimensions(node);
+      assertSketchReferenceDimensions(node, document.schemaVersion);
       assertSketchComposites(node);
     }
     if (node.kind === 'parameter') assertParameterQuantity(node);
@@ -920,7 +927,7 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   // it while migrating: unmarked saved sketches must retain revision 1 geometry.
   // Schema v26 adds S04 sketch composites. Never synthesize one:
   // a saved rectangle or polygon object stays the parametric object it was.
-  // Schema v31 reference-distance modes are optional. Never fill one in:
+  // Schema v35 reference-distance modes are optional. Never fill one in:
   // an absent mode remains the saved absolute distance without rewriting it.
   // Schema v16 -> v17 allows reference-form mesh payloads. Keep existing
   // embedded triangles and pre-release references as written; the version
