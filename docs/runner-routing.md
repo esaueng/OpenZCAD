@@ -28,6 +28,8 @@ Change it in two PRs, as Remus does:
 
 Old pinned commits stay on main, so earlier runs can still be re-run.
 
+<a id="staged-merge-queue-overflow"></a>
+
 ## Trusted merge-queue overflow
 
 `ci.yml` activates `fleet-ci-v2.yml` at the landed #809 commit
