@@ -2300,10 +2300,7 @@ export function validateExtrudeExtent(
       throw new Error('An extrude to a face has no through-all side.');
     }
     validateToFaceTarget(data.toFace);
-    if (
-      data.symmetric === true ||
-      !resolvedZero(resolve)(data.backDistance)
-    ) {
+    if (data.symmetric === true || !resolvedZero(resolve)(data.backDistance)) {
       throw new Error(
         'An extrude to a face runs one way, from the sketch plane to the face; it is not symmetric or two-sided.'
       );

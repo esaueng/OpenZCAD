@@ -63,7 +63,10 @@ function componentTitles(name: string): Map<string, string[]> {
   return byComponent;
 }
 
-const SPLICED = componentTitles('AnalyticsConsent.tsx');
+const SPLICED = new Map([
+  ...componentTitles('AnalyticsConsent.tsx'),
+  ...componentTitles('EncryptionSettings.tsx')
+]);
 
 function renderedSettingsBySection(): Map<string, string[]> {
   const bySection = new Map<string, string[]>();
@@ -101,8 +104,8 @@ describe('settings search index', () => {
 
     // Guard the parser itself: a regex that silently stopped matching would
     // otherwise make this test pass by comparing two empty maps.
-    expect(rendered.size).toBe(10);
-    expect(indexed.size).toBe(10);
+    expect(rendered.size).toBe(11);
+    expect(indexed.size).toBe(11);
     expect(Array.from(rendered.values()).flat().length).toBeGreaterThanOrEqual(
       30
     );
@@ -116,6 +119,8 @@ describe('settings search index', () => {
     expect(SPLICED.get('CloudStatisticsConsent')).toEqual([
       'Cloud account statistics'
     ]);
+    // The Encryption rows come from its lazy component.
+    expect(SPLICED.get('EncryptionSettings')).toContain('Your fingerprint');
 
     for (const [section, titles] of rendered) {
       expect({ section, titles: indexed.get(section) }).toEqual({
@@ -163,8 +168,27 @@ describe('assistant settings', () => {
     expect(bySettingTitle.map((section) => section.id)).toEqual(['sketching']);
     expect(byDetail.map((section) => section.id)).toEqual(['advanced']);
     expect(visibleSettingsSections({ query: '   ' })).toHaveLength(
-      SETTINGS_SECTIONS.length
+      SETTINGS_SECTIONS.length - 1
     );
+    expect(
+      visibleSettingsSections({ query: '   ', encryptionAvailable: true })
+    ).toHaveLength(SETTINGS_SECTIONS.length);
+  });
+});
+
+describe('encryption settings', () => {
+  it('appear only when the server opened them and cloud features are on', () => {
+    const ids = (options: Parameters<typeof visibleSettingsSections>[0]) =>
+      visibleSettingsSections(options).map((section) => section.id);
+    expect(ids({})).not.toContain('encryption');
+    expect(ids({ encryptionAvailable: true })).toContain('encryption');
+    expect(
+      ids({ encryptionAvailable: true, cloudFunctionsEnabled: false })
+    ).not.toContain('encryption');
+    expect(ids({ encryptionAvailable: true, query: 'recovery key' })).toEqual([
+      'encryption'
+    ]);
+    expect(ids({ query: 'recovery key' })).toEqual([]);
   });
 });
 

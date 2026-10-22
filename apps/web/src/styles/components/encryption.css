@@ -1,0 +1,67 @@
+/* Settings › Encryption. Loaded with the section's lazy chunk; everything
+   else on the page comes from settings.css. */
+
+.encryption-settings {
+  display: grid;
+  gap: var(--sp-5);
+}
+
+.encryption-loading {
+  margin: 0;
+  padding: var(--sp-3) var(--sp-4);
+  color: var(--color-text-muted);
+}
+
+/* Codes people read or compare: never truncated, wrapped in groups. */
+.encryption-code {
+  display: block;
+  max-width: 34ch;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.encryption-recovery,
+.encryption-scan,
+.encryption-scan-entry,
+.encryption-camera {
+  display: grid;
+  justify-items: end;
+  gap: var(--sp-2);
+}
+
+.encryption-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+
+/* A QR code must stay dark on light in either theme to scan. */
+.encryption-qr {
+  width: 168px;
+  height: 168px;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.encryption-sas {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-medium);
+  letter-spacing: 0.08em;
+}
+
+.encryption-approve {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-2) 0;
+}
+
+.encryption-camera video {
+  width: 220px;
+  border-radius: 6px;
+  background: var(--color-surface-2);
+}

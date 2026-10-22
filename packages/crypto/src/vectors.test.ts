@@ -32,6 +32,11 @@ import {
   parseEnvelope
 } from './envelope';
 import type { ProjectEnvelopeHeaderInit } from './header';
+import {
+  accountKeyCommitment,
+  deviceListEntryHash,
+  encodeDeviceListEntry
+} from './devices';
 import { exportPublicKey } from './keys';
 import { verifyProjectEnvelopeSignature, versionHash } from './signing';
 import {
@@ -434,6 +439,55 @@ describe('codes vectors', () => {
       await assetDedupeHash(dedupeKey, utf8('ISO-10303-21;'))
     ).toMatchInlineSnapshot(
       `"2773f97b7a136acc8879dec921294696f276e2a87a3a8956d727420795058483"`
+    );
+  });
+});
+
+describe('device list v1 vector', () => {
+  it('encodes a fixed first entry and its paired approval commitment', async () => {
+    const raw = async (
+      jwk: typeof TEST_SIGNER_JWK,
+      algorithm: 'ECDH' | 'ECDSA'
+    ) => exportPublicKey((await importFixedPair(jwk, algorithm)).publicKey);
+    const signingKey = await raw(TEST_SIGNER_JWK, 'ECDSA');
+    const unlockKey = await raw(TEST_RECIPIENT_JWK, 'ECDH');
+    const entry = encodeDeviceListEntry({
+      userId: 'user_vector',
+      sequence: 0,
+      previousEntryHash: null,
+      issuedAt: 1_760_000_000_000,
+      previousIdentityKeyHash: null,
+      encryptionKey: await raw(TEST_IDENTITY_JWK, 'ECDH'),
+      accountKeyCommitment: await accountKeyCommitment(patternBytes(32, 0xa0)),
+      devices: [
+        {
+          deviceId: 'dev_vector',
+          label: 'Vector device',
+          signingKey,
+          unlockKey,
+          addedAt: 1_760_000_000_000
+        }
+      ],
+      unlockTargets: [
+        {
+          kind: 'recovery-key',
+          targetId: 'rk_vector',
+          publicKey: await raw(TEST_EPHEMERAL_JWK, 'ECDH'),
+          addedAt: 1_760_000_000_000
+        }
+      ],
+      revoked: []
+    });
+    expect(entry.byteLength).toMatchInlineSnapshot(`380`);
+    expect(toHex(await deviceListEntryHash(entry))).toMatchInlineSnapshot(
+      `"204a3f11c0f7482a9b193bf696dbec5190b6c5820766dbd7ec21955df10b14e8"`
+    );
+    const { commitment } = await commitDeviceApprovalWith(
+      [signingKey, unlockKey],
+      queuedRandom(patternBytes(32, 0x60))
+    );
+    expect(toHex(commitment)).toMatchInlineSnapshot(
+      `"44b678e45f8953d389ae09934a82073cd891376a15c0c6e4a0ddd1548b184466"`
     );
   });
 });

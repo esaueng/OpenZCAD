@@ -1,4 +1,8 @@
-import { accountEntitlements } from '@openzcad/cloudflare-adapters';
+import { admitDevelopmentE2eeWrite } from './e2eeWriteAuthorization';
+import {
+  isE2eeKeysEnabled,
+  accountEntitlements
+} from '@openzcad/cloudflare-adapters';
 import { PROJECT_INVITATION_RATE_WINDOW_SECONDS } from '@openzcad/persistence';
 import { toUserId, type AuthSession } from '@openzcad/shared';
 import {
@@ -7,8 +11,14 @@ import {
 } from '@openzcad/cloudflare-adapters';
 import { isDesktopAuthReady } from './readiness';
 
+import {
+  SESSION_COOKIE_NAME,
+  readCookie,
+  readBearerToken,
+  sha256
+} from './sessionCredentials';
+
 const DEVELOPMENT_USER_ID = 'user_beta_dev';
-const SESSION_COOKIE_NAME = '__Host-openzcad_session';
 const LOGIN_CODE_TTL_SECONDS = 10 * 60;
 const LOGIN_CODE_MAX_ATTEMPTS = 5;
 const LOGIN_RATE_WINDOW_SECONDS = 15 * 60;
@@ -128,12 +138,6 @@ function bytesToBase64Url(bytes: Uint8Array): string {
     .replace(/=+$/g, '');
 }
 
-async function sha256(value: string): Promise<string> {
-  return bytesToHex(
-    await crypto.subtle.digest('SHA-256', encoder.encode(value))
-  );
-}
-
 async function sha256Base64Url(value: string): Promise<string> {
   return bytesToBase64Url(
     new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(value)))
@@ -238,20 +242,6 @@ async function hmacUserId(
 ): Promise<AuthSession['userId']> {
   const digest = await hmac(identity, secret);
   return toUserId(`${prefix}_${digest.slice(0, 24)}`);
-}
-
-function readCookie(request: Request, name: string): string | null {
-  const header = request.headers.get('cookie');
-  if (!header) {
-    return null;
-  }
-  for (const part of header.split(';')) {
-    const [candidate, ...value] = part.trim().split('=');
-    if (candidate === name) {
-      return value.join('=') || null;
-    }
-  }
-  return null;
 }
 
 function configuredSessionDays(env: CloudflareEnv): number {
@@ -1355,15 +1345,6 @@ export async function refreshDesktopAuthorization(
   return response;
 }
 
-function readBearerToken(request: Request): string | null {
-  const authorization = request.headers.get('authorization');
-  if (!authorization) {
-    return null;
-  }
-  const match = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(authorization);
-  return match?.[1] ?? null;
-}
-
 async function authenticateDesktopBearer(
   token: string,
   env: CloudflareEnv
@@ -1450,13 +1431,22 @@ export async function authenticateRequest(
     }
     const requestedUser = request.headers.get('x-openzcad-development-user');
     const userId = toUserId(requestedUser?.trim() || DEVELOPMENT_USER_ID);
-    return {
+    const session: AuthSession = {
       userId,
       displayName:
         request.headers.get('x-openzcad-development-name')?.trim() ||
         'Beta developer',
       mode
     };
+    if (
+      env.DB &&
+      isE2eeKeysEnabled(env) &&
+      new URL(request.url).pathname.startsWith('/api/e2ee/') &&
+      !['GET', 'HEAD', 'OPTIONS'].includes(request.method)
+    ) {
+      await admitDevelopmentE2eeWrite(env.DB, session);
+    }
+    return session;
   }
 
   if (mode !== 'email-code' || !env.DB) {

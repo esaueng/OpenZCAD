@@ -475,6 +475,20 @@ describe('cloud project autosave — what it declines to do', () => {
     controller.dispose();
   });
 
+  it('resumes a failed departure without losing a later durable edit', async () => {
+    const { controller, saves } = harness();
+    const baseline = documentAt(2);
+    controller.openProject(baseline.projectId, baseline.version);
+    controller.schedule(documentAt(3, baseline));
+    controller.closeProject();
+    // A local save can finish while session revocation is in flight.
+    controller.schedule(documentAt(4, baseline));
+    controller.openProject(baseline.projectId, baseline.version);
+    await controller.flushPending();
+    expect(saves).toEqual([{ expectedVersion: 2, version: 4 }]);
+    controller.dispose();
+  });
+
   it('recognises the document the account already holds', () => {
     const { controller } = harness();
     const document = documentAt(2);
