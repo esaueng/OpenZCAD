@@ -22,6 +22,7 @@ import {
   isSketchCompositeCornerTarget,
   resolveSketchReferenceDimension,
   toUserId,
+  type DocumentChange,
   type ProjectDocument,
   type SerializedCommand,
   type SketchComposite,
@@ -75,15 +76,50 @@ function distance(composite: SketchComposite): SketchReferenceDimensionData {
   };
 }
 
-function managerWithReference() {
+function managerWithReference(
+  kind: 'projected-distance' | 'distance' | 'angle' = 'projected-distance'
+) {
   const f = fixture();
   const manager = new CommandManager(f.document);
+  const data: SketchReferenceDimensionData =
+    kind === 'angle'
+      ? {
+          dimensionKind: 'angle',
+          a: createSketchCompositeSideTarget(f.composite, 0),
+          b: createSketchCompositeSideTarget(f.composite, 1)
+        }
+      : distance(f.composite);
+  if (kind === 'distance' && data.dimensionKind === 'distance')
+    delete data.distanceMode;
   const command = commandFactories.addSketchReferenceDimension({
     sketchId: f.sketchId,
-    data: distance(f.composite)
+    data
   });
   manager.execute(command);
   return { ...f, manager, annotationId: command.payload.ids!.annotationId };
+}
+
+function withCarrierVersion(
+  document: ProjectDocument,
+  version: number | undefined
+): ProjectDocument {
+  const saved = structuredClone(document);
+  if (version === undefined) Reflect.deleteProperty(saved, 'schemaVersion');
+  else saved.schemaVersion = version as typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
+  return saved;
+}
+
+function expectOldCompositeCarrierRefused(
+  document: ProjectDocument,
+  carrier: string
+) {
+  const before = JSON.stringify(document);
+  const upgrade =
+    /Composite reference targets require project schema v36 or newer/;
+  expect(() => normalizeDocument(document), carrier).toThrow(upgrade);
+  expect(() => new CommandManager(document), carrier).toThrow(upgrade);
+  expect(() => replayCommands(document, []), carrier).toThrow(upgrade);
+  expect(JSON.stringify(document), carrier).toBe(before);
 }
 
 describe('S04 composite reference commands', () => {
@@ -258,104 +294,97 @@ describe('S04 composite reference commands', () => {
     ).toEqual(expected);
   });
 
-  it.each(['current', 'undo', 'redo'] as const)(
-    'refuses a pre-v32 carrier of composite targets in %s data without upgrading it',
-    (location) => {
-      const f = managerWithReference();
-      if (location === 'undo')
-        f.manager.execute(
-          commandFactories.deleteSketchReferenceDimension({
-            sketchId: f.sketchId,
-            annotationId: f.annotationId
-          })
-        );
-      if (location === 'redo') f.manager.undo();
-      const saved = structuredClone(f.manager.document);
-      saved.commandLog = [];
-      saved.schemaVersion = 31 as typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
-      const before = JSON.stringify(saved);
-      expect(() => normalizeDocument(saved)).toThrow(
-        /require project schema v32/
-      );
-      expect(JSON.stringify(saved)).toBe(before);
-    }
-  );
-
-  it('rejects composite targets hidden only in an old carrier replay transaction', () => {
-    const f = managerWithReference();
-    f.manager.execute(
-      commandFactories.deleteSketchReferenceDimension({
-        sketchId: f.sketchId,
-        annotationId: f.annotationId
-      })
-    );
-    const saved = structuredClone(f.manager.document);
-    delete saved.editHistory;
-    saved.commandLog = [
-      {
-        kind: 'transaction',
-        label: 'Recorded annotations',
-        payload: saved.commandLog,
-        replayVersion: 1,
-        timestamp: new Date(0).toISOString()
-      }
-    ];
-    expect(() => normalizeDocument(saved)).not.toThrow();
-    saved.schemaVersion = 31 as typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
-    const before = JSON.stringify(saved);
-    expect(() => normalizeDocument(saved)).toThrow(
-      /require project schema v32/
-    );
-    expect(JSON.stringify(saved)).toBe(before);
-  });
-
-  describe.each(['value', 'splice'] as const)(
-    '%s replay-log history',
+  describe.each(['distance', 'angle'] as const)(
+    '%s composite reference schema boundary',
     (kind) => {
-      it.each(['undo', 'redo'] as const)(
-        'rejects pre-v32 targets stored only in readable %s log snapshots',
-        (location) => {
-          const f = managerWithReference();
-          const recorded = structuredClone(f.manager.document.commandLog[0]!);
-          const saved = structuredClone(f.manager.document);
-          findSketch(saved, f.sketchId)!.referenceDimensions = [];
-          saved.commandLog = [];
-          saved.editHistory = {
-            schemaVersion: 1,
-            projectId: saved.projectId,
-            actorUserId: saved.ownerUserId,
-            cursor: location === 'undo' ? 1 : 0,
-            trimmed: 0,
-            entries: [
-              {
-                id: 'history_reference_log',
-                label: 'Saved reference log',
-                changes: [
-                  kind === 'splice'
-                    ? {
-                        kind: 'splice',
-                        field: 'commandLog',
-                        index: 0,
-                        before: location === 'undo' ? [recorded] : [],
-                        after: location === 'redo' ? [recorded] : []
-                      }
-                    : {
-                        kind: 'value',
-                        field: 'commandLog',
-                        before: location === 'undo' ? [recorded] : [],
-                        after: location === 'redo' ? [recorded] : []
-                      }
+      it.each([31, 32, 33, 34, 35, undefined])(
+        'refuses every readable pre-v36 carrier at schema %s without rewriting',
+        (version) => {
+          for (const carrier of [
+            'current annotation',
+            'undo node',
+            'redo node',
+            'undo node map',
+            'redo node map',
+            'current nested log',
+            'undo value log',
+            'redo value log',
+            'undo splice log',
+            'redo splice log'
+          ] as const) {
+            const f = managerWithReference(kind);
+            const saved = structuredClone(f.manager.document);
+            const recorded = structuredClone(saved.commandLog[0]!);
+            const annotated = findSketch(saved, f.sketchId)!;
+            const plain = structuredClone(annotated);
+            delete plain.referenceDimensions;
+            saved.nodes[plain.id] = plain;
+            saved.commandLog = [];
+            delete saved.editHistory;
+            const transaction = (payload: SerializedCommand[]) => ({
+              kind: 'transaction',
+              label: 'Recorded annotation',
+              payload,
+              replayVersion: 1,
+              timestamp: new Date(0).toISOString()
+            });
+            const nested = [transaction([transaction([recorded])])];
+            if (carrier === 'current annotation') {
+              saved.nodes[annotated.id] = annotated;
+            } else if (carrier === 'current nested log') {
+              saved.commandLog = nested;
+            } else {
+              const undo = carrier.startsWith('undo');
+              const wholeMap = carrier.endsWith('map');
+              const beforeNode = wholeMap ? saved.nodes : plain;
+              const afterNode = wholeMap
+                ? { ...saved.nodes, [annotated.id]: annotated }
+                : annotated;
+              const change: DocumentChange = carrier.includes('node')
+                ? {
+                    kind: 'value',
+                    field: 'nodes',
+                    ...(wholeMap ? {} : { key: annotated.id }),
+                    before: undo ? afterNode : beforeNode,
+                    after: undo ? beforeNode : afterNode
+                  }
+                : carrier.includes('splice')
+                  ? {
+                      kind: 'splice',
+                      field: 'commandLog',
+                      index: 0,
+                      before: undo ? nested : [],
+                      after: undo ? [] : nested
+                    }
+                  : {
+                      kind: 'value',
+                      field: 'commandLog',
+                      before: undo ? nested : [],
+                      after: undo ? [] : nested
+                    };
+              saved.editHistory = {
+                schemaVersion: 1,
+                projectId: saved.projectId,
+                actorUserId: saved.ownerUserId,
+                cursor: undo ? 1 : 0,
+                trimmed: 0,
+                entries: [
+                  {
+                    id: 'history_composite_carrier',
+                    label: 'Saved composite annotation',
+                    changes: [change]
+                  }
                 ]
-              }
-            ]
-          };
-          expect(normalizeDocument(saved).editHistory).toEqual(
-            saved.editHistory
-          );
-          saved.schemaVersion = 31 as typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
-          expect(() => normalizeDocument(saved)).toThrow(
-            /require project schema v32/
-          );
+              };
+            }
+            expect(normalizeDocument(saved).editHistory, carrier).toEqual(
+              saved.editHistory
+            );
+            expectOldCompositeCarrierRefused(
+              withCarrierVersion(saved, version),
+              carrier
+            );
+          }
         }
       );
     }

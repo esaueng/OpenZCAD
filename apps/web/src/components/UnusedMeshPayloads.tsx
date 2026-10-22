@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   documentNodesWithHistory,
   documentAssetsWithHistory,
+  referenceImagesWithHistory,
   type ArtifactRecord,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -29,7 +30,21 @@ function referencedArtifacts(document: ProjectDocument): Set<string> {
       ids.add(node.data.artifactId);
     }
   }
+  // An I05 picture stays while the image, or an undo step that can restore
+  // it, names its archive.
+  for (const image of referenceImagesWithHistory(document)) {
+    if (typeof image.artifactId === 'string') ids.add(image.artifactId);
+  }
   return ids;
+}
+
+/** What a removable artifact is, in the words its row uses. */
+function subjectOf(kind: ArtifactRecord['kind']): string {
+  return kind === 'mesh-payload'
+    ? 'mesh data'
+    : kind === 'reference-image'
+      ? 'image'
+      : 'imported file';
 }
 
 /** Durable account listing makes failed compensation recoverable after reload. */
@@ -68,16 +83,20 @@ export default function UnusedMeshPayloads({
       artifact.projectId === projectId &&
       (artifact.kind === 'mesh-payload' ||
         artifact.kind === 'stl-import' ||
-        artifact.kind === 'mesh-import') &&
+        artifact.kind === 'mesh-import' ||
+        artifact.kind === 'reference-image') &&
       !referenced.has(artifact.artifactId)
   );
 
   async function remove(artifact: ArtifactRecord) {
+    // Originals and pictures are stored files: owner-only removal, by kind.
     const originalKind =
-      artifact.kind === 'stl-import' || artifact.kind === 'mesh-import'
+      artifact.kind === 'stl-import' ||
+      artifact.kind === 'mesh-import' ||
+      artifact.kind === 'reference-image'
         ? artifact.kind
         : undefined;
-    const subject = originalKind ? 'imported file' : 'mesh data';
+    const subject = subjectOf(artifact.kind);
     const current = getDocument();
     if (
       !current ||
@@ -132,14 +151,14 @@ export default function UnusedMeshPayloads({
     <>
       <div className="topbar-menu-sep" />
       <strong className="topbar-menu-label">
-        Unused imported mesh files and data
+        Unused imported files, mesh data and images
       </strong>
       {unused.map((artifact) => (
         <button
           key={artifact.artifactId}
           type="button"
           className="topbar-menu-item"
-          aria-label={`Remove unused ${artifact.kind === 'mesh-payload' ? 'mesh data' : 'imported file'}: ${artifact.name}`}
+          aria-label={`Remove unused ${subjectOf(artifact.kind)}: ${artifact.name}`}
           disabled={pending !== null}
           onClick={() => void remove(artifact)}
         >

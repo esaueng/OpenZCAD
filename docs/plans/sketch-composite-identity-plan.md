@@ -87,7 +87,7 @@ designed below.
 
 This bounded slice builds on the held-line decision above and on S02-E in
 [PR #797](https://github.com/esaueng/OpenZCAD/pull/797). It uses additive schema
-v32 from that branch's v31 baseline; pending independent schema migrations must
+v36 from that branch's v35 baseline; earlier coordinated schema migrations must
 be reconciled against the actual merged base before integration.
 
 A saved corner or side target names its composite ID, a zero-based index, and
@@ -113,7 +113,8 @@ composite-target annotation blocks that deletion until it is explicitly
 removed. Unrelated primitive reference/deletion behavior remains unchanged.
 Malformed descriptors are refused on load, including undo/redo nodes; a
 well-formed target whose topology no longer resolves stays visible and
-removable. Schema versions before v32 cannot carry composite-target records.
+removable. Schema versions before v36 cannot carry composite-target records. An omitted
+schema version is not proof that these targets are supported.
 Legacy saves without them remain additive and do not synthesize descriptors.
 
 Acceptance covers rectangle methods and regular polygons, strict topology and

@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { FLEET_CI_PATH } from './fleet-workflow';
 
 describe('superseded CI recovery', () => {
   const workflow = readFileSync('.github/workflows/ci-recovery.yml', 'utf8');
@@ -30,12 +31,12 @@ describe('superseded CI recovery', () => {
     expect(script).not.toContain('${{');
     // Cancellation recovery must not change the required gates into skipped
     // successes when validation fails or the current run is canceled.
-    const gates = readFileSync('.github/workflows/fleet-ci.yml', 'utf8');
+    const gates = readFileSync(FLEET_CI_PATH, 'utf8');
     expect(gates).toContain(
-      'needs: [quality, unit, validation]\n    if: always()'
+      'needs: [queue-trust, quality, unit, validation]\n    if: always()'
     );
     expect(gates).toContain(
-      'needs: [e2e-tests, e2e-tests-pr]\n    if: always()'
+      'needs: [queue-trust, e2e-tests, e2e-tests-pr]\n    if: always()'
     );
   });
 });

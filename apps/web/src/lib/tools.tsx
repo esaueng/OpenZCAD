@@ -12,6 +12,7 @@ import {
   FlipHorizontal2,
   Globe,
   Grid3x3,
+  ImagePlus,
   Layers,
   Move3d,
   Orbit,
@@ -43,6 +44,7 @@ export type ToolId =
   | 'sketch'
   | 'datum-plane'
   | 'datum-axis'
+  | 'reference-image'
   | 'extrude'
   | 'revolve'
   | 'loft'
@@ -126,6 +128,12 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     icon: icon(<Axis3d size={16} aria-hidden="true" />),
     group: 'create',
     hint: 'Axis through points, along an edge or cylinder, or where planes meet'
+  },
+  'reference-image': {
+    label: 'Image',
+    icon: icon(<ImagePlus size={16} aria-hidden="true" />),
+    group: 'create',
+    hint: 'Place a PNG or JPEG on a plane or face to trace over'
   },
   box: {
     label: 'Box',
@@ -316,7 +324,13 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
     {
       id: 'create',
       label: 'Create',
-      tools: ['sketch', 'datum-plane', 'datum-axis', ...PRIMITIVE_TOOLS]
+      tools: [
+        'sketch',
+        'datum-plane',
+        'datum-axis',
+        'reference-image',
+        ...PRIMITIVE_TOOLS
+      ]
     },
     {
       id: 'from-sketch',

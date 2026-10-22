@@ -6,12 +6,19 @@ import {
 } from '@openzcad/persistence';
 import {
   addPrimitiveFeature,
-  createProjectDocument
+  addSketchComposite,
+  addSketchFeature,
+  createProjectDocument,
+  findSketch
 } from '@openzcad/document-core';
+import { commandFactories } from '@openzcad/command-system';
 import {
   DEFAULT_APP_SETTINGS,
   MAX_ARTIFACT_UPLOAD_PARTS,
+  MAX_CLOUD_PROJECT_WRITE_BYTES,
   MAX_PROJECT_NAME_LENGTH,
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
+  createSketchCompositeCornerTarget,
   projectOrganization,
   toUserId,
   type CreateProjectResponse,
@@ -1283,6 +1290,52 @@ describe('worker api routes', () => {
     );
     expect(changed.status).toBe(200);
     expect(storedSettings.sketching.relationGlyphs).toBe('always');
+
+    // A tab from before the per-kind filter keeps the stored filter, while a
+    // newer one that sends an empty filter clears it.
+    const filtered = structuredClone(storedSettings);
+    filtered.sketching.hiddenRelationGlyphs = ['coincident', 'lock'];
+    expect(
+      (
+        await worker.fetch(
+          patch('/api/settings', { settings: filtered, expectedRevision: 3 }),
+          workerEnv
+        )
+      ).status
+    ).toBe(200);
+    const beforeFilter = structuredClone(storedSettings) as unknown as {
+      appearance: { theme: string };
+      sketching: Record<string, unknown>;
+    };
+    delete beforeFilter.sketching.hiddenRelationGlyphs;
+    beforeFilter.appearance.theme = 'light';
+    expect(
+      (
+        await worker.fetch(
+          patch('/api/settings', {
+            settings: beforeFilter,
+            expectedRevision: 4
+          }),
+          workerEnv
+        )
+      ).status
+    ).toBe(200);
+    expect(storedSettings.appearance.theme).toBe('light');
+    expect(storedSettings.sketching.hiddenRelationGlyphs).toEqual([
+      'coincident',
+      'lock'
+    ]);
+    const cleared = structuredClone(storedSettings);
+    cleared.sketching.hiddenRelationGlyphs = [];
+    expect(
+      (
+        await worker.fetch(
+          patch('/api/settings', { settings: cleared, expectedRevision: 5 }),
+          workerEnv
+        )
+      ).status
+    ).toBe(200);
+    expect(storedSettings.sketching.hiddenRelationGlyphs).toEqual([]);
   });
 
   it('keeps the stored field of view and X-ray opacity when an older client omits them', async () => {
@@ -2508,6 +2561,218 @@ describe('worker api routes', () => {
     }
   });
 
+  describe.each(['current annotation', 'nested replay log'] as const)(
+    'unversioned reference-distance account saves: %s',
+    (carrier) => {
+      it.each(['absolute', 'horizontal', 'vertical'] as const)(
+        'refuses an explicit %s mode without writing, then accepts its legacy omitted-mode form',
+        async (distanceMode) => {
+          const created = await createProject(
+            `Legacy ${carrier} ${distanceMode}`
+          );
+          const added = addSketchFeature(created.document, {
+            name: 'Diagonal',
+            plane: 'XY',
+            objects: [{ objectKind: 'line', x1: 0, y1: 0, x2: 30, y2: 40 }]
+          });
+          const projectId = created.document.projectId;
+          const route = `/api/projects/${projectId}/document`;
+          const seeded = await worker.fetch(
+            put(route, {
+              projectId,
+              expectedVersion: created.document.version,
+              document: added.document
+            }),
+            env
+          );
+          expect(seeded.status).toBe(200);
+          const read = async () => {
+            const response = await worker.fetch(
+              new Request(`https://example.com/api/projects/${projectId}`),
+              env
+            );
+            expect(response.status).toBe(200);
+            return (await response.json()) as ProjectDocument;
+          };
+          const before = await read();
+          const candidate = structuredClone(before);
+          candidate.name = 'Legacy write awaiting validation';
+          candidate.version += 1;
+          const sketch = findSketch(candidate, added.sketchId)!;
+          const objectId = sketch.objectIds[0]!;
+          const command = commandFactories.addSketchReferenceDimension({
+            sketchId: added.sketchId,
+            data: {
+              dimensionKind: 'distance',
+              distanceMode,
+              a: { objectId, point: 'start' },
+              b: { objectId, point: 'end' }
+            }
+          });
+          const recorded = command.serialize();
+          const data = recorded.payload.data;
+          if (carrier === 'current annotation') {
+            sketch.referenceDimensions = [
+              {
+                annotationId: recorded.payload.ids!.annotationId,
+                data
+              }
+            ];
+          } else {
+            const transaction = (payload: ProjectDocument['commandLog']) => ({
+              kind: 'transaction',
+              label: 'Saved annotation',
+              replayVersion: 1,
+              timestamp: '2026-10-22T00:00:00.000Z',
+              payload
+            });
+            candidate.commandLog = [transaction([transaction([recorded])])];
+          }
+          const legacy: Partial<ProjectDocument> = candidate;
+          delete legacy.schemaVersion;
+          delete legacy.editHistory;
+          const send = () =>
+            worker.fetch(
+              put(route, {
+                projectId,
+                expectedVersion: before.version,
+                document: legacy
+              }),
+              env
+            );
+
+          const refused = await send();
+          expect(refused.status).toBe(400);
+          expect(await refused.json()).toEqual({
+            error:
+              'Reference distance modes require project schema v35 or newer.'
+          });
+          expect(await read()).toEqual(before);
+
+          // Remove only the new field from the submitted wire payload, keeping
+          // its identity and every other document field exactly the same.
+          if (data.dimensionKind !== 'distance')
+            throw new Error('Missing distance fixture');
+          delete data.distanceMode;
+          const accepted = await send();
+          expect(accepted.status).toBe(200);
+          const saved = await read();
+          expect(saved.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
+          expect(saved.name).toBe(candidate.name);
+          expect(saved.version).toBe(candidate.version);
+          expect(saved.nodes).toEqual(candidate.nodes);
+          expect(saved.commandLog).toEqual(candidate.commandLog);
+          expect(JSON.stringify(saved)).not.toContain('distanceMode');
+          expect(saved.editHistory).toBeUndefined();
+        }
+      );
+
+      it('refuses unversioned composite targets without a distance mode or any account write', async () => {
+        const created = await createProject(`Legacy composite ${carrier}`);
+        const added = addSketchFeature(created.document, {
+          name: 'Held rectangle',
+          plane: 'XY',
+          objects: [
+            { objectKind: 'line', x1: 0, y1: 0, x2: 20, y2: 0 },
+            { objectKind: 'line', x1: 20, y1: 0, x2: 20, y2: 12 },
+            { objectKind: 'line', x1: 20, y1: 12, x2: 0, y2: 12 },
+            { objectKind: 'line', x1: 0, y1: 12, x2: 0, y2: 0 }
+          ]
+        });
+        const held = addSketchComposite(added.document, {
+          sketchId: added.sketchId,
+          composite: {
+            compositeKind: 'rectangle',
+            method: 'corner',
+            edgeIds: findSketch(added.document, added.sketchId)!.objectIds
+          }
+        });
+        const projectId = created.document.projectId;
+        const route = `/api/projects/${projectId}/document`;
+        const seeded = await worker.fetch(
+          put(route, {
+            projectId,
+            expectedVersion: created.document.version,
+            document: held.document
+          }),
+          env
+        );
+        expect(seeded.status).toBe(200);
+        const read = async () => {
+          const response = await worker.fetch(
+            new Request(`https://example.com/api/projects/${projectId}`),
+            env
+          );
+          expect(response.status).toBe(200);
+          return (await response.json()) as ProjectDocument;
+        };
+        const before = await read();
+        const candidate = structuredClone(before);
+        candidate.name = 'Composite reference awaiting validation';
+        candidate.version += 1;
+        const sketch = findSketch(candidate, added.sketchId)!;
+        const composite = sketch.composites![0]!;
+        const recorded = commandFactories
+          .addSketchReferenceDimension({
+            sketchId: added.sketchId,
+            data: {
+              dimensionKind: 'distance',
+              a: createSketchCompositeCornerTarget(composite, 0),
+              b: createSketchCompositeCornerTarget(composite, 1)
+            }
+          })
+          .serialize();
+        expect(recorded.payload.data).not.toHaveProperty('distanceMode');
+        if (carrier === 'current annotation') {
+          sketch.referenceDimensions = [
+            {
+              annotationId: recorded.payload.ids!.annotationId,
+              data: recorded.payload.data
+            }
+          ];
+        } else {
+          const transaction = (payload: ProjectDocument['commandLog']) => ({
+            kind: 'transaction',
+            label: 'Saved composite annotation',
+            replayVersion: 1,
+            timestamp: '2026-10-22T00:00:00.000Z',
+            payload
+          });
+          candidate.commandLog = [transaction([transaction([recorded])])];
+        }
+        const legacy: Partial<ProjectDocument> = candidate;
+        delete legacy.schemaVersion;
+        delete legacy.editHistory;
+        const send = () =>
+          worker.fetch(
+            put(route, {
+              projectId,
+              expectedVersion: before.version,
+              document: legacy
+            }),
+            env
+          );
+        const refused = await send();
+        expect(refused.status).toBe(400);
+        expect(await refused.json()).toEqual({
+          error:
+            'Composite reference targets require project schema v36 or newer.'
+        });
+        expect(await read()).toEqual(before);
+
+        // The same valid targets save once the writer declares support. The
+        // earlier refusal came from the carrier boundary, not their geometry.
+        legacy.schemaVersion = PROJECT_DOCUMENT_SCHEMA_VERSION;
+        expect((await send()).status).toBe(200);
+        const saved = await read();
+        expect(saved.nodes).toEqual(candidate.nodes);
+        expect(saved.commandLog).toEqual(candidate.commandLog);
+        expect(saved.name).toBe(candidate.name);
+        expect(saved.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
+      });
+    }
+  );
+
   it('returns a conflict response for stale revision writes', async () => {
     const created = await createProject('Revision Conflict');
     const document = created.document;
@@ -2742,7 +3007,7 @@ describe('worker api routes', () => {
       new Request('https://example.com/api/projects', {
         method: 'POST',
         body: '{}',
-        headers: { 'content-length': String(30 * 1024 * 1024) }
+        headers: { 'content-length': String(MAX_CLOUD_PROJECT_WRITE_BYTES + 1) }
       }),
       env
     );
@@ -2777,7 +3042,9 @@ describe('worker api routes', () => {
     'rejects an oversized stream $description with 413',
     async ({ contentLength }) => {
       const chunk = new Uint8Array(1024 * 1024).fill(0x20);
-      let chunksRemaining = 26;
+      // Past the document-write ceiling, which leaves room for base64 uploads.
+      let chunksRemaining =
+        Math.ceil(MAX_CLOUD_PROJECT_WRITE_BYTES / chunk.length) + 1;
       const body = new ReadableStream<Uint8Array>({
         pull(controller) {
           if (chunksRemaining === 0) {
