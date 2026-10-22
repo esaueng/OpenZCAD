@@ -641,7 +641,16 @@ async function writeGeneration(
         `UPDATE e2ee_device_approvals SET expires_at = MIN(expires_at, ?)
          WHERE user_id = ? AND ${guard.sql}`
       )
-      .bind(now, userId, ...guard.binds)
+      .bind(now, userId, ...guard.binds),
+    // Retain exactly the history loadAccount exposes. The foreign-key
+    // cascade removes entries and wraps too; a failed or revoked replacement
+    // cannot prune because the new identity must exist under the same guard.
+    db
+      .prepare(
+        `DELETE FROM e2ee_identities
+         WHERE user_id = ? AND generation < ? AND ${guard.sql}`
+      )
+      .bind(userId, input.generation - PREVIOUS_GENERATIONS, ...guard.binds)
   ];
   const results = await db.batch(statements);
   return (results[0]?.meta?.changes ?? 0) === 1;

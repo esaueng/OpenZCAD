@@ -7,8 +7,8 @@
 
 -- One row per identity key a user has had. Replacing the recovery key
 -- replaces the identity and starts a new generation with a fresh device
--- list; older generations stay readable so the browser can list the devices
--- to approve again.
+-- list; the current and three previous generations stay readable so the
+-- browser can list devices to approve again. Replacement prunes older rows.
 CREATE TABLE e2ee_identities (
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   generation INTEGER NOT NULL CHECK (generation >= 1),

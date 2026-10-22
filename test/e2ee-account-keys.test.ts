@@ -597,6 +597,86 @@ describe('refusing what a server substitutes', () => {
 });
 
 describe('replacing the recovery key', () => {
+  it('bounds retained generations and cascades old entries without touching another account', async () => {
+    const srv = server();
+    const { laptop, recovery } = await setUp(srv);
+    await enrolled(srv, recovery.secret, 'Phone');
+    srv.db
+      .prepare('INSERT INTO users (id, email, created_at) VALUES (?, NULL, ?)')
+      .run('user_other', new Date().toISOString());
+    srv.db
+      .prepare(
+        `INSERT INTO e2ee_identities SELECT 'user_other', generation, identity_key, transition_statement, transition_signature, created_at FROM e2ee_identities WHERE user_id = ?`
+      )
+      .run(USER);
+    srv.db
+      .prepare(
+        `INSERT INTO e2ee_device_list_entries SELECT 'user_other', generation, sequence, entry, signature, entry_hash, created_at FROM e2ee_device_list_entries WHERE user_id = ?`
+      )
+      .run(USER);
+    let account = ready(await loadEncryption(laptop));
+    for (let generation = 2; generation <= 8; generation++) {
+      account = ready(
+        await replaceRecoveryKey(
+          laptop,
+          account,
+          (await generateRecoveryKey()).secret,
+          null
+        )
+      );
+      expect(account.generation).toBe(generation);
+      expect(account.previous.map((previous) => previous.generation)).toEqual(
+        Array.from(
+          { length: Math.min(3, generation - 1) },
+          (_, index) => generation - index - 1
+        )
+      );
+      expect(account.unlocked).toBe(true);
+      expect(
+        count(
+          srv.db,
+          'SELECT COUNT(*) AS n FROM e2ee_identities WHERE user_id = ?',
+          USER
+        )
+      ).toBeLessThanOrEqual(4);
+    }
+    expect(
+      srv.db
+        .prepare(
+          'SELECT generation FROM e2ee_identities WHERE user_id = ? ORDER BY generation'
+        )
+        .all(USER)
+    ).toEqual([5, 6, 7, 8].map((generation) => ({ generation })));
+    expect(
+      count(
+        srv.db,
+        'SELECT COUNT(*) AS n FROM e2ee_device_list_entries WHERE user_id = ? AND generation < 5',
+        USER
+      )
+    ).toBe(0);
+    expect(
+      count(
+        srv.db,
+        'SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE user_id = ? AND generation < 8',
+        USER
+      )
+    ).toBe(0);
+    expect(
+      count(
+        srv.db,
+        'SELECT COUNT(*) AS n FROM e2ee_identities WHERE user_id = ?',
+        'user_other'
+      )
+    ).toBe(1);
+    expect(
+      count(
+        srv.db,
+        'SELECT COUNT(*) AS n FROM e2ee_device_list_entries WHERE user_id = ?',
+        'user_other'
+      )
+    ).toBe(2);
+  });
+
   it('starts a new identity with only this device and a fresh recovery key', async () => {
     const srv = server();
     const { recovery, laptop } = await setUp(srv);
