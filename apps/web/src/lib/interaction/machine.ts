@@ -2,6 +2,7 @@ import type { ExtrudeChoice } from '../extrudeInference';
 import type {
   ParamValue,
   SketchPlaneRef,
+  SketchProjectionMode,
   TextAlign,
   TextFontStyle,
   TopologySelection
@@ -80,7 +81,9 @@ export type SketchToolId =
   | 'polygon'
   | 'ellipse'
   | 'spline'
-  | 'text';
+  | 'text'
+  /** I01: pick model edges or faces to project into the sketch. */
+  | 'project';
 
 /**
  * The curve slot's types (I01): the Ellipse tool draws a full ellipse or an
@@ -291,12 +294,24 @@ export interface SketchSessionState {
   drawing: boolean;
   /** Stable document id of the entity selected for editing. */
   selectedObjectId: string | null;
+  /**
+   * The relation picked from its viewport glyph; Delete removes it. It sits
+   * beside the entity selection rather than replacing it, so a relation
+   * picked from the selected entity's glyphs keeps that entity's glyphs up.
+   * Absent is none.
+   */
+  selectedConstraintId?: string | null;
   /** Armed constraint tool, if any; picking routes here instead of select. */
   pendingConstraint: PendingSketchConstraint | null;
   /** Armed modify tool, if any; picking routes here instead of select. */
   pendingEdit: PendingSketchEdit | null;
   /** The Offset tool's settings; absent is a mitered chain. */
   offsetOptions?: SketchOffsetOptions;
+  /**
+   * I01: whether the Project tool keeps what it projects linked to its edge
+   * or copies it once; absent is linked.
+   */
+  projectMode?: SketchProjectionMode;
   /**
    * The selected object's drag-move, while the pointer holds it. Absent
    * otherwise; a release commits it and Escape cancels it, and neither
@@ -428,6 +443,7 @@ export type InteractionEvent =
   | { type: 'sketch-created'; sketchId: string }
   | { type: 'sketch-drawing'; drawing: boolean }
   | { type: 'sketch-select-object'; objectId: string | null }
+  | { type: 'sketch-select-constraint'; constraintId: string | null }
   | {
       type: 'sketch-constraint-tool';
       kind: SketchConstraintToolKind | null;
@@ -435,6 +451,7 @@ export type InteractionEvent =
   | { type: 'sketch-constraint-pick'; pick: SketchConstraintPick }
   | { type: 'sketch-edit-tool'; kind: SketchEditToolKind | null }
   | { type: 'sketch-offset-options'; options: SketchOffsetOptions }
+  | { type: 'sketch-project-mode'; mode: SketchProjectionMode }
   | { type: 'sketch-edit-pick'; objectId: string }
   | {
       type: 'sketch-move-start';
@@ -509,6 +526,21 @@ export function sketchPickArmed(state: InteractionState): boolean {
 }
 
 /**
+ * I01: whether an armed projection re-pick still holds. A re-pick replaces a
+ * linked projection's source, so it lives only while Project is armed in
+ * linked mode: leaving the tool, or stepping to Unlinked from the strip or
+ * the project key, disarms it, and the next pick then does what the strip
+ * shows.
+ */
+export function projectionRepickHolds(state: InteractionState): boolean {
+  return (
+    state.mode === 'sketch' &&
+    state.session.tool === 'project' &&
+    (state.session.projectMode ?? 'linked') === 'linked'
+  );
+}
+
+/**
  * What the next Escape press does.
  *
  * Inside a sketch Escape climbs a ladder, innermost state first: the chain
@@ -561,7 +593,7 @@ export function escapeTarget(
     if (state.session.tool !== 'select') {
       return 'exit-drawing-tool';
     }
-    return state.session.selectedObjectId
+    return state.session.selectedObjectId || state.session.selectedConstraintId
       ? 'clear-sketch-selection'
       : 'exit-sketch';
   }
@@ -831,6 +863,7 @@ function reduceInteraction(
           circleMode: 'center-radius',
           drawing: false,
           selectedObjectId: null,
+          selectedConstraintId: null,
           pendingConstraint: null,
           pendingEdit: null
         }
@@ -847,6 +880,7 @@ function reduceInteraction(
           circleMode: event.mode,
           drawing: false,
           selectedObjectId: null,
+          selectedConstraintId: null,
           pendingConstraint: null,
           pendingEdit: null
         }
@@ -863,6 +897,7 @@ function reduceInteraction(
           curveMode: event.mode,
           drawing: false,
           selectedObjectId: null,
+          selectedConstraintId: null,
           pendingConstraint: null,
           pendingEdit: null,
           textDraft: null
@@ -880,6 +915,7 @@ function reduceInteraction(
           rectangleMode: event.mode,
           drawing: false,
           selectedObjectId: null,
+          selectedConstraintId: null,
           pendingConstraint: null,
           pendingEdit: null,
           textDraft: null
@@ -915,6 +951,7 @@ function reduceInteraction(
           drawing: false,
           selectedObjectId:
             event.tool === 'select' ? state.session.selectedObjectId : null,
+          selectedConstraintId: null,
           pendingConstraint: null,
           pendingEdit: null,
           // The text tool opens its card at once with an empty string; the
@@ -941,7 +978,8 @@ function reduceInteraction(
           pendingConstraint: event.kind
             ? { kind: event.kind, picks: [] }
             : null,
-          pendingEdit: null
+          pendingEdit: null,
+          selectedConstraintId: null
         }
       };
     case 'sketch-constraint-pick':
@@ -971,9 +1009,28 @@ function reduceInteraction(
           tool: 'select',
           drawing: false,
           pendingConstraint: null,
-          pendingEdit: event.kind ? { kind: event.kind, picks: [] } : null
+          pendingEdit: event.kind ? { kind: event.kind, picks: [] } : null,
+          selectedConstraintId: null
         }
       };
+    case 'sketch-project-mode':
+      // Choosing linked or unlinked arms the Project tool, like a circle type
+      // arms the Circle tool.
+      return state.mode === 'sketch'
+        ? {
+            ...state,
+            session: {
+              ...state.session,
+              tool: 'project',
+              projectMode: event.mode,
+              drawing: false,
+              selectedObjectId: null,
+              pendingConstraint: null,
+              pendingEdit: null,
+              textDraft: null
+            }
+          }
+        : state;
     case 'sketch-offset-options':
       // A setting of the tool, like the polygon's side count: it never
       // disarms the tool or drops a pick.
@@ -1031,7 +1088,25 @@ function reduceInteraction(
               ...state.session,
               tool: 'select',
               drawing: false,
-              selectedObjectId: event.objectId
+              selectedObjectId: event.objectId,
+              selectedConstraintId: null
+            }
+          }
+        : state;
+    case 'sketch-select-constraint':
+      // A glyph click is a plain selection: it lands on Select and ends any
+      // armed pick tool, but keeps the selected entity (see the field).
+      return state.mode === 'sketch' && !state.session.moving
+        ? {
+            ...state,
+            session: {
+              ...state.session,
+              tool: 'select',
+              drawing: false,
+              pendingConstraint: null,
+              pendingEdit: null,
+              textDraft: null,
+              selectedConstraintId: event.constraintId
             }
           }
         : state;

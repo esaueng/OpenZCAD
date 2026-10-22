@@ -48,6 +48,29 @@ export {
   assertCopiedSourcesArchived,
   type CopiedImportArchive
 } from './copied-source-reconciliation';
+export {
+  decodeProjectStorageBody,
+  hydrateProjectStorageSnapshot,
+  openProjectStorageUpload,
+  prepareClientProjectStorageSnapshot,
+  prepareProjectStorageSnapshot,
+  PROJECT_OBJECT_STORAGE_FORMAT,
+  PROJECT_OBJECT_STORAGE_PREFIX,
+  PROJECT_OBJECT_STORAGE_VERSION,
+  ProjectObjectStorageError,
+  ProjectStorageUploadError,
+  sha256Hex,
+  splitProjectStorageAssets,
+  splitProjectStorageUpload,
+  type ClientProjectStorage,
+  type PreparedProjectStorageSnapshot,
+  type ProjectStorageAssetKind,
+  type ProjectStorageAssetObject,
+  type ProjectStorageAssetReference,
+  type ProjectStorageSnapshot,
+  type ProjectStorageSplit
+} from './project-storage-snapshot';
+import type { ClientProjectStorage } from './project-storage-snapshot';
 import { importArtifactIds } from './mesh-artifact-discard';
 export {
   importArtifactIds,
@@ -72,7 +95,9 @@ import {
   MAX_PROJECT_REVISIONS,
   MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_THUMBNAIL_BYTES,
+  PROJECT_SHARE_LINK_TTL_SECONDS,
   THUMBNAIL_CONTENT_TYPE,
+  isAcceptableReferenceImageArtifact,
   nowIso,
   persistedDocumentBytes,
   projectBranchPoint,
@@ -209,10 +234,13 @@ export function sharedProjectSnapshotDocument(
   // date and drawing-number text, and a share link opens no Draw workspace.
   // Objects folders (U06) are shared: they only organize bodies whose names
   // the visitor already sees, and carry no author, date or history.
+  // Reference images stay too: they are the owner's tracing underlays, and a
+  // share link serves import sources only, never their pictures.
   const {
     editHistory: _editHistory,
     branchedFrom: _branchedFrom,
     drawings: _drawings,
+    referenceImages: _referenceImages,
     ...current
   } = withoutDerivedProjection(document);
   return {
@@ -442,6 +470,15 @@ interface StoredRevision {
   document: ProjectDocument;
 }
 
+/** How a document write reached the account. */
+export interface ProjectWriteOptions {
+  /**
+   * The browser's storage projection of the document, verified by the
+   * Worker (ADR-024 Phase 1). Stores without object storage ignore it.
+   */
+  storage?: ClientProjectStorage;
+}
+
 export interface PersistenceService {
   requireProjectRead(userId: UserId, projectId: string): Promise<ProjectAccess>;
   requireProjectEdit(userId: UserId, projectId: string): Promise<ProjectAccess>;
@@ -489,7 +526,7 @@ export interface PersistenceService {
     projectId: string,
     input: CreateProjectShareLinkInput
   ): Promise<ProjectShareLinkSummary>;
-  /** Active links only; token hashes never leave the store. */
+  /** Unrevoked links, including expired ones so owners can revoke them; no token hashes. */
   listProjectShareLinks(
     ownerUserId: UserId,
     projectId: string
@@ -501,8 +538,8 @@ export interface PersistenceService {
     revokedAt: number
   ): Promise<void>;
   /**
-   * Resolves an unrevoked share link and loads its project document with the
-   * derived projection stripped. Unknown and revoked tokens are equally null
+   * Resolves an unrevoked, unexpired share link and loads its project document with the
+   * derived projection stripped. Unknown, revoked and expired tokens are equally null
    * so the route can stay an indistinguishable 404.
    */
   loadSharedProjectByTokenHash(
@@ -521,9 +558,14 @@ export interface PersistenceService {
     artifactId: string
   ): Promise<SharedProjectImportDownload | null>;
   listProjects(userId: UserId): Promise<ListProjectsResponse>;
+  /**
+   * `options.storage` is a browser-split write the Worker already verified
+   * (ADR-024 Phase 1); `request.document` is then its hydrated document.
+   */
   createProject(
     userId: UserId,
-    request: CreateProjectRequest
+    request: CreateProjectRequest,
+    options?: ProjectWriteOptions
   ): Promise<CreateProjectResponse>;
   /**
    * Copies a project, including its feature history, into a new one.
@@ -531,7 +573,8 @@ export interface PersistenceService {
    */
   duplicateProject(
     userId: UserId,
-    request: DuplicateProjectRequest
+    request: DuplicateProjectRequest,
+    options?: ProjectWriteOptions
   ): Promise<CreateProjectResponse>;
   /**
    * Moves a project between shelves, pins it, or repositions it.
@@ -564,7 +607,8 @@ export interface PersistenceService {
   /** @throws ProjectNotFoundError when the project does not exist. */
   saveRevision(
     userId: UserId,
-    request: SaveRevisionRequest
+    request: SaveRevisionRequest,
+    options?: ProjectWriteOptions
   ): Promise<ProjectDocument>;
   /**
    * The project's retained save states, newest first, without their documents.
@@ -599,7 +643,8 @@ export interface PersistenceService {
    */
   saveDocument(
     userId: UserId,
-    request: SaveProjectDocumentRequest
+    request: SaveProjectDocumentRequest,
+    options?: ProjectWriteOptions
   ): Promise<SaveProjectDocumentResponse>;
   /** What this account currently stores, and the limits it is measured against. */
   getStorageUsage(userId: UserId): Promise<AccountStorageUsage>;
@@ -654,7 +699,7 @@ export interface PersistenceService {
     userId: UserId,
     projectId: string,
     artifactId: string,
-    originalKind?: 'stl-import' | 'mesh-import'
+    originalKind?: 'stl-import' | 'mesh-import' | 'reference-image'
   ): Promise<{ deleted: boolean }>;
   listArtifacts(
     userId: UserId,
@@ -1076,9 +1121,13 @@ export class InMemoryPersistenceService implements PersistenceService {
   async loadSharedProjectByTokenHash(
     tokenHash: string
   ): Promise<SharedProjectSnapshot | null> {
+    const oldestValidCreation =
+      Math.floor(Date.now() / 1000) - PROJECT_SHARE_LINK_TTL_SECONDS;
     const link = Array.from(this.projectShareLinks.values()).find(
       (candidate) =>
-        candidate.tokenHash === tokenHash && candidate.revokedAt === null
+        candidate.tokenHash === tokenHash &&
+        candidate.revokedAt === null &&
+        candidate.createdAt > oldestValidCreation
     );
     const document = link ? this.projects.get(link.projectId) : undefined;
     if (!link || !document) {
@@ -1352,7 +1401,7 @@ export class InMemoryPersistenceService implements PersistenceService {
             expectedVersion: current.version,
             document: copied
           },
-          current
+          { expectedDocument: current }
         );
         copied = {
           ...copied,
@@ -1857,8 +1906,9 @@ export class InMemoryPersistenceService implements PersistenceService {
   async saveDocument(
     userId: UserId,
     request: SaveProjectDocumentRequest,
-    expectedDocument?: ProjectDocument
+    options?: ProjectWriteOptions & { expectedDocument?: ProjectDocument }
   ): Promise<SaveProjectDocumentResponse> {
+    const expectedDocument = options?.expectedDocument;
     const existing = this.projects.get(request.projectId);
     if (!existing) {
       throw new ProjectNotFoundError(request.projectId);
@@ -2161,6 +2211,14 @@ export class InMemoryPersistenceService implements PersistenceService {
         'Thumbnail artifact is invalid or too large.'
       );
     }
+    if (
+      artifact.kind === 'reference-image' &&
+      !isAcceptableReferenceImageArtifact(artifact.contentType, body.byteLength)
+    ) {
+      throw new ArtifactStorageError(
+        'Reference image artifact is not a PNG or JPEG within the size limit.'
+      );
+    }
     if (artifact.kind === 'thumbnail') {
       for (const [artifactId, existing] of this.artifacts) {
         if (
@@ -2183,7 +2241,7 @@ export class InMemoryPersistenceService implements PersistenceService {
     userId: UserId,
     projectId: string,
     artifactId: string,
-    originalKind?: 'stl-import' | 'mesh-import'
+    originalKind?: 'stl-import' | 'mesh-import' | 'reference-image'
   ): Promise<{ deleted: boolean }> {
     const access = await this.requireProjectEdit(userId, projectId);
     // Originals are stored files, and finalized records do not identify the

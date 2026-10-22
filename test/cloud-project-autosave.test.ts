@@ -7,6 +7,7 @@ import {
 import {
   JsonComplexityGuard,
   MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
+  MAX_CLOUD_PROJECT_WRITE_BYTES,
   MAX_DOCUMENT_VALUES,
   documentStructureError,
   toUserId,
@@ -474,6 +475,20 @@ describe('cloud project autosave — what it declines to do', () => {
     controller.dispose();
   });
 
+  it('resumes a failed departure without losing a later durable edit', async () => {
+    const { controller, saves } = harness();
+    const baseline = documentAt(2);
+    controller.openProject(baseline.projectId, baseline.version);
+    controller.schedule(documentAt(3, baseline));
+    controller.closeProject();
+    // A local save can finish while session revocation is in flight.
+    controller.schedule(documentAt(4, baseline));
+    controller.openProject(baseline.projectId, baseline.version);
+    await controller.flushPending();
+    expect(saves).toEqual([{ expectedVersion: 2, version: 4 }]);
+    controller.dispose();
+  });
+
   it('recognises the document the account already holds', () => {
     const { controller } = harness();
     const document = documentAt(2);
@@ -905,12 +920,12 @@ describe('cloud project autosave — refusals', () => {
     },
     {
       path: 'declared request length',
-      limitBytes: 25 * 1024 * 1024,
+      limitBytes: MAX_CLOUD_PROJECT_WRITE_BYTES,
       contentLength: true
     },
     {
       path: 'streamed request bytes',
-      limitBytes: 25 * 1024 * 1024,
+      limitBytes: MAX_CLOUD_PROJECT_WRITE_BYTES,
       contentLength: false
     }
   ])(
@@ -977,7 +992,7 @@ describe('cloud project autosave — refusals', () => {
         expect((errors[0] as ApiError).status).toBe(413);
         expect(lastState(statuses)).toBe('refused');
         if (limitBytes > MAX_CLOUD_PROJECT_DOCUMENT_BYTES) {
-          // A request fitting 25 MiB may still exceed the canonical 24 MiB cap.
+          // A request that fits may still exceed the canonical 24 MiB cap.
           controller.schedule({
             ...document,
             version: document.version + 2,
@@ -1224,6 +1239,92 @@ describe('cloud project autosave — refusals', () => {
 });
 
 describe('cloud project autosave — flushing', () => {
+  it('rechecks edits when a drain begins with a write already in flight', async () => {
+    const held = gate();
+    const started = gate();
+    const { controller, saves } = harness({
+      respond: async (input) => {
+        if (input.document.version === 3) {
+          started.open();
+          await held.wait;
+        }
+        return { projectId: input.document.projectId, version: input.document.version, updatedAt: '2026-01-01T00:00:00.000Z' };
+      }
+    });
+    const document = documentAt(2);
+    controller.openProject(document.projectId, 2);
+    controller.schedule(documentAt(3, document));
+    const first = controller.flush();
+    await started.wait;
+    expect(controller.hasPendingChanges).toBe(false);
+    const draining = controller.flushPending();
+    controller.schedule(documentAt(4, document));
+    held.open();
+    await Promise.all([first, draining]);
+
+    expect(saves.map((save) => save.version)).toEqual([3, 4]);
+    expect(controller.hasPendingChanges).toBe(false);
+    controller.dispose();
+  });
+
+  it.each(['paused', 'offline', 'conflict'] as const)('rechecks %s eligibility before a queued write starts', async (state) => {
+    const held = gate();
+    const h = harness({
+      respond: async (input) => {
+        if (input.document.version === 3) await held.wait;
+        return { projectId: input.document.projectId, version: input.document.version, updatedAt: '2026-01-01T00:00:00.000Z' };
+      }
+    });
+    const document = documentAt(2);
+    h.controller.openProject(document.projectId, 2);
+    h.controller.schedule(documentAt(3, document));
+    const first = h.controller.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    h.controller.schedule(documentAt(4, document));
+    const queued = h.controller.flush();
+    if (state === 'paused') h.controller.configure({ enabled: false });
+    else if (state === 'offline') h.setConnectivity(false);
+    else h.controller.haltForConflict(document.projectId);
+    held.open();
+    await Promise.all([first, queued]);
+
+    expect(h.saves.map((save) => save.version)).toEqual([3]);
+    expect(h.controller.hasPendingChanges).toBe(true);
+    expect(lastState(h.statuses)).toBe(state);
+    await h.controller.flushPending();
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_MAX_WAIT_MS * 2);
+    expect(h.saves).toHaveLength(1);
+    h.controller.dispose();
+  });
+
+  it('preserves a newer edit over an ineligible queued snapshot and resumes with the acknowledged fence', async () => {
+    const held = gate();
+    const { controller, saves } = harness({
+      respond: async (input) => {
+        if (input.document.version === 3) await held.wait;
+        return { projectId: input.document.projectId, version: input.document.version, updatedAt: '2026-01-01T00:00:00.000Z' };
+      }
+    });
+    const document = documentAt(2);
+    controller.openProject(document.projectId, 2);
+    controller.schedule(documentAt(3, document));
+    const first = controller.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    controller.schedule(documentAt(4, document));
+    const queued = controller.flush();
+    controller.configure({ enabled: false });
+    controller.schedule(documentAt(5, document));
+    held.open();
+    await Promise.all([first, queued]);
+    expect(saves.map((save) => save.version)).toEqual([3]);
+    controller.configure({ enabled: true });
+    await vi.advanceTimersByTimeAsync(0);
+    await controller.whenIdle();
+    expect(saves).toEqual([{ version: 3, expectedVersion: 2 }, { version: 5, expectedVersion: 3 }]);
+    expect(controller.hasPendingChanges).toBe(false);
+    controller.dispose();
+  });
+
   it('writes immediately on flush rather than waiting out the delay', async () => {
     const { controller, saves } = harness();
     const document = documentAt(2);

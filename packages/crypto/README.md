@@ -5,8 +5,8 @@ End-to-end encryption primitives for ADR-024, end-to-end encrypted projects
 [esaueng/OpenZCAD#743](https://github.com/esaueng/OpenZCAD/pull/743); this
 reference becomes a link to `docs/adrs/` once that lands. WebCrypto and web streams only, with no
 dependencies, so the same code runs in browsers, Web Workers, the Tauri
-WKWebView and Node 20+. Nothing in the application imports it yet; Phases 3–5
-wire it in.
+WKWebView and Node 20+. Phase 3's account keys (device lists, unlock targets,
+device approval) are its first application use; Phases 4–5 add projects.
 
 All integers are big-endian. Every label below is UTF-8 and prefixed with
 `OpenZCAD E2EE `, so `v1 wrap version-key` means the bytes of
@@ -143,10 +143,9 @@ settles: it resolves when the envelope finishes, and it rejects with
   content under the same header with valid tags, and a test shows such a
   forgery fails verification.
 
-Key management is not in this package: device lists, the signed roster and
-its entry types, contacts lists, revocation cutoffs and read modes. That code
-is parked on the `claude/e2ee-chains` branch while MLS (RFC 9420) is assessed
-as its replacement.
+Device lists live here (below). The contacts list, the custom roster and
+its revocation cutoffs are parked on the `claude/e2ee-chains` branch: MLS
+(RFC 9420) replaces the roster and epochs, and contacts arrive with sharing.
 
 ## Key wrapping
 
@@ -166,22 +165,28 @@ keys are raw uncompressed P-256 points (65 bytes). The context is a
 `u8 name length | name | u8 type | value`, where type 1 is a `u16`-length
 UTF-8 string and type 2 a u64.
 
-| Purpose                  | Format | Fields                               | Wrapped by                                                                   |
-| ------------------------ | ------ | ------------------------------------ | ---------------------------------------------------------------------------- |
-| `account-key`            | KW     | userId, method, unlockId             | device key, passkey PRF output or recovery key; sealed to an approved device |
-| `identity-key`           | GCM    | userId, method, unlockId             | recovery key or passkey PRF output only (PKCS #8 bytes)                      |
-| `encryption-private-key` | GCM    | userId, keyId                        | account key (PKCS #8 bytes)                                                  |
-| `project-key`            | KW     | userId, projectId, keyEpoch          | sealed to a member; then the member's account key                            |
-| `version-key`            | KW     | projectId, keyEpoch, kind, versionId | project key                                                                  |
-| `dedupe-secret`          | KW     | projectId, keyEpoch                  | project key: the dedupe secret, carried across epochs                        |
-| `share-key`              | KW     | projectId, keyEpoch, shareId         | project key; it never encrypts content                                       |
-| `share-version-key`      | KW     | projectId, shareId, versionId        | share key: a share snapshot's version key, for link visitors                 |
+| Purpose                  | Format | Fields                                    | Wrapped by                                                                                                               |
+| ------------------------ | ------ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `account-key`            | Seal   | userId, method, unlockId                  | sealed to each certified unlock target: device unlock key, recovery-key or passkey target; or to a device being approved |
+| `identity-key`           | Seal   | userId, method, unlockId                  | sealed to the recovery-key or a passkey target only (PKCS #8 bytes)                                                      |
+| `unlock-target-key`      | GCM    | userId, method, unlockId, identityKeyHash | a target's private half (PKCS #8) under its secret: the recovery key or a passkey PRF output                             |
+| `encryption-private-key` | GCM    | userId, keyId                             | account key (PKCS #8 bytes)                                                                                              |
+| `project-key`            | KW     | userId, projectId, keyEpoch               | sealed to a member; then the member's account key                                                                        |
+| `version-key`            | KW     | projectId, keyEpoch, kind, versionId      | project key                                                                                                              |
+| `dedupe-secret`          | KW     | projectId, keyEpoch                       | project key: the dedupe secret, carried across epochs                                                                    |
+| `share-key`              | KW     | projectId, keyEpoch, shareId              | project key; it never encrypts content                                                                                   |
+| `share-version-key`      | KW     | projectId, shareId, versionId             | share key: a share snapshot's version key, for link visitors                                                             |
 
-Sealing to a public key is limited to two contexts (`SealContext`): the
-account key with method `device-approval`, for a device being approved, and a
-`project-key`, for a member. Any other purpose is refused
-(`invalid-argument`), so long-term private keys never leave their wrap
-hierarchy by seal.
+Every unlock method is a public-key target (ADR-024, Unlock and devices), so
+a rotation can re-seal a new account key to every target without knowing any
+method's secret. Sealing is therefore limited to three purposes
+(`SealContext`): the account key to a certified unlock target or a device
+being approved, the identity key to the recovery-key or a passkey target
+(its context schema has no device method), and a project key to a member.
+Any other purpose is refused (`invalid-argument`). A target's own private
+half is wrapped under the method's secret as `unlock-target-key`, whose
+context binds the identity key hash, so a server cannot pair a genuine
+target with an identity of its own.
 
 `wrapShareSnapshotKey` wraps a share snapshot's fresh version key twice:
 under the project key for members (`version-key`, kind `share-snapshot`) and
@@ -208,8 +213,13 @@ PRF input is `passkeyPrfInput()`, a fresh copy on each call.
 - **Project state code:**
   `SHA-256(label "v1 project state" | newest versionHash | u64 version | signer identity key hash)`,
   shown with `formatComparisonCode`.
-- **Device approval, scan form:** the new device shows its `publicKeyHash` as
-  a QR code, and the approver checks it with `verifyScannedDeviceKey`.
+- **Device approval, scan form:** the new device shows `pk_new =
+deviceKeysHash(signing, unlock)`, the `publicKeyHash` of both its public
+  keys, as a QR code, and the approver checks the pair the server delivered
+  with `verifyScannedDeviceKey([signing, unlock], scanned)`. Every approval
+  function takes the key pair as an array and binds `pk_new` (32 bytes); a
+  single raw key (65 bytes) is still bound as itself, so the two never
+  collide.
 - **Device approval, compare form:** the new device sends
   `SHA-256(label "v1 device approval commitment" | pk_new | n_new)` first. Only
   after it receives the approver's key and nonce `n_app` does it reveal
@@ -221,10 +231,45 @@ PRF input is `passkeyPrfInput()`, a fresh copy on each call.
   as 56 Crockford base32 characters in hyphenated groups of four. Parsing
   ignores case, spaces and hyphens and reads O as 0 and I or L as 1.
 
+## Device lists
+
+A user's device list is a hash chain of entries signed by their identity key
+(`v1 device list signature`, `u8 1 | r ‖ s`). Each entry is a full snapshot:
+
+```
+"OZD" | u8 1 | u32 sequence | u8 (0|32) + previous entry hash | u8 length + user id
+| u64 issuedAt | u8 (0|32) + replaced identity key hash | 65-byte encryption key
+| 32-byte account key commitment
+| u16 count + devices by id (u8 length + id, u8 length + UTF-8 label, 65-byte signing key, 65-byte unlock key, u64 addedAt)
+| u16 count + unlock targets by id (u8 kind 1 recovery-key / 2 passkey, u8 length + id, 65-byte key, u64 addedAt)
+| u16 count + revocations by kind, then id (u8 kind 1 device / 2 unlock target, u8 length + id)
+```
+
+`deviceListEntryHash` is `SHA-256(label "v1 device list entry hash" | entry)`.
+`accountKeyCommitment` is `SHA-256(label "v1 account key commitment" | key)`;
+every unlock checks the opened account key against it. `verifyDeviceList`
+enforces, oldest first: canonical bytes, the identity signature, sequence 0
+then +1 with the previous hash, one user, real P-256 points, exactly one
+recovery-key target fixed for the life of the identity, an explicit
+revocation for anything dropped, a rotated encryption key and account key in
+any entry that revokes, and no revoked id or key (or replaced encryption or
+account key) ever returning. With a pin (identity key hash, sequence, entry
+hash) it refuses another identity (`context-mismatch`) and a list that does
+not contain the pinned entry (`chain-broken`). `nextDeviceListEntry` builds
+the next entry from a verified head.
+
+Two statements travel beside lists. An identity transition (`"OZT"`) names
+the old identity hash, the new identity key and its first entry's hash, and
+is signed by the old identity or a device it certified; it proves nothing to
+contacts. A device approval grant (`"OZG"`) is signed by the approving
+device's key and names the approved device's `pk_new`, the identity and the
+device-list head the new device should pin, and whether it was certified.
+
 ## Tests
 
 `vectors.test.ts` holds fixed vectors built from injected keys, blob ids, IVs,
-ephemeral keys and timestamps. It also re-derives the nonce layout, both
+ephemeral keys and timestamps, including a device-list entry and a paired
+approval commitment. It also re-derives the nonce layout, both
 envelope classes, the content blob hash and the wrap with raw WebCrypto. A
 change to a vector is a format change and needs a new version byte.
 `fuzz.test.ts` mutates valid inputs and requires every parser to fail only

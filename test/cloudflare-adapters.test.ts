@@ -60,6 +60,7 @@ describe('cloudflare adapters', () => {
       'PROJECT_SHARING_ENABLED',
       'PROJECT_EDIT_LEASES_ENFORCED',
       'PROJECT_PERSONAL_SYNC_ENABLED',
+      'E2EE_KEYS_ENABLED',
       'AI_PATCH_DIRECT_EDIT_ENABLED',
       'AI_PATCH_GROWING_HOLDER_ENABLED',
       'AI_PATCH_HOLE_CONTROL_ENABLED',
@@ -69,6 +70,7 @@ describe('cloudflare adapters', () => {
       'AI_PATCH_SHELL_ENABLED',
       'AI_PATCH_SOLID_OFFSET_ENABLED',
       'AI_PATCH_DATUM_PLANE_ENABLED',
+      'AI_PATCH_DATUM_GEOMETRY_ENABLED',
       'AI_PATCH_PARTIAL_REVOLVE_ENABLED'
     ]);
     expect(isCloudflareFeatureEnabled({}, 'PROJECT_SHARING_ENABLED')).toBe(

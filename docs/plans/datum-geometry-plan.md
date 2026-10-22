@@ -46,8 +46,8 @@
 > edge; a deleted, ambiguous, closed or hash-only edge refuses by name, and
 > no vertex is chosen by proximity. Both kernels share the construction
 > rules (`packages/geometry`) and the edge-vertex resolver
-> (`face-attachment.ts`). Vertex re-pick repair and AI operations for these
-> kinds remain open.
+> (`face-attachment.ts`). Vertex re-pick repair and the AI contract for
+> these constructors are specified below.
 
 > **Datum axes (2026-10-19, schema v28):** a datum axis is a `datum-axis`
 > feature in `featureOrder`, resolved once at its own history position into a
@@ -82,6 +82,86 @@
 This revision replaces the earlier canonical-offset-only first slice.
 [ROADMAP.md](../../ROADMAP.md#r01) owns delivery status. This document proposes
 contracts and acceptance evidence; it adds no runtime capability or schema bump.
+
+## Vertex-source repair (R01 recovery slice)
+
+The existing three-point/parallel-at-point planes and two-point axes retain
+their authored feature identities when a qualified edge-end source disappears.
+History offers explicit re-pick actions for each stored vertex slot and for
+all vertex slots together. Typed point slots are retained. A missing frame
+alone is not a lost-source signal: suppression, an unfinished rebuild and
+coincident/collinear points must not advertise source repair as a diagnosis.
+
+Repair stages qualified endpoint choices against one project and document
+version. Every pick must identify an open edge and an explicit, unambiguous
+end; invalid, closed, ambiguous or stale picks report their reason without
+altering the document. Replacing multiple lost sources stages them all before
+validation, so a deleted body that owned every defining point can be repaired
+in one edit. Picking a source never silently changes a typed point or a datum's
+construction kind, expressions, direction flags or other source slots.
+
+One ordinary feature update commits only after exact preflight resolves the
+repaired datum and affected active body outputs, preserving previously resolved
+downstream datums. A later source, degenerate geometry,
+failed consumer, moved document, cancellation or superseded worker reply
+cannot publish a partial repair or add a history entry. Invalid final choices
+remain retryable. Escape and project/tool changes withdraw pending repair and
+restore ordinary selection behavior. Undo restores every original source;
+redo, replay, backup and reopen retain the same datum and replacement sources.
+
+This slice changes no schema, source resolver, units, tolerances or kernel API.
+The source remains an existing `EdgeVertexPointSource`; an explicit viewport
+pick chooses an end, and exact rebuilds resolve that identity without any
+nearest-geometry repair fallback. `ROADMAP.md` records implementation evidence.
+
+## AI datum geometry contract
+
+The legacy `add_datum_plane` wire contract remains canonical/datum offset and
+midplane only. `add_datum_plane_v2` accepts all four shipped plane definitions:
+offset, midplane, three-point and parallel-point. `add_datum_axis` accepts the
+four shipped axis definitions: two-point, straight edge, cylinder/cone face and
+plane intersection. Typed points keep raw unit-aware coordinate expressions;
+edge vertices use the exact stored end 0/1 convention. Neither operation adds
+a document schema or a new geometric constructor.
+
+Plane and axis aliases are distinct, globally unique and declared before use.
+`update_datum_plane` and `update_datum_axis` replace a full definition through
+the ordinary feature-update command, retaining feature identity and name.
+Retained canonical Front sources preserve their original basis revision or
+legacy absence even when an offset expression or direction changes.
+`add_datum_revolve`, `add_datum_pattern` (circular), and
+`add_datum_transform` (axis rotation then translation, in place) consume an
+axis ID or an earlier axis alias. Existing datum sketch, mirror and split
+operations also consume planes created by the expanded operation. Old numeric
+mirror, revolve, pattern and transform contracts keep their existing meaning.
+
+Face sources copy one unique current digest face's exact reference, unrounded
+geometry, area centroid and deterministic attachment frame. Edge and vertex
+sources copy a unique exact edge reference; display polylines and rounded
+bounds are not source proofs. Closed vertices, curved edge axes, wrong-kind
+aliases, invented/stale/ambiguous identities and forward sources refuse.
+Topology sources cannot refer to same-proposal body aliases. For an update,
+an unchanged historical source may be retained verbatim from the target's
+existing definition after its body was consumed later. A changed source needs
+current live topology proof; exact preflight still proves availability at the
+datum's own history position.
+
+The digest publishes exact edge references and each datum's resolved,
+unresolved or suppressed status with its available frame/axis. An unresolved
+datum may be the target of an explicit repair; it cannot serve as a source.
+Preview and Apply require the edited/created datum to resolve even when no
+solid is created and no new warning text appears. They also check affected
+active body outputs and preserve previously resolved downstream datums.
+Degenerate geometry, failed consumers and withdrawn or superseded attempts
+publish no partial document or history. A successful proposal remains one
+undoable transaction, replayable through native backup and reopen.
+
+The seven expanded operations negotiate separately through
+`AI_PATCH_DATUM_GEOMETRY_ENABLED`. Older tabs retain the four legacy plane
+operations behind `AI_PATCH_DATUM_PLANE_ENABLED`; a missing or incomplete new
+capability list never widens their schema. Schema, runtime parser, command
+lowering, summaries, prompt, digest qualification and exact preflight must agree
+before enabling the new group. `ROADMAP.md` records acceptance evidence.
 
 ## Decision and scope
 

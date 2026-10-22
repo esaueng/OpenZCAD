@@ -44,13 +44,18 @@ import {
   diagnoseImportedSolid,
   faceCandidatesForSolid,
   modifierChainRootPrimitive,
-  patternJournalEdgeOutputs,
+  patternJournalBoundaryOutputs,
+  patternJournalBoundaryOutputsForSources,
   patternJournalFaceClaims,
   rederiveBoxModifierLineage,
   rederiveCylinderModifierLineage,
   rederivePrimitiveDirectEditLineage,
   topologyCandidatesForSolid
 } from './exact-lineage-builders';
+import {
+  qualifyGridNativeVertices,
+  type RemusNativeVertexState
+} from './remus-native-vertices';
 import { measureFaceGeometry } from './exact-measure';
 import {
   drillHole,
@@ -211,6 +216,7 @@ import {
   resolveSketchBasisAtHistory
 } from './exact-profile-builders';
 import { applyDirectEdit } from './exact-direct-edit-ops';
+import { resolveSketchProjectionsAtHistory } from './exact-sketch-projection';
 import type { FeatureBuildContext, FeatureDataOf } from './exact-build-loop';
 
 /**
@@ -232,9 +238,21 @@ function buildSketchFeature(
   if (!sketch) {
     throw new Error('Referenced sketch no longer exists.');
   }
-  result.sketchBases.set(
-    sketch.sketchId,
-    resolveSketchBasisAtHistory(kernel, document, sketch, result, scope)
+  const basis = resolveSketchBasisAtHistory(
+    kernel,
+    document,
+    sketch,
+    result,
+    scope
+  );
+  result.sketchBases.set(sketch.sketchId, basis);
+  resolveSketchProjectionsAtHistory(
+    kernel,
+    document,
+    sketch,
+    feature,
+    basis,
+    result
   );
 }
 
@@ -971,12 +989,13 @@ function buildHelicalSweepFeature(
   }
 }
 
-function buildTransformFeature(
+/** The ordinary and prepared paths must project the same authored transform. */
+function resolveTransformFeature(
   ctx: FeatureBuildContext,
   feature: FeatureNode,
   data: FeatureDataOf<'transform'>
-): void {
-  const { kernel, document, scope, result } = ctx;
+) {
+  const { document, scope, result } = ctx;
   const target = result.shapes.get(data.targetBodyId);
   if (!target) {
     throw new Error('Transform target is unavailable.');
@@ -1035,19 +1054,77 @@ function buildTransformFeature(
       z: resolveParamValue(pivot.z, scope, 'pivot Z', document.units)
     }
   );
-  result.shapes.set(
-    resultBodyId,
-    copyShapeWithVerifiedLineage(
-      kernel,
-      target,
-      axisTurn ? composeAffine(authored, axisTurn) : authored,
-      // Both primitive planners convert world-space drags through uniform scale.
-      ['cylinder', 'box'].includes(
-        modifierChainRootPrimitive(document, data.targetBodyId) ?? ''
-      )
-    )
+  const matrix = axisTurn ? composeAffine(authored, axisTurn) : authored;
+  // Both primitive planners convert world-space drags through uniform scale.
+  const allowUniformScale = ['cylinder', 'box'].includes(
+    modifierChainRootPrimitive(document, data.targetBodyId) ?? ''
   );
+  return { target, resultBodyId, matrix, allowUniformScale };
+}
+
+function buildTransformFeature(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'transform'>
+): void {
+  const { kernel, result } = ctx;
+  const { target, resultBodyId, matrix, allowUniformScale } =
+    resolveTransformFeature(ctx, feature, data);
+  const transformed = copyShapeWithVerifiedLineage(
+    kernel,
+    target,
+    matrix,
+    allowUniformScale
+  );
+  result.shapes.set(resultBodyId, transformed);
+  try {
+    if (data.axisRotation) ctx.idleLineageView?.abandon();
+    else
+      ctx.idleLineageView?.transform(
+        kernel,
+        data.targetBodyId,
+        resultBodyId,
+        transformed,
+        matrix,
+        allowUniformScale
+      );
+  } catch {
+    // An unavailable alternate view keeps ordinary exact-mode replay.
+    ctx.idleLineageView?.abandon();
+  }
   if (data.copy) inheritMeshOrigin(result, data.targetBodyId, resultBodyId);
+}
+
+/** Complete alternate metadata after existing prepared geometry reuse. */
+export function completePreparedFeatureLineage(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode
+): void {
+  const view = ctx.idleLineageView;
+  if (!view) return;
+  try {
+    const data = feature.data;
+    if (data.featureKind === 'transform') {
+      if (data.axisRotation) return view.abandon();
+      const { resultBodyId, matrix, allowUniformScale } =
+        resolveTransformFeature(ctx, feature, data);
+      const transformed = ctx.result.shapes.get(resultBodyId);
+      if (!transformed) return view.abandon();
+      view.transform(
+        ctx.kernel,
+        data.targetBodyId,
+        resultBodyId,
+        transformed,
+        matrix,
+        allowUniformScale
+      );
+    } else {
+      view.reused(feature, ctx.result, ctx.kernel, ctx.lineageDemand);
+    }
+  } catch {
+    // Metadata cannot change acceptance of the already verified prepared shape.
+    view.abandon();
+  }
 }
 
 /**
@@ -2120,37 +2197,53 @@ function combineBooleanOperands(
   }
   // M11: a kept input stays live beside the result, its own shape untouched.
   booleanConsumedBodyIds(data).forEach((bodyId) => result.consumed.add(bodyId));
-  result.shapes.set(bodyId, {
-    solids: [solid],
-    lineage: deriveBooleanLineage({
-      evidence:
-        evolutionProbe !== null &&
-        // No lineage demand means a caller that did not opt into the idle
-        // skip (exports, previews, seeding, tests): probe as always.
-        (ctx.lineageDemand === undefined ||
-          booleanEvolutionProbeNeeded(document, feature, ctx.lineageDemand))
-          ? probeBooleanEntityEvolution({
-              kernel,
-              operation: evolutionProbe.operation,
-              a: evolutionProbe.a,
-              b: evolutionProbe.b,
-              shipped: solid,
-              unify: (candidate) =>
-                evolutionProbe.operation === 'fuse'
-                  ? unifyUnionFaces(kernel, candidate)
-                  : unifyBooleanFaces(kernel, candidate),
-              operands: operandLineage
-            })
-          : declinedBooleanEvidence(
-              evolutionProbe === null
-                ? probeDeclined
-                : BOOLEAN_EVOLUTION_SKIPPED_NO_REFERENCE
-            ),
-      producingFeatureId: feature.featureId,
-      operands: operandLineage,
-      resultCandidates: topologyCandidatesForSolid(kernel, solid)
-    })
+  const probeSelected =
+    ctx.lineageDemand === undefined ||
+    booleanEvolutionProbeNeeded(document, feature, ctx.lineageDemand);
+  const evidence =
+    evolutionProbe !== null &&
+    // No lineage demand means a caller that did not opt into the idle
+    // skip (exports, previews, seeding, tests): probe as always.
+    probeSelected
+      ? probeBooleanEntityEvolution({
+          kernel,
+          operation: evolutionProbe.operation,
+          a: evolutionProbe.a,
+          b: evolutionProbe.b,
+          shipped: solid,
+          unify: (candidate) =>
+            evolutionProbe.operation === 'fuse'
+              ? unifyUnionFaces(kernel, candidate)
+              : unifyBooleanFaces(kernel, candidate),
+          operands: operandLineage
+        })
+      : declinedBooleanEvidence(
+          evolutionProbe === null
+            ? probeDeclined
+            : BOOLEAN_EVOLUTION_SKIPPED_NO_REFERENCE
+        );
+  const resultCandidates = topologyCandidatesForSolid(kernel, solid);
+  const lineage = deriveBooleanLineage({
+    evidence,
+    producingFeatureId: feature.featureId,
+    operands: operandLineage,
+    resultCandidates
   });
+  result.shapes.set(bodyId, { solids: [solid], lineage });
+  try {
+    ctx.idleLineageView?.boolean({
+      feature,
+      operands,
+      candidates: operandLineage,
+      resultCandidates,
+      selected: lineage,
+      probeSelected,
+      probeAvailable: evolutionProbe !== null,
+      declined: probeDeclined
+    });
+  } catch {
+    ctx.idleLineageView?.abandon();
+  }
 }
 
 function buildEdgeModifierFeature(
@@ -2352,14 +2445,27 @@ interface PatternInstanceBuild {
   readonly solids: number[];
   readonly claims: (ReadonlyMap<number, number> | undefined)[];
   readonly edgeOutputs: (ReadonlySet<number> | undefined)[];
+  readonly vertexOutputs: (ReadonlySet<number> | undefined)[];
+  readonly vertexUnavailableReason: (
+    'event-budget' | 'journal-unavailable' | undefined
+  )[];
 }
 
 /** What one source solid's kernel pattern produced. */
 interface KernelPatternCopies {
   readonly solids: number[];
   readonly claims: (ReadonlyMap<number, number> | undefined)[] | null;
-  /** Grid-only: complete checked journal subjects, not source-edge claims. */
+  /** Complete checked journal subjects, not source-edge claims. */
   readonly edgeOutputs?: ReadonlySet<number>[] | null;
+  readonly vertexOutputs?: ReadonlySet<number>[] | null;
+  readonly vertexUnavailableReason?:
+    'event-budget' | 'journal-unavailable' | null;
+  /** Retained with its actual member group until all LINEAR costs are known. */
+  readonly linearJournal?: {
+    readonly sourceSolid: number;
+    readonly compound: number;
+    readonly op: number;
+  };
 }
 
 /**
@@ -2488,8 +2594,98 @@ function patternInstances(
     matrix: arm.matrix(index),
     solids: perSource.map((copies) => copies.solids[index]!),
     claims: perSource.map((copies) => copies.claims?.[index]),
-    edgeOutputs: perSource.map((copies) => copies.edgeOutputs?.[index])
+    edgeOutputs: perSource.map((copies) => copies.edgeOutputs?.[index]),
+    vertexOutputs: perSource.map((copies) => copies.vertexOutputs?.[index]),
+    vertexUnavailableReason: perSource.map(
+      (copies) => copies.vertexUnavailableReason ?? undefined
+    )
   }));
+}
+
+/** Qualify every source operation against one aggregate boundary allowance. */
+function linearPatternBoundaryCopies(
+  kernel: RemusKernel,
+  sourceSolids: readonly number[],
+  copies: readonly KernelPatternCopies[]
+): KernelPatternCopies[] {
+  if (copies.length !== sourceSolids.length) return [...copies];
+  try {
+    const sources = [];
+    for (const [index, copy] of copies.entries()) {
+      const journal = copy.linearJournal;
+      if (
+        !journal ||
+        journal.sourceSolid !== sourceSolids[index] ||
+        copy.solids[0] !== journal.sourceSolid
+      )
+        return [...copies];
+      const members = Array.from(kernel.getCompoundSolids(journal.compound));
+      if (
+        members.length !== copy.solids.length ||
+        members.some((solid, member) => solid !== copy.solids[member])
+      )
+        return [...copies];
+      sources.push({ op: journal.op, instanceSolids: copy.solids });
+    }
+    const boundary = patternJournalBoundaryOutputsForSources(
+      kernel,
+      sources,
+      true,
+      'linear_pattern'
+    );
+    return copies.map((copy, index) => ({
+      ...copy,
+      edgeOutputs: boundary[index]?.edges,
+      vertexOutputs: boundary[index]?.vertices,
+      vertexUnavailableReason:
+        boundary[index]?.vertexUnavailableReason ?? 'journal-unavailable'
+    }));
+  } catch {
+    // Qualification is optional evidence; the already-built copies and face
+    // claims remain available if the retained operation cannot be checked.
+    return [...copies];
+  }
+}
+
+/** Keep native state scoped to the source/member pair that was qualified. */
+function patternNativeVertices(
+  kernel: RemusKernel,
+  feature: FeatureNode,
+  target: ExactShape,
+  lineage: RemusLineageState,
+  instances: readonly PatternInstanceBuild[]
+): RemusNativeVertexState | undefined {
+  const solids = instances.flatMap((instance) => instance.solids);
+  if (
+    new Set(target.solids).size !== target.solids.length ||
+    new Set(solids).size !== solids.length ||
+    instances.some(
+      (instance) => instance.solids.length !== target.solids.length
+    )
+  )
+    return undefined;
+  const states = target.solids.map((sourceSolid, source) =>
+    qualifyGridNativeVertices({
+      kernel,
+      producingFeatureId: feature.featureId,
+      sourceSolid,
+      sourceLineage: target.lineage,
+      resultLineage: lineage,
+      instances: instances.map((instance) => ({
+        solid: instance.solids[source]!,
+        instance: instance.instance,
+        matrix: instance.matrix,
+        journalVertices: instance.vertexOutputs[source],
+        unavailableReason: instance.vertexUnavailableReason[source]
+      }))
+    })
+  );
+  return {
+    bySolid: new Map(states.flatMap((state) => [...state.bySolid])),
+    withheldBySolid: new Map(
+      states.flatMap((state) => [...state.withheldBySolid])
+    )
+  };
 }
 
 /**
@@ -2595,6 +2791,7 @@ function linearPatternArm(
       );
       return {
         solids,
+        linearJournal: { sourceSolid: solid, ...journal },
         claims: patternJournalFaceClaims(
           kernel,
           journal.op,
@@ -2610,7 +2807,8 @@ function linearPatternArm(
 function gridPatternArm(
   kernel: RemusKernel,
   columns: { direction: Vec3; spacing: number; count: number },
-  rows: { direction: Vec3; spacing: number; count: number }
+  rows: { direction: Vec3; spacing: number; count: number },
+  includeVertices: boolean
 ): PatternArm {
   const total = columns.count * rows.count;
   const columnOf = (ordinal: number) => Math.floor(ordinal / rows.count);
@@ -2669,10 +2867,11 @@ function gridPatternArm(
         Array.from<number>(kernel.getSolidFaces(solid)),
         produced
       );
-      const edgeOutputs = patternJournalEdgeOutputs(
+      const boundaryOutputs = patternJournalBoundaryOutputs(
         kernel,
         journal.op,
-        produced
+        produced,
+        includeVertices
       );
       const publicationOrder = Array.from(
         { length: total },
@@ -2682,7 +2881,13 @@ function gridPatternArm(
         solids: publicationOrder.map((index) => produced[index]!),
         claims: claims && publicationOrder.map((index) => claims[index]),
         edgeOutputs:
-          edgeOutputs && publicationOrder.map((index) => edgeOutputs[index]!)
+          boundaryOutputs &&
+          publicationOrder.map((index) => boundaryOutputs.edges[index]!),
+        vertexOutputs:
+          boundaryOutputs?.vertices &&
+          publicationOrder.map((index) => boundaryOutputs.vertices![index]!),
+        vertexUnavailableReason:
+          boundaryOutputs?.vertexUnavailableReason ?? 'journal-unavailable'
       };
     }
   };
@@ -2874,7 +3079,8 @@ function buildPatternFeature(
     arm = gridPatternArm(
       kernel,
       { direction, spacing, count },
-      { direction: direction2, spacing: spacing2, count: count2 }
+      { direction: direction2, spacing: spacing2, count: count2 },
+      target.solids.length === 1
     );
   } else {
     const angle = resolveParamValue(
@@ -2944,6 +3150,9 @@ function buildPatternFeature(
     }
   } else {
     perSource = copyInstances();
+  }
+  if (data.patternKind === 'linear' && kernelCopies && !declined) {
+    perSource = linearPatternBoundaryCopies(kernel, target.solids, perSource);
   }
   const instances = patternInstances(arm, perSource);
   const solids = instances.flatMap((instance) => instance.solids);
@@ -3056,12 +3265,25 @@ function buildPatternFeature(
       )
     });
   } else {
+    const lineage = withPatternDiagnostic(
+      patternInstanceLineage(kernel, feature, target, instances),
+      declined
+    );
     result.shapes.set(feature.bodyId, {
       solids,
-      lineage: withPatternDiagnostic(
-        patternInstanceLineage(kernel, feature, target, instances),
-        declined
-      )
+      lineage,
+      ...(data.patternKind === 'linear' ||
+      (data.patternKind === 'grid' && target.solids.length === 1)
+        ? {
+            nativeVertices: patternNativeVertices(
+              kernel,
+              feature,
+              target,
+              lineage,
+              instances
+            )
+          }
+        : {})
     });
   }
   // Consumed only once a shape exists, which is what the other eight consume

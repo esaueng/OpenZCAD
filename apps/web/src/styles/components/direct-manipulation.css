@@ -1433,6 +1433,11 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0 8px;
+  /* A fieldset, so a linked projection's values disable as one. */
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
 }
 
 /* A field showing its preview or error line makes the row taller; its
@@ -1473,6 +1478,13 @@
   font-weight: var(--fw-regular);
   letter-spacing: var(--ls-eyebrow);
   text-transform: uppercase;
+}
+
+/* I01: a projected entity's source and its link actions. */
+.sketch-entity-projection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .sketch-entity-constraints .sketch-constraint-list li > svg {

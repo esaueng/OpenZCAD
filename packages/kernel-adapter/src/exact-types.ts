@@ -13,16 +13,21 @@ import type {
   FaceReferenceRepair,
   FeatureId,
   FeatureWarning,
-  SketchId
+  SketchId,
+  SketchObjectData,
+  SketchProjectionState
 } from '@openzcad/shared';
 import type { TriangleMeshClosure } from './boolean-result-validation';
 import type { RemusLineageState } from './remus-lineage';
+import type { RemusNativeVertexState } from './remus-native-vertices';
 
 export interface ExactShape {
   /** A body can contain several independent solids, as with a pattern. */
   solids: number[];
   /** Exact, handle-bound schema-v5 references plus fail-closed diagnostics. */
   lineage?: RemusLineageState;
+  /** Grid-only construction evidence; native handles stay inside the build. */
+  nativeVertices?: RemusNativeVertexState;
   /**
    * The new-body extrude that produced exactly these solid handles. Only
    * meaningful while `solids` still equals `sweepSource.solids`: any feature
@@ -92,6 +97,24 @@ export interface ExactBuildResult {
    */
   referenceRepairs: EdgeReferenceRepair[];
   faceReferenceRepairs?: FaceReferenceRepair[];
+  /**
+   * I01: each linked sketch projection's state at its sketch's history
+   * position, keyed by object id. Published as `derived.sketchProjections`.
+   */
+  sketchProjections?: Map<string, SketchProjectionState>;
+  /**
+   * I01: re-projected geometry for linked projections that moved, keyed by
+   * object id. Every feature after the sketch builds from it in place of the
+   * stored (last valid) geometry; see `buildDocumentHistorySteps`.
+   */
+  sketchObjectOverrides?: Map<string, SketchObjectData>;
+  /**
+   * Linked projections whose persistent sketch constraints could not be
+   * solved at this history position. Consumers of that sketch refuse the
+   * recorded reason; unrelated sketches and bodies remain available.
+   * Build-local only, copied with retained history checkpoints.
+   */
+  sketchProjectionFailures?: Map<SketchId, string>;
 }
 
 /** Same-kernel measurement handles and the verdicts established for them. */

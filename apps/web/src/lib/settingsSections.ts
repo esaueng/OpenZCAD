@@ -122,7 +122,8 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Geometry snapping',
       'Snap tolerance',
       'Automatic inferencing',
-      'Relation glyphs'
+      'Relation glyphs',
+      'Glyph kinds'
     ]
   },
   {
@@ -168,6 +169,48 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'storage usage',
       'cloud profile',
       'email sign-in'
+    ]
+  },
+  {
+    id: 'encryption',
+    label: 'Encryption',
+    detail: 'Keys, devices, and recovery',
+    group: 'Cloud and data',
+    settings: [
+      'End-to-end encryption',
+      'Your fingerprint',
+      'This device',
+      'Certify with your recovery key',
+      'Enter your recovery key',
+      'Revoke read-only access',
+      'Revoke read-only devices',
+      'Device key',
+      'Recovery key',
+      'Passkeys',
+      'Replace recovery key',
+      'Scan this code',
+      'Compare these digits',
+      'Approve from another device',
+      'Use your recovery key',
+      'Approval requests',
+      'Code from the new device',
+      'Compare the codes',
+      'Certify the new device',
+      'Your recovery key',
+      'I saved my recovery key',
+      'Confirm recovery key',
+      'Current recovery key',
+      'Recovery key to confirm'
+    ],
+    searchTerms: [
+      'e2ee',
+      'end-to-end',
+      'encrypt',
+      'devices',
+      'approve device',
+      'remove device',
+      'fingerprint',
+      'recovery'
     ]
   },
   {
@@ -255,6 +298,11 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
 export interface SettingsSectionVisibility {
   /** Device-local offline mode removes every cloud-only settings surface. */
   cloudFunctionsEnabled?: boolean;
+  /**
+   * Encryption appears only for a signed-in account the server has opened
+   * the end-to-end encryption beta to (ADR-024); hidden otherwise.
+   */
+  encryptionAvailable?: boolean;
   /** Raw "Find a setting" query; blank matches everything. */
   query?: string;
 }
@@ -276,14 +324,20 @@ function offlineAccount(section: SettingsSectionMeta): SettingsSectionMeta {
 /** The settings sections matching the current navigation query. */
 export function visibleSettingsSections({
   cloudFunctionsEnabled = true,
+  encryptionAvailable = false,
   query = ''
 }: SettingsSectionVisibility): SettingsSectionMeta[] {
-  const available = cloudFunctionsEnabled
-    ? [...SETTINGS_SECTIONS]
-    : SETTINGS_SECTIONS.filter((section) => section.id !== 'assistant').map(
-        (section) =>
-          section.id === 'account' ? offlineAccount(section) : section
-      );
+  const available = (
+    cloudFunctionsEnabled
+      ? [...SETTINGS_SECTIONS]
+      : SETTINGS_SECTIONS.filter((section) => section.id !== 'assistant').map(
+          (section) =>
+            section.id === 'account' ? offlineAccount(section) : section
+        )
+  ).filter(
+    (section) =>
+      section.id !== 'encryption' || (cloudFunctionsEnabled && encryptionAvailable)
+  );
   const normalized = query.trim().toLowerCase();
   return normalized
     ? available.filter((section) =>

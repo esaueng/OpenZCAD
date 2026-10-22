@@ -15,7 +15,8 @@ const WORKSPACE_PACKAGES = [
   'io-stl',
   'persistence',
   'cloudflare-adapters',
-  'crypto'
+  'crypto',
+  'mls'
 ] as const;
 
 const workspaceAliases = Object.fromEntries(
@@ -74,6 +75,12 @@ export default defineConfig({
       '@openzcad/kernel-adapter/mesh-import-formats': fileURLToPath(
         new URL(
           './packages/kernel-adapter/src/mesh-import-formats.ts',
+          import.meta.url
+        )
+      ),
+      '@openzcad/kernel-adapter/topology-lineage': fileURLToPath(
+        new URL(
+          './packages/kernel-adapter/src/topology-lineage.ts',
           import.meta.url
         )
       ),

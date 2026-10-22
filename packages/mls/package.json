@@ -1,0 +1,13 @@
+{
+  "name": "@openzcad/mls",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build:wasm": "./build.sh",
+    "check:wasm": "./build.sh --check",
+    "test:browser": "node browser/run.mjs"
+  }
+}

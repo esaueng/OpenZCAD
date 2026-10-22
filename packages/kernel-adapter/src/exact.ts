@@ -1,4 +1,11 @@
 import { CooperativeWork } from './cooperative-work';
+import {
+  cloneIdleLineageView,
+  currentIdleLineageView,
+  idleLineageViewBytes,
+  supportsIdleLineageView,
+  type IdleLineageView
+} from './exact-idle-lineage-view';
 import type { EditAnalysisRequest } from '@openzcad/shared';
 import { projectShapeMesh } from './exact-display-projection';
 import {
@@ -42,13 +49,13 @@ import {
   getParameterHiddenBodyIds,
   listFeaturesInOrder,
   listNodesByKind,
-  resolveParamValue,
   rigidImportedSource
 } from '@openzcad/document-core';
 import { writeDxf, type DxfEntity } from '@openzcad/io-dxf';
 import { writeAsciiStl } from '@openzcad/io-stl';
 import { faceDxfEntities } from './exact-dxf';
 import { sketchDxfEntities, SketchDxfExportError } from './exact-sketch-dxf';
+import { assertSketchProjectionsValid } from './exact-sketch-projection-failures';
 export { SketchDxfExportError } from './exact-sketch-dxf';
 import { writeSketchSvg } from './exact-sketch-svg';
 export type {
@@ -98,7 +105,6 @@ import {
   type FaceTopologyReferenceV5,
   type ImportedSourceReference,
   type OpposingPlanarFacePair,
-  type ParamValue,
   type ProjectDocument,
   type SketchId,
   type UnitSystem,
@@ -176,6 +182,10 @@ import {
   faceWitnessOf,
   registerSolidWitnesses
 } from './exact-witnesses';
+import {
+  nativeVertexEvidence,
+  nativeVertexPoint
+} from './remus-native-vertices';
 import {
   SyncReadMemo,
   TopologyWitnessStore,
@@ -256,7 +266,10 @@ import {
   ownedMeshFaceOffsets
 } from './owned-mesh-output';
 import { PrimitiveBuildCache } from './exact-primitive-cache';
-import { isBooleanEvolutionProbeEligible } from './exact-boolean-evolution';
+import {
+  booleanEvolutionProbeNeeded,
+  isBooleanEvolutionProbeEligible
+} from './exact-boolean-evolution';
 export type { RebuildCacheEvent };
 export {
   booleanEvolutionProbeNeeded,
@@ -273,13 +286,8 @@ import {
   topologyHashOfWitness,
   topologyWitnessesEqual
 } from './topology-lineage';
-// Type-only: the solver mapping loads on the first sketch solve, keeping it
-// out of the lazily loaded exact chunk, which sits at its size budget.
-import type {
-  ResolvedSketchObject,
-  SketchSolveAnchor,
-  SketchSolveOutcome
-} from './gcs-sketch';
+// Public solver types; the runtime mapping is shared with history projection solves.
+import type { SketchSolveAnchor, SketchSolveOutcome } from './gcs-sketch';
 
 export type {
   SketchDofSummary,
@@ -1223,6 +1231,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     return this.options.historyCheckpointLimit ?? MAX_HISTORY_CHECKPOINTS;
   }
 
+  /** Retained JS lineage metadata; kernel topology telemetry excludes it. */
+  private get historyLineageMetadataBytes(): number {
+    return this.historyCheckpoints.reduce(
+      (bytes, entry) => bytes + (entry.lineageMetadataBytes ?? 0),
+      0
+    );
+  }
+
   private get maxMeasuredShapeCacheBytes(): number {
     return (
       this.options.measuredShapeCacheBytes ?? MAX_MEASURED_SHAPE_CACHE_BYTES
@@ -1549,10 +1565,36 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             : undefined
         )
       : [];
+    const idleDigests =
+      normalizedDemand?.size === 0
+        ? digests
+        : cachingEnabled
+          ? features.map(
+              (feature, index) =>
+                historyFeatureDigest(document, feature, index, scope, []) +
+                (feature.featureId === deferredDirectEditFeatureId
+                  ? '|display-output'
+                  : '')
+            )
+          : [];
+    const probePrefix: [string, boolean][] = [];
+    const probeKeys = cachingEnabled
+      ? features.map((feature) => {
+          if (isBooleanEvolutionProbeEligible(feature))
+            probePrefix.push([
+              feature.featureId,
+              normalizedDemand === undefined ||
+                booleanEvolutionProbeNeeded(document, feature, normalizedDemand)
+            ]);
+          return JSON.stringify(probePrefix);
+        })
+      : [];
 
     let kernel = this.historyKernel;
     let startIndex = 0;
     let initial: ExactBuildResult | null = null;
+    let initialIdleLineageView: IdleLineageView | undefined;
+    let initialLineageIsIdle = false;
     let reusePrimitiveTail = false;
     let reusedPrimitives = 0;
     let reusedPreparedFeatures = 0;
@@ -1596,6 +1638,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       this.historyScopeKey === scopeKey
     ) {
       let prefix = -1;
+      let prefixUsesIdleView = false;
+      let unavailableModeView = false;
+      // Inspect the whole retained history, including entries beyond an
+      // unrelated geometry edit. Missing provenance is an unknown mode.
+      const lineageModeChanged = this.historyCheckpoints.some(
+        (entry) =>
+          entry.lineageProbeKey === undefined ||
+          entry.lineageProbeKey !== probeKeys[entry.featureIndex]
+      );
       // A previous sync's tail that this one no longer schedules. It is the
       // last retained checkpoint; it is restored and then discarded, so the
       // checkpoints this replay takes stay aligned with the schedule.
@@ -1616,22 +1667,69 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         ) {
           break;
         }
+        // Older entries in the table may carry eager digests even when a
+        // later snapshot was assembled from their idle views. Name the JS
+        // snapshot's own full probe signature, not its ancestors' modes.
+        const primaryMatches =
+          entry.lineageProbeKey !== undefined
+            ? entry.lineageProbeKey === probeKeys[entry.featureIndex]
+            : this.historyCheckpoints
+                .slice(0, index + 1)
+                .flatMap((prior) => prior.digests)
+                .every(
+                  (digest, featureIndex) => digest === digests[featureIndex]
+                );
+        const needsIdleView = !primaryMatches;
+        if (needsIdleView) {
+          const view = entry.idleLineageView;
+          // Geometry-compatible eager snapshots cannot publish their eager
+          // metadata to an idle request. Select only a finalized view whose
+          // complete effective probe signature matches this request.
+          if (
+            !view ||
+            view.digests.length !== entry.featureIndex + 1 ||
+            view.digests.some((digest, index) => digest !== digests[index])
+          ) {
+            unavailableModeView = true;
+            break;
+          }
+        }
         if (entry.featureIndex !== checkpointIndices[index]) {
           if (index === this.historyCheckpoints.length - 1) {
             prefix = index;
+            prefixUsesIdleView = needsIdleView;
             staleTail = true;
           }
           break;
         }
         prefix = index;
+        prefixUsesIdleView = needsIdleView;
+      }
+      // An unaudited suffix must run in a genuinely fresh arena after a
+      // mode change. Retaining eager probe scratch topology can otherwise
+      // influence that suffix's serialized construction metadata.
+      const forceFreshLineageReplay =
+        lineageModeChanged &&
+        (unavailableModeView ||
+          features
+            .slice(
+              prefix < 0 ? 0 : this.historyCheckpoints[prefix]!.featureIndex + 1
+            )
+            .some((feature) => !supportsIdleLineageView(feature, document)));
+      if (forceFreshLineageReplay) {
+        prefix = -1;
+        prefixUsesIdleView = false;
+        staleTail = false;
       }
       const restoredFeatures =
         prefix >= 0 ? this.historyCheckpoints[prefix]!.featureIndex + 1 : 0;
-      reusePrimitiveTail = this.primitiveBuildCache.canReuseTail(
-        features,
-        digests,
-        restoredFeatures
-      );
+      reusePrimitiveTail =
+        !forceFreshLineageReplay &&
+        this.primitiveBuildCache.canReuseTail(
+          features,
+          digests,
+          restoredFeatures
+        );
       if (prefix >= 0 || reusePrimitiveTail) {
         try {
           const restoredEntry =
@@ -1667,6 +1765,38 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           initial = restoredEntry
             ? cloneBuildState(restoredEntry.snapshot)
             : null;
+          if (restoredEntry && initial) {
+            const view = restoredEntry.idleLineageView;
+            if (view) {
+              initialIdleLineageView = cloneIdleLineageView(
+                view.state,
+                restoredEntry.snapshot,
+                initial
+              );
+            }
+            if (prefixUsesIdleView) {
+              if (
+                !initialIdleLineageView ||
+                initialIdleLineageView.lineages.size !== initial.shapes.size
+              )
+                throw new HistoryCacheIntegrityError(
+                  'Idle lineage view ownership disagrees.'
+                );
+              for (const [id, shape] of initial.shapes) {
+                if (!initialIdleLineageView.lineages.has(id))
+                  throw new HistoryCacheIntegrityError(
+                    'Idle lineage view body is missing.'
+                  );
+                const lineage = initialIdleLineageView.lineages.get(id);
+                if (lineage) shape.lineage = lineage;
+                else delete shape.lineage;
+              }
+              initialIdleLineageView = currentIdleLineageView(initial);
+            }
+            initialLineageIsIdle = digests
+              .slice(0, restoredFeatures)
+              .every((digest, index) => digest === idleDigests[index]);
+          }
           // Restore may succeed even when an entity was retired before the
           // checkpoint barrier. Never replay builders from stale JS handles.
           for (const shape of initial?.shapes.values() ?? []) {
@@ -1679,6 +1809,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           reusePrimitiveTail = false;
           startIndex = 0;
           initial = null;
+          initialIdleLineageView = undefined;
+          initialLineageIsIdle = false;
         }
       } else {
         this.invalidateHistoryCache();
@@ -1709,7 +1841,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         features.length
       );
     };
-    const onFeature = (index: number, result: ExactBuildResult) => {
+    const onFeature = (
+      index: number,
+      result: ExactBuildResult,
+      idleView?: IdleLineageView
+    ) => {
       featureDone?.();
       // Publish only a disposable mesh projection before an expensive pattern.
       // It is never cached as an exact result, nor used by export/validation.
@@ -1771,11 +1907,20 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       // A checkpoint is cheap to create but makes the next mutation copy the
       // arena. Admit against that projected cost, including retired slots.
       const memory = checkpointMemoryStats(activeKernel);
+      const retainedLineageBytes = this.historyLineageMetadataBytes;
+      const probeKey = probeKeys[index]!;
+      const probeKeyBytes = memory
+        ? new TextEncoder().encode(probeKey).byteLength
+        : 0;
+      const byteBudget =
+        this.options.historyCheckpointEstimatedBytes ??
+        MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES;
       if (memory) {
         if (
-          memory.nextMutationEstimatedBytes >
-          (this.options.historyCheckpointEstimatedBytes ??
-            MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES)
+          memory.nextMutationEstimatedBytes +
+            retainedLineageBytes +
+            probeKeyBytes >
+          byteBudget
         )
           return;
       }
@@ -1796,12 +1941,48 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         );
       }
       const previous = this.historyCheckpoints.at(-1);
-      const entry = {
+      const entry: HistoryCheckpointEntry = {
         featureIndex: index,
         digests: digests.slice((previous?.featureIndex ?? -1) + 1, index + 1),
         checkpointId,
-        snapshot: cloneBuildState(result)
+        snapshot: cloneBuildState(result),
+        ...(memory
+          ? { lineageProbeKey: probeKey, lineageMetadataBytes: probeKeyBytes }
+          : {})
       };
+      // Different probe signatures also need a finalized proof when an
+      // unavailable probe left the metadata identical. Charge the complete
+      // view/signature against the existing checkpoint byte ceiling;
+      // unavailable telemetry or oversized views keep exact replay.
+      if (
+        idleView &&
+        memory &&
+        (idleView.diverged ||
+          idleDigests
+            .slice(0, index + 1)
+            .some((digest, featureIndex) => digest !== digests[featureIndex]))
+      ) {
+        try {
+          const viewDigests = idleDigests.slice(0, index + 1);
+          const bytes = idleLineageViewBytes(idleView, viewDigests);
+          if (
+            memory.nextMutationEstimatedBytes +
+              retainedLineageBytes +
+              probeKeyBytes +
+              bytes <=
+            byteBudget
+          ) {
+            entry.idleLineageView = {
+              digests: viewDigests,
+              state: cloneIdleLineageView(idleView, result, entry.snapshot),
+              estimatedBytes: bytes
+            };
+            entry.lineageMetadataBytes = probeKeyBytes + bytes;
+          }
+        } catch {
+          // Alternate metadata cannot change checkpoint or geometry acceptance.
+        }
+      }
       this.historyCheckpoints.push(entry);
       this.historyCheckpointOwners.set(checkpointId, entry);
       done();
@@ -1846,7 +2027,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         document,
         importSources,
         pinnedImports,
-        initial ? { startIndex, initial } : undefined,
+        initial
+          ? {
+              startIndex,
+              initial,
+              idleLineageView: initialIdleLineageView,
+              idleLineageIsCurrent: initialLineageIsIdle
+            }
+          : undefined,
         this.importedSteps,
         onFeature,
         onFeatureStart,
@@ -1879,7 +2067,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         cancellation,
         normalizedDemand,
         (bodyId) => this.heldDisplayDeflections.get(bodyId)?.[0],
-        deferredDirectEditFeatureId
+        deferredDirectEditFeatureId,
+        cachingEnabled &&
+          (this.options.historyCheckpointEstimatedBytes ??
+            MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES) > 0
       );
     } catch (error) {
       // A cancelled build keeps the retained prefix: the checkpoints pushed
@@ -2045,7 +2236,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     let indexCount = 0;
     const lineageDiagnostics =
       shape.lineage?.diagnostics.map(projectRemusLineageDiagnostic) ?? [];
-    const topology: BodyTopology = { faces: [], edges: [] };
+    const topology: BodyTopology = {
+      faces: [],
+      edges: [],
+      ...(shape.nativeVertices ? { vertices: [] } : {})
+    };
     const witness: MeasuredShape['witness'] = { solids: [] };
     const bbox = {
       min: { x: Infinity, y: Infinity, z: Infinity },
@@ -2109,6 +2304,50 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         if (!vertexIdByHandle.has(vertex)) {
           vertexIdByHandle.set(vertex, nextVertexId);
           nextVertexId += 1;
+        }
+      }
+      // Native handles remain private. This projection uses the same existing
+      // body/solid numbering the edge incidence records publish.
+      if (topology.vertices) {
+        const members = new Set(vertexHandles);
+        for (const vertex of vertexHandles) {
+          const actual = nativeVertexPoint(kernel, vertex);
+          if (!actual) {
+            // A partial point array must not pretend to cover native topology.
+            delete topology.vertices;
+            break;
+          }
+          const evidence = nativeVertexEvidence(
+            kernel,
+            shape.nativeVertices,
+            solid,
+            vertex,
+            members
+          );
+          const reference =
+            evidence?.status === 'qualified' ? evidence.reference : undefined;
+          topology.vertices.push({
+            id: vertexIdByHandle.get(vertex)!,
+            point: actual.point,
+            ...(reference
+              ? {
+                  reference: {
+                    ...reference,
+                    witness: { position: [...reference.witness.position] }
+                  }
+                }
+              : {}),
+            ...(!reference
+              ? {
+                  unavailableReason:
+                    evidence?.status === 'unavailable'
+                      ? evidence.reason
+                      : (shape.nativeVertices?.withheldBySolid
+                          .get(solid)
+                          ?.get(vertex) ?? 'unsupported-source')
+                }
+              : {})
+          });
         }
       }
       const meshDone = onStage?.('Display mesh and face topology');
@@ -3259,6 +3498,18 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         ...(build.datumAxes.size > 0
           ? { datumAxes: Object.fromEntries(build.datumAxes) }
           : {}),
+        ...(build.sketchProjections?.size
+          ? { sketchProjections: Object.fromEntries(build.sketchProjections) }
+          : {}),
+        ...(build.sketchObjectOverrides?.size
+          ? {
+              sketchGeometry: {
+                projectId: document.projectId,
+                documentVersion: document.version,
+                objects: Object.fromEntries(build.sketchObjectOverrides)
+              }
+            }
+          : {}),
         ...(build.faceReferenceRepairs?.length
           ? { faceReferenceRepairs: build.faceReferenceRepairs }
           : {}),
@@ -3685,6 +3936,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     }
     try {
       return await this.withExportBuild(document, (_kernel, build) => {
+        assertSketchProjectionsValid(build, sketchId);
         // The sketch feature resolves this same basis at its history position
         // during the build — canonical offsets, arbitrary frames, and
         // face-attached lineage alike — so reading it here is exact without a
@@ -3701,7 +3953,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             const node = document.nodes[id];
             return {
               id,
-              data: node?.kind === 'sketch-object' ? node.data : undefined
+              data:
+                build.sketchObjectOverrides?.get(id) ??
+                (node?.kind === 'sketch-object' ? node.data : undefined)
             };
           }),
           scope,
@@ -4011,122 +4265,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     if (!sketch) {
       throw new Error(`Sketch ${sketchId} not found.`);
     }
-    const { scope, errors } = getParameterScope(document);
-    if (errors.length > 0) {
-      throw new Error(`Parameters failed to evaluate: ${errors.join('; ')}`);
-    }
-    const objects: ResolvedSketchObject[] = [];
-    for (const objectId of sketch.objectIds) {
-      const node = document.nodes[objectId];
-      if (!node || node.kind !== 'sketch-object') {
-        continue;
-      }
-      const data = node.data;
-      // Rectangles, polygons, and text are not solvable geometry;
-      // document validation refuses constraints that reference them, so
-      // skipping them here cannot orphan a constraint.
-      if (data.objectKind === 'line') {
-        objects.push({
-          objectId,
-          kind: 'line',
-          x1: resolveParamValue(data.x1, scope, 'x1', document.units),
-          y1: resolveParamValue(data.y1, scope, 'y1', document.units),
-          x2: resolveParamValue(data.x2, scope, 'x2', document.units),
-          y2: resolveParamValue(data.y2, scope, 'y2', document.units)
-        });
-      } else if (data.objectKind === 'circle') {
-        objects.push({
-          objectId,
-          kind: 'circle',
-          centerX: resolveParamValue(
-            data.centerX,
-            scope,
-            'centerX',
-            document.units
-          ),
-          centerY: resolveParamValue(
-            data.centerY,
-            scope,
-            'centerY',
-            document.units
-          ),
-          radius: resolveParamValue(
-            data.radius,
-            scope,
-            'radius',
-            document.units
-          )
-        });
-      } else if (data.objectKind === 'arc') {
-        objects.push({
-          objectId,
-          kind: 'arc',
-          centerX: resolveParamValue(
-            data.centerX,
-            scope,
-            'centerX',
-            document.units
-          ),
-          centerY: resolveParamValue(
-            data.centerY,
-            scope,
-            'centerY',
-            document.units
-          ),
-          radius: resolveParamValue(
-            data.radius,
-            scope,
-            'radius',
-            document.units
-          ),
-          startAngleDeg: resolveParamValue(
-            data.startAngleDeg,
-            scope,
-            'startAngleDeg',
-            document.units
-          ),
-          endAngleDeg: resolveParamValue(
-            data.endAngleDeg,
-            scope,
-            'endAngleDeg',
-            document.units
-          )
-        });
-      } else if (data.objectKind === 'ellipse') {
-        const value = (field: ParamValue, label: string) =>
-          resolveParamValue(field, scope, label, document.units);
-        objects.push({
-          objectId,
-          kind: 'ellipse',
-          centerX: value(data.centerX, 'centerX'),
-          centerY: value(data.centerY, 'centerY'),
-          radiusX: value(data.radiusX, 'radiusX'),
-          radiusY: value(data.radiusY, 'radiusY'),
-          rotationDeg: value(data.rotationDeg, 'rotationDeg')
-        });
-      } else if (data.objectKind === 'spline') {
-        objects.push({
-          objectId,
-          kind: 'spline',
-          points: data.points.map((point) => ({
-            x: resolveParamValue(point.x, scope, 'spline x', document.units),
-            y: resolveParamValue(point.y, scope, 'spline y', document.units)
-          })),
-          closed: data.closed === true
-        });
-      }
-    }
-    const { solveSketchWithGcs } = await import('./gcs-sketch');
+    const { solveDocumentSketchWithGcs } =
+      await import('./gcs-sketch-document');
     const kernel = new RemusKernel();
     try {
-      return solveSketchWithGcs(
-        kernel,
-        objects,
-        sketch.constraints ?? [],
-        (value, label) =>
-          resolveParamValue(value, scope, label, document.units),
-        options
-      );
+      return solveDocumentSketchWithGcs(kernel, document, sketch, options);
     } finally {
       kernel.free();
     }

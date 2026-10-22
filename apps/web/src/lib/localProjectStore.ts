@@ -144,12 +144,30 @@ const DATABASE_VERSION = LOCAL_PROJECT_DATABASE_VERSION;
 
 interface ProjectMetaRecord extends ProjectOrganization {
   projectId: string;
+  organizationRevision?: string;
   /**
    * Present while a change made on this device has not reached the account.
    * Set by every local organisation write, cleared once the account has the
    * same row; the listing's reconcile lets the account win when it is absent.
    */
   mirrorPending?: true;
+}
+
+export interface LocalProjectOrganizationSnapshot {
+  organization: ProjectOrganization;
+  /** Null identifies metadata written before revision fencing was introduced. */
+  revision: string | null;
+  mirrorPending: boolean;
+}
+
+function organizationSnapshot(
+  record: ProjectMetaRecord
+): LocalProjectOrganizationSnapshot {
+  return {
+    organization: organizationOf(record),
+    revision: record.organizationRevision ?? null,
+    mirrorPending: record.mirrorPending === true
+  };
 }
 
 function organizationOf(record: ProjectMetaRecord): ProjectOrganization {
@@ -1261,6 +1279,7 @@ export function saveLocalProjectOrganization(
   const record: ProjectMetaRecord = {
     ...organizationOf({ ...organization, projectId }),
     projectId,
+    organizationRevision: crypto.randomUUID(),
     ...(options.mirrorPending ? { mirrorPending: true } : {})
   };
   return projectTransaction('readwrite', projectId, META_STORE_NAME, (store) =>
@@ -1268,11 +1287,69 @@ export function saveLocalProjectOrganization(
   ).then(() => undefined);
 }
 
+/** A network acknowledgement/adoption may replace only the revision it read. */
+export function saveLocalProjectOrganizationIfCurrent(
+  projectId: string,
+  organization: ProjectOrganization,
+  expectedRevision: string | null,
+  isCurrent?: () => boolean
+): Promise<boolean> {
+  return scopedTransaction(
+    'readwrite',
+    [META_STORE_NAME, ALIAS_STORE_NAME],
+    async (store) => {
+      await assertCurrentProjectId(store(ALIAS_STORE_NAME), projectId);
+      const meta = store(META_STORE_NAME);
+      const current = (await settled(meta.get(projectId))) as
+        ProjectMetaRecord | undefined;
+      if (
+        (current?.organizationRevision ?? null) !== expectedRevision ||
+        (isCurrent && !isCurrent())
+      )
+        return false;
+      meta.put({
+        ...organizationOf({ ...organization, projectId }),
+        projectId,
+        organizationRevision: crypto.randomUUID()
+      });
+      return true;
+    }
+  );
+}
+
+export function loadLocalProjectOrganizationSnapshot(
+  projectId: string
+): Promise<LocalProjectOrganizationSnapshot | null> {
+  return projectTransaction(
+    'readonly',
+    projectId,
+    META_STORE_NAME,
+    (store, resolved) => store.get(resolved)
+  ).then((record: ProjectMetaRecord | undefined) =>
+    record ? organizationSnapshot(record) : null
+  );
+}
+
 function listLocalProjectMetaRecords(): Promise<ProjectMetaRecord[]> {
   return transaction<ProjectMetaRecord[]>(
     'readonly',
     (store) => store.getAll() as IDBRequest<ProjectMetaRecord[]>,
     META_STORE_NAME
+  );
+}
+
+/** Organization values and their pending/revision fences from one snapshot. */
+export function listLocalProjectOrganizationSnapshots(): Promise<
+  Map<string, LocalProjectOrganizationSnapshot>
+> {
+  return listLocalProjectMetaRecords().then(
+    (records) =>
+      new Map(
+        records.map((record) => [
+          record.projectId,
+          organizationSnapshot(record)
+        ])
+      )
   );
 }
 
@@ -1470,6 +1547,14 @@ export function clearAllLastSyncedVersions(): Promise<void> {
  * for a project that cannot be opened.
  */
 export function deleteLocalProject(projectId: string): Promise<void> {
+  return deleteLocalProjectWhen(projectId).then(() => undefined);
+}
+
+function deleteLocalProjectWhen(
+  projectId: string,
+  eligible?: (record: ProjectMetaRecord | undefined) => boolean,
+  retainPendingOrganization = false
+): Promise<boolean> {
   const storeNames = [
     BACKUP_STORE_NAME,
     STORE_NAME,
@@ -1485,9 +1570,24 @@ export function deleteLocalProject(projectId: string): Promise<void> {
     [...storeNames, CHECKPOINT_STORE_NAME, ALIAS_STORE_NAME],
     async (store) => {
       await assertCurrentProjectId(store(ALIAS_STORE_NAME), projectId);
-      for (const name of storeNames) store(name).delete(projectId);
+      const metadata =
+        eligible || retainPendingOrganization
+          ? ((await settled(store(META_STORE_NAME).get(projectId))) as
+              ProjectMetaRecord | undefined)
+          : undefined;
+      if (eligible && !eligible(metadata)) return false;
+      for (const name of storeNames) {
+        if (
+          name === META_STORE_NAME &&
+          retainPendingOrganization &&
+          metadata?.mirrorPending
+        )
+          continue;
+        store(name).delete(projectId);
+      }
       store(CHECKPOINT_STORE_NAME).delete(checkpointKeyRange(projectId));
       // Aliases remain as fences: an older tab must never resurrect the removed ID.
+      return true;
     }
   );
 }
@@ -1614,11 +1714,20 @@ export async function listLocalProjects(): Promise<ProjectSummary[]> {
  * ids that were purged. Called on every start-screen refresh — retention is
  * measured in days, so a check at arrival is timely enough and the browser has
  * nowhere to run a scheduled job anyway.
+ * Account mirrors can defer eligible pending rows. Otherwise an optional small
+ * pending organization tombstone survives normal model/companion expiry.
  */
 export async function purgeExpiredLocalProjects(
   now = Date.now(),
-  excludedProjectIds: ReadonlySet<string> = new Set()
+  excludedProjectIds: ReadonlySet<string> = new Set(),
+  options: {
+    retainPendingOrganization?: boolean;
+    deferPendingProjectIds?: ReadonlySet<string>;
+    /** The discovery generation that still owns these irreversible deletes. */
+    isCurrent?: () => boolean;
+  } = {}
 ): Promise<string[]> {
+  if (options.isCurrent && !options.isCurrent()) return [];
   const organizations = await listLocalProjectOrganizations();
   const expired = [...organizations.entries()]
     .filter(
@@ -1628,10 +1737,27 @@ export async function purgeExpiredLocalProjects(
         isPurgeDue(organization.deletedAt, now)
     )
     .map(([projectId]) => projectId);
+  const purged: string[] = [];
   for (const projectId of expired) {
-    await deleteLocalProject(projectId);
+    if (options.isCurrent && !options.isCurrent()) break;
+    if (
+      await deleteLocalProjectWhen(
+        projectId,
+        (record) =>
+          Boolean(
+            (!options.isCurrent || options.isCurrent()) &&
+            record &&
+            (!record.mirrorPending ||
+              !options.deferPendingProjectIds?.has(projectId)) &&
+            record.status === 'deleted' &&
+            isPurgeDue(record.deletedAt, now)
+          ),
+        options.retainPendingOrganization
+      )
+    )
+      purged.push(projectId);
   }
-  return expired;
+  return purged;
 }
 
 /**
@@ -1771,15 +1897,16 @@ export function projectRebuildInputs(document: ProjectDocument): unknown {
 }
 
 /**
- * The rebuild inputs that decide geometry: drawing sheets, Objects folders
+ * The rebuild inputs that decide geometry: drawing sheets, reference images and Objects folders
  * and the undo history are rebuild inputs of the document (an edit to them
- * is real work), but no mesh depends on them — and every drawing or folder
- * edit also records an undo entry.
+ * is real work), but no mesh depends on them — and every such edit also
+ * records an undo entry.
  */
 function projectGeometryInputs(document: ProjectDocument): unknown {
   const {
     drawings: _drawings,
     objectFolders: _objectFolders,
+    referenceImages: _referenceImages,
     editHistory: _editHistory,
     ...inputs
   } = projectRebuildInputs(document) as Partial<ProjectDocument>;

@@ -10,6 +10,8 @@
  * `@openzcad/kernel-adapter`'s 2D sketch operations.
  */
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
+import { resolvedSketchDocument } from '@openzcad/document-core';
+import { retainSketchGeometryCommands } from './releaseGeometry';
 import type {
   Sketch2dPoint,
   SketchChamferGeometry,
@@ -151,7 +153,7 @@ function sketchObjectData(
   if (!sketch.objectIds.includes(objectId as EntityId)) {
     return null;
   }
-  const node = document.nodes[objectId as EntityId];
+  const node = resolvedSketchDocument(document).nodes[objectId as EntityId];
   return node?.kind === 'sketch-object' ? node.data : null;
 }
 
@@ -211,6 +213,10 @@ export function refuseEditPick(
   const composite = COMPOSITE_REFUSALS[data.objectKind];
   if (composite) {
     return composite;
+  }
+  // A fillet or chamfer cuts back the picked lines themselves.
+  if (kernelTool(kind) && data.projection?.mode === 'linked') {
+    return `A linked projection follows its model edge; unlink it to ${spec.label.toLowerCase()} it.`;
   }
   if (kind === 'offset') {
     return data.objectKind === 'line' ||
@@ -1171,7 +1177,12 @@ export async function runSketchEdit(
       const commands = await settleOptionalRelations(
         document,
         sketch.sketchId,
-        plan.commands,
+        kind === 'trim'
+          ? [
+              ...retainSketchGeometryCommands(document, sketch.sketchId),
+              ...plan.commands
+            ]
+          : plan.commands,
         plan.optional ?? [],
         host.solveSketch
       );

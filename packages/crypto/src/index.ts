@@ -1,7 +1,8 @@
 /**
- * End-to-end encryption primitives for ADR-024 (roadmap L11, Phase 2).
+ * End-to-end encryption primitives for ADR-024 (roadmap L11, Phases 2–3).
  * WebCrypto only: runs in browsers, Web Workers, the Tauri WKWebView and
- * Node 20+. Nothing in the application imports this package yet.
+ * Node 20+. The account key material of Phase 3 (device lists, unlock
+ * targets, device approval) is its first application use.
  *
  * Test-only entry points that inject keys or randomness (`…With`,
  * `envelopeKeyFromBytes`) live in the modules and are deliberately not
@@ -9,8 +10,10 @@
  */
 export { E2eeError, isE2eeError, type E2eeErrorCode } from './errors';
 export {
+  fromBase32,
   fromBase64Url,
   fromHex,
+  toBase32,
   toBase64Url,
   toHex,
   type Bytes
@@ -141,7 +144,49 @@ export {
   publicKeyHash,
   verifyDeviceApprovalCommitment,
   verifyScannedDeviceKey,
+  deviceKeysHash,
   type DeviceApprovalCodeInput,
   type DeviceApprovalCommitment,
+  type DeviceApprovalKeys,
   type ProjectStateInput
 } from './codes';
+export {
+  DEVICE_LIST_VERSION_1,
+  MAX_DEVICE_LABEL_BYTES,
+  MAX_DEVICE_LIST_ENTRIES,
+  MAX_DEVICE_LIST_ENTRY_BYTES,
+  MAX_LISTED_DEVICES,
+  MAX_UNLOCK_TARGETS,
+  UNLOCK_TARGET_KINDS,
+  accountKeyCommitment,
+  decodeDeviceApprovalGrant,
+  decodeDeviceListEntry,
+  decodeIdentityTransition,
+  deviceListEntryHash,
+  encodeDeviceListEntry,
+  nextDeviceListEntry,
+  publicKeyOfPrivateKey,
+  recoveryTarget,
+  signDeviceApprovalGrant,
+  signDeviceListEntry,
+  signIdentityTransition,
+  verifyDeviceApprovalGrant,
+  verifyDeviceList,
+  verifyIdentityTransition,
+  type DeviceApprovalGrant,
+  type DeviceListChange,
+  type DeviceListEntry,
+  type DeviceListPin,
+  type DeviceRecord,
+  type IdentityTransition,
+  type ListedDevice,
+  type Revocation,
+  type RevocationKind,
+  type RevokedRecord,
+  type SignedDeviceListEntry,
+  type SignedStatement,
+  type TransitionSigner,
+  type UnlockTarget,
+  type UnlockTargetKind,
+  type VerifiedDeviceList
+} from './devices';

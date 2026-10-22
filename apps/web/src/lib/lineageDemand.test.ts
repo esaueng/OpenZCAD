@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderHook } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
 import { toBodyId } from '@openzcad/shared';
 import type { TopologySelection } from '@openzcad/shared';
 import {
@@ -71,6 +71,20 @@ describe('lineageDemand helpers', () => {
 });
 
 describe('useLineageDemand', () => {
+  it('keeps Project picks sticky without replacing sketch selection', () => {
+    const { result, rerender } = renderHook(
+      ({ projectId }) =>
+        useLineageDemand({ projectId, selections: [], interaction: IDLE }),
+      { initialProps: { projectId: 'first' } }
+    );
+    act(() => result.current.addBodies([bodyB, bodyB]));
+    expect(result.current.demand).toEqual([bodyB]);
+    rerender({ projectId: 'first' });
+    expect(result.current.demand).toEqual([bodyB]);
+    rerender({ projectId: 'second' });
+    expect(result.current.demand).toEqual([]);
+  });
+
   it('stays sticky and clears on document change', () => {
     const { result, rerender } = renderHook(
       ({ projectId, selections }) =>

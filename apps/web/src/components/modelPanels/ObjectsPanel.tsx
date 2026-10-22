@@ -15,7 +15,10 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
+  Image as ImageIcon,
   Layers,
+  Link2,
+  Link2Off,
   Move3d,
   Pencil,
   PenLine,
@@ -25,6 +28,7 @@ import {
   Trash2
 } from 'lucide-react';
 import {
+  findSketch,
   listObjectFolders,
   nextObjectFolderName,
   objectFolderPlacements,
@@ -42,6 +46,10 @@ import { useArrivals } from '../../hooks/useArrivals';
 import { useCollapsedFolders } from '../../lib/objectFolderView';
 import { datumPlaneRows } from '../../lib/datumPlanes';
 import { datumAxisRows } from '../../lib/datumAxes';
+import {
+  projectionRoleLabel,
+  sketchProjectionRows
+} from '../../lib/sketch/projection';
 import type { ModelPanelSource } from './modelPanelProps';
 import type { ObjectsView } from './panelViews';
 import { ObjectRenameField } from './ObjectRenameField';
@@ -63,6 +71,10 @@ export type ObjectsPanelProps = ObjectsSource &
     | 'hiddenSketchIds'
     | 'hiddenDatumIds'
     | 'onHiddenDatumIdsChange'
+    | 'hiddenReferenceImageIds'
+    | 'onHiddenReferenceImageIdsChange'
+    | 'selectedReferenceImageId'
+    | 'onSelectReferenceImage'
     | 'onSelectFeature'
     | 'onSelectBody'
     | 'onToggleBodyVisibility'
@@ -224,7 +236,8 @@ export function objectCount(source: ObjectsSource): number {
   return (
     modelBodies(source).filter((body) => !body.consumed).length +
     modelSketches(source).length +
-    modelDatums(source).length
+    modelDatums(source).length +
+    (source.document?.referenceImages?.images.length ?? 0)
   );
 }
 
@@ -241,6 +254,10 @@ export function ObjectsPanel({
   hiddenSketchIds,
   hiddenDatumIds,
   onHiddenDatumIdsChange,
+  hiddenReferenceImageIds,
+  onHiddenReferenceImageIdsChange,
+  selectedReferenceImageId = null,
+  onSelectReferenceImage,
   onSelectFeature,
   onSelectBody,
   onToggleBodyVisibility,
@@ -338,11 +355,18 @@ export function ObjectsPanel({
     return true;
   };
 
+  const showImages = objectFilter === 'all' || objectFilter === 'images';
+  const images = showImages
+    ? (document?.referenceImages?.images ?? []).filter((image) =>
+        matchesObject(image.name)
+      )
+    : [];
   const filteredCount =
     (showBodies ? matchingBodies.length : 0) +
     (showSketches ? sketches.length : 0) +
     planes.length +
-    (treeShown ? folders.length : 0);
+    (treeShown ? folders.length : 0) +
+    images.length;
 
   function endDrag() {
     setDrag(null);
@@ -676,6 +700,7 @@ export function ObjectsPanel({
           <option value="sketches">Sketches</option>
           <option value="planes">Planes</option>
           <option value="axes">Axes</option>
+          <option value="images">Images</option>
         </select>
       </div>
       <div className="object-filter">
@@ -724,7 +749,9 @@ export function ObjectsPanel({
                     ? 'No planes yet. Use Plane to offset one from a plane or face.'
                     : objectFilter === 'axes'
                       ? 'No axes yet. Use Axis to run one through points, an edge or a cylinder.'
-                      : 'No sketches yet. Start a sketch on a plane or face.'}
+                      : objectFilter === 'images'
+                        ? 'No images yet. Use Image to place a picture on a plane or face.'
+                        : 'No sketches yet. Start a sketch on a plane or face.'}
           </p>
         )}
         {showBodies &&
@@ -749,7 +776,18 @@ export function ObjectsPanel({
             const selected =
               selectedFeatureNodeId === sketch.id ||
               selectedSketchProfileId === sketchId;
-            return (
+            // I01: what the sketch projects from the model, and how.
+            const sketchNode = document
+              ? findSketch(document, sketchId)
+              : undefined;
+            const projections =
+              document && sketchNode
+                ? sketchProjectionRows(document, sketchNode)
+                : [];
+            const broken = projections.filter(
+              (row) => row.state === 'broken'
+            ).length;
+            return [
               <div
                 key={sketch.id}
                 className={`object-row${selected ? ' selected' : ''}${hidden ? ' hidden-body' : ''}${sketchArrivals.has(sketch.id) ? ' is-arrival' : ''}`}
@@ -766,6 +804,18 @@ export function ObjectsPanel({
                     <PenLine size={13} aria-hidden="true" />
                   </span>
                   <span className="feature-name">{sketch.name}</span>
+                  {broken > 0 && !geometryPending ? (
+                    <span
+                      className="feature-flag error"
+                      title="A linked projection lost its source edge. Open the sketch to re-pick or unlink it."
+                    >
+                      broken projection
+                    </span>
+                  ) : projections.length > 0 ? (
+                    <span className="feature-flag">
+                      {projections.length} projected
+                    </span>
+                  ) : null}
                 </button>
                 <button
                   type="button"
@@ -789,8 +839,42 @@ export function ObjectsPanel({
                     <Eye size={12} aria-hidden="true" />
                   )}
                 </button>
-              </div>
-            );
+              </div>,
+              ...projections.map((row) => {
+                const role = projectionRoleLabel(row);
+                const name = `Projected ${row.objectKind}`;
+                return (
+                  <div
+                    key={`${sketch.id}:${row.objectId}`}
+                    className="object-row projection-row"
+                    role="listitem"
+                    aria-label={`${name}: ${role}`}
+                    title={row.reason ? `${role}: ${row.reason}` : role}
+                  >
+                    <span className="feature-icon">
+                      {row.mode === 'linked' ? (
+                        <Link2 size={12} aria-hidden="true" />
+                      ) : (
+                        <Link2Off size={12} aria-hidden="true" />
+                      )}
+                    </span>
+                    <span className="feature-name">
+                      {name}
+                      {row.sourceName ? ` · ${row.sourceName}` : ''}
+                    </span>
+                    <span
+                      className={`feature-flag${row.state === 'broken' && !geometryPending ? ' error' : ''}`}
+                    >
+                      {row.mode === 'unlinked'
+                        ? 'independent'
+                        : row.state === 'broken' && !geometryPending
+                          ? 'broken'
+                          : 'linked'}
+                    </span>
+                  </div>
+                );
+              })
+            ];
           })}
         {planes.map((plane) => {
           const hidden = hiddenDatumIds?.has(plane.featureId) ?? false;
@@ -853,6 +937,60 @@ export function ObjectsPanel({
                     if (hidden) next.delete(plane.featureId);
                     else next.add(plane.featureId);
                     onHiddenDatumIdsChange(next);
+                  }}
+                >
+                  {hidden ? (
+                    <EyeOff size={12} aria-hidden="true" />
+                  ) : (
+                    <Eye size={12} aria-hidden="true" />
+                  )}
+                </button>
+              ) : null}
+            </div>
+          );
+        })}
+        {images.map((image) => {
+          const hidden = hiddenReferenceImageIds?.has(image.imageId) ?? false;
+          const selected = selectedReferenceImageId === image.imageId;
+          return (
+            <div
+              key={image.imageId}
+              className={`object-row${selected ? ' selected' : ''}${hidden ? ' hidden-body' : ''}`}
+              role="listitem"
+            >
+              <button
+                type="button"
+                className="body-row-main"
+                aria-pressed={selected}
+                aria-description="Reference image. Not part of the model or its exports."
+                title={`${image.name} — reference image · click to place, scale or fade it`}
+                onClick={() => onSelectReferenceImage?.(image.imageId)}
+              >
+                <span className="feature-icon">
+                  <ImageIcon size={13} aria-hidden="true" />
+                </span>
+                <span className="feature-name">{image.name}</span>
+              </button>
+              {onHiddenReferenceImageIdsChange ? (
+                <button
+                  type="button"
+                  className={`row-visibility${hidden ? ' is-hidden' : ''}`}
+                  title={
+                    hidden
+                      ? `Show image ${image.name}`
+                      : `Hide image ${image.name}`
+                  }
+                  aria-label={
+                    hidden
+                      ? `Show image ${image.name}`
+                      : `Hide image ${image.name}`
+                  }
+                  aria-pressed={hidden}
+                  onClick={() => {
+                    const next = new Set(hiddenReferenceImageIds);
+                    if (hidden) next.delete(image.imageId);
+                    else next.add(image.imageId);
+                    onHiddenReferenceImageIdsChange(next);
                   }}
                 >
                   {hidden ? (
