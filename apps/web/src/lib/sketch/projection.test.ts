@@ -125,6 +125,42 @@ function modelDocument(): ProjectDocument {
 }
 
 describe('projectionFromPick', () => {
+  it.each([false, true])(
+    'refuses an unlinked two-sample arc without changing the document, reversed=%s',
+    (reversed) => {
+      const document = modelDocument();
+      const end = [20 * Math.cos(0.002), 20 * Math.sin(0.002), 5];
+      const start = [20, 0, 5];
+      const edge: EdgeTopology = {
+        topologyId: 'shallow',
+        hash: 90,
+        vertexIds: [1, 2],
+        curve: {
+          type: 'CIRCLE',
+          circle: {
+            center: { x: 0, y: 0, z: 5 },
+            axis: { x: 0, y: 0, z: 1 },
+            radius: 20
+          }
+        },
+        points: reversed ? [...end, ...start] : [...start, ...end]
+      };
+      document.derived.bodyRepresentations[bodyId]!.topology!.edges = [edge];
+      const before = JSON.stringify(document);
+      expect(() =>
+        projectionFromPick({
+          document,
+          sketch: null,
+          selection: { bodyId, kind: 'edge', topologyId: 'shallow', hash: 90 },
+          basis,
+          mode: 'unlinked',
+          construction: false
+        })
+      ).toThrow(/circular arc without an interior sample/);
+      expect(JSON.stringify(document)).toBe(before);
+    }
+  );
+
   it('retries an idle-skipped linked pick with verified lineage before refusing it', async () => {
     const document = modelDocument();
     let rebuilt = 0;
