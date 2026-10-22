@@ -346,7 +346,7 @@ async function expectLiveLoop(
         const data = state.objects.find((object) => object.id === id)?.data;
         return data?.objectKind === 'line'
           ? [data.x1, data.y1, data.x2, data.y2].map(
-              (value) => Math.round(Number(value) * 1e6) / 1e6
+              (value) => Math.round(Number(value) * 1e6) / 1e6 + 0
             )
           : [];
       });
@@ -428,9 +428,9 @@ async function inspectLiveSketch(
   await page.keyboard.press('v');
   // The point is outside the old 20-wide loop, so this proves fresh profile geometry.
   await page.mouse.click(interior!.x, interior!.y);
-  await expect(
-    page.getByRole('region', { name: 'Selected closed profile' })
-  ).toBeVisible();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    '1 closed sketch profile selected.'
+  );
 }
 
 async function releasedPlate(

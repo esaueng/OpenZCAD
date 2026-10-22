@@ -70,6 +70,14 @@ const line = (
 const volume = (derived: DerivedState, bodyId: BodyId) =>
   derived.bodyRepresentations[bodyId]!.volume;
 
+function expectLineAtX(data: SketchObjectData | undefined, x: number) {
+  expect(data?.objectKind).toBe('line');
+  if (data?.objectKind !== 'line') throw new Error('Expected a solved line.');
+  expect(data.x1).toBeCloseTo(x, 8);
+  expect(data.x2).toBeCloseTo(x, 8);
+  return data;
+}
+
 /** A real verified edge drives an ordinary, independently dimensioned closed loop. */
 async function constrainedPlate(locked = false, typed = false) {
   const initial = createProjectDocument(
@@ -334,9 +342,11 @@ describe('linked projection constraint propagation before writeback', () => {
       expect(
         volume(await adapter.syncDocument(f.manager.document), f.plateId)
       ).toBeCloseTo(576, 6);
-      expect(f.manager.document.nodes[f.loop[1]!]).toMatchObject({
-        data: { x1: expect.closeTo(32, 8) }
-      });
+      const retained = f.manager.document.nodes[f.loop[1]!];
+      expectLineAtX(
+        retained?.kind === 'sketch-object' ? retained.data : undefined,
+        32
+      );
       if (typed) {
         expect(f.manager.document.nodes[f.loop[1]!]).toMatchObject({
           data: { y2: 'h' }
@@ -406,11 +416,7 @@ describe('linked projection constraint propagation before writeback', () => {
       projectId: resized.projectId,
       documentVersion: resized.version
     });
-    expect(built.sketchGeometry?.objects[f.loop[1]!]).toMatchObject({
-      objectKind: 'line',
-      x1: expect.closeTo(32, 8),
-      x2: expect.closeTo(32, 8)
-    });
+    expectLineAtX(built.sketchGeometry?.objects[f.loop[1]!], 32);
     // The construction shadow contributes no area: this is the constrained ordinary loop.
     expect(volume(built, f.plateId)).toBeCloseTo(32 * 6 * 3, 6);
     const expected = expectedPlate(f, resized, 32);
@@ -450,14 +456,16 @@ describe('linked projection constraint propagation before writeback', () => {
     expect(Object.keys(built.sketchProjections ?? {})).toEqual([
       f.projectionId
     ]);
-    expect(built.sketchGeometry?.objects[f.constructionId!]).toMatchObject({
+    const publishedConstruction = expectLineAtX(
+      built.sketchGeometry?.objects[f.constructionId!],
+      32
+    );
+    expect(publishedConstruction).toMatchObject({
       objectKind: 'line',
       construction: true,
-      projection: { mode: 'unlinked' },
-      x1: expect.closeTo(32, 8),
-      x2: expect.closeTo(32, 8),
-      y2: expect.closeTo(4, 8)
+      projection: { mode: 'unlinked' }
     });
+    expect(publishedConstruction.y2).toBeCloseTo(4, 8);
     const expected = expectedPlate(f, resized, 32);
     const ordinaryOnly = findSketch(expected, f.sketchId)!;
     ordinaryOnly.objectIds = [...f.loop];
@@ -550,10 +558,7 @@ describe('linked projection constraint propagation before writeback', () => {
           projectId: document.projectId,
           documentVersion: document.version
         });
-        expect(rebuilt.sketchGeometry?.objects[f.loop[1]!]).toMatchObject({
-          x1: expect.closeTo(32, 8),
-          x2: expect.closeTo(32, 8)
-        });
+        expectLineAtX(rebuilt.sketchGeometry?.objects[f.loop[1]!], 32);
         expect(
           (rebuilt.featureWarnings ?? []).every(
             (warning) => warning.kind === 'advisory'
