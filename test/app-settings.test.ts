@@ -4,6 +4,8 @@ import {
   DEFAULT_APP_SETTINGS,
   deepClone,
   PANEL_WIDTH_LIMITS,
+  VIEWPORT_FIELD_OF_VIEW_BOUNDS,
+  XRAY_OPACITY_BOUNDS,
   toUserId
 } from '@openzcad/shared';
 import {
@@ -169,6 +171,44 @@ describe('application settings', () => {
         'development'
       ).settings.sketching.relationGlyphs
     ).toBe('hidden');
+  });
+
+  it('keeps the per-kind glyph filter, dropping unknown kinds and absent fields', () => {
+    expect(defaultAppSettings().sketching.hiddenRelationGlyphs).toEqual([]);
+    // Unknown kinds (a newer client's) and duplicates drop out; the kinds come
+    // back in filter order.
+    expect(
+      normalizeAppSettings({
+        sketching: {
+          hiddenRelationGlyphs: ['lock', 'spiral', 'horizontal', 'lock', 3]
+        }
+      }).sketching.hiddenRelationGlyphs
+    ).toEqual(['horizontal', 'lock']);
+    expect(
+      normalizeAppSettings({ sketching: { hiddenRelationGlyphs: 'lock' } })
+        .sketching.hiddenRelationGlyphs
+    ).toEqual([]);
+
+    const older = deepClone(DEFAULT_APP_SETTINGS) as unknown as {
+      sketching: Record<string, unknown>;
+    };
+    delete older.sketching.hiddenRelationGlyphs;
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 0, settings: older },
+        'development'
+      ).settings.sketching.hiddenRelationGlyphs
+    ).toEqual([]);
+    const filtered = deepClone(DEFAULT_APP_SETTINGS) as unknown as {
+      sketching: Record<string, unknown>;
+    };
+    filtered.sketching.hiddenRelationGlyphs = ['coincident', 'future-kind'];
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 0, settings: filtered },
+        'development'
+      ).settings.sketching.hiddenRelationGlyphs
+    ).toEqual(['coincident']);
   });
 
   it('strictly validates account settings and compatible endpoints', () => {
@@ -601,6 +641,50 @@ describe('application settings', () => {
         'development'
       ).settings.keymap
     ).toEqual({ overrides: {} });
+  });
+
+  it('reads the field of view and X-ray opacity in range on every layer', () => {
+    // Absent from settings written before either preference existed.
+    expect(normalizeAppSettings({}).viewport).toMatchObject({
+      fieldOfView: VIEWPORT_FIELD_OF_VIEW_BOUNDS.default,
+      xrayOpacity: XRAY_OPACITY_BOUNDS.default
+    });
+    expect(
+      normalizeAppSettings({ viewport: { fieldOfView: 400, xrayOpacity: 2 } })
+        .viewport
+    ).toMatchObject({
+      fieldOfView: VIEWPORT_FIELD_OF_VIEW_BOUNDS.max,
+      xrayOpacity: XRAY_OPACITY_BOUNDS.min
+    });
+
+    const settings = deepClone(DEFAULT_APP_SETTINGS);
+    settings.viewport = {
+      ...settings.viewport,
+      fieldOfView: 28.4,
+      xrayOpacity: 60
+    };
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 1, settings },
+        'development'
+      ).settings.viewport
+    ).toMatchObject({ fieldOfView: 28, xrayOpacity: 60 });
+
+    // A client from before them still saves, with the defaults kept.
+    const legacy = deepClone(DEFAULT_APP_SETTINGS) as unknown as {
+      viewport: Record<string, unknown>;
+    };
+    delete legacy.viewport.fieldOfView;
+    delete legacy.viewport.xrayOpacity;
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 1, settings: legacy },
+        'development'
+      ).settings.viewport
+    ).toMatchObject({
+      fieldOfView: VIEWPORT_FIELD_OF_VIEW_BOUNDS.default,
+      xrayOpacity: XRAY_OPACITY_BOUNDS.default
+    });
   });
 
   it('clamps an out-of-range delay at the account boundary too', () => {

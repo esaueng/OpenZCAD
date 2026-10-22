@@ -48,6 +48,92 @@ function body(bodyId = 'body_1') {
 }
 
 describe('exact section geometry in the viewport', () => {
+  it('shows an exact cut arriving during wireframe X-ray and hides it again with X-ray off', () => {
+    const { group, mesh } = body();
+    mesh.material.opacity = 0.35;
+    applyDisplayMode(group, 'wireframe', true);
+    applySectionPlane(group, sectionClippingPlane({ plane: 'XY', offset: 1 }), {
+      regions: [region()],
+      displayMode: 'wireframe',
+      xray: true
+    });
+    const fill = group.getObjectByName(`${EXACT_SECTION}-fill`) as THREE.Mesh<
+      THREE.BufferGeometry,
+      THREE.MeshPhongMaterial
+    >;
+    expect(fill.material.visible).toBe(true);
+    expect(fill.material.opacity).toBe(0.35);
+    const curves = group.getObjectByName(`${EXACT_SECTION}-curve`);
+    applyDisplayMode(group, 'wireframe', false);
+    expect(fill.material.visible).toBe(false);
+    expect(curves).toBeDefined();
+    expect(curves!.visible).toBe(true);
+    applyDisplayMode(group, 'wireframe', true);
+    expect(fill.material.visible).toBe(true);
+  });
+
+  it('keeps supporting a numeric opacity snapshot', () => {
+    const root = new THREE.Group();
+    applyExactSection(
+      root,
+      shaded([region()]),
+      new Map(),
+      new Map([['body_1', 0.6]])
+    );
+    const fill = root.getObjectByName(`${EXACT_SECTION}-fill`) as THREE.Mesh<
+      THREE.BufferGeometry,
+      THREE.MeshPhongMaterial
+    >;
+    fill.onBeforeRender(
+      ...([] as unknown as Parameters<typeof fill.onBeforeRender>)
+    );
+    expect(fill.material.opacity).toBe(0.6);
+    expect(fill.material.transparent).toBe(true);
+    expect(fill.material.depthWrite).toBe(false);
+  });
+
+  it.each([1, 0.35])(
+    'follows opacity previews and their cleanup without rebuilding the cut (X-ray factor: %s)',
+    (xray) => {
+      const { group, mesh } = body();
+      mesh.material.opacity = xray;
+      applySectionPlane(
+        group,
+        sectionClippingPlane({ plane: 'XY', offset: 1 }),
+        shaded([region()])
+      );
+      const fill = group.getObjectByName(`${EXACT_SECTION}-fill`) as THREE.Mesh<
+        THREE.BufferGeometry,
+        THREE.MeshPhongMaterial
+      >;
+      const geometry = fill.geometry;
+      for (const appearance of [0.4, 1]) {
+        // Appearance previews and cancellation mutate the live body material.
+        mesh.material.opacity = appearance * xray;
+        fill.onBeforeRender(
+          ...([] as unknown as Parameters<typeof fill.onBeforeRender>)
+        );
+        expect(fill.material.opacity).toBeCloseTo(appearance * xray, 12);
+        expect(fill.material.transparent).toBe(appearance * xray < 1);
+        expect(fill.material.depthWrite).toBe(appearance * xray >= 1);
+        expect(fill.geometry).toBe(geometry);
+      }
+    }
+  );
+
+  it.each([1, 0.6])('uses the body opacity for exact fills when X-ray is toggled (appearance: %s)', (appearance) => {
+    const { group, mesh } = body();
+    const plane = sectionClippingPlane({ plane: 'XY', offset: 1 });
+    for (const xray of [0.35, 1]) {
+      mesh.material.opacity = appearance * xray;
+      applySectionPlane(group, plane, shaded([region()]));
+      const fill = group.getObjectByName(`${EXACT_SECTION}-fill`) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshPhongMaterial>;
+      expect(fill.material.opacity).toBeCloseTo(appearance * xray, 12);
+      expect(fill.material.transparent).toBe(appearance * xray < 1);
+      expect(fill.material.depthWrite).toBe(appearance * xray >= 1);
+    }
+  });
+
   it('draws the cut surface and its boundary curves', () => {
     const root = new THREE.Group();
     applyExactSection(root, shaded([region()]));

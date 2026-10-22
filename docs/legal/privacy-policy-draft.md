@@ -141,9 +141,22 @@ We send no marketing email.
 
 **When projects reach the cloud.** When you are signed in with cloud features
 on, projects you create are saved to your account, and cloud autosave keeps
-them updated (Settings → Saving → Cloud autosave; when it is off, the cloud copy
-changes only when you save a revision). A project you made on a device while
-signed out stays on that device until you choose to add it to your account.
+the account copy updated (Settings → Saving → Cloud autosave). Turning autosave
+off stops those automatic account saves; you can still save a revision.
+
+Live collaboration is a separate setting. For an open cloud project, leaving
+Collaboration enabled (the default) sends document edits to its collaboration
+room, even when Cloud autosave is off and even when nobody else is present.
+The room keeps its own readable document and snapshots. Turn Collaboration
+off too if you do not want that live synchronization, or turn Cloud features
+off to stop requests to the OpenZCAD API from that device. A project you made
+while signed out stays on that device until you choose to add it to your
+account.
+
+> **Reviewer trace (2026-10-22).** `App.tsx` admits a cloud project's room
+> independently of `files.cloudAutosave`; `useCollaboration.ts` sends changed
+> document versions after a 500 ms debounce. The account autosave and room
+> synchronization paths must be rechecked separately before publication.
 
 ## 5. How cloud data is stored today
 
@@ -296,14 +309,27 @@ requests are handled and whether users are notified.]`
 | Projects in the Trash               | Permanently deleted, with their files, revisions and collaboration room, at the first visit to your project list after 30 days in the Trash. If you do not return, they stay in the Trash until you do |
 | Saved revisions                     | The newest 50 per project; older ones are removed as new ones are saved                                                                                                                                |
 | Collaboration room                  | The latest document and up to 20 earlier snapshots, for the life of the project                                                                                                                        |
-| Sign-in sessions                    | 30 days, or until you sign out                                                                                                                                                                         |
-| Sign-in codes                       | Valid for 10 minutes; the hashed record stays up to 24 hours after it expires, to limit repeated guessing                                                                                              |
-| Rate-limit counters                 | About two hours after their window ends; removed during routine cleanup                                                                                                                                |
+| Sign-in sessions                    | Valid for 30 days, unless you sign out earlier. Expired server rows become eligible for traffic-triggered cleanup; expiry is not a deletion deadline                                                   |
+| Sign-in codes                       | Valid once for 10 minutes. The hashed record becomes eligible for cleanup 24 hours after expiry; bounded, traffic-triggered cleanup can retain it longer                                               |
+| Rate-limit counters                 | Eligible for cleanup after two of the longest shared-table windows have elapsed from the window start (currently two hours); removed in bounded, traffic-triggered passes                              |
 | Invitations and sharing history     | For the life of the project, or until the invited or inviting account is deleted                                                                                                                       |
 | Share links                         | Until revoked, or until the project is deleted                                                                                                                                                         |
 | Assistant usage counters            | Until your account is deleted `[OWNER: decide a shorter period]`                                                                                                                                       |
 | Cloud account statistics permission | 30 days, or until withdrawn                                                                                                                                                                            |
 | Logs                                | `[CONFIRM: Workers Logs retention]`                                                                                                                                                                    |
+
+**Cleanup timing.** Validity limits and cleanup eligibility do not promise a
+deletion time. Authentication cleanup runs when a later email sign-in or
+desktop-auth start reaches it, deleting at most 100 eligible rows from each
+of the challenge, session and rate-limit tables per pass. API rate-limit
+cleanup also depends on later requests and removes at most 100 eligible
+counters per pass. If the relevant traffic never returns, expired records can
+remain indefinitely; even with traffic, a backlog may need multiple passes.
+Signing out removes the current session token separately.
+
+> **Reviewer trace (2026-10-22).** `cleanExpiredAuthRows` in `auth.ts` and the
+> sweep in `apiRateLimit.ts` define eligibility and bounded cleanup. They do
+> not schedule a guaranteed purge.
 
 **Backups.** The database keeps a point-in-time history (Cloudflare D1 Time
 Travel) that can restore it to any moment in the last **30 days**. The

@@ -414,9 +414,11 @@ export interface RemusPatternInstance {
   /**
    * The kernel journal's claim for this instance: source face handle to
    * instance face handle. Absent where the entry point publishes no journal
-   * (`circularPattern` and `gridPattern` are unjournaled on the pin).
+   * (the circular arm uses `circularPattern` without a journal).
    */
   readonly claimedFaces?: ReadonlyMap<number, number>;
+  /** Complete public grid edge-output census; contains no source relation. */
+  readonly journalEdges?: ReadonlySet<number>;
 }
 
 /**
@@ -434,8 +436,10 @@ export interface RemusPatternInstance {
  * Names carry the instance ordinal — `pattern.face.instance.2.<source name>` —
  * so a sketch pinned to the third instance's top face is distinguishable from
  * the first's, and survives a count change that leaves that instance where it
- * was. Edges are not carried: the pin's pattern journal publishes face
- * outputs only, and nothing downstream attaches to a pattern's edges by name.
+ * was. Grid edges additionally inherit named source roles through the same
+ * known transform, after checking the public journal's complete
+ * construction-origin edge subject set. Resolver output positions are never
+ * interpreted as source-edge relations.
  */
 export function deriveRemusPatternInstanceLineage(input: {
   readonly producingFeatureId: FeatureId;
@@ -453,6 +457,16 @@ export function deriveRemusPatternInstanceLineage(input: {
   const sources = [...(input.sourceLineage?.faceReferences ?? [])].filter(
     ([handle, reference]) =>
       referenceMatchesCandidate(reference, sourceByHandle.get(handle))
+  );
+  const sourceEdges = new Map(
+    input.sourceCandidates
+      .filter((candidate) => candidate.kind === 'edge')
+      .map((candidate) => [candidate.handle, candidate] as const)
+  );
+  const edgeSources = [...(input.sourceLineage?.edgeReferences ?? [])].filter(
+    ([handle, reference]) =>
+      edgeReferenceMatchesCandidate(reference, sourceEdges.get(handle)) &&
+      inspectTopologyWitness('edge', reference.witness).status === 'supported'
   );
 
   for (const instance of input.instances) {
@@ -538,6 +552,72 @@ export function deriveRemusPatternInstanceLineage(input: {
       assignments.push({
         ...match,
         lineageName: `pattern.face.instance.${instance.instance}.${reference.lineageName}`
+      });
+    }
+    if (instance.journalEdges === undefined) continue;
+    const edges = instance.candidates.filter(
+      (candidate) => candidate.kind === 'edge'
+    );
+    if (
+      edges.length !== instance.journalEdges.size ||
+      new Set(edges.map((candidate) => candidate.handle)).size !==
+        edges.length ||
+      edges.some((candidate) => !instance.journalEdges!.has(candidate.handle))
+    ) {
+      diagnostics.push({
+        code: 'invalid-pattern-journal',
+        operation: 'pattern',
+        topologyKind: 'edge',
+        message: `Pattern instance ${instance.instance} has no complete checked edge-output census.`
+      });
+      continue;
+    }
+    for (const [handle, reference] of edgeSources) {
+      const expected = transformRemusWitness(
+        'edge',
+        reference.witness,
+        instance.matrix
+      );
+      const matches = expected
+        ? edges.filter((candidate) =>
+            topologyWitnessesNearlyEqual('edge', expected, candidate.witness)
+          )
+        : [];
+      if (matches.length !== 1) {
+        diagnostics.push({
+          code: 'pattern-instance-unverified',
+          operation: 'pattern',
+          topologyKind: 'edge',
+          lineageName: reference.lineageName,
+          sourceHandle: handle,
+          resultHandles: matches.map((candidate) => candidate.handle),
+          message: `Pattern instance ${instance.instance} matched ${matches.length} edges for ${reference.lineageName}.`
+        });
+        continue;
+      }
+      const match = matches[0]!;
+      const verification = verifyTopologyEvolution({
+        operation: 'pattern',
+        kind: 'edge',
+        sourceWitness: reference.witness,
+        resultWitness: match.witness,
+        relation: { kind: 'known-transform', expectedResultWitness: expected! }
+      });
+      if (verification.status !== 'verified') {
+        diagnostics.push({
+          code: 'pattern-instance-unverified',
+          operation: 'pattern',
+          topologyKind: 'edge',
+          lineageName: reference.lineageName,
+          sourceHandle: handle,
+          resultHandles: [match.handle],
+          message: `Pattern instance ${instance.instance} failed exact edge witness verification for ${reference.lineageName}.`
+        });
+        continue;
+      }
+      assignments.push({
+        ...match,
+        lineageName: `pattern.edge.instance.${instance.instance}.${reference.lineageName}`
       });
     }
   }

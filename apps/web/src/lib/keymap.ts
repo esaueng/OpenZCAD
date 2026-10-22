@@ -99,6 +99,9 @@ export const KEYMAP_COMMANDS: readonly KeymapCommand[] = [
   command('view-top', 'Top view', 'view-display', 'model', '2'),
   command('view-right', 'Right view', 'view-display', 'model', '3'),
   command('view-iso', 'Isometric view', 'view-display', 'model', '4'),
+  command('view-back', 'Back view', 'view-display', 'model', '5'),
+  command('view-bottom', 'Bottom view', 'view-display', 'model', '6'),
+  command('view-left', 'Left view', 'view-display', 'model', '7'),
   command('view-fit', 'Fit view', 'view-display', 'model', 'F'),
   command(
     'view-normal-to-face',
@@ -110,6 +113,15 @@ export const KEYMAP_COMMANDS: readonly KeymapCommand[] = [
   command('view-grid', 'Toggle the grid', 'view-display', 'model', 'G'),
   command('view-display', 'Cycle display mode', 'view-display', 'model', 'W'),
   command('view-projection', 'Toggle projection', 'view-display', 'model', 'P'),
+  command('view-xray', 'Toggle X-ray', 'view-display', 'model', 'Shift+X'),
+  // Not Tab, which moves focus: a Ctrl chord also works from a field.
+  command(
+    'panels-hide-all',
+    'Hide or show the model panels',
+    'view-display',
+    'global',
+    'Ctrl+\\'
+  ),
   command(
     'selection-filter',
     'Cycle the selection filter',
@@ -202,7 +214,7 @@ const BROWSER_CHORDS = new Set([
 
 export interface Keymap {
   readonly overrides: KeymapOverrides;
-  /** The command's live chords: its override when it has one, else defaults. */
+  /** The command's live chords: its override, else unclaimed defaults. */
   bindings(id: string): readonly string[];
   /** The first live chord, for a tooltip or a palette row; none when unbound. */
   label(id: string): string | undefined;
@@ -217,16 +229,38 @@ export interface Keymap {
 }
 
 export function resolveKeymap(overrides: KeymapOverrides): Keymap {
+  // A key that was free in an older release may already be someone's saved
+  // shortcut. New defaults yield to that explicit choice across overlapping
+  // contexts, even when the default's context is searched first (model before
+  // build, for example). Every surface reads the same filtered bindings.
+  const claimed = new Map<string, KeymapContext[]>();
+  for (const item of KEYMAP_COMMANDS) {
+    for (const chord of overrides[item.id] ?? []) {
+      const contexts = claimed.get(chord) ?? [];
+      contexts.push(item.context);
+      claimed.set(chord, contexts);
+    }
+  }
+  const defaults = new Map(
+    KEYMAP_COMMANDS.map((item) => [
+      item.id,
+      item.defaults.filter(
+        (chord) =>
+          !claimed
+            .get(chord)
+            ?.some((context) => contextsOverlap(item.context, context))
+      )
+    ])
+  );
   const byContext = new Map<KeymapContext, Map<string, KeymapCommand>>();
-  const bindings = (id: string) =>
-    overrides[id] ?? keymapCommand(id)?.defaults ?? [];
+  const bindings = (id: string) => overrides[id] ?? defaults.get(id) ?? [];
   for (const item of KEYMAP_COMMANDS) {
     const table =
       byContext.get(item.context) ?? new Map<string, KeymapCommand>();
     byContext.set(item.context, table);
     for (const chord of bindings(item.id)) {
-      // The first claim wins, so a stored clash — written before a default
-      // moved, say — resolves the same way on every load.
+      // If stored explicit overrides clash, the first claim still wins
+      // deterministically within a context.
       if (!table.has(chord)) table.set(chord, item);
     }
   }

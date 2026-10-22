@@ -3,13 +3,14 @@ import {
   expect,
   createProject,
   expectBodyCount,
+  MODEL_ONLY,
   promptField,
   stubApi
 } from './openzcad-fixtures';
 import type { Page } from '@playwright/test';
 
 async function baseline(page: Page) {
-  await stubApi(page, { modelDrawer: false, commandFoldClosed: true });
+  await stubApi(page, { panelLayout: MODEL_ONLY, commandFoldClosed: true });
   await createProject(page, 'QA panel recovery');
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
   await page
@@ -54,7 +55,7 @@ test('offline first-open History waits locally and reconnects without reloading'
   const coldRequests: string[] = [];
   page.on('request', (request) => {
     if (
-      /\/(Sidebar|ParameterRows|FeatureHistoryPanel)-.*\.js$/.test(
+      /\/(ModelPanel|ParameterRows|FeatureHistoryPanel)-.*\.js$/.test(
         request.url()
       )
     )
@@ -117,7 +118,7 @@ test('opening Tweak offline cannot poison the shared Parameters download before 
   const coldRequests: string[] = [];
   page.on('request', (request) => {
     if (
-      /\/(TweakPanel|ViewModeBar|Sidebar|ParameterRows|FeatureHistoryPanel)-.*\.js$/.test(
+      /\/(TweakPanel|ViewModeBar|ModelPanel|ParameterRows|FeatureHistoryPanel)-.*\.js$/.test(
         request.url()
       )
     )
@@ -174,7 +175,7 @@ test('a parameter command focuses its cached expression while offline', async ({
   const coldRequests: string[] = [];
   page.on('request', (request) => {
     if (
-      /\/(Sidebar|ParameterRows|FeatureHistoryPanel)-.*\.js$/.test(
+      /\/(ModelPanel|ParameterRows|FeatureHistoryPanel)-.*\.js$/.test(
         request.url()
       )
     )
@@ -197,7 +198,7 @@ test('a parameter command focuses its cached expression while offline', async ({
   await preservedWorkspace(page, timeOrigin);
 });
 
-for (const chunk of ['Sidebar', 'ParameterRows', 'FeatureHistoryPanel']) {
+for (const chunk of ['ModelPanel', 'ParameterRows', 'FeatureHistoryPanel']) {
   test(`an online ${chunk} rejection stays local and offers an honest durable reload`, async ({
     page
   }) => {

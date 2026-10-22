@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { promptField, revealModelDrawer, stubApi } from './openzcad-fixtures';
+import { promptField, revealModelPanel, stubApi } from './openzcad-fixtures';
 
 /**
  * Production QA, 1 October: floating chips, menus and sheets that sat under
@@ -77,7 +77,7 @@ test('UI-01: an inch part’s selection chip stays under the top bar and its Mov
     units: 'inch',
     size: ['2', '1', '0.5']
   });
-  await revealModelDrawer(page, 'Objects');
+  await revealModelPanel(page, 'Objects');
   await page.locator('.body-row').first().click();
   const chip = page.locator('.selection-callout-chip');
   const move = chip.getByRole('button', { name: 'Selection: Move' });
@@ -164,7 +164,7 @@ test('UI-06: open menus move back inside a window resized under them', async ({
   await createBox(page, 'Resized Menus');
 
   // A history row's actions.
-  await revealModelDrawer(page, 'History');
+  await revealModelPanel(page, 'History');
   await page
     .locator('.feature-row-main', { hasText: 'Box' })
     .click({ button: 'right' });

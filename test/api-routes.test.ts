@@ -11,6 +11,7 @@ import {
 import {
   DEFAULT_APP_SETTINGS,
   MAX_ARTIFACT_UPLOAD_PARTS,
+  MAX_CLOUD_PROJECT_WRITE_BYTES,
   MAX_PROJECT_NAME_LENGTH,
   projectOrganization,
   toUserId,
@@ -1283,6 +1284,120 @@ describe('worker api routes', () => {
     );
     expect(changed.status).toBe(200);
     expect(storedSettings.sketching.relationGlyphs).toBe('always');
+
+    // A tab from before the per-kind filter keeps the stored filter, while a
+    // newer one that sends an empty filter clears it.
+    const filtered = structuredClone(storedSettings);
+    filtered.sketching.hiddenRelationGlyphs = ['coincident', 'lock'];
+    expect(
+      (
+        await worker.fetch(
+          patch('/api/settings', { settings: filtered, expectedRevision: 3 }),
+          workerEnv
+        )
+      ).status
+    ).toBe(200);
+    const beforeFilter = structuredClone(storedSettings) as unknown as {
+      appearance: { theme: string };
+      sketching: Record<string, unknown>;
+    };
+    delete beforeFilter.sketching.hiddenRelationGlyphs;
+    beforeFilter.appearance.theme = 'light';
+    expect(
+      (
+        await worker.fetch(
+          patch('/api/settings', {
+            settings: beforeFilter,
+            expectedRevision: 4
+          }),
+          workerEnv
+        )
+      ).status
+    ).toBe(200);
+    expect(storedSettings.appearance.theme).toBe('light');
+    expect(storedSettings.sketching.hiddenRelationGlyphs).toEqual([
+      'coincident',
+      'lock'
+    ]);
+    const cleared = structuredClone(storedSettings);
+    cleared.sketching.hiddenRelationGlyphs = [];
+    expect(
+      (
+        await worker.fetch(
+          patch('/api/settings', { settings: cleared, expectedRevision: 5 }),
+          workerEnv
+        )
+      ).status
+    ).toBe(200);
+    expect(storedSettings.sketching.hiddenRelationGlyphs).toEqual([]);
+  });
+
+  it('keeps the stored field of view and X-ray opacity when an older client omits them', async () => {
+    const custom = structuredClone(DEFAULT_APP_SETTINGS);
+    custom.viewport.fieldOfView = 70;
+    custom.viewport.xrayOpacity = 60;
+    let storedSettings = structuredClone(custom);
+    let storedRevision = 1;
+    const prepare = vi.fn((query: string) => {
+      let values: unknown[] = [];
+      const statement = {
+        bind(...next: unknown[]) {
+          values = next;
+          return statement;
+        },
+        async first() {
+          return query.includes('FROM user_settings')
+            ? {
+                settings_json: JSON.stringify(storedSettings),
+                revision: storedRevision
+              }
+            : null;
+        },
+        async run() {
+          if (query.includes('UPDATE user_settings')) {
+            storedSettings = JSON.parse(
+              String(values[0])
+            ) as typeof storedSettings;
+            storedRevision = Number(values[1]);
+            return { meta: { changes: 1 } };
+          }
+          return { meta: { changes: 0 } };
+        },
+        async all() {
+          return { results: [] };
+        }
+      };
+      return statement;
+    });
+    const workerEnv = { ...env, DB: { prepare } } as never;
+
+    // A tab from before these preferences changes the theme and sends none.
+    const legacy = structuredClone(custom) as unknown as {
+      appearance: { theme: string };
+      viewport: Record<string, unknown>;
+    };
+    delete legacy.viewport.fieldOfView;
+    delete legacy.viewport.xrayOpacity;
+    legacy.appearance.theme = 'dark';
+    const saved = await worker.fetch(
+      patch('/api/settings', { settings: legacy, expectedRevision: 1 }),
+      workerEnv
+    );
+    expect(saved.status).toBe(200);
+    expect(storedSettings.appearance.theme).toBe('dark');
+    expect(storedSettings.viewport.fieldOfView).toBe(70);
+    expect(storedSettings.viewport.xrayOpacity).toBe(60);
+
+    // A client that sends them is honoured.
+    const changed = structuredClone(storedSettings);
+    changed.viewport.fieldOfView = 30;
+    const accepted = await worker.fetch(
+      patch('/api/settings', { settings: changed, expectedRevision: 2 }),
+      workerEnv
+    );
+    expect(accepted.status).toBe(200);
+    expect(storedSettings.viewport.fieldOfView).toBe(30);
+    expect(storedSettings.viewport.xrayOpacity).toBe(60);
   });
 
   it('leaves rooms alone when a save keeps sharing off', async () => {
@@ -2674,7 +2789,7 @@ describe('worker api routes', () => {
       new Request('https://example.com/api/projects', {
         method: 'POST',
         body: '{}',
-        headers: { 'content-length': String(30 * 1024 * 1024) }
+        headers: { 'content-length': String(MAX_CLOUD_PROJECT_WRITE_BYTES + 1) }
       }),
       env
     );
@@ -2709,7 +2824,9 @@ describe('worker api routes', () => {
     'rejects an oversized stream $description with 413',
     async ({ contentLength }) => {
       const chunk = new Uint8Array(1024 * 1024).fill(0x20);
-      let chunksRemaining = 26;
+      // Past the document-write ceiling, which leaves room for base64 uploads.
+      let chunksRemaining =
+        Math.ceil(MAX_CLOUD_PROJECT_WRITE_BYTES / chunk.length) + 1;
       const body = new ReadableStream<Uint8Array>({
         pull(controller) {
           if (chunksRemaining === 0) {

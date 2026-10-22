@@ -13,6 +13,8 @@ import {
   toUserId,
   type BodyId,
   type BodyRepresentation,
+  type DrawingAnnotation,
+  type DrawingAnnotationId,
   type DrawingSheet,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -20,8 +22,10 @@ import { DrawingWorkspace } from './DrawingWorkspace';
 import { DrawingProjectionClient } from '../lib/drawing/projectionClient';
 import {
   createStarterSheet,
-  drawingSourceFingerprint
+  drawingSourceFingerprint,
+  projectionBodyInput
 } from '../lib/drawing/sheetSources';
+import type { ProjectionBodyInput } from '../lib/drawing/projectView';
 import type * as SheetSources from '../lib/drawing/sheetSources';
 
 // Pass-through, counted: fingerprinting is the costly step a drag must skip.
@@ -102,6 +106,27 @@ function cube(size = 10): BodyRepresentation {
   };
 }
 
+/**
+ * The geometry worker's canonical tessellation, stood in for by each body's
+ * display mesh: these synthetic cubes have no exact geometry to mesh.
+ */
+function displayTessellation(
+  bodies: Record<string, BodyRepresentation>
+): (
+  document: ProjectDocument,
+  bodyIds: BodyId[]
+) => Promise<Record<string, ProjectionBodyInput>> {
+  return (_document, bodyIds) =>
+    Promise.resolve(
+      Object.fromEntries(
+        bodyIds.flatMap((id) => {
+          const input = bodies[id] ? projectionBodyInput(bodies[id]) : null;
+          return input ? [[id, input]] : [];
+        })
+      )
+    );
+}
+
 function setup(
   options: {
     sheet?: DrawingSheet;
@@ -125,6 +150,7 @@ function setup(
       bodies={bodies}
       geometryPending={options.geometryPending ?? false}
       defaultBodyIds={[bodyId]}
+      requestTessellation={displayTessellation(bodies)}
       editDisabledReason={options.editDisabledReason ?? null}
       onCommand={onCommand}
       onStatus={onStatus}
@@ -176,6 +202,7 @@ describe('DrawingWorkspace', () => {
         bodies={{ [bodyId]: cube() }}
         geometryPending={false}
         defaultBodyIds={[]}
+        requestTessellation={displayTessellation({ [bodyId]: cube() })}
         editDisabledReason={null}
         onCommand={onCommand}
         onStatus={onStatus}
@@ -405,6 +432,7 @@ describe('DrawingWorkspace', () => {
       bodies: { [bodyId]: cube() },
       geometryPending: false,
       defaultBodyIds: [bodyId],
+      requestTessellation: displayTessellation({ [bodyId]: cube() }),
       editDisabledReason: null,
       onCommand,
       onStatus: vi.fn()
@@ -468,6 +496,7 @@ describe('DrawingWorkspace', () => {
         bodies: { [bodyId]: cube() },
         geometryPending: false,
         defaultBodyIds: [bodyId],
+        requestTessellation: displayTessellation({ [bodyId]: cube() }),
         editDisabledReason: null,
         onCommand: vi.fn(() => true),
         onStatus: vi.fn()
@@ -502,6 +531,136 @@ describe('DrawingWorkspace', () => {
     }
   });
 
+  it('projects from the canonical tessellation, meshed once per model, never the display mesh', async () => {
+    const project = vi.spyOn(DrawingProjectionClient.prototype, 'project');
+    try {
+      const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+        bodyId
+      ])!;
+      const sheet = starter(fingerprint);
+      const base = createProjectDocument('Bracket', toUserId('test'));
+      const document = (shown: DrawingSheet): ProjectDocument => ({
+        ...base,
+        bodyOrder: [bodyId],
+        drawings: { sheets: [shown] }
+      });
+      // Told apart by size: the display mesh is the 10 mm cube, the
+      // canonical tessellation a 12 mm one.
+      const canonical = displayTessellation({ [bodyId]: cube(12) });
+      const requestTessellation = vi.fn(canonical);
+      const props = {
+        bodies: { [bodyId]: cube() },
+        geometryPending: false,
+        defaultBodyIds: [bodyId],
+        requestTessellation,
+        editDisabledReason: null,
+        onCommand: vi.fn(() => true),
+        onStatus: vi.fn()
+      };
+      const settled = () =>
+        waitFor(() =>
+          expect(
+            screen
+              .getByRole('application', { name: 'Sheet Sheet 1' })
+              .querySelectorAll('.drawing-view.is-placeholder')
+          ).toHaveLength(0)
+        );
+      const { rerender } = render(
+        <DrawingWorkspace document={document(sheet)} {...props} />
+      );
+      await settled();
+      expect(requestTessellation).toHaveBeenCalledTimes(1);
+      expect(requestTessellation.mock.calls[0]![1]).toEqual([bodyId]);
+      const [inputs] = project.mock.calls[0]!;
+      expect(Math.max(...inputs[bodyId]!.vertices)).toBe(12);
+      // A hidden-line toggle projects again from the same tessellation.
+      rerender(
+        <DrawingWorkspace
+          document={document({
+            ...sheet,
+            views: sheet.views.map((view, index) =>
+              index === 0 ? { ...view, hiddenLines: !view.hiddenLines } : view
+            )
+          })}
+          {...props}
+        />
+      );
+      await settled();
+      await waitFor(() => expect(project).toHaveBeenCalledTimes(2));
+      expect(requestTessellation).toHaveBeenCalledTimes(1);
+    } finally {
+      project.mockRestore();
+    }
+  });
+
+  it('shows the refusal when the model cannot be meshed for drawing', async () => {
+    const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+      bodyId
+    ])!;
+    const base = createProjectDocument('Bracket', toUserId('test'));
+    const requestTessellation = vi.fn(() =>
+      Promise.reject(new Error('Body body_cube has no exact geometry to draw.'))
+    );
+    render(
+      <DrawingWorkspace
+        document={{
+          ...base,
+          bodyOrder: [bodyId],
+          drawings: { sheets: [starter(fingerprint)] }
+        }}
+        bodies={{ [bodyId]: cube() }}
+        geometryPending={false}
+        defaultBodyIds={[bodyId]}
+        requestTessellation={requestTessellation}
+        editDisabledReason={null}
+        onCommand={vi.fn(() => true)}
+        onStatus={vi.fn()}
+      />
+    );
+    // Two retries, then the views say why rather than asking for ever.
+    await waitFor(() =>
+      expect(
+        screen.getAllByText(/has no exact geometry to draw/).length
+      ).toBeGreaterThan(0)
+    );
+    expect(requestTessellation).toHaveBeenCalledTimes(3);
+  });
+
+  it('abandons a tessellation still in the geometry worker when the workspace closes', async () => {
+    const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+      bodyId
+    ])!;
+    const base = createProjectDocument('Bracket', toUserId('test'));
+    const signals: AbortSignal[] = [];
+    // Never answers: the model is still meshing when Draw closes.
+    const requestTessellation = vi.fn(
+      (_document: ProjectDocument, _bodyIds: BodyId[], signal: AbortSignal) => {
+        signals.push(signal);
+        return new Promise<Record<string, ProjectionBodyInput>>(() => {});
+      }
+    );
+    const { unmount } = render(
+      <DrawingWorkspace
+        document={{
+          ...base,
+          bodyOrder: [bodyId],
+          drawings: { sheets: [starter(fingerprint)] }
+        }}
+        bodies={{ [bodyId]: cube() }}
+        geometryPending={false}
+        defaultBodyIds={[bodyId]}
+        requestTessellation={requestTessellation}
+        editDisabledReason={null}
+        onCommand={vi.fn(() => true)}
+        onStatus={vi.fn()}
+      />
+    );
+    await waitFor(() => expect(requestTessellation).toHaveBeenCalled());
+    expect(signals.every((signal) => !signal.aborted)).toBe(true);
+    unmount();
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+  });
+
   it("keeps each sheet's projections when switching between sheets of different bodies", async () => {
     const otherId = 'body_other' as BodyId;
     const other = { ...cube(4), bodyId: otherId, name: 'Small cube' };
@@ -529,6 +688,7 @@ describe('DrawingWorkspace', () => {
           bodies={bodies}
           geometryPending={false}
           defaultBodyIds={[bodyId]}
+          requestTessellation={displayTessellation(bodies)}
           editDisabledReason={null}
           onCommand={vi.fn(() => true)}
           onStatus={vi.fn()}
@@ -589,6 +749,7 @@ describe('DrawingWorkspace', () => {
         bodies: { [bodyId]: cube() },
         geometryPending: false,
         defaultBodyIds: [bodyId],
+        requestTessellation: displayTessellation({ [bodyId]: cube() }),
         editDisabledReason: null,
         onCommand: vi.fn(() => true),
         onStatus: vi.fn()
@@ -641,6 +802,7 @@ describe('DrawingWorkspace', () => {
           bodies={bodies}
           geometryPending={false}
           defaultBodyIds={[bodyId]}
+          requestTessellation={displayTessellation(bodies)}
           editDisabledReason={null}
           onCommand={vi.fn(() => true)}
           onStatus={vi.fn()}
@@ -672,6 +834,7 @@ describe('DrawingWorkspace', () => {
       bodies: { [bodyId]: cube() },
       geometryPending: false,
       defaultBodyIds: [bodyId],
+      requestTessellation: displayTessellation({ [bodyId]: cube() }),
       editDisabledReason: null,
       onCommand: vi.fn(() => true),
       onStatus: vi.fn()
@@ -713,5 +876,255 @@ describe('DrawingWorkspace', () => {
     expect(screen.getByRole('status').textContent).toMatch(
       /a deleted body, which no longer exists/
     );
+  });
+
+  describe('D02 annotations', () => {
+    /** The cube's bottom front edge, (0,0,0)–(10,0,0): 10 mm across. */
+    function dimensioned(hash = 210): DrawingSheet {
+      const sheet = starter(
+        drawingSourceFingerprint({ [bodyId]: cube() }, [bodyId])!
+      );
+      const front = sheet.views.find((view) => view.orientation === 'front')!;
+      const annotation: DrawingAnnotation = {
+        annotationId: 'dann_w' as DrawingAnnotationId,
+        kind: 'linear',
+        viewId: front.viewId,
+        direction: 'horizontal',
+        from: { edge: { bodyId, hash }, anchor: 'first' },
+        to: { edge: { bodyId, hash }, anchor: 'second' },
+        placementMm: { x: 0, y: -15 }
+      };
+      return { ...sheet, annotations: [annotation] };
+    }
+
+    it('draws a dimension with its value read from the model', async () => {
+      setup({ sheet: dimensioned() });
+      const canvas = screen.getByRole('application', {
+        name: 'Sheet Sheet 1'
+      });
+      expect(
+        await within(canvas).findByRole('button', {
+          name: 'Horizontal dimension 10'
+        })
+      ).toBeTruthy();
+      expect(
+        canvas.querySelectorAll(
+          '.drawing-strokes.is-dimension polygon.is-filled'
+        )
+      ).toHaveLength(2);
+      expect(
+        within(
+          screen.getByRole('listbox', { name: 'Annotations on this sheet' })
+        ).getByRole('option', { name: 'Horizontal dimension 10' })
+      ).toBeTruthy();
+      expect(
+        screen.getByRole<HTMLButtonElement>('button', { name: 'PDF' }).disabled
+      ).toBe(false);
+    });
+
+    it('keeps a broken dimension in place, refuses export and offers a re-pick', async () => {
+      const { onCommand } = setup({ sheet: dimensioned(999) });
+      const canvas = screen.getByRole('application', {
+        name: 'Sheet Sheet 1'
+      });
+      await waitFor(() =>
+        expect(canvas.textContent).toContain('Broken dimension')
+      );
+      expect(
+        screen.getByRole<HTMLButtonElement>('button', { name: 'PDF' }).disabled
+      ).toBe(true);
+      expect(document.body.textContent).toMatch(
+        /An annotation has lost what it measures/
+      );
+      await userEvent.click(
+        screen.getByRole('option', { name: 'Horizontal dimension (broken)' })
+      );
+      expect(screen.getByRole('alert').textContent).toMatch(/no longer exists/);
+      await userEvent.click(screen.getByRole('button', { name: /Re-pick/ }));
+      expect(screen.getByText(/Horizontal dimension: pick/)).toBeTruthy();
+      await userEvent.click(screen.getByRole('button', { name: /^Delete$/ }));
+      const command = onCommand.mock.calls.at(-1)![0];
+      expect(command.kind).toBe('drawing.annotation.delete');
+      expect(command.payload).toMatchObject({ annotationId: 'dann_w' });
+    });
+
+    it('shows no value and offers no tool until a stale sheet is updated', () => {
+      setup({ sheet: dimensioned(), size: 12 });
+      expect(
+        screen.getByRole('option', { name: 'Horizontal dimension' })
+      ).toBeTruthy();
+      expect(
+        screen.queryByRole('button', { name: /^Horizontal dimension/ })
+      ).toBeNull();
+      expect(
+        screen.getByRole<HTMLButtonElement>('button', { name: 'Horizontal' })
+          .disabled
+      ).toBe(true);
+    });
+
+    it("ends a tool when another sheet takes the active one's place", async () => {
+      const first = dimensioned();
+      const second = { ...dimensioned(), name: 'Sheet 2' };
+      const base = createProjectDocument('Bracket', toUserId('test'));
+      const props = {
+        bodies: { [bodyId]: cube() },
+        requestTessellation: displayTessellation({ [bodyId]: cube() }),
+        geometryPending: false,
+        defaultBodyIds: [bodyId],
+        editDisabledReason: null,
+        onCommand: vi.fn((_command: AnyCommand) => true),
+        onStatus: vi.fn()
+      };
+      const documentWith = (sheet: DrawingSheet): ProjectDocument => ({
+        ...base,
+        bodyOrder: [bodyId],
+        drawings: { sheets: [sheet] }
+      });
+      const { rerender } = render(
+        <DrawingWorkspace document={documentWith(first)} {...props} />
+      );
+      await userEvent.click(screen.getByRole('button', { name: 'Vertical' }));
+      expect(document.querySelector('.drawing-pick-surface')).not.toBeNull();
+      // An undo or a collaborator replaces the sheet with another, ready one.
+      rerender(<DrawingWorkspace document={documentWith(second)} {...props} />);
+      await waitFor(() =>
+        expect(document.querySelector('.drawing-pick-surface')).toBeNull()
+      );
+      expect(screen.queryByText(/Vertical dimension: pick/)).toBeNull();
+    });
+
+    it('offers paper notes, but no dimensions, on a ready sheet with no views', () => {
+      const sheet = {
+        ...starter(drawingSourceFingerprint({}, [])!),
+        views: []
+      };
+      setup({ sheet });
+      expect(
+        screen.getByRole<HTMLButtonElement>('button', { name: 'Note' }).disabled
+      ).toBe(false);
+      expect(
+        screen.getByRole<HTMLButtonElement>('button', { name: 'Horizontal' })
+          .disabled
+      ).toBe(true);
+    });
+
+    it('ends a tool when its view stops drawing what was picked', async () => {
+      const sheet = dimensioned(999);
+      const viewId = sheet.annotations![0]!.viewId!;
+      const base = createProjectDocument('Bracket', toUserId('test'));
+      const props = {
+        bodies: { [bodyId]: cube() },
+        requestTessellation: displayTessellation({ [bodyId]: cube() }),
+        geometryPending: false,
+        defaultBodyIds: [bodyId],
+        editDisabledReason: null,
+        onCommand: vi.fn((_command: AnyCommand) => true),
+        onStatus: vi.fn()
+      };
+      const documentWith = (entry: DrawingSheet): ProjectDocument => ({
+        ...base,
+        bodyOrder: [bodyId],
+        drawings: { sheets: [entry] }
+      });
+      const { rerender } = render(
+        <DrawingWorkspace document={documentWith(sheet)} {...props} />
+      );
+      await userEvent.click(
+        screen.getByRole('option', { name: 'Horizontal dimension (broken)' })
+      );
+      await userEvent.click(screen.getByRole('button', { name: /Re-pick/ }));
+      expect(document.querySelector('.drawing-pick-surface')).not.toBeNull();
+      // The same view, same sheet, still ready, with its hidden lines toggled.
+      const toggled: DrawingSheet = {
+        ...sheet,
+        views: sheet.views.map((view) =>
+          view.viewId === viewId
+            ? { ...view, hiddenLines: !view.hiddenLines }
+            : view
+        )
+      };
+      rerender(
+        <DrawingWorkspace document={documentWith(toggled)} {...props} />
+      );
+      await waitFor(() =>
+        expect(document.querySelector('.drawing-pick-surface')).toBeNull()
+      );
+    });
+
+    it('ends a tool when the view it picks in is deleted', async () => {
+      const sheet = dimensioned(999);
+      const viewId = sheet.annotations![0]!.viewId!;
+      const base = createProjectDocument('Bracket', toUserId('test'));
+      const props = {
+        bodies: { [bodyId]: cube() },
+        requestTessellation: displayTessellation({ [bodyId]: cube() }),
+        geometryPending: false,
+        defaultBodyIds: [bodyId],
+        editDisabledReason: null,
+        onCommand: vi.fn((_command: AnyCommand) => true),
+        onStatus: vi.fn()
+      };
+      const documentWith = (entry: DrawingSheet): ProjectDocument => ({
+        ...base,
+        bodyOrder: [bodyId],
+        drawings: { sheets: [entry] }
+      });
+      const { rerender } = render(
+        <DrawingWorkspace document={documentWith(sheet)} {...props} />
+      );
+      // Re-picking the broken dimension pins the tool to its view.
+      await userEvent.click(
+        screen.getByRole('option', { name: 'Horizontal dimension (broken)' })
+      );
+      await userEvent.click(screen.getByRole('button', { name: /Re-pick/ }));
+      expect(document.querySelector('.drawing-pick-surface')).not.toBeNull();
+      // Another view keeps the sheet ready; this one, and its dimension, go.
+      const without: DrawingSheet = {
+        ...sheet,
+        views: sheet.views
+          .filter((view) => view.viewId !== viewId)
+          .map(({ parentViewId: _base, ...view }) => view),
+        annotations: undefined
+      };
+      rerender(
+        <DrawingWorkspace document={documentWith(without)} {...props} />
+      );
+      await waitFor(() =>
+        expect(document.querySelector('.drawing-pick-surface')).toBeNull()
+      );
+    });
+
+    it('moves and deletes the selected annotation from the keyboard, and Escape ends a tool', async () => {
+      const { onCommand } = setup({ sheet: dimensioned() });
+      const canvas = screen.getByRole('application', {
+        name: 'Sheet Sheet 1'
+      });
+      fireEvent.pointerDown(
+        await within(canvas).findByRole('button', {
+          name: 'Horizontal dimension 10'
+        }),
+        { button: 0 }
+      );
+      fireEvent.keyDown(canvas, { key: 'ArrowUp' });
+      let command = onCommand.mock.calls.at(-1)![0];
+      expect(command.kind).toBe('drawing.annotation.update');
+      expect(command.label).toBe('Move annotation');
+      expect(
+        (command.payload as { annotation: DrawingAnnotation }).annotation
+          .placementMm
+      ).toEqual({ x: 0, y: -14 });
+      fireEvent.keyDown(canvas, { key: 'Delete' });
+      command = onCommand.mock.calls.at(-1)![0];
+      expect(command.kind).toBe('drawing.annotation.delete');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Vertical' }));
+      expect(screen.getByRole('status').textContent).toMatch(
+        /Vertical dimension: pick a straight edge/
+      );
+      expect(canvas.querySelector('[data-tool="vertical"]')).not.toBeNull();
+      fireEvent.keyDown(canvas, { key: 'Escape' });
+      expect(screen.queryByRole('status')).toBeNull();
+      expect(canvas.querySelector('.drawing-pick-surface')).toBeNull();
+    });
   });
 });

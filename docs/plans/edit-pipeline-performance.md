@@ -14,6 +14,14 @@ Implementation order and acceptance:
 
 Run lint, typecheck, root and web unit suites, parity corpus, build and focused browser coverage. Remus changes require format/lint, relevant native correctness tests, boundary checks, paired WASM build and consumer checks. Record actual results and remaining limits in this document and the H02/W02 roadmap rows. Open reviewable PRs; merging or deploying is separate from this implementation request.
 
+Preview face reuse acceptance (21 October 2026): every surface and boundary
+input in a reuse key must be readable. A failed analytic-parameter, domain,
+normal, curve-type, curve-sample or NURBS read must use the existing cold
+measurement path and retain no incomplete key. Once reads recover, distinct
+boundaries remain distinct and matching complete inputs may reuse a result.
+`preview-face-geometry-cache.test.ts` exercises each refused read; this slice
+changes cache admission only and makes no new latency or heap claim.
+
 Implemented contracts:
 
 | Area                | Result                                                                                                                                                                                                                                                                                                                                                                   |

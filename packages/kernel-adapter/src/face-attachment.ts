@@ -5,7 +5,8 @@ import type {
   Vector3
 } from '@openzcad/shared';
 
-import { edgeEndPoint } from './topology-fingerprint';
+import { edgeEndPoint, quantizeCoordinate } from './topology-fingerprint';
+import type { NativeVertexPointEvidence } from './remus-native-vertices';
 import {
   resolveTopologyReference,
   type EdgeTopologyResolutionCandidate,
@@ -380,6 +381,11 @@ export function resolveFaceAttachment(
  */
 export interface EdgeVertexCandidate extends EdgeTopologyResolutionCandidate {
   readonly endpoints: readonly [Vector3, Vector3] | null;
+  /** Native points in the same start/end order; absent preserves legacy R01. */
+  readonly nativeEndpoints?: readonly [
+    NativeVertexPointEvidence | undefined,
+    NativeVertexPointEvidence | undefined
+  ];
 }
 
 export interface ResolveEdgeVertexInput {
@@ -428,6 +434,25 @@ export function resolveEdgeVertex(input: ResolveEdgeVertexInput): Vector3 {
     throw fail('its edge is now closed and has no end vertex.');
   }
   const point = edgeEndPoint(candidate.endpoints, input.end);
+  const native =
+    candidate.nativeEndpoints?.[point === candidate.endpoints[0] ? 0 : 1];
+  if (native) {
+    if (native.status !== 'qualified')
+      throw fail(
+        `its advertised native vertex evidence is ${native.reason}; endpoint fallback is not accepted.`
+      );
+    const key = (value: Vector3) =>
+      [value.x, value.y, value.z].map(quantizeCoordinate);
+    if (
+      !finiteVector(native.point) ||
+      !key(point).every((value, index) => value === key(native.point)[index])
+    ) {
+      throw fail(
+        'its advertised native vertex contradicts the resolved edge endpoint; endpoint fallback is not accepted.'
+      );
+    }
+    return { ...native.point };
+  }
   if (!finiteVector(point)) {
     throw fail('the resolved vertex is not a finite position.');
   }

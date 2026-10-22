@@ -72,9 +72,19 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Projection',
       'Display mode',
       'Show construction grid',
+      'Field of view',
+      'X-ray opacity',
       'Current view'
     ],
-    searchTerms: ['wireframe', 'perspective', 'orthographic', 'apply defaults']
+    searchTerms: [
+      'wireframe',
+      'perspective',
+      'orthographic',
+      'apply defaults',
+      'fov',
+      'xray',
+      'transparent'
+    ]
   },
   {
     id: 'controls',
@@ -112,7 +122,8 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Geometry snapping',
       'Snap tolerance',
       'Automatic inferencing',
-      'Relation glyphs'
+      'Relation glyphs',
+      'Glyph kinds'
     ]
   },
   {

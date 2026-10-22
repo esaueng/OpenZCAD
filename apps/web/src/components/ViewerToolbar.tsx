@@ -37,11 +37,11 @@ import { platformShortcutLabel } from '../lib/platformShortcut';
  */
 const VIEWS: { id: StandardView; command?: string }[] = [
   { id: 'front', command: 'view-front' },
-  { id: 'back' },
-  { id: 'left' },
+  { id: 'back', command: 'view-back' },
+  { id: 'left', command: 'view-left' },
   { id: 'right', command: 'view-right' },
   { id: 'top', command: 'view-top' },
-  { id: 'bottom' },
+  { id: 'bottom', command: 'view-bottom' },
   { id: 'iso', command: 'view-iso' }
 ];
 
@@ -173,7 +173,15 @@ export function ViewerToolbar({
   }
   const sectionPanelShown = sectionPanelOpen && sectionOn;
   const panelId = useId();
-  const displayModeLabel = DISPLAY_MODE_LABELS[settings.displayMode];
+  // X-ray rides over the display mode, so the mode button says when it is
+  // on. It has no rail button of its own: the rail is sized to centre on the
+  // stage (and to fit beside the cube) down to a phone's height, and another
+  // 38px lifted it off centre there. Shift+X, the command bar and the view
+  // menu reach it, and View mode's bar has room for its button.
+  const displayModeLabel = `${DISPLAY_MODE_LABELS[settings.displayMode]}${
+    settings.xray ? ' · X-ray' : ''
+  }`;
+  const xrayKey = keymap.label('view-xray');
   const sectionLabel = settings.sectionView
     ? SECTION_PLANE_LABELS[settings.sectionView.plane]
     : 'Off';
@@ -467,7 +475,9 @@ export function ViewerToolbar({
       <Tooltip
         label="Display mode"
         shortcut={keymap.label('view-display')}
-        description={`Now: ${displayModeLabel}`}
+        description={`Now: ${displayModeLabel}${
+          xrayKey ? ` · ${platformShortcutLabel(xrayKey)} for X-ray` : ''
+        }`}
       >
         <button
           type="button"

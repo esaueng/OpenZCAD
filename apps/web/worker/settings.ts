@@ -7,9 +7,12 @@ import {
   DEFAULT_APP_SETTINGS,
   deepClone,
   EXPORT_UNITS,
+  normalizeHiddenRelationGlyphs,
   normalizeKeymapOverrides,
   nowIso,
   PANEL_WIDTH_LIMITS,
+  VIEWPORT_FIELD_OF_VIEW_BOUNDS,
+  XRAY_OPACITY_BOUNDS,
   UNITLESS_IMPORT_UNITS,
   type AppSettings,
   type PanelWidthLimits,
@@ -312,6 +315,17 @@ export function parseUpdateAppSettingsRequest(
           'pointerNavigation',
           POINTER_NAVIGATIONS,
           'auto'
+        ),
+        // Optional and clamped, like the panel widths: an older client
+        // omits them, and a newer one's out-of-range value is pulled in
+        // exactly as the browser pulls it in.
+        fieldOfView: optionalBoundedNumber(
+          viewport.fieldOfView,
+          VIEWPORT_FIELD_OF_VIEW_BOUNDS
+        ),
+        xrayOpacity: optionalBoundedNumber(
+          viewport.xrayOpacity,
+          XRAY_OPACITY_BOUNDS
         )
       },
       sketching: {
@@ -340,6 +354,11 @@ export function parseUpdateAppSettingsRequest(
           'relationGlyphs',
           RELATION_GLYPHS,
           DEFAULT_APP_SETTINGS.sketching.relationGlyphs
+        ),
+        // Optional and lenient, like relationGlyphs: an unknown kind from a
+        // newer client drops out rather than failing the save.
+        hiddenRelationGlyphs: normalizeHiddenRelationGlyphs(
+          sketching.hiddenRelationGlyphs
         )
       },
       files: {
@@ -853,8 +872,28 @@ export function settingsRequestOmitsKeymap(body: unknown): boolean {
   );
 }
 
-/** True when a client from before relation glyphs saved its settings. */
-export function settingsRequestOmitsRelationGlyphs(body: unknown): boolean {
+/** Viewport preferences newer than some clients that still save settings. */
+export type CarriedViewportField = 'fieldOfView' | 'xrayOpacity';
+
+/**
+ * The viewport preferences a settings PATCH leaves out because its client
+ * predates them; the stored values are kept rather than reset to defaults.
+ */
+export function settingsRequestOmittedViewportFields(
+  body: unknown
+): CarriedViewportField[] {
+  const fields: CarriedViewportField[] = ['fieldOfView', 'xrayOpacity'];
+  if (!body || typeof body !== 'object') return fields;
+  const settings = (body as Record<string, unknown>).settings;
+  if (!settings || typeof settings !== 'object') return fields;
+  const viewport = (settings as Record<string, unknown>).viewport;
+  if (!viewport || typeof viewport !== 'object') return fields;
+  return fields.filter(
+    (field) => !Object.prototype.hasOwnProperty.call(viewport, field)
+  );
+}
+
+function settingsRequestOmitsSketching(body: unknown, key: string): boolean {
   if (!body || typeof body !== 'object') return true;
   const settings = (body as Record<string, unknown>).settings;
   if (!settings || typeof settings !== 'object') return true;
@@ -862,8 +901,20 @@ export function settingsRequestOmitsRelationGlyphs(body: unknown): boolean {
   return (
     !sketching ||
     typeof sketching !== 'object' ||
-    !Object.prototype.hasOwnProperty.call(sketching, 'relationGlyphs')
+    !Object.prototype.hasOwnProperty.call(sketching, key)
   );
+}
+
+/** True when a client from before relation glyphs saved its settings. */
+export function settingsRequestOmitsRelationGlyphs(body: unknown): boolean {
+  return settingsRequestOmitsSketching(body, 'relationGlyphs');
+}
+
+/** True when a client from before the per-kind glyph filter saved. */
+export function settingsRequestOmitsHiddenRelationGlyphs(
+  body: unknown
+): boolean {
+  return settingsRequestOmitsSketching(body, 'hiddenRelationGlyphs');
 }
 
 export async function updateAppSettings(
@@ -874,6 +925,8 @@ export async function updateAppSettings(
   options: {
     keepStoredKeymap?: boolean;
     keepStoredRelationGlyphs?: boolean;
+    keepStoredHiddenRelationGlyphs?: boolean;
+    keepStoredViewportFields?: readonly CarriedViewportField[];
   } = {}
 ): Promise<AppSettingsUpdate> {
   if (!env.DB) {
@@ -898,6 +951,22 @@ export async function updateAppSettings(
         relationGlyphs: current.settings.sketching.relationGlyphs
       }
     };
+  }
+  if (options.keepStoredHiddenRelationGlyphs) {
+    settings = {
+      ...settings,
+      sketching: {
+        ...settings.sketching,
+        hiddenRelationGlyphs: current.settings.sketching.hiddenRelationGlyphs
+      }
+    };
+  }
+  if (options.keepStoredViewportFields?.length) {
+    const viewport = { ...settings.viewport };
+    for (const field of options.keepStoredViewportFields) {
+      viewport[field] = current.settings.viewport[field] ?? viewport[field];
+    }
+    settings = { ...settings, viewport };
   }
   const serialized = JSON.stringify(settings);
   const timestamp = nowIso();

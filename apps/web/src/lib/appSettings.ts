@@ -2,7 +2,10 @@ import {
   CLOUD_AUTOSAVE_DELAY_BOUNDS,
   DEFAULT_APP_SETTINGS,
   EXPORT_UNITS,
+  normalizeHiddenRelationGlyphs,
   PANEL_WIDTH_LIMITS,
+  VIEWPORT_FIELD_OF_VIEW_BOUNDS,
+  XRAY_OPACITY_BOUNDS,
   UNITLESS_IMPORT_UNITS,
   normalizeKeymapOverrides,
   type AppSettings,
@@ -222,7 +225,13 @@ export function normalizeAppSettings(value: unknown): AppSettings {
         viewport.pointerNavigation,
         POINTER_NAVIGATIONS,
         defaults.viewport.pointerNavigation
-      )
+      ),
+      // Absent from settings written before either existed.
+      fieldOfView: clampedNumber(
+        viewport.fieldOfView,
+        VIEWPORT_FIELD_OF_VIEW_BOUNDS
+      ),
+      xrayOpacity: clampedNumber(viewport.xrayOpacity, XRAY_OPACITY_BOUNDS)
     },
     sketching: {
       gridVisible: boolean(
@@ -263,6 +272,9 @@ export function normalizeAppSettings(value: unknown): AppSettings {
         sketching.relationGlyphs,
         RELATION_GLYPHS,
         defaults.sketching.relationGlyphs
+      ),
+      hiddenRelationGlyphs: normalizeHiddenRelationGlyphs(
+        sketching.hiddenRelationGlyphs
       )
     },
     files: {

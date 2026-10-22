@@ -3,7 +3,7 @@ import {
   test,
   expect,
   stubApi,
-  selectBodyFromItems
+  selectBodyFromObjects
 } from './openzcad-fixtures';
 
 /**
@@ -184,7 +184,102 @@ test('lays out, places, exports and fences a drawing sheet', async ({
       )
     )
     .toBe(121);
-  await expect(reopened.getByRole('status')).toHaveCount(0);
+  // The reopened model rebuilds before the sheet can read ready; headless
+  // runs stall seconds on first open, past the default 5 s.
+  await expect(reopened.getByRole('status')).toHaveCount(0, {
+    timeout: 30_000
+  });
+});
+
+async function exportSheet(
+  page: Page,
+  panel: Locator
+): Promise<{ pdf: Buffer; svg: Buffer }> {
+  const bytes: Buffer[] = [];
+  for (const format of ['PDF', 'SVG']) {
+    const downloadPromise = page.waitForEvent('download');
+    await panel.getByRole('button', { name: format, exact: true }).click();
+    bytes.push(await readDownload(await downloadPromise));
+  }
+  return { pdf: bytes[0]!, svg: bytes[1]! };
+}
+
+test('exports the same bytes after a reload re-meshes the model', async ({
+  page
+}) => {
+  test.setTimeout(180_000);
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Drawing bytes');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  // A broad, thin disc: its rim is faceted by the chordal deflection, not
+  // the angular limit, so a different deflection samples it differently.
+  const inspector = inspectorOf(page);
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  await inspector.getByLabel('Radius', { exact: true }).fill('20');
+  await inspector.getByLabel('Height', { exact: true }).fill('4');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Cylinder' })
+  ).toBeVisible();
+  // Edit only once the creation has rebuilt: an edit opened against the
+  // rebuilding model is refused ("The model changed").
+  await expect(page.getByRole('contentinfo')).not.toContainText(
+    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i,
+    { timeout: 60_000 }
+  );
+  // R20 → R21 stays inside the display mesh's held-deflection band, so this
+  // session keeps meshing the disc at the R20 value; a reload meshes it at
+  // the R21 nominal value.
+  await page.locator('.feature-row-main', { hasText: 'Cylinder' }).click();
+  await inspector
+    .getByRole('textbox', { name: 'Radius', exact: true })
+    .fill('21');
+  await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect(page.getByRole('contentinfo')).toContainText('Edited Cylinder');
+
+  await mode(page, 'Draw').click();
+  const drawings = page.getByRole('region', { name: 'Drawings' });
+  await drawings.getByRole('button', { name: 'New drawing sheet' }).click();
+  const canvas = drawings.getByRole('application', { name: 'Sheet Sheet 1' });
+  const panel = drawings.getByRole('complementary', {
+    name: 'Drawing properties'
+  });
+  await canvas.getByRole('button', { name: 'Isometric view' }).click();
+  await panel.getByLabel('Hidden lines').check();
+  await expect(canvas.locator('.drawing-view.is-placeholder')).toHaveCount(0, {
+    timeout: 20_000
+  });
+  await expect(
+    canvas.locator('.drawing-strokes.is-hidden polyline').first()
+  ).toBeAttached();
+  const before = await exportSheet(page, panel);
+
+  await expect(page.locator('.save-state')).toHaveClass(/is-(synced|local)\b/);
+  await page.reload();
+  const reopened = page.getByRole('region', { name: 'Drawings' });
+  const reopenedCanvas = reopened.getByRole('application', {
+    name: 'Sheet Sheet 1'
+  });
+  await expect(reopenedCanvas).toBeVisible({ timeout: 30_000 });
+  // The reopened model rebuilds before the sheet can read ready; headless
+  // runs stall seconds on first open, past the default 5 s.
+  await expect(reopened.getByRole('status')).toHaveCount(0, {
+    timeout: 30_000
+  });
+  await expect(
+    reopenedCanvas.locator('.drawing-view.is-placeholder')
+  ).toHaveCount(0, { timeout: 30_000 });
+  const reopenedPanel = reopened.getByRole('complementary', {
+    name: 'Drawing properties'
+  });
+  await expect(
+    reopenedPanel.getByRole('button', { name: 'PDF', exact: true })
+  ).toBeEnabled();
+  const after = await exportSheet(page, reopenedPanel);
+  expect(after.svg.toString('utf8')).toBe(before.svg.toString('utf8'));
+  expect(after.pdf.equals(before.pdf)).toBe(true);
 });
 
 test('refuses a parameter-only undo or redo in the Draw workspace', async ({
@@ -257,7 +352,7 @@ test('starts a sheet from the bodies on screen, not the export scope', async ({
   }
   // Hide Upper. The export scope still includes hidden bodies by default
   // (the mesh dialog's choice); a new drawing shows what is on screen.
-  await selectBodyFromItems(page, 'Upper');
+  await selectBodyFromObjects(page, 'Upper');
   await page
     .locator('.body-row', { hasText: 'Upper' })
     .getByRole('button', { name: /^Hide body / })

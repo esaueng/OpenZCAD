@@ -8,7 +8,7 @@ import {
 import { computeSketchProfileAnalysis } from '@openzcad/geometry';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import type { Page } from '@playwright/test';
-import { expect, revealModelDrawer, stubApi, test } from './openzcad-fixtures';
+import { expect, revealModelPanel, stubApi, test } from './openzcad-fixtures';
 
 /**
  * Deleting sketch geometry is an edit. It used to skip the downstream check
@@ -89,7 +89,7 @@ async function open(page: Page, document: ProjectDocument) {
     )
   });
   await expect(page.locator('.viewer-host canvas')).toBeVisible(READ_TIMEOUT);
-  await revealModelDrawer(page, 'History');
+  await revealModelPanel(page, 'History');
   await page.locator('.feature-row-main', { hasText: 'Profile' }).click();
   await page
     .getByRole('button', { name: 'Edit sketch in viewport', exact: true })

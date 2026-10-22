@@ -24,13 +24,16 @@ import type { ViewProjection } from './projectView';
  * far from the world origin.
  */
 
-export type SheetStrokeKind = 'visible' | 'hidden' | 'border' | 'thin';
+export type SheetStrokeKind =
+  'visible' | 'hidden' | 'border' | 'thin' | 'dimension';
 
 export interface SheetStroke {
   kind: SheetStrokeKind;
   /** Flat `[x0, y0, x1, y1, …]` paper millimetres. */
   points: number[];
   closed?: boolean;
+  /** Filled rather than outlined (dimension arrowheads); implies closed. */
+  filled?: boolean;
 }
 
 export interface SheetText {
@@ -40,6 +43,10 @@ export interface SheetText {
   sizeMm: number;
   text: string;
   bold?: boolean;
+  /** Which part of the text sits at (x, y); absent is its start. */
+  align?: 'middle' | 'end';
+  /** Counter-clockwise turn of the baseline about (x, y), in degrees. */
+  angleDeg?: number;
 }
 
 export interface SheetPage {
@@ -55,7 +62,8 @@ export const SHEET_STROKE_WIDTH_MM: Readonly<Record<SheetStrokeKind, number>> =
     visible: 0.35,
     hidden: 0.25,
     border: 0.5,
-    thin: 0.25
+    thin: 0.25,
+    dimension: 0.25
   };
 /** Hidden-line dash and gap, in paper millimetres. */
 export const SHEET_HIDDEN_DASH_MM: readonly [number, number] = [3, 1.5];
@@ -357,7 +365,9 @@ export interface ComposedView {
 export function composeSheetPage(
   sheet: DrawingSheet,
   views: readonly ComposedView[],
-  context: { projectName: string; units: UnitSystem }
+  context: { projectName: string; units: UnitSystem },
+  /** D02 dimensions and notes, already laid out on this page. */
+  annotations?: { strokes: SheetStroke[]; texts: SheetText[] }
 ): SheetPage {
   const paper = drawingPaperMm(sheet.paper);
   const strokes: SheetStroke[] = [
@@ -398,7 +408,7 @@ export function composeSheetPage(
   return {
     widthMm: paper.width,
     heightMm: paper.height,
-    strokes: [...strokes, ...block.strokes],
-    texts: block.texts
+    strokes: [...strokes, ...(annotations?.strokes ?? []), ...block.strokes],
+    texts: [...(annotations?.texts ?? []), ...block.texts]
   };
 }

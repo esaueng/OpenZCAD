@@ -1,4 +1,3 @@
-import { useState, type Dispatch, type SetStateAction } from 'react';
 import {
   Axis3d,
   Box,
@@ -7,6 +6,7 @@ import {
   Eye,
   EyeOff,
   FileBox,
+  Image as ImageIcon,
   Layers,
   Move3d,
   PenLine,
@@ -18,38 +18,18 @@ import type { BodyRepresentation } from '@openzcad/shared';
 import { useArrivals } from '../../hooks/useArrivals';
 import { datumPlaneRows } from '../../lib/datumPlanes';
 import { datumAxisRows } from '../../lib/datumAxes';
-import type { SidebarProps } from '../Sidebar';
+import type { ModelPanelSource } from './modelPanelProps';
+import type { ObjectsView } from './panelViews';
 
 /** What the Objects list is built from, and all its header count needs. */
 export type ObjectsSource = Pick<
-  SidebarProps,
+  ModelPanelSource,
   'features' | 'representations' | 'document' | 'parameterValues'
 >;
 
-/**
- * The Objects list's type filter, name search and source-body disclosure.
- * The composer holds them, so they outlive the list while its section is
- * folded.
- */
-export interface ObjectsView {
-  filter: string;
-  setFilter(filter: string): void;
-  query: string;
-  setQuery(query: string): void;
-  showConsumed: boolean;
-  setShowConsumed: Dispatch<SetStateAction<boolean>>;
-}
-
-export function useObjectsView(): ObjectsView {
-  const [showConsumed, setShowConsumed] = useState(false);
-  const [filter, setFilter] = useState('all');
-  const [query, setQuery] = useState('');
-  return { filter, setFilter, query, setQuery, showConsumed, setShowConsumed };
-}
-
 export type ObjectsPanelProps = ObjectsSource &
   Pick<
-    SidebarProps,
+    ModelPanelSource,
     | 'geometryPending'
     | 'selectedFeatureNodeId'
     | 'selectedSketchProfileId'
@@ -58,6 +38,10 @@ export type ObjectsPanelProps = ObjectsSource &
     | 'hiddenSketchIds'
     | 'hiddenDatumIds'
     | 'onHiddenDatumIdsChange'
+    | 'hiddenReferenceImageIds'
+    | 'onHiddenReferenceImageIdsChange'
+    | 'selectedReferenceImageId'
+    | 'onSelectReferenceImage'
     | 'onSelectFeature'
     | 'onSelectBody'
     | 'onToggleBodyVisibility'
@@ -168,7 +152,8 @@ export function objectCount(source: ObjectsSource): number {
   return (
     modelBodies(source).filter((body) => !body.consumed).length +
     modelSketches(source).length +
-    modelDatums(source).length
+    modelDatums(source).length +
+    (source.document?.referenceImages?.images.length ?? 0)
   );
 }
 
@@ -185,6 +170,10 @@ export function ObjectsPanel({
   hiddenSketchIds,
   hiddenDatumIds,
   onHiddenDatumIdsChange,
+  hiddenReferenceImageIds,
+  onHiddenReferenceImageIdsChange,
+  selectedReferenceImageId = null,
+  onSelectReferenceImage,
   onSelectFeature,
   onSelectBody,
   onToggleBodyVisibility,
@@ -231,10 +220,17 @@ export function ObjectsPanel({
       matchesObject(plane.name) &&
       (plane.datum === 'plane' ? showPlanes : showAxes)
   );
+  const showImages = objectFilter === 'all' || objectFilter === 'images';
+  const images = showImages
+    ? (document?.referenceImages?.images ?? []).filter((image) =>
+        matchesObject(image.name)
+      )
+    : [];
   const filteredCount =
     (showBodies ? matchingBodies.length : 0) +
     (showSketches ? sketches.length : 0) +
-    planes.length;
+    planes.length +
+    images.length;
 
   function renderBodyRow(body: BodyRepresentation) {
     const hidden = hiddenBodyIds.has(body.bodyId);
@@ -296,6 +292,7 @@ export function ObjectsPanel({
           <option value="sketches">Sketches</option>
           <option value="planes">Planes</option>
           <option value="axes">Axes</option>
+          <option value="images">Images</option>
         </select>
       </div>
       <div className="object-filter">
@@ -333,7 +330,9 @@ export function ObjectsPanel({
                     ? 'No planes yet. Use Plane to offset one from a plane or face.'
                     : objectFilter === 'axes'
                       ? 'No axes yet. Use Axis to run one through points, an edge or a cylinder.'
-                      : 'No sketches yet. Start a sketch on a plane or face.'}
+                      : objectFilter === 'images'
+                        ? 'No images yet. Use Image to place a picture on a plane or face.'
+                        : 'No sketches yet. Start a sketch on a plane or face.'}
           </p>
         )}
         {showBodies && liveBodies.map(renderBodyRow)}
@@ -449,6 +448,60 @@ export function ObjectsPanel({
                     if (hidden) next.delete(plane.featureId);
                     else next.add(plane.featureId);
                     onHiddenDatumIdsChange(next);
+                  }}
+                >
+                  {hidden ? (
+                    <EyeOff size={12} aria-hidden="true" />
+                  ) : (
+                    <Eye size={12} aria-hidden="true" />
+                  )}
+                </button>
+              ) : null}
+            </div>
+          );
+        })}
+        {images.map((image) => {
+          const hidden = hiddenReferenceImageIds?.has(image.imageId) ?? false;
+          const selected = selectedReferenceImageId === image.imageId;
+          return (
+            <div
+              key={image.imageId}
+              className={`object-row${selected ? ' selected' : ''}${hidden ? ' hidden-body' : ''}`}
+              role="listitem"
+            >
+              <button
+                type="button"
+                className="body-row-main"
+                aria-pressed={selected}
+                aria-description="Reference image. Not part of the model or its exports."
+                title={`${image.name} — reference image · click to place, scale or fade it`}
+                onClick={() => onSelectReferenceImage?.(image.imageId)}
+              >
+                <span className="feature-icon">
+                  <ImageIcon size={13} aria-hidden="true" />
+                </span>
+                <span className="feature-name">{image.name}</span>
+              </button>
+              {onHiddenReferenceImageIdsChange ? (
+                <button
+                  type="button"
+                  className={`row-visibility${hidden ? ' is-hidden' : ''}`}
+                  title={
+                    hidden
+                      ? `Show image ${image.name}`
+                      : `Hide image ${image.name}`
+                  }
+                  aria-label={
+                    hidden
+                      ? `Show image ${image.name}`
+                      : `Hide image ${image.name}`
+                  }
+                  aria-pressed={hidden}
+                  onClick={() => {
+                    const next = new Set(hiddenReferenceImageIds);
+                    if (hidden) next.delete(image.imageId);
+                    else next.add(image.imageId);
+                    onHiddenReferenceImageIdsChange(next);
                   }}
                 >
                   {hidden ? (

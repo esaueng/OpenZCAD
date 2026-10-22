@@ -8,6 +8,7 @@ import {
   type DimensionGraphic,
   type FatLineResolution
 } from '@openzcad/viewport';
+import { MODEL_PANEL_OBSTACLES } from '../../lib/selectionCalloutView';
 import type { SketchDimensionAnnotation } from '../../lib/sketch/dimensionAnnotations';
 import {
   toSketchConstraintId,
@@ -33,6 +34,12 @@ function overlaps(a: LayoutRect, b: LayoutRect) {
  * this is a presentation-only margin correction, recalculated from the
  * CSS2DRenderer transform on every frame like the other callout clamps.
  */
+/**
+ * Viewport controls drawn above the label layer. Labels and glyphs keep out
+ * from under them, since a control there takes their clicks.
+ */
+export const VIEWPORT_OBSTACLE_SELECTOR = `.viewer-rail-stack, .viewer-rail, .viewport-readout, .sketch-relations, .sketch-flyouts, ${MODEL_PANEL_OBSTACLES}, .workspace-column-float`;
+
 export function avoidSketchDimensionOverlays(
   container: HTMLElement,
   occupiedRoot: HTMLElement | null = container.closest('.viewer-area') ??
@@ -46,7 +53,7 @@ export function avoidSketchDimensionOverlays(
   const occupied = occupiedRoot
     ? [
         ...occupiedRoot.querySelectorAll<HTMLElement>(
-          '.viewer-rail-stack, .viewer-rail, .viewport-readout, .sketch-relations, .sketch-flyouts, .model-drawer-float, .workspace-column-float'
+          VIEWPORT_OBSTACLE_SELECTOR
         )
       ]
         .map((element) => element.getBoundingClientRect())
@@ -142,6 +149,7 @@ export function buildSketchDimensions(
 ) {
   const group = new THREE.Group();
   const referenceLabels = new Map<string, HTMLButtonElement>();
+  const placedLabels: CSS2DObject[] = [];
   group.name = 'sketch-dimensions';
   const spans: {
     graphic: DimensionGraphic;
@@ -289,12 +297,85 @@ export function buildSketchDimensions(
     const label = new CSS2DObject(button);
     label.position.copy(world(annotation.anchor));
     group.add(label);
+    placedLabels.push(label);
   }
   group.traverse((child) => {
     child.raycast = () => undefined;
   });
+  // Each label's laid-out size, read once it has one, so per-frame boxes
+  // need no DOM read. A label's text only changes with a rebuild, but its
+  // size can change under it: laid out first in a fallback font, it grows or
+  // shrinks when the web font arrives. A resize clears the cached size (read
+  // again next frame) and asks for that frame.
+  const sizes = new Float64Array(placedLabels.length * 2);
+  const scratch = new THREE.Vector3();
+  let resized: () => void = () => {};
+  const labelIndex = new Map(
+    placedLabels.map((label, index) => [label.element, index] as const)
+  );
+  const resizeObserver =
+    typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver((entries) => {
+          for (const entry of entries) {
+            const index = labelIndex.get(entry.target as HTMLElement);
+            if (index === undefined) continue;
+            sizes[index * 2] = 0;
+            sizes[index * 2 + 1] = 0;
+          }
+          resized();
+        });
+  for (const label of placedLabels) resizeObserver?.observe(label.element);
   return {
     group,
+    /** How many boxes {@link writeLabelBoxes} can write. */
+    labelCount: placedLabels.length,
+    /**
+     * Writes each on-screen label's box as [left, top, right, bottom] in
+     * viewport pixels into `out` from `at`, and returns how many it wrote.
+     * The relation glyphs keep out of them. Allocates nothing.
+     */
+    writeLabelBoxes(
+      out: Float64Array,
+      at: number,
+      camera: THREE.Camera,
+      width: number,
+      height: number
+    ): number {
+      let written = 0;
+      for (let index = 0; index < placedLabels.length; index += 1) {
+        const label = placedLabels[index]!;
+        const element = label.element;
+        if (sizes[index * 2] === 0) {
+          sizes[index * 2] = element.offsetWidth;
+          sizes[index * 2 + 1] = element.offsetHeight;
+        }
+        const w = sizes[index * 2]!;
+        const h = sizes[index * 2 + 1]!;
+        if (w === 0) continue;
+        scratch.copy(label.position).project(camera);
+        if (scratch.z < -1 || scratch.z > 1) continue;
+        // CSS2DRenderer centres the label on its point; the overlay clamp
+        // above shifts it by its margins.
+        const cx =
+          (scratch.x * 0.5 + 0.5) * width +
+          (parseFloat(element.style.marginLeft) || 0);
+        const cy =
+          (-scratch.y * 0.5 + 0.5) * height +
+          (parseFloat(element.style.marginTop) || 0);
+        const o = at + written * 4;
+        out[o] = cx - w / 2;
+        out[o + 1] = cy - h / 2;
+        out[o + 2] = cx + w / 2;
+        out[o + 3] = cy + h / 2;
+        written += 1;
+      }
+      return written;
+    },
+    /** Called when a label's size changes, so the scene draws again. */
+    onLabelResize(listener: () => void) {
+      resized = listener;
+    },
     focusReference(id: string) {
       referenceLabels.get(id)?.focus({ preventScroll: true });
     },
@@ -307,6 +388,8 @@ export function buildSketchDimensions(
       }
     },
     dispose() {
+      resizeObserver?.disconnect();
+      resized = () => {};
       for (const span of spans) {
         group.remove(span.graphic.object);
         span.graphic.dispose();

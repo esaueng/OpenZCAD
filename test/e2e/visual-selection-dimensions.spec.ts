@@ -1,10 +1,20 @@
-import { expect, test, stubApi } from './openzcad-fixtures';
+import {
+  expect,
+  test,
+  MODEL_ONLY,
+  railPanelButton,
+  revealModelPanel,
+  stubApi
+} from './openzcad-fixtures';
 
 test('round-trips diameter entry and edits a cylinder cap by total height', async ({
   page
 }) => {
   test.setTimeout(90_000);
-  await stubApi(page);
+  // The chips ride the cylinder's right side: a docked column moves the
+  // right lane far enough in that the selection card covers them. The spec
+  // seeds the model alone and opens History only for the step that needs it.
+  await stubApi(page, { panelLayout: MODEL_ONLY });
   // At this width the top-cap anchor used to land under the floating
   // inspector, leaving the Total chip visible only as an unclickable sliver.
   await page.setViewportSize({ width: 1200, height: 800 });
@@ -109,9 +119,18 @@ test('round-trips diameter entry and edits a cylinder cap by total height', asyn
   await expect(page.getByRole('contentinfo')).toContainText(
     'Cylinder height set to 35.7 mm.'
   );
+  await revealModelPanel(page, 'History');
+  await expect(
+    page.locator('.feature-row', { hasText: 'Cylinder' })
+  ).toBeVisible();
   await expect(
     page.locator('.feature-row', { hasText: 'Offset Face' })
   ).toHaveCount(0);
+  await railPanelButton(page, 'History').click();
+  await expect(railPanelButton(page, 'History')).toHaveAttribute(
+    'aria-pressed',
+    'false'
+  );
   await expect.poll(readCylinderHeight).toBeCloseTo(35.7, 5);
 
   // ── One value, one commit gesture ──────────────────────────────────────

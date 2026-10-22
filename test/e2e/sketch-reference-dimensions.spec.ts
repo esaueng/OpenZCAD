@@ -12,7 +12,7 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import type { Locator, Page } from '@playwright/test';
-import { expect, revealModelDrawer, stubApi, test } from './openzcad-fixtures';
+import { expect, revealModelPanel, stubApi, test } from './openzcad-fixtures';
 
 const READ_TIMEOUT = { timeout: 30_000 };
 const SAVED = /\bis-(?:local|synced)(?:\s|$)/;
@@ -82,7 +82,7 @@ async function open(page: Page, document: ProjectDocument) {
 }
 
 async function enter(page: Page) {
-  await revealModelDrawer(page, 'History');
+  await revealModelPanel(page, 'History');
   await page
     .locator('.feature-row-main', { hasText: 'Reference outline' })
     .click();

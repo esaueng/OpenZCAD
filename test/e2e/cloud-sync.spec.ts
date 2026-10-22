@@ -19,11 +19,12 @@ import {
   createProject,
   expectBodyCount,
   expect,
-  seedOpenModelDrawer,
+  seedPanelLayout,
   seedUnitlessImportUnits,
   setSelectionFilter,
   stubApi,
-  test
+  test,
+  withHydratedDocument
 } from './openzcad-fixtures';
 
 // Cross-tab IndexedDB sync settles much more slowly on the 2-core CI runners
@@ -89,7 +90,9 @@ test('keeps exact geometry and undo through a save echo and reopens compatible s
   // A server echo can advance the fence without changing the exact model.
   await page.route('**/api/projects/*/revisions', async (route) => {
     if (route.request().method() !== 'POST') return route.fallback();
-    const payload = route.request().postDataJSON() as {
+    const payload = (await withHydratedDocument(
+      route.request().postDataJSON()
+    )) as {
       document: ProjectDocument;
       reason: string;
       savedRevisionId?: string;
@@ -175,7 +178,7 @@ class SharedCloudProjectApi {
   projectLoadAttempts = 0;
 
   async install(page: Page): Promise<void> {
-    await seedOpenModelDrawer(page);
+    await seedPanelLayout(page);
     const settings = structuredClone(DEFAULT_APP_SETTINGS);
     settings.assistant.enabled = false;
     settings.files.cloudAutosaveDelaySeconds = 1;
@@ -227,7 +230,9 @@ class SharedCloudProjectApi {
     );
     await page.route('**/api/projects', async (route) => {
       if (route.request().method() === 'POST') {
-        const payload = route.request().postDataJSON() as {
+        const payload = (await withHydratedDocument(
+          route.request().postDataJSON()
+        )) as {
           name: string;
           units?: UnitSystem;
           initialDocument?: ProjectDocument;
@@ -256,9 +261,9 @@ class SharedCloudProjectApi {
     });
     await page.route('**/api/projects/*/document', async (route) => {
       const current = this.project;
-      const payload = route
-        .request()
-        .postDataJSON() as SaveProjectDocumentRequest;
+      const payload = (await withHydratedDocument(
+        route.request().postDataJSON()
+      )) as SaveProjectDocumentRequest;
       if (
         !current ||
         payload.projectId !== current.projectId ||
@@ -294,7 +299,9 @@ class SharedCloudProjectApi {
       if (route.request().method() !== 'POST') {
         return route.fulfill({ json: { revisions: [], maxRevisions: 50 } });
       }
-      const payload = route.request().postDataJSON() as {
+      const payload = (await withHydratedDocument(
+        route.request().postDataJSON()
+      )) as {
         expectedVersion: number;
         document: ProjectDocument;
       };
@@ -581,7 +588,9 @@ for (const action of ['edit', 'leave', 'switch', 'share'] as const) {
     });
     await page.route('**/api/projects/*/revisions', async (route) => {
       if (route.request().method() !== 'POST') return route.fallback();
-      const { document } = route.request().postDataJSON() as {
+      const { document } = (await withHydratedDocument(
+        route.request().postDataJSON()
+      )) as {
         document: ProjectDocument;
       };
       received();
@@ -996,11 +1005,33 @@ for (const uploadAvailable of [true, false]) {
         { timeout: SYNC_BUDGET_MS }
       )
       .toBe(true);
+    const importedVersion = api.project!.version;
+    const importedHistoryCursor = api.project!.editHistory?.cursor;
+    expect(importedHistoryCursor).toBeGreaterThan(0);
     await page.getByRole('button', { name: 'Undo', exact: true }).click();
     await expectBodyCount(page, 0);
     await page.getByRole('button', { name: 'Redo', exact: true }).click();
     await expectBodyCount(page, 1);
-    await page.waitForTimeout(3000);
+    // A late Redo autosave would repair the fixture after we mark its account
+    // copy unreadable. Wait for that exact edit and its acknowledgement before
+    // reloading; the imported model alone also describes the earlier snapshot.
+    await expect
+      .poll(
+        () => ({
+          version: api.project?.version,
+          historyCursor: api.project?.editHistory?.cursor,
+          bodies: api.project?.bodyOrder.length
+        }),
+        { timeout: SYNC_BUDGET_MS }
+      )
+      .toEqual({
+        version: importedVersion + 2,
+        historyCursor: importedHistoryCursor,
+        bodies: 1
+      });
+    await expect(
+      page.getByRole('button', { name: 'Local source', exact: true })
+    ).toBeVisible({ timeout: SYNC_BUDGET_MS });
     api.documentUnavailable = true;
     await page.reload();
     await expect(

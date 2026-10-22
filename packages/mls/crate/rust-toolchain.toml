@@ -1,0 +1,5 @@
+# The WASM in ../pkg is reproducible only with this exact toolchain.
+[toolchain]
+channel = "1.96.0"
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"

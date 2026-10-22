@@ -7,6 +7,7 @@ import {
 } from '@openzcad/command-system';
 import {
   createBodyFeatureIds,
+  listFeaturesInOrder,
   numberedFeatureName
 } from '@openzcad/document-core';
 import {
@@ -18,8 +19,12 @@ import {
 import type {
   BodyId,
   BodyRepresentation,
+  FeatureId,
   ProjectDocument
 } from '@openzcad/shared';
+import { isFeatureSuppressed } from '@openzcad/shared';
+import { affectedFeatureTargets } from './affectedFeatureTargets';
+import { validatedFeatureRejection } from './featureValidation';
 import { exactWarningBaseline, newExactWarnings } from './exactWarnings';
 
 export interface ExactPatchTarget {
@@ -62,6 +67,112 @@ export function exactPatchTargets(
           ? [{ featureName, resultBodyId: bodyId as BodyId }]
           : []
     );
+  });
+}
+
+/** Datums explicitly authored by this patch, including an unchanged update. */
+function authoredDatumIds(
+  commands: readonly AnyCommand[],
+  candidate: ProjectDocument
+): Set<FeatureId> {
+  const datums = new Set(
+    listFeaturesInOrder(candidate)
+      .filter(
+        (feature) =>
+          feature.data.featureKind === 'datum-plane' ||
+          feature.data.featureKind === 'datum-axis'
+      )
+      .map((feature) => feature.featureId)
+  );
+  const authored = new Set<FeatureId>();
+  for (const command of commands) {
+    if (command.commands) {
+      for (const id of authoredDatumIds(command.commands, candidate))
+        authored.add(id);
+      continue;
+    }
+    const payload = commandRecord(command);
+    const ids = payload?.ids as { featureId?: unknown } | undefined;
+    const id =
+      command.kind === 'feature.update'
+        ? payload?.featureId
+        : command.kind === 'feature.datum-plane' ||
+            command.kind === 'feature.datum-axis'
+          ? ids?.featureId
+          : undefined;
+    if (typeof id === 'string' && datums.has(id as FeatureId))
+      authored.add(id as FeatureId);
+  }
+  return authored;
+}
+
+/**
+ * A datum has no result body. Its own published frame/axis must prove the
+ * operation succeeded, even when its exact failure already existed before
+ * this proposal. Preserve previously resolved active downstream datums as
+ * well, using the candidate graph so deliberately removed consumers do not
+ * become expected results.
+ */
+async function datumPatchTargets(
+  base: ProjectDocument,
+  candidate: ProjectDocument,
+  derived: ProjectDocument['derived'],
+  commands: readonly AnyCommand[]
+): Promise<ExactPatchTarget[]> {
+  const authored = authoredDatumIds(commands, candidate);
+  const before = new Set(
+    listFeaturesInOrder(base).map((feature) => feature.featureId)
+  );
+  const active = listFeaturesInOrder(candidate).filter(
+    (feature) =>
+      (feature.data.featureKind === 'datum-plane' ||
+        feature.data.featureKind === 'datum-axis') &&
+      !isFeatureSuppressed(feature)
+  );
+  for (const feature of active)
+    if (!before.has(feature.featureId)) authored.add(feature.featureId);
+  if (authored.size === 0) return [];
+  const { downstreamDatumIds, requireResolvedDatum } =
+    await import('./datumPlanes');
+  const required = new Set(authored);
+  for (const id of authored)
+    for (const downstream of downstreamDatumIds(candidate, id))
+      if (
+        base.derived.datumFrames?.[downstream] ||
+        base.derived.datumAxes?.[downstream]
+      )
+        required.add(downstream);
+  for (const feature of active.filter((item) => required.has(item.featureId)))
+    requireResolvedDatum(
+      derived,
+      feature.featureId,
+      feature.name,
+      feature.data.featureKind === 'datum-axis' ? 'datum-axis' : 'datum-plane'
+    );
+
+  const targets = [...authored].flatMap((id) =>
+    affectedFeatureTargets(candidate, id)
+  );
+  const seen = new Set<string>();
+  return targets.flatMap((target) => {
+    const key = `${target.featureId}:${target.resultBodyId}`;
+    if (seen.has(key)) return [];
+    seen.add(key);
+    const rejection = validatedFeatureRejection({
+      featureName: target.featureName,
+      featureId: target.featureId,
+      bodyPresent: Boolean(derived.bodyRepresentations[target.resultBodyId]),
+      warnings: derived.warnings,
+      ...(derived.featureWarnings
+        ? { featureWarnings: derived.featureWarnings }
+        : {}),
+      documentMoved: false
+    });
+    if (rejection)
+      throw new Error(`Feature "${target.featureName}": ${rejection.message}`);
+    return [
+      { featureName: target.featureName, resultBodyId: target.resultBodyId }
+    ];
   });
 }
 
@@ -391,7 +502,10 @@ export async function preflightCadPatch(
   if (warnings.length > 0) {
     throw exactWarningsError(warnings);
   }
-  const targets = exactPatchTargets(commands);
+  const targets = [
+    ...exactPatchTargets(commands),
+    ...(await datumPatchTargets(base, candidate, derived, commands))
+  ];
   const missing = targets.find(
     (target) => !derived.bodyRepresentations[target.resultBodyId]
   );

@@ -14,6 +14,7 @@ import {
   shiftedDatumFrame
 } from '../lib/datumPlaneDisplay';
 import { datumAxisDisplays } from '../lib/datumAxisDisplay';
+import type { ReferenceImageDisplay } from '../lib/referenceImageDisplay';
 import type { AutoFrameRequest } from '../lib/autoFrame';
 import {
   useMemo,
@@ -212,6 +213,11 @@ interface ViewerShellProps {
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
   selectionFilter: SelectionFilter;
   onBoxSelect(bodyIds: string[]): void;
+  /** See `ModelViewerProps.onBoxSelectTopology`. */
+  onBoxSelectTopology?(
+    selections: TopologySelection[],
+    kind: 'face' | 'edge'
+  ): void;
   onSelectEdgeChain(selections: TopologySelection[]): void;
   onSelectTopology(
     selection: TopologySelection | null,
@@ -274,6 +280,8 @@ interface ViewerShellProps {
     identity: SketchDimensionIdentity,
     offset: { x: number; y: number }
   ): void;
+  onSelectSketchConstraint?: ModelViewerProps['onSelectSketchConstraint'];
+  onSketchConstraintSelectionShown?: ModelViewerProps['onSketchConstraintSelectionShown'];
   onSketchDrawingChange(drawing: boolean): void;
   sketchMoveEnabled?: ModelViewerProps['sketchMoveEnabled'];
   onSketchMoveChange?: ModelViewerProps['onSketchMoveChange'];
@@ -297,6 +305,9 @@ interface ViewerShellProps {
   datumDocument?: ProjectDocument | null;
   /** Datum planes hidden by their eye toggle. */
   hiddenDatumIds?: ReadonlySet<string>;
+  /** I05 reference images to draw; see `ModelViewer`. */
+  referenceImages?: readonly ReferenceImageDisplay[];
+  loadReferenceImage?: (checksumSha256: string) => Promise<Blob | null>;
   /** The selected or edited feature, drawn highlighted when it is a datum. */
   selectedFeatureId?: FeatureId | null;
   onPickPlane(plane: PlaneId): void;
@@ -350,6 +361,10 @@ interface ViewerShellProps {
   savedViews?: SavedViewsSectionProps;
   onCycleDisplayMode(): void;
   onToggleProjection(): void;
+  /** Perspective field of view, degrees (Settings › Viewport). */
+  fieldOfView?: number;
+  /** Face opacity in X-ray, 0–1 (Settings › Viewport). */
+  xrayOpacity?: number;
   sectionRange: { min: number; max: number } | null;
   onToggleSection(): void;
   onSectionPlane(plane: SectionPlaneId): void;
@@ -413,6 +428,7 @@ export function ViewerShell({
   onSelectEdgeChain,
   selectionFilter,
   onBoxSelect,
+  onBoxSelectTopology,
   offsetHandle,
   onOffsetPreview,
   onOffsetCommit,
@@ -446,6 +462,8 @@ export function ViewerShell({
   onSketchCommitComposite,
   onEditSketchDimension,
   onMoveSketchDimension,
+  onSelectSketchConstraint,
+  onSketchConstraintSelectionShown,
   onSketchDrawingChange,
   sketchMoveEnabled,
   onSketchMoveChange,
@@ -462,6 +480,8 @@ export function ViewerShell({
   primitiveGhost = null,
   datumDocument = null,
   hiddenDatumIds,
+  referenceImages,
+  loadReferenceImage,
   selectedFeatureId = null,
   onPickPlane,
   onPickDatum,
@@ -483,6 +503,8 @@ export function ViewerShell({
   savedViews,
   onCycleDisplayMode,
   onToggleProjection,
+  fieldOfView,
+  xrayOpacity,
   sectionRange,
   onToggleSection,
   onSectionPlane,
@@ -679,6 +701,9 @@ export function ViewerShell({
         onSelectEdgeChain={onSelectEdgeChain}
         selectionFilter={selectionFilter}
         onBoxSelect={onBoxSelect}
+        {...(onBoxSelectTopology ? { onBoxSelectTopology } : {})}
+        {...(fieldOfView !== undefined ? { fieldOfView } : {})}
+        {...(xrayOpacity !== undefined ? { xrayOpacity } : {})}
         offsetHandle={offsetHandle ?? datumOffsetTarget}
         onOffsetPreview={
           datumOffsetTarget && datumHandle
@@ -734,6 +759,8 @@ export function ViewerShell({
         onSketchCommitComposite={onSketchCommitComposite}
         onEditSketchDimension={onEditSketchDimension}
         onMoveSketchDimension={onMoveSketchDimension}
+        onSelectSketchConstraint={onSelectSketchConstraint}
+        onSketchConstraintSelectionShown={onSketchConstraintSelectionShown}
         onSketchDrawingChange={onSketchDrawingChange}
         sketchMoveEnabled={sketchMoveEnabled}
         onSketchMoveChange={onSketchMoveChange}
@@ -776,6 +803,8 @@ export function ViewerShell({
               )
             : []
         }
+        {...(referenceImages ? { referenceImages } : {})}
+        {...(loadReferenceImage ? { loadReferenceImage } : {})}
         onPickPlane={onPickPlane}
         onPickDatum={onPickDatum}
         onMeasurePreview={onMeasurePreview}

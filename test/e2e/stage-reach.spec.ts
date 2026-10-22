@@ -86,7 +86,7 @@ test('UI-08: every instrument rail control keeps its own click in a short window
 
   const viewerBar = page.getByRole('toolbar', { name: 'Viewer bar' });
   const panels = page.getByRole('toolbar', { name: 'Model panels' });
-  // Every control as drawn: Undo stands clear of Settings, and the drawer's
+  // Every control as drawn: Undo stands clear of Settings, and the panels'
   // buttons — the activity log last — are inside the window.
   for (const button of [
     ...(await viewerBar.getByRole('button').all()),
