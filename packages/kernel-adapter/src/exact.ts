@@ -1,4 +1,11 @@
 import { CooperativeWork } from './cooperative-work';
+import {
+  cloneIdleLineageView,
+  currentIdleLineageView,
+  idleLineageViewBytes,
+  supportsIdleLineageView,
+  type IdleLineageView
+} from './exact-idle-lineage-view';
 import type { EditAnalysisRequest } from '@openzcad/shared';
 import { projectShapeMesh } from './exact-display-projection';
 import {
@@ -260,7 +267,10 @@ import {
   ownedMeshFaceOffsets
 } from './owned-mesh-output';
 import { PrimitiveBuildCache } from './exact-primitive-cache';
-import { isBooleanEvolutionProbeEligible } from './exact-boolean-evolution';
+import {
+  booleanEvolutionProbeNeeded,
+  isBooleanEvolutionProbeEligible
+} from './exact-boolean-evolution';
 export type { RebuildCacheEvent };
 export {
   booleanEvolutionProbeNeeded,
@@ -1227,6 +1237,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     return this.options.historyCheckpointLimit ?? MAX_HISTORY_CHECKPOINTS;
   }
 
+  /** Retained JS lineage metadata; kernel topology telemetry excludes it. */
+  private get historyLineageMetadataBytes(): number {
+    return this.historyCheckpoints.reduce(
+      (bytes, entry) => bytes + (entry.lineageMetadataBytes ?? 0),
+      0
+    );
+  }
+
   private get maxMeasuredShapeCacheBytes(): number {
     return (
       this.options.measuredShapeCacheBytes ?? MAX_MEASURED_SHAPE_CACHE_BYTES
@@ -1553,10 +1571,36 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             : undefined
         )
       : [];
+    const idleDigests =
+      normalizedDemand?.size === 0
+        ? digests
+        : cachingEnabled
+          ? features.map(
+              (feature, index) =>
+                historyFeatureDigest(document, feature, index, scope, []) +
+                (feature.featureId === deferredDirectEditFeatureId
+                  ? '|display-output'
+                  : '')
+            )
+          : [];
+    const probePrefix: [string, boolean][] = [];
+    const probeKeys = cachingEnabled
+      ? features.map((feature) => {
+          if (isBooleanEvolutionProbeEligible(feature))
+            probePrefix.push([
+              feature.featureId,
+              normalizedDemand === undefined ||
+                booleanEvolutionProbeNeeded(document, feature, normalizedDemand)
+            ]);
+          return JSON.stringify(probePrefix);
+        })
+      : [];
 
     let kernel = this.historyKernel;
     let startIndex = 0;
     let initial: ExactBuildResult | null = null;
+    let initialIdleLineageView: IdleLineageView | undefined;
+    let initialLineageIsIdle = false;
     let reusePrimitiveTail = false;
     let reusedPrimitives = 0;
     let reusedPreparedFeatures = 0;
@@ -1600,6 +1644,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       this.historyScopeKey === scopeKey
     ) {
       let prefix = -1;
+      let prefixUsesIdleView = false;
+      let unavailableModeView = false;
+      // Inspect the whole retained history, including entries beyond an
+      // unrelated geometry edit. Missing provenance is an unknown mode.
+      const lineageModeChanged = this.historyCheckpoints.some(
+        (entry) =>
+          entry.lineageProbeKey === undefined ||
+          entry.lineageProbeKey !== probeKeys[entry.featureIndex]
+      );
       // A previous sync's tail that this one no longer schedules. It is the
       // last retained checkpoint; it is restored and then discarded, so the
       // checkpoints this replay takes stay aligned with the schedule.
@@ -1620,22 +1673,69 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         ) {
           break;
         }
+        // Older entries in the table may carry eager digests even when a
+        // later snapshot was assembled from their idle views. Name the JS
+        // snapshot's own full probe signature, not its ancestors' modes.
+        const primaryMatches =
+          entry.lineageProbeKey !== undefined
+            ? entry.lineageProbeKey === probeKeys[entry.featureIndex]
+            : this.historyCheckpoints
+                .slice(0, index + 1)
+                .flatMap((prior) => prior.digests)
+                .every(
+                  (digest, featureIndex) => digest === digests[featureIndex]
+                );
+        const needsIdleView = !primaryMatches;
+        if (needsIdleView) {
+          const view = entry.idleLineageView;
+          // Geometry-compatible eager snapshots cannot publish their eager
+          // metadata to an idle request. Select only a finalized view whose
+          // complete effective probe signature matches this request.
+          if (
+            !view ||
+            view.digests.length !== entry.featureIndex + 1 ||
+            view.digests.some((digest, index) => digest !== digests[index])
+          ) {
+            unavailableModeView = true;
+            break;
+          }
+        }
         if (entry.featureIndex !== checkpointIndices[index]) {
           if (index === this.historyCheckpoints.length - 1) {
             prefix = index;
+            prefixUsesIdleView = needsIdleView;
             staleTail = true;
           }
           break;
         }
         prefix = index;
+        prefixUsesIdleView = needsIdleView;
+      }
+      // An unaudited suffix must run in a genuinely fresh arena after a
+      // mode change. Retaining eager probe scratch topology can otherwise
+      // influence that suffix's serialized construction metadata.
+      const forceFreshLineageReplay =
+        lineageModeChanged &&
+        (unavailableModeView ||
+          features
+            .slice(
+              prefix < 0 ? 0 : this.historyCheckpoints[prefix]!.featureIndex + 1
+            )
+            .some((feature) => !supportsIdleLineageView(feature, document)));
+      if (forceFreshLineageReplay) {
+        prefix = -1;
+        prefixUsesIdleView = false;
+        staleTail = false;
       }
       const restoredFeatures =
         prefix >= 0 ? this.historyCheckpoints[prefix]!.featureIndex + 1 : 0;
-      reusePrimitiveTail = this.primitiveBuildCache.canReuseTail(
-        features,
-        digests,
-        restoredFeatures
-      );
+      reusePrimitiveTail =
+        !forceFreshLineageReplay &&
+        this.primitiveBuildCache.canReuseTail(
+          features,
+          digests,
+          restoredFeatures
+        );
       if (prefix >= 0 || reusePrimitiveTail) {
         try {
           const restoredEntry =
@@ -1671,6 +1771,38 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           initial = restoredEntry
             ? cloneBuildState(restoredEntry.snapshot)
             : null;
+          if (restoredEntry && initial) {
+            const view = restoredEntry.idleLineageView;
+            if (view) {
+              initialIdleLineageView = cloneIdleLineageView(
+                view.state,
+                restoredEntry.snapshot,
+                initial
+              );
+            }
+            if (prefixUsesIdleView) {
+              if (
+                !initialIdleLineageView ||
+                initialIdleLineageView.lineages.size !== initial.shapes.size
+              )
+                throw new HistoryCacheIntegrityError(
+                  'Idle lineage view ownership disagrees.'
+                );
+              for (const [id, shape] of initial.shapes) {
+                if (!initialIdleLineageView.lineages.has(id))
+                  throw new HistoryCacheIntegrityError(
+                    'Idle lineage view body is missing.'
+                  );
+                const lineage = initialIdleLineageView.lineages.get(id);
+                if (lineage) shape.lineage = lineage;
+                else delete shape.lineage;
+              }
+              initialIdleLineageView = currentIdleLineageView(initial);
+            }
+            initialLineageIsIdle = digests
+              .slice(0, restoredFeatures)
+              .every((digest, index) => digest === idleDigests[index]);
+          }
           // Restore may succeed even when an entity was retired before the
           // checkpoint barrier. Never replay builders from stale JS handles.
           for (const shape of initial?.shapes.values() ?? []) {
@@ -1683,6 +1815,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           reusePrimitiveTail = false;
           startIndex = 0;
           initial = null;
+          initialIdleLineageView = undefined;
+          initialLineageIsIdle = false;
         }
       } else {
         this.invalidateHistoryCache();
@@ -1713,7 +1847,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         features.length
       );
     };
-    const onFeature = (index: number, result: ExactBuildResult) => {
+    const onFeature = (
+      index: number,
+      result: ExactBuildResult,
+      idleView?: IdleLineageView
+    ) => {
       featureDone?.();
       // Publish only a disposable mesh projection before an expensive pattern.
       // It is never cached as an exact result, nor used by export/validation.
@@ -1775,11 +1913,20 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       // A checkpoint is cheap to create but makes the next mutation copy the
       // arena. Admit against that projected cost, including retired slots.
       const memory = checkpointMemoryStats(activeKernel);
+      const retainedLineageBytes = this.historyLineageMetadataBytes;
+      const probeKey = probeKeys[index]!;
+      const probeKeyBytes = memory
+        ? new TextEncoder().encode(probeKey).byteLength
+        : 0;
+      const byteBudget =
+        this.options.historyCheckpointEstimatedBytes ??
+        MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES;
       if (memory) {
         if (
-          memory.nextMutationEstimatedBytes >
-          (this.options.historyCheckpointEstimatedBytes ??
-            MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES)
+          memory.nextMutationEstimatedBytes +
+            retainedLineageBytes +
+            probeKeyBytes >
+          byteBudget
         )
           return;
       }
@@ -1800,12 +1947,48 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         );
       }
       const previous = this.historyCheckpoints.at(-1);
-      const entry = {
+      const entry: HistoryCheckpointEntry = {
         featureIndex: index,
         digests: digests.slice((previous?.featureIndex ?? -1) + 1, index + 1),
         checkpointId,
-        snapshot: cloneBuildState(result)
+        snapshot: cloneBuildState(result),
+        ...(memory
+          ? { lineageProbeKey: probeKey, lineageMetadataBytes: probeKeyBytes }
+          : {})
       };
+      // Different probe signatures also need a finalized proof when an
+      // unavailable probe left the metadata identical. Charge the complete
+      // view/signature against the existing checkpoint byte ceiling;
+      // unavailable telemetry or oversized views keep exact replay.
+      if (
+        idleView &&
+        memory &&
+        (idleView.diverged ||
+          idleDigests
+            .slice(0, index + 1)
+            .some((digest, featureIndex) => digest !== digests[featureIndex]))
+      ) {
+        try {
+          const viewDigests = idleDigests.slice(0, index + 1);
+          const bytes = idleLineageViewBytes(idleView, viewDigests);
+          if (
+            memory.nextMutationEstimatedBytes +
+              retainedLineageBytes +
+              probeKeyBytes +
+              bytes <=
+            byteBudget
+          ) {
+            entry.idleLineageView = {
+              digests: viewDigests,
+              state: cloneIdleLineageView(idleView, result, entry.snapshot),
+              estimatedBytes: bytes
+            };
+            entry.lineageMetadataBytes = probeKeyBytes + bytes;
+          }
+        } catch {
+          // Alternate metadata cannot change checkpoint or geometry acceptance.
+        }
+      }
       this.historyCheckpoints.push(entry);
       this.historyCheckpointOwners.set(checkpointId, entry);
       done();
@@ -1850,7 +2033,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         document,
         importSources,
         pinnedImports,
-        initial ? { startIndex, initial } : undefined,
+        initial
+          ? {
+              startIndex,
+              initial,
+              idleLineageView: initialIdleLineageView,
+              idleLineageIsCurrent: initialLineageIsIdle
+            }
+          : undefined,
         this.importedSteps,
         onFeature,
         onFeatureStart,
@@ -1883,7 +2073,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         cancellation,
         normalizedDemand,
         (bodyId) => this.heldDisplayDeflections.get(bodyId)?.[0],
-        deferredDirectEditFeatureId
+        deferredDirectEditFeatureId,
+        cachingEnabled &&
+          (this.options.historyCheckpointEstimatedBytes ??
+            MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES) > 0
       );
     } catch (error) {
       // A cancelled build keeps the retained prefix: the checkpoints pushed
