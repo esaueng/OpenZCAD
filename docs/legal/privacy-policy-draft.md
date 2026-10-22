@@ -84,7 +84,8 @@ apply to it. See [section 14](#14-self-hosted-deployments).
 - Optional analytics are off until you turn them on, and contain no
   identifiers or model contents.
 - You can delete your cloud projects, your profile, or both from Settings.
-  Deleted data can remain in backups for up to 30 days.
+  Deleted data may remain in recovery copies or exports. Their retention
+  windows must be confirmed before this draft is published (section 11).
 - We do not sell your data and show no advertising.
 
 ## 3. Using OpenZCAD without an account
@@ -321,7 +322,7 @@ requests are handled and whether users are notified.]`
 | Sign-in codes                       | Valid once for 10 minutes. The hashed record becomes eligible for cleanup 24 hours after expiry; bounded, traffic-triggered cleanup can retain it longer                                                                                          |
 | Rate-limit counters                 | Eligible for cleanup after two of the longest shared-table windows have elapsed from the window start (currently two hours); removed in bounded, traffic-triggered passes                                                                         |
 | Invitations and sharing history     | For the life of the project, or until the invited or inviting account is deleted                                                                                                                                                                  |
-| Share links                         | Until revoked, or until the project is deleted                                                                                                                                                                                                    |
+| Share links                         | Revocation ends access; the token hash, creator and timestamps remain until the project or relevant account is deleted                                                                                                                            |
 | Assistant usage counters            | Until your account is deleted `[OWNER: decide a shorter period]`                                                                                                                                                                                  |
 | Cloud account statistics permission | 30 days, or until withdrawn                                                                                                                                                                                                                       |
 | Published cloud account statistics  | Hourly aggregate snapshots remain for up to 90 days, independently of the 30-day permission                                                                                                                                                       |
@@ -342,13 +343,14 @@ multiple project-list requests to purge.
 > sweep in `apiRateLimit.ts` define eligibility and bounded cleanup. They do
 > not schedule a guaranteed purge.
 
-**Backups.** The database keeps a point-in-time history (Cloudflare D1 Time
-Travel) that can restore it to any moment in the last **30 days**. The
-collaboration rooms have a similar 30-day recovery window. So data you delete,
-including deleted accounts and projects, can remain in these recovery copies
-for up to 30 days after deletion. We do not restore deleted personal data from
-them except to recover from an incident. `[CONFIRM: plan windows; R2
-versioning or backups; any manual exports.]`
+**Backups.** Cloudflare D1 Time Travel and Durable Object recovery may retain
+point-in-time copies after live data is deleted. The design assumes windows
+of up to 30 days, but the actual plan windows have not been verified. R2
+versioning, lifecycle rules, backup copies and manual exports are also
+unconfirmed. There is therefore no verified maximum across all recovery
+paths in this draft. `[CONFIRM before publication: each recovery mechanism,
+its configured window, retained exports, and the incident-restore process for
+deleted personal data.]`
 
 ## 12. Deleting your data and your rights
 
