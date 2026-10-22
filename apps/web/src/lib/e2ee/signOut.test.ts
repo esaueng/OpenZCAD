@@ -45,6 +45,43 @@ async function fixture() {
 }
 
 describe('saving before device-key sign-out', () => {
+  it('does not drain or revoke a session that replaced the inspected account', async () => {
+    const savePending = vi.fn(async () => {});
+    const revokeSession = vi.fn();
+    await expect(
+      signOutAfterSaving({
+        userId: 'user_sign_out',
+        isCurrentSession: () => false,
+        savePending,
+        revokeSession
+      })
+    ).rejects.toThrow('signed-in account changed');
+    expect(savePending).not.toHaveBeenCalled();
+    expect(revokeSession).not.toHaveBeenCalled();
+  });
+
+  it('preserves device keys and the new session when the account changes during saving', async () => {
+    const { userId, store, accountKey } = await fixture();
+    let current = true;
+    const remove = vi.spyOn(store, 'deleteDevice');
+    const revokeSession = vi.fn();
+    await expect(
+      signOutAfterSaving({
+        userId,
+        keepDevice: false,
+        isCurrentSession: () => current,
+        savePending: async () => {
+          current = false;
+        },
+        revokeSession
+      })
+    ).rejects.toThrow('signed-in account changed');
+    expect(remove).not.toHaveBeenCalled();
+    expect(revokeSession).not.toHaveBeenCalled();
+    expect(await store.loadDevice(userId)).not.toBeNull();
+    expect(unlockedAccount(userId)?.accountKey).toBe(accountKey);
+  });
+
   it('does not remove keys or revoke the session when saving fails', async () => {
     const { userId, store, accountKey } = await fixture();
     const remove = vi.spyOn(store, 'deleteDevice');
@@ -53,6 +90,7 @@ describe('saving before device-key sign-out', () => {
       signOutAfterSaving({
         userId,
         keepDevice: false,
+        isCurrentSession: () => true,
         savePending: async () => {
           throw new Error('Save failed');
         },
@@ -75,7 +113,13 @@ describe('saving before device-key sign-out', () => {
     const revokeSession = vi.fn(async () => {
       expect(await store.loadDevice(userId)).toBeNull();
     });
-    const input = { userId, keepDevice: false, savePending, revokeSession };
+    const input = {
+      userId,
+      keepDevice: false,
+      isCurrentSession: () => true,
+      savePending,
+      revokeSession
+    };
     await expect(signOutAfterSaving(input)).rejects.toThrow('Deletion aborted');
     expect(revokeSession).not.toHaveBeenCalled();
     expect(await store.loadDevice(userId)).not.toBeNull();
@@ -96,6 +140,7 @@ describe('saving before device-key sign-out', () => {
       await signOutAfterSaving({
         userId,
         keepDevice,
+        isCurrentSession: () => true,
         savePending: async () => {
           expect(await store.loadDevice(userId)).not.toBeNull();
           expect(unlockedAccount(userId)).toBeDefined();

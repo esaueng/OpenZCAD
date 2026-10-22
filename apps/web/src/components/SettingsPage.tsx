@@ -171,7 +171,7 @@ interface SettingsPageProps {
   onStartDesktopLogin(): Promise<void>;
   onDesktopAuthorizationCodeChange(code: string): void;
   onApproveDesktopLogin(): Promise<void>;
-  onLogout(choice?: DeviceKeySignOutChoice): Promise<void>;
+  onLogout(choice: DeviceKeySignOutChoice): Promise<void>;
   onDeleteCloudData(
     scope: AccountDeletionScope,
     confirmation: string
@@ -606,6 +606,8 @@ export function SettingsPage({
   );
   const [signOutBusy, setSignOutBusy] = useState(false);
   const [signOutError, setSignOutError] = useState<string | null>(null);
+  const signOutSessionRef = useRef(session);
+  signOutSessionRef.current = session;
   const contentRef = useRef<HTMLElement>(null);
   const pageRef = useRef<HTMLDivElement>(null);
   const brandRef = useRef<HTMLButtonElement>(null);
@@ -690,16 +692,18 @@ export function SettingsPage({
     let failureMessage =
       "Could not check this browser's device keys. Try signing out again.";
     try {
-      const userId = session?.userId;
-      if (userId) {
-        const { hasStoredDevice } = await import('../lib/e2ee/deviceStore');
-        if (await hasStoredDevice(userId)) {
-          setSignOutChoiceUserId(userId);
-          return;
-        }
+      const inspectedSession = session;
+      const userId = inspectedSession?.userId;
+      if (!userId) return;
+      const { hasStoredDevice } = await import('../lib/e2ee/deviceStore');
+      const hasDevice = await hasStoredDevice(userId);
+      if (signOutSessionRef.current !== inspectedSession) return;
+      if (hasDevice) {
+        setSignOutChoiceUserId(userId);
+        return;
       }
       failureMessage = 'Could not complete sign-out. Try again.';
-      await onLogout();
+      await onLogout({ userId });
     } catch {
       setSignOutError(failureMessage);
     } finally {

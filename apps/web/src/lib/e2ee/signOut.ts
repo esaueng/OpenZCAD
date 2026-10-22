@@ -3,7 +3,7 @@ import { indexedDbDeviceStore } from './deviceStore';
 
 export interface DeviceKeySignOutChoice {
   readonly userId: string;
-  readonly keepDevice: boolean;
+  readonly keepDevice?: boolean;
 }
 
 /**
@@ -24,12 +24,21 @@ export async function endKeySession(
 export async function signOutAfterSaving(input: {
   userId: string | null;
   keepDevice?: boolean;
+  isCurrentSession(): boolean;
   savePending(): Promise<void>;
   revokeSession(): Promise<unknown>;
 }): Promise<void> {
+  const requireCurrentSession = () => {
+    if (!input.isCurrentSession()) {
+      throw new Error('The signed-in account changed. Try signing out again.');
+    }
+  };
+  requireCurrentSession();
   await input.savePending();
+  requireCurrentSession();
   if (input.userId && input.keepDevice !== undefined) {
     await endKeySession(input.userId, input.keepDevice);
   }
+  requireCurrentSession();
   await input.revokeSession();
 }

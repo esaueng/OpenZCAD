@@ -123,7 +123,7 @@ describe('device-key sign-out choice', () => {
       .mockRejectedValueOnce(new Error('Deletion aborted'))
       .mockResolvedValue(undefined);
     const onLogout = vi.fn(
-      async (choice?: { userId: string; keepDevice: boolean }) => {
+      async (choice?: { userId: string; keepDevice?: boolean }) => {
         if (choice?.keepDevice === false) await remove();
         signedOut = true;
       }
@@ -188,6 +188,61 @@ describe('device-key sign-out choice', () => {
       screen.queryByRole('button', { name: 'Remove device keys' })
     ).toBeNull();
     expect(onLogout).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])(
+    'does not sign out a replacement account after a pending device lookup returns %s',
+    async (hasDevice) => {
+      const store = await import('../lib/e2ee/deviceStore');
+      let finish!: (value: boolean) => void;
+      const lookup = vi.spyOn(store, 'hasStoredDevice').mockReturnValue(
+        new Promise<boolean>((resolve) => {
+          finish = resolve;
+        })
+      );
+      const onLogout = vi.fn();
+      const user = userEvent.setup();
+      const view = renderSettings(null, {
+        initialSection: 'account',
+        session,
+        onLogout
+      });
+      await user.click(screen.getByRole('button', { name: 'Sign out' }));
+      await waitFor(() => expect(lookup).toHaveBeenCalledWith(session.userId));
+      view.rerender(
+        settingsElement(null, {
+          initialSection: 'account',
+          session: {
+            ...session,
+            userId: toUserId('user_sign_out_replacement')
+          },
+          onLogout
+        })
+      );
+      finish(hasDevice);
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Sign out' })).toBeEnabled()
+      );
+      expect(onLogout).not.toHaveBeenCalled();
+      expect(
+        screen.queryByRole('button', { name: 'Remove device keys' })
+      ).toBeNull();
+    }
+  );
+
+  it('binds direct sign-out without device keys to the inspected account', async () => {
+    const store = await import('../lib/e2ee/deviceStore');
+    vi.spyOn(store, 'hasStoredDevice').mockResolvedValue(false);
+    const onLogout = vi.fn();
+    renderSettings(null, { initialSection: 'account', session, onLogout });
+    await userEvent
+      .setup()
+      .click(screen.getByRole('button', { name: 'Sign out' }));
+    await waitFor(() =>
+      expect(onLogout).toHaveBeenCalledExactlyOnceWith({
+        userId: session.userId
+      })
+    );
   });
 
   it.each([true, false])(

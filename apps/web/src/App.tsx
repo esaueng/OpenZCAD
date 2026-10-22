@@ -9283,7 +9283,13 @@ export function App() {
     }
   }
 
-  async function handleLogout(choice?: DeviceKeySignOutChoice) {
+  async function handleLogout(choice: DeviceKeySignOutChoice) {
+    const departingSession = sessionRef.current;
+    const isCurrentSession = () =>
+      departingSession !== null &&
+      departingSession.userId === choice.userId &&
+      sessionRef.current === departingSession;
+    if (!isCurrentSession()) return;
     setSettingsBusy(true);
     setSettingsMessage('Signing out…');
     try {
@@ -9291,15 +9297,20 @@ export function App() {
       // become unsendable the moment the cookie does.
       const { signOutAfterSaving } = await import('./lib/e2ee/signOut');
       await signOutAfterSaving({
-        userId: choice?.userId ?? null,
-        keepDevice: choice?.keepDevice,
+        userId: choice.userId,
+        keepDevice: choice.keepDevice,
+        isCurrentSession,
         savePending: async () => {
           await cloudProjectAutosaveRef.current?.flushPending();
+          if (!isCurrentSession()) {
+            throw new Error(
+              'The signed-in account changed. Try signing out again.'
+            );
+          }
           await cloudSettingsAutosaveRef.current?.flushPending();
         },
         revokeSession: async () => {
           const controller = cloudProjectAutosaveRef.current;
-          const departingSession = sessionRef.current;
           const projectId = managerRef.current?.document.projectId;
           const wasHalted = controller?.isHalted ?? false;
           controller?.closeProject();
@@ -9349,11 +9360,13 @@ export function App() {
           }
         }
       });
+      if (!isCurrentSession()) return;
       // The server session is gone: no unlocked key outlives it, even if the
       // local cleanup below fails.
       lockAccountsExcept(null);
       clearAssistantHistory();
       const listed = await loadProjectSummaries(false);
+      if (!isCurrentSession()) return;
       remoteVersionsRef.current.clear();
       accountDocumentUnavailableProjectIdRef.current = null;
       endCloudSettingsAutosave();
@@ -9367,6 +9380,7 @@ export function App() {
       } catch {
         baselinesCleared = false;
       }
+      if (!isCurrentSession()) return;
       sessionRef.current = null;
       setSession(null);
       accountSettingsRef.current = null;
