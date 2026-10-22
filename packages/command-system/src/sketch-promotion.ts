@@ -14,11 +14,13 @@ import {
   type SketchObjectData,
   type SketchPointRef,
   type SketchProfileReference,
-  type SketchPromotion
+  type SketchPromotion,
+  type UnitSystem
 } from '@openzcad/shared';
 import {
   cloneDocument,
   findSketch,
+  getExpressionDimensions,
   getParameterScope,
   listFeaturesInOrder,
   resolveParamValue,
@@ -51,13 +53,21 @@ export interface SketchPromotionReleaseInput {
   promotionId: string;
 }
 
+function requirePromotionSchema(document: ProjectDocument): void {
+  if (
+    typeof document.schemaVersion !== 'number' ||
+    !Number.isSafeInteger(document.schemaVersion) ||
+    document.schemaVersion < 37
+  )
+    refuse('conversion ownership requires schema v37.');
+}
+
 /** Explicitly free the generated graph while retaining its downstream aliases. */
 export function releaseSketchPromotionStructure(
   document: ProjectDocument,
   input: SketchPromotionReleaseInput
 ): ProjectDocument {
-  if (document.schemaVersion < 33)
-    refuse('conversion ownership requires schema v33.');
+  requirePromotionSchema(document);
   const sketch = findSketch(document, input.sketchId);
   const promotion = sketch?.promotions?.find(
     (p) => p.promotionId === input.promotionId
@@ -100,12 +110,27 @@ function containsId(value: unknown, id: string): boolean {
 function affine(
   center: ParamValue,
   size: ParamValue,
-  factor: number
+  factor: number,
+  scope: Record<string, number>,
+  documentUnits: UnitSystem
 ): ParamValue {
   if (factor === 0) return center;
   if (typeof center === 'number' && typeof size === 'number')
     return center + size * factor;
-  return `(${center}) + (${size}) * (${factor})`;
+  // A bare coordinate is already a document-unit number, while a suffixed
+  // expression or typed length parameter still carries its dimension. Make
+  // each length operand a document-unit scalar before combining the two;
+  // otherwise (5) + (2 mm) * (-0.5) silently loses that generated edge when
+  // profile analysis refuses the number/length addition. Keep expressions
+  // live instead of replacing their parameter reads with evaluated values.
+  const scalar = (value: ParamValue): string => {
+    if (typeof value === 'number') return `(${value})`;
+    const dimensions = getExpressionDimensions(value, scope, { documentUnits });
+    return dimensions.length === 1 && dimensions.angle === 0
+      ? `((${value}) / (1 ${documentUnits}))`
+      : `(${value})`;
+  };
+  return `${scalar(center)} + ${scalar(size)} * (${factor})`;
 }
 
 function legacyMatch(
@@ -156,8 +181,7 @@ export function convertLegacySketchObject(
   document: ProjectDocument,
   input: LegacySketchConversionInput
 ): ProjectDocument {
-  if (document.schemaVersion < 33)
-    refuse('conversion ownership requires schema v33.');
+  requirePromotionSchema(document);
   const sketch = findSketch(document, input.sketchId);
   const source = sketch?.objectIds.includes(input.sourceObjectId)
     ? document.nodes[input.sourceObjectId]
@@ -251,8 +275,20 @@ export function convertLegacySketchObject(
           [0.5, 0.5],
           [-0.5, 0.5]
         ].map(([x, y]) => ({
-          x: affine(data.centerX, data.width, x!),
-          y: affine(data.centerY, data.height, y!)
+          x: affine(
+            data.centerX,
+            data.width,
+            x!,
+            scopeResult.scope,
+            document.units
+          ),
+          y: affine(
+            data.centerY,
+            data.height,
+            y!,
+            scopeResult.scope,
+            document.units
+          )
         }))
       : Array.from({ length: count }, (_, index) => {
           const angle = Math.PI / 2 + (index * 2 * Math.PI) / count;
@@ -260,8 +296,20 @@ export function convertLegacySketchObject(
             Math.abs(Math.cos(angle)) < 1e-14 ? 0 : Math.cos(angle);
           const sine = Math.abs(Math.sin(angle)) < 1e-14 ? 0 : Math.sin(angle);
           return {
-            x: affine(data.centerX, data.radius, cosine),
-            y: affine(data.centerY, data.radius, sine)
+            x: affine(
+              data.centerX,
+              data.radius,
+              cosine,
+              scopeResult.scope,
+              document.units
+            ),
+            y: affine(
+              data.centerY,
+              data.radius,
+              sine,
+              scopeResult.scope,
+              document.units
+            )
           };
         });
   const byId = new Map(

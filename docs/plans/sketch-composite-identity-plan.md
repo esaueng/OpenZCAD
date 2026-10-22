@@ -87,7 +87,7 @@ S04-C below. Untouched legacy objects keep their original representation.
 
 This bounded slice builds on the held-line decision above and on S02-E in
 [PR #797](https://github.com/esaueng/OpenZCAD/pull/797). It uses additive schema
-v32 from that branch's v31 baseline; pending independent schema migrations must
+v36 from that branch's v35 baseline; earlier coordinated schema migrations must
 be reconciled against the actual merged base before integration.
 
 A saved corner or side target names its composite ID, a zero-based index, and
@@ -113,7 +113,8 @@ composite-target annotation blocks that deletion until it is explicitly
 removed. Unrelated primitive reference/deletion behavior remains unchanged.
 Malformed descriptors are refused on load, including undo/redo nodes; a
 well-formed target whose topology no longer resolves stays visible and
-removable. Schema versions before v32 cannot carry composite-target records.
+removable. Schema versions before v36 cannot carry composite-target records. An omitted
+schema version is not proof that these targets are supported.
 Legacy saves without them remain additive and do not synthesize descriptors.
 
 Acceptance covers rectangle methods and regular polygons, strict topology and
@@ -132,10 +133,17 @@ The existing held lines remain the source of exact regions and lineage.
 ## Legacy provenance and explicit conversion (S04-C)
 
 This implementation builds on [S04-B #800](https://github.com/esaueng/OpenZCAD/pull/800)
-and uses schema v33 from its v32 baseline. Independent pending schema changes
+and uses schema v37 from its v36 baseline. Independent pending schema changes
 must be reconciled with the actual merged base. This section supersedes the
 historical virtual-graph and promotion recipes below; it uses persisted legal
 primitive constraints, with no virtual solver operands.
+
+Conversion retains authored unit-aware source expressions. When generated
+coordinates combine a bare document-unit center with an explicit length or
+typed length parameter, each operand is expressed in document units before
+the affine sum. The generated edges remain live parameter expressions; no
+source witness, identity matcher or geometric tolerance is rewritten to make
+mixed-unit input fit.
 
 Legacy rectangle/polygon arrangement curves now carry the fixed
 `b1/<entity>/<rectangle|regular-polygon>/1/<count>/e/<index>` token. Indices are
@@ -195,7 +203,7 @@ source, aliases and references; redo/replay reuses every recorded identity.
 
 Schema validation covers current, readable undo/redo and replay-only profile,
 alias and ownership records, including nested transactions and saved log copies.
-Pre-v33 carriers refuse these new fields; unreadable undo history retains the
+Pre-v37 and unversioned carriers refuse these new fields; unreadable undo history retains the
 existing recovery policy. Exact tests qualify analytic solids, independent
 solver graphs and attached faces through conversion, resizing, replay and
 backup. Browser tests cover both shapes, refusal without a history edit,

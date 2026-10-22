@@ -1,6 +1,7 @@
 import {
   createSketchReferenceAnnotationId,
   deepClone,
+  documentNodesWithHistory,
   isSketchCompositeCornerTarget,
   isSketchCompositeSideTarget,
   isSketchReferenceDimension,
@@ -38,12 +39,47 @@ export interface SketchReferenceLabelPositionInput extends SketchReferenceDimens
   position: SketchDimensionLabelPosition;
 }
 
-const COMPOSITE_REFERENCE_SCHEMA_VERSION = 32;
+const COMPOSITE_REFERENCE_SCHEMA_VERSION = 36;
+const REFERENCE_DISTANCE_MODE_SCHEMA_VERSION = 35;
 
-function compositeReferenceSchemaError(): Error {
-  return new Error(
-    'Composite reference targets require project schema v32 or newer.'
+function supportsReferenceSchema(
+  schemaVersion: number | undefined,
+  minimumVersion: number
+): boolean {
+  return (
+    typeof schemaVersion === 'number' &&
+    Number.isSafeInteger(schemaVersion) &&
+    schemaVersion >= minimumVersion
   );
+}
+
+function assertReferenceDataSchema(
+  data: SketchReferenceDimensionData,
+  schemaVersion: number | undefined
+): void {
+  if (
+    data.dimensionKind !== 'radius' &&
+    [data.a, data.b].some(
+      (target) =>
+        isSketchCompositeCornerTarget(target) ||
+        isSketchCompositeSideTarget(target)
+    ) &&
+    !supportsReferenceSchema(schemaVersion, COMPOSITE_REFERENCE_SCHEMA_VERSION)
+  )
+    throw new Error(
+      'Composite reference targets require project schema v36 or newer.'
+    );
+  if (
+    data.dimensionKind === 'distance' &&
+    data.distanceMode !== undefined &&
+    !supportsReferenceSchema(
+      schemaVersion,
+      REFERENCE_DISTANCE_MODE_SCHEMA_VERSION
+    )
+  )
+    throw new Error(
+      'Reference distance modes require project schema v35 or newer.'
+    );
 }
 
 /** Validate replay targets, including log copies retained only by readable history. */
@@ -78,21 +114,16 @@ export function assertReferenceCommandSchema(
       !isSketchReferenceDimensionData(command.payload.data)
     )
       throw new Error('Reference dimension replay targets are malformed.');
-    const data = command.payload.data;
-    if (
-      document.schemaVersion >= COMPOSITE_REFERENCE_SCHEMA_VERSION ||
-      data.dimensionKind === 'radius'
-    )
-      continue;
-    if (
-      [data.a, data.b].some(
-        (target) =>
-          isSketchCompositeCornerTarget(target) ||
-          isSketchCompositeSideTarget(target)
-      )
-    )
-      throw compositeReferenceSchemaError();
+    assertReferenceDataSchema(command.payload.data, document.schemaVersion);
   }
+}
+
+/** Call only after validating or dropping unreadable history at the entry boundary. */
+export function assertReferenceDocumentSchema(document: ProjectDocument): void {
+  assertReferenceCommandSchema(document);
+  for (const node of documentNodesWithHistory(document))
+    if (node.kind === 'sketch')
+      assertSketchReferenceDimensions(node, document.schemaVersion);
 }
 
 function requireSketch(document: ProjectDocument, sketchId: SketchId) {
@@ -145,21 +176,7 @@ export function assertSketchReferenceDimensions(
         'Reference dimensions need unique annotation identities and measured targets, without driving values.'
       );
     }
-    if (
-      schemaVersion !== undefined &&
-      schemaVersion < COMPOSITE_REFERENCE_SCHEMA_VERSION
-    ) {
-      const data = reference.data;
-      if (
-        data.dimensionKind !== 'radius' &&
-        [data.a, data.b].some(
-          (target) =>
-            isSketchCompositeCornerTarget(target) ||
-            isSketchCompositeSideTarget(target)
-        )
-      )
-        throw compositeReferenceSchemaError();
-    }
+    assertReferenceDataSchema(reference.data, schemaVersion);
     seen.add(reference.annotationId);
   }
 }

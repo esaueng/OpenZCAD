@@ -293,6 +293,13 @@ export interface SketchSessionState {
   drawing: boolean;
   /** Stable document id of the entity selected for editing. */
   selectedObjectId: string | null;
+  /**
+   * The relation picked from its viewport glyph; Delete removes it. It sits
+   * beside the entity selection rather than replacing it, so a relation
+   * picked from the selected entity's glyphs keeps that entity's glyphs up.
+   * Absent is none.
+   */
+  selectedConstraintId?: string | null;
   /** Armed constraint tool, if any; picking routes here instead of select. */
   pendingConstraint: PendingSketchConstraint | null;
   /** Armed modify tool, if any; picking routes here instead of select. */
@@ -430,6 +437,7 @@ export type InteractionEvent =
   | { type: 'sketch-created'; sketchId: string }
   | { type: 'sketch-drawing'; drawing: boolean }
   | { type: 'sketch-select-object'; objectId: string | null }
+  | { type: 'sketch-select-constraint'; constraintId: string | null }
   | {
       type: 'sketch-constraint-tool';
       kind: SketchConstraintToolKind | null;
@@ -563,7 +571,7 @@ export function escapeTarget(
     if (state.session.tool !== 'select') {
       return 'exit-drawing-tool';
     }
-    return state.session.selectedObjectId
+    return state.session.selectedObjectId || state.session.selectedConstraintId
       ? 'clear-sketch-selection'
       : 'exit-sketch';
   }
@@ -833,6 +841,7 @@ function reduceInteraction(
           circleMode: 'center-radius',
           drawing: false,
           selectedObjectId: null,
+          selectedConstraintId: null,
           pendingConstraint: null,
           pendingEdit: null
         }
@@ -849,6 +858,7 @@ function reduceInteraction(
           circleMode: event.mode,
           drawing: false,
           selectedObjectId: null,
+          selectedConstraintId: null,
           pendingConstraint: null,
           pendingEdit: null
         }
@@ -865,6 +875,7 @@ function reduceInteraction(
           curveMode: event.mode,
           drawing: false,
           selectedObjectId: null,
+          selectedConstraintId: null,
           pendingConstraint: null,
           pendingEdit: null,
           textDraft: null
@@ -882,6 +893,7 @@ function reduceInteraction(
           rectangleMode: event.mode,
           drawing: false,
           selectedObjectId: null,
+          selectedConstraintId: null,
           pendingConstraint: null,
           pendingEdit: null,
           textDraft: null
@@ -917,6 +929,7 @@ function reduceInteraction(
           drawing: false,
           selectedObjectId:
             event.tool === 'select' ? state.session.selectedObjectId : null,
+          selectedConstraintId: null,
           pendingConstraint: null,
           pendingEdit: null,
           // The text tool opens its card at once with an empty string; the
@@ -943,7 +956,8 @@ function reduceInteraction(
           pendingConstraint: event.kind
             ? { kind: event.kind, picks: [] }
             : null,
-          pendingEdit: null
+          pendingEdit: null,
+          selectedConstraintId: null
         }
       };
     case 'sketch-constraint-pick':
@@ -973,7 +987,8 @@ function reduceInteraction(
           tool: 'select',
           drawing: false,
           pendingConstraint: null,
-          pendingEdit: event.kind ? { kind: event.kind, picks: [] } : null
+          pendingEdit: event.kind ? { kind: event.kind, picks: [] } : null,
+          selectedConstraintId: null
         }
       };
     case 'sketch-offset-options':
@@ -1033,7 +1048,25 @@ function reduceInteraction(
               ...state.session,
               tool: 'select',
               drawing: false,
-              selectedObjectId: event.objectId
+              selectedObjectId: event.objectId,
+              selectedConstraintId: null
+            }
+          }
+        : state;
+    case 'sketch-select-constraint':
+      // A glyph click is a plain selection: it lands on Select and ends any
+      // armed pick tool, but keeps the selected entity (see the field).
+      return state.mode === 'sketch' && !state.session.moving
+        ? {
+            ...state,
+            session: {
+              ...state.session,
+              tool: 'select',
+              drawing: false,
+              pendingConstraint: null,
+              pendingEdit: null,
+              textDraft: null,
+              selectedConstraintId: event.constraintId
             }
           }
         : state;

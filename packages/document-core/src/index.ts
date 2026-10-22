@@ -35,6 +35,7 @@ import {
 export { assertSketchBoundaryTopologyPreserved } from './sketch-boundary-dependencies';
 export * from './sketch-composites';
 export * from './drawings';
+export * from './reference-images';
 export {
   constantRigidTransform,
   rigidImportedSource
@@ -59,6 +60,7 @@ import {
   createId,
   deepClone,
   assertDrawingSet,
+  assertReferenceImageSet,
   featureColor,
   isProjectCheckpoint,
   isRevisionRecord,
@@ -873,8 +875,11 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   const document = withReadableHistory(input);
   assertSketchProvenance(document);
   assertReferenceCommandSchema(document);
-  // Schema v30 drawings: validated as written, never synthesized or rewritten.
+  // Schema v30 drawings (v31 annotations): validated as written, never
+  // synthesized or rewritten.
   assertDrawingSet(document.drawings);
+  // Schema v32 reference images: the same — validated, never rewritten.
+  assertReferenceImageSet(document.referenceImages);
   for (const node of documentNodesWithHistory(document)) {
     if (node.kind === 'sketch') {
       assertSketchReferenceDimensions(node, document.schemaVersion);
@@ -935,10 +940,12 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   // it while migrating: unmarked saved sketches must retain revision 1 geometry.
   // Schema v26 adds S04 sketch composites. Never synthesize one:
   // a saved rectangle or polygon object stays the parametric object it was.
-  // Schema v31 reference-distance modes are optional. Never fill one in:
+  // Schema v35 reference-distance modes are optional. Never fill one in:
   // an absent mode remains the saved absolute distance without rewriting it.
-  // Schema v32 composite reference targets are explicit snapshots. Never
+  // Schema v36 composite reference targets are explicit snapshots. Never
   // derive them from a legacy object or promote an older carrier silently.
+  // Schema v37 boundary provenance and conversion ownership are authored.
+  // Opening older content never converts it or invents source witnesses.
   // Schema v16 -> v17 allows reference-form mesh payloads. Keep existing
   // embedded triangles and pre-release references as written; the version
   // boundary prevents older clients from accepting meshes they cannot rebuild.

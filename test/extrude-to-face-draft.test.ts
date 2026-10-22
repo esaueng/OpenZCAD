@@ -154,7 +154,7 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
   }
 
   describe('document contract', () => {
-    it('stores the face and the angle, nothing derived, and pins schema v31 (F01 is v29)', async () => {
+    it('stores the face and the angle, nothing derived, and pins the current schema (F01 is v29)', async () => {
       const lifted = ceiling(project('Contract'), 25);
       const target = await face(lifted.document, lifted.bodyId, -1);
       const sketched = sketch(lifted.document);
@@ -174,8 +174,9 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
         draftAngleDeg: 3
       });
       expect(data).toHaveProperty('toFace.faceReference.kind', 'face');
-      // F01 took v29; projected reference distances now require v31.
-      expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(33);
+      expect(result.document.schemaVersion).toBe(
+        PROJECT_DOCUMENT_SCHEMA_VERSION
+      );
     });
 
     it('opens an older extrude and a v29 one exactly as written', async () => {

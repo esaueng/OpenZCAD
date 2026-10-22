@@ -9,7 +9,7 @@ import {
   type SketchPromotion
 } from '@openzcad/shared';
 
-const PROVENANCE_SCHEMA_VERSION = 33;
+const PROVENANCE_SCHEMA_VERSION = 37;
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -22,9 +22,13 @@ function identities(value: unknown): value is string[] {
 }
 
 function requireSchema(document: ProjectDocument): void {
-  if (document.schemaVersion < PROVENANCE_SCHEMA_VERSION)
+  if (
+    typeof document.schemaVersion !== 'number' ||
+    !Number.isSafeInteger(document.schemaVersion) ||
+    document.schemaVersion < PROVENANCE_SCHEMA_VERSION
+  )
     throw new Error(
-      'Sketch boundary provenance and promotion ownership require project schema v33 or newer.'
+      'Sketch boundary provenance and promotion ownership require project schema v37 or newer.'
     );
 }
 

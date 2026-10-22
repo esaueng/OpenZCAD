@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CommandManager,
+  commandFactories,
+  replayCommands
+} from '@openzcad/command-system';
+import { computeSketchProfileAnalysis } from '@openzcad/geometry';
+import {
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
   toEntityId,
   toSketchConstraintId,
   toUserId,
@@ -8,10 +15,15 @@ import {
   type SerializedCommand,
   type SketchPromotion
 } from '@openzcad/shared';
-import { addSketchFeature, createProjectDocument, findSketch } from './index';
+import {
+  addSketchFeature,
+  createProjectDocument,
+  findSketch,
+  normalizeDocument
+} from './index';
 import { assertSketchProvenance } from './sketch-provenance-validation';
 
-function fixture() {
+function fixture(width: number | string = 'width') {
   const f = addSketchFeature(
     createProjectDocument('Provenance guard', toUserId('user_test')),
     {
@@ -20,7 +32,7 @@ function fixture() {
       objects: [
         {
           objectKind: 'rectangle',
-          width: 'width',
+          width,
           height: 3,
           centerX: 0,
           centerY: 0
@@ -56,12 +68,16 @@ function command(kind: string, payload: unknown): SerializedCommand {
   };
 }
 
-function history(document: ProjectDocument, change: DocumentChange) {
+function history(
+  document: ProjectDocument,
+  change: DocumentChange,
+  cursor: 0 | 1 = 0
+) {
   document.editHistory = {
     schemaVersion: 1,
     projectId: document.projectId,
     actorUserId: document.ownerUserId,
-    cursor: 0,
+    cursor,
     trimmed: 0,
     entries: [{ id: 'history_guard', label: 'Saved edit', changes: [change] }]
   };
@@ -114,11 +130,165 @@ function promoted() {
   return { ...f, sketch, owner };
 }
 
+function authored(family: 'boundary profile' | 'promotion ownership') {
+  const f = fixture(20);
+  const manager = new CommandManager(f.document);
+  const source = f.document.nodes[f.sourceObjectId]!;
+  if (source.kind !== 'sketch-object') throw new Error('Missing legacy source');
+  if (family === 'promotion ownership') {
+    manager.execute(
+      commandFactories.convertLegacySketchObject({
+        sketchId: f.sketchId,
+        sourceObjectId: f.sourceObjectId,
+        expectedSource: source.data
+      })
+    );
+  } else {
+    const profile = computeSketchProfileAnalysis(
+      [{ id: f.sourceObjectId, data: source.data }],
+      Number
+    ).profiles[0]!;
+    expect(profile.sourceBoundaryLoops).toBeDefined();
+    manager.execute(
+      commandFactories.extrudeSketch({
+        name: 'Authored plate',
+        sketchId: f.sketchId,
+        distance: 2,
+        profile: {
+          profileId: profile.profileId,
+          regionFingerprint: profile.regionFingerprint,
+          sourceArea: profile.area,
+          samplePoint: profile.samplePoint,
+          sourceEntityIds: profile.sourceEntityIds,
+          sourceBoundaryLoops: profile.sourceBoundaryLoops
+        }
+      })
+    );
+  }
+  const node =
+    family === 'promotion ownership'
+      ? findSketch(manager.document, f.sketchId)!
+      : Object.values(manager.document.nodes).find(
+          (candidate) =>
+            candidate.kind === 'feature' &&
+            candidate.data.featureKind === 'extrude'
+        )!;
+  const plain = structuredClone(node);
+  if (plain.kind === 'sketch') {
+    delete plain.promotions;
+    plain.constraints = plain.constraints?.filter(
+      (constraint) => constraint.origin !== 'promotion-structure'
+    );
+  } else if (plain.kind === 'feature' && plain.data.featureKind === 'extrude') {
+    delete plain.data.profile;
+  }
+  return {
+    ...f,
+    document: manager.document,
+    base: f.document,
+    node,
+    plain,
+    recorded: manager.document.commandLog[0]!
+  };
+}
+
+describe.each(['boundary profile', 'promotion ownership'] as const)(
+  'S04 schema-v37 carriers: %s',
+  (family) => {
+    it.each([32, 33, 34, 35, 36, undefined])(
+      'refuses readable older schema %s in every carrier without mutation',
+      (version) => {
+        for (const carrier of [
+          'current node',
+          'undo node',
+          'redo node',
+          'undo node map',
+          'redo node map',
+          'current nested log',
+          'undo value log',
+          'redo value log',
+          'undo splice log',
+          'redo splice log'
+        ] as const) {
+          const f = authored(family);
+          const isNode = carrier.includes('node');
+          const saved = structuredClone(isNode ? f.document : f.base);
+          saved.commandLog = [];
+          delete saved.editHistory;
+          if (isNode) saved.nodes[f.node.id] = structuredClone(f.plain);
+          const marked = structuredClone(f.node);
+          const undo = carrier.startsWith('undo');
+          const nested = [
+            command('transaction', [
+              command('transaction', [structuredClone(f.recorded)])
+            ])
+          ];
+          if (carrier === 'current node') saved.nodes[marked.id] = marked;
+          else if (carrier === 'current nested log') saved.commandLog = nested;
+          else if (isNode) {
+            const wholeMap = carrier.endsWith('map');
+            const before = wholeMap ? saved.nodes : f.plain;
+            const after = wholeMap
+              ? { ...saved.nodes, [marked.id]: marked }
+              : marked;
+            history(
+              saved,
+              {
+                kind: 'value',
+                field: 'nodes',
+                ...(wholeMap ? {} : { key: marked.id }),
+                before: undo ? after : before,
+                after: undo ? before : after
+              },
+              undo ? 1 : 0
+            );
+          } else {
+            history(
+              saved,
+              carrier.includes('splice')
+                ? {
+                    kind: 'splice',
+                    field: 'commandLog',
+                    index: 0,
+                    before: undo ? nested : [],
+                    after: undo ? [] : nested
+                  }
+                : {
+                    kind: 'value',
+                    field: 'commandLog',
+                    before: undo ? nested : [],
+                    after: undo ? [] : nested
+                  },
+              undo ? 1 : 0
+            );
+          }
+          expect(saved.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
+          expect(normalizeDocument(saved).editHistory, carrier).toEqual(
+            saved.editHistory
+          );
+          expect(() => assertSketchProvenance(saved), carrier).not.toThrow();
+          if (version === undefined)
+            Reflect.deleteProperty(saved, 'schemaVersion');
+          else
+            saved.schemaVersion = version as ProjectDocument['schemaVersion'];
+          const before = structuredClone(saved);
+          const upgrade = /require project schema v37 or newer/;
+          expect(() => assertSketchProvenance(saved), carrier).toThrow(upgrade);
+          expect(() => normalizeDocument(saved), carrier).toThrow(upgrade);
+          expect(() => new CommandManager(saved), carrier).toThrow(upgrade);
+          expect(() => replayCommands(saved, []), carrier).toThrow(upgrade);
+          expect(saved, carrier).toEqual(before);
+        }
+      }
+    );
+  }
+);
+
 describe('S04 provenance carrier validation', () => {
   it('keeps all legacy envelopes without new fields unchanged', () => {
     const f = fixture();
     const before = structuredClone(f.document);
-    for (let schema = 1; schema < 33; schema++) {
+    for (let schema = 1; schema < 37; schema++) {
       const old = {
         ...f.document,
         schemaVersion: schema as ProjectDocument['schemaVersion']
@@ -152,8 +322,8 @@ describe('S04 provenance carrier validation', () => {
         command('transaction', [command(kind, payload)])
       ];
       expect(() => assertSketchProvenance(f.document)).not.toThrow();
-      f.document.schemaVersion = 32 as ProjectDocument['schemaVersion'];
-      expect(() => assertSketchProvenance(f.document)).toThrow(/schema v33/);
+      f.document.schemaVersion = 36 as ProjectDocument['schemaVersion'];
+      expect(() => assertSketchProvenance(f.document)).toThrow(/schema v37/);
     }
   );
 
@@ -169,8 +339,8 @@ describe('S04 provenance carrier validation', () => {
         after: [],
         [side]: [command('feature.extrude', { profile: reference() })]
       });
-      f.document.schemaVersion = 32 as ProjectDocument['schemaVersion'];
-      expect(() => assertSketchProvenance(f.document)).toThrow(/schema v33/);
+      f.document.schemaVersion = 36 as ProjectDocument['schemaVersion'];
+      expect(() => assertSketchProvenance(f.document)).toThrow(/schema v37/);
     }
   );
 
@@ -197,13 +367,13 @@ describe('S04 provenance carrier validation', () => {
       })
     ];
     expect(() => assertSketchProvenance(f.document)).toThrow(/malformed/);
-    f.document.schemaVersion = 32 as ProjectDocument['schemaVersion'];
-    expect(() => assertSketchProvenance(f.document)).toThrow(/schema v33/);
+    f.document.schemaVersion = 36 as ProjectDocument['schemaVersion'];
+    expect(() => assertSketchProvenance(f.document)).toThrow(/schema v37/);
   });
 
   it('does not interpret arbitrary metadata as authored profile or ownership fields', () => {
     const f = fixture();
-    f.document.schemaVersion = 32 as ProjectDocument['schemaVersion'];
+    f.document.schemaVersion = 36 as ProjectDocument['schemaVersion'];
     f.document.commandLog = [
       command('node.metadata.set', {
         metadata: {
@@ -221,8 +391,8 @@ describe('S04 promotion ownership validation', () => {
   it('validates owned structure but lets missing physical members remain repairable on load', () => {
     const f = promoted();
     expect(() => assertSketchProvenance(f.document)).not.toThrow();
-    f.document.schemaVersion = 32 as ProjectDocument['schemaVersion'];
-    expect(() => assertSketchProvenance(f.document)).toThrow(/schema v33/);
+    f.document.schemaVersion = 36 as ProjectDocument['schemaVersion'];
+    expect(() => assertSketchProvenance(f.document)).toThrow(/schema v37/);
   });
 
   it.each([
@@ -320,8 +490,8 @@ describe('S04 promotion ownership validation', () => {
       /preassigned identities/
     );
     f.document.commandLog = [command('sketch.legacy.convert', {})];
-    f.document.schemaVersion = 32 as ProjectDocument['schemaVersion'];
-    expect(() => assertSketchProvenance(f.document)).toThrow(/schema v33/);
+    f.document.schemaVersion = 36 as ProjectDocument['schemaVersion'];
+    expect(() => assertSketchProvenance(f.document)).toThrow(/schema v37/);
   });
 
   it('refuses an arbitrary replay constraint carrying conversion ownership', () => {
@@ -352,7 +522,7 @@ describe('S04 promotion ownership validation', () => {
       })
     ];
     expect(() => assertSketchProvenance(f.document)).not.toThrow();
-    f.document.schemaVersion = 32 as ProjectDocument['schemaVersion'];
-    expect(() => assertSketchProvenance(f.document)).toThrow(/schema v33/);
+    f.document.schemaVersion = 36 as ProjectDocument['schemaVersion'];
+    expect(() => assertSketchProvenance(f.document)).toThrow(/schema v37/);
   });
 });

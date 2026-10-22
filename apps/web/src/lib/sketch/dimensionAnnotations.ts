@@ -50,6 +50,24 @@ export function sketchPointPosition(
     const y = scalar(pointName === 'start' ? data.y1 : data.y2);
     return x === undefined || y === undefined ? null : { x, y };
   }
+  // I01 solver points, as the constraint tools resolve them: an ellipse by
+  // its centre, an open spline by its first and last points.
+  if (data.objectKind === 'ellipse') {
+    if (pointName !== 'center') return null;
+    const x = scalar(data.centerX);
+    const y = scalar(data.centerY);
+    return x === undefined || y === undefined ? null : { x, y };
+  }
+  if (data.objectKind === 'spline') {
+    if (pointName === 'center' || data.closed === true) return null;
+    const point =
+      pointName === 'start'
+        ? data.points[0]
+        : data.points[data.points.length - 1];
+    const x = point ? scalar(point.x) : undefined;
+    const y = point ? scalar(point.y) : undefined;
+    return x === undefined || y === undefined ? null : { x, y };
+  }
   if (data.objectKind !== 'circle' && data.objectKind !== 'arc') return null;
   const x = scalar(data.centerX);
   const y = scalar(data.centerY);
