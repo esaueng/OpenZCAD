@@ -57,6 +57,7 @@ import {
   type ProjectAccess,
   type ProjectMemberRole,
   type PersistenceService,
+  type ProjectWriteOptions,
   type CopiedImportArchive,
   type SharedProjectAssetDownload,
   type SharedProjectImportDownload,
@@ -75,6 +76,7 @@ import {
   MAX_ARTIFACT_UPLOAD_BYTES,
   MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_THUMBNAIL_BYTES,
+  PROJECT_SHARE_LINK_TTL_SECONDS,
   MAX_PERSISTED_DOCUMENT_BYTES,
   MAX_PROJECT_REVISIONS,
   MAX_PROJECT_REVISION_RECORDS,
@@ -84,6 +86,7 @@ import {
   KEPT_LOCAL_VERSION_REASON,
   MAX_CHECKPOINT_REASON_LENGTH,
   THUMBNAIL_CONTENT_TYPE,
+  isAcceptableReferenceImageArtifact,
   nowIso,
   isProjectCheckpoint,
   isRevisionRecord,
@@ -151,15 +154,17 @@ import {
 import {
   decodeProjectStorageBody,
   hydrateProjectStorageSnapshot,
+  prepareClientProjectStorageSnapshot,
   prepareProjectStorageSnapshot,
   PROJECT_OBJECT_STORAGE_PREFIX,
   ProjectObjectStorageError,
   sha256Hex,
+  type ClientProjectStorage,
   type PreparedProjectStorageSnapshot,
   type ProjectStorageAssetObject,
   type ProjectStorageAssetReference,
   type ProjectStorageSnapshot
-} from './project-object-storage';
+} from '@openzcad/persistence';
 
 export {
   decodeProjectStorageBody,
@@ -170,7 +175,7 @@ export {
   PROJECT_OBJECT_STORAGE_VERSION,
   ProjectObjectStorageError,
   sha256Hex
-} from './project-object-storage';
+} from '@openzcad/persistence';
 
 export interface CloudflareEnv {
   ENVIRONMENT?: 'development' | 'beta';
@@ -209,6 +214,8 @@ export interface CloudflareEnv {
   AI_PATCH_MIRROR_ENABLED?: string;
   AI_PATCH_SHELL_ENABLED?: string;
   AI_PATCH_DATUM_PLANE_ENABLED?: string;
+  /** Complete datum definitions and axis consumers, negotiated separately. */
+  AI_PATCH_DATUM_GEOMETRY_ENABLED?: string;
   AI_PATCH_SOLID_OFFSET_ENABLED?: string;
   AI_PATCH_PARTIAL_REVOLVE_ENABLED?: string;
   PRODUCTION_GUARD?: string;
@@ -294,6 +301,7 @@ export const CLOUDFLARE_BOOLEAN_FLAGS = [
   'AI_PATCH_SHELL_ENABLED',
   'AI_PATCH_SOLID_OFFSET_ENABLED',
   'AI_PATCH_DATUM_PLANE_ENABLED',
+  'AI_PATCH_DATUM_GEOMETRY_ENABLED',
   'AI_PATCH_PARTIAL_REVOLVE_ENABLED'
 ] as const;
 
@@ -1077,7 +1085,9 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().loadSharedProjectByTokenHash(tokenHash);
     }
     // The token hash is the entire authorization: no user access check runs
-    // here on purpose, and unknown stays indistinguishable from revoked.
+    // here on purpose, and unknown stays indistinguishable from revoked or expired.
+    // Derive the fixed expiry from the stored creation time, including older
+    // rows, so no migration or token/request/response format change is needed.
     //
     // The owner's two kill switches have to reach this read, not only the
     // write side that mints links. Turning "Project sharing" off cut every
@@ -1097,6 +1107,7 @@ export class D1R2PersistenceService implements PersistenceService {
          ON owner_settings.user_id = p.user_id
        WHERE l.token_hash = ?
          AND l.revoked_at IS NULL
+         AND l.created_at > ?
          AND p.status != 'deleted'
          AND COALESCE(
            CASE WHEN json_valid(owner_settings.settings_json)
@@ -1108,7 +1119,10 @@ export class D1R2PersistenceService implements PersistenceService {
            1
          ) = 1`
     )
-      .bind(tokenHash)
+      .bind(
+        tokenHash,
+        Math.floor(Date.now() / 1000) - PROJECT_SHARE_LINK_TTL_SECONDS
+      )
       .first<{
         mode: ProjectShareLinkMode;
         project_id: string;
@@ -1143,7 +1157,7 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     // The join is the authorization: the asset is served only when it belongs
-    // to the unrevoked link's own project — and, as above, only while the
+    // to the unrevoked, unexpired link's own project — and, as above, only while the
     // owner still has sharing on and has not trashed the project. Serving a
     // side asset for a link whose document read is refused would leak the
     // imported source of a model the owner has already withdrawn.
@@ -1157,6 +1171,7 @@ export class D1R2PersistenceService implements PersistenceService {
          ON owner_settings.user_id = p.user_id
        WHERE l.token_hash = ?
          AND l.revoked_at IS NULL
+         AND l.created_at > ?
          AND a.id = ?
          AND p.status != 'deleted'
          AND COALESCE(
@@ -1169,7 +1184,11 @@ export class D1R2PersistenceService implements PersistenceService {
            1
          ) = 1`
     )
-      .bind(tokenHash, assetId)
+      .bind(
+        tokenHash,
+        Math.floor(Date.now() / 1000) - PROJECT_SHARE_LINK_TTL_SECONDS,
+        assetId
+      )
       .first<SharedProjectAssetRow>();
     if (!row) {
       return null;
@@ -1232,7 +1251,7 @@ export class D1R2PersistenceService implements PersistenceService {
       return null;
     }
     // Recheck the capability and both owner kill switches in this query. A
-    // revocation between document lookup and R2 lookup must stop the download.
+    // revocation or expiry between document lookup and R2 lookup must stop the download.
     const row = await this.env.DB.prepare(
       `SELECT a.id, a.project_id, a.kind, a.name, a.object_key,
               a.content_type, a.bytes, a.metadata_json, a.created_at
@@ -1241,6 +1260,7 @@ export class D1R2PersistenceService implements PersistenceService {
        INNER JOIN projects p ON p.id = a.project_id
        LEFT JOIN user_settings owner_settings ON owner_settings.user_id = p.user_id
        WHERE l.token_hash = ? AND l.revoked_at IS NULL
+         AND l.created_at > ?
          AND a.id = ? AND a.kind IN ('step-import', 'mesh-payload')
          AND p.status != 'deleted'
          AND COALESCE(
@@ -1249,7 +1269,11 @@ export class D1R2PersistenceService implements PersistenceService {
            END, 1
          ) = 1`
     )
-      .bind(tokenHash, artifactId)
+      .bind(
+        tokenHash,
+        Math.floor(Date.now() / 1000) - PROJECT_SHARE_LINK_TTL_SECONDS,
+        artifactId
+      )
       .first<ArtifactRow>();
     if (!row || row.project_id !== shared.projectId) {
       return null;
@@ -1330,7 +1354,8 @@ export class D1R2PersistenceService implements PersistenceService {
 
   async createProject(
     userId: UserId,
-    request: CreateProjectRequest
+    request: CreateProjectRequest,
+    options?: ProjectWriteOptions
   ): Promise<CreateProjectResponse> {
     if (!this.env.DB) {
       return getInMemoryPersistence().createProject(userId, request);
@@ -1360,7 +1385,8 @@ export class D1R2PersistenceService implements PersistenceService {
           localProjectId,
           undefined,
           request.document,
-          request.sourceArtifactIds
+          request.sourceArtifactIds,
+          options?.storage
         ),
         document
       };
@@ -1497,7 +1523,8 @@ export class D1R2PersistenceService implements PersistenceService {
 
   async duplicateProject(
     userId: UserId,
-    request: DuplicateProjectRequest
+    request: DuplicateProjectRequest,
+    options?: ProjectWriteOptions
   ): Promise<CreateProjectResponse> {
     if (!this.env.DB) {
       return getInMemoryPersistence().duplicateProject(userId, request);
@@ -1527,7 +1554,10 @@ export class D1R2PersistenceService implements PersistenceService {
       undefined,
       (head) => {
         initialHead.value = head;
-      }
+      },
+      undefined,
+      undefined,
+      request.document ? options?.storage : undefined
     );
     if (!initialHead.value)
       throw new ArtifactStorageError('The project copy could not be created.');
@@ -2012,7 +2042,7 @@ export class D1R2PersistenceService implements PersistenceService {
         expectedVersion: state.document.version,
         document
       },
-      state.storedHead
+      { expectedHead: state.storedHead }
     );
     return {
       project: {
@@ -2266,7 +2296,8 @@ export class D1R2PersistenceService implements PersistenceService {
 
   async saveRevision(
     userId: UserId,
-    request: SaveRevisionRequest
+    request: SaveRevisionRequest,
+    options?: ProjectWriteOptions
   ): Promise<ProjectDocument> {
     if (!this.env.DB) {
       return getInMemoryPersistence().saveRevision(userId, request);
@@ -2287,14 +2318,16 @@ export class D1R2PersistenceService implements PersistenceService {
         request.expectedVersion
       );
     }
+    const archives = await this.loadCopiedImportArchives(
+      userId,
+      request.projectId
+    );
     const normalized = withoutDerivedProjection(
       normalizeDocument(
-        reconcileCopiedImportSources(
-          request.document,
-          await this.loadCopiedImportArchives(userId, request.projectId)
-        )
+        reconcileCopiedImportSources(request.document, archives)
       )
     );
+    const storage = reconciledClientStorage(options?.storage, archives);
     if (
       normalized.projectId !== request.projectId ||
       normalized.ownerUserId !== access.ownerUserId
@@ -2332,7 +2365,7 @@ export class D1R2PersistenceService implements PersistenceService {
         access.ownerUserId,
         request.expectedVersion
       );
-      const write = await this.putProjectStorageObjects(document);
+      const write = await this.putProjectStorageObjects(document, { storage });
       const updatedAt = nowIso();
       const envelope = projectObjectEnvelope(document, write.objectId);
       const assetStatements = this.projectAssetStatements(
@@ -2869,8 +2902,9 @@ export class D1R2PersistenceService implements PersistenceService {
   async saveDocument(
     userId: UserId,
     request: SaveProjectDocumentRequest,
-    expectedHead?: ProjectCopyStoredHead
+    options?: ProjectWriteOptions & { expectedHead?: ProjectCopyStoredHead }
   ): Promise<SaveProjectDocumentResponse> {
+    const expectedHead = options?.expectedHead;
     if (!this.env.DB) {
       return getInMemoryPersistence().saveDocument(userId, request);
     }
@@ -2890,14 +2924,16 @@ export class D1R2PersistenceService implements PersistenceService {
         request.expectedVersion
       );
     }
+    const archives = await this.loadCopiedImportArchives(
+      userId,
+      request.projectId
+    );
     const normalized = withoutDerivedProjection(
       normalizeDocument(
-        reconcileCopiedImportSources(
-          request.document,
-          await this.loadCopiedImportArchives(userId, request.projectId)
-        )
+        reconcileCopiedImportSources(request.document, archives)
       )
     );
+    const storage = reconciledClientStorage(options?.storage, archives);
     if (
       normalized.projectId !== request.projectId ||
       normalized.ownerUserId !== access.ownerUserId
@@ -2920,7 +2956,9 @@ export class D1R2PersistenceService implements PersistenceService {
         access.ownerUserId,
         request.expectedVersion
       );
-      const write = await this.putProjectStorageObjects(normalized);
+      const write = await this.putProjectStorageObjects(normalized, {
+        storage
+      });
       const envelope = projectObjectEnvelope(normalized, write.objectId);
       const assetStatements = this.projectAssetStatements(
         request.projectId,
@@ -3971,6 +4009,14 @@ export class D1R2PersistenceService implements PersistenceService {
         'Thumbnail artifact is invalid or too large.'
       );
     }
+    if (
+      artifact.kind === 'reference-image' &&
+      !isAcceptableReferenceImageArtifact(artifact.contentType, stored.size)
+    ) {
+      throw new ArtifactStorageError(
+        'Reference image artifact is not a PNG or JPEG within the size limit.'
+      );
+    }
 
     const supersededThumbnails =
       artifact.kind === 'thumbnail'
@@ -4123,7 +4169,7 @@ export class D1R2PersistenceService implements PersistenceService {
     userId: UserId,
     projectId: string,
     artifactId: string,
-    originalKind?: 'stl-import' | 'mesh-import'
+    originalKind?: 'stl-import' | 'mesh-import' | 'reference-image'
   ): Promise<{ deleted: boolean }> {
     if (!this.env.DB)
       return getInMemoryPersistence().discardMeshPayload(
@@ -4407,7 +4453,11 @@ export class D1R2PersistenceService implements PersistenceService {
 
   private async putProjectStorageObjects(
     document: ProjectDocument,
-    options?: { reuseExistingAssetsOnly?: boolean }
+    options?: {
+      reuseExistingAssetsOnly?: boolean;
+      /** The browser already split the document (ADR-024 Phase 1). */
+      storage?: ClientProjectStorage;
+    }
   ): Promise<ProjectStorageWrite> {
     const bucket = this.projectStorageBucket();
     if (!bucket) {
@@ -4421,31 +4471,33 @@ export class D1R2PersistenceService implements PersistenceService {
     // them embedded so refusal can remove them without racing a canonical save
     // that reused the same content-addressed asset. Existing shared assets are
     // still deduplicated and never acquire checkpoint-only metadata.
-    const prepared = await prepareProjectStorageSnapshot(
-      document,
-      options?.reuseExistingAssetsOnly
-        ? {
-            externalizeAsset: async (reference) => {
-              const existing = await this.env
-                .DB!.prepare(
-                  `SELECT stored_bytes FROM project_storage_assets
+    const prepared = options?.storage
+      ? await prepareClientProjectStorageSnapshot(document, options.storage)
+      : await prepareProjectStorageSnapshot(
+          document,
+          options?.reuseExistingAssetsOnly
+            ? {
+                externalizeAsset: async (reference) => {
+                  const existing = await this.env
+                    .DB!.prepare(
+                      `SELECT stored_bytes FROM project_storage_assets
                  WHERE project_id = ? AND checksum_sha256 = ? AND kind = ?`
-                )
-                .bind(
-                  document.projectId,
-                  reference.checksumSha256,
-                  reference.kind
-                )
-                .first<{ stored_bytes: number }>();
-              const stored =
-                existing && typeof bucket.head === 'function'
-                  ? await bucket.head(reference.objectKey)
-                  : null;
-              return !!existing && stored?.size === existing.stored_bytes;
-            }
-          }
-        : undefined
-    );
+                    )
+                    .bind(
+                      document.projectId,
+                      reference.checksumSha256,
+                      reference.kind
+                    )
+                    .first<{ stored_bytes: number }>();
+                  const stored =
+                    existing && typeof bucket.head === 'function'
+                      ? await bucket.head(reference.objectKey)
+                      : null;
+                  return !!existing && stored?.size === existing.stored_bytes;
+                }
+              }
+            : undefined
+        );
     const createdAt = nowIso();
     const objectId = `project_object_${crypto.randomUUID()}`;
     const objectKey = `${PROJECT_OBJECT_STORAGE_PREFIX}/${document.projectId}/documents/${crypto.randomUUID()}.json.gz`;
@@ -4850,7 +4902,8 @@ export class D1R2PersistenceService implements PersistenceService {
     localProjectId?: string,
     captureInitialHead?: (head: ProjectCopyStoredHead) => void,
     adoptionSource?: ProjectDocument,
-    adoptionSourceArtifactIds: readonly string[] = []
+    adoptionSourceArtifactIds: readonly string[] = [],
+    storage?: ClientProjectStorage
   ): Promise<ProjectSummary> {
     this.assertDocumentCanBeStored(document);
     // Keep the pre-localization IDs in the atomic insert guard: a discard may
@@ -4879,7 +4932,7 @@ export class D1R2PersistenceService implements PersistenceService {
         ]
       : [];
     if (this.projectStorageBucket()) {
-      const write = await this.putProjectStorageObjects(document);
+      const write = await this.putProjectStorageObjects(document, { storage });
       const envelope = projectObjectEnvelope(document, write.objectId);
       captureInitialHead?.({
         documentJson: envelope,
@@ -5462,6 +5515,24 @@ function createUploadSessionRecord(
   };
   session.uploadUrl = `/api/uploads/${session.uploadSessionId}/content`;
   return session;
+}
+
+/**
+ * Applies the copied-source rehoming a browser-split write's hydrated
+ * document gets to its storage projection too. Rehoming rewrites only
+ * `artifactId` values, never a payload or its reference, so the projection
+ * still hydrates to the document the account stores.
+ */
+function reconciledClientStorage(
+  storage: ClientProjectStorage | undefined,
+  archives: readonly CopiedImportArchive[]
+): ClientProjectStorage | undefined {
+  if (!storage) return undefined;
+  const document = reconcileCopiedImportSources(
+    storage.document as unknown as ProjectDocument,
+    archives
+  ) as unknown as Record<string, unknown>;
+  return document === storage.document ? storage : { ...storage, document };
 }
 
 /** Small, non-document fallback kept in the legacy NOT NULL D1 column. */
@@ -6348,7 +6419,8 @@ export class ProjectCollaborationRoom extends DurableObject {
           payload.artifactId.length > 200 ||
           (payload.kind !== undefined &&
             payload.kind !== 'stl-import' &&
-            payload.kind !== 'mesh-import'))) ||
+            payload.kind !== 'mesh-import' &&
+            payload.kind !== 'reference-image'))) ||
       (payload.action !== 'discard-mesh' &&
         (!Number.isSafeInteger(payload.expectedVersion) ||
           (payload.expectedVersion as number) < 0 ||
@@ -6422,7 +6494,7 @@ export class ProjectCollaborationRoom extends DurableObject {
             userId,
             projectId,
             artifactId,
-            payload.kind as 'stl-import' | 'mesh-import' | undefined
+            payload.kind as 'stl-import' | 'mesh-import' | 'reference-image' | undefined
           )
         );
       }

@@ -16,9 +16,25 @@ import type {
 import { clearAssistantHistory } from './lib/assistant/historyStorage';
 import { exactWarningBaseline } from './lib/exactWarnings';
 import {
+  beginDatumVertexRepair,
   datumAxisSourceFailed,
-  datumFaceAttachFailed
+  datumFaceAttachFailed,
+  datumVertexRepairSlots,
+  datumVertexSourceFailed,
+  earlierDatumPlanes
 } from './lib/datumPlaneDisplay';
+import type { DatumVertexRepairSession } from './lib/datumVertexRepair';
+import {
+  referenceImageDisplays,
+  referenceImageInsertPlane
+} from './lib/referenceImageDisplay';
+import { referenceImagesWithHistory } from '@openzcad/shared';
+import type {
+  ReferenceImage,
+  ReferenceImageId,
+  ReferenceImagePlane
+} from '@openzcad/shared';
+import type { ReferenceImageUpdateInput } from '@openzcad/document-core';
 import { topologyReferenceRepairCommand } from './lib/topologyReferenceRepairs';
 import { boxPreviewProfile } from './lib/interaction/boxPreviewProfile';
 import { capPreviewProfile } from './lib/interaction/capPreviewProfile';
@@ -125,6 +141,7 @@ import {
   duplicateFeatureRefusal,
   isParameterRetype,
   isDrawingCommandKind,
+  isReferenceImageCommandKind,
   type AnyCommand
 } from '@openzcad/command-system';
 import type {
@@ -253,7 +270,12 @@ import {
   type DrivingDimensionKind
 } from './lib/sketch/constraints';
 import { sketchDimensionAnnotations } from './lib/sketch/dimensionAnnotations';
-import { sketchRelationGlyphs } from './lib/sketch/relationGlyphs';
+import {
+  SKETCH_RELATION_GLYPHS,
+  sketchRelationGlyphs,
+  sketchRelationKeepOuts,
+  sketchRelationStrokes
+} from './lib/sketch/relationGlyphs';
 import { toggledSketchVisibility } from './lib/sketch/visibilityOverrides';
 import {
   sketchGeometryDeleteRefusal,
@@ -290,6 +312,14 @@ import {
   STALE_CHUNK_MESSAGE
 } from './lib/staleChunk';
 import { lockAccountsExcept } from './lib/e2ee/unlockedKeys';
+import {
+  allowKeySession,
+  announceKeySessionChange,
+  blockKeySession,
+  getKeySessionRevision,
+  subscribeKeySession,
+  type KeySessionEvent
+} from './lib/e2ee/keySession';
 import type { DeviceKeySignOutChoice } from './lib/e2ee/signOut';
 import { watchBuildVersion } from './lib/buildVersionWatch';
 import { commandOutcomeMessage } from './lib/commandOutcome';
@@ -1246,6 +1276,13 @@ const SketchPlanePrompt = withSuspense(LazySketchPlanePrompt);
 const DatumPlaneCard = withSuspense(LazyDatumPlaneCard);
 
 const DatumAxisCard = withSuspense(LazyDatumAxisCard);
+
+const LazyReferenceImageCard = lazyWithStaleChunkNotice(() =>
+  import('./components/forms/ReferenceImageForm').then((module) => ({
+    default: module.ReferenceImageWorkspaceCard
+  }))
+);
+const ReferenceImageCard = withSuspense(LazyReferenceImageCard);
 import {
   chooseProjectDocument,
   projectsHaveSameRebuildInputs,
@@ -1254,6 +1291,8 @@ import {
   deleteLocalProject,
   isLocalStorageBlockedError,
   listLocalProjectOrganizations,
+  listLocalProjectOrganizationSnapshots,
+  loadLocalProjectOrganizationSnapshot,
   listLocalProjects,
   listLocalSaveStateIds,
   loadLastSyncedVersion,
@@ -1265,17 +1304,30 @@ import {
   purgeExpiredLocalProjects,
   restoreDuplicateDerivedProjection,
   saveLastSyncedVersion,
-  listPendingOrganizationMirrors,
   saveLocalProjectOrganization,
+  saveLocalProjectOrganizationIfCurrent,
   saveProjectMeasurements,
   saveProjectThumbnail,
   saveLocalProject,
   saveLocalSaveStates,
   sha256Hex,
-  withMatchingLocalDerived
+  withMatchingLocalDerived,
+  type LocalProjectOrganizationSnapshot
 } from './lib/localProjectStore';
-import { cacheCopySources } from './lib/sourceBlobClaims';
-import { reconcileRemoteOrganizations } from './lib/projectOrganizationMirror';
+import {
+  cacheCopyPictures,
+  cacheCopySources
+} from './lib/sourceBlobClaims';
+import {
+  mirrorPendingOrganization,
+  mirrorPendingReorder,
+  type OrganizationMirrorHost
+} from './lib/projectOrganizationMirror';
+import {
+  OrganizationMirrorBackground,
+  ORGANIZATION_SESSION_KEY,
+  prepareOrganizationMirrors
+} from './lib/projectOrganizationBackground';
 import {
   applyLocalProjectOrganizations,
   mergeProjectSummaries,
@@ -1670,12 +1722,27 @@ interface HydrateOptions {
   activeProjectSince?: ActiveProjectSnapshot;
 }
 
+const organizationMirrorHost: OrganizationMirrorHost = {
+  readLocal: loadLocalProjectOrganizationSnapshot,
+  saveLocal: saveLocalProjectOrganizationIfCurrent,
+  updateRemote: (projectId, organization, signal) =>
+    api
+      .updateProject({
+        projectId: toProjectId(projectId),
+        status: organization.status,
+        pinned: organization.pinned,
+        sortOrder: organization.sortOrder
+      }, signal)
+      .then(() => undefined)
+};
+const organizationBackground = new OrganizationMirrorBackground();
+
 /**
  * Every project this device can reach. Device shelf state is reconciled before
  * expired local copies are purged so a temporarily failed cloud mirror cannot
  * resurrect a project after its local retention window closes.
  */
-async function loadProjectSummaries(signedIn: boolean): Promise<{
+async function loadProjectSummaries(accountId: string | null, allowPurge = true): Promise<{
   projects: ProjectSummary[];
   remoteReached: boolean;
   /**
@@ -1686,6 +1753,8 @@ async function loadProjectSummaries(signedIn: boolean): Promise<{
    */
   cloudProjectIds: Set<string>;
 }> {
+  const signedIn = accountId !== null;
+  const scope = organizationBackground.begin(accountId);
   const unavailableAs =
     <T,>(fallback: T) =>
     (error: unknown): T => {
@@ -1697,50 +1766,55 @@ async function loadProjectSummaries(signedIn: boolean): Promise<{
       }
       return fallback;
     };
-  const [local, localOrganizations, pendingMirrors, remote] = await Promise.all(
+  const [local, organizationSnapshots, remote] = await Promise.all(
     [
       listLocalProjects().catch(unavailableAs<ProjectSummary[]>([])),
-      listLocalProjectOrganizations().catch(
-        unavailableAs(new Map<string, ProjectOrganization>())
+      listLocalProjectOrganizationSnapshots().catch(
+        unavailableAs(new Map<string, LocalProjectOrganizationSnapshot>())
       ),
-      listPendingOrganizationMirrors().catch(unavailableAs(new Set<string>())),
       signedIn ? api.listProjects().catch(() => null) : Promise.resolve(null)
     ]
   );
+  const localOrganizations = new Map(
+    [...organizationSnapshots].map(([id, snapshot]) => [id, snapshot.organization])
+  );
   const remoteProjects = remote?.projects ?? [];
-  const mirrorFailures = remote
-    ? await reconcileRemoteOrganizations(
-        localOrganizations,
-        pendingMirrors,
+  const remoteIds = new Set<string>(remoteProjects.map((project) => project.projectId));
+  const prepared = remote
+    ? await prepareOrganizationMirrors(
+        organizationSnapshots,
         remoteProjects,
-        {
-          saveLocal: saveLocalProjectOrganization,
-          updateRemote: (projectId, organization) =>
-            api
-              .updateProject({
-                projectId: toProjectId(projectId),
-                status: organization.status,
-                pinned: organization.pinned,
-                sortOrder: organization.sortOrder
-              })
-              .then(() => undefined)
-        }
+        organizationMirrorHost,
+        scope
       )
-    : new Set<string>();
+    : { pending: [], protectedProjectIds: new Set<string>() };
+  // Discovery returns after local adoption; paced account writes run lazily.
+  organizationBackground.start(scope, prepared.pending, organizationMirrorHost);
+  // Defer model expiry for this account's pending mirrors. Without an eligible
+  // account row, expire model bytes normally but keep the tiny pending intent.
+  const protectedModels = new Set(
+    [...prepared.protectedProjectIds].filter((id) => remoteIds.has(id))
+  );
   // While signed in but offline, defer irreversible local purging until the
   // cloud copy can be reconciled. Otherwise a failed mirror could later make
   // an active remote row reappear after the local tombstone was destroyed.
   const purgedProjectIds =
-    !signedIn || remote
-      ? await purgeExpiredLocalProjects(Date.now(), mirrorFailures).catch(
-          () => []
-        )
+    allowPurge && scope.ownsDiscovery() && (!signedIn || remote)
+      ? await purgeExpiredLocalProjects(Date.now(), protectedModels, {
+          retainPendingOrganization: true,
+          deferPendingProjectIds: remoteIds,
+          isCurrent: scope.ownsDiscovery
+        }).catch(() => [])
       : [];
-  const remoteIds = new Set(remoteProjects.map((project) => project.projectId));
   const purged = new Set(purgedProjectIds);
+  const settledOrganizations = remote
+    ? await listLocalProjectOrganizations().catch(
+        unavailableAs(localOrganizations)
+      )
+    : localOrganizations;
   const projects = applyLocalProjectOrganizations(
     mergeProjectSummaries(local, remoteProjects),
-    localOrganizations
+    settledOrganizations
   ).filter(
     (project) =>
       !purged.has(project.projectId) || remoteIds.has(project.projectId)
@@ -2292,6 +2366,8 @@ export function App() {
     slot: 0 | 1;
     both?: boolean;
     first?: TopologySelection;
+    /** Requested vertex roles are staged without touching the document. */
+    vertices?: DatumVertexRepairSession;
   } | null>(null);
   const [formFacePickTarget, setFormFacePickTarget] = useState<BodyId | null>(
     null
@@ -2448,9 +2524,11 @@ export function App() {
   // prompt still said "click a planar face". The manual choice survives and
   // takes over again once the sketch has a plane.
   const selectionFilter =
-    tool === 'sketch'
-      ? 'face'
-      : effectiveSelectionFilter(manualSelectionFilter, tool);
+    datumRepair?.vertices
+      ? 'edge'
+      : tool === 'sketch'
+        ? 'face'
+        : effectiveSelectionFilter(manualSelectionFilter, tool);
   const [statusEntry, setStatusEntry] = useState<StatusEntry>(() => ({
     text: cloudFunctionsEnabled
       ? LIBRARY_MODE_STATUS.checking
@@ -2799,6 +2877,68 @@ export function App() {
   });
   const sessionRef = useRef(session);
   sessionRef.current = session;
+  const keySessionEventRef = useRef<(event: KeySessionEvent) => void>(() => {});
+  const keySessionListenerMountedRef = useRef(false);
+  keySessionEventRef.current = (event) => {
+    if (
+      event.phase === 'prepare' ||
+      event.phase === 'ready' ||
+      event.phase === 'blocked' ||
+      (!event.remote && event.phase !== 'retry') ||
+      !cloudFunctionsEnabledRef.current
+    )
+      return;
+    const observed = sessionRef.current;
+    const revision = event.revision;
+    // The notice never grants access or identifies a new account. Only a fresh
+    // server read may reopen keys, and an intervening notice/login wins.
+    void Promise.resolve()
+      .then(() => api.session())
+      .then((active) => {
+        if (
+          !keySessionListenerMountedRef.current ||
+          getKeySessionRevision() !== revision ||
+          sessionRef.current !== observed ||
+          !cloudFunctionsEnabledRef.current
+        )
+          return;
+        if (active && observed && active.userId === observed.userId) {
+          sessionRef.current = active;
+          setSession(active);
+          allowKeySession(revision);
+        } else {
+          cloudProjectAutosaveRef.current?.closeProject();
+          if (!active) organizationBackground.confirmSignedOut();
+          endCloudSettingsSession();
+          setCloudAvailable(false);
+          setCloudProjectIds(new Set());
+          setAccountProjectListReached(false);
+          if (active)
+            setSettingsMessage(
+              'The account changed in another tab. Reconnect to continue.'
+            );
+        }
+      })
+      .catch(() => {
+        if (
+          keySessionListenerMountedRef.current &&
+          getKeySessionRevision() === revision
+        )
+          setSettingsMessage(
+            'Encryption keys are locked. Refresh the cloud connection to check this session.'
+          );
+      });
+  };
+  useEffect(() => {
+    keySessionListenerMountedRef.current = true;
+    const unsubscribe = subscribeKeySession((event) =>
+      keySessionEventRef.current(event)
+    );
+    return () => {
+      keySessionListenerMountedRef.current = false;
+      unsubscribe();
+    };
+  }, []);
   // End-to-end encryption keys unlocked in this page belong to one session:
   // however it ends (sign-out, expiry, offline mode, account deletion, or a
   // different account), no other account's keys stay in memory.
@@ -2806,6 +2946,20 @@ export function App() {
   useEffect(() => {
     lockAccountsExcept(sessionUserId);
   }, [sessionUserId]);
+  useEffect(() => {
+    const online = () => organizationBackground.resume();
+    const changed = (event: StorageEvent) => {
+      if (event.key === ORGANIZATION_SESSION_KEY)
+        organizationBackground.accountChanged();
+    };
+    window.addEventListener('online', online);
+    window.addEventListener('storage', changed);
+    return () => {
+      organizationBackground.dispose();
+      window.removeEventListener('online', online);
+      window.removeEventListener('storage', changed);
+    };
+  }, []);
   /**
    * The shelf's preview source. This reads a small device-cached or cloud
    * image and nothing else — deliberately not the project document. Loading
@@ -4977,11 +5131,14 @@ export function App() {
     return () => window.removeEventListener('beforeunload', beforeUnload);
   }, [localAutosave, localSaveDirty]);
 
+  useLayoutEffect(() => {
+    setDatumRepair(null);
+  }, [doc?.projectId]);
+
   useEffect(() => {
     // An armed face re-pick names a feature by id; a different project's
     // features must never satisfy it.
     setFaceRepair(null);
-    setDatumRepair(null);
     setToFacePick(null);
     // Nor may an armed edge or face operation, or a delete awaiting its
     // confirm: a "Fillet · Ready" chip from the last project read as a
@@ -5245,13 +5402,18 @@ export function App() {
                 status: 'unavailable' as const
               }
         ]);
+        const keySessionRevision = getKeySessionRevision();
+        let sessionLookupFailed = false;
         const activeSession = bootCloudFunctionsEnabledRef.current
           ? await timedAsync('startup.session', () =>
-              api.session().catch(() => null)
+              api.session().catch(() => {
+                sessionLookupFailed = true;
+                return null;
+              })
             )
           : null;
         const listedPromise = timedAsync('startup.projectList', () =>
-          loadProjectSummaries(Boolean(activeSession))
+          loadProjectSummaries(activeSession?.userId ?? null, !sessionLookupFailed)
         );
         const lastSyncedVersionPromise = startupProjectId
           ? loadLastSyncedVersion(startupProjectId)
@@ -5343,8 +5505,12 @@ export function App() {
         setCloudProjectIds(listed.cloudProjectIds);
         setAccountProjectListReached(listed.remoteReached);
         setCloudAvailable(canUseCloud);
-        sessionRef.current = activeSession;
-        setSession(activeSession);
+        if (getKeySessionRevision() === keySessionRevision) {
+          if (activeSession) allowKeySession(keySessionRevision);
+          else blockKeySession();
+          sessionRef.current = activeSession;
+          setSession(activeSession);
+        }
         setAuthConfig(currentAuth.config);
         setAuthConfigStatus(currentAuth.status);
         if (remoteSettings) {
@@ -5465,6 +5631,7 @@ export function App() {
     })();
     return () => {
       cancelled = true;
+      organizationBackground.dispose();
     };
     // Startup settings are intentionally read once. Later settings changes
     // should not re-run project discovery or reopen a different document.
@@ -7160,7 +7327,11 @@ export function App() {
       let next = managerRef.current.execute(command);
       // A drawing-sheet edit leaves the model alone: keep the ready geometry
       // rather than posting a rebuild (and a "Rebuilding" lane) per view move.
-      if (isDrawingCommandKind(command.kind)) geometry.retainReadyGeometry(next);
+      if (
+        isDrawingCommandKind(command.kind) ||
+        isReferenceImageCommandKind(command.kind)
+      )
+        geometry.retainReadyGeometry(next);
       if (derived) {
         // Validation already rebuilt this exact result; attaching it now
         // renders the new geometry in the same batch instead of flashing the
@@ -7728,6 +7899,22 @@ export function App() {
       edgePreview.clear();
       dispatchInteraction({ type: 'clear' });
       setKeypad(null);
+    }
+    if (nextTool === 'reference-image') {
+      // The picture comes first: the file dialog opens, and the image lands
+      // on the selected flat face, or on Top (XY) with nothing picked. A
+      // selected face it cannot lie on refuses, rather than quietly placing
+      // the picture on Top, far from what the user picked.
+      const placement = referenceImageInsertPlane(selectedFaceImagePlane());
+      if ('refusal' in placement) {
+        setStatus(
+          `${TOOL_META['reference-image'].label}: ${placement.refusal}`
+        );
+        return false;
+      }
+      referenceImagePlaneRef.current = placement.plane;
+      referenceImageInputRef.current?.click();
+      return true;
     }
     if (nextTool === 'sketch') {
       clearSelection();
@@ -8522,6 +8709,133 @@ export function App() {
   const [hiddenDatumIds, setHiddenDatumIds] = useState<ReadonlySet<string>>(
     () => new Set()
   );
+  /** I05 reference images hidden by their eye toggle: view state too. */
+  const [hiddenReferenceImageIds, setHiddenReferenceImageIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  /** The reference image whose card is open, with the Image tool. */
+  const [openReferenceImageId, setOpenReferenceImageId] =
+    useState<ReferenceImageId | null>(null);
+  /** The open image card's unapplied placement, drawn live. */
+  const [referenceImageDraft, setReferenceImageDraft] =
+    useState<ReferenceImage | null>(null);
+  const referenceImageInputRef = useRef<HTMLInputElement | null>(null);
+  /** The plane a picture chosen in the file dialog will lie on. */
+  const referenceImagePlaneRef = useRef<ReferenceImagePlane | null>(null);
+
+  /**
+   * The plane of the selected face, when an image can lie on it: associative
+   * when the face has lineage, a fixed frame coincident with it when not.
+   */
+  function selectedFaceImagePlane():
+    | ReferenceImagePlane
+    | { reason: string }
+    | null {
+    const current = managerRef.current?.document;
+    if (!current || selectedTopology?.kind !== 'face') return null;
+    const attachment = faceSketchAttachment({
+      bodyId: selectedTopology.bodyId,
+      pickedHash: selectedTopology.hash,
+      face: current.derived.bodyRepresentations[
+        selectedTopology.bodyId
+      ]?.topology?.faces.find((face) => face.hash === selectedTopology.hash)
+    });
+    return attachment.ok ? attachment.planeRef : { reason: attachment.reason };
+  }
+
+  function openReferenceImage(imageId: ReferenceImageId) {
+    setOpenReferenceImageId(imageId);
+    setReferenceImageDraft(null);
+    setTool('reference-image');
+  }
+
+  function closeReferenceImage() {
+    setOpenReferenceImageId(null);
+    setReferenceImageDraft(null);
+    setTool((current) => (current === 'reference-image' ? null : current));
+  }
+
+  async function insertReferenceImage(file: File) {
+    const current = managerRef.current?.document;
+    if (!current || !ensureCanEdit('insert an image')) return;
+    const plane =
+      referenceImagePlaneRef.current ??
+      ({ type: 'canonical', plane: 'XY', offset: 0 } as const);
+    referenceImagePlaneRef.current = null;
+    setStatus(`Placing ${file.name}…`);
+    try {
+      const { discardReferenceImageBytes, prepareReferenceImage } =
+        await import('./lib/referenceImageInsert');
+      const prepared = await prepareReferenceImage({
+        file,
+        document: current,
+        plane,
+        archive: archiveArtifact
+      });
+      const { image } = prepared;
+      if (
+        managerRef.current?.document.projectId === current.projectId &&
+        executeCommand(commandFactories.addReferenceImage({ image }))
+      ) {
+        openReferenceImage(image.imageId);
+        setStatus(
+          `${image.name} placed. Scale it from two points, or set its width.`
+        );
+      } else {
+        await discardReferenceImageBytes(prepared, [
+          managerRef.current?.document
+        ]);
+      }
+    } catch (error) {
+      setStatus(errorMessage(error, 'The image could not be placed.'));
+    }
+  }
+
+  function applyReferenceImage(update: ReferenceImageUpdateInput): boolean {
+    return executeCommand(commandFactories.updateReferenceImage(update));
+  }
+
+  function deleteReferenceImage(imageId: ReferenceImageId) {
+    if (executeCommand(commandFactories.deleteReferenceImage({ imageId }))) {
+      closeReferenceImage();
+    }
+  }
+
+  // An open image card whose image is gone (undone, or deleted by a
+  // collaborator) closes rather than falling through to the inspector.
+  useEffect(() => {
+    if (
+      tool === 'reference-image' &&
+      !doc?.referenceImages?.images.some(
+        (image) => image.imageId === openReferenceImageId
+      )
+    ) {
+      setOpenReferenceImageId(null);
+      setReferenceImageDraft(null);
+      setTool(null);
+    }
+  }, [doc, tool, openReferenceImageId]);
+
+  /**
+   * A picture's bytes for the viewport, by checksum; lazy-loaded. Every
+   * image placing that picture is offered, so one record's unavailable
+   * artifact never hides another's.
+   */
+  const loadReferenceImage = useCallback(
+    async (checksumSha256: string): Promise<Blob | null> => {
+      const images = (
+        managerRef.current?.document.referenceImages?.images ?? []
+      ).filter(
+        (candidate) => candidate.source.checksumSha256 === checksumSha256
+      );
+      if (images.length === 0) return null;
+      const { loadReferenceImageBlob } = await import(
+        './lib/referenceImageInsert'
+      );
+      return loadReferenceImageBlob(images);
+    },
+    []
+  );
 
   /** Sketches referenced by any feature: extrude/revolve, loft sections, sweep profile + path. */
   const consumedSketchIds = useMemo(() => {
@@ -8686,6 +9000,7 @@ export function App() {
     if (next === cloudFunctionsEnabledRef.current) {
       return;
     }
+    if (!next) organizationBackground.cancel();
     // Flip the transport gate before React can render another cloud consumer.
     // This also aborts active browser API and assistant fetches when going off.
     setCloudFunctionsEnabled(next);
@@ -8724,7 +9039,7 @@ export function App() {
       'Offline mode active · cloud functions are disabled on this device.'
     );
     setStatus('Offline mode · work is saved on this device.');
-    void loadProjectSummaries(false)
+    void loadProjectSummaries(null)
       .then((listed) => {
         if (!cloudFunctionsEnabledRef.current) {
           setProjects(listed.projects);
@@ -8734,6 +9049,7 @@ export function App() {
   }
 
   function endCloudSettingsSession() {
+    organizationBackground.cancel();
     clearAssistantHistory();
     endCloudSettingsAutosave();
     // The next session on this device may be a different account; it must not
@@ -8754,6 +9070,7 @@ export function App() {
     if (!cloudFunctionsEnabledRef.current) {
       return;
     }
+    const keySessionRevision = getKeySessionRevision();
     setAuthConfigStatus('loading');
     void api
       .health()
@@ -8766,14 +9083,19 @@ export function App() {
         .catch(() => ({ config: null, status: 'unavailable' as const })),
       api.session().catch(() => null)
     ]);
-    if (!cloudFunctionsEnabledRef.current) {
+    if (
+      !cloudFunctionsEnabledRef.current ||
+      getKeySessionRevision() !== keySessionRevision
+    ) {
       return;
     }
     setAuthConfig(nextAuth.config);
     setAuthConfigStatus(nextAuth.status);
+    organizationBackground.begin(activeSession?.userId ?? null);
     sessionRef.current = activeSession;
     setSession(activeSession);
     if (!activeSession) {
+      blockKeySession();
       endCloudSettingsSession();
       setSettingsMessage(
         nextAuth.status === 'ready'
@@ -8784,6 +9106,7 @@ export function App() {
       );
       return;
     }
+    allowKeySession(keySessionRevision);
     setCollaborationRollout(DISABLED_COLLABORATION_ROLLOUT);
     try {
       const [remoteSettings, collaborationCapabilities] = await Promise.all([
@@ -8798,7 +9121,7 @@ export function App() {
       accountSettingsRef.current = remoteSettings;
       setAccountSettings(remoteSettings);
       setCollaborationRollout(collaborationCapabilities);
-      const listed = await loadProjectSummaries(true);
+      const listed = await loadProjectSummaries(sessionRef.current?.userId ?? null);
       if (!cloudFunctionsEnabledRef.current) {
         return;
       }
@@ -8979,16 +9302,21 @@ export function App() {
   }
 
   async function activateCloudSession(activeSession: AuthSession) {
+    const keySessionRevision = announceKeySessionChange();
+    organizationBackground.begin(activeSession.userId);
     const [remoteSettings, listed, collaborationCapabilities] =
       await Promise.all([
         api.getSettings(),
-        loadProjectSummaries(true),
+        loadProjectSummaries(activeSession.userId),
         api
           .collaborationCapabilities()
           .catch(() => DISABLED_COLLABORATION_ROLLOUT)
       ]);
+    if (getKeySessionRevision() !== keySessionRevision)
+      throw new Error('The signed-in account changed. Reconnect to continue.');
     sessionRef.current = activeSession;
     setSession(activeSession);
+    allowKeySession(keySessionRevision);
     accountSettingsRef.current = remoteSettings;
     setAccountSettings(remoteSettings);
     setCollaborationRollout(collaborationCapabilities);
@@ -9108,7 +9436,14 @@ export function App() {
     }
   }
 
-  async function handleLogout(choice?: DeviceKeySignOutChoice) {
+  async function handleLogout(choice: DeviceKeySignOutChoice) {
+    const departingSession = sessionRef.current;
+    const isCurrentSession = () =>
+      departingSession !== null &&
+      departingSession.userId === choice.userId &&
+      sessionRef.current === departingSession;
+    if (!isCurrentSession()) return;
+    organizationBackground.cancel();
     setSettingsBusy(true);
     setSettingsMessage('Signing out…');
     try {
@@ -9116,15 +9451,20 @@ export function App() {
       // become unsendable the moment the cookie does.
       const { signOutAfterSaving } = await import('./lib/e2ee/signOut');
       await signOutAfterSaving({
-        userId: choice?.userId ?? null,
-        keepDevice: choice?.keepDevice,
+        userId: choice.userId,
+        keepDevice: choice.keepDevice,
+        isCurrentSession,
         savePending: async () => {
           await cloudProjectAutosaveRef.current?.flushPending();
+          if (!isCurrentSession()) {
+            throw new Error(
+              'The signed-in account changed. Try signing out again.'
+            );
+          }
           await cloudSettingsAutosaveRef.current?.flushPending();
         },
         revokeSession: async () => {
           const controller = cloudProjectAutosaveRef.current;
-          const departingSession = sessionRef.current;
           const projectId = managerRef.current?.document.projectId;
           const wasHalted = controller?.isHalted ?? false;
           controller?.closeProject();
@@ -9174,11 +9514,14 @@ export function App() {
           }
         }
       });
+      if (!isCurrentSession()) return;
+      organizationBackground.confirmSignedOut();
       // The server session is gone: no unlocked key outlives it, even if the
       // local cleanup below fails.
       lockAccountsExcept(null);
       clearAssistantHistory();
-      const listed = await loadProjectSummaries(false);
+      const listed = await loadProjectSummaries(null);
+      if (!isCurrentSession()) return;
       remoteVersionsRef.current.clear();
       accountDocumentUnavailableProjectIdRef.current = null;
       endCloudSettingsAutosave();
@@ -9192,6 +9535,7 @@ export function App() {
       } catch {
         baselinesCleared = false;
       }
+      if (!isCurrentSession()) return;
       sessionRef.current = null;
       setSession(null);
       accountSettingsRef.current = null;
@@ -9225,6 +9569,7 @@ export function App() {
     scope: AccountDeletionScope,
     confirmation: string
   ) {
+    const departingSession = sessionRef.current;
     setSettingsBusy(true);
     setSettingsMessage(
       scope === 'projects'
@@ -9247,15 +9592,30 @@ export function App() {
       }
       await cloudSettingsAutosaveRef.current?.flushPending();
 
-      const deleted = await api.deleteAccountData(scope, confirmation);
+      if (sessionRef.current !== departingSession)
+        throw new Error('The signed-in account changed. Try deleting again.');
+      const erase = () => api.deleteAccountData(scope, confirmation);
+      const deleted =
+        scope === 'projects'
+          ? await erase()
+          : await (
+              await import('./lib/e2ee/accountErasure')
+            ).eraseAccountWithKeyCleanup({
+              userId: departingSession?.userId ?? null,
+              isCurrentSession: () => sessionRef.current === departingSession,
+              erase,
+              onSignedOut: () => {
+                endCloudSettingsSession();
+                projectController?.closeProject();
+              }
+            });
       if (deleted.signedOut) {
+        if (sessionRef.current !== null) return;
+        organizationBackground.confirmSignedOut();
         projectController?.closeProject();
-        const listed = await loadProjectSummaries(false);
+        const listed = await loadProjectSummaries(null);
+        if (sessionRef.current !== null) return;
         remoteVersionsRef.current.clear();
-        // The successful response invalidated the browser cookie (and the
-        // desktop proxy drops its Keychain credential). Mirror that immediately
-        // in React so no signed-in UI or account state survives the deletion.
-        endCloudSettingsSession();
         setCloudAvailable(false);
         setProjects(listed.projects);
         setCloudProjectIds(new Set());
@@ -9275,7 +9635,7 @@ export function App() {
           await clearLastSyncedVersion(projectId).catch(() => undefined);
         })
       );
-      const listed = await loadProjectSummaries(true);
+      const listed = await loadProjectSummaries(sessionRef.current?.userId ?? null);
       setProjects(listed.projects);
       setCloudProjectIds(listed.cloudProjectIds);
       setAccountProjectListReached(listed.remoteReached);
@@ -9957,7 +10317,7 @@ export function App() {
     try {
       const accepted = await projectSharingClient.acceptInvitation(token);
       if (!isCurrent()) return;
-      const listed = await loadProjectSummaries(true);
+      const listed = await loadProjectSummaries(sessionRef.current?.userId ?? null);
       if (!isCurrent()) return;
       setProjects(listed.projects);
       setCloudProjectIds(listed.cloudProjectIds);
@@ -10229,7 +10589,7 @@ export function App() {
     setSelectedProfiles([]);
     setTool(null);
     try {
-      const listed = await loadProjectSummaries(Boolean(session));
+      const listed = await loadProjectSummaries(sessionRef.current?.userId ?? null);
       if (!isCurrent()) return;
       setProjects(listed.projects);
       setCloudProjectIds(listed.cloudProjectIds);
@@ -10275,15 +10635,12 @@ export function App() {
     if (!session) {
       return;
     }
-    await api
-      .updateProject({
-        projectId: toProjectId(projectId),
-        status: organization.status,
-        pinned: organization.pinned,
-        sortOrder: organization.sortOrder
-      })
-      .then(() => saveLocalProjectOrganization(projectId, organization))
-      .catch(() => undefined);
+    await mirrorPendingOrganization(
+      projectId,
+      organizationMirrorHost,
+      undefined,
+      organizationBackground.scopeFor(session.userId)
+    ).catch(() => undefined);
   }
 
   async function handleMoveProjectToShelf(
@@ -10353,16 +10710,17 @@ export function App() {
           .sort(compareProjectSummaries)
       );
       if (session) {
-        await api
-          .reorderProjects({ projectIds: projectIds.map(toProjectId) })
-          .then(() =>
-            Promise.all(
-              [...organizations].map(([projectId, organization]) =>
-                saveLocalProjectOrganization(projectId, organization)
-              )
-            )
-          )
-          .catch(() => undefined);
+        const organizationScope = organizationBackground.scopeFor(session.userId);
+        await mirrorPendingReorder(
+          projectIds,
+          organizationMirrorHost,
+          async (ids) =>
+            (await api.reorderProjects(
+              { projectIds: ids.map(toProjectId) }, organizationScope.signal
+            )).projects,
+          undefined,
+          organizationScope
+        ).catch(() => undefined);
       }
     } catch (error) {
       setStatus(errorMessage(error, 'Could not reorder the projects.'));
@@ -10397,7 +10755,7 @@ export function App() {
         try {
           // The browser builds the copy and the account stores it (ADR-024
           // Phase 1). Loaded on demand: only Duplicate and Branch get here.
-          const { buildCloudProjectCopy } =
+          const { buildCloudProjectCopy, publishCopyPictures } =
             await import('./lib/cloudProjectCopy');
           const request = await buildCloudProjectCopy(
             {
@@ -10414,7 +10772,9 @@ export function App() {
             },
             session.userId,
             projects.map((summary) => summary.name),
-            api
+            api,
+            (document) =>
+              cacheCopyPictures(document, loadSourceBlob, sha256Hex)
           );
           if (!request) {
             // The account no longer stores that save state; this device may.
@@ -10424,22 +10784,46 @@ export function App() {
             project.projectId,
             request
           );
+          // Reference images arrive under device-local ids (the account
+          // copies import sources only): upload them into the copy now, so
+          // no other device opens it without its pictures.
+          const { archiveArtifact: archiveArtifactBody } =
+            await import('./lib/archiveArtifact');
+          const pictures = await publishCopyPictures(
+            response.document,
+            response.project.documentVersion ?? response.document.version,
+            {
+              loadSourceBytes: loadSourceBlob,
+              archive: (input) =>
+                archiveArtifactBody(api, response.document.projectId, input),
+              save: (document, expectedVersion) =>
+                api.saveProjectDocument({
+                  projectId: document.projectId,
+                  expectedVersion,
+                  document
+                })
+            }
+          ).catch(() => null);
+          const copied = pictures?.document ?? response.document;
+          const pictureWarning = pictures
+            ? sourceUploadMessage(pictures.result)
+            : 'Its images are still on this device only; open the copy and save it to upload them.';
           const localSource = await loadLocalProject(project.projectId).catch(
             () => null
           );
           let localCopy = restoreDuplicateDerivedProjection(
-            response.document,
+            copied,
             localSource
           );
-          if (localCopy === response.document) {
+          if (localCopy === copied) {
             // This device may not have the exact source revision cached. The
             // kernel stays in the browser, so rebuild the copy here rather
             // than asking cloud persistence to store a derived projection.
             const derived = await geometry
-              .syncOnce(response.document)
+              .syncOnce(copied)
               .catch(() => null);
             if (derived) {
-              localCopy = { ...response.document, derived };
+              localCopy = { ...copied, derived };
             }
           }
           // Kept on the device too, so the copy opens offline exactly like the
@@ -10455,9 +10839,12 @@ export function App() {
             [...current, response.project].sort(compareProjectSummaries)
           );
           setStatus(
-            saveState
-              ? `Branched ${project.name} from “${saveState.reason}” as ${response.project.name}.`
-              : `Duplicated ${project.name} as ${response.project.name}.`
+            [
+              saveState
+                ? `Branched ${project.name} from “${saveState.reason}” as ${response.project.name}.`
+                : `Duplicated ${project.name} as ${response.project.name}.`,
+              ...(pictureWarning ? [pictureWarning] : [])
+            ].join(' ')
           );
           return;
         } catch (error) {
@@ -10759,6 +11146,7 @@ export function App() {
     // keeps the modeling refusal rather than reverting unseen work.
     const parametersOnly = managerRef.current.undoIsParameterOnly;
     const drawingOnly = managerRef.current.undoIsDrawingOnly;
+    const imageOnly = managerRef.current.undoIsReferenceImageOnly;
     if (drawingOnly) {
       if (!ensureCanEditDrawings('undo')) return;
     } else if (!parametersOnly && !ensureCanEdit('undo')) {
@@ -10770,7 +11158,7 @@ export function App() {
     const label = managerRef.current.undoLabel;
     try {
       const next = managerRef.current.undo();
-      if (drawingOnly) geometry.retainReadyGeometry(next);
+      if (drawingOnly || imageOnly) geometry.retainReadyGeometry(next);
       clearAutoFrame();
       setDoc(next);
     } catch (error) {
@@ -10797,6 +11185,7 @@ export function App() {
     // cursor, so its kinds decide — not the undo entry below it.
     const parametersOnly = managerRef.current.redoIsParameterOnly;
     const drawingOnly = managerRef.current.redoIsDrawingOnly;
+    const imageOnly = managerRef.current.redoIsReferenceImageOnly;
     if (drawingOnly) {
       if (!ensureCanEditDrawings('redo')) return;
     } else if (!parametersOnly && !ensureCanEdit('redo')) {
@@ -10808,7 +11197,7 @@ export function App() {
     const label = managerRef.current.redoLabel;
     try {
       const next = managerRef.current.redo();
-      if (drawingOnly) geometry.retainReadyGeometry(next);
+      if (drawingOnly || imageOnly) geometry.retainReadyGeometry(next);
       clearAutoFrame();
       setDoc(next);
     } catch (error) {
@@ -12497,6 +12886,14 @@ export function App() {
           source
         );
         setDoc(next);
+        if (source.kind === 'reference-image') {
+          return [...referenceImagesWithHistory(next)].some(
+            (image) =>
+              image.artifactId === artifactId &&
+              image.source.checksumSha256 === source.checksumSha256 &&
+              image.source.logicalBytes === source.logicalBytes
+          );
+        }
         return [...documentNodesWithHistory(next)].some((node) => {
           if (
             node.kind !== 'feature' ||
@@ -13502,6 +13899,72 @@ export function App() {
       const { feature: repair, slot, both, first } = datumRepair;
       const attempt = datumRepairAttempt.current;
       const withdrawn = () => datumRepairAttempt.current !== attempt;
+      if (datumRepair.vertices) {
+        const session = datumRepair.vertices;
+        if (
+          base.projectId !== session.projectId ||
+          base.version !== session.documentVersion
+        ) {
+          setStatus(
+            'The document changed during vertex repair. Cancel and start the repair again.',
+            { sticky: true }
+          );
+          return;
+        }
+        if (geometryBusy) {
+          setStatus(
+            'The repair is still being checked. Wait before choosing another vertex.',
+            { sticky: true }
+          );
+          return;
+        }
+        void import('./lib/datumVertexRepair').then(
+          ({ stageDatumVertexRepairPick, datumVertexRepairEdit }) => {
+            if (withdrawn()) return;
+            if (managerRef.current?.document !== base) {
+              setStatus(
+                'The document changed during vertex repair. Cancel and start the repair again.',
+                { sticky: true }
+              );
+              return;
+            }
+            try {
+              const staged = stageDatumVertexRepairPick(
+                base,
+                session,
+                selection,
+                detail?.point ?? null
+              );
+              if (staged.pendingSlot) {
+                setDatumRepair({ ...datumRepair, vertices: staged });
+                setStatus(datumVertexRepairPrompt(staged), { sticky: true });
+                return;
+              }
+              const edit = datumVertexRepairEdit(base, staged);
+              void validatedFeature.runTransaction([edit.command], {
+                label: edit.label,
+                cancelled: withdrawn,
+                targets: affectedFeatureTargets(base, repair.featureId),
+                validateDerived: edit.validateDerived,
+                validatingMessage: `Checking the re-picked vertices for "${repair.name}"…`,
+                successMessage: `"${repair.name}" follows the re-picked vertices.`,
+                onSuccess: () => setDatumRepair(null),
+                // Keep earlier valid picks and the last role pending on refusal.
+                onFailure: (message) =>
+                  setStatus(`${message} ${datumVertexRepairPrompt(session)}`, {
+                    sticky: true
+                  })
+              });
+            } catch (error) {
+              setStatus(
+                errorMessage(error, 'That pick cannot replace this datum vertex.'),
+                { sticky: true }
+              );
+            }
+          }
+        );
+        return;
+      }
       if (repair.data.featureKind === 'datum-axis') {
         void import('./lib/datumAxes').then(({ datumAxisSourceRepairEdit }) => {
           if (withdrawn()) return;
@@ -15160,6 +15623,10 @@ export function App() {
     interaction.mode === 'sketch' && interaction.session.sketchId && doc
       ? (findSketch(doc, interaction.session.sketchId as SketchId) ?? null)
       : null;
+  const selectedSketchConstraintId =
+    interaction.mode === 'sketch'
+      ? (interaction.session.selectedConstraintId ?? null)
+      : null;
   const sketchRelationChips = useMemo(
     () =>
       sketchModeState && doc
@@ -15172,6 +15639,10 @@ export function App() {
             {
               visibility: appSettings.sketching.relationGlyphs,
               selectedObjectId: sketchModeState.selectedObjectId,
+              selectedConstraintId: selectedSketchConstraintId,
+              hiddenKinds: new Set(
+                appSettings.sketching.hiddenRelationGlyphs
+              ),
               conflictingConstraintIds: new Set(
                 sketchSolveStatus?.conflictingConstraintIds ?? []
               )
@@ -15184,8 +15655,62 @@ export function App() {
       editingSketchNode,
       parameterScope.scope,
       appSettings.sketching.relationGlyphs,
+      appSettings.sketching.hiddenRelationGlyphs,
+      selectedSketchConstraintId,
       sketchSolveStatus
     ]
+  );
+  // A relation is picked from its glyph, so the pick lasts only while that
+  // glyph is drawn: a filter that hides its kind, glyphs turned off, or an
+  // undo that removes the relation drops it, and Delete can never remove a
+  // relation nobody can see selected.
+  const selectedSketchConstraintDrawn =
+    selectedSketchConstraintId !== null &&
+    sketchRelationChips.some((chip) =>
+      chip.glyphs.some(
+        (glyph) => glyph.constraintId === selectedSketchConstraintId
+      )
+    );
+  useEffect(() => {
+    if (selectedSketchConstraintId !== null && !selectedSketchConstraintDrawn) {
+      dispatchInteraction({
+        type: 'sketch-select-constraint',
+        constraintId: null
+      });
+    }
+  }, [selectedSketchConstraintId, selectedSketchConstraintDrawn]);
+  // The drawn curves relation glyphs keep clear of, only while any show.
+  const sketchRelationStrokeSegments = useMemo(
+    () =>
+      sketchModeState && doc && sketchRelationChips.length > 0
+        ? sketchRelationStrokes(
+            sketchModeState.objects,
+            (value) =>
+              evalParamValue(value, parameterScope.scope, doc.units) ??
+              undefined,
+            textOutlineBudgetError
+          )
+        : undefined,
+    [
+      sketchModeState,
+      doc,
+      parameterScope.scope,
+      sketchRelationChips.length,
+      textOutlineBudgetError
+    ]
+  );
+  // And every pickable point (centres, ends, the origin), likewise.
+  const sketchRelationKeepOutPoints = useMemo(
+    () =>
+      sketchModeState && doc && sketchRelationChips.length > 0
+        ? sketchRelationKeepOuts(
+            sketchModeState.objects,
+            (value) =>
+              evalParamValue(value, parameterScope.scope, doc.units) ??
+              undefined
+          )
+        : undefined,
+    [sketchModeState, doc, parameterScope.scope, sketchRelationChips.length]
   );
   // The viewport's copy of the session also knows whether a solve or rebuild
   // owns the sketch, so a click cannot place text the card has disabled.
@@ -15194,9 +15719,18 @@ export function App() {
       sketchModeState && {
         ...sketchModeState,
         relations: sketchRelationChips,
+        relationStrokes: sketchRelationStrokeSegments,
+        relationKeepOuts: sketchRelationKeepOutPoints,
         textDraftBusy: sketchSolving || geometryBusy
       },
-    [sketchModeState, sketchRelationChips, sketchSolving, geometryBusy]
+    [
+      sketchModeState,
+      sketchRelationChips,
+      sketchRelationStrokeSegments,
+      sketchRelationKeepOutPoints,
+      sketchSolving,
+      geometryBusy
+    ]
   );
 
   const sketchOverview = useMemo(() => {
@@ -16342,6 +16876,32 @@ export function App() {
     setStatus(`Selected ${target.label}, referenced by this constraint.`);
   }
 
+  /**
+   * Whether the picked relation's glyph is drawn, as the viewport last
+   * reported. Panned or orbited off screen, or with nowhere clear to show,
+   * the selection stays but Delete does nothing: it never removes a relation
+   * whose selected glyph cannot be seen.
+   */
+  const selectedConstraintShownRef = useRef<{
+    constraintId: string;
+    shown: boolean;
+  } | null>(null);
+
+  /** A relation glyph was clicked: select that relation for Delete. */
+  function handleSelectSketchConstraint(constraintId: string) {
+    const constraint = editingSketchNode?.constraints?.find(
+      (candidate) => String(candidate.constraintId) === constraintId
+    );
+    if (!constraint || sketchSolving || geometryBusy) return;
+    const kind = constraint.data.constraintKind;
+    const label =
+      kind === 'distance' || kind === 'radius' || kind === 'angle'
+        ? 'dimension'
+        : `${SKETCH_RELATION_GLYPHS[kind].label} relation`;
+    dispatchInteraction({ type: 'sketch-select-constraint', constraintId });
+    setStatus(`Selected ${label}. Press Delete to remove it.`);
+  }
+
   function handleDeleteSketchConstraint(constraintId: string) {
     if (!editingSketchNode) {
       return;
@@ -16358,6 +16918,12 @@ export function App() {
       )
     ) {
       setSketchSolveStatus(null);
+      if (selectedSketchConstraintId === constraintId) {
+        dispatchInteraction({
+          type: 'sketch-select-constraint',
+          constraintId: null
+        });
+      }
       setStatus('Deleted constraint.');
     }
   }
@@ -19751,15 +20317,52 @@ export function App() {
     );
   }
 
+  function datumVertexRepairPrompt(session: DatumVertexRepairSession): string {
+    const pending = session.pendingSlot;
+    return pending
+      ? `Re-pick ${pending.label.toLowerCase()} for "${session.featureName}": click an edge near the intended end · Esc cancels.`
+      : `Checking the re-picked vertices for "${session.featureName}"…`;
+  }
+
+  function armDatumVertexRepair(feature: FeatureNode, slots: (0 | 1 | 2)[]) {
+    if (!ensureCanEdit('repair a feature')) return;
+    const base = managerRef.current?.document;
+    if (!base) return;
+    try {
+      const vertices = beginDatumVertexRepair(
+        base,
+        feature.featureId,
+        slots,
+        attributedFeatureWarnings()
+      );
+      setMeasuring(false);
+      setTool(null);
+      clearSelection();
+      setFaceRepair(null);
+      setToFacePick(null);
+      setDatumRepair({ feature, slot: 0, vertices });
+      setStatus(datumVertexRepairPrompt(vertices), { sticky: true });
+    } catch (error) {
+      setStatus(errorMessage(error, 'Vertex repair could not start.'));
+    }
+  }
+
   // A datum re-pick yields to any mode that takes viewport clicks over:
   // Measure, a tool, a sketch or a locked workspace (View or Tweak). Each
   // arm or disarm also moves the attempt counter, which withdraws an edit
   // still being checked.
   const datumRepairAttempt = useRef(0);
-  useEffect(() => {
+  useLayoutEffect(() => {
     datumRepairAttempt.current += 1;
-  }, [datumRepair]);
-  useEffect(() => {
+  }, [
+    datumRepair,
+    measuring,
+    tool,
+    modelingLocked,
+    interaction.mode,
+    doc?.projectId
+  ]);
+  useLayoutEffect(() => {
     if (
       measuring ||
       tool !== null ||
@@ -19981,6 +20584,43 @@ export function App() {
                 ]
               : []
           )
+        : []),
+      ...(doc &&
+      datumVertexSourceFailed(
+        feature,
+        featureAttribution?.derived === doc.derived
+          ? featureAttribution.featureWarnings
+          : []
+      )
+        ? (() => {
+            const slots = datumVertexRepairSlots(feature);
+            return [
+              ...slots.map((slot) => ({
+                item: {
+                  id: `repair-datum-vertex-${slot.index}`,
+                  label: `Re-pick ${slot.label.toLowerCase()}…`,
+                  icon: <Crosshair size={13} aria-hidden="true" />
+                },
+                run: () => armDatumVertexRepair(feature, [slot.index])
+              })),
+              ...(slots.length > 1
+                ? [
+                    {
+                      item: {
+                        id: 'repair-datum-vertices-all',
+                        label: 'Re-pick all source vertices…',
+                        icon: <Crosshair size={13} aria-hidden="true" />
+                      },
+                      run: () =>
+                        armDatumVertexRepair(
+                          feature,
+                          slots.map(({ index }) => index)
+                        )
+                    }
+                  ]
+                : [])
+            ];
+          })()
         : []),
       // R01: an axis along an edge or a cylinder whose source was lost.
       ...(feature.data.featureKind === 'datum-axis' &&
@@ -20372,6 +21012,34 @@ export function App() {
           startExtrude(interaction.session.sketchId as SketchId);
           return;
         }
+        // A relation picked from its glyph is the narrower selection, so
+        // Delete removes it before it would remove the entity it sits on.
+        // Only a relation whose glyph is drawn counts as selected (an undo,
+        // a filter or the glyph setting can take it away before the effect
+        // above clears it); otherwise the key falls through to the entity.
+        const selectedConstraintId = selectedSketchConstraintDrawn
+          ? selectedSketchConstraintId
+          : null;
+        if (
+          (event.key === 'Delete' || event.key === 'Backspace') &&
+          !meta &&
+          !event.altKey &&
+          selectedConstraintId
+        ) {
+          event.preventDefault();
+          const onScreen =
+            selectedConstraintShownRef.current?.constraintId ===
+              selectedConstraintId &&
+            selectedConstraintShownRef.current.shown;
+          if (!onScreen) {
+            setStatus(
+              'The selected relation is out of view; bring its glyph back to delete it.'
+            );
+          } else if (!sketchSolving && !geometryBusy) {
+            handleDeleteSketchConstraint(selectedConstraintId);
+          }
+          return;
+        }
         if (
           (event.key === 'Delete' || event.key === 'Backspace') &&
           !meta &&
@@ -20499,7 +21167,11 @@ export function App() {
             setFaceRepair(null);
             setDatumRepair(null);
             setToFacePick(null);
-            setStatus('Face pick canceled · the feature is unchanged.');
+            setStatus(
+              datumRepair?.vertices
+                ? 'Vertex repair canceled · the feature is unchanged.'
+                : 'Face pick canceled · the feature is unchanged.'
+            );
             return;
           }
           if (interaction.mode === 'sketch') {
@@ -20632,6 +21304,15 @@ export function App() {
           return;
         case 'view-iso':
           requestView('iso');
+          return;
+        case 'view-back':
+          requestView('back');
+          return;
+        case 'view-bottom':
+          requestView('bottom');
+          return;
+        case 'view-left':
+          requestView('left');
           return;
         case 'view-measure':
           toggleMeasure(!measuring);
@@ -21129,6 +21810,30 @@ export function App() {
       run: () => requestView('iso')
     },
     {
+      id: 'view-back',
+      label: 'Back view',
+      group: 'View',
+      shortcut: keymap.label('view-back'),
+      icon: <Monitor size={16} aria-hidden="true" />,
+      run: () => requestView('back')
+    },
+    {
+      id: 'view-bottom',
+      label: 'Bottom view',
+      group: 'View',
+      shortcut: keymap.label('view-bottom'),
+      icon: <Monitor size={16} aria-hidden="true" />,
+      run: () => requestView('bottom')
+    },
+    {
+      id: 'view-left',
+      label: 'Left view',
+      group: 'View',
+      shortcut: keymap.label('view-left'),
+      icon: <Monitor size={16} aria-hidden="true" />,
+      run: () => requestView('left')
+    },
+    {
       id: 'view-fit',
       label: 'Fit view',
       group: 'View',
@@ -21552,6 +22257,12 @@ export function App() {
                         : viewerBodies.length > 0
                           ? 'Click a body, face, or edge · Shift+Click adds to selection'
                           : idleHint));
+  const openReferenceImageEntry =
+    (openReferenceImageId &&
+      doc?.referenceImages?.images.find(
+        (image) => image.imageId === openReferenceImageId
+      )) ||
+    null;
   const inspectorActive =
     !modelingLocked &&
     !directMode &&
@@ -22176,6 +22887,14 @@ export function App() {
       document={doc}
       hiddenDatumIds={hiddenDatumIds}
       onHiddenDatumIdsChange={setHiddenDatumIds}
+      hiddenReferenceImageIds={hiddenReferenceImageIds}
+      onHiddenReferenceImageIdsChange={setHiddenReferenceImageIds}
+      selectedReferenceImageId={
+        tool === 'reference-image' ? openReferenceImageId : null
+      }
+      onSelectReferenceImage={(imageId) =>
+        openReferenceImage(imageId as ReferenceImageId)
+      }
       warnings={diagnostics}
       historyDetails={
         <FeatureHistoryPanel
@@ -22790,6 +23509,12 @@ export function App() {
             }}
             onEditSketchDimension={handleEditSketchDimension}
             onMoveSketchDimension={handleMoveSketchDimension}
+            onSelectSketchConstraint={handleSelectSketchConstraint}
+            onSketchConstraintSelectionShown={(constraintId, shown) => {
+              // Whether the picked relation's glyph is on screen: Delete
+              // acts on it only while it is (see the sketch key handler).
+              selectedConstraintShownRef.current = { constraintId, shown };
+            }}
             onSketchDrawingChange={(drawing) =>
               dispatchInteraction({ type: 'sketch-drawing', drawing })
             }
@@ -22836,6 +23561,13 @@ export function App() {
             planePickerArmed={!modelingLocked && tool === 'sketch'}
             datumDocument={doc}
             hiddenDatumIds={hiddenDatumIds}
+            referenceImages={referenceImageDisplays(
+              doc,
+              hiddenReferenceImageIds,
+              tool === 'reference-image' ? openReferenceImageId : null,
+              tool === 'reference-image' ? referenceImageDraft : null
+            )}
+            loadReferenceImage={loadReferenceImage}
             selectedFeatureId={
               (modelingEditFeature ?? selectedFeature)?.featureId ?? null
             }
@@ -23494,6 +24226,26 @@ export function App() {
                   )}
                 </div>
               </section>
+            ) : tool === 'reference-image' && openReferenceImageEntry ? (
+              <ReferenceImageCard
+                key={openReferenceImageEntry.imageId}
+                document={doc}
+                image={openReferenceImageEntry}
+                datumPlanes={earlierDatumPlanes(doc, null)}
+                selectedFacePlane={selectedFaceImagePlane()}
+                loadPicture={() =>
+                  loadReferenceImage(
+                    openReferenceImageEntry.source.checksumSha256
+                  )
+                }
+                editDisabledReason={editDisabledReason}
+                onDraft={setReferenceImageDraft}
+                onApply={applyReferenceImage}
+                onDelete={() =>
+                  deleteReferenceImage(openReferenceImageEntry.imageId)
+                }
+                onClose={closeReferenceImage}
+              />
             ) : tool === 'datum-plane' && doc ? (
               <DatumPlaneCard
                 key={modelingEditFeature?.featureId ?? 'new'}
@@ -24164,6 +24916,18 @@ export function App() {
               if (files.length > 0) {
                 void handleImportFiles(files);
               }
+            }}
+          />
+          <input
+            ref={referenceImageInputRef}
+            type="file"
+            accept="image/png,image/jpeg,.png,.jpg,.jpeg"
+            aria-label="Insert reference image"
+            style={{ display: 'none' }}
+            onChange={(event: ChangeEvent<HTMLInputElement>) => {
+              const file = event.target.files?.[0];
+              event.target.value = '';
+              if (file) void insertReferenceImage(file);
             }}
           />
           {shortcutsOpen && (

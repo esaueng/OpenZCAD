@@ -2,7 +2,7 @@
  * Share-link fragments: `https://app-origin/#share=<token>`.
  *
  * Unlike invitation fragments (`projectInvitationLink.ts`), the token is NOT
- * scrubbed from the URL. A share link is a durable address people bookmark
+ * scrubbed from the URL. Until it expires, a share link is an address people bookmark
  * and reopen; the fragment never reaches the server or Referer headers, so
  * leaving it in place costs nothing and keeps reload working.
  */

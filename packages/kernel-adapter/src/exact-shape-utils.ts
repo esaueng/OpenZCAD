@@ -36,6 +36,10 @@ import {
   faceWitnessOf
 } from './exact-witnesses';
 import { GEOMETRY_EPSILON } from './exact-math';
+import {
+  nativeVertexEvidence,
+  type NativeVertexPointEvidence
+} from './remus-native-vertices';
 import { healPipelineSolid, requireValidSolid } from './kernel-validation';
 
 export /** Sewing gap for imported meshes, relative to the mesh's largest extent. */
@@ -170,17 +174,55 @@ export function edgeVertexCandidatesForShape(
   kernel: RemusKernel,
   shape: ExactShape
 ): EdgeVertexCandidate[] {
-  return shape.solids.flatMap((solid) =>
-    Array.from(kernel.getSolidEdges(solid), (handle) => {
+  return shape.solids.flatMap((solid) => {
+    const references = shape.nativeVertices?.bySolid.get(solid);
+    const members = references?.size
+      ? new Set(kernel.getSolidVertices(solid))
+      : undefined;
+    const native = new Map<number, NativeVertexPointEvidence | undefined>();
+    if (members)
+      for (const vertex of members)
+        native.set(
+          vertex,
+          nativeVertexEvidence(
+            kernel,
+            shape.nativeVertices,
+            solid,
+            vertex,
+            members
+          )
+        );
+    return Array.from(kernel.getSolidEdges(solid), (handle) => {
       const witness = edgeWitnessOf(kernel, handle);
       const sample = edgeSampleOf(kernel, handle);
       const reference = shape.lineage?.edgeReferences.get(handle);
+      const handles = members
+        ? Array.from(kernel.getEdgeVertexHandles(handle))
+        : undefined;
+      const stale: NativeVertexPointEvidence = {
+        status: 'unavailable',
+        reason: 'stale-evidence'
+      };
+      const nativeEndpoints:
+        | readonly [
+            NativeVertexPointEvidence | undefined,
+            NativeVertexPointEvidence | undefined
+          ]
+        | undefined = handles
+        ? handles.length === 2
+          ? [
+              members!.has(handles[0]!) ? native.get(handles[0]!) : stale,
+              members!.has(handles[1]!) ? native.get(handles[1]!) : stale
+            ]
+          : [stale, stale]
+        : undefined;
       return {
         kind: 'edge' as const,
         currentHash: topologyHashOfWitness('edge', witness),
         witnessVersion: 1 as const,
         witness,
         endpoints: sample.closed ? null : sample.endpoints,
+        ...(nativeEndpoints ? { nativeEndpoints } : {}),
         ...(reference
           ? {
               lineage: {
@@ -193,8 +235,8 @@ export function edgeVertexCandidatesForShape(
             }
           : {})
       };
-    })
-  );
+    });
+  });
 }
 
 export function copyShapeWithVerifiedLineage(

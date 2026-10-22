@@ -83,12 +83,17 @@ function writeAuthorization(
   userId: string,
   dispose: () => Promise<void>
 ): E2eeWriteAuthorization {
+  // Expiry admits this request once. Re-evaluating the clock in each batch
+  // statement can admit the identity/entry and silently skip its wraps when
+  // the second changes. Erasure, session deletion and desktop revocation
+  // still use live rows inside the transaction, so they revoke every write.
+  const admittedAt = Math.floor(Date.now() / 1000);
   return {
     sql: `NOT EXISTS (SELECT 1 FROM account_erasure_requests WHERE user_id = ?)
       AND EXISTS (SELECT 1 FROM ${table}
-        WHERE token_hash = ? AND user_id = ? AND expires_at >= unixepoch()
+        WHERE token_hash = ? AND user_id = ? AND expires_at >= ?
         ${table === 'desktop_access_tokens' ? "AND revoked_at IS NULL AND client_id = 'openzcad-macos'" : ''})`,
-    binds: [userId, tokenHash, userId],
+    binds: [userId, tokenHash, userId, admittedAt],
     dispose
   };
 }

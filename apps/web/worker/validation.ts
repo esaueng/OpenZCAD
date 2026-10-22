@@ -14,6 +14,8 @@ import {
   MAX_PROJECT_NAME_LENGTH,
   MAX_PROJECT_CHECKPOINTS,
   THUMBNAIL_CONTENT_TYPE,
+  REFERENCE_IMAGE_CONTENT_TYPES,
+  referenceImageSetError,
   persistedDocumentBytes,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   PROJECT_STATUSES,
@@ -40,7 +42,9 @@ import {
 import {
   isImportSourceCopyRef,
   isProjectCopyDocumentDigest,
-  MAX_IMPORT_SOURCE_COPY_REFS
+  MAX_IMPORT_SOURCE_COPY_REFS,
+  openProjectStorageUpload,
+  type ClientProjectStorage
 } from '@openzcad/persistence';
 import {
   ASSISTANT_ATTACHMENT_MEDIA_TYPES,
@@ -75,6 +79,7 @@ const ARTIFACT_KINDS: readonly ArtifactKind[] = [
   'stl-import',
   'mesh-import',
   'mesh-payload',
+  'reference-image',
   'step-export',
   'stl-export',
   '3mf-export',
@@ -142,15 +147,61 @@ function requireString(
   return trimmed;
 }
 
+/**
+ * Opens a browser-split document write (ADR-024 Phase 1). With
+ * `storageAssets`, the request's document is the browser's storage
+ * projection: its uploads are checked against their declared sizes and
+ * checksums, and the parser receives the hydrated document while the
+ * verified projection travels beside it to the store. Requests without
+ * `storageAssets` are the pre-Phase 1 shape and pass through unchanged.
+ */
+export async function openProjectStorageRequest(
+  body: unknown,
+  projectIdFromPath?: string
+): Promise<{ body: unknown; storage?: ClientProjectStorage }> {
+  if (
+    typeof body !== 'object' ||
+    body === null ||
+    Array.isArray(body) ||
+    (body as Record<string, unknown>).storageAssets === undefined
+  ) {
+    return { body };
+  }
+  const { storageAssets, ...record } = body as Record<string, unknown>;
+  const field =
+    record.initialDocument !== undefined ? 'initialDocument' : 'document';
+  const document = record[field];
+  const projectId =
+    projectIdFromPath ??
+    (typeof document === 'object' &&
+    document !== null &&
+    typeof (document as Record<string, unknown>).projectId === 'string'
+      ? ((document as Record<string, unknown>).projectId as string)
+      : undefined);
+  if (!projectId) {
+    throw badRequest(`"${field}.projectId" must be a non-empty string.`);
+  }
+  const opened = await openProjectStorageUpload(
+    document,
+    storageAssets,
+    projectId
+  );
+  return {
+    body: { ...record, [field]: opened.document },
+    storage: opened.storage
+  };
+}
+
 export function parseDiscardMeshPayloadRequest(body: unknown): {
   projectId: string;
-  kind?: 'stl-import' | 'mesh-import';
+  kind?: 'stl-import' | 'mesh-import' | 'reference-image';
 } {
   const record = asRecord(body, 'Request body');
   if (
     record.kind !== undefined &&
     record.kind !== 'stl-import' &&
-    record.kind !== 'mesh-import'
+    record.kind !== 'mesh-import' &&
+    record.kind !== 'reference-image'
   )
     throw badRequest('Original mesh cleanup kind is invalid.');
   return {
@@ -445,6 +496,12 @@ function parseProjectDocument(
     const drawingsError = drawingSetError(record.drawings);
     if (drawingsError) throw badRequest(`"document.drawings": ${drawingsError}`);
   }
+  // I05: the same holds for the reference-image section.
+  if (record.referenceImages !== undefined) {
+    const imagesError = referenceImageSetError(record.referenceImages);
+    if (imagesError)
+      throw badRequest(`"document.referenceImages": ${imagesError}`);
+  }
   // Undo and redo can restore imports that are absent from current nodes.
   // Validate every copy before the document can be saved or shared.
   if (!hasValidImportedStepSources(value as ProjectDocument)) {
@@ -543,6 +600,16 @@ export function parseCreateUploadSessionRequest(
   ) {
     throw badRequest(
       `Thumbnail contentType must be ${THUMBNAIL_CONTENT_TYPE}.`
+    );
+  }
+  if (
+    record.kind === 'reference-image' &&
+    !(REFERENCE_IMAGE_CONTENT_TYPES as readonly unknown[]).includes(
+      record.contentType
+    )
+  ) {
+    throw badRequest(
+      `Reference image contentType must be one of: ${REFERENCE_IMAGE_CONTENT_TYPES.join(', ')}.`
     );
   }
   const metadata =

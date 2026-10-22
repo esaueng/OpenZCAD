@@ -80,6 +80,7 @@ import {
   type ControlReferenceGroup
 } from '../lib/controlReference';
 import { KeymapEditor } from './KeymapEditor';
+import { RelationGlyphFilter } from './RelationGlyphFilter';
 import { resolveKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
 import { BrandMark } from './BrandMark';
@@ -170,7 +171,7 @@ interface SettingsPageProps {
   onStartDesktopLogin(): Promise<void>;
   onDesktopAuthorizationCodeChange(code: string): void;
   onApproveDesktopLogin(): Promise<void>;
-  onLogout(choice?: DeviceKeySignOutChoice): Promise<void>;
+  onLogout(choice: DeviceKeySignOutChoice): Promise<void>;
   onDeleteCloudData(
     scope: AccountDeletionScope,
     confirmation: string
@@ -595,10 +596,18 @@ export function SettingsPage({
   const [encryptionAvailable, setEncryptionAvailable] = useState<
     boolean | null
   >(null);
-  /** Set while sign-out asks whether to keep this device unlocked. */
-  const [signOutChoice, setSignOutChoice] = useState(false);
+  /**
+   * Set, to the account it was opened for, while sign-out asks whether to
+   * keep this device unlocked; it never applies to an account that replaced
+   * that one before the choice was made.
+   */
+  const [signOutChoiceUserId, setSignOutChoiceUserId] = useState<string | null>(
+    null
+  );
   const [signOutBusy, setSignOutBusy] = useState(false);
   const [signOutError, setSignOutError] = useState<string | null>(null);
+  const signOutSessionRef = useRef(session);
+  signOutSessionRef.current = session;
   const contentRef = useRef<HTMLElement>(null);
   const pageRef = useRef<HTMLDivElement>(null);
   const brandRef = useRef<HTMLButtonElement>(null);
@@ -663,6 +672,17 @@ export function SettingsPage({
     };
   }, [cloudFunctionsEnabled, sessionUserId]);
 
+  // A prompt opened for another account is withdrawn, never re-targeted.
+  const signOutChoice =
+    signOutChoiceUserId !== null && signOutChoiceUserId === sessionUserId
+      ? signOutChoiceUserId
+      : null;
+  useEffect(() => {
+    setSignOutChoiceUserId((pending) =>
+      pending === sessionUserId ? pending : null
+    );
+  }, [sessionUserId]);
+
   // Sign-out asks whether to keep this device unlocked, but only when this
   // browser holds device keys for the account; otherwise it signs out at once.
   const signOut = async () => {
@@ -672,16 +692,18 @@ export function SettingsPage({
     let failureMessage =
       "Could not check this browser's device keys. Try signing out again.";
     try {
-      const userId = session?.userId;
-      if (userId) {
-        const { hasStoredDevice } = await import('../lib/e2ee/deviceStore');
-        if (await hasStoredDevice(userId)) {
-          setSignOutChoice(true);
-          return;
-        }
+      const inspectedSession = session;
+      const userId = inspectedSession?.userId;
+      if (!userId) return;
+      const { hasStoredDevice } = await import('../lib/e2ee/deviceStore');
+      const hasDevice = await hasStoredDevice(userId);
+      if (signOutSessionRef.current !== inspectedSession) return;
+      if (hasDevice) {
+        setSignOutChoiceUserId(userId);
+        return;
       }
       failureMessage = 'Could not complete sign-out. Try again.';
-      await onLogout();
+      await onLogout({ userId });
     } catch {
       setSignOutError(failureMessage);
     } finally {
@@ -695,9 +717,10 @@ export function SettingsPage({
     setSignOutBusy(true);
     setSignOutError(null);
     try {
-      const userId = session?.userId;
-      await onLogout(userId ? { userId, keepDevice } : undefined);
-      setSignOutChoice(false);
+      const userId = signOutChoice;
+      if (!userId) return;
+      await onLogout({ userId, keepDevice });
+      setSignOutChoiceUserId(null);
     } catch {
       setSignOutError(
         'Could not complete sign-out. Retry your device-key choice.'
@@ -1412,6 +1435,23 @@ export function SettingsPage({
                     }
                   />
                 </SettingRow>
+                <SettingRow
+                  title="Glyph kinds"
+                  hint="Which relations draw a glyph."
+                >
+                  <RelationGlyphFilter
+                    hidden={settings.sketching.hiddenRelationGlyphs}
+                    disabled={settings.sketching.relationGlyphs === 'hidden'}
+                    onChange={(hiddenRelationGlyphs) =>
+                      patch({
+                        sketching: {
+                          ...settings.sketching,
+                          hiddenRelationGlyphs
+                        }
+                      })
+                    }
+                  />
+                </SettingRow>
               </Group>
             </Section>
           )}
@@ -1921,7 +1961,7 @@ export function SettingsPage({
                                   type="button"
                                   disabled={busy || signOutBusy}
                                   onClick={() => {
-                                    setSignOutChoice(false);
+                                    setSignOutChoiceUserId(null);
                                     setSignOutError(null);
                                   }}
                                 >

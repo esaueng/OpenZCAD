@@ -122,7 +122,8 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Geometry snapping',
       'Snap tolerance',
       'Automatic inferencing',
-      'Relation glyphs'
+      'Relation glyphs',
+      'Glyph kinds'
     ]
   },
   {

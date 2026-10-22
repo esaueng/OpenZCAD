@@ -320,6 +320,12 @@ import { buildPlanePickerRig } from './viewer/planePickerRig';
 import { buildDatumPlaneRig, type DatumPlaneRig } from './viewer/datumPlaneRig';
 import { buildDatumAxisRig, type DatumAxisRig } from './viewer/datumAxisRig';
 import type { DatumPlaneDisplay } from '../lib/datumPlaneDisplay';
+import type { ReferenceImageDisplay } from '../lib/referenceImageDisplay';
+import {
+  buildReferenceImageRig,
+  ReferenceTextureCache,
+  type ReferenceTextureRequest
+} from './viewer/referenceImageRig';
 import type { DatumAxisDisplay } from '../lib/datumAxisDisplay';
 import { sketchValueResolver } from '../lib/sketch/valueResolver';
 import { reducesMotion } from '../lib/reducedMotion';
@@ -459,6 +465,10 @@ export interface SketchModeState {
   dimensions: SketchDimensionAnnotation[];
   /** Relation glyph chips, already filtered by the visibility setting. */
   relations?: SketchRelationGlyphChip[];
+  /** The drawn curves as plane-local segments; glyphs keep clear of them. */
+  relationStrokes?: Float64Array;
+  /** Every pickable sketch point as plane-local pairs; glyphs keep off. */
+  relationKeepOuts?: Float64Array;
   /**
    * The text card's draft while the text tool composes. Its outline follows
    * the pointer over the plane and a click places it; nothing is placed
@@ -941,6 +951,17 @@ export interface ModelViewerProps {
    */
   datumAxes?: readonly DatumAxisDisplay[];
   /**
+   * I05 reference images, laid on their planes. Hidden images and images
+   * whose plane has not resolved are simply absent.
+   */
+  referenceImages?: readonly ReferenceImageDisplay[];
+  /**
+   * The bytes behind a reference image, by checksum: from this device's
+   * source store, else the image's archived artifact. Null when neither has
+   * them; the image then draws as an empty frame.
+   */
+  loadReferenceImage?: (checksumSha256: string) => Promise<Blob | null>;
+  /**
    * What measuring the hovered target would report, for the preview chip.
    * Null when measuring is off or the pick has nothing honest to say.
    */
@@ -978,6 +999,10 @@ export interface ModelViewerProps {
     identity: SketchDimensionIdentity,
     offset: { x: number; y: number }
   ): void;
+  /** A relation glyph was clicked: select that relation. */
+  onSelectSketchConstraint?(constraintId: string): void;
+  /** The selected relation's glyph started or stopped being drawn. */
+  onSketchConstraintSelectionShown?(constraintId: string, shown: boolean): void;
   /** Mirrors chain/drag liveness into the interaction machine. */
   onSketchDrawingChange(drawing: boolean): void;
   /**
@@ -1877,6 +1902,8 @@ export function ModelViewer({
   primitiveGhost = null,
   datumPlanes,
   datumAxes,
+  referenceImages,
+  loadReferenceImage,
   planePickerOffset,
   onPickPlane,
   onPickDatum,
@@ -1889,6 +1916,8 @@ export function ModelViewer({
   onSketchCommitComposite,
   onEditSketchDimension,
   onMoveSketchDimension,
+  onSelectSketchConstraint,
+  onSketchConstraintSelectionShown,
   onSketchDrawingChange,
   sketchMoveEnabled = false,
   onSketchMoveChange,
@@ -2107,6 +2136,15 @@ export function ModelViewer({
   editSketchDimensionRef.current = onEditSketchDimension;
   const moveSketchDimensionRef = useRef(onMoveSketchDimension);
   moveSketchDimensionRef.current = onMoveSketchDimension;
+  const selectSketchConstraintRef = useRef(onSelectSketchConstraint);
+  selectSketchConstraintRef.current = onSelectSketchConstraint;
+  const sketchConstraintSelectionShownRef = useRef(
+    onSketchConstraintSelectionShown
+  );
+  sketchConstraintSelectionShownRef.current = onSketchConstraintSelectionShown;
+  const sketchRelationsRef = useRef<ReturnType<
+    typeof buildSketchRelationGlyphs
+  > | null>(null);
   /** Separate from direct-edit overlays so body rebuilds do not erase it. */
   const measurementGroupRef = useRef<THREE.Group | null>(null);
   /**
@@ -2839,6 +2877,14 @@ export function ModelViewer({
       if (
         (offsetChipRef.current && !offsetChipRef.current.hidden) ||
         host.querySelector(`.${SELECTION_CALLOUT_CHIP_CLASS}`)
+      ) {
+        requestRender();
+      }
+      // Relation glyphs keep out from under the panels: re-measure at once
+      // rather than on the glyphs' timer, so a dragged panel pushes them
+      // aside as it moves.
+      if (
+        sketchRelationsRef.current?.refreshObstacles(labelRenderer.domElement)
       ) {
         requestRender();
       }
@@ -3678,6 +3724,9 @@ export function ModelViewer({
     const sketchRotateRing = hud.create('sketch-rotate-ring', {
       ariaHidden: true
     });
+    // Where those handles are this frame, for the relation glyphs to keep
+    // off; rewritten in place each frame.
+    const sketchHandleSpot = { shown: false, x: 0, y: 0, ring: false };
 
     // Exact entry drives the same preview the drag does.
     offsetSetterRef.current = (value: number) => {
@@ -4607,6 +4656,8 @@ export function ModelViewer({
           bodyId?: string;
           /** Edges already taken, so a second call finds a different one. */
           excludeTopologyIds?: string[];
+          /** Interior fraction; endpoint repair needs an intentional end choice. */
+          fraction?: number;
           /**
            * Only a point a face stands in front of: an edge a click can take
            * through the face (X-ray select-through) and not otherwise.
@@ -4632,15 +4683,23 @@ export function ModelViewer({
       );
       const rect = renderer.domElement.getBoundingClientRect();
       const sample = new THREE.Vector3();
+      const fraction = detail.fraction ?? 0.5;
+      if (!Number.isFinite(fraction) || fraction <= 0 || fraction >= 1) {
+        detail.resolve(null);
+        return;
+      }
       for (const edge of edges) {
         for (let index = 0; index + 5 < edge.points.length; index += 3) {
-          // Segment midpoints, not vertices: a vertex sits on two edges at
-          // once, so which one a click there takes is an arbitrary tie-break.
+          // Interior points avoid a vertex's two-edge tie. Tests may choose
+          // an interior point nearer an end to name that vertex explicitly.
           sample
             .set(
-              (edge.points[index]! + edge.points[index + 3]!) / 2,
-              (edge.points[index + 1]! + edge.points[index + 4]!) / 2,
-              (edge.points[index + 2]! + edge.points[index + 5]!) / 2
+              edge.points[index]! +
+                (edge.points[index + 3]! - edge.points[index]!) * fraction,
+              edge.points[index + 1]! +
+                (edge.points[index + 4]! - edge.points[index + 1]!) * fraction,
+              edge.points[index + 2]! +
+                (edge.points[index + 5]! - edge.points[index + 2]!) * fraction
             )
             .project(context.activeCamera);
           // Client coordinates are integers, so round before confirming: the
@@ -7648,6 +7707,7 @@ export function ModelViewer({
         selection && data
           ? sketchObjectGrabPoint(data, sketchModeResolver(selection.mode))
           : null;
+      sketchHandleSpot.shown = false;
       if (!selection || !grab) {
         sketchGrabHandle.hidden = true;
         sketchRotateRing.hidden = true;
@@ -7673,6 +7733,10 @@ export function ModelViewer({
         drag?.active === true && drag.handle === 'translate'
       );
       hud.showAt(sketchGrabHandle, screen.x, screen.y);
+      sketchHandleSpot.shown = true;
+      sketchHandleSpot.x = screen.x;
+      sketchHandleSpot.y = screen.y;
+      sketchHandleSpot.ring = sketchObjectRotatable(selection.data);
       if (sketchObjectRotatable(selection.data)) {
         sketchRotateRing.dataset.active = String(
           drag?.active === true && drag.handle === 'rotate'
@@ -9388,6 +9452,7 @@ export function ModelViewer({
         if (!sketchGridIndicator.hidden) sketchGridIndicator.hidden = true;
         if (!sketchGrabHandle.hidden) sketchGrabHandle.hidden = true;
         if (!sketchRotateRing.hidden) sketchRotateRing.hidden = true;
+        sketchHandleSpot.shown = false;
       }
 
       // Preselection and selection overlays cut to their targets; their
@@ -9591,7 +9656,19 @@ export function ModelViewer({
       }
       updateDimensionLabels(context, canvasWidth(), canvasHeight());
       labelRenderer.render(scene, context.activeCamera);
+      // Dimension labels settle first: the glyph layout below keeps out of
+      // their boxes, margins included, so it must read this frame's.
       avoidSketchDimensionOverlays(labelRenderer.domElement);
+      // Relation glyphs stand off their geometry in screen space, so they
+      // are laid out against this frame's camera; a still frame writes no
+      // style and the layout allocates nothing.
+      sketchRelationsRef.current?.layout(
+        context.activeCamera,
+        canvasWidth(),
+        canvasHeight(),
+        sketchDimensionsRef.current,
+        sketchHandleSpot
+      );
       if (cylinderRadiusProxyFrame && import.meta.env.OZ_PERF === '1') {
         mark('cylinder-radius.proxy-frame', {
           latencyMs: Math.max(
@@ -11680,6 +11757,76 @@ export function ModelViewer({
     };
   }, [datumPlaneKey]);
 
+  // I05 reference images (viewer/referenceImageRig). One texture per picture,
+  // decoded once and kept while any shown image uses it; the rig is rebuilt
+  // when the set, a placement, the selection or a finished decode changes.
+  const referenceTexturesRef = useRef<ReferenceTextureCache | null>(null);
+  referenceTexturesRef.current ??= new ReferenceTextureCache();
+  const [referenceTextureVersion, setReferenceTextureVersion] = useState(0);
+  const loadReferenceImageRef = useRef(loadReferenceImage);
+  loadReferenceImageRef.current = loadReferenceImage;
+  const referenceImageKey = JSON.stringify(referenceImages ?? []);
+  // Where each picture can be read from, not just which: an archive rewrite
+  // changes this and retries a picture that was not yet available.
+  const referenceTextureKey = JSON.stringify(
+    [
+      ...new Map(
+        (referenceImages ?? []).map(({ checksumSha256, artifactId }) => [
+          `${checksumSha256}|${artifactId}`,
+          { checksumSha256, artifactId }
+        ])
+      ).values()
+    ].sort((a, b) =>
+      `${a.checksumSha256}|${a.artifactId}`.localeCompare(
+        `${b.checksumSha256}|${b.artifactId}`
+      )
+    )
+  );
+  useEffect(() => {
+    const load = loadReferenceImageRef.current;
+    referenceTexturesRef.current!.sync(
+      JSON.parse(referenceTextureKey) as ReferenceTextureRequest[],
+      (checksum) => (load ? load(checksum) : Promise.resolve(null)),
+      () => setReferenceTextureVersion((version) => version + 1)
+    );
+  }, [referenceTextureKey]);
+  useEffect(() => {
+    const cache = referenceTexturesRef.current!;
+    return () => cache.clear();
+  }, []);
+  useEffect(() => {
+    const context = contextRef.current;
+    const images = JSON.parse(referenceImageKey) as ReferenceImageDisplay[];
+    if (!context || images.length === 0) {
+      return;
+    }
+    const textures = referenceTexturesRef.current!.textures;
+    const rig = buildReferenceImageRig(images, textures);
+    context.scene.add(rig.group);
+    const canvas = context.renderer.domElement;
+    if (E2E_CANVAS_HOOKS_ENABLED) {
+      canvas.dataset.e2eReferenceImages = JSON.stringify(
+        images.map(({ imageId, frame, width, height, opacity }, index) => ({
+          imageId,
+          center: frame.center,
+          xAxis: frame.xAxis,
+          normal: frame.normal,
+          width,
+          height,
+          opacity,
+          textured: textures.has(images[index]!.checksumSha256)
+        }))
+      );
+    }
+    context.requestRender();
+    return () => {
+      context.scene.remove(rig.group);
+      rig.dispose();
+      delete canvas.dataset.e2eReferenceImages;
+      context.requestRender();
+    };
+  }, [referenceImageKey, referenceTextureVersion]);
+
   // Committed datum axes (viewer/datumAxisRig), rebuilt when the set, a line
   // or the selection changes; the render loop keeps their length.
   const datumAxisKey = JSON.stringify(
@@ -11834,6 +11981,9 @@ export function ModelViewer({
     );
     context.scene.add(overlay.group);
     sketchDimensionsRef.current = overlay;
+    // A label that changes size (its web font arriving) moves the relation
+    // glyphs that keep clear of it; draw again so they do.
+    overlay.onLabelResize(() => context.requestRender());
     context.requestRender();
     const focusedReference = focusedReferenceDimensionRef.current;
     focusedReferenceDimensionRef.current = null;
@@ -11857,18 +12007,42 @@ export function ModelViewer({
     };
   }, [sketchBasis, sketchDimensions]);
   const sketchRelations = sketchMode?.relations;
+  const sketchRelationStrokes = sketchMode?.relationStrokes;
+  const sketchRelationKeepOuts = sketchMode?.relationKeepOuts;
   useEffect(() => {
     const context = contextRef.current;
     if (!context || !sketchBasis || !sketchRelations?.length) return;
-    const overlay = buildSketchRelationGlyphs(sketchRelations, sketchBasis);
+    const overlay = buildSketchRelationGlyphs(
+      sketchRelations,
+      sketchBasis,
+      (constraintId) => selectSketchConstraintRef.current?.(constraintId),
+      (constraintId, shown) =>
+        sketchConstraintSelectionShownRef.current?.(constraintId, shown),
+      sketchRelationStrokes,
+      sketchRelationKeepOuts
+    );
     context.scene.add(overlay.group);
+    sketchRelationsRef.current = overlay;
+    // The rails, flyouts and floating panels glyphs keep out from under are
+    // measured on their own timer, so one that moves over an idle scene
+    // still moves the glyphs (it draws a frame only on a change).
+    overlay.watchObstacles(context.labelRenderer.domElement, () =>
+      context.requestRender()
+    );
     context.requestRender();
     return () => {
       context.scene.remove(overlay.group);
       overlay.dispose();
+      if (sketchRelationsRef.current === overlay)
+        sketchRelationsRef.current = null;
       context.requestRender();
     };
-  }, [sketchBasis, sketchRelations]);
+  }, [
+    sketchBasis,
+    sketchRelations,
+    sketchRelationStrokes,
+    sketchRelationKeepOuts
+  ]);
   const sketchEntryFrameRef = useRef<SketchEntryFrame | null>(null);
   sketchEntryFrameRef.current = sketchMode?.frame ?? null;
   useEffect(() => {

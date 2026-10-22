@@ -242,104 +242,232 @@ export function patternJournalFaceClaims(
  * public resolver exposes subjects and provenance, not Generated.sources.
  * Known document transforms and independent edge witnesses establish roles.
  */
-const MAX_GRID_EDGE_LINEAGE_EVENT_VISITS = 4_000_000;
+const MAX_GRID_BOUNDARY_LINEAGE_EVENT_VISITS = 4_000_000;
 
+export interface PatternJournalBoundaryOutputs {
+  readonly edges: ReadonlySet<number>[];
+  readonly vertices: ReadonlySet<number>[] | null;
+  readonly vertexUnavailableReason:
+    'event-budget' | 'journal-unavailable' | null;
+}
+
+export interface PatternJournalBoundarySource {
+  readonly op: number;
+  readonly instanceSolids: readonly number[];
+}
+
+interface PatternJournalBoundaryPlan {
+  readonly op: number;
+  readonly edges: ReadonlySet<number>[];
+  readonly edgeSet: ReadonlySet<number>;
+  readonly vertices: ReadonlySet<number>[];
+  readonly vertexSet: ReadonlySet<number>;
+  readonly edgeVisits: number;
+  readonly combinedVisits: number;
+}
+
+function patternJournalRecord(
+  value: unknown
+): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** Existing edge-only callers retain exactly their original work allowance. */
 export function patternJournalEdgeOutputs(
   kernel: RemusKernel,
   op: number,
   instanceSolids: readonly number[]
 ): ReadonlySet<number>[] | null {
+  return (
+    patternJournalBoundaryOutputs(kernel, op, instanceSolids, false)?.edges ??
+    null
+  );
+}
+
+/**
+ * Preflight both lanes before ANY ordinal call. A vertex lane that cannot fit
+ * the existing combined cap leaves all existing face/edge behavior intact.
+ */
+export function patternJournalBoundaryOutputs(
+  kernel: RemusKernel,
+  op: number,
+  instanceSolids: readonly number[],
+  includeVertices = true,
+  expectedKind: 'grid_pattern' | 'linear_pattern' = 'grid_pattern'
+): PatternJournalBoundaryOutputs | null {
+  return (
+    patternJournalBoundaryOutputsForSources(
+      kernel,
+      [{ op, instanceSolids }],
+      includeVertices,
+      expectedKind
+    )[0] ?? null
+  );
+}
+
+/**
+ * Every source retains its own operation and actual members. Plan all work
+ * before reading either subject census so the same allowance covers every
+ * operation, both sentinels, and both lanes regardless of source order.
+ */
+export function patternJournalBoundaryOutputsForSources(
+  kernel: RemusKernel,
+  sources: readonly PatternJournalBoundarySource[],
+  includeVertices = true,
+  expectedKind: 'grid_pattern' | 'linear_pattern' = 'linear_pattern'
+): (PatternJournalBoundaryOutputs | null)[] {
+  const unavailable = () => sources.map(() => null);
   try {
-    const queried = instanceSolids.map((solid) =>
-      Array.from(kernel.getSolidEdges(solid))
-    );
-    const members = queried.map((edges) => new Set(edges));
-    if (members.some((edges, index) => edges.size !== queried[index]!.length))
-      return null;
-    const actual = new Set(members.flatMap((edges) => [...edges]));
-    const total = members.reduce((sum, edges) => sum + edges.size, 0);
+    if (expectedKind !== 'grid_pattern' && expectedKind !== 'linear_pattern')
+      return unavailable();
+    const solids = sources.flatMap((source) => [...source.instanceSolids]);
     if (
-      total === 0 ||
-      !Number.isSafeInteger(total + 1) ||
-      actual.size !== total
+      new Set(sources.map((source) => source.op)).size !== sources.length ||
+      sources.some(
+        (source) =>
+          !Number.isSafeInteger(source.op) ||
+          source.op < 0 ||
+          source.instanceSolids.length === 0
+      ) ||
+      new Set(solids).size !== solids.length ||
+      solids.some((solid) => !Number.isSafeInteger(solid) || solid < 0)
     )
-      return null;
-    // This producer records one event per unique result face, edge and
-    // vertex. Count the actual subjects independently so stale or understated
-    // summary metadata cannot make the ordinal scan budget look cheaper.
-    let actualEventCount = total;
-    for (const query of ['getSolidFaces', 'getSolidVertices'] as const) {
-      const entities = instanceSolids.flatMap((solid) =>
-        Array.from(kernel[query](solid))
-      );
-      if (new Set(entities).size !== entities.length) return null;
-      actualEventCount += entities.length;
-      if (!Number.isSafeInteger(actualEventCount)) return null;
-    }
-    // Each public ordinal resolution scans the entry's events. Bound this
-    // added work before making the ordinal calls; complex grids retain their
-    // existing face lineage and geometry when edge adoption exceeds it.
+      return unavailable();
     const summary: unknown = JSON.parse(kernel.journalSummary());
-    if (!Array.isArray(summary)) return null;
-    const entries = summary.filter(
-      (entry: unknown) =>
-        entry !== null &&
-        typeof entry === 'object' &&
-        (entry as Record<string, unknown>).op === op
-    ) as Record<string, unknown>[];
-    if (entries.length !== 1) return null;
-    const entry = entries[0]!;
-    const detail = entry.detail as Record<string, unknown> | undefined;
-    if (
-      entry.kind !== 'grid_pattern' ||
-      entry.type !== 'evolution' ||
-      !detail ||
-      detail.origin !== 'construction' ||
-      !Number.isSafeInteger(detail.events) ||
-      detail.events !== actualEventCount
-    )
-      return null;
-    const eventVisits = (total + 1) * actualEventCount;
-    if (
-      !Number.isSafeInteger(eventVisits) ||
-      eventVisits > MAX_GRID_EDGE_LINEAGE_EVENT_VISITS
-    )
-      return null;
-    const outputs = new Set<number>();
-    for (let index = 0; index <= total; index += 1) {
-      const decoded: unknown = JSON.parse(
-        kernel.resolveOperationOutput(op, 'edge', index)
+    if (!Array.isArray(summary)) return unavailable();
+    const entries = summary.filter(patternJournalRecord);
+    const plans: PatternJournalBoundaryPlan[] = [];
+    for (const source of sources) {
+      const edgeGroups = source.instanceSolids.map((solid) =>
+        Array.from(kernel.getSolidEdges(solid))
       );
-      if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded))
-        return null;
-      const row = decoded as Record<string, unknown>;
-      if (index === total) {
-        if (row.status !== 'noMatch') return null;
-        break;
+      const vertexGroups = source.instanceSolids.map((solid) =>
+        Array.from(kernel.getSolidVertices(solid))
+      );
+      const edges = edgeGroups.map((group) => new Set(group));
+      const vertices = vertexGroups.map((group) => new Set(group));
+      const edgeHandles = edgeGroups.flat();
+      const vertexHandles = vertexGroups.flat();
+      const faceHandles = source.instanceSolids.flatMap((solid) =>
+        Array.from(kernel.getSolidFaces(solid))
+      );
+      for (const handles of [edgeHandles, vertexHandles, faceHandles]) {
+        if (
+          new Set(handles).size !== handles.length ||
+          handles.some((handle) => !Number.isSafeInteger(handle) || handle < 0)
+        )
+          return unavailable();
       }
+      const eventCount =
+        edgeHandles.length + vertexHandles.length + faceHandles.length;
+      if (edgeHandles.length === 0 || !Number.isSafeInteger(eventCount))
+        return unavailable();
+      const matching = entries.filter((entry) => entry.op === source.op);
+      if (matching.length !== 1) return unavailable();
+      const entry = matching[0]!;
+      const detail = entry.detail;
       if (
-        row.status !== 'bound' ||
-        row.provenance !== 'construction' ||
-        !Array.isArray(row.entities) ||
-        row.entities.length !== 1
+        entry.kind !== expectedKind ||
+        entry.type !== 'evolution' ||
+        !patternJournalRecord(detail) ||
+        detail.origin !== 'construction' ||
+        !Number.isSafeInteger(detail.events) ||
+        detail.events !== eventCount
       )
-        return null;
-      const entity: unknown = row.entities[0];
-      if (!entity || typeof entity !== 'object' || Array.isArray(entity))
-        return null;
-      const { kind, handle } = entity as Record<string, unknown>;
-      if (
-        kind !== 'edge' ||
-        !Number.isSafeInteger(handle) ||
-        !actual.has(handle as number) ||
-        outputs.has(handle as number)
-      )
-        return null;
-      outputs.add(handle as number);
+        return unavailable();
+      plans.push({
+        op: source.op,
+        edges,
+        edgeSet: new Set(edgeHandles),
+        vertices,
+        vertexSet: new Set(vertexHandles),
+        edgeVisits: (edgeHandles.length + 1) * eventCount,
+        combinedVisits:
+          (edgeHandles.length + vertexHandles.length + 2) * eventCount
+      });
     }
-    return outputs.size === actual.size ? members : null;
+    const edgeVisits = plans.reduce((sum, plan) => sum + plan.edgeVisits, 0);
+    if (
+      !Number.isSafeInteger(edgeVisits) ||
+      edgeVisits > MAX_GRID_BOUNDARY_LINEAGE_EVENT_VISITS
+    )
+      return unavailable();
+    const combinedVisits = plans.reduce(
+      (sum, plan) => sum + plan.combinedVisits,
+      0
+    );
+    const canReadVertices =
+      includeVertices &&
+      plans.every((plan) => plan.vertexSet.size > 0) &&
+      Number.isSafeInteger(combinedVisits) &&
+      combinedVisits <= MAX_GRID_BOUNDARY_LINEAGE_EVENT_VISITS;
+    const read = (
+      op: number,
+      kind: 'edge' | 'vertex',
+      expected: ReadonlySet<number>
+    ): boolean => {
+      try {
+        const outputs = new Set<number>();
+        for (let index = 0; index <= expected.size; index += 1) {
+          const decoded: unknown = JSON.parse(
+            kernel.resolveOperationOutput(op, kind, index)
+          );
+          if (!patternJournalRecord(decoded)) return false;
+          const row = decoded;
+          if (index === expected.size)
+            return (
+              row.status === 'noMatch' &&
+              (row.entities === undefined ||
+                (Array.isArray(row.entities) && row.entities.length === 0))
+            );
+          if (
+            row.status !== 'bound' ||
+            row.provenance !== 'construction' ||
+            !Array.isArray(row.entities) ||
+            row.entities.length !== 1
+          )
+            return false;
+          const entity: unknown = row.entities[0];
+          if (!patternJournalRecord(entity)) return false;
+          const { kind: actualKind, handle } = entity;
+          if (
+            actualKind !== kind ||
+            typeof handle !== 'number' ||
+            !Number.isSafeInteger(handle) ||
+            handle < 0 ||
+            !expected.has(handle) ||
+            outputs.has(handle)
+          )
+            return false;
+          outputs.add(handle);
+        }
+        return false;
+      } catch {
+        return false;
+      }
+    };
+    return plans.map<PatternJournalBoundaryOutputs | null>((plan) => {
+      if (!read(plan.op, 'edge', plan.edgeSet)) return null;
+      if (!canReadVertices)
+        return {
+          edges: plan.edges,
+          vertices: null,
+          vertexUnavailableReason: includeVertices ? 'event-budget' : null
+        };
+      if (!read(plan.op, 'vertex', plan.vertexSet))
+        return {
+          edges: plan.edges,
+          vertices: null,
+          vertexUnavailableReason: 'journal-unavailable'
+        };
+      return {
+        edges: plan.edges,
+        vertices: plan.vertices,
+        vertexUnavailableReason: null
+      };
+    });
   } catch {
-    return null;
+    return unavailable();
   }
 }
 

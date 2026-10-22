@@ -102,6 +102,82 @@ async function fixture() {
 describe.each(['memory', 'indexeddb'] as const)(
   '%s atomic device-list pins',
   (backend) => {
+    if (backend === 'indexeddb')
+      it('reads and retires an existing legacy pin record', async () => {
+        const [left, right] = await stores(backend);
+        const a = await fixture();
+        const db = await new Promise<IDBDatabase>((resolve, reject) => {
+          const request = indexedDB.open('openzcad-e2ee', 1);
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () =>
+            reject(
+              new Error(
+                request.error?.message ?? 'Legacy pin fixture did not open'
+              )
+            );
+        });
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const tx = db.transaction('pins', 'readwrite');
+            tx.objectStore('pins').put(a.list.pin, USER);
+            tx.oncomplete = () => resolve();
+            tx.onabort = tx.onerror = () =>
+              reject(
+                new Error(
+                  tx.error?.message ?? 'Legacy pin fixture write failed'
+                )
+              );
+          });
+        } finally {
+          db.close();
+        }
+        expect(await left.loadPin(USER)).toEqual(a.list.pin);
+        await right.forgetErasedIdentity(USER, await left.loadPin(USER));
+        expect(await left.loadPin(USER)).toBeNull();
+        await expect(left.savePin(USER, a.list)).rejects.toHaveProperty(
+          'reason',
+          'identity'
+        );
+      });
+    it('retires erased trust across tabs and repeated erasures without admitting old replies', async () => {
+      const [left, right] = await stores(backend);
+      const a = await fixture(),
+        b = await fixture(),
+        c = await fixture();
+      await left.savePin(USER, a.list);
+      const snapshot = await left.loadPin(USER);
+      const advanced = await a.extend(a.list, a.chain, 2);
+      await right.savePin(USER, advanced.list);
+      await left.forgetErasedIdentity(USER, snapshot);
+      expect(await right.loadPin(USER)).toBeNull();
+      await expect(right.savePin(USER, advanced.list)).rejects.toHaveProperty(
+        'reason',
+        'identity'
+      );
+      await right.savePin(USER, b.list, { replaceIdentityFrom: null });
+      await left.forgetErasedIdentity(USER, await left.loadPin(USER));
+      await right.savePin(USER, c.list, { replaceIdentityFrom: null });
+      for (const old of [a.list, advanced.list, b.list])
+        await expect(
+          left.savePin(USER, old, { replaceIdentityFrom: c.list.pin })
+        ).rejects.toHaveProperty('reason', 'identity');
+      expect(await left.loadPin(USER)).toEqual(c.list.pin);
+    });
+
+    it('preserves a newly replaced identity when an older erasure completes', async () => {
+      const [left, right] = await stores(backend);
+      const a = await fixture(),
+        b = await fixture();
+      await left.savePin(USER, a.list);
+      const snapshot = await left.loadPin(USER);
+      await right.savePin(USER, b.list, { replaceIdentityFrom: snapshot });
+      await left.forgetErasedIdentity(USER, snapshot);
+      await left.forgetErasedIdentity(USER, null);
+      expect(await right.loadPin(USER)).toEqual(b.list.pin);
+      await expect(
+        left.savePin(USER, a.list, { replaceIdentityFrom: b.list.pin })
+      ).rejects.toHaveProperty('reason', 'identity');
+    });
     it('atomically retains one non-extractable device across connections and retries', async () => {
       const [left, right] = await stores(backend);
       const candidate = async (deviceId: string): Promise<StoredDevice> => {
@@ -141,6 +217,45 @@ describe.each(['memory', 'indexeddb'] as const)(
         label: 'Updated',
         approval: { id: 'request' }
       });
+      await right.saveDevice({
+        ...stored,
+        approval: { id: 'new_request', nonce: null }
+      });
+      await left.clearApprovalIfCurrent(USER, 'request');
+      expect((await right.loadDevice(USER))?.approval?.id).toBe('new_request');
+      await left.clearApprovalIfCurrent(USER, 'new_request');
+      expect((await right.loadDevice(USER))?.approval).toBeNull();
+      expect((await right.loadDevice(USER))?.signingPublicKey).toEqual(
+        a.signingPublicKey
+      );
+      const snapshot = (await left.loadDevice(USER))!;
+      const saved = await Promise.all([
+        left.replaceDeviceIfCurrent(snapshot, {
+          ...snapshot,
+          approval: { id: 'left', nonce: new Uint8Array([1]) }
+        }),
+        right.replaceDeviceIfCurrent(snapshot, {
+          ...snapshot,
+          approval: { id: 'right', nonce: new Uint8Array([2]) }
+        })
+      ]);
+      expect(saved).toEqual([true, false]);
+      expect((await right.loadDevice(USER))?.approval?.id).toBe('left');
+      const pending = (await right.loadDevice(USER))!;
+      await left.saveDevice({
+        ...pending,
+        approval: {
+          ...pending.approval!,
+          confirmedApproverKey: 'new confirmation'
+        }
+      });
+      expect(await right.replaceDeviceIfCurrent(pending, snapshot)).toBe(false);
+      expect(
+        (await left.loadDevice(USER))?.approval?.confirmedApproverKey
+      ).toBe('new confirmation');
+      await left.deleteDevice(USER);
+      expect(await right.replaceDeviceIfCurrent(pending, snapshot)).toBe(false);
+      expect(await left.loadDevice(USER)).toBeNull();
     });
 
     it('accepts first sight, identical heads and descendants, refusing a stale head', async () => {

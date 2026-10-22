@@ -23,7 +23,8 @@ import {
   seedUnitlessImportUnits,
   setSelectionFilter,
   stubApi,
-  test
+  test,
+  withHydratedDocument
 } from './openzcad-fixtures';
 
 // Cross-tab IndexedDB sync settles much more slowly on the 2-core CI runners
@@ -89,7 +90,9 @@ test('keeps exact geometry and undo through a save echo and reopens compatible s
   // A server echo can advance the fence without changing the exact model.
   await page.route('**/api/projects/*/revisions', async (route) => {
     if (route.request().method() !== 'POST') return route.fallback();
-    const payload = route.request().postDataJSON() as {
+    const payload = (await withHydratedDocument(
+      route.request().postDataJSON()
+    )) as {
       document: ProjectDocument;
       reason: string;
       savedRevisionId?: string;
@@ -227,7 +230,9 @@ class SharedCloudProjectApi {
     );
     await page.route('**/api/projects', async (route) => {
       if (route.request().method() === 'POST') {
-        const payload = route.request().postDataJSON() as {
+        const payload = (await withHydratedDocument(
+          route.request().postDataJSON()
+        )) as {
           name: string;
           units?: UnitSystem;
           initialDocument?: ProjectDocument;
@@ -256,9 +261,9 @@ class SharedCloudProjectApi {
     });
     await page.route('**/api/projects/*/document', async (route) => {
       const current = this.project;
-      const payload = route
-        .request()
-        .postDataJSON() as SaveProjectDocumentRequest;
+      const payload = (await withHydratedDocument(
+        route.request().postDataJSON()
+      )) as SaveProjectDocumentRequest;
       if (
         !current ||
         payload.projectId !== current.projectId ||
@@ -294,7 +299,9 @@ class SharedCloudProjectApi {
       if (route.request().method() !== 'POST') {
         return route.fulfill({ json: { revisions: [], maxRevisions: 50 } });
       }
-      const payload = route.request().postDataJSON() as {
+      const payload = (await withHydratedDocument(
+        route.request().postDataJSON()
+      )) as {
         expectedVersion: number;
         document: ProjectDocument;
       };
@@ -581,7 +588,9 @@ for (const action of ['edit', 'leave', 'switch', 'share'] as const) {
     });
     await page.route('**/api/projects/*/revisions', async (route) => {
       if (route.request().method() !== 'POST') return route.fallback();
-      const { document } = route.request().postDataJSON() as {
+      const { document } = (await withHydratedDocument(
+        route.request().postDataJSON()
+      )) as {
         document: ProjectDocument;
       };
       received();

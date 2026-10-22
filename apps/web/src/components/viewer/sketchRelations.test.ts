@@ -1,66 +1,641 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import * as THREE from 'three';
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
-import { buildSketchRelationGlyphs } from './sketchRelations';
+import type { SketchRelationGlyphChip } from '../../lib/sketch/relationGlyphs';
+import { segmentHitsBox } from '../../lib/sketch/relationGlyphLayout';
+import {
+  OBSTACLE_REFRESH_MS,
+  buildSketchRelationGlyphs
+} from './sketchRelations';
+
+// The XZ plane at y = 5: plane (10, 0) is world (10, 5, 0).
+const basis = {
+  origin: { x: 0, y: 5, z: 0 },
+  u: { x: 1, y: 0, z: 0 },
+  v: { x: 0, y: 0, z: -1 },
+  normal: { x: 0, y: 1, z: 0 }
+};
+
+const bottom: SketchRelationGlyphChip = {
+  key: 'object:bottom',
+  placement: 'object',
+  anchor: { x: 10, y: 0 },
+  normal: { x: 0, y: 1 },
+  glyphs: [
+    {
+      constraintId: 'c1',
+      kind: 'horizontal',
+      symbol: '—',
+      label: 'Horizontal',
+      conflicted: false
+    },
+    {
+      constraintId: 'c2',
+      kind: 'parallel',
+      symbol: '∥',
+      label: 'Parallel',
+      conflicted: true,
+      selected: true
+    }
+  ]
+};
+
+/** Looking straight down the plane normal: plane +u is screen right, +v up. */
+function topCamera() {
+  const camera = new THREE.OrthographicCamera(-50, 50, 50, -50, 0.1, 100);
+  camera.position.set(10, 30, 0);
+  camera.up.set(0, 0, -1);
+  camera.lookAt(10, 5, 0);
+  camera.updateMatrixWorld();
+  camera.updateProjectionMatrix();
+  return camera;
+}
 
 describe('sketch relation glyph overlay', () => {
-  it('places one decorative, click-through chip per cluster on the sketch plane', () => {
-    const overlay = buildSketchRelationGlyphs(
-      [
-        {
-          key: 'object:bottom',
-          placement: 'object',
-          anchor: { x: 10, y: 0 },
-          glyphs: [
-            {
-              constraintId: 'c1',
-              kind: 'horizontal',
-              symbol: '—',
-              label: 'Horizontal',
-              conflicted: false
-            },
-            {
-              constraintId: 'c2',
-              kind: 'parallel',
-              symbol: '∥',
-              label: 'Parallel',
-              conflicted: true
-            }
-          ]
-        }
-      ],
-      // The XZ plane at y = 5: plane (10, 0) is world (10, 5, 0).
-      {
-        origin: { x: 0, y: 5, z: 0 },
-        u: { x: 1, y: 0, z: 0 },
-        v: { x: 0, y: 0, z: -1 },
-        normal: { x: 0, y: 1, z: 0 }
-      }
-    );
+  it('places one chip per cluster on the sketch plane, a button per relation', () => {
+    const overlay = buildSketchRelationGlyphs([bottom], basis);
     const labels = overlay.group.children.filter(
       (child): child is CSS2DObject => child instanceof CSS2DObject
     );
     expect(labels).toHaveLength(1);
     const label = labels[0]!;
     expect(label.position.toArray()).toEqual([10, 5, 0]);
-    expect(label.element.getAttribute('aria-hidden')).toBe('true');
     expect(label.element.dataset.placement).toBe('object');
     const marks = [
-      ...label.element.querySelectorAll<HTMLElement>('.sketch-relation-glyph')
+      ...label.element.querySelectorAll<HTMLButtonElement>(
+        'button.sketch-relation-glyph'
+      )
     ];
     expect(
       marks.map((mark) => [
         mark.textContent,
         mark.dataset.kind,
         mark.dataset.constraintId,
-        mark.dataset.conflicted ?? null
+        mark.dataset.conflicted ?? null,
+        mark.getAttribute('aria-pressed'),
+        mark.getAttribute('aria-label'),
+        mark.tabIndex
       ])
     ).toEqual([
-      ['—', 'horizontal', 'c1', null],
-      ['∥', 'parallel', 'c2', 'true']
+      ['—', 'horizontal', 'c1', null, 'false', 'Horizontal relation', -1],
+      [
+        '∥',
+        'parallel',
+        'c2',
+        'true',
+        'true',
+        'Parallel relation · solver residual',
+        -1
+      ]
     ]);
-    // Picks pass through to the geometry underneath.
+    expect(marks[1]!.dataset.selected).toBe('true');
+    // The 3D pick never lands on a chip; its own buttons take the click.
     expect(label.raycast).not.toBe(CSS2DObject.prototype.raycast);
     overlay.dispose();
     expect(overlay.group.children).toHaveLength(0);
+  });
+
+  it('selects the clicked relation without the press reaching the host', () => {
+    const select = vi.fn();
+    const overlay = buildSketchRelationGlyphs([bottom], basis, select);
+    const host = document.createElement('div');
+    const label = overlay.group.children[0] as CSS2DObject;
+    host.append(label.element);
+    const hostPress = vi.fn();
+    host.addEventListener('pointerdown', hostPress);
+    host.addEventListener('click', hostPress);
+    const mark = label.element.querySelector<HTMLButtonElement>(
+      '[data-constraint-id="c1"]'
+    )!;
+    mark.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    mark.click();
+    expect(select).toHaveBeenCalledWith('c1');
+    expect(hostPress).not.toHaveBeenCalled();
+    overlay.dispose();
+  });
+
+  it('stands a chip off its curve on the projected normal and rewrites nothing on a still frame', () => {
+    const overlay = buildSketchRelationGlyphs([bottom], basis);
+    const element = (overlay.group.children[0] as CSS2DObject).element;
+    const setProperty = vi.spyOn(element.style, 'setProperty');
+    const camera = topCamera();
+    overlay.layout(camera, 400, 400);
+    const translates = () =>
+      setProperty.mock.calls.filter(([property]) => property === 'translate');
+    expect(translates()).toHaveLength(1);
+    const [property, value] = translates()[0]!;
+    expect(property).toBe('translate');
+    // Plane +v (the line's upper side) is screen up: the chip rises straight
+    // off the line by its standoff plus half its height, and does not slide.
+    const [dx, dy] = String(value)
+      .split(' ')
+      .map((part) => parseFloat(part));
+    expect(dx).toBe(0);
+    expect(dy).toBeLessThanOrEqual(-(6 + 8));
+    const calls = setProperty.mock.calls.length;
+    overlay.layout(camera, 400, 400);
+    expect(setProperty).toHaveBeenCalledTimes(calls);
+    overlay.dispose();
+  });
+
+  it.each([1e9, 1e12])(
+    'keeps the standoff direction for a sketch at %d under a close, tilted perspective camera',
+    (far) => {
+      // Plane (far, far) is world (far, 5, -far). The chip stands off along
+      // plane -v, world +z: partly toward a camera 20 units away and tilted
+      // back over it. Any probe point long enough to survive rounding at this
+      // magnitude would cross the eye plane and flip; the clip-space
+      // derivative has no probe.
+      const chip: SketchRelationGlyphChip = {
+        ...bottom,
+        anchor: { x: far, y: far },
+        normal: { x: 0, y: -1 }
+      };
+      const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
+      camera.position.set(far, 30, -far + 20);
+      camera.lookAt(far, 5, -far);
+      camera.updateMatrixWorld();
+      camera.updateProjectionMatrix();
+      const overlay = buildSketchRelationGlyphs([chip], basis);
+      const element = (overlay.group.children[0] as CSS2DObject).element;
+      overlay.layout(camera, 400, 400);
+      const [dx, dy] = element.style
+        .getPropertyValue('translate')
+        .split(' ')
+        .map((part) => parseFloat(part));
+      // The anchor is at the screen centre and world +z leans toward the
+      // camera's bottom edge: the chip drops straight down the screen.
+      expect(dx).toBe(0);
+      expect(dy).toBeGreaterThan(0);
+      overlay.dispose();
+    }
+  );
+
+  it("measures the viewer area's floating controls and keeps glyphs from under them", () => {
+    const area = document.createElement('div');
+    area.className = 'viewer-area';
+    const layer = document.createElement('div');
+    const rail = document.createElement('div');
+    rail.className = 'viewer-rail';
+    // The right lane's inspector floats over the stage as well; this one
+    // is closed (no box), so it blocks nothing.
+    const inspector = document.createElement('div');
+    inspector.className = 'inspector-float';
+    area.append(layer, rail, inspector);
+    document.body.append(area);
+    const rect = (left: number, top: number, width: number, height: number) =>
+      ({
+        left,
+        top,
+        right: left + width,
+        bottom: top + height,
+        width,
+        height,
+        x: left,
+        y: top,
+        toJSON: () => ({})
+      }) as DOMRect;
+    vi.spyOn(layer, 'getBoundingClientRect').mockReturnValue(
+      rect(0, 0, 400, 400)
+    );
+    // The rail sits right over the bottom line's preferred spot: the chip
+    // above the line's middle (screen 200, 200).
+    vi.spyOn(rail, 'getBoundingClientRect').mockReturnValue(
+      rect(150, 150, 100, 46)
+    );
+    const overlay = buildSketchRelationGlyphs([bottom], basis);
+    const element = (overlay.group.children[0] as CSS2DObject).element;
+    expect(overlay.refreshObstacles(layer)).toBe(true);
+    // Nothing moved: a second measurement reports no change.
+    expect(overlay.refreshObstacles(layer)).toBe(false);
+    overlay.layout(topCamera(), 400, 400);
+    const [dx, dy] = element.style
+      .getPropertyValue('translate')
+      .split(' ')
+      .map((part) => parseFloat(part));
+    const left = 200 + dx! - 17;
+    const top = 200 + dy! - 8;
+    const clear =
+      left + 34 <= 150 || left >= 250 || top + 16 <= 150 || top >= 196;
+    expect(clear).toBe(true);
+    overlay.dispose();
+    area.remove();
+  });
+
+  it('re-measures the viewport controls on its own timer and draws only on a change', () => {
+    vi.useFakeTimers();
+    try {
+      const area = document.createElement('div');
+      area.className = 'viewer-area';
+      const layer = document.createElement('div');
+      const flyout = document.createElement('div');
+      flyout.className = 'sketch-flyouts';
+      area.append(layer, flyout);
+      document.body.append(area);
+      const box = (left: number, width: number) =>
+        ({
+          left,
+          top: 100,
+          right: left + width,
+          bottom: 200,
+          width,
+          height: 100,
+          x: left,
+          y: 100,
+          toJSON: () => ({})
+        }) as DOMRect;
+      vi.spyOn(layer, 'getBoundingClientRect').mockReturnValue(box(0, 400));
+      const flyoutBox = vi
+        .spyOn(flyout, 'getBoundingClientRect')
+        .mockReturnValue(box(0, 0));
+      const changed = vi.fn();
+      const overlay = buildSketchRelationGlyphs([bottom], basis);
+      // Closed flyout: nothing to keep out of, so nothing to draw.
+      overlay.watchObstacles(layer, changed);
+      expect(changed).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(OBSTACLE_REFRESH_MS * 3);
+      expect(changed).not.toHaveBeenCalled();
+      // It opens while the scene is idle: the next tick asks for one frame.
+      flyoutBox.mockReturnValue(box(150, 100));
+      vi.advanceTimersByTime(OBSTACLE_REFRESH_MS);
+      expect(changed).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(OBSTACLE_REFRESH_MS * 3);
+      expect(changed).toHaveBeenCalledTimes(1);
+      // Disposed overlays stop measuring.
+      overlay.dispose();
+      flyoutBox.mockReturnValue(box(0, 0));
+      vi.advanceTimersByTime(OBSTACLE_REFRESH_MS * 3);
+      expect(changed).toHaveBeenCalledTimes(1);
+      area.remove();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps glyphs off the dimension labels beside them, every frame', () => {
+    // A driving dimension's label centred on the same line middle the
+    // horizontal relation's chip would stand above (screen 200, 200).
+    const boxes = vi.fn(
+      (
+        out: Float64Array,
+        at: number,
+        _camera: THREE.Camera,
+        _width: number,
+        _height: number
+      ) => {
+        out.set([160, 170, 240, 200], at);
+        return 1;
+      }
+    );
+    const overlay = buildSketchRelationGlyphs([bottom], basis);
+    const element = (overlay.group.children[0] as CSS2DObject).element;
+    overlay.layout(topCamera(), 400, 400, {
+      labelCount: 1,
+      writeLabelBoxes: boxes
+    });
+    expect(boxes).toHaveBeenCalledTimes(1);
+    const [dx, dy] = element.style
+      .getPropertyValue('translate')
+      .split(' ')
+      .map((part) => parseFloat(part));
+    const left = 200 + dx! - 17;
+    const top = 200 + dy! - 8;
+    expect(
+      left + 34 <= 160 || left >= 240 || top + 16 <= 170 || top >= 200
+    ).toBe(true);
+    overlay.dispose();
+  });
+
+  it('stands a curve chip off square to the curve as drawn on an oblique view', () => {
+    // A camera low and off to the side: the projected plane normal leans
+    // along the projected line, so only the tangent's perpendicular is square.
+    const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
+    camera.position.set(40, 25, 30);
+    camera.lookAt(10, 5, 0);
+    camera.updateMatrixWorld();
+    camera.updateProjectionMatrix();
+    const overlay = buildSketchRelationGlyphs([bottom], basis);
+    const element = (overlay.group.children[0] as CSS2DObject).element;
+    overlay.layout(camera, 400, 400);
+    const [dx, dy] = element.style
+      .getPropertyValue('translate')
+      .split(' ')
+      .map((part) => parseFloat(part));
+    const screen = (x: number, z: number) => {
+      const point = new THREE.Vector3(x, 5, z).project(camera);
+      return { x: point.x * 200 + 200, y: -point.y * 200 + 200 };
+    };
+    // The line runs along world x through (10, 5, 0); its normal side is
+    // plane +v, world −z.
+    const a = screen(9, 0);
+    const b = screen(11, 0);
+    const tangent = { x: b.x - a.x, y: b.y - a.y };
+    const along =
+      (dx! * tangent.x + dy! * tangent.y) /
+      (Math.hypot(dx!, dy!) * Math.hypot(tangent.x, tangent.y));
+    // Rounded to whole pixels, so square to within a few degrees.
+    expect(Math.abs(along)).toBeLessThan(0.08);
+    const side = screen(10, -1);
+    const anchor = screen(10, 0);
+    expect(
+      dx! * (side.x - anchor.x) + dy! * (side.y - anchor.y)
+    ).toBeGreaterThan(0);
+    // The projected normal itself is not square here (else this proves
+    // nothing).
+    const normal = { x: side.x - anchor.x, y: side.y - anchor.y };
+    expect(
+      Math.abs(
+        (normal.x * tangent.x + normal.y * tangent.y) /
+          (Math.hypot(normal.x, normal.y) * Math.hypot(tangent.x, tangent.y))
+      )
+    ).toBeGreaterThan(0.2);
+    overlay.dispose();
+  });
+
+  it('keeps one chip of a selected relation in view, and reports when none can show', () => {
+    // A selected parallel shows on both lines. A panel covers all but a strip
+    // along the top: only the pinned chip walks out to it (pinning both
+    // would stack two). When the panel covers everything, the selection is
+    // reported not drawn, once.
+    const area = document.createElement('div');
+    area.className = 'viewer-area';
+    const layer = document.createElement('div');
+    const cover = document.createElement('div');
+    cover.className = 'viewer-rail';
+    area.append(layer, cover);
+    document.body.append(area);
+    const rect = (top: number, width: number, height: number) =>
+      ({
+        left: 0,
+        top,
+        right: width,
+        bottom: top + height,
+        width,
+        height,
+        x: 0,
+        y: top,
+        toJSON: () => ({})
+      }) as DOMRect;
+    vi.spyOn(layer, 'getBoundingClientRect').mockReturnValue(rect(0, 400, 400));
+    const coverBox = vi
+      .spyOn(cover, 'getBoundingClientRect')
+      .mockReturnValue(rect(40, 400, 360));
+    const selectedParallel = { ...bottom.glyphs[1]!, selected: true };
+    const shown = vi.fn();
+    const overlay = buildSketchRelationGlyphs(
+      [
+        { ...bottom, glyphs: [selectedParallel] },
+        {
+          ...bottom,
+          key: 'object:top',
+          anchor: { x: 10, y: 20 },
+          glyphs: [selectedParallel]
+        }
+      ],
+      basis,
+      () => {},
+      shown
+    );
+    const shownCount = () =>
+      overlay.group.children.filter(
+        (child) =>
+          child instanceof CSS2DObject &&
+          child.element.style.visibility !== 'hidden'
+      ).length;
+    overlay.refreshObstacles(layer);
+    overlay.layout(topCamera(), 400, 400);
+    expect(shownCount()).toBe(1);
+    expect(shown.mock.calls).toEqual([['c2', true]]);
+    coverBox.mockReturnValue(rect(0, 400, 400));
+    overlay.refreshObstacles(layer);
+    overlay.layout(topCamera(), 400, 400);
+    overlay.layout(topCamera(), 400, 400);
+    expect(shownCount()).toBe(0);
+    expect(shown.mock.calls).toEqual([
+      ['c2', true],
+      ['c2', false]
+    ]);
+    overlay.dispose();
+    area.remove();
+  });
+
+  it('keeps a glyph off an unrelated curve crossing its anchor', () => {
+    // The bottom line's horizontal relation sits at its middle, (10, 0),
+    // where an unconstrained vertical line crosses it. The chip would stand
+    // straight up over that line; it must go aside instead.
+    const overlay = buildSketchRelationGlyphs(
+      [bottom],
+      basis,
+      () => {},
+      () => {},
+      new Float64Array([0, 0, 20, 0, 10, -10, 10, 10])
+    );
+    const element = (overlay.group.children[0] as CSS2DObject).element;
+    overlay.layout(topCamera(), 400, 400);
+    const [dx, dy] = element.style
+      .getPropertyValue('translate')
+      .split(' ')
+      .map((part) => parseFloat(part));
+    // The vertical line is screen x = 200, from y = 160 to 240.
+    const left = 200 + dx! - 17;
+    const right = 200 + dx! + 17;
+    const top = 200 + dy! - 8;
+    const bottomEdge = 200 + dy! + 8;
+    expect(
+      right < 200 - 2 || left > 200 + 2 || bottomEdge < 160 || top > 240
+    ).toBe(true);
+    // And the line the relation is on, screen y = 200.
+    expect(bottomEdge < 200 - 2 || top > 200 + 2).toBe(true);
+    overlay.dispose();
+  });
+
+  it('keeps a glyph off the visible part of a curve that runs behind the camera', () => {
+    // A camera standing on the sketch plane, looking along it. A long line
+    // runs from behind the camera, through the chip's anchor at plane
+    // (10, 20), on into the distance; the chip would stand straight along it.
+    const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
+    camera.position.set(10, 8, 5);
+    camera.lookAt(10, 5, -20);
+    camera.updateMatrixWorld();
+    camera.updateProjectionMatrix();
+    const chip: SketchRelationGlyphChip = {
+      ...bottom,
+      key: 'object:far',
+      anchor: { x: 10, y: 20 },
+      normal: { x: 0, y: 1 }
+    };
+    const overlay = buildSketchRelationGlyphs(
+      [chip],
+      basis,
+      () => {},
+      () => {},
+      new Float64Array([10, -20, 10, 40])
+    );
+    const element = (overlay.group.children[0] as CSS2DObject).element;
+    overlay.layout(camera, 400, 400);
+    const [dx, dy] = element.style
+      .getPropertyValue('translate')
+      .split(' ')
+      .map((part) => parseFloat(part));
+    const screen = (y: number) => {
+      const point = new THREE.Vector3(10, 5, -y).project(camera);
+      return { x: point.x * 200 + 200, y: -point.y * 200 + 200 };
+    };
+    const anchor = screen(20);
+    const cx = anchor.x + dx!;
+    const cy = anchor.y + dy!;
+    // The visible part of the line, plane y from just ahead of the camera
+    // to its far end, sampled finely.
+    for (let y = 0; y < 40; y += 0.5) {
+      const a = screen(y);
+      const b = screen(y + 0.5);
+      expect(
+        segmentHitsBox(a.x, a.y, b.x, b.y, cx - 17, cy - 8, cx + 17, cy + 8),
+        `covers the line near plane y = ${y}`
+      ).toBe(false);
+    }
+    overlay.dispose();
+  });
+
+  it('keeps a glyph off a pickable point it has no relation to', () => {
+    // A large circle's centre at plane (10, 4) sits just above the bottom
+    // line's middle, right where its chip would stand; nothing ties the two.
+    const overlay = buildSketchRelationGlyphs(
+      [bottom],
+      basis,
+      () => {},
+      () => {},
+      new Float64Array(0),
+      new Float64Array([10, 4])
+    );
+    const element = (overlay.group.children[0] as CSS2DObject).element;
+    overlay.layout(topCamera(), 400, 400);
+    const [dx, dy] = element.style
+      .getPropertyValue('translate')
+      .split(' ')
+      .map((part) => parseFloat(part));
+    // The centre is screen (200, 184); the chip box must keep 5 px off it.
+    const left = 200 + dx! - 17;
+    const right = 200 + dx! + 17;
+    const top = 200 + dy! - 8;
+    const bottomEdge = 200 + dy! + 8;
+    expect(right <= 195 || left >= 205 || bottomEdge <= 179 || top >= 189).toBe(
+      true
+    );
+    overlay.dispose();
+  });
+
+  it('reports a selected glyph panned off screen and back', () => {
+    const shown = vi.fn();
+    const overlay = buildSketchRelationGlyphs(
+      [{ ...bottom, glyphs: [{ ...bottom.glyphs[0]!, selected: true }] }],
+      basis,
+      () => {},
+      shown
+    );
+    const camera = topCamera();
+    overlay.layout(camera, 400, 400);
+    // Pan far enough that the anchor (plane 10, 0) leaves the view.
+    camera.position.x += 200;
+    camera.updateMatrixWorld();
+    overlay.layout(camera, 400, 400);
+    overlay.layout(camera, 400, 400);
+    camera.position.x -= 200;
+    camera.updateMatrixWorld();
+    overlay.layout(camera, 400, 400);
+    expect(shown.mock.calls).toEqual([
+      ['c1', true],
+      ['c1', false],
+      ['c1', true]
+    ]);
+    overlay.dispose();
+  });
+
+  it('counts a selected relation in view while any of its chips is drawn', () => {
+    // A selected parallel on two lines: the first (pinned) is panned off
+    // screen, the second still shows, so the selection is still in view.
+    const shown = vi.fn();
+    const selectedParallel = { ...bottom.glyphs[1]!, selected: true };
+    const overlay = buildSketchRelationGlyphs(
+      [
+        { ...bottom, glyphs: [selectedParallel] },
+        {
+          ...bottom,
+          key: 'object:far',
+          anchor: { x: 40, y: 0 },
+          glyphs: [selectedParallel]
+        }
+      ],
+      basis,
+      () => {},
+      shown
+    );
+    const camera = topCamera();
+    // 4 px a unit, plane x = 10 at the screen centre. Pan 55 units: x = 10
+    // lands 20 px off the left edge, x = 40 at 100 px, still in view.
+    camera.position.x += 55;
+    camera.updateMatrixWorld();
+    overlay.layout(camera, 400, 400);
+    expect(shown.mock.calls).toEqual([['c2', true]]);
+    // Both gone: out of view.
+    camera.position.x += 200;
+    camera.updateMatrixWorld();
+    overlay.layout(camera, 400, 400);
+    expect(shown.mock.calls).toEqual([
+      ['c2', true],
+      ['c2', false]
+    ]);
+    overlay.dispose();
+  });
+
+  it("keeps glyphs off the selected text's rotation ring and grab dot", () => {
+    // A selected text's handles drawn just above the bottom line's middle,
+    // right where its chip would stand: the ring takes presses 27–41 px out.
+    const overlay = buildSketchRelationGlyphs([bottom], basis);
+    const element = (overlay.group.children[0] as CSS2DObject).element;
+    overlay.layout(topCamera(), 400, 400, null, {
+      shown: true,
+      x: 200,
+      y: 170,
+      ring: true
+    });
+    const [dx, dy] = element.style
+      .getPropertyValue('translate')
+      .split(' ')
+      .map((part) => parseFloat(part));
+    const left = 200 + dx! - 17;
+    const right = 200 + dx! + 17;
+    const top = 200 + dy! - 8;
+    const bottomEdge = 200 + dy! + 8;
+    // Clear of the ring's whole square (41 px each way of 200, 170).
+    expect(right <= 159 || left >= 241 || bottomEdge <= 129 || top >= 211).toBe(
+      true
+    );
+    // A hidden handle blocks nothing: the chip takes its usual spot again.
+    overlay.layout(topCamera(), 400, 400, null, {
+      shown: false,
+      x: 200,
+      y: 170,
+      ring: true
+    });
+    const [, plainDy] = element.style
+      .getPropertyValue('translate')
+      .split(' ')
+      .map((part) => parseFloat(part));
+    expect(plainDy).toBe(-14);
+    overlay.dispose();
+  });
+
+  it('leaves a chip whose anchor is off the viewport where it is', () => {
+    const camera = topCamera();
+    // Plane (200, 0) is far right of the 100-unit-wide view.
+    const overlay = buildSketchRelationGlyphs(
+      [{ ...bottom, anchor: { x: 200, y: 0 } }],
+      basis
+    );
+    const element = (overlay.group.children[0] as CSS2DObject).element;
+    overlay.layout(camera, 400, 400);
+    expect(element.style.getPropertyValue('translate')).toBe('0px 0px');
+    overlay.dispose();
   });
 });

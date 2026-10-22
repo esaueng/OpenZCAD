@@ -1,15 +1,21 @@
 import {
   documentNodesWithHistory,
-  importedSourceReferenceOf
+  importedSourceReferenceOf,
+  referenceImagesWithHistory
 } from '@openzcad/shared';
-import type { ProjectDocument } from '@openzcad/shared';
+import type { ProjectDocument, ReferenceImage } from '@openzcad/shared';
 
 /**
- * Every source checksum the document's imports need in order to rebuild:
- * STEP sources and mesh payloads, in the model and in undo/redo history.
+ * Every source checksum the document needs: STEP sources and mesh payloads
+ * its imports rebuild from, and the pictures behind its reference images, in
+ * the model and in undo/redo history. Cleanup keeps any blob listed here.
  */
 export function importSourceChecksums(document: ProjectDocument): Set<string> {
   const checksums = new Set<string>();
+  for (const image of referenceImagesWithHistory(document)) {
+    const checksum = image.source?.checksumSha256;
+    if (typeof checksum === 'string') checksums.add(checksum);
+  }
   for (const node of documentNodesWithHistory(document)) {
     if (node.kind !== 'feature') {
       continue;
@@ -22,7 +28,10 @@ export function importSourceChecksums(document: ProjectDocument): Set<string> {
   return checksums;
 }
 
-/** Preserve rebuild bytes before a local copy drops cloud artifact identities. */
+/**
+ * Preserve rebuild bytes — and reference-image pictures — before a copy drops
+ * cloud artifact identities.
+ */
 export async function cacheCopySources(
   document: ProjectDocument,
   load: (checksum: string) => Promise<Uint8Array | null>,
@@ -53,6 +62,61 @@ export async function cacheCopySources(
         `The source file for "${node.data.sourceName}" failed its integrity check. The copy was not created.`
       );
     seen.add(key);
+  }
+  await cacheCopyPictures(document, load, hash);
+}
+
+/**
+ * I05 pictures: a copy re-archives them from this device into its own
+ * project, so their bytes must be here before the copy drops the source
+ * project's artifact ids. The account copy carries imports across itself and
+ * needs only this half. Only the images the copy keeps: a duplicate drops
+ * the undo history, so a picture deleted before copying is never needed and
+ * must not block the copy when this device cannot fetch it.
+ */
+export async function cacheCopyPictures(
+  document: ProjectDocument,
+  load: (checksum: string) => Promise<Uint8Array | null>,
+  hash: (bytes: Uint8Array<ArrayBuffer>) => Promise<string>
+): Promise<void> {
+  // One picture may be placed several times, each record with its own
+  // artifact: any record that can produce the bytes will do, so a
+  // device-only first record never refuses a copy a later one can serve.
+  const byContent = new Map<string, ReferenceImage[]>();
+  for (const image of document.referenceImages?.images ?? []) {
+    const key = `${image.source.checksumSha256}:${image.source.logicalBytes}`;
+    byContent.set(key, [...(byContent.get(key) ?? []), image]);
+  }
+  for (const images of byContent.values()) {
+    const [first] = images as [ReferenceImage, ...ReferenceImage[]];
+    const ref = first.source;
+    let bytes = await load(ref.checksumSha256);
+    let failure: unknown = null;
+    for (const image of images) {
+      if (bytes) break;
+      const { resolveExactSourceBytes } = await import('./exactSourceResolver');
+      bytes = await resolveExactSourceBytes(ref, {
+        artifactId: image.artifactId,
+        sourceName: image.name
+      }).catch((error: unknown) => {
+        failure = error;
+        return null;
+      });
+    }
+    if (!bytes) {
+      throw failure instanceof Error
+        ? failure
+        : new Error(
+            `The picture for image "${first.name}" is not available. The copy was not created.`
+          );
+    }
+    if (
+      bytes.byteLength !== ref.logicalBytes ||
+      (await hash(bytes as Uint8Array<ArrayBuffer>)) !== ref.checksumSha256
+    )
+      throw new Error(
+        `The picture for image "${first.name}" failed its integrity check. The copy was not created.`
+      );
   }
 }
 

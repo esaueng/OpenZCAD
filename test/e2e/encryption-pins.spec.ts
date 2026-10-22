@@ -80,14 +80,21 @@ test('a delayed tab cannot overwrite the device-list pin advanced by another tab
   const readSequence = () =>
     page.evaluate(
       (userId) =>
-        new Promise<number>((resolve, reject) => {
+        new Promise<number | null>((resolve, reject) => {
           const open = indexedDB.open('openzcad-e2ee', 1);
           open.onsuccess = () => {
             const db = open.result;
             const read = db.transaction('pins').objectStore('pins').get(userId);
             read.onsuccess = () => {
               db.close();
-              resolve((read.result as { sequence: number }).sequence);
+              // The persisted record also retains retired identity hashes.
+              // Read its active pin while still accepting the legacy layout.
+              const stored = read.result as
+                | { pin: { sequence: number } | null }
+                | { sequence: number }
+                | undefined;
+              const pin = stored && 'pin' in stored ? stored.pin : stored;
+              resolve(pin?.sequence ?? null);
             };
             read.onerror = () => reject(new Error('Pin read failed'));
           };

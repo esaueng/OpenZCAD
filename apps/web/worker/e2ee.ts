@@ -15,6 +15,7 @@
  */
 import {
   E2eeError,
+  MAX_LISTED_DEVICES,
   decodeDeviceApprovalGrant,
   decodeDeviceListEntry,
   decodeIdentityTransition,
@@ -84,6 +85,8 @@ export const APPROVAL_TTL_MS = 10 * 60 * 1000;
 const APPROVAL_RETENTION_MS = 60 * 60 * 1000;
 export const MAX_OPEN_APPROVALS = 3;
 export const MAX_APPROVALS_PER_HOUR = 10;
+/** The current key generation may retain this many read-only recipients. */
+export const MAX_READ_ONLY_DEVICES = MAX_LISTED_DEVICES;
 const PREVIOUS_GENERATIONS = 3;
 
 const WRAP_PURPOSES: readonly E2eeWrapPurpose[] = [
@@ -405,27 +408,40 @@ async function loadAccount(
   db: D1Database,
   userId: string
 ): Promise<E2eeAccountResponse> {
-  const { results: identities } = await db
-    .prepare(
-      `SELECT generation, identity_key, transition_statement,
-              transition_signature, created_at
-       FROM e2ee_identities WHERE user_id = ?
-       ORDER BY generation DESC LIMIT ?`
-    )
-    .bind(userId, PREVIOUS_GENERATIONS + 1)
-    .all<IdentityRow>();
-  const [current, ...previous] = identities ?? [];
-  if (!current) return { current: null, previous: [] };
-  const [entries, wraps, approvedDevices] = await Promise.all([
-    entryRows(db, userId, current.generation),
+  // Every response carrier comes from one D1 transaction: a rotation or
+  // identity replacement cannot split the chain from the keys it commits.
+  const currentGeneration =
+    '(SELECT MAX(generation) FROM e2ee_identities WHERE user_id = ?)';
+  const [
+    identityResult,
+    entryResult,
+    wrapResult,
+    approvedResult,
+    previousResult
+  ] = await db.batch([
+    db
+      .prepare(
+        `SELECT generation, identity_key, transition_statement,
+                transition_signature, created_at
+         FROM e2ee_identities WHERE user_id = ?
+         ORDER BY generation DESC LIMIT ?`
+      )
+      .bind(userId, PREVIOUS_GENERATIONS + 1),
+    db
+      .prepare(
+        `SELECT sequence, entry, signature, entry_hash
+         FROM e2ee_device_list_entries
+         WHERE user_id = ? AND generation = ${currentGeneration}
+         ORDER BY sequence`
+      )
+      .bind(userId, userId),
     db
       .prepare(
         `SELECT purpose, target_id, key_sequence, wrapped
-         FROM e2ee_key_wraps WHERE user_id = ? AND generation = ?
+         FROM e2ee_key_wraps WHERE user_id = ? AND generation = ${currentGeneration}
          ORDER BY purpose, target_id`
       )
-      .bind(userId, current.generation)
-      .all<WrapRow>(),
+      .bind(userId, userId),
     db
       .prepare(
         `SELECT w.target_id AS device_id, w.updated_at AS approved_at,
@@ -434,23 +450,52 @@ async function loadAccount(
                AND a.state = 'completed'
              ORDER BY a.created_at DESC, a.id DESC LIMIT 1), 'Read-only device') AS label
          FROM e2ee_key_wraps w
-         WHERE w.user_id = ? AND w.generation = ? AND w.purpose = 'account-key-approval'
+         WHERE w.user_id = ? AND w.generation = ${currentGeneration}
+           AND w.purpose = 'account-key-approval'
          ORDER BY w.target_id`
       )
-      .bind(userId, current.generation)
-      .all<{ device_id: string; label: string; approved_at: string }>()
+      .bind(userId, userId),
+    db
+      .prepare(
+        `SELECT e.generation, e.sequence, e.entry, e.signature, e.entry_hash
+         FROM e2ee_device_list_entries e
+         WHERE e.user_id = ? AND e.generation IN (
+           SELECT generation FROM e2ee_identities WHERE user_id = ?
+           ORDER BY generation DESC LIMIT ? OFFSET 1
+         ) AND e.sequence = (
+           SELECT MAX(sequence) FROM e2ee_device_list_entries h
+           WHERE h.user_id = e.user_id AND h.generation = e.generation
+         )`
+      )
+      .bind(userId, userId, PREVIOUS_GENERATIONS)
   ]);
+  if (
+    !identityResult ||
+    !entryResult ||
+    !wrapResult ||
+    !approvedResult ||
+    !previousResult
+  ) {
+    throw new Error('Incomplete encryption account snapshot');
+  }
+  const [current, ...previous] = (identityResult.results ??
+    []) as IdentityRow[];
+  if (!current) return { current: null, previous: [] };
+  const entries = (entryResult.results ?? []) as EntryRow[];
+  const wraps = (wrapResult.results ?? []) as WrapRow[];
+  const approvedDevices = (approvedResult.results ?? []) as {
+    device_id: string;
+    label: string;
+    approved_at: string;
+  }[];
+  const previousHeads = (previousResult.results ?? []) as (EntryRow & {
+    generation: number;
+  })[];
   const previousRecords: E2eePreviousIdentityRecord[] = [];
   for (const row of previous) {
-    const head = await db
-      .prepare(
-        `SELECT sequence, entry, signature, entry_hash
-         FROM e2ee_device_list_entries
-         WHERE user_id = ? AND generation = ?
-         ORDER BY sequence DESC LIMIT 1`
-      )
-      .bind(userId, row.generation)
-      .first<EntryRow>();
+    const head = previousHeads.find(
+      (entry) => entry.generation === row.generation
+    );
     if (head) {
       previousRecords.push({
         generation: row.generation,
@@ -480,12 +525,12 @@ async function loadAccount(
             signature: current.transition_signature
           }
         : null,
-    approvedDevices: (approvedDevices.results ?? []).map((row) => ({
+    approvedDevices: approvedDevices.map((row) => ({
       deviceId: row.device_id,
       label: row.label,
       approvedAt: row.approved_at
     })),
-    wraps: (wraps.results ?? []).map((row): E2eeWrapRecord => ({
+    wraps: wraps.map((row): E2eeWrapRecord => ({
       purpose: row.purpose,
       targetId: row.target_id,
       keySequence: row.key_sequence,
@@ -599,7 +644,16 @@ async function writeGeneration(
         `UPDATE e2ee_device_approvals SET expires_at = MIN(expires_at, ?)
          WHERE user_id = ? AND ${guard.sql}`
       )
-      .bind(now, userId, ...guard.binds)
+      .bind(now, userId, ...guard.binds),
+    // Retain exactly the history loadAccount exposes. The foreign-key
+    // cascade removes entries and wraps too; a failed or revoked replacement
+    // cannot prune because the new identity must exist under the same guard.
+    db
+      .prepare(
+        `DELETE FROM e2ee_identities
+         WHERE user_id = ? AND generation < ? AND ${guard.sql}`
+      )
+      .bind(userId, input.generation - PREVIOUS_GENERATIONS, ...guard.binds)
   ];
   const results = await db.batch(statements);
   return (results[0]?.meta?.changes ?? 0) === 1;
@@ -1312,6 +1366,44 @@ async function handleCompleteApproval(
   const responderKey = sameResponder
     ? row.approver_key
     : toBase64Url(approver.signingKey);
+  const readOnlyCount = sealed
+    ? await db
+        .prepare(
+          `
+    SELECT COUNT(*) AS count, COALESCE(MAX(CASE WHEN target_id = ? THEN 1 ELSE 0 END), 0) AS existing
+    FROM e2ee_key_wraps WHERE user_id = ? AND generation = ? AND purpose = 'account-key-approval'
+  `
+        )
+        .bind(row.device_id, userId, current.generation)
+        .first<{ count: number; existing: number }>()
+    : null;
+  if (
+    readOnlyCount &&
+    !readOnlyCount.existing &&
+    readOnlyCount.count >= MAX_READ_ONLY_DEVICES
+  ) {
+    refuse(
+      409,
+      'E2EE_READ_ONLY_DEVICE_LIMIT',
+      `At most ${MAX_READ_ONLY_DEVICES} read-only devices can share this account key. Certify or revoke existing devices before approving another.`
+    );
+  }
+  const readOnlyGuard = sealed
+    ? {
+        sql: `(EXISTS (SELECT 1 FROM e2ee_key_wraps WHERE user_id = ? AND generation = ?
+                   AND purpose = 'account-key-approval' AND target_id = ?)
+           OR (SELECT COUNT(*) FROM e2ee_key_wraps WHERE user_id = ? AND generation = ?
+                   AND purpose = 'account-key-approval') < ?)`,
+        binds: [
+          userId,
+          current.generation,
+          row.device_id,
+          userId,
+          current.generation,
+          MAX_READ_ONLY_DEVICES
+        ]
+      }
+    : { sql: '1 = 1', binds: [] };
   const headGuard = {
     sql: `(SELECT MAX(generation) FROM e2ee_identities WHERE user_id = ?) = ?
       AND (SELECT entry_hash FROM e2ee_device_list_entries WHERE user_id = ?
@@ -1327,7 +1419,7 @@ async function handleCompleteApproval(
            AND state IN ('requested', 'revealed')
            AND ((state = 'revealed' AND approver_key = ?)
                 OR (state = 'requested' AND (commitment IS NULL OR approver_key IS NULL)))
-           AND ${headGuard.sql} AND ${db.authorization.sql}`
+           AND ${headGuard.sql} AND ${readOnlyGuard.sql} AND ${db.authorization.sql}`
       )
       .bind(
         statementText,
@@ -1337,6 +1429,7 @@ async function handleCompleteApproval(
         now,
         responderKey,
         ...headGuard.binds,
+        ...readOnlyGuard.binds,
         ...db.authorization.binds
       )
   ];
@@ -1359,12 +1452,13 @@ async function handleCompleteApproval(
           // including duplicate grants that already have a completed row.
           sql: `changes() = 1 AND EXISTS (SELECT 1 FROM e2ee_device_approvals
                         WHERE id = ? AND user_id = ? AND state = 'completed' AND grant_statement = ?)
-                        AND ${headGuard.sql} AND ${db.authorization.sql}`,
+                        AND ${headGuard.sql} AND ${readOnlyGuard.sql} AND ${db.authorization.sql}`,
           binds: [
             id,
             userId,
             statementText,
             ...headGuard.binds,
+            ...readOnlyGuard.binds,
             ...db.authorization.binds
           ]
         }

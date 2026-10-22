@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { admitDevelopmentE2eeWrite } from '../apps/web/worker/e2eeWriteAuthorization';
 import type { DatabaseSync } from 'node:sqlite';
 import {
@@ -34,6 +34,7 @@ import {
   removePasskey,
   approveDevice,
   confirmApprovalCode,
+  cancelApprovalRequest,
   approverComparisonCode,
   beginCompareApproval,
   deviceScanCode,
@@ -70,6 +71,12 @@ import {
 } from '../apps/web/src/lib/e2ee/deviceStore';
 import type { E2eeSetupRequest } from '@openzcad/shared';
 import { d1Database, migratedDatabase } from './d1-sqlite';
+import { eraseAccountWithKeyCleanup } from '../apps/web/src/lib/e2ee/accountErasure';
+import {
+  allowKeySession,
+  confirmKeySessionEnded,
+  getKeySessionRevision
+} from '../apps/web/src/lib/e2ee/keySession';
 
 const USER = 'user_alice';
 
@@ -79,6 +86,8 @@ interface Server {
   /** Rewrites a response body before the browser sees it. */
   tamper?: (path: string, body: unknown) => unknown;
   beforeWrite?: (sql: string) => Promise<void>;
+  /** A competing rotation at an account-read boundary. */
+  beforeAccountSnapshot?: () => Promise<void>;
   credential?: { token: string; desktop: boolean };
 }
 
@@ -102,7 +111,12 @@ function fetcherFor(srv: Server, userId: string) {
     const wrapped: D1PreparedStatement = {
       bind: (...values) => wrap(sql, statement.bind(...values)),
       first: () => statement.first(),
-      all: () => statement.all(),
+      all: async <T>() => {
+        const result = await statement.all<T>();
+        if (sql.includes('FROM e2ee_device_list_entries'))
+          await srv.beforeAccountSnapshot?.();
+        return result;
+      },
       run: async () => {
         await srv.beforeWrite?.(sql);
         return statement.run();
@@ -116,9 +130,13 @@ function fetcherFor(srv: Server, userId: string) {
     DB: {
       prepare: (sql: string) => wrap(sql, base.prepare(sql)),
       batch: async (statements: D1PreparedStatement[]) => {
-        await srv.beforeWrite?.(
-          statements.map((s) => queries.get(s)).join('\n')
-        );
+        const sql = statements.map((s) => queries.get(s)).join('\n');
+        if (
+          sql.includes('FROM e2ee_device_list_entries') &&
+          sql.includes('SELECT purpose, target_id, key_sequence, wrapped')
+        )
+          await srv.beforeAccountSnapshot?.();
+        await srv.beforeWrite?.(sql);
         return base.batch(statements.map((s) => originals.get(s)!));
       }
     },
@@ -221,6 +239,204 @@ const count = (db: DatabaseSync, sql: string, ...values: string[]) =>
   (db.prepare(sql).get(...values) as { n: number }).n;
 
 describe('encryption key routes', () => {
+  it('preserves a newer unlock when an old view finishes crypto after teardown', async () => {
+    const srv = server();
+    const { laptop } = await setUp(srv);
+    lockAccount(USER);
+    let entered!: () => void, release!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const decrypt = crypto.subtle.decrypt.bind(crypto.subtle);
+    let first = true,
+      active = true;
+    vi.spyOn(crypto.subtle, 'decrypt').mockImplementation(async (...args) => {
+      const value = await decrypt(...args);
+      if (first) {
+        first = false;
+        entered();
+        await held;
+      }
+      return value;
+    });
+    try {
+      const old = loadEncryption({ ...laptop, isCurrent: () => active });
+      await waiting;
+      active = false;
+      lockAccountsExcept(null);
+      expect(ready(await loadEncryption(laptop)).unlocked).toBe(true);
+      const fresh = unlockedAccount(USER)!;
+      release();
+      await expect(old).rejects.toThrow('session');
+      expect(unlockedAccount(USER)).toBe(fresh);
+      expect(fresh.accountKey.some((byte) => byte !== 0)).toBe(true);
+    } finally {
+      release();
+      vi.restoreAllMocks();
+      lockAccount(USER);
+    }
+  });
+
+  it('refuses an already-unmounted context before making its account request', async () => {
+    const srv = server();
+    let requests = 0;
+    const ctx = device(srv);
+    await expect(
+      loadEncryption({
+        ...ctx,
+        isCurrent: () => false,
+        api: {
+          ...ctx.api,
+          account: async () => {
+            requests++;
+            return { current: null, previous: [] };
+          }
+        }
+      })
+    ).rejects.toThrow('session');
+    expect(requests).toBe(0);
+  });
+  it.each(['account response', 'pin read', 'device read', 'crypto'] as const)(
+    'does not resurrect raw keys after teardown during %s',
+    async (phase) => {
+      const srv = server();
+      const { laptop } = await setUp(srv);
+      lockAccount(USER);
+      let entered!: () => void, release!: () => void;
+      const waiting = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const pause = async <T>(value: T) => {
+        entered();
+        await held;
+        return value;
+      };
+      const ctx: E2eeContext = {
+        ...laptop,
+        api: {
+          ...laptop.api,
+          account: async () => {
+            const value = await laptop.api.account();
+            return phase === 'account response' ? pause(value) : value;
+          }
+        },
+        store: {
+          ...laptop.store,
+          loadPin: async (id) => {
+            const value = await laptop.store.loadPin(id);
+            return phase === 'pin read' ? pause(value) : value;
+          },
+          loadDevice: async (id) => {
+            const value = await laptop.store.loadDevice(id);
+            return phase === 'device read' ? pause(value) : value;
+          }
+        }
+      };
+      if (phase === 'crypto') {
+        const decrypt = crypto.subtle.decrypt.bind(crypto.subtle);
+        let first = true;
+        vi.spyOn(crypto.subtle, 'decrypt').mockImplementation(
+          async (...args) => {
+            const value = await decrypt(...args);
+            if (!first) return value;
+            first = false;
+            return pause(value);
+          }
+        );
+      }
+      try {
+        const loading = loadEncryption(ctx);
+        await waiting;
+        // No raw cache entry exists yet; pending loads must still be fenced.
+        lockAccountsExcept(null);
+        release();
+        await expect(loading).rejects.toThrow('session');
+        expect(unlockedEncryptionKey(USER)).toBeNull();
+      } finally {
+        release();
+        vi.restoreAllMocks();
+        lockAccount(USER);
+      }
+    }
+  );
+  it('refuses a missing pinned account and keeps its pin and private keys', async () => {
+    const srv = server();
+    const { laptop } = await setUp(srv);
+    const pin = await laptop.store.loadPin(USER);
+    const keys = await laptop.store.loadDevice(USER);
+    srv.tamper = (path, body) =>
+      path === '/api/e2ee/account' ? { current: null, previous: [] } : body;
+    expect(await loadEncryption(laptop)).toMatchObject({ kind: 'fork' });
+    expect(unlockedEncryptionKey(USER)).toBeNull();
+    expect(await laptop.store.loadPin(USER)).toEqual(pin);
+    expect(await laptop.store.loadDevice(USER)).toEqual(keys);
+    expect(await loadEncryption(device(srv))).toEqual({
+      kind: 'not-set-up',
+      previous: []
+    });
+    let requested = false;
+    const guarded = {
+      ...laptop,
+      api: {
+        ...laptop.api,
+        setup: async () => {
+          requested = true;
+          throw new Error('Unexpected replacement');
+        }
+      }
+    };
+    await flowRefusal(
+      setUpEncryption(guarded, {
+        recoverySecret: (await generateRecoveryKey()).secret,
+        label: 'Laptop'
+      }),
+      'invalid-request'
+    );
+    expect(requested).toBe(false);
+    expect(await laptop.store.loadPin(USER)).toEqual(pin);
+  });
+
+  it.each(['rotation', 'replacement'] as const)(
+    'returns a coherent chain and wraps when %s races an account read',
+    async (change) => {
+      const srv = server();
+      const { laptop, recovery } = await setUp(srv);
+      const phone = await enrolled(srv, recovery.secret, 'Phone');
+      const before = ready(await loadEncryption(laptop));
+      let moved = false;
+      srv.beforeAccountSnapshot = async () => {
+        srv.beforeAccountSnapshot = undefined;
+        moved = true;
+        if (change === 'rotation')
+          await removeDevice(
+            laptop,
+            before,
+            phone.account.device!.deviceId,
+            recovery.secret
+          );
+        else
+          await replaceRecoveryKey(
+            laptop,
+            before,
+            (await generateRecoveryKey()).secret,
+            null
+          );
+      };
+      lockAccount(USER);
+      const loaded = ready(await loadEncryption(laptop));
+      expect(moved).toBe(true);
+      expect(loaded.unlocked).toBe(true);
+      const fresh = ready(await loadEncryption(laptop));
+      expect(loaded.list.pin).toEqual(fresh.list.pin);
+      expect(loaded.wraps).toEqual(fresh.wraps);
+    }
+  );
   it('stay closed unless enabled, and unavailable until migrated', async () => {
     const srv = server();
     srv.enabled = false;
@@ -531,6 +747,86 @@ describe('refusing what a server substitutes', () => {
 });
 
 describe('replacing the recovery key', () => {
+  it('bounds retained generations and cascades old entries without touching another account', async () => {
+    const srv = server();
+    const { laptop, recovery } = await setUp(srv);
+    await enrolled(srv, recovery.secret, 'Phone');
+    srv.db
+      .prepare('INSERT INTO users (id, email, created_at) VALUES (?, NULL, ?)')
+      .run('user_other', new Date().toISOString());
+    srv.db
+      .prepare(
+        `INSERT INTO e2ee_identities SELECT 'user_other', generation, identity_key, transition_statement, transition_signature, created_at FROM e2ee_identities WHERE user_id = ?`
+      )
+      .run(USER);
+    srv.db
+      .prepare(
+        `INSERT INTO e2ee_device_list_entries SELECT 'user_other', generation, sequence, entry, signature, entry_hash, created_at FROM e2ee_device_list_entries WHERE user_id = ?`
+      )
+      .run(USER);
+    let account = ready(await loadEncryption(laptop));
+    for (let generation = 2; generation <= 8; generation++) {
+      account = ready(
+        await replaceRecoveryKey(
+          laptop,
+          account,
+          (await generateRecoveryKey()).secret,
+          null
+        )
+      );
+      expect(account.generation).toBe(generation);
+      expect(account.previous.map((previous) => previous.generation)).toEqual(
+        Array.from(
+          { length: Math.min(3, generation - 1) },
+          (_, index) => generation - index - 1
+        )
+      );
+      expect(account.unlocked).toBe(true);
+      expect(
+        count(
+          srv.db,
+          'SELECT COUNT(*) AS n FROM e2ee_identities WHERE user_id = ?',
+          USER
+        )
+      ).toBeLessThanOrEqual(4);
+    }
+    expect(
+      srv.db
+        .prepare(
+          'SELECT generation FROM e2ee_identities WHERE user_id = ? ORDER BY generation'
+        )
+        .all(USER)
+    ).toEqual([5, 6, 7, 8].map((generation) => ({ generation })));
+    expect(
+      count(
+        srv.db,
+        'SELECT COUNT(*) AS n FROM e2ee_device_list_entries WHERE user_id = ? AND generation < 5',
+        USER
+      )
+    ).toBe(0);
+    expect(
+      count(
+        srv.db,
+        'SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE user_id = ? AND generation < 8',
+        USER
+      )
+    ).toBe(0);
+    expect(
+      count(
+        srv.db,
+        'SELECT COUNT(*) AS n FROM e2ee_identities WHERE user_id = ?',
+        'user_other'
+      )
+    ).toBe(1);
+    expect(
+      count(
+        srv.db,
+        'SELECT COUNT(*) AS n FROM e2ee_device_list_entries WHERE user_id = ?',
+        'user_other'
+      )
+    ).toBe(2);
+  });
+
   it('starts a new identity with only this device and a fresh recovery key', async () => {
     const srv = server();
     const { recovery, laptop } = await setUp(srv);
@@ -633,6 +929,308 @@ describe('replacing the recovery key', () => {
 });
 
 describe('device approval', () => {
+  it('stages one key pair and serializes approval requests from two tabs', async () => {
+    const srv = server();
+    const { laptop, account, recovery } = await setUp(srv);
+    const phone = device(srv);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const create = phone.api.createApproval;
+    const first = requestApproval(
+      {
+        ...phone,
+        api: {
+          ...phone.api,
+          createApproval: async (input) => {
+            const result = await create(input);
+            started();
+            await held;
+            return result;
+          }
+        }
+      },
+      null,
+      'First tab'
+    );
+    await entered;
+    let second: ReturnType<typeof requestApproval> | undefined;
+    try {
+      const staged = await phone.store.loadDevice(USER);
+      expect(staged).not.toBeNull();
+      second = requestApproval({ ...phone }, null, 'Second tab');
+    } finally {
+      release();
+    }
+    const a = await first;
+    const b = await second;
+    if (a.step !== 'waiting' || b.step !== 'waiting')
+      throw new Error('Expected both sequential requests');
+    expect(a.scanCode).toBe(b.scanCode);
+    expect(a.approval.deviceId).toBe(b.approval.deviceId);
+    await expect(phone.api.getApproval(a.approval.id)).rejects.toHaveProperty(
+      'status',
+      404
+    );
+    await approveDevice(
+      laptop,
+      account,
+      b.approval,
+      { kind: 'scan', code: b.scanCode },
+      recovery.secret
+    );
+    const completed = await advanceApprovalAsNewDevice(phone);
+    expect(completed.step).toBe('done');
+    expect((await advanceApprovalAsNewDevice({ ...phone })).step).toBe('done');
+    expect(ready(await loadEncryption(phone)).deviceStatus).toBe('certified');
+  });
+
+  it('does not restore device keys deleted while approval creation is in flight', async () => {
+    const srv = server();
+    await setUp(srv);
+    const phone = device(srv);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const create = phone.api.createApproval;
+    let approvalId = '';
+    const result = requestApproval(
+      {
+        ...phone,
+        api: {
+          ...phone.api,
+          createApproval: async (input) => {
+            const approval = await create(input);
+            approvalId = approval.id;
+            started();
+            await held;
+            return approval;
+          }
+        }
+      },
+      null,
+      'Departing tab'
+    );
+    const outcome = result.then(
+      () => null,
+      (error: unknown) => error
+    );
+    await entered;
+    await phone.store.deleteDevice(USER);
+    release();
+    expect(await outcome).toBeInstanceOf(Error);
+    expect(await phone.store.loadDevice(USER)).toBeNull();
+    await expect(phone.api.getApproval(approvalId)).rejects.toHaveProperty(
+      'status',
+      404
+    );
+  });
+
+  it('retains the current approval on a failed restart and releases its lock for retry', async () => {
+    const srv = server();
+    await setUp(srv);
+    const phone = device(srv);
+    await requestApproval(phone, null, 'Original request');
+    const before = await phone.store.loadDevice(USER);
+    const create = vi.fn(phone.api.createApproval);
+    await expect(
+      requestApproval(
+        {
+          ...phone,
+          api: {
+            ...phone.api,
+            createApproval: create,
+            cancelApproval: async () => {
+              throw new E2eeApiError(503, 'OFFLINE', 'Try again');
+            }
+          }
+        },
+        null,
+        'Failed restart'
+      )
+    ).rejects.toHaveProperty('status', 503);
+    expect(create).not.toHaveBeenCalled();
+    expect(await phone.store.loadDevice(USER)).toEqual(before);
+    expect((await requestApproval(phone, null, 'Successful retry')).step).toBe(
+      'waiting'
+    );
+    expect((await phone.store.loadDevice(USER))?.deviceId).toBe(
+      before?.deviceId
+    );
+  });
+
+  it('does not replace newly staged keys again for a stale removed-device view', async () => {
+    const srv = server();
+    await setUp(srv);
+    const phone = device(srv);
+    await requestApproval(phone, null, 'Old device');
+    await cancelApprovalRequest(phone);
+    const removed = {
+      deviceStatus: 'removed' as const,
+      device: await phone.store.loadDevice(USER)
+    };
+    const first = await requestApproval(phone, removed, 'Replacement');
+    const second = await requestApproval(phone, removed, 'Other tab');
+    if (first.step !== 'waiting' || second.step !== 'waiting')
+      throw new Error('Expected requests');
+    expect(first.approval.deviceId).not.toBe(removed.device?.deviceId);
+    expect(second.approval.deviceId).toBe(first.approval.deviceId);
+    expect(second.scanCode).toBe(first.scanCode);
+  });
+
+  it('atomically caps durable read-only approvals and frees capacity on revocation', async () => {
+    const limit = 64;
+    const srv = server();
+    const { recovery, laptop, account } = await setUp(srv);
+    const first = device(srv);
+    const original = await requestApproval(
+      first,
+      null,
+      'First read-only device'
+    );
+    if (original.step !== 'waiting') throw new Error('Expected request');
+    await approveDevice(
+      laptop,
+      account,
+      original.approval,
+      { kind: 'scan', code: original.scanCode },
+      null
+    );
+    const originalId = (await first.store.loadDevice(USER))!.deviceId;
+    // Fill stored capacity independently of creation quotas. The Worker cannot
+    // verify these encrypted payloads; every retained wrap must count.
+    for (let i = 1; i < limit - 1; i++)
+      srv.db
+        .prepare(
+          `
+      INSERT INTO e2ee_key_wraps
+      SELECT user_id, generation, purpose, ?, key_sequence, wrapped, updated_at
+      FROM e2ee_key_wraps WHERE user_id = ? AND purpose = 'account-key-approval' AND target_id = ?
+    `
+        )
+        .run(`retained_device_${i}`, USER, originalId);
+    const pending = await Promise.all(
+      [0, 1].map(async (i) => {
+        const phone = device(srv);
+        const request = await requestApproval(phone, null, `Contender ${i}`);
+        if (request.step !== 'waiting') throw new Error('Expected request');
+        return request;
+      })
+    );
+    const current = ready(await loadEncryption(laptop));
+    let arrived = 0,
+      release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    srv.beforeWrite = async (sql) => {
+      if (!sql.includes("SET state = 'completed'")) return;
+      if (++arrived === 2) release();
+      await held;
+    };
+    const results = await Promise.allSettled(
+      pending.map((request) =>
+        approveDevice(
+          laptop,
+          current,
+          request.approval,
+          { kind: 'scan', code: request.scanCode },
+          null
+        )
+      )
+    );
+    srv.beforeWrite = undefined;
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
+    expect(
+      count(
+        srv.db,
+        "SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE user_id = ? AND purpose = 'account-key-approval'",
+        USER
+      )
+    ).toBe(limit);
+    const loser = pending[results.findIndex((r) => r.status === 'rejected')]!;
+    await expect(
+      approveDevice(
+        laptop,
+        ready(await loadEncryption(laptop)),
+        loser.approval,
+        { kind: 'scan', code: loser.scanCode },
+        null
+      )
+    ).rejects.toHaveProperty('code', 'E2EE_READ_ONLY_DEVICE_LIMIT');
+    const rotated = ready(
+      await revokeReadOnlyDevices(
+        laptop,
+        ready(await loadEncryption(laptop)),
+        recovery.secret
+      )
+    );
+    expect(rotated.approvedDevices).toHaveLength(0);
+    const fresh = await requestApproval(device(srv), null, 'After revocation');
+    if (fresh.step !== 'waiting') throw new Error('Expected request');
+    await approveDevice(
+      laptop,
+      rotated,
+      fresh.approval,
+      { kind: 'scan', code: fresh.scanCode },
+      null
+    );
+    expect(
+      count(
+        srv.db,
+        "SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE user_id = ? AND purpose = 'account-key-approval'",
+        USER
+      )
+    ).toBe(1);
+  });
+  it.each(['cancel failure', 'read failure', 'still live'] as const)(
+    'approval cancellation preserves its retry ID and keys after %s',
+    async (fault) => {
+      const srv = server();
+      await setUp(srv);
+      const phone = device(srv);
+      const requested = await requestApproval(phone, null, 'Phone');
+      if (requested.step !== 'waiting') throw new Error('Expected request');
+      const before = await phone.store.loadDevice(USER);
+      const retry = {
+        ...phone,
+        api: {
+          ...phone.api,
+          cancelApproval: async () => {
+            if (fault === 'cancel failure')
+              throw new Error('Network unavailable');
+            return { ok: true as const };
+          },
+          getApproval: async (id: string) => {
+            if (fault === 'read failure')
+              throw new E2eeApiError(401, 'Session expired');
+            return phone.api.getApproval(id);
+          }
+        }
+      };
+      await expect(cancelApprovalRequest(retry)).rejects.toThrow();
+      expect(await phone.store.loadDevice(USER)).toEqual(before);
+      expect((await phone.api.getApproval(requested.approval.id)).state).toBe(
+        requested.approval.state
+      );
+      await cancelApprovalRequest(phone);
+      expect((await phone.store.loadDevice(USER))?.approval).toBeNull();
+      await expect(
+        phone.api.getApproval(requested.approval.id)
+      ).rejects.toHaveProperty('status', 404);
+    }
+  );
   it.each([
     'retained',
     'legacy pruned',
@@ -945,6 +1543,94 @@ describe('device approval', () => {
         "SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE purpose = 'account-key-approval'"
       )
     ).toBe(0);
+  });
+
+  it('resumes a certified approval whose completion never reached the Worker', async () => {
+    const srv = server();
+    const { recovery, laptop, account } = await setUp(srv);
+    const phone = device(srv);
+    const request = await requestApproval(phone, null, 'Phone');
+    if (request.step !== 'waiting')
+      throw new Error('Expected pending approval');
+    const lost = {
+      ...laptop,
+      api: {
+        ...laptop.api,
+        completeApproval: async () => {
+          throw new Error('network lost');
+        }
+      }
+    };
+    await expect(
+      approveDevice(
+        lost,
+        account,
+        request.approval,
+        { kind: 'scan', code: request.scanCode },
+        recovery.secret
+      )
+    ).rejects.toThrow('network lost');
+    // The append landed: the phone is certified but its approval is pending.
+    expect((await laptop.api.getApproval(request.approval.id)).state).toBe(
+      'requested'
+    );
+    const entries = ready(await loadEncryption(laptop)).list.entries.length;
+    // Retry from the same, now stale, view without appending again.
+    await approveDevice(
+      laptop,
+      account,
+      request.approval,
+      { kind: 'scan', code: request.scanCode },
+      recovery.secret
+    );
+    expect(ready(await loadEncryption(laptop)).list.entries).toHaveLength(
+      entries
+    );
+    const done = await advanceApprovalAsNewDevice(phone);
+    if (done.step !== 'done') throw new Error('Expected completed approval');
+    lockAccount(USER);
+    const state = ready(await loadEncryption(phone));
+    expect([state.deviceStatus, state.unlocked]).toEqual(['certified', true]);
+  });
+
+  it('refuses to certify from a view an account-key rotation made stale', async () => {
+    const srv = server();
+    const { recovery, laptop } = await setUp(srv);
+    await enrolled(srv, recovery.secret, 'Tablet');
+    const stale = ready(await loadEncryption(laptop));
+    const phone = device(srv);
+    const request = await requestApproval(phone, null, 'Phone');
+    if (request.step !== 'waiting')
+      throw new Error('Expected pending approval');
+    const tabletId = stale.list.devices.find(
+      (d) => d.label === 'Tablet'
+    )!.deviceId;
+    // The unlocked-key store is page memory: keep this page's old unlock
+    // while the rotation runs, as a second browser would.
+    const { rememberUnlockedAccount, unlockedAccount } =
+      await import('../apps/web/src/lib/e2ee/unlockedKeys');
+    const held = unlockedAccount(USER)!;
+    const pageMemory = { ...held, accountKey: held.accountKey.slice() };
+    const rotated = ready(
+      await removeDevice(laptop, stale, tabletId, recovery.secret)
+    );
+    rememberUnlockedAccount(USER, pageMemory);
+    expect(rotated.list.head.accountKeyCommitment).not.toEqual(
+      stale.list.head.accountKeyCommitment
+    );
+    await flowRefusal(
+      approveDevice(
+        laptop,
+        stale,
+        request.approval,
+        { kind: 'scan', code: request.scanCode },
+        recovery.secret
+      ),
+      'key-mismatch'
+    );
+    expect(ready(await loadEncryption(laptop)).list.entries).toHaveLength(
+      rotated.list.entries.length
+    );
   });
 
   it.each(['before verification', 'before commit'] as const)(
@@ -1598,6 +2284,145 @@ describe('session teardown', () => {
 });
 
 describe('profile deletion', () => {
+  it('does not tear down a replacement session after an older erasure response', async () => {
+    const srv = server();
+    const { laptop } = await setUp(srv);
+    let current = true;
+    let ended = false;
+    await eraseAccountWithKeyCleanup({
+      userId: USER,
+      store: laptop.store,
+      isCurrentSession: () => current,
+      erase: async () => {
+        current = false;
+        return { signedOut: true };
+      },
+      onSignedOut: () => {
+        ended = true;
+      }
+    });
+    expect(ended).toBe(false);
+    expect(unlockedEncryptionKey(USER)).toBeNull();
+    expect(await laptop.store.loadPin(USER)).toBeNull();
+  });
+
+  it.each(['profile', 'all'] as const)(
+    'allows fresh encryption setup after confirmed %s erasure',
+    async (scope) => {
+      const srv = server();
+      const { laptop } = await setUp(srv);
+      const oldPin = await laptop.store.loadPin(USER);
+      expect(oldPin).not.toBeNull();
+      expect(unlockedEncryptionKey(USER)).not.toBeNull();
+      const { deleteAccountData } =
+        await import('../apps/web/worker/accountDeletion');
+      let signedOut = false;
+      await eraseAccountWithKeyCleanup({
+        userId: USER,
+        store: laptop.store,
+        isCurrentSession: () => true,
+        erase: () =>
+          deleteAccountData(
+            {
+              userId: USER as never,
+              displayName: 'Alice',
+              mode: 'development'
+            },
+            {
+              scope,
+              confirmation:
+                scope === 'profile'
+                  ? 'DELETE CLOUD PROFILE'
+                  : 'DELETE ALL CLOUD DATA'
+            },
+            {
+              DB: d1Database(srv.db),
+              PROJECT_STORAGE: {
+                put: async () => {},
+                get: async () => null,
+                delete: async () => {}
+              } as never,
+              PROJECT_ROOM: {} as never
+            },
+            { deleteOwnedProjects: async () => [] } as never
+          ),
+        onSignedOut: () => {
+          expect(unlockedEncryptionKey(USER)).toBeNull();
+          signedOut = true;
+        }
+      });
+      expect(signedOut).toBe(true);
+      expect(await laptop.store.loadPin(USER)).toBeNull();
+      expect(await loadEncryption(laptop)).toMatchObject({
+        kind: 'not-set-up'
+      });
+      const recovery = await generateRecoveryKey();
+      expect(
+        ready(
+          await setUpEncryption(laptop, {
+            recoverySecret: recovery.secret,
+            label: 'Same browser'
+          })
+        ).unlocked
+      ).toBe(true);
+      expect(await laptop.store.loadPin(USER)).not.toEqual(oldPin);
+    }
+  );
+
+  it('locks the raw key and ends the session before fallible local erasure cleanup', async () => {
+    const srv = server();
+    const { laptop } = await setUp(srv);
+    let ended = false;
+    await expect(
+      eraseAccountWithKeyCleanup({
+        userId: USER,
+        store: {
+          ...laptop.store,
+          forgetErasedIdentity: async () => {
+            expect(ended).toBe(true);
+            expect(unlockedEncryptionKey(USER)).toBeNull();
+            throw new Error('IndexedDB unavailable');
+          }
+        },
+        isCurrentSession: () => true,
+        erase: async () => ({ signedOut: true }),
+        onSignedOut: () => {
+          ended = true;
+        }
+      })
+    ).rejects.toThrow('IndexedDB unavailable');
+    expect(unlockedEncryptionKey(USER)).toBeNull();
+  });
+
+  it('retains trusted state after a failed erasure and refuses a replacement session before the request', async () => {
+    const srv = server();
+    const { laptop } = await setUp(srv);
+    const before = await laptop.store.loadPin(USER);
+    let current = true,
+      requests = 0;
+    const input = {
+      userId: USER,
+      store: laptop.store,
+      isCurrentSession: () => current,
+      erase: async () => {
+        requests++;
+        throw new Error('Server unavailable');
+      },
+      onSignedOut: () => {
+        throw new Error('Unexpected teardown');
+      }
+    };
+    await expect(eraseAccountWithKeyCleanup(input)).rejects.toThrow(
+      'Server unavailable'
+    );
+    expect(await laptop.store.loadPin(USER)).toEqual(before);
+    expect(unlockedEncryptionKey(USER)).not.toBeNull();
+    current = false;
+    await expect(eraseAccountWithKeyCleanup(input)).rejects.toThrow(
+      'account changed'
+    );
+    expect(requests).toBe(1);
+  });
   it('still deletes a profile before the E2EE schema exists', async () => {
     const srv = server();
     srv.db.exec(
@@ -2036,6 +2861,96 @@ describe.each(['development', 'browser', 'desktop'] as const)(
   }
 );
 
+describe.each(['development', 'browser', 'desktop'] as const)(
+  '%s expiry during a key-write batch',
+  (backend) => {
+    it.each(['setup', 'rotation'] as const)(
+      'keeps every %s statement under the same expiry decision',
+      async (operation) => {
+        const srv = server();
+        if (backend !== 'development') {
+          const token = 'b'.repeat(43);
+          const hash = Buffer.from(
+            await crypto.subtle.digest(
+              'SHA-256',
+              new TextEncoder().encode(token)
+            )
+          ).toString('hex');
+          srv.credential = { token, desktop: backend === 'desktop' };
+          if (backend === 'browser')
+            srv.db
+              .prepare('INSERT INTO auth_sessions VALUES (?, ?, ?, ?)')
+              .run(hash, USER, 0, 9_999_999_999);
+          else
+            srv.db
+              .prepare(
+                'INSERT INTO desktop_access_tokens VALUES (?, ?, ?, ?, ?, ?, NULL)'
+              )
+              .run(
+                hash,
+                'desktop-expiry',
+                USER,
+                'openzcad-macos',
+                0,
+                9_999_999_999
+              );
+        }
+        const laptop = device(srv);
+        const recovery = await generateRecoveryKey();
+        let action: () => Promise<EncryptionState>;
+        if (operation === 'setup') {
+          action = () =>
+            setUpEncryption(laptop, {
+              recoverySecret: recovery.secret,
+              label: 'Laptop'
+            });
+        } else {
+          await setUpEncryption(laptop, {
+            recoverySecret: recovery.secret,
+            label: 'Laptop'
+          });
+          const phone = await enrolled(srv, recovery.secret, 'Phone');
+          const account = ready(await loadEncryption(laptop));
+          action = () =>
+            removeDevice(
+              laptop,
+              account,
+              phone.account.device!.deviceId,
+              recovery.secret
+            );
+        }
+        let crossed = false;
+        srv.beforeWrite = async (sql) => {
+          if (
+            !sql.includes(
+              operation === 'setup'
+                ? 'INSERT INTO e2ee_identities'
+                : 'INSERT INTO e2ee_device_list_entries'
+            )
+          )
+            return;
+          srv.beforeWrite = undefined;
+          crossed = true;
+          const cutoff = Math.floor(Date.now() / 1000) + 5;
+          // The first SQL clock read admits, the next is already expired.
+          // These are real SQLite statements, not query-text return values.
+          let second = cutoff;
+          srv.db.function('unixepoch', () => second++);
+          const table =
+            backend === 'desktop' ? 'desktop_access_tokens' : 'auth_sessions';
+          srv.db
+            .prepare(`UPDATE ${table} SET expires_at = ? WHERE user_id = ?`)
+            .run(cutoff, USER);
+        };
+        expect(ready(await action()).unlocked).toBe(true);
+        expect(crossed).toBe(true);
+        lockAccount(USER);
+        expect(ready(await loadEncryption(laptop)).unlocked).toBe(true);
+      }
+    );
+  }
+);
+
 describe('setup device persistence', () => {
   it('keeps the certified keys when two tabs set up concurrently', async () => {
     const srv = server();
@@ -2064,35 +2979,29 @@ describe('setup device persistence', () => {
     });
     await started;
     const winningKeys = await first.store.loadDevice(USER);
-    let secondEntered!: () => void;
-    let secondRelease!: () => void;
-    const secondStarted = new Promise<void>((resolve) => {
-      secondEntered = resolve;
-    });
-    const secondReleased = new Promise<void>((resolve) => {
-      secondRelease = resolve;
-    });
+    const secondRequest = vi.fn(api.setup);
     const second = {
       ...device(srv),
       store: first.store,
       api: {
         ...api,
-        setup: async (body: E2eeSetupRequest) => {
-          secondEntered();
-          await secondReleased;
-          return api.setup(body);
-        }
+        setup: secondRequest
       }
     };
     const secondSetup = setUpEncryption(second, {
       recoverySecret: secret,
       label: 'Second tab'
     });
-    await secondStarted;
+    const secondOutcome = secondSetup.then(
+      () => null,
+      (error: unknown) => error
+    );
+    await Promise.resolve();
+    expect(secondRequest).not.toHaveBeenCalled();
     release();
     await pending;
-    secondRelease();
-    await expect(secondSetup).rejects.toBeInstanceOf(E2eeApiError);
+    expect(await secondOutcome).toBeInstanceOf(EncryptionFlowError);
+    expect(secondRequest).not.toHaveBeenCalled();
     lockAccount(USER);
     expect((await first.store.loadDevice(USER))?.deviceId).toBe(
       winningKeys?.deviceId
@@ -2224,6 +3133,143 @@ async function passkeyDevice(srv: Server, passkeys: PasskeyPrf) {
 }
 
 describe('passkey PRF unlock', () => {
+  it('keeps passkey certification behind the same-device writer lock and refuses it after logout', async () => {
+    const srv = server();
+    const { passkeys } = await withPasskey(srv);
+    const fresh = await passkeyDevice(srv, passkeys);
+    let release!: () => void;
+    let entered!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const holding = fresh.ctx.store.withDeviceLock(USER, async () => {
+      entered();
+      await held;
+    });
+    await started;
+    let sessionLive = true;
+    const writing = enrollWithPasskey(
+      { ...fresh.ctx, isCurrent: () => sessionLive },
+      fresh.account,
+      'Logged-out browser'
+    );
+    const outcome = writing.then(
+      () => null,
+      (error: unknown) => error
+    );
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(passkeys.get).not.toHaveBeenCalled();
+      sessionLive = false;
+      lockAccountsExcept(null);
+    } finally {
+      release();
+      await holding;
+    }
+    expect(await outcome).toBeInstanceOf(EncryptionFlowError);
+    expect(passkeys.get).not.toHaveBeenCalled();
+    expect(await fresh.ctx.store.loadDevice(USER)).toBeNull();
+    expect(
+      count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_device_list_entries')
+    ).toBe(2);
+  });
+
+  it.each(['create', 'get', 'revoke-read-only'] as const)(
+    'refuses a delayed %s after its settings view closes',
+    async (operation) => {
+      const srv = server();
+      const { laptop, account, recovery } = await withPasskey(srv);
+      let finish!: (value: PasskeySecret) => void;
+      let started!: () => void;
+      const waiting = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const provider = fakePasskey();
+      provider[operation === 'create' ? 'create' : 'get'].mockImplementation(
+        () => {
+          started();
+          return new Promise<PasskeySecret>((resolve) => {
+            finish = resolve;
+          });
+        }
+      );
+      let currentView = true;
+      const fresh =
+        operation === 'get'
+          ? await passkeyDevice(srv, provider)
+          : { ctx: { ...laptop, passkeys: provider }, account };
+      const ctx = { ...fresh.ctx, isCurrent: () => currentView };
+      const work =
+        operation === 'create'
+          ? addPasskey(ctx, fresh.account, recovery.secret)
+          : operation === 'get'
+            ? enrollWithPasskey(ctx, fresh.account, 'Closed view')
+            : revokeReadOnlyDevices(ctx, fresh.account, 'passkey');
+      const outcome = work.then(
+        () => null,
+        (error: unknown) => error
+      );
+      await waiting;
+      currentView = false;
+      const bytes = new Uint8Array(32).fill(0x71);
+      finish({ targetId: 'pk_test', secret: bytes });
+      expect(await outcome).toBeInstanceOf(EncryptionFlowError);
+      expect(bytes.every((byte) => byte === 0)).toBe(true);
+      expect(
+        count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_device_list_entries')
+      ).toBe(2);
+      expect(await ctx.store.loadDevice(USER)).toEqual(fresh.account.device);
+    }
+  );
+
+  it('does not resume an old passkey prompt after session teardown and a fresh authenticated recheck', async () => {
+    const srv = server();
+    const { laptop, account, recovery } = await withPasskey(srv);
+    let finish!: (value: PasskeySecret) => void;
+    let started!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const provider = fakePasskey('pk_late');
+    provider.create.mockImplementation(() => {
+      started();
+      return new Promise<PasskeySecret>((resolve) => {
+        finish = resolve;
+      });
+    });
+    const work = addPasskey(
+      { ...laptop, passkeys: provider },
+      account,
+      recovery.secret
+    );
+    const outcome = work.then(
+      () => null,
+      (error: unknown) => error
+    );
+    await waiting;
+    confirmKeySessionEnded();
+    // A later authenticated session must not revive a previous prompt.
+    allowKeySession(getKeySessionRevision());
+    const bytes = new Uint8Array(32).fill(0x71);
+    finish({ targetId: 'pk_late', secret: bytes });
+    expect(await outcome).toHaveProperty('name', 'AbortError');
+    expect(bytes.every((byte) => byte === 0)).toBe(true);
+    expect(unlockedEncryptionKey(USER)).toBeNull();
+    expect(
+      count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_device_list_entries')
+    ).toBe(2);
+  });
+
+  beforeEach(() => {
+    // Each fixture starts with a fresh authenticated server session. Prior
+    // account-erasure tests intentionally leave the app-wide session closed.
+    allowKeySession(getKeySessionRevision());
+  });
+
   it('certifies a public target with exactly three wraps, never sends PRF material, and enrolls a fresh browser', async () => {
     const srv = server();
     const { account, passkeys } = await withPasskey(srv);
@@ -2693,12 +3739,14 @@ describe('passkey PRF unlock', () => {
         started = resolve;
       });
       const provider = fakePasskey();
-      provider[operation === 'create' ? 'create' : 'get'].mockImplementation(() => {
-        started();
-        return new Promise<PasskeySecret>((resolve) => {
-          finish = resolve;
-        });
-      });
+      provider[operation === 'create' ? 'create' : 'get'].mockImplementation(
+        () => {
+          started();
+          return new Promise<PasskeySecret>((resolve) => {
+            finish = resolve;
+          });
+        }
+      );
       const fresh =
         operation === 'get'
           ? await passkeyDevice(srv, provider)
@@ -2913,7 +3961,7 @@ describe('cross-tab pin persistence', () => {
     expect(unlockedEncryptionKey(USER)).toBeNull();
   });
 
-  it('preserves explicit re-approval after an identity replacement', async () => {
+  async function replacedUnderPhone() {
     const srv = server();
     const { laptop, recovery } = await setUp(srv);
     const phone = await enrolled(srv, recovery.secret, 'Phone');
@@ -2929,6 +3977,19 @@ describe('cross-tab pin persistence', () => {
     const stale = await loadEncryption(phone.ctx);
     if (stale.kind !== 'identity-changed')
       throw new Error('Expected an identity change');
+    const oldPin = await phone.ctx.store.loadPin(USER);
+    return { laptop, phone, next, newer, stale, oldPin };
+  }
+
+  // The scan form authenticates only the phone to the approver: the approver
+  // key would come from the unpinned list itself, which a server could
+  // fabricate along with a new identity, so it cannot replace the identity
+  // this browser pinned.
+  async function refusedScan(
+    setup: Awaited<ReturnType<typeof replacedUnderPhone>>,
+    recoverySecret: Uint8Array | null
+  ) {
+    const { laptop, phone, newer, stale, oldPin } = setup;
     const request = await requestApproval(
       phone.ctx,
       stale.account,
@@ -2942,13 +4003,63 @@ describe('cross-tab pin persistence', () => {
       newer,
       request.approval,
       { kind: 'scan', code: request.scanCode },
-      next.secret
+      recoverySecret
     );
-    const completed = await advanceApprovalAsNewDevice(phone.ctx);
+    lockAccount(USER);
+    await flowRefusal(advanceApprovalAsNewDevice(phone.ctx), 'grant-invalid');
+    expect(await phone.ctx.store.loadPin(USER)).toEqual(oldPin);
+    expect((await phone.ctx.store.loadDevice(USER))?.approval).toBeNull();
+    expect(unlockedEncryptionKey(USER)).toBeNull();
+    const after = await loadEncryption(phone.ctx);
+    expect(after.kind).toBe('identity-changed');
+    return after;
+  }
+
+  it('re-approves a replaced identity by comparing codes, not by a scan', async () => {
+    const setup = await replacedUnderPhone();
+    const { laptop, phone, newer } = setup;
+    const after = await refusedScan(setup, null);
+    if (after.kind !== 'identity-changed') throw new Error('unreachable');
+    // The six digits authenticate the approver, so the compare form may.
+    const request = await requestApproval(
+      phone.ctx,
+      after.account,
+      'Phone again'
+    );
+    if (request.step !== 'waiting')
+      throw new Error('Expected a waiting approval');
+    const approver = ready(await loadEncryption(laptop));
+    await beginCompareApproval(laptop, approver, request.approval.id);
+    const shown = await advanceApprovalAsNewDevice(phone.ctx);
+    if (shown.step !== 'compare') throw new Error(`got ${shown.step}`);
+    const revealed = await laptop.api.getApproval(request.approval.id);
+    expect(await approverComparisonCode(laptop, approver, revealed)).toBe(
+      shown.code
+    );
+    await approveDevice(laptop, approver, revealed, { kind: 'compare' }, null);
+    lockAccount(USER);
+    const completed = await confirmApprovalCode(phone.ctx);
     if (completed.step !== 'done')
       throw new Error('Expected a completed approval');
     expect(ready(completed.state).unlocked).toBe(true);
     expect(ready(completed.state).fingerprint).toBe(newer.fingerprint);
+  });
+
+  it('recovers with the new recovery key after a refused certifying scan', async () => {
+    const setup = await replacedUnderPhone();
+    const after = await refusedScan(setup, setup.next.secret);
+    if (after.kind !== 'identity-changed') throw new Error('unreachable');
+    const recovered = ready(
+      await enrollWithRecoveryKey(
+        setup.phone.ctx,
+        after.account,
+        setup.next.secret,
+        'Phone again'
+      )
+    );
+    expect(recovered.deviceStatus).toBe('certified');
+    expect(recovered.unlocked).toBe(true);
+    expect(recovered.fingerprint).toBe(setup.newer.fingerprint);
   });
 
   it('recovers a certified browser when replacement committed but its pin snapshot was stale', async () => {

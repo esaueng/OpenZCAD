@@ -298,6 +298,8 @@ importers:
         specifier: github:esaueng/remus#b464097112a6a25878666740442a46eb54b0ed7a&path:/crates/wasm-io/pkg
         version: https://codeload.github.com/esaueng/remus/tar.gz/b464097112a6a25878666740442a46eb54b0ed7a#path:/crates/wasm-io/pkg
 
+  packages/mls: {}
+
   packages/persistence:
     dependencies:
       '@openzcad/document-core':
