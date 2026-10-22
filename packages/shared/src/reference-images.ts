@@ -138,6 +138,60 @@ export function sniffReferenceImageType(
   return null;
 }
 
+/**
+ * A PNG's or JPEG's pixel size as its header declares it (the PNG `IHDR`
+ * chunk, the JPEG start-of-frame segment), read without decoding, so an
+ * oversized picture can be refused before a decoder allocates its bitmap.
+ * Null when the header is missing or malformed. A JPEG's EXIF orientation
+ * may swap the decoded sides; the longer side is the same either way.
+ */
+export function referenceImageHeaderSize(
+  bytes: Uint8Array
+): { width: number; height: number } | null {
+  const u16 = (at: number) => (bytes[at]! << 8) | bytes[at + 1]!;
+  const u32 = (at: number) => u16(at) * 0x10000 + u16(at + 2);
+  const type = sniffReferenceImageType(bytes);
+  if (type === 'image/png') {
+    // Signature, then the first chunk: length 13, type `IHDR`.
+    const ihdr = [0x49, 0x48, 0x44, 0x52];
+    if (
+      bytes.length < 24 ||
+      u32(8) !== 13 ||
+      !ihdr.every((value, index) => bytes[12 + index] === value)
+    )
+      return null;
+    return { width: u32(16), height: u32(20) };
+  }
+  if (type !== 'image/jpeg') return null;
+  let at = 2;
+  while (at < bytes.length) {
+    if (bytes[at] !== 0xff) return null;
+    while (bytes[at] === 0xff) at += 1;
+    if (at >= bytes.length) return null;
+    const marker = bytes[at]!;
+    at += 1;
+    // Markers without a length: TEM and the restart markers.
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    // End of image, or scan data before any frame header.
+    if (marker === 0xd8 || marker === 0xd9 || marker === 0xda) return null;
+    if (at + 2 > bytes.length) return null;
+    const length = u16(at);
+    if (length < 2) return null;
+    const isFrame =
+      marker >= 0xc0 &&
+      marker <= 0xcf &&
+      marker !== 0xc4 &&
+      marker !== 0xc8 &&
+      marker !== 0xcc;
+    if (isFrame) {
+      if (length < 8 || at + 7 > bytes.length) return null;
+      return { width: u16(at + 5), height: u16(at + 3) };
+    }
+    at += length;
+  }
+  return null;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

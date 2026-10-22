@@ -3,6 +3,7 @@ import {
   MAX_REFERENCE_IMAGE_BYTES,
   MAX_REFERENCE_IMAGE_NAME_LENGTH,
   MAX_REFERENCE_IMAGE_PIXELS,
+  referenceImageHeaderSize,
   sniffReferenceImageType,
   UNIT_TO_MM,
   type ArtifactId,
@@ -95,6 +96,27 @@ export async function prepareReferenceImage({
   if (!contentType) {
     throw new Error(`${file.name} is not a PNG or JPEG image.`);
   }
+  const checkSize = (size: { width: number; height: number }) => {
+    if (
+      !Number.isSafeInteger(size.width) ||
+      !Number.isSafeInteger(size.height) ||
+      size.width < 1 ||
+      size.height < 1 ||
+      Math.max(size.width, size.height) > MAX_REFERENCE_IMAGE_PIXELS
+    ) {
+      throw new Error(
+        `${file.name} is ${size.width} × ${size.height} pixels; pictures up to ${MAX_REFERENCE_IMAGE_PIXELS} pixels on a side can be placed.`
+      );
+    }
+  };
+  // The declared size is checked before decoding: a small, highly
+  // compressed file can declare a bitmap of gigabytes, and the decoder would
+  // allocate it before the decoded size could be refused.
+  const declared = referenceImageHeaderSize(bytes);
+  if (!declared) {
+    throw new Error(`${file.name} could not be read as an image.`);
+  }
+  checkSize(declared);
   const body = new Blob([bytes], { type: contentType });
   let size: { width: number; height: number };
   try {
@@ -102,17 +124,7 @@ export async function prepareReferenceImage({
   } catch {
     throw new Error(`${file.name} could not be read as an image.`);
   }
-  if (
-    !Number.isSafeInteger(size.width) ||
-    !Number.isSafeInteger(size.height) ||
-    size.width < 1 ||
-    size.height < 1 ||
-    Math.max(size.width, size.height) > MAX_REFERENCE_IMAGE_PIXELS
-  ) {
-    throw new Error(
-      `${file.name} is ${size.width} × ${size.height} pixels; pictures up to ${MAX_REFERENCE_IMAGE_PIXELS} pixels on a side can be placed.`
-    );
-  }
+  checkSize(size);
   // The whole insert is checked before a byte is stored or uploaded: a
   // refusal (the project already holds the most images it may, a plane the
   // section cannot hold) must not leave an unreferenced picture behind on

@@ -17,6 +17,7 @@ import {
   MAX_REFERENCE_IMAGE_BYTES,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   referenceImageError,
+  referenceImageHeaderSize,
   referenceImageHeight,
   referenceImageSetError,
   referenceImagesWithHistory,
@@ -375,6 +376,47 @@ describe('reference-image measures', () => {
     );
     expect(
       sniffReferenceImageType(new TextEncoder().encode('<svg></svg>'))
+    ).toBeNull();
+  });
+
+  it('reads the declared pixel size from PNG and JPEG headers without decoding', () => {
+    const png = new Uint8Array(33);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    png.set([0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52], 8);
+    png.set([0, 0, 0x40, 0, 0, 0, 0x20, 0], 16);
+    expect(referenceImageHeaderSize(png)).toEqual({
+      width: 16_384,
+      height: 8_192
+    });
+    // A truncated or out-of-order PNG declares nothing.
+    expect(referenceImageHeaderSize(png.slice(0, 20))).toBeNull();
+    const notIhdr = png.slice();
+    notIhdr[12] = 0x69;
+    expect(referenceImageHeaderSize(notIhdr)).toBeNull();
+    // JPEG: SOI, an APP0 segment to skip, fill bytes, then a progressive
+    // start-of-frame (SOF2) giving height 300 and width 500.
+    const jpeg = new Uint8Array([
+      0xff, 0xd8, 0xff, 0xe0, 0x00, 0x06, 0x4a, 0x46, 0x49, 0x46, 0xff, 0xff,
+      0xc2, 0x00, 0x11, 0x08, 0x01, 0x2c, 0x01, 0xf4, 0x03
+    ]);
+    expect(referenceImageHeaderSize(jpeg)).toEqual({ width: 500, height: 300 });
+    // A Huffman table (0xC4) is not a frame header; scan data before a frame
+    // header, a broken marker or a truncated segment declares nothing.
+    expect(
+      referenceImageHeaderSize(
+        new Uint8Array([0xff, 0xd8, 0xff, 0xc4, 0x00, 0x02, 0xff, 0xda])
+      )
+    ).toBeNull();
+    expect(
+      referenceImageHeaderSize(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00]))
+    ).toBeNull();
+    expect(
+      referenceImageHeaderSize(
+        new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0, 0, 0x12])
+      )
+    ).toBeNull();
+    expect(
+      referenceImageHeaderSize(new TextEncoder().encode('<svg></svg>'))
     ).toBeNull();
   });
 });
