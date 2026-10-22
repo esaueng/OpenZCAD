@@ -100,6 +100,13 @@ export function sanitizeThreeMfModel(model: string): string {
 }
 
 /**
+ * fflate stamps entries with the current time by default, so the same model
+ * exported twice differed whenever the two calls crossed a 2-second DOS time
+ * step. Use the DOS epoch (local time, as the format stores it) instead.
+ */
+const ARCHIVE_TIME = new Date(1980, 0, 1);
+
+/**
  * Remove exact zero-area facets from the generated 3MF model part, or apply
  * `rewrite` to it instead when the caller has more to change (it then owns
  * calling {@link sanitizeThreeMfModel}).
@@ -117,7 +124,7 @@ export function sanitizeThreeMf(
   const encoder = new TextEncoder();
   const sanitized = rewrite(decoder.decode(model));
   files[path] = encoder.encode(sanitized);
-  return new Uint8Array(zipSync(files));
+  return new Uint8Array(zipSync(files, { mtime: ARCHIVE_TIME }));
 }
 
 const PLY_SCALAR_SIZES: Record<string, number> = {
@@ -263,8 +270,7 @@ export function sanitizeBinaryPly(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
     );
   const used = new Set(keptFaces.flat());
   const remap = new Map<number, number>();
-  for (const old of [...used].sort((a, b) => a - b))
-    remap.set(old, remap.size);
+  for (const old of [...used].sort((a, b) => a - b)) remap.set(old, remap.size);
   const rewritten = header
     .replace(/^element vertex \d+$/m, `element vertex ${remap.size}`)
     .replace(/^element face \d+$/m, `element face ${keptFaces.length}`);

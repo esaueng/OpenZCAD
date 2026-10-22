@@ -98,7 +98,7 @@ function shareLinkClient(): ProjectShareLinkClient {
           shareLinkId: `share_${links.length + 1}`,
           projectId,
           mode,
-          createdAt: 1_700_000_000,
+          createdAt: Math.floor(Date.now() / 1000),
           revokedAt: null
         };
         links.push(shareLink);
@@ -455,6 +455,11 @@ describe('ProjectSharingDialog', () => {
     expect(screen.getByText('Anyone with the link')).toBeVisible();
     expect(
       screen.getByText(
+        'Links expire 30 days after creation. Create a new link to share again.'
+      )
+    ).toBeVisible();
+    expect(
+      screen.getByText(
         'Opens in Tweak: parameters and export, no account needed.'
       )
     ).toBeVisible();
@@ -481,6 +486,9 @@ describe('ProjectSharingDialog', () => {
     expect(screen.getByRole('button', { name: 'Copied' })).toBeVisible();
     expect(screen.getByText('Shown once — copy it now.')).toBeVisible();
     expect(screen.getByText(/^Link created /)).toBeVisible();
+    expect(screen.getByText(/^Link created /)).toHaveTextContent(
+      'Expires in 30d'
+    );
     expect(screen.getByText(/^Link created /).closest('li')).toHaveTextContent(
       /Tweak/
     );
@@ -500,6 +508,42 @@ describe('ProjectSharingDialog', () => {
       ).not.toBeInTheDocument()
     );
     expect(screen.queryByLabelText('Share link')).not.toBeInTheDocument();
+  });
+
+  it('labels an expired link and keeps it revocable', async () => {
+    const base = createProjectDocument('Expired share link', owner);
+    const links = shareLinkClient();
+    vi.mocked(links.listProjectShareLinks).mockResolvedValue([
+      {
+        shareLinkId: 'share_old',
+        projectId: base.projectId,
+        mode: 'view',
+        createdAt: 1,
+        revokedAt: null
+      }
+    ]);
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId={base.projectId}
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        shareLinkClient={links}
+        onClose={vi.fn()}
+      />
+    );
+    expect(await screen.findByText(/^Link created /)).toHaveTextContent(
+      'Expired'
+    );
+    await user.click(
+      screen.getByRole('button', { name: /Revoke share link created/ })
+    );
+    expect(links.revokeProjectShareLink).toHaveBeenCalledWith(
+      base.projectId,
+      'share_old'
+    );
   });
 
   it('blocks a new link while a STEP source exists only on this device', async () => {
