@@ -2,8 +2,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   CommandManager,
   commandFactories,
+  commandsForCadPatch,
   replayCommands
 } from '@openzcad/command-system';
+import {
+  createCadDocumentDigest,
+  type CadPatchProposal
+} from '@openzcad/ai-contracts';
 import {
   createProjectDocument,
   deleteFeature,
@@ -25,6 +30,7 @@ import {
 } from '@openzcad/kernel-adapter/exact';
 import {
   toUserId,
+  toProjectId,
   toSketchId,
   toEntityId,
   type BodyId,
@@ -290,6 +296,312 @@ function expectFreshProjection(
 }
 
 describe('linked projection constraint propagation before writeback', () => {
+  it('compiles ID-only consumers of a solved multi-line sketch without selecting a profile', async () => {
+    const f = await constrainedPlate();
+    f.manager.execute(
+      commandFactories.setParameter({ name: 'w', expression: '32' })
+    );
+    f.manager.commitDerivedState(
+      await adapter.syncDocument(f.manager.document)
+    );
+    const before = f.manager.document;
+    const commands = commandsForCadPatch(before, {
+      proposalId: 'id_only_compilation',
+      summary: 'Compile consumers without selecting a region.',
+      assumptions: [],
+      operations: [
+        { kind: 'set_parameter', name: 'w', expression: '40' },
+        {
+          kind: 'add_extrude',
+          name: 'Unselected extrusion',
+          sketchId: f.sketchId,
+          distance: 2,
+          samplePoint: null
+        },
+        {
+          kind: 'add_revolve',
+          name: 'Unselected revolve',
+          sketchId: f.sketchId,
+          axis: 'vertical',
+          angleDeg: 360
+        }
+      ]
+    });
+    expect(f.manager.document).toBe(before);
+    expect(commands).toHaveLength(3);
+    f.manager.runTransaction('Compile ID-only consumers', commands);
+    const [extrude, revolve] = listFeaturesInOrder(f.manager.document).slice(
+      -2
+    );
+    expect(extrude!.data).toMatchObject({
+      featureKind: 'extrude',
+      sketchId: f.sketchId,
+      distance: 2
+    });
+    expect(revolve!.data).toMatchObject({
+      featureKind: 'revolve',
+      sketchId: f.sketchId,
+      axis: 'vertical',
+      angleDeg: 360
+    });
+    for (const id of f.loop)
+      expect(f.manager.document.nodes[id]).toEqual(before.nodes[id]);
+  });
+
+  it('preserves native legacy primitive consumers after an upstream edit', async () => {
+    const manager = new CommandManager(
+      createProjectDocument(
+        'Legacy profile compatibility',
+        toUserId('user_legacy_profile')
+      )
+    );
+    manager.execute(
+      commandFactories.setParameter({ name: 'r', expression: '32' })
+    );
+    manager.execute(
+      commandFactories.addSketch({
+        name: 'Driven legacy circle',
+        planeRef: plane,
+        objects: [
+          { objectKind: 'circle', centerX: 100, centerY: 0, radius: 'r' }
+        ]
+      })
+    );
+    const sketchId = manager.document.sketchOrder[0]!;
+    const circleId = findSketch(manager.document, sketchId)!.objectIds[0]!;
+    const before = manager.document;
+    expect(before.nodes[circleId]).toMatchObject({ data: { radius: 'r' } });
+    const commands = commandsForCadPatch(before, {
+      proposalId: 'unprofiled_solved_consumers',
+      summary: 'Rebuild consumers without selecting a region.',
+      assumptions: [],
+      operations: [
+        { kind: 'set_parameter', name: 'r', expression: '40' },
+        {
+          kind: 'add_extrude',
+          name: 'Whole circle copy',
+          sketchId,
+          distance: 2,
+          samplePoint: null
+        },
+        {
+          kind: 'add_revolve',
+          name: 'Whole circle revolve',
+          sketchId,
+          axis: 'vertical',
+          angleDeg: 360
+        }
+      ]
+    });
+    expect(manager.document).toBe(before);
+    expect(commands).toHaveLength(3);
+    manager.runTransaction('Rebuild whole circle consumers', commands);
+    const built = await adapter.syncDocument(manager.document);
+    const [extruded, revolved] = manager.document.bodyOrder.slice(-2) as [
+      BodyId,
+      BodyId
+    ];
+    expect(volume(built, extruded)).toBeCloseTo(Math.PI * 40 ** 2 * 2, 6);
+    expect(volume(built, revolved)).toBeCloseTo(
+      2 * Math.PI ** 2 * 100 * 40 ** 2,
+      5
+    );
+  });
+
+  it('keeps qualified profile reads across a new parameter and repeated appends', async () => {
+    const f = await constrainedPlate();
+    f.manager.execute(
+      commandFactories.setParameter({ name: 'w', expression: '32' })
+    );
+    f.manager.commitDerivedState(
+      await adapter.syncDocument(f.manager.document)
+    );
+    const before = f.manager.document;
+    const authored = JSON.stringify(before.nodes);
+    const commands = commandsForCadPatch(before, {
+      proposalId: 'repeated_solved_profiles',
+      summary: 'Append two solved-outline copies.',
+      assumptions: [],
+      operations: [
+        { kind: 'set_parameter', name: 'w', expression: '32' },
+        { kind: 'set_parameter', name: 'copyDepth', expression: '2' },
+        {
+          kind: 'add_extrude',
+          name: 'First solved copy',
+          sketchId: f.sketchId,
+          distance: 'copyDepth',
+          samplePoint: { x: 26, y: 3 }
+        },
+        {
+          kind: 'add_multi_profile_extrude',
+          name: 'Second solved copy',
+          sketchId: f.sketchId,
+          distance: 3,
+          samplePoints: [{ x: 10, y: 3 }]
+        }
+      ]
+    });
+    expect(JSON.stringify(before.nodes)).toBe(authored);
+    f.manager.runTransaction('Append solved copies', commands);
+    const built = await adapter.syncDocument(f.manager.document);
+    const [first, second] = f.manager.document.bodyOrder.slice(-2) as [
+      BodyId,
+      BodyId
+    ];
+    expect(volume(built, first)).toBeCloseTo(32 * 6 * 2, 6);
+    expect(volume(built, second)).toBeCloseTo(32 * 6 * 3, 6);
+    for (const id of f.loop)
+      expect(f.manager.document.nodes[id]).toEqual(before.nodes[id]);
+  });
+
+  it.each(['project', 'version'] as const)(
+    'ignores a %s-mismatched solved view during profile compilation',
+    async (mismatch) => {
+      const f = await constrainedPlate();
+      f.manager.execute(
+        commandFactories.setParameter({ name: 'w', expression: '32' })
+      );
+      f.manager.commitDerivedState(
+        await adapter.syncDocument(f.manager.document)
+      );
+      const current = f.manager.document;
+      const geometry = current.derived.sketchGeometry!;
+      const stale = {
+        ...current,
+        derived: {
+          ...current.derived,
+          sketchGeometry: {
+            ...geometry,
+            ...(mismatch === 'project'
+              ? { projectId: toProjectId('proj_unrelated_solve') }
+              : { documentVersion: current.version - 1 })
+          }
+        }
+      };
+      expect(() =>
+        commandsForCadPatch(stale, {
+          proposalId: 'mismatched_solved_profile',
+          summary: 'A stale view must not supply a profile.',
+          assumptions: [],
+          operations: [
+            {
+              kind: 'add_extrude',
+              name: 'Unqualified outline',
+              sketchId: f.sketchId,
+              distance: 2,
+              samplePoint: { x: 26, y: 3 }
+            }
+          ]
+        })
+      ).toThrow(/not inside any closed region/);
+    }
+  );
+
+  it.each(['w', ' w '])(
+    'refuses a stale solved profile after an upstream edit to %s without mutating the proposal base',
+    async (name) => {
+      const f = await constrainedPlate();
+      f.manager.execute(
+        commandFactories.setParameter({ name: 'w', expression: '32' })
+      );
+      f.manager.commitDerivedState(
+        await adapter.syncDocument(f.manager.document)
+      );
+      const before = f.manager.document;
+      const authored = JSON.stringify(before);
+      expect(() =>
+        commandsForCadPatch(before, {
+          proposalId: 'invalidated_solved_profile',
+          summary: 'Change the upstream driver then select a profile.',
+          assumptions: [],
+          operations: [
+            { kind: 'set_parameter', name, expression: '40' },
+            {
+              kind: 'add_extrude',
+              name: 'Unqualified copy',
+              sketchId: f.sketchId,
+              distance: 2,
+              samplePoint: { x: 10, y: 3 }
+            }
+          ]
+        })
+      ).toThrow(
+        name === 'w'
+          ? /rebuild.*sketch|sketch.*rebuild/i
+          : /Parameter name " w " is not usable/
+      );
+      expect(JSON.stringify(before)).toBe(authored);
+      expect(f.manager.document).toBe(before);
+    }
+  );
+
+  for (const kind of ['add_extrude', 'add_multi_profile_extrude'] as const) {
+    for (const x of [10, 26]) {
+      it(`compiles ${kind} against the digest's solved outline at x=${x}`, async () => {
+        const f = await constrainedPlate();
+        f.manager.execute(
+          commandFactories.setParameter({ name: 'w', expression: '32' })
+        );
+        f.manager.commitDerivedState(
+          await adapter.syncDocument(f.manager.document)
+        );
+        const before = f.manager.document;
+        const authored = JSON.stringify(before.nodes);
+        const digest = createCadDocumentDigest(before);
+        const sketchData = digest.features.find(
+          (feature) => feature.featureKind === 'sketch'
+        )!.data as { objects: SketchObjectData[] };
+        expect(sketchData.objects).toContainEqual(
+          expect.objectContaining({ objectKind: 'line', x1: 32, x2: 32 })
+        );
+        const operation = {
+          kind,
+          name: 'Solved outline copy',
+          sketchId: f.sketchId,
+          distance: 2
+        };
+        const proposal: CadPatchProposal = {
+          proposalId: 'solved_outline',
+          summary: 'Extrude the displayed solved boundary.',
+          assumptions: [],
+          operations: [
+            kind === 'add_extrude'
+              ? { ...operation, kind, samplePoint: { x, y: 3 } }
+              : { ...operation, kind, samplePoints: [{ x, y: 3 }] }
+          ]
+        };
+        const commands = commandsForCadPatch(before, proposal);
+        expect(JSON.stringify(before.nodes)).toBe(authored);
+        f.manager.runTransaction('Extrude solved outline', commands);
+        const feature = listFeaturesInOrder(f.manager.document).at(-1)!;
+        if (feature.data.featureKind !== 'extrude')
+          throw new Error('Expected extrude.');
+        const profile = feature.data.profiles?.[0] ?? feature.data.profile;
+        expect(profile).toMatchObject({
+          sourceArea: 32 * 6,
+          samplePoint: { x, y: 3 }
+        });
+        const bodyId = f.manager.document.bodyOrder.at(-1)!;
+        expect(
+          volume(await adapter.syncDocument(f.manager.document), bodyId)
+        ).toBeCloseTo(32 * 6 * 2, 6);
+        f.manager.undo();
+        expect(JSON.stringify(f.manager.document.nodes)).toBe(authored);
+        f.manager.redo();
+        expect(
+          volume(await adapter.syncDocument(f.manager.document), bodyId)
+        ).toBeCloseTo(32 * 6 * 2, 6);
+        const replayed = replayCommands(
+          f.initial,
+          f.manager.document.commandLog
+        );
+        expect(
+          volume(await adapter.syncDocument(replayed), bodyId)
+        ).toBeCloseTo(32 * 6 * 2, 6);
+      });
+    }
+  }
+
   it.each([false, true])(
     'keeps the solved shape when the last link is released (typed=%s)',
     async (typed) => {
