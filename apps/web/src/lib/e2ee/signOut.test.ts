@@ -5,6 +5,7 @@ import {
   generateSigningKeyPair
 } from '@openzcad/crypto';
 import * as deviceStores from './deviceStore';
+import * as e2eeApis from './e2eeApi';
 import { signOutAfterSaving } from './signOut';
 import {
   lockAccountsExcept,
@@ -45,6 +46,110 @@ async function fixture() {
 }
 
 describe('saving before device-key sign-out', () => {
+  async function pendingApproval() {
+    const current = await fixture();
+    const device = (await current.store.loadDevice(current.userId))!;
+    await current.store.saveDevice({
+      ...device,
+      approval: { id: 'sign_out_pending_approval', nonce: new Uint8Array(32) }
+    });
+    const api = e2eeApis.createE2eeApi();
+    const cancel = vi.fn(async () => ({ ok: true as const }));
+    vi.spyOn(e2eeApis, 'createE2eeApi').mockReturnValue({
+      ...api,
+      cancelApproval: cancel
+    });
+    return { ...current, cancel };
+  }
+
+  it('cancels the pending server approval before its only device keys disappear', async () => {
+    const { userId, store, cancel } = await pendingApproval();
+    let requestLive = true;
+    cancel.mockImplementation(async () => {
+      expect(await store.loadDevice(userId)).not.toBeNull();
+      requestLive = false;
+      return { ok: true };
+    });
+    const remove = store.deleteDevice.bind(store);
+    vi.spyOn(store, 'deleteDevice').mockImplementation(async (id) => {
+      // A previously scanned approval must already be unusable at key removal.
+      expect(requestLive).toBe(false);
+      await remove(id);
+    });
+    const revokeSession = vi.fn(async () => {
+      expect(requestLive).toBe(false);
+      expect(await store.loadDevice(userId)).toBeNull();
+    });
+    await signOutAfterSaving({
+      userId,
+      keepDevice: false,
+      isCurrentSession: () => true,
+      savePending: async () => {},
+      revokeSession
+    });
+    expect(cancel).toHaveBeenCalledExactlyOnceWith('sign_out_pending_approval');
+    expect(revokeSession).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the approval ID and keys for retry when cancellation fails', async () => {
+    const { userId, store, cancel } = await pendingApproval();
+    cancel.mockRejectedValueOnce(new Error('Cancellation unavailable'));
+    const revokeSession = vi.fn();
+    const input = {
+      userId,
+      keepDevice: false,
+      isCurrentSession: () => true,
+      savePending: async () => {},
+      revokeSession
+    };
+    await expect(signOutAfterSaving(input)).rejects.toThrow(
+      'Cancellation unavailable'
+    );
+    expect((await store.loadDevice(userId))?.approval?.id).toBe(
+      'sign_out_pending_approval'
+    );
+    expect(revokeSession).not.toHaveBeenCalled();
+    await signOutAfterSaving(input);
+    expect(await store.loadDevice(userId)).toBeNull();
+    expect(revokeSession).toHaveBeenCalledOnce();
+  });
+
+  it('retains a pending approval when keeping the device unlocked', async () => {
+    const { userId, store, cancel } = await pendingApproval();
+    await signOutAfterSaving({
+      userId,
+      keepDevice: true,
+      isCurrentSession: () => true,
+      savePending: async () => {},
+      revokeSession: async () => {}
+    });
+    expect(cancel).not.toHaveBeenCalled();
+    expect((await store.loadDevice(userId))?.approval?.id).toBe(
+      'sign_out_pending_approval'
+    );
+  });
+
+  it('stops removing keys or revoking a new session if the account changes during cancellation', async () => {
+    const { userId, store, cancel } = await pendingApproval();
+    let current = true;
+    cancel.mockImplementation(async () => {
+      current = false;
+      return { ok: true };
+    });
+    const revokeSession = vi.fn();
+    await expect(
+      signOutAfterSaving({
+        userId,
+        keepDevice: false,
+        isCurrentSession: () => current,
+        savePending: async () => {},
+        revokeSession
+      })
+    ).rejects.toThrow('signed-in account changed');
+    expect(await store.loadDevice(userId)).not.toBeNull();
+    expect(revokeSession).not.toHaveBeenCalled();
+  });
+
   it('does not drain or revoke a session that replaced the inspected account', async () => {
     const savePending = vi.fn(async () => {});
     const revokeSession = vi.fn();

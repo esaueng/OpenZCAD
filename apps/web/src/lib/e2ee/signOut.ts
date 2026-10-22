@@ -1,5 +1,6 @@
 import { lockAccount } from './unlockedKeys';
 import { indexedDbDeviceStore } from './deviceStore';
+import { createE2eeApi } from './e2eeApi';
 
 export interface DeviceKeySignOutChoice {
   readonly userId: string;
@@ -14,10 +15,23 @@ export interface DeviceKeySignOutChoice {
  */
 export async function endKeySession(
   userId: string,
-  keepDevice: boolean
+  keepDevice: boolean,
+  requireCurrentSession: () => void
 ): Promise<void> {
+  requireCurrentSession();
   lockAccount(userId);
-  if (!keepDevice) await indexedDbDeviceStore().deleteDevice(userId);
+  if (!keepDevice) {
+    const store = indexedDbDeviceStore();
+    const device = await store.loadDevice(userId);
+    requireCurrentSession();
+    if (device?.approval) {
+      // Keep the request ID and keys if cancellation cannot finish; the user
+      // can retry without leaving an approvable request for discarded keys.
+      await createE2eeApi().cancelApproval(device.approval.id);
+      requireCurrentSession();
+    }
+    await store.deleteDevice(userId);
+  }
 }
 
 /** Save with the live session, then finish its key choice before revoking it. */
@@ -37,7 +51,7 @@ export async function signOutAfterSaving(input: {
   await input.savePending();
   requireCurrentSession();
   if (input.userId && input.keepDevice !== undefined) {
-    await endKeySession(input.userId, input.keepDevice);
+    await endKeySession(input.userId, input.keepDevice, requireCurrentSession);
   }
   requireCurrentSession();
   await input.revokeSession();
