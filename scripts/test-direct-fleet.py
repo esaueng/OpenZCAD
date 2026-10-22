@@ -61,11 +61,14 @@ class Context(dict):
         return Context(value) if isinstance(value, dict) else value
 
 
-def evaluate(expression, github, variables):
+def evaluate(expression, github, variables, needs=None):
     source = expression[3:-3].replace("&&", " and ").replace("||", " or ")
     source = re.sub(r"\btrue\b(?!\')", "True", source)
     source = re.sub(r"\bfalse\b(?!\')", "False", source)
-    names = {"github": Context(github), "vars": Context(variables)}
+    # GitHub permits hyphens in job property names; Python parses subtraction.
+    source = source.replace("needs.queue-trust", "needs.queue_trust")
+    names = {"github": Context(github), "vars": Context(variables),
+             "needs": Context({"queue_trust": (needs or {}).get("queue-trust", {})})}
     def visit(node):
         if isinstance(node, ast.Constant):
             return node.value
@@ -143,7 +146,7 @@ class DirectFleetTests(unittest.TestCase):
             for expression in EXPRESSIONS:
                 self.assertEqual(
                     evaluate(expression, self.github, self.variables),
-                    {"group": "ci-trusted-main", "labels": target},
+                    {"group": "ci-trusted-main", "labels": "ci-server-jane-5gb" if target == "ci-server-jane" else target},
                 )
 
     def test_untrusted_events_never_schedule_on_home_fleet(self):
@@ -197,14 +200,26 @@ class DirectFleetTests(unittest.TestCase):
         for expression in EXPRESSIONS:
             self.assertIsInstance(evaluate(expression, self.github, self.variables), str)
 
-    def test_merge_groups_run_on_hosted_runners_without_pr_fields(self):
+    def test_merge_groups_require_a_successful_exact_sha_probe(self):
         self.github.update(
             event_name="merge_group",
             ref="refs/heads/gh-readonly-queue/main/pr-7-synthetic",
+            sha="a" * 40,
             event={"merge_group": {"base_ref": "refs/heads/main"}},
         )
         for expression in EXPRESSIONS:
-            self.assertEqual(evaluate(expression, self.github, self.variables), "ubuntu-latest")
+            for needs in ({}, *(
+                {"queue-trust": {"result": result, "outputs": {"sha": "a" * 40}}}
+                for result in ("failure", "cancelled", "skipped")
+            ), {"queue-trust": {"result": "success", "outputs": {"sha": "b" * 40}}}):
+                self.assertEqual(evaluate(expression, self.github, self.variables, needs), "ubuntu-latest")
+            verified = {"queue-trust": {"result": "success", "outputs": {"sha": "a" * 40}}}
+            self.assertEqual(evaluate(expression, self.github, self.variables, verified),
+                             {"group": "ci-trusted-main", "labels": "ci-server-jane-5gb"})
+            for variables in (dict(self.variables, CI_FLEET_ENABLED="false"),
+                              dict(self.variables, CI_FLEET_TARGET="github-hosted"),
+                              dict(self.variables, CI_FLEET_TARGET="ci-server-john")):
+                self.assertEqual(evaluate(expression, self.github, variables, verified), "ubuntu-latest")
 
     def test_queue_checks_have_triggers_and_independent_verdicts(self):
         cloudflare = (ROOT / ".github/workflows/cloudflare.yml").read_text()

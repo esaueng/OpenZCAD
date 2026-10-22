@@ -31,7 +31,11 @@ describe('required validation gate', () => {
   const ci = workflow;
 
   it('keeps the immutable runner policy identical to the reviewed source', () => {
-    const pinned = execFileSync('git', ['show', `${FLEET_CI_PIN}:${FLEET_CI_PATH}`], {encoding:'utf8'});
+    const pinned = execFileSync(
+      'git',
+      ['show', `${FLEET_CI_PIN}:${FLEET_CI_PATH}`],
+      { encoding: 'utf8' }
+    );
     expect(
       pinned,
       `Edit a new versioned fleet-ci file, not ${FLEET_CI_PATH}; see docs/runner-routing.md.`
@@ -43,8 +47,9 @@ describe('required validation gate', () => {
       /uses: esaueng\/OpenZCAD\/\.github\/workflows\/fleet-ci(?:-v\d+)?\.yml@[0-9a-f]{40}\n/
     );
     expect(caller).not.toMatch(/secrets: inherit|runs-on:/);
+    expect(caller).toContain('      pull-requests: read\n');
     expect(ci).toContain(
-      'needs: [quality, unit, validation]\n    if: always()'
+      'needs: [queue-trust, quality, unit, validation]\n    if: always()'
     );
   });
 
@@ -87,17 +92,21 @@ describe('required validation gate', () => {
     };
     const direct = job('e2e-tests');
     const pr = job('e2e-tests-pr');
-    expect(direct).toContain("if: github.event_name != 'pull_request'\n");
-    expect(direct).not.toMatch(/^ {4}needs:/m);
-    expect(pr).toContain("if: github.event_name == 'pull_request'\n");
-    expect(pr).toContain('needs: quality\n');
+    expect(direct).toContain(
+      "if: ${{ !cancelled() && (github.event_name != 'pull_request') }}\n"
+    );
+    expect(direct).toContain('needs: queue-trust\n');
+    expect(pr).toContain(
+      "if: ${{ !cancelled() && needs.quality.result == 'success' && (github.event_name == 'pull_request') }}\n"
+    );
+    expect(pr).toContain('needs: [queue-trust, quality]\n');
     // Both shard sets run the same matrix and steps, not drifting copies.
     expect(direct).toContain('strategy: &e2e-strategy\n');
     expect(direct).toContain('steps: &e2e-steps\n');
     expect(pr).toContain('strategy: *e2e-strategy\n');
     expect(pr).toContain('steps: *e2e-steps\n');
     expect(job('e2e')).toContain(
-      'needs: [e2e-tests, e2e-tests-pr]\n    if: always()'
+      'needs: [queue-trust, e2e-tests, e2e-tests-pr]\n    if: always()'
     );
   });
 

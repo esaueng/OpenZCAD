@@ -1,6 +1,6 @@
 # Trusted CI fleet
 
-Linux CI jobs and their completion gates live in `fleet-ci.yml`, called at an
+Linux CI jobs and their completion gates live in `fleet-ci-v2.yml`, called at an
 immutable commit from `ci.yml`. GitHub evaluates the runner expression before
 scheduling each job. There is no GitHub-hosted authorization or routing job in
 front of the Linux checks, and no routing HTTP request from Actions.
@@ -28,13 +28,20 @@ Change it in two PRs, as Remus does:
 
 Old pinned commits stay on main, so earlier runs can still be re-run.
 
-## Staged merge-queue overflow
+## Trusted merge-queue overflow
 
-`fleet-ci-v2.yml` stages trusted merge-queue support; the active caller and its
-immutable pin remain unchanged until a separate activation PR. That PR must
-grant the reusable caller `pull-requests: read` and add only the exact new
-workflow revision to `ci-trusted-main`, retaining existing entries and both
-repository and workflow restrictions.
+`ci.yml` activates `fleet-ci-v2.yml` at the landed #809 commit
+`6cd1c223fe3b3ac49f6379e0999f1b4bbe310f04` and grants its `checks` job
+`pull-requests: read`. Before this caller runs on Jane, add this exact workflow
+entry to the existing `ci-trusted-main` runner group:
+
+```text
+esaueng/OpenZCAD/.github/workflows/fleet-ci-v2.yml@6cd1c223fe3b3ac49f6379e0999f1b4bbe310f04
+```
+
+Retain all existing entries and the selected-repository and selected-workflow
+restrictions. The retired `fleet-ci.yml` remains resolvable at its historical
+pin for older branches and reruns; it must not gain access to the migrated slots.
 
 The external controller keeps GitHub-hosted execution primary. When it
 publishes `CI_FLEET_TARGET=ci-server-jane` under hosted queue pressure, a small
@@ -61,8 +68,8 @@ candidates only. Already queued jobs retain their selected runner.
 
 `scripts/test-merge-queue-routing.py` exercises the embedded policy and gate
 behavior through the existing direct-fleet test entrypoint. The staged policy
-is not a live routing claim; activation and a real queue run on Jane remain
-separate rollout steps.
+does not establish live routing; runner-group/label activation and a real
+queue run on Jane remain separate rollout steps.
 
 Only the approved owner's open, same-repository PR merge refs are eligible.
 Main pushes and manual dispatches also require protected main. Repository name
@@ -83,10 +90,10 @@ GitHub billing and capacity.
 
 Before checkout, self-hosted jobs verify the non-root identity, protected runner
 files, NoNewPrivileges, fresh storage, empty rootless Docker state, mount options
-and exact cgroup limits. The staged v2 workflow supports Jane's approved three
+and exact cgroup limits. The active v2 workflow supports Jane's approved three
 slots, each with six CPU equivalents and a nominal 5 GB decimal memory cap.
 It compares the exact kernel page-aligned limit (4,999,999,488 bytes with 4 KiB
-pages). The active legacy callee still requires the retired two-slot 6 GiB
+pages). Historical legacy callees require the retired two-slot 6 GiB
 profile. The combined v2 selects `ci-server-jane-5gb` while retaining the
 canonical `CI_FLEET_TARGET=ci-server-jane` controller preference. Keep the old
 shared `ci-server-jane` label withheld so legacy callers cannot reach the
@@ -107,12 +114,19 @@ Local runs keep Playwright's automatic worker count.
 
 ## Activation and rollback
 
-Approve the exact immutable `fleet-ci.yml` runner-group entry without removing
-existing restrictions. Configure the external controller's selected repository
-identities and dedicated GitHub credential, then validate both hosts. Review
-required check names: the new reusable workflow adds the `checks /` prefix.
-Change only explicitly approved contexts after checking actual job names;
-retain the complete application suite and review requirements.
+Before validating or merging the activation PR, deploy the controller mapping
+for `ci-server-jane-5gb`, approve the exact v2 entry above, then add
+`ci-server-jane-5gb` to each verified registration: `ci-server-jane-1`,
+`ci-server-jane-2`, and `ci-server-jane-3`. Keep those runner names and their
+individual slot labels. Keep the old shared `ci-server-jane` label absent from
+all three slots. This additive profile selector can be shared with compatible
+Remus workflows; exact workflow restrictions keep legacy callers quarantined.
+
+Keep `CI_FLEET_ENABLED=true` and let the hosted-first controller publish the
+canonical target `ci-server-jane` under hosted queue pressure; do not set the
+target to the profile label. No required-check names or protection settings
+change in this activation. Once merged, new queue candidates use the new caller;
+older PR branches must pick up its pin before their runs can use v2.
 
 Run an authorized real application job on each Jane slot, verify cleanup and
 unavailable-only selection, then enable normal routing. Code merge alone does
