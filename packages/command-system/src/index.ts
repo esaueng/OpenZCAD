@@ -83,6 +83,7 @@ import {
   addSketchComposite,
   type SketchCompositeAddInput,
   addSketchReferenceDimension,
+  restoreSketchReferenceDimensionForReplay,
   assertReferenceCommandSchema,
   assertReferenceDocumentSchema,
   deleteSketchReferenceDimension,
@@ -4442,7 +4443,7 @@ export function replayCommands(
         next = extrudeSketch(next, command.payload as ExtrudeInput).document;
         break;
       case 'reference-dimension.add':
-        next = addSketchReferenceDimension(
+        next = restoreSketchReferenceDimensionForReplay(
           next,
           command.payload as SketchReferenceDimensionAddInput
         ).document;

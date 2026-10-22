@@ -10,6 +10,7 @@ import {
   sketchCompositeMemberIds,
   sketchCompositeTargetMemberIds,
   sketchReferenceDimensionObjectIds,
+  validateSketchReferenceDimensionData,
   type EntityId,
   type ProjectDocument,
   type SketchDimensionLabelPosition,
@@ -26,6 +27,7 @@ import {
   resolveParamValue
 } from './index';
 import { assertMinimumProjectSchema } from './document-content-schema';
+import { resolvedSketchDocument } from './sketch-geometry';
 
 export interface SketchReferenceDimensionAddInput {
   sketchId: SketchId;
@@ -167,7 +169,7 @@ export function assertSketchReferenceDimensions(
   }
 }
 
-export function addSketchReferenceDimension(
+function prepareReferenceDimension(
   document: ProjectDocument,
   input: SketchReferenceDimensionAddInput
 ) {
@@ -192,6 +194,51 @@ export function addSketchReferenceDimension(
       return node?.kind === 'sketch-object' ? [[id, node.data] as const] : [];
     })
   );
+  validateSketchReferenceDimensionData(
+    objects,
+    reference.data,
+    annotationId,
+    sketch.composites
+  );
+  return { sketch, reference, annotationId, objects };
+}
+
+function appendReferenceDimension(
+  document: ProjectDocument,
+  input: SketchReferenceDimensionAddInput,
+  {
+    sketch,
+    reference,
+    annotationId
+  }: ReturnType<typeof prepareReferenceDimension>
+) {
+  const next = cloneDocument(document);
+  requireSketch(next, input.sketchId).referenceDimensions = [
+    ...(sketch.referenceDimensions ?? []),
+    reference
+  ];
+  next.version += 1;
+  return { document: next, annotationId };
+}
+
+export function addSketchReferenceDimension(
+  document: ProjectDocument,
+  input: SketchReferenceDimensionAddInput
+) {
+  const prepared = prepareReferenceDimension(document, input);
+  const { sketch, reference } = prepared;
+  const view = resolvedSketchDocument(document);
+  const objects =
+    view === document
+      ? prepared.objects
+      : new Map(
+          sketch.objectIds.flatMap((id) => {
+            const node = view.nodes[id];
+            return node?.kind === 'sketch-object'
+              ? [[id, node.data] as const]
+              : [];
+          })
+        );
   const scope = getParameterScope(document).scope;
   const outcome = resolveSketchReferenceDimension(
     objects,
@@ -206,13 +253,35 @@ export function addSketchReferenceDimension(
     sketch.composites
   );
   if (outcome.status === 'unresolved') throw new Error(outcome.reason);
-  const next = cloneDocument(document);
-  requireSketch(next, input.sketchId).referenceDimensions = [
-    ...(sketch.referenceDimensions ?? []),
-    reference
-  ];
-  next.version += 1;
-  return { document: next, annotationId };
+  return appendReferenceDimension(document, input, prepared);
+}
+
+/**
+ * Restore saved composite target identities without requiring a transient solve.
+ * Like loaded annotations, a structurally valid restored reference may remain
+ * unresolved until the exact build supplies current geometry. Live Add always
+ * measures its targets; its payload cannot opt into restoration validation.
+ * Primitive-only commands retain their existing measured replay validation.
+ */
+export function restoreSketchReferenceDimensionForReplay(
+  document: ProjectDocument,
+  input: SketchReferenceDimensionAddInput
+) {
+  if (
+    !isSketchReferenceDimensionData(input.data) ||
+    input.data.dimensionKind === 'radius' ||
+    ![input.data.a, input.data.b].some(
+      (target) =>
+        isSketchCompositeCornerTarget(target) ||
+        isSketchCompositeSideTarget(target)
+    )
+  )
+    return addSketchReferenceDimension(document, input);
+  return appendReferenceDimension(
+    document,
+    input,
+    prepareReferenceDimension(document, input)
+  );
 }
 
 export function deleteSketchReferenceDimension(
