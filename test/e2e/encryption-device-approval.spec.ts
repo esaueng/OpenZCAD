@@ -3,6 +3,7 @@ import { requestApproval } from '../../apps/web/src/lib/e2ee/accountKeys';
 import { expect, stubApi, test } from './openzcad-fixtures';
 import {
   createE2eeServer,
+  E2E_USER_ID,
   installE2eeServer,
   openEncryptionSettings,
   seedE2eeDevice,
@@ -168,6 +169,104 @@ test('certifies a new device approved by its full-hash scan code', async ({
       phoneSettings.getByText('Unlocked', { exact: true })
     ).toBeVisible();
   } finally {
+    await phone.context.close();
+  }
+});
+
+test('two approval tabs retain one staged device and can both unlock it', async ({
+  page,
+  browser
+}) => {
+  const server = createE2eeServer();
+  const { seeded, settings } = await approverWith(page, server);
+  const phone = await secondDevice(browser, server);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let started!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  try {
+    const firstSettings = await openEncryptionSettings(phone.page);
+    const other = await phone.context.newPage();
+    await stubApi(other);
+    await other.goto('/');
+    const otherSettings = await openEncryptionSettings(other);
+    await phone.page.route('**/api/e2ee/approvals', async (route) => {
+      if (route.request().method() === 'POST') {
+        started();
+        await held;
+      }
+      await route.fallback();
+    });
+    await firstSettings
+      .getByRole('button', { name: 'Ask for approval' })
+      .click();
+    await entered;
+    const stagedId = await phone.page.evaluate(
+      (userId) =>
+        new Promise<string | null>((resolve, reject) => {
+          const open = indexedDB.open('openzcad-e2ee', 1);
+          open.onsuccess = () => {
+            const db = open.result;
+            const read = db
+              .transaction('devices')
+              .objectStore('devices')
+              .get(userId);
+            read.onsuccess = () => {
+              db.close();
+              resolve(
+                (read.result as { deviceId: string } | undefined)?.deviceId ??
+                  null
+              );
+            };
+            read.onerror = () => reject(new Error('Device read failed'));
+          };
+          open.onerror = () =>
+            reject(new Error('Device database did not open'));
+        }),
+      E2E_USER_ID
+    );
+    expect(stagedId).not.toBeNull();
+    await otherSettings
+      .getByRole('button', { name: 'Ask for approval' })
+      .click();
+    release();
+    await expect(
+      otherSettings.getByRole('img', { name: 'Device approval QR code' })
+    ).toBeVisible();
+    const code = (await otherSettings
+      .getByLabel('Device approval code')
+      .textContent())!;
+    await settings
+      .getByRole('button', { name: 'Refresh', exact: true })
+      .click();
+    await expect(
+      settings.getByRole('button', { name: 'Refresh', exact: true })
+    ).toBeEnabled();
+    await expect(settings.getByText('None waiting')).toHaveCount(0, {
+      timeout: 10_000
+    });
+    await settings.getByRole('button', { name: 'Scan code' }).click();
+    await settings.getByLabel('Code from the new device').fill(code);
+    await settings
+      .getByLabel('Recovery key to certify the new device')
+      .fill(seeded.recoveryKey);
+    await settings.getByRole('button', { name: 'Approve device' }).click();
+    await expect(
+      otherSettings.getByText('Certified', { exact: true })
+    ).toBeVisible({ timeout: 15_000 });
+    await firstSettings
+      .getByRole('button', { name: 'Refresh', exact: true })
+      .click();
+    for (const panel of [firstSettings, otherSettings]) {
+      await expect(panel.getByText('Certified', { exact: true })).toBeVisible();
+      await expect(panel.getByText('Unlocked', { exact: true })).toBeVisible();
+    }
+  } finally {
+    release();
     await phone.context.close();
   }
 });

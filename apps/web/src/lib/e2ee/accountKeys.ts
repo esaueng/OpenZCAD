@@ -1236,40 +1236,101 @@ export type NewDeviceApprovalStep =
  */
 export async function requestApproval(
   ctx: E2eeContext,
-  account: Pick<AccountView, 'deviceStatus'> | null,
+  account:
+    | (Pick<AccountView, 'deviceStatus'> & Partial<Pick<AccountView, 'device'>>)
+    | null,
   label: string
 ): Promise<NewDeviceApprovalStep> {
-  const pinAtRequest = await ctx.store.loadPin(ctx.userId);
-  const stored = await ctx.store.loadDevice(ctx.userId);
-  if (stored?.approval) {
-    await ctx.api.cancelApproval(stored.approval.id).catch(() => undefined);
-  }
-  // A removed device's keys can never be listed again.
-  const device =
-    stored && account?.deviceStatus !== 'removed'
-      ? { ...stored, label: normalizeDeviceLabel(label), approval: null }
-      : await newStoredDevice(ctx, label);
-  const { nonce, commitment } = await commitDeviceApproval([
-    device.signingPublicKey,
-    device.unlockPublicKey
-  ]);
-  const approval = await ctx.api.createApproval({
-    deviceId: device.deviceId,
-    label: device.label,
-    signingKey: b64(device.signingPublicKey),
-    unlockKey: b64(device.unlockPublicKey),
-    commitment: b64(commitment)
-  });
-  await ctx.store.saveDevice({
-    ...device,
-    approval: {
-      id: approval.id,
-      nonce,
-      confirmedApproverKey: null,
-      pinAtRequest
+  return ctx.store.withDeviceLock(ctx.userId, async () => {
+    const requireCurrent = () => {
+      if (ctx.isCurrent && !ctx.isCurrent())
+        throw new EncryptionFlowError(
+          'invalid-request',
+          'The account session ended.'
+        );
+    };
+    requireCurrent();
+    const pinAtRequest = await ctx.store.loadPin(ctx.userId);
+    let stored = await ctx.store.loadDevice(ctx.userId);
+    if (stored && account?.deviceStatus === 'removed' && !account.device)
+      throw new EncryptionFlowError(
+        'invalid-request',
+        'Refresh the removed device before asking for approval.'
+      );
+    if (stored?.approval) {
+      await confirmApprovalCancellation(
+        ctx.api,
+        stored.approval.id,
+        requireCurrent
+      );
+      await ctx.store.clearApprovalIfCurrent(ctx.userId, stored.approval.id);
+      stored = await ctx.store.loadDevice(ctx.userId);
+      if (stored?.approval)
+        throw new EncryptionFlowError(
+          'invalid-request',
+          'The approval changed in another tab. Refresh and try again.'
+        );
     }
+    requireCurrent();
+    let device = stored;
+    if (
+      stored &&
+      account?.deviceStatus === 'removed' &&
+      account.device?.deviceId === stored.deviceId
+    ) {
+      const candidate = await newStoredDevice(ctx, label);
+      requireCurrent();
+      if (!(await ctx.store.replaceDeviceIfCurrent(stored, candidate)))
+        throw new EncryptionFlowError(
+          'invalid-request',
+          'The device changed in another tab. Refresh and try again.'
+        );
+      device = candidate;
+    } else if (!device) {
+      const candidate = await newStoredDevice(ctx, label);
+      requireCurrent();
+      device = await ctx.store.getOrCreateDevice(candidate);
+    }
+    // Stage the only private keys before publishing their public halves.
+    // The cross-tab lock serializes requests; CAS also detects explicit key
+    // deletion and other device-state changes outside that lock.
+    const { nonce, commitment } = await commitDeviceApproval([
+      device.signingPublicKey,
+      device.unlockPublicKey
+    ]);
+    requireCurrent();
+    const approval = await ctx.api.createApproval({
+      deviceId: device.deviceId,
+      label: normalizeDeviceLabel(label),
+      signingKey: b64(device.signingPublicKey),
+      unlockKey: b64(device.unlockPublicKey),
+      commitment: b64(commitment)
+    });
+    if (
+      (ctx.isCurrent && !ctx.isCurrent()) ||
+      !(await ctx.store.replaceDeviceIfCurrent(device, {
+        ...device,
+        label: normalizeDeviceLabel(label),
+        approval: {
+          id: approval.id,
+          nonce,
+          confirmedApproverKey: null,
+          pinAtRequest
+        }
+      }))
+    ) {
+      await confirmApprovalCancellation(ctx.api, approval.id);
+      throw new EncryptionFlowError(
+        'invalid-request',
+        'The device changed while approval was starting. Refresh and try again.'
+      );
+    }
+    return {
+      step: 'waiting',
+      approval,
+      scanCode: await deviceScanCode(device)
+    };
   });
-  return { step: 'waiting', approval, scanCode: await deviceScanCode(device) };
 }
 
 /**
@@ -1287,7 +1348,7 @@ export async function advanceApprovalAsNewDevice(
     approval = await ctx.api.getApproval(device.approval.id);
   } catch (error) {
     if ((error as { status?: number }).status === 404) {
-      await ctx.store.saveDevice({ ...device, approval: null });
+      await ctx.store.clearApprovalIfCurrent(ctx.userId, device.approval.id);
       return { step: 'expired' };
     }
     throw error;
@@ -1358,10 +1419,19 @@ export async function confirmApprovalCode(
       'There is no code to confirm yet.'
     );
   }
-  await ctx.store.saveDevice({
-    ...device,
-    approval: { ...device.approval, confirmedApproverKey: approval.approverKey }
-  });
+  if (
+    !(await ctx.store.replaceDeviceIfCurrent(device, {
+      ...device,
+      approval: {
+        ...device.approval,
+        confirmedApproverKey: approval.approverKey
+      }
+    }))
+  )
+    throw new EncryptionFlowError(
+      'invalid-request',
+      'The approval changed in another tab. Refresh and try again.'
+    );
   return advanceApprovalAsNewDevice(ctx);
 }
 
@@ -1414,7 +1484,7 @@ async function finishApproval(
     // the approver here, or the new recovery key.
     if (!approval.approverKey) {
       await ctx.api.cancelApproval(approval.id).catch(() => undefined);
-      await ctx.store.saveDevice({ ...device, approval: null });
+      await ctx.store.clearApprovalIfCurrent(ctx.userId, device.approval!.id);
       throw new EncryptionFlowError(
         'grant-invalid',
         'This device trusted different encryption keys, and a scanned approval cannot replace them. Enter the new recovery key here, or ask again and choose Compare codes on the other device.'
@@ -1483,7 +1553,7 @@ async function finishApproval(
   await persistDeviceList(ctx, list, {
     replaceIdentityFrom: device.approval?.pinAtRequest
   });
-  await ctx.store.saveDevice({ ...device, approval: null });
+  await ctx.store.clearApprovalIfCurrent(ctx.userId, device.approval!.id);
   await ctx.api.cancelApproval(approval.id).catch(() => undefined);
   return loadEncryption(ctx);
 }

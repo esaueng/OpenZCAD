@@ -228,6 +228,34 @@ describe.each(['memory', 'indexeddb'] as const)(
       expect((await right.loadDevice(USER))?.signingPublicKey).toEqual(
         a.signingPublicKey
       );
+      const snapshot = (await left.loadDevice(USER))!;
+      const saved = await Promise.all([
+        left.replaceDeviceIfCurrent(snapshot, {
+          ...snapshot,
+          approval: { id: 'left', nonce: new Uint8Array([1]) }
+        }),
+        right.replaceDeviceIfCurrent(snapshot, {
+          ...snapshot,
+          approval: { id: 'right', nonce: new Uint8Array([2]) }
+        })
+      ]);
+      expect(saved).toEqual([true, false]);
+      expect((await right.loadDevice(USER))?.approval?.id).toBe('left');
+      const pending = (await right.loadDevice(USER))!;
+      await left.saveDevice({
+        ...pending,
+        approval: {
+          ...pending.approval!,
+          confirmedApproverKey: 'new confirmation'
+        }
+      });
+      expect(await right.replaceDeviceIfCurrent(pending, snapshot)).toBe(false);
+      expect(
+        (await left.loadDevice(USER))?.approval?.confirmedApproverKey
+      ).toBe('new confirmation');
+      await left.deleteDevice(USER);
+      expect(await right.replaceDeviceIfCurrent(pending, snapshot)).toBe(false);
+      expect(await left.loadDevice(USER)).toBeNull();
     });
 
     it('accepts first sight, identical heads and descendants, refusing a stale head', async () => {

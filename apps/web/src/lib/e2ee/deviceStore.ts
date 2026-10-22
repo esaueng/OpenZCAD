@@ -43,6 +43,13 @@ export interface DeviceKeyStore {
   saveDevice(device: StoredDevice): Promise<void>;
   /** Keep the existing private keys when setup races or a response is lost. */
   getOrCreateDevice(candidate: StoredDevice): Promise<StoredDevice>;
+  /** Serialize approval creation across contexts sharing this device store. */
+  withDeviceLock<T>(userId: string, run: () => Promise<T>): Promise<T>;
+  /** Refuse to overwrite keys or approval state changed by another context. */
+  replaceDeviceIfCurrent(
+    expected: StoredDevice | null,
+    candidate: StoredDevice
+  ): Promise<boolean>;
   deleteDevice(userId: string): Promise<void>;
   /** Clear only the canceled request, preserving a newer request or device. */
   clearApprovalIfCurrent(userId: string, approvalId: string): Promise<void>;
@@ -144,6 +151,31 @@ const samePin = (a: DeviceListPin | null, b: DeviceListPin | null) =>
       sameBytes(a.identityKeyHash, b.identityKeyHash) &&
       sameBytes(a.entryHash, b.entryHash);
 
+function sameDeviceState(
+  a: StoredDevice | null,
+  b: StoredDevice | null
+): boolean {
+  if (!a || !b) return a === b;
+  if (
+    a.userId !== b.userId ||
+    a.deviceId !== b.deviceId ||
+    a.label !== b.label ||
+    a.createdAt !== b.createdAt ||
+    !sameBytes(a.signingPublicKey, b.signingPublicKey) ||
+    !sameBytes(a.unlockPublicKey, b.unlockPublicKey)
+  )
+    return false;
+  if (!a.approval || !b.approval) return a.approval === b.approval;
+  return (
+    a.approval.id === b.approval.id &&
+    a.approval.confirmedApproverKey === b.approval.confirmedApproverKey &&
+    (a.approval.nonce === null || b.approval.nonce === null
+      ? a.approval.nonce === b.approval.nonce
+      : sameBytes(a.approval.nonce, b.approval.nonce)) &&
+    samePin(a.approval.pinAtRequest ?? null, b.approval.pinAtRequest ?? null)
+  );
+}
+
 function pinUpdate(
   userId: string,
   list: VerifiedDeviceList,
@@ -186,6 +218,7 @@ function checkPinUpdate(
 export function memoryDeviceStore(): DeviceKeyStore {
   const devices = new Map<string, StoredDevice>();
   const pins = new Map<string, StoredPin>();
+  const locks = new Map<string, Promise<void>>();
   return {
     loadDevice: async (userId) => devices.get(userId) ?? null,
     saveDevice: async (device) => {
@@ -196,6 +229,23 @@ export function memoryDeviceStore(): DeviceKeyStore {
       if (existing) return existing;
       devices.set(candidate.userId, candidate);
       return candidate;
+    },
+    withDeviceLock: (userId, run) => {
+      const active = (locks.get(userId) ?? Promise.resolve()).then(run);
+      const settled = active.then(
+        () => {},
+        () => {}
+      );
+      locks.set(userId, settled);
+      return active.finally(() => {
+        if (locks.get(userId) === settled) locks.delete(userId);
+      });
+    },
+    replaceDeviceIfCurrent: async (expected, candidate) => {
+      if (!sameDeviceState(devices.get(candidate.userId) ?? null, expected))
+        return false;
+      devices.set(candidate.userId, candidate);
+      return true;
     },
     deleteDevice: async (userId) => {
       devices.delete(userId);
@@ -301,6 +351,42 @@ export function indexedDbDeviceStore(): DeviceKeyStore {
         read.onsuccess = () => {
           device = (read.result as StoredDevice | undefined) ?? candidate;
           if (!read.result) objects.add(device);
+        };
+      });
+    },
+    withDeviceLock: async (userId, run) => {
+      if (typeof navigator === 'undefined' || !navigator.locks)
+        throw new Error(
+          'This browser cannot safely coordinate device approvals.'
+        );
+      return navigator.locks.request(
+        `openzcad-e2ee-device:${userId}`,
+        { mode: 'exclusive' },
+        async () => run()
+      );
+    },
+    replaceDeviceIfCurrent: async (expected, candidate) => {
+      const snapshot = expected ? structuredClone(expected) : null;
+      const value = structuredClone(candidate);
+      const db = await openDatabase();
+      return new Promise<boolean>((resolve, reject) => {
+        const tx = db.transaction(DEVICES, 'readwrite');
+        const objects = tx.objectStore(DEVICES);
+        let replaced = false;
+        tx.oncomplete = () => resolve(replaced);
+        tx.onabort = tx.onerror = () =>
+          reject(tx.error ?? new Error('IndexedDB device update failed'));
+        const read = objects.get(value.userId);
+        read.onsuccess = () => {
+          if (
+            sameDeviceState(
+              (read.result as StoredDevice | undefined) ?? null,
+              snapshot
+            )
+          ) {
+            objects.put(value);
+            replaced = true;
+          }
         };
       });
     },

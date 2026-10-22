@@ -911,6 +911,164 @@ describe('replacing the recovery key', () => {
 });
 
 describe('device approval', () => {
+  it('stages one key pair and serializes approval requests from two tabs', async () => {
+    const srv = server();
+    const { laptop, account, recovery } = await setUp(srv);
+    const phone = device(srv);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const create = phone.api.createApproval;
+    const first = requestApproval(
+      {
+        ...phone,
+        api: {
+          ...phone.api,
+          createApproval: async (input) => {
+            const result = await create(input);
+            started();
+            await held;
+            return result;
+          }
+        }
+      },
+      null,
+      'First tab'
+    );
+    await entered;
+    let second: ReturnType<typeof requestApproval> | undefined;
+    try {
+      const staged = await phone.store.loadDevice(USER);
+      expect(staged).not.toBeNull();
+      second = requestApproval({ ...phone }, null, 'Second tab');
+    } finally {
+      release();
+    }
+    const a = await first;
+    const b = await second;
+    if (a.step !== 'waiting' || b.step !== 'waiting')
+      throw new Error('Expected both sequential requests');
+    expect(a.scanCode).toBe(b.scanCode);
+    expect(a.approval.deviceId).toBe(b.approval.deviceId);
+    await expect(phone.api.getApproval(a.approval.id)).rejects.toHaveProperty(
+      'status',
+      404
+    );
+    await approveDevice(
+      laptop,
+      account,
+      b.approval,
+      { kind: 'scan', code: b.scanCode },
+      recovery.secret
+    );
+    const completed = await advanceApprovalAsNewDevice(phone);
+    expect(completed.step).toBe('done');
+    expect(ready(await loadEncryption(phone)).deviceStatus).toBe('certified');
+  });
+
+  it('does not restore device keys deleted while approval creation is in flight', async () => {
+    const srv = server();
+    await setUp(srv);
+    const phone = device(srv);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const create = phone.api.createApproval;
+    let approvalId = '';
+    const result = requestApproval(
+      {
+        ...phone,
+        api: {
+          ...phone.api,
+          createApproval: async (input) => {
+            const approval = await create(input);
+            approvalId = approval.id;
+            started();
+            await held;
+            return approval;
+          }
+        }
+      },
+      null,
+      'Departing tab'
+    );
+    const outcome = result.then(
+      () => null,
+      (error: unknown) => error
+    );
+    await entered;
+    await phone.store.deleteDevice(USER);
+    release();
+    expect(await outcome).toBeInstanceOf(Error);
+    expect(await phone.store.loadDevice(USER)).toBeNull();
+    await expect(phone.api.getApproval(approvalId)).rejects.toHaveProperty(
+      'status',
+      404
+    );
+  });
+
+  it('retains the current approval on a failed restart and releases its lock for retry', async () => {
+    const srv = server();
+    await setUp(srv);
+    const phone = device(srv);
+    await requestApproval(phone, null, 'Original request');
+    const before = await phone.store.loadDevice(USER);
+    const create = vi.fn(phone.api.createApproval);
+    await expect(
+      requestApproval(
+        {
+          ...phone,
+          api: {
+            ...phone.api,
+            createApproval: create,
+            cancelApproval: async () => {
+              throw new E2eeApiError(503, 'OFFLINE', 'Try again');
+            }
+          }
+        },
+        null,
+        'Failed restart'
+      )
+    ).rejects.toHaveProperty('status', 503);
+    expect(create).not.toHaveBeenCalled();
+    expect(await phone.store.loadDevice(USER)).toEqual(before);
+    expect((await requestApproval(phone, null, 'Successful retry')).step).toBe(
+      'waiting'
+    );
+    expect((await phone.store.loadDevice(USER))?.deviceId).toBe(
+      before?.deviceId
+    );
+  });
+
+  it('does not replace newly staged keys again for a stale removed-device view', async () => {
+    const srv = server();
+    await setUp(srv);
+    const phone = device(srv);
+    await requestApproval(phone, null, 'Old device');
+    await cancelApprovalRequest(phone);
+    const removed = {
+      deviceStatus: 'removed' as const,
+      device: await phone.store.loadDevice(USER)
+    };
+    const first = await requestApproval(phone, removed, 'Replacement');
+    const second = await requestApproval(phone, removed, 'Other tab');
+    if (first.step !== 'waiting' || second.step !== 'waiting')
+      throw new Error('Expected requests');
+    expect(first.approval.deviceId).not.toBe(removed.device?.deviceId);
+    expect(second.approval.deviceId).toBe(first.approval.deviceId);
+    expect(second.scanCode).toBe(first.scanCode);
+  });
+
   it('atomically caps durable read-only approvals and frees capacity on revocation', async () => {
     const limit = 64;
     const srv = server();
