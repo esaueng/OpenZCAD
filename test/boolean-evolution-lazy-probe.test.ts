@@ -23,7 +23,8 @@ import type {
   EdgeTopology,
   FaceTopology,
   FeatureId,
-  ProjectDocument
+  ProjectDocument,
+  SketchObjectData
 } from '@openzcad/shared';
 import {
   BOOLEAN_EVOLUTION_SKIPPED_NO_REFERENCE,
@@ -162,6 +163,84 @@ describe('booleanEvolutionProbeNeeded', () => {
     expect(
       booleanEvolutionProbeNeeded(document, booleanFeatureOf(document))
     ).toBe(false);
+  });
+
+  it.each([
+    'producer',
+    'source body',
+    'descendant body',
+    'unlinked',
+    'unrelated'
+  ] as const)('accounts for persisted projection demand: %s', (caseKind) => {
+    const f = fusedPlateDocument();
+    const fuse = booleanFeatureOf(f.document);
+    let document = f.document;
+    let sourceBodyId = f.bodyId;
+    let producer =
+      caseKind === 'source body' || caseKind === 'descendant body'
+        ? listFeaturesInOrder(document)[0]!.featureId
+        : fuse.featureId;
+    if (caseKind === 'unrelated' || caseKind === 'producer') {
+      document = addPrimitiveFeature(document, {
+        name: 'Unrelated',
+        primitiveKind: 'box',
+        dimensions: { width: 2, height: 2, depth: 2 }
+      });
+      sourceBodyId = document.bodyOrder.at(-1)!;
+      if (caseKind === 'unrelated') {
+        producer = listFeaturesInOrder(document).at(-1)!.featureId;
+      }
+    }
+    if (caseKind === 'descendant body') {
+      const moved = transformBody(document, {
+        name: 'Copy',
+        targetBodyId: f.bodyId,
+        translation: { x: 50, y: 0, z: 0 },
+        copy: true
+      });
+      document = moved.document;
+      sourceBodyId = moved.bodyId;
+    }
+    const object: SketchObjectData = {
+      objectKind: 'line',
+      x1: 0,
+      y1: 0,
+      x2: 10,
+      y2: 0,
+      projection: {
+        mode: caseKind === 'unlinked' ? 'unlinked' : 'linked',
+        source: {
+          bodyId: sourceBodyId,
+          edgeReference: {
+            kind: 'edge',
+            producingFeatureId: producer,
+            lineageName: 'edge.projected',
+            currentHash: 1,
+            witnessVersion: 1,
+            witness: {
+              curveType: 'LINE',
+              length: 1,
+              closed: false,
+              endpoints: [
+                [0, 0, 0],
+                [1, 0, 0]
+              ],
+              midpoint: [0, 0, 0]
+            }
+          }
+        }
+      }
+    };
+    const projected = addSketchFeature(document, {
+      name: 'Stored projection',
+      plane: 'XY',
+      objects: [object]
+    }).document;
+    expect(booleanEvolutionProbeNeeded(projected, fuse, [])).toBe(
+      caseKind === 'producer' ||
+        caseKind === 'source body' ||
+        caseKind === 'descendant body'
+    );
   });
 
   it('is true when a later fillet picks an edge of the result', () => {
