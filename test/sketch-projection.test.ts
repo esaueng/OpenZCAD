@@ -26,6 +26,7 @@ import {
 } from '@openzcad/geometry';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
+  edgeTopologyWitnessHash,
   toUserId,
   type BodyId,
   type DerivedState,
@@ -130,6 +131,7 @@ describe('sketch projection in the document (v33)', () => {
         }
       }
     };
+    source.edgeReference.currentHash = edgeTopologyWitnessHash(source.edgeReference.witness);
     const sketched = addSketchFeature(blank(), {
       name: 'S',
       planeRef: above,
@@ -702,6 +704,7 @@ describe('sketch projection in the exact build', () => {
         }
       }
     };
+    linked.projection.source.edgeReference.currentHash = edgeTopologyWitnessHash(linked.projection.source.edgeReference.witness);
     const sketched = addSketchFeature(blank(), {
       name: 'Solve',
       planeRef: above,

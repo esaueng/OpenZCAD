@@ -8,6 +8,7 @@ import {
   listFeaturesInOrder
 } from '@openzcad/document-core';
 import {
+  edgeTopologyWitnessHash,
   toBodyId,
   toUserId,
   type FeatureId,
@@ -48,6 +49,7 @@ const source = {
     }
   }
 };
+source.edgeReference.currentHash = edgeTopologyWitnessHash(source.edgeReference.witness);
 
 function document(broken: boolean): ProjectDocument {
   const sketched = addSketchFeature(

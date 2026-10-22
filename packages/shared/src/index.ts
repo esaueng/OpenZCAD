@@ -15,6 +15,7 @@ import type { KeymapOverrides } from './keymap-settings';
 import type { DrawingSet } from './drawings';
 import type { ObjectFolderSet } from './object-folders';
 export * from './drawing-annotations';
+export * from './topology-reference';
 export * from './reference-images';
 import type { ReferenceImageSet } from './reference-images';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
