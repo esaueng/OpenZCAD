@@ -23,6 +23,11 @@ import { assertSketchComposites, compositesWithout } from './sketch-composites';
 import { assertSketchObjectProjection } from './sketch-projections';
 export * from './sketch-composites';
 export * from './sketch-projections';
+import {
+  assertDocumentContentSchema,
+  assertSketchObjectContentSchema
+} from './document-content-schema';
+export * from './document-content-schema';
 export * from './drawings';
 export * from './reference-images';
 export {
@@ -862,6 +867,7 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
     );
   }
   const document = withReadableHistory(input);
+  assertDocumentContentSchema(document);
   // Schema v30 drawings (v31 annotations): validated as written, never
   // synthesized or rewritten.
   assertDrawingSet(document.drawings);
@@ -1345,7 +1351,9 @@ export function addSketchFeature(
     objectIds: objectNodeIds
   };
 
-  objects.forEach((object) => assertSketchObjectProjection(object));
+  objects.forEach((object) =>
+    assertSketchObjectContentSchema(object, document.schemaVersion)
+  );
   objects.forEach((object, index) => {
     const objectNodeId = objectNodeIds[index]!;
     next.nodes[objectNodeId] = {
@@ -1574,7 +1582,9 @@ export function addSketchObjects(
   const objectNodeIds = input.objects.map(
     (_, index) => input.ids?.objectNodeIds[index] ?? toEntityId(createId('ent'))
   );
-  input.objects.forEach((object) => assertSketchObjectProjection(object));
+  input.objects.forEach((object) =>
+    assertSketchObjectContentSchema(object, document.schemaVersion)
+  );
   input.objects.forEach((object, index) => {
     const objectNodeId = objectNodeIds[index]!;
     next.nodes[objectNodeId] = {
@@ -1614,7 +1624,11 @@ export function updateSketchObject(
   document: ProjectDocument,
   input: SketchObjectUpdateInput
 ): ProjectDocument {
-  assertSketchObjectProjection(input.data, input.objectId);
+  assertSketchObjectContentSchema(
+    input.data,
+    document.schemaVersion,
+    input.objectId
+  );
   const next = cloneDocument(document);
   const { objectNode } = requireSketchObject(
     next,
@@ -2279,10 +2293,7 @@ export function validateExtrudeExtent(
       throw new Error('An extrude to a face has no through-all side.');
     }
     validateToFaceTarget(data.toFace);
-    if (
-      data.symmetric === true ||
-      !resolvedZero(resolve)(data.backDistance)
-    ) {
+    if (data.symmetric === true || !resolvedZero(resolve)(data.backDistance)) {
       throw new Error(
         'An extrude to a face runs one way, from the sketch plane to the face; it is not symmetric or two-sided.'
       );
