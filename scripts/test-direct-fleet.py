@@ -106,6 +106,13 @@ def evaluate(expression, github, variables):
 
 
 class DirectFleetTests(unittest.TestCase):
+    def test_staged_merge_queue_routing(self):
+        result = subprocess.run(
+            ["python3", str(ROOT / "scripts/test-merge-queue-routing.py")],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def setUp(self):
         repo = {"id": REPO_ID, "fork": False}
         self.github = {
