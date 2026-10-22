@@ -405,27 +405,40 @@ async function loadAccount(
   db: D1Database,
   userId: string
 ): Promise<E2eeAccountResponse> {
-  const { results: identities } = await db
-    .prepare(
-      `SELECT generation, identity_key, transition_statement,
-              transition_signature, created_at
-       FROM e2ee_identities WHERE user_id = ?
-       ORDER BY generation DESC LIMIT ?`
-    )
-    .bind(userId, PREVIOUS_GENERATIONS + 1)
-    .all<IdentityRow>();
-  const [current, ...previous] = identities ?? [];
-  if (!current) return { current: null, previous: [] };
-  const [entries, wraps, approvedDevices] = await Promise.all([
-    entryRows(db, userId, current.generation),
+  // Every response carrier comes from one D1 transaction: a rotation or
+  // identity replacement cannot split the chain from the keys it commits.
+  const currentGeneration =
+    '(SELECT MAX(generation) FROM e2ee_identities WHERE user_id = ?)';
+  const [
+    identityResult,
+    entryResult,
+    wrapResult,
+    approvedResult,
+    previousResult
+  ] = await db.batch([
+    db
+      .prepare(
+        `SELECT generation, identity_key, transition_statement,
+                transition_signature, created_at
+         FROM e2ee_identities WHERE user_id = ?
+         ORDER BY generation DESC LIMIT ?`
+      )
+      .bind(userId, PREVIOUS_GENERATIONS + 1),
+    db
+      .prepare(
+        `SELECT sequence, entry, signature, entry_hash
+         FROM e2ee_device_list_entries
+         WHERE user_id = ? AND generation = ${currentGeneration}
+         ORDER BY sequence`
+      )
+      .bind(userId, userId),
     db
       .prepare(
         `SELECT purpose, target_id, key_sequence, wrapped
-         FROM e2ee_key_wraps WHERE user_id = ? AND generation = ?
+         FROM e2ee_key_wraps WHERE user_id = ? AND generation = ${currentGeneration}
          ORDER BY purpose, target_id`
       )
-      .bind(userId, current.generation)
-      .all<WrapRow>(),
+      .bind(userId, userId),
     db
       .prepare(
         `SELECT w.target_id AS device_id, w.updated_at AS approved_at,
@@ -434,23 +447,52 @@ async function loadAccount(
                AND a.state = 'completed'
              ORDER BY a.created_at DESC, a.id DESC LIMIT 1), 'Read-only device') AS label
          FROM e2ee_key_wraps w
-         WHERE w.user_id = ? AND w.generation = ? AND w.purpose = 'account-key-approval'
+         WHERE w.user_id = ? AND w.generation = ${currentGeneration}
+           AND w.purpose = 'account-key-approval'
          ORDER BY w.target_id`
       )
-      .bind(userId, current.generation)
-      .all<{ device_id: string; label: string; approved_at: string }>()
+      .bind(userId, userId),
+    db
+      .prepare(
+        `SELECT e.generation, e.sequence, e.entry, e.signature, e.entry_hash
+         FROM e2ee_device_list_entries e
+         WHERE e.user_id = ? AND e.generation IN (
+           SELECT generation FROM e2ee_identities WHERE user_id = ?
+           ORDER BY generation DESC LIMIT ? OFFSET 1
+         ) AND e.sequence = (
+           SELECT MAX(sequence) FROM e2ee_device_list_entries h
+           WHERE h.user_id = e.user_id AND h.generation = e.generation
+         )`
+      )
+      .bind(userId, userId, PREVIOUS_GENERATIONS)
   ]);
+  if (
+    !identityResult ||
+    !entryResult ||
+    !wrapResult ||
+    !approvedResult ||
+    !previousResult
+  ) {
+    throw new Error('Incomplete encryption account snapshot');
+  }
+  const [current, ...previous] = (identityResult.results ??
+    []) as IdentityRow[];
+  if (!current) return { current: null, previous: [] };
+  const entries = (entryResult.results ?? []) as EntryRow[];
+  const wraps = (wrapResult.results ?? []) as WrapRow[];
+  const approvedDevices = (approvedResult.results ?? []) as {
+    device_id: string;
+    label: string;
+    approved_at: string;
+  }[];
+  const previousHeads = (previousResult.results ?? []) as (EntryRow & {
+    generation: number;
+  })[];
   const previousRecords: E2eePreviousIdentityRecord[] = [];
   for (const row of previous) {
-    const head = await db
-      .prepare(
-        `SELECT sequence, entry, signature, entry_hash
-         FROM e2ee_device_list_entries
-         WHERE user_id = ? AND generation = ?
-         ORDER BY sequence DESC LIMIT 1`
-      )
-      .bind(userId, row.generation)
-      .first<EntryRow>();
+    const head = previousHeads.find(
+      (entry) => entry.generation === row.generation
+    );
     if (head) {
       previousRecords.push({
         generation: row.generation,
@@ -480,12 +522,12 @@ async function loadAccount(
             signature: current.transition_signature
           }
         : null,
-    approvedDevices: (approvedDevices.results ?? []).map((row) => ({
+    approvedDevices: approvedDevices.map((row) => ({
       deviceId: row.device_id,
       label: row.label,
       approvedAt: row.approved_at
     })),
-    wraps: (wraps.results ?? []).map((row): E2eeWrapRecord => ({
+    wraps: wraps.map((row): E2eeWrapRecord => ({
       purpose: row.purpose,
       targetId: row.target_id,
       keySequence: row.key_sequence,

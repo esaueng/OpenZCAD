@@ -62,6 +62,8 @@ interface Server {
   /** Rewrites a response body before the browser sees it. */
   tamper?: (path: string, body: unknown) => unknown;
   beforeWrite?: (sql: string) => Promise<void>;
+  /** A competing rotation at an account-read boundary. */
+  beforeAccountSnapshot?: () => Promise<void>;
   credential?: { token: string; desktop: boolean };
 }
 
@@ -85,7 +87,12 @@ function fetcherFor(srv: Server, userId: string) {
     const wrapped: D1PreparedStatement = {
       bind: (...values) => wrap(sql, statement.bind(...values)),
       first: () => statement.first(),
-      all: () => statement.all(),
+      all: async <T>() => {
+        const result = await statement.all<T>();
+        if (sql.includes('FROM e2ee_device_list_entries'))
+          await srv.beforeAccountSnapshot?.();
+        return result;
+      },
       run: async () => {
         await srv.beforeWrite?.(sql);
         return statement.run();
@@ -99,9 +106,13 @@ function fetcherFor(srv: Server, userId: string) {
     DB: {
       prepare: (sql: string) => wrap(sql, base.prepare(sql)),
       batch: async (statements: D1PreparedStatement[]) => {
-        await srv.beforeWrite?.(
-          statements.map((s) => queries.get(s)).join('\n')
-        );
+        const sql = statements.map((s) => queries.get(s)).join('\n');
+        if (
+          sql.includes('FROM e2ee_device_list_entries') &&
+          sql.includes('SELECT purpose, target_id, key_sequence, wrapped')
+        )
+          await srv.beforeAccountSnapshot?.();
+        await srv.beforeWrite?.(sql);
         return base.batch(statements.map((s) => originals.get(s)!));
       }
     },
@@ -204,6 +215,41 @@ const count = (db: DatabaseSync, sql: string, ...values: string[]) =>
   (db.prepare(sql).get(...values) as { n: number }).n;
 
 describe('encryption key routes', () => {
+  it.each(['rotation', 'replacement'] as const)(
+    'returns a coherent chain and wraps when %s races an account read',
+    async (change) => {
+      const srv = server();
+      const { laptop, recovery } = await setUp(srv);
+      const phone = await enrolled(srv, recovery.secret, 'Phone');
+      const before = ready(await loadEncryption(laptop));
+      let moved = false;
+      srv.beforeAccountSnapshot = async () => {
+        srv.beforeAccountSnapshot = undefined;
+        moved = true;
+        if (change === 'rotation')
+          await removeDevice(
+            laptop,
+            before,
+            phone.account.device!.deviceId,
+            recovery.secret
+          );
+        else
+          await replaceRecoveryKey(
+            laptop,
+            before,
+            (await generateRecoveryKey()).secret,
+            null
+          );
+      };
+      lockAccount(USER);
+      const loaded = ready(await loadEncryption(laptop));
+      expect(moved).toBe(true);
+      expect(loaded.unlocked).toBe(true);
+      const fresh = ready(await loadEncryption(laptop));
+      expect(loaded.list.pin).toEqual(fresh.list.pin);
+      expect(loaded.wraps).toEqual(fresh.wraps);
+    }
+  );
   it('stay closed unless enabled, and unavailable until migrated', async () => {
     const srv = server();
     srv.enabled = false;
@@ -2104,6 +2150,96 @@ describe.each(['development', 'browser', 'desktop'] as const)(
         }
       );
     });
+  }
+);
+
+describe.each(['development', 'browser', 'desktop'] as const)(
+  '%s expiry during a key-write batch',
+  (backend) => {
+    it.each(['setup', 'rotation'] as const)(
+      'keeps every %s statement under the same expiry decision',
+      async (operation) => {
+        const srv = server();
+        if (backend !== 'development') {
+          const token = 'b'.repeat(43);
+          const hash = Buffer.from(
+            await crypto.subtle.digest(
+              'SHA-256',
+              new TextEncoder().encode(token)
+            )
+          ).toString('hex');
+          srv.credential = { token, desktop: backend === 'desktop' };
+          if (backend === 'browser')
+            srv.db
+              .prepare('INSERT INTO auth_sessions VALUES (?, ?, ?, ?)')
+              .run(hash, USER, 0, 9_999_999_999);
+          else
+            srv.db
+              .prepare(
+                'INSERT INTO desktop_access_tokens VALUES (?, ?, ?, ?, ?, ?, NULL)'
+              )
+              .run(
+                hash,
+                'desktop-expiry',
+                USER,
+                'openzcad-macos',
+                0,
+                9_999_999_999
+              );
+        }
+        const laptop = device(srv);
+        const recovery = await generateRecoveryKey();
+        let action: () => Promise<EncryptionState>;
+        if (operation === 'setup') {
+          action = () =>
+            setUpEncryption(laptop, {
+              recoverySecret: recovery.secret,
+              label: 'Laptop'
+            });
+        } else {
+          await setUpEncryption(laptop, {
+            recoverySecret: recovery.secret,
+            label: 'Laptop'
+          });
+          const phone = await enrolled(srv, recovery.secret, 'Phone');
+          const account = ready(await loadEncryption(laptop));
+          action = () =>
+            removeDevice(
+              laptop,
+              account,
+              phone.account.device!.deviceId,
+              recovery.secret
+            );
+        }
+        let crossed = false;
+        srv.beforeWrite = async (sql) => {
+          if (
+            !sql.includes(
+              operation === 'setup'
+                ? 'INSERT INTO e2ee_identities'
+                : 'INSERT INTO e2ee_device_list_entries'
+            )
+          )
+            return;
+          srv.beforeWrite = undefined;
+          crossed = true;
+          const cutoff = Math.floor(Date.now() / 1000) + 5;
+          // The first SQL clock read admits, the next is already expired.
+          // These are real SQLite statements, not query-text return values.
+          let second = cutoff;
+          srv.db.function('unixepoch', () => second++);
+          const table =
+            backend === 'desktop' ? 'desktop_access_tokens' : 'auth_sessions';
+          srv.db
+            .prepare(`UPDATE ${table} SET expires_at = ? WHERE user_id = ?`)
+            .run(cutoff, USER);
+        };
+        expect(ready(await action()).unlocked).toBe(true);
+        expect(crossed).toBe(true);
+        lockAccount(USER);
+        expect(ready(await loadEncryption(laptop)).unlocked).toBe(true);
+      }
+    );
   }
 );
 
