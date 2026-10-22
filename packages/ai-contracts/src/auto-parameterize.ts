@@ -457,7 +457,9 @@ function sketchCandidates(
     // profile. Leave them literal until the constraint model can preserve the
     // relationship instead of merely preserving today's numeric coincidence.
     if (data.objectKind === 'line' || data.objectKind === 'arc') {
-      skippedRelational += fields.length;
+      skippedRelational += Object.keys(data).filter((field) =>
+        isSketchDimensionField(data.objectKind, field)
+      ).length;
       return;
     }
     for (const field of Object.keys(data)) {
