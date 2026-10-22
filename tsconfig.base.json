@@ -47,6 +47,7 @@
       "@openzcad/io-stl": ["./packages/io-stl/src/index.ts"],
       "@openzcad/persistence": ["./packages/persistence/src/index.ts"],
       "@openzcad/crypto": ["./packages/crypto/src/index.ts"],
+      "@openzcad/mls": ["./packages/mls/src/index.ts"],
       "@openzcad/cloudflare-adapters": [
         "./packages/cloudflare-adapters/src/index.ts"
       ]

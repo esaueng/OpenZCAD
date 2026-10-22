@@ -554,7 +554,7 @@ export const api = {
   discardMeshPayload: (
     projectId: string,
     artifactId: string,
-    kind?: 'stl-import' | 'mesh-import'
+    kind?: 'stl-import' | 'mesh-import' | 'reference-image'
   ) =>
     requestJson<{ deleted: boolean }>(
       `/api/artifacts/${encodeURIComponent(artifactId)}/discard-unreferenced`,

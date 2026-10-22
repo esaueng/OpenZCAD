@@ -320,6 +320,12 @@ import { buildPlanePickerRig } from './viewer/planePickerRig';
 import { buildDatumPlaneRig, type DatumPlaneRig } from './viewer/datumPlaneRig';
 import { buildDatumAxisRig, type DatumAxisRig } from './viewer/datumAxisRig';
 import type { DatumPlaneDisplay } from '../lib/datumPlaneDisplay';
+import type { ReferenceImageDisplay } from '../lib/referenceImageDisplay';
+import {
+  buildReferenceImageRig,
+  ReferenceTextureCache,
+  type ReferenceTextureRequest
+} from './viewer/referenceImageRig';
 import type { DatumAxisDisplay } from '../lib/datumAxisDisplay';
 import { sketchValueResolver } from '../lib/sketch/valueResolver';
 import { reducesMotion } from '../lib/reducedMotion';
@@ -944,6 +950,17 @@ export interface ModelViewerProps {
    * resolved. Hidden, suppressed and unresolved axes are simply absent.
    */
   datumAxes?: readonly DatumAxisDisplay[];
+  /**
+   * I05 reference images, laid on their planes. Hidden images and images
+   * whose plane has not resolved are simply absent.
+   */
+  referenceImages?: readonly ReferenceImageDisplay[];
+  /**
+   * The bytes behind a reference image, by checksum: from this device's
+   * source store, else the image's archived artifact. Null when neither has
+   * them; the image then draws as an empty frame.
+   */
+  loadReferenceImage?: (checksumSha256: string) => Promise<Blob | null>;
   /**
    * What measuring the hovered target would report, for the preview chip.
    * Null when measuring is off or the pick has nothing honest to say.
@@ -1885,6 +1902,8 @@ export function ModelViewer({
   primitiveGhost = null,
   datumPlanes,
   datumAxes,
+  referenceImages,
+  loadReferenceImage,
   planePickerOffset,
   onPickPlane,
   onPickDatum,
@@ -11737,6 +11756,76 @@ export function ModelViewer({
       context.requestRender();
     };
   }, [datumPlaneKey]);
+
+  // I05 reference images (viewer/referenceImageRig). One texture per picture,
+  // decoded once and kept while any shown image uses it; the rig is rebuilt
+  // when the set, a placement, the selection or a finished decode changes.
+  const referenceTexturesRef = useRef<ReferenceTextureCache | null>(null);
+  referenceTexturesRef.current ??= new ReferenceTextureCache();
+  const [referenceTextureVersion, setReferenceTextureVersion] = useState(0);
+  const loadReferenceImageRef = useRef(loadReferenceImage);
+  loadReferenceImageRef.current = loadReferenceImage;
+  const referenceImageKey = JSON.stringify(referenceImages ?? []);
+  // Where each picture can be read from, not just which: an archive rewrite
+  // changes this and retries a picture that was not yet available.
+  const referenceTextureKey = JSON.stringify(
+    [
+      ...new Map(
+        (referenceImages ?? []).map(({ checksumSha256, artifactId }) => [
+          `${checksumSha256}|${artifactId}`,
+          { checksumSha256, artifactId }
+        ])
+      ).values()
+    ].sort((a, b) =>
+      `${a.checksumSha256}|${a.artifactId}`.localeCompare(
+        `${b.checksumSha256}|${b.artifactId}`
+      )
+    )
+  );
+  useEffect(() => {
+    const load = loadReferenceImageRef.current;
+    referenceTexturesRef.current!.sync(
+      JSON.parse(referenceTextureKey) as ReferenceTextureRequest[],
+      (checksum) => (load ? load(checksum) : Promise.resolve(null)),
+      () => setReferenceTextureVersion((version) => version + 1)
+    );
+  }, [referenceTextureKey]);
+  useEffect(() => {
+    const cache = referenceTexturesRef.current!;
+    return () => cache.clear();
+  }, []);
+  useEffect(() => {
+    const context = contextRef.current;
+    const images = JSON.parse(referenceImageKey) as ReferenceImageDisplay[];
+    if (!context || images.length === 0) {
+      return;
+    }
+    const textures = referenceTexturesRef.current!.textures;
+    const rig = buildReferenceImageRig(images, textures);
+    context.scene.add(rig.group);
+    const canvas = context.renderer.domElement;
+    if (E2E_CANVAS_HOOKS_ENABLED) {
+      canvas.dataset.e2eReferenceImages = JSON.stringify(
+        images.map(({ imageId, frame, width, height, opacity }, index) => ({
+          imageId,
+          center: frame.center,
+          xAxis: frame.xAxis,
+          normal: frame.normal,
+          width,
+          height,
+          opacity,
+          textured: textures.has(images[index]!.checksumSha256)
+        }))
+      );
+    }
+    context.requestRender();
+    return () => {
+      context.scene.remove(rig.group);
+      rig.dispose();
+      delete canvas.dataset.e2eReferenceImages;
+      context.requestRender();
+    };
+  }, [referenceImageKey, referenceTextureVersion]);
 
   // Committed datum axes (viewer/datumAxisRig), rebuilt when the set, a line
   // or the selection changes; the render loop keeps their length.
