@@ -56,6 +56,22 @@ function topology(derived: DerivedState, bodyId: BodyId) {
   return derived.bodyRepresentations[bodyId]!.topology!;
 }
 
+function multipleSourceLinear(spacing = 30, count = 3) {
+  const pair = linear('z', 30, 2);
+  const field = patternBody(pair.document, {
+    name: 'Multiple source row',
+    patternKind: 'linear',
+    targetBodyId: pair.bodyId,
+    axis: 'x',
+    spacing,
+    count
+  });
+  return {
+    ...field,
+    featureId: listFeaturesInOrder(field.document).at(-1)!.featureId
+  };
+}
+
 describe(
   'qualified LINEAR edge and runtime native vertex adoption',
   { timeout: 120_000 },
@@ -281,10 +297,11 @@ describe(
         output.mockRestore();
       }
     });
-    it('keeps multiple-source LINEAR faces and geometry without any new boundary scans', async () => {
+    it('publishes qualified native vertices for every source and member of a LINEAR pattern', async () => {
       const pair = linear('z', 30, 2);
       await adapter.syncDocument(pair.document);
       const output = vi.spyOn(RemusKernel.prototype, 'resolveOperationOutput');
+      const journal = vi.spyOn(RemusKernel.prototype, 'linearPatternJournaled');
       try {
         const field = patternBody(pair.document, {
           name: 'Multiple sources',
@@ -300,20 +317,218 @@ describe(
         const body = topology(derived, field.bodyId);
         expect(body.faces.filter((face) => face.reference)).toHaveLength(36);
         expect(body.edges).toHaveLength(72);
-        expect(body.edges.filter((edge) => edge.reference)).toHaveLength(0);
-        expect(body.vertices).toBeUndefined();
+        expect(body.edges.filter((edge) => edge.reference)).toHaveLength(72);
         expect(
-          output.mock.calls.filter(
-            ([, kind]) => kind === 'edge' || kind === 'vertex'
-          )
-        ).toHaveLength(0);
+          body.vertices?.filter((vertex) => vertex.reference)
+        ).toHaveLength(48);
+        expect(new Set(body.vertices!.map((vertex) => vertex.id)).size).toBe(
+          48
+        );
+        expect(
+          new Set(body.vertices!.map((vertex) => vertex.reference!.lineageName))
+            .size
+        ).toBe(48);
+        const expected = [];
+        for (const sourceZ of [0, 30])
+          for (const memberX of [0, 30, 60])
+            for (const x of [0, 10])
+              for (const y of [0, 10])
+                for (const z of [0, 10])
+                  expected.push(
+                    JSON.stringify({ x: memberX + x, y, z: sourceZ + z })
+                  );
+        expect(
+          body.vertices!.map((vertex) => JSON.stringify(vertex.point)).sort()
+        ).toEqual(expected.sort());
+        for (const vertex of body.vertices!) {
+          expect(
+            body.edges.filter((edge) => edge.vertexIds?.includes(vertex.id))
+          ).toHaveLength(3);
+          expect(vertex.reference!.witness.position).toEqual(
+            [vertex.point.x, vertex.point.y, vertex.point.z].map((value) =>
+              Math.round(value * 1e6)
+            )
+          );
+        }
+        expect(journal.mock.calls).toHaveLength(2);
+        const members = journal.mock.results.flatMap((result, index) => {
+          expect(result.type).toBe('return');
+          const { compound, op } = JSON.parse(result.value as string) as {
+            compound: number;
+            op: number;
+          };
+          expect(
+            output.mock.calls.filter(
+              ([actualOp, kind]) => actualOp === op && kind === 'edge'
+            )
+          ).toHaveLength(37);
+          expect(
+            output.mock.calls.filter(
+              ([actualOp, kind]) => actualOp === op && kind === 'vertex'
+            )
+          ).toHaveLength(25);
+          const solids = Array.from(
+            (journal.mock.contexts[index] as RemusKernel).getCompoundSolids(
+              compound
+            )
+          );
+          expect(solids).toHaveLength(3);
+          return solids;
+        });
+        expect(new Set(members).size).toBe(6);
         expect(derived.bodyRepresentations[field.bodyId]!.volume).toBeCloseTo(
           6000,
           8
         );
       } finally {
         output.mockRestore();
+        journal.mockRestore();
       }
+    });
+
+    it('keeps touching multi-source members distinct at their shared positions', async () => {
+      const field = multipleSourceLinear(10);
+      const derived = await adapter.syncDocument(field.document);
+      expect(derived.warnings).toEqual([]);
+      expect(derived.bodyRepresentations[field.bodyId]!.volume).toBeCloseTo(
+        6000,
+        8
+      );
+      const body = topology(derived, field.bodyId);
+      expect(body.faces.filter((face) => face.reference)).toHaveLength(36);
+      expect(body.edges.filter((edge) => edge.reference)).toHaveLength(72);
+      expect(body.vertices?.filter((vertex) => vertex.reference)).toHaveLength(
+        48
+      );
+      expect(new Set(body.vertices!.map((vertex) => vertex.id)).size).toBe(48);
+      expect(
+        new Set(body.vertices!.map((vertex) => vertex.reference!.lineageName))
+          .size
+      ).toBe(48);
+      const positions = new Map<string, typeof body.vertices>();
+      for (const vertex of body.vertices!) {
+        const key = JSON.stringify(vertex.point);
+        positions.set(key, [...(positions.get(key) ?? []), vertex]);
+        expect(
+          body.edges.filter((edge) => edge.vertexIds?.includes(vertex.id))
+        ).toHaveLength(3);
+      }
+      expect(positions.size).toBe(32);
+      const touching = [...positions.values()].filter(
+        (vertices) => vertices!.length === 2
+      );
+      expect(touching).toHaveLength(16);
+      for (const vertices of touching) {
+        expect(new Set(vertices!.map((vertex) => vertex.id)).size).toBe(2);
+        expect(
+          new Set(vertices!.map((vertex) => vertex.reference!.lineageName)).size
+        ).toBe(2);
+      }
+    });
+
+    it('requalifies a unique multi-source R01 endpoint through count and spacing replay, then refuses its deleted member', async () => {
+      const field = multipleSourceLinear();
+      const initial = topology(
+        await adapter.syncDocument(field.document),
+        field.bodyId
+      );
+      const vertices = new Map(
+        initial.vertices!.map((vertex) => [vertex.id, vertex])
+      );
+      const reference = initial.edges.find(
+        (edge) =>
+          edge.reference &&
+          edge.vertexIds?.length === 2 &&
+          edge.vertexIds.every((id) => {
+            const point = vertices.get(id)!.point;
+            return (
+              point.x === 70 && point.y === 0 && [30, 40].includes(point.z)
+            );
+          })
+      )?.reference;
+      expect(reference).toBeDefined();
+      const datum = addDatumPlane(field.document, {
+        name: 'Multiple source endpoint',
+        definition: {
+          kind: 'parallel-point',
+          source: { type: 'canonical', plane: 'XY', offset: 0 },
+          point: {
+            type: 'edge-vertex',
+            bodyId: field.bodyId,
+            edgeReference: reference!,
+            end: 1
+          }
+        }
+      });
+      const check = (derived: DerivedState, x: number, count: number) => {
+        expect(derived.warnings).toEqual([]);
+        expect(derived.datumFrames![datum.featureId]!.origin).toEqual({
+          x,
+          y: 0,
+          z: 40
+        });
+        const body = topology(derived, field.bodyId);
+        expect(body.faces.filter((face) => face.reference)).toHaveLength(
+          12 * count
+        );
+        expect(body.edges.filter((edge) => edge.reference)).toHaveLength(
+          24 * count
+        );
+        expect(
+          body.vertices?.filter((vertex) => vertex.reference)
+        ).toHaveLength(16 * count);
+        expect(
+          new Set(body.vertices!.map((vertex) => vertex.reference!.lineageName))
+            .size
+        ).toBe(16 * count);
+        expect(
+          body.vertices!.filter(
+            (vertex) =>
+              vertex.point.x === x &&
+              vertex.point.y === 0 &&
+              vertex.point.z === 40
+          )
+        ).toHaveLength(1);
+        return body
+          .vertices!.map((vertex) => ({
+            name: vertex.reference!.lineageName,
+            point: vertex.point,
+            witness: vertex.reference!.witness
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+      };
+      check(await adapter.syncDocument(datum.document), 70, 3);
+      const grown = updateFeature(datum.document, {
+        featureId: field.featureId,
+        data: { count: 5, spacing: 45 }
+      });
+      const expected = check(await adapter.syncDocument(grown), 100, 5);
+      check(await adapter.syncDocument(datum.document), 70, 3);
+      expect(check(await adapter.syncDocument(grown), 100, 5)).toEqual(
+        expected
+      );
+      const cold = await createExactKernelAdapter();
+      try {
+        expect(
+          check(
+            await cold.syncDocument(
+              JSON.parse(JSON.stringify(grown)) as ProjectDocument
+            ),
+            100,
+            5
+          )
+        ).toEqual(expected);
+      } finally {
+        cold.dispose();
+      }
+      const deleted = await adapter.syncDocument(
+        updateFeature(grown, { featureId: field.featureId, data: { count: 2 } })
+      );
+      expect(deleted.datumFrames?.[datum.featureId]).toBeUndefined();
+      expect(deleted.warnings).toHaveLength(1);
+      expect(deleted.warnings[0]).toMatch(
+        /Multiple source endpoint.*deleted|Multiple source endpoint.*no longer/i
+      );
     });
 
     it('requalifies native R01 points through edits, checkpoint undo/redo and cold replay, then refuses a deleted member', async () => {
