@@ -61,6 +61,7 @@ import {
 } from '../apps/web/src/lib/e2ee/unlockedKeys';
 import {
   PasskeyError,
+  browserPasskeys,
   passkeyEnrollmentCleanup,
   type PasskeyPrf,
   type PasskeySecret
@@ -72,6 +73,8 @@ import {
 import type { E2eeSetupRequest } from '@openzcad/shared';
 import { d1Database, migratedDatabase } from './d1-sqlite';
 import { eraseAccountWithKeyCleanup } from '../apps/web/src/lib/e2ee/accountErasure';
+import { signOutAfterSaving } from '../apps/web/src/lib/e2ee/signOut';
+import * as deviceStores from '../apps/web/src/lib/e2ee/deviceStore';
 import {
   allowKeySession,
   confirmKeySessionEnded,
@@ -3133,6 +3136,81 @@ async function passkeyDevice(srv: Server, passkeys: PasskeyPrf) {
 }
 
 describe('passkey PRF unlock', () => {
+  it.each(['create', 'get', 'rotation'] as const)(
+    'signs out without waiting for a pending browser %s ceremony',
+    async (operation) => {
+      const srv = server();
+      const { laptop, account, recovery } = await withPasskey(srv);
+      const fresh =
+        operation === 'get'
+          ? await passkeyDevice(srv, browserPasskeys)
+          : { ctx: { ...laptop, passkeys: browserPasskeys }, account };
+      let cancelPrompt!: () => void;
+      let started!: () => void;
+      const waiting = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const prompt = (
+        options: CredentialCreationOptions | CredentialRequestOptions
+      ) =>
+        new Promise<Credential | null>((_resolve, reject) => {
+          cancelPrompt = () =>
+            reject(new DOMException('Canceled', 'AbortError'));
+          options.signal?.addEventListener('abort', cancelPrompt, {
+            once: true
+          });
+          started();
+        });
+      vi.stubGlobal('PublicKeyCredential', class {});
+      vi.stubGlobal('isSecureContext', true);
+      vi.stubGlobal('location', { hostname: 'zcad.test' });
+      vi.stubGlobal('navigator', {
+        credentials: { create: prompt, get: prompt }
+      });
+      const storeSpy = vi
+        .spyOn(deviceStores, 'indexedDbDeviceStore')
+        .mockReturnValue(fresh.ctx.store);
+      let revoked = false;
+      const work =
+        operation === 'create'
+          ? addPasskey(fresh.ctx, fresh.account, recovery.secret)
+          : operation === 'get'
+            ? enrollWithPasskey(fresh.ctx, fresh.account, 'Prompt browser')
+            : revokeReadOnlyDevices(fresh.ctx, fresh.account, 'passkey');
+      const outcome = work.then(
+        () => null,
+        (error: unknown) => error
+      );
+      await waiting;
+      const signingOut = signOutAfterSaving({
+        userId: USER,
+        keepDevice: true,
+        isCurrentSession: () => !revoked,
+        savePending: async () => {},
+        revokeSession: async () => {
+          revoked = true;
+        }
+      });
+      try {
+        // Abort and lock release require promise jobs only. Reach the next
+        // event-loop turn without resolving the authenticator ourselves.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(revoked).toBe(true);
+        expect(await outcome).toBeInstanceOf(PasskeyError);
+        expect(unlockedEncryptionKey(USER)).toBeNull();
+        expect(
+          count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_device_list_entries')
+        ).toBe(2);
+      } finally {
+        cancelPrompt();
+        await outcome;
+        await signingOut;
+        storeSpy.mockRestore();
+        vi.unstubAllGlobals();
+      }
+    }
+  );
+
   it('keeps passkey certification behind the same-device writer lock and refuses it after logout', async () => {
     const srv = server();
     const { passkeys } = await withPasskey(srv);

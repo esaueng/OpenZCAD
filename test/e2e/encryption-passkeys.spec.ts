@@ -1,6 +1,8 @@
+import type { Page } from '@playwright/test';
 import { expect, stubApi, test } from './openzcad-fixtures';
 import {
   createE2eeServer,
+  E2E_USER_ID,
   installE2eeServer,
   openEncryptionSettings,
   seedE2eeDevice
@@ -258,4 +260,112 @@ test('disables passkeys when WebAuthn is unavailable', async ({
     )
   ).toBeVisible();
   await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
+});
+
+test('cross-tab sign-out aborts a pending real WebAuthn prompt before releasing the device lock', async ({
+  page,
+  context,
+  baseURL
+}) => {
+  let signedIn = true;
+  const session = async (tab: Page) => {
+    await stubApi(tab);
+    await tab.route('**/api/session', (route) =>
+      route.fulfill({
+        json: signedIn
+          ? {
+              userId: E2E_USER_ID,
+              displayName: 'E2E user',
+              mode: 'development'
+            }
+          : null
+      })
+    );
+  };
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('WebAuthn.enable');
+  await cdp.send('WebAuthn.addVirtualAuthenticator', {
+    options: {
+      protocol: 'ctap2',
+      transport: 'internal',
+      hasResidentKey: true,
+      hasUserVerification: true,
+      isUserVerified: true,
+      hasPrf: true,
+      automaticPresenceSimulation: false
+    }
+  });
+  await page.addInitScript(() => {
+    const probe = { started: 0, aborted: 0 };
+    (
+      window as Window & { passkeyPromptProbe?: typeof probe }
+    ).passkeyPromptProbe = probe;
+    const create = navigator.credentials.create.bind(navigator.credentials);
+    Object.defineProperty(navigator.credentials, 'create', {
+      configurable: true,
+      value: (options: CredentialCreationOptions) => {
+        probe.started++;
+        options.signal?.addEventListener(
+          'abort',
+          () => {
+            probe.aborted++;
+          },
+          { once: true }
+        );
+        return create(options);
+      }
+    });
+  });
+  const server = createE2eeServer();
+  await installE2eeServer(context, server);
+  await session(page);
+  const appUrl = new URL(baseURL!);
+  appUrl.hostname = 'localhost';
+  await page.goto(appUrl.href);
+  const seeded = await seedE2eeDevice(page, server);
+  const settings = await openEncryptionSettings(page);
+  const other = await context.newPage();
+  await session(other);
+  await other.route('**/api/auth/logout', async (route) => {
+    signedIn = false;
+    await route.fulfill({ json: { ok: true } });
+  });
+  await other.goto(appUrl.href);
+  const otherSettings = await openEncryptionSettings(other);
+  await settings
+    .getByRole('button', { name: 'Add passkey', exact: true })
+    .click();
+  await settings
+    .getByLabel('Recovery key', { exact: true })
+    .fill(seeded.recoveryKey);
+  await settings
+    .getByRole('button', { name: 'Create passkey', exact: true })
+    .click();
+  const probe = () =>
+    page.evaluate(
+      () =>
+        (
+          window as Window & {
+            passkeyPromptProbe?: { started: number; aborted: number };
+          }
+        ).passkeyPromptProbe
+    );
+  await expect.poll(async () => (await probe())?.started).toBe(1);
+  await otherSettings
+    .getByRole('button', { name: 'Account', exact: true })
+    .click();
+  await otherSettings
+    .getByRole('button', { name: 'Sign out', exact: true })
+    .click();
+  await otherSettings
+    .getByRole('button', { name: 'Keep unlocked', exact: true })
+    .click();
+  await expect.poll(() => signedIn).toBe(false);
+  await expect.poll(async () => (await probe())?.aborted).toBe(1);
+  await expect(settings.getByText('Unlocked', { exact: true })).toHaveCount(0);
+  expect(
+    server.db
+      .prepare('SELECT COUNT(*) AS n FROM e2ee_device_list_entries')
+      .get()
+  ).toEqual({ n: 1 });
 });

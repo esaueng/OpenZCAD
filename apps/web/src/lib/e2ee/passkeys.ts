@@ -1,5 +1,10 @@
 import { passkeyPrfInput, toHex, type Bytes } from '@openzcad/crypto';
 import { isDesktopApp } from '../desktopBridge';
+import {
+  getKeySessionRevision,
+  isCurrentKeySession,
+  subscribeKeySession
+} from './keySession';
 
 export class PasskeyError extends Error {
   constructor(message: string) {
@@ -126,10 +131,25 @@ async function selected(value: PublicKeyCredential): Promise<PasskeySecret> {
   }
 }
 
-async function ceremony<T>(work: () => Promise<T>): Promise<T> {
+async function ceremony(
+  work: (signal: AbortSignal) => Promise<PasskeySecret>
+): Promise<PasskeySecret> {
   available();
+  const revision = getKeySessionRevision();
+  const controller = new AbortController();
+  const unsubscribe = subscribeKeySession(() => {
+    if (!isCurrentKeySession(revision)) controller.abort();
+  });
   try {
-    return await work();
+    if (!isCurrentKeySession(revision)) {
+      throw new DOMException('The account session ended.', 'AbortError');
+    }
+    const result = await work(controller.signal);
+    if (controller.signal.aborted) {
+      result.secret.fill(0);
+      throw new DOMException('The account session ended.', 'AbortError');
+    }
+    return result;
   } catch (error) {
     if (error instanceof PasskeyError) throw error;
     if (
@@ -143,6 +163,8 @@ async function ceremony<T>(work: () => Promise<T>): Promise<T> {
     throw new PasskeyError(
       'The passkey could not be used here. Try another passkey or your recovery key.'
     );
+  } finally {
+    unsubscribe();
   }
 }
 
@@ -160,8 +182,9 @@ export const browserPasskeys: PasskeyPrf = {
     const label = `OpenZCAD encryption ${toHex(handle.slice(0, 6))}`;
     let credentialCreated = false;
     try {
-      const selectedPasskey = await ceremony(async () => {
+      const selectedPasskey = await ceremony(async (signal) => {
         const value = await navigator.credentials.create({
+          signal,
           publicKey: {
             challenge: challenge(),
             rp: { name: 'OpenZCAD', id: location.hostname },
@@ -195,6 +218,7 @@ export const browserPasskeys: PasskeyPrf = {
           }
           const asserted = credential(
             await navigator.credentials.get({
+              signal,
               publicKey: {
                 challenge: challenge(),
                 rpId: location.hostname,
@@ -224,10 +248,11 @@ export const browserPasskeys: PasskeyPrf = {
     }
   },
   get: () =>
-    ceremony(async () =>
+    ceremony(async (signal) =>
       selected(
         credential(
           await navigator.credentials.get({
+            signal,
             publicKey: {
               challenge: challenge(),
               rpId: location.hostname,
