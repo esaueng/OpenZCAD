@@ -354,6 +354,108 @@ async function importedShaprBoxDocument(
 }
 
 describe('assistant auto-parameterization', () => {
+  it('skips linked projections while applying ordinary and unlinked sketch parameters atomically', () => {
+    const manager = new CommandManager(nativeDocument());
+    const bodyId = manager.document.bodyOrder[0]!;
+    const source = {
+      bodyId,
+      edgeReference: {
+        kind: 'edge' as const,
+        producingFeatureId: manager.document.featureOrder[0]!,
+        lineageName: 'projection-source',
+        currentHash: 7,
+        witnessVersion: 1 as const,
+        witness: {
+          curveType: 'CIRCLE',
+          length: Math.round(8 * Math.PI * 1_000_000),
+          closed: true as const,
+          center: [0, 0, 0] as [number, number, number],
+          axis: [0, 0, 1_000_000] as [number, number, number]
+        }
+      }
+    };
+    manager.execute(
+      commandFactories.addSketch({
+        name: 'Mixed projections',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [
+          {
+            objectKind: 'circle',
+            radius: 4,
+            centerX: 2,
+            centerY: 3,
+            projection: { mode: 'linked', source }
+          },
+          {
+            objectKind: 'ellipse',
+            radiusX: 4,
+            radiusY: 3,
+            centerX: 2,
+            centerY: 3,
+            rotationDeg: 30,
+            projection: { mode: 'linked', source }
+          },
+          {
+            objectKind: 'line',
+            x1: 1,
+            y1: 2,
+            x2: 3,
+            y2: 4,
+            projection: { mode: 'linked', source }
+          },
+          {
+            objectKind: 'ellipse',
+            radiusX: 5,
+            radiusY: 2,
+            centerX: 0,
+            centerY: 0,
+            rotationDeg: 0,
+            projection: { mode: 'unlinked' }
+          }
+        ]
+      })
+    );
+    const document = manager.document;
+    const sketchFeature = listFeaturesInOrder(document).at(-1)!;
+    if (sketchFeature.data.featureKind !== 'sketch')
+      throw new Error('Expected sketch');
+    const sketch = findSketch(document, sketchFeature.data.sketchId)!;
+    const linkedIds = sketch.objectIds.slice(0, 3);
+    const proposal = createAutoParameterizeProposal(document, noSelection)!;
+    const bindings = proposal.operations.filter(
+      (operation) => operation.kind === 'set_sketch_dimension'
+    );
+    expect(
+      bindings.some((operation) => linkedIds.some((id) => id === operation.objectId))
+    ).toBe(false);
+    expect(
+      bindings.some(
+        (operation) =>
+          operation.objectId === sketch.objectIds[3] &&
+          operation.field === 'radiusX'
+      )
+    ).toBe(true);
+    const parsed = parseCadPatchProposal(structuredClone(proposal));
+    const applied = new CommandManager(document).runTransaction(
+      'Apply mixed parameters',
+      commandsForCadPatch(document, parsed)
+    );
+    for (const id of linkedIds)
+      expect(applied.nodes[id]).toEqual(document.nodes[id]);
+    expect(listParameters(applied).length).toBeGreaterThan(5);
+    expect(applied.nodes[sketch.objectIds[3]!]).toMatchObject({
+      data: {
+        radiusX: expect.any(String),
+        radiusY: expect.any(String),
+        projection: { mode: 'unlinked' }
+      }
+    });
+    // Linked lines must not inflate the warning about editable relational fields.
+    expect(proposal.assumptions.join(' ')).not.toMatch(
+      /Line and arc coordinates/
+    );
+  });
+
   it('binds native feature and safe sketch literals in one replayable patch', () => {
     const document = nativeDocument();
     const proposal = createAutoParameterizeProposal(document, noSelection);
