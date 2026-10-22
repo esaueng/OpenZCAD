@@ -3,7 +3,8 @@
  * exactly, and nothing on the package entry path loads the WASM eagerly.
  */
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url));
@@ -33,6 +34,38 @@ describe('@openzcad/mls build', () => {
     expect(text('../crate/Cargo.toml')).toContain(
       `wasm-bindgen = "=${manifest.wasmBindgen}"`
     );
+  });
+
+  // CI has no Rust, so it cannot rebuild pkg/; the scenario suites run the
+  // committed WASM. The manifest records the sources that WASM was built
+  // from, so a Rust change committed without build.sh fails here instead of
+  // passing against the old WASM.
+  it('BUILD.json records the current crate sources, so pkg/ is not stale', () => {
+    const manifest = JSON.parse(text('../pkg/BUILD.json')) as {
+      sources?: Record<string, string>;
+    };
+    const crateSources = [
+      'crate/Cargo.toml',
+      'crate/Cargo.lock',
+      'crate/rust-toolchain.toml',
+      ...readdirSync(new URL('../crate/src', import.meta.url), {
+        recursive: true,
+        encoding: 'utf8'
+      })
+        .map((file) => `crate/src/${file.split(sep).join('/')}`)
+        .filter((file) =>
+          statSync(new URL(`../${file}`, import.meta.url)).isFile()
+        )
+    ].sort();
+    expect(Object.keys(manifest.sources ?? {}).sort()).toEqual(crateSources);
+    for (const [file, sha] of Object.entries(manifest.sources ?? {})) {
+      expect(
+        createHash('sha256')
+          .update(read(`../${file}`))
+          .digest('hex'),
+        `${file} changed since pkg/ was built: run packages/mls/build.sh`
+      ).toBe(sha);
+    }
   });
 
   it('pins every MLS crate exactly, in the manifest and the lockfile', () => {

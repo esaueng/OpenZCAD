@@ -60,6 +60,17 @@ manifest() {
     first=0
     printf '    "%s": "%s"' "$file" "$(sha "$1/$file")"
   done <<< "$files"
+  printf '\n  },\n  "sources": {\n'
+  # The inputs the WASM is built from, so pkg.test.ts (in CI, which has no
+  # Rust) fails when a source change is committed without rebuilding pkg/.
+  local sources
+  sources="$(cd "$crate" && { printf '%s\n' Cargo.toml Cargo.lock rust-toolchain.toml; find src -type f; } | LC_ALL=C sort)"
+  first=1
+  while IFS= read -r file; do
+    [[ $first == 1 ]] || printf ',\n'
+    first=0
+    printf '    "%s": "%s"' "crate/$file" "$(sha "$crate/$file")"
+  done <<< "$sources"
   printf '\n  }\n}\n'
 }
 manifest "$out" > "$out/BUILD.json"

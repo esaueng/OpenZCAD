@@ -106,7 +106,9 @@ pnpm --filter @openzcad/mls test:browser
 `build.sh` uses the toolchain in `crate/rust-toolchain.toml`, `--locked`, and
 remaps absolute paths, so the WASM is identical wherever the repository
 lives. `src/pkg.test.ts` checks `pkg/` against `pkg/BUILD.json` and the
-exact pins. The scenario suite (`src/scenarios.ts`) runs in Node in-process
+exact pins. `BUILD.json` also records the hash of every crate source, so a
+Rust change committed without rebuilding `pkg/` fails `pnpm test` in CI,
+which has no Rust toolchain to rebuild it. The scenario suite (`src/scenarios.ts`) runs in Node in-process
 and through the Worker protocol (`src/mls.test.ts`, part of `pnpm test`),
 and `test:browser` runs it in a real module Worker in Chromium and WebKit
 (Playwright browsers required; `-- --chromium-only` skips WebKit).

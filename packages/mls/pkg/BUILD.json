@@ -8,5 +8,17 @@
     "openzcad_mls_bg.wasm": "c73fde4460c2999be89b4ed7e2c189372b5326b3d5f429cdcf832d4e7d98bafb",
     "openzcad_mls_bg.wasm.d.ts": "e90c4bb17f51bf4bc7d846aa0b5b80057eaf4b0f3dee5b0839eef55d10fc1a00",
     "snippets/mls-rs-core-f99cdecbb456b09c/inline0.js": "6739cfe5b7f2a23d65a1c2a0912a691701e50793dca7c0f95c89dae38861c2f6"
+  },
+  "sources": {
+    "crate/Cargo.lock": "3bd532e7a8c5984d2a750c25c2b0bd75a331223198ef6acd1662bf8dacb59f8a",
+    "crate/Cargo.toml": "daefba1776446da29efa3799957d17132b104d318fdeb36a6841bc776022235c",
+    "crate/rust-toolchain.toml": "6a1afceac10cad1fda6c96b91c730cef9b65529c16993abd259fd0abf75c2c98",
+    "crate/src/directory.rs": "5c32f089be1a2c1ec19640af60902cea57eb11f55cb9b988245d454355b6ec21",
+    "crate/src/error.rs": "2d6df2b6335a5dafa353e5caf906c57b0b70db6fbb980bb120b53ff0c004736e",
+    "crate/src/lib.rs": "e3cf79ef1ebf2d9436aad7ed49f0e7072737ac05e3fd108deaa4bdd0fbc32f88",
+    "crate/src/model.rs": "2ea3d1507ae521a63efd10c6117b7ee2c72d856a046a46d4d024315d27d63315",
+    "crate/src/policy.rs": "4e8f6fc32eb3f5bb815a81a329c7e54076c047f49d040dae4b0c8b804a82c464",
+    "crate/src/session.rs": "092377e1982a86ace618fb1b07bd78feab0d80f1fd2e6dc6d8182e4dec50ecc3",
+    "crate/src/storage.rs": "3457d58a90e2971e1260b7850a01d3e9c2378f38b169ee0a7fdcf425d4ef3183"
   }
 }

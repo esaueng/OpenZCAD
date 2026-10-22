@@ -61,8 +61,10 @@ export interface LeafKeyCertification {
   key: Uint8Array;
   /**
    * The group epoch from which the certification counts, as the device list
-   * records it. A recovery Add by a non-owner needs one no earlier than the
-   * identity's latest leaf removal.
+   * records it. A recovery Add (a leaf for an identity already listed, with
+   * its unchanged role) needs one no earlier than the identity's latest leaf
+   * removal, whoever commits it, the owner included; a missing value counts
+   * as before that removal.
    */
   certifiedEpoch?: number;
 }
