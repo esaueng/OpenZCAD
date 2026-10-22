@@ -5,7 +5,11 @@
  * (sign-out, expiry, offline mode, account deletion, a different account)
  * without pulling the key code into the entry chunk.
  */
-import { subscribeKeySession } from './keySession';
+import {
+  getKeySessionRevision,
+  isCurrentKeySession,
+  subscribeKeySession
+} from './keySession';
 
 export interface UnlockedAccount {
   readonly generation: number;
@@ -23,6 +27,20 @@ export function captureAccountKeyRead(userId: string): () => boolean {
   const token = pendingReads.get(userId) ?? {};
   pendingReads.set(userId, token);
   return () => pendingReads.get(userId) === token;
+}
+
+/** A pending passkey prompt cannot outlive view or cross-tab session teardown. */
+export function keyOperationGuard(userId: string): () => void {
+  const readCurrent = captureAccountKeyRead(userId);
+  const revision = getKeySessionRevision();
+  return () => {
+    if (!readCurrent() || !isCurrentKeySession(revision)) {
+      throw new DOMException(
+        'The encryption session ended. Sign in again.',
+        'AbortError'
+      );
+    }
+  };
 }
 
 /** Closing the settings view cancels its loads without locking a valid cache. */
