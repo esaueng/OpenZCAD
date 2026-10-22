@@ -248,14 +248,22 @@ Control signals switch them off. The desktop app never sends them. You can
 turn them off at any time; sending stops immediately.
 
 **Cloud account statistics (off unless you opt in).** In Settings → Privacy &
-data you can allow aggregate counts of your account's projects, revisions and
-stored bytes to be included in service-wide totals for 30 days. The permission
-expires on its own, and you can withdraw it sooner with the same checkbox.
+data you can allow aggregate counts of your account's projects (including
+retained Trash), revisions and known stored bytes to be included in hourly
+service-wide snapshots. This account-wide permission lasts 30 days and can be
+withdrawn sooner with the same checkbox. The published aggregate snapshots
+remain for up to 90 days; the permission window is not their retention period.
 
-All analytics go to Glimpse, our own analytics service, which runs on
-Cloudflare and keeps only daily aggregate counters, with no raw events. Totals
-we have already received cannot be traced to you, so they cannot be removed
-after you withdraw.
+Analytics go to Glimpse, our own analytics service, which runs on Cloudflare.
+Basic statistics and optional usage analytics use daily aggregate counters,
+with no raw events. Cloud account statistics use the separate hourly aggregate
+snapshots described above. Totals already received cannot be traced to you,
+so they cannot be removed after you withdraw.
+
+> **Reviewer trace (2026-10-22).** `CloudStatisticsConsent` in
+> `AnalyticsConsent.tsx` distinguishes the hourly snapshots, 30-day permission
+> and up-to-90-day published retention; `docs/glimpse.md` describes the hourly
+> census publication path.
 
 ## 9. Cookies and browser storage
 
@@ -302,21 +310,22 @@ requests are handled and whether users are notified.]`
 
 ## 11. How long we keep data
 
-| Data                                | How long                                                                                                                                                                                               |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Local projects and settings         | Until you delete them or clear your browser's site data                                                                                                                                                |
-| Cloud projects                      | Until you delete them                                                                                                                                                                                  |
-| Projects in the Trash               | Permanently deleted, with their files, revisions and collaboration room, at the first visit to your project list after 30 days in the Trash. If you do not return, they stay in the Trash until you do |
-| Saved revisions                     | The newest 50 per project; older ones are removed as new ones are saved                                                                                                                                |
-| Collaboration room                  | The latest document and up to 20 earlier snapshots, for the life of the project                                                                                                                        |
-| Sign-in sessions                    | Valid for 30 days, unless you sign out earlier. Expired server rows become eligible for traffic-triggered cleanup; expiry is not a deletion deadline                                                   |
-| Sign-in codes                       | Valid once for 10 minutes. The hashed record becomes eligible for cleanup 24 hours after expiry; bounded, traffic-triggered cleanup can retain it longer                                               |
-| Rate-limit counters                 | Eligible for cleanup after two of the longest shared-table windows have elapsed from the window start (currently two hours); removed in bounded, traffic-triggered passes                              |
-| Invitations and sharing history     | For the life of the project, or until the invited or inviting account is deleted                                                                                                                       |
-| Share links                         | Until revoked, or until the project is deleted                                                                                                                                                         |
-| Assistant usage counters            | Until your account is deleted `[OWNER: decide a shorter period]`                                                                                                                                       |
-| Cloud account statistics permission | 30 days, or until withdrawn                                                                                                                                                                            |
-| Logs                                | `[CONFIRM: Workers Logs retention]`                                                                                                                                                                    |
+| Data                                | How long                                                                                                                                                                                                                                          |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Local projects and settings         | Until you delete them or clear your browser's site data                                                                                                                                                                                           |
+| Cloud projects                      | Until you delete them                                                                                                                                                                                                                             |
+| Projects in the Trash               | Eligible for permanent deletion, with their files, revisions and room, after 30 days. Project-list requests purge at most 100 eligible projects per pass; a backlog needs later requests, and without a return visit they may remain indefinitely |
+| Saved revisions                     | The newest 50 per project; older ones are removed as new ones are saved                                                                                                                                                                           |
+| Collaboration room                  | The latest document and up to 20 earlier snapshots, for the life of the project                                                                                                                                                                   |
+| Sign-in sessions                    | Valid for 30 days, unless you sign out earlier. Expired server rows become eligible for traffic-triggered cleanup; expiry is not a deletion deadline                                                                                              |
+| Sign-in codes                       | Valid once for 10 minutes. The hashed record becomes eligible for cleanup 24 hours after expiry; bounded, traffic-triggered cleanup can retain it longer                                                                                          |
+| Rate-limit counters                 | Eligible for cleanup after two of the longest shared-table windows have elapsed from the window start (currently two hours); removed in bounded, traffic-triggered passes                                                                         |
+| Invitations and sharing history     | For the life of the project, or until the invited or inviting account is deleted                                                                                                                                                                  |
+| Share links                         | Until revoked, or until the project is deleted                                                                                                                                                                                                    |
+| Assistant usage counters            | Until your account is deleted `[OWNER: decide a shorter period]`                                                                                                                                                                                  |
+| Cloud account statistics permission | 30 days, or until withdrawn                                                                                                                                                                                                                       |
+| Published cloud account statistics  | Hourly aggregate snapshots remain for up to 90 days, independently of the 30-day permission                                                                                                                                                       |
+| Logs                                | `[CONFIRM: Workers Logs retention]`                                                                                                                                                                                                               |
 
 **Cleanup timing.** Validity limits and cleanup eligibility do not promise a
 deletion time. Authentication cleanup runs when a later email sign-in or
@@ -325,7 +334,9 @@ of the challenge, session and rate-limit tables per pass. API rate-limit
 cleanup also depends on later requests and removes at most 100 eligible
 counters per pass. If the relevant traffic never returns, expired records can
 remain indefinitely; even with traffic, a backlog may need multiple passes.
-Signing out removes the current session token separately.
+Signing out removes the current session token separately. Trash cleanup is also
+request-triggered and bounded: more than 100 eligible projects can require
+multiple project-list requests to purge.
 
 > **Reviewer trace (2026-10-22).** `cleanExpiredAuthRows` in `auth.ts` and the
 > sweep in `apiRateLimit.ts` define eligibility and bounded cleanup. They do
