@@ -12,12 +12,48 @@ export interface OrganizationMirrorHost {
   saveLocal(
     projectId: string,
     organization: ProjectOrganization,
-    expectedRevision: string | null
+    expectedRevision: string | null,
+    isCurrent?: () => boolean
   ): Promise<boolean>;
   updateRemote(
     projectId: string,
-    organization: ProjectOrganization
+    organization: ProjectOrganization,
+    signal?: AbortSignal
   ): Promise<void>;
+}
+
+export interface OrganizationMirrorScope {
+  signal: AbortSignal;
+  isCurrent(): boolean;
+}
+
+export function mirrorScopeCurrent(scope?: OrganizationMirrorScope): boolean {
+  return !scope || (!scope.signal.aborted && scope.isCurrent());
+}
+
+export async function updateOrganizationRemote(
+  host: OrganizationMirrorHost,
+  projectId: string,
+  organization: ProjectOrganization,
+  scope?: OrganizationMirrorScope
+): Promise<void> {
+  if (!mirrorScopeCurrent(scope)) return;
+  if (scope) await host.updateRemote(projectId, organization, scope.signal);
+  else await host.updateRemote(projectId, organization);
+}
+
+export function acknowledgeOrganization(
+  host: OrganizationMirrorHost,
+  projectId: string,
+  organization: ProjectOrganization,
+  revision: string | null,
+  scope?: OrganizationMirrorScope
+): Promise<boolean> {
+  return scope
+    ? host.saveLocal(projectId, organization, revision, () =>
+        mirrorScopeCurrent(scope)
+      )
+    : host.saveLocal(projectId, organization, revision);
 }
 
 export function sameWritableOrganization(
@@ -55,13 +91,27 @@ export const organizationMirrorQueue = new OrganizationMirrorQueue();
 export function mirrorPendingOrganization(
   projectId: string,
   host: OrganizationMirrorHost,
-  queue = organizationMirrorQueue
+  queue = organizationMirrorQueue,
+  scope?: OrganizationMirrorScope
 ): Promise<void> {
   return queue.run(async () => {
+    if (!mirrorScopeCurrent(scope)) return;
     const current = await host.readLocal(projectId);
-    if (!current?.mirrorPending) return;
-    await host.updateRemote(projectId, current.organization);
-    await host.saveLocal(projectId, current.organization, current.revision);
+    if (!current?.mirrorPending || !mirrorScopeCurrent(scope)) return;
+    await updateOrganizationRemote(
+      host,
+      projectId,
+      current.organization,
+      scope
+    );
+    if (!mirrorScopeCurrent(scope)) return;
+    await acknowledgeOrganization(
+      host,
+      projectId,
+      current.organization,
+      current.revision,
+      scope
+    );
   });
 }
 
@@ -71,13 +121,19 @@ export function mirrorPendingReorder(
   projectIds: readonly string[],
   host: OrganizationMirrorHost,
   reorder: (projectIds: string[]) => Promise<ProjectSummary[]>,
-  queue = organizationMirrorQueue
+  queue = organizationMirrorQueue,
+  scope?: OrganizationMirrorScope
 ): Promise<void> {
   return queue.run(async () => {
+    if (!mirrorScopeCurrent(scope)) return;
     const current = await Promise.all(
       projectIds.map(async (id) => ({ id, snapshot: await host.readLocal(id) }))
     );
-    if (!current.some(({ snapshot }) => snapshot?.mirrorPending)) return;
+    if (
+      !mirrorScopeCurrent(scope) ||
+      !current.some(({ snapshot }) => snapshot?.mirrorPending)
+    )
+      return;
     const ordered = current
       .filter(
         (
@@ -98,12 +154,20 @@ export function mirrorPendingReorder(
       ])
     );
     for (const { id, snapshot } of ordered) {
+      if (!mirrorScopeCurrent(scope)) return;
       if (!snapshot.mirrorPending) continue;
       const remote = account.get(id);
       if (!remote || !sameWritableOrganization(snapshot.organization, remote)) {
-        await host.updateRemote(id, snapshot.organization);
+        await updateOrganizationRemote(host, id, snapshot.organization, scope);
       }
-      await host.saveLocal(id, snapshot.organization, snapshot.revision);
+      if (!mirrorScopeCurrent(scope)) return;
+      await acknowledgeOrganization(
+        host,
+        id,
+        snapshot.organization,
+        snapshot.revision,
+        scope
+      );
     }
   });
 }
