@@ -11,7 +11,6 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import {
-  PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
   type BodyId,
   type ProjectDocument
@@ -57,7 +56,6 @@ describe('transform pivot (M10)', () => {
   }
 
   it('moves +10 then −10 back to exactly where it was', async () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(34);
     const { document, blockId } = block();
     const before = await bounds(document, blockId);
     let moved = transformBody(document, {

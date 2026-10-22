@@ -77,7 +77,7 @@ describe('serial v31/v32/v33 to v34 integration', () => {
         schemaVersion: version
       } as ProjectDocument;
       const opened = normalizeDocument(saved(legacy));
-      expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(34);
+      expect(opened.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
       expect({ ...opened, schemaVersion: version }).toEqual(legacy);
       const manager = new CommandManager(opened);
       manager.execute(

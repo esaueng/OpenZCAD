@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENT_SCHEMA_VERSION } from '@openzcad/shared';
 import type { Locator, Page } from '@playwright/test';
 import {
   expect,
@@ -154,7 +155,7 @@ test('a linked projection follows an upstream resize and shows its deleted sourc
   });
   await expect(page.locator('.save-state')).toHaveClass(/is-synced/);
   let stored = await storedProject(page, projectName);
-  expect(stored.schemaVersion).toBe(34);
+  expect(stored.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
   expect(projectedObjects(stored)).toHaveLength(4);
   expect(
     projectedObjects(stored).every(

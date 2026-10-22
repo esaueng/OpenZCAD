@@ -24,7 +24,6 @@ import {
   BODY_OPACITY_METADATA_KEY,
   DEFAULT_BODY_COLOR,
   featureColor,
-  PROJECT_DOCUMENT_SCHEMA_VERSION,
   isInPlaceTransform,
   isTransformCopy,
   toBodyId,
@@ -96,7 +95,6 @@ describe('transform copy (M10)', { timeout: 60_000 }, () => {
   }
 
   it('adds an independent body and leaves the source in place', async () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(34);
     const { manager, blockId } = block();
     const command = copyCommand(blockId);
     manager.execute(command);

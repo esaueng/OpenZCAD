@@ -15,7 +15,6 @@ import {
   DRAWING_VIEW_FRAMES,
   drawingSetError,
   projectToView,
-  PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
   type BodyId,
   type BodyRepresentation,
@@ -209,7 +208,6 @@ function linear(
 describe('D02 annotation section (schema v31)', () => {
   it('is additive: a v30 sheet opens without annotations', () => {
     // D02 took v31; I05's reference images are v32.
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(34);
     const document = boxDocument();
     const v30 = {
       ...document,
