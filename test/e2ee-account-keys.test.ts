@@ -215,6 +215,43 @@ const count = (db: DatabaseSync, sql: string, ...values: string[]) =>
   (db.prepare(sql).get(...values) as { n: number }).n;
 
 describe('encryption key routes', () => {
+  it('refuses a missing pinned account and keeps its pin and private keys', async () => {
+    const srv = server();
+    const { laptop } = await setUp(srv);
+    const pin = await laptop.store.loadPin(USER);
+    const keys = await laptop.store.loadDevice(USER);
+    srv.tamper = (path, body) =>
+      path === '/api/e2ee/account' ? { current: null, previous: [] } : body;
+    expect(await loadEncryption(laptop)).toMatchObject({ kind: 'fork' });
+    expect(unlockedEncryptionKey(USER)).toBeNull();
+    expect(await laptop.store.loadPin(USER)).toEqual(pin);
+    expect(await laptop.store.loadDevice(USER)).toEqual(keys);
+    expect(await loadEncryption(device(srv))).toEqual({
+      kind: 'not-set-up',
+      previous: []
+    });
+    let requested = false;
+    const guarded = {
+      ...laptop,
+      api: {
+        ...laptop.api,
+        setup: async () => {
+          requested = true;
+          throw new Error('Unexpected replacement');
+        }
+      }
+    };
+    await flowRefusal(
+      setUpEncryption(guarded, {
+        recoverySecret: (await generateRecoveryKey()).secret,
+        label: 'Laptop'
+      }),
+      'invalid-request'
+    );
+    expect(requested).toBe(false);
+    expect(await laptop.store.loadPin(USER)).toEqual(pin);
+  });
+
   it.each(['rotation', 'replacement'] as const)(
     'returns a coherent chain and wraps when %s races an account read',
     async (change) => {

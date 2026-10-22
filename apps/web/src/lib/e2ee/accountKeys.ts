@@ -608,13 +608,19 @@ export async function loadEncryption(
   const response = await ctx.api.account();
   const previous = previousKeySets(response);
   const current = response.current;
+  const pin = await ctx.store.loadPin(ctx.userId);
   if (!current) {
     lockAccount(ctx.userId);
-    return { kind: 'not-set-up', previous };
+    return pin
+      ? {
+          kind: 'fork',
+          message:
+            'The server omitted the device list this browser already trusts. Reload or recover the existing identity.'
+        }
+      : { kind: 'not-set-up', previous };
   }
   const identityKey = fromBase64Url(current.identityKey);
   const chain = decodeChain(current);
-  const pin = await ctx.store.loadPin(ctx.userId);
   let list: VerifiedDeviceList;
   let identityChanged = false;
   try {
@@ -876,6 +882,13 @@ export async function setUpEncryption(
   options: { recoverySecret: Uint8Array; label: string }
 ): Promise<EncryptionState> {
   const persistedPin = await ctx.store.loadPin(ctx.userId);
+  if (persistedPin) {
+    lockAccount(ctx.userId);
+    throw new EncryptionFlowError(
+      'invalid-request',
+      'This browser already trusts an encryption identity. Recover it instead of setting up a replacement.'
+    );
+  }
   const device = await ctx.store.getOrCreateDevice(
     await newStoredDevice(ctx, options.label)
   );
