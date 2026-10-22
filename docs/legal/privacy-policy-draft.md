@@ -100,6 +100,7 @@ request and model summary described in section 7:
 - projects, their full feature history and undo history;
 - imported files (STEP, STL, 3MF, OBJ, glTF and PLY) and meshes;
 - settings, saved views, panel layout and recovery copies;
+- local project-identity aliases linking an original project ID to its replacement ID after adoption or rekeying;
 - your AI assistant conversation history.
 
 We do not receive this data unless you use a cloud feature described below.
@@ -110,6 +111,9 @@ cloud-reconciliation deferrals in section 11. This deletes the main local
 project copy. Imported STEP/mesh/reference-image source blobs, their checksums
 and claim metadata are stored separately and can survive even deletion of the
 last referencing project indefinitely, until browser site data is cleared.
+Local project-identity aliases also survive target-project deletion as a
+fence against resurrecting the old identity. They remain until browser site
+data is cleared.
 Separate interaction diagnostics can retain a rebuildable copy as described
 below. Anyone with access to your device or browser profile can
 read this local data.
@@ -371,6 +375,7 @@ requests are handled and whether users are notified.]`
 | Local projects in the Trash                   | Eligible for permanent deletion after 30 days, on a later start-screen refresh. When that refresh reconciles cloud copies, an unavailable cloud listing defers local purging, and failed organization updates exclude the affected projects. Without a later successful refresh, entries can remain longer                                                                                                                                                                                               |
 | Local interaction diagnostics                 | Direct-edit captures can include a sanitized, rebuildable native parametric project document; captures of imported STEP/mesh documents omit it. Kept separately after project deletion or Trash expiry until later captures evict them or browser site data is cleared. Newest 40 entries and an 8 MiB target, with the newest entry retained even if it alone exceeds the byte target. No time-based expiry or in-app clearing control                                                                  |
 | Local imported-source blobs                   | STEP, mesh and reference-image bytes, checksums and source-claim metadata live separately from project records. Project purge, including deletion of the last referencing project, does not sweep these stores; they can remain indefinitely until browser site data is cleared                                                                                                                                                                                                                          |
+| Local project-identity aliases                | Original-to-replacement project ID mappings remain after adoption/rekeying and target-project deletion to prevent resurrection. They have no time-based expiry and remain until browser site data is cleared                                                                                                                                                                                                                                                                                             |
 | Workspace sessions                            | Saved camera, selection, device/session identifiers and workspace state are hidden from session listings after 30 days without an update. That cutoff does not delete rows. A later workspace save prunes to the newest 20 sessions per account/project, regardless of age; otherwise records can remain until project deletion or full-account cleanup                                                                                                                                                  |
 | Deletion coordination records                 | Removed after the requested erasure successfully completes. Failed/incomplete erasure requests retain account ID, scope and start/update timestamps for retry; no scheduled expiry, so they may remain indefinitely                                                                                                                                                                                                                                                                                      |
 | Account/profile data and synced settings      | Email/profile data, synced settings and the encrypted personal AI credential remain while the account is used, or until individually changed/removed. Profile deletion clears the email, settings and credential but retains the opaque account row for projects that remain; full-account deletion removes that row                                                                                                                                                                                     |
