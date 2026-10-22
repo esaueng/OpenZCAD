@@ -1333,6 +1333,22 @@ const laterRevocation = suite<LaterRevocationCast>({
         world.retire(c1);
         return `before both: ${beforeFirst}; between: ${betweenRefusal}; ${accepted}`;
       }
+    },
+    {
+      name: 'refused: a directory listing a revoked device without its cutoff',
+      async run({ world, a1 }) {
+        const snapshot = world.snapshot();
+        const devices = snapshot.users.find((u) => u.userId === 'C')!.devices;
+        const c3 = devices.find((d) => d.deviceId === 'C3')!;
+        assert(
+          c3.status === 'revoked' && c3.revocationCutoffEpoch !== undefined,
+          'C3 is revoked with a cutoff'
+        );
+        const withoutCutoff = { ...c3 };
+        delete withoutCutoff.revocationCutoffEpoch;
+        devices[devices.indexOf(c3)] = withoutCutoff;
+        return failsWith(() => a1.session.setDirectory(snapshot), 'input');
+      }
     }
   ]
 });

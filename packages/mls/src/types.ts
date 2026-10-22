@@ -51,7 +51,9 @@ export interface DirectoryDevice {
    * For a revoked device: the first epoch of this project's group whose
    * rejoin PSK it must not know (the revocation's per-project cutoff). A
    * rejoin PSK must be no earlier than the newest of the user's cutoffs; the
-   * last-leaf exception waives only the stale leaf's own.
+   * last-leaf exception waives only the stale leaf's own. Required for a
+   * revoked device (0 when the group never had an epoch it could know):
+   * `setDirectory` refuses a directory with a revoked device that lacks one.
    */
   revocationCutoffEpoch?: number;
 }

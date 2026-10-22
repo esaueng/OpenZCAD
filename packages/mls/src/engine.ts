@@ -159,6 +159,16 @@ function checkEpoch(epoch: number): bigint {
 }
 
 function directoryJson(directory: DeviceDirectory): string {
+  // A revocation without its cutoff would drop out of the user's newest
+  // cutoff and let a sibling device rejoin with a PSK from before it, so the
+  // whole directory is refused instead.
+  for (const user of directory.users)
+    for (const device of user.devices)
+      if (device.status === 'revoked' && device.revocationCutoffEpoch == null)
+        throw new MlsError(
+          'input',
+          `revoked device ${device.deviceId} of ${user.userId} has no revocationCutoffEpoch`
+        );
   return JSON.stringify({
     users: directory.users.map((user) => ({
       userId: user.userId,
