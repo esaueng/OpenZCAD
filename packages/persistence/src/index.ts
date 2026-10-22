@@ -48,6 +48,29 @@ export {
   assertCopiedSourcesArchived,
   type CopiedImportArchive
 } from './copied-source-reconciliation';
+export {
+  decodeProjectStorageBody,
+  hydrateProjectStorageSnapshot,
+  openProjectStorageUpload,
+  prepareClientProjectStorageSnapshot,
+  prepareProjectStorageSnapshot,
+  PROJECT_OBJECT_STORAGE_FORMAT,
+  PROJECT_OBJECT_STORAGE_PREFIX,
+  PROJECT_OBJECT_STORAGE_VERSION,
+  ProjectObjectStorageError,
+  ProjectStorageUploadError,
+  sha256Hex,
+  splitProjectStorageAssets,
+  splitProjectStorageUpload,
+  type ClientProjectStorage,
+  type PreparedProjectStorageSnapshot,
+  type ProjectStorageAssetKind,
+  type ProjectStorageAssetObject,
+  type ProjectStorageAssetReference,
+  type ProjectStorageSnapshot,
+  type ProjectStorageSplit
+} from './project-storage-snapshot';
+import type { ClientProjectStorage } from './project-storage-snapshot';
 import { importArtifactIds } from './mesh-artifact-discard';
 export {
   importArtifactIds,
@@ -73,6 +96,7 @@ import {
   MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_THUMBNAIL_BYTES,
   THUMBNAIL_CONTENT_TYPE,
+  isAcceptableReferenceImageArtifact,
   nowIso,
   persistedDocumentBytes,
   projectBranchPoint,
@@ -207,10 +231,13 @@ export function sharedProjectSnapshotDocument(
 ): ProjectDocument {
   // Drawing sheets stay with the owner: their title blocks carry author,
   // date and drawing-number text, and a share link opens no Draw workspace.
+  // Reference images stay too: they are the owner's tracing underlays, and a
+  // share link serves import sources only, never their pictures.
   const {
     editHistory: _editHistory,
     branchedFrom: _branchedFrom,
     drawings: _drawings,
+    referenceImages: _referenceImages,
     ...current
   } = withoutDerivedProjection(document);
   return {
@@ -440,6 +467,15 @@ interface StoredRevision {
   document: ProjectDocument;
 }
 
+/** How a document write reached the account. */
+export interface ProjectWriteOptions {
+  /**
+   * The browser's storage projection of the document, verified by the
+   * Worker (ADR-024 Phase 1). Stores without object storage ignore it.
+   */
+  storage?: ClientProjectStorage;
+}
+
 export interface PersistenceService {
   requireProjectRead(userId: UserId, projectId: string): Promise<ProjectAccess>;
   requireProjectEdit(userId: UserId, projectId: string): Promise<ProjectAccess>;
@@ -519,9 +555,14 @@ export interface PersistenceService {
     artifactId: string
   ): Promise<SharedProjectImportDownload | null>;
   listProjects(userId: UserId): Promise<ListProjectsResponse>;
+  /**
+   * `options.storage` is a browser-split write the Worker already verified
+   * (ADR-024 Phase 1); `request.document` is then its hydrated document.
+   */
   createProject(
     userId: UserId,
-    request: CreateProjectRequest
+    request: CreateProjectRequest,
+    options?: ProjectWriteOptions
   ): Promise<CreateProjectResponse>;
   /**
    * Copies a project, including its feature history, into a new one.
@@ -529,7 +570,8 @@ export interface PersistenceService {
    */
   duplicateProject(
     userId: UserId,
-    request: DuplicateProjectRequest
+    request: DuplicateProjectRequest,
+    options?: ProjectWriteOptions
   ): Promise<CreateProjectResponse>;
   /**
    * Moves a project between shelves, pins it, or repositions it.
@@ -562,7 +604,8 @@ export interface PersistenceService {
   /** @throws ProjectNotFoundError when the project does not exist. */
   saveRevision(
     userId: UserId,
-    request: SaveRevisionRequest
+    request: SaveRevisionRequest,
+    options?: ProjectWriteOptions
   ): Promise<ProjectDocument>;
   /**
    * The project's retained save states, newest first, without their documents.
@@ -597,7 +640,8 @@ export interface PersistenceService {
    */
   saveDocument(
     userId: UserId,
-    request: SaveProjectDocumentRequest
+    request: SaveProjectDocumentRequest,
+    options?: ProjectWriteOptions
   ): Promise<SaveProjectDocumentResponse>;
   /** What this account currently stores, and the limits it is measured against. */
   getStorageUsage(userId: UserId): Promise<AccountStorageUsage>;
@@ -652,7 +696,7 @@ export interface PersistenceService {
     userId: UserId,
     projectId: string,
     artifactId: string,
-    originalKind?: 'stl-import' | 'mesh-import'
+    originalKind?: 'stl-import' | 'mesh-import' | 'reference-image'
   ): Promise<{ deleted: boolean }>;
   listArtifacts(
     userId: UserId,
@@ -1350,7 +1394,7 @@ export class InMemoryPersistenceService implements PersistenceService {
             expectedVersion: current.version,
             document: copied
           },
-          current
+          { expectedDocument: current }
         );
         copied = {
           ...copied,
@@ -1855,8 +1899,9 @@ export class InMemoryPersistenceService implements PersistenceService {
   async saveDocument(
     userId: UserId,
     request: SaveProjectDocumentRequest,
-    expectedDocument?: ProjectDocument
+    options?: ProjectWriteOptions & { expectedDocument?: ProjectDocument }
   ): Promise<SaveProjectDocumentResponse> {
+    const expectedDocument = options?.expectedDocument;
     const existing = this.projects.get(request.projectId);
     if (!existing) {
       throw new ProjectNotFoundError(request.projectId);
@@ -2159,6 +2204,14 @@ export class InMemoryPersistenceService implements PersistenceService {
         'Thumbnail artifact is invalid or too large.'
       );
     }
+    if (
+      artifact.kind === 'reference-image' &&
+      !isAcceptableReferenceImageArtifact(artifact.contentType, body.byteLength)
+    ) {
+      throw new ArtifactStorageError(
+        'Reference image artifact is not a PNG or JPEG within the size limit.'
+      );
+    }
     if (artifact.kind === 'thumbnail') {
       for (const [artifactId, existing] of this.artifacts) {
         if (
@@ -2181,7 +2234,7 @@ export class InMemoryPersistenceService implements PersistenceService {
     userId: UserId,
     projectId: string,
     artifactId: string,
-    originalKind?: 'stl-import' | 'mesh-import'
+    originalKind?: 'stl-import' | 'mesh-import' | 'reference-image'
   ): Promise<{ deleted: boolean }> {
     const access = await this.requireProjectEdit(userId, projectId);
     // Originals are stored files, and finalized records do not identify the

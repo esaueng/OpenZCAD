@@ -13,3 +13,19 @@ Per-account admission uses a separate Web Lock and localStorage record shared by
 Each refresh captures an abortable generation and shared account marker. Logout/account replacement cancels work; storage events abort obsolete requests in other tabs. Checks after pacing waits, lock grants and metadata reads prevent old work using a new session. Acknowledgements recheck generation inside the IndexedDB transaction in addition to matching the revision. Offline and other failed requests stop until an online event or later refresh; they do not spin.
 
 Validation is recorded in the PR: fake-time 1,000/10,000-row backlogs; cross-tab shared budget; 429 backoff; long queued-request pacing; fresh-action interleaving; latest revisions; cancellation before timers, after lock grants, before the API call and after response; unavailable storage; real IndexedDB acknowledgement/retention checks. Chromium tests open two actual tabs, hold the first PATCH while both libraries render, prove a fresh unpin goes next, verify shared pacing and cancel an in-flight request by signing out in the other tab. Existing shelf race regressions remain required.
+
+## Discovery ownership and retention
+
+A superseded signed-out discovery could previously purge expired model data
+while a newer account discovery was deferring it. Local discovery ownership is
+now separate from permission to send account writes. Purging checks that
+ownership before enumeration, between rows and after awaited metadata reads
+inside each delete transaction. Restored status and newer deletion dates still
+win, pending organization tombstones remain, and explicit permanent deletion
+keeps its existing behavior.
+
+Real IndexedDB regressions cover supersession before purge, during metadata
+reads and between rows; all three fail on the prior code. Additional controls
+cover cross-tab account markers, restored/newer metadata and current signed-out
+expiry without granting background network permission. Final source and hosted
+qualification accompany the implementation PR.

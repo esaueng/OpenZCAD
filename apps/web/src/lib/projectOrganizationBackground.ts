@@ -21,6 +21,10 @@ type StorageLike = Pick<Storage, 'getItem' | 'setItem'>;
 export interface OrganizationLocks {
   request<T>(name: string, action: () => T | Promise<T>): Promise<T>;
 }
+export interface OrganizationDiscoveryScope extends OrganizationMirrorScope {
+  /** Local discovery can own retention work while signed out. */
+  ownsDiscovery(): boolean;
+}
 interface SessionMarker {
   accountId: string | null;
   token: string;
@@ -158,7 +162,7 @@ export class OrganizationMirrorBackground {
   readonly #locks: OrganizationLocks | null;
   readonly #queue: OrganizationMirrorQueue;
   readonly #online: () => boolean;
-  #scope: OrganizationMirrorScope | null = null;
+  #scope: OrganizationDiscoveryScope | null = null;
   #accountId: string | null = null;
   #abort: AbortController | null = null;
   #jobs: readonly ProjectSummary[] = [];
@@ -182,7 +186,7 @@ export class OrganizationMirrorBackground {
       options.online ?? (() => globalThis.navigator?.onLine !== false);
   }
 
-  begin(accountId: string | null): OrganizationMirrorScope {
+  begin(accountId: string | null): OrganizationDiscoveryScope {
     this.#abort?.abort();
     this.#abort = new AbortController();
     this.#accountId = accountId;
@@ -201,13 +205,13 @@ export class OrganizationMirrorBackground {
       marker = null;
     }
     const token = marker?.token;
-    const scope: OrganizationMirrorScope = {
+    const scope: OrganizationDiscoveryScope = {
       signal: this.#abort.signal,
-      isCurrent: () =>
+      ownsDiscovery: () =>
         !scope.signal.aborted &&
         this.#scope === scope &&
-        accountId !== null &&
-        (!token || readMarker(this.#storage)?.token === token)
+        (!token || readMarker(this.#storage)?.token === token),
+      isCurrent: () => accountId !== null && scope.ownsDiscovery()
     };
     this.#scope = scope;
     return scope;
@@ -225,7 +229,7 @@ export class OrganizationMirrorBackground {
     this.#jobs = [];
   }
   accountChanged(): void {
-    if (this.#scope && !mirrorScopeCurrent(this.#scope)) this.#abort?.abort();
+    if (this.#scope && !this.#scope.ownsDiscovery()) this.#abort?.abort();
   }
   start(
     scope: OrganizationMirrorScope,

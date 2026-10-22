@@ -122,7 +122,7 @@ const v = (x: number, y: number, z: number): Vec3 => ({ x, y, z });
 
 describe('three-point and parallel planes in the document (v25)', () => {
   it('is schema 25, additive, and round-trips without rewriting', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(30);
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(32);
     const planed = withDatum(blank(), {
       kind: 'three-point',
       points: [at(0, 0, 0), at('5 + 5', 0, 0), at(0, 10, 0)]
@@ -136,7 +136,7 @@ describe('three-point and parallel planes in the document (v25)', () => {
     const saved = JSON.parse(
       JSON.stringify(parallel.document)
     ) as ProjectDocument;
-    expect(saved.schemaVersion).toBe(30);
+    expect(saved.schemaVersion).toBe(32);
     expect(normalizeDocument(saved)).toEqual(parallel.document);
 
     // A v22 document opens with its datums exactly as written.

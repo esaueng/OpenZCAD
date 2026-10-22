@@ -24,11 +24,14 @@ import {
   loadLocalProject,
   saveProjectThumbnail,
   loadProjectThumbnail,
+  deleteLocalProject,
+  META_STORE_NAME,
   scopedTransaction,
   BACKUP_STORE_NAME,
   loadProjectBackupFiles
 } from './localProjectStore';
 import type { LocalProjectOrganizationSnapshot } from './localProjectStore';
+import { LOCAL_PROJECT_DOCUMENT_STORE } from './localProjectSchema';
 
 const active = { status: 'active' as const, pinned: false, sortOrder: 0 };
 function storage() {
@@ -121,8 +124,223 @@ beforeEach(() => {
 afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
+
+it.each(['before purge', 'during metadata read', 'between rows'] as const)(
+  'preserves expired models when signed-out discovery is replaced %s',
+  async (phase) => {
+    vi.useRealTimers();
+    vi.stubGlobal('indexedDB', new IDBFactory());
+    const background = new OrganizationMirrorBackground({
+      storage: storage(),
+      locks: locks()
+    });
+    const scope = background.begin(null);
+    const models: ReturnType<typeof createProjectDocument>[] = [];
+    for (let i = 0; i < (phase === 'between rows' ? 2 : 1); i++) {
+      const document = createProjectDocument(
+        'Pending expired model',
+        toUserId('user_retention')
+      );
+      await saveLocalProject(document);
+      await saveLocalProjectOrganization(
+        document.projectId,
+        {
+          ...active,
+          status: 'deleted',
+          deletedAt: '2020-01-01T00:00:00Z'
+        },
+        { mirrorPending: true }
+      );
+      await scopedTransaction(
+        'readwrite',
+        [BACKUP_STORE_NAME],
+        async (store) => {
+          store(BACKUP_STORE_NAME).put(
+            [{ path: 'model.bin', bytes: new Uint8Array([1, 2, 3]) }],
+            document.projectId
+          );
+        }
+      );
+      models.push(document);
+    }
+    models.sort((a, b) => (a.projectId < b.projectId ? -1 : 1));
+    const firstId = models[0]!.projectId;
+    let replaced = false;
+    const replace = () => {
+      if (replaced) return;
+      replaced = true;
+      background.begin('account_A');
+    };
+    if (phase === 'before purge') replace();
+    if (phase === 'during metadata read') {
+      const get = IDBObjectStore.prototype.get;
+      vi.spyOn(IDBObjectStore.prototype, 'get').mockImplementation(function (
+        this: IDBObjectStore,
+        key
+      ) {
+        const request = get.call(this, key);
+        if (
+          this.name === META_STORE_NAME &&
+          this.transaction.mode === 'readwrite' &&
+          key === firstId
+        ) {
+          request.addEventListener('success', replace, { once: true });
+        }
+        return request;
+      });
+    }
+    if (phase === 'between rows') {
+      const remove = IDBObjectStore.prototype.delete;
+      vi.spyOn(IDBObjectStore.prototype, 'delete').mockImplementation(function (
+        this: IDBObjectStore,
+        key
+      ) {
+        if (this.name === LOCAL_PROJECT_DOCUMENT_STORE && key === firstId) {
+          this.transaction.addEventListener('complete', replace, {
+            once: true
+          });
+        }
+        return remove.call(this, key);
+      });
+    }
+    const purged = await purgeExpiredLocalProjects(
+      Date.parse('2026-10-21T00:00:00Z'),
+      new Set(),
+      {
+        retainPendingOrganization: true,
+        isCurrent: () => !scope.signal.aborted
+      }
+    );
+    expect(replaced).toBe(true);
+    expect(scope.signal.aborted).toBe(true);
+    expect(purged).toEqual(phase === 'between rows' ? [firstId] : []);
+    for (const document of models.slice(phase === 'between rows' ? 1 : 0)) {
+      expect(await loadLocalProject(document.projectId)).not.toBeNull();
+      expect(await loadProjectBackupFiles(document.projectId)).toHaveLength(1);
+      expect(
+        (await loadLocalProjectOrganizationSnapshot(document.projectId))
+          ?.mirrorPending
+      ).toBe(true);
+    }
+    if (phase === 'between rows')
+      expect(await loadLocalProject(firstId)).toBeNull();
+    // Explicit permanent deletion remains independent of an old discovery.
+    if (phase === 'before purge') {
+      await deleteLocalProject(firstId);
+      expect(await loadLocalProject(firstId)).toBeNull();
+    }
+    background.dispose();
+  }
+);
+
+it('invalidates signed-out retention across account markers without granting network permission', async () => {
+  vi.useRealTimers();
+  vi.stubGlobal('indexedDB', new IDBFactory());
+  const shared = { storage: storage(), locks: locks() };
+  const first = new OrganizationMirrorBackground(shared);
+  const second = new OrganizationMirrorBackground(shared);
+  const scope = first.begin(null);
+  expect(scope.ownsDiscovery()).toBe(true);
+  expect(scope.isCurrent()).toBe(false);
+  const document = createProjectDocument(
+    'Cross-tab pending model',
+    toUserId('user_retention')
+  );
+  await saveLocalProject(document);
+  await saveLocalProjectOrganization(
+    document.projectId,
+    {
+      ...active,
+      status: 'deleted',
+      deletedAt: '2020-01-01T00:00:00Z'
+    },
+    { mirrorPending: true }
+  );
+  second.begin('account_A');
+  expect(scope.signal.aborted).toBe(false);
+  expect(scope.ownsDiscovery()).toBe(false);
+  expect(
+    await purgeExpiredLocalProjects(
+      Date.parse('2026-10-21T00:00:00Z'),
+      new Set(),
+      {
+        retainPendingOrganization: true,
+        isCurrent: scope.ownsDiscovery
+      }
+    )
+  ).toEqual([]);
+  expect(await loadLocalProject(document.projectId)).not.toBeNull();
+  first.accountChanged();
+  expect(scope.signal.aborted).toBe(true);
+  first.dispose();
+  second.dispose();
+});
+
+it.each(['restored', 'new deletion date'] as const)(
+  'preserves an enumerated expired model after %s metadata is committed',
+  async (change) => {
+    vi.useRealTimers();
+    vi.stubGlobal('indexedDB', new IDBFactory());
+    const document = createProjectDocument(
+      'Changed retention',
+      toUserId('user_retention')
+    );
+    await saveLocalProject(document);
+    await saveLocalProjectOrganization(document.projectId, {
+      ...active,
+      status: 'deleted',
+      deletedAt: '2020-01-01T00:00:00Z'
+    });
+    const getAll = IDBObjectStore.prototype.getAll;
+    let update: Promise<void> | undefined;
+    vi.spyOn(IDBObjectStore.prototype, 'getAll').mockImplementation(function (
+      this: IDBObjectStore,
+      ...args
+    ) {
+      const request = getAll.apply(this, args);
+      if (
+        this.name === META_STORE_NAME &&
+        this.transaction.mode === 'readonly' &&
+        !update
+      ) {
+        request.addEventListener(
+          'success',
+          () => {
+            update = saveLocalProjectOrganization(
+              document.projectId,
+              change === 'restored'
+                ? active
+                : {
+                    ...active,
+                    status: 'deleted',
+                    deletedAt: '2026-10-20T00:00:00Z'
+                  }
+            );
+          },
+          { once: true }
+        );
+      }
+      return request;
+    });
+    expect(
+      await purgeExpiredLocalProjects(
+        Date.parse('2026-10-21T00:00:00Z'),
+        new Set(),
+        { isCurrent: () => true }
+      )
+    ).toEqual([]);
+    expect(update).toBeDefined();
+    await update;
+    expect(await loadLocalProject(document.projectId)).not.toBeNull();
+    const current = (await loadLocalProjectOrganizationSnapshot(
+      document.projectId
+    ))!.organization;
+    expect(current.status).toBe(change === 'restored' ? 'active' : 'deleted');
+  }
+);
 
 it.each([1_000, 10_000])(
   'prepares %i pending rows without awaiting a network request, lock or rate timer',
@@ -514,11 +732,18 @@ it('expires signed-out model and backup data while retaining only pending organi
       document.projectId
     );
   });
+  const background = new OrganizationMirrorBackground({
+    storage: storage(),
+    locks: locks()
+  });
+  const scope = background.begin(null);
+  expect(scope.ownsDiscovery()).toBe(true);
+  expect(scope.isCurrent()).toBe(false);
   expect(
     await purgeExpiredLocalProjects(
       Date.parse('2026-10-21T00:00:00Z'),
       new Set(),
-      { retainPendingOrganization: true }
+      { retainPendingOrganization: true, isCurrent: scope.ownsDiscovery }
     )
   ).toEqual([document.projectId]);
   expect(await loadLocalProject(document.projectId)).toBeNull();
@@ -529,6 +754,7 @@ it('expires signed-out model and backup data while retaining only pending organi
   ))!;
   expect(remaining.mirrorPending).toBe(true);
   expect(remaining.organization.status).toBe('deleted');
+  background.dispose();
   // The small tombstone can still mirror when the owning account returns.
   const h = harness(0);
   h.host.readLocal.mockImplementation(loadLocalProjectOrganizationSnapshot);

@@ -2,10 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { createAutoParameterizeProposal } from '@openzcad/ai-contracts/auto-parameterize';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
+  addDatumPlane,
+  addSketchFeature,
   createProjectDocument,
+  extrudeSketch,
   importStepBody,
   listFeaturesInOrder
 } from '@openzcad/document-core';
+import type { CadPatchProposal } from '@openzcad/ai-contracts';
 import {
   toFeatureId,
   toUserId,
@@ -599,5 +603,247 @@ describe('AI exact patch preflight', () => {
         return derived;
       })
     ).rejects.toThrow(/consumed by the staged prefix/);
+  });
+});
+
+const datumFrame = {
+  origin: { x: 0, y: 0, z: 0 },
+  u: { x: 1, y: 0, z: 0 },
+  v: { x: 0, y: 1, z: 0 },
+  normal: { x: 0, y: 0, z: 1 }
+};
+const planeDefinition = {
+  kind: 'offset' as const,
+  source: { type: 'canonical' as const, plane: 'XY' as const, offset: 0 },
+  offset: 2
+};
+const datumProposal = (
+  operations: CadPatchProposal['operations']
+): CadPatchProposal => ({
+  proposalId: 'proposal_datum_exact_results',
+  summary: 'Edit reference geometry',
+  assumptions: [],
+  operations
+});
+
+function datumBase() {
+  return addDatumPlane(
+    createProjectDocument('Datum preflight', toUserId('user_ai_datum')),
+    { name: 'Reference', definition: planeDefinition }
+  );
+}
+
+describe('AI datum exact result gates', () => {
+  it('requires a frame for a datum-only proposal, even when no warning or body exists', async () => {
+    const base = createProjectDocument('AI datum', toUserId('user_ai_datum'));
+    const patch = datumProposal([
+      {
+        kind: 'add_datum_plane',
+        name: 'New reference',
+        localId: 'reference',
+        definition: planeDefinition
+      }
+    ]);
+    await expect(
+      preflightCadPatch(base, patch, async (candidate) => ({
+        ...candidate.derived,
+        warnings: [],
+        featureWarnings: []
+      }))
+    ).rejects.toThrow('New reference did not resolve to a plane');
+    expect(base.commandLog).toHaveLength(0);
+    const result = await preflightCadPatch(base, patch, async (candidate) => ({
+      ...candidate.derived,
+      datumFrames: {
+        [listFeaturesInOrder(candidate)[0]!.featureId]: datumFrame
+      }
+    }));
+    expect(result.targets).toEqual([]);
+    expect(result.candidate.derived.datumFrames).toBeDefined();
+  });
+
+  it('requires an axis for an axis-only proposal', async () => {
+    const base = createProjectDocument('AI axis', toUserId('user_ai_datum'));
+    const patch = datumProposal([
+      {
+        kind: 'add_datum_axis',
+        name: 'New axis',
+        localId: 'axis',
+        definition: {
+          kind: 'two-point',
+          points: [
+            { type: 'point', point: { x: 0, y: 0, z: 0 } },
+            { type: 'point', point: { x: 0, y: 0, z: 10 } }
+          ]
+        }
+      }
+    ]);
+    await expect(
+      preflightCadPatch(base, patch, async (candidate) => candidate.derived)
+    ).rejects.toThrow('New axis did not resolve to an axis');
+    const result = await preflightCadPatch(base, patch, async (candidate) => ({
+      ...candidate.derived,
+      datumAxes: {
+        [listFeaturesInOrder(candidate)[0]!.featureId]: {
+          origin: { x: 0, y: 0, z: 0 },
+          direction: { x: 0, y: 0, z: 1 }
+        }
+      }
+    }));
+    expect(result.targets).toEqual([]);
+  });
+
+  it('refuses an explicitly updated datum whose own failure is unchanged from the baseline', async () => {
+    const reference = datumBase();
+    const message = 'Reference could not resolve its exact source.';
+    const base: ProjectDocument = {
+      ...reference.document,
+      derived: {
+        ...reference.document.derived,
+        warnings: [message],
+        featureWarnings: [
+          {
+            featureId: reference.featureId,
+            featureName: 'Reference',
+            kind: 'build-failed',
+            message
+          }
+        ]
+      }
+    };
+    const patch = datumProposal([
+      {
+        kind: 'update_datum_plane',
+        featureId: reference.featureId,
+        definition: planeDefinition
+      }
+    ]);
+    await expect(
+      preflightCadPatch(base, patch, async (candidate) => candidate.derived)
+    ).rejects.toThrow(message);
+    expect(base.commandLog).toHaveLength(0);
+  });
+
+  it('preserves resolved active downstream datums without demanding unrelated outputs', async () => {
+    const reference = datumBase();
+    const child = addDatumPlane(reference.document, {
+      name: 'Child reference',
+      definition: {
+        kind: 'offset',
+        source: { type: 'datum', datumFeatureId: reference.featureId },
+        offset: 4
+      }
+    });
+    const other = addDatumPlane(child.document, {
+      name: 'Unrelated reference',
+      definition: planeDefinition
+    });
+    const base: ProjectDocument = {
+      ...other.document,
+      derived: {
+        ...other.document.derived,
+        datumFrames: {
+          [reference.featureId]: datumFrame,
+          [child.featureId]: datumFrame,
+          [other.featureId]: datumFrame
+        }
+      }
+    };
+    const patch = datumProposal([
+      {
+        kind: 'update_datum_plane',
+        featureId: reference.featureId,
+        definition: { ...planeDefinition, offset: 3 }
+      }
+    ]);
+    await expect(
+      preflightCadPatch(base, patch, async (candidate) => ({
+        ...candidate.derived,
+        datumFrames: { [reference.featureId]: datumFrame }
+      }))
+    ).rejects.toThrow('Child reference did not resolve to a plane');
+    const result = await preflightCadPatch(base, patch, async (candidate) => ({
+      ...candidate.derived,
+      datumFrames: {
+        [reference.featureId]: datumFrame,
+        [child.featureId]: datumFrame
+      }
+    }));
+    expect(
+      result.candidate.derived.datumFrames?.[other.featureId]
+    ).toBeUndefined();
+  });
+
+  it('requires affected active body outputs when updating a datum', async () => {
+    const reference = datumBase();
+    const sketch = addSketchFeature(reference.document, {
+      name: 'Dependent sketch',
+      planeRef: { type: 'datum', datumFeatureId: reference.featureId },
+      objects: [
+        { objectKind: 'rectangle', centerX: 0, centerY: 0, width: 4, height: 6 }
+      ]
+    });
+    const pad = extrudeSketch(sketch.document, {
+      name: 'Dependent pad',
+      sketchId: sketch.sketchId,
+      distance: 5,
+      operation: 'new-body'
+    });
+    const base: ProjectDocument = {
+      ...pad.document,
+      derived: {
+        ...exactDerived(pad.document),
+        datumFrames: { [reference.featureId]: datumFrame }
+      }
+    };
+    const patch = datumProposal([
+      {
+        kind: 'update_datum_plane',
+        featureId: reference.featureId,
+        definition: { ...planeDefinition, offset: 3 }
+      }
+    ]);
+    await expect(
+      preflightCadPatch(base, patch, async (candidate) => ({
+        ...candidate.derived,
+        bodyRepresentations: {}
+      }))
+    ).rejects.toThrow(/Dependent pad.*(solid|body)/);
+    expect(base.nodes).toEqual(pad.document.nodes);
+  });
+
+  it('does not demand the result of a downstream datum intentionally deleted by the patch', async () => {
+    const reference = datumBase();
+    const child = addDatumPlane(reference.document, {
+      name: 'Removed reference',
+      definition: {
+        kind: 'offset',
+        source: { type: 'datum', datumFeatureId: reference.featureId },
+        offset: 4
+      }
+    });
+    const base: ProjectDocument = {
+      ...child.document,
+      derived: {
+        ...child.document.derived,
+        datumFrames: {
+          [reference.featureId]: datumFrame,
+          [child.featureId]: datumFrame
+        }
+      }
+    };
+    const patch = datumProposal([
+      {
+        kind: 'update_datum_plane',
+        featureId: reference.featureId,
+        definition: { ...planeDefinition, offset: 3 }
+      },
+      { kind: 'delete_feature', featureId: child.featureId }
+    ]);
+    const result = await preflightCadPatch(base, patch, async (candidate) => ({
+      ...candidate.derived,
+      datumFrames: { [reference.featureId]: datumFrame }
+    }));
+    expect(listFeaturesInOrder(result.candidate)).toHaveLength(1);
   });
 });

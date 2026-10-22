@@ -39,6 +39,13 @@ export interface ModelPanelSource {
   /** Datum planes hidden by their eye toggle: view state, as sketches' is. */
   hiddenDatumIds?: ReadonlySet<string>;
   onHiddenDatumIdsChange?(hidden: ReadonlySet<string>): void;
+  /** I05 reference images hidden by their eye toggle: view state too. */
+  hiddenReferenceImageIds?: ReadonlySet<string>;
+  onHiddenReferenceImageIdsChange?(hidden: ReadonlySet<string>): void;
+  /** The reference image whose card is open, drawn selected. */
+  selectedReferenceImageId?: string | null;
+  /** Opens a reference image's card. */
+  onSelectReferenceImage?(imageId: string): void;
   warnings: DiagnosticRow[];
   historyDetails?: ReactNode;
   checkpoints: ProjectCheckpoint[];

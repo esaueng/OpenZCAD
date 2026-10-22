@@ -2,8 +2,10 @@ import {
   SHEET_HIDDEN_DASH_MM,
   SHEET_STROKE_WIDTH_MM,
   sheetSafeText,
+  textWidthMm,
   type SheetPage,
-  type SheetStrokeKind
+  type SheetStrokeKind,
+  type SheetText
 } from './sheetPage';
 import { exportFileStem } from '../model';
 
@@ -60,8 +62,24 @@ const STROKE_ORDER: readonly SheetStrokeKind[] = [
   'border',
   'thin',
   'hidden',
-  'visible'
+  'visible',
+  'dimension'
 ];
+
+/**
+ * Where a text's start lies: `align` measures back along its baseline by
+ * the same Helvetica metrics layout used, so SVG and PDF agree.
+ */
+export function sheetTextStart(text: SheetText): { x: number; y: number } {
+  if (!text.align) return { x: text.x, y: text.y };
+  const width = textWidthMm(text.text, text.sizeMm, text.bold);
+  const shift = text.align === 'middle' ? width / 2 : width;
+  const radians = ((text.angleDeg ?? 0) * Math.PI) / 180;
+  return {
+    x: text.x - Math.cos(radians) * shift,
+    y: text.y - Math.sin(radians) * shift
+  };
+}
 
 /** One SVG user unit is one paper millimetre; y is flipped to SVG's down. */
 export function sheetPageToSvg(page: SheetPage, title: string): string {
@@ -91,7 +109,9 @@ export function sheetPageToSvg(page: SheetPage, title: string): string {
           `${num(stroke.points[i]!)},${num(h - stroke.points[i + 1]!)}`
         );
       lines.push(
-        `<${stroke.closed ? 'polygon' : 'polyline'} points="${coords.join(' ')}"/>`
+        stroke.filled
+          ? `<polygon points="${coords.join(' ')}" fill="#000000" stroke="none"/>`
+          : `<${stroke.closed ? 'polygon' : 'polyline'} points="${coords.join(' ')}"/>`
       );
     }
     lines.push('</g>');
@@ -101,8 +121,14 @@ export function sheetPageToSvg(page: SheetPage, title: string): string {
     for (const text of page.texts) {
       if (!text.text) continue;
       // `sizeMm` is cap height-ish; Helvetica's cap height is 0.718 em.
+      // Aligned text is placed from its measured start, as in the PDF, so
+      // a viewer's own font metrics cannot move it.
+      const start = sheetTextStart(text);
+      const turn = text.angleDeg
+        ? ` transform="rotate(${num(-text.angleDeg)} ${num(start.x)} ${num(h - start.y)})"`
+        : '';
       lines.push(
-        `<text x="${num(text.x)}" y="${num(h - text.y)}" font-size="${num(text.sizeMm / 0.718)}"${text.bold ? ' font-weight="bold"' : ''}>${escapeXml(text.text)}</text>`
+        `<text x="${num(start.x)}" y="${num(h - start.y)}" font-size="${num(text.sizeMm / 0.718)}"${text.bold ? ' font-weight="bold"' : ''}${turn}>${escapeXml(text.text)}</text>`
       );
     }
     lines.push('</g>');
@@ -151,13 +177,20 @@ export function sheetPageToPdf(page: SheetPage, title: string): Uint8Array {
           `${pt(stroke.points[i]!)} ${pt(stroke.points[i + 1]!)} ${i === 0 ? 'm' : 'l'}`
         );
       if (path.length < 2) continue;
-      content.push(`${path.join(' ')} ${stroke.closed ? 's' : 'S'}`);
+      content.push(
+        `${path.join(' ')} ${stroke.filled ? 'h f' : stroke.closed ? 's' : 'S'}`
+      );
     }
   }
   for (const text of page.texts) {
     if (!text.text) continue;
+    const start = sheetTextStart(text);
+    const radians = ((text.angleDeg ?? 0) * Math.PI) / 180;
+    const place = text.angleDeg
+      ? `${num(Math.cos(radians), 6)} ${num(Math.sin(radians), 6)} ${num(-Math.sin(radians), 6)} ${num(Math.cos(radians), 6)} ${pt(start.x)} ${pt(start.y)} Tm`
+      : `${pt(start.x)} ${pt(start.y)} Td`;
     content.push(
-      `BT /${text.bold ? 'F2' : 'F1'} ${pt(text.sizeMm / 0.718)} Tf ${pt(text.x)} ${pt(text.y)} Td ${pdfString(text.text)} Tj ET`
+      `BT /${text.bold ? 'F2' : 'F1'} ${pt(text.sizeMm / 0.718)} Tf ${place} ${pdfString(text.text)} Tj ET`
     );
   }
   const stream = content.join('\n');

@@ -7,6 +7,7 @@ import {
   DEFAULT_APP_SETTINGS,
   deepClone,
   EXPORT_UNITS,
+  normalizeHiddenRelationGlyphs,
   normalizeKeymapOverrides,
   nowIso,
   PANEL_WIDTH_LIMITS,
@@ -353,6 +354,11 @@ export function parseUpdateAppSettingsRequest(
           'relationGlyphs',
           RELATION_GLYPHS,
           DEFAULT_APP_SETTINGS.sketching.relationGlyphs
+        ),
+        // Optional and lenient, like relationGlyphs: an unknown kind from a
+        // newer client drops out rather than failing the save.
+        hiddenRelationGlyphs: normalizeHiddenRelationGlyphs(
+          sketching.hiddenRelationGlyphs
         )
       },
       files: {
@@ -887,8 +893,7 @@ export function settingsRequestOmittedViewportFields(
   );
 }
 
-/** True when a client from before relation glyphs saved its settings. */
-export function settingsRequestOmitsRelationGlyphs(body: unknown): boolean {
+function settingsRequestOmitsSketching(body: unknown, key: string): boolean {
   if (!body || typeof body !== 'object') return true;
   const settings = (body as Record<string, unknown>).settings;
   if (!settings || typeof settings !== 'object') return true;
@@ -896,8 +901,20 @@ export function settingsRequestOmitsRelationGlyphs(body: unknown): boolean {
   return (
     !sketching ||
     typeof sketching !== 'object' ||
-    !Object.prototype.hasOwnProperty.call(sketching, 'relationGlyphs')
+    !Object.prototype.hasOwnProperty.call(sketching, key)
   );
+}
+
+/** True when a client from before relation glyphs saved its settings. */
+export function settingsRequestOmitsRelationGlyphs(body: unknown): boolean {
+  return settingsRequestOmitsSketching(body, 'relationGlyphs');
+}
+
+/** True when a client from before the per-kind glyph filter saved. */
+export function settingsRequestOmitsHiddenRelationGlyphs(
+  body: unknown
+): boolean {
+  return settingsRequestOmitsSketching(body, 'hiddenRelationGlyphs');
 }
 
 export async function updateAppSettings(
@@ -908,6 +925,7 @@ export async function updateAppSettings(
   options: {
     keepStoredKeymap?: boolean;
     keepStoredRelationGlyphs?: boolean;
+    keepStoredHiddenRelationGlyphs?: boolean;
     keepStoredViewportFields?: readonly CarriedViewportField[];
   } = {}
 ): Promise<AppSettingsUpdate> {
@@ -931,6 +949,15 @@ export async function updateAppSettings(
       sketching: {
         ...settings.sketching,
         relationGlyphs: current.settings.sketching.relationGlyphs
+      }
+    };
+  }
+  if (options.keepStoredHiddenRelationGlyphs) {
+    settings = {
+      ...settings,
+      sketching: {
+        ...settings.sketching,
+        hiddenRelationGlyphs: current.settings.sketching.hiddenRelationGlyphs
       }
     };
   }

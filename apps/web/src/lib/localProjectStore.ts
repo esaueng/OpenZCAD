@@ -1723,8 +1723,11 @@ export async function purgeExpiredLocalProjects(
   options: {
     retainPendingOrganization?: boolean;
     deferPendingProjectIds?: ReadonlySet<string>;
+    /** The discovery generation that still owns these irreversible deletes. */
+    isCurrent?: () => boolean;
   } = {}
 ): Promise<string[]> {
+  if (options.isCurrent && !options.isCurrent()) return [];
   const organizations = await listLocalProjectOrganizations();
   const expired = [...organizations.entries()]
     .filter(
@@ -1736,11 +1739,13 @@ export async function purgeExpiredLocalProjects(
     .map(([projectId]) => projectId);
   const purged: string[] = [];
   for (const projectId of expired) {
+    if (options.isCurrent && !options.isCurrent()) break;
     if (
       await deleteLocalProjectWhen(
         projectId,
         (record) =>
           Boolean(
+            (!options.isCurrent || options.isCurrent()) &&
             record &&
             (!record.mirrorPending ||
               !options.deferPendingProjectIds?.has(projectId)) &&
@@ -1892,14 +1897,15 @@ export function projectRebuildInputs(document: ProjectDocument): unknown {
 }
 
 /**
- * The rebuild inputs that decide geometry: drawing sheets and the undo
- * history are rebuild inputs of the document (an edit to them is real
- * work), but no mesh depends on them — and every drawing edit also records
- * an undo entry.
+ * The rebuild inputs that decide geometry: drawing sheets, reference images
+ * and the undo history are rebuild inputs of the document (an edit to them
+ * is real work), but no mesh depends on them — and every such edit also
+ * records an undo entry.
  */
 function projectGeometryInputs(document: ProjectDocument): unknown {
   const {
     drawings: _drawings,
+    referenceImages: _referenceImages,
     editHistory: _editHistory,
     ...inputs
   } = projectRebuildInputs(document) as Partial<ProjectDocument>;

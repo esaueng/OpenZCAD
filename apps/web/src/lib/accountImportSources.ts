@@ -3,6 +3,7 @@ import { CommandManager } from '@openzcad/command-system';
 import {
   documentNodesWithHistory,
   importedSourceReferenceOf,
+  referenceImagesWithHistory,
   type ProjectDocument
 } from '@openzcad/shared';
 import {
@@ -66,6 +67,13 @@ export function applyAccountSourceArchives(
         artifactId
       );
     }
+  }
+  for (const image of referenceImagesWithHistory(acknowledged)) {
+    if (!image.artifactId.startsWith('artifact_local_'))
+      archived.set(
+        `reference-image:${image.source.checksumSha256}:${image.source.logicalBytes}`,
+        image.artifactId
+      );
   }
   const manager = new CommandManager(current);
   for (const source of listLocalOnlyImportSources(current)) {

@@ -6,6 +6,7 @@ import {
   isHistoryCommandKinds,
   MAX_UNDO_BYTES,
   MAX_UNDO_STEPS,
+  referenceImagesWithHistory,
   type DocumentChange,
   type DocumentHistory,
   type DocumentHistoryEntry,
@@ -267,7 +268,8 @@ export function normalizeDocumentHistory(
 }
 
 export interface ImportedSourceArchiveIdentity {
-  kind: 'step-source' | 'mesh-payload';
+  /** A STEP source, an imported mesh's payload, or an I05 image's picture. */
+  kind: 'step-source' | 'mesh-payload' | 'reference-image';
   checksumSha256: string;
   logicalBytes: number;
 }
@@ -276,7 +278,8 @@ export interface ImportedSourceArchiveIdentity {
 export function archiveHistorySources(
   document: ProjectDocument,
   replacement?: {
-    featureId: string;
+    /** The owning feature; null for a reference image, named by `source`. */
+    featureId: string | null;
     artifactId: string;
     source?: ImportedSourceArchiveIdentity;
   }
@@ -286,6 +289,17 @@ export function archiveHistorySources(
   ): ImportedSourceArchiveIdentity | undefined => {
     if (!value || typeof value !== 'object') return;
     const data = value as Record<string, unknown>;
+    // An I05 image record, wherever it sits: the section, an undo snapshot
+    // or a `reference-image.add` command.
+    if (typeof data.imageId === 'string') {
+      return isImportedSourceReference(data.source)
+        ? {
+            kind: 'reference-image',
+            checksumSha256: data.source.checksumSha256,
+            logicalBytes: data.source.logicalBytes
+          }
+        : undefined;
+    }
     const kind =
       data.featureKind === 'imported-step'
         ? 'step-source'
@@ -324,6 +338,16 @@ export function archiveHistorySources(
       sources.add(sourceKey);
       local.set(artifactId, sources);
     } else archived.set(sourceKey, artifactId);
+  }
+  for (const image of referenceImagesWithHistory(document)) {
+    const source = identity(image);
+    if (!source || typeof image.artifactId !== 'string') continue;
+    const sourceKey = key(source);
+    if (image.artifactId.startsWith('artifact_local_')) {
+      const sources = local.get(image.artifactId) ?? new Set<string>();
+      sources.add(sourceKey);
+      local.set(image.artifactId, sources);
+    } else archived.set(sourceKey, image.artifactId);
   }
   if (replacement) {
     // Legacy calls infer the current source, or the sole retained source when

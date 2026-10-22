@@ -5,7 +5,8 @@ import reactHooks from "eslint-plugin-react-hooks";
 
 export default tseslint.config(
   {
-    ignores: ["dist/**", "**/dist/**", "coverage/**", ".wrangler/**", "node_modules/**"]
+    // packages/mls/pkg is wasm-bindgen output, rebuilt by packages/mls/build.sh.
+    ignores: ["dist/**", "**/dist/**", "coverage/**", ".wrangler/**", "node_modules/**", "packages/mls/pkg/**"]
   },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked.map((config) => ({
@@ -22,6 +23,18 @@ export default tseslint.config(
         fetch: "readonly",
         process: "readonly",
         setTimeout: "readonly"
+      }
+    }
+  },
+  {
+    // Node scripts that also pass closures to the page (window).
+    files: ["packages/mls/browser/*.mjs"],
+    languageOptions: {
+      globals: {
+        URL: "readonly",
+        console: "readonly",
+        process: "readonly",
+        window: "readonly"
       }
     }
   },

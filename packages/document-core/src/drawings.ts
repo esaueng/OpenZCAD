@@ -1,6 +1,9 @@
 import {
   assertDrawingSet,
   deepClone,
+  drawingAnnotationEdges,
+  type DrawingAnnotation,
+  type DrawingAnnotationId,
   drawingPaperMm,
   drawingViewAlignment,
   projectedViewSide,
@@ -57,6 +60,25 @@ export interface DrawingViewUpdateInput {
 export interface DrawingViewDeleteInput {
   sheetId: DrawingSheetId;
   viewId: DrawingViewId;
+}
+
+export interface DrawingAnnotationAddInput {
+  sheetId: DrawingSheetId;
+  annotation: DrawingAnnotation;
+}
+
+/**
+ * Replaces an annotation whole — a move, a text or format edit, or a re-pick
+ * of its references — so the command carries everything it sets.
+ */
+export interface DrawingAnnotationUpdateInput {
+  sheetId: DrawingSheetId;
+  annotation: DrawingAnnotation;
+}
+
+export interface DrawingAnnotationDeleteInput {
+  sheetId: DrawingSheetId;
+  annotationId: DrawingAnnotationId;
 }
 
 function withDrawings(
@@ -336,6 +358,14 @@ export function deleteDrawingView(
     const sheet = sheets[sheetIndex(sheets, input.sheetId)]!;
     if (!sheet.views.some((view) => view.viewId === input.viewId))
       throw new Error(`Drawing view ${input.viewId} not found.`);
+    // Its dimensions and notes go with it: they measure and sit in it.
+    if (sheet.annotations) {
+      const kept = sheet.annotations.filter(
+        (annotation) => annotation.viewId !== input.viewId
+      );
+      if (kept.length > 0) sheet.annotations = kept;
+      else delete sheet.annotations;
+    }
     // Projected views of a deleted base stay where they are, now free.
     sheet.views = sheet.views
       .filter((view) => view.viewId !== input.viewId)
@@ -344,6 +374,98 @@ export function deleteDrawingView(
         const { parentViewId: _base, ...free } = view;
         return free;
       });
+    return sheets;
+  });
+}
+
+/**
+ * A new reference must name an edge of a body its view draws: the picker
+ * only offers those, and a replayed or hand-made command must not bind a
+ * dimension to geometry its view does not show. References an edit keeps
+ * unchanged are not checked again — a body later removed from the view
+ * leaves them broken, which the sheet shows, rather than refusing the edit.
+ */
+function assertAnnotationEdgesInView(
+  sheet: DrawingSheet,
+  annotation: DrawingAnnotation,
+  previous?: DrawingAnnotation
+): void {
+  const edges = drawingAnnotationEdges(annotation);
+  if (edges.length === 0) return;
+  const view = sheet.views.find((entry) => entry.viewId === annotation.viewId);
+  if (!view)
+    throw new Error(`Drawing view ${String(annotation.viewId)} not found.`);
+  const kept = new Set(
+    (previous ? drawingAnnotationEdges(previous) : []).map((edge) =>
+      JSON.stringify(edge)
+    )
+  );
+  for (const edge of edges) {
+    if (kept.has(JSON.stringify(edge))) continue;
+    if (!view.bodyIds.includes(edge.bodyId))
+      throw new Error(`Body ${edge.bodyId} is not drawn in that view.`);
+  }
+}
+
+export function addDrawingAnnotation(
+  document: ProjectDocument,
+  input: DrawingAnnotationAddInput
+): ProjectDocument {
+  return withDrawings(document, (sheets) => {
+    const sheet = sheets[sheetIndex(sheets, input.sheetId)]!;
+    const annotations = sheet.annotations ?? [];
+    if (
+      annotations.some(
+        (entry) => entry.annotationId === input.annotation.annotationId
+      )
+    )
+      throw new Error(
+        `Drawing annotation ${input.annotation.annotationId} already exists.`
+      );
+    assertAnnotationEdgesInView(sheet, input.annotation);
+    sheet.annotations = [...annotations, deepClone(input.annotation)];
+    return sheets;
+  });
+}
+
+export function updateDrawingAnnotation(
+  document: ProjectDocument,
+  input: DrawingAnnotationUpdateInput
+): ProjectDocument {
+  return withDrawings(document, (sheets) => {
+    const sheet = sheets[sheetIndex(sheets, input.sheetId)]!;
+    const annotations = sheet.annotations ?? [];
+    const index = annotations.findIndex(
+      (entry) => entry.annotationId === input.annotation.annotationId
+    );
+    if (index < 0)
+      throw new Error(
+        `Drawing annotation ${input.annotation.annotationId} not found.`
+      );
+    const previous = annotations[index]!;
+    if (previous.viewId !== input.annotation.viewId)
+      throw new Error('An annotation cannot move to another view.');
+    assertAnnotationEdgesInView(sheet, input.annotation, previous);
+    annotations[index] = deepClone(input.annotation);
+    sheet.annotations = annotations;
+    return sheets;
+  });
+}
+
+export function deleteDrawingAnnotation(
+  document: ProjectDocument,
+  input: DrawingAnnotationDeleteInput
+): ProjectDocument {
+  return withDrawings(document, (sheets) => {
+    const sheet = sheets[sheetIndex(sheets, input.sheetId)]!;
+    const annotations = sheet.annotations ?? [];
+    if (!annotations.some((entry) => entry.annotationId === input.annotationId))
+      throw new Error(`Drawing annotation ${input.annotationId} not found.`);
+    const kept = annotations.filter(
+      (entry) => entry.annotationId !== input.annotationId
+    );
+    if (kept.length > 0) sheet.annotations = kept;
+    else delete sheet.annotations;
     return sheets;
   });
 }

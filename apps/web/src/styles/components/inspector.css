@@ -979,3 +979,45 @@ fieldset.field > legend {
   accent-color: var(--color-accent);
   cursor: ew-resize;
 }
+
+/* I05 two-point scale: the picture at card width, clicked to place two
+   markers a known distance apart. */
+.reference-image-calibration {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.reference-image-calibration > legend {
+  margin: 0 0 5px;
+  padding: 0;
+  font-size: var(--fs-xs);
+}
+
+.reference-image-pick {
+  position: relative;
+  line-height: 0;
+}
+
+.reference-image-pick > img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-sm);
+  cursor: crosshair;
+}
+
+.reference-image-marker {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border: 2px solid var(--color-on-accent);
+  border-radius: 50%;
+  background: var(--color-accent);
+  pointer-events: none;
+}

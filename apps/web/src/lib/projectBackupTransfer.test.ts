@@ -3,6 +3,7 @@ import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import {
+  addReferenceImage,
   createCheckpoint,
   createProjectDocument,
   importMeshBody,
@@ -13,7 +14,8 @@ import {
   encodeImportedMeshPayload,
   toUserId,
   toArtifactId,
-  type ArtifactRecord
+  type ArtifactRecord,
+  type ReferenceImageId
 } from '@openzcad/shared';
 import { api } from './api';
 import {
@@ -308,4 +310,47 @@ it('uses an older backup payload file when the local source cache misses', async
   expect(backup.sources).toHaveLength(1);
   expect(backup.sources![0]!.sha256).toBe(ref.checksumSha256);
   expect(fetch).not.toHaveBeenCalled();
+});
+
+it('carries reference-image pictures as sources and refuses a backup without them', async () => {
+  const bytes = new Uint8Array([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9
+  ]);
+  const ref = await putSourceBlob(bytes);
+  const document = addReferenceImage(
+    createProjectDocument('Traced', toUserId('owner')),
+    {
+      image: {
+        imageId: 'rimg_backup' as ReferenceImageId,
+        name: 'Plan',
+        contentType: 'image/png',
+        source: ref,
+        artifactId: toArtifactId('artifact_local_plan'),
+        pixelWidth: 4,
+        pixelHeight: 2,
+        plane: { type: 'canonical', plane: 'XY', offset: 0 },
+        center: { u: 0, v: 0 },
+        rotationDeg: 0,
+        width: 40,
+        opacity: 0.5
+      }
+    }
+  );
+  await saveLocalProject(document);
+  const text = await createProjectBackup(document, false);
+  const backup = await parseProjectBackup(text);
+  expect(backup.sources?.map((source) => source.sha256)).toEqual([
+    ref.checksumSha256
+  ]);
+  // Restored on a device that never saw the picture, the bytes come along.
+  const copy = importProjectCopy(backup, toUserId('new-owner'));
+  globalThis.indexedDB = new IDBFactory();
+  await saveImportedProject(copy);
+  expect(await loadSourceBlob(ref.checksumSha256)).toEqual(bytes);
+  // A backup whose picture is missing would restore a blank image: refused.
+  const stripped = JSON.parse(text) as { sources: unknown[] };
+  stripped.sources = [];
+  await expect(parseProjectBackup(JSON.stringify(stripped))).rejects.toThrow(
+    'Missing image: Plan'
+  );
 });

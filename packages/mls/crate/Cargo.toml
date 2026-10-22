@@ -1,0 +1,45 @@
+[package]
+name = "openzcad-mls"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+publish = false
+license = "Apache-2.0"
+description = "ADR-024 MLS group-key layer for OpenZCAD projects (mls-rs, RustCrypto, WASM)"
+
+# Standalone: not part of any repository workspace. `build.sh` builds it with
+# the toolchain in rust-toolchain.toml and `--locked`.
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Every MLS crate is pinned exactly (ADR-024, "Decision"). A version bump is a
+# reviewed change of its own, never a range update.
+[dependencies]
+mls-rs = { version = "=0.56.0", default-features = false, features = [
+  "std",
+  "by_ref_proposal",
+  "custom_proposal",
+  "self_remove_proposal",
+  "psk",
+  "tree_index",
+] }
+mls-rs-core = { version = "=0.27.0", default-features = false, features = ["std"] }
+mls-rs-codec = "=0.7.0"
+mls-rs-crypto-rustcrypto = { version = "=0.22.1", features = ["browser"] }
+# Must equal the wasm-bindgen CLI version build.sh checks.
+wasm-bindgen = "=0.2.126"
+js-sys = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+zeroize = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+debug = false
+strip = true
