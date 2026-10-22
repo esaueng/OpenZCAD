@@ -18,6 +18,7 @@ import type {
   ProjectSharingResponse,
   UserId
 } from '@openzcad/shared';
+import { PROJECT_SHARE_LINK_TTL_SECONDS } from '@openzcad/shared';
 import { COLLABORATION_LABELS } from '../lib/collaborationLabels';
 import {
   buildShareLinkUrl,
@@ -116,6 +117,11 @@ function expiryLabel(expiresAt: number): string {
     return `${Math.ceil(remaining / 86_400_000)}d`;
   }
   return `${Math.ceil(remaining / 3_600_000)}h`;
+}
+
+function shareLinkExpiryLabel(createdAt: number): string {
+  const remaining = expiryLabel(createdAt + PROJECT_SHARE_LINK_TTL_SECONDS);
+  return remaining === 'expired' ? 'Expired' : `Expires in ${remaining}`;
 }
 
 function activeLease(
@@ -494,6 +500,10 @@ export function ProjectSharingDialog({
                   <span className="sharing-tag">
                     Opens in Tweak: parameters and export, no account needed.
                   </span>
+                  <span className="sharing-tag">
+                    Links expire 30 days after creation. Create a new link to
+                    share again.
+                  </span>
                 </div>
                 <button
                   type="button"
@@ -562,6 +572,8 @@ export function ProjectSharingDialog({
                       </span>
                       <span className="sharing-member-id">
                         Link created {createdLabel(shareLink.createdAt)}
+                        {' · '}
+                        {shareLinkExpiryLabel(shareLink.createdAt)}
                       </span>
                       <span className="sharing-kind">
                         {LINK_MODE_LABELS[shareLink.mode]}

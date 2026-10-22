@@ -143,6 +143,32 @@ describe('project share links (persistence)', () => {
     ).resolves.toBeNull();
   });
 
+  it('refuses a link at its fixed expiration boundary', async () => {
+    const service = new InMemoryPersistenceService();
+    const owner = toUserId('user_share_expiry');
+    const project = await service.createProject(owner, { name: 'Expires' });
+    const createdAt = Math.floor(Date.now() / 1000);
+    await service.createProjectShareLink(owner, project.document.projectId, {
+      shareLinkId: 'share_expiry',
+      mode: 'view',
+      tokenHash: 'hash_expiry',
+      createdAt
+    });
+    const clock = vi.spyOn(Date, 'now');
+    try {
+      clock.mockReturnValue((createdAt + 30 * 24 * 60 * 60 - 1) * 1000);
+      await expect(
+        service.loadSharedProjectByTokenHash('hash_expiry')
+      ).resolves.not.toBeNull();
+      clock.mockReturnValue((createdAt + 30 * 24 * 60 * 60) * 1000);
+      await expect(
+        service.loadSharedProjectByTokenHash('hash_expiry')
+      ).resolves.toBeNull();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('drops share links when their project is destroyed', async () => {
     const service = new InMemoryPersistenceService();
     const owner = toUserId('user_share_destroy');
@@ -196,7 +222,7 @@ describe('project share links (persistence)', () => {
     ).resolves.not.toBeNull();
   });
 
-  it('authorizes the D1 shared reads purely by unrevoked token hash', async () => {
+  it('authorizes the D1 shared reads by unrevoked, unexpired token hash', async () => {
     const statements: Array<{ query: string; bindings: unknown[] }> = [];
     const prepare = vi.fn((query: string) => ({
       bind: (...bindings: unknown[]) => {
@@ -229,7 +255,11 @@ describe('project share links (persistence)', () => {
     );
     expect(assetRead?.query).toContain('l.revoked_at IS NULL');
     expect(assetRead?.query).toContain('a.id = ?');
-    expect(assetRead?.bindings).toEqual(['hash_d1', 'asset_d1']);
+    expect(assetRead?.bindings).toEqual([
+      'hash_d1',
+      expect.any(Number),
+      'asset_d1'
+    ]);
   });
 
   it('rechecks D1 link authorization when serving a referenced STEP artifact', async () => {
@@ -264,7 +294,7 @@ describe('project share links (persistence)', () => {
         first: async () => {
           queries.push(query);
           if (query.includes('FROM project_share_links l')) {
-            expect(bindings).toEqual(['hash_source']);
+            expect(bindings).toEqual(['hash_source', expect.any(Number)]);
             return {
               mode: 'tweak',
               project_id: base.projectId,
@@ -273,7 +303,11 @@ describe('project share links (persistence)', () => {
               document_object_id: null
             };
           }
-          expect(bindings).toEqual(['hash_source', artifactId]);
+          expect(bindings).toEqual([
+            'hash_source',
+            expect.any(Number),
+            artifactId
+          ]);
           return sourceAvailable
             ? {
                 id: artifactId,
@@ -422,8 +456,12 @@ function sharedProjectD1(document: ProjectDocument) {
   db.prepare(
     `INSERT INTO project_share_links
        (id, project_id, mode, token_hash, created_by_user_id, created_at)
-     VALUES ('share_projection', ?, 'tweak', 'hash_projection', ?, 1)`
-  ).run(document.projectId, document.ownerUserId);
+     VALUES ('share_projection', ?, 'tweak', 'hash_projection', ?, ?)`
+  ).run(
+    document.projectId,
+    document.ownerUserId,
+    Math.floor(Date.now() / 1000)
+  );
   return db;
 }
 
@@ -441,7 +479,7 @@ describe('project share links (visitor snapshot)', () => {
       shareLinkId: 'share_history',
       mode: 'tweak',
       tokenHash: 'hash_history',
-      createdAt: 1
+      createdAt: Math.floor(Date.now() / 1000)
     });
 
     const shared = await service.loadSharedProjectByTokenHash('hash_history');
