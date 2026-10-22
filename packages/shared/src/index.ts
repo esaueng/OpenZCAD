@@ -3642,6 +3642,133 @@ export interface AuthSession {
   mode: 'development' | 'email-code';
 }
 
+// --- End-to-end encryption keys (ADR-024 Phase 3) -------------------------
+// Every byte field is unpadded base64url. The Worker stores and relays these;
+// the browser makes and verifies every one of them.
+
+/** What a wrapped or sealed key is, as the Worker stores it. */
+export type E2eeWrapPurpose =
+  | 'account-key'
+  | 'account-key-approval'
+  | 'identity-key'
+  | 'unlock-target-key'
+  | 'encryption-key';
+
+export interface E2eeWrapInput {
+  purpose: E2eeWrapPurpose;
+  /** Device id, unlock target id, or `current` for the encryption key. */
+  targetId: string;
+  wrapped: string;
+}
+
+export interface E2eeWrapRecord extends E2eeWrapInput {
+  /** Device-list sequence the Worker stored it at. */
+  keySequence: number;
+}
+
+export interface E2eeSignedStatementRecord {
+  statement: string;
+  signature: string;
+}
+
+export interface E2eeDeviceListEntryRecord {
+  sequence: number;
+  entry: string;
+  signature: string;
+}
+
+export interface E2eeIdentityRecord {
+  generation: number;
+  identityKey: string;
+  createdAt: string;
+  /** Oldest first, starting at sequence 0. */
+  entries: E2eeDeviceListEntryRecord[];
+  transition: E2eeSignedStatementRecord | null;
+  wraps: E2eeWrapRecord[];
+  /** Display metadata only; live approval wraps determine read-only access. */
+  approvedDevices?: E2eeApprovedDeviceRecord[];
+}
+
+export interface E2eeApprovedDeviceRecord {
+  deviceId: string;
+  label: string;
+  approvedAt: string;
+}
+
+export interface E2eePreviousIdentityRecord {
+  generation: number;
+  identityKey: string;
+  createdAt: string;
+  /** The newest entry of that generation, for listing its devices. */
+  head: E2eeDeviceListEntryRecord;
+}
+
+export interface E2eeConfigResponse {
+  enabled: boolean;
+}
+
+export interface E2eeAccountResponse {
+  current: E2eeIdentityRecord | null;
+  /** Up to three replaced identities, newest first. */
+  previous: E2eePreviousIdentityRecord[];
+}
+
+export interface E2eeSetupRequest {
+  identityKey: string;
+  entry: string;
+  signature: string;
+  wraps: E2eeWrapInput[];
+}
+
+export interface E2eeAppendDeviceListRequest {
+  generation: number;
+  entry: string;
+  signature: string;
+  wraps: E2eeWrapInput[];
+}
+
+export interface E2eeReplaceIdentityRequest extends E2eeSetupRequest {
+  generation: number;
+  transition: E2eeSignedStatementRecord;
+}
+
+export type E2eeApprovalState =
+  | 'requested'
+  | 'responded'
+  | 'revealed'
+  | 'completed';
+
+export interface E2eeCreateApprovalRequest {
+  deviceId: string;
+  label: string;
+  signingKey: string;
+  unlockKey: string;
+  /** Present for the compare form; the scan form needs none. */
+  commitment?: string;
+}
+
+export interface E2eeApprovalRecord {
+  id: string;
+  deviceId: string;
+  label: string;
+  signingKey: string;
+  unlockKey: string;
+  commitment: string | null;
+  approverKey: string | null;
+  approverNonce: string | null;
+  deviceNonce: string | null;
+  grant: E2eeSignedStatementRecord | null;
+  state: E2eeApprovalState;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface E2eeCompleteApprovalRequest {
+  grant: E2eeSignedStatementRecord;
+  /** The account key sealed to an approved but uncertified device. */
+  sealedAccountKey?: string;
+}
+
 export interface AuthConfigResponse {
   mode: 'development' | 'email-code' | 'unconfigured';
   emailCodeEnabled: boolean;

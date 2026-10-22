@@ -324,6 +324,16 @@ import {
   watchPreloadErrors,
   STALE_CHUNK_MESSAGE
 } from './lib/staleChunk';
+import { lockAccountsExcept } from './lib/e2ee/unlockedKeys';
+import {
+  allowKeySession,
+  announceKeySessionChange,
+  blockKeySession,
+  getKeySessionRevision,
+  subscribeKeySession,
+  type KeySessionEvent
+} from './lib/e2ee/keySession';
+import type { DeviceKeySignOutChoice } from './lib/e2ee/signOut';
 import { watchBuildVersion } from './lib/buildVersionWatch';
 import { commandOutcomeMessage } from './lib/commandOutcome';
 import { tintPreviewResultBodies } from './lib/previewBodyTint';
@@ -2892,6 +2902,75 @@ export function App() {
   });
   const sessionRef = useRef(session);
   sessionRef.current = session;
+  const keySessionEventRef = useRef<(event: KeySessionEvent) => void>(() => {});
+  const keySessionListenerMountedRef = useRef(false);
+  keySessionEventRef.current = (event) => {
+    if (
+      event.phase === 'prepare' ||
+      event.phase === 'ready' ||
+      event.phase === 'blocked' ||
+      (!event.remote && event.phase !== 'retry') ||
+      !cloudFunctionsEnabledRef.current
+    )
+      return;
+    const observed = sessionRef.current;
+    const revision = event.revision;
+    // The notice never grants access or identifies a new account. Only a fresh
+    // server read may reopen keys, and an intervening notice/login wins.
+    void Promise.resolve()
+      .then(() => api.session())
+      .then((active) => {
+        if (
+          !keySessionListenerMountedRef.current ||
+          getKeySessionRevision() !== revision ||
+          sessionRef.current !== observed ||
+          !cloudFunctionsEnabledRef.current
+        )
+          return;
+        if (active && observed && active.userId === observed.userId) {
+          sessionRef.current = active;
+          setSession(active);
+          allowKeySession(revision);
+        } else {
+          cloudProjectAutosaveRef.current?.closeProject();
+          if (!active) organizationBackground.confirmSignedOut();
+          endCloudSettingsSession();
+          setCloudAvailable(false);
+          setCloudProjectIds(new Set());
+          setAccountProjectListReached(false);
+          if (active)
+            setSettingsMessage(
+              'The account changed in another tab. Reconnect to continue.'
+            );
+        }
+      })
+      .catch(() => {
+        if (
+          keySessionListenerMountedRef.current &&
+          getKeySessionRevision() === revision
+        )
+          setSettingsMessage(
+            'Encryption keys are locked. Refresh the cloud connection to check this session.'
+          );
+      });
+  };
+  useEffect(() => {
+    keySessionListenerMountedRef.current = true;
+    const unsubscribe = subscribeKeySession((event) =>
+      keySessionEventRef.current(event)
+    );
+    return () => {
+      keySessionListenerMountedRef.current = false;
+      unsubscribe();
+    };
+  }, []);
+  // End-to-end encryption keys unlocked in this page belong to one session:
+  // however it ends (sign-out, expiry, offline mode, account deletion, or a
+  // different account), no other account's keys stay in memory.
+  const sessionUserId = session?.userId ?? null;
+  useEffect(() => {
+    lockAccountsExcept(sessionUserId);
+  }, [sessionUserId]);
   useEffect(() => {
     const online = () => organizationBackground.resume();
     const changed = (event: StorageEvent) => {
@@ -5360,6 +5439,7 @@ export function App() {
                 status: 'unavailable' as const
               }
         ]);
+        const keySessionRevision = getKeySessionRevision();
         let sessionLookupFailed = false;
         const activeSession = bootCloudFunctionsEnabledRef.current
           ? await timedAsync('startup.session', () =>
@@ -5462,8 +5542,12 @@ export function App() {
         setCloudProjectIds(listed.cloudProjectIds);
         setAccountProjectListReached(listed.remoteReached);
         setCloudAvailable(canUseCloud);
-        sessionRef.current = activeSession;
-        setSession(activeSession);
+        if (getKeySessionRevision() === keySessionRevision) {
+          if (activeSession) allowKeySession(keySessionRevision);
+          else blockKeySession();
+          sessionRef.current = activeSession;
+          setSession(activeSession);
+        }
         setAuthConfig(currentAuth.config);
         setAuthConfigStatus(currentAuth.status);
         if (remoteSettings) {
@@ -9082,6 +9166,7 @@ export function App() {
     if (!cloudFunctionsEnabledRef.current) {
       return;
     }
+    const keySessionRevision = getKeySessionRevision();
     setAuthConfigStatus('loading');
     void api
       .health()
@@ -9094,7 +9179,10 @@ export function App() {
         .catch(() => ({ config: null, status: 'unavailable' as const })),
       api.session().catch(() => null)
     ]);
-    if (!cloudFunctionsEnabledRef.current) {
+    if (
+      !cloudFunctionsEnabledRef.current ||
+      getKeySessionRevision() !== keySessionRevision
+    ) {
       return;
     }
     setAuthConfig(nextAuth.config);
@@ -9103,6 +9191,7 @@ export function App() {
     sessionRef.current = activeSession;
     setSession(activeSession);
     if (!activeSession) {
+      blockKeySession();
       endCloudSettingsSession();
       setSettingsMessage(
         nextAuth.status === 'ready'
@@ -9113,6 +9202,7 @@ export function App() {
       );
       return;
     }
+    allowKeySession(keySessionRevision);
     setCollaborationRollout(DISABLED_COLLABORATION_ROLLOUT);
     try {
       const [remoteSettings, collaborationCapabilities] = await Promise.all([
@@ -9308,6 +9398,7 @@ export function App() {
   }
 
   async function activateCloudSession(activeSession: AuthSession) {
+    const keySessionRevision = announceKeySessionChange();
     organizationBackground.begin(activeSession.userId);
     const [remoteSettings, listed, collaborationCapabilities] =
       await Promise.all([
@@ -9317,8 +9408,11 @@ export function App() {
           .collaborationCapabilities()
           .catch(() => DISABLED_COLLABORATION_ROLLOUT)
       ]);
+    if (getKeySessionRevision() !== keySessionRevision)
+      throw new Error('The signed-in account changed. Reconnect to continue.');
     sessionRef.current = activeSession;
     setSession(activeSession);
+    allowKeySession(keySessionRevision);
     accountSettingsRef.current = remoteSettings;
     setAccountSettings(remoteSettings);
     setCollaborationRollout(collaborationCapabilities);
@@ -9438,20 +9532,92 @@ export function App() {
     }
   }
 
-  async function handleLogout() {
+  async function handleLogout(choice: DeviceKeySignOutChoice) {
+    const departingSession = sessionRef.current;
+    const isCurrentSession = () =>
+      departingSession !== null &&
+      departingSession.userId === choice.userId &&
+      sessionRef.current === departingSession;
+    if (!isCurrentSession()) return;
     organizationBackground.cancel();
     setSettingsBusy(true);
     setSettingsMessage('Signing out…');
     try {
       // Both queues drain before the session goes away, or their contents
       // become unsendable the moment the cookie does.
-      await cloudProjectAutosaveRef.current?.flushPending();
-      cloudProjectAutosaveRef.current?.closeProject();
-      await cloudSettingsAutosaveRef.current?.flushPending();
-      await api.logout();
+      const { signOutAfterSaving } = await import('./lib/e2ee/signOut');
+      await signOutAfterSaving({
+        userId: choice.userId,
+        keepDevice: choice.keepDevice,
+        isCurrentSession,
+        savePending: async () => {
+          await cloudProjectAutosaveRef.current?.flushPending();
+          if (!isCurrentSession()) {
+            throw new Error(
+              'The signed-in account changed. Try signing out again.'
+            );
+          }
+          await cloudSettingsAutosaveRef.current?.flushPending();
+        },
+        revokeSession: async () => {
+          const controller = cloudProjectAutosaveRef.current;
+          const projectId = managerRef.current?.document.projectId;
+          const wasHalted = controller?.isHalted ?? false;
+          controller?.closeProject();
+          try {
+            await api.logout();
+          } catch (error) {
+            const canResume = () =>
+              Boolean(
+                controller &&
+                controller === cloudProjectAutosaveRef.current &&
+                cloudFunctionsEnabledRef.current &&
+                departingSession &&
+                sessionRef.current === departingSession &&
+                !shareSessionRef.current &&
+                projectId &&
+                managerRef.current?.document.projectId === projectId &&
+                managerRef.current.document.ownerUserId ===
+                  departingSession.userId &&
+                accountDocumentUnavailableProjectIdRef.current !== projectId
+              );
+            if (canResume() && projectId && wasHalted) {
+              // Reopening must not clear a pre-existing conflict/refusal.
+              setStatus(
+                'Cloud autosave remains paused after sign-out failed. Reopen this project to retry syncing.'
+              );
+            } else if (canResume() && projectId) {
+              try {
+                const durable = await loadLocalProject(projectId);
+                const baseline = remoteVersionsRef.current.get(projectId);
+                if (canResume() && baseline !== undefined) {
+                  controller!.openProject(projectId, baseline);
+                  if (
+                    durable &&
+                    !controller!.hasPendingChanges &&
+                    durable.version > baseline
+                  ) {
+                    controller!.schedule(durable);
+                  }
+                }
+              } catch {
+                setStatus(
+                  'Cloud autosave could not resume after sign-out failed. Reopen this project to retry syncing.'
+                );
+              }
+            }
+            throw error;
+          }
+        }
+      });
+      if (!isCurrentSession()) return;
       organizationBackground.confirmSignedOut();
+      // The server session is gone: no unlocked key outlives it, even if the
+      // local cleanup below fails.
+      lockAccountsExcept(null);
       clearAssistantHistory();
       const listed = await loadProjectSummaries(null);
+      if (!isCurrentSession()) return;
       remoteVersionsRef.current.clear();
       accountDocumentUnavailableProjectIdRef.current = null;
       endCloudSettingsAutosave();
@@ -9465,6 +9631,7 @@ export function App() {
       } catch {
         baselinesCleared = false;
       }
+      if (!isCurrentSession()) return;
       sessionRef.current = null;
       setSession(null);
       accountSettingsRef.current = null;
@@ -9498,6 +9665,7 @@ export function App() {
     scope: AccountDeletionScope,
     confirmation: string
   ) {
+    const departingSession = sessionRef.current;
     setSettingsBusy(true);
     setSettingsMessage(
       scope === 'projects'
@@ -9520,16 +9688,30 @@ export function App() {
       }
       await cloudSettingsAutosaveRef.current?.flushPending();
 
-      const deleted = await api.deleteAccountData(scope, confirmation);
+      if (sessionRef.current !== departingSession)
+        throw new Error('The signed-in account changed. Try deleting again.');
+      const erase = () => api.deleteAccountData(scope, confirmation);
+      const deleted =
+        scope === 'projects'
+          ? await erase()
+          : await (
+              await import('./lib/e2ee/accountErasure')
+            ).eraseAccountWithKeyCleanup({
+              userId: departingSession?.userId ?? null,
+              isCurrentSession: () => sessionRef.current === departingSession,
+              erase,
+              onSignedOut: () => {
+                endCloudSettingsSession();
+                projectController?.closeProject();
+              }
+            });
       if (deleted.signedOut) {
+        if (sessionRef.current !== null) return;
         organizationBackground.confirmSignedOut();
         projectController?.closeProject();
         const listed = await loadProjectSummaries(null);
+        if (sessionRef.current !== null) return;
         remoteVersionsRef.current.clear();
-        // The successful response invalidated the browser cookie (and the
-        // desktop proxy drops its Keychain credential). Mirror that immediately
-        // in React so no signed-in UI or account state survives the deletion.
-        endCloudSettingsSession();
         setCloudAvailable(false);
         setProjects(listed.projects);
         setCloudProjectIds(new Set());
