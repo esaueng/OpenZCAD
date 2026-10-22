@@ -79,6 +79,10 @@ The exact result also publishes session sketch geometry qualified by source proj
 
 Explicit driver release (unlink, relation removal or entity deletion) captures the current solved geometry in the same user transaction before dropping the driver. These ordinary commands replay and undo together; unchanged expression fields survive using the existing solve-application comparison. Geometry-dependent edits of linked sketches require a current exact result before planning from that view.
 
+## Objects folders
+
+Objects folders (U06, schema v34) are canonical organization in `ProjectDocument.objectFolders`: named folders with a parent (null at the top level), so they nest, and explicit body placements. A body with no placement follows the body it was made from (its feature's target, or a boolean's first operand), so a body keeps its folder while fillets, holes and booleans reshape it under new ids. Folders change only through `objectFolder.*` commands, which undo, save, replay and sync like any other and are kept out of the geometry rebuild key, so filing a body never rebuilds. Which folders are collapsed is a per-device preference, and a folder's visibility toggle hides or shows its bodies through the same per-project view state as a body's eye. Share-link snapshots keep the folders (they organize bodies whose names a visitor already sees) but, like every shared snapshot, none of their commands or undo entries. Loading validates the section as written and never rewrites it. The I02 STEP assembly hierarchy is meant to land as nested folders.
+
 ## Collaboration lifecycle
 
 After D1 resolves current project read access, the client upgrades

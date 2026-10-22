@@ -21,7 +21,10 @@ import type {
   CadPatchProposal,
   CadSelectionContext
 } from './index';
-import { sketchObjectExposesDimension } from './sketch-dimensions';
+import {
+  isSketchDimensionField,
+  sketchObjectExposesDimension
+} from './sketch-dimensions';
 
 /** Parameter declarations are capped independently of grouped feature binds. */
 const MAX_AUTO_PARAMETER_CANDIDATES = 30;
@@ -449,11 +452,7 @@ function sketchCandidates(
       return;
     }
     const data = object.data;
-    // Linked fields belong to the source edge, including in the statistics.
     if (data.projection?.mode === 'linked') return;
-    const fields = Object.keys(data).filter((field) =>
-      sketchObjectExposesDimension(data, field)
-    );
     // Independent line/arc coordinate bindings can open a previously closed
     // profile. Leave them literal until the constraint model can preserve the
     // relationship instead of merely preserving today's numeric coincidence.
@@ -461,7 +460,10 @@ function sketchCandidates(
       skippedRelational += fields.length;
       return;
     }
-    for (const field of fields) {
+    for (const field of Object.keys(data)) {
+      if (!sketchObjectExposesDimension(data, field)) {
+        continue;
+      }
       const expression = literalExpression(
         data[field as keyof SketchObjectData] as ParamValue | undefined
       );

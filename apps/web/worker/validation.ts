@@ -508,7 +508,8 @@ function parseProjectDocument(
   // every device (`normalizeDocument` fails closed on it), so refuse it here.
   if (record.drawings !== undefined) {
     const drawingsError = drawingSetError(record.drawings);
-    if (drawingsError) throw badRequest(`"document.drawings": ${drawingsError}`);
+    if (drawingsError)
+      throw badRequest(`"document.drawings": ${drawingsError}`);
   }
   // U06 folders fail closed in `normalizeDocument` the same way.
   if (record.objectFolders !== undefined) {
