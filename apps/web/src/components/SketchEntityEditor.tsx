@@ -67,6 +67,8 @@ export interface SketchCompositeSummary {
 
 interface SketchEntityEditorProps {
   data: SketchObjectData;
+  /** Authored values behind a solved read view; untouched fields keep these. */
+  authoredData?: SketchObjectData;
   /** Set when the selected line is a side of a rectangle or polygon. */
   composite?: SketchCompositeSummary | null;
   /**
@@ -321,14 +323,16 @@ function rebaseEditorFields(
 function nextData(
   data: SketchObjectData,
   values: Record<string, string>,
-  text: TextAttributes | null
+  text: TextAttributes | null,
+  displayedData: SketchObjectData = data
 ): SketchObjectData {
   const raw = rawValues(data);
+  const displayed = initialValues(displayedData);
   // A field still showing the rounded display of its own value keeps the
   // exact value: rounding every untouched coordinate on Apply would nudge
   // geometry the user never meant to change.
   const value = (key: string) =>
-    raw[key] !== undefined && values[key] === fieldText(raw[key])
+    raw[key] !== undefined && values[key] === displayed[key]
       ? raw[key]
       : coerceParamValue(values[key] ?? '');
   const kind = data.objectKind;
@@ -518,6 +522,7 @@ function geometryError(
 /** Exact-value editor for the entity selected inside an active sketch. */
 export function SketchEntityEditor({
   data,
+  authoredData,
   scope,
   units = 'mm',
   disabled = false,
@@ -578,7 +583,9 @@ export function SketchEntityEditor({
   function submit(event: FormEvent) {
     event.preventDefault();
     if (valid && !disabled && !linked) {
-      onApply(nextData(data, values, textAttrs));
+      const authored =
+        authoredData?.objectKind === data.objectKind ? authoredData : data;
+      onApply(nextData(authored, values, textAttrs, data));
     }
   }
 
@@ -807,6 +814,7 @@ export function SketchEntityEditor({
                       className="sketch-constraint-edit"
                       title={`Edit constraint: ${label}`}
                       aria-label={`Edit constraint: ${label}`}
+                      disabled={disabled}
                       onClick={(event) =>
                         onEditConstraint?.(constraintId, {
                           x: event.clientX,
@@ -824,6 +832,7 @@ export function SketchEntityEditor({
                     className="row-delete"
                     title={`Delete constraint: ${label}`}
                     aria-label={`Delete constraint: ${label}`}
+                    disabled={disabled}
                     onClick={() => onDeleteConstraint?.(constraintId)}
                   >
                     <Trash2 size={12} aria-hidden="true" />

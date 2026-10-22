@@ -1,6 +1,7 @@
 import {
   getParameterScope,
   listFeaturesInOrder,
+  resolvedSketchDocument,
   resolveParamValue
 } from '@openzcad/document-core';
 import {
@@ -107,7 +108,7 @@ function label(feature: FeatureNode): string {
 }
 
 function objectOf(document: ProjectDocument, id: string) {
-  const node = document.nodes[id];
+  const node = resolvedSketchDocument(document).nodes[id];
   return node?.kind === 'sketch-object' ? node : undefined;
 }
 

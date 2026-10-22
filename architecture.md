@@ -75,6 +75,10 @@ Objects folders (U06, schema v34) are canonical organization in `ProjectDocument
 
 Exact history reprojects linked edges at the sketch's history position, then solves its persistent relations with every linked curve held fixed. Broken links remain held at their last stored geometry. The solve uses a disposable kernel so its scratch state never enters retained history checkpoints. Projection states and ordinary geometry overrides publish together only after a successful solve; a failure blocks features using that sketch and its sketch exports. Ordinary authored values remain canonical, so current-link and cold rebuilds solve again after the browser normalizes moved linked geometry.
 
+The exact result also publishes session sketch geometry qualified by source project and document version. Sketch rendering, snapping, entity cards and profile/measurement reads use that resolved view; commands, history and saved documents retain authored data. Stale or loaded channels are discarded. Geometry-preserving edit and cache reuse may requalify the channel only after the existing canonical geometry-content equality proof.
+
+Explicit driver release (unlink, relation removal or entity deletion) captures the current solved geometry in the same user transaction before dropping the driver. These ordinary commands replay and undo together; unchanged expression fields survive using the existing solve-application comparison. Geometry-dependent edits of linked sketches require a current exact result before planning from that view.
+
 ## Collaboration lifecycle
 
 After D1 resolves current project read access, the client upgrades

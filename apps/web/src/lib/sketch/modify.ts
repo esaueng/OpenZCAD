@@ -17,6 +17,7 @@ import {
   composeCommands,
   type AnyCommand
 } from '@openzcad/command-system';
+import { resolvedSketchDocument } from '@openzcad/document-core';
 import {
   boundedArcSweepDegrees,
   boundedPolygonSides,
@@ -415,7 +416,7 @@ function sketchObject(
   if (!sketch.objectIds.includes(objectId as EntityId)) {
     return null;
   }
-  const node = document.nodes[objectId as EntityId];
+  const node = resolvedSketchDocument(document).nodes[objectId as EntityId];
   return node?.kind === 'sketch-object' ? node.data : null;
 }
 
@@ -2292,7 +2293,13 @@ export function planSketchConstructionToggle(
   sketchId: SketchId,
   objectId: string
 ): SketchModifyPlan {
-  const data = sketchObject(document, sketch, objectId);
+  // This changes profile membership only; retain the authored coordinates.
+  const node = document.nodes[objectId as EntityId];
+  const data =
+    sketch.objectIds.includes(objectId as EntityId) &&
+    node?.kind === 'sketch-object'
+      ? node.data
+      : undefined;
   if (!data) {
     return {
       status: 'refuse',
