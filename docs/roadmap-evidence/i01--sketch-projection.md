@@ -6,3 +6,7 @@ Delivered: sketch projection with a linked/unlinked choice (research-audit Stage
 Remaining: silhouette projection of curved faces, spline and ellipse edge projection, and offsetting a body edge chain into a sketch.
 
 Constrained ordinary geometry now follows refreshed linked projections during exact history rebuilds. Every linked entity stays fixed, including current and broken links at their retained positions; only a successful solve publishes overrides. Unsatisfied relations refuse dependent features and affected exports without partial projection write-back (`test/sketch-projection-constraints.test.ts`). Cold rebuild, undo, replay, verified edge lineage, exact-volume and SVG/DXF export regressions cover the lifecycle.
+
+Solved ordinary neighbours also reach the sketch viewport through a project/version-qualified session view, so entity cards, endpoint snaps, point measurements and closed-profile picks agree with the rebuilt solid and exports. The view preserves authored values/history, is omitted from persistence, and is retained across geometry-preserving edits only after canonical geometry equivalence is proved. `test/e2e/sketch-projection-constraints.spec.ts` checks these reads after resize and reopen without a manual solve.
+
+Unlinking the last projection retains the solved shape in one undoable, replayable transaction; driver releases keep unchanged typed expressions. Exact regressions cover 576 volume after release, rollback without partial writes, undo/redo, cold replay/reopen/export, and an independent typed-height edit producing 672 volume.
