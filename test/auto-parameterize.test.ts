@@ -426,7 +426,9 @@ describe('assistant auto-parameterization', () => {
       (operation) => operation.kind === 'set_sketch_dimension'
     );
     expect(
-      bindings.some((operation) => linkedIds.some((id) => id === operation.objectId))
+      bindings.some((operation) =>
+        linkedIds.some((id) => id === operation.objectId)
+      )
     ).toBe(false);
     expect(
       bindings.some(
@@ -443,13 +445,15 @@ describe('assistant auto-parameterization', () => {
     for (const id of linkedIds)
       expect(applied.nodes[id]).toEqual(document.nodes[id]);
     expect(listParameters(applied).length).toBeGreaterThan(5);
-    expect(applied.nodes[sketch.objectIds[3]!]).toMatchObject({
-      data: {
-        radiusX: expect.any(String),
-        radiusY: expect.any(String),
-        projection: { mode: 'unlinked' }
-      }
-    });
+    const unlinked = applied.nodes[sketch.objectIds[3]!];
+    if (
+      unlinked?.kind !== 'sketch-object' ||
+      unlinked.data.objectKind !== 'ellipse'
+    )
+      throw new Error('Expected the unlinked ellipse');
+    expect(typeof unlinked.data.radiusX).toBe('string');
+    expect(typeof unlinked.data.radiusY).toBe('string');
+    expect(unlinked.data.projection).toEqual({ mode: 'unlinked' });
     // Linked lines must not inflate the warning about editable relational fields.
     expect(proposal.assumptions.join(' ')).not.toMatch(
       /Line and arc coordinates/
