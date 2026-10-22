@@ -25,7 +25,12 @@ import {
   assertSketchProvenance,
   assertFeatureProfileProvenance
 } from './sketch-provenance-validation';
-export { assertSketchProvenance } from './sketch-provenance-validation';
+export {
+  assertSketchProvenance,
+  assertLegacySketchConversionQualification,
+  type LegacySketchConversionQualification,
+  type LegacySketchNumericGeometry
+} from './sketch-provenance-validation';
 import {
   assertSketchBoundaryDeletion,
   assertSketchPromotionMemberUpdate,
@@ -1458,7 +1463,10 @@ export function updateSketch(
       throw new Error(`Sketch ${input.sketchId} has no profile object.`);
     }
     assertSketchPromotionMemberUpdate(
-      document, sketch, objectNode.id, input.object
+      document,
+      sketch,
+      objectNode.id,
+      input.object
     );
     objectNode.objectKind = input.object.objectKind;
     objectNode.data = input.object;
@@ -1662,7 +1670,10 @@ export function updateSketchObject(
     input.objectId
   );
   assertSketchPromotionMemberUpdate(
-    document, sketch, input.objectId, input.data
+    document,
+    sketch,
+    input.objectId,
+    input.data
   );
   objectNode.objectKind = input.data.objectKind;
   objectNode.data = input.data;
@@ -2015,7 +2026,8 @@ export function deleteSketchConstraint(
   }
   if (
     sketch.constraints?.some(
-      (constraint) => constraint.constraintId === input.constraintId &&
+      (constraint) =>
+        constraint.constraintId === input.constraintId &&
         constraint.origin === 'promotion-structure'
     )
   )
@@ -6767,7 +6779,8 @@ export function suggestParameterQuantity(
 
 export {
   keyableImportedNodeData,
-  keyableImportedNodes
+  keyableImportedNodes,
+  canonicalTextDigest
 } from './imported-payload-key';
 
 export { resolvedSketchDocument } from './sketch-geometry';

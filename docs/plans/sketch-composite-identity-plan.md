@@ -145,6 +145,18 @@ the affine sum. The generated edges remain live parameter expressions; no
 source witness, identity matcher or geometric tolerance is rewritten to make
 mixed-unit input fit.
 
+When linked projection constraints move neighboring geometry, conversion uses
+the project/version-qualified exact read view for profile qualification while
+keeping canonical authored expressions as the mutation base. A versioned optional
+`qualification` command payload stores changed numeric analysis geometry and a
+stable authored-input digest so full replay does not need transient kernel
+state. Projection verdicts must be current or moved at live preparation.
+Overrides never become neighboring authored values, and the unchanged profile
+resolver still rejects altered loop roles, hole multiplicity and boundary tokens.
+Native-copy project identity and artifact locations are excluded from the
+content digest; source checksums and actual modeling inputs remain included.
+The digest detects stale input and does not authenticate fabricated coordinates.
+
 Legacy rectangle/polygon arrangement curves now carry the fixed
 `b1/<entity>/<rectangle|regular-polygon>/1/<count>/e/<index>` token. Indices are
 zero-based, including zero; noncanonical decimals, unknown versions and

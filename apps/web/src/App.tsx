@@ -147,6 +147,7 @@ import {
 import {
   CommandManager,
   commandFactories,
+  prepareLegacySketchConversion,
   duplicateFeatureCommands,
   duplicateFeatureRefusal,
   isParameterRetype,
@@ -15683,11 +15684,13 @@ export function App() {
     setSketchEditError(null);
     setSketchDiagnosticPoints([]);
     try {
-      const command = commandFactories.convertLegacySketchObject({
-        sketchId,
-        sourceObjectId,
-        expectedSource: structuredClone(source.data)
-      });
+      const command = commandFactories.convertLegacySketchObject(
+        prepareLegacySketchConversion(base, {
+          sketchId,
+          sourceObjectId,
+          expectedSource: structuredClone(source.data)
+        })
+      );
       command.validate(base);
       const prospective = command.apply(base);
       const outcome = await geometry.solveSketch(prospective, sketchId);

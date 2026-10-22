@@ -22,10 +22,16 @@ import {
   findSketch,
   getExpressionDimensions,
   getParameterScope,
+  keyableImportedNodes,
+  canonicalTextDigest,
   listFeaturesInOrder,
+  resolvedSketchDocument,
   resolveParamValue,
   validateSketchConstraint,
-  assertSketchProvenance
+  assertSketchProvenance,
+  assertLegacySketchConversionQualification,
+  type LegacySketchConversionQualification,
+  type LegacySketchNumericGeometry
 } from '@openzcad/document-core';
 import {
   computeSketchProfileAnalysis,
@@ -39,6 +45,8 @@ export interface LegacySketchConversionInput {
   sourceObjectId: EntityId;
   /** UI previews can bind the command to their exact authored source. */
   expectedSource?: SketchObjectData;
+  /** Captured exact read geometry for qualification, never authored writes. */
+  qualification?: LegacySketchConversionQualification;
   ids?: {
     promotionId: string;
     /** Preallocated up to the polygon cap; only the source's count is used. */
@@ -94,6 +102,233 @@ export function releaseSketchPromotionStructure(
 
 function refuse(message: string): never {
   throw new Error(`Cannot convert to editable edges: ${message}`);
+}
+
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === 'object')
+    return Object.fromEntries(
+      Object.entries(value)
+        // Native copies rebind artifact locations and the project identity;
+        // source checksums, modeling identities and all geometry inputs remain.
+        .filter(
+          ([key, entry]) =>
+            entry !== undefined &&
+            !['artifactId', 'storage', 'objectKey'].includes(key) &&
+            !(
+              key === 'projectId' &&
+              (value as { kind?: unknown }).kind === 'project'
+            )
+        )
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([key, entry]) => [key, canonical(entry)])
+    );
+  return value;
+}
+
+/** Uses the existing 64-bit content digest as a stale-input guard, not authentication. */
+function qualificationInputKey(document: ProjectDocument): string {
+  return canonicalTextDigest(
+    JSON.stringify(
+      canonical({
+        units: document.units,
+        rootNodeId: document.rootNodeId,
+        rootAssemblyId: document.rootAssemblyId,
+        activePartId: document.activePartId,
+        nodes: keyableImportedNodes(document.nodes),
+        featureOrder: document.featureOrder,
+        sketchOrder: document.sketchOrder,
+        bodyOrder: document.bodyOrder,
+        parameterOrder: document.parameterOrder,
+        assets: document.assets,
+        shaprImports: document.shaprImports,
+        shaprImportOrder: document.shaprImportOrder
+      })
+    )
+  );
+}
+
+function numericGeometryOf(
+  data: SketchObjectData,
+  resolve: (value: ParamValue) => number
+): LegacySketchNumericGeometry | undefined {
+  switch (data.objectKind) {
+    case 'line':
+      return {
+        objectKind: 'line',
+        x1: resolve(data.x1),
+        y1: resolve(data.y1),
+        x2: resolve(data.x2),
+        y2: resolve(data.y2)
+      };
+    case 'circle':
+      return {
+        objectKind: 'circle',
+        centerX: resolve(data.centerX),
+        centerY: resolve(data.centerY),
+        radius: resolve(data.radius)
+      };
+    case 'arc':
+      return {
+        objectKind: 'arc',
+        centerX: resolve(data.centerX),
+        centerY: resolve(data.centerY),
+        radius: resolve(data.radius),
+        startAngleDeg: resolve(data.startAngleDeg),
+        endAngleDeg: resolve(data.endAngleDeg)
+      };
+    case 'ellipse':
+      return {
+        objectKind: 'ellipse',
+        centerX: resolve(data.centerX),
+        centerY: resolve(data.centerY),
+        radiusX: resolve(data.radiusX),
+        radiusY: resolve(data.radiusY),
+        rotationDeg: resolve(data.rotationDeg),
+        ...(data.startParamDeg !== undefined
+          ? { startParamDeg: resolve(data.startParamDeg) }
+          : {}),
+        ...(data.endParamDeg !== undefined
+          ? { endParamDeg: resolve(data.endParamDeg) }
+          : {})
+      };
+    case 'spline':
+      return {
+        objectKind: 'spline',
+        points: data.points.map(({ x, y }) => ({
+          x: resolve(x),
+          y: resolve(y)
+        }))
+      };
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Prepare from a current exact read view. The captured numbers are replayable
+ * analysis inputs, not proof of a solver result and never an edit base.
+ */
+export function prepareLegacySketchConversion(
+  document: ProjectDocument,
+  input: Omit<LegacySketchConversionInput, 'qualification'>
+): LegacySketchConversionInput {
+  requirePromotionSchema(document);
+  const sketch = findSketch(document, input.sketchId);
+  const source = document.nodes[input.sourceObjectId];
+  if (
+    !sketch?.objectIds.includes(input.sourceObjectId) ||
+    source?.kind !== 'sketch-object' ||
+    (source.data.objectKind !== 'rectangle' &&
+      source.data.objectKind !== 'polygon')
+  )
+    refuse('select an existing legacy rectangle or regular polygon.');
+  const snapshot = deepClone({
+    ...input,
+    expectedSource: input.expectedSource ?? source.data
+  });
+  const channel = document.derived.sketchGeometry;
+  if (
+    channel &&
+    (channel.projectId !== document.projectId ||
+      channel.documentVersion !== document.version)
+  )
+    refuse('wait for current exact sketch geometry before converting.');
+  const linkedIds = sketch.objectIds.filter((id) => {
+    const node = document.nodes[id];
+    return (
+      node?.kind === 'sketch-object' && node.data.projection?.mode === 'linked'
+    );
+  });
+  if (
+    linkedIds.length &&
+    (!channel ||
+      linkedIds.some((id) => {
+        const state = document.derived.sketchProjections?.[id];
+        return state?.status !== 'current' && state?.status !== 'moved';
+      }))
+  )
+    refuse('wait for current exact sketch geometry before converting.');
+  const view = resolvedSketchDocument(document);
+  if (view === document) return snapshot;
+  const { scope } = getParameterScope(document);
+  const resolve = (value: ParamValue) =>
+    resolveParamValue(value, scope, 'conversion qualification', document.units);
+  const geometryOverrides: LegacySketchConversionQualification['geometryOverrides'] =
+    [];
+  for (const objectId of sketch.objectIds) {
+    const authored = document.nodes[objectId];
+    const read = view.nodes[objectId];
+    if (
+      authored?.kind !== 'sketch-object' ||
+      read?.kind !== 'sketch-object' ||
+      authored.data.objectKind !== read.data.objectKind
+    )
+      refuse('the exact sketch geometry has foreign or changed entity kinds.');
+    const before = numericGeometryOf(authored.data, resolve);
+    const after = numericGeometryOf(read.data, resolve);
+    if (JSON.stringify(before) === JSON.stringify(after)) continue;
+    if (!after)
+      refuse('the exact sketch geometry has unsupported entity geometry.');
+    geometryOverrides.push({ objectId, geometry: after });
+  }
+  if (!geometryOverrides.length) return snapshot;
+  const qualification: LegacySketchConversionQualification = {
+    version: 1,
+    authoredInputKey: qualificationInputKey(document),
+    geometryOverrides
+  };
+  assertLegacySketchConversionQualification(qualification);
+  return { ...snapshot, qualification };
+}
+
+function qualifiedAnalysisObjects(
+  document: ProjectDocument,
+  input: LegacySketchConversionInput,
+  objects: Map<EntityId, SketchObjectData>
+): Map<EntityId, SketchObjectData> {
+  const qualification = input.qualification;
+  if (qualification === undefined) return objects;
+  assertLegacySketchConversionQualification(qualification);
+  if (
+    !input.expectedSource ||
+    qualification.authoredInputKey !== qualificationInputKey(document)
+  )
+    refuse('the authored model changed after this conversion was qualified.');
+  if (qualification.geometryOverrides.length > objects.size)
+    refuse('the conversion qualification has foreign sketch geometry.');
+  const result = new Map(objects);
+  for (const { objectId, geometry } of qualification.geometryOverrides) {
+    const authored = objects.get(objectId as EntityId);
+    if (
+      !authored ||
+      objectId === input.sourceObjectId ||
+      authored.objectKind !== geometry.objectKind
+    )
+      refuse(
+        'the conversion qualification has foreign or changed entity kinds.'
+      );
+    if (
+      authored.objectKind === 'spline' &&
+      geometry.objectKind === 'spline' &&
+      authored.points.length !== geometry.points.length
+    )
+      refuse('the conversion qualification changed the spline point count.');
+    if (
+      authored.objectKind === 'ellipse' &&
+      geometry.objectKind === 'ellipse' &&
+      ((authored.startParamDeg !== undefined) !==
+        (geometry.startParamDeg !== undefined) ||
+        (authored.endParamDeg !== undefined) !==
+          (geometry.endParamDeg !== undefined))
+    )
+      refuse('the conversion qualification changed an ellipse range.');
+    result.set(
+      objectId as EntityId,
+      { ...authored, ...deepClone(geometry) } as SketchObjectData
+    );
+  }
+  return result;
 }
 
 function containsId(value: unknown, id: string): boolean {
@@ -312,11 +547,15 @@ export function convertLegacySketchObject(
             )
           };
         });
-  const byId = new Map(
-    sketch.objectIds.flatMap((id) => {
-      const node = document.nodes[id];
-      return node?.kind === 'sketch-object' ? [[id, node.data] as const] : [];
-    })
+  const byId = qualifiedAnalysisObjects(
+    document,
+    input,
+    new Map(
+      sketch.objectIds.flatMap((id) => {
+        const node = document.nodes[id];
+        return node?.kind === 'sketch-object' ? [[id, node.data] as const] : [];
+      })
+    )
   );
   const analysis = computeSketchProfileAnalysis(
     [...byId].map(([id, object]) => ({ id, data: object })),

@@ -1,3 +1,5 @@
+import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
+import { currentHoledPlate } from '../support/qualifiedConversionFixture';
 import type { Page } from '@playwright/test';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument, findSketch } from '@openzcad/document-core';
@@ -71,11 +73,9 @@ function fixture(kind: 'rectangle' | 'polygon', extruded = true) {
   return { manager, sketchId, sourceObjectId, sourceData, userConstraints };
 }
 
-async function enter(page: Page) {
+async function enter(page: Page, sketchName = 'Legacy outline') {
   await revealModelPanel(page, 'History');
-  await page
-    .locator('.feature-row-main', { hasText: 'Legacy outline' })
-    .click();
+  await page.locator('.feature-row-main', { hasText: sketchName }).click();
   await page
     .getByRole('button', { name: 'Edit sketch in viewport', exact: true })
     .click();
@@ -93,7 +93,11 @@ async function enter(page: Page) {
   ).toBeVisible();
 }
 
-async function open(page: Page, document: ProjectDocument) {
+async function open(
+  page: Page,
+  document: ProjectDocument,
+  sketchName = 'Legacy outline'
+) {
   await stubApi(page);
   await page.route('**/api/session', (route) =>
     route.fulfill({ status: 401, json: { error: 'Not signed in' } })
@@ -121,7 +125,7 @@ async function open(page: Page, document: ProjectDocument) {
     )
   });
   await expect(page.locator('.viewer-host canvas')).toBeVisible(READY);
-  await enter(page);
+  await enter(page, sketchName);
 }
 
 async function exportDocument(page: Page): Promise<ProjectDocument> {
@@ -144,11 +148,11 @@ async function exportDocument(page: Page): Promise<ProjectDocument> {
   ).document;
 }
 
-async function volume(page: Page) {
+async function volume(page: Page, bodyName = 'Conversion solid') {
   await revealModelPanel(page, 'Objects');
   await page
     .locator('.body-row:not(.consumed) .body-row-main', {
-      hasText: 'Conversion solid'
+      hasText: bodyName
     })
     .click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
@@ -363,4 +367,83 @@ test('a stale boundary witness refuses conversion without saving a partial graph
   expect(after.editHistory).toEqual(before.editHistory);
   expect(after.version).toBe(before.version);
   expect(findSketch(after, f.sketchId)!.promotions).toBeUndefined();
+});
+
+test('converts a hole inside a real projected constrained plate without replacing typed neighbors', async ({
+  page
+}, testInfo) => {
+  test.setTimeout(150_000);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const adapter = await createExactKernelAdapter();
+  let f: Awaited<ReturnType<typeof currentHoledPlate>>;
+  try {
+    f = await currentHoledPlate(adapter);
+  } finally {
+    adapter.dispose();
+  }
+  const sketchName = 'Constrained linked plate';
+  await open(page, f.manager.document, sketchName);
+  await page
+    .getByRole('button', { name: 'Finish Sketch', exact: true })
+    .click();
+  const originalVolume = await volume(page, 'Qualified plate');
+  expect(originalVolume).toMatch(/^564(?:\.|\s)/);
+  await enter(page, sketchName);
+  const selected = page
+    .getByRole('region', { name: 'Sketch overview' })
+    .getByLabel('Selected geometry');
+  await selected.selectOption(f.sourceObjectId);
+  const before = await exportDocument(page);
+  const convert = page
+    .getByRole('form', { name: 'Edit rectangle', exact: true })
+    .getByRole('button', { name: 'Convert to editable edges', exact: true });
+  await expect(convert).toBeEnabled(READY);
+  await convert.click();
+  await expect(
+    page.getByRole('form', { name: 'Edit line', exact: true })
+  ).toBeVisible(READY);
+  const converted = await exportDocument(page);
+  const promotion = findSketch(converted, f.sketchId)!.promotions![0]!;
+  expect(promotion.sourceObjectId).toBe(f.sourceObjectId);
+  expect(promotion.sourceData).toMatchObject({ width: '2 mm', height: '2 mm' });
+  for (const id of f.loop)
+    expect(converted.nodes[id]).toEqual(before.nodes[id]);
+  expect(converted.nodes[f.loop[1]!]).toMatchObject({
+    data: { x1: '2 cm', x2: '2 cm', y2: 'h' }
+  });
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await selected.selectOption(f.sourceObjectId);
+  await expect(
+    page.getByRole('form', { name: 'Edit rectangle', exact: true })
+  ).toBeVisible(READY);
+  const undone = await exportDocument(page);
+  expect(undone.nodes[f.sourceObjectId]).toEqual(
+    before.nodes[f.sourceObjectId]
+  );
+  expect(findSketch(undone, f.sketchId)!.promotions).toBeUndefined();
+  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  await selected.selectOption(promotion.edgeIds[0]!);
+  await expect(
+    page.getByRole('form', { name: 'Edit line', exact: true })
+  ).toBeVisible(READY);
+  await page.screenshot({
+    path: testInfo.outputPath('qualified-conversion-desktop.png')
+  });
+  await page
+    .getByRole('button', { name: 'Finish Sketch', exact: true })
+    .click();
+  await expect(page.locator('.save-state')).toHaveClass(SAVED, READY);
+  expect(await volume(page, 'Qualified plate')).toBe(originalVolume);
+  await page.reload();
+  await expect(page.locator('.viewer-host canvas')).toBeVisible(READY);
+  expect(await volume(page, 'Qualified plate')).toBe(originalVolume);
+  await enter(page, sketchName);
+  await selected.selectOption(promotion.edgeIds[0]!);
+  const reopened = await exportDocument(page);
+  expect(findSketch(reopened, f.sketchId)!.promotions).toEqual(
+    findSketch(converted, f.sketchId)!.promotions
+  );
+  for (const id of f.loop) expect(reopened.nodes[id]).toEqual(before.nodes[id]);
+  expect(errors).toEqual([]);
 });

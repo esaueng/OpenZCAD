@@ -6,6 +6,7 @@ import {
   type SketchPromotionReleaseInput
 } from './sketch-promotion';
 export type { LegacySketchConversionInput } from './sketch-promotion';
+export { prepareLegacySketchConversion } from './sketch-promotion';
 import {
   growingHolderCommand,
   growingHolderHistories,

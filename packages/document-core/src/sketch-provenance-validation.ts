@@ -4,6 +4,8 @@ import {
   isLegacyCompositeObjectData,
   isSketchBoundaryEntityId,
   isSketchPromotion,
+  MAX_DOCUMENT_VALUES,
+  MAX_SKETCH_SPLINE_POINTS,
   promotionStructureObjectIds,
   type ProjectDocument,
   type SketchPromotion
@@ -11,6 +13,120 @@ import {
 import { assertMinimumProjectSchema } from './document-content-schema';
 
 const PROVENANCE_SCHEMA_VERSION = 37;
+
+export type LegacySketchNumericGeometry =
+  | { objectKind: 'line'; x1: number; y1: number; x2: number; y2: number }
+  | { objectKind: 'circle'; centerX: number; centerY: number; radius: number }
+  | {
+      objectKind: 'arc';
+      centerX: number;
+      centerY: number;
+      radius: number;
+      startAngleDeg: number;
+      endAngleDeg: number;
+    }
+  | {
+      objectKind: 'ellipse';
+      centerX: number;
+      centerY: number;
+      radiusX: number;
+      radiusY: number;
+      rotationDeg: number;
+      startParamDeg?: number;
+      endParamDeg?: number;
+    }
+  | { objectKind: 'spline'; points: { x: number; y: number }[] };
+
+/** Numeric inputs for conversion analysis only; never authored sketch writes. */
+export interface LegacySketchConversionQualification {
+  version: 1;
+  authoredInputKey: string;
+  geometryOverrides: {
+    objectId: string;
+    geometry: LegacySketchNumericGeometry;
+  }[];
+}
+
+function numericGeometry(value: unknown): boolean {
+  if (!record(value)) return false;
+  const fields =
+    value.objectKind === 'line'
+      ? ['x1', 'y1', 'x2', 'y2']
+      : value.objectKind === 'circle'
+        ? ['centerX', 'centerY', 'radius']
+        : value.objectKind === 'arc'
+          ? ['centerX', 'centerY', 'radius', 'startAngleDeg', 'endAngleDeg']
+          : value.objectKind === 'ellipse'
+            ? [
+                'centerX',
+                'centerY',
+                'radiusX',
+                'radiusY',
+                'rotationDeg',
+                ...('startParamDeg' in value || 'endParamDeg' in value
+                  ? ['startParamDeg', 'endParamDeg']
+                  : [])
+              ]
+            : null;
+  if (fields)
+    return (
+      Object.keys(value).length === fields.length + 1 &&
+      fields.every(
+        (key) => typeof value[key] === 'number' && Number.isFinite(value[key])
+      ) &&
+      (!('radius' in value) || Number(value.radius) > 0) &&
+      (!('radiusX' in value) ||
+        (Number(value.radiusX) > 0 && Number(value.radiusY) > 0))
+    );
+  return (
+    value.objectKind === 'spline' &&
+    Object.keys(value).length === 2 &&
+    Array.isArray(value.points) &&
+    value.points.length >= 2 &&
+    value.points.length <= MAX_SKETCH_SPLINE_POINTS &&
+    Array.from(value.points).every(
+      (point: unknown) =>
+        record(point) &&
+        Object.keys(point).length === 2 &&
+        typeof point.x === 'number' &&
+        Number.isFinite(point.x) &&
+        typeof point.y === 'number' &&
+        Number.isFinite(point.y)
+    )
+  );
+}
+
+/** Structural only: saved command carriers may outlive their original objects. */
+export function assertLegacySketchConversionQualification(
+  value: unknown
+): asserts value is LegacySketchConversionQualification {
+  const failure = () =>
+    new Error('Legacy conversion qualification is malformed.');
+  if (
+    !record(value) ||
+    Object.keys(value).length !== 3 ||
+    value.version !== 1 ||
+    typeof value.authoredInputKey !== 'string' ||
+    !/^[0-9]+:[0-9a-z]+$/.test(value.authoredInputKey) ||
+    value.authoredInputKey.length > 64 ||
+    !Array.isArray(value.geometryOverrides) ||
+    value.geometryOverrides.length === 0 ||
+    value.geometryOverrides.length > MAX_DOCUMENT_VALUES
+  )
+    throw failure();
+  const seen = new Set<string>();
+  for (const entry of value.geometryOverrides) {
+    if (
+      !record(entry) ||
+      Object.keys(entry).length !== 2 ||
+      !isSketchBoundaryEntityId(entry.objectId) ||
+      seen.has(entry.objectId) ||
+      !numericGeometry(entry.geometry)
+    )
+      throw failure();
+    seen.add(entry.objectId);
+  }
+}
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -281,10 +397,20 @@ function conversionPayload(value: unknown): void {
     !identities(value.ids.helperIds) ||
     value.ids.helperIds.length !== 1 ||
     !Object.keys(value).every((key) =>
-      ['sketchId', 'sourceObjectId', 'expectedSource', 'ids'].includes(key)
+      [
+        'sketchId',
+        'sourceObjectId',
+        'expectedSource',
+        'ids',
+        'qualification'
+      ].includes(key)
     )
   )
     throw failure();
+  if (value.qualification !== undefined) {
+    if (!isLegacyCompositeObjectData(value.expectedSource)) throw failure();
+    assertLegacySketchConversionQualification(value.qualification);
+  }
   const members = [
     value.sourceObjectId,
     ...value.ids.edgeIds,
