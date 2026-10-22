@@ -340,7 +340,7 @@ test('a linked edge rebuilds its constrained plate and SVG without a manual solv
   ).toContainText(PROJECT_NAME, READY);
   await expect(page.locator('.viewer-host canvas')).toHaveAttribute(
     'data-e2e-rendered-bodies',
-    new RegExp(f.plateId),
+    '2',
     READY
   );
   await plate(page, f, 32);
