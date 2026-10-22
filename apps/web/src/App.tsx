@@ -329,6 +329,16 @@ import {
   watchPreloadErrors,
   STALE_CHUNK_MESSAGE
 } from './lib/staleChunk';
+import { lockAccountsExcept } from './lib/e2ee/unlockedKeys';
+import {
+  allowKeySession,
+  announceKeySessionChange,
+  blockKeySession,
+  getKeySessionRevision,
+  subscribeKeySession,
+  type KeySessionEvent
+} from './lib/e2ee/keySession';
+import type { DeviceKeySignOutChoice } from './lib/e2ee/signOut';
 import { watchBuildVersion } from './lib/buildVersionWatch';
 import { commandOutcomeMessage } from './lib/commandOutcome';
 import { tintPreviewResultBodies } from './lib/previewBodyTint';
@@ -1335,9 +1345,13 @@ import { cacheCopyPictures, cacheCopySources } from './lib/sourceBlobClaims';
 import {
   mirrorPendingOrganization,
   mirrorPendingReorder,
-  reconcileRemoteOrganizations,
   type OrganizationMirrorHost
 } from './lib/projectOrganizationMirror';
+import {
+  OrganizationMirrorBackground,
+  ORGANIZATION_SESSION_KEY,
+  prepareOrganizationMirrors
+} from './lib/projectOrganizationBackground';
 import {
   applyLocalProjectOrganizations,
   mergeProjectSummaries,
@@ -1735,21 +1749,30 @@ interface HydrateOptions {
 const organizationMirrorHost: OrganizationMirrorHost = {
   readLocal: loadLocalProjectOrganizationSnapshot,
   saveLocal: saveLocalProjectOrganizationIfCurrent,
-  updateRemote: (projectId, organization) =>
-    api.updateProject({
-      projectId: toProjectId(projectId),
-      status: organization.status,
-      pinned: organization.pinned,
-      sortOrder: organization.sortOrder
-    }).then(() => undefined)
+  updateRemote: (projectId, organization, signal) =>
+    api
+      .updateProject(
+        {
+          projectId: toProjectId(projectId),
+          status: organization.status,
+          pinned: organization.pinned,
+          sortOrder: organization.sortOrder
+        },
+        signal
+      )
+      .then(() => undefined)
 };
+const organizationBackground = new OrganizationMirrorBackground();
 
 /**
  * Every project this device can reach. Device shelf state is reconciled before
  * expired local copies are purged so a temporarily failed cloud mirror cannot
  * resurrect a project after its local retention window closes.
  */
-async function loadProjectSummaries(signedIn: boolean): Promise<{
+async function loadProjectSummaries(
+  accountId: string | null,
+  allowPurge = true
+): Promise<{
   projects: ProjectSummary[];
   remoteReached: boolean;
   /**
@@ -1760,6 +1783,8 @@ async function loadProjectSummaries(signedIn: boolean): Promise<{
    */
   cloudProjectIds: Set<string>;
 }> {
+  const signedIn = accountId !== null;
+  const scope = organizationBackground.begin(accountId);
   const unavailableAs =
     <T,>(fallback: T) =>
     (error: unknown): T => {
@@ -1771,36 +1796,49 @@ async function loadProjectSummaries(signedIn: boolean): Promise<{
       }
       return fallback;
     };
-  const [local, organizationSnapshots, remote] = await Promise.all(
-    [
-      listLocalProjects().catch(unavailableAs<ProjectSummary[]>([])),
-      listLocalProjectOrganizationSnapshots().catch(
-        unavailableAs(new Map<string, LocalProjectOrganizationSnapshot>())
-      ),
-      signedIn ? api.listProjects().catch(() => null) : Promise.resolve(null)
-    ]
-  );
+  const [local, organizationSnapshots, remote] = await Promise.all([
+    listLocalProjects().catch(unavailableAs<ProjectSummary[]>([])),
+    listLocalProjectOrganizationSnapshots().catch(
+      unavailableAs(new Map<string, LocalProjectOrganizationSnapshot>())
+    ),
+    signedIn ? api.listProjects().catch(() => null) : Promise.resolve(null)
+  ]);
   const localOrganizations = new Map(
-    [...organizationSnapshots].map(([id, snapshot]) => [id, snapshot.organization])
+    [...organizationSnapshots].map(([id, snapshot]) => [
+      id,
+      snapshot.organization
+    ])
   );
   const remoteProjects = remote?.projects ?? [];
-  const mirrorFailures = remote
-    ? await reconcileRemoteOrganizations(
+  const remoteIds = new Set<string>(
+    remoteProjects.map((project) => project.projectId)
+  );
+  const prepared = remote
+    ? await prepareOrganizationMirrors(
         organizationSnapshots,
         remoteProjects,
-        organizationMirrorHost
+        organizationMirrorHost,
+        scope
       )
-    : new Set<string>();
+    : { pending: [], protectedProjectIds: new Set<string>() };
+  // Discovery returns after local adoption; paced account writes run lazily.
+  organizationBackground.start(scope, prepared.pending, organizationMirrorHost);
+  // Defer model expiry for this account's pending mirrors. Without an eligible
+  // account row, expire model bytes normally but keep the tiny pending intent.
+  const protectedModels = new Set(
+    [...prepared.protectedProjectIds].filter((id) => remoteIds.has(id))
+  );
   // While signed in but offline, defer irreversible local purging until the
   // cloud copy can be reconciled. Otherwise a failed mirror could later make
   // an active remote row reappear after the local tombstone was destroyed.
   const purgedProjectIds =
-    !signedIn || remote
-      ? await purgeExpiredLocalProjects(Date.now(), mirrorFailures).catch(
-          () => []
-        )
+    allowPurge && scope.ownsDiscovery() && (!signedIn || remote)
+      ? await purgeExpiredLocalProjects(Date.now(), protectedModels, {
+          retainPendingOrganization: true,
+          deferPendingProjectIds: remoteIds,
+          isCurrent: scope.ownsDiscovery
+        }).catch(() => [])
       : [];
-  const remoteIds = new Set(remoteProjects.map((project) => project.projectId));
   const purged = new Set(purgedProjectIds);
   const settledOrganizations = remote
     ? await listLocalProjectOrganizations().catch(
@@ -2527,12 +2565,11 @@ export function App() {
   // left over from a fillet silently swallowed every face click while the
   // prompt still said "click a planar face". The manual choice survives and
   // takes over again once the sketch has a plane.
-  const selectionFilter =
-    datumRepair?.vertices
-      ? 'edge'
-      : tool === 'sketch'
-        ? 'face'
-        : effectiveSelectionFilter(manualSelectionFilter, tool);
+  const selectionFilter = datumRepair?.vertices
+    ? 'edge'
+    : tool === 'sketch'
+      ? 'face'
+      : effectiveSelectionFilter(manualSelectionFilter, tool);
   const [statusEntry, setStatusEntry] = useState<StatusEntry>(() => ({
     text: cloudFunctionsEnabled
       ? LIBRARY_MODE_STATUS.checking
@@ -2883,6 +2920,89 @@ export function App() {
   });
   const sessionRef = useRef(session);
   sessionRef.current = session;
+  const keySessionEventRef = useRef<(event: KeySessionEvent) => void>(() => {});
+  const keySessionListenerMountedRef = useRef(false);
+  keySessionEventRef.current = (event) => {
+    if (
+      event.phase === 'prepare' ||
+      event.phase === 'ready' ||
+      event.phase === 'blocked' ||
+      (!event.remote && event.phase !== 'retry') ||
+      !cloudFunctionsEnabledRef.current
+    )
+      return;
+    const observed = sessionRef.current;
+    const revision = event.revision;
+    // The notice never grants access or identifies a new account. Only a fresh
+    // server read may reopen keys, and an intervening notice/login wins.
+    void Promise.resolve()
+      .then(() => api.session())
+      .then((active) => {
+        if (
+          !keySessionListenerMountedRef.current ||
+          getKeySessionRevision() !== revision ||
+          sessionRef.current !== observed ||
+          !cloudFunctionsEnabledRef.current
+        )
+          return;
+        if (active && observed && active.userId === observed.userId) {
+          sessionRef.current = active;
+          setSession(active);
+          allowKeySession(revision);
+        } else {
+          cloudProjectAutosaveRef.current?.closeProject();
+          if (!active) organizationBackground.confirmSignedOut();
+          endCloudSettingsSession();
+          setCloudAvailable(false);
+          setCloudProjectIds(new Set());
+          setAccountProjectListReached(false);
+          if (active)
+            setSettingsMessage(
+              'The account changed in another tab. Reconnect to continue.'
+            );
+        }
+      })
+      .catch(() => {
+        if (
+          keySessionListenerMountedRef.current &&
+          getKeySessionRevision() === revision
+        )
+          setSettingsMessage(
+            'Encryption keys are locked. Refresh the cloud connection to check this session.'
+          );
+      });
+  };
+  useEffect(() => {
+    keySessionListenerMountedRef.current = true;
+    const unsubscribe = subscribeKeySession((event) =>
+      keySessionEventRef.current(event)
+    );
+    return () => {
+      keySessionListenerMountedRef.current = false;
+      unsubscribe();
+    };
+  }, []);
+  // End-to-end encryption keys unlocked in this page belong to one session:
+  // however it ends (sign-out, expiry, offline mode, account deletion, or a
+  // different account), no other account's keys stay in memory.
+  const sessionUserId = session?.userId ?? null;
+  useEffect(() => {
+    lockAccountsExcept(sessionUserId);
+  }, [sessionUserId]);
+  useEffect(() => {
+    const online = () => organizationBackground.resume();
+    const changed = (event: StorageEvent) => {
+      if (event.key === ORGANIZATION_SESSION_KEY)
+        organizationBackground.accountChanged();
+    };
+    window.addEventListener('online', online);
+    window.addEventListener('storage', changed);
+    return () => {
+      organizationBackground.dispose();
+      window.removeEventListener('online', online);
+      window.removeEventListener('storage', changed);
+    };
+  }, []);
   /**
    * The shelf's preview source. This reads a small device-cached or cloud
    * image and nothing else — deliberately not the project document. Loading
@@ -5337,13 +5457,21 @@ export function App() {
                 status: 'unavailable' as const
               }
         ]);
+        const keySessionRevision = getKeySessionRevision();
+        let sessionLookupFailed = false;
         const activeSession = bootCloudFunctionsEnabledRef.current
           ? await timedAsync('startup.session', () =>
-              api.session().catch(() => null)
+              api.session().catch(() => {
+                sessionLookupFailed = true;
+                return null;
+              })
             )
           : null;
         const listedPromise = timedAsync('startup.projectList', () =>
-          loadProjectSummaries(Boolean(activeSession))
+          loadProjectSummaries(
+            activeSession?.userId ?? null,
+            !sessionLookupFailed
+          )
         );
         const lastSyncedVersionPromise = startupProjectId
           ? loadLastSyncedVersion(startupProjectId)
@@ -5435,8 +5563,12 @@ export function App() {
         setCloudProjectIds(listed.cloudProjectIds);
         setAccountProjectListReached(listed.remoteReached);
         setCloudAvailable(canUseCloud);
-        sessionRef.current = activeSession;
-        setSession(activeSession);
+        if (getKeySessionRevision() === keySessionRevision) {
+          if (activeSession) allowKeySession(keySessionRevision);
+          else blockKeySession();
+          sessionRef.current = activeSession;
+          setSession(activeSession);
+        }
         setAuthConfig(currentAuth.config);
         setAuthConfigStatus(currentAuth.status);
         if (remoteSettings) {
@@ -5557,6 +5689,7 @@ export function App() {
     })();
     return () => {
       cancelled = true;
+      organizationBackground.dispose();
     };
     // Startup settings are intentionally read once. Later settings changes
     // should not re-run project discovery or reopen a different document.
@@ -7297,11 +7430,11 @@ export function App() {
       let next = managerRef.current.execute(command);
       // A drawing-sheet edit leaves the model alone: keep the ready geometry
       // rather than posting a rebuild (and a "Rebuilding" lane) per view move.
-      // Filing a body in a folder is organization only, likewise (U06).
+      // Drawings, images and folders edit presentation without rebuilding.
       if (
         isDrawingCommandKind(command.kind) ||
-        isObjectFolderCommandKind(command.kind) ||
-        isReferenceImageCommandKind(command.kind)
+        isReferenceImageCommandKind(command.kind) ||
+        isObjectFolderCommandKind(command.kind)
       )
         geometry.retainReadyGeometry(next);
       if (derived) {
@@ -8987,6 +9120,7 @@ export function App() {
     if (next === cloudFunctionsEnabledRef.current) {
       return;
     }
+    if (!next) organizationBackground.cancel();
     // Flip the transport gate before React can render another cloud consumer.
     // This also aborts active browser API and assistant fetches when going off.
     setCloudFunctionsEnabled(next);
@@ -9025,7 +9159,7 @@ export function App() {
       'Offline mode active · cloud functions are disabled on this device.'
     );
     setStatus('Offline mode · work is saved on this device.');
-    void loadProjectSummaries(false)
+    void loadProjectSummaries(null)
       .then((listed) => {
         if (!cloudFunctionsEnabledRef.current) {
           setProjects(listed.projects);
@@ -9035,6 +9169,7 @@ export function App() {
   }
 
   function endCloudSettingsSession() {
+    organizationBackground.cancel();
     clearAssistantHistory();
     endCloudSettingsAutosave();
     // The next session on this device may be a different account; it must not
@@ -9055,6 +9190,7 @@ export function App() {
     if (!cloudFunctionsEnabledRef.current) {
       return;
     }
+    const keySessionRevision = getKeySessionRevision();
     setAuthConfigStatus('loading');
     void api
       .health()
@@ -9067,14 +9203,19 @@ export function App() {
         .catch(() => ({ config: null, status: 'unavailable' as const })),
       api.session().catch(() => null)
     ]);
-    if (!cloudFunctionsEnabledRef.current) {
+    if (
+      !cloudFunctionsEnabledRef.current ||
+      getKeySessionRevision() !== keySessionRevision
+    ) {
       return;
     }
     setAuthConfig(nextAuth.config);
     setAuthConfigStatus(nextAuth.status);
+    organizationBackground.begin(activeSession?.userId ?? null);
     sessionRef.current = activeSession;
     setSession(activeSession);
     if (!activeSession) {
+      blockKeySession();
       endCloudSettingsSession();
       setSettingsMessage(
         nextAuth.status === 'ready'
@@ -9085,6 +9226,7 @@ export function App() {
       );
       return;
     }
+    allowKeySession(keySessionRevision);
     setCollaborationRollout(DISABLED_COLLABORATION_ROLLOUT);
     try {
       const [remoteSettings, collaborationCapabilities] = await Promise.all([
@@ -9099,7 +9241,9 @@ export function App() {
       accountSettingsRef.current = remoteSettings;
       setAccountSettings(remoteSettings);
       setCollaborationRollout(collaborationCapabilities);
-      const listed = await loadProjectSummaries(true);
+      const listed = await loadProjectSummaries(
+        sessionRef.current?.userId ?? null
+      );
       if (!cloudFunctionsEnabledRef.current) {
         return;
       }
@@ -9280,16 +9424,21 @@ export function App() {
   }
 
   async function activateCloudSession(activeSession: AuthSession) {
+    const keySessionRevision = announceKeySessionChange();
+    organizationBackground.begin(activeSession.userId);
     const [remoteSettings, listed, collaborationCapabilities] =
       await Promise.all([
         api.getSettings(),
-        loadProjectSummaries(true),
+        loadProjectSummaries(activeSession.userId),
         api
           .collaborationCapabilities()
           .catch(() => DISABLED_COLLABORATION_ROLLOUT)
       ]);
+    if (getKeySessionRevision() !== keySessionRevision)
+      throw new Error('The signed-in account changed. Reconnect to continue.');
     sessionRef.current = activeSession;
     setSession(activeSession);
+    allowKeySession(keySessionRevision);
     accountSettingsRef.current = remoteSettings;
     setAccountSettings(remoteSettings);
     setCollaborationRollout(collaborationCapabilities);
@@ -9409,18 +9558,92 @@ export function App() {
     }
   }
 
-  async function handleLogout() {
+  async function handleLogout(choice: DeviceKeySignOutChoice) {
+    const departingSession = sessionRef.current;
+    const isCurrentSession = () =>
+      departingSession !== null &&
+      departingSession.userId === choice.userId &&
+      sessionRef.current === departingSession;
+    if (!isCurrentSession()) return;
+    organizationBackground.cancel();
     setSettingsBusy(true);
     setSettingsMessage('Signing out…');
     try {
       // Both queues drain before the session goes away, or their contents
       // become unsendable the moment the cookie does.
-      await cloudProjectAutosaveRef.current?.flushPending();
-      cloudProjectAutosaveRef.current?.closeProject();
-      await cloudSettingsAutosaveRef.current?.flushPending();
-      await api.logout();
+      const { signOutAfterSaving } = await import('./lib/e2ee/signOut');
+      await signOutAfterSaving({
+        userId: choice.userId,
+        keepDevice: choice.keepDevice,
+        isCurrentSession,
+        savePending: async () => {
+          await cloudProjectAutosaveRef.current?.flushPending();
+          if (!isCurrentSession()) {
+            throw new Error(
+              'The signed-in account changed. Try signing out again.'
+            );
+          }
+          await cloudSettingsAutosaveRef.current?.flushPending();
+        },
+        revokeSession: async () => {
+          const controller = cloudProjectAutosaveRef.current;
+          const projectId = managerRef.current?.document.projectId;
+          const wasHalted = controller?.isHalted ?? false;
+          controller?.closeProject();
+          try {
+            await api.logout();
+          } catch (error) {
+            const canResume = () =>
+              Boolean(
+                controller &&
+                controller === cloudProjectAutosaveRef.current &&
+                cloudFunctionsEnabledRef.current &&
+                departingSession &&
+                sessionRef.current === departingSession &&
+                !shareSessionRef.current &&
+                projectId &&
+                managerRef.current?.document.projectId === projectId &&
+                managerRef.current.document.ownerUserId ===
+                  departingSession.userId &&
+                accountDocumentUnavailableProjectIdRef.current !== projectId
+              );
+            if (canResume() && projectId && wasHalted) {
+              // Reopening must not clear a pre-existing conflict/refusal.
+              setStatus(
+                'Cloud autosave remains paused after sign-out failed. Reopen this project to retry syncing.'
+              );
+            } else if (canResume() && projectId) {
+              try {
+                const durable = await loadLocalProject(projectId);
+                const baseline = remoteVersionsRef.current.get(projectId);
+                if (canResume() && baseline !== undefined) {
+                  controller!.openProject(projectId, baseline);
+                  if (
+                    durable &&
+                    !controller!.hasPendingChanges &&
+                    durable.version > baseline
+                  ) {
+                    controller!.schedule(durable);
+                  }
+                }
+              } catch {
+                setStatus(
+                  'Cloud autosave could not resume after sign-out failed. Reopen this project to retry syncing.'
+                );
+              }
+            }
+            throw error;
+          }
+        }
+      });
+      if (!isCurrentSession()) return;
+      organizationBackground.confirmSignedOut();
+      // The server session is gone: no unlocked key outlives it, even if the
+      // local cleanup below fails.
+      lockAccountsExcept(null);
       clearAssistantHistory();
-      const listed = await loadProjectSummaries(false);
+      const listed = await loadProjectSummaries(null);
+      if (!isCurrentSession()) return;
       remoteVersionsRef.current.clear();
       accountDocumentUnavailableProjectIdRef.current = null;
       endCloudSettingsAutosave();
@@ -9434,6 +9657,7 @@ export function App() {
       } catch {
         baselinesCleared = false;
       }
+      if (!isCurrentSession()) return;
       sessionRef.current = null;
       setSession(null);
       accountSettingsRef.current = null;
@@ -9467,6 +9691,7 @@ export function App() {
     scope: AccountDeletionScope,
     confirmation: string
   ) {
+    const departingSession = sessionRef.current;
     setSettingsBusy(true);
     setSettingsMessage(
       scope === 'projects'
@@ -9489,15 +9714,30 @@ export function App() {
       }
       await cloudSettingsAutosaveRef.current?.flushPending();
 
-      const deleted = await api.deleteAccountData(scope, confirmation);
+      if (sessionRef.current !== departingSession)
+        throw new Error('The signed-in account changed. Try deleting again.');
+      const erase = () => api.deleteAccountData(scope, confirmation);
+      const deleted =
+        scope === 'projects'
+          ? await erase()
+          : await (
+              await import('./lib/e2ee/accountErasure')
+            ).eraseAccountWithKeyCleanup({
+              userId: departingSession?.userId ?? null,
+              isCurrentSession: () => sessionRef.current === departingSession,
+              erase,
+              onSignedOut: () => {
+                endCloudSettingsSession();
+                projectController?.closeProject();
+              }
+            });
       if (deleted.signedOut) {
+        if (sessionRef.current !== null) return;
+        organizationBackground.confirmSignedOut();
         projectController?.closeProject();
-        const listed = await loadProjectSummaries(false);
+        const listed = await loadProjectSummaries(null);
+        if (sessionRef.current !== null) return;
         remoteVersionsRef.current.clear();
-        // The successful response invalidated the browser cookie (and the
-        // desktop proxy drops its Keychain credential). Mirror that immediately
-        // in React so no signed-in UI or account state survives the deletion.
-        endCloudSettingsSession();
         setCloudAvailable(false);
         setProjects(listed.projects);
         setCloudProjectIds(new Set());
@@ -9517,7 +9757,9 @@ export function App() {
           await clearLastSyncedVersion(projectId).catch(() => undefined);
         })
       );
-      const listed = await loadProjectSummaries(true);
+      const listed = await loadProjectSummaries(
+        sessionRef.current?.userId ?? null
+      );
       setProjects(listed.projects);
       setCloudProjectIds(listed.cloudProjectIds);
       setAccountProjectListReached(listed.remoteReached);
@@ -10199,7 +10441,9 @@ export function App() {
     try {
       const accepted = await projectSharingClient.acceptInvitation(token);
       if (!isCurrent()) return;
-      const listed = await loadProjectSummaries(true);
+      const listed = await loadProjectSummaries(
+        sessionRef.current?.userId ?? null
+      );
       if (!isCurrent()) return;
       setProjects(listed.projects);
       setCloudProjectIds(listed.cloudProjectIds);
@@ -10471,7 +10715,9 @@ export function App() {
     setSelectedProfiles([]);
     setTool(null);
     try {
-      const listed = await loadProjectSummaries(Boolean(session));
+      const listed = await loadProjectSummaries(
+        sessionRef.current?.userId ?? null
+      );
       if (!isCurrent()) return;
       setProjects(listed.projects);
       setCloudProjectIds(listed.cloudProjectIds);
@@ -10517,9 +10763,12 @@ export function App() {
     if (!session) {
       return;
     }
-    await mirrorPendingOrganization(projectId, organizationMirrorHost).catch(
-      () => undefined
-    );
+    await mirrorPendingOrganization(
+      projectId,
+      organizationMirrorHost,
+      undefined,
+      organizationBackground.scopeFor(session.userId)
+    ).catch(() => undefined);
   }
 
   async function handleMoveProjectToShelf(
@@ -10589,11 +10838,21 @@ export function App() {
           .sort(compareProjectSummaries)
       );
       if (session) {
+        const organizationScope = organizationBackground.scopeFor(
+          session.userId
+        );
         await mirrorPendingReorder(
           projectIds,
           organizationMirrorHost,
           async (ids) =>
-            (await api.reorderProjects({ projectIds: ids.map(toProjectId) })).projects
+            (
+              await api.reorderProjects(
+                { projectIds: ids.map(toProjectId) },
+                organizationScope.signal
+              )
+            ).projects,
+          undefined,
+          organizationScope
         ).catch(() => undefined);
       }
     } catch (error) {
@@ -13840,7 +14099,10 @@ export function App() {
               });
             } catch (error) {
               setStatus(
-                errorMessage(error, 'That pick cannot replace this datum vertex.'),
+                errorMessage(
+                  error,
+                  'That pick cannot replace this datum vertex.'
+                ),
                 { sticky: true }
               );
             }
@@ -14854,9 +15116,10 @@ export function App() {
     ) {
       return null;
     }
-    const node = sketchReadDocument?.nodes[
-      interaction.session.selectedObjectId as EntityId
-    ];
+    const node =
+      sketchReadDocument?.nodes[
+        interaction.session.selectedObjectId as EntityId
+      ];
     return node?.kind === 'sketch-object' ? node : null;
   }, [interaction, doc, sketchReadDocument]);
   const selectedSketchEntityAuthored = selectedSketchEntity
@@ -15722,9 +15985,7 @@ export function App() {
     }
     const base = managerRef.current?.document;
     if (!base || sketchSolving || geometryBusy) return;
-    if (
-      !requireCurrentSketchGeometry(interaction.session.sketchId as SketchId)
-    )
+    if (!requireCurrentSketchGeometry(interaction.session.sketchId as SketchId))
       return;
     const sketchId = interaction.session.sketchId as SketchId;
     const objectId = interaction.session.selectedObjectId as EntityId;

@@ -60,8 +60,8 @@ const picture: ReferenceImage = {
 const saved = (document: ProjectDocument): ProjectDocument =>
   JSON.parse(JSON.stringify(document)) as ProjectDocument;
 
-describe('serial v31/v32 to v33 integration', () => {
-  it.each([31, 32])(
+describe('serial v31/v32/v33 to v34 integration', () => {
+  it.each([31, 32, 33])(
     'preserves v%s content, undo, redo and replay while adding a projection',
     (version) => {
       const initial = createProjectDocument(
@@ -70,7 +70,7 @@ describe('serial v31/v32 to v33 integration', () => {
       );
       const older = new CommandManager(initial);
       older.execute(commandFactories.addDrawingSheet({ sheet }));
-      if (version === 32)
+      if (version >= 32)
         older.execute(commandFactories.addReferenceImage({ image: picture }));
       const legacy = {
         ...saved(older.document),
@@ -99,6 +99,86 @@ describe('serial v31/v32 to v33 integration', () => {
       const withProjection = saved(manager.document);
       expect(withProjection.drawings).toEqual(legacy.drawings);
       expect(withProjection.referenceImages).toEqual(legacy.referenceImages);
+      const filing = new CommandManager(withProjection);
+      filing.execute(
+        commandFactories.createObjectFolder({
+          folderId: 'folder_references',
+          name: 'References',
+          parentId: null
+        })
+      );
+      const withFolder = saved(filing.document);
+      expect(withFolder.schemaVersion).toBe(34);
+      expect(withFolder.objectFolders?.folders[0]?.name).toBe('References');
+      expect(withFolder.nodes).toEqual(withProjection.nodes);
+      expect(withFolder.drawings).toEqual(withProjection.drawings);
+      expect(withFolder.referenceImages).toEqual(
+        withProjection.referenceImages
+      );
+      const restoredFolders = new CommandManager(normalizeDocument(withFolder));
+      restoredFolders.undo();
+      expect(restoredFolders.document.objectFolders).toEqual(
+        withProjection.objectFolders
+      );
+      expect(restoredFolders.document.nodes).toEqual(withProjection.nodes);
+      expect(restoredFolders.document.drawings).toEqual(
+        withProjection.drawings
+      );
+      expect(restoredFolders.document.referenceImages).toEqual(
+        withProjection.referenceImages
+      );
+      restoredFolders.redo();
+      expect(restoredFolders.document.objectFolders).toEqual(
+        withFolder.objectFolders
+      );
+      const replayedFolders = replayCommands(initial, withFolder.commandLog);
+      expect(replayedFolders.objectFolders).toEqual(withFolder.objectFolders);
+      expect(replayedFolders.nodes).toEqual(withFolder.nodes);
+      expect(replayedFolders.drawings).toEqual(withFolder.drawings);
+      expect(replayedFolders.referenceImages).toEqual(
+        withFolder.referenceImages
+      );
+      if (version >= 32) {
+        const combined = new CommandManager(withFolder);
+        combined.runTransaction('Organize picture and folder', [
+          commandFactories.renameObjectFolder({
+            folderId: 'folder_references',
+            name: 'Tracing'
+          }),
+          commandFactories.updateReferenceImage({
+            imageId: picture.imageId,
+            center: { u: 11, v: 12 }
+          })
+        ]);
+        const edited = saved(combined.document);
+        const history = new CommandManager(normalizeDocument(edited));
+        expect(history.document.objectFolders?.folders[0]?.name).toBe(
+          'Tracing'
+        );
+        expect(history.document.referenceImages?.images[0]?.center).toEqual({
+          u: 11,
+          v: 12
+        });
+        history.undo();
+        expect(history.document.objectFolders).toEqual(
+          withFolder.objectFolders
+        );
+        expect(history.document.referenceImages).toEqual(
+          withFolder.referenceImages
+        );
+        expect(history.document.nodes).toEqual(withFolder.nodes);
+        expect(history.document.drawings).toEqual(withFolder.drawings);
+        history.redo();
+        expect(history.document.objectFolders).toEqual(edited.objectFolders);
+        expect(history.document.referenceImages).toEqual(
+          edited.referenceImages
+        );
+        const replayed = replayCommands(initial, edited.commandLog);
+        expect(replayed.objectFolders).toEqual(edited.objectFolders);
+        expect(replayed.referenceImages).toEqual(edited.referenceImages);
+        expect(replayed.nodes).toEqual(edited.nodes);
+        expect(replayed.drawings).toEqual(edited.drawings);
+      }
       const reloaded = new CommandManager(normalizeDocument(withProjection));
       reloaded.undo();
       expect(reloaded.document.nodes).toEqual(opened.nodes);
@@ -113,14 +193,14 @@ describe('serial v31/v32 to v33 integration', () => {
       // Walking farther back after a save must retain the old image and
       // annotation history too, not only the new sketch's undo step.
       reloaded.undo();
-      if (version === 32) {
+      if (version >= 32) {
         reloaded.undo();
         expect(reloaded.document.referenceImages).toBeUndefined();
         reloaded.redo();
         expect(reloaded.document.referenceImages?.images).toEqual([picture]);
       }
       reloaded.undo();
-      if (version === 32) reloaded.undo();
+      if (version >= 32) reloaded.undo();
       expect(reloaded.document.drawings).toBeUndefined();
       expect(() =>
         normalizeDocument({

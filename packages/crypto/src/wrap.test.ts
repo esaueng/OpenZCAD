@@ -666,27 +666,82 @@ describe('sealing to a public key', () => {
     expect(await openSealedKey(device, sealed, context)).toEqual(accountKey);
   });
 
-  it('seals only device-approval account keys and project keys', async () => {
-    // Long-term private keys stay inside their wrap hierarchy: a seal under
-    // any other purpose is refused at runtime, typed or not.
+  it('seals the account key to every kind of certified unlock target', async () => {
+    const accountKey = generateSymmetricKey();
+    for (const method of [
+      'device',
+      'recovery-key',
+      'passkey-prf',
+      'device-approval'
+    ] as const) {
+      const target = await generateEncryptionKeyPair(false);
+      const context: SealContext = {
+        purpose: 'account-key',
+        userId: 'user-1',
+        method,
+        unlockId: 'target-1'
+      };
+      const sealed = await sealKey(target.publicKey, accountKey, context);
+      expect(await openSealedKey(target, sealed, context)).toEqual(accountKey);
+      // The method is bound: a device seal never opens as a recovery seal.
+      const other: SealContext = {
+        ...context,
+        method: method === 'device' ? 'recovery-key' : 'device'
+      };
+      await rejectsWith(
+        openSealedKey(target, sealed, other),
+        'authentication-failed'
+      );
+    }
+  });
+
+  it('seals the identity key only to recovery-key and passkey targets', async () => {
+    const identity = await generateSigningKeyPair();
+    const pkcs8 = await exportPrivateKey(identity.privateKey);
+    const target = await generateEncryptionKeyPair(false);
+    const context: SealContext = {
+      purpose: 'identity-key',
+      userId: 'user-1',
+      method: 'recovery-key',
+      unlockId: 'rk-1'
+    };
+    const sealed = await sealKey(target.publicKey, pkcs8, context);
+    expect(await openSealedKey(target, sealed, context)).toEqual(pkcs8);
+    // Never to a device: the identity-key context schema has no such method.
+    for (const method of ['device', 'device-approval']) {
+      await rejectsWith(
+        sealKey(target.publicKey, pkcs8, {
+          ...context,
+          method
+        } as unknown as SealContext),
+        'invalid-argument'
+      );
+    }
+  });
+
+  it('never seals the encryption, unlock-target, version or share keys', async () => {
+    // Those stay inside their wrap hierarchy: a seal under any other purpose
+    // is refused at runtime, typed or not.
     const member = await generateEncryptionKeyPair();
     const sealed = await sealKey(member.publicKey, PROJECT_KEY, CONTEXT);
     for (const context of [
+      { purpose: 'encryption-private-key', userId: 'u', keyId: 'k' },
       {
-        purpose: 'identity-key',
+        purpose: 'unlock-target-key',
         userId: 'u',
         method: 'recovery-key',
-        unlockId: 'r'
+        unlockId: 'r',
+        identityKeyHash: 'ab'
       },
-      { purpose: 'encryption-private-key', userId: 'u', keyId: 'k' },
-      { purpose: 'account-key', userId: 'u', method: 'device', unlockId: 'd' },
       {
         purpose: 'version-key',
         projectId: 'p',
         keyEpoch: 1,
         kind: 'document',
         versionId: 'v'
-      }
+      },
+      { purpose: 'share-key', projectId: 'p', keyEpoch: 1, shareId: 's' },
+      { purpose: 'dedupe-secret', projectId: 'p', keyEpoch: 1 }
     ] as unknown as SealContext[]) {
       await rejectsWith(
         sealKey(member.publicKey, patternBytes(32), context),
@@ -697,6 +752,33 @@ describe('sealing to a public key', () => {
         'invalid-argument'
       );
     }
+  });
+
+  it('wraps an unlock target under its secret, bound to the identity', async () => {
+    const recoverySecret = generateSymmetricKey();
+    const target = await generateEncryptionKeyPair();
+    const pkcs8 = await exportPrivateKey(target.privateKey);
+    const context: WrapContext = {
+      purpose: 'unlock-target-key',
+      userId: 'user-1',
+      method: 'recovery-key',
+      unlockId: 'rk-1',
+      identityKeyHash: 'a'.repeat(64)
+    };
+    const wrapped = await wrapKey(recoverySecret, pkcs8, context);
+    expect(wrapped[0]).toBe(1);
+    expect(await unwrapKey(recoverySecret, wrapped, context)).toEqual(pkcs8);
+    await rejectsWith(
+      unwrapKey(recoverySecret, wrapped, {
+        ...context,
+        identityKeyHash: 'b'.repeat(64)
+      }),
+      'authentication-failed'
+    );
+    await rejectsWith(
+      unwrapKey(generateSymmetricKey(), wrapped, context),
+      'authentication-failed'
+    );
   });
 
   it('exports only P-256 public keys', async () => {

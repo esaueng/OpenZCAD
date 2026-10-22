@@ -15,6 +15,7 @@ export const SETTINGS_SECTION_IDS = [
   'sketching',
   'saving',
   'account',
+  'encryption',
   'assistant',
   'privacy',
   'advanced'

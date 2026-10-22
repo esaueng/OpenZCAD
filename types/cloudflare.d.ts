@@ -2,13 +2,14 @@ declare class DurableObject {
   constructor(ctx: unknown, env: unknown);
 }
 
-
 declare interface DurableObjectNamespace<T = unknown> {
   getByName(name: string): T;
 }
 
 declare interface D1RunResult {
   success?: boolean;
+  /** SELECT statements in a batch return their rows in this field. */
+  results?: unknown[];
   meta?: {
     changes?: number;
   };
@@ -114,5 +115,4 @@ declare module 'cloudflare:workers' {
   export class DurableObject {
     constructor(ctx: unknown, env: unknown);
   }
-
 }

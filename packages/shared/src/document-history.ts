@@ -25,8 +25,8 @@ export const HISTORY_FIELDS = [
   'shaprImports',
   'shaprImportOrder',
   'drawings',
-  'referenceImages',
-  'objectFolders'
+  'objectFolders',
+  'referenceImages'
 ] as const;
 export type HistoryField = (typeof HISTORY_FIELDS)[number];
 
