@@ -9,6 +9,7 @@ import {
   createProjectDocument,
   findSketch,
   normalizeDocument,
+  updateSketch,
   updateSketchObject
 } from '@openzcad/document-core';
 import {
@@ -288,6 +289,45 @@ it('refuses a native backup carrying backdated projection content before opening
   const saved = clone(backup);
   expect(() => importProjectCopy(backup, document.ownerUserId)).toThrow(floor);
   expect(backup).toEqual(saved);
+  expect(document).toEqual(before);
+});
+
+it('legacy object writes validate projection metadata and schema before mutation', () => {
+  const f = fixture();
+  for (const version of [undefined, 32, 32.5]) {
+    const document = clone(f.document);
+    Object.assign(document, { schemaVersion: version });
+    const before = clone(document);
+    expect(() =>
+      updateSketch(document, { sketchId: f.sketchId, object: projection })
+    ).toThrow(floor);
+    expect(document).toEqual(before);
+    const ordinary = { ...projection, projection: undefined };
+    const updated = updateSketch(document, {
+      sketchId: f.sketchId,
+      object: ordinary
+    });
+    expect(updated.schemaVersion).toBe(version);
+    expect(document).toEqual(before);
+  }
+  const document = clone(f.document);
+  const before = clone(document);
+  const malformed = {
+    ...projection,
+    projection: { mode: 'linked', source: {} }
+  } as unknown as SketchObjectData;
+  expect(() =>
+    updateSketch(document, { sketchId: f.sketchId, object: malformed })
+  ).toThrow(/without a verified source edge/);
+  expect(document).toEqual(before);
+  const updated = updateSketch(document, {
+    sketchId: f.sketchId,
+    object: projection
+  });
+  const object = updated.nodes[f.objectId];
+  expect(object?.kind).toBe('sketch-object');
+  if (object?.kind !== 'sketch-object') throw new Error('Expected an object.');
+  expect(object.data.projection).toEqual({ mode: 'unlinked' });
   expect(document).toEqual(before);
 });
 

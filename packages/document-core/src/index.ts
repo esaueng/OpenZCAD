@@ -1393,6 +1393,8 @@ export function updateSketch(
   document: ProjectDocument,
   input: SketchUpdateInput
 ): ProjectDocument {
+  if (input.object !== undefined)
+    assertSketchObjectContentSchema(input.object, document.schemaVersion);
   const next = cloneDocument(document);
   const sketch = findSketch(next, input.sketchId);
   if (!sketch) {
