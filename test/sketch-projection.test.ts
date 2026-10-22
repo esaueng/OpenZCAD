@@ -37,6 +37,7 @@ import {
   type SketchPlaneRef,
   type SketchProjectionMode
 } from '@openzcad/shared';
+import { projectionFromPickWithLineage } from '../apps/web/src/lib/sketch/projection';
 
 /**
  * I01 sketch projection (schema v33) against the exact kernel: a linked
@@ -292,6 +293,28 @@ describe('sketch projection in the exact build', () => {
     return next;
   }
 
+  it('projects a new Boolean edge after an idle-skipped lineage rebuild', async () => {
+    const source = block(40);
+    const second = addPrimitiveFeature(source.document, { name: 'Post', primitiveKind: 'box', dimensions: { width: 12, height: 10, depth: 30 } });
+    const fused = booleanBodies(second, { name: 'Fuse', operation: 'union', targetBodyIds: [source.bodyId, second.bodyOrder.at(-1)!] });
+    const idle = await adapter.syncDocument(fused.document, undefined, undefined, undefined, { lineageDemand: [] });
+    const topology = idle.bodyRepresentations[fused.bodyId]!.topology!;
+    const candidate = topology.edges.find(edge => !edge.reference && edge.curve?.type === 'LINE' && Math.abs(edge.points[0]! - edge.points[3]!) > 1);
+    expect(candidate, 'a new edge withheld by idle lineage mode').toBeDefined();
+    let requests = 0;
+    const pick = await projectionFromPickWithLineage({ document: { ...fused.document, derived: idle }, sketch: null, selection: { bodyId: fused.bodyId, kind: 'edge', hash: candidate!.hash, topologyId: candidate!.topologyId }, basis, mode: 'linked', construction: false }, {
+      cancelled: () => false,
+      rebuildWithLineage: async () => {
+        requests++;
+        const derived = await adapter.syncDocument(fused.document, undefined, undefined, undefined, { lineageDemand: [fused.bodyId] });
+        return { ...fused.document, derived };
+      }
+    });
+    expect(requests).toBe(1);
+    expect(pick?.objects).toHaveLength(1);
+    expect(pick?.objects[0]?.projection).toMatchObject({ mode: 'linked', source: { bodyId: fused.bodyId } });
+  });
+
   it('re-projects exactly what a pick stored, so nothing is rewritten', async () => {
     const outline = await projectedOutline('linked');
     const derived = await adapter.syncDocument(outline.document);
@@ -343,6 +366,32 @@ describe('sketch projection in the exact build', () => {
       )
     ).toBe(true);
     expect(volumeOf(again, outline.plateId)).toBeCloseTo(32 * 10 * 3, 6);
+  });
+
+  it('exports fresh linked geometry before browser write-back in both SVG and DXF', async () => {
+    const outline = await projectedOutline('linked');
+    const resized = setParameter(outline.document, {
+      name: 'w',
+      expression: '32'
+    });
+    const savedNodes = JSON.stringify(resized.nodes);
+    const built = await adapter.syncDocument(resized);
+    const settled = writeBack(resized, outline.sketchId, built);
+    const expectedSvg = await adapter.exportSketchSvg(
+      settled,
+      outline.sketchId
+    );
+    const expectedDxf = await adapter.exportSketchDxf(
+      settled,
+      outline.sketchId
+    );
+    expect(await adapter.exportSketchSvg(resized, outline.sketchId)).toBe(
+      expectedSvg
+    );
+    expect(await adapter.exportSketchDxf(resized, outline.sketchId)).toBe(
+      expectedDxf
+    );
+    expect(JSON.stringify(resized.nodes)).toBe(savedNodes);
   });
 
   it('keeps the line ends named when an edge comes back reversed', async () => {
@@ -567,8 +616,7 @@ describe('sketch projection in the exact build', () => {
         }
       ]
     });
-    const [a, b] = findSketch(sketched.document, sketched.sketchId)!
-      .objectIds;
+    const [a, b] = findSketch(sketched.document, sketched.sketchId)!.objectIds;
     const { document: constrained } = addSketchConstraint(sketched.document, {
       sketchId: sketched.sketchId,
       constraint: {
@@ -577,10 +625,7 @@ describe('sketch projection in the exact build', () => {
         b: b!
       }
     });
-    const outcome = await adapter.solveSketch(
-      constrained,
-      sketched.sketchId
-    );
+    const outcome = await adapter.solveSketch(constrained, sketched.sketchId);
     expect(outcome.converged).toBe(true);
     const [held, free] = outcome.objects as {
       radiusX: number;

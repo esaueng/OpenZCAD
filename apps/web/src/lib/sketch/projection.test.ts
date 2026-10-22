@@ -23,6 +23,7 @@ import {
   assertProjectionsResolve,
   projectionAddCommand,
   projectionFromPick,
+  projectionFromPickWithLineage,
   projectionRoleLabel,
   projectionWriteBackCommand,
   repickedProjectionData,
@@ -121,6 +122,67 @@ function modelDocument(): ProjectDocument {
 }
 
 describe('projectionFromPick', () => {
+  it('retries an idle-skipped linked pick with verified lineage before refusing it', async () => {
+    const document = modelDocument();
+    let rebuilt = 0;
+    const pick = await projectionFromPickWithLineage(
+      {
+        document,
+        sketch: null,
+        selection: { bodyId, kind: 'face', hash: 50 },
+        basis,
+        mode: 'linked',
+        construction: false
+      },
+      {
+        cancelled: () => false,
+        rebuildWithLineage: async () => {
+          rebuilt++;
+          const updated = structuredClone(document);
+          const topology =
+            updated.derived.bodyRepresentations[bodyId]!.topology!;
+          const producer = listFeaturesInOrder(updated).at(-1)!.featureId;
+          topology.edges = topology.edges.map((edge) => ({
+            ...edge,
+            reference: edge.reference ?? {
+              ...reference('edge.c', edge.hash),
+              producingFeatureId: producer
+            }
+          }));
+          return updated;
+        }
+      }
+    );
+    expect(rebuilt).toBe(1);
+    expect(pick?.objects).toHaveLength(4);
+    expect(
+      pick?.objects.every((object) => object.projection?.mode === 'linked')
+    ).toBe(true);
+    expect(pick?.skipped).toEqual([]);
+  });
+
+  it('does not apply a lineage rebuild after the sketch command was withdrawn', async () => {
+    let cancelled = false;
+    const pick = await projectionFromPickWithLineage(
+      {
+        document: modelDocument(),
+        sketch: null,
+        selection: { bodyId, kind: 'face', hash: 50 },
+        basis,
+        mode: 'linked',
+        construction: false
+      },
+      {
+        cancelled: () => cancelled,
+        rebuildWithLineage: async () => {
+          cancelled = true;
+          return modelDocument();
+        }
+      }
+    );
+    expect(pick).toBeNull();
+  });
+
   it('projects one picked edge, linked to its verified source', () => {
     const document = modelDocument();
     const pick = projectionFromPick({
@@ -250,7 +312,9 @@ describe('projectionFromPick', () => {
 
   it('refuses by name what does not project', () => {
     const document = modelDocument();
-    const pick = (selection: Parameters<typeof projectionFromPick>[0]['selection']) =>
+    const pick = (
+      selection: Parameters<typeof projectionFromPick>[0]['selection']
+    ) =>
       projectionFromPick({
         document,
         sketch: null,
@@ -259,9 +323,9 @@ describe('projectionFromPick', () => {
         mode: 'linked',
         construction: false
       });
-    expect(() => pick({ bodyId, kind: 'edge', topologyId: 'e', hash: 5 })).toThrow(
-      /projects to a point/
-    );
+    expect(() =>
+      pick({ bodyId, kind: 'edge', topologyId: 'e', hash: 5 })
+    ).toThrow(/projects to a point/);
     expect(() => pick({ bodyId, kind: 'body' })).toThrow(/Pick a model edge/);
     expect(() =>
       pick({ bodyId, kind: 'edge', topologyId: 'gone', hash: 99 })

@@ -167,11 +167,36 @@ export function projectionFromPick(input: {
     });
   }
   if (objects.length === 0) {
-    throw new Error(
-      `Nothing to project: ${[...new Set(skipped)].join('; ')}.`
-    );
+    throw new Error(`Nothing to project: ${[...new Set(skipped)].join('; ')}.`);
   }
   return { objects, skipped: [...new Set(skipped)] };
+}
+
+/** Acquire idle-skipped lineage once before accepting or refusing a linked pick. */
+export async function projectionFromPickWithLineage(
+  input: Parameters<typeof projectionFromPick>[0],
+  control: {
+    rebuildWithLineage(): Promise<ProjectDocument>;
+    cancelled(): boolean;
+  }
+): Promise<ProjectionPick | null> {
+  if (control.cancelled()) return null;
+  let document = input.document;
+  const edges = pickedEdges(document, input.selection);
+  if (
+    input.mode === 'linked' &&
+    input.selection.kind !== 'body' &&
+    (edges.length === 0 || edges.some((edge) => !edge.reference))
+  ) {
+    try {
+      document = await control.rebuildWithLineage();
+    } catch (error) {
+      if (control.cancelled()) return null;
+      throw error;
+    }
+  }
+  if (control.cancelled()) return null;
+  return projectionFromPick({ ...input, document });
 }
 
 /** The sketch an object belongs to, by its object list. */
@@ -242,7 +267,10 @@ export function unlinkedProjectionData(
 ): SketchObjectData {
   const projection = data.projection;
   if (!projection || projection.mode === 'unlinked') return data;
-  return { ...data, projection: { mode: 'unlinked', source: projection.source } };
+  return {
+    ...data,
+    projection: { mode: 'unlinked', source: projection.source }
+  };
 }
 
 /**
@@ -289,8 +317,7 @@ export function projectionSourceName(
   if (!source) return null;
   return (
     listFeaturesInOrder(document).find(
-      (feature) =>
-        feature.featureId === source.edgeReference.producingFeatureId
+      (feature) => feature.featureId === source.edgeReference.producingFeatureId
     )?.name ?? null
   );
 }
@@ -326,9 +353,7 @@ export function sketchProjectionRows(
 export function projectionRoleLabel(row: SketchProjectionRow): string {
   const from = row.sourceName ? ` from ${row.sourceName}` : '';
   if (row.mode === 'unlinked') return `Independent copy${from}`;
-  return row.state === 'broken'
-    ? `Linked${from} · broken`
-    : `Linked${from}`;
+  return row.state === 'broken' ? `Linked${from} · broken` : `Linked${from}`;
 }
 
 /** Sketch ids with at least one broken linked projection. */

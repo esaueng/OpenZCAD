@@ -3949,7 +3949,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             const node = document.nodes[id];
             return {
               id,
-              data: node?.kind === 'sketch-object' ? node.data : undefined
+              data:
+                build.sketchObjectOverrides?.get(id) ??
+                (node?.kind === 'sketch-object' ? node.data : undefined)
             };
           }),
           scope,

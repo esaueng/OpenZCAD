@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { BodyId, TopologySelection } from '@openzcad/shared';
 import type { InteractionState } from './interaction/machine';
 
@@ -102,12 +102,27 @@ export function useLineageDemand(input: {
   projectId: string | undefined;
   selections: readonly TopologySelection[];
   interaction: InteractionState | null | undefined;
-}): { demand: readonly BodyId[] } {
+}): { demand: readonly BodyId[]; addBodies(bodies: readonly BodyId[]): void } {
   const { projectId, selections, interaction } = input;
   const [held, setHeld] = useState<{
     projectId: string | undefined;
     demand: readonly BodyId[];
   }>({ projectId, demand: NO_DEMAND });
+  const addBodies = useCallback(
+    (bodies: readonly BodyId[]) => {
+      setHeld((previous) => {
+        const base = previous.projectId === projectId ? previous.demand : [];
+        const missing = bodies.filter((bodyId) => !base.includes(bodyId));
+        return missing.length === 0 && previous.projectId === projectId
+          ? previous
+          : {
+              projectId,
+              demand: normalizeLineageDemand([...base, ...missing])
+            };
+      });
+    },
+    [projectId]
+  );
   useEffect(() => {
     const fresh = [
       ...demandedBodiesForSelections(selections),
@@ -123,5 +138,8 @@ export function useLineageDemand(input: {
   }, [projectId, selections, interaction]);
   // A project switch clears the demand on this very render, before the
   // effect above records the new project.
-  return { demand: held.projectId === projectId ? held.demand : NO_DEMAND };
+  return {
+    demand: held.projectId === projectId ? held.demand : NO_DEMAND,
+    addBodies
+  };
 }
