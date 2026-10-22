@@ -34,6 +34,7 @@ function database(
         return statement;
       },
       async first() {
+        if (query.includes('COUNT(*) AS tables')) return { tables: 0 };
         if (query.includes("name LIKE 'block_erasing_%'")) {
           return { table_ready: 1, trigger_count: 30 };
         }

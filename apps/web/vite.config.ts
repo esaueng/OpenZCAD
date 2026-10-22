@@ -47,7 +47,8 @@ const WORKSPACE_PACKAGES = [
   'io-stl',
   'jobs',
   'cloudflare-adapters',
-  'persistence'
+  'persistence',
+  'crypto'
 ] as const;
 
 const workspaceAliases = {
