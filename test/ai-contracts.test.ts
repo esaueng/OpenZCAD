@@ -262,6 +262,22 @@ describe('AI patch contracts', () => {
     ).toBe(false);
   });
 
+  it('sets no dimension on a linked projection, but does on a copy (I01)', () => {
+    const line = { objectKind: 'line', x1: 0, y1: 0, x2: 1, y2: 0 };
+    expect(
+      sketchObjectExposesDimension(
+        { ...line, projection: { mode: 'linked' } },
+        'x2'
+      )
+    ).toBe(false);
+    expect(
+      sketchObjectExposesDimension(
+        { ...line, projection: { mode: 'unlinked' } },
+        'x2'
+      )
+    ).toBe(true);
+  });
+
   it('offers the AI exactly the font families the geometry package bundles', () => {
     // `ai-contracts` cannot depend on `@openzcad/geometry`, so the id list is
     // duplicated. This is what keeps the copy honest: a family added to the

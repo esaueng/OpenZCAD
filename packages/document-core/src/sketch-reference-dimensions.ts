@@ -18,6 +18,7 @@ import {
   getParameterScope,
   resolveParamValue
 } from './index';
+import { assertMinimumProjectSchema } from './document-content-schema';
 
 export interface SketchReferenceDimensionAddInput {
   sketchId: SketchId;
@@ -38,15 +39,11 @@ function assertReferenceDataSchema(
   data: SketchReferenceDimensionData,
   schemaVersion: number | undefined
 ): void {
-  if (
-    data.dimensionKind === 'distance' &&
-    data.distanceMode !== undefined &&
-    (typeof schemaVersion !== 'number' ||
-      !Number.isSafeInteger(schemaVersion) ||
-      schemaVersion < REFERENCE_DISTANCE_MODE_SCHEMA_VERSION)
-  )
-    throw new Error(
-      'Reference distance modes require project schema v35 or newer.'
+  if (data.dimensionKind === 'distance' && data.distanceMode !== undefined)
+    assertMinimumProjectSchema(
+      schemaVersion,
+      REFERENCE_DISTANCE_MODE_SCHEMA_VERSION,
+      'Reference distance modes'
     );
 }
 

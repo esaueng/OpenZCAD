@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   CommandManager,
   commandFactories,
@@ -23,6 +23,12 @@ import {
   type SketchReferenceDimension,
   type SketchReferenceDistanceMode
 } from '@openzcad/shared';
+
+import {
+  createRoomContext,
+  createTestRoom,
+  installWorkerSocketGlobals
+} from './collaboration-room-harness';
 
 const introduced = 35;
 const modes = ['absolute', 'horizontal', 'vertical'] as const;
@@ -451,3 +457,83 @@ describe('S02 reference-distance introduction at schema v35', () => {
     expect(saved).toEqual(before);
   });
 });
+
+let socketGlobals: ReturnType<typeof installWorkerSocketGlobals>;
+beforeAll(() => {
+  socketGlobals = installWorkerSocketGlobals();
+});
+afterAll(() => {
+  socketGlobals.restore();
+});
+
+describe.each(['http', 'websocket'])(
+  'S02 %s collaboration schema guard',
+  (transport) => {
+    it.each(modes)(
+      'refuses backdated %s mode carriers before storing a snapshot',
+      async (mode) => {
+        for (const carrier of ['current node', 'current nested log'] as const) {
+          const document = carried(carrier, 34, mode);
+          const before = clone(document);
+          const { context, values } = createRoomContext();
+          const room = createTestRoom(context, {});
+          const url = `https://room.test/?projectId=${document.projectId}`;
+          const headers = {
+            'x-openzcad-user-id': document.ownerUserId,
+            'x-openzcad-display-name': 'Owner',
+            'x-openzcad-project-role': 'owner'
+          };
+          let result: unknown;
+          if (transport === 'http') {
+            const response = await room.fetch(
+              new Request(url, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                  clientId: 'client_distance_schema',
+                  baseVersion: null,
+                  document
+                })
+              })
+            );
+            result = await response.json();
+          } else {
+            const response = await room.fetch(
+              new Request(url, {
+                headers: { ...headers, upgrade: 'websocket' }
+              })
+            );
+            expect(response.status).toBe(101);
+            const socket = socketGlobals.serverSockets.at(-1)!;
+            await socket.receive(
+              JSON.stringify({
+                type: 'hello',
+                clientId: 'client_distance_schema',
+                displayName: 'Owner',
+                baseVersion: null,
+                document: null
+              })
+            );
+            await socket.receive(
+              JSON.stringify({
+                type: 'document',
+                clientId: 'client_distance_schema',
+                baseVersion: null,
+                document
+              })
+            );
+            result = socket.lastFrame();
+          }
+          expect(result).toMatchObject({
+            type: 'error',
+            code: 'document-invalid',
+            message:
+              'Reference distance modes require project schema v35 or newer.'
+          });
+          expect(values.has('room:latest')).toBe(false);
+          expect(document).toEqual(before);
+        }
+      }
+    );
+  }
+);

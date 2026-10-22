@@ -11,7 +11,8 @@ import {
   documentEnvelopeError,
   hasValidImportedMeshSources,
   hasValidImportedStepSources,
-  isDocumentHistory
+  isDocumentHistory,
+  objectFolderSetError
 } from '@openzcad/shared';
 import { DurableObject } from 'cloudflare:workers';
 import {
@@ -148,6 +149,8 @@ import {
   createProjectDocument,
   duplicateProjectDocument,
   normalizeDocument,
+  assertDocumentContentSchema,
+  assertReferenceDocumentSchema,
   withoutDerivedProjection
 } from '@openzcad/document-core';
 import {
@@ -8127,6 +8130,28 @@ function checkClientDocument(value: unknown): CollaborationRejection | null {
       message: 'Collaboration document has invalid imported mesh data.'
     };
   }
+  try {
+    assertDocumentContentSchema(value as unknown as ProjectDocument);
+    assertReferenceDocumentSchema(value as unknown as ProjectDocument);
+  } catch (error) {
+    return {
+      code: 'document-invalid',
+      message:
+        error instanceof Error ? error.message : 'Invalid project content schema.'
+    };
+  }
+  // `normalizeDocument` fails closed on a malformed U06 folder section; say
+  // so here, as the account route does, rather than fail the room.
+  const foldersError =
+    value.objectFolders === undefined
+      ? null
+      : objectFolderSetError(value.objectFolders);
+  if (foldersError) {
+    return {
+      code: 'document-invalid',
+      message: `Collaboration document has invalid Objects folders: ${foldersError}`
+    };
+  }
   return null;
 }
 
@@ -8505,14 +8530,22 @@ export function mergeCollaborationDocuments(
   if (merged === MERGE_CONFLICT || !isRecord(merged)) {
     return null;
   }
-  return normalizeDocument({
-    ...merged,
-    version: Math.max(latest.version, incoming.version) + 1,
-    derived: {
-      bodyRepresentations: {},
-      exportableBodyIds: [],
-      warnings: [],
-      updatedAt: nowIso()
-    }
-  } as unknown as ProjectDocument);
+  // Each side is valid on its own, but a field-by-field merge can still
+  // compose an invalid document: one fork deletes an Objects folder while
+  // the other files a body in it. That is a conflict the submitter resolves,
+  // not a room failure, so a merge that does not validate is no merge.
+  try {
+    return normalizeDocument({
+      ...merged,
+      version: Math.max(latest.version, incoming.version) + 1,
+      derived: {
+        bodyRepresentations: {},
+        exportableBodyIds: [],
+        warnings: [],
+        updatedAt: nowIso()
+      }
+    } as unknown as ProjectDocument);
+  } catch {
+    return null;
+  }
 }

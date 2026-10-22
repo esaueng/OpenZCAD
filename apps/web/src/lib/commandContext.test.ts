@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   commandContextFor,
   commandContextKind,
+  commandContextLabel,
   FOLD_GROUPS,
   RAIL_TOOLS,
   remainingTools,
@@ -96,5 +97,34 @@ describe('commandContextFor', () => {
     const face = commandContextFor(EVERY_KIND.face);
     expect(toolApplies(face, 'hole')).toBe(true);
     expect(toolApplies(face, 'union')).toBe(false);
+  });
+});
+
+describe('commandContextLabel', () => {
+  it('names the pick the command bar filters to', () => {
+    expect(commandContextLabel(EVERY_KIND.idle)).toBeNull();
+    expect(commandContextLabel(EVERY_KIND.body)).toBe('1 body');
+    expect(commandContextLabel(EVERY_KIND.bodies)).toBe('2 bodies');
+    expect(commandContextLabel(EVERY_KIND.face)).toBe('1 face');
+    expect(commandContextLabel(EVERY_KIND.edges)).toBe('3 edges');
+    expect(commandContextLabel({ ...NOTHING, edgeCount: 1 })).toBe('1 edge');
+    expect(commandContextLabel({ ...NOTHING, regionCount: 2 })).toBe(
+      '2 regions'
+    );
+  });
+});
+
+describe('the body context', () => {
+  it('keeps every tool that starts from a picked body, Rotate about axis included', () => {
+    const body = commandContextFor(EVERY_KIND.body);
+    for (const tool of [
+      'transform',
+      'scale',
+      'axis-rotate',
+      'mirror',
+      'linear-pattern'
+    ] as const)
+      expect(toolApplies(body, tool)).toBe(true);
+    expect(toolApplies(body, 'box')).toBe(false);
   });
 });

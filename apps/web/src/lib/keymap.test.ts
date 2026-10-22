@@ -98,6 +98,7 @@ describe('keymap registry', () => {
       'sketch-ellipse': 'O',
       'sketch-spline': 'S',
       'sketch-text': 'T',
+      'sketch-project': 'U',
       'sketch-extrude': 'E'
     });
   });

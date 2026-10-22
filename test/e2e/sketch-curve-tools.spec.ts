@@ -155,7 +155,11 @@ test('the curve slot draws ellipses, elliptical arcs and both splines', async ({
   expect(sweep).toBeGreaterThan(90);
   expect(sweep).toBeLessThan(270);
 
-  expect(fit).toMatchObject({ objectKind: 'spline', method: 'fit', closed: true });
+  expect(fit).toMatchObject({
+    objectKind: 'spline',
+    method: 'fit',
+    closed: true
+  });
   expect(fit.points).toHaveLength(4);
   expect(control).toMatchObject({
     objectKind: 'spline',

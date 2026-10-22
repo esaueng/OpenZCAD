@@ -384,6 +384,16 @@
   white-space: nowrap;
 }
 
+/* I01: a sketch's projected entities, indented under its Objects row. They
+   say where each came from; selecting happens on the sketch itself. */
+.projection-row {
+  min-height: 24px;
+  gap: 8px;
+  padding: 2px 6px 2px 26px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
 .feature-flag {
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
@@ -1092,4 +1102,64 @@
   background: var(--color-surface);
   border: 1px solid var(--color-accent);
   border-radius: var(--radius-sm);
+}
+
+/* ── Objects folders (U06) ───────────────────────────────────
+   Rows inside a folder step in by its depth; the folder row leads with its
+   disclosure. A drag lights the folder it would land in, and a "Move to top
+   level" row appears under the bodies only while something is dragged. */
+.body-row[style*='--object-depth'],
+.object-folder-row {
+  padding-left: calc(var(--object-depth, 0) * 14px);
+}
+
+.object-folder-toggle {
+  width: 20px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: var(--color-text-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.object-folder-toggle:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.object-folder-row .feature-flag {
+  flex: 0 0 auto;
+}
+
+.object-folder-row.drop-target,
+.object-drop-root.drop-target {
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent);
+}
+
+.object-drop-root {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  padding: 3px 8px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.object-folder-new {
+  width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: var(--color-text-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.object-folder-new:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
 }

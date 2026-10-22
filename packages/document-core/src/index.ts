@@ -21,8 +21,15 @@ import {
 } from './sketch-reference-dimensions';
 export * from './sketch-reference-dimensions';
 import { assertSketchComposites, compositesWithout } from './sketch-composites';
+import {
+  assertDocumentContentSchema,
+  assertSketchObjectContentSchema
+} from './document-content-schema';
 export * from './sketch-composites';
+export * from './sketch-projections';
+export * from './document-content-schema';
 export * from './drawings';
+export * from './object-folders';
 export * from './reference-images';
 export {
   constantRigidTransform,
@@ -48,6 +55,7 @@ import {
   createId,
   deepClone,
   assertDrawingSet,
+  assertObjectFolderSet,
   assertReferenceImageSet,
   featureColor,
   isProjectCheckpoint,
@@ -867,6 +875,9 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   assertDrawingSet(document.drawings);
   // Schema v32 reference images: the same — validated, never rewritten.
   assertReferenceImageSet(document.referenceImages);
+  // Schema v34 Objects folders: validated as written, never synthesized.
+  assertObjectFolderSet(document.objectFolders);
+  assertDocumentContentSchema(document);
   for (const node of documentNodesWithHistory(document)) {
     if (node.kind === 'sketch') {
       assertSketchReferenceDimensions(node, document.schemaVersion);
@@ -1334,6 +1345,9 @@ export function addSketchFeature(
     objectIds: objectNodeIds
   };
 
+  objects.forEach((object) =>
+    assertSketchObjectContentSchema(object, document.schemaVersion)
+  );
   objects.forEach((object, index) => {
     const objectNodeId = objectNodeIds[index]!;
     next.nodes[objectNodeId] = {
@@ -1373,6 +1387,8 @@ export function updateSketch(
   document: ProjectDocument,
   input: SketchUpdateInput
 ): ProjectDocument {
+  if (input.object !== undefined)
+    assertSketchObjectContentSchema(input.object, document.schemaVersion);
   const next = cloneDocument(document);
   const sketch = findSketch(next, input.sketchId);
   if (!sketch) {
@@ -1495,7 +1511,12 @@ export function translateSketch(
         : resolveParamValue(value, scope, label, next.units) + delta;
     for (const objectId of sketch.objectIds) {
       const node = next.nodes[objectId];
-      if (node?.kind !== 'sketch-object') {
+      // A linked projection belongs to its model edge, not to the sketch's
+      // placement: the next rebuild would project it back regardless.
+      if (
+        node?.kind !== 'sketch-object' ||
+        node.data.projection?.mode === 'linked'
+      ) {
         continue;
       }
       const data = node.data;
@@ -1557,6 +1578,9 @@ export function addSketchObjects(
   const objectNodeIds = input.objects.map(
     (_, index) => input.ids?.objectNodeIds[index] ?? toEntityId(createId('ent'))
   );
+  input.objects.forEach((object) =>
+    assertSketchObjectContentSchema(object, document.schemaVersion)
+  );
   input.objects.forEach((object, index) => {
     const objectNodeId = objectNodeIds[index]!;
     next.nodes[objectNodeId] = {
@@ -1596,6 +1620,11 @@ export function updateSketchObject(
   document: ProjectDocument,
   input: SketchObjectUpdateInput
 ): ProjectDocument {
+  assertSketchObjectContentSchema(
+    input.data,
+    document.schemaVersion,
+    input.objectId
+  );
   const next = cloneDocument(document);
   const { objectNode } = requireSketchObject(
     next,

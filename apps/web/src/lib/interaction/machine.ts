@@ -2,6 +2,7 @@ import type { ExtrudeChoice } from '../extrudeInference';
 import type {
   ParamValue,
   SketchPlaneRef,
+  SketchProjectionMode,
   TextAlign,
   TextFontStyle,
   TopologySelection
@@ -80,7 +81,9 @@ export type SketchToolId =
   | 'polygon'
   | 'ellipse'
   | 'spline'
-  | 'text';
+  | 'text'
+  /** I01: pick model edges or faces to project into the sketch. */
+  | 'project';
 
 /**
  * The curve slot's types (I01): the Ellipse tool draws a full ellipse or an
@@ -305,6 +308,11 @@ export interface SketchSessionState {
   /** The Offset tool's settings; absent is a mitered chain. */
   offsetOptions?: SketchOffsetOptions;
   /**
+   * I01: whether the Project tool keeps what it projects linked to its edge
+   * or copies it once; absent is linked.
+   */
+  projectMode?: SketchProjectionMode;
+  /**
    * The selected object's drag-move, while the pointer holds it. Absent
    * otherwise; a release commits it and Escape cancels it, and neither
    * clears the selection.
@@ -443,6 +451,7 @@ export type InteractionEvent =
   | { type: 'sketch-constraint-pick'; pick: SketchConstraintPick }
   | { type: 'sketch-edit-tool'; kind: SketchEditToolKind | null }
   | { type: 'sketch-offset-options'; options: SketchOffsetOptions }
+  | { type: 'sketch-project-mode'; mode: SketchProjectionMode }
   | { type: 'sketch-edit-pick'; objectId: string }
   | {
       type: 'sketch-move-start';
@@ -513,6 +522,21 @@ export function sketchPickArmed(state: InteractionState): boolean {
     state.mode === 'sketch' &&
     (state.session.pendingConstraint !== null ||
       state.session.pendingEdit !== null)
+  );
+}
+
+/**
+ * I01: whether an armed projection re-pick still holds. A re-pick replaces a
+ * linked projection's source, so it lives only while Project is armed in
+ * linked mode: leaving the tool, or stepping to Unlinked from the strip or
+ * the project key, disarms it, and the next pick then does what the strip
+ * shows.
+ */
+export function projectionRepickHolds(state: InteractionState): boolean {
+  return (
+    state.mode === 'sketch' &&
+    state.session.tool === 'project' &&
+    (state.session.projectMode ?? 'linked') === 'linked'
   );
 }
 
@@ -989,6 +1013,24 @@ function reduceInteraction(
           selectedConstraintId: null
         }
       };
+    case 'sketch-project-mode':
+      // Choosing linked or unlinked arms the Project tool, like a circle type
+      // arms the Circle tool.
+      return state.mode === 'sketch'
+        ? {
+            ...state,
+            session: {
+              ...state.session,
+              tool: 'project',
+              projectMode: event.mode,
+              drawing: false,
+              selectedObjectId: null,
+              pendingConstraint: null,
+              pendingEdit: null,
+              textDraft: null
+            }
+          }
+        : state;
     case 'sketch-offset-options':
       // A setting of the tool, like the polygon's side count: it never
       // disarms the tool or drops a pick.

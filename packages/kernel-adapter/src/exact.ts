@@ -3504,6 +3504,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         ...(build.datumAxes.size > 0
           ? { datumAxes: Object.fromEntries(build.datumAxes) }
           : {}),
+        ...(build.sketchProjections?.size
+          ? { sketchProjections: Object.fromEntries(build.sketchProjections) }
+          : {}),
         ...(build.faceReferenceRepairs?.length
           ? { faceReferenceRepairs: build.faceReferenceRepairs }
           : {}),
@@ -4361,6 +4364,22 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         });
       }
     }
+    // I01: a linked projection is its model edge's shadow, not free
+    // geometry, so the solver holds it where the edge put it.
+    const linked = sketch.objectIds.filter((objectId) => {
+      const node = document.nodes[objectId];
+      return (
+        node?.kind === 'sketch-object' &&
+        node.data.projection?.mode === 'linked'
+      );
+    });
+    const anchor =
+      linked.length > 0
+        ? {
+            ...options.anchor,
+            objectIds: [...(options.anchor?.objectIds ?? []), ...linked]
+          }
+        : options.anchor;
     const { solveSketchWithGcs } = await import('./gcs-sketch');
     const kernel = new RemusKernel();
     try {
@@ -4370,7 +4389,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         sketch.constraints ?? [],
         (value, label) =>
           resolveParamValue(value, scope, label, document.units),
-        options
+        anchor ? { ...options, anchor } : options
       );
     } finally {
       kernel.free();
