@@ -1530,6 +1530,34 @@ export async function approverComparisonCode(
   });
 }
 
+/**
+ * The account's device list as the server holds it now, verified to extend
+ * `account`'s list under the same identity and key generation.
+ */
+async function currentDeviceList(
+  ctx: E2eeContext,
+  account: AccountView
+): Promise<VerifiedDeviceList> {
+  const current = (await ctx.api.account()).current;
+  if (
+    !current ||
+    current.generation !== account.generation ||
+    !sameBytes(fromBase64Url(current.identityKey), account.list.identityKey)
+  ) {
+    throw new EncryptionFlowError(
+      'key-mismatch',
+      'Your encryption keys changed since this page loaded. Reload and approve again.'
+    );
+  }
+  const list = await verifyDeviceList(
+    account.list.identityKey,
+    decodeChain(current),
+    { pin: account.list.pin }
+  );
+  await persistDeviceList(ctx, list);
+  return list;
+}
+
 export type ApprovalProof =
   | { readonly kind: 'scan'; readonly code: string }
   /** The user confirmed both screens show the same six digits. */
@@ -1574,6 +1602,25 @@ export async function approveDevice(
   let certified = false;
   let sealedAccountKey: string | undefined;
   if (recoverySecret) {
+    // An earlier attempt may have certified the device and then failed
+    // before `completeApproval` reached the Worker. Resume from the current
+    // list with that certification instead of conflicting on a second append.
+    list = await currentDeviceList(ctx, account);
+    const listed = list.devices.find((d) => d.deviceId === approval.deviceId);
+    if (listed) {
+      if (
+        !sameBytes(listed.signingKey, signingKey) ||
+        !sameBytes(listed.unlockKey, unlockKey)
+      ) {
+        throw new EncryptionFlowError(
+          'key-mismatch',
+          'The device list already holds different keys for this device. Do not approve it.'
+        );
+      }
+      certified = true;
+    }
+  }
+  if (recoverySecret && !certified) {
     const { identityPrivateKey, accountKey } = await openIdentity(
       ctx,
       account,
@@ -1617,7 +1664,7 @@ export async function approveDevice(
       written: signed.entry
     });
     certified = true;
-  } else {
+  } else if (!certified) {
     sealedAccountKey = b64(
       await sealKey(unlockKey, unlocked.accountKey, {
         purpose: 'account-key',

@@ -930,6 +930,54 @@ describe('device approval', () => {
     ).toBe(0);
   });
 
+  it('resumes a certified approval whose completion never reached the Worker', async () => {
+    const srv = server();
+    const { recovery, laptop, account } = await setUp(srv);
+    const phone = device(srv);
+    const request = await requestApproval(phone, null, 'Phone');
+    if (request.step !== 'waiting')
+      throw new Error('Expected pending approval');
+    const lost = {
+      ...laptop,
+      api: {
+        ...laptop.api,
+        completeApproval: async () => {
+          throw new Error('network lost');
+        }
+      }
+    };
+    await expect(
+      approveDevice(
+        lost,
+        account,
+        request.approval,
+        { kind: 'scan', code: request.scanCode },
+        recovery.secret
+      )
+    ).rejects.toThrow('network lost');
+    // The append landed: the phone is certified but its approval is pending.
+    expect((await laptop.api.getApproval(request.approval.id)).state).toBe(
+      'requested'
+    );
+    const entries = ready(await loadEncryption(laptop)).list.entries.length;
+    // Retry from the same, now stale, view without appending again.
+    await approveDevice(
+      laptop,
+      account,
+      request.approval,
+      { kind: 'scan', code: request.scanCode },
+      recovery.secret
+    );
+    expect(ready(await loadEncryption(laptop)).list.entries).toHaveLength(
+      entries
+    );
+    const done = await advanceApprovalAsNewDevice(phone);
+    if (done.step !== 'done') throw new Error('Expected completed approval');
+    lockAccount(USER);
+    const state = ready(await loadEncryption(phone));
+    expect([state.deviceStatus, state.unlocked]).toEqual(['certified', true]);
+  });
+
   it.each(['before verification', 'before commit'] as const)(
     'binds a revealed comparison to its responding approver %s',
     async (timing) => {
