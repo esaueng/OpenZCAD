@@ -16,10 +16,14 @@ import type {
 import { clearAssistantHistory } from './lib/assistant/historyStorage';
 import { exactWarningBaseline } from './lib/exactWarnings';
 import {
+  beginDatumVertexRepair,
   datumAxisSourceFailed,
   datumFaceAttachFailed,
+  datumVertexRepairSlots,
+  datumVertexSourceFailed,
   earlierDatumPlanes
 } from './lib/datumPlaneDisplay';
+import type { DatumVertexRepairSession } from './lib/datumVertexRepair';
 import {
   referenceImageDisplays,
   referenceImageInsertPlane
@@ -2352,6 +2356,8 @@ export function App() {
     slot: 0 | 1;
     both?: boolean;
     first?: TopologySelection;
+    /** Requested vertex roles are staged without touching the document. */
+    vertices?: DatumVertexRepairSession;
   } | null>(null);
   const [formFacePickTarget, setFormFacePickTarget] = useState<BodyId | null>(
     null
@@ -2508,9 +2514,11 @@ export function App() {
   // prompt still said "click a planar face". The manual choice survives and
   // takes over again once the sketch has a plane.
   const selectionFilter =
-    tool === 'sketch'
-      ? 'face'
-      : effectiveSelectionFilter(manualSelectionFilter, tool);
+    datumRepair?.vertices
+      ? 'edge'
+      : tool === 'sketch'
+        ? 'face'
+        : effectiveSelectionFilter(manualSelectionFilter, tool);
   const [statusEntry, setStatusEntry] = useState<StatusEntry>(() => ({
     text: cloudFunctionsEnabled
       ? LIBRARY_MODE_STATUS.checking
@@ -5044,11 +5052,14 @@ export function App() {
     return () => window.removeEventListener('beforeunload', beforeUnload);
   }, [localAutosave, localSaveDirty]);
 
+  useLayoutEffect(() => {
+    setDatumRepair(null);
+  }, [doc?.projectId]);
+
   useEffect(() => {
     // An armed face re-pick names a feature by id; a different project's
     // features must never satisfy it.
     setFaceRepair(null);
-    setDatumRepair(null);
     setToFacePick(null);
     // Nor may an armed edge or face operation, or a delete awaiting its
     // confirm: a "Fillet · Ready" chip from the last project read as a
@@ -13700,6 +13711,72 @@ export function App() {
       const { feature: repair, slot, both, first } = datumRepair;
       const attempt = datumRepairAttempt.current;
       const withdrawn = () => datumRepairAttempt.current !== attempt;
+      if (datumRepair.vertices) {
+        const session = datumRepair.vertices;
+        if (
+          base.projectId !== session.projectId ||
+          base.version !== session.documentVersion
+        ) {
+          setStatus(
+            'The document changed during vertex repair. Cancel and start the repair again.',
+            { sticky: true }
+          );
+          return;
+        }
+        if (geometryBusy) {
+          setStatus(
+            'The repair is still being checked. Wait before choosing another vertex.',
+            { sticky: true }
+          );
+          return;
+        }
+        void import('./lib/datumVertexRepair').then(
+          ({ stageDatumVertexRepairPick, datumVertexRepairEdit }) => {
+            if (withdrawn()) return;
+            if (managerRef.current?.document !== base) {
+              setStatus(
+                'The document changed during vertex repair. Cancel and start the repair again.',
+                { sticky: true }
+              );
+              return;
+            }
+            try {
+              const staged = stageDatumVertexRepairPick(
+                base,
+                session,
+                selection,
+                detail?.point ?? null
+              );
+              if (staged.pendingSlot) {
+                setDatumRepair({ ...datumRepair, vertices: staged });
+                setStatus(datumVertexRepairPrompt(staged), { sticky: true });
+                return;
+              }
+              const edit = datumVertexRepairEdit(base, staged);
+              void validatedFeature.runTransaction([edit.command], {
+                label: edit.label,
+                cancelled: withdrawn,
+                targets: affectedFeatureTargets(base, repair.featureId),
+                validateDerived: edit.validateDerived,
+                validatingMessage: `Checking the re-picked vertices for "${repair.name}"…`,
+                successMessage: `"${repair.name}" follows the re-picked vertices.`,
+                onSuccess: () => setDatumRepair(null),
+                // Keep earlier valid picks and the last role pending on refusal.
+                onFailure: (message) =>
+                  setStatus(`${message} ${datumVertexRepairPrompt(session)}`, {
+                    sticky: true
+                  })
+              });
+            } catch (error) {
+              setStatus(
+                errorMessage(error, 'That pick cannot replace this datum vertex.'),
+                { sticky: true }
+              );
+            }
+          }
+        );
+        return;
+      }
       if (repair.data.featureKind === 'datum-axis') {
         void import('./lib/datumAxes').then(({ datumAxisSourceRepairEdit }) => {
           if (withdrawn()) return;
@@ -20052,15 +20129,52 @@ export function App() {
     );
   }
 
+  function datumVertexRepairPrompt(session: DatumVertexRepairSession): string {
+    const pending = session.pendingSlot;
+    return pending
+      ? `Re-pick ${pending.label.toLowerCase()} for "${session.featureName}": click an edge near the intended end · Esc cancels.`
+      : `Checking the re-picked vertices for "${session.featureName}"…`;
+  }
+
+  function armDatumVertexRepair(feature: FeatureNode, slots: (0 | 1 | 2)[]) {
+    if (!ensureCanEdit('repair a feature')) return;
+    const base = managerRef.current?.document;
+    if (!base) return;
+    try {
+      const vertices = beginDatumVertexRepair(
+        base,
+        feature.featureId,
+        slots,
+        attributedFeatureWarnings()
+      );
+      setMeasuring(false);
+      setTool(null);
+      clearSelection();
+      setFaceRepair(null);
+      setToFacePick(null);
+      setDatumRepair({ feature, slot: 0, vertices });
+      setStatus(datumVertexRepairPrompt(vertices), { sticky: true });
+    } catch (error) {
+      setStatus(errorMessage(error, 'Vertex repair could not start.'));
+    }
+  }
+
   // A datum re-pick yields to any mode that takes viewport clicks over:
   // Measure, a tool, a sketch or a locked workspace (View or Tweak). Each
   // arm or disarm also moves the attempt counter, which withdraws an edit
   // still being checked.
   const datumRepairAttempt = useRef(0);
-  useEffect(() => {
+  useLayoutEffect(() => {
     datumRepairAttempt.current += 1;
-  }, [datumRepair]);
-  useEffect(() => {
+  }, [
+    datumRepair,
+    measuring,
+    tool,
+    modelingLocked,
+    interaction.mode,
+    doc?.projectId
+  ]);
+  useLayoutEffect(() => {
     if (
       measuring ||
       tool !== null ||
@@ -20282,6 +20396,43 @@ export function App() {
                 ]
               : []
           )
+        : []),
+      ...(doc &&
+      datumVertexSourceFailed(
+        feature,
+        featureAttribution?.derived === doc.derived
+          ? featureAttribution.featureWarnings
+          : []
+      )
+        ? (() => {
+            const slots = datumVertexRepairSlots(feature);
+            return [
+              ...slots.map((slot) => ({
+                item: {
+                  id: `repair-datum-vertex-${slot.index}`,
+                  label: `Re-pick ${slot.label.toLowerCase()}…`,
+                  icon: <Crosshair size={13} aria-hidden="true" />
+                },
+                run: () => armDatumVertexRepair(feature, [slot.index])
+              })),
+              ...(slots.length > 1
+                ? [
+                    {
+                      item: {
+                        id: 'repair-datum-vertices-all',
+                        label: 'Re-pick all source vertices…',
+                        icon: <Crosshair size={13} aria-hidden="true" />
+                      },
+                      run: () =>
+                        armDatumVertexRepair(
+                          feature,
+                          slots.map(({ index }) => index)
+                        )
+                    }
+                  ]
+                : [])
+            ];
+          })()
         : []),
       // R01: an axis along an edge or a cylinder whose source was lost.
       ...(feature.data.featureKind === 'datum-axis' &&
@@ -20828,7 +20979,11 @@ export function App() {
             setFaceRepair(null);
             setDatumRepair(null);
             setToFacePick(null);
-            setStatus('Face pick canceled · the feature is unchanged.');
+            setStatus(
+              datumRepair?.vertices
+                ? 'Vertex repair canceled · the feature is unchanged.'
+                : 'Face pick canceled · the feature is unchanged.'
+            );
             return;
           }
           if (interaction.mode === 'sketch') {

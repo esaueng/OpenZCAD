@@ -26,7 +26,7 @@ import {
  * The CI matrix passes each shard's file list to `playwright test`, so the
  * assignment is a gate: a spec left out of every shard never runs, and one
  * assigned twice wastes a runner. The shard count here mirrors
- * `.github/workflows/fleet-ci.yml`.
+ * the active fleet workflow selected by `ci.yml`.
  */
 const CI_SHARDS = 6;
 

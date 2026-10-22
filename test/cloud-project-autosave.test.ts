@@ -1225,6 +1225,92 @@ describe('cloud project autosave — refusals', () => {
 });
 
 describe('cloud project autosave — flushing', () => {
+  it('rechecks edits when a drain begins with a write already in flight', async () => {
+    const held = gate();
+    const started = gate();
+    const { controller, saves } = harness({
+      respond: async (input) => {
+        if (input.document.version === 3) {
+          started.open();
+          await held.wait;
+        }
+        return { projectId: input.document.projectId, version: input.document.version, updatedAt: '2026-01-01T00:00:00.000Z' };
+      }
+    });
+    const document = documentAt(2);
+    controller.openProject(document.projectId, 2);
+    controller.schedule(documentAt(3, document));
+    const first = controller.flush();
+    await started.wait;
+    expect(controller.hasPendingChanges).toBe(false);
+    const draining = controller.flushPending();
+    controller.schedule(documentAt(4, document));
+    held.open();
+    await Promise.all([first, draining]);
+
+    expect(saves.map((save) => save.version)).toEqual([3, 4]);
+    expect(controller.hasPendingChanges).toBe(false);
+    controller.dispose();
+  });
+
+  it.each(['paused', 'offline', 'conflict'] as const)('rechecks %s eligibility before a queued write starts', async (state) => {
+    const held = gate();
+    const h = harness({
+      respond: async (input) => {
+        if (input.document.version === 3) await held.wait;
+        return { projectId: input.document.projectId, version: input.document.version, updatedAt: '2026-01-01T00:00:00.000Z' };
+      }
+    });
+    const document = documentAt(2);
+    h.controller.openProject(document.projectId, 2);
+    h.controller.schedule(documentAt(3, document));
+    const first = h.controller.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    h.controller.schedule(documentAt(4, document));
+    const queued = h.controller.flush();
+    if (state === 'paused') h.controller.configure({ enabled: false });
+    else if (state === 'offline') h.setConnectivity(false);
+    else h.controller.haltForConflict(document.projectId);
+    held.open();
+    await Promise.all([first, queued]);
+
+    expect(h.saves.map((save) => save.version)).toEqual([3]);
+    expect(h.controller.hasPendingChanges).toBe(true);
+    expect(lastState(h.statuses)).toBe(state);
+    await h.controller.flushPending();
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_MAX_WAIT_MS * 2);
+    expect(h.saves).toHaveLength(1);
+    h.controller.dispose();
+  });
+
+  it('preserves a newer edit over an ineligible queued snapshot and resumes with the acknowledged fence', async () => {
+    const held = gate();
+    const { controller, saves } = harness({
+      respond: async (input) => {
+        if (input.document.version === 3) await held.wait;
+        return { projectId: input.document.projectId, version: input.document.version, updatedAt: '2026-01-01T00:00:00.000Z' };
+      }
+    });
+    const document = documentAt(2);
+    controller.openProject(document.projectId, 2);
+    controller.schedule(documentAt(3, document));
+    const first = controller.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    controller.schedule(documentAt(4, document));
+    const queued = controller.flush();
+    controller.configure({ enabled: false });
+    controller.schedule(documentAt(5, document));
+    held.open();
+    await Promise.all([first, queued]);
+    expect(saves.map((save) => save.version)).toEqual([3]);
+    controller.configure({ enabled: true });
+    await vi.advanceTimersByTimeAsync(0);
+    await controller.whenIdle();
+    expect(saves).toEqual([{ version: 3, expectedVersion: 2 }, { version: 5, expectedVersion: 3 }]);
+    expect(controller.hasPendingChanges).toBe(false);
+    controller.dispose();
+  });
+
   it('writes immediately on flush rather than waiting out the delay', async () => {
     const { controller, saves } = harness();
     const document = documentAt(2);
