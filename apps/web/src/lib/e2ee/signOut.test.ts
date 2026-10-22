@@ -53,13 +53,21 @@ describe('saving before device-key sign-out', () => {
       ...device,
       approval: { id: 'sign_out_pending_approval', nonce: new Uint8Array(32) }
     });
-    const api = e2eeApis.createE2eeApi();
+    const api = e2eeApis.createE2eeApi(async () =>
+      Response.json({ state: 'pending' })
+    );
+    const readLiveApproval = api.getApproval;
+    const get = vi
+      .spyOn(api, 'getApproval')
+      .mockRejectedValue(
+        new e2eeApis.E2eeApiError(404, 'Approval unavailable')
+      );
     const cancel = vi.fn(async () => ({ ok: true as const }));
     vi.spyOn(e2eeApis, 'createE2eeApi').mockReturnValue({
       ...api,
       cancelApproval: cancel
     });
-    return { ...current, cancel };
+    return { ...current, cancel, get, readLiveApproval };
   }
 
   it('cancels the pending server approval before its only device keys disappear', async () => {
@@ -127,6 +135,46 @@ describe('saving before device-key sign-out', () => {
     expect((await store.loadDevice(userId))?.approval?.id).toBe(
       'sign_out_pending_approval'
     );
+  });
+
+  it('retains keys when an idempotent cancellation leaves the request readable', async () => {
+    const { userId, store, cancel, get, readLiveApproval } =
+      await pendingApproval();
+    get.mockImplementation(readLiveApproval);
+    const revokeSession = vi.fn();
+    await expect(
+      signOutAfterSaving({
+        userId,
+        keepDevice: false,
+        isCurrentSession: () => true,
+        savePending: async () => {},
+        revokeSession
+      })
+    ).rejects.toThrow('could not be canceled');
+    expect(cancel).toHaveBeenCalledOnce();
+    expect((await store.loadDevice(userId))?.approval?.id).toBe(
+      'sign_out_pending_approval'
+    );
+    expect(revokeSession).not.toHaveBeenCalled();
+  });
+
+  it('retains keys when authorization is revoked before cancellation can be confirmed', async () => {
+    const { userId, store, get } = await pendingApproval();
+    get.mockRejectedValue(new e2eeApis.E2eeApiError(401, 'Session revoked'));
+    const revokeSession = vi.fn();
+    await expect(
+      signOutAfterSaving({
+        userId,
+        keepDevice: false,
+        isCurrentSession: () => true,
+        savePending: async () => {},
+        revokeSession
+      })
+    ).rejects.toThrow('Session revoked');
+    expect((await store.loadDevice(userId))?.approval?.id).toBe(
+      'sign_out_pending_approval'
+    );
+    expect(revokeSession).not.toHaveBeenCalled();
   });
 
   it('stops removing keys or revoking a new session if the account changes during cancellation', async () => {
