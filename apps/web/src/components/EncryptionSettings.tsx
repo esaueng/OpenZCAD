@@ -237,8 +237,8 @@ function AccountPanel({
       {identityChanged ? (
         <Notice tone="warning" role="alert">
           Your encryption keys were replaced on another device, so this device
-          no longer trusts them. Approve it again from that device, or enter
-          the new recovery key.
+          no longer trusts them. Approve it again from that device by
+          choosing Compare codes there, or enter the new recovery key.
         </Notice>
       ) : null}
       {account.unlockError ? (

@@ -1353,6 +1353,19 @@ async function finishApproval(
     // A device re-approved after its identity was replaced pins the new one
     // only on the approver's signed word, below.
     if (!(pin && isE2eeError(error, 'context-mismatch'))) throw error;
+    // The scan form authenticates only this device to the approver: the
+    // approver's key would come from the very list being trusted, which a
+    // server could fabricate together with a new identity. Replacing a
+    // pinned identity needs the compare form, whose six digits authenticate
+    // the approver here, or the new recovery key.
+    if (!approval.approverKey) {
+      await ctx.api.cancelApproval(approval.id).catch(() => undefined);
+      await ctx.store.saveDevice({ ...device, approval: null });
+      throw new EncryptionFlowError(
+        'grant-invalid',
+        'This device trusted different encryption keys, and a scanned approval cannot replace them. Enter the new recovery key here, or ask again and choose Compare codes on the other device.'
+      );
+    }
     list = await verifyDeviceList(identityKey, chain);
   }
   // In the compare form the six digits authenticated the approver's key; in

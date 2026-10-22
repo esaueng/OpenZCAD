@@ -2366,7 +2366,7 @@ describe('cross-tab pin persistence', () => {
     expect(unlockedEncryptionKey(USER)).toBeNull();
   });
 
-  it('preserves explicit re-approval after an identity replacement', async () => {
+  async function replacedUnderPhone() {
     const srv = server();
     const { laptop, recovery } = await setUp(srv);
     const phone = await enrolled(srv, recovery.secret, 'Phone');
@@ -2382,6 +2382,19 @@ describe('cross-tab pin persistence', () => {
     const stale = await loadEncryption(phone.ctx);
     if (stale.kind !== 'identity-changed')
       throw new Error('Expected an identity change');
+    const oldPin = await phone.ctx.store.loadPin(USER);
+    return { laptop, phone, next, newer, stale, oldPin };
+  }
+
+  // The scan form authenticates only the phone to the approver: the approver
+  // key would come from the unpinned list itself, which a server could
+  // fabricate along with a new identity, so it cannot replace the identity
+  // this browser pinned.
+  async function refusedScan(
+    setup: Awaited<ReturnType<typeof replacedUnderPhone>>,
+    recoverySecret: Uint8Array | null
+  ) {
+    const { laptop, phone, newer, stale, oldPin } = setup;
     const request = await requestApproval(
       phone.ctx,
       stale.account,
@@ -2395,13 +2408,63 @@ describe('cross-tab pin persistence', () => {
       newer,
       request.approval,
       { kind: 'scan', code: request.scanCode },
-      next.secret
+      recoverySecret
     );
-    const completed = await advanceApprovalAsNewDevice(phone.ctx);
+    lockAccount(USER);
+    await flowRefusal(advanceApprovalAsNewDevice(phone.ctx), 'grant-invalid');
+    expect(await phone.ctx.store.loadPin(USER)).toEqual(oldPin);
+    expect((await phone.ctx.store.loadDevice(USER))?.approval).toBeNull();
+    expect(unlockedEncryptionKey(USER)).toBeNull();
+    const after = await loadEncryption(phone.ctx);
+    expect(after.kind).toBe('identity-changed');
+    return after;
+  }
+
+  it('re-approves a replaced identity by comparing codes, not by a scan', async () => {
+    const setup = await replacedUnderPhone();
+    const { laptop, phone, newer } = setup;
+    const after = await refusedScan(setup, null);
+    if (after.kind !== 'identity-changed') throw new Error('unreachable');
+    // The six digits authenticate the approver, so the compare form may.
+    const request = await requestApproval(
+      phone.ctx,
+      after.account,
+      'Phone again'
+    );
+    if (request.step !== 'waiting')
+      throw new Error('Expected a waiting approval');
+    const approver = ready(await loadEncryption(laptop));
+    await beginCompareApproval(laptop, approver, request.approval.id);
+    const shown = await advanceApprovalAsNewDevice(phone.ctx);
+    if (shown.step !== 'compare') throw new Error(`got ${shown.step}`);
+    const revealed = await laptop.api.getApproval(request.approval.id);
+    expect(await approverComparisonCode(laptop, approver, revealed)).toBe(
+      shown.code
+    );
+    await approveDevice(laptop, approver, revealed, { kind: 'compare' }, null);
+    lockAccount(USER);
+    const completed = await confirmApprovalCode(phone.ctx);
     if (completed.step !== 'done')
       throw new Error('Expected a completed approval');
     expect(ready(completed.state).unlocked).toBe(true);
     expect(ready(completed.state).fingerprint).toBe(newer.fingerprint);
+  });
+
+  it('recovers with the new recovery key after a refused certifying scan', async () => {
+    const setup = await replacedUnderPhone();
+    const after = await refusedScan(setup, setup.next.secret);
+    if (after.kind !== 'identity-changed') throw new Error('unreachable');
+    const recovered = ready(
+      await enrollWithRecoveryKey(
+        setup.phone.ctx,
+        after.account,
+        setup.next.secret,
+        'Phone again'
+      )
+    );
+    expect(recovered.deviceStatus).toBe('certified');
+    expect(recovered.unlocked).toBe(true);
+    expect(recovered.fingerprint).toBe(setup.newer.fingerprint);
   });
 
   it('recovers a certified browser when replacement committed but its pin snapshot was stale', async () => {
