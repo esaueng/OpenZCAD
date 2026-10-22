@@ -108,6 +108,13 @@ export interface ExactBuildResult {
    * stored (last valid) geometry; see `buildDocumentHistorySteps`.
    */
   sketchObjectOverrides?: Map<string, SketchObjectData>;
+  /**
+   * Linked projections whose persistent sketch constraints could not be
+   * solved at this history position. Consumers of that sketch refuse the
+   * recorded reason; unrelated sketches and bodies remain available.
+   * Build-local only, copied with retained history checkpoints.
+   */
+  sketchProjectionFailures?: Map<SketchId, string>;
 }
 
 /** Same-kernel measurement handles and the verdicts established for them. */
