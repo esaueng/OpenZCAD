@@ -365,6 +365,13 @@ export const KEYBOARD_CONTROL_GROUPS = [
         detail: 'Place editable text on the sketch plane.'
       },
       {
+        id: 'sketch-project',
+        ...bound('sketch-project'),
+        action: 'Project edges',
+        detail:
+          'Click a model edge, or a face for its whole boundary, to project it into the sketch; again steps between linked and unlinked.'
+      },
+      {
         id: 'sketch-constraints',
         keys: ['—'],
         action: 'Constraints (Horizontal, Vertical, Parallel, …)',

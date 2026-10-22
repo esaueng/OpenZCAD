@@ -7,7 +7,11 @@ import type { GeometryReadyState } from '@openzcad/shared';
 import type { EditAnalysisRequest } from '@openzcad/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { documentForWorker, documentForRebuild } from '../lib/meshTransport';
-import { geometryContentKey } from '../worker/exactRebuildCache';
+import {
+  geometryContentKey,
+  rebindSketchGeometryForContent
+} from '../worker/exactRebuildCache';
+import { attachDerivedState } from '@openzcad/document-core';
 import { describeWorkerFailure } from '../lib/workerFailure';
 import type {
   BodyId,
@@ -333,6 +337,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   const lastSyncedKey = useRef<string | null>(null);
   const broadcastDocument = useRef<ProjectDocument | null>(null);
   const readyDocument = useRef<ProjectDocument | null>(null);
+  const readyDerived = useRef<DerivedState | null>(null);
   const lastDemandRef = useRef<readonly BodyId[] | null>(null);
   const firstReadyMarkedRef = useRef(false);
   // True while work has been posted whose terminal state has not arrived.
@@ -428,6 +433,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       rejectOutstanding(new Error(message));
       lastSyncedKey.current = null;
       readyDocument.current = null;
+      readyDerived.current = null;
       broadcastDocument.current = null;
       failed?.terminate();
       workerRef.current = null;
@@ -531,6 +537,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
                 version: document.version
               };
               readyDocument.current = null;
+              readyDerived.current = null;
               broadcastDocument.current = document;
               armedRef.current = true;
               livePhase = 'starting';
@@ -833,6 +840,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         if (!result.ok) {
           lastSyncedKey.current = null;
           readyDocument.current = null;
+          readyDerived.current = null;
           hostRef.current.onError(`Geometry rebuild failed: ${result.error}`);
           return;
         }
@@ -844,6 +852,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           submitted.version === result.version
             ? submitted
             : null;
+        readyDerived.current = readyDocument.current ? result.derived : null;
         hostRef.current.onDerived(result.derived);
       };
 
@@ -987,6 +996,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       ) {
         broadcastDocument.current = document;
         readyDocument.current = null;
+        readyDerived.current = null;
       }
       postSync(
         worker,
@@ -1259,6 +1269,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
     invalidate() {
       lastSyncedKey.current = null;
       readyDocument.current = null;
+      readyDerived.current = null;
       setState((current) => ({
         ...current,
         phase: 'starting',
@@ -1275,13 +1286,30 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         state.projectId !== completed.projectId ||
         state.version !== completed.version ||
         completed.projectId !== document.projectId ||
-        geometryContentKey(completed) !==
-          geometryContentKey(document)
+        geometryContentKey(completed) !== geometryContentKey(document)
       ) {
         return false;
       }
       // Retarget the live result, not a stored mesh. Invalidation, crashes and
       // a new sync retire this witness; different projects/content still rebuild.
+      const live = readyDerived.current;
+      if (
+        live?.sketchGeometry?.projectId === completed.projectId &&
+        live.sketchGeometry.documentVersion === completed.version
+      ) {
+        const rebound = rebindSketchGeometryForContent(
+          document,
+          live,
+          geometryContentKey(completed)
+        );
+        // Replace the target's container, not the derived object shared with
+        // its previous revision. Only this proven live result changes clocks.
+        document.derived = attachDerivedState(document, {
+          ...document.derived,
+          sketchGeometry: rebound.sketchGeometry
+        }).derived;
+        readyDerived.current = rebound;
+      }
       readyDocument.current = document;
       broadcastDocument.current = document;
       lastSyncedKey.current = `${document.projectId}:${document.version}:${(lastDemandRef.current ?? []).join()}`;

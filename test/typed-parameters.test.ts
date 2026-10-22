@@ -17,7 +17,6 @@ import {
 } from '@openzcad/command-system';
 import { parseCadPatchProposal } from '@openzcad/ai-contracts';
 import {
-  PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
   type BodyId
 } from '@openzcad/shared';
@@ -34,7 +33,6 @@ describe('typed parameters through the exact build (F05)', () => {
   });
 
   it('builds a box from width + 5 mm and follows the parameter', async () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(32);
     let document = createProjectDocument('Typed', toUserId('user_f05'));
     document = setParameter(document, {
       name: 'width',

@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENT_SCHEMA_VERSION } from '@openzcad/shared';
 import type { Page } from '@playwright/test';
 import type { ProjectDocument, SketchObjectData } from '@openzcad/shared';
 import { expect, stubApi, test } from './openzcad-fixtures';
@@ -65,7 +66,7 @@ async function exportObjects(page: Page): Promise<SketchObjectData[]> {
       document: ProjectDocument;
     }
   ).document;
-  expect(document.schemaVersion).toBe(32);
+  expect(document.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
   const sketch = Object.values(document.nodes).find(
     (node) => node.kind === 'sketch'
   );

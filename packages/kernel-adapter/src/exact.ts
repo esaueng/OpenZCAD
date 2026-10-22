@@ -49,13 +49,13 @@ import {
   getParameterHiddenBodyIds,
   listFeaturesInOrder,
   listNodesByKind,
-  resolveParamValue,
   rigidImportedSource
 } from '@openzcad/document-core';
 import { writeDxf, type DxfEntity } from '@openzcad/io-dxf';
 import { writeAsciiStl } from '@openzcad/io-stl';
 import { faceDxfEntities } from './exact-dxf';
 import { sketchDxfEntities, SketchDxfExportError } from './exact-sketch-dxf';
+import { assertSketchProjectionsValid } from './exact-sketch-projection-failures';
 export { SketchDxfExportError } from './exact-sketch-dxf';
 import { writeSketchSvg } from './exact-sketch-svg';
 export type {
@@ -105,7 +105,6 @@ import {
   type FaceTopologyReferenceV5,
   type ImportedSourceReference,
   type OpposingPlanarFacePair,
-  type ParamValue,
   type ProjectDocument,
   type SketchId,
   type UnitSystem,
@@ -287,13 +286,8 @@ import {
   topologyHashOfWitness,
   topologyWitnessesEqual
 } from './topology-lineage';
-// Type-only: the solver mapping loads on the first sketch solve, keeping it
-// out of the lazily loaded exact chunk, which sits at its size budget.
-import type {
-  ResolvedSketchObject,
-  SketchSolveAnchor,
-  SketchSolveOutcome
-} from './gcs-sketch';
+// Public solver types; the runtime mapping is shared with history projection solves.
+import type { SketchSolveAnchor, SketchSolveOutcome } from './gcs-sketch';
 
 export type {
   SketchDofSummary,
@@ -3504,6 +3498,18 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         ...(build.datumAxes.size > 0
           ? { datumAxes: Object.fromEntries(build.datumAxes) }
           : {}),
+        ...(build.sketchProjections?.size
+          ? { sketchProjections: Object.fromEntries(build.sketchProjections) }
+          : {}),
+        ...(build.sketchObjectOverrides?.size
+          ? {
+              sketchGeometry: {
+                projectId: document.projectId,
+                documentVersion: document.version,
+                objects: Object.fromEntries(build.sketchObjectOverrides)
+              }
+            }
+          : {}),
         ...(build.faceReferenceRepairs?.length
           ? { faceReferenceRepairs: build.faceReferenceRepairs }
           : {}),
@@ -3930,6 +3936,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     }
     try {
       return await this.withExportBuild(document, (_kernel, build) => {
+        assertSketchProjectionsValid(build, sketchId);
         // The sketch feature resolves this same basis at its history position
         // during the build — canonical offsets, arbitrary frames, and
         // face-attached lineage alike — so reading it here is exact without a
@@ -3946,7 +3953,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             const node = document.nodes[id];
             return {
               id,
-              data: node?.kind === 'sketch-object' ? node.data : undefined
+              data:
+                build.sketchObjectOverrides?.get(id) ??
+                (node?.kind === 'sketch-object' ? node.data : undefined)
             };
           }),
           scope,
@@ -4256,122 +4265,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     if (!sketch) {
       throw new Error(`Sketch ${sketchId} not found.`);
     }
-    const { scope, errors } = getParameterScope(document);
-    if (errors.length > 0) {
-      throw new Error(`Parameters failed to evaluate: ${errors.join('; ')}`);
-    }
-    const objects: ResolvedSketchObject[] = [];
-    for (const objectId of sketch.objectIds) {
-      const node = document.nodes[objectId];
-      if (!node || node.kind !== 'sketch-object') {
-        continue;
-      }
-      const data = node.data;
-      // Rectangles, polygons, and text are not solvable geometry;
-      // document validation refuses constraints that reference them, so
-      // skipping them here cannot orphan a constraint.
-      if (data.objectKind === 'line') {
-        objects.push({
-          objectId,
-          kind: 'line',
-          x1: resolveParamValue(data.x1, scope, 'x1', document.units),
-          y1: resolveParamValue(data.y1, scope, 'y1', document.units),
-          x2: resolveParamValue(data.x2, scope, 'x2', document.units),
-          y2: resolveParamValue(data.y2, scope, 'y2', document.units)
-        });
-      } else if (data.objectKind === 'circle') {
-        objects.push({
-          objectId,
-          kind: 'circle',
-          centerX: resolveParamValue(
-            data.centerX,
-            scope,
-            'centerX',
-            document.units
-          ),
-          centerY: resolveParamValue(
-            data.centerY,
-            scope,
-            'centerY',
-            document.units
-          ),
-          radius: resolveParamValue(
-            data.radius,
-            scope,
-            'radius',
-            document.units
-          )
-        });
-      } else if (data.objectKind === 'arc') {
-        objects.push({
-          objectId,
-          kind: 'arc',
-          centerX: resolveParamValue(
-            data.centerX,
-            scope,
-            'centerX',
-            document.units
-          ),
-          centerY: resolveParamValue(
-            data.centerY,
-            scope,
-            'centerY',
-            document.units
-          ),
-          radius: resolveParamValue(
-            data.radius,
-            scope,
-            'radius',
-            document.units
-          ),
-          startAngleDeg: resolveParamValue(
-            data.startAngleDeg,
-            scope,
-            'startAngleDeg',
-            document.units
-          ),
-          endAngleDeg: resolveParamValue(
-            data.endAngleDeg,
-            scope,
-            'endAngleDeg',
-            document.units
-          )
-        });
-      } else if (data.objectKind === 'ellipse') {
-        const value = (field: ParamValue, label: string) =>
-          resolveParamValue(field, scope, label, document.units);
-        objects.push({
-          objectId,
-          kind: 'ellipse',
-          centerX: value(data.centerX, 'centerX'),
-          centerY: value(data.centerY, 'centerY'),
-          radiusX: value(data.radiusX, 'radiusX'),
-          radiusY: value(data.radiusY, 'radiusY'),
-          rotationDeg: value(data.rotationDeg, 'rotationDeg')
-        });
-      } else if (data.objectKind === 'spline') {
-        objects.push({
-          objectId,
-          kind: 'spline',
-          points: data.points.map((point) => ({
-            x: resolveParamValue(point.x, scope, 'spline x', document.units),
-            y: resolveParamValue(point.y, scope, 'spline y', document.units)
-          })),
-          closed: data.closed === true
-        });
-      }
-    }
-    const { solveSketchWithGcs } = await import('./gcs-sketch');
+    const { solveDocumentSketchWithGcs } =
+      await import('./gcs-sketch-document');
     const kernel = new RemusKernel();
     try {
-      return solveSketchWithGcs(
-        kernel,
-        objects,
-        sketch.constraints ?? [],
-        (value, label) =>
-          resolveParamValue(value, scope, label, document.units),
-        options
-      );
+      return solveDocumentSketchWithGcs(kernel, document, sketch, options);
     } finally {
       kernel.free();
     }

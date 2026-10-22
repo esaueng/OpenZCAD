@@ -20,7 +20,14 @@ import {
 } from './sketch-reference-dimensions';
 export * from './sketch-reference-dimensions';
 import { assertSketchComposites, compositesWithout } from './sketch-composites';
+import { assertSketchObjectProjection } from './sketch-projections';
 export * from './sketch-composites';
+export * from './sketch-projections';
+import {
+  assertDocumentContentSchema,
+  assertSketchObjectContentSchema
+} from './document-content-schema';
+export * from './document-content-schema';
 export * from './drawings';
 export * from './reference-images';
 export {
@@ -860,6 +867,7 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
     );
   }
   const document = withReadableHistory(input);
+  assertDocumentContentSchema(document);
   // Schema v30 drawings (v31 annotations): validated as written, never
   // synthesized or rewritten.
   assertDrawingSet(document.drawings);
@@ -869,6 +877,10 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
     if (node.kind === 'sketch') {
       assertSketchReferenceDimensions(node);
       assertSketchComposites(node);
+    }
+    // Schema v33 projections: validated as written, never synthesized.
+    if (node.kind === 'sketch-object') {
+      assertSketchObjectProjection(node.data, node.id);
     }
     if (node.kind === 'parameter') assertParameterQuantity(node);
   }
@@ -913,6 +925,12 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
       }
     } satisfies SketchNode;
   }
+  // Session geometry is never trusted on load, even if its saved clock matches.
+  let persistedDerived = document.derived;
+  if (persistedDerived && Object.hasOwn(persistedDerived, 'sketchGeometry')) {
+    const { sketchGeometry: _sessionGeometry, ...persisted } = persistedDerived;
+    persistedDerived = persisted;
+  }
   // Schema v4 -> v5 topology references, v5 -> v6 modeling feature kinds,
   // v6 -> v7 text sketch objects plus entity-wide profile references,
   // v7 -> v8 advanced modeling feature kinds, and v8 -> v9 sketch
@@ -931,6 +949,9 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   return {
     ...document,
     schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION,
+    ...(persistedDerived !== document.derived
+      ? { derived: persistedDerived }
+      : {}),
     nodes,
     parameterOrder: document.parameterOrder ?? [],
     featureOrder: document.featureOrder ?? [],
@@ -1330,6 +1351,9 @@ export function addSketchFeature(
     objectIds: objectNodeIds
   };
 
+  objects.forEach((object) =>
+    assertSketchObjectContentSchema(object, document.schemaVersion)
+  );
   objects.forEach((object, index) => {
     const objectNodeId = objectNodeIds[index]!;
     next.nodes[objectNodeId] = {
@@ -1369,6 +1393,8 @@ export function updateSketch(
   document: ProjectDocument,
   input: SketchUpdateInput
 ): ProjectDocument {
+  if (input.object !== undefined)
+    assertSketchObjectContentSchema(input.object, document.schemaVersion);
   const next = cloneDocument(document);
   const sketch = findSketch(next, input.sketchId);
   if (!sketch) {
@@ -1491,7 +1517,12 @@ export function translateSketch(
         : resolveParamValue(value, scope, label, next.units) + delta;
     for (const objectId of sketch.objectIds) {
       const node = next.nodes[objectId];
-      if (node?.kind !== 'sketch-object') {
+      // A linked projection belongs to its model edge, not to the sketch's
+      // placement: the next rebuild would project it back regardless.
+      if (
+        node?.kind !== 'sketch-object' ||
+        node.data.projection?.mode === 'linked'
+      ) {
         continue;
       }
       const data = node.data;
@@ -1553,6 +1584,9 @@ export function addSketchObjects(
   const objectNodeIds = input.objects.map(
     (_, index) => input.ids?.objectNodeIds[index] ?? toEntityId(createId('ent'))
   );
+  input.objects.forEach((object) =>
+    assertSketchObjectContentSchema(object, document.schemaVersion)
+  );
   input.objects.forEach((object, index) => {
     const objectNodeId = objectNodeIds[index]!;
     next.nodes[objectNodeId] = {
@@ -1592,6 +1626,11 @@ export function updateSketchObject(
   document: ProjectDocument,
   input: SketchObjectUpdateInput
 ): ProjectDocument {
+  assertSketchObjectContentSchema(
+    input.data,
+    document.schemaVersion,
+    input.objectId
+  );
   const next = cloneDocument(document);
   const { objectNode } = requireSketchObject(
     next,
@@ -2256,10 +2295,7 @@ export function validateExtrudeExtent(
       throw new Error('An extrude to a face has no through-all side.');
     }
     validateToFaceTarget(data.toFace);
-    if (
-      data.symmetric === true ||
-      !resolvedZero(resolve)(data.backDistance)
-    ) {
+    if (data.symmetric === true || !resolvedZero(resolve)(data.backDistance)) {
       throw new Error(
         'An extrude to a face runs one way, from the sketch plane to the face; it is not symmetric or two-sided.'
       );
@@ -5219,11 +5255,24 @@ export function attachDerivedState(
   // that computed them; stripping them here keeps stale lists out of saved and
   // replayed documents.
   const {
+    sketchGeometry,
     referenceRepairs: _referenceRepairs,
     faceReferenceRepairs: _faceReferenceRepairs,
     featureWarnings: _featureWarnings,
     ...persisted
   } = derived;
+  if (
+    sketchGeometry?.projectId === document.projectId &&
+    sketchGeometry.documentVersion === document.version
+  ) {
+    // Keep live display geometry through immutable command copies, but never
+    // serialize it into JSON, structuredClone/IDB, native files or history.
+    Object.defineProperty(persisted, 'sketchGeometry', {
+      value: sketchGeometry,
+      enumerable: false,
+      configurable: true
+    });
+  }
   return { ...document, derived: persisted };
 }
 
@@ -6671,3 +6720,5 @@ export {
   keyableImportedNodeData,
   keyableImportedNodes
 } from './imported-payload-key';
+
+export { resolvedSketchDocument } from './sketch-geometry';

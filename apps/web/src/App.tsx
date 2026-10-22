@@ -6,7 +6,15 @@ import {
   repairLegacyBracketDemo,
   repairLegacyBracketSaveState
 } from './lib/bracketDemoCompatibility';
-import { setAnalyticsEnabled, trackUsage, trackDetail, trackParts, trackSize, isAnalyticsEnabled, durationBucket } from './lib/analytics';
+import {
+  setAnalyticsEnabled,
+  trackUsage,
+  trackDetail,
+  trackParts,
+  trackSize,
+  isAnalyticsEnabled,
+  durationBucket
+} from './lib/analytics';
 import type {
   GeometryBodyRepresentation,
   GeometryReadyState,
@@ -160,6 +168,7 @@ import {
   findFeature,
   findSketch,
   getParameterScope,
+  resolvedSketchDocument,
   listFeaturesInOrder,
   listNodesByKind,
   listExposedParameters,
@@ -294,6 +303,10 @@ import {
 import type { CompositeShape } from './lib/sketch/composites';
 import { resolvedSketchPlaneBasis } from './lib/sketch/planeBasis';
 import { sketchEntityEditTarget } from './lib/sketch/editTarget';
+import {
+  retainSketchGeometryCommands,
+  sketchUsesProjectionGeometry
+} from './lib/sketch/releaseGeometry';
 import { textPlacementBudgetError } from './lib/sketch/textPlacement';
 import {
   modelingOperationNeedsPlanarFaces,
@@ -632,6 +645,7 @@ import {
   composingTextDraft,
   escapeTarget,
   sketchPickArmed,
+  projectionRepickHolds,
   sketchToolKeysSuspended,
   interactionReducer,
   commandSessionFor,
@@ -2278,6 +2292,8 @@ export function App() {
   } | null>(null);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
   const [doc, setDoc] = useState<ProjectDocument | null>(null);
+  // Exact solved geometry is a read view; commands and persistence keep doc.
+  const sketchReadDocument = doc ? resolvedSketchDocument(doc) : null;
   // Held here, not in the panels: a move between the dock and the phone lane
   // remounts a panel, and its filter, search and Find field outlive that. A
   // different project starts them afresh.
@@ -2348,13 +2364,20 @@ export function App() {
   /** The open Plane card's handler for a drag of its datum's handle. */
   const datumOffsetDragRef = useRef<((delta: number) => void) | null>(null);
   /** The open Plane card's draft Offset, drawn ahead of its Apply. */
-  const [datumOffsetDraft, setDatumOffsetDraft] = useState<number | null>(
-    null
-  );
+  const [datumOffsetDraft, setDatumOffsetDraft] = useState<number | null>(null);
   /** Whether the open Plane card's draft can take a drag: a numeric offset. */
   const [datumDragAvailable, setDatumDragAvailable] = useState(false);
   /** The open Plane card's exact entry for its datum's handle. */
   const datumOffsetEntryRef = useRef<(() => boolean) | null>(null);
+  /**
+   * I01: a linked projection whose source edge is being re-picked. While
+   * set, the Project tool's next pick replaces that object's source instead
+   * of adding geometry; leaving the tool disarms it.
+   */
+  const [projectionRepair, setProjectionRepair] = useState<{
+    sketchId: SketchId;
+    objectId: EntityId;
+  } | null>(null);
   /** R01: an offset datum whose source face is being re-picked. */
   /**
    * R01: a datum whose source face is being re-picked. `both` re-picks a
@@ -2767,7 +2790,9 @@ export function App() {
       doc
         ? doc.bodyOrder.filter((id) => {
             const body = doc.derived.bodyRepresentations[id];
-            return body !== undefined && !body.consumed && !hiddenBodyIds.has(id);
+            return (
+              body !== undefined && !body.consumed && !hiddenBodyIds.has(id)
+            );
           })
         : [],
     [doc, hiddenBodyIds]
@@ -3314,7 +3339,10 @@ export function App() {
       run: handleUndo
     });
   };
-  const pendingPartCountRef = useRef<Pick<ProjectDocument, 'projectId' | 'version'> | null>(null);
+  const pendingPartCountRef = useRef<Pick<
+    ProjectDocument,
+    'projectId' | 'version'
+  > | null>(null);
   const [geometrySnapshot, setGeometrySnapshot] = useState<{
     projectId: string;
     version: number;
@@ -3359,6 +3387,7 @@ export function App() {
         setMoveCommitHold(null);
         announceSuppression(derived);
         applyTopologyReferenceRepairs(derived);
+        applyProjectionWriteBack(derived);
       }
     },
     onError: (message) => {
@@ -3398,6 +3427,14 @@ export function App() {
       );
     }
     return ready;
+  }
+  function requireCurrentSketchGeometry(sketchId: SketchId): boolean {
+    const current = managerRef.current?.document;
+    if (!current) return false;
+    return (
+      !sketchUsesProjectionGeometry(current, sketchId) ||
+      requireExactGeometryReady()
+    );
   }
   const remoteVersionsRef = useRef(new Map<string, number>());
   /**
@@ -5769,11 +5806,12 @@ export function App() {
     () => [...(selectedTopology ? [selectedTopology] : []), ...selectedEdges],
     [selectedTopology, selectedEdges]
   );
-  const { demand: lineageDemand } = useLineageDemand({
-    projectId: doc?.projectId,
-    selections: lineageDemandSelections,
-    interaction
-  });
+  const { demand: lineageDemand, addBodies: addLineageDemand } =
+    useLineageDemand({
+      projectId: doc?.projectId,
+      selections: lineageDemandSelections,
+      interaction
+    });
   useEffect(() => {
     geometry.sync(doc, lineageDemand);
     // `geometry` is stable across renders; re-sync when the demanded set
@@ -6123,7 +6161,8 @@ export function App() {
       parameterCandidate !== null &&
       parameterCandidate.base.projectId === doc?.projectId &&
       parameterCandidate?.base.version === doc?.version
-        ? (parameterPreviewSession?.preview(parameterCandidate.document) ?? null)
+        ? (parameterPreviewSession?.preview(parameterCandidate.document) ??
+          null)
         : !previewDoc &&
             !exactGeometryReady &&
             geometry.state.phase !== 'failed'
@@ -6416,10 +6455,10 @@ export function App() {
       return null;
     }
     const objectNode = selectedSketch.objectIds[0]
-      ? doc.nodes[selectedSketch.objectIds[0]]
+      ? sketchReadDocument?.nodes[selectedSketch.objectIds[0]]
       : undefined;
     return objectNode?.kind === 'sketch-object' ? objectNode.data : null;
-  }, [doc, selectedSketch]);
+  }, [doc, selectedSketch, sketchReadDocument]);
 
   const selectedFeatureBodyId =
     (featureSelectionSource === 'inferred' ? selectedTopology?.bodyId : null) ??
@@ -6765,7 +6804,7 @@ export function App() {
       evalParamValue(value, scope, doc.units);
     return listNodesByKind(doc, 'sketch').flatMap((sketch) => {
       const objectNode = sketch.objectIds[0]
-        ? doc.nodes[sketch.objectIds[0]]
+        ? sketchReadDocument?.nodes[sketch.objectIds[0]]
         : undefined;
       if (objectNode?.kind !== 'sketch-object') {
         return [];
@@ -6845,7 +6884,13 @@ export function App() {
         }
       ];
     });
-  }, [doc, parameterScope, selectedSketch, selectedSketchProfileId]);
+  }, [
+    doc,
+    parameterScope,
+    selectedSketch,
+    selectedSketchProfileId,
+    sketchReadDocument
+  ]);
 
   // The viewport installs and tears down real scene objects when these props
   // change identity, so each one is memoized rather than built inline: a fresh
@@ -7308,6 +7353,43 @@ export function App() {
     }
   }
 
+  /**
+   * I01: the exact build re-projected a linked projection somewhere new and
+   * already built from it. Write that position back to the object, as a
+   * normalization (no undo step of its own), so every browser view — the
+   * sketch, its regions, exports — reads what the model was built from.
+   */
+  function applyProjectionWriteBack(derived: ProjectDocument['derived']): void {
+    const manager = managerRef.current;
+    if (
+      !manager ||
+      parameterEditDisabledReason ||
+      !Object.values(derived.sketchProjections ?? {}).some(
+        (state) => state.status === 'moved'
+      )
+    )
+      return;
+    const version = manager.document.version;
+    void import('./lib/sketch/projection').then(
+      ({ projectionWriteBackCommand }) => {
+        // A later edit gets its own rebuild, and that rebuild its own verdict.
+        if (
+          managerRef.current !== manager ||
+          manager.document.version !== version
+        )
+          return;
+        const command = projectionWriteBackCommand(manager.document, derived);
+        if (!command) return;
+        try {
+          manager.normalize(command);
+          setDoc(manager.document);
+        } catch {
+          // The stored copy stays as it was; the build still follows the edge.
+        }
+      }
+    );
+  }
+
   function executeCommand(
     command: AnyCommand,
     derived?: ProjectDocument['derived'],
@@ -7342,10 +7424,14 @@ export function App() {
       }
       recordLocalCommit(next, before);
       setDoc(next);
+      if (derived) applyProjectionWriteBack(derived);
       if (isAnalyticsEnabled()) {
         trackUsage('feature_used');
         trackDetail('feature_operation', command.kind);
-        pendingPartCountRef.current = { projectId: next.projectId, version: next.version };
+        pendingPartCountRef.current = {
+          projectId: next.projectId,
+          version: next.version
+        };
         if (derived) trackCommittedParts(next, derived);
       }
       setStatus(commandOutcomeMessage(command.label));
@@ -7386,11 +7472,15 @@ export function App() {
       }
       recordLocalCommit(next, before);
       setDoc(next);
+      if (derived) applyProjectionWriteBack(derived);
       if (isAnalyticsEnabled()) {
         trackUsage('feature_used');
         for (const command of commands)
           trackDetail('feature_operation', command.kind);
-        pendingPartCountRef.current = { projectId: next.projectId, version: next.version };
+        pendingPartCountRef.current = {
+          projectId: next.projectId,
+          version: next.version
+        };
         if (derived) trackCommittedParts(next, derived);
       }
       setStatus(commandOutcomeMessage(label));
@@ -7407,13 +7497,21 @@ export function App() {
     derived: ProjectDocument['derived']
   ): void {
     const pending = pendingPartCountRef.current;
-    if (!pending || pending.projectId !== document.projectId || pending.version !== document.version)
+    if (
+      !pending ||
+      pending.projectId !== document.projectId ||
+      pending.version !== document.version
+    )
       return;
     pendingPartCountRef.current = null;
     // Count the completed result, including hidden parts but excluding consumed
     // replay sources. Pending edits are sampled only after their owned rebuild.
     if (isAnalyticsEnabled())
-      trackParts(Object.values(derived.bodyRepresentations).filter(body => !body.consumed).length);
+      trackParts(
+        Object.values(derived.bodyRepresentations).filter(
+          (body) => !body.consumed
+        ).length
+      );
   }
 
   function finishFeatureCreation(): void {
@@ -7564,12 +7662,8 @@ export function App() {
     void run(command, {
       featureName,
       resultBodyId,
-      targets: editAffectedFeatureTargets(
-        doc,
-        proposed,
-        feature.featureId
-      ).map((target, index) =>
-        index === 0 ? { ...target, featureName } : target
+      targets: editAffectedFeatureTargets(doc, proposed, feature.featureId).map(
+        (target, index) => (index === 0 ? { ...target, featureName } : target)
       ),
       successMessage: commandOutcomeMessage(command.label),
       onSuccess: () => finishFeatureEdit(feature, editSession),
@@ -8351,7 +8445,9 @@ export function App() {
     if (
       !moveHasFiniteValues(values) ||
       (values.pivot &&
-        ![values.pivot.x, values.pivot.y, values.pivot.z].every(Number.isFinite))
+        ![values.pivot.x, values.pivot.y, values.pivot.z].every(
+          Number.isFinite
+        ))
     ) {
       setStatus(
         'Could not apply Move: its resulting transform must be finite.'
@@ -8363,7 +8459,9 @@ export function App() {
       commandFactories.transformBody({
         // Whatever the gizmo's Name field holds, falling back to the default
         // rather than committing a feature with a blank name.
-        name: newFeatureName(moveName.trim() || (preview.copy ? 'Copy' : 'Move')),
+        name: newFeatureName(
+          moveName.trim() || (preview.copy ? 'Copy' : 'Move')
+        ),
         targetBodyId: preview.bodyId as BodyId,
         ...values,
         ...(preview.copy
@@ -8444,7 +8542,10 @@ export function App() {
           setProjection(view.projection);
           if (view.fieldOfView !== undefined) {
             const current = appSettingsRef.current;
-            handleAppSettingsChange({ ...current, viewport: { ...current.viewport, fieldOfView: view.fieldOfView } });
+            handleAppSettingsChange({
+              ...current,
+              viewport: { ...current.viewport, fieldOfView: view.fieldOfView }
+            });
           }
           // The exact section on screen belongs to the cut being replaced.
           clearSectionOutline();
@@ -8728,9 +8829,7 @@ export function App() {
    * when the face has lineage, a fixed frame coincident with it when not.
    */
   function selectedFaceImagePlane():
-    | ReferenceImagePlane
-    | { reason: string }
-    | null {
+    ReferenceImagePlane | { reason: string } | null {
     const current = managerRef.current?.document;
     if (!current || selectedTopology?.kind !== 'face') return null;
     const attachment = faceSketchAttachment({
@@ -8829,9 +8928,8 @@ export function App() {
         (candidate) => candidate.source.checksumSha256 === checksumSha256
       );
       if (images.length === 0) return null;
-      const { loadReferenceImageBlob } = await import(
-        './lib/referenceImageInsert'
-      );
+      const { loadReferenceImageBlob } =
+        await import('./lib/referenceImageInsert');
       return loadReferenceImageBlob(images);
     },
     []
@@ -8895,9 +8993,7 @@ export function App() {
   function toggleSketchVisibility(sketchId: string) {
     const show = hiddenSketchIds.has(sketchId);
     const liveSketchIds = new Set(
-      doc
-        ? listNodesByKind(doc, 'sketch').map((sketch) => sketch.sketchId)
-        : []
+      doc ? listNodesByKind(doc, 'sketch').map((sketch) => sketch.sketchId) : []
     );
     setSketchVisibilityOverrides((current) =>
       toggledSketchVisibility(
@@ -10773,8 +10869,7 @@ export function App() {
             session.userId,
             projects.map((summary) => summary.name),
             api,
-            (document) =>
-              cacheCopyPictures(document, loadSourceBlob, sha256Hex)
+            (document) => cacheCopyPictures(document, loadSourceBlob, sha256Hex)
           );
           if (!request) {
             // The account no longer stores that save state; this device may.
@@ -10819,9 +10914,7 @@ export function App() {
             // This device may not have the exact source revision cached. The
             // kernel stays in the browser, so rebuild the copy here rather
             // than asking cloud persistence to store a derived projection.
-            const derived = await geometry
-              .syncOnce(copied)
-              .catch(() => null);
+            const derived = await geometry.syncOnce(copied).catch(() => null);
             if (derived) {
               localCopy = { ...copied, derived };
             }
@@ -13109,9 +13202,9 @@ export function App() {
       );
       trackUsage('export_completed');
       if (analyticsStarted !== null) {
-        trackSize('project_size',new Blob([text]).size);
-        const bucket = durationBucket(performance.now()-analyticsStarted);
-        if(bucket)trackDetail('export_latency',bucket);
+        trackSize('project_size', new Blob([text]).size);
+        const bucket = durationBucket(performance.now() - analyticsStarted);
+        if (bucket) trackDetail('export_latency', bucket);
       }
       setStatus(`Exported complete project ${snapshot.name}.`);
       sink.finish({ tone: 'ok', message: 'complete project', landed: true });
@@ -13883,6 +13976,14 @@ export function App() {
       return;
     }
     exactEntryQueue.cancel();
+    // I01: the sketch's Project tool owns every model pick while it is armed.
+    if (
+      interactionRef.current.mode === 'sketch' &&
+      interactionRef.current.session.tool === 'project'
+    ) {
+      void handleSketchProjectPick(selection);
+      return;
+    }
     // An armed face re-pick owns the click outright: the pick answers "which
     // face should this broken edit use", never a selection or a drag handle.
     if (faceRepair) {
@@ -14027,7 +14128,9 @@ export function App() {
               }
             });
           } catch (error) {
-            setStatus(errorMessage(error, 'That face cannot carry this plane.'));
+            setStatus(
+              errorMessage(error, 'That face cannot carry this plane.')
+            );
           }
         }
       );
@@ -14561,7 +14664,9 @@ export function App() {
     }
     if (
       !exactGeometryReady &&
-      selections.some((selection) => !selectionResolvesInDerived(doc, selection))
+      selections.some(
+        (selection) => !selectionResolvesInDerived(doc, selection)
+      )
     ) {
       setStatus(
         'Exact geometry is still rebuilding. Topology actions are temporarily unavailable.'
@@ -14859,7 +14964,7 @@ export function App() {
       : undefined;
     const objects =
       sketch?.objectIds.flatMap((objectId) => {
-        const node = doc.nodes[objectId];
+        const node = sketchReadDocument?.nodes[objectId];
         return node?.kind === 'sketch-object'
           ? [{ id: objectId, data: node.data }]
           : [];
@@ -14944,6 +15049,7 @@ export function App() {
     interaction,
     doc,
     sketchBasis,
+    sketchReadDocument,
     appSettings.sketching,
     parameterScope.scope,
     sketchDiagnosticPoints,
@@ -14963,9 +15069,42 @@ export function App() {
     ) {
       return null;
     }
-    const node = doc.nodes[interaction.session.selectedObjectId as EntityId];
+    const node = sketchReadDocument?.nodes[
+      interaction.session.selectedObjectId as EntityId
+    ];
     return node?.kind === 'sketch-object' ? node : null;
-  }, [interaction, doc]);
+  }, [interaction, doc, sketchReadDocument]);
+  const selectedSketchEntityAuthored = selectedSketchEntity
+    ? doc?.nodes[selectedSketchEntity.id]
+    : undefined;
+
+  /** I01: the selected entity's projection, as its card describes it. */
+  const selectedEntityProjection = useMemo(() => {
+    const projection = selectedSketchEntity?.data.projection;
+    if (!selectedSketchEntity || !projection || !doc) return null;
+    const producer = projection.source?.edgeReference.producingFeatureId;
+    const state =
+      projection.mode === 'linked'
+        ? doc.derived.sketchProjections?.[selectedSketchEntity.id]
+        : undefined;
+    return {
+      mode: projection.mode,
+      sourceName:
+        (producer &&
+          features.find((feature) => feature.featureId === producer)?.name) ||
+        null,
+      ...(state ? { state: state.status } : {}),
+      ...(state?.status === 'broken' ? { reason: state.reason } : {}),
+      repicking: projectionRepair?.objectId === selectedSketchEntity.id
+    };
+  }, [selectedSketchEntity, doc, features, projectionRepair]);
+
+  // A re-pick lives only while the linked Project tool it armed does.
+  useEffect(() => {
+    if (projectionRepair && !projectionRepickHolds(interaction)) {
+      setProjectionRepair(null);
+    }
+  }, [interaction, projectionRepair]);
 
   /** A drawing gesture finished: commit the entity as a real command. */
   function handleSketchCommit(object: SketchObjectData) {
@@ -15047,6 +15186,214 @@ export function App() {
   }
 
   /**
+   * I01: the Project tool picked a model edge or face. A linked projection
+   * commits only once the exact build re-finds every new edge at the
+   * sketch's place in the history; an unlinked copy commits like any drawn
+   * entity. With a re-pick armed, the pick replaces that object's source on
+   * the same object, validated the same way before anything changes.
+   */
+  async function handleSketchProjectPick(selection: TopologySelection | null) {
+    const session =
+      interactionRef.current.mode === 'sketch'
+        ? interactionRef.current.session
+        : null;
+    const manager = managerRef.current;
+    const base = manager?.document;
+    if (!session || !manager || !base || !sketchBasis) return;
+    if (!selection) {
+      setStatus('Click a model edge, or a face for its whole boundary.');
+      return;
+    }
+    if (!exactGeometryReady || geometryBusy || sketchSolving) {
+      setStatus(
+        'Exact geometry is still rebuilding. Pick the edge again when it finishes.'
+      );
+      return;
+    }
+    const sketchId = session.sketchId as SketchId | null;
+    const sketch = sketchId ? (findSketch(base, sketchId) ?? null) : null;
+    const repair = projectionRepair;
+    const mode = repair ? 'linked' : (session.projectMode ?? 'linked');
+    try {
+      const {
+        assertProjectionsResolve,
+        projectionAddCommand,
+        projectionFromPickWithLineage,
+        repickedProjectionData
+      } = await import('./lib/sketch/projection');
+      const pick = await projectionFromPickWithLineage(
+        {
+          document: base,
+          sketch,
+          selection,
+          basis: sketchBasis,
+          mode,
+          construction: sketchConstruction,
+          ...(repair ? { repairing: repair.objectId } : {})
+        },
+        {
+          rebuildWithLineage: async () => {
+            addLineageDemand([selection.bodyId]);
+            const derived = await geometry.syncOnce(base, undefined, [
+              ...new Set([...lineageDemand, selection.bodyId])
+            ]);
+            return { ...base, derived };
+          },
+          cancelled: () =>
+            managerRef.current !== manager ||
+            manager.document.version !== base.version ||
+            interactionRef.current.mode !== 'sketch' ||
+            interactionRef.current.session !== session
+        }
+      );
+      if (!pick) return;
+      const sketchFeature = sketch
+        ? features.find(
+            (feature) =>
+              feature.data.featureKind === 'sketch' &&
+              feature.data.sketchId === sketch.sketchId
+          )
+        : undefined;
+      const targets = sketchFeature
+        ? affectedFeatureTargets(base, sketchFeature.featureId)
+        : [];
+      if (repair) {
+        const node = base.nodes[repair.objectId];
+        if (node?.kind !== 'sketch-object' || pick.objects.length !== 1) {
+          setStatus(
+            'Re-pick one edge: a face projects several, and the object needs one source.'
+          );
+          return;
+        }
+        const data = repickedProjectionData(node.data, pick.objects[0]!);
+        await validatedFeature.runTransaction(
+          [
+            commandFactories.updateSketchObject(
+              {
+                sketchId: repair.sketchId,
+                objectId: repair.objectId,
+                data
+              },
+              'Re-pick projection source'
+            )
+          ],
+          {
+            label: 'Re-pick projection source',
+            targets,
+            validateDerived: (derived) =>
+              assertProjectionsResolve(derived, [repair.objectId]),
+            successMessage: `The projected ${data.objectKind} follows the re-picked edge.`,
+            onSuccess: () => {
+              setProjectionRepair(null);
+              dispatchInteraction({ type: 'sketch-tool', tool: 'select' });
+              dispatchInteraction({
+                type: 'sketch-select-object',
+                objectId: repair.objectId
+              });
+            },
+            // Stay armed: the next pick can try another edge.
+            onFailure: (message) => setStatus(message)
+          }
+        );
+        return;
+      }
+      const name = `Sketch ${String(sketchOptions.length + 1).padStart(2, '0')}`;
+      const commit = projectionAddCommand({
+        sketchId: sketch?.sketchId ?? null,
+        ...(sketch ? {} : { newSketch: { name, planeRef: session.plane } }),
+        objects: pick.objects,
+        mode
+      });
+      const left =
+        pick.skipped.length > 0 ? ` Left out: ${pick.skipped.join('; ')}.` : '';
+      const done = () => {
+        if (!sketch) {
+          dispatchInteraction({
+            type: 'sketch-created',
+            sketchId: commit.sketchId
+          });
+        }
+      };
+      if (mode === 'unlinked') {
+        if (executeCommand(commit.command)) {
+          done();
+          setStatus(
+            `Copied ${pick.objects.length} projected ${pick.objects.length === 1 ? 'edge' : 'edges'} into the sketch.${left}`
+          );
+        }
+        return;
+      }
+      await validatedFeature.runTransaction([commit.command], {
+        label: commit.command.label,
+        targets,
+        validateDerived: (derived) =>
+          assertProjectionsResolve(derived, commit.objectIds),
+        successMessage: `Projected ${pick.objects.length} linked ${pick.objects.length === 1 ? 'edge' : 'edges'}.${left}`,
+        onSuccess: done,
+        onFailure: (message) => setStatus(message)
+      });
+    } catch (error) {
+      setStatus(errorMessage(error, 'That pick cannot be projected.'));
+    }
+  }
+
+  /** I01: keep the selected projection's geometry and drop its link. */
+  async function handleUnlinkProjection() {
+    const base = managerRef.current?.document;
+    const target = sketchEntityEditTarget(interactionRef.current);
+    const node =
+      target &&
+      base &&
+      resolvedSketchDocument(base).nodes[target.objectId as EntityId];
+    if (
+      !base ||
+      !target ||
+      node?.kind !== 'sketch-object' ||
+      sketchSolving ||
+      geometryBusy
+    )
+      return;
+    if (!requireCurrentSketchGeometry(target.sketchId as SketchId)) return;
+    const { unlinkedProjectionData } = await import('./lib/sketch/projection');
+    if (managerRef.current?.document !== base) return;
+    const sketchId = target.sketchId as SketchId;
+    if (
+      executeTransaction('Unlink projection', [
+        ...retainSketchGeometryCommands(base, sketchId, [target.objectId]),
+        commandFactories.updateSketchObject(
+          {
+            sketchId,
+            objectId: target.objectId as EntityId,
+            data: unlinkedProjectionData(node.data)
+          },
+          'Unlink projection'
+        )
+      ])
+    ) {
+      setProjectionRepair(null);
+      setStatus(
+        `The ${node.data.objectKind} is an independent copy now; it no longer follows its edge.`
+      );
+    }
+  }
+
+  /** I01: arm the Project tool to replace the selected projection's source. */
+  function handleRepickProjection() {
+    const target = sketchEntityEditTarget(interactionRef.current);
+    if (!target) return;
+    // A re-pick replaces a linked source, so Project arms in Linked and the
+    // strip says so; stepping to Unlinked (strip or key) disarms the re-pick.
+    dispatchInteraction({ type: 'sketch-project-mode', mode: 'linked' });
+    setProjectionRepair({
+      sketchId: target.sketchId as SketchId,
+      objectId: target.objectId as EntityId
+    });
+    setStatus(
+      'Click the model edge that should replace this projection’s source · Esc cancels.'
+    );
+  }
+
+  /**
    * A rectangle or polygon gesture finished: its lines, the relations that
    * hold them and the record that names them commit as one transaction
    * (S04), so one undo removes the whole shape.
@@ -15071,7 +15418,10 @@ export function App() {
       return;
     }
     if (!session.sketchId) {
-      dispatchInteraction({ type: 'sketch-created', sketchId: commit.sketchId });
+      dispatchInteraction({
+        type: 'sketch-created',
+        sketchId: commit.sketchId
+      });
       setStatus(`${name} started.`);
     }
   }
@@ -15210,6 +15560,8 @@ export function App() {
       capturedObjectId
     );
     if (!base || !target || sketchSolving || geometryBusy) return false;
+    if (!requireCurrentSketchGeometry(target.sketchId as SketchId))
+      return false;
     const sketchId = target.sketchId as SketchId;
     const objectId = target.objectId as EntityId;
     const selected = base.nodes[objectId];
@@ -15278,20 +15630,25 @@ export function App() {
     const base = managerRef.current?.document;
     const target = sketchEntityEditTarget(interactionRef.current);
     if (!base || !target || sketchSolving || geometryBusy) return;
+    if (!requireCurrentSketchGeometry(target.sketchId as SketchId)) return;
     const sketchId = target.sketchId as SketchId;
     const sketch = findSketch(base, sketchId);
     const composite = sketch && sketchCompositeOf(sketch, target.objectId);
     if (!sketch || !composite) return;
     const objects = new Map(
       sketch.objectIds.flatMap((id) => {
-        const node = base.nodes[id];
+        const node = resolvedSketchDocument(base).nodes[id];
         return node?.kind === 'sketch-object'
           ? [[String(id), node.data] as const]
           : [];
       })
     );
-    const resolved = resolveSketchComposite(composite, objects, (value) =>
-      evalParamValue(value, getParameterScope(base).scope, base.units) ?? undefined
+    const resolved = resolveSketchComposite(
+      composite,
+      objects,
+      (value) =>
+        evalParamValue(value, getParameterScope(base).scope, base.units) ??
+        undefined
     );
     if (resolved.status !== 'resolved') {
       setSketchEditError(resolved.reason);
@@ -15385,6 +15742,7 @@ export function App() {
     const sketch =
       target && base && findSketch(base, target.sketchId as SketchId);
     if (!base || !target || !sketch || sketchSolving || geometryBusy) return;
+    if (!requireCurrentSketchGeometry(sketch.sketchId)) return;
     setSketchSolving(true);
     setSketchEditError(null);
     setSketchDiagnosticPoints([]);
@@ -15450,12 +15808,20 @@ export function App() {
     }
     const base = managerRef.current?.document;
     if (!base || sketchSolving || geometryBusy) return;
+    if (
+      !requireCurrentSketchGeometry(interaction.session.sketchId as SketchId)
+    )
+      return;
     const sketchId = interaction.session.sketchId as SketchId;
     const objectId = interaction.session.selectedObjectId as EntityId;
     const command = commandFactories.deleteSketchObject(
       { sketchId, objectId },
       'Delete sketch entity'
     );
+    const commands = [
+      ...retainSketchGeometryCommands(base, sketchId, [objectId]),
+      command
+    ];
     setSketchDiagnosticPoints([]);
     const source = listFeaturesInOrder(base).find(
       (feature) =>
@@ -15466,7 +15832,7 @@ export function App() {
       !source ||
       affectedFeatureTargets(base, source.featureId).length === 0
     ) {
-      if (executeCommand(command)) {
+      if (executeTransaction('Delete sketch entity', commands)) {
         dispatchInteraction({ type: 'sketch-select-object', objectId: null });
         setStatus('Deleted sketch entity.');
       }
@@ -15480,7 +15846,7 @@ export function App() {
     void commitSketchEdit(
       base,
       sketchId,
-      [command],
+      commands,
       'Delete sketch entity',
       objectId
     )
@@ -15640,9 +16006,7 @@ export function App() {
               visibility: appSettings.sketching.relationGlyphs,
               selectedObjectId: sketchModeState.selectedObjectId,
               selectedConstraintId: selectedSketchConstraintId,
-              hiddenKinds: new Set(
-                appSettings.sketching.hiddenRelationGlyphs
-              ),
+              hiddenKinds: new Set(appSettings.sketching.hiddenRelationGlyphs),
               conflictingConstraintIds: new Set(
                 sketchSolveStatus?.conflictingConstraintIds ?? []
               )
@@ -15736,7 +16100,7 @@ export function App() {
   const sketchOverview = useMemo(() => {
     const objects =
       editingSketchNode?.objectIds.flatMap((id) => {
-        const node = doc?.nodes[id];
+        const node = sketchReadDocument?.nodes[id];
         return node?.kind === 'sketch-object'
           ? [{ id, data: node.data, label: node.name || node.data.objectKind }]
           : [];
@@ -15754,7 +16118,7 @@ export function App() {
         error: errorMessage(error, 'Unable to analyze this sketch.')
       };
     }
-  }, [editingSketchNode, doc, resolveDocumentValue]);
+  }, [editingSketchNode, resolveDocumentValue, sketchReadDocument]);
 
   useEffect(() => {
     setSketchDiagnosticPoints([]);
@@ -15839,7 +16203,7 @@ export function App() {
     if (!composite || side < 0) return null;
     const objects = new Map(
       editingSketchNode.objectIds.flatMap((id) => {
-        const node = doc.nodes[id];
+        const node = sketchReadDocument?.nodes[id];
         return node?.kind === 'sketch-object'
           ? [[String(id), node.data] as const]
           : [];
@@ -15891,7 +16255,13 @@ export function App() {
           ? 'Keeps its center.'
           : 'Keeps corner 1.'
     };
-  }, [editingSketchNode, doc, selectedSketchEntity, parameterScope.scope]);
+  }, [
+    editingSketchNode,
+    doc,
+    selectedSketchEntity,
+    parameterScope.scope,
+    sketchReadDocument
+  ]);
 
   // What the relations rail offers the selected entity: its kind, for the
   // refusal it names, and the relations that take it as their first pick.
@@ -15966,6 +16336,12 @@ export function App() {
     if (!doc || !editingSketchNode) {
       return true;
     }
+    if (
+      sketchSolving ||
+      geometryBusy ||
+      !requireCurrentSketchGeometry(editingSketchNode.sketchId)
+    )
+      return true;
     const pending = interaction.session.pendingConstraint;
     const spec = constraintToolSpec(pending.kind);
     if (spec.placement && pending.picks.length === spec.picks) {
@@ -16052,17 +16428,21 @@ export function App() {
           ? lockConstraintIds(editingSketchNode, ref)
           : disconnectConstraintIds(editingSketchNode, ref);
       if (removals.length > 0) {
-        const verb = pending.kind === 'lock' ? 'Unlock point' : 'Disconnect point';
+        const verb =
+          pending.kind === 'lock' ? 'Unlock point' : 'Disconnect point';
         if (
-          executeTransaction(
-            verb,
-            removals.map((constraintId) =>
+          executeTransaction(verb, [
+            ...retainSketchGeometryCommands(
+              managerRef.current?.document ?? doc,
+              editingSketchNode.sketchId
+            ),
+            ...removals.map((constraintId) =>
               commandFactories.deleteSketchConstraint({
                 sketchId: editingSketchNode.sketchId,
                 constraintId: toSketchConstraintId(constraintId)
               })
             )
-          )
+          ])
         ) {
           setSketchSolveStatus(null);
           setStatus(
@@ -16075,7 +16455,9 @@ export function App() {
         return true;
       }
       if (pending.kind === 'disconnect') {
-        setStatus('That point has no coincident, midpoint or on-curve relation.');
+        setStatus(
+          'That point has no coincident, midpoint or on-curve relation.'
+        );
         dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
         return true;
       }
@@ -16111,6 +16493,11 @@ export function App() {
     label: string
   ) {
     if (!doc || !editingSketchNode) return;
+    if (
+      geometryBusy ||
+      !requireCurrentSketchGeometry(editingSketchNode.sketchId)
+    )
+      return;
     if (sketchSolving) {
       setStatus(
         `${label} not added: the sketch is still solving. Try again when it finishes.`
@@ -16273,9 +16660,15 @@ export function App() {
   ): boolean {
     const session = interaction.mode === 'sketch' ? interaction.session : null;
     const pending = session?.pendingEdit;
-    if (!pending) {
+    if (!session || !pending) {
       return false;
     }
+    if (
+      sketchSolving ||
+      geometryBusy ||
+      !requireCurrentSketchGeometry(session.sketchId as SketchId)
+    )
+      return true;
     if (doc && editingSketchNode) {
       const host = sketchEditHost(doc, clickPoint);
       const sketch = editingSketchNode;
@@ -16310,6 +16703,12 @@ export function App() {
       );
       return;
     }
+    if (
+      sketchSolving ||
+      geometryBusy ||
+      !requireCurrentSketchGeometry(sketch.sketchId)
+    )
+      return;
     const { runSketchEdit } = await import('./lib/sketch/edits');
     await runSketchEdit(
       sketchEditHost(base, draft.anchor),
@@ -16435,6 +16834,12 @@ export function App() {
       setStatus('The sketch dimension is no longer available.');
       return;
     }
+    if (
+      sketchSolving ||
+      geometryBusy ||
+      !requireCurrentSketchGeometry(sketch.sketchId)
+    )
+      return;
     const storedValue: ParamValue = Number.isFinite(Number(raw))
       ? evaluatedValue
       : raw;
@@ -16903,11 +17308,14 @@ export function App() {
   }
 
   function handleDeleteSketchConstraint(constraintId: string) {
-    if (!editingSketchNode) {
+    const base = managerRef.current?.document;
+    if (!base || !editingSketchNode || sketchSolving || geometryBusy) {
       return;
     }
+    if (!requireCurrentSketchGeometry(editingSketchNode.sketchId)) return;
     if (
-      executeCommand(
+      executeTransaction('Delete constraint', [
+        ...retainSketchGeometryCommands(base, editingSketchNode.sketchId),
         commandFactories.deleteSketchConstraint(
           {
             sketchId: editingSketchNode.sketchId,
@@ -16915,7 +17323,7 @@ export function App() {
           },
           'Delete constraint'
         )
-      )
+      ])
     ) {
       setSketchSolveStatus(null);
       if (selectedSketchConstraintId === constraintId) {
@@ -17036,7 +17444,7 @@ export function App() {
         selectedSketch?.sketchId === sketch.sketchId ||
         selectedSketchProfileId === sketch.sketchId;
       const objects = sketch.objectIds.flatMap((objectId) => {
-        const node = doc.nodes[objectId];
+        const node = sketchReadDocument?.nodes[objectId];
         return node?.kind === 'sketch-object'
           ? [{ id: objectId, data: node.data }]
           : [];
@@ -17142,7 +17550,8 @@ export function App() {
     textOutlineBudgetError,
     hiddenSketchIds,
     movingSketch,
-    modelingEditFeature
+    modelingEditFeature,
+    sketchReadDocument
   ]);
   // Editing needs hidden source profiles; visibility remains a viewport concern.
   const sketchViews = useMemo(
@@ -17272,7 +17681,7 @@ export function App() {
       // A curve pick carries only SketchId; open sketches are valid selections.
       if (pick.kind === 'sketch-profile') return [];
       const objects = sketch.objectIds.flatMap((id) => {
-        const node = current.nodes[id];
+        const node = resolvedSketchDocument(current).nodes[id];
         return node?.kind === 'sketch-object' ? [{ id, data: node.data }] : [];
       });
       return computeSketchRegions(
@@ -19730,7 +20139,9 @@ export function App() {
     });
     if (plan.kind === 'direct') executeCommand(command);
     if (plan.kind === 'pending')
-      setStatus('Exact geometry is still rebuilding. Reorder once it finishes.');
+      setStatus(
+        'Exact geometry is still rebuilding. Reorder once it finishes.'
+      );
     if (plan.kind !== 'validate') return;
     let failed = '';
     const attribution =
@@ -19752,7 +20163,8 @@ export function App() {
       },
       validatingMessage: `Checking features after ${name ?? 'the move'}…`,
       successMessage: commandOutcomeMessage(label),
-      onFailure: (message) => announce(`${label} not applied${failed}. ${message}`)
+      onFailure: (message) =>
+        announce(`${label} not applied${failed}. ${message}`)
     });
   }
 
@@ -20211,7 +20623,9 @@ export function App() {
         setFaceRepair(null);
         setDatumRepair(null);
         setToFacePick(
-          kind === 'edit' && featureId ? { kind, featureId } : { kind: 'create' }
+          kind === 'edit' && featureId
+            ? { kind, featureId }
+            : { kind: 'create' }
         );
         setStatus(
           'Click a planar face parallel to the sketch for the extrusion to reach · Esc cancels.'
@@ -20249,7 +20663,9 @@ export function App() {
       return;
     }
     if (!selection) {
-      setStatus('Click a planar face for the extrusion to reach · Esc cancels.');
+      setStatus(
+        'Click a planar face for the extrusion to reach · Esc cancels.'
+      );
       return;
     }
     if (!exactGeometryReady) {
@@ -20528,62 +20944,63 @@ export function App() {
           ? featureAttribution.featureWarnings
           : []
       )
-        ? datumPlaneSources(feature.data.definition).flatMap((source, index) => {
-            if (source.type !== 'face') return [];
-            const slot = index as 0 | 1;
-            const midplane =
-              feature.data.featureKind === 'datum-plane' &&
-              feature.data.definition.kind === 'midplane';
-            const which = midplane ? ` ${slot === 0 ? 'A' : 'B'}` : '';
-            return [
-              {
-                item: {
-                  id: `repair-datum-face${midplane ? `-${slot}` : ''}`,
-                  label: `Re-pick source face${which}…`,
-                  icon: <Crosshair size={13} aria-hidden="true" />
-                },
-                run: () => {
-                  if (!ensureCanEdit('repair a feature')) return;
-                  setTool(null);
-                  clearSelection();
-                  setFaceRepair(null);
-                  setDatumRepair({ feature, slot });
-                  setStatus(
-                    `Re-pick ${midplane ? `face${which}` : 'the face'} for "${feature.name}": click a planar face · Esc cancels.`
-                  );
-                }
-              }
-            ];
-          })
-          .concat(
-            // Both of a midplane's faces lost (a deleted body held them):
-            // either alone still leaves the plane unresolved, so pick both.
-            feature.data.featureKind === 'datum-plane' &&
-              feature.data.definition.kind === 'midplane' &&
-              feature.data.definition.sources.every(
-                (source) => source.type === 'face'
-              )
-              ? [
-                  {
-                    item: {
-                      id: 'repair-datum-faces-both',
-                      label: 'Re-pick both source faces…',
-                      icon: <Crosshair size={13} aria-hidden="true" />
-                    },
-                    run: () => {
-                      if (!ensureCanEdit('repair a feature')) return;
-                      setTool(null);
-                      clearSelection();
-                      setFaceRepair(null);
-                      setDatumRepair({ feature, slot: 0, both: true });
-                      setStatus(
-                        `Re-pick both faces for "${feature.name}": click face A, then face B · Esc cancels.`
-                      );
-                    }
+        ? datumPlaneSources(feature.data.definition)
+            .flatMap((source, index) => {
+              if (source.type !== 'face') return [];
+              const slot = index as 0 | 1;
+              const midplane =
+                feature.data.featureKind === 'datum-plane' &&
+                feature.data.definition.kind === 'midplane';
+              const which = midplane ? ` ${slot === 0 ? 'A' : 'B'}` : '';
+              return [
+                {
+                  item: {
+                    id: `repair-datum-face${midplane ? `-${slot}` : ''}`,
+                    label: `Re-pick source face${which}…`,
+                    icon: <Crosshair size={13} aria-hidden="true" />
+                  },
+                  run: () => {
+                    if (!ensureCanEdit('repair a feature')) return;
+                    setTool(null);
+                    clearSelection();
+                    setFaceRepair(null);
+                    setDatumRepair({ feature, slot });
+                    setStatus(
+                      `Re-pick ${midplane ? `face${which}` : 'the face'} for "${feature.name}": click a planar face · Esc cancels.`
+                    );
                   }
-                ]
-              : []
-          )
+                }
+              ];
+            })
+            .concat(
+              // Both of a midplane's faces lost (a deleted body held them):
+              // either alone still leaves the plane unresolved, so pick both.
+              feature.data.featureKind === 'datum-plane' &&
+                feature.data.definition.kind === 'midplane' &&
+                feature.data.definition.sources.every(
+                  (source) => source.type === 'face'
+                )
+                ? [
+                    {
+                      item: {
+                        id: 'repair-datum-faces-both',
+                        label: 'Re-pick both source faces…',
+                        icon: <Crosshair size={13} aria-hidden="true" />
+                      },
+                      run: () => {
+                        if (!ensureCanEdit('repair a feature')) return;
+                        setTool(null);
+                        clearSelection();
+                        setFaceRepair(null);
+                        setDatumRepair({ feature, slot: 0, both: true });
+                        setStatus(
+                          `Re-pick both faces for "${feature.name}": click face A, then face B · Esc cancels.`
+                        );
+                      }
+                    }
+                  ]
+                : []
+            )
         : []),
       ...(doc &&
       datumVertexSourceFailed(
@@ -20955,10 +21372,7 @@ export function App() {
       // The command the key means outside a sketch, if any. In a reading
       // workspace a tool key is still looked up, to say why it is refused.
       const resolvedModelCommand = chord
-        ? keymap.commandFor(chord, [
-            'model',
-            modelingLocked ? 'view' : 'build'
-          ])
+        ? keymap.commandFor(chord, ['model', modelingLocked ? 'view' : 'build'])
         : null;
       // From a field only Space reaches a command, and only Normal to face:
       // a number or expression field still holding focus after a face pick
@@ -20975,11 +21389,7 @@ export function App() {
         renderedSelectedTopology?.kind === 'face' &&
         (interaction.mode === 'idle' ||
           (interaction.mode === 'face' && interaction.phase === 'armed'));
-      if (
-        normalViewKey &&
-        tool === null &&
-        stableFaceSelection
-      ) {
+      if (normalViewKey && tool === null && stableFaceSelection) {
         event.preventDefault();
         requestNormalToSelectedFace();
         return;
@@ -21029,8 +21439,7 @@ export function App() {
           event.preventDefault();
           const onScreen =
             selectedConstraintShownRef.current?.constraintId ===
-              selectedConstraintId &&
-            selectedConstraintShownRef.current.shown;
+              selectedConstraintId && selectedConstraintShownRef.current.shown;
           if (!onScreen) {
             setStatus(
               'The selected relation is out of view; bring its glyph back to delete it.'
@@ -21080,6 +21489,22 @@ export function App() {
                 interaction.session.curveMode
               )
             )
+          });
+          return;
+        }
+        // The project key arms Project, and on Project steps between
+        // linked and unlinked.
+        if (sketchCommand === 'sketch-project') {
+          event.preventDefault();
+          const current = interaction.session.projectMode ?? 'linked';
+          dispatchInteraction({
+            type: 'sketch-project-mode',
+            mode:
+              interaction.session.tool === 'project'
+                ? current === 'linked'
+                  ? 'unlinked'
+                  : 'linked'
+                : current
           });
           return;
         }
@@ -22220,43 +22645,43 @@ export function App() {
   const workspacePrompt = drawingMode
     ? 'Drag a view to place it · arrow keys nudge it · Update redraws a stale sheet'
     : readingHints
-    ? viewModeHint
-    : tweakMode
-      ? tweakModeHint
-      : (commandPromptText(interaction) ??
-        (tool === 'sketch'
-          ? [
-              'Drag to draw',
-              keyHint(keymap, 'sketch-rectangle', 'rectangle'),
-              keyHint(keymap, 'sketch-circle', 'circle'),
-              'P polygon',
-              'Enter finishes'
-            ]
-              .filter(Boolean)
-              .join(' · ')
-          : tool === 'fillet' || tool === 'chamfer'
-            ? selectedEdges.length > 0
-              ? `${selectedEdges.length} edge${selectedEdges.length === 1 ? '' : 's'} selected · Shift+Click adjusts · Enter creates`
-              : 'Click an edge (Shift adds more) or choose Select all edges'
-            : tool === 'union' || tool === 'subtract' || tool === 'intersect'
-              ? selectedBodyIds.length >= 2
-                ? `${selectedBodyIds.length} bodies picked, numbered in the viewport · Click toggles · Enter creates`
-                : 'Click bodies in the viewport or the list · pick order sets the base'
-              : tool
-                ? 'Enter creates · Esc cancels'
-                : selectedBodyIds.length >= 2
-                  ? `${selectedBodyIds.length} bodies picked${booleanKeyHints() ? ` — ${booleanKeyHints()}` : ''}`
-                  : selectedTopology?.kind === 'face'
-                    ? faceSelectedHint
-                    : selectedTopology?.kind === 'edge'
-                      ? // Neither tool has a shortcut, so the rail is the only
-                        // route: name it the way the rail names itself.
-                        'Edge selected — Fillet or Chamfer in Feature tools'
-                      : selectedFeature
-                        ? 'Edit in the panel · Del deletes · Esc closes'
-                        : viewerBodies.length > 0
-                          ? 'Click a body, face, or edge · Shift+Click adds to selection'
-                          : idleHint));
+      ? viewModeHint
+      : tweakMode
+        ? tweakModeHint
+        : (commandPromptText(interaction) ??
+          (tool === 'sketch'
+            ? [
+                'Drag to draw',
+                keyHint(keymap, 'sketch-rectangle', 'rectangle'),
+                keyHint(keymap, 'sketch-circle', 'circle'),
+                'P polygon',
+                'Enter finishes'
+              ]
+                .filter(Boolean)
+                .join(' · ')
+            : tool === 'fillet' || tool === 'chamfer'
+              ? selectedEdges.length > 0
+                ? `${selectedEdges.length} edge${selectedEdges.length === 1 ? '' : 's'} selected · Shift+Click adjusts · Enter creates`
+                : 'Click an edge (Shift adds more) or choose Select all edges'
+              : tool === 'union' || tool === 'subtract' || tool === 'intersect'
+                ? selectedBodyIds.length >= 2
+                  ? `${selectedBodyIds.length} bodies picked, numbered in the viewport · Click toggles · Enter creates`
+                  : 'Click bodies in the viewport or the list · pick order sets the base'
+                : tool
+                  ? 'Enter creates · Esc cancels'
+                  : selectedBodyIds.length >= 2
+                    ? `${selectedBodyIds.length} bodies picked${booleanKeyHints() ? ` — ${booleanKeyHints()}` : ''}`
+                    : selectedTopology?.kind === 'face'
+                      ? faceSelectedHint
+                      : selectedTopology?.kind === 'edge'
+                        ? // Neither tool has a shortcut, so the rail is the only
+                          // route: name it the way the rail names itself.
+                          'Edge selected — Fillet or Chamfer in Feature tools'
+                        : selectedFeature
+                          ? 'Edit in the panel · Del deletes · Esc closes'
+                          : viewerBodies.length > 0
+                            ? 'Click a body, face, or edge · Shift+Click adds to selection'
+                            : idleHint));
   const openReferenceImageEntry =
     (openReferenceImageId &&
       doc?.referenceImages?.images.find(
@@ -22674,9 +23099,23 @@ export function App() {
       // its fields onto the stored object instead of remounting, so a value
       // typed but not yet applied survives a move on the canvas.
       key={selectedSketchEntity.id}
-      disabled={sketchSolving || geometryBusy}
+      disabled={
+        sketchSolving ||
+        geometryBusy ||
+        Boolean(
+          doc &&
+          editingSketchNode &&
+          sketchUsesProjectionGeometry(doc, editingSketchNode.sketchId) &&
+          !exactGeometryReady
+        )
+      }
       error={sketchEditError}
       data={selectedSketchEntity.data}
+      authoredData={
+        selectedSketchEntityAuthored?.kind === 'sketch-object'
+          ? selectedSketchEntityAuthored.data
+          : undefined
+      }
       scope={parameterScope.scope}
       units={doc?.units}
       onApply={(data) => {
@@ -22688,6 +23127,9 @@ export function App() {
       onResizeComposite={(size, expressions) => {
         void handleResizeSketchComposite(size, expressions);
       }}
+      projection={selectedEntityProjection}
+      onUnlinkProjection={() => void handleUnlinkProjection()}
+      onRepickProjection={handleRepickProjection}
       constraints={selectedEntityConstraints}
       onEditConstraint={handleEditSketchDimension}
       onDeleteConstraint={handleDeleteSketchConstraint}
@@ -22843,6 +23285,16 @@ export function App() {
         onCurveMode={(mode) =>
           dispatchInteraction({ type: 'sketch-curve-mode', mode })
         }
+        projectMode={interaction.session.projectMode ?? 'linked'}
+        onProjectMode={(mode) => {
+          setProjectionRepair(null);
+          dispatchInteraction({ type: 'sketch-project-mode', mode });
+          setStatus(
+            mode === 'linked'
+              ? 'Click a model edge, or a face for its boundary, to project it linked: it follows later edits.'
+              : 'Click a model edge, or a face for its boundary, to copy it into the sketch once.'
+          );
+        }}
         onConstruction={setSketchConstruction}
         onSettings={(sketching) => {
           const current = appSettingsRef.current;
@@ -24393,23 +24845,26 @@ export function App() {
                 onCreateTransform={(value) => {
                   const name = newFeatureName(value.name);
                   const command = commandFactories.transformBody({
-                      name,
-                      targetBodyId: value.targetBodyId,
-                      translation: value.translation,
-                      rotationDeg: value.rotationDeg,
-                      ...(value.scale !== undefined
-                        ? { scale: value.scale }
-                        : {}),
-                      ...(value.pivot !== undefined
-                        ? { pivot: value.pivot }
-                        : {}),
-                      ...(value.copy
-                        ? { copy: true, bodyName: newCopyBodyName(value.targetBodyId) }
-                        : {}),
-                      ...(value.axisRotation
-                        ? { axisRotation: value.axisRotation }
-                        : {})
-                    });
+                    name,
+                    targetBodyId: value.targetBodyId,
+                    translation: value.translation,
+                    rotationDeg: value.rotationDeg,
+                    ...(value.scale !== undefined
+                      ? { scale: value.scale }
+                      : {}),
+                    ...(value.pivot !== undefined
+                      ? { pivot: value.pivot }
+                      : {}),
+                    ...(value.copy
+                      ? {
+                          copy: true,
+                          bodyName: newCopyBodyName(value.targetBodyId)
+                        }
+                      : {}),
+                    ...(value.axisRotation
+                      ? { axisRotation: value.axisRotation }
+                      : {})
+                  });
                   createValidatedFeature(
                     command,
                     name,
@@ -25114,45 +25569,45 @@ export function App() {
             // nothing visible is left, so the choice can be undone here.
             (exportBodyIds.length > 0 ||
               (exportScopeInfo?.hiddenExcluded ?? 0) > 0) && (
-            <ExportDialog
-              scopeLabel={
-                exportScopeInfo?.selection && selectedBody
-                  ? selectedBody.name
-                  : exportScopeInfo
-                    ? exportScopeLabel(exportScopeInfo)
-                    : `all bodies (${exportBodyIds.length})`
-              }
-              hiddenBodies={
-                exportScopeInfo && !exportScopeInfo.selection
-                  ? exportScopeInfo.hiddenIncluded +
-                    exportScopeInfo.hiddenExcluded
-                  : 0
-              }
-              includeHidden={exportIncludesHidden}
-              onIncludeHiddenChange={setExportIncludesHidden}
-              bodies={exportBodyIds.map((bodyId) => ({
-                bodyId,
-                name: doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId
-              }))}
-              revision={doc.version}
-              onClose={() => {
-                setMeshExportOpen(false);
-                // Leaving with every body hidden and left out would leave no
-                // export to reopen this dialog from; hidden bodies come back.
-                if (exportBodyIds.length === 0) setExportIncludesHidden(true);
-              }}
-              onExport={handleExportMesh}
-              onCheckQuality={handleCheckMeshQuality}
-              exportUnits={appSettings.files.exportUnits}
-              documentUnits={doc.units}
-              onExportUnitsChange={(exportUnits) =>
-                handleAppSettingsChange({
-                  ...appSettingsRef.current,
-                  files: { ...appSettingsRef.current.files, exportUnits }
-                })
-              }
-            />
-          )}
+              <ExportDialog
+                scopeLabel={
+                  exportScopeInfo?.selection && selectedBody
+                    ? selectedBody.name
+                    : exportScopeInfo
+                      ? exportScopeLabel(exportScopeInfo)
+                      : `all bodies (${exportBodyIds.length})`
+                }
+                hiddenBodies={
+                  exportScopeInfo && !exportScopeInfo.selection
+                    ? exportScopeInfo.hiddenIncluded +
+                      exportScopeInfo.hiddenExcluded
+                    : 0
+                }
+                includeHidden={exportIncludesHidden}
+                onIncludeHiddenChange={setExportIncludesHidden}
+                bodies={exportBodyIds.map((bodyId) => ({
+                  bodyId,
+                  name: doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId
+                }))}
+                revision={doc.version}
+                onClose={() => {
+                  setMeshExportOpen(false);
+                  // Leaving with every body hidden and left out would leave no
+                  // export to reopen this dialog from; hidden bodies come back.
+                  if (exportBodyIds.length === 0) setExportIncludesHidden(true);
+                }}
+                onExport={handleExportMesh}
+                onCheckQuality={handleCheckMeshQuality}
+                exportUnits={appSettings.files.exportUnits}
+                documentUnits={doc.units}
+                onExportUnitsChange={(exportUnits) =>
+                  handleAppSettingsChange({
+                    ...appSettingsRef.current,
+                    files: { ...appSettingsRef.current.files, exportUnits }
+                  })
+                }
+              />
+            )}
           {imageExportView && doc && (
             <ImageExportDialog
               viewScopeLabel={

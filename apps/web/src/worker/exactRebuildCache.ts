@@ -75,6 +75,30 @@ export function geometryContentKey(document: ProjectDocument): string {
   return canonicalProjectContentKey(model);
 }
 
+/** Requalify a cached result only under its actual canonical geometry key. */
+export function rebindSketchGeometryForContent(
+  document: ProjectDocument,
+  derived: ProjectDocument['derived'],
+  sourceContentKey: string
+): ProjectDocument['derived'] {
+  const geometry = derived.sketchGeometry;
+  if (!geometry) return derived;
+  const { sketchGeometry: _previousGeometry, ...rest } = derived;
+  if (
+    geometry.projectId !== document.projectId ||
+    sourceContentKey !== geometryContentKey(document)
+  )
+    return rest;
+  return {
+    ...rest,
+    sketchGeometry: {
+      ...geometry,
+      projectId: document.projectId,
+      documentVersion: document.version
+    }
+  };
+}
+
 /**
  * Approximate retained size, counted by walking the value rather than
  * serialising it. The previous measure built a stable JSON string purely to

@@ -1,3 +1,4 @@
+import { assertDocumentContentSchema } from '@openzcad/document-core';
 import {
   assertDocumentHistory,
   documentStructureError,
@@ -494,13 +495,21 @@ function parseProjectDocument(
   // every device (`normalizeDocument` fails closed on it), so refuse it here.
   if (record.drawings !== undefined) {
     const drawingsError = drawingSetError(record.drawings);
-    if (drawingsError) throw badRequest(`"document.drawings": ${drawingsError}`);
+    if (drawingsError)
+      throw badRequest(`"document.drawings": ${drawingsError}`);
   }
   // I05: the same holds for the reference-image section.
   if (record.referenceImages !== undefined) {
     const imagesError = referenceImageSetError(record.referenceImages);
     if (imagesError)
       throw badRequest(`"document.referenceImages": ${imagesError}`);
+  }
+  try {
+    assertDocumentContentSchema(value as ProjectDocument);
+  } catch (error) {
+    throw badRequest(
+      error instanceof Error ? error.message : 'Invalid project content schema.'
+    );
   }
   // Undo and redo can restore imports that are absent from current nodes.
   // Validate every copy before the document can be saved or shared.

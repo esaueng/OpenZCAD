@@ -43,6 +43,7 @@ import {
   type SketchObjectData,
   type SketchPointRef
 } from '@openzcad/shared';
+import { resolvedSketchDocument } from '@openzcad/document-core';
 import type {
   SketchOffsetJoin,
   SketchOffsetOptions
@@ -274,7 +275,7 @@ function sketchObject(
   objectId: string
 ): SketchObjectData | null {
   if (!sketch.objectIds.includes(objectId as EntityId)) return null;
-  const node = document.nodes[objectId as EntityId];
+  const node = resolvedSketchDocument(document).nodes[objectId as EntityId];
   return node?.kind === 'sketch-object' ? node.data : null;
 }
 

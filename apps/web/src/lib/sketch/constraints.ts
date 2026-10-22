@@ -12,6 +12,7 @@ import type {
   SketchPointRef
 } from '@openzcad/shared';
 import type { ProjectDocument } from '@openzcad/shared';
+import { resolvedSketchDocument } from '@openzcad/document-core';
 // Type-only on purpose: a value import would pull the WASM-bearing module
 // into the main bundle and fail the build's bundle-size check.
 import type {
@@ -202,7 +203,7 @@ function sketchObjectData(
   if (!sketch.objectIds.includes(objectId as EntityId)) {
     return null;
   }
-  const node = document.nodes[objectId as EntityId];
+  const node = resolvedSketchDocument(document).nodes[objectId as EntityId];
   return node?.kind === 'sketch-object' ? node.data : null;
 }
 
@@ -918,7 +919,7 @@ export function topResidualConstraints(
 ): string[] {
   if (!sketch) return [];
   const nameOf = (objectId: EntityId) => {
-    const node = document.nodes[objectId];
+    const node = resolvedSketchDocument(document).nodes[objectId];
     return node?.kind === 'sketch-object'
       ? node.name || node.data.objectKind
       : 'entity';

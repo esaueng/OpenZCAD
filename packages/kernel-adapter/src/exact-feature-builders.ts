@@ -216,6 +216,7 @@ import {
   resolveSketchBasisAtHistory
 } from './exact-profile-builders';
 import { applyDirectEdit } from './exact-direct-edit-ops';
+import { resolveSketchProjectionsAtHistory } from './exact-sketch-projection';
 import type { FeatureBuildContext, FeatureDataOf } from './exact-build-loop';
 
 /**
@@ -237,9 +238,21 @@ function buildSketchFeature(
   if (!sketch) {
     throw new Error('Referenced sketch no longer exists.');
   }
-  result.sketchBases.set(
-    sketch.sketchId,
-    resolveSketchBasisAtHistory(kernel, document, sketch, result, scope)
+  const basis = resolveSketchBasisAtHistory(
+    kernel,
+    document,
+    sketch,
+    result,
+    scope
+  );
+  result.sketchBases.set(sketch.sketchId, basis);
+  resolveSketchProjectionsAtHistory(
+    kernel,
+    document,
+    sketch,
+    feature,
+    basis,
+    result
   );
 }
 

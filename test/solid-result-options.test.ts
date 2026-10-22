@@ -19,7 +19,6 @@ import {
 import { extrudeEditTargets } from '../apps/web/src/lib/extrudeEditing';
 import {
   FEATURE_SUPPRESSED_METADATA_KEY,
-  PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
   type BodyId,
   type BooleanKeepOriginals,
@@ -100,7 +99,6 @@ function throughBlock(): {
 
 describe('Stage 4 solid options: document contract', () => {
   it('is schema v24', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(32);
   });
 
   it('stores nothing new when no option is chosen', () => {

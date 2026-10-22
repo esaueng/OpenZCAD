@@ -1,4 +1,6 @@
 import { GEOMETRY_LINEAR_TOLERANCE, type Vec3 } from '@openzcad/geometry';
+import { fingerprintOfTopologySignature as fingerprintOfSignature } from '@openzcad/shared';
+export { fingerprintOfSignature };
 
 /**
  * Kernel-neutral topology identity (ADR-011).
@@ -17,25 +19,12 @@ import { GEOMETRY_LINEAR_TOLERANCE, type Vec3 } from '@openzcad/geometry';
  * hashes by registering both generations in its lookup maps.
  */
 
-const FNV_OFFSET_BASIS = 2166136261;
-const FNV_PRIME = 16777619;
-
 /** Direction components are quantized 1000× finer than coordinates. */
 const AXIS_SCALE = 1000;
 
 export function quantizeCoordinate(value: number): number {
   const quantized = Math.round(value / GEOMETRY_LINEAR_TOLERANCE);
   return Object.is(quantized, -0) ? 0 : quantized;
-}
-
-export function fingerprintOfSignature(signature: string): number {
-  let hash = FNV_OFFSET_BASIS;
-  for (let index = 0; index < signature.length; index += 1) {
-    hash ^= signature.charCodeAt(index);
-    hash = Math.imul(hash, FNV_PRIME);
-  }
-  const unsigned = hash >>> 0;
-  return unsigned === 0 ? 1 : unsigned;
 }
 
 function quantizedDirectionComponents(

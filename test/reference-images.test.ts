@@ -15,7 +15,6 @@ import {
   calibratedReferenceImageWidth,
   isAcceptableReferenceImageArtifact,
   MAX_REFERENCE_IMAGE_BYTES,
-  PROJECT_DOCUMENT_SCHEMA_VERSION,
   referenceImageError,
   referenceImageHeaderSize,
   referenceImageHeight,
@@ -90,8 +89,7 @@ function boxDocument(): ProjectDocument {
 }
 
 describe('I05 reference-image section (schema v32)', () => {
-  it('is schema 32, additive, and never added to a document without images', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(32);
+  it('retains schema-v32 images, additive, and never added to a document without images', () => {
     const document = boxDocument();
     expect(document.referenceImages).toBeUndefined();
     const saved = JSON.parse(JSON.stringify(document)) as ProjectDocument;

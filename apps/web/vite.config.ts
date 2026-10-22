@@ -358,6 +358,18 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
                     '/packages/kernel-adapter/src/feature-profile-dependencies.ts'
                   ),
                 includeDependenciesRecursively: false
+              },
+              {
+                // I01 projection geometry is reached both from the geometry
+                // barrel, which every worker loads eagerly, and from the lazy
+                // exact adapter. Left unassigned, the bundler hosts it in the
+                // exact chunk, and the barrel's re-export then makes every
+                // worker load that chunk (and its mesh-payload split) at
+                // startup. Its own leaf chunk keeps the exact boundary lazy.
+                name: 'geometry-sketch-projection',
+                test: (id: string) =>
+                  id.includes('/packages/geometry/src/sketch-projection.ts'),
+                includeDependenciesRecursively: false
               }
             ]
           }

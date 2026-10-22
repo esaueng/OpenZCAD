@@ -10,6 +10,7 @@ export * from './mass-density';
 export * from './keymap-settings';
 export * from './drawings';
 export * from './drawing-annotations';
+export * from './topology-reference';
 export * from './reference-images';
 import type { DocumentHistory } from './document-history';
 import type { KeymapOverrides } from './keymap-settings';
@@ -128,8 +129,17 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
  * images are never features or bodies, so no build or export reads them. An
  * older client would drop the section on its next save, so the bump makes it
  * refuse such a document.
+ *
+ * v33 adds I01 sketch projection (`SketchObjectData.projection`): a line,
+ * arc, circle or ellipse projected from a model edge records the edge (by
+ * schema-v5 lineage) and whether it stays linked to it or was copied once.
+ * A linked projection is re-projected at the sketch's history position on
+ * every rebuild. An older client would keep the stored geometry and drop the
+ * link on its next save, so the bump makes it refuse such a document.
+ * Absent means an ordinary drawn object, so every older document loads
+ * unchanged.
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 32 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 33 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -695,7 +705,10 @@ export type SketchPlaneRef =
     };
 
 /** A canonical plane (optionally offset), as a datum source. */
-export type CanonicalPlaneSource = Extract<SketchPlaneRef, { type: 'canonical' }>;
+export type CanonicalPlaneSource = Extract<
+  SketchPlaneRef,
+  { type: 'canonical' }
+>;
 
 /**
  * A qualified exact planar face, as a datum source: lineage and the
@@ -715,9 +728,7 @@ export type FacePlaneSource = Extract<SketchPlaneRef, { type: 'face' }> & {
 export type ExtrudeToFaceTarget = FacePlaneSource;
 
 export type DatumPlaneSource =
-  | CanonicalPlaneSource
-  | DatumPlaneRef
-  | FacePlaneSource;
+  CanonicalPlaneSource | DatumPlaneRef | FacePlaneSource;
 
 /**
  * Schema v25: a model vertex, named as one end of an open edge whose
@@ -1256,7 +1267,67 @@ export type SketchObjectData = (
    * snappable but never split curves or bound a solid profile.
    */
   construction?: boolean;
+  /**
+   * I01 (schema v33): this object was projected from a model edge. Only
+   * lines, arcs, circles and ellipses carry it. Absent is ordinary drawn
+   * geometry.
+   */
+  projection?: SketchProjection;
 };
+
+/**
+ * I01 (schema v33): the model edge a projected sketch object came from: a
+ * body and one of its edges by schema-v5 lineage, re-found at the sketch's
+ * history position. No edge is ever found by proximity.
+ */
+export interface SketchProjectionSource {
+  bodyId: BodyId;
+  edgeReference: EdgeTopologyReferenceV5;
+}
+
+/**
+ * I01 (schema v33): how a projected sketch object relates to its edge.
+ *
+ * - `linked`: the exact build re-projects the edge onto the sketch plane at
+ *   the sketch's history position on every rebuild and builds from that, so
+ *   the object follows upstream edits. The stored geometry is the last valid
+ *   projection: it stands in, with a broken status, when the edge can no
+ *   longer be re-found through verified lineage, and the solver holds it
+ *   fixed.
+ * - `unlinked`: the geometry was copied once and is ordinary editable
+ *   geometry from then on. `source` stays as provenance only (absent when
+ *   the edge had no verified identity); nothing reads it during a rebuild.
+ */
+export type SketchProjection =
+  | { mode: 'linked'; source: SketchProjectionSource }
+  | { mode: 'unlinked'; source?: SketchProjectionSource };
+
+export type SketchProjectionMode = SketchProjection['mode'];
+
+/** Object kinds a projection can produce (and so may carry `projection`). */
+export const SKETCH_PROJECTION_OBJECT_KINDS = [
+  'line',
+  'arc',
+  'circle',
+  'ellipse'
+] as const satisfies readonly SketchObjectKind[];
+
+/**
+ * I01: what the exact build found for one linked projection at its sketch's
+ * history position.
+ *
+ * - `current`: the re-projected edge matches the stored geometry.
+ * - `moved`: the edge resolved but projects elsewhere now (an upstream edit
+ *   moved it). The build used `data`; the app writes it back to the object.
+ * - `broken`: the edge could not be re-found through verified lineage (its
+ *   feature was deleted or suppressed, or the edge was consumed), or it no
+ *   longer projects to the same kind of curve. The build used the stored,
+ *   last valid geometry; repairing needs an explicit re-pick or unlink.
+ */
+export type SketchProjectionState =
+  | { status: 'current' }
+  | { status: 'moved'; data: SketchObjectData }
+  | { status: 'broken'; reason: string };
 
 export interface SketchObjectNode extends BaseNode {
   kind: 'sketch-object';
@@ -1346,9 +1417,10 @@ export function isInPlaceTransform(
 }
 
 /** M10: a transform that adds a moved copy and leaves its source live. */
-export function isTransformCopy(
-  data: FeatureData
-): data is Extract<FeatureData, { featureKind: 'transform' }> & {
+export function isTransformCopy(data: FeatureData): data is Extract<
+  FeatureData,
+  { featureKind: 'transform' }
+> & {
   copy: true;
 } {
   return data.featureKind === 'transform' && data.copy === true;
@@ -2928,6 +3000,23 @@ export interface DerivedState {
    * own history position. A datum axis that failed or is suppressed is absent.
    */
   datumAxes?: Record<FeatureId, DatumAxisLine>;
+  /**
+   * I01 (schema v33): each linked sketch projection's state as the exact
+   * build found it at its sketch's history position, keyed by object id.
+   * Unlinked projections and sketches the build did not reach are absent.
+   */
+  sketchProjections?: Record<string, SketchProjectionState>;
+  /**
+   * Session geometry from this exact build, including ordinary entities solved
+   * against linked projections. Readers require both source identifiers to
+   * match; authored nodes, expressions and history remain unchanged. Attaching
+   * a result keeps this channel out of persisted documents.
+   */
+  sketchGeometry?: {
+    projectId: ProjectId;
+    documentVersion: number;
+    objects: Record<string, SketchObjectData>;
+  };
   exportableBodyIds: BodyId[];
   warnings: string[];
   updatedAt: string;
