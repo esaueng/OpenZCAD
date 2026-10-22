@@ -19,10 +19,12 @@ import {
   Hexagon,
   Layers3,
   Link2,
+  Link2Off,
   Magnet,
   MousePointer2,
   Minus,
   Play,
+  Projector,
   Radius,
   RotateCw,
   ScanSearch,
@@ -37,7 +39,11 @@ import {
   Type,
   Waypoints
 } from 'lucide-react';
-import { MAX_SKETCH_POLYGON_SIDES, type AppSettings } from '@openzcad/shared';
+import {
+  MAX_SKETCH_POLYGON_SIDES,
+  type AppSettings,
+  type SketchProjectionMode
+} from '@openzcad/shared';
 import {
   nextSketchCircleMode,
   nextSketchCurveMode,
@@ -61,6 +67,7 @@ import { SKETCH_EDIT_TOOL_SPECS } from '../lib/sketch/edits';
 import { DEFAULT_SKETCH_OFFSET_OPTIONS } from '../lib/sketch/offset';
 import { CONSTRAINT_ICONS } from './constraintIcons';
 import { Tooltip } from './Tooltip';
+import { RelationGlyphFilter } from './RelationGlyphFilter';
 import { useKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
 
@@ -140,6 +147,10 @@ interface SketchToolRailProps {
   onRectangleMode?(mode: SketchRectangleMode): void;
   onPolygonSides?(sides: number): void;
   onCurveMode?(mode: SketchCurveMode): void;
+  /** I01: the Project tool's linked/unlinked choice; absent is linked. */
+  projectMode?: SketchProjectionMode;
+  /** Arms the Project tool with that choice. */
+  onProjectMode?(mode: SketchProjectionMode): void;
   onConstruction(value: boolean): void;
   onSettings(settings: AppSettings['sketching']): void;
   /** The hint travels with the tool: the rail already holds the specs. */
@@ -158,7 +169,7 @@ interface SketchToolRailProps {
 const TOOLS: {
   id: Exclude<
     SketchToolId,
-    'circle' | 'rectangle' | 'polygon' | 'ellipse' | 'spline'
+    'circle' | 'rectangle' | 'polygon' | 'ellipse' | 'spline' | 'project'
   >;
   label: string;
   /** The keymap command whose live key the tooltip names. */
@@ -174,6 +185,31 @@ const TOOLS: {
   { id: 'line', label: 'Line', command: 'sketch-line', icon: Minus },
   { id: 'arc', label: 'Arc', command: 'sketch-arc', icon: Waypoints },
   { id: 'text', label: 'Text', command: 'sketch-text', icon: Type }
+];
+
+/** The Project tool's two modes, in the order its strip shows them. */
+const PROJECT_MODES: {
+  mode: SketchProjectionMode;
+  label: string;
+  tile: string;
+  detail: string;
+  icon: typeof Minus;
+}[] = [
+  {
+    mode: 'linked',
+    label: 'Linked projection',
+    tile: 'Linked',
+    detail:
+      'Follows its model edge through later edits; shows broken if the edge goes away.',
+    icon: Link2
+  },
+  {
+    mode: 'unlinked',
+    label: 'Unlinked projection',
+    tile: 'Unlinked',
+    detail: 'Copies the edge once as ordinary, editable sketch geometry.',
+    icon: Link2Off
+  }
 ];
 
 /** A circle through three points on its circumference, drawn like lucide. */
@@ -582,6 +618,8 @@ export function SketchToolRail({
   rectangleMode = 'corner',
   polygonSides = 6,
   curveMode,
+  projectMode = 'linked',
+  onProjectMode,
   construction,
   settings,
   units,
@@ -617,6 +655,7 @@ export function SketchToolRail({
   const polygonKey = keymap.label('sketch-polygon');
   const ellipseKey = keymap.label('sketch-ellipse');
   const splineKey = keymap.label('sketch-spline');
+  const projectKey = keymap.label('sketch-project');
   // The sketch's overview and settings open beside the rail; closed until asked.
   const [paletteOpenState, setPaletteOpenState] = useState(false);
   const paletteOpen = paletteOpenProp ?? paletteOpenState;
@@ -953,6 +992,66 @@ export function SketchToolRail({
         ) : null}
       </span>
       {TOOLS.slice(3).map(drawTool)}
+      <span className="sketch-circle-tool">
+        <Tooltip
+          label="Project edges"
+          shortcut={projectKey}
+          description={
+            projectKey
+              ? `Click a model edge, or a face for its boundary. ${platformShortcutLabel(projectKey)} again steps between linked and unlinked`
+              : 'Click a model edge, or a face for its boundary'
+          }
+        >
+          <button
+            type="button"
+            className={tool === 'project' ? 'active' : undefined}
+            aria-pressed={tool === 'project'}
+            aria-label="Project edges"
+            onClick={() => onProjectMode?.(projectMode)}
+          >
+            <Projector size={16} aria-hidden="true" />
+          </button>
+        </Tooltip>
+        {tool === 'project' ? (
+          <span
+            className="sketch-type-strip"
+            role="radiogroup"
+            aria-label="Projection link"
+            data-rail-flyout=""
+          >
+            {PROJECT_MODES.map(
+              ({ mode, label, tile, detail, icon: Icon }, index) => {
+                const checked = projectMode === mode;
+                return (
+                  <Tooltip key={mode} label={label} description={detail}>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={checked}
+                      tabIndex={checked ? 0 : -1}
+                      className={`sketch-type-tile${checked ? ' active' : ''}`}
+                      onClick={() => onProjectMode?.(mode)}
+                      onKeyDown={(event) => {
+                        const next = radioGroupKeyStep(
+                          event,
+                          PROJECT_MODES.length,
+                          index
+                        );
+                        if (next !== null) {
+                          onProjectMode?.(PROJECT_MODES[next]!.mode);
+                        }
+                      }}
+                    >
+                      <Icon size={16} aria-hidden="true" />
+                      <span>{tile}</span>
+                    </button>
+                  </Tooltip>
+                );
+              }
+            )}
+          </span>
+        ) : null}
+      </span>
     </>
   );
   const editTool = (
@@ -1242,6 +1341,13 @@ export function SketchToolRail({
                 <option value="hidden">Hidden</option>
               </select>
             </label>
+            <RelationGlyphFilter
+              hidden={settings.hiddenRelationGlyphs}
+              disabled={settings.relationGlyphs === 'hidden'}
+              onChange={(hiddenRelationGlyphs) =>
+                patchSettings({ hiddenRelationGlyphs })
+              }
+            />
           </fieldset>
           <fieldset>
             <legend>Snapping</legend>

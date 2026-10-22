@@ -5,13 +5,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   createProjectDocument,
+  findSketch,
   listFeaturesInOrder
 } from '@openzcad/document-core';
 import {
   toUserId,
   type BodyId,
   type BodyRepresentation,
-  type ProjectDocument
+  type ProjectDocument,
+  type ReferenceImage
 } from '@openzcad/shared';
 import { COLLAPSED_FOLDERS_STORAGE_KEY } from '../../lib/objectFolderView';
 import { ObjectsPanel, type ObjectFolderActions } from './ObjectsPanel';
@@ -60,11 +62,16 @@ function Harness({
   manager,
   selected = [],
   editable = true,
+  imageActions,
   spy
 }: {
   manager: CommandManager;
   selected?: BodyId[];
   editable?: boolean;
+  imageActions?: Pick<
+    PanelProps,
+    'onSelectReferenceImage' | 'onHiddenReferenceImageIdsChange'
+  >;
   spy: Partial<ObjectFolderActions>;
 }) {
   const [document, setDocument] = useState(manager.document);
@@ -109,7 +116,8 @@ function Harness({
     onSelectBody: vi.fn(),
     onToggleBodyVisibility: vi.fn(),
     onToggleSketchVisibility: vi.fn(),
-    objectFolderActions: actions
+    objectFolderActions: actions,
+    ...imageActions
   };
   return <ObjectsPanel {...props} view={useObjectsView()} />;
 }
@@ -140,6 +148,157 @@ afterEach(() => {
 });
 
 describe('Objects folders (U06, ZC-128)', () => {
+  it('keeps folder bodies, broken projection roles and image actions through type filters', async () => {
+    const user = userEvent.setup();
+    const manager = model();
+    const [bodyId] = manager.document.bodyOrder;
+    const producingFeatureId = listFeaturesInOrder(manager.document)[0]!
+      .featureId;
+    const source = {
+      bodyId: bodyId!,
+      edgeReference: {
+        kind: 'edge' as const,
+        producingFeatureId,
+        lineageName: 'edge.a',
+        currentHash: 1,
+        witnessVersion: 1 as const,
+        witness: {
+          curveType: 'LINE',
+          length: 1,
+          closed: false as const,
+          endpoints: [
+            [0, 0, 0],
+            [1, 0, 0]
+          ] as [[number, number, number], [number, number, number]],
+          midpoint: [0, 0, 0] as [number, number, number]
+        }
+      }
+    };
+    manager.execute(
+      commandFactories.addSketch({
+        name: 'Outline',
+        plane: 'XY',
+        objects: [
+          {
+            objectKind: 'line',
+            x1: 0,
+            y1: 0,
+            x2: 1,
+            y2: 0,
+            projection: { mode: 'linked', source }
+          },
+          {
+            objectKind: 'circle',
+            centerX: 0,
+            centerY: 0,
+            radius: 1,
+            projection: { mode: 'unlinked', source }
+          }
+        ]
+      })
+    );
+    const sketchId = manager.document.sketchOrder[0]!;
+    const lineId = findSketch(manager.document, sketchId)!.objectIds[0]!;
+    manager.execute(
+      commandFactories.createObjectFolder({
+        folderId: 'folder_frame',
+        name: 'Frame',
+        parentId: null,
+        bodyIds: [bodyId!]
+      })
+    );
+    const image: ReferenceImage = {
+      imageId: 'rimg_front' as ReferenceImage['imageId'],
+      name: 'Front photo',
+      contentType: 'image/jpeg',
+      source: {
+        marker: 'openzcad-source-ref',
+        version: 1,
+        hashAlgorithm: 'sha256',
+        checksumSha256: 'f'.repeat(64),
+        logicalBytes: 10
+      },
+      artifactId: 'artifact_front' as ReferenceImage['artifactId'],
+      pixelWidth: 10,
+      pixelHeight: 10,
+      plane: { type: 'canonical', plane: 'XY', offset: 0 },
+      center: { u: 0, v: 0 },
+      rotationDeg: 0,
+      width: 10,
+      opacity: 1
+    };
+    manager.execute(commandFactories.addReferenceImage({ image }));
+    manager.commitDerivedState({
+      ...manager.document.derived,
+      sketchProjections: {
+        [lineId]: { status: 'broken', reason: 'its source edge was deleted.' }
+      }
+    });
+    const onSelectReferenceImage = vi.fn();
+    const onHiddenReferenceImageIdsChange = vi.fn();
+    render(
+      <Harness
+        manager={manager}
+        spy={{}}
+        imageActions={{
+          onSelectReferenceImage,
+          onHiddenReferenceImageIdsChange
+        }}
+      />
+    );
+    const filter = screen.getByRole('combobox', {
+      name: 'Filter objects by type'
+    });
+    expect(list().getByRole('button', { name: /^Frame/ })).toBeInTheDocument();
+    expect(list().getByRole('button', { name: 'Base' })).toBeInTheDocument();
+    expect(list().getByText('broken projection')).toBeInTheDocument();
+    expect(
+      list().getByRole('listitem', {
+        name: 'Projected line: Linked from Base · broken'
+      })
+    ).toHaveAttribute(
+      'title',
+      'Linked from Base · broken: its source edge was deleted.'
+    );
+    expect(
+      list().getByRole('listitem', {
+        name: 'Projected circle: Independent copy from Base'
+      })
+    ).toHaveTextContent('independent');
+
+    await user.click(
+      screen.getByRole('button', { name: 'Collapse folder Frame' })
+    );
+    expect(list().queryByRole('button', { name: 'Base' })).toBeNull();
+    expect(list().getByText('broken projection')).toBeInTheDocument();
+    await user.selectOptions(filter, 'images');
+    expect(list().queryByRole('button', { name: /^Frame/ })).toBeNull();
+    expect(list().queryByText('broken projection')).toBeNull();
+    expect(list().queryByText(/No images yet/)).toBeNull();
+    await user.click(list().getByRole('button', { name: /^Front photo/ }));
+    expect(onSelectReferenceImage).toHaveBeenCalledWith(image.imageId);
+    await user.click(
+      list().getByRole('button', { name: 'Hide image Front photo' })
+    );
+    expect(onHiddenReferenceImageIdsChange).toHaveBeenCalledWith(
+      new Set([image.imageId])
+    );
+
+    await user.selectOptions(filter, 'sketches');
+    expect(list().queryByRole('button', { name: /^Front photo/ })).toBeNull();
+    expect(list().getByText('broken projection')).toBeInTheDocument();
+    await user.selectOptions(filter, 'all');
+    expect(list().getByRole('button', { name: /^Frame/ })).toBeInTheDocument();
+    expect(list().queryByRole('button', { name: 'Base' })).toBeNull();
+    await user.click(
+      screen.getByRole('button', { name: 'Expand folder Frame' })
+    );
+    expect(list().getByRole('button', { name: 'Base' })).toBeInTheDocument();
+    expect(
+      list().getByRole('button', { name: /^Front photo/ })
+    ).toBeInTheDocument();
+  });
+
   it('makes a folder of the selected bodies and names it in place', async () => {
     const user = userEvent.setup();
     const manager = model();

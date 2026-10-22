@@ -79,7 +79,13 @@ export const CAD_OPERATIONS = [
   'objectFolder.create',
   'objectFolder.rename',
   'objectFolder.delete',
-  'objectFolder.move'
+  'objectFolder.move',
+  'drawing.annotation.add',
+  'drawing.annotation.update',
+  'drawing.annotation.delete',
+  'reference-image.add',
+  'reference-image.update',
+  'reference-image.delete'
 ] as const;
 export const EXPANDED: Readonly<Record<string, readonly string[]>> = {
   feature_operation: CAD_OPERATIONS,

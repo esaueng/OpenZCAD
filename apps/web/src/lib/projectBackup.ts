@@ -1,6 +1,7 @@
 import {
   documentNodesWithHistory,
   documentAssetsWithHistory,
+  referenceImagesWithHistory,
   importedSourceReferenceOf,
   assertDocumentHistory,
   documentStructureError
@@ -328,6 +329,18 @@ export async function parseProjectBackup(text: string): Promise<ProjectBackup> {
       ).find((entry) => entry.sha256 === sourceRef.checksumSha256);
       if (source?.logicalBytes !== sourceRef.logicalBytes)
         throw new Error(`Invalid ${what} length.`);
+    }
+    // A reference image's picture travels as a source too (I05).
+    for (const image of referenceImagesWithHistory(document)) {
+      const sources = (parsed.sources ?? []) as NonNullable<
+        ProjectBackup['sources']
+      >;
+      const source = sources.find(
+        (entry) => entry.sha256 === image.source?.checksumSha256
+      );
+      if (!source) throw new Error(`Missing image: ${image.name}`);
+      if (source.logicalBytes !== image.source.logicalBytes)
+        throw new Error('Invalid image length.');
     }
     for (const asset of documentAssetsWithHistory(document)) {
       if (

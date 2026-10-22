@@ -1,6 +1,10 @@
 import type { ProjectDocument, UserId } from './index';
 import { drawingSetError } from './drawings';
 import { objectFolderSetError } from './object-folders';
+import {
+  referenceImageSetError,
+  type ReferenceImage
+} from './reference-images';
 
 export const MAX_UNDO_STEPS = 100;
 export const MAX_UNDO_BYTES = 8_000_000;
@@ -21,6 +25,7 @@ export const HISTORY_FIELDS = [
   'shaprImports',
   'shaprImportOrder',
   'drawings',
+  'referenceImages',
   'objectFolders'
 ] as const;
 export type HistoryField = (typeof HISTORY_FIELDS)[number];
@@ -169,6 +174,16 @@ export function isDocumentHistory(
             ))
         )
           return false;
+        // The same holds for reference images (I05).
+        if (
+          change.field === 'referenceImages' &&
+          (change.key !== undefined ||
+            [change.before, change.after].some(
+              (side) =>
+                side !== undefined && referenceImageSetError(side) !== null
+            ))
+        )
+          return false;
       } else return false;
     }
   }
@@ -205,6 +220,28 @@ export function* documentNodesWithHistory(
         for (const node of nodes) {
           if (record(node) && typeof node.kind === 'string')
             yield node as unknown as ProjectDocument['nodes'][string];
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Reference images in the document and in undo/redo snapshots (I05): an
+ * image a user deleted still owns its bytes while undo can bring it back.
+ */
+export function* referenceImagesWithHistory(
+  document: ProjectDocument
+): Generator<ReferenceImage> {
+  yield* document.referenceImages?.images ?? [];
+  for (const entry of document.editHistory?.entries ?? []) {
+    for (const change of entry.changes) {
+      if (change.kind !== 'value' || change.field !== 'referenceImages')
+        continue;
+      for (const value of [change.before, change.after]) {
+        if (!record(value) || !Array.isArray(value.images)) continue;
+        for (const image of value.images) {
+          if (record(image)) yield image as unknown as ReferenceImage;
         }
       }
     }

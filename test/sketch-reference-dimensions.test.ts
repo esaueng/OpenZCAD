@@ -21,8 +21,9 @@ function user() {
 }
 
 describe('S02-A reference dimension schema envelope', () => {
-  it('retains additive reference dimensions in the current schema', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(34);
+  it('creates a document in the current schema', () => {
+    const document = createProjectDocument('Reference dimensions', user());
+    expect(document.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
   });
 
   it('leaves a document without reference dimensions byte-identical', () => {

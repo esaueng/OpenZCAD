@@ -5,11 +5,34 @@ import {
   createProjectDocument,
   normalizeDocument
 } from '@openzcad/document-core';
+import { openProjectStorageUpload } from '@openzcad/persistence';
 import type { AppSettings, ProjectDocument } from '@openzcad/shared';
 import { DEFAULT_APP_SETTINGS, toUserId } from '@openzcad/shared';
 import { WORKSPACE_SESSION_STORAGE_KEY } from '../../apps/web/src/lib/workspaceSession';
 
 export { test, expect, WORKSPACE_SESSION_STORAGE_KEY };
+
+/**
+ * A write body with its document whole again. The browser splits embedded
+ * import payloads into `storageAssets` (ADR-024 Phase 1), and the worker
+ * hydrates the projection from them before storing it, so a fixture that
+ * stores or echoes the document must too.
+ */
+export async function withHydratedDocument<T extends Record<string, unknown>>(
+  payload: T
+): Promise<T> {
+  if (payload.storageAssets === undefined) return payload;
+  const { storageAssets, ...body } = payload;
+  const field =
+    body.initialDocument !== undefined ? 'initialDocument' : 'document';
+  const document = body[field] as { projectId: string };
+  const opened = await openProjectStorageUpload(
+    document,
+    storageAssets,
+    document.projectId
+  );
+  return { ...body, [field]: opened.document } as unknown as T;
+}
 
 /** Waits on the production workspace summary instead of viewport chrome. */
 export async function expectBodyCount(page: Page, count: number) {
@@ -214,9 +237,11 @@ export async function stubApi(
       }
     })
   );
-  await page.route('**/api/projects', (route) => {
+  await page.route('**/api/projects', async (route) => {
     if (route.request().method() === 'POST') {
-      const payload = route.request().postDataJSON() as {
+      const payload = (await withHydratedDocument(
+        route.request().postDataJSON()
+      )) as {
         name: string;
         units?: string;
         document?: ProjectDocument;
@@ -264,8 +289,10 @@ export async function stubApi(
   // The browser builds a duplicate or branch and the worker stores it as sent
   // (ADR-024 Phase 1). A request without a document asks the account to build
   // the copy, which these specs' account cannot: it holds no projects.
-  await page.route('**/api/projects/*/duplicate', (route) => {
-    const payload = route.request().postDataJSON() as {
+  await page.route('**/api/projects/*/duplicate', async (route) => {
+    const payload = (await withHydratedDocument(
+      route.request().postDataJSON()
+    )) as {
       document?: ProjectDocument;
     };
     if (!payload.document)
@@ -288,7 +315,7 @@ export async function stubApi(
       }
     });
   });
-  await page.route('**/api/projects/*/revisions', (route) => {
+  await page.route('**/api/projects/*/revisions', async (route) => {
     // Two verbs share this path: an explicit save POSTs a document, and the
     // history panel GETs the list of stored save states when a project opens.
     // Reading post data off the GET throws inside the handler, which strands
@@ -299,7 +326,9 @@ export async function stubApi(
       // the panel offers is one this device stored.
       return route.fulfill({ json: { revisions: [], maxRevisions: 50 } });
     }
-    const payload = route.request().postDataJSON() as {
+    const payload = (await withHydratedDocument(
+      route.request().postDataJSON()
+    )) as {
       reason: string;
       document: ProjectDocument;
       savedRevisionId?: string;

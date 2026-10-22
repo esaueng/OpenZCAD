@@ -99,8 +99,10 @@ function throughBlock(): {
 }
 
 describe('Stage 4 solid options: document contract', () => {
-  it('is schema v24', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(34);
+  it('creates solid options in the current schema', () => {
+    expect(cubePair().document.schemaVersion).toBe(
+      PROJECT_DOCUMENT_SCHEMA_VERSION
+    );
   });
 
   it('stores nothing new when no option is chosen', () => {

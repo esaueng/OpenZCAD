@@ -8,6 +8,7 @@ import {
   type ObjectFolderSet,
   type ProjectDocument
 } from '@openzcad/shared';
+import { assertObjectFolderSchema } from './document-content-schema';
 
 /**
  * U06 Objects folder commands (schema v34). Each carries explicit ids and
@@ -45,6 +46,7 @@ function withFolders(
   document: ProjectDocument,
   edit: (set: ObjectFolderSet) => ObjectFolderSet
 ): ProjectDocument {
+  assertObjectFolderSchema(document.schemaVersion);
   const before = document.objectFolders ?? EMPTY;
   const after = edit(deepClone(before));
   // A move that changes nothing returns the same document, which the command

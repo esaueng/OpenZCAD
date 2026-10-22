@@ -5,6 +5,7 @@ import {
   composingTextDraft,
   sketchToolKeysSuspended,
   sketchPickArmed,
+  projectionRepickHolds,
   radialFaceOperationName,
   escapeTarget,
   interactionReducer,
@@ -358,6 +359,57 @@ describe('interactionReducer', () => {
       join: 'round',
       chain: false
     });
+  });
+
+  it('arms Project with its linked or unlinked choice, which outlives the tool (I01)', () => {
+    let state = interactionReducer(IDLE, { type: 'enter-sketch', plane });
+    state = interactionReducer(state, {
+      type: 'sketch-select-object',
+      objectId: 'ent_a'
+    });
+    state = interactionReducer(state, {
+      type: 'sketch-project-mode',
+      mode: 'unlinked'
+    });
+    expect(state.mode === 'sketch' && state.session).toMatchObject({
+      tool: 'project',
+      projectMode: 'unlinked',
+      selectedObjectId: null,
+      pendingEdit: null
+    });
+    state = interactionReducer(state, { type: 'sketch-tool', tool: 'line' });
+    expect(state.mode === 'sketch' && state.session).toMatchObject({
+      tool: 'line',
+      projectMode: 'unlinked'
+    });
+  });
+
+  it('holds a projection re-pick only while Project is armed linked (I01)', () => {
+    let state = interactionReducer(IDLE, { type: 'enter-sketch', plane });
+    expect(projectionRepickHolds(state)).toBe(false);
+    // Re-pick arms Project in Linked, the only mode a re-pick commits.
+    state = interactionReducer(state, {
+      type: 'sketch-project-mode',
+      mode: 'linked'
+    });
+    expect(projectionRepickHolds(state)).toBe(true);
+    // The project key on Project steps to Unlinked through the same event
+    // as the strip: the re-pick must not survive it, or the next pick would
+    // rewrite the existing entity's source while the strip shows Unlinked.
+    state = interactionReducer(state, {
+      type: 'sketch-project-mode',
+      mode: 'unlinked'
+    });
+    expect(state.mode === 'sketch' && state.session.tool).toBe('project');
+    expect(projectionRepickHolds(state)).toBe(false);
+    state = interactionReducer(state, {
+      type: 'sketch-project-mode',
+      mode: 'linked'
+    });
+    expect(projectionRepickHolds(state)).toBe(true);
+    // Leaving the tool disarms it too.
+    state = interactionReducer(state, { type: 'sketch-tool', tool: 'line' });
+    expect(projectionRepickHolds(state)).toBe(false);
   });
 
   it('steps the circle type in the strip order, wrapping round', () => {
@@ -872,6 +924,85 @@ describe('escape chain', () => {
       state.mode === 'sketch' && state.session.selectedObjectId
     ).toBeNull();
     expect(escapeTarget(state)).toBe('exit-sketch');
+  });
+
+  it('selects a relation from its glyph beside the entity selection, and clears both in one press', () => {
+    let state = interactionReducer(IDLE, { type: 'enter-sketch', plane });
+    state = interactionReducer(state, {
+      type: 'sketch-select-object',
+      objectId: 'entity_1'
+    });
+    state = interactionReducer(state, {
+      type: 'sketch-constraint-tool',
+      kind: 'parallel'
+    });
+    state = interactionReducer(state, {
+      type: 'sketch-select-constraint',
+      constraintId: 'cons_1'
+    });
+    if (state.mode !== 'sketch') throw new Error('expected sketch mode');
+    expect(state.session.selectedConstraintId).toBe('cons_1');
+    // The entity whose glyphs were showing stays selected; the armed pick
+    // tool gives way to Select.
+    expect(state.session.selectedObjectId).toBe('entity_1');
+    expect(state.session.pendingConstraint).toBeNull();
+    expect(state.session.tool).toBe('select');
+    expect(escapeTarget(state)).toBe('clear-sketch-selection');
+    state = interactionReducer(state, { type: 'escape' });
+    if (state.mode !== 'sketch') throw new Error('expected sketch mode');
+    expect(state.session.selectedConstraintId).toBeNull();
+    expect(state.session.selectedObjectId).toBeNull();
+    expect(escapeTarget(state)).toBe('exit-sketch');
+  });
+
+  it('drops a glyph-picked relation when an entity, a tool or a pick tool is chosen', () => {
+    const picked = () => {
+      const entered = interactionReducer(IDLE, { type: 'enter-sketch', plane });
+      return interactionReducer(entered, {
+        type: 'sketch-select-constraint',
+        constraintId: 'cons_1'
+      });
+    };
+    const constraintOf = (state: ReturnType<typeof picked>) =>
+      state.mode === 'sketch'
+        ? (state.session.selectedConstraintId ?? null)
+        : 'not sketch';
+    expect(
+      constraintOf(
+        interactionReducer(picked(), {
+          type: 'sketch-select-object',
+          objectId: 'entity_2'
+        })
+      )
+    ).toBeNull();
+    expect(
+      constraintOf(
+        interactionReducer(picked(), { type: 'sketch-tool', tool: 'line' })
+      )
+    ).toBeNull();
+    expect(
+      constraintOf(
+        interactionReducer(picked(), {
+          type: 'sketch-constraint-tool',
+          kind: 'equal'
+        })
+      )
+    ).toBeNull();
+    expect(
+      constraintOf(
+        interactionReducer(picked(), {
+          type: 'sketch-circle-mode',
+          mode: 'three-point'
+        })
+      )
+    ).toBeNull();
+    // Outside a sketch there is no relation to pick.
+    expect(
+      interactionReducer(IDLE, {
+        type: 'sketch-select-constraint',
+        constraintId: 'cons_1'
+      })
+    ).toBe(IDLE);
   });
 
   it('keeps validating face operations locked, then clears a refusal in one press', () => {

@@ -18,7 +18,7 @@ import {
   MAX_THREE_MF_PLACEMENTS,
   readThreeMfPackage
 } from '../packages/kernel-adapter/src/three-mf-package';
-import { decodeProjectStorageBody } from '../packages/cloudflare-adapters/src/project-object-storage';
+import { decodeProjectStorageBody } from '@openzcad/persistence';
 import { deflatedThreeMfFixture } from './support/mesh-import-fixtures';
 
 function glb(nodes: unknown[], roots = [0]): Uint8Array {

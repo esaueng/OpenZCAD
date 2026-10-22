@@ -16,12 +16,16 @@ import type {
   BodyTopology,
   BooleanOperation,
   DirectEditOperation,
+  DatumAxisLine,
+  DatumFrame,
+  EdgeTopologyReferenceV5,
   EditAnalysisRequest,
   FaceGeometry,
   FaceTopologyReferenceV5,
   FeatureId,
   PatternKind,
   ParametricPlane,
+  ParametricVector3,
   ParamValue,
   PlanarEmbossSelection,
   OpposingPlanarFacePair,
@@ -171,6 +175,78 @@ export type CadDatumPlaneDefinition =
       kind: 'midplane';
       sources: [CadDatumPlaneSource, CadDatumPlaneSource];
       reverseNormal?: boolean;
+    };
+
+/** R01 geometry operations use the qualified sources the manual commands store. */
+export type CadDatumPlaneSourceV2 =
+  | CadDatumPlaneSource
+  | (Omit<CadFaceSketchPlaneRef, 'bodyId' | 'sourceCentroid'> & {
+      bodyId: string;
+      sourceCentroid: Vector3;
+    });
+
+export type CadDatumPointSource =
+  | { type: 'point'; point: ParametricVector3 }
+  | {
+      type: 'edge-vertex';
+      bodyId: string;
+      edgeReference: EdgeTopologyReferenceV5;
+      end: 0 | 1;
+    };
+
+export type CadDatumPlaneDefinitionV2 =
+  | {
+      kind: 'offset';
+      source: CadDatumPlaneSourceV2;
+      offset: ParamValue;
+      reverseNormal?: boolean;
+    }
+  | {
+      kind: 'midplane';
+      sources: [CadDatumPlaneSourceV2, CadDatumPlaneSourceV2];
+      reverseNormal?: boolean;
+    }
+  | {
+      kind: 'three-point';
+      points: [CadDatumPointSource, CadDatumPointSource, CadDatumPointSource];
+      reverseNormal?: boolean;
+    }
+  | {
+      kind: 'parallel-point';
+      source: CadDatumPlaneSourceV2;
+      point: CadDatumPointSource;
+      reverseNormal?: boolean;
+    };
+
+export type CadDatumAxisRef = string;
+export type CadDatumAxisDefinition =
+  | {
+      kind: 'two-point';
+      points: [CadDatumPointSource, CadDatumPointSource];
+      reverseDirection?: boolean;
+    }
+  | {
+      kind: 'edge';
+      source: {
+        type: 'edge';
+        bodyId: string;
+        edgeReference: EdgeTopologyReferenceV5;
+      };
+      reverseDirection?: boolean;
+    }
+  | {
+      kind: 'cylinder';
+      source: {
+        type: 'face';
+        bodyId: string;
+        faceReference: FaceTopologyReferenceV5;
+      };
+      reverseDirection?: boolean;
+    }
+  | {
+      kind: 'plane-intersection';
+      sources: [CadDatumPlaneSourceV2, CadDatumPlaneSourceV2];
+      reverseDirection?: boolean;
     };
 
 export type CadPatchOperation =
@@ -389,6 +465,53 @@ export type CadPatchOperation =
       definition: CadDatumPlaneDefinition;
     }
   | {
+      kind: 'add_datum_plane_v2';
+      name: string;
+      localId?: LocalBodyId;
+      definition: CadDatumPlaneDefinitionV2;
+    }
+  | {
+      kind: 'update_datum_plane';
+      featureId: CadDatumRef;
+      definition: CadDatumPlaneDefinitionV2;
+    }
+  | {
+      kind: 'add_datum_axis';
+      name: string;
+      localId?: LocalBodyId;
+      definition: CadDatumAxisDefinition;
+    }
+  | {
+      kind: 'update_datum_axis';
+      featureId: CadDatumAxisRef;
+      definition: CadDatumAxisDefinition;
+    }
+  | {
+      kind: 'add_datum_revolve';
+      name: string;
+      localId?: LocalBodyId;
+      sketchId: string;
+      datum: CadDatumAxisRef;
+      angleDeg: ParamValue;
+    }
+  | {
+      kind: 'add_datum_pattern';
+      name: string;
+      localId?: LocalBodyId;
+      targetBodyId: BodyRef;
+      datum: CadDatumAxisRef;
+      count: ParamValue;
+      angleDeg: ParamValue;
+    }
+  | {
+      kind: 'add_datum_transform';
+      name: string;
+      targetBodyId: BodyRef;
+      datum: CadDatumAxisRef;
+      angleDeg: ParamValue;
+      translation: ParametricVector3;
+    }
+  | {
       kind: 'add_datum_sketch';
       name: string;
       /** \$alias other operations may use to reference this sketch. */
@@ -552,6 +675,8 @@ export interface CadDigestBodyTopology {
   edges: Array<{
     topologyId: string;
     hash: number;
+    /** Exact current lineage identity; vertex/axis operations copy it verbatim. */
+    reference?: EdgeTopologyReferenceV5;
     modelingRole: 'edge' | 'rim' | 'seam';
     modifierCandidate: boolean;
     /**
@@ -584,6 +709,13 @@ export interface CadDocumentDigest {
     bodyId: string | null;
     suppressed: boolean;
     data: unknown;
+    /** Optional for older clients; resolved output from this exact projection. */
+    datum?: {
+      kind: 'plane' | 'axis';
+      status: 'resolved' | 'unresolved' | 'suppressed';
+      frame?: DatumFrame;
+      axis?: DatumAxisLine;
+    };
   }>;
   /**
    * The bodies that have been built, with the two facts the feature list cannot
@@ -735,6 +867,10 @@ function compactEdge(
   const base = {
     topologyId: edge.topologyId,
     hash: edge.hash,
+    ...(isEdgeReference(edge.reference) &&
+    edge.reference.currentHash === edge.hash
+      ? { reference: edge.reference }
+      : {}),
     modelingRole: 'edge' as const,
     modifierCandidate: true
   };
@@ -976,7 +1112,18 @@ export function createCadDocumentDigest(
     const edgeLimit = Math.min(MAX_DIGEST_TOPOLOGY_PER_BODY, remainingEdges);
     const faceLimit = Math.min(MAX_DIGEST_TOPOLOGY_PER_BODY, remainingFaces);
     const primitiveKind = primitiveKindByBodyId.get(bodyId);
-    const edges = body.topology.edges
+    const selectedEdges = (edge: BodyTopology['edges'][number]) =>
+      context.topologies.some(
+        (selected) =>
+          selected.bodyId === bodyId &&
+          selected.kind === 'edge' &&
+          (selected.hash === edge.hash ||
+            selected.topologyId === edge.topologyId)
+      );
+    const edges = [
+      ...body.topology.edges.filter(selectedEdges),
+      ...body.topology.edges.filter((edge) => !selectedEdges(edge))
+    ]
       .slice(0, edgeLimit)
       .map((edge) => compactEdge(edge, primitiveKind));
     const provenPairHashes = new Set(
@@ -1077,7 +1224,38 @@ export function createCadDocumentDigest(
       featureKind: feature.featureKind,
       bodyId: feature.bodyId ?? null,
       suppressed: isFeatureSuppressed(feature),
-      data: compactFeatureData(document, feature.data)
+      data: compactFeatureData(document, feature.data),
+      ...(feature.data.featureKind === 'datum-plane'
+        ? {
+            datum: {
+              kind: 'plane' as const,
+              status: isFeatureSuppressed(feature)
+                ? ('suppressed' as const)
+                : document.derived.datumFrames?.[feature.featureId]
+                  ? ('resolved' as const)
+                  : ('unresolved' as const),
+              ...(!isFeatureSuppressed(feature) &&
+              document.derived.datumFrames?.[feature.featureId]
+                ? { frame: document.derived.datumFrames[feature.featureId] }
+                : {})
+            }
+          }
+        : feature.data.featureKind === 'datum-axis'
+          ? {
+              datum: {
+                kind: 'axis' as const,
+                status: isFeatureSuppressed(feature)
+                  ? ('suppressed' as const)
+                  : document.derived.datumAxes?.[feature.featureId]
+                    ? ('resolved' as const)
+                    : ('unresolved' as const),
+                ...(!isFeatureSuppressed(feature) &&
+                document.derived.datumAxes?.[feature.featureId]
+                  ? { axis: document.derived.datumAxes[feature.featureId] }
+                  : {})
+              }
+            }
+          : {})
     })),
     // Meshes are deliberately dropped here: the model needs each body's
     // identity, liveness, and placement, never its triangles.
@@ -1872,6 +2050,215 @@ const datumPlaneDefinitionSchema = {
   required: ['kind', 'source', 'sources', 'offset', 'reverseNormal']
 } as const;
 
+const edgeReferenceSchema = {
+  type: 'object',
+  additionalProperties: false,
+  description:
+    'Exact schema-v5 edge identity copied verbatim from one current digest edge.',
+  properties: {
+    kind: { type: 'string', const: 'edge' },
+    producingFeatureId: { type: 'string' },
+    lineageName: { type: 'string' },
+    currentHash: { type: 'integer', minimum: 1 },
+    witnessVersion: { type: 'number', const: 1 },
+    witness: {
+      anyOf: [
+        {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            curveType: { type: 'string' },
+            length: { type: 'integer', minimum: 0 },
+            closed: { type: 'boolean', const: false },
+            endpoints: {
+              type: 'array',
+              minItems: 2,
+              maxItems: 2,
+              items: {
+                type: 'array',
+                minItems: 3,
+                maxItems: 3,
+                items: { type: 'integer' }
+              }
+            },
+            midpoint: {
+              type: 'array',
+              minItems: 3,
+              maxItems: 3,
+              items: { type: 'integer' }
+            }
+          },
+          required: ['curveType', 'length', 'closed', 'endpoints', 'midpoint']
+        },
+        {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            curveType: { type: 'string' },
+            length: { type: 'integer', minimum: 0 },
+            closed: { type: 'boolean', const: true },
+            center: {
+              type: 'array',
+              minItems: 3,
+              maxItems: 3,
+              items: { type: 'integer' }
+            },
+            axis: {
+              anyOf: [
+                {
+                  type: 'array',
+                  minItems: 3,
+                  maxItems: 3,
+                  items: { type: 'integer' }
+                },
+                { type: 'null' }
+              ]
+            }
+          },
+          required: ['curveType', 'length', 'closed', 'center', 'axis']
+        }
+      ]
+    }
+  },
+  required: [
+    'kind',
+    'producingFeatureId',
+    'lineageName',
+    'currentHash',
+    'witnessVersion',
+    'witness'
+  ]
+} as const;
+
+function strictDatumObject<const T extends Record<string, unknown>>(
+  properties: T
+) {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    properties,
+    required: Object.keys(properties)
+  } as const;
+}
+
+const datumGeometryPlaneSourceSchema = {
+  anyOf: [
+    datumPlaneSourceSchema,
+    {
+      ...facePlaneRefSchema,
+      properties: {
+        ...facePlaneRefSchema.properties,
+        sourceCentroid: numberVectorSchema
+      }
+    }
+  ]
+} as const;
+const datumPointSourceSchema = {
+  anyOf: [
+    strictDatumObject({
+      type: { type: 'string', const: 'point' },
+      point: vectorSchema
+    }),
+    strictDatumObject({
+      type: { type: 'string', const: 'edge-vertex' },
+      bodyId: existingBodyRefSchema,
+      edgeReference: edgeReferenceSchema,
+      end: {
+        type: 'integer',
+        enum: [0, 1],
+        description:
+          'End 0 sorts before end 1 by the exact witness integer coordinates: x, then y, then z.'
+      }
+    })
+  ]
+} as const;
+const nullableDatumReverseSchema = {
+  anyOf: [{ type: 'boolean' }, { type: 'null' }]
+} as const;
+const datumGeometryPlaneDefinitionSchema = {
+  anyOf: [
+    strictDatumObject({
+      kind: { type: 'string', const: 'offset' },
+      source: datumGeometryPlaneSourceSchema,
+      offset: scalarSchema,
+      reverseNormal: nullableDatumReverseSchema
+    }),
+    strictDatumObject({
+      kind: { type: 'string', const: 'midplane' },
+      sources: {
+        type: 'array',
+        minItems: 2,
+        maxItems: 2,
+        items: datumGeometryPlaneSourceSchema
+      },
+      reverseNormal: nullableDatumReverseSchema
+    }),
+    strictDatumObject({
+      kind: { type: 'string', const: 'three-point' },
+      points: {
+        type: 'array',
+        minItems: 3,
+        maxItems: 3,
+        items: datumPointSourceSchema
+      },
+      reverseNormal: nullableDatumReverseSchema
+    }),
+    strictDatumObject({
+      kind: { type: 'string', const: 'parallel-point' },
+      source: datumGeometryPlaneSourceSchema,
+      point: datumPointSourceSchema,
+      reverseNormal: nullableDatumReverseSchema
+    })
+  ]
+} as const;
+const datumAxisRefSchema = {
+  type: 'string',
+  description:
+    'An existing datum-axis featureId, or "$localId" naming an add_datum_axis earlier in this proposal.'
+} as const;
+const datumAxisDefinitionSchema = {
+  anyOf: [
+    strictDatumObject({
+      kind: { type: 'string', const: 'two-point' },
+      points: {
+        type: 'array',
+        minItems: 2,
+        maxItems: 2,
+        items: datumPointSourceSchema
+      },
+      reverseDirection: nullableDatumReverseSchema
+    }),
+    strictDatumObject({
+      kind: { type: 'string', const: 'edge' },
+      source: strictDatumObject({
+        type: { type: 'string', const: 'edge' },
+        bodyId: existingBodyRefSchema,
+        edgeReference: edgeReferenceSchema
+      }),
+      reverseDirection: nullableDatumReverseSchema
+    }),
+    strictDatumObject({
+      kind: { type: 'string', const: 'cylinder' },
+      source: strictDatumObject({
+        type: { type: 'string', const: 'face' },
+        bodyId: existingBodyRefSchema,
+        faceReference: faceReferenceSchema
+      }),
+      reverseDirection: nullableDatumReverseSchema
+    }),
+    strictDatumObject({
+      kind: { type: 'string', const: 'plane-intersection' },
+      sources: {
+        type: 'array',
+        minItems: 2,
+        maxItems: 2,
+        items: datumGeometryPlaneSourceSchema
+      },
+      reverseDirection: nullableDatumReverseSchema
+    })
+  ]
+} as const;
+
 const parametricPlaneSchema = {
   type: 'object',
   additionalProperties: false,
@@ -2149,6 +2536,13 @@ export const AI_CAD_OPERATION_CAPABILITIES = {
   add_shell: { enabled: true, reason: null },
   add_solid_offset: { enabled: true, reason: null },
   add_datum_plane: { enabled: true, reason: null },
+  add_datum_plane_v2: { enabled: true, reason: null },
+  update_datum_plane: { enabled: true, reason: null },
+  add_datum_axis: { enabled: true, reason: null },
+  update_datum_axis: { enabled: true, reason: null },
+  add_datum_revolve: { enabled: true, reason: null },
+  add_datum_pattern: { enabled: true, reason: null },
+  add_datum_transform: { enabled: true, reason: null },
   add_datum_sketch: { enabled: true, reason: null },
   add_datum_mirror: { enabled: true, reason: null },
   add_datum_split: { enabled: true, reason: null },
@@ -2699,6 +3093,53 @@ export const CAD_PATCH_JSON_SCHEMA = {
             },
             required: ['kind', 'name', 'localId', 'definition']
           },
+          strictDatumObject({
+            kind: { type: 'string', const: 'add_datum_plane_v2' },
+            name: { type: 'string' },
+            localId: localIdSchema,
+            definition: datumGeometryPlaneDefinitionSchema
+          }),
+          strictDatumObject({
+            kind: { type: 'string', const: 'update_datum_plane' },
+            featureId: datumRefSchema,
+            definition: datumGeometryPlaneDefinitionSchema
+          }),
+          strictDatumObject({
+            kind: { type: 'string', const: 'add_datum_axis' },
+            name: { type: 'string' },
+            localId: localIdSchema,
+            definition: datumAxisDefinitionSchema
+          }),
+          strictDatumObject({
+            kind: { type: 'string', const: 'update_datum_axis' },
+            featureId: datumAxisRefSchema,
+            definition: datumAxisDefinitionSchema
+          }),
+          strictDatumObject({
+            kind: { type: 'string', const: 'add_datum_revolve' },
+            name: { type: 'string' },
+            localId: localIdSchema,
+            sketchId: { type: 'string' },
+            datum: datumAxisRefSchema,
+            angleDeg: scalarSchema
+          }),
+          strictDatumObject({
+            kind: { type: 'string', const: 'add_datum_pattern' },
+            name: { type: 'string' },
+            localId: localIdSchema,
+            targetBodyId: bodyRefSchema,
+            datum: datumAxisRefSchema,
+            count: scalarSchema,
+            angleDeg: scalarSchema
+          }),
+          strictDatumObject({
+            kind: { type: 'string', const: 'add_datum_transform' },
+            name: { type: 'string' },
+            targetBodyId: bodyRefSchema,
+            datum: datumAxisRefSchema,
+            angleDeg: scalarSchema,
+            translation: vectorSchema
+          }),
           {
             type: 'object',
             additionalProperties: false,
@@ -3337,6 +3778,41 @@ function isQuantizedPoint(value: unknown): boolean {
   );
 }
 
+function isEdgeReference(value: unknown): value is EdgeTopologyReferenceV5 {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const reference = value as Record<string, unknown>;
+  if (
+    reference.kind !== 'edge' ||
+    typeof reference.producingFeatureId !== 'string' ||
+    !reference.producingFeatureId.trim() ||
+    typeof reference.lineageName !== 'string' ||
+    !reference.lineageName.trim() ||
+    !Number.isSafeInteger(reference.currentHash) ||
+    Number(reference.currentHash) <= 0 ||
+    reference.witnessVersion !== 1 ||
+    !reference.witness ||
+    typeof reference.witness !== 'object' ||
+    Array.isArray(reference.witness)
+  )
+    return false;
+  const witness = reference.witness as Record<string, unknown>;
+  if (
+    typeof witness.curveType !== 'string' ||
+    !witness.curveType.trim() ||
+    !Number.isSafeInteger(witness.length) ||
+    Number(witness.length) < 0
+  )
+    return false;
+  return witness.closed === false
+    ? Array.isArray(witness.endpoints) &&
+        witness.endpoints.length === 2 &&
+        witness.endpoints.every(isQuantizedPoint) &&
+        isQuantizedPoint(witness.midpoint)
+    : witness.closed === true &&
+        isQuantizedPoint(witness.center) &&
+        (witness.axis === null || isQuantizedPoint(witness.axis));
+}
+
 function isFaceReference(value: unknown): value is FaceTopologyReferenceV5 {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return false;
@@ -3664,6 +4140,315 @@ function parseDatumPlaneDefinition(
   throw new Error('add_datum_plane definition kind is "offset" or "midplane".');
 }
 
+function datumFields(
+  value: Record<string, unknown>,
+  allowed: string[],
+  label: string
+): void {
+  if (Object.keys(value).some((key) => !allowed.includes(key)))
+    throw new Error(
+      `${label} contains fields that do not belong to this construction.`
+    );
+}
+
+function isDatumScalar(value: unknown): value is ParamValue {
+  return typeof value === 'number'
+    ? Number.isFinite(value)
+    : typeof value === 'string' && value.trim().length > 0;
+}
+
+function requireDatumAxisRef(
+  value: unknown,
+  declaredAxes: Set<string>,
+  label: string
+): asserts value is CadDatumAxisRef {
+  if (typeof value !== 'string' || !value.trim())
+    throw new Error(`Invalid ${label} datum axis.`);
+  if (isLocalBodyRef(value) && !declaredAxes.has(normalizeLocalId(value)))
+    throw new Error(
+      `${label} datum axis references "${value}" before an earlier add_datum_axis declares that localId.`
+    );
+}
+
+function parseDatumPlaneSourceV2(
+  value: unknown,
+  declaredPlanes: Set<string>
+): CadDatumPlaneSourceV2 {
+  const source = record(value);
+  if (source.type === 'canonical' || source.type === 'datum') {
+    datumFields(
+      source,
+      ['type', 'plane', 'offset', 'datum'],
+      'Datum plane source'
+    );
+    const parsed = parseDatumPlaneSource(source, declaredPlanes);
+    if (parsed.type === 'canonical' && !isDatumScalar(parsed.offset))
+      throw new Error(
+        'A canonical datum source offset must be a finite value or expression.'
+      );
+    return parsed;
+  }
+  datumFields(
+    source,
+    [
+      'type',
+      'bodyId',
+      'faceHash',
+      'faceReference',
+      'sourceArea',
+      'sourceCenter',
+      'sourceCentroid',
+      'sourceNormal',
+      'frame'
+    ],
+    'Datum face source'
+  );
+  if (
+    source.type !== 'face' ||
+    typeof source.bodyId !== 'string' ||
+    !source.bodyId.trim() ||
+    !Number.isSafeInteger(source.faceHash) ||
+    Number(source.faceHash) <= 0 ||
+    !isFaceReference(source.faceReference) ||
+    source.faceReference.currentHash !== source.faceHash ||
+    typeof source.sourceArea !== 'number' ||
+    !Number.isFinite(source.sourceArea) ||
+    source.sourceArea <= 0 ||
+    !isNumberVector(source.sourceCenter) ||
+    !isNumberVector(source.sourceCentroid) ||
+    !isNumberVector(source.sourceNormal) ||
+    !isSketchFrame(source.frame)
+  )
+    throw new Error(
+      'A datum face source requires a qualified planar face, centroid and frame copied from the digest.'
+    );
+  assertExistingTopologyBody(source.bodyId, 'Datum face source');
+  return source as unknown as Extract<CadDatumPlaneSourceV2, { type: 'face' }>;
+}
+
+function parseDatumPointSource(value: unknown): CadDatumPointSource {
+  const source = record(value);
+  if (source.type === 'point') {
+    datumFields(source, ['type', 'point'], 'Datum point');
+    const point = record(source.point);
+    datumFields(point, ['x', 'y', 'z'], 'Datum point coordinates');
+    if (
+      !isDatumScalar(point.x) ||
+      !isDatumScalar(point.y) ||
+      !isDatumScalar(point.z)
+    )
+      throw new Error(
+        'A datum point requires finite coordinates or expressions for X, Y and Z.'
+      );
+    return { type: 'point', point: { x: point.x, y: point.y, z: point.z } };
+  }
+  datumFields(
+    source,
+    ['type', 'bodyId', 'edgeReference', 'end'],
+    'Datum vertex source'
+  );
+  if (
+    source.type !== 'edge-vertex' ||
+    typeof source.bodyId !== 'string' ||
+    !source.bodyId.trim() ||
+    !isEdgeReference(source.edgeReference) ||
+    source.edgeReference.witness.closed ||
+    (source.end !== 0 && source.end !== 1)
+  )
+    throw new Error(
+      'A datum vertex source requires an open edge with exact lineage and an explicit end 0 or 1.'
+    );
+  assertExistingTopologyBody(source.bodyId, 'Datum vertex source');
+  return {
+    type: 'edge-vertex',
+    bodyId: source.bodyId,
+    edgeReference: source.edgeReference,
+    end: source.end
+  };
+}
+
+function datumReverse(value: unknown, label: string): boolean {
+  if (value !== undefined && value !== null && typeof value !== 'boolean')
+    throw new Error(`${label} must be true, false or null.`);
+  return value === true;
+}
+
+function parseDatumPlaneDefinitionV2(
+  value: unknown,
+  declaredPlanes: Set<string>
+): CadDatumPlaneDefinitionV2 {
+  const definition = record(value);
+  const flip = datumReverse(definition.reverseNormal, 'reverseNormal')
+    ? { reverseNormal: true }
+    : {};
+  switch (definition.kind) {
+    case 'offset':
+      datumFields(
+        definition,
+        ['kind', 'source', 'offset', 'reverseNormal'],
+        'Offset plane'
+      );
+      if (!isDatumScalar(definition.offset))
+        throw new Error(
+          'An offset plane requires a finite offset or expression.'
+        );
+      return {
+        kind: 'offset',
+        source: parseDatumPlaneSourceV2(definition.source, declaredPlanes),
+        offset: definition.offset,
+        ...flip
+      };
+    case 'midplane':
+      datumFields(definition, ['kind', 'sources', 'reverseNormal'], 'Midplane');
+      if (!Array.isArray(definition.sources) || definition.sources.length !== 2)
+        throw new Error('A midplane requires exactly two plane sources.');
+      return {
+        kind: 'midplane',
+        sources: [
+          parseDatumPlaneSourceV2(definition.sources[0], declaredPlanes),
+          parseDatumPlaneSourceV2(definition.sources[1], declaredPlanes)
+        ],
+        ...flip
+      };
+    case 'three-point':
+      datumFields(
+        definition,
+        ['kind', 'points', 'reverseNormal'],
+        'Three-point plane'
+      );
+      if (!Array.isArray(definition.points) || definition.points.length !== 3)
+        throw new Error('A three-point plane requires exactly three points.');
+      return {
+        kind: 'three-point',
+        points: [
+          parseDatumPointSource(definition.points[0]),
+          parseDatumPointSource(definition.points[1]),
+          parseDatumPointSource(definition.points[2])
+        ],
+        ...flip
+      };
+    case 'parallel-point':
+      datumFields(
+        definition,
+        ['kind', 'source', 'point', 'reverseNormal'],
+        'Parallel-at-point plane'
+      );
+      return {
+        kind: 'parallel-point',
+        source: parseDatumPlaneSourceV2(definition.source, declaredPlanes),
+        point: parseDatumPointSource(definition.point),
+        ...flip
+      };
+    default:
+      throw new Error(
+        'A datum plane construction is offset, midplane, three-point or parallel-point.'
+      );
+  }
+}
+
+function parseDatumAxisDefinition(
+  value: unknown,
+  declaredPlanes: Set<string>
+): CadDatumAxisDefinition {
+  const definition = record(value);
+  const flip = datumReverse(definition.reverseDirection, 'reverseDirection')
+    ? { reverseDirection: true }
+    : {};
+  if (definition.kind === 'two-point') {
+    datumFields(
+      definition,
+      ['kind', 'points', 'reverseDirection'],
+      'Two-point axis'
+    );
+    if (!Array.isArray(definition.points) || definition.points.length !== 2)
+      throw new Error('A two-point axis requires exactly two points.');
+    return {
+      kind: 'two-point',
+      points: [
+        parseDatumPointSource(definition.points[0]),
+        parseDatumPointSource(definition.points[1])
+      ],
+      ...flip
+    };
+  }
+  if (definition.kind === 'plane-intersection') {
+    datumFields(
+      definition,
+      ['kind', 'sources', 'reverseDirection'],
+      'Plane-intersection axis'
+    );
+    if (!Array.isArray(definition.sources) || definition.sources.length !== 2)
+      throw new Error('A plane-intersection axis requires exactly two planes.');
+    return {
+      kind: 'plane-intersection',
+      sources: [
+        parseDatumPlaneSourceV2(definition.sources[0], declaredPlanes),
+        parseDatumPlaneSourceV2(definition.sources[1], declaredPlanes)
+      ],
+      ...flip
+    };
+  }
+  datumFields(definition, ['kind', 'source', 'reverseDirection'], 'Datum axis');
+  const source = record(definition.source);
+  if (definition.kind === 'edge') {
+    datumFields(
+      source,
+      ['type', 'bodyId', 'edgeReference'],
+      'Edge axis source'
+    );
+    if (
+      source.type !== 'edge' ||
+      typeof source.bodyId !== 'string' ||
+      !source.bodyId.trim() ||
+      !isEdgeReference(source.edgeReference) ||
+      source.edgeReference.witness.closed ||
+      source.edgeReference.witness.curveType.toLowerCase() !== 'line'
+    )
+      throw new Error(
+        'An edge axis requires an exact open straight edge from the digest.'
+      );
+    assertExistingTopologyBody(source.bodyId, 'Edge axis source');
+    return {
+      kind: 'edge',
+      source: {
+        type: 'edge',
+        bodyId: source.bodyId,
+        edgeReference: source.edgeReference
+      },
+      ...flip
+    };
+  }
+  if (definition.kind === 'cylinder') {
+    datumFields(
+      source,
+      ['type', 'bodyId', 'faceReference'],
+      'Cylinder axis source'
+    );
+    if (
+      source.type !== 'face' ||
+      typeof source.bodyId !== 'string' ||
+      !source.bodyId.trim() ||
+      !isFaceReference(source.faceReference)
+    )
+      throw new Error(
+        'A cylinder axis requires an exact cylindrical or conical face from the digest.'
+      );
+    assertExistingTopologyBody(source.bodyId, 'Cylinder axis source');
+    return {
+      kind: 'cylinder',
+      source: {
+        type: 'face',
+        bodyId: source.bodyId,
+        faceReference: source.faceReference
+      },
+      ...flip
+    };
+  }
+  throw new Error(
+    'A datum axis construction is two-point, edge, cylinder or plane-intersection.'
+  );
+}
+
 export function parseCadPatchProposal(
   value: unknown,
   digest?: CadDocumentDigest
@@ -3687,6 +4472,7 @@ export function parseCadPatchProposal(
   const declaredBodies = new Set<string>();
   const declaredSketches = new Set<string>();
   const declaredDatums = new Set<string>();
+  const declaredAxes = new Set<string>();
 
   for (const rawOperation of candidate.operations) {
     const operation = record(rawOperation);
@@ -4318,6 +5104,139 @@ export function parseCadPatchProposal(
         }
         break;
       }
+      case 'add_datum_plane_v2': {
+        datumFields(
+          operation,
+          ['kind', 'name', 'localId', 'definition'],
+          operation.kind
+        );
+        if (typeof operation.name !== 'string' || !operation.name.trim())
+          throw new Error('Invalid add_datum_plane_v2 name.');
+        operation.definition = parseDatumPlaneDefinitionV2(
+          operation.definition,
+          declaredDatums
+        );
+        declareLocalId(operation, declared);
+        if (typeof operation.localId === 'string')
+          declaredDatums.add(normalizeLocalId(operation.localId));
+        break;
+      }
+      case 'update_datum_plane':
+        datumFields(
+          operation,
+          ['kind', 'featureId', 'definition'],
+          operation.kind
+        );
+        requireDatumRef(operation.featureId, declaredDatums, operation.kind);
+        operation.definition = parseDatumPlaneDefinitionV2(
+          operation.definition,
+          declaredDatums
+        );
+        break;
+      case 'add_datum_axis': {
+        datumFields(
+          operation,
+          ['kind', 'name', 'localId', 'definition'],
+          operation.kind
+        );
+        if (typeof operation.name !== 'string' || !operation.name.trim())
+          throw new Error('Invalid add_datum_axis name.');
+        operation.definition = parseDatumAxisDefinition(
+          operation.definition,
+          declaredDatums
+        );
+        declareLocalId(operation, declared);
+        if (typeof operation.localId === 'string')
+          declaredAxes.add(normalizeLocalId(operation.localId));
+        break;
+      }
+      case 'update_datum_axis':
+        datumFields(
+          operation,
+          ['kind', 'featureId', 'definition'],
+          operation.kind
+        );
+        requireDatumAxisRef(operation.featureId, declaredAxes, operation.kind);
+        operation.definition = parseDatumAxisDefinition(
+          operation.definition,
+          declaredDatums
+        );
+        break;
+      case 'add_datum_revolve':
+        datumFields(
+          operation,
+          ['kind', 'name', 'localId', 'sketchId', 'datum', 'angleDeg'],
+          operation.kind
+        );
+        if (
+          typeof operation.name !== 'string' ||
+          !operation.name.trim() ||
+          !isDatumScalar(operation.angleDeg)
+        )
+          throw new Error('Invalid add_datum_revolve operation.');
+        requireBodyRef(
+          operation.sketchId,
+          declaredSketches,
+          'add_datum_revolve sketchId'
+        );
+        requireDatumAxisRef(operation.datum, declaredAxes, operation.kind);
+        declareBodyLocalId(operation, declared, declaredBodies);
+        break;
+      case 'add_datum_pattern':
+        datumFields(
+          operation,
+          [
+            'kind',
+            'name',
+            'localId',
+            'targetBodyId',
+            'datum',
+            'count',
+            'angleDeg'
+          ],
+          operation.kind
+        );
+        if (
+          typeof operation.name !== 'string' ||
+          !operation.name.trim() ||
+          !isDatumScalar(operation.count) ||
+          !isDatumScalar(operation.angleDeg)
+        )
+          throw new Error('Invalid add_datum_pattern operation.');
+        requireBodyRef(
+          operation.targetBodyId,
+          declaredBodies,
+          'add_datum_pattern targetBodyId'
+        );
+        requireDatumAxisRef(operation.datum, declaredAxes, operation.kind);
+        declareBodyLocalId(operation, declared, declaredBodies);
+        break;
+      case 'add_datum_transform': {
+        datumFields(
+          operation,
+          ['kind', 'name', 'targetBodyId', 'datum', 'angleDeg', 'translation'],
+          operation.kind
+        );
+        if (
+          typeof operation.name !== 'string' ||
+          !operation.name.trim() ||
+          !isDatumScalar(operation.angleDeg)
+        )
+          throw new Error('Invalid add_datum_transform operation.');
+        requireBodyRef(
+          operation.targetBodyId,
+          declaredBodies,
+          'add_datum_transform targetBodyId'
+        );
+        requireDatumAxisRef(operation.datum, declaredAxes, operation.kind);
+        const translation = parseDatumPointSource({
+          type: 'point',
+          point: operation.translation
+        });
+        if (translation.type === 'point')
+          operation.translation = translation.point;
+        break;
+      }
       case 'add_datum_sketch':
         if (
           typeof operation.name !== 'string' ||
@@ -4595,6 +5514,291 @@ function requireDigestDatum(
   }
 }
 
+function geometryDatumKey(reference: string): string {
+  return isLocalBodyRef(reference)
+    ? `$${normalizeLocalId(reference)}`
+    : reference;
+}
+
+function requireDigestGeometryDatum(
+  digest: CadDocumentDigest,
+  reference: string,
+  kind: 'datum-plane' | 'datum-axis',
+  label: string,
+  updated: ReadonlySet<string>,
+  target = false
+): CadDocumentDigest['features'][number] | undefined {
+  if (isLocalBodyRef(reference)) {
+    if (!updated.has(geometryDatumKey(reference)))
+      throw new Error(`${label} ${reference} is not an earlier ${kind} alias.`);
+    return undefined;
+  }
+  const features = digest.features.filter(
+    (feature) => feature.featureId === reference
+  );
+  const feature = features[0];
+  if (features.length !== 1 || !feature || feature.featureKind !== kind)
+    throw new Error(
+      `${label} ${reference} is not a ${kind} in the current digest.`
+    );
+  if (feature.suppressed || feature.datum?.status === 'suppressed')
+    throw new Error(`${label} ${reference} is suppressed.`);
+  if (
+    !target &&
+    !updated.has(geometryDatumKey(reference)) &&
+    feature.datum?.status === 'unresolved'
+  )
+    throw new Error(
+      `${label} ${reference} is unresolved. Repair it before using it as a source.`
+    );
+  return feature;
+}
+
+/** Only unchanged, authored sources may stand in for omitted historical topology. */
+function retainedDatumTopologySources(definition: unknown): Set<string> {
+  if (
+    !definition ||
+    typeof definition !== 'object' ||
+    Array.isArray(definition)
+  )
+    return new Set();
+  const value = definition as Record<string, unknown>;
+  const candidates = [
+    value.source,
+    value.point,
+    ...(Array.isArray(value.sources) ? (value.sources as unknown[]) : []),
+    ...(Array.isArray(value.points) ? (value.points as unknown[]) : [])
+  ];
+  return new Set(
+    candidates
+      .filter((source) => {
+        if (!source || typeof source !== 'object' || Array.isArray(source))
+          return false;
+        return ['face', 'edge', 'edge-vertex'].includes(
+          String((source as Record<string, unknown>).type)
+        );
+      })
+      .map(canonicalJson)
+  );
+}
+
+function exactDatumDigestFace(
+  digest: CadDocumentDigest,
+  bodyId: string,
+  reference: FaceTopologyReferenceV5,
+  label: string
+): CadDigestBodyTopology['faces'][number] {
+  const bodies =
+    digest.bodies?.filter((body) => body.bodyId === bodyId && !body.consumed) ??
+    [];
+  const faces = bodies.length === 1 ? (bodies[0]!.topology?.faces ?? []) : [];
+  const matches = faces.filter(
+    (face) =>
+      face.hash === reference.currentHash &&
+      face.reference &&
+      canonicalJson(face.reference) === canonicalJson(reference)
+  );
+  const sameHash = faces.filter((face) => face.hash === reference.currentHash);
+  const sameLineage = faces.filter(
+    (face) =>
+      face.reference?.producingFeatureId === reference.producingFeatureId &&
+      face.reference.lineageName === reference.lineageName
+  );
+  if (matches.length !== 1 || sameHash.length !== 1 || sameLineage.length !== 1)
+    throw new Error(
+      `${label} requires one current, unique face identity for body ${bodyId}; its reference is stale, unavailable or ambiguous.`
+    );
+  return matches[0]!;
+}
+
+function exactDatumDigestEdge(
+  digest: CadDocumentDigest,
+  bodyId: string,
+  reference: EdgeTopologyReferenceV5,
+  label: string
+): void {
+  const bodies =
+    digest.bodies?.filter((body) => body.bodyId === bodyId && !body.consumed) ??
+    [];
+  const edges = bodies.length === 1 ? (bodies[0]!.topology?.edges ?? []) : [];
+  const matches = edges.filter(
+    (edge) =>
+      edge.hash === reference.currentHash &&
+      edge.reference &&
+      canonicalJson(edge.reference) === canonicalJson(reference)
+  );
+  const sameHash = edges.filter((edge) => edge.hash === reference.currentHash);
+  const sameLineage = edges.filter(
+    (edge) =>
+      edge.reference?.producingFeatureId === reference.producingFeatureId &&
+      edge.reference.lineageName === reference.lineageName
+  );
+  if (matches.length !== 1 || sameHash.length !== 1 || sameLineage.length !== 1)
+    throw new Error(
+      `${label} requires one current, unique edge identity for body ${bodyId}; its reference is stale, unavailable or ambiguous.`
+    );
+}
+
+function validateDatumPlaneSourceV2(
+  digest: CadDocumentDigest,
+  source: CadDatumPlaneSourceV2,
+  label: string,
+  retained: ReadonlySet<string>,
+  updatedPlanes: ReadonlySet<string>
+): void {
+  if (source.type === 'canonical') return;
+  if (source.type === 'datum') {
+    requireDigestGeometryDatum(
+      digest,
+      source.datum,
+      'datum-plane',
+      label,
+      updatedPlanes
+    );
+    return;
+  }
+  if (retained.has(canonicalJson(source))) return;
+  const face = exactDatumDigestFace(
+    digest,
+    source.bodyId,
+    source.faceReference,
+    label
+  );
+  const snapshot = face.snapshot;
+  if (
+    snapshot?.surfaceType !== 'plane' ||
+    !snapshot.normal ||
+    !snapshot.centroid ||
+    !face.attachmentFrame ||
+    canonicalJson([
+      source.faceHash,
+      source.sourceArea,
+      source.sourceCenter,
+      source.sourceCentroid,
+      source.sourceNormal,
+      source.frame
+    ]) !==
+      canonicalJson([
+        face.hash,
+        snapshot.area,
+        snapshot.center,
+        snapshot.centroid,
+        snapshot.normal,
+        face.attachmentFrame
+      ])
+  )
+    throw new Error(
+      `${label} must copy the exact planar face snapshot, centroid and attachmentFrame from the current digest.`
+    );
+}
+
+function validateDatumPointSource(
+  digest: CadDocumentDigest,
+  source: CadDatumPointSource,
+  label: string,
+  retained: ReadonlySet<string>
+): void {
+  if (source.type === 'point' || retained.has(canonicalJson(source))) return;
+  exactDatumDigestEdge(digest, source.bodyId, source.edgeReference, label);
+}
+
+function validateDatumPlaneDefinitionV2(
+  digest: CadDocumentDigest,
+  definition: CadDatumPlaneDefinitionV2,
+  label: string,
+  retained: ReadonlySet<string>,
+  updatedPlanes: ReadonlySet<string>
+): void {
+  if (definition.kind === 'three-point') {
+    definition.points.forEach((point) =>
+      validateDatumPointSource(digest, point, label, retained)
+    );
+  } else if (definition.kind === 'midplane') {
+    definition.sources.forEach((source) =>
+      validateDatumPlaneSourceV2(digest, source, label, retained, updatedPlanes)
+    );
+  } else {
+    validateDatumPlaneSourceV2(
+      digest,
+      definition.source,
+      label,
+      retained,
+      updatedPlanes
+    );
+    if (definition.kind === 'parallel-point')
+      validateDatumPointSource(digest, definition.point, label, retained);
+  }
+}
+
+function validateDatumAxisDefinition(
+  digest: CadDocumentDigest,
+  definition: CadDatumAxisDefinition,
+  label: string,
+  retained: ReadonlySet<string>,
+  updatedPlanes: ReadonlySet<string>
+): void {
+  if (definition.kind === 'two-point') {
+    definition.points.forEach((point) =>
+      validateDatumPointSource(digest, point, label, retained)
+    );
+  } else if (definition.kind === 'plane-intersection') {
+    definition.sources.forEach((source) =>
+      validateDatumPlaneSourceV2(digest, source, label, retained, updatedPlanes)
+    );
+  } else if (!retained.has(canonicalJson(definition.source))) {
+    const source = definition.source;
+    if (source.type === 'edge')
+      exactDatumDigestEdge(digest, source.bodyId, source.edgeReference, label);
+    else {
+      const face = exactDatumDigestFace(
+        digest,
+        source.bodyId,
+        source.faceReference,
+        label
+      );
+      if (!['cylinder', 'cone'].includes(face.snapshot?.surfaceType ?? ''))
+        throw new Error(
+          `${label} requires an exact cylindrical or conical digest face.`
+        );
+    }
+  }
+}
+
+function requireDatumConsumerSketch(
+  digest: CadDocumentDigest,
+  sketchId: string,
+  label: string
+): void {
+  if (isLocalBodyRef(sketchId)) return;
+  const features = digest.features.filter(
+    (feature) =>
+      feature.featureKind === 'sketch' &&
+      feature.data &&
+      typeof feature.data === 'object' &&
+      (feature.data as Record<string, unknown>).sketchId === sketchId &&
+      !feature.suppressed
+  );
+  if (features.length !== 1)
+    throw new Error(
+      `${label} sketch ${sketchId} is not an active sketch in the current digest.`
+    );
+}
+
+function requireDatumConsumerBody(
+  digest: CadDocumentDigest,
+  bodyId: string,
+  label: string
+): void {
+  if (isLocalBodyRef(bodyId)) return;
+  if (
+    digest.bodies?.filter((body) => body.bodyId === bodyId && !body.consumed)
+      .length !== 1
+  )
+    throw new Error(
+      `${label} body ${bodyId} is not a unique live body in the current digest.`
+    );
+}
+
 export function validateCadPatchProposalAgainstDigest(
   proposal: CadPatchProposal,
   digest: CadDocumentDigest
@@ -4605,6 +5809,21 @@ export function validateCadPatchProposalAgainstDigest(
   const parameterNames = new Set(
     digest.parameters.map((parameter) => parameter.name)
   );
+  const updatedPlanes = new Set<string>();
+  const updatedAxes = new Set<string>();
+  const datumDefinitions = new Map<string, unknown>();
+  for (const feature of digest.features) {
+    if (
+      (feature.featureKind === 'datum-plane' ||
+        feature.featureKind === 'datum-axis') &&
+      feature.data &&
+      typeof feature.data === 'object'
+    )
+      datumDefinitions.set(
+        feature.featureId,
+        (feature.data as Record<string, unknown>).definition
+      );
+  }
   for (const operation of proposal.operations) {
     switch (operation.kind) {
       case 'add_raised_feature_control': {
@@ -4998,8 +6217,116 @@ export function validateCadPatchProposalAgainstDigest(
         for (const source of sources)
           if (source.type === 'datum')
             requireDigestDatum(digest, source.datum, operation.kind);
+        if (typeof operation.localId === 'string') {
+          const key = geometryDatumKey(
+            `$${normalizeLocalId(operation.localId)}`
+          );
+          updatedPlanes.add(key);
+          datumDefinitions.set(key, definition);
+        }
         break;
       }
+      case 'add_datum_plane_v2': {
+        validateDatumPlaneDefinitionV2(
+          digest,
+          operation.definition,
+          operation.kind,
+          new Set(),
+          updatedPlanes
+        );
+        if (typeof operation.localId === 'string') {
+          const key = geometryDatumKey(
+            `$${normalizeLocalId(operation.localId)}`
+          );
+          updatedPlanes.add(key);
+          datumDefinitions.set(key, operation.definition);
+        }
+        break;
+      }
+      case 'update_datum_plane': {
+        requireDigestGeometryDatum(
+          digest,
+          operation.featureId,
+          'datum-plane',
+          operation.kind,
+          updatedPlanes,
+          true
+        );
+        const key = geometryDatumKey(operation.featureId);
+        validateDatumPlaneDefinitionV2(
+          digest,
+          operation.definition,
+          operation.kind,
+          retainedDatumTopologySources(datumDefinitions.get(key)),
+          updatedPlanes
+        );
+        updatedPlanes.add(key);
+        datumDefinitions.set(key, operation.definition);
+        break;
+      }
+      case 'add_datum_axis': {
+        validateDatumAxisDefinition(
+          digest,
+          operation.definition,
+          operation.kind,
+          new Set(),
+          updatedPlanes
+        );
+        if (typeof operation.localId === 'string') {
+          const key = geometryDatumKey(
+            `$${normalizeLocalId(operation.localId)}`
+          );
+          updatedAxes.add(key);
+          datumDefinitions.set(key, operation.definition);
+        }
+        break;
+      }
+      case 'update_datum_axis': {
+        requireDigestGeometryDatum(
+          digest,
+          operation.featureId,
+          'datum-axis',
+          operation.kind,
+          updatedAxes,
+          true
+        );
+        const key = geometryDatumKey(operation.featureId);
+        validateDatumAxisDefinition(
+          digest,
+          operation.definition,
+          operation.kind,
+          retainedDatumTopologySources(datumDefinitions.get(key)),
+          updatedPlanes
+        );
+        updatedAxes.add(key);
+        datumDefinitions.set(key, operation.definition);
+        break;
+      }
+      case 'add_datum_revolve':
+        requireDigestGeometryDatum(
+          digest,
+          operation.datum,
+          'datum-axis',
+          operation.kind,
+          updatedAxes
+        );
+        requireDatumConsumerSketch(digest, operation.sketchId, operation.kind);
+        break;
+      case 'add_datum_pattern':
+      case 'add_datum_transform':
+        requireDigestGeometryDatum(
+          digest,
+          operation.datum,
+          'datum-axis',
+          operation.kind,
+          updatedAxes
+        );
+        requireDatumConsumerBody(
+          digest,
+          operation.targetBodyId,
+          operation.kind
+        );
+        break;
       case 'add_datum_sketch':
       case 'add_datum_mirror':
       case 'add_datum_split':
@@ -5116,6 +6443,20 @@ export function describeCadPatchOperation(
       return operation.definition.kind === 'offset'
         ? `Create offset plane ${operation.name} at ${String(operation.definition.offset)}`
         : `Create midplane ${operation.name}`;
+    case 'add_datum_plane_v2':
+      return `Create ${operation.definition.kind} datum plane ${operation.name}`;
+    case 'update_datum_plane':
+      return `Update datum plane ${operation.featureId} as ${operation.definition.kind}`;
+    case 'add_datum_axis':
+      return `Create ${operation.definition.kind} datum axis ${operation.name}`;
+    case 'update_datum_axis':
+      return `Update datum axis ${operation.featureId} as ${operation.definition.kind}`;
+    case 'add_datum_revolve':
+      return `Revolve sketch ${operation.sketchId} about datum axis ${operation.datum} as ${operation.name}`;
+    case 'add_datum_pattern':
+      return `Pattern body ${operation.targetBodyId} about datum axis ${operation.datum} as ${operation.name}`;
+    case 'add_datum_transform':
+      return `Transform body ${operation.targetBodyId} about datum axis ${operation.datum} as ${operation.name}`;
     case 'add_datum_sketch':
       return `Create sketch ${operation.name} on datum ${operation.datum}`;
     case 'add_datum_mirror':

@@ -1,0 +1,5 @@
+---
+row: U05
+---
+
+Command search slice (research audit ZC-203): the ⌘K/slash search matches a name's initials ("lp" finds Linear pattern), an empty command search (a bare `/`; ⌘K alone keeps the quiet field, whose empty Enter applies an assistant proposal) lists the five commands last run from it first (marked Recent; a device preference, `openzcad-recent-commands:v1`, never project data), then only the commands that can run now and act on the current pick — the verb rail's `commandContext` table, so a picked face or body drops the tools that do not act on it and a caption names the pick — while a typed search still reaches every command and ranks the pick's first. Rows keep reading their live keymap binding. Evidence: `lib/commandSearch.test.ts` (scores, initials, tie order, browse filter, recent storage), `CommandBar.test.tsx` (recent first across a remount, initials, pick filter and caption, empty-pick message), `commandContext.test.ts` (pick label) and `objects-folders.spec.ts` (run from search, then listed Recent; picked body filters the list; typed search still finds Box).

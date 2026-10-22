@@ -10,9 +10,12 @@ export * from './mass-density';
 export * from './keymap-settings';
 export * from './drawings';
 export * from './object-folders';
+export * from './drawing-annotations';
+export * from './reference-images';
 import type { DocumentHistory } from './document-history';
 import type { KeymapOverrides } from './keymap-settings';
 import type { DrawingSet } from './drawings';
+import type { ReferenceImageSet } from './reference-images';
 import type { ObjectFolderSet } from './object-folders';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
@@ -111,12 +114,37 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
  * every older document loads unchanged. An older client would drop the
  * section on its next save, so the bump makes it refuse such a document.
  *
+ * v31 adds D02 drawing annotations (`DrawingSheet.annotations`): linear,
+ * aligned, radius, diameter and angle dimensions that name the model edges
+ * they measure by persistent reference, and text notes with optional
+ * leaders. Additive: absent means a sheet has none, and every v30 document
+ * loads unchanged. An older client would refuse the unknown field or drop
+ * it on save, so the bump makes it refuse such a document.
+ *
+ * v32 adds the I05 reference-image section (`ProjectDocument.referenceImages`):
+ * PNG and JPEG pictures placed on a principal plane, a datum plane or a
+ * planar face, with their in-plane position, turn, width and opacity. The
+ * pixels are never embedded: each image holds the SHA-256 of its file, whose
+ * bytes live in the source blob store and its `reference-image` artifact.
+ * Additive: absent means no images, every older document loads unchanged, and
+ * images are never features or bodies, so no build or export reads them. An
+ * older client would drop the section on its next save, so the bump makes it
+ * refuse such a document.
+ *
+ * v33 adds I01 sketch projection (`SketchObjectData.projection`): a line,
+ * arc, circle or ellipse projected from a model edge records the edge (by
+ * schema-v5 lineage) and whether it stays linked to it or was copied once.
+ * A linked projection is re-projected at the sketch's history position on
+ * every rebuild. An older client would keep the stored geometry and drop the
+ * link on its next save, so the bump makes it refuse such a document.
+ * Absent means an ordinary drawn object, so every older document loads
+ * unchanged.
+ *
  * v34 adds the U06 Objects folders (`ProjectDocument.objectFolders`): named,
  * nestable folders and the bodies placed in them. Organization only — no
  * rebuild reads it. Additive: absent means no folders. An older client would
  * drop the section on its next save, so the bump makes it refuse such a
- * document. (v31–v33 are assigned to D02 annotations, reference images and
- * sketch projection.)
+ * document.
  */
 export const PROJECT_DOCUMENT_SCHEMA_VERSION = 34 as const;
 export type ProjectDocumentSchemaVersion =
@@ -684,7 +712,10 @@ export type SketchPlaneRef =
     };
 
 /** A canonical plane (optionally offset), as a datum source. */
-export type CanonicalPlaneSource = Extract<SketchPlaneRef, { type: 'canonical' }>;
+export type CanonicalPlaneSource = Extract<
+  SketchPlaneRef,
+  { type: 'canonical' }
+>;
 
 /**
  * A qualified exact planar face, as a datum source: lineage and the
@@ -704,9 +735,7 @@ export type FacePlaneSource = Extract<SketchPlaneRef, { type: 'face' }> & {
 export type ExtrudeToFaceTarget = FacePlaneSource;
 
 export type DatumPlaneSource =
-  | CanonicalPlaneSource
-  | DatumPlaneRef
-  | FacePlaneSource;
+  CanonicalPlaneSource | DatumPlaneRef | FacePlaneSource;
 
 /**
  * Schema v25: a model vertex, named as one end of an open edge whose
@@ -1245,7 +1274,67 @@ export type SketchObjectData = (
    * snappable but never split curves or bound a solid profile.
    */
   construction?: boolean;
+  /**
+   * I01 (schema v33): this object was projected from a model edge. Only
+   * lines, arcs, circles and ellipses carry it. Absent is ordinary drawn
+   * geometry.
+   */
+  projection?: SketchProjection;
 };
+
+/**
+ * I01 (schema v33): the model edge a projected sketch object came from: a
+ * body and one of its edges by schema-v5 lineage, re-found at the sketch's
+ * history position. No edge is ever found by proximity.
+ */
+export interface SketchProjectionSource {
+  bodyId: BodyId;
+  edgeReference: EdgeTopologyReferenceV5;
+}
+
+/**
+ * I01 (schema v33): how a projected sketch object relates to its edge.
+ *
+ * - `linked`: the exact build re-projects the edge onto the sketch plane at
+ *   the sketch's history position on every rebuild and builds from that, so
+ *   the object follows upstream edits. The stored geometry is the last valid
+ *   projection: it stands in, with a broken status, when the edge can no
+ *   longer be re-found through verified lineage, and the solver holds it
+ *   fixed.
+ * - `unlinked`: the geometry was copied once and is ordinary editable
+ *   geometry from then on. `source` stays as provenance only (absent when
+ *   the edge had no verified identity); nothing reads it during a rebuild.
+ */
+export type SketchProjection =
+  | { mode: 'linked'; source: SketchProjectionSource }
+  | { mode: 'unlinked'; source?: SketchProjectionSource };
+
+export type SketchProjectionMode = SketchProjection['mode'];
+
+/** Object kinds a projection can produce (and so may carry `projection`). */
+export const SKETCH_PROJECTION_OBJECT_KINDS = [
+  'line',
+  'arc',
+  'circle',
+  'ellipse'
+] as const satisfies readonly SketchObjectKind[];
+
+/**
+ * I01: what the exact build found for one linked projection at its sketch's
+ * history position.
+ *
+ * - `current`: the re-projected edge matches the stored geometry.
+ * - `moved`: the edge resolved but projects elsewhere now (an upstream edit
+ *   moved it). The build used `data`; the app writes it back to the object.
+ * - `broken`: the edge could not be re-found through verified lineage (its
+ *   feature was deleted or suppressed, or the edge was consumed), or it no
+ *   longer projects to the same kind of curve. The build used the stored,
+ *   last valid geometry; repairing needs an explicit re-pick or unlink.
+ */
+export type SketchProjectionState =
+  | { status: 'current' }
+  | { status: 'moved'; data: SketchObjectData }
+  | { status: 'broken'; reason: string };
 
 export interface SketchObjectNode extends BaseNode {
   kind: 'sketch-object';
@@ -1335,9 +1424,10 @@ export function isInPlaceTransform(
 }
 
 /** M10: a transform that adds a moved copy and leaves its source live. */
-export function isTransformCopy(
-  data: FeatureData
-): data is Extract<FeatureData, { featureKind: 'transform' }> & {
+export function isTransformCopy(data: FeatureData): data is Extract<
+  FeatureData,
+  { featureKind: 'transform' }
+> & {
   copy: true;
 } {
   return data.featureKind === 'transform' && data.copy === true;
@@ -2320,11 +2410,43 @@ export interface EdgeCurve {
   };
 }
 
+/**
+ * Runtime-only identity qualified from native construction vertex subjects.
+ * This is deliberately outside TopologyReferenceV5 and the document schema:
+ * stored datum sources continue to address a named edge and canonical end.
+ */
+export interface RuntimeVertexReference {
+  kind: 'vertex';
+  producingFeatureId: FeatureId;
+  lineageName: string;
+  witnessVersion: 1;
+  witness: { position: QuantizedTopologyPoint };
+}
+
+export type RuntimeVertexUnavailableReason =
+  | 'journal-unavailable'
+  | 'event-budget'
+  | 'unsupported-source'
+  | 'ambiguous-anchor'
+  | 'conflicting-anchors'
+  | 'stale-evidence';
+
+/** Exact native vertex geometry, with the same body-scoped ids edges use. */
+export interface VertexTopology {
+  /** Transient body/solid numbering, never a WASM handle or persisted id. */
+  id: number;
+  point: Vector3;
+  reference?: RuntimeVertexReference;
+  unavailableReason?: RuntimeVertexUnavailableReason;
+}
+
 export interface BodyTopology {
   /** Independent exact raised-profile group; it does not require an opening. */
   recognizedPlanarEmboss?: PlanarEmbossSelection;
   faces: FaceTopology[];
   edges: EdgeTopology[];
+  /** Derived native points; their optional references are runtime-only. */
+  vertices?: VertexTopology[];
   /** Non-overlapping exact proofs created while imported topology is live. */
   recognizedImportedFeatures?: RecognizedImportedFeature[];
   /** Bounded imported-body dimensions with a successful changed-value proof. */
@@ -2885,6 +3007,12 @@ export interface DerivedState {
    * own history position. A datum axis that failed or is suppressed is absent.
    */
   datumAxes?: Record<FeatureId, DatumAxisLine>;
+  /**
+   * I01 (schema v33): each linked sketch projection's state as the exact
+   * build found it at its sketch's history position, keyed by object id.
+   * Unlinked projections and sketches the build did not reach are absent.
+   */
+  sketchProjections?: Record<string, SketchProjectionState>;
   exportableBodyIds: BodyId[];
   warnings: string[];
   updatedAt: string;
@@ -2937,6 +3065,11 @@ export interface ProjectDocument {
    */
   drawings?: DrawingSet;
   /**
+   * I05 reference images (schema v32). Canonical user content: which picture
+   * lies where, never its pixels. Absent means the project has none.
+   */
+  referenceImages?: ReferenceImageSet;
+  /**
    * U06 Objects folders (schema v34): how the bodies are organized in the
    * Objects browser. Never read by a rebuild. Absent means no folders.
    */
@@ -2977,6 +3110,11 @@ export interface ArtifactRecord {
      * `meshPayloadRef`; internal, not a file anyone downloads.
      */
     | 'mesh-payload'
+    /**
+     * I05: the PNG or JPEG behind a reference image's `source`; internal,
+     * resolved by the viewport, not a file the File menu lists.
+     */
+    | 'reference-image'
     | 'step-export'
     | 'stl-export'
     | '3mf-export'
@@ -3173,6 +3311,26 @@ export function duplicateProjectName(
   }
 }
 
+/**
+ * An embedded import payload the browser split out of a document it sends
+ * (ADR-024 Phase 1): legacy `stepText`, or a mesh's `vertices`/`indices`.
+ * The document carries the project-asset reference in its place, exactly as
+ * the stored projection does, and the account stores these bytes under that
+ * reference's content-addressed key after checking them against `checksumSha256`.
+ */
+export interface ProjectStorageAssetUpload {
+  kind: 'step-source' | 'mesh-payload';
+  /** SHA-256 of the payload before compression, lowercase hex. */
+  checksumSha256: string;
+  /** Payload bytes before compression. */
+  logicalBytes: number;
+  /** The gzip-compressed payload, base64-encoded. */
+  storedBody: string;
+}
+
+/** Distinct split payloads one document write may carry. */
+export const MAX_PROJECT_STORAGE_ASSET_UPLOADS = 1_000;
+
 export interface CreateProjectRequest {
   name: string;
   units?: UnitSystem;
@@ -3206,6 +3364,13 @@ export interface CreateProjectRequest {
    * pre-Phase 1 contract, kept for one release: the server builds the document.
    */
   initialDocument?: ProjectDocument;
+  /**
+   * With this, the document field is the browser's storage projection: its
+   * embedded import payloads are split out into these uploads (ADR-024
+   * Phase 1). Requests without it are the pre-Phase 1 contract, kept for one
+   * release: the server splits the document itself.
+   */
+  storageAssets?: ProjectStorageAssetUpload[];
 }
 
 export interface CreateProjectResponse {
@@ -3253,6 +3418,13 @@ export interface DuplicateProjectRequest {
    * server copies byte for byte without reading either document.
    */
   importSources?: ImportSourceCopyRef[];
+  /**
+   * With this, the document field is the browser's storage projection: its
+   * embedded import payloads are split out into these uploads (ADR-024
+   * Phase 1). Requests without it are the pre-Phase 1 contract, kept for one
+   * release: the server splits the document itself.
+   */
+  storageAssets?: ProjectStorageAssetUpload[];
 }
 
 /** One archived import source a browser-built copy needs under its own id. */
@@ -3294,6 +3466,13 @@ export interface SaveRevisionRequest {
    * release: the server mints the save point itself.
    */
   savedRevisionId?: RevisionId;
+  /**
+   * With this, the document field is the browser's storage projection: its
+   * embedded import payloads are split out into these uploads (ADR-024
+   * Phase 1). Requests without it are the pre-Phase 1 contract, kept for one
+   * release: the server splits the document itself.
+   */
+  storageAssets?: ProjectStorageAssetUpload[];
 }
 
 /**
@@ -3306,6 +3485,13 @@ export interface SaveProjectDocumentRequest {
   projectId: ProjectId;
   expectedVersion: number;
   document: ProjectDocument;
+  /**
+   * With this, the document field is the browser's storage projection: its
+   * embedded import payloads are split out into these uploads (ADR-024
+   * Phase 1). Requests without it are the pre-Phase 1 contract, kept for one
+   * release: the server splits the document itself.
+   */
+  storageAssets?: ProjectStorageAssetUpload[];
 }
 
 /**
@@ -3498,6 +3684,37 @@ export type SettingsPointerNavigation = 'auto' | 'mouse' | 'trackpad';
  * those that mention the selected entity, or none. Presentation only.
  */
 export type SketchRelationGlyphVisibility = 'always' | 'selected' | 'hidden';
+/** Relations drawn as glyphs; driving dimensions already have labels. */
+export type SketchRelationGlyphKind = Exclude<
+  SketchConstraintKind,
+  'distance' | 'radius' | 'angle'
+>;
+/** Every glyph kind, in the order the per-kind filter lists them. */
+export const SKETCH_RELATION_GLYPH_KINDS: readonly SketchRelationGlyphKind[] = [
+  'horizontal',
+  'vertical',
+  'parallel',
+  'perpendicular',
+  'tangent',
+  'coincident',
+  'equal',
+  'concentric',
+  'symmetric',
+  'point-on-object',
+  'midpoint',
+  'lock'
+];
+
+/**
+ * A stored per-kind glyph filter, read leniently: unknown kinds (from a newer
+ * client) and duplicates drop out, and the kinds come back in filter order.
+ */
+export function normalizeHiddenRelationGlyphs(
+  value: unknown
+): SketchRelationGlyphKind[] {
+  if (!Array.isArray(value)) return [];
+  return SKETCH_RELATION_GLYPH_KINDS.filter((kind) => value.includes(kind));
+}
 export type AssistantProvider =
   'openrouter' | 'openai' | 'responses-compatible';
 export type AssistantCredentialSource = 'deployment' | 'personal';
@@ -3564,6 +3781,8 @@ export interface AppSettings {
     /** Screen-space radius used for sketch snap candidates. */
     snapTolerancePx: number;
     relationGlyphs: SketchRelationGlyphVisibility;
+    /** Glyph kinds the per-kind filter hides; presentation only. */
+    hiddenRelationGlyphs: SketchRelationGlyphKind[];
   };
   /**
    * How work reaches the account. There is no toggle for the device write —
@@ -3704,7 +3923,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     linearSnap: 1,
     angleSnap: 15,
     snapTolerancePx: 10,
-    relationGlyphs: 'selected'
+    relationGlyphs: 'selected',
+    hiddenRelationGlyphs: []
   },
   files: {
     cloudAutosave: true,
@@ -3981,6 +4201,18 @@ export const MAX_PERSISTED_DOCUMENT_BYTES = 1_500_000;
  * than an R2 object-size limit.
  */
 export const MAX_CLOUD_PROJECT_DOCUMENT_BYTES = 24 * 1024 * 1024;
+
+/**
+ * Largest request body a cloud document write may send: the document ceiling
+ * and 1 MiB of request envelope, plus room for a browser-split write
+ * (ADR-024 Phase 1), whose payloads travel gzip-compressed and base64-encoded
+ * — for bytes gzip cannot shrink, a third larger than inside the document,
+ * plus gzip framing. The document ceiling still applies once it is hydrated.
+ */
+export const MAX_CLOUD_PROJECT_WRITE_BYTES =
+  MAX_CLOUD_PROJECT_DOCUMENT_BYTES +
+  1024 * 1024 +
+  Math.ceil((MAX_CLOUD_PROJECT_DOCUMENT_BYTES * 1.01) / 3);
 
 /** Account limits include projects in the recycle bin until hard deletion. */
 export const MAX_ACCOUNT_PROJECTS = 100;

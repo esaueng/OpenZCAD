@@ -3,6 +3,7 @@ import type { FeatureNode } from '@openzcad/shared';
 import { HistoryTimeline } from '../HistoryTimeline';
 import type { ModelPanelSource } from './modelPanelProps';
 import type { HistoryFind } from './panelViews';
+import { sketchesWithBrokenProjections } from '../../lib/sketch/projection';
 
 /** The header's Find toggle, shown while the list has something to find. */
 export function HistoryFindToggle({ find }: { find: HistoryFind }) {
@@ -36,6 +37,7 @@ export type HistoryPanelProps = Pick<
   | 'selectedFeatureNodeId'
   | 'hiddenBodyIds'
   | 'hiddenSketchIds'
+  | 'document'
   | 'parameterValues'
   | 'units'
   | 'historyDetails'
@@ -59,6 +61,7 @@ export function HistoryPanel({
   selectedFeatureNodeId,
   hiddenBodyIds,
   hiddenSketchIds,
+  document,
   parameterValues,
   units,
   historyDetails,
@@ -84,6 +87,9 @@ export function HistoryPanel({
         selectedFeatureNodeId={selectedFeatureNodeId}
         hiddenBodyIds={hiddenBodyIds}
         hiddenSketchIds={hiddenSketchIds}
+        brokenProjectionSketchIds={
+          document ? sketchesWithBrokenProjections(document) : undefined
+        }
         parameterValues={parameterValues}
         units={units}
         findOpen={find.open}
