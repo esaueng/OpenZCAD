@@ -40,7 +40,9 @@ import {
 import {
   isImportSourceCopyRef,
   isProjectCopyDocumentDigest,
-  MAX_IMPORT_SOURCE_COPY_REFS
+  MAX_IMPORT_SOURCE_COPY_REFS,
+  openProjectStorageUpload,
+  type ClientProjectStorage
 } from '@openzcad/persistence';
 import {
   ASSISTANT_ATTACHMENT_MEDIA_TYPES,
@@ -140,6 +142,51 @@ function requireString(
     throw badRequest(`"${key}" must be at most ${maxLength} characters.`);
   }
   return trimmed;
+}
+
+/**
+ * Opens a browser-split document write (ADR-024 Phase 1). With
+ * `storageAssets`, the request's document is the browser's storage
+ * projection: its uploads are checked against their declared sizes and
+ * checksums, and the parser receives the hydrated document while the
+ * verified projection travels beside it to the store. Requests without
+ * `storageAssets` are the pre-Phase 1 shape and pass through unchanged.
+ */
+export async function openProjectStorageRequest(
+  body: unknown,
+  projectIdFromPath?: string
+): Promise<{ body: unknown; storage?: ClientProjectStorage }> {
+  if (
+    typeof body !== 'object' ||
+    body === null ||
+    Array.isArray(body) ||
+    (body as Record<string, unknown>).storageAssets === undefined
+  ) {
+    return { body };
+  }
+  const { storageAssets, ...record } = body as Record<string, unknown>;
+  const field =
+    record.initialDocument !== undefined ? 'initialDocument' : 'document';
+  const document = record[field];
+  const projectId =
+    projectIdFromPath ??
+    (typeof document === 'object' &&
+    document !== null &&
+    typeof (document as Record<string, unknown>).projectId === 'string'
+      ? ((document as Record<string, unknown>).projectId as string)
+      : undefined);
+  if (!projectId) {
+    throw badRequest(`"${field}.projectId" must be a non-empty string.`);
+  }
+  const opened = await openProjectStorageUpload(
+    document,
+    storageAssets,
+    projectId
+  );
+  return {
+    body: { ...record, [field]: opened.document },
+    storage: opened.storage
+  };
 }
 
 export function parseDiscardMeshPayloadRequest(body: unknown): {

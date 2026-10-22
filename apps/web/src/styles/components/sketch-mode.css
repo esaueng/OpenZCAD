@@ -244,9 +244,14 @@
   border-style: dashed;
 }
 
-/* Relation glyphs sit on the curve or point they describe, so they never
-   take a pick; CSS2DRenderer owns transform, so the offset that clears the
-   stroke is a margin. */
+/* Relation glyphs stand off the curve or point they describe, laid out every
+   frame (lib/sketch/relationGlyphLayout.ts) so they cover neither it nor each
+   other; CSS2DRenderer owns transform, so the standoff rides on `translate`.
+   The chip lets clicks through between glyphs; each glyph is a button that
+   selects its relation. Box sizes match RELATION_GLYPH_PX and
+   RELATION_GLYPH_GAP_PX there, which the layout reserves without measuring.
+   They stay 16 px: the constraint list offers every glyph's action at full
+   target size. */
 .sketch-relation-chip {
   display: inline-flex;
   gap: 2px;
@@ -254,33 +259,74 @@
   white-space: nowrap;
 }
 
-.sketch-relation-chip[data-placement='object'] {
-  margin-top: -16px;
-  margin-left: 14px;
-}
-
-.sketch-relation-chip[data-placement='point'] {
-  margin-top: 14px;
-  margin-left: 14px;
-}
-
 .sketch-relation-glyph {
   display: inline-grid;
   place-items: center;
-  min-width: 15px;
-  height: 15px;
-  padding: 0 2px;
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  pointer-events: auto;
+  cursor: pointer;
   color: var(--color-text-muted);
   background: var(--color-surface);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-sm);
+  font: inherit;
   font-size: var(--fs-mini);
   line-height: 1;
+}
+
+.sketch-relation-glyph:hover {
+  color: var(--color-text);
+  border-color: var(--color-preselect);
 }
 
 .sketch-relation-glyph[data-conflicted='true'] {
   color: var(--color-error-text);
   border-color: var(--color-error);
+}
+
+.sketch-relation-glyph[data-selected='true'] {
+  color: var(--color-on-accent);
+  background: var(--color-select);
+  border-color: var(--color-select);
+}
+
+/* The per-kind glyph filter: one toggle per kind, drawn with its glyph. */
+.relation-glyph-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.relation-glyph-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  line-height: 1;
+  opacity: 0.7;
+}
+
+.relation-glyph-toggle[aria-pressed='true'] {
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border-style: solid;
+  opacity: 1;
+}
+
+.relation-glyph-toggle:disabled {
+  cursor: default;
+  opacity: 0.4;
 }
 
 .sketch-reference-dimensions {
