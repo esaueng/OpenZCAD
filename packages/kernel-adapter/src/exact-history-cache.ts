@@ -453,6 +453,9 @@ export function cloneBuildState(result: ExactBuildResult): ExactBuildResult {
       : {}),
     ...(result.sketchObjectOverrides
       ? { sketchObjectOverrides: new Map(result.sketchObjectOverrides) }
+      : {}),
+    ...(result.sketchProjectionFailures
+      ? { sketchProjectionFailures: new Map(result.sketchProjectionFailures) }
       : {})
   };
 }
