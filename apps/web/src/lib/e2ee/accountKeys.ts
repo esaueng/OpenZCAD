@@ -62,6 +62,8 @@ import {
 } from './deviceStore';
 import {
   lockAccount,
+  captureAccountKeyRead,
+  clearCachedAccountKeys,
   rememberUnlockedAccount,
   unlockedAccount,
   type UnlockedAccount
@@ -119,6 +121,8 @@ export interface E2eeContext {
   readonly api: E2eeApi;
   readonly store: DeviceKeyStore;
   readonly now?: () => number;
+  /** The initiating settings/account view still owns this operation. */
+  readonly isCurrent?: () => boolean;
   /**
    * Makes this device's key pairs; non-extractable by default. Tests and
    * Playwright fixtures inject extractable pairs to seed a browser.
@@ -505,7 +509,8 @@ async function rememberAccountKey(
   generation: number,
   list: VerifiedDeviceList,
   wraps: readonly E2eeWrapRecord[],
-  accountKey: Bytes
+  accountKey: Bytes,
+  requireCurrent: () => void
 ): Promise<void> {
   const commitment = await accountKeyCommitment(accountKey);
   if (!sameBytes(commitment, list.head.accountKeyCommitment)) {
@@ -536,6 +541,7 @@ async function rememberAccountKey(
       );
     }
     const encryptionPrivateKey = await importEncryptionPrivateKey(pkcs8, false);
+    requireCurrent();
     rememberUnlockedAccount(userId, {
       generation,
       commitment: toHex(commitment),
@@ -553,8 +559,10 @@ async function unlockThisDevice(
   list: VerifiedDeviceList,
   wraps: readonly E2eeWrapRecord[],
   device: StoredDevice,
-  status: 'certified' | 'approved'
+  status: 'certified' | 'approved',
+  requireCurrent: () => void
 ): Promise<void> {
+  requireCurrent();
   const cached = unlockedAccount(ctx.userId);
   if (
     cached?.generation === generation &&
@@ -577,7 +585,20 @@ async function unlockThisDevice(
       unlockId: device.deviceId
     }
   );
-  await rememberAccountKey(ctx.userId, generation, list, wraps, accountKey);
+  let remembered = false;
+  try {
+    await rememberAccountKey(
+      ctx.userId,
+      generation,
+      list,
+      wraps,
+      accountKey,
+      requireCurrent
+    );
+    remembered = true;
+  } finally {
+    if (!remembered) accountKey.fill(0);
+  }
 }
 
 function describe(error: unknown): string {
@@ -587,12 +608,13 @@ function describe(error: unknown): string {
 async function persistDeviceList(
   ctx: E2eeContext,
   list: VerifiedDeviceList,
-  options: PinUpdateOptions = {}
+  options: PinUpdateOptions = {},
+  isCurrent: () => boolean = () => ctx.isCurrent?.() !== false
 ): Promise<void> {
   try {
     await ctx.store.savePin(ctx.userId, list, options);
   } catch (error) {
-    lockAccount(ctx.userId);
+    if (isCurrent()) clearCachedAccountKeys(ctx.userId);
     throw error;
   }
 }
@@ -606,12 +628,24 @@ async function persistDeviceList(
 export async function loadEncryption(
   ctx: E2eeContext
 ): Promise<EncryptionState> {
+  const readCurrent = captureAccountKeyRead(ctx.userId);
+  const isCurrent = () => readCurrent() && ctx.isCurrent?.() !== false;
+  const requireCurrent = () => {
+    if (!isCurrent())
+      throw new EncryptionFlowError(
+        'invalid-request',
+        'The account session ended. Reopen encryption settings to retry.'
+      );
+  };
+  requireCurrent();
   const response = await ctx.api.account();
+  requireCurrent();
   const previous = previousKeySets(response);
   const current = response.current;
   const pin = await ctx.store.loadPin(ctx.userId);
+  requireCurrent();
   if (!current) {
-    lockAccount(ctx.userId);
+    clearCachedAccountKeys(ctx.userId);
     return pin
       ? {
           kind: 'fork',
@@ -632,8 +666,11 @@ export async function loadEncryption(
         'The device list belongs to another account.'
       );
     }
-    await persistDeviceList(ctx, list);
+    requireCurrent();
+    await persistDeviceList(ctx, list, {}, isCurrent);
+    requireCurrent();
   } catch (error) {
+    if (!isCurrent()) throw error;
     if (
       (pin && isE2eeError(error, 'context-mismatch')) ||
       (error instanceof DeviceListPinConflict && error.reason === 'identity')
@@ -644,7 +681,7 @@ export async function loadEncryption(
       (pin && isE2eeError(error, 'chain-broken')) ||
       (error instanceof DeviceListPinConflict && error.reason === 'chain')
     ) {
-      lockAccount(ctx.userId);
+      clearCachedAccountKeys(ctx.userId);
       return {
         kind: 'fork',
         message:
@@ -661,6 +698,7 @@ export async function loadEncryption(
     );
   }
   const device = await ctx.store.loadDevice(ctx.userId);
+  requireCurrent();
   const deviceStatus = statusOf(list, device, current.wraps);
   let unlocked = false;
   let unlockError: string | null = null;
@@ -676,15 +714,17 @@ export async function loadEncryption(
         list,
         current.wraps,
         device,
-        deviceStatus
+        deviceStatus,
+        requireCurrent
       );
       unlocked = true;
     } catch (error) {
-      lockAccount(ctx.userId);
+      if (!isCurrent()) throw error;
+      clearCachedAccountKeys(ctx.userId);
       unlockError = describe(error);
     }
   } else {
-    lockAccount(ctx.userId);
+    clearCachedAccountKeys(ctx.userId);
   }
   const approvedMetadata = new Map(
     (current.approvedDevices ?? []).map((item) => [item.deviceId, item])

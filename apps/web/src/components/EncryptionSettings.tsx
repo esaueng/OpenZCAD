@@ -38,8 +38,12 @@ import {
   type NewDeviceApprovalStep
 } from '../lib/e2ee/accountKeys';
 import { createE2eeApi, E2eeApiError } from '../lib/e2ee/e2eeApi';
-import { DeviceListPinConflict, indexedDbDeviceStore } from '../lib/e2ee/deviceStore';
+import {
+  DeviceListPinConflict,
+  indexedDbDeviceStore
+} from '../lib/e2ee/deviceStore';
 import { encodeQr, qrSvgPath } from '../lib/e2ee/qrCode';
+import { invalidateAccountKeyReads } from '../lib/e2ee/unlockedKeys';
 import { Group, Notice, SettingRow, Status } from './settingsControls';
 import '../styles/components/encryption.css';
 
@@ -52,9 +56,22 @@ import '../styles/components/encryption.css';
  * section opens. No project is encrypted yet.
  */
 export function EncryptionSettings({ userId }: { userId: string }) {
-  const ctx = useMemo<E2eeContext>(
-    () => ({ userId, api: createE2eeApi(), store: indexedDbDeviceStore() }),
+  return <AccountEncryptionSettings key={userId} userId={userId} />;
+}
+
+function AccountEncryptionSettings({ userId }: { userId: string }) {
+  const lifetime = useMemo(
+    () => ({ userId, active: false, generation: 0 }),
     [userId]
+  );
+  const ctx = useMemo<E2eeContext>(
+    () => ({
+      userId,
+      api: createE2eeApi(),
+      store: indexedDbDeviceStore(),
+      isCurrent: () => lifetime.active
+    }),
+    [userId, lifetime]
   );
   const [state, setState] = useState<EncryptionState | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -63,36 +80,50 @@ export function EncryptionSettings({ userId }: { userId: string }) {
 
   const run = useCallback(
     async (work: () => Promise<EncryptionState | void>) => {
+      const generation = lifetime.generation;
+      const isCurrent = () =>
+        lifetime.active && lifetime.generation === generation;
+      if (!isCurrent()) return false;
       setBusy(true);
       setError(null);
       try {
         const next = await work();
+        if (!isCurrent()) return false;
         if (next) setState(next);
         return true;
       } catch (caught) {
+        if (!isCurrent()) return false;
         setError(messageFor(caught));
         return false;
       } finally {
-        setBusy(false);
+        if (isCurrent()) setBusy(false);
       }
     },
-    []
+    [lifetime]
   );
 
-  const reload = useCallback(
-    () => run(() => loadEncryption(ctx)),
-    [ctx, run]
-  );
+  const reload = useCallback(() => run(() => loadEncryption(ctx)), [ctx, run]);
 
   useEffect(() => {
+    lifetime.active = true;
+    lifetime.generation++;
     void reload();
-  }, [reload]);
+    return () => {
+      lifetime.active = false;
+      lifetime.generation++;
+      invalidateAccountKeyReads(userId);
+    };
+  }, [reload, lifetime, userId]);
 
   if (!state) {
     return (
       <Group>
         {error ? (
-          <Notice tone="warning" role="alert" action={<RetryButton onClick={() => void reload()} />}>
+          <Notice
+            tone="warning"
+            role="alert"
+            action={<RetryButton onClick={() => void reload()} />}
+          >
             {error}
           </Notice>
         ) : (
@@ -114,10 +145,13 @@ export function EncryptionSettings({ userId }: { userId: string }) {
       ) : null}
       {state.kind === 'fork' ? (
         <Group title="Device list">
-          <Notice tone="warning" role="alert" action={<RetryButton onClick={() => void reload()} />}>
+          <Notice
+            tone="warning"
+            role="alert"
+            action={<RetryButton onClick={() => void reload()} />}
+          >
             {state.message} Nothing was unlocked. If this keeps happening,
-            compare your fingerprint on another device before trusting this
-            one.
+            compare your fingerprint on another device before trusting this one.
           </Notice>
         </Group>
       ) : state.kind === 'not-set-up' ? (
@@ -182,7 +216,11 @@ interface Shared {
 }
 
 function messageFor(error: unknown): string {
-  if (error instanceof EncryptionFlowError || error instanceof E2eeApiError || error instanceof DeviceListPinConflict) {
+  if (
+    error instanceof EncryptionFlowError ||
+    error instanceof E2eeApiError ||
+    error instanceof DeviceListPinConflict
+  ) {
     return error.message;
   }
   if (error instanceof Error && error.name === 'E2eeError') {
@@ -237,8 +275,8 @@ function AccountPanel({
       {identityChanged ? (
         <Notice tone="warning" role="alert">
           Your encryption keys were replaced on another device, so this device
-          no longer trusts them. Approve it again from that device by
-          choosing Compare codes there, or enter the new recovery key.
+          no longer trusts them. Approve it again from that device by choosing
+          Compare codes there, or enter the new recovery key.
         </Notice>
       ) : null}
       {account.unlockError ? (
@@ -267,8 +305,9 @@ function AccountPanel({
         </SettingRow>
       </Group>
 
-      {!identityChanged && (account.deviceStatus === 'certified' ||
-      account.deviceStatus === 'approved') ? null : (
+      {!identityChanged &&
+      (account.deviceStatus === 'certified' ||
+        account.deviceStatus === 'approved') ? null : (
         <EnrollPanel {...shared} account={account} />
       )}
       {account.deviceStatus === 'approved' && flow?.kind !== 'recover' ? (
@@ -381,7 +420,9 @@ function AccountPanel({
           intro="Removing a device replaces your account key and encryption key, so it cannot open anything new. Certified devices keep working. Read-only devices must be approved again."
           actionLabel="Remove device"
           danger
-          onSubmit={(secret) => removeDevice(ctx, account, flow.deviceId, secret)}
+          onSubmit={(secret) =>
+            removeDevice(ctx, account, flow.deviceId, secret)
+          }
         />
       ) : null}
 
@@ -488,9 +529,13 @@ function DeviceStatusBadge({ account }: { account: AccountView }) {
   }
 }
 
-function EnrollPanel({ account, ...shared }: Shared & { account: AccountView }) {
+function EnrollPanel({
+  account,
+  ...shared
+}: Shared & { account: AccountView }) {
   const { ctx, busy, run, flow, setFlow } = shared;
-  const label = account.device?.label ?? defaultDeviceLabel(navigator.userAgent);
+  const label =
+    account.device?.label ?? defaultDeviceLabel(navigator.userAgent);
   const step = flow?.kind === 'request' ? flow.step : null;
 
   // Poll the approval request while this device waits.
@@ -645,7 +690,10 @@ function ScanCodeDisplay({ code }: { code: string }) {
   );
 }
 
-function ApprovalsPanel({ account, ...shared }: Shared & { account: AccountView }) {
+function ApprovalsPanel({
+  account,
+  ...shared
+}: Shared & { account: AccountView }) {
   const { ctx, busy, run, flow, setFlow } = shared;
   const [approvals, setApprovals] = useState<E2eeApprovalRecord[]>([]);
   const approving = flow?.kind === 'approve' ? flow : null;
@@ -707,7 +755,9 @@ function ApprovalsPanel({ account, ...shared }: Shared & { account: AccountView 
               <button
                 className="secondary"
                 type="button"
-                disabled={busy || !approval.commitment || approval.state !== 'requested'}
+                disabled={
+                  busy || !approval.commitment || approval.state !== 'requested'
+                }
                 onClick={() =>
                   void run(async () => {
                     const responded = await beginCompareApproval(
@@ -805,7 +855,10 @@ function ApproveDevice({
     });
 
   return (
-    <div className="encryption-approve" aria-label={`Approve ${approval.label}`}>
+    <div
+      className="encryption-approve"
+      aria-label={`Approve ${approval.label}`}
+    >
       {mode === 'scan' ? (
         <SettingRow
           title="Code from the new device"
@@ -859,8 +912,7 @@ function ApproveDevice({
           className="primary"
           type="button"
           disabled={
-            busy ||
-            (mode === 'scan' ? scanned.trim() === '' : code === null)
+            busy || (mode === 'scan' ? scanned.trim() === '' : code === null)
           }
           onClick={approve}
         >
@@ -1112,8 +1164,8 @@ function RecoveryKeyFlow({
           </SettingRow>
           {mismatch ? (
             <Notice tone="warning" role="alert">
-              That does not match the recovery key above. Go back and check
-              what you saved.
+              That does not match the recovery key above. Go back and check what
+              you saved.
             </Notice>
           ) : null}
           {askOldKey ? (
@@ -1220,10 +1272,7 @@ function RecoveryKeyEntry({
 function PreviousKeySets({ previous }: { previous: AccountView['previous'] }) {
   if (previous.length === 0) return null;
   return (
-    <Group
-      title="Devices from replaced keys"
-      note="Not trusted; approve again"
-    >
+    <Group title="Devices from replaced keys" note="Not trusted; approve again">
       {previous.flatMap((set) =>
         set.devices.map((device) => (
           <SettingRow

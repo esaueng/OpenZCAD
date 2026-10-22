@@ -1,5 +1,5 @@
 import { admitDevelopmentE2eeWrite } from '../apps/web/worker/e2eeWriteAuthorization';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { DatabaseSync } from 'node:sqlite';
 import {
   accountKeyCommitment,
@@ -55,6 +55,10 @@ import {
 import type { E2eeSetupRequest } from '@openzcad/shared';
 import { d1Database, migratedDatabase } from './d1-sqlite';
 import { eraseAccountWithKeyCleanup } from '../apps/web/src/lib/e2ee/accountErasure';
+import {
+  lockAccountsExcept,
+  unlockedAccount
+} from '../apps/web/src/lib/e2ee/unlockedKeys';
 
 const USER = 'user_alice';
 
@@ -217,6 +221,132 @@ const count = (db: DatabaseSync, sql: string, ...values: string[]) =>
   (db.prepare(sql).get(...values) as { n: number }).n;
 
 describe('encryption key routes', () => {
+  it('preserves a newer unlock when an old view finishes crypto after teardown', async () => {
+    const srv = server();
+    const { laptop } = await setUp(srv);
+    lockAccount(USER);
+    let entered!: () => void, release!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const decrypt = crypto.subtle.decrypt.bind(crypto.subtle);
+    let first = true,
+      active = true;
+    vi.spyOn(crypto.subtle, 'decrypt').mockImplementation(async (...args) => {
+      const value = await decrypt(...args);
+      if (first) {
+        first = false;
+        entered();
+        await held;
+      }
+      return value;
+    });
+    try {
+      const old = loadEncryption({ ...laptop, isCurrent: () => active });
+      await waiting;
+      active = false;
+      lockAccountsExcept(null);
+      expect(ready(await loadEncryption(laptop)).unlocked).toBe(true);
+      const fresh = unlockedAccount(USER)!;
+      release();
+      await expect(old).rejects.toThrow('session');
+      expect(unlockedAccount(USER)).toBe(fresh);
+      expect(fresh.accountKey.some((byte) => byte !== 0)).toBe(true);
+    } finally {
+      release();
+      vi.restoreAllMocks();
+      lockAccount(USER);
+    }
+  });
+
+  it('refuses an already-unmounted context before making its account request', async () => {
+    const srv = server();
+    let requests = 0;
+    const ctx = device(srv);
+    await expect(
+      loadEncryption({
+        ...ctx,
+        isCurrent: () => false,
+        api: {
+          ...ctx.api,
+          account: async () => {
+            requests++;
+            return { current: null, previous: [] };
+          }
+        }
+      })
+    ).rejects.toThrow('session');
+    expect(requests).toBe(0);
+  });
+  it.each(['account response', 'pin read', 'device read', 'crypto'] as const)(
+    'does not resurrect raw keys after teardown during %s',
+    async (phase) => {
+      const srv = server();
+      const { laptop } = await setUp(srv);
+      lockAccount(USER);
+      let entered!: () => void, release!: () => void;
+      const waiting = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const pause = async <T>(value: T) => {
+        entered();
+        await held;
+        return value;
+      };
+      const ctx: E2eeContext = {
+        ...laptop,
+        api: {
+          ...laptop.api,
+          account: async () => {
+            const value = await laptop.api.account();
+            return phase === 'account response' ? pause(value) : value;
+          }
+        },
+        store: {
+          ...laptop.store,
+          loadPin: async (id) => {
+            const value = await laptop.store.loadPin(id);
+            return phase === 'pin read' ? pause(value) : value;
+          },
+          loadDevice: async (id) => {
+            const value = await laptop.store.loadDevice(id);
+            return phase === 'device read' ? pause(value) : value;
+          }
+        }
+      };
+      if (phase === 'crypto') {
+        const decrypt = crypto.subtle.decrypt.bind(crypto.subtle);
+        let first = true;
+        vi.spyOn(crypto.subtle, 'decrypt').mockImplementation(
+          async (...args) => {
+            const value = await decrypt(...args);
+            if (!first) return value;
+            first = false;
+            return pause(value);
+          }
+        );
+      }
+      try {
+        const loading = loadEncryption(ctx);
+        await waiting;
+        // No raw cache entry exists yet; pending loads must still be fenced.
+        lockAccountsExcept(null);
+        release();
+        await expect(loading).rejects.toThrow('session');
+        expect(unlockedEncryptionKey(USER)).toBeNull();
+      } finally {
+        release();
+        vi.restoreAllMocks();
+        lockAccount(USER);
+      }
+    }
+  );
   it('refuses a missing pinned account and keeps its pin and private keys', async () => {
     const srv = server();
     const { laptop } = await setUp(srv);
@@ -781,6 +911,112 @@ describe('replacing the recovery key', () => {
 });
 
 describe('device approval', () => {
+  it('atomically caps durable read-only approvals and frees capacity on revocation', async () => {
+    const limit = 64;
+    const srv = server();
+    const { recovery, laptop, account } = await setUp(srv);
+    const first = device(srv);
+    const original = await requestApproval(
+      first,
+      null,
+      'First read-only device'
+    );
+    if (original.step !== 'waiting') throw new Error('Expected request');
+    await approveDevice(
+      laptop,
+      account,
+      original.approval,
+      { kind: 'scan', code: original.scanCode },
+      null
+    );
+    const originalId = (await first.store.loadDevice(USER))!.deviceId;
+    // Fill stored capacity independently of creation quotas. The Worker cannot
+    // verify these encrypted payloads; every retained wrap must count.
+    for (let i = 1; i < limit - 1; i++)
+      srv.db
+        .prepare(
+          `
+      INSERT INTO e2ee_key_wraps
+      SELECT user_id, generation, purpose, ?, key_sequence, wrapped, updated_at
+      FROM e2ee_key_wraps WHERE user_id = ? AND purpose = 'account-key-approval' AND target_id = ?
+    `
+        )
+        .run(`retained_device_${i}`, USER, originalId);
+    const pending = await Promise.all(
+      [0, 1].map(async (i) => {
+        const phone = device(srv);
+        const request = await requestApproval(phone, null, `Contender ${i}`);
+        if (request.step !== 'waiting') throw new Error('Expected request');
+        return request;
+      })
+    );
+    const current = ready(await loadEncryption(laptop));
+    let arrived = 0,
+      release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    srv.beforeWrite = async (sql) => {
+      if (!sql.includes("SET state = 'completed'")) return;
+      if (++arrived === 2) release();
+      await held;
+    };
+    const results = await Promise.allSettled(
+      pending.map((request) =>
+        approveDevice(
+          laptop,
+          current,
+          request.approval,
+          { kind: 'scan', code: request.scanCode },
+          null
+        )
+      )
+    );
+    srv.beforeWrite = undefined;
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
+    expect(
+      count(
+        srv.db,
+        "SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE user_id = ? AND purpose = 'account-key-approval'",
+        USER
+      )
+    ).toBe(limit);
+    const loser = pending[results.findIndex((r) => r.status === 'rejected')]!;
+    await expect(
+      approveDevice(
+        laptop,
+        ready(await loadEncryption(laptop)),
+        loser.approval,
+        { kind: 'scan', code: loser.scanCode },
+        null
+      )
+    ).rejects.toHaveProperty('code', 'E2EE_READ_ONLY_DEVICE_LIMIT');
+    const rotated = ready(
+      await revokeReadOnlyDevices(
+        laptop,
+        ready(await loadEncryption(laptop)),
+        recovery.secret
+      )
+    );
+    expect(rotated.approvedDevices).toHaveLength(0);
+    const fresh = await requestApproval(device(srv), null, 'After revocation');
+    if (fresh.step !== 'waiting') throw new Error('Expected request');
+    await approveDevice(
+      laptop,
+      rotated,
+      fresh.approval,
+      { kind: 'scan', code: fresh.scanCode },
+      null
+    );
+    expect(
+      count(
+        srv.db,
+        "SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE user_id = ? AND purpose = 'account-key-approval'",
+        USER
+      )
+    ).toBe(1);
+  });
   it.each(['cancel failure', 'read failure', 'still live'] as const)(
     'approval cancellation preserves its retry ID and keys after %s',
     async (fault) => {

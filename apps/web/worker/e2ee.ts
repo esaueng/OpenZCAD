@@ -15,6 +15,7 @@
  */
 import {
   E2eeError,
+  MAX_LISTED_DEVICES,
   decodeDeviceApprovalGrant,
   decodeDeviceListEntry,
   decodeIdentityTransition,
@@ -84,6 +85,8 @@ export const APPROVAL_TTL_MS = 10 * 60 * 1000;
 const APPROVAL_RETENTION_MS = 60 * 60 * 1000;
 export const MAX_OPEN_APPROVALS = 3;
 export const MAX_APPROVALS_PER_HOUR = 10;
+/** The current key generation may retain this many read-only recipients. */
+export const MAX_READ_ONLY_DEVICES = MAX_LISTED_DEVICES;
 const PREVIOUS_GENERATIONS = 3;
 
 const WRAP_PURPOSES: readonly E2eeWrapPurpose[] = [
@@ -1337,6 +1340,44 @@ async function handleCompleteApproval(
   const responderKey = sameResponder
     ? row.approver_key
     : toBase64Url(approver.signingKey);
+  const readOnlyCount = sealed
+    ? await db
+        .prepare(
+          `
+    SELECT COUNT(*) AS count, COALESCE(MAX(CASE WHEN target_id = ? THEN 1 ELSE 0 END), 0) AS existing
+    FROM e2ee_key_wraps WHERE user_id = ? AND generation = ? AND purpose = 'account-key-approval'
+  `
+        )
+        .bind(row.device_id, userId, current.generation)
+        .first<{ count: number; existing: number }>()
+    : null;
+  if (
+    readOnlyCount &&
+    !readOnlyCount.existing &&
+    readOnlyCount.count >= MAX_READ_ONLY_DEVICES
+  ) {
+    refuse(
+      409,
+      'E2EE_READ_ONLY_DEVICE_LIMIT',
+      `At most ${MAX_READ_ONLY_DEVICES} read-only devices can share this account key. Certify or revoke existing devices before approving another.`
+    );
+  }
+  const readOnlyGuard = sealed
+    ? {
+        sql: `(EXISTS (SELECT 1 FROM e2ee_key_wraps WHERE user_id = ? AND generation = ?
+                   AND purpose = 'account-key-approval' AND target_id = ?)
+           OR (SELECT COUNT(*) FROM e2ee_key_wraps WHERE user_id = ? AND generation = ?
+                   AND purpose = 'account-key-approval') < ?)`,
+        binds: [
+          userId,
+          current.generation,
+          row.device_id,
+          userId,
+          current.generation,
+          MAX_READ_ONLY_DEVICES
+        ]
+      }
+    : { sql: '1 = 1', binds: [] };
   const headGuard = {
     sql: `(SELECT MAX(generation) FROM e2ee_identities WHERE user_id = ?) = ?
       AND (SELECT entry_hash FROM e2ee_device_list_entries WHERE user_id = ?
@@ -1352,7 +1393,7 @@ async function handleCompleteApproval(
            AND state IN ('requested', 'revealed')
            AND ((state = 'revealed' AND approver_key = ?)
                 OR (state = 'requested' AND (commitment IS NULL OR approver_key IS NULL)))
-           AND ${headGuard.sql} AND ${db.authorization.sql}`
+           AND ${headGuard.sql} AND ${readOnlyGuard.sql} AND ${db.authorization.sql}`
       )
       .bind(
         statementText,
@@ -1362,6 +1403,7 @@ async function handleCompleteApproval(
         now,
         responderKey,
         ...headGuard.binds,
+        ...readOnlyGuard.binds,
         ...db.authorization.binds
       )
   ];
@@ -1384,12 +1426,13 @@ async function handleCompleteApproval(
           // including duplicate grants that already have a completed row.
           sql: `changes() = 1 AND EXISTS (SELECT 1 FROM e2ee_device_approvals
                         WHERE id = ? AND user_id = ? AND state = 'completed' AND grant_statement = ?)
-                        AND ${headGuard.sql} AND ${db.authorization.sql}`,
+                        AND ${headGuard.sql} AND ${readOnlyGuard.sql} AND ${db.authorization.sql}`,
           binds: [
             id,
             userId,
             statementText,
             ...headGuard.binds,
+            ...readOnlyGuard.binds,
             ...db.authorization.binds
           ]
         }
