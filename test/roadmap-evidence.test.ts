@@ -143,12 +143,24 @@ describe('roadmap evidence fragments', () => {
     ]);
   });
 
-  it('keeps earlier evidence when a later fragment sets a shared state cell', () => {
-    const out = foldEvidence(LEDGER, [
-      fragment('PERF-N04', 'Measured.', undefined, 'perf-n04--a.md'),
-      fragment('PERF-N04', 'Closed.', 'Done', 'perf-n04--b.md')
-    ]);
-    expect(splitRow(rowOf(out, 'perf-n04')!)[2]).toBe('Done Measured. Closed.');
+  it('refuses state changes where the state cell holds the evidence', () => {
+    // Evidence from earlier folds lives in that cell, so a state would erase it.
+    for (const fragments of [
+      [fragment('PERF-N04', 'Closed.', 'Done')],
+      [
+        fragment('PERF-N04', 'Measured.', undefined, 'perf-n04--a.md'),
+        fragment('PERF-N04', 'Closed.', 'Done', 'perf-n04--b.md')
+      ]
+    ]) {
+      expect(() => foldEvidence(LEDGER, fragments)).toThrow(
+        /keeps its evidence in the state cell/
+      );
+    }
+    const folded = foldEvidence(LEDGER, [fragment('PERF-N04', 'Measured.')]);
+    const out = foldEvidence(folded, [fragment('PERF-N04', 'Again.')]);
+    expect(splitRow(rowOf(out, 'perf-n04')!)[2]).toBe(
+      'Pending Measured. Again.'
+    );
   });
 
   it('applies several fragments for one row in file-name order', () => {

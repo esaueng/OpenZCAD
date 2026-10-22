@@ -226,6 +226,14 @@ export function foldEvidence(markdown, fragments) {
         );
         continue;
       }
+      if (state === target) {
+        // The state cell also holds every earlier fold's evidence, so
+        // replacing it would erase that history.
+        errors.push(
+          `${fragment.name}: row "${fragment.row}" keeps its evidence in the state cell; change its state by editing the row, not with a fragment`
+        );
+        continue;
+      }
       const prior = stateSetters.get(index);
       if (prior) {
         errors.push(
