@@ -154,6 +154,26 @@ building a cloud backend.
 
 ## Design decisions
 
+### Anonymous share-link lifetime (L01)
+
+Share links expire 30 days after their server-assigned creation time, for both
+View and Tweak. The deadline is fixed: reading a link, editing its project,
+restoring a trashed project or re-enabling sharing does not extend it. Owners
+create a new link to share again and can revoke a link earlier.
+
+The same lifetime applies to existing links, using their stored Unix-second
+`createdAt`; links already 30 days old become unavailable when this policy is
+deployed. No database migration, token-format change or request/response-field
+change is required. Expiration covers the current model and its imported source
+and side assets, with the same unavailable response as a revoked link.
+
+The owner's list retains unrevoked expired links, labelled **Expired**, so they
+remain revocable and the existing 100-unrevoked-link bound stays recoverable.
+Expiration does not delete audit metadata or retract copies already downloaded.
+Regression evidence: `test/share-link-expiration.test.ts`,
+`test/project-share-links.test.ts` and `ProjectSharingDialog.test.tsx`.
+Production activation and live verification remain part of L01 delivery.
+
 ### 1. Whole-document last-writer-wins with version fencing, not CRDT
 
 The document is a replayable command history whose canonical rebuild is exact; merging two

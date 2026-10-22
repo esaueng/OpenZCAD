@@ -656,7 +656,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   // Anonymous share-link reads, registered alongside the other public routes.
   // The capability token in the path is the entire authorization, so these
   // deliberately never touch authenticateRequest, and unknown, malformed, and
-  // revoked tokens all collapse into one opaque 404.
+  // revoked or expired tokens all collapse into one opaque 404.
   const sharedProjectMatch = SHARED_PROJECT_ROUTE.exec(pathname);
   const sharedProjectAssetMatch = SHARED_PROJECT_ASSET_ROUTE.exec(pathname);
   const sharedProjectSourceMatch = SHARED_PROJECT_SOURCE_ROUTE.exec(pathname);

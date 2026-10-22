@@ -92,6 +92,7 @@ import {
   addSketchComposite,
   type SketchCompositeAddInput,
   addSketchReferenceDimension,
+  restoreSketchReferenceDimensionForReplay,
   assertReferenceCommandSchema,
   assertReferenceDocumentSchema,
   assertSketchProvenance,
@@ -4538,7 +4539,7 @@ export function replayCommands(
         next = releaseSketchPromotionStructure(next, command.payload as SketchPromotionReleaseInput);
         break;
       case 'reference-dimension.add':
-        next = addSketchReferenceDimension(
+        next = restoreSketchReferenceDimensionForReplay(
           next,
           command.payload as SketchReferenceDimensionAddInput
         ).document;
