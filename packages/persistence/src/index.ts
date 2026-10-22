@@ -96,6 +96,7 @@ import {
   MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_THUMBNAIL_BYTES,
   THUMBNAIL_CONTENT_TYPE,
+  isAcceptableReferenceImageArtifact,
   nowIso,
   persistedDocumentBytes,
   projectBranchPoint,
@@ -230,10 +231,13 @@ export function sharedProjectSnapshotDocument(
 ): ProjectDocument {
   // Drawing sheets stay with the owner: their title blocks carry author,
   // date and drawing-number text, and a share link opens no Draw workspace.
+  // Reference images stay too: they are the owner's tracing underlays, and a
+  // share link serves import sources only, never their pictures.
   const {
     editHistory: _editHistory,
     branchedFrom: _branchedFrom,
     drawings: _drawings,
+    referenceImages: _referenceImages,
     ...current
   } = withoutDerivedProjection(document);
   return {
@@ -692,7 +696,7 @@ export interface PersistenceService {
     userId: UserId,
     projectId: string,
     artifactId: string,
-    originalKind?: 'stl-import' | 'mesh-import'
+    originalKind?: 'stl-import' | 'mesh-import' | 'reference-image'
   ): Promise<{ deleted: boolean }>;
   listArtifacts(
     userId: UserId,
@@ -2200,6 +2204,14 @@ export class InMemoryPersistenceService implements PersistenceService {
         'Thumbnail artifact is invalid or too large.'
       );
     }
+    if (
+      artifact.kind === 'reference-image' &&
+      !isAcceptableReferenceImageArtifact(artifact.contentType, body.byteLength)
+    ) {
+      throw new ArtifactStorageError(
+        'Reference image artifact is not a PNG or JPEG within the size limit.'
+      );
+    }
     if (artifact.kind === 'thumbnail') {
       for (const [artifactId, existing] of this.artifacts) {
         if (
@@ -2222,7 +2234,7 @@ export class InMemoryPersistenceService implements PersistenceService {
     userId: UserId,
     projectId: string,
     artifactId: string,
-    originalKind?: 'stl-import' | 'mesh-import'
+    originalKind?: 'stl-import' | 'mesh-import' | 'reference-image'
   ): Promise<{ deleted: boolean }> {
     const access = await this.requireProjectEdit(userId, projectId);
     // Originals are stored files, and finalized records do not identify the

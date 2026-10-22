@@ -85,6 +85,7 @@ import {
   KEPT_LOCAL_VERSION_REASON,
   MAX_CHECKPOINT_REASON_LENGTH,
   THUMBNAIL_CONTENT_TYPE,
+  isAcceptableReferenceImageArtifact,
   nowIso,
   isProjectCheckpoint,
   isRevisionRecord,
@@ -3991,6 +3992,14 @@ export class D1R2PersistenceService implements PersistenceService {
         'Thumbnail artifact is invalid or too large.'
       );
     }
+    if (
+      artifact.kind === 'reference-image' &&
+      !isAcceptableReferenceImageArtifact(artifact.contentType, stored.size)
+    ) {
+      throw new ArtifactStorageError(
+        'Reference image artifact is not a PNG or JPEG within the size limit.'
+      );
+    }
 
     const supersededThumbnails =
       artifact.kind === 'thumbnail'
@@ -4143,7 +4152,7 @@ export class D1R2PersistenceService implements PersistenceService {
     userId: UserId,
     projectId: string,
     artifactId: string,
-    originalKind?: 'stl-import' | 'mesh-import'
+    originalKind?: 'stl-import' | 'mesh-import' | 'reference-image'
   ): Promise<{ deleted: boolean }> {
     if (!this.env.DB)
       return getInMemoryPersistence().discardMeshPayload(
@@ -6393,7 +6402,8 @@ export class ProjectCollaborationRoom extends DurableObject {
           payload.artifactId.length > 200 ||
           (payload.kind !== undefined &&
             payload.kind !== 'stl-import' &&
-            payload.kind !== 'mesh-import'))) ||
+            payload.kind !== 'mesh-import' &&
+            payload.kind !== 'reference-image'))) ||
       (payload.action !== 'discard-mesh' &&
         (!Number.isSafeInteger(payload.expectedVersion) ||
           (payload.expectedVersion as number) < 0 ||
@@ -6467,7 +6477,7 @@ export class ProjectCollaborationRoom extends DurableObject {
             userId,
             projectId,
             artifactId,
-            payload.kind as 'stl-import' | 'mesh-import' | undefined
+            payload.kind as 'stl-import' | 'mesh-import' | 'reference-image' | undefined
           )
         );
       }

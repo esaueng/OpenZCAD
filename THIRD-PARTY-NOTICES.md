@@ -89,6 +89,30 @@ same license — Roboto Slab is Apache-2.0, not OFL.
   font binaries into glyph outlines. Source and license:
   <https://github.com/opentypejs/opentype.js>.
 
+## End-to-end encryption
+
+`packages/mls` compiles these Rust crates into one WebAssembly module
+(`packages/mls/pkg/openzcad_mls_bg.wasm`). The application does not load it
+yet. `packages/mls/crate/Cargo.lock` is the authoritative inventory.
+
+- **`mls-rs` 0.56.0, `mls-rs-core` 0.27.0, `mls-rs-codec` 0.7.0,
+  `mls-rs-crypto-rustcrypto` 0.22.1, `mls-rs-crypto-hpke` 0.21.1,
+  `mls-rs-crypto-traits` 0.22.0** — Copyright Amazon.com, Inc. or its
+  affiliates and contributors; Apache-2.0 OR MIT. Source:
+  <https://github.com/awslabs/mls-rs>.
+- **RustCrypto crates** (`p256`, `p384`, `elliptic-curve`, `aes-gcm`,
+  `chacha20poly1305`, `sha2`, `hkdf`, `hmac` and their support crates) —
+  Copyright the RustCrypto developers; Apache-2.0 OR MIT.
+  <https://github.com/RustCrypto>.
+- **`curve25519-dalek`, `ed25519-dalek`, `x25519-dalek`** — Copyright Isis
+  Agora Lovecruft, Henry de Valence and contributors; BSD-3-Clause.
+  `subtle` — Copyright Isis Agora Lovecruft and Henry de Valence;
+  BSD-3-Clause. <https://github.com/dalek-cryptography>.
+- **`wasm-bindgen` 0.2.126 and `js-sys`, `serde`, `serde_json`, `hex`,
+  `zeroize`, `thiserror`** and the remaining build and support crates —
+  Apache-2.0 OR MIT or MIT; `memchr` is Unlicense OR MIT and
+  `unicode-ident` adds Unicode-3.0.
+
 The complete license texts shipped by npm packages remain available in each
 package's `LICENSE` file. This notice does not alter the terms of those
 licenses.
