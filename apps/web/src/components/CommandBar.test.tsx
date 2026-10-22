@@ -6,6 +6,8 @@ import {
   ASSISTANT_PROMPT_FILES_EVENT,
   ASSISTANT_PROMPT_KEY_EVENT
 } from '../lib/assistant/promptKeys';
+import { commandContextFor, toolApplies } from '../lib/commandContext';
+import { TOOL_META } from '../lib/tools';
 import { CommandBar, type PaletteCommand } from './CommandBar';
 
 function command(
@@ -31,7 +33,8 @@ function Bar({
   initialOpen = false,
   draft = null,
   context = null,
-  askUnavailable = false
+  askUnavailable = false,
+  pick = null
 }: {
   commands: PaletteCommand[];
   onAsk?(question: string): void;
@@ -40,6 +43,7 @@ function Bar({
   draft?: { id: number; text: string } | null;
   context?: string | null;
   askUnavailable?: boolean;
+  pick?: string | null;
 }) {
   const [open, setOpen] = useState(initialOpen);
   return (
@@ -55,6 +59,7 @@ function Bar({
       draft={draft}
       context={context}
       askUnavailable={askUnavailable}
+      pick={pick}
     />
   );
 }
@@ -73,9 +78,112 @@ function visibleLabels(): string[] {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  // Recent commands are a device preference; each case starts without any.
+  localStorage.clear();
 });
 
 describe('CommandBar', () => {
+  it('lists the commands run from it first on an empty search, marked Recent (ZC-203)', async () => {
+    const commands = [
+      command('box', 'Box', 'Create'),
+      command('fillet', 'Fillet', 'Modify'),
+      command('front', 'Front view', 'View')
+    ];
+    const { unmount } = render(<Bar commands={commands} />);
+    const search = searchField();
+    await userEvent.type(search, '/fro');
+    await userEvent.keyboard('{Enter}');
+    expect(commands[2]!.run).toHaveBeenCalledTimes(1);
+    await userEvent.type(search, '/fil');
+    await userEvent.keyboard('{Enter}');
+
+    await userEvent.type(search, '/');
+    expect(visibleLabels()).toEqual(['Fillet', 'Front view', 'Box']);
+    const rows = screen.getAllByRole('option');
+    expect(rows[0]).toHaveTextContent('Recent');
+    expect(rows[2]).toHaveTextContent('Create');
+    unmount();
+
+    // Kept on the device: a fresh bar remembers them.
+    render(<Bar commands={commands} />);
+    await userEvent.type(searchField(), '/');
+    expect(visibleLabels()).toEqual(['Fillet', 'Front view', 'Box']);
+  });
+
+  it('matches a command by the initials of its name', async () => {
+    const commands = [
+      command('lin', 'Line', 'Sketch'),
+      command('linear-pattern', 'Linear pattern', 'Pattern'),
+      command('normal', 'Normal to selected face', 'View')
+    ];
+    render(<Bar commands={commands} />);
+    await userEvent.type(searchField(), '/lp');
+    expect(visibleLabels()).toEqual(['Linear pattern']);
+    await userEvent.clear(searchField());
+    await userEvent.type(searchField(), '/ntsf');
+    expect(visibleLabels()).toEqual(['Normal to selected face']);
+  });
+
+  it('lists only the commands that act on the pick on an empty search, and ranks them first when typed', async () => {
+    const commands = [
+      command('box', 'Box', 'Create', { offPick: true }),
+      command('chamfer', 'Chamfer', 'Modify'),
+      command('cylinder', 'Cylinder', 'Create', { offPick: true }),
+      command('extrude', 'Extrude', 'Create', {
+        disabledReason: 'Select a region first'
+      }),
+      command('fillet', 'Fillet', 'Modify'),
+      command('front', 'Front view', 'View')
+    ];
+    render(<Bar commands={commands} pick="2 edges" />);
+    const search = searchField();
+    await userEvent.type(search, '/');
+    // Body tools and a command the mode cannot run drop out of the list.
+    expect(visibleLabels()).toEqual(['Chamfer', 'Fillet', 'Front view']);
+    expect(screen.getByText(/For 2 edges · type to search all/)).toBeTruthy();
+
+    // A typed search still reaches everything, the pick's commands first.
+    await userEvent.type(search, 'c');
+    expect(visibleLabels()).toEqual(['Chamfer', 'Cylinder']);
+    await userEvent.clear(search);
+    await userEvent.type(search, '/ext');
+    expect(visibleLabels()).toEqual(['Extrude']);
+    expect(screen.getByRole('option')).toHaveTextContent(
+      'Select a region first'
+    );
+  });
+
+  it('lists Rotate about axis for a picked body, from the shared pick table', async () => {
+    const body = commandContextFor({
+      edgeCount: 0,
+      faceSelected: false,
+      bodyCount: 1,
+      regionCount: 0
+    });
+    const commands = (['box', 'axis-rotate', 'mirror'] as const).map((tool) =>
+      command(tool, TOOL_META[tool].label, 'Tool', {
+        offPick: !toolApplies(body, tool)
+      })
+    );
+    render(<Bar commands={commands} pick="1 body" />);
+    await userEvent.type(searchField(), '/');
+    expect(visibleLabels()).toEqual(['Rotate about axis', 'Mirror']);
+  });
+
+  it('says how to reach every command when nothing can run on the pick', async () => {
+    render(
+      <Bar
+        commands={[command('box', 'Box', 'Create', { offPick: true })]}
+        pick="1 face"
+      />
+    );
+    await userEvent.type(searchField(), '/');
+    expect(screen.queryAllByRole('option')).toHaveLength(0);
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Type to search every command'
+    );
+  });
+
   it('lists commands for a slash, ranking label matches above group matches', async () => {
     const commands = [
       command('save', 'Save revision', 'File'),

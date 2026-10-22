@@ -13,10 +13,25 @@ import {
 } from '@openzcad/shared';
 import type { SketchConstraintToolKind } from '../lib/interaction/machine';
 import { CONSTRAINT_ICONS } from './constraintIcons';
-import { Construction, Trash2, X } from 'lucide-react';
+import { Construction, Link2Off, Repeat2, Trash2, X } from 'lucide-react';
 import { ExprInput } from './ExprInput';
 import { previewExpression } from '../lib/model';
 import { TextObjectFields, type TextAttributes } from './TextObjectFields';
+
+/**
+ * I01: where a projected entity came from, for its card. A linked one is
+ * held where its model edge projects; `state` is what the last exact build
+ * found for it (absent while it has not built yet).
+ */
+export interface SketchEntityProjection {
+  mode: 'linked' | 'unlinked';
+  /** The feature that made the source edge, when it still exists. */
+  sourceName: string | null;
+  state?: 'current' | 'moved' | 'broken';
+  reason?: string;
+  /** True while the next viewport pick replaces this entity's source. */
+  repicking?: boolean;
+}
 
 /** One constraint the selected entity takes part in. */
 export interface EntityConstraintItem {
@@ -90,6 +105,12 @@ interface SketchEntityEditorProps {
     anchor: { x: number; y: number }
   ): void;
   onDeleteConstraint?(constraintId: string): void;
+  /** I01: set when the entity was projected from a model edge. */
+  projection?: SketchEntityProjection | null;
+  /** Keep the geometry and drop the link (one undo step). */
+  onUnlinkProjection?(): void;
+  /** Arm a re-pick: the next model edge picked becomes the source. */
+  onRepickProjection?(): void;
 }
 
 interface FieldDefinition {
@@ -512,8 +533,14 @@ export function SketchEntityEditor({
   onResizeComposite,
   onConvertToEdges,
   promotionSource,
-  onReleaseShapeConstraints
+  onReleaseShapeConstraints,
+  projection,
+  onUnlinkProjection,
+  onRepickProjection
 }: SketchEntityEditorProps) {
+  // A linked projection is where its edge puts it: its values are read, not
+  // typed. Unlinking makes it ordinary geometry again.
+  const linked = projection?.mode === 'linked';
   const [values, setValues] = useState(() => initialValues(data));
   const [textAttrs, setTextAttrs] = useState<TextAttributes | null>(() =>
     textAttributes(data)
@@ -550,7 +577,7 @@ export function SketchEntityEditor({
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (valid && !disabled) {
+    if (valid && !disabled && !linked) {
       onApply(nextData(data, values, textAttrs));
     }
   }
@@ -592,7 +619,7 @@ export function SketchEntityEditor({
               Undo conversion to restore the parametric shape.
             </p>
           )}
-          <div className="sketch-entity-fields">
+          <fieldset disabled={linked} className="sketch-entity-fields">
             {fields.map(({ key, label, dimension = 'length' }) => (
               <ExprInput
                 key={key}
@@ -605,7 +632,7 @@ export function SketchEntityEditor({
                 }
               />
             ))}
-          </div>
+          </fieldset>
           {!valid && (
             <p className="form-error" role="alert">
               {semanticError ?? 'Fix invalid values before applying this edit.'}
@@ -648,7 +675,7 @@ export function SketchEntityEditor({
             <button
               type="submit"
               className="primary"
-              disabled={!valid || disabled}
+              disabled={!valid || disabled || linked}
             >
               Apply
             </button>
@@ -698,6 +725,55 @@ export function SketchEntityEditor({
           )}
         </fieldset>
       </form>
+      {projection && (
+        <section
+          className="sketch-entity-constraints sketch-entity-projection"
+          aria-label="Projection"
+        >
+          <span className="eyebrow">Projection</span>
+          <p className="muted">
+            {projection.mode === 'linked'
+              ? `Linked to an edge${projection.sourceName ? ` of ${projection.sourceName}` : ''}: it follows later edits and the solver holds it.`
+              : `Independent copy of an edge${projection.sourceName ? ` of ${projection.sourceName}` : ''}: edit it like any sketch geometry.`}
+          </p>
+          {projection.state === 'broken' && (
+            <p className="form-error" role="alert">
+              Broken: {projection.reason ?? 'its source edge cannot be found.'}{' '}
+              The sketch keeps its last projected position.
+            </p>
+          )}
+          {projection.repicking && (
+            <p className="muted" role="status">
+              Click the model edge that should replace the source · Esc cancels.
+            </p>
+          )}
+          {linked && (
+            <div className="sketch-entity-projection-actions">
+              <button
+                type="button"
+                className="secondary"
+                disabled={disabled}
+                aria-pressed={projection.repicking === true}
+                title="Pick another model edge as this entity's source; the sketch keeps its geometry until the new edge validates"
+                onClick={onRepickProjection}
+              >
+                <Repeat2 size={13} aria-hidden="true" />
+                Re-pick source
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                disabled={disabled}
+                title="Keep this geometry as an independent copy that no longer follows the edge"
+                onClick={onUnlinkProjection}
+              >
+                <Link2Off size={13} aria-hidden="true" />
+                Unlink
+              </button>
+            </div>
+          )}
+        </section>
+      )}
       {composite && (
         <SketchCompositeCard
           // A new stored size is a new card: the fields start from it.

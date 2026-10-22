@@ -939,4 +939,34 @@ describe('SketchRelationsRail', () => {
     expect(horizontal).toBeDisabled();
     expect(horizontal).toHaveAccessibleDescription('Draw an entity first.');
   });
+
+  it('arms Project and steps between linked and unlinked (I01)', async () => {
+    const user = userEvent.setup();
+    const onProjectMode = vi.fn();
+    const { rerender, props } = renderRail({ tool: 'line', onProjectMode });
+    expect(
+      screen.queryByRole('radiogroup', { name: 'Projection link' })
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Project edges' }));
+    expect(onProjectMode).toHaveBeenLastCalledWith('linked');
+    rerender(
+      <SketchToolRail
+        {...props}
+        tool="project"
+        projectMode="linked"
+        onProjectMode={onProjectMode}
+      />
+    );
+    const strip = screen.getByRole('radiogroup', { name: 'Projection link' });
+    expect(
+      within(strip).getByRole('radio', { name: 'Linked' })
+    ).toHaveAttribute('aria-checked', 'true');
+    await user.click(
+      within(strip).getByRole('radio', { name: 'Unlinked' })
+    );
+    expect(onProjectMode).toHaveBeenLastCalledWith('unlinked');
+    expect(
+      screen.getByRole('button', { name: 'Project edges' })
+    ).toHaveAttribute('aria-pressed', 'true');
+  });
 });

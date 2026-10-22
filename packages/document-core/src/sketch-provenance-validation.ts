@@ -8,6 +8,7 @@ import {
   type ProjectDocument,
   type SketchPromotion
 } from '@openzcad/shared';
+import { assertMinimumProjectSchema } from './document-content-schema';
 
 const PROVENANCE_SCHEMA_VERSION = 37;
 
@@ -22,14 +23,11 @@ function identities(value: unknown): value is string[] {
 }
 
 function requireSchema(document: ProjectDocument): void {
-  if (
-    typeof document.schemaVersion !== 'number' ||
-    !Number.isSafeInteger(document.schemaVersion) ||
-    document.schemaVersion < PROVENANCE_SCHEMA_VERSION
-  )
-    throw new Error(
-      'Sketch boundary provenance and promotion ownership require project schema v37 or newer.'
-    );
+  assertMinimumProjectSchema(
+    document.schemaVersion,
+    PROVENANCE_SCHEMA_VERSION,
+    'Sketch boundary provenance and promotion ownership'
+  );
 }
 
 function profile(value: unknown, document: ProjectDocument): void {

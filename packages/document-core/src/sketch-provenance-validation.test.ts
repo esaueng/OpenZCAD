@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   CommandManager,
   commandFactories,
@@ -22,6 +22,12 @@ import {
   normalizeDocument
 } from './index';
 import { assertSketchProvenance } from './sketch-provenance-validation';
+
+import {
+  createRoomContext,
+  createTestRoom,
+  installWorkerSocketGlobals
+} from '../../../test/collaboration-room-harness';
 
 function fixture(width: number | string = 'width') {
   const f = addSketchFeature(
@@ -526,3 +532,128 @@ describe('S04 promotion ownership validation', () => {
     expect(() => assertSketchProvenance(f.document)).toThrow(/schema v37/);
   });
 });
+
+it.each(['boundary profile', 'promotion ownership'] as const)(
+  'requires an integer declared schema for authored %s',
+  (family) => {
+    const f = authored(family);
+    for (const version of [null, Number.NaN, '37', 37.5]) {
+      const document = structuredClone(f.document);
+      Object.assign(document, { schemaVersion: version });
+      const before = structuredClone(document);
+      expect(() => assertSketchProvenance(document)).toThrow(
+        /require project schema v37 or newer/
+      );
+      expect(() => normalizeDocument(document)).toThrow(/schema/);
+      expect(() => new CommandManager(document)).toThrow(
+        /require project schema v37 or newer/
+      );
+      expect(() => replayCommands(document, [])).toThrow(
+        /require project schema v37 or newer/
+      );
+      expect(document).toEqual(before);
+    }
+  }
+);
+
+let socketGlobals: ReturnType<typeof installWorkerSocketGlobals>;
+beforeAll(() => {
+  socketGlobals = installWorkerSocketGlobals();
+});
+afterAll(() => {
+  socketGlobals.restore();
+});
+
+describe.each(['http', 'websocket'])(
+  'S04 provenance %s collaboration boundary',
+  (transport) => {
+    it.each(['boundary profile', 'promotion ownership'] as const)(
+      'refuses backdated and accepts current %s without rewriting',
+      async (family) => {
+        for (const carrier of ['current', 'nested log'] as const)
+          for (const version of [36, PROJECT_DOCUMENT_SCHEMA_VERSION]) {
+            const f = authored(family);
+            const document = structuredClone(
+              carrier === 'current' ? f.document : f.base
+            );
+            delete document.editHistory;
+            document.commandLog =
+              carrier === 'current'
+                ? []
+                : [
+                    command('transaction', [
+                      command('transaction', [structuredClone(f.recorded)])
+                    ])
+                  ];
+            document.schemaVersion =
+              version as ProjectDocument['schemaVersion'];
+            const before = structuredClone(document);
+            const { context, values } = createRoomContext();
+            const room = createTestRoom(context, {});
+            const url = `https://room.test/?projectId=${document.projectId}`;
+            const headers = {
+              'x-openzcad-user-id': document.ownerUserId,
+              'x-openzcad-display-name': 'Owner',
+              'x-openzcad-project-role': 'owner'
+            };
+            let result: unknown;
+            if (transport === 'http') {
+              const response = await room.fetch(
+                new Request(url, {
+                  method: 'POST',
+                  headers,
+                  body: JSON.stringify({
+                    clientId: 'client_provenance_schema',
+                    baseVersion: null,
+                    document
+                  })
+                })
+              );
+              result = await response.json();
+            } else {
+              const response = await room.fetch(
+                new Request(url, {
+                  headers: { ...headers, upgrade: 'websocket' }
+                })
+              );
+              expect(response.status).toBe(101);
+              const socket = socketGlobals.serverSockets.at(-1)!;
+              await socket.receive(
+                JSON.stringify({
+                  type: 'hello',
+                  clientId: 'client_provenance_schema',
+                  displayName: 'Owner',
+                  baseVersion: null,
+                  document: null
+                })
+              );
+              await socket.receive(
+                JSON.stringify({
+                  type: 'document',
+                  clientId: 'client_provenance_schema',
+                  baseVersion: null,
+                  document
+                })
+              );
+              result = socket.lastFrame();
+            }
+            if (version === 36) {
+              expect(result).toMatchObject({
+                type: 'error',
+                code: 'document-invalid',
+                message:
+                  'Sketch boundary provenance and promotion ownership require project schema v37 or newer.'
+              });
+              expect(values.has('room:latest')).toBe(false);
+            } else {
+              expect(result).toMatchObject({ type: 'ack' });
+              const stored = values.get('room:latest') as ProjectDocument;
+              expect(stored.nodes).toEqual(before.nodes);
+              expect(stored.commandLog).toEqual(before.commandLog);
+            }
+            expect(document).toEqual(before);
+          }
+      }
+    );
+  }
+);

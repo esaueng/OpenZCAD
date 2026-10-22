@@ -4,10 +4,12 @@ import {
   documentEnvelopeError,
   assertDocumentTextBudget,
   drawingSetError,
+  objectFolderSetError,
   hasValidImportedMeshSources,
   hasValidImportedStepSources
 } from '@openzcad/shared';
 import {
+  assertDocumentContentSchema,
   assertReferenceDocumentSchema,
   assertSketchProvenance
 } from '@openzcad/document-core';
@@ -516,11 +518,24 @@ function parseProjectDocument(
     const drawingsError = drawingSetError(record.drawings);
     if (drawingsError) throw badRequest(`"document.drawings": ${drawingsError}`);
   }
+  // U06 folders fail closed in `normalizeDocument` the same way.
+  if (record.objectFolders !== undefined) {
+    const foldersError = objectFolderSetError(record.objectFolders);
+    if (foldersError)
+      throw badRequest(`"document.objectFolders": ${foldersError}`);
+  }
   // I05: the same holds for the reference-image section.
   if (record.referenceImages !== undefined) {
     const imagesError = referenceImageSetError(record.referenceImages);
     if (imagesError)
       throw badRequest(`"document.referenceImages": ${imagesError}`);
+  }
+  try {
+    assertDocumentContentSchema(value as ProjectDocument);
+  } catch (error) {
+    throw badRequest(
+      error instanceof Error ? error.message : 'Invalid project content schema.'
+    );
   }
   // Undo and redo can restore imports that are absent from current nodes.
   // Validate every copy before the document can be saved or shared.

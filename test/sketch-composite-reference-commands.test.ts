@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   CommandManager,
   commandFactories,
@@ -28,6 +28,12 @@ import {
   type SketchComposite,
   type SketchReferenceDimensionData
 } from '@openzcad/shared';
+
+import {
+  createRoomContext,
+  createTestRoom,
+  installWorkerSocketGlobals
+} from './collaboration-room-harness';
 
 function fixture() {
   const line = (
@@ -101,11 +107,11 @@ function managerWithReference(
 
 function withCarrierVersion(
   document: ProjectDocument,
-  version: number | undefined
+  version: unknown
 ): ProjectDocument {
   const saved = structuredClone(document);
   if (version === undefined) Reflect.deleteProperty(saved, 'schemaVersion');
-  else saved.schemaVersion = version as typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
+  else Object.assign(saved, { schemaVersion: version });
   return saved;
 }
 
@@ -519,3 +525,133 @@ describe('S04 composite reference commands', () => {
     }
   });
 });
+
+const compositeUpgrade =
+  /Composite reference targets require project schema v36 or newer/;
+
+it.each(['distance', 'angle'] as const)(
+  'requires a positive integer declared schema for %s composite targets',
+  (kind) => {
+    const f = managerWithReference(kind);
+    for (const version of [null, Number.NaN, '36', 36.5]) {
+      const document = withCarrierVersion(f.manager.document, version);
+      const before = structuredClone(document);
+      expect(() => normalizeDocument(document)).toThrow(/schema/);
+      expect(() => new CommandManager(document)).toThrow(compositeUpgrade);
+      expect(() => replayCommands(document, [])).toThrow(compositeUpgrade);
+      expect(document).toEqual(before);
+    }
+  }
+);
+
+let socketGlobals: ReturnType<typeof installWorkerSocketGlobals>;
+beforeAll(() => {
+  socketGlobals = installWorkerSocketGlobals();
+});
+afterAll(() => {
+  socketGlobals.restore();
+});
+
+describe.each(['http', 'websocket'])(
+  'S04 %s collaboration schema boundary',
+  (transport) => {
+    it.each(['distance', 'angle'] as const)(
+      'refuses backdated and accepts current %s named targets without rewriting',
+      async (kind) => {
+        for (const carrier of ['current', 'nested log'] as const)
+          for (const version of [35, PROJECT_DOCUMENT_SCHEMA_VERSION]) {
+            const f = managerWithReference(kind);
+            const document = withCarrierVersion(f.manager.document, version);
+            delete document.editHistory;
+            if (carrier === 'current') document.commandLog = [];
+            else {
+              delete findSketch(document, f.sketchId)!.referenceDimensions;
+              const command = document.commandLog[0]!;
+              document.commandLog = [
+                {
+                  kind: 'transaction',
+                  label: 'Nested named targets',
+                  replayVersion: 1,
+                  timestamp: '2026-10-22T00:00:00.000Z',
+                  payload: [
+                    {
+                      kind: 'transaction',
+                      label: 'Named target',
+                      replayVersion: 1,
+                      timestamp: '2026-10-22T00:00:00.000Z',
+                      payload: [command]
+                    }
+                  ]
+                }
+              ];
+            }
+            const before = structuredClone(document);
+            const { context, values } = createRoomContext();
+            const room = createTestRoom(context, {});
+            const url = `https://room.test/?projectId=${document.projectId}`;
+            const headers = {
+              'x-openzcad-user-id': document.ownerUserId,
+              'x-openzcad-display-name': 'Owner',
+              'x-openzcad-project-role': 'owner'
+            };
+            let result: unknown;
+            if (transport === 'http') {
+              const response = await room.fetch(
+                new Request(url, {
+                  method: 'POST',
+                  headers,
+                  body: JSON.stringify({
+                    clientId: 'client_composite_schema',
+                    baseVersion: null,
+                    document
+                  })
+                })
+              );
+              result = await response.json();
+            } else {
+              const response = await room.fetch(
+                new Request(url, {
+                  headers: { ...headers, upgrade: 'websocket' }
+                })
+              );
+              expect(response.status).toBe(101);
+              const socket = socketGlobals.serverSockets.at(-1)!;
+              await socket.receive(
+                JSON.stringify({
+                  type: 'hello',
+                  clientId: 'client_composite_schema',
+                  displayName: 'Owner',
+                  baseVersion: null,
+                  document: null
+                })
+              );
+              await socket.receive(
+                JSON.stringify({
+                  type: 'document',
+                  clientId: 'client_composite_schema',
+                  baseVersion: null,
+                  document
+                })
+              );
+              result = socket.lastFrame();
+            }
+            if (version === 35) {
+              expect(result).toMatchObject({
+                type: 'error',
+                code: 'document-invalid',
+                message:
+                  'Composite reference targets require project schema v36 or newer.'
+              });
+              expect(values.has('room:latest')).toBe(false);
+            } else {
+              expect(result).toMatchObject({ type: 'ack' });
+              const stored = values.get('room:latest') as ProjectDocument;
+              expect(stored.nodes).toEqual(before.nodes);
+              expect(stored.commandLog).toEqual(before.commandLog);
+            }
+            expect(document).toEqual(before);
+          }
+      }
+    );
+  }
+);

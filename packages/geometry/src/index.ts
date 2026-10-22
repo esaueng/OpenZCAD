@@ -79,6 +79,17 @@ export {
   type SplineGeometry
 } from './sketch-curves';
 export {
+  SKETCH_PROJECTION_TOLERANCE,
+  orientLikeStored,
+  projectEdgeToSketch,
+  projectPointToSketch,
+  projectableCurveFromTopology,
+  sameProjectedGeometry,
+  type ProjectableEdgeCurve,
+  type SketchProjectionGeometry,
+  type SketchProjectionOutcome
+} from './sketch-projection';
+export {
   DEFAULT_FONT_FAMILY_ID,
   DEFAULT_FONT_STYLE,
   DEFAULT_LINE_HEIGHT,

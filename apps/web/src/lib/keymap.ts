@@ -161,6 +161,8 @@ export const KEYMAP_COMMANDS: readonly KeymapCommand[] = [
   command('sketch-ellipse', 'Ellipse', 'sketch-mode', 'sketch', 'O'),
   command('sketch-spline', 'Spline', 'sketch-mode', 'sketch', 'S'),
   command('sketch-text', 'Text', 'sketch-mode', 'sketch', 'T'),
+  // Pressed again on its tool, it steps between linked and unlinked.
+  command('sketch-project', 'Project edges', 'sketch-mode', 'sketch', 'U'),
   command('sketch-extrude', 'Extrude the sketch', 'sketch-mode', 'sketch', 'E')
 ];
 

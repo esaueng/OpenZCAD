@@ -7119,7 +7119,12 @@ export function ModelViewer({
       }
       rig.setInference(null);
       sketchCenterTarget.hidden = true;
-      if (mode.tool !== 'select' && mode.inferenceEnabled && !event.shiftKey) {
+      if (
+        mode.tool !== 'select' &&
+        mode.tool !== 'project' &&
+        mode.inferenceEnabled &&
+        !event.shiftKey
+      ) {
         showSketchCenterInference(point, snapTargetsRef.current);
       }
       if (
@@ -8719,6 +8724,22 @@ export function ModelViewer({
         const point = sketchPointAt(event);
         const moved = gestures.hasMoved(event);
         gestures.release(event, null);
+        // I01: the Project tool picks model edges and faces through the
+        // sketch plane; the host projects them into the sketch.
+        if (mode.tool === 'project') {
+          if (!moved) {
+            const candidate = picker
+              .pickAll(event)
+              .find(
+                (entry) =>
+                  entry.selection?.kind === 'edge' ||
+                  entry.selection?.kind === 'face'
+              );
+            onSelectTopologyRef.current(candidate?.selection ?? null, false);
+          }
+          requestRender();
+          return;
+        }
         if (mode.tool === 'select' && !moved) {
           setRayFromEvent(event);
           const pickThreshold =
