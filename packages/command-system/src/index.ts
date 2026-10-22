@@ -133,6 +133,7 @@ import {
   findParameterReferences,
   findSketch,
   getParameterScope,
+  listParameters,
   newTypedParameterMisuse,
   parameterKindsOf,
   withParameterKinds,
@@ -194,6 +195,7 @@ import {
   type ReferenceImageUpdateInput,
   type ReferenceImageDeleteInput,
   resolveParamValue,
+  resolvedSketchDocument,
   resolveSketchInput,
   type RevolveInput,
   revolveSketch,
@@ -2770,6 +2772,17 @@ export function commandsForCadPatch(
   }
   const scope = new LocalBodyScope(document);
   let projectedDocument = document;
+  const originalSketchView = resolvedSketchDocument(document);
+  let originalSketchViewValid = true;
+  const sketchReadOnlyAppends = new Set([
+    'add_primitive',
+    'add_sketch',
+    'add_face_sketch',
+    'add_datum_sketch',
+    'add_extrude',
+    'add_multi_profile_extrude',
+    'add_revolve'
+  ]);
   const parameterScope = projectedParameterScope(document, proposal);
   proposal.operations.forEach((operation) =>
     assertOperationExpressions(operation, parameterScope, document.units)
@@ -2796,7 +2809,8 @@ export function commandsForCadPatch(
     { sketchId: SketchId; objects: SketchObjectData[]; objectIds: EntityId[] }
   >();
   const resolveSketch = (
-    reference: string
+    reference: string,
+    needsProfileGeometry: boolean
   ): {
     sketchId: SketchId;
     objects: SketchObjectData[];
@@ -2817,8 +2831,29 @@ export function commandsForCadPatch(
     }
     const objects: SketchObjectData[] = [];
     const objectIds: EntityId[] = [];
+    let readDocument = needsProfileGeometry
+      ? resolvedSketchDocument(projectedDocument)
+      : projectedDocument;
+    if (
+      needsProfileGeometry &&
+      readDocument === projectedDocument &&
+      originalSketchView !== document &&
+      sketch.objectIds.some(
+        (id) => originalSketchView.nodes[id] !== document.nodes[id]
+      )
+    ) {
+      if (!originalSketchViewValid) {
+        throw new Error(
+          `Sketch ${reference} needs an exact rebuild after earlier edits before selecting a profile.`
+        );
+      }
+      // Appended consumers and new parameter names cannot change an existing
+      // sketch at its earlier history position. Keep only its qualified read
+      // snapshot; every command still applies to authored projectedDocument.
+      readDocument = originalSketchView;
+    }
     for (const objectId of sketch.objectIds) {
-      const node = projectedDocument.nodes[objectId];
+      const node = readDocument.nodes[objectId];
       if (node?.kind === 'sketch-object') {
         objects.push(node.data);
         objectIds.push(objectId);
@@ -3306,7 +3341,10 @@ export function commandsForCadPatch(
         });
       }
       case 'add_extrude': {
-        const sketch = resolveSketch(operation.sketchId);
+        const sketch = resolveSketch(
+          operation.sketchId,
+          Boolean(operation.samplePoint)
+        );
         let profile: ExtrudeInput['profile'];
         if (operation.samplePoint) {
           // Resolve the region reference now so the direct-manipulation and
@@ -3354,7 +3392,7 @@ export function commandsForCadPatch(
         return commandFactories.revolveSketch({
           name: operation.name,
           bodyName: numberedBodyName(projectedDocument, proposedName),
-          sketchId: resolveSketch(operation.sketchId).sketchId,
+          sketchId: resolveSketch(operation.sketchId, false).sketchId,
           axis: operation.axis,
           // Null is the schema's way of saying "omitted"; a full turn.
           angleDeg: operation.angleDeg ?? undefined,
@@ -3474,7 +3512,7 @@ export function commandsForCadPatch(
         });
       }
       case 'add_multi_profile_extrude': {
-        const sketch = resolveSketch(operation.sketchId);
+        const sketch = resolveSketch(operation.sketchId, true);
         const regions = computeSketchRegions(
           sketch.objects.map((data, index) => ({
             id: sketch.objectIds[index] ?? `object_${index}`,
@@ -3670,7 +3708,7 @@ export function commandsForCadPatch(
       case 'add_datum_revolve': {
         const ids = createBodyFeatureIds();
         const datumFeatureId = resolveDatumAxis(operation.datum);
-        const sketchId = resolveSketch(operation.sketchId).sketchId;
+        const sketchId = resolveSketch(operation.sketchId, false).sketchId;
         scope.declare(operation.localId, ids.bodyId);
         return commandFactories.revolveSketch({
           name: operation.name,
@@ -3919,9 +3957,21 @@ export function commandsForCadPatch(
   // one transaction.
   const commands: AnyCommand[] = [];
   for (const operation of proposal.operations) {
+    const previousParameter =
+      operation.kind === 'set_parameter'
+        ? listParameters(projectedDocument).find(
+            (parameter) => parameter.name === operation.name.trim()
+          )
+        : undefined;
+    const keepsOriginalSketchReads =
+      sketchReadOnlyAppends.has(operation.kind) ||
+      (operation.kind === 'set_parameter' &&
+        (!previousParameter ||
+          previousParameter.expression === operation.expression));
     const command = commandForOperation(operation);
     command.validate(projectedDocument);
     projectedDocument = command.apply(projectedDocument);
+    originalSketchViewValid &&= keepsOriginalSketchReads;
     commands.push(command);
   }
   return commands;
