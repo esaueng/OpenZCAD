@@ -67,6 +67,9 @@ describe('keymap registry', () => {
       'view-top': '2',
       'view-right': '3',
       'view-iso': '4',
+      'view-back': '5',
+      'view-bottom': '6',
+      'view-left': '7',
       'view-fit': 'F',
       'view-normal-to-face': 'Space',
       'view-grid': 'G',
@@ -211,6 +214,54 @@ describe('remapping', () => {
     expect(keymap.commandFor('H', ['model'])?.id).toBe('view-grid');
     expect(keymap.commandFor('G', ['model'])).toBeNull();
     expect(keymap.label('view-grid')).toBe('H');
+  });
+
+  it.each([
+    ['view-back', '5', '8', 'back-view'],
+    ['view-bottom', '6', '9', 'bottom-view'],
+    ['view-left', '7', '0', 'left-view']
+  ])(
+    'remaps %s in model contexts and the control reference',
+    (id, original, next, referenceId) => {
+      const keymap = resolveKeymap(withBindings({}, id, [next]));
+      expect(DEFAULTS.commandFor(original, ['model'])?.id).toBe(id);
+      expect(keymap.commandFor(original, ['model'])).toBeNull();
+      expect(keymap.commandFor(next, ['model', 'build'])?.id).toBe(id);
+      expect(keymap.commandFor(next, ['model', 'view'])?.id).toBe(id);
+      expect(keymap.commandFor(next, ['sketch'])).toBeNull();
+      const reference = liveKeyboardGroups(keymap)
+        .find((group) => group.id === 'view-display')
+        ?.items.find((item) => item.id === referenceId);
+      expect(reference?.keys).toEqual([next]);
+    }
+  );
+
+  it('keeps saved shortcuts when new view defaults claim their keys', () => {
+    const keymap = resolveKeymap({
+      'view-grid': ['5'],
+      'tool-extrude': ['6'],
+      'assistant-toggle': ['7']
+    });
+    expect(keymap.commandFor('5', ['model', 'build'])?.id).toBe('view-grid');
+    // Model contexts are searched before build: leaving a default active
+    // there would silently steal this formerly valid modeling shortcut.
+    expect(keymap.commandFor('6', ['model', 'build'])?.id).toBe('tool-extrude');
+    expect(keymap.commandFor('7', ['global'])?.id).toBe('assistant-toggle');
+    for (const id of ['view-back', 'view-bottom', 'view-left']) {
+      expect(keymap.bindings(id)).toEqual([]);
+      expect(keymap.label(id)).toBeUndefined();
+    }
+    const back = liveKeyboardGroups(keymap)
+      .find((group) => group.id === 'view-display')
+      ?.items.find((item) => item.id === 'back-view');
+    expect(back?.keys).toEqual([]);
+  });
+
+  it('retains view defaults when an explicit shortcut lives only in a sketch', () => {
+    const keymap = resolveKeymap({ 'sketch-line': ['5'] });
+    expect(keymap.commandFor('5', ['model'])?.id).toBe('view-back');
+    expect(keymap.commandFor('5', ['sketch'])?.id).toBe('sketch-line');
+    expect(keymap.label('view-back')).toBe('5');
   });
 
   it('refuses a taken key and names the command that has it', () => {

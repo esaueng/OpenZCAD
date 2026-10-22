@@ -23,7 +23,14 @@ import type {
   StrictUnionVerdict as BooleanHelperStrictUnionVerdict,
   UnionVerdictsWithMeshBudget
 } from './exact-boolean-helpers';
-import { buildFeature } from './exact-feature-builders';
+import {
+  buildFeature,
+  completePreparedFeatureLineage
+} from './exact-feature-builders';
+import {
+  IdleLineageViewBuilder,
+  type IdleLineageView
+} from './exact-idle-lineage-view';
 import { kernelRefusalRecordOf } from './kernel-refusal';
 import {
   firstManualSuppressionIndex,
@@ -85,6 +92,8 @@ export type StrictUnionVerdict = BooleanHelperStrictUnionVerdict;
  * One shared shape keeps the 21 builders' signatures uniform.
  */
 export interface FeatureBuildContext {
+  /** Build-local alternate metadata, never another kernel or geometry cache. */
+  idleLineageView?: IdleLineageViewBuilder;
   /** Only the terminal face drag may defer output naming for a disposable mesh. */
   deferredDirectEditFeatureId?: FeatureId;
   kernel: RemusKernel;
@@ -150,11 +159,20 @@ function* buildDocumentHistorySteps(
    * the loop replays only `startIndex..end`. The scope errors seeded into
    * fresh warnings below are already inside `initial`.
    */
-  resume?: { startIndex: number; initial: ExactBuildResult },
+  resume?: {
+    startIndex: number;
+    initial: ExactBuildResult;
+    idleLineageView?: IdleLineageView;
+    idleLineageIsCurrent?: boolean;
+  },
   /** Parsed imported-STEP results shared across rebuilds, keyed by checksum. */
   importedSteps?: ImportedStepStore,
   /** Runs after every feature index this call executed, failed included. */
-  onFeature?: (index: number, result: ExactBuildResult) => void,
+  onFeature?: (
+    index: number,
+    result: ExactBuildResult,
+    idleView?: IdleLineageView
+  ) => void,
   /** Diagnostic hook before synchronous feature work begins. */
   onFeatureStart?: (index: number) => void,
   /** Receives the union gate's verdicts; see {@link FeatureBuildContext}. */
@@ -175,7 +193,8 @@ function* buildDocumentHistorySteps(
   lineageDemand?: ReadonlySet<BodyId> | readonly BodyId[],
   /** See {@link FeatureBuildContext.heldDisplayDeflection}. */
   heldDisplayDeflection?: (bodyId: BodyId) => number | undefined,
-  deferredDirectEditFeatureId?: FeatureId
+  deferredDirectEditFeatureId?: FeatureId,
+  trackIdleLineageViews = false
 ): Generator<void, ExactBuildResult> {
   const { scope, errors } = getParameterScope(document);
   // F05: a feature fed a typed parameter as the wrong quantity (a length as
@@ -217,7 +236,16 @@ function* buildDocumentHistorySteps(
     signal === undefined
       ? undefined
       : { signal, token: new OperationCancellationToken() };
+  const idleLineageView = trackIdleLineageViews
+    ? new IdleLineageViewBuilder(
+        document,
+        result,
+        resume?.idleLineageView,
+        resume === undefined || resume.idleLineageIsCurrent === true
+      )
+    : undefined;
   const ctx: FeatureBuildContext = {
+    idleLineageView,
     deferredDirectEditFeatureId,
     kernel,
     document,
@@ -241,6 +269,7 @@ function* buildDocumentHistorySteps(
       // in-flight WASM call still runs to completion, everything after it
       // does not start.
       throwIfBuildCancelled(signal);
+      idleLineageView?.begin(result);
       onFeatureStart?.(index);
       if (isFeatureSuppressed(feature)) {
         const message = `Feature "${feature.name}": Suppressed; skipped during exact rebuild.`;
@@ -252,7 +281,7 @@ function* buildDocumentHistorySteps(
         // A skipped step that replaced one body leaves that body, unchanged,
         // where its dependents look for the result (F1 follow-up).
         passSuppressedFeatureThrough(result, feature);
-        onFeature?.(index, result);
+        onFeature?.(index, result, idleLineageView?.finish(feature, result));
         yield;
         continue;
       }
@@ -262,11 +291,14 @@ function* buildDocumentHistorySteps(
         if (!primitiveReuse?.restore(index, feature, result)) {
           buildFeature(ctx, feature);
           primitiveReuse?.store(index, feature, result);
+        } else {
+          completePreparedFeatureLineage(ctx, feature);
         }
         if (firstSuppressed >= 0 && index > firstSuppressed) {
           withholdReferenceRepairs(result, feature);
         }
       } catch (error) {
+        idleLineageView?.abandon();
         // Cancellation is not a feature verdict: recording it as a warning
         // would continue the build it exists to stop, and commit a partial
         // result as if the remaining features had run.
@@ -289,7 +321,7 @@ function* buildDocumentHistorySteps(
           kernelRefusalRecordOf(error)
         );
       }
-      onFeature?.(index, result);
+      onFeature?.(index, result, idleLineageView?.finish(feature, result));
       yield;
     }
     return result;

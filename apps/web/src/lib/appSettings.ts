@@ -2,6 +2,7 @@ import {
   CLOUD_AUTOSAVE_DELAY_BOUNDS,
   DEFAULT_APP_SETTINGS,
   EXPORT_UNITS,
+  normalizeHiddenRelationGlyphs,
   PANEL_WIDTH_LIMITS,
   VIEWPORT_FIELD_OF_VIEW_BOUNDS,
   XRAY_OPACITY_BOUNDS,
@@ -271,6 +272,9 @@ export function normalizeAppSettings(value: unknown): AppSettings {
         sketching.relationGlyphs,
         RELATION_GLYPHS,
         defaults.sketching.relationGlyphs
+      ),
+      hiddenRelationGlyphs: normalizeHiddenRelationGlyphs(
+        sketching.hiddenRelationGlyphs
       )
     },
     files: {

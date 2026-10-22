@@ -184,7 +184,11 @@ test('lays out, places, exports and fences a drawing sheet', async ({
       )
     )
     .toBe(121);
-  await expect(reopened.getByRole('status')).toHaveCount(0);
+  // The reopened model rebuilds before the sheet can read ready; headless
+  // runs stall seconds on first open, past the default 5 s.
+  await expect(reopened.getByRole('status')).toHaveCount(0, {
+    timeout: 30_000
+  });
 });
 
 async function exportSheet(
@@ -219,6 +223,12 @@ test('exports the same bytes after a reload re-meshes the model', async ({
   await expect(
     page.locator('.feature-row-main', { hasText: 'Cylinder' })
   ).toBeVisible();
+  // Edit only once the creation has rebuilt: an edit opened against the
+  // rebuilding model is refused ("The model changed").
+  await expect(page.getByRole('contentinfo')).not.toContainText(
+    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i,
+    { timeout: 60_000 }
+  );
   // R20 → R21 stays inside the display mesh's held-deflection band, so this
   // session keeps meshing the disc at the R20 value; a reload meshes it at
   // the R21 nominal value.
@@ -253,7 +263,11 @@ test('exports the same bytes after a reload re-meshes the model', async ({
     name: 'Sheet Sheet 1'
   });
   await expect(reopenedCanvas).toBeVisible({ timeout: 30_000 });
-  await expect(reopened.getByRole('status')).toHaveCount(0);
+  // The reopened model rebuilds before the sheet can read ready; headless
+  // runs stall seconds on first open, past the default 5 s.
+  await expect(reopened.getByRole('status')).toHaveCount(0, {
+    timeout: 30_000
+  });
   await expect(
     reopenedCanvas.locator('.drawing-view.is-placeholder')
   ).toHaveCount(0, { timeout: 30_000 });

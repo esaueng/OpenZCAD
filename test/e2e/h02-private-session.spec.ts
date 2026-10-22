@@ -440,15 +440,32 @@ test('private holder survives sustained edits, retirement, refusal and worker re
     }
     await checkpoint(`block-${block + 1}`);
   }
-  expect(
-    caches.some((event) => event.recycleReason === 'replay-budget'),
-    'The private session must cross the unchanged replay recycling budget'
-  ).toBe(true);
+  // Missing lifetime coverage still fails acceptance. Collect independent
+  // refusal/restart observations even when a candidate rebuilds fresh arenas.
+  const replayBudgetRecycles = caches.filter(
+    (event) => event.recycleReason === 'replay-budget'
+  ).length;
+  expect
+    .soft(
+      caches.some((event) => event.recycleReason === 'replay-budget'),
+      'The private session must cross the unchanged replay recycling budget'
+    )
+    .toBe(true);
   const previousValue = await field.inputValue();
   const beforeRefusal = await probe.evaluate<Observation>(
     'globalThis.__h02Session.snapshot()'
   );
-  expect(beforeRefusal.retiredCheckpoints).toBeGreaterThan(0);
+  record({
+    phase: 'lifetime-coverage',
+    replayBudgetRecycles,
+    retiredCheckpoints: beforeRefusal.retiredCheckpoints
+  });
+  expect
+    .soft(
+      beforeRefusal.retiredCheckpoints,
+      'The private session must exercise checkpoint retirement'
+    )
+    .toBeGreaterThan(0);
   expect(beforeRefusal.memo.evictions).toBeGreaterThan(0);
   await field.fill('-1');
   await field.press('Enter');

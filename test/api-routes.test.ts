@@ -11,6 +11,7 @@ import {
 import {
   DEFAULT_APP_SETTINGS,
   MAX_ARTIFACT_UPLOAD_PARTS,
+  MAX_CLOUD_PROJECT_WRITE_BYTES,
   MAX_PROJECT_NAME_LENGTH,
   projectOrganization,
   toUserId,
@@ -1283,6 +1284,52 @@ describe('worker api routes', () => {
     );
     expect(changed.status).toBe(200);
     expect(storedSettings.sketching.relationGlyphs).toBe('always');
+
+    // A tab from before the per-kind filter keeps the stored filter, while a
+    // newer one that sends an empty filter clears it.
+    const filtered = structuredClone(storedSettings);
+    filtered.sketching.hiddenRelationGlyphs = ['coincident', 'lock'];
+    expect(
+      (
+        await worker.fetch(
+          patch('/api/settings', { settings: filtered, expectedRevision: 3 }),
+          workerEnv
+        )
+      ).status
+    ).toBe(200);
+    const beforeFilter = structuredClone(storedSettings) as unknown as {
+      appearance: { theme: string };
+      sketching: Record<string, unknown>;
+    };
+    delete beforeFilter.sketching.hiddenRelationGlyphs;
+    beforeFilter.appearance.theme = 'light';
+    expect(
+      (
+        await worker.fetch(
+          patch('/api/settings', {
+            settings: beforeFilter,
+            expectedRevision: 4
+          }),
+          workerEnv
+        )
+      ).status
+    ).toBe(200);
+    expect(storedSettings.appearance.theme).toBe('light');
+    expect(storedSettings.sketching.hiddenRelationGlyphs).toEqual([
+      'coincident',
+      'lock'
+    ]);
+    const cleared = structuredClone(storedSettings);
+    cleared.sketching.hiddenRelationGlyphs = [];
+    expect(
+      (
+        await worker.fetch(
+          patch('/api/settings', { settings: cleared, expectedRevision: 5 }),
+          workerEnv
+        )
+      ).status
+    ).toBe(200);
+    expect(storedSettings.sketching.hiddenRelationGlyphs).toEqual([]);
   });
 
   it('keeps the stored field of view and X-ray opacity when an older client omits them', async () => {
@@ -2742,7 +2789,7 @@ describe('worker api routes', () => {
       new Request('https://example.com/api/projects', {
         method: 'POST',
         body: '{}',
-        headers: { 'content-length': String(30 * 1024 * 1024) }
+        headers: { 'content-length': String(MAX_CLOUD_PROJECT_WRITE_BYTES + 1) }
       }),
       env
     );
@@ -2777,7 +2824,9 @@ describe('worker api routes', () => {
     'rejects an oversized stream $description with 413',
     async ({ contentLength }) => {
       const chunk = new Uint8Array(1024 * 1024).fill(0x20);
-      let chunksRemaining = 26;
+      // Past the document-write ceiling, which leaves room for base64 uploads.
+      let chunksRemaining =
+        Math.ceil(MAX_CLOUD_PROJECT_WRITE_BYTES / chunk.length) + 1;
       const body = new ReadableStream<Uint8Array>({
         pull(controller) {
           if (chunksRemaining === 0) {
