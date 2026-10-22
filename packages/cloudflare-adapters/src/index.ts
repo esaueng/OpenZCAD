@@ -149,6 +149,7 @@ import {
   createSavedRevision,
   createProjectDocument,
   duplicateProjectDocument,
+  assertDocumentContentSchema,
   normalizeDocument,
   withoutDerivedProjection
 } from '@openzcad/document-core';
@@ -375,10 +376,7 @@ export function projectCollaborationRollout(
  * routes: the global flag, or the account's email on the canary allowlist.
  * Both default closed.
  */
-export function isE2eeKeysEnabled(
-  env: CloudflareEnv,
-  email?: string
-): boolean {
+export function isE2eeKeysEnabled(env: CloudflareEnv, email?: string): boolean {
   if (isCloudflareFeatureEnabled(env, 'E2EE_KEYS_ENABLED')) return true;
   const normalizedEmail = email?.trim().toLowerCase();
   return Boolean(
@@ -6495,7 +6493,8 @@ export class ProjectCollaborationRoom extends DurableObject {
             userId,
             projectId,
             artifactId,
-            payload.kind as 'stl-import' | 'mesh-import' | 'reference-image' | undefined
+            payload.kind as
+              'stl-import' | 'mesh-import' | 'reference-image' | undefined
           )
         );
       }
@@ -8187,6 +8186,17 @@ function checkClientDocument(value: unknown): CollaborationRejection | null {
     return {
       code: 'document-invalid',
       message: `Collaboration document has invalid Objects folders: ${foldersError}`
+    };
+  }
+  try {
+    assertDocumentContentSchema(value as unknown as ProjectDocument);
+  } catch (error) {
+    return {
+      code: 'document-invalid',
+      message:
+        error instanceof Error
+          ? error.message
+          : 'Invalid project content schema.'
     };
   }
   return null;

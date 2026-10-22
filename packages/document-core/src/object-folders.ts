@@ -1,3 +1,4 @@
+import { assertObjectFolderSchema } from './document-content-schema';
 import {
   assertObjectFolderSet,
   deepClone,
@@ -45,6 +46,7 @@ function withFolders(
   document: ProjectDocument,
   edit: (set: ObjectFolderSet) => ObjectFolderSet
 ): ProjectDocument {
+  assertObjectFolderSchema(document.schemaVersion);
   const before = document.objectFolders ?? EMPTY;
   const after = edit(deepClone(before));
   // A move that changes nothing returns the same document, which the command

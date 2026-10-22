@@ -1,3 +1,4 @@
+import { assertDocumentContentSchema } from '@openzcad/document-core';
 import {
   assertDocumentHistory,
   documentStructureError,
@@ -509,6 +510,13 @@ function parseProjectDocument(
     const imagesError = referenceImageSetError(record.referenceImages);
     if (imagesError)
       throw badRequest(`"document.referenceImages": ${imagesError}`);
+  }
+  try {
+    assertDocumentContentSchema(value as ProjectDocument);
+  } catch (error) {
+    throw badRequest(
+      error instanceof Error ? error.message : 'Invalid project content schema.'
+    );
   }
   // Undo and redo can restore imports that are absent from current nodes.
   // Validate every copy before the document can be saved or shared.

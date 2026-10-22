@@ -23,6 +23,11 @@ import { assertSketchComposites, compositesWithout } from './sketch-composites';
 import { assertSketchObjectProjection } from './sketch-projections';
 export * from './sketch-composites';
 export * from './sketch-projections';
+import {
+  assertDocumentContentSchema,
+  assertSketchObjectContentSchema
+} from './document-content-schema';
+export * from './document-content-schema';
 export * from './drawings';
 export * from './object-folders';
 export * from './reference-images';
@@ -864,6 +869,7 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
     );
   }
   const document = withReadableHistory(input);
+  assertDocumentContentSchema(document);
   // Schema v30 drawings (v31 annotations): validated as written, never
   // synthesized or rewritten.
   assertDrawingSet(document.drawings);
@@ -1349,7 +1355,9 @@ export function addSketchFeature(
     objectIds: objectNodeIds
   };
 
-  objects.forEach((object) => assertSketchObjectProjection(object));
+  objects.forEach((object) =>
+    assertSketchObjectContentSchema(object, document.schemaVersion)
+  );
   objects.forEach((object, index) => {
     const objectNodeId = objectNodeIds[index]!;
     next.nodes[objectNodeId] = {
@@ -1389,6 +1397,8 @@ export function updateSketch(
   document: ProjectDocument,
   input: SketchUpdateInput
 ): ProjectDocument {
+  if (input.object !== undefined)
+    assertSketchObjectContentSchema(input.object, document.schemaVersion);
   const next = cloneDocument(document);
   const sketch = findSketch(next, input.sketchId);
   if (!sketch) {
@@ -1578,7 +1588,9 @@ export function addSketchObjects(
   const objectNodeIds = input.objects.map(
     (_, index) => input.ids?.objectNodeIds[index] ?? toEntityId(createId('ent'))
   );
-  input.objects.forEach((object) => assertSketchObjectProjection(object));
+  input.objects.forEach((object) =>
+    assertSketchObjectContentSchema(object, document.schemaVersion)
+  );
   input.objects.forEach((object, index) => {
     const objectNodeId = objectNodeIds[index]!;
     next.nodes[objectNodeId] = {
@@ -1618,7 +1630,11 @@ export function updateSketchObject(
   document: ProjectDocument,
   input: SketchObjectUpdateInput
 ): ProjectDocument {
-  assertSketchObjectProjection(input.data, input.objectId);
+  assertSketchObjectContentSchema(
+    input.data,
+    document.schemaVersion,
+    input.objectId
+  );
   const next = cloneDocument(document);
   const { objectNode } = requireSketchObject(
     next,

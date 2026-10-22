@@ -94,6 +94,8 @@ import {
   normalizeDocumentHistory,
   addPrimitiveFeature,
   addSketchConstraint,
+  assertDocumentContentSchema,
+  assertDocumentContentCommandSchema,
   addSketchFeature,
   addSketchObjects,
   addDatumAxis,
@@ -4077,6 +4079,7 @@ export class CommandManager {
     private readonly actorUserId: UserId = document.ownerUserId
   ) {
     assertDocumentHistory(document);
+    assertDocumentContentSchema(document);
   }
 
   private get history() {
@@ -4350,6 +4353,12 @@ export function replayCommands(
   initialDocument: ProjectDocument,
   serializedCommands: SerializedCommand[]
 ): ProjectDocument {
+  assertDocumentHistory(initialDocument);
+  assertDocumentContentSchema(initialDocument);
+  assertDocumentContentCommandSchema({
+    schemaVersion: initialDocument.schemaVersion,
+    commandLog: serializedCommands
+  });
   let next = deepClone(initialDocument);
   next.commandLog = [];
   next.revisions = initialDocument.revisions.slice(0, 1);
