@@ -20,6 +20,7 @@ import {
   type SketchObjectData
 } from '@openzcad/shared';
 import type { ExactBuildResult, ImportedStepDiagnostics } from './exact-types';
+import { assertFeatureSketchProjectionsValid } from './exact-sketch-projection-failures';
 import type {
   StrictUnionVerdict as BooleanHelperStrictUnionVerdict,
   UnionVerdictsWithMeshBudget
@@ -291,6 +292,7 @@ function* buildDocumentHistorySteps(
       try {
         const wrongQuantity = misuse.get(feature.featureId);
         if (wrongQuantity) throw new Error(wrongQuantity);
+        assertFeatureSketchProjectionsValid(result, feature.data);
         if (!primitiveReuse?.restore(index, feature, result)) {
           buildFeature(ctx, feature);
           primitiveReuse?.store(index, feature, result);

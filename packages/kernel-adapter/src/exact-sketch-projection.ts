@@ -1,5 +1,13 @@
-import type { RemusKernel } from './remus-runtime';
-import { listFeaturesInOrder } from '@openzcad/document-core';
+import { RemusKernel } from './remus-runtime';
+import {
+  getParameterScope,
+  listFeaturesInOrder,
+  resolveParamValue
+} from '@openzcad/document-core';
+import {
+  solveDocumentSketchWithGcs,
+  sketchDataFromSolvedObject
+} from './gcs-sketch-document';
 import {
   orientLikeStored,
   projectEdgeToSketch,
@@ -51,31 +59,96 @@ export function resolveSketchProjectionsAtHistory(
   result: ExactBuildResult
 ): void {
   const candidatesByBody = new Map<string, EdgeTopologyResolutionCandidate[]>();
-  for (const objectId of sketch.objectIds) {
-    const node = document.nodes[objectId];
-    if (node?.kind !== 'sketch-object') continue;
-    const projection = node.data.projection;
-    if (projection?.mode !== 'linked') continue;
-    const state = resolveOne(
-      kernel,
-      document,
-      node.data,
-      projection.source,
-      basis,
-      result,
-      candidatesByBody
-    );
-    (result.sketchProjections ??= new Map()).set(objectId, state);
-    if (state.status === 'moved') {
-      (result.sketchObjectOverrides ??= new Map()).set(objectId, state.data);
-    } else {
-      result.sketchObjectOverrides?.delete(objectId);
+  const states = new Map<string, SketchProjectionState>();
+  const overrides = new Map<string, SketchObjectData>();
+  const linked = new Set<string>();
+  try {
+    for (const objectId of sketch.objectIds) {
+      const node = document.nodes[objectId];
+      if (node?.kind !== 'sketch-object') continue;
+      const projection = node.data.projection;
+      if (projection?.mode !== 'linked') continue;
+      linked.add(objectId);
+      const state = resolveOne(
+        kernel,
+        document,
+        node.data,
+        projection.source,
+        basis,
+        result,
+        candidatesByBody
+      );
+      states.set(objectId, state);
+      if (state.status === 'moved') {
+        overrides.set(objectId, state.data);
+      }
     }
+    // Write-back normalizes only linked entities. Their ordinary constrained
+    // neighbours must therefore be solved on cold/current builds as well.
+    if (linked.size > 0 && (sketch.constraints?.length ?? 0) > 0) {
+      const nodes = { ...document.nodes };
+      for (const [objectId, data] of overrides) {
+        const node = nodes[objectId];
+        if (node?.kind === 'sketch-object') nodes[objectId] = { ...node, data };
+      }
+      const projected = { ...document, nodes };
+      // GCS sketches live until their kernel is freed; keep scratch out of the
+      // retained history kernel and its checkpoints.
+      const solver = new RemusKernel();
+      try {
+        const solved = solveDocumentSketchWithGcs(solver, projected, sketch);
+        if (
+          !solved.converged ||
+          solved.rolledBack ||
+          solved.classification === 'unsatisfied'
+        )
+          throw new Error(
+            'Persistent sketch relations cannot follow the linked projections. No projected geometry was applied.'
+          );
+        const { scope } = getParameterScope(projected);
+        for (const object of solved.objects) {
+          if (linked.has(object.objectId)) continue;
+          const node = nodes[object.objectId];
+          if (node?.kind !== 'sketch-object') continue;
+          const data = sketchDataFromSolvedObject(
+            node.data,
+            object,
+            (value, label) =>
+              resolveParamValue(value, scope, label, document.units)
+          );
+          if (data !== node.data) overrides.set(object.objectId, data);
+        }
+      } finally {
+        solver.free();
+      }
+    }
+  } catch (error) {
+    for (const objectId of sketch.objectIds) {
+      result.sketchObjectOverrides?.delete(objectId);
+      result.sketchProjections?.delete(objectId);
+    }
+    (result.sketchProjectionFailures ??= new Map()).set(
+      sketch.sketchId,
+      error instanceof Error
+        ? error.message
+        : 'Linked sketch projections could not be solved.'
+    );
+    throw error;
+  }
+  result.sketchProjectionFailures?.delete(sketch.sketchId);
+  for (const objectId of sketch.objectIds) {
+    const data = overrides.get(objectId);
+    if (data) (result.sketchObjectOverrides ??= new Map()).set(objectId, data);
+    else result.sketchObjectOverrides?.delete(objectId);
+    const state = states.get(objectId);
+    if (!state) continue;
+    (result.sketchProjections ??= new Map()).set(objectId, state);
     if (state.status === 'broken') {
+      const node = document.nodes[objectId];
       raiseFeatureWarning(
         result,
         feature,
-        `Projected ${node.data.objectKind} ${objectId} is broken: ${state.reason} The sketch keeps its last projected position until the edge is re-picked or the projection is unlinked.`,
+        `Projected ${node?.kind === 'sketch-object' ? node.data.objectKind : 'entity'} ${objectId} is broken: ${state.reason} The sketch keeps its last projected position until the edge is re-picked or the projection is unlinked.`,
         'advisory'
       );
     }
@@ -134,9 +207,14 @@ function resolveOne(
     );
   }
   const edge = resolution.candidate.value as number;
-  const outcome = projectEdgeToSketch(projectableEdgeCurve(kernel, edge), basis);
+  const outcome = projectEdgeToSketch(
+    projectableEdgeCurve(kernel, edge),
+    basis
+  );
   if (outcome.status === 'refused') {
-    return broken(`its source edge from "${sourceFeatureName}": ${outcome.reason}`);
+    return broken(
+      `its source edge from "${sourceFeatureName}": ${outcome.reason}`
+    );
   }
   if (outcome.data.objectKind !== stored.objectKind) {
     return broken(
