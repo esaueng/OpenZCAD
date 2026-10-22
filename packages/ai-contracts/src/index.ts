@@ -2,7 +2,8 @@ import {
   findSketch,
   isValidParameterName,
   listFeaturesInOrder,
-  listParameters
+  listParameters,
+  resolvedSketchDocument
 } from '@openzcad/document-core';
 import {
   isFeatureSuppressed,
@@ -1050,7 +1051,7 @@ function compactFeatureData(document: ProjectDocument, data: unknown): unknown {
       return feature;
     }
     const sketchObjects = sketch.objectIds.flatMap((objectId) => {
-      const object = document.nodes[objectId];
+      const object = resolvedSketchDocument(document).nodes[objectId];
       return object?.kind === 'sketch-object'
         ? [{ objectId, data: object.data }]
         : [];

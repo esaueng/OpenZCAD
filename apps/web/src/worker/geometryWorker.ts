@@ -31,7 +31,8 @@ import type {
 import {
   ExactRebuildCache,
   LatestBroadcastGate,
-  geometryContentKey
+  geometryContentKey,
+  rebindSketchGeometryForContent
 } from './exactRebuildCache';
 import { GeometryWorkerQueue } from './geometryWorkerQueue';
 import { geometryYield } from './geometryYield';
@@ -1021,7 +1022,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       request.type === 'sync' && request.lineageDemand !== undefined
         ? `:lazy:${JSON.stringify([...new Set(request.lineageDemand)].sort())}`
         : '';
-    const derived =
+    const cachedDerived =
       contentKey === null
         ? emptyDerived(document)
         : await rebuildCache.get(
@@ -1120,6 +1121,10 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
               return result;
             }
           );
+    const derived =
+      contentKey === null
+        ? cachedDerived
+        : rebindSketchGeometryForContent(document, cachedDerived, contentKey);
     if (!broadcastGate.isCurrent(job.broadcastToken)) {
       return;
     }

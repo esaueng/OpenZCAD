@@ -3026,6 +3026,17 @@ export interface DerivedState {
    * Unlinked projections and sketches the build did not reach are absent.
    */
   sketchProjections?: Record<string, SketchProjectionState>;
+  /**
+   * Session geometry from this exact build, including ordinary entities solved
+   * against linked projections. Readers require both source identifiers to
+   * match; authored nodes, expressions and history remain unchanged. Attaching
+   * a result keeps this channel out of persisted documents.
+   */
+  sketchGeometry?: {
+    projectId: ProjectId;
+    documentVersion: number;
+    objects: Record<string, SketchObjectData>;
+  };
   exportableBodyIds: BodyId[];
   warnings: string[];
   updatedAt: string;

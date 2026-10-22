@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument } from '@openzcad/document-core';
-import { toUserId } from '@openzcad/shared';
+import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
   ExactRebuildCache,
   LatestBroadcastGate,
-  canonicalProjectContentKey
+  canonicalProjectContentKey,
+  geometryContentKey,
+  rebindSketchGeometryForContent
 } from './exactRebuildCache';
 
 function deferred<T>() {
@@ -180,5 +182,80 @@ describe('newest broadcast publication', () => {
     expect(gate.isCurrent(running)).toBe(false);
     expect(gate.isCurrent(newest)).toBe(true);
     expect(gate.isCurrent(gate.issue(false))).toBe(true);
+  });
+});
+
+describe('content-proven cached sketch geometry', () => {
+  it('requalifies a cached solve across bookkeeping versions without changing its stored proof', async () => {
+    const document = createProjectDocument('Cached solve', toUserId('user'));
+    const derived: ProjectDocument['derived'] = {
+      ...document.derived,
+      sketchGeometry: {
+        projectId: document.projectId,
+        documentVersion: document.version,
+        objects: {
+          ent_line: { objectKind: 'line', x1: 0, y1: 0, x2: 32, y2: 0 }
+        }
+      }
+    };
+    const key = geometryContentKey(document);
+    const cache = new ExactRebuildCache<ProjectDocument['derived']>({
+      maxEntries: 2,
+      maxBytes: 100000,
+      maxInFlight: 2
+    });
+    const load = vi.fn(async () => derived);
+    await cache.get(key, load);
+    const target = {
+      ...document,
+      version: document.version + 8,
+      drawings: { sheets: [] },
+      referenceImages: { images: [] }
+    };
+    expect(geometryContentKey(target)).toBe(key);
+    const cached = await cache.get(geometryContentKey(target), load);
+    const rebound = rebindSketchGeometryForContent(target, cached, key);
+    expect(rebound.sketchGeometry?.documentVersion).toBe(target.version);
+    expect(rebound.sketchGeometry?.objects).toEqual(
+      derived.sketchGeometry?.objects
+    );
+    expect(structuredClone(rebound).sketchGeometry).toBeDefined();
+    expect(cached.sketchGeometry?.documentVersion).toBe(document.version);
+    expect((await cache.get(key, load)).sketchGeometry?.documentVersion).toBe(
+      document.version
+    );
+    expect(load).toHaveBeenCalledOnce();
+  });
+  it('drops overlays when the cached source key or project does not prove the target geometry', () => {
+    const document = createProjectDocument('Cached solve', toUserId('user'));
+    const derived: ProjectDocument['derived'] = {
+      ...document.derived,
+      sketchGeometry: {
+        projectId: document.projectId,
+        documentVersion: document.version,
+        objects: {}
+      }
+    };
+    const key = geometryContentKey(document);
+    const changed = {
+      ...document,
+      version: document.version + 1,
+      units: 'cm' as const
+    };
+    expect(
+      rebindSketchGeometryForContent(changed, derived, key).sketchGeometry
+    ).toBeUndefined();
+    const foreign = {
+      ...document,
+      projectId: `${document.projectId}_foreign` as typeof document.projectId
+    };
+    expect(
+      rebindSketchGeometryForContent(
+        foreign,
+        derived,
+        geometryContentKey(foreign)
+      ).sketchGeometry
+    ).toBeUndefined();
+    expect(derived.sketchGeometry?.documentVersion).toBe(document.version);
   });
 });

@@ -3501,6 +3501,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         ...(build.sketchProjections?.size
           ? { sketchProjections: Object.fromEntries(build.sketchProjections) }
           : {}),
+        ...(build.sketchObjectOverrides?.size
+          ? {
+              sketchGeometry: {
+                projectId: document.projectId,
+                documentVersion: document.version,
+                objects: Object.fromEntries(build.sketchObjectOverrides)
+              }
+            }
+          : {}),
         ...(build.faceReferenceRepairs?.length
           ? { faceReferenceRepairs: build.faceReferenceRepairs }
           : {}),

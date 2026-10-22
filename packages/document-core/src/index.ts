@@ -926,6 +926,12 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
       }
     } satisfies SketchNode;
   }
+  // Session geometry is never trusted on load, even if its saved clock matches.
+  let persistedDerived = document.derived;
+  if (persistedDerived && Object.hasOwn(persistedDerived, 'sketchGeometry')) {
+    const { sketchGeometry: _sessionGeometry, ...persisted } = persistedDerived;
+    persistedDerived = persisted;
+  }
   // Schema v4 -> v5 topology references, v5 -> v6 modeling feature kinds,
   // v6 -> v7 text sketch objects plus entity-wide profile references,
   // v7 -> v8 advanced modeling feature kinds, and v8 -> v9 sketch
@@ -946,6 +952,9 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   return {
     ...document,
     schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION,
+    ...(persistedDerived !== document.derived
+      ? { derived: persistedDerived }
+      : {}),
     nodes,
     parameterOrder: document.parameterOrder ?? [],
     featureOrder: document.featureOrder ?? [],
@@ -5252,11 +5261,24 @@ export function attachDerivedState(
   // that computed them; stripping them here keeps stale lists out of saved and
   // replayed documents.
   const {
+    sketchGeometry,
     referenceRepairs: _referenceRepairs,
     faceReferenceRepairs: _faceReferenceRepairs,
     featureWarnings: _featureWarnings,
     ...persisted
   } = derived;
+  if (
+    sketchGeometry?.projectId === document.projectId &&
+    sketchGeometry.documentVersion === document.version
+  ) {
+    // Keep live display geometry through immutable command copies, but never
+    // serialize it into JSON, structuredClone/IDB, native files or history.
+    Object.defineProperty(persisted, 'sketchGeometry', {
+      value: sketchGeometry,
+      enumerable: false,
+      configurable: true
+    });
+  }
   return { ...document, derived: persisted };
 }
 
@@ -6704,3 +6726,5 @@ export {
   keyableImportedNodeData,
   keyableImportedNodes
 } from './imported-payload-key';
+
+export { resolvedSketchDocument } from './sketch-geometry';
