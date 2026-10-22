@@ -17,7 +17,6 @@ import {
   toUserId,
   type CreateProjectResponse,
   type DocumentChange,
-  type ProjectDocument,
   type SerializedCommand,
   type SketchObjectData
 } from '@openzcad/shared';
@@ -320,7 +319,9 @@ it.each(carriers)(
     const { document: original } =
       (await created.json()) as CreateProjectResponse;
     const path = `/api/projects/${original.projectId}`;
-    const before = await (await worker.fetch(request(path, 'GET'), env)).json();
+    const before: unknown = await (
+      await worker.fetch(request(path, 'GET'), env)
+    ).json();
     const f = fixture(original);
     for (const malformed of [true, false]) {
       const document = carried(
