@@ -8,6 +8,7 @@ import {
 } from '@openzcad/document-core';
 import { frameForPlaneRef } from '@openzcad/geometry';
 import {
+  edgeTopologyWitnessHash,
   toBodyId,
   toUserId,
   type BodyRepresentation,
@@ -42,7 +43,7 @@ const basis = frameForPlaneRef(plane, (value) => Number(value));
 const bodyId = toBodyId('body_block');
 
 function reference(name: string, hash: number): EdgeTopologyReferenceV5 {
-  return {
+  const result: EdgeTopologyReferenceV5 = {
     kind: 'edge',
     producingFeatureId: 'feat_block' as FeatureId,
     lineageName: name,
@@ -59,6 +60,8 @@ function reference(name: string, hash: number): EdgeTopologyReferenceV5 {
       midpoint: [0, 0, 0]
     }
   };
+  result.currentHash = edgeTopologyWitnessHash(result.witness);
+  return result;
 }
 
 const line = (
@@ -451,6 +454,28 @@ describe('repair, unlink and the words for each', () => {
         projection: replacement.projection
       })
     ).toThrow(/projects to a line/);
+  });
+
+  it('keeps constrained start and end identity when a re-picked line runs backward', () => {
+    const replacement: SketchObjectData = {
+      objectKind: 'line',
+      x1: 1.25,
+      y1: 0.25,
+      x2: 0.25,
+      y2: 0.25,
+      projection: {
+        mode: 'linked',
+        source: { bodyId, edgeReference: reference('edge.repicked', 2) }
+      }
+    };
+    const before = structuredClone(replacement);
+    expect(repickedProjectionData(linked, replacement)).toEqual({
+      ...replacement,
+      x1: 0.25,
+      x2: 1.25,
+      construction: true
+    });
+    expect(replacement).toEqual(before);
   });
 
   it('refuses a candidate whose new projection the build could not re-find', () => {

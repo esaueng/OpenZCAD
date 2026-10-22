@@ -10,6 +10,7 @@ export * from './mass-density';
 export * from './keymap-settings';
 export * from './drawings';
 export * from './drawing-annotations';
+export * from './topology-reference';
 export * from './reference-images';
 import type { DocumentHistory } from './document-history';
 import type { KeymapOverrides } from './keymap-settings';

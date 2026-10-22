@@ -16,7 +16,7 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
-import { toUserId } from '@openzcad/shared';
+import { edgeTopologyWitnessHash, toUserId } from '@openzcad/shared';
 import type {
   BodyId,
   DerivedState,
@@ -231,6 +231,8 @@ describe('booleanEvolutionProbeNeeded', () => {
         }
       }
     };
+    const source = object.projection!.source!;
+    source.edgeReference.currentHash = edgeTopologyWitnessHash(source.edgeReference.witness);
     const projected = addSketchFeature(document, {
       name: 'Stored projection',
       plane: 'XY',
