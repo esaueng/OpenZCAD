@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { createProjectDocument } from '@openzcad/document-core';
+import {
+  addSketchFeature,
+  createProjectDocument,
+  findSketch
+} from '@openzcad/document-core';
 import {
   toBodyId,
   toUserId,
@@ -158,6 +162,34 @@ function digestDocument() {
 }
 
 describe('AI deterministic modeling operation contracts', () => {
+  it('publishes matching solved sketch geometry without changing authored expressions or accepting stale geometry', () => {
+    const added = addSketchFeature(
+      createProjectDocument('Solved AI context', toUserId('user_digest')),
+      {
+        name: 'Outline',
+        plane: 'XY',
+        objects: [{ objectKind: 'line', x1: 0, y1: 0, x2: '20', y2: 0 }]
+      }
+    );
+    const document = added.document;
+    const id = findSketch(document, added.sketchId)!.objectIds[0]!;
+    document.derived.sketchGeometry = {
+      projectId: document.projectId,
+      documentVersion: document.version,
+      objects: { [id]: { objectKind: 'line', x1: 0, y1: 0, x2: 32, y2: 0 } }
+    };
+    const before = structuredClone(document);
+    const readSketch = () =>
+      createCadDocumentDigest(document).features.find(
+        (feature) => feature.featureKind === 'sketch'
+      )?.data;
+    expect(readSketch()).toMatchObject({ objects: [{ x2: 32 }] });
+    expect(document).toEqual(before);
+    document.version += 1;
+    expect(readSketch()).toMatchObject({ objects: [{ x2: '20' }] });
+    expect(document.nodes[id]).toMatchObject({ data: { x2: '20' } });
+  });
+
   it('publishes exact face references, snapshots, and deterministic attachment frames', () => {
     const face =
       createCadDocumentDigest(digestDocument()).bodies?.[0]?.topology?.faces[0];

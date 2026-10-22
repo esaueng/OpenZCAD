@@ -58,6 +58,11 @@ function movedAngle(
   return Math.abs(turn) > APPLY_EPSILON;
 }
 
+export {
+  movedField as sketchSolveValueMoved,
+  movedAngle as sketchSolveAngleMoved
+};
+
 /**
  * Commands that write the solved geometry back, one `updateSketchObject`
  * per moved object, spreading over the existing data so `construction` and
