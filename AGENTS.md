@@ -27,6 +27,10 @@ approved repository Git identity.
 - A merge request authorizes the identified pull request’s merge and its
   existing automatic deployment. Mention that consequence and proceed
   without another confirmation.
+- The owner standing-authorizes an agent session to arm auto-merge on a pull
+  request it opened once that PR is done, as defined in
+  [Pull request lifecycle](#pull-request-lifecycle), unless the PR carries the
+  `hold` label.
 - Before merging, verify the current head, mergeability, reviews, and required
   checks. Wait for pending checks. Existing approval remains valid for the
   authorized change.
@@ -54,9 +58,15 @@ Tauri macOS host, and shared TypeScript packages for its CAD model and runtime.
 ## Planning
 
 [ROADMAP.md](ROADMAP.md) is the only priority and delivery-status ledger.
-Select a master ID, read its supporting specification, and update that row
-with evidence in the implementation PR. Older plans retain design/history,
-not independent work queues.
+Select a master ID, read its supporting specification, and record the
+implementation PR's evidence as a fragment in
+[docs/roadmap-evidence/](docs/roadmap-evidence/README.md), not by editing the
+row. Rows are single-line table cells, so two PRs appending to one row always
+conflict; fragments are separate files and never do. Edit ROADMAP.md directly
+only to add or restructure rows. `node scripts/roadmap-evidence.mjs --fold`
+appends every fragment to its row and deletes the files; run it in a
+standalone `docs(roadmap): fold evidence` PR. Older plans retain
+design/history, not independent work queues.
 
 ## Required verification
 
@@ -165,6 +175,35 @@ An element styled entirely from a parent, a child, or a wrapper component
 belongs in `UNSTYLED_ALLOWANCES` in that script together with the reason; an
 entry that stops matching fails as stale, so the list cannot quietly rot.
 
+## Pull request lifecycle
+
+Many agent sessions (Claude and Codex) open PRs in parallel, and a session
+usually ends when its PR opens. These rules keep PRs from piling up green but
+unmergeable.
+
+- **Done means mergeable, not opened.** Before ending, the session that opened
+  a PR confirms CI is green on its exact head, the PR has no conflict, and
+  every review thread is answered. Read threads from the review-comments API
+  (an empty `gh pr view --comments` does not mean none): bot findings
+  included, fix the real ones, reply with the traced reason for the rest, and
+  resolve each thread. Main requires conversation resolution, so one
+  unanswered bot thread blocks the merge.
+- **Then arm auto-merge (see [Merge gate](#merge-gate)) as the session's last
+  action.** Any later push lands once green, so finish pushing first, and
+  disarm before reopening work. Instead of arming, add the `hold` label when
+  the PR needs an owner decision: legal or policy text, product direction, a
+  security-posture choice, or a body that asks the owner something.
+- **Schema versions are claimed, not assumed.** Before bumping
+  `PROJECT_DOCUMENT_SCHEMA_VERSION`, check open PRs for bumps in flight and
+  take the next unclaimed number; state the version you build on and the one
+  you introduce in the PR description. If another PR lands the same number
+  first, merge main and renumber yours. New or edited tests and e2e specs
+  read the constant instead of a version literal, so a bump does not have to
+  touch them (older suites still pin literals).
+- **Do not stack on another session's branch.** If you must stack, retarget
+  the child PR to `main` before the parent merges: GitHub deletes the parent
+  branch at merge, which closes the child irreversibly.
+
 ## Merge gate
 
 Main uses the active `Bounded merge queue` ruleset: two concurrent queue
@@ -190,7 +229,10 @@ rerun checks on any changed PR head.
   and threads, and confirm the head you are authorizing. Arm it with that
   head pinned: `enablePullRequestAutoMerge` with `expectedHeadOid` and
   `mergeMethod: SQUASH`, or `gh pr merge <n> --auto --squash
-  --match-head-commit <sha>`. Never use a direct/admin merge, a bypass
+  --match-head-commit <sha>`. Where GraphQL is unavailable (Claude Code
+  cloud sessions), the REST auto-merge route does not enforce a pinned
+  head: read the head SHA immediately before and after arming, and disarm
+  if it moved. Never use a direct/admin merge, a bypass
   actor, or `jump`. Queue configuration is not authorization to arm
   unrelated PRs. An authorized merge still triggers the existing automatic
   deployment workflows; standalone deployment or migration needs its own
