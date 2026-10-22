@@ -1,6 +1,8 @@
 import {
   documentNodesWithHistory,
-  importedSourceReferenceOf
+  importedSourceReferenceOf,
+  referenceImagesWithHistory,
+  type ImportedSourceReference
 } from '@openzcad/shared';
 import type { StoredMeasurementRecord } from './measurementRecord';
 import { withoutDerivedProjection } from '@openzcad/document-core';
@@ -66,8 +68,11 @@ export async function createProjectBackup(
   // Internal mesh payloads belong in sources, where their content key makes
   // one copy serve the current document, undo history and saved states.
   // Keep older backups' file bytes available as a source-resolution fallback.
+  // Reference-image pictures (I05) are sources in the same way.
   const files = storedFiles.filter(
-    (file) => file.artifact.kind !== 'mesh-payload'
+    (file) =>
+      file.artifact.kind !== 'mesh-payload' &&
+      file.artifact.kind !== 'reference-image'
   );
   const backup: ProjectBackup = {
     format: 'openzcad-project',
@@ -92,6 +97,7 @@ export async function createProjectBackup(
     for (const artifact of archived.artifacts) {
       if (
         artifact.kind === 'mesh-payload' ||
+        artifact.kind === 'reference-image' ||
         files.some((file) => file.artifact.artifactId === artifact.artifactId)
       )
         continue;
@@ -136,13 +142,32 @@ export async function createProjectBackup(
     snapshot,
     ...backup.saveStates!.map((state) => state.document)
   ]) {
+    // STEP sources and mesh payloads: a restored project must rebuild
+    // without the account, so it carries the bytes its references name. A
+    // reference image's picture travels the same way.
+    const needed: {
+      ref: ImportedSourceReference;
+      artifactId: string;
+      what: string;
+    }[] = [];
     for (const node of documentNodesWithHistory(candidate)) {
       if (node.kind !== 'feature') continue;
-      // STEP sources and mesh payloads: a restored project must rebuild
-      // without the account, so it carries the bytes its references name.
       const ref = importedSourceReferenceOf(node.data);
       if (!ref) continue;
-      const { artifactId } = node.data as { artifactId: string };
+      needed.push({
+        ref,
+        artifactId: (node.data as { artifactId: string }).artifactId,
+        what: `${node.data.featureKind === 'imported-mesh' ? 'mesh data' : 'STEP source'}: ${node.name}`
+      });
+    }
+    for (const image of referenceImagesWithHistory(candidate)) {
+      needed.push({
+        ref: image.source,
+        artifactId: image.artifactId,
+        what: `image: ${image.name}`
+      });
+    }
+    for (const { ref, artifactId, what } of needed) {
       if (
         backup.sources!.some((source) => source.sha256 === ref.checksumSha256)
       )
@@ -164,9 +189,7 @@ export async function createProjectBackup(
         bytes.length !== ref.logicalBytes ||
         (await checksum(bytes)) !== ref.checksumSha256
       )
-        throw new Error(
-          `Missing or damaged ${node.data.featureKind === 'imported-mesh' ? 'mesh data' : 'STEP source'}: ${node.name}`
-        );
+        throw new Error(`Missing or damaged ${what}`);
       let binary = '';
       for (let offset = 0; offset < bytes.length; offset += 32768)
         binary += String.fromCharCode(

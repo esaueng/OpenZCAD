@@ -1,6 +1,7 @@
 import {
   documentNodesWithHistory,
   documentAssetsWithHistory,
+  referenceImagesWithHistory,
   type ProjectDocument
 } from '@openzcad/shared';
 
@@ -11,7 +12,11 @@ export function isMeshImportArchiveKind(kind: string): boolean {
   );
 }
 
-/** Source locations held by the model or by its durable undo/redo entries. */
+/**
+ * Source locations held by the model or by its durable undo/redo entries:
+ * import sources, project assets and reference-image pictures (I05), so no
+ * cleanup removes an artifact any of them still names.
+ */
 export function importArtifactIds(document: ProjectDocument): string[] {
   const ids = new Set<string>();
   for (const asset of documentAssetsWithHistory(document)) {
@@ -27,6 +32,13 @@ export function importArtifactIds(document: ProjectDocument): string[] {
     ) {
       ids.add(node.data.artifactId);
     }
+  }
+  for (const image of referenceImagesWithHistory(document)) {
+    if (
+      typeof image.artifactId === 'string' &&
+      !image.artifactId.startsWith('artifact_local_')
+    )
+      ids.add(image.artifactId);
   }
   return [...ids];
 }

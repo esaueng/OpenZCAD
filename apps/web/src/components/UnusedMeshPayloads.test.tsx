@@ -7,7 +7,8 @@ import {
   toAssetId,
   toUserId,
   type ArtifactRecord,
-  type ProjectDocument
+  type ProjectDocument,
+  type ReferenceImageId
 } from '@openzcad/shared';
 import { describe, expect, it, vi } from 'vitest';
 import UnusedMeshPayloads, {
@@ -391,5 +392,153 @@ describe('manual unused mesh cleanup', () => {
       screen.queryByText('Unused mesh data removed.')
     ).not.toBeInTheDocument();
     expect(next.transport.discardMeshPayload).not.toHaveBeenCalled();
+  });
+});
+
+describe('unused reference-image pictures', () => {
+  function picture(
+    document: ProjectDocument,
+    artifactId: string
+  ): ArtifactRecord {
+    return {
+      ...payload(document, artifactId),
+      kind: 'reference-image',
+      name: `${artifactId}.png`,
+      contentType: 'image/png'
+    };
+  }
+
+  it('offers an unreferenced picture for owner removal and keeps one undo can restore', async () => {
+    const { manager, transport, props } = fixture();
+    manager.execute(
+      commandFactories.addReferenceImage({
+        image: {
+          imageId: 'rimg_kept' as ReferenceImageId,
+          name: 'Kept',
+          contentType: 'image/png',
+          source: {
+            marker: 'openzcad-source-ref',
+            version: 1,
+            hashAlgorithm: 'sha256',
+            checksumSha256: 'f'.repeat(64),
+            logicalBytes: 10
+          },
+          artifactId: toArtifactId('artifact_kept'),
+          pixelWidth: 2,
+          pixelHeight: 2,
+          plane: { type: 'canonical', plane: 'XY', offset: 0 },
+          center: { u: 0, v: 0 },
+          rotationDeg: 0,
+          width: 10,
+          opacity: 1
+        }
+      })
+    );
+    // Deleted, but still restorable by undo: its picture must stay.
+    manager.execute(
+      commandFactories.deleteReferenceImage({
+        imageId: 'rimg_kept' as ReferenceImageId
+      })
+    );
+    transport.listArtifacts.mockResolvedValue({
+      artifacts: [
+        picture(manager.document, 'artifact_kept'),
+        picture(manager.document, 'artifact_gone')
+      ]
+    });
+    transport.discardMeshPayload.mockResolvedValue({ deleted: true });
+    render(<UnusedMeshPayloads {...props} document={manager.document} />);
+    const remove = await screen.findByRole('button', {
+      name: 'Remove unused image: artifact_gone.png'
+    });
+    expect(
+      screen.queryByRole('button', { name: /artifact_kept/ })
+    ).not.toBeInTheDocument();
+    fireEvent.click(remove);
+    await waitFor(() =>
+      expect(transport.discardMeshPayload).toHaveBeenCalledWith(
+        manager.document.projectId,
+        'artifact_gone',
+        'reference-image'
+      )
+    );
+    expect(
+      await screen.findByRole('status', { name: 'Mesh cleanup' })
+    ).toHaveTextContent('Unused image removed.');
+  });
+
+  it('lets the owner remove an unreferenced picture and refuses one a revision names', async () => {
+    const service = new InMemoryPersistenceService();
+    const owner = toUserId('user_owner');
+    const created = await service.createProject(owner, { name: 'Pictures' });
+    const projectId = created.project.projectId;
+    const archive = async () => {
+      const { session } = await service.createUploadSession(owner, {
+        projectId,
+        fileName: 'plan.png',
+        contentType: 'image/png',
+        kind: 'reference-image'
+      });
+      await service.putUpload(
+        owner,
+        session.uploadSessionId,
+        new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer
+      );
+      await service.finalizeArtifact(owner, {
+        projectId,
+        uploadSessionId: session.uploadSessionId,
+        artifactId: session.artifactId
+      });
+      return session.artifactId;
+    };
+    const unused = await archive();
+    expect(
+      await service.discardMeshPayload(
+        owner,
+        projectId,
+        unused,
+        'reference-image'
+      )
+    ).toEqual({ deleted: true });
+    // A picture the stored document names is never removed.
+    const used = await archive();
+    const manager = new CommandManager(created.document);
+    manager.execute(
+      commandFactories.addReferenceImage({
+        image: {
+          imageId: 'rimg_used' as ReferenceImageId,
+          name: 'Used',
+          contentType: 'image/png',
+          source: {
+            marker: 'openzcad-source-ref',
+            version: 1,
+            hashAlgorithm: 'sha256',
+            checksumSha256: 'e'.repeat(64),
+            logicalBytes: 4
+          },
+          artifactId: toArtifactId(used),
+          pixelWidth: 2,
+          pixelHeight: 2,
+          plane: { type: 'canonical', plane: 'XY', offset: 0 },
+          center: { u: 0, v: 0 },
+          rotationDeg: 0,
+          width: 10,
+          opacity: 1
+        }
+      })
+    );
+    await service.saveDocument(owner, {
+      projectId,
+      expectedVersion: created.document.version,
+      document: manager.document
+    });
+    expect(
+      await service.discardMeshPayload(
+        owner,
+        projectId,
+        used,
+        'reference-image'
+      )
+    ).toEqual({ deleted: false });
   });
 });

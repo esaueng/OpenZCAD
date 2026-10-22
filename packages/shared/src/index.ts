@@ -10,9 +10,11 @@ export * from './mass-density';
 export * from './keymap-settings';
 export * from './drawings';
 export * from './drawing-annotations';
+export * from './reference-images';
 import type { DocumentHistory } from './document-history';
 import type { KeymapOverrides } from './keymap-settings';
 import type { DrawingSet } from './drawings';
+import type { ReferenceImageSet } from './reference-images';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
 export type ProjectId = Brand<string, 'ProjectId'>;
@@ -116,8 +118,18 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
  * leaders. Additive: absent means a sheet has none, and every v30 document
  * loads unchanged. An older client would refuse the unknown field or drop
  * it on save, so the bump makes it refuse such a document.
+ *
+ * v32 adds the I05 reference-image section (`ProjectDocument.referenceImages`):
+ * PNG and JPEG pictures placed on a principal plane, a datum plane or a
+ * planar face, with their in-plane position, turn, width and opacity. The
+ * pixels are never embedded: each image holds the SHA-256 of its file, whose
+ * bytes live in the source blob store and its `reference-image` artifact.
+ * Additive: absent means no images, every older document loads unchanged, and
+ * images are never features or bodies, so no build or export reads them. An
+ * older client would drop the section on its next save, so the bump makes it
+ * refuse such a document.
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 31 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 32 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -2967,6 +2979,11 @@ export interface ProjectDocument {
    * project has no drawings.
    */
   drawings?: DrawingSet;
+  /**
+   * I05 reference images (schema v32). Canonical user content: which picture
+   * lies where, never its pixels. Absent means the project has none.
+   */
+  referenceImages?: ReferenceImageSet;
 }
 
 export interface SerializedCommand<TPayload = unknown> {
@@ -3003,6 +3020,11 @@ export interface ArtifactRecord {
      * `meshPayloadRef`; internal, not a file anyone downloads.
      */
     | 'mesh-payload'
+    /**
+     * I05: the PNG or JPEG behind a reference image's `source`; internal,
+     * resolved by the viewport, not a file the File menu lists.
+     */
+    | 'reference-image'
     | 'step-export'
     | 'stl-export'
     | '3mf-export'

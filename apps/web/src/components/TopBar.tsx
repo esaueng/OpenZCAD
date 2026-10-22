@@ -174,9 +174,11 @@ export function TopBar({
   const saveKey = keymap.label('file-save');
   const saveNamedKey = keymap.label('file-save-named');
   // A mesh payload is the import's internal triangles, not a file anyone
-  // picked or would download; the original upload is listed beside it.
+  // picked or would download; the original upload is listed beside it. A
+  // reference image's picture is internal to its image in the same way.
   const artifacts = storedArtifacts.filter(
-    (artifact) => artifact.kind !== 'mesh-payload'
+    (artifact) =>
+      artifact.kind !== 'mesh-payload' && artifact.kind !== 'reference-image'
   );
   const [editingProjectName, setEditingProjectName] = useState(false);
   const [projectNameDraft, setProjectNameDraft] = useState(projectName ?? '');
