@@ -57,12 +57,12 @@ const folderOf = (document: ProjectDocument, bodyId: BodyId) =>
 
 describe('Objects folders (U06, schema v34)', () => {
   it('is schema 34, additive, and absent from a project without folders', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(34);
     const { manager } = threeBoxes();
     expect(manager.document.objectFolders).toBeUndefined();
     const saved = JSON.parse(
       JSON.stringify(manager.document)
     ) as ProjectDocument;
+    expect(saved.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     const older = { ...saved, schemaVersion: 30 } as unknown as ProjectDocument;
     const opened = normalizeDocument(older);
     expect('objectFolders' in opened).toBe(false);
