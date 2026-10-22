@@ -11,7 +11,8 @@ import {
   findSketch,
   getParameterScope,
   resolveParamValue,
-  normalizeDocument
+  normalizeDocument,
+  resolvedSketchDocument
 } from '@openzcad/document-core';
 import {
   frameForPlaneRef,
@@ -37,7 +38,11 @@ import {
   type SketchPlaneRef
 } from '@openzcad/shared';
 import { solvedSketchCommands } from '../apps/web/src/lib/sketch/applySolve';
-import { projectionWriteBackCommand } from '../apps/web/src/lib/sketch/projection';
+import {
+  projectionWriteBackCommand,
+  unlinkedProjectionData
+} from '../apps/web/src/lib/sketch/projection';
+import { retainSketchGeometryCommands } from '../apps/web/src/lib/sketch/releaseGeometry';
 import {
   assertFeatureSketchProjectionsValid,
   assertSketchProjectionsValid
@@ -277,6 +282,114 @@ function expectFreshProjection(
 }
 
 describe('linked projection constraint propagation before writeback', () => {
+  it.each([false, true])(
+    'keeps the solved shape when the last link is released (typed=%s)',
+    async (typed) => {
+      const f = await constrainedPlate(false, typed);
+      f.manager.execute(
+        commandFactories.setParameter({
+          name: 'w',
+          expression: typed ? '3.2 cm' : '32',
+          ...(typed ? { quantity: 'length' as const } : {})
+        })
+      );
+      const moved = await adapter.syncDocument(f.manager.document);
+      const writeback = projectionWriteBackCommand(f.manager.document, moved);
+      expect(writeback).not.toBeNull();
+      f.manager.normalize(writeback!);
+      f.manager.commitDerivedState(
+        await adapter.syncDocument(f.manager.document)
+      );
+      const before = f.manager.document;
+      const seeds = retainSketchGeometryCommands(before, f.sketchId, [
+        f.projectionId
+      ]);
+      expect(seeds.length).toBeGreaterThan(0);
+      // Failure after staging seed commands must leave history and authored data intact.
+      expect(() =>
+        f.manager.runTransaction('Invalid release', [
+          ...seeds,
+          commandFactories.updateSketchObject({
+            sketchId: f.sketchId,
+            objectId: toEntityId('missing_release_target'),
+            data: line(0, 0, 1, 0)
+          })
+        ])
+      ).toThrow();
+      expect(f.manager.document).toBe(before);
+      const view = resolvedSketchDocument(before);
+      const target = view.nodes[f.projectionId];
+      if (target?.kind !== 'sketch-object')
+        throw new Error('Expected projected line.');
+      const cursor = before.editHistory!.cursor;
+      f.manager.runTransaction('Unlink projection', [
+        ...seeds,
+        commandFactories.updateSketchObject({
+          sketchId: f.sketchId,
+          objectId: f.projectionId,
+          data: unlinkedProjectionData(target.data)
+        })
+      ]);
+      expect(f.manager.document.editHistory!.cursor).toBe(cursor + 1);
+      expect(
+        volume(await adapter.syncDocument(f.manager.document), f.plateId)
+      ).toBeCloseTo(576, 6);
+      expect(f.manager.document.nodes[f.loop[1]!]).toMatchObject({
+        data: { x1: expect.closeTo(32, 8) }
+      });
+      if (typed) {
+        expect(f.manager.document.nodes[f.loop[1]!]).toMatchObject({
+          data: { y2: 'h' }
+        });
+        expect(f.manager.document.nodes[f.constructionId!]).toMatchObject({
+          data: { y2: '4 mm' }
+        });
+      }
+      f.manager.undo();
+      expect(f.manager.document.nodes[f.loop[1]!]).toEqual(
+        before.nodes[f.loop[1]!]
+      );
+      expect(
+        volume(await adapter.syncDocument(f.manager.document), f.plateId)
+      ).toBeCloseTo(576, 6);
+      f.manager.redo();
+      expect(
+        volume(await adapter.syncDocument(f.manager.document), f.plateId)
+      ).toBeCloseTo(576, 6);
+      if (typed) {
+        f.manager.execute(
+          commandFactories.setParameter({
+            name: 'h',
+            expression: '0.7 cm',
+            quantity: 'length'
+          })
+        );
+        expect(
+          volume(await adapter.syncDocument(f.manager.document), f.plateId)
+        ).toBeCloseTo(672, 6);
+      }
+      const released = f.manager.document;
+      for (const reopened of [
+        replayCommands(f.initial, released.commandLog),
+        normalizeDocument(
+          JSON.parse(JSON.stringify(released)) as ProjectDocument
+        )
+      ]) {
+        const cold = await createExactKernelAdapter();
+        try {
+          expect(
+            volume(await cold.syncDocument(reopened), f.plateId)
+          ).toBeCloseTo(typed ? 672 : 576, 6);
+          expect(await cold.exportSketchSvg(reopened, f.sketchId)).toBe(
+            await adapter.exportSketchSvg(released, f.sketchId)
+          );
+        } finally {
+          cold.dispose();
+        }
+      }
+    }
+  );
+
   it('re-solves the ordinary closed loop in the same exact build and all exports', async () => {
     const f = await constrainedPlate();
     expect(
@@ -289,6 +402,15 @@ describe('linked projection constraint propagation before writeback', () => {
     const before = structuredClone(resized);
     const built = await adapter.syncDocument(resized);
     expectFreshProjection(f, built);
+    expect(built.sketchGeometry).toMatchObject({
+      projectId: resized.projectId,
+      documentVersion: resized.version
+    });
+    expect(built.sketchGeometry?.objects[f.loop[1]!]).toMatchObject({
+      objectKind: 'line',
+      x1: expect.closeTo(32, 8),
+      x2: expect.closeTo(32, 8)
+    });
     // The construction shadow contributes no area: this is the constrained ordinary loop.
     expect(volume(built, f.plateId)).toBeCloseTo(32 * 6 * 3, 6);
     const expected = expectedPlate(f, resized, 32);
@@ -328,6 +450,14 @@ describe('linked projection constraint propagation before writeback', () => {
     expect(Object.keys(built.sketchProjections ?? {})).toEqual([
       f.projectionId
     ]);
+    expect(built.sketchGeometry?.objects[f.constructionId!]).toMatchObject({
+      objectKind: 'line',
+      construction: true,
+      projection: { mode: 'unlinked' },
+      x1: expect.closeTo(32, 8),
+      x2: expect.closeTo(32, 8),
+      y2: expect.closeTo(4, 8)
+    });
     const expected = expectedPlate(f, resized, 32);
     const ordinaryOnly = findSketch(expected, f.sketchId)!;
     ordinaryOnly.objectIds = [...f.loop];
@@ -416,6 +546,14 @@ describe('linked projection constraint propagation before writeback', () => {
           status
         );
         expect(volume(rebuilt, f.plateId)).toBeCloseTo(32 * 6 * 3, 6);
+        expect(rebuilt.sketchGeometry).toMatchObject({
+          projectId: document.projectId,
+          documentVersion: document.version
+        });
+        expect(rebuilt.sketchGeometry?.objects[f.loop[1]!]).toMatchObject({
+          x1: expect.closeTo(32, 8),
+          x2: expect.closeTo(32, 8)
+        });
         expect(
           (rebuilt.featureWarnings ?? []).every(
             (warning) => warning.kind === 'advisory'
@@ -511,6 +649,8 @@ describe('linked projection constraint propagation before writeback', () => {
       )
     ).toBe(false);
     expect(projectionWriteBackCommand(resized, built)).toBeNull();
+    for (const objectId of [f.projectionId, ...f.loop])
+      expect(built.sketchGeometry?.objects[objectId]).toBeUndefined();
     expect(built.exportableBodyIds).not.toContain(f.plateId);
     expect(built.bodyRepresentations[f.plateId]).toBeUndefined();
     await expect(adapter.exportStep(resized, [f.plateId])).rejects.toThrow();

@@ -164,6 +164,7 @@ import {
   findFeature,
   findSketch,
   getParameterScope,
+  resolvedSketchDocument,
   listFeaturesInOrder,
   listNodesByKind,
   listExposedParameters,
@@ -298,6 +299,10 @@ import {
 import type { CompositeShape } from './lib/sketch/composites';
 import { resolvedSketchPlaneBasis } from './lib/sketch/planeBasis';
 import { sketchEntityEditTarget } from './lib/sketch/editTarget';
+import {
+  retainSketchGeometryCommands,
+  sketchUsesProjectionGeometry
+} from './lib/sketch/releaseGeometry';
 import { textPlacementBudgetError } from './lib/sketch/textPlacement';
 import {
   modelingOperationNeedsPlanarFaces,
@@ -2236,6 +2241,8 @@ export function App() {
   } | null>(null);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
   const [doc, setDoc] = useState<ProjectDocument | null>(null);
+  // Exact solved geometry is a read view; commands and persistence keep doc.
+  const sketchReadDocument = doc ? resolvedSketchDocument(doc) : null;
   // Held here, not in the panels: a move between the dock and the phone lane
   // remounts a panel, and its filter, search and Find field outlive that. A
   // different project starts them afresh.
@@ -3282,6 +3289,14 @@ export function App() {
       );
     }
     return ready;
+  }
+  function requireCurrentSketchGeometry(sketchId: SketchId): boolean {
+    const current = managerRef.current?.document;
+    if (!current) return false;
+    return (
+      !sketchUsesProjectionGeometry(current, sketchId) ||
+      requireExactGeometryReady()
+    );
   }
   const remoteVersionsRef = useRef(new Map<string, number>());
   /**
@@ -6289,10 +6304,10 @@ export function App() {
       return null;
     }
     const objectNode = selectedSketch.objectIds[0]
-      ? doc.nodes[selectedSketch.objectIds[0]]
+      ? sketchReadDocument?.nodes[selectedSketch.objectIds[0]]
       : undefined;
     return objectNode?.kind === 'sketch-object' ? objectNode.data : null;
-  }, [doc, selectedSketch]);
+  }, [doc, selectedSketch, sketchReadDocument]);
 
   const selectedFeatureBodyId =
     (featureSelectionSource === 'inferred' ? selectedTopology?.bodyId : null) ??
@@ -6638,7 +6653,7 @@ export function App() {
       evalParamValue(value, scope, doc.units);
     return listNodesByKind(doc, 'sketch').flatMap((sketch) => {
       const objectNode = sketch.objectIds[0]
-        ? doc.nodes[sketch.objectIds[0]]
+        ? sketchReadDocument?.nodes[sketch.objectIds[0]]
         : undefined;
       if (objectNode?.kind !== 'sketch-object') {
         return [];
@@ -6718,7 +6733,13 @@ export function App() {
         }
       ];
     });
-  }, [doc, parameterScope, selectedSketch, selectedSketchProfileId]);
+  }, [
+    doc,
+    parameterScope,
+    selectedSketch,
+    selectedSketchProfileId,
+    sketchReadDocument
+  ]);
 
   // The viewport installs and tears down real scene objects when these props
   // change identity, so each one is memoized rather than built inline: a fresh
@@ -14623,7 +14644,7 @@ export function App() {
       : undefined;
     const objects =
       sketch?.objectIds.flatMap((objectId) => {
-        const node = doc.nodes[objectId];
+        const node = sketchReadDocument?.nodes[objectId];
         return node?.kind === 'sketch-object'
           ? [{ id: objectId, data: node.data }]
           : [];
@@ -14708,6 +14729,7 @@ export function App() {
     interaction,
     doc,
     sketchBasis,
+    sketchReadDocument,
     appSettings.sketching,
     parameterScope.scope,
     sketchDiagnosticPoints,
@@ -14727,9 +14749,14 @@ export function App() {
     ) {
       return null;
     }
-    const node = doc.nodes[interaction.session.selectedObjectId as EntityId];
+    const node = sketchReadDocument?.nodes[
+      interaction.session.selectedObjectId as EntityId
+    ];
     return node?.kind === 'sketch-object' ? node : null;
-  }, [interaction, doc]);
+  }, [interaction, doc, sketchReadDocument]);
+  const selectedSketchEntityAuthored = selectedSketchEntity
+    ? doc?.nodes[selectedSketchEntity.id]
+    : undefined;
 
   /** I01: the selected entity's projection, as its card describes it. */
   const selectedEntityProjection = useMemo(() => {
@@ -14994,20 +15021,34 @@ export function App() {
   async function handleUnlinkProjection() {
     const base = managerRef.current?.document;
     const target = sketchEntityEditTarget(interactionRef.current);
-    const node = target && base?.nodes[target.objectId as EntityId];
-    if (!base || !target || node?.kind !== 'sketch-object') return;
-    const { unlinkedProjectionData } = await import('./lib/sketch/projection');
+    const node =
+      target &&
+      base &&
+      resolvedSketchDocument(base).nodes[target.objectId as EntityId];
     if (
-      executeCommand(
+      !base ||
+      !target ||
+      node?.kind !== 'sketch-object' ||
+      sketchSolving ||
+      geometryBusy
+    )
+      return;
+    if (!requireCurrentSketchGeometry(target.sketchId as SketchId)) return;
+    const { unlinkedProjectionData } = await import('./lib/sketch/projection');
+    if (managerRef.current?.document !== base) return;
+    const sketchId = target.sketchId as SketchId;
+    if (
+      executeTransaction('Unlink projection', [
+        ...retainSketchGeometryCommands(base, sketchId, [target.objectId]),
         commandFactories.updateSketchObject(
           {
-            sketchId: target.sketchId as SketchId,
+            sketchId,
             objectId: target.objectId as EntityId,
             data: unlinkedProjectionData(node.data)
           },
           'Unlink projection'
         )
-      )
+      ])
     ) {
       setProjectionRepair(null);
       setStatus(
@@ -15199,6 +15240,8 @@ export function App() {
       capturedObjectId
     );
     if (!base || !target || sketchSolving || geometryBusy) return false;
+    if (!requireCurrentSketchGeometry(target.sketchId as SketchId))
+      return false;
     const sketchId = target.sketchId as SketchId;
     const objectId = target.objectId as EntityId;
     const selected = base.nodes[objectId];
@@ -15267,13 +15310,14 @@ export function App() {
     const base = managerRef.current?.document;
     const target = sketchEntityEditTarget(interactionRef.current);
     if (!base || !target || sketchSolving || geometryBusy) return;
+    if (!requireCurrentSketchGeometry(target.sketchId as SketchId)) return;
     const sketchId = target.sketchId as SketchId;
     const sketch = findSketch(base, sketchId);
     const composite = sketch && sketchCompositeOf(sketch, target.objectId);
     if (!sketch || !composite) return;
     const objects = new Map(
       sketch.objectIds.flatMap((id) => {
-        const node = base.nodes[id];
+        const node = resolvedSketchDocument(base).nodes[id];
         return node?.kind === 'sketch-object'
           ? [[String(id), node.data] as const]
           : [];
@@ -15378,6 +15422,7 @@ export function App() {
     const sketch =
       target && base && findSketch(base, target.sketchId as SketchId);
     if (!base || !target || !sketch || sketchSolving || geometryBusy) return;
+    if (!requireCurrentSketchGeometry(sketch.sketchId)) return;
     setSketchSolving(true);
     setSketchEditError(null);
     setSketchDiagnosticPoints([]);
@@ -15443,12 +15488,20 @@ export function App() {
     }
     const base = managerRef.current?.document;
     if (!base || sketchSolving || geometryBusy) return;
+    if (
+      !requireCurrentSketchGeometry(interaction.session.sketchId as SketchId)
+    )
+      return;
     const sketchId = interaction.session.sketchId as SketchId;
     const objectId = interaction.session.selectedObjectId as EntityId;
     const command = commandFactories.deleteSketchObject(
       { sketchId, objectId },
       'Delete sketch entity'
     );
+    const commands = [
+      ...retainSketchGeometryCommands(base, sketchId, [objectId]),
+      command
+    ];
     setSketchDiagnosticPoints([]);
     const source = listFeaturesInOrder(base).find(
       (feature) =>
@@ -15459,7 +15512,7 @@ export function App() {
       !source ||
       affectedFeatureTargets(base, source.featureId).length === 0
     ) {
-      if (executeCommand(command)) {
+      if (executeTransaction('Delete sketch entity', commands)) {
         dispatchInteraction({ type: 'sketch-select-object', objectId: null });
         setStatus('Deleted sketch entity.');
       }
@@ -15473,7 +15526,7 @@ export function App() {
     void commitSketchEdit(
       base,
       sketchId,
-      [command],
+      commands,
       'Delete sketch entity',
       objectId
     )
@@ -15727,7 +15780,7 @@ export function App() {
   const sketchOverview = useMemo(() => {
     const objects =
       editingSketchNode?.objectIds.flatMap((id) => {
-        const node = doc?.nodes[id];
+        const node = sketchReadDocument?.nodes[id];
         return node?.kind === 'sketch-object'
           ? [{ id, data: node.data, label: node.name || node.data.objectKind }]
           : [];
@@ -15745,7 +15798,7 @@ export function App() {
         error: errorMessage(error, 'Unable to analyze this sketch.')
       };
     }
-  }, [editingSketchNode, doc, resolveDocumentValue]);
+  }, [editingSketchNode, resolveDocumentValue, sketchReadDocument]);
 
   useEffect(() => {
     setSketchDiagnosticPoints([]);
@@ -15830,7 +15883,7 @@ export function App() {
     if (!composite || side < 0) return null;
     const objects = new Map(
       editingSketchNode.objectIds.flatMap((id) => {
-        const node = doc.nodes[id];
+        const node = sketchReadDocument?.nodes[id];
         return node?.kind === 'sketch-object'
           ? [[String(id), node.data] as const]
           : [];
@@ -15882,7 +15935,13 @@ export function App() {
           ? 'Keeps its center.'
           : 'Keeps corner 1.'
     };
-  }, [editingSketchNode, doc, selectedSketchEntity, parameterScope.scope]);
+  }, [
+    editingSketchNode,
+    doc,
+    selectedSketchEntity,
+    parameterScope.scope,
+    sketchReadDocument
+  ]);
 
   // What the relations rail offers the selected entity: its kind, for the
   // refusal it names, and the relations that take it as their first pick.
@@ -15957,6 +16016,12 @@ export function App() {
     if (!doc || !editingSketchNode) {
       return true;
     }
+    if (
+      sketchSolving ||
+      geometryBusy ||
+      !requireCurrentSketchGeometry(editingSketchNode.sketchId)
+    )
+      return true;
     const pending = interaction.session.pendingConstraint;
     const spec = constraintToolSpec(pending.kind);
     if (spec.placement && pending.picks.length === spec.picks) {
@@ -16046,15 +16111,18 @@ export function App() {
         const verb =
           pending.kind === 'lock' ? 'Unlock point' : 'Disconnect point';
         if (
-          executeTransaction(
-            verb,
-            removals.map((constraintId) =>
+          executeTransaction(verb, [
+            ...retainSketchGeometryCommands(
+              managerRef.current?.document ?? doc,
+              editingSketchNode.sketchId
+            ),
+            ...removals.map((constraintId) =>
               commandFactories.deleteSketchConstraint({
                 sketchId: editingSketchNode.sketchId,
                 constraintId: toSketchConstraintId(constraintId)
               })
             )
-          )
+          ])
         ) {
           setSketchSolveStatus(null);
           setStatus(
@@ -16105,6 +16173,11 @@ export function App() {
     label: string
   ) {
     if (!doc || !editingSketchNode) return;
+    if (
+      geometryBusy ||
+      !requireCurrentSketchGeometry(editingSketchNode.sketchId)
+    )
+      return;
     if (sketchSolving) {
       setStatus(
         `${label} not added: the sketch is still solving. Try again when it finishes.`
@@ -16267,9 +16340,15 @@ export function App() {
   ): boolean {
     const session = interaction.mode === 'sketch' ? interaction.session : null;
     const pending = session?.pendingEdit;
-    if (!pending) {
+    if (!session || !pending) {
       return false;
     }
+    if (
+      sketchSolving ||
+      geometryBusy ||
+      !requireCurrentSketchGeometry(session.sketchId as SketchId)
+    )
+      return true;
     if (doc && editingSketchNode) {
       const host = sketchEditHost(doc, clickPoint);
       const sketch = editingSketchNode;
@@ -16304,6 +16383,12 @@ export function App() {
       );
       return;
     }
+    if (
+      sketchSolving ||
+      geometryBusy ||
+      !requireCurrentSketchGeometry(sketch.sketchId)
+    )
+      return;
     const { runSketchEdit } = await import('./lib/sketch/edits');
     await runSketchEdit(
       sketchEditHost(base, draft.anchor),
@@ -16429,6 +16514,12 @@ export function App() {
       setStatus('The sketch dimension is no longer available.');
       return;
     }
+    if (
+      sketchSolving ||
+      geometryBusy ||
+      !requireCurrentSketchGeometry(sketch.sketchId)
+    )
+      return;
     const storedValue: ParamValue = Number.isFinite(Number(raw))
       ? evaluatedValue
       : raw;
@@ -16897,11 +16988,14 @@ export function App() {
   }
 
   function handleDeleteSketchConstraint(constraintId: string) {
-    if (!editingSketchNode) {
+    const base = managerRef.current?.document;
+    if (!base || !editingSketchNode || sketchSolving || geometryBusy) {
       return;
     }
+    if (!requireCurrentSketchGeometry(editingSketchNode.sketchId)) return;
     if (
-      executeCommand(
+      executeTransaction('Delete constraint', [
+        ...retainSketchGeometryCommands(base, editingSketchNode.sketchId),
         commandFactories.deleteSketchConstraint(
           {
             sketchId: editingSketchNode.sketchId,
@@ -16909,7 +17003,7 @@ export function App() {
           },
           'Delete constraint'
         )
-      )
+      ])
     ) {
       setSketchSolveStatus(null);
       if (selectedSketchConstraintId === constraintId) {
@@ -17030,7 +17124,7 @@ export function App() {
         selectedSketch?.sketchId === sketch.sketchId ||
         selectedSketchProfileId === sketch.sketchId;
       const objects = sketch.objectIds.flatMap((objectId) => {
-        const node = doc.nodes[objectId];
+        const node = sketchReadDocument?.nodes[objectId];
         return node?.kind === 'sketch-object'
           ? [{ id: objectId, data: node.data }]
           : [];
@@ -17136,7 +17230,8 @@ export function App() {
     textOutlineBudgetError,
     hiddenSketchIds,
     movingSketch,
-    modelingEditFeature
+    modelingEditFeature,
+    sketchReadDocument
   ]);
   // Editing needs hidden source profiles; visibility remains a viewport concern.
   const sketchViews = useMemo(
@@ -17266,7 +17361,7 @@ export function App() {
       // A curve pick carries only SketchId; open sketches are valid selections.
       if (pick.kind === 'sketch-profile') return [];
       const objects = sketch.objectIds.flatMap((id) => {
-        const node = current.nodes[id];
+        const node = resolvedSketchDocument(current).nodes[id];
         return node?.kind === 'sketch-object' ? [{ id, data: node.data }] : [];
       });
       return computeSketchRegions(
@@ -22606,9 +22701,23 @@ export function App() {
       // its fields onto the stored object instead of remounting, so a value
       // typed but not yet applied survives a move on the canvas.
       key={selectedSketchEntity.id}
-      disabled={sketchSolving || geometryBusy}
+      disabled={
+        sketchSolving ||
+        geometryBusy ||
+        Boolean(
+          doc &&
+          editingSketchNode &&
+          sketchUsesProjectionGeometry(doc, editingSketchNode.sketchId) &&
+          !exactGeometryReady
+        )
+      }
       error={sketchEditError}
       data={selectedSketchEntity.data}
+      authoredData={
+        selectedSketchEntityAuthored?.kind === 'sketch-object'
+          ? selectedSketchEntityAuthored.data
+          : undefined
+      }
       scope={parameterScope.scope}
       units={doc?.units}
       onApply={(data) => {

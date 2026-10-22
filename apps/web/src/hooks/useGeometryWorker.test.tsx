@@ -2,7 +2,7 @@ import { act, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toBodyId, toUserId } from '@openzcad/shared';
-import type { CommandManager } from '@openzcad/command-system';
+import { CommandManager } from '@openzcad/command-system';
 import type { GeometryWorkerResult } from '../worker/geometryWorker';
 import { useGeometryWorker } from './useGeometryWorker';
 import { ProjectionSender } from '../lib/projectionStream';
@@ -106,7 +106,10 @@ describe('useGeometryWorker', () => {
     'rebuilds a transient %s result after closing and reopening',
     (messageType) => {
       installWorker();
-      const document = createProjectDocument('Missing source', toUserId('user'));
+      const document = createProjectDocument(
+        'Missing source',
+        toUserId('user')
+      );
       const manager = { document } as CommandManager;
       const host = {
         manager: () => manager,
@@ -271,8 +274,10 @@ describe('useGeometryWorker', () => {
     };
     act(() => {
       worker.emit({
-        type: 'mass-properties', ok: true,
-        requestId: request.requestId, result: unavailable
+        type: 'mass-properties',
+        ok: true,
+        requestId: request.requestId,
+        result: unavailable
       });
     });
     await expect(pending).resolves.toEqual(unavailable);
@@ -301,9 +306,15 @@ describe('useGeometryWorker', () => {
     });
     act(() => {
       worker.emit({
-        type: 'mass-properties', ok: true,
+        type: 'mass-properties',
+        ok: true,
         requestId: request.requestId,
-        result: { status: 'unavailable', code: 'unsupported', reason: 'stale', epoch: 1 }
+        result: {
+          status: 'unavailable',
+          code: 'unsupported',
+          reason: 'stale',
+          epoch: 1
+        }
       });
     });
     expect(host.onDerived).not.toHaveBeenCalled();
@@ -335,8 +346,10 @@ describe('useGeometryWorker', () => {
     });
     act(() => {
       worker.emit({
-        type: 'drawing-tessellation', ok: true,
-        requestId: request.requestId, bodies: {}
+        type: 'drawing-tessellation',
+        ok: true,
+        requestId: request.requestId,
+        bodies: {}
       });
     });
     expect(host.onDerived).not.toHaveBeenCalled();
@@ -363,8 +376,11 @@ describe('useGeometryWorker', () => {
     expect(request).toMatchObject({ type: 'sync', document, analysis });
     act(() => {
       worker.emit({
-        type: 'sync', ok: true, requestId: request.requestId,
-        projectId: document.projectId, version: document.version,
+        type: 'sync',
+        ok: true,
+        requestId: request.requestId,
+        projectId: document.projectId,
+        version: document.version,
         derived: document.derived
       });
     });
@@ -501,7 +517,6 @@ describe('useGeometryWorker', () => {
     expect(result.current.isReadyFor(document)).toBe(false);
   });
 
-
   it('requests a full projection after a missing base and rejects stale analysis', () => {
     installWorker();
     const document = createProjectDocument('Recovery', toUserId('user'));
@@ -580,13 +595,33 @@ describe('useGeometryWorker', () => {
   it('keeps upstream projections ephemeral and ignores other revisions', () => {
     installWorker();
     const document = createProjectDocument('Projection', toUserId('user'));
-    const host = { manager: () => ({ document }) as CommandManager, onDerived: vi.fn(), onProjection: vi.fn(), onError: vi.fn() };
+    const host = {
+      manager: () => ({ document }) as CommandManager,
+      onDerived: vi.fn(),
+      onProjection: vi.fn(),
+      onError: vi.fn()
+    };
     const { result } = renderHook(() => useGeometryWorker(host));
     const worker = FakeWorker.instances[0]!;
     act(() => {
-      worker.emit({ type: 'projection', projectId: document.projectId, version: document.version, derived: document.derived });
-      worker.emit({ type: 'projection', projectId: document.projectId, version: document.version + 1, derived: document.derived });
-      worker.emit({ type: 'projection', projectId: 'another-project', version: document.version, derived: document.derived });
+      worker.emit({
+        type: 'projection',
+        projectId: document.projectId,
+        version: document.version,
+        derived: document.derived
+      });
+      worker.emit({
+        type: 'projection',
+        projectId: document.projectId,
+        version: document.version + 1,
+        derived: document.derived
+      });
+      worker.emit({
+        type: 'projection',
+        projectId: 'another-project',
+        version: document.version,
+        derived: document.derived
+      });
     });
     expect(host.onProjection).toHaveBeenCalledTimes(1);
     expect(host.onDerived).not.toHaveBeenCalled();
@@ -678,7 +713,9 @@ describe('useGeometryWorker', () => {
     );
 
     const orphaned = result.current.syncOnce(document);
-    const rejected = expect(orphaned).rejects.toThrow('Geometry worker crashed');
+    const rejected = expect(orphaned).rejects.toThrow(
+      'Geometry worker crashed'
+    );
     const first = FakeWorker.instances[0]!;
     await act(async () => {
       first.onerror?.({} as ErrorEvent);
@@ -775,7 +812,9 @@ describe('useGeometryWorker', () => {
     expect(result.current.isReadyFor(document)).toBe(false);
     expect(onDerived).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledWith(
-      expect.stringContaining('Check your connection, then reload the workspace')
+      expect.stringContaining(
+        'Check your connection, then reload the workspace'
+      )
     );
   });
 
@@ -1485,4 +1524,91 @@ describe('useGeometryWorker', () => {
       expect(FakeWorker.instances).toHaveLength(1);
     });
   });
+});
+
+it('requalifies live solved neighbors only after no-rebuild geometry equality and keeps old derived immutable', () => {
+  installWorker();
+  const initial = createProjectDocument('Solved neighbors', toUserId('user'));
+  const manager = new CommandManager(initial);
+  const derived = {
+    ...initial.derived,
+    sketchGeometry: {
+      projectId: initial.projectId,
+      documentVersion: initial.version,
+      objects: {
+        ent_line: { objectKind: 'line' as const, x1: 0, y1: 0, x2: 32, y2: 0 }
+      }
+    }
+  };
+  const { result } = renderHook(() =>
+    useGeometryWorker({
+      manager: () => manager,
+      onDerived: (value) => {
+        manager.commitDerivedState(value);
+      },
+      onError: vi.fn()
+    })
+  );
+  const worker = FakeWorker.instances[0]!;
+  act(() => {
+    result.current.sync(initial);
+    worker.emit({
+      type: 'sync',
+      ok: true,
+      projectId: initial.projectId,
+      version: initial.version,
+      derived
+    });
+    worker.emit({
+      type: 'state',
+      phase: 'ready',
+      projectId: initial.projectId,
+      version: initial.version,
+      stale: false
+    });
+  });
+  const completed = manager.document;
+  const oldDerived = completed.derived;
+  const target = {
+    ...completed,
+    version: completed.version + 1,
+    drawings: { sheets: [] },
+    referenceImages: { images: [] }
+  };
+  const canonicalNodes = target.nodes;
+  act(() => {
+    expect(result.current.retainReadyGeometry(target)).toBe(true);
+    manager.document = target;
+  });
+  expect(target.derived).not.toBe(oldDerived);
+  expect(target.derived.bodyRepresentations).toBe(
+    oldDerived.bodyRepresentations
+  );
+  expect(target.derived.sketchGeometry?.documentVersion).toBe(target.version);
+  expect(
+    Object.getOwnPropertyDescriptor(target.derived, 'sketchGeometry')
+      ?.enumerable
+  ).toBe(false);
+  expect(completed.derived).toBe(oldDerived);
+  expect(oldDerived.sketchGeometry?.documentVersion).toBe(completed.version);
+  expect(target.nodes).toBe(canonicalNodes);
+  expect(structuredClone(target).derived.sketchGeometry).toBeUndefined();
+  const changed = {
+    ...target,
+    version: target.version + 1,
+    units: 'cm' as const
+  };
+  const changedDerived = changed.derived;
+  act(() => {
+    expect(result.current.retainReadyGeometry(changed)).toBe(false);
+  });
+  expect(changed.derived).toBe(changedDerived);
+  expect(changed.derived.sketchGeometry?.documentVersion).toBe(target.version);
+  act(() => result.current.invalidate());
+  expect(
+    result.current.retainReadyGeometry({
+      ...target,
+      version: target.version + 1
+    })
+  ).toBe(false);
 });

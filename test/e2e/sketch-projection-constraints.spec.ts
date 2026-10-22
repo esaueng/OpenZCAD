@@ -21,7 +21,8 @@ import {
   expectBodyCount,
   revealModelPanel,
   stubApi,
-  test
+  test,
+  waitForStillViewport
 } from './openzcad-fixtures';
 
 const READY = { timeout: 30_000 };
@@ -217,7 +218,7 @@ async function open(page: Page, document: ProjectDocument) {
   await expect(page.locator('.save-state')).toHaveClass(/is-local/, READY);
 }
 
-async function plate(
+async function plateGeometry(
   page: Page,
   f: Awaited<ReturnType<typeof fixture>>,
   width: number
@@ -240,6 +241,15 @@ async function plate(
   expect(body.bbox.max.x).toBeCloseTo(width, 6);
   expect(body.bbox.max.y - body.bbox.min.y).toBeCloseTo(6, 6);
   expect(body.bbox.max.z - body.bbox.min.z).toBeCloseTo(3, 6);
+  return document;
+}
+
+async function plate(
+  page: Page,
+  f: Awaited<ReturnType<typeof fixture>>,
+  width: number
+) {
+  const document = await plateGeometry(page, f, width);
   // Automatic linked normalization may finish; ordinary authored inputs must stay canonical.
   for (const id of f.loop)
     expect(document.nodes[id]).toEqual(f.document.nodes[id]);
@@ -302,6 +312,182 @@ async function exportSvg(page: Page, width: number) {
   return svg;
 }
 
+interface LiveSketch {
+  objects: { id: string; data: SketchObjectData }[];
+  screen: { x: number; y: number }[];
+}
+
+async function liveSketch(
+  page: Page,
+  project: { x: number; y: number }[] = []
+): Promise<LiveSketch> {
+  const state = await page.locator('.viewer-host canvas').evaluate(
+    (element, points) =>
+      new Promise<LiveSketch | null>((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-sketch-state', {
+            detail: { project: points, resolve }
+          })
+        );
+      }),
+    project
+  );
+  return state ?? { objects: [], screen: [] };
+}
+
+async function expectLiveLoop(
+  page: Page,
+  f: Awaited<ReturnType<typeof fixture>>
+) {
+  await expect
+    .poll(async () => {
+      const state = await liveSketch(page);
+      return f.loop.map((id) => {
+        const data = state.objects.find((object) => object.id === id)?.data;
+        return data?.objectKind === 'line'
+          ? [data.x1, data.y1, data.x2, data.y2].map(
+              (value) => Math.round(Number(value) * 1e6) / 1e6
+            )
+          : [];
+      });
+    }, READY)
+    .toEqual([
+      [0, 0, 32, 0],
+      [32, 0, 32, 6],
+      [32, 6, 0, 6],
+      [0, 6, 0, 0]
+    ]);
+}
+
+/** The editor, point tools and profile picker must see the same ephemeral solved loop. */
+async function inspectLiveSketch(
+  page: Page,
+  f: Awaited<ReturnType<typeof fixture>>
+) {
+  await revealModelPanel(page, 'History');
+  await page
+    .locator('.feature-row-main', { hasText: 'Constrained linked plate' })
+    .click();
+  await page
+    .getByRole('button', { name: 'Edit sketch in viewport', exact: true })
+    .click();
+  await expect(page.getByRole('toolbar', { name: 'Sketch tools' })).toBeVisible(
+    READY
+  );
+  await waitForStillViewport(page);
+  await expectLiveLoop(page, f);
+  const palette = page.getByRole('button', {
+    name: 'Sketch palette',
+    exact: true
+  });
+  if ((await palette.getAttribute('aria-expanded')) !== 'true')
+    await palette.click();
+  const overview = page.getByRole('region', { name: 'Sketch overview' });
+  await expect(overview.getByRole('status')).toHaveText(
+    '1 closed profile ready to extrude'
+  );
+  const selected = overview.getByLabel('Selected geometry');
+  await selected.selectOption(f.loop[1]!);
+  const editor = page.getByRole('form', { name: 'Edit line', exact: true });
+  await expect(editor.getByLabel('Start X', { exact: true })).toHaveValue('32');
+  await expect(editor.getByLabel('End X', { exact: true })).toHaveValue('32');
+  await expect(editor.getByLabel('End Y', { exact: true })).toHaveValue('6');
+  await selected.selectOption('');
+  await palette.click();
+  const [right, left, interior] = (
+    await liveSketch(page, [
+      { x: 32, y: 6 },
+      { x: 0, y: 6 },
+      { x: 26, y: 3 }
+    ])
+  ).screen;
+  expect(right).toBeDefined();
+  expect(left).toBeDefined();
+  expect(interior).toBeDefined();
+  await page
+    .getByRole('toolbar', { name: 'Relations' })
+    .getByRole('button', { name: 'Distance', exact: true })
+    .click();
+  await page.mouse.move(right!.x, right!.y, { steps: 4 });
+  await expect(page.locator('.sketch-snap-marker')).toHaveAttribute(
+    'data-label',
+    'Endpoint'
+  );
+  await page.mouse.click(right!.x, right!.y);
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Distance: pick 2 of 2.'
+  );
+  await page.mouse.click(left!.x, left!.y);
+  await page.mouse.click(interior!.x, interior!.y);
+  const keypad = page.getByRole('dialog', { name: 'Distance value' });
+  await expect(
+    keypad.getByRole('textbox', { name: 'Distance', exact: true })
+  ).toHaveValue('32');
+  await page.keyboard.press('Escape');
+  await expect(keypad).toHaveCount(0);
+  await page.keyboard.press('v');
+  // The point is outside the old 20-wide loop, so this proves fresh profile geometry.
+  await page.mouse.click(interior!.x, interior!.y);
+  await expect(
+    page.getByRole('region', { name: 'Selected closed profile' })
+  ).toBeVisible();
+}
+
+async function releasedPlate(
+  page: Page,
+  f: Awaited<ReturnType<typeof fixture>>
+) {
+  await expect
+    .poll(async () => {
+      const node = (await stored(page)).nodes[f.projectionId];
+      return node?.kind === 'sketch-object' ? node.data.projection?.mode : null;
+    }, READY)
+    .toBe('unlinked');
+  const document = await plateGeometry(page, f, 32);
+  const expected = [
+    line(0, 0, 32, 0),
+    line(32, 0, 32, 6),
+    line(32, 6, 0, 6),
+    line(0, 6, 0, 0)
+  ];
+  for (const [i, id] of f.loop.entries())
+    expect(document.nodes[id]).toMatchObject({ data: expected[i] });
+  expect(document.nodes[f.projectionId]).toMatchObject({
+    data: { construction: true, projection: { mode: 'unlinked' } }
+  });
+  expect(findSketch(document, f.sketchId)!.constraints).toEqual(
+    findSketch(f.document, f.sketchId)!.constraints
+  );
+  return document;
+}
+
+async function unlinkLiveSketch(
+  page: Page,
+  f: Awaited<ReturnType<typeof fixture>>
+) {
+  const before = (await stored(page)).editHistory?.cursor ?? 0;
+  const palette = page.getByRole('button', {
+    name: 'Sketch palette',
+    exact: true
+  });
+  if ((await palette.getAttribute('aria-expanded')) !== 'true')
+    await palette.click();
+  await page
+    .getByRole('region', { name: 'Sketch overview' })
+    .getByLabel('Selected geometry')
+    .selectOption(f.projectionId);
+  await page
+    .getByRole('region', { name: 'Projection' })
+    .getByRole('button', { name: 'Unlink', exact: true })
+    .click();
+  await expectLiveLoop(page, f);
+  await releasedPlate(page, f);
+  await expect
+    .poll(async () => (await stored(page)).editHistory?.cursor, READY)
+    .toBe(before + 1);
+  return before;
+}
+
 test('a linked edge rebuilds its constrained plate and SVG without a manual solve', async ({
   page
 }, testInfo) => {
@@ -329,6 +515,14 @@ test('a linked edge rebuilds its constrained plate and SVG without a manual solv
   await page.screenshot({
     path: testInfo.outputPath('constrained-plate-resized.png')
   });
+  await inspectLiveSketch(page, f);
+  await page.screenshot({
+    path: testInfo.outputPath('constrained-plate-sketch-resized.png')
+  });
+  await page
+    .getByRole('button', { name: 'Finish Sketch', exact: true })
+    .click();
+  await plate(page, f, 32);
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await plate(page, f, 20);
   await page.getByRole('button', { name: 'Redo', exact: true }).click();
@@ -343,6 +537,30 @@ test('a linked edge rebuilds its constrained plate and SVG without a manual solv
     '2',
     READY
   );
+  await plate(page, f, 32);
+  await inspectLiveSketch(page, f);
+  await page.screenshot({
+    path: testInfo.outputPath('constrained-plate-sketch-reopened.png')
+  });
+  const beforeUnlink = await unlinkLiveSketch(page, f);
+  await page.screenshot({
+    path: testInfo.outputPath('constrained-plate-unlinked.png')
+  });
+  await page
+    .getByRole('button', { name: 'Finish Sketch', exact: true })
+    .click();
+  await releasedPlate(page, f);
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await plate(page, f, 32);
+  await expect
+    .poll(async () => (await stored(page)).editHistory?.cursor, READY)
+    .toBe(beforeUnlink);
+  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  await releasedPlate(page, f);
+  await expect
+    .poll(async () => (await stored(page)).editHistory?.cursor, READY)
+    .toBe(beforeUnlink + 1);
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await plate(page, f, 32);
   expect(await exportSvg(page, 32)).toBe(svg);
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
