@@ -7,7 +7,8 @@ import {
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   archiveHistorySources,
-  createProjectDocument
+  createProjectDocument,
+  mergeCollaborationDocuments
 } from '@openzcad/document-core';
 import {
   InMemoryPersistenceService,
@@ -1866,17 +1867,34 @@ describe('room copy completion', () => {
         dimensions: { width: 2, height: 2, depth: 2 }
       })
     );
-    const response = await target.room.fetch(
+    // Completion moved the room past the acknowledged edit. The room hands
+    // the late browser its base, and the browser merges and resubmits.
+    const stale = await target.room.fetch(
       roomSubmission(late.document, acknowledged.version)
     );
-    expect(response.status).toBe(200);
-    const ack = (await response.json()) as {
+    expect(stale.status).toBe(409);
+    const conflict = (await stale.json()) as {
       type: string;
       document: ProjectDocument;
+      base?: ProjectDocument;
     };
+    expect(conflict.type).toBe('conflict');
+    expect(conflict.base?.version).toBe(acknowledged.version);
+    const merged = mergeCollaborationDocuments(
+      conflict.base!,
+      conflict.document,
+      late.document
+    )!;
+    expect(merged).not.toBeNull();
+    const response = await target.room.fetch(
+      roomSubmission(merged, conflict.document.version)
+    );
+    expect(response.status).toBe(200);
+    const ack = (await response.json()) as { type: string; version: number };
     expect(ack.type).toBe('ack');
-    expect(ack.document.featureOrder).toHaveLength(3);
     const published = target.values.get('room:latest') as ProjectDocument;
+    expect(published.version).toBe(ack.version);
+    expect(published.featureOrder).toHaveLength(3);
     expect(
       referenceIds(published).every((id) => !id.startsWith('artifact_local_'))
     ).toBe(true);

@@ -608,6 +608,228 @@ describe('useCollaboration lease ordering', () => {
     }
   );
 
+  it.each([false, true])(
+    'merges a stale submission with the room in the browser and resubmits it (edited again: %s)',
+    (editedAgain) => {
+      const base = createProjectDocument(
+        'Browser merge',
+        toUserId('user_browser_merge')
+      );
+      const {
+        result,
+        socket,
+        rerender,
+        unmount,
+        onRemoteDocument,
+        onConflict
+      } = connectedOwner(base);
+      const first = addPrimitiveFeature(base, {
+        name: 'Local box',
+        primitiveKind: 'box',
+        dimensions: { width: 1, height: 1, depth: 1 }
+      });
+      const remote = addPrimitiveFeature(base, {
+        name: 'Remote sphere',
+        primitiveKind: 'sphere',
+        dimensions: { radius: 2 }
+      });
+      const newerLocal = addPrimitiveFeature(first, {
+        name: 'Local cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 1, height: 2 }
+      });
+      rerender({ document: first });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(socket.frames().at(-1)).toMatchObject({
+        type: 'document',
+        baseVersion: base.version
+      });
+      // An edit made while the stale submission was in flight is merged too.
+      if (editedAgain) rerender({ document: newerLocal });
+      act(() => socket.receive({ type: 'conflict', document: remote, base }));
+      const local = editedAgain ? newerLocal : first;
+      expect(onRemoteDocument).toHaveBeenCalledTimes(1);
+      const [merged, context] = onRemoteDocument.mock.calls[0] as [
+        ProjectDocument,
+        unknown
+      ];
+      expect(context).toEqual({ adopted: true });
+      expect(merged.featureOrder).toEqual([
+        ...remote.featureOrder,
+        ...local.featureOrder
+      ]);
+      expect(merged.version).toBe(Math.max(remote.version, local.version) + 1);
+      expect(onConflict).not.toHaveBeenCalled();
+      expect(result.current.conflict).toBeNull();
+      expect(result.current.roomVersion).toBe(remote.version);
+      // The merge goes back to the room on the version it was merged with.
+      expect(socket.frames().at(-1)).toMatchObject({
+        type: 'document',
+        baseVersion: remote.version,
+        document: { version: merged.version, featureOrder: merged.featureOrder }
+      });
+      rerender({ document: merged });
+      act(() => socket.receive({ type: 'ack', version: merged.version }));
+      expect(result.current.status).toBe('live');
+      expect(result.current.roomVersion).toBe(merged.version);
+      unmount();
+    }
+  );
+
+  it('keeps a conflict for manual reconciliation when the browser merge cannot combine the edits', () => {
+    const base = createProjectDocument(
+      'Unmergeable',
+      toUserId('user_unmergeable')
+    );
+    const { result, socket, rerender, unmount, onRemoteDocument, onConflict } =
+      connectedOwner(base);
+    const local = { ...base, name: 'Local name', version: base.version + 1 };
+    const remote = { ...base, name: 'Remote name', version: base.version + 1 };
+    rerender({ document: local });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    const sent = socket.sent.length;
+    act(() => socket.receive({ type: 'conflict', document: remote, base }));
+    expect(onRemoteDocument).not.toHaveBeenCalled();
+    expect(onConflict).toHaveBeenCalledWith(remote);
+    expect(result.current.status).toBe('conflict');
+    expect(socket.sent).toHaveLength(sent);
+    unmount();
+  });
+
+  it('does not merge against a base other than the one it submitted on', () => {
+    const base = createProjectDocument(
+      'Foreign base',
+      toUserId('user_foreign_base')
+    );
+    const { result, socket, rerender, unmount, onRemoteDocument, onConflict } =
+      connectedOwner(base);
+    const first = addPrimitiveFeature(base, {
+      name: 'Local box',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 1 }
+    });
+    const remote = addPrimitiveFeature(first, {
+      name: 'Remote sphere',
+      primitiveKind: 'sphere',
+      dimensions: { radius: 2 }
+    });
+    rerender({ document: first });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    // The room names a base this browser never submitted on.
+    act(() =>
+      socket.receive({ type: 'conflict', document: remote, base: first })
+    );
+    expect(onRemoteDocument).not.toHaveBeenCalled();
+    expect(onConflict).toHaveBeenCalledWith(remote);
+    expect(result.current.status).toBe('conflict');
+    unmount();
+  });
+
+  it('stops merging and asks for reconciliation after repeated stale conflicts', () => {
+    const base = createProjectDocument('Busy room', toUserId('user_busy_room'));
+    const { result, socket, rerender, unmount, onRemoteDocument, onConflict } =
+      connectedOwner(base);
+    let local = addPrimitiveFeature(base, {
+      name: 'Local box',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 1 }
+    });
+    rerender({ document: local });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    let roomBase = base;
+    for (let round = 1; round <= 4; round += 1) {
+      const remote = addPrimitiveFeature(roomBase, {
+        name: `Remote ${round}`,
+        primitiveKind: 'sphere',
+        dimensions: { radius: round }
+      });
+      act(() =>
+        socket.receive({ type: 'conflict', document: remote, base: roomBase })
+      );
+      if (round <= 3) {
+        expect(onRemoteDocument).toHaveBeenCalledTimes(round);
+        local = onRemoteDocument.mock.calls.at(-1)![0] as ProjectDocument;
+        rerender({ document: local });
+        expect(socket.frames().at(-1)).toMatchObject({
+          baseVersion: remote.version,
+          document: { version: local.version }
+        });
+      } else {
+        expect(onRemoteDocument).toHaveBeenCalledTimes(3);
+        expect(onConflict).toHaveBeenCalledWith(remote);
+        expect(result.current.status).toBe('conflict');
+      }
+      roomBase = remote;
+    }
+    unmount();
+  });
+
+  it('merges a stale oversize edit returned over HTTP and resubmits it there', async () => {
+    const base = createProjectDocument(
+      'Oversize merge',
+      toUserId('user_oversize_merge')
+    );
+    const { result, rerender, unmount, onRemoteDocument, onConflict } =
+      connectedOwner(base);
+    const responses: Array<(response: Response) => void> = [];
+    const fetch = vi.fn(
+      (_input: string, _init?: RequestInit) =>
+        new Promise<Response>((resolve) => responses.push(resolve))
+    );
+    vi.stubGlobal('fetch', fetch);
+    const large = largeMeshDocument(base);
+    const remote = addPrimitiveFeature(base, {
+      name: 'Remote sphere',
+      primitiveKind: 'sphere',
+      dimensions: { radius: 2 }
+    });
+    rerender({ document: large });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+    await act(async () =>
+      responses[0]!(
+        new Response(
+          JSON.stringify({ type: 'conflict', document: remote, base }),
+          { status: 409 }
+        )
+      )
+    );
+    expect(onRemoteDocument).toHaveBeenCalledTimes(1);
+    const merged = onRemoteDocument.mock.calls[0]![0] as ProjectDocument;
+    expect(merged.featureOrder).toEqual([
+      ...remote.featureOrder,
+      ...large.featureOrder
+    ]);
+    expect(onConflict).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const body = JSON.parse(fetch.mock.calls[1]![1]!.body as string) as {
+      baseVersion: number;
+      document: ProjectDocument;
+    };
+    expect(body.baseVersion).toBe(remote.version);
+    expect(body.document.version).toBe(merged.version);
+    expect(body.document.featureOrder).toEqual(merged.featureOrder);
+    rerender({ document: merged });
+    await act(async () =>
+      responses[1]!(
+        new Response(JSON.stringify({ type: 'ack', version: merged.version }))
+      )
+    );
+    expect(result.current.roomVersion).toBe(merged.version);
+    expect(result.current.conflict).toBeNull();
+    unmount();
+  });
+
   it('adopts save-history acknowledgements even when the model version is unchanged', () => {
     const base = createProjectDocument(
       'Acknowledged save',
@@ -1660,7 +1882,7 @@ describe('inbound frame validation', () => {
     const socket = FakeWebSocket.instances[0]!;
     act(() => socket.open());
 
-    act(() => socket.receiveRaw('x'.repeat(2_000_001)));
+    act(() => socket.receiveRaw('x'.repeat(3_500_001)));
     act(() => socket.receiveRaw('{not json'));
     act(() => socket.receiveRaw(JSON.stringify({ type: 'state' })));
     act(() =>
@@ -1744,6 +1966,33 @@ describe('parseServerMessage', () => {
     ).toBeNull();
   });
 
+  it('keeps a usable conflict base and drops one the client cannot use', () => {
+    const latest = { ...document, version: document.version + 2 };
+    const base = { ...document, version: document.version + 1 };
+    expect(
+      parseServerMessage(
+        JSON.stringify({ type: 'conflict', document: latest, base }),
+        document.projectId
+      )
+    ).toEqual({ type: 'conflict', document: latest, base });
+    for (const unusable of [
+      { ...base, projectId: 'project_other' },
+      { ...base, version: latest.version },
+      { nope: true }
+    ]) {
+      expect(
+        parseServerMessage(
+          JSON.stringify({
+            type: 'conflict',
+            document: latest,
+            base: unusable
+          }),
+          document.projectId
+        )
+      ).toEqual({ type: 'conflict', document: latest });
+    }
+  });
+
   it('rejects documents from another project and oversize frames', () => {
     expect(
       parseServerMessage(
@@ -1752,7 +2001,7 @@ describe('parseServerMessage', () => {
       )
     ).toBeNull();
     expect(
-      parseServerMessage(' '.repeat(2_000_001), document.projectId)
+      parseServerMessage(' '.repeat(3_500_001), document.projectId)
     ).toBeNull();
   });
 });

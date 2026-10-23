@@ -51,11 +51,13 @@ export function reconcileCheckpointFlush(
 }
 
 /**
- * Inbound frames wrap a room document (bounded server-side by
- * MAX_PERSISTED_DOCUMENT_BYTES, 1.5 MB) plus presence/lease metadata. A frame
- * larger than this cannot have come from a well-behaved room and is dropped.
+ * Inbound frames wrap at most two room documents (each bounded server-side by
+ * MAX_PERSISTED_DOCUMENT_BYTES, 1.5 MB): a conflict carries the latest
+ * document and the submitter's merge base. Presence and lease metadata are
+ * small. A frame larger than this cannot have come from a well-behaved room
+ * and is dropped.
  */
-const MAX_INBOUND_MESSAGE_BYTES = 2_000_000;
+const MAX_INBOUND_MESSAGE_BYTES = 3_500_000;
 
 const PROJECT_ROLES: readonly ProjectAccessRole[] = [
   'owner',
@@ -161,8 +163,19 @@ export function parseServerMessage(
         ? message
         : null;
     case 'document':
-    case 'conflict':
       return documentOk(true) ? message : null;
+    case 'conflict': {
+      if (!documentOk(true)) return null;
+      // A base the client cannot use only costs it the browser merge; the
+      // conflict itself still stands.
+      const base = parsed.base;
+      if (base === undefined) return message;
+      const { base: _base, ...withoutBase } = parsed;
+      return isRoomDocument(base, projectId) &&
+        base.version < (document as ProjectDocument).version
+        ? message
+        : (withoutBase as unknown as CollaborationServerMessage);
+    }
     case 'ack':
       return typeof parsed.version === 'number' && documentOk(false)
         ? message

@@ -16,7 +16,8 @@ import {
 } from '@openzcad/shared';
 import {
   addPrimitiveFeature,
-  createProjectDocument
+  createProjectDocument,
+  mergeCollaborationDocuments
 } from '@openzcad/document-core';
 import {
   createRoomContext,
@@ -230,7 +231,7 @@ describe('project edit lease', () => {
     });
   });
 
-  it('merges independent simultaneous edits and returns the combined model to both browsers', async () => {
+  it('hands the losing browser its base so it merges simultaneous edits and resubmits', async () => {
     const { document, values, first, second, firstLease, secondLease } =
       await twoBrowsers();
     await first.receive(
@@ -259,7 +260,36 @@ describe('project edit lease', () => {
         )
       )
     ]);
-    const merged = values.get('room:latest') as ProjectDocument;
+    // The room ordered the first browser's box and refused the second
+    // browser's sphere with the base it was built on; it merged nothing.
+    expect(values.get('room:latest')).toMatchObject({
+      featureOrder: box.featureOrder
+    });
+    const conflict = second.lastFrame() as {
+      type: string;
+      document: ProjectDocument;
+      base?: ProjectDocument;
+    };
+    expect(conflict).toMatchObject({
+      type: 'conflict',
+      document: { version: box.version },
+      base: { version: document.version }
+    });
+    // The second browser merges and resubmits on the room's latest version.
+    const merged = mergeCollaborationDocuments(
+      conflict.base!,
+      conflict.document,
+      sphere
+    )!;
+    await second.receive(
+      documentFrame(
+        merged,
+        'client_second',
+        secondLease.leaseId,
+        conflict.document.version
+      )
+    );
+    expect(values.get('room:latest')).toEqual(merged);
     expect(merged.featureOrder).toEqual(
       expect.arrayContaining([...box.featureOrder, ...sphere.featureOrder])
     );
@@ -268,9 +298,9 @@ describe('project edit lease', () => {
       type: 'document',
       document: { version: merged.version }
     });
-    expect(second.lastFrame()).toMatchObject({
+    expect(second.lastFrame()).toEqual({
       type: 'ack',
-      document: { version: merged.version }
+      version: merged.version
     });
   });
 

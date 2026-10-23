@@ -224,7 +224,7 @@ function roomFixture(
               ? reconcileCopiedImportSources(next, [archive])
               : next;
             // Production ackFor includes a full body only when canonical source
-            // identities changed (or a merge minted a new room version).
+            // identities changed (or the room minted a kept version).
             return sourceArchived ? document : null;
           }
           document = next;
