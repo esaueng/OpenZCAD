@@ -1001,6 +1001,19 @@ export async function seedDismissedWorkspaceTour(page: Page) {
 }
 
 /**
+ * E2E builds render without antialiasing, shadows or the studio environment
+ * map: on CI's GPU-less runners SwiftShader spends most of the suite's time
+ * on them (viewer/renderProfile.ts). A spec whose contract is the rendering
+ * itself (pixels, shadows, the exported image) calls this before its first
+ * navigation to get the production renderer back.
+ */
+export async function enableFullRender(page: Page) {
+  await page.addInitScript(() => {
+    (window as { __ozFullRender?: boolean }).__ozFullRender = true;
+  });
+}
+
+/**
  * Settles how unitless imports (STL, OBJ, PLY) are read before the app
  * boots, merged into whatever settings the device already holds — a
  * returning user who answered "millimetres, always". A fresh device asks at

@@ -13,6 +13,7 @@ import type { HoleGhost } from '../lib/holeGhost';
 import { buildHoleGhostRig } from './viewer/holeGhostRig';
 import type { PrimitiveGhost } from '../lib/primitiveGhost';
 import { buildPrimitiveGhostRig } from './viewer/primitiveGhostRig';
+import { currentRenderProfile } from './viewer/renderProfile';
 import { createdBodiesToFrame, type AutoFrameRequest } from '../lib/autoFrame';
 import { readStagePalette, watchStageTheme } from '../lib/stagePalette';
 import { mark, measure, timed } from '../lib/perf';
@@ -2379,11 +2380,14 @@ export function ModelViewer({
     const gradientBackdrop = createGradientBackdrop();
     scene.add(gradientBackdrop);
 
+    // E2E builds skip antialiasing, shadows and the environment map unless a
+    // spec opts back in (viewer/renderProfile.ts).
+    const profile = currentRenderProfile();
     const renderer = timed(
       'viewer.renderer',
       () =>
         new THREE.WebGLRenderer({
-          antialias: true,
+          antialias: profile.antialias,
           // Ground decorations use the opaque bodies' stencil coverage.
           stencil: true,
           powerPreference: 'high-performance'
@@ -2427,7 +2431,7 @@ export function ModelViewer({
     renderer.localClippingEnabled = true;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
-    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.enabled = profile.shadows;
     renderer.shadowMap.autoUpdate = false;
     /**
      * The single place that thaws the frozen shadow map, counting refreshes on
@@ -2458,9 +2462,9 @@ export function ModelViewer({
 
     // Studio environment rig: soft IBL reflections do the heavy lifting for
     // "real CAD" shading, so the analytic lights stay gentle.
-    const environment = timed('viewer.environment', () =>
-      createStudioEnvironment(renderer)
-    );
+    const environment = profile.environment
+      ? timed('viewer.environment', () => createStudioEnvironment(renderer))
+      : null;
     scene.environment = environment;
     scene.environmentIntensity = 0.4;
 
@@ -9937,7 +9941,7 @@ export function ModelViewer({
         disposable.geometry.dispose();
         (disposable.material as THREE.Material).dispose();
       }
-      environment.dispose();
+      environment?.dispose();
       // The key light's shadow map is a render target of its own, which no
       // scene-graph clear reaches.
       keyLight.dispose();

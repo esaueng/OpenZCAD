@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { BodyRepresentation } from '@openzcad/shared';
+import { currentRenderProfile } from '../components/viewer/renderProfile';
 import {
   VIEW_DIRECTIONS,
   clearGroup,
@@ -207,7 +208,7 @@ function thumbnailRenderer(): THREE.WebGLRenderer {
   }
   keptRenderer?.dispose();
   const renderer = new THREE.WebGLRenderer({
-    antialias: true,
+    antialias: currentRenderProfile().antialias,
     alpha: false,
     powerPreference: 'low-power',
     preserveDrawingBuffer: true

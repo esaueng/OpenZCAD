@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { stubAnonymousApi } from './openzcad-fixtures';
+import { enableFullRender, stubAnonymousApi } from './openzcad-fixtures';
 
 interface ResizeProbeWindow extends Window {
   __openZcadResizeProbe?: {
@@ -47,6 +47,7 @@ test('keeps the rendered scene visible while a docked panel resizes', async ({
   page
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
+  await enableFullRender(page);
   await stubAnonymousApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Resize Render Part');

@@ -1,10 +1,11 @@
-import { test, expect, stubApi } from './openzcad-fixtures';
+import { test, expect, enableFullRender, stubApi } from './openzcad-fixtures';
 
 for (const view of ['perspective', 'orthographic', 'below'] as const) {
   test(`ground decorations do not paint over an opaque sphere crossing Z=0 (${view})`, async ({
     page
   }, testInfo) => {
     await page.setViewportSize({ width: 1200, height: 900 });
+    await enableFullRender(page);
     await stubApi(page);
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));

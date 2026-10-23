@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { stubApi } from './openzcad-fixtures';
+import { enableFullRender, stubApi } from './openzcad-fixtures';
 
 test.use({
   viewport: { width: 1600, height: 1000 },
@@ -15,6 +15,7 @@ interface BackgroundMetrics {
 }
 
 test('dithers the studio gradient without flattening it', async ({ page }) => {
+  await enableFullRender(page);
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Background Dither');

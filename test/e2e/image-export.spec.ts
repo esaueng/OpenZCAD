@@ -5,7 +5,13 @@ import {
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 import type { Download, Page } from '@playwright/test';
-import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  enableFullRender,
+  stubApi,
+  expectBodyCount
+} from './openzcad-fixtures';
 
 /**
  * ZC-190/192: Export image… writes the current view as a PNG at a chosen
@@ -103,6 +109,7 @@ test('exports the view as a sized, transparent PNG and a sketch as exact SVG', a
   page
 }, testInfo) => {
   test.setTimeout(180_000);
+  await enableFullRender(page);
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Image export');
