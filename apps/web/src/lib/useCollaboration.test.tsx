@@ -692,7 +692,9 @@ describe('useCollaboration lease ordering', () => {
       primitiveKind: 'box',
       dimensions: { width: 1, height: 1, depth: 1 }
     });
-    rerender({ document: { ...edited, schemaVersion: 30 } });
+    rerender({
+      document: { ...edited, schemaVersion: 30 } as unknown as ProjectDocument
+    });
     act(() => {
       vi.advanceTimersByTime(500);
     });
