@@ -163,3 +163,29 @@ describe('required validation gate', () => {
     expect(validation).toContain('run: pnpm build\n');
   });
 });
+
+describe('routing fixture deadlines', () => {
+  let evidence: {
+    control: { exit_code: number; five_second_timeout: boolean; fetches: number };
+    prepared: { exit_code: number; five_second_timeout: boolean; fetches: number };
+    fixture_delay_seconds: number;
+  };
+
+  beforeAll(() => {
+    evidence = JSON.parse(
+      execFileSync('python3', ['scripts/test-fleet-test-fixtures.py', '--deadline-evidence'], {
+        encoding: 'utf8'
+      })
+    ) as typeof evidence;
+  });
+
+  it('keeps a six-second fixture fetch outside the five-second policy test', () => {
+    expect(evidence.fixture_delay_seconds).toBe(6);
+    expect(evidence.control.fetches).toBe(1);
+    expect(evidence.control.exit_code).not.toBe(0);
+    expect(evidence.control.five_second_timeout).toBe(true);
+    expect(evidence.prepared.fetches).toBe(1);
+    expect(evidence.prepared.exit_code).toBe(0);
+    expect(evidence.prepared.five_second_timeout).toBe(false);
+  });
+});
