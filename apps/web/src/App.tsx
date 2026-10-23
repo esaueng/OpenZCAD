@@ -46,6 +46,7 @@ import type { ReferenceImageUpdateInput } from '@openzcad/document-core';
 import { topologyReferenceRepairCommand } from './lib/topologyReferenceRepairs';
 import { boxPreviewProfile } from './lib/interaction/boxPreviewProfile';
 import { capPreviewProfile } from './lib/interaction/capPreviewProfile';
+import { stepPreviewProfile } from './lib/interaction/stepPreviewProfile';
 import {
   parameterMinimums,
   parameterInputError,
@@ -1553,6 +1554,12 @@ declare global {
      */
     __openzcadE2ESlowFrameMs?: number;
     /**
+     * Turns off the whole-body step preview of generic planar face drags,
+     * honoured only in `VITE_E2E=1` builds, so a spec can drive the exact
+     * worker stream that faces the step preview declines still depend on.
+     */
+    __openzcadE2EExactFaceDrag?: boolean;
+    /**
      * E2E-only interruption-test hooks, honoured only in `VITE_E2E=1` builds.
      * The in-flight flag is true exactly while the verified Apply's exact
      * preflight has started and its transaction has not committed, so a spec
@@ -1590,6 +1597,11 @@ async function holdNextExactCheckForE2E(): Promise<void> {
   window.__openzcadE2EDelayNextExactCheckMs = 0;
   await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
 }
+
+const E2E_EXACT_FACE_DRAG =
+  (import.meta.env as unknown as { VITE_E2E?: string }).VITE_E2E === '1' &&
+  typeof window !== 'undefined' &&
+  window.__openzcadE2EExactFaceDrag === true;
 
 const E2E_SLOW_FRAME_MS =
   (import.meta.env as unknown as { VITE_E2E?: string }).VITE_E2E === '1' &&
@@ -18328,20 +18340,22 @@ export function App() {
           })
         : null;
     const body = representations[target.bodyId as BodyId];
+    const pickedFace = body?.topology?.faces.find(
+      (face) =>
+        face.topologyId === target.topologyId && face.hash === target.hash
+    );
     const terminalProfile =
-      !profile && !boxProfile
-        ? capPreviewProfile(
-            body,
-            body?.topology?.faces.find(
-              (face) =>
-                face.topologyId === target.topologyId &&
-                face.hash === target.hash
-            )
-          )
-        : null;
+      !profile && !boxProfile ? capPreviewProfile(body, pickedFace) : null;
     const linearProfile = boxProfile ?? terminalProfile;
+    // Any other planar face: move it with its blends and stretch the walls
+    // they meet, when that is what the exact move would do.
+    const stepProfile =
+      !profile && !linearProfile && !E2E_EXACT_FACE_DRAG
+        ? stepPreviewProfile(body, pickedFace)
+        : null;
     return {
       ...(linearProfile ? { linearProfilePreview: linearProfile } : {}),
+      ...(stepProfile ? { stepProfilePreview: stepProfile } : {}),
       ...(profile ? { profilePreview: profile } : {}),
       bodyId: target.bodyId,
       topologyId: target.topologyId,
@@ -19692,15 +19706,78 @@ export function App() {
         : null;
     offsetPreview.stop();
     offsetPreviewValueRef.current = null;
+    const target = current.target;
     void executeValidatedDirectEdit(
       reuse ? reuse.command : plan.command,
       reuse ? reuse.bodyId : plan.bodyId,
       reuse ? reuse.successMessage : plan.successMessage,
       offset,
-      undefined,
+      // The moved face stays the selection, armed for the next drag, rather
+      // than handing over to a whole-body selection that recolours the part.
+      () => reselectOffsetFace(target, offset),
       reuse ? reuse.validationTargets : plan.validationTargets
     );
     return true;
+  }
+
+  function reselectOffsetFace(target: FaceTarget, offset: number) {
+    // An extrude cap or a box side edits a total length, whose handle does
+    // not restart from zero on the moved face, unless the card was switched
+    // to a local Offset Face.
+    if (
+      !target.localFaceOffset &&
+      (target.extrudeFeatureId || target.resizeBodyFeatureId)
+    )
+      return;
+    const bodyId = target.bodyId as BodyId;
+    const faces =
+      managerRef.current?.document.derived.bodyRepresentations[bodyId]
+        ?.topology?.faces;
+    const vector = (value: [number, number, number]) => ({
+      x: value[0],
+      y: value[1],
+      z: value[2]
+    });
+    const moved = faces
+      ? resolveOffsetPreviewFace(
+          faces,
+          {
+            point: vector(target.point),
+            normal: vector(target.normal),
+            ...(target.surfaceCenter
+              ? { center: vector(target.surfaceCenter) }
+              : {})
+          },
+          offset
+        )
+      : null;
+    if (!moved?.geometry) return;
+    const { reference: _staleReference, ...stableTarget } = target;
+    const shift = (value: [number, number, number]) =>
+      value.map(
+        (component, axis) => component + target.normal[axis]! * offset
+      ) as [number, number, number];
+    const nextTarget: FaceTarget = {
+      ...stableTarget,
+      topologyId: moved.topologyId,
+      hash: moved.hash,
+      ...(moved.reference ? { reference: moved.reference } : {}),
+      point: shift(target.point),
+      surfaceCenter: [
+        moved.geometry.center.x,
+        moved.geometry.center.y,
+        moved.geometry.center.z
+      ]
+    };
+    setSelectedTopology({
+      bodyId,
+      kind: 'face',
+      topologyId: moved.topologyId,
+      hash: moved.hash,
+      ...(moved.reference ? { reference: moved.reference } : {})
+    });
+    setSelectedBodyIds([bodyId]);
+    dispatchInteraction({ type: 'select-face', target: nextTarget });
   }
 
   function handleResizeThroughHole(

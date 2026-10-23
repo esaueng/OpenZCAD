@@ -55,6 +55,10 @@ const renderedWorldBounds = (page: Page) =>
 async function armChamferedTopCapOffset(page: Page) {
   await stubApi(page);
   await page.addInitScript(() => {
+    // These cases drive the exact worker stream, which the whole-body step
+    // preview would otherwise stand in for on this cap
+    // (generic-face-drag-preview.spec.ts covers that path).
+    window.__openzcadE2EExactFaceDrag = true;
     const scope = window as typeof window & { facePreviewRequests?: string[] };
     scope.facePreviewRequests = [];
     const send = Worker.prototype.postMessage;
