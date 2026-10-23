@@ -4,6 +4,7 @@ import {
   privateArtifactPaths,
   privatePlaywrightOutput
 } from './test/support/privateArtifacts';
+import { fullRenderBuild } from './test/support/renderBuild';
 
 // Private runs need final CLI destinations checked before Playwright's cleanup;
 // globalSetup and test hooks run after it has already removed output folders.
@@ -38,6 +39,10 @@ function portForCheckout(): number {
 }
 
 const PORT = portForCheckout();
+
+// Performance probes and documentation captures build the production
+// renderer, and never reuse a server that may hold the cheaper e2e one.
+const FULL_RENDER_BUILD = fullRenderBuild();
 
 export default defineConfig({
   ...(privateOutput ? { outputDir: privateOutput } : {}),
@@ -89,9 +94,13 @@ export default defineConfig({
     colorScheme: 'dark'
   },
   webServer: {
-    command: `VITE_E2E=1 pnpm --filter @openzcad/web build && pnpm --filter @openzcad/web preview --host 127.0.0.1 --port ${PORT}`,
+    command: `VITE_E2E=1${FULL_RENDER_BUILD ? ' VITE_E2E_FULL_RENDER=1' : ''} pnpm --filter @openzcad/web build && pnpm --filter @openzcad/web preview --host 127.0.0.1 --port ${PORT}`,
     url: `http://127.0.0.1:${PORT}`,
-    reuseExistingServer: !process.env.CI,
+    // A server named by PLAYWRIGHT_PORT was started on purpose (the face-drag
+    // probe prestarts one); otherwise a full-render run builds its own.
+    reuseExistingServer:
+      !process.env.CI &&
+      (!FULL_RENDER_BUILD || Boolean(process.env.PLAYWRIGHT_PORT)),
     timeout: 120_000
   }
 });

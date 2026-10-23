@@ -1,4 +1,5 @@
 import {
+  enableFullRender,
   test,
   expect,
   bareCanvasDrags,
@@ -2461,6 +2462,7 @@ test('clicking a cube corner past its drawn facet snaps to that isometric view',
 test('the frozen shadow map thaws for a moving body but not for the camera', async ({
   page
 }) => {
+  await enableFullRender(page);
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Shadow Freeze');
