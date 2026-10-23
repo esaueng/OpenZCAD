@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect, enableFullRender, stubApi } from './openzcad-fixtures';
+import { fullRenderBuild } from '../support/renderBuild';
 
 /**
  * E2E builds draw without antialiasing, shadows or the environment map
@@ -26,7 +27,8 @@ async function viewerAntialias(page: Page) {
 test('the e2e build renders the viewer without antialiasing by default', async ({
   page
 }) => {
-  expect(await viewerAntialias(page)).toBe(false);
+  // Perf and capture runs build the production renderer instead.
+  expect(await viewerAntialias(page)).toBe(fullRenderBuild());
 });
 
 test('enableFullRender restores the production renderer', async ({ page }) => {

@@ -8,7 +8,10 @@
  * any of them. `VITE_E2E=1` builds therefore render without all three
  * unless the page sets `window.__ozFullRender = true` before it loads,
  * which is what `enableFullRender` in the e2e fixtures does for the specs
- * whose contract is the rendering itself. Production always renders in full.
+ * whose contract is the rendering itself. Performance probes and
+ * documentation captures build with `VITE_E2E_FULL_RENDER=1`
+ * (playwright.config.ts), so they measure and publish the production
+ * renderer. Production always renders in full.
  */
 export interface RenderProfile {
   readonly antialias: boolean;
@@ -33,11 +36,17 @@ export interface FullRenderScope {
   __ozFullRender?: unknown;
 }
 
+/** Which build the bundle is: production, a full-render e2e build, or e2e. */
+export interface RenderBuild {
+  e2e: boolean;
+  fullRender: boolean;
+}
+
 export function renderProfile(
-  e2eBuild: boolean,
+  build: RenderBuild,
   scope: FullRenderScope | undefined
 ): RenderProfile {
-  return e2eBuild && scope?.__ozFullRender !== true
+  return build.e2e && !build.fullRender && scope?.__ozFullRender !== true
     ? E2E_RENDER_PROFILE
     : FULL_RENDER_PROFILE;
 }
@@ -45,7 +54,10 @@ export function renderProfile(
 /** Read when a renderer is created, so an opt-in must precede navigation. */
 export function currentRenderProfile(): RenderProfile {
   return renderProfile(
-    import.meta.env.VITE_E2E === '1',
+    {
+      e2e: import.meta.env.VITE_E2E === '1',
+      fullRender: import.meta.env.VITE_E2E_FULL_RENDER === '1'
+    },
     typeof window === 'undefined' ? undefined : (window as FullRenderScope)
   );
 }
