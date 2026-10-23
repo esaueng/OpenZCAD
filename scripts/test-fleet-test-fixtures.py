@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -73,8 +74,9 @@ def git_fixture(*, main_is_pin=False, missing_pins=False):
         binaries = directory / "bin"
         binaries.mkdir()
         wrapper = binaries / "git"
+        fetch_wrapper = binaries / "git-fetch.py"
         ready = directory / "pins-ready"
-        wrapper.write_text(
+        fetch_wrapper.write_text(
             "#!" + sys.executable + "\n"
             "import os, subprocess, sys, time\n"
             "from pathlib import Path\n"
@@ -99,6 +101,21 @@ def git_fixture(*, main_is_pin=False, missing_pins=False):
             "    Path(os.environ['OPENZCAD_FIXTURE_PINS_READY']).touch()\n"
             "    sys.exit(0)\n"
             f"os.execv({GIT!r}, [{GIT!r}, *sys.argv[1:]])\n"
+        )
+        # Ordinary Git reads must not start another Python interpreter. This
+        # fixture is exercised repeatedly inside the unchanged five-second
+        # test and by two nested Vitest workers inside the setup deadline.
+        # Keep the slow, delayed fetch in Python; pass every other operation
+        # straight to real Git after the same missing-object guard.
+        wrapper.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = fetch ]; then exec "
+            + shlex.quote(sys.executable) + " " + shlex.quote(str(fetch_wrapper))
+            + " \"$@\"; fi\n"
+            "if [ \"$OPENZCAD_FIXTURE_MISSING_PINS\" = 1 ] && [ \"$1\" = show ] "
+            "&& [ \"$#\" -gt 1 ] && [ ! -e \"$OPENZCAD_FIXTURE_PINS_READY\" ]; then\n"
+            "  case \"$2\" in *:*) echo 'fixture workflow object is not present yet' >&2; exit 1;; esac\n"
+            "fi\nexec " + shlex.quote(GIT) + " \"$@\"\n"
         )
         wrapper.chmod(0o755)
         log = directory / "fetch.log"
