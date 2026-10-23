@@ -37,7 +37,7 @@ def main_contains(commit):
         # Main's commits since a day before the pin are enough to walk to it;
         # CI checkouts are shallow and full history is tens of megabytes.
         committed = subprocess.check_output(["git", "show", "-s", "--format=%cI", commit], cwd=ROOT, text=True).strip()
-        since = datetime.fromisoformat(committed) - timedelta(days=1)
+        since = datetime.fromisoformat(committed.replace("Z", "+00:00")) - timedelta(days=1)
         fetch.append(f"--shallow-since={since.isoformat()}")
     result = subprocess.run(
         fetch + ["origin", "+refs/heads/main:refs/remotes/origin/main"],
