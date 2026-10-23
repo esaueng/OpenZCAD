@@ -399,12 +399,16 @@ test('one Escape clears a refused offset: card, preview, handle and selection', 
   page
 }) => {
   test.setTimeout(180_000);
+  // Keep the cap on the exact-preview path, so a refusal comes from the
+  // kernel rather than from a viewport proxy: chamfers take it off the
+  // primitive's own proxy, and this takes it off the step preview.
+  await page.addInitScript(() => {
+    window.__openzcadE2EExactFaceDrag = true;
+  });
   const { canvas, inspector, consoleErrors } = await createCylinder(
     page,
     'Contract refused offset'
   );
-  // Chamfers keep the cap on the exact-preview path, so a refusal comes from
-  // the kernel rather than from a viewport proxy.
   await page.getByRole('button', { name: /^Chamfer/ }).click();
   await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
   await inspector.getByLabel('Distance', { exact: true }).fill('1');

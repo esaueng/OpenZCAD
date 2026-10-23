@@ -76,3 +76,4 @@ export * from './annotation/dimensionGraphic';
 export * from './selection/hoverDwell';
 
 export * from './gizmo/cylinderProfilePreview';
+export * from './gizmo/stepStretchPreview';

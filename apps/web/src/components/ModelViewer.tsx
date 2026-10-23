@@ -93,7 +93,9 @@ import {
   cylinderRadiusPreviewMatrix,
   createCylinderProfilePreview,
   createLinearProfilePreview,
+  createStepStretchPreview,
   type LinearPreviewProfile,
+  type StepPreviewProfile,
   type CylinderPreviewProfile,
   type CylinderProfilePreview,
   faceTrianglesCentroid,
@@ -376,6 +378,7 @@ export interface FaceResizeCommit {
 /** An armed face-offset handle: where it sits and which face it edits. */
 export interface OffsetHandleTarget {
   linearProfilePreview?: LinearPreviewProfile;
+  stepProfilePreview?: StepPreviewProfile;
   profilePreview?: CylinderPreviewProfile;
   bodyId: string;
   topologyId: string;
@@ -387,6 +390,31 @@ export interface OffsetHandleTarget {
   totalBaseline?: number;
   /** -1 when a drag along the handle subtracts from that total; default +1. */
   totalSense?: 1 | -1;
+}
+
+/**
+ * The handle's value runs along its own normal, which a pick can report
+ * facing either way; the step profile's runs along the face's outward normal.
+ */
+function orientedStepPreview(
+  object: THREE.Object3D,
+  profile: StepPreviewProfile,
+  handleNormal: { x: number; y: number; z: number }
+): CylinderProfilePreview | null {
+  const preview = createStepStretchPreview(object, profile);
+  if (!preview) return null;
+  const sense =
+    profile.normal.x * handleNormal.x +
+      profile.normal.y * handleNormal.y +
+      profile.normal.z * handleNormal.z >=
+    0
+      ? 1
+      : -1;
+  return {
+    cachedBytes: preview.cachedBytes,
+    apply: (offset) => preview.apply(sense * offset),
+    restore: () => preview.restore()
+  };
 }
 
 /** An explicit cylindrical-wall radius handle with an immutable world axis. */
@@ -3189,12 +3217,19 @@ export function ModelViewer({
                     };
               return createCylinderProfilePreview(object, oriented, 'height');
             })()
-          : null;
+          : target.stepProfilePreview
+            ? orientedStepPreview(
+                object,
+                target.stepProfilePreview,
+                target.normal
+              )
+            : null;
       // Generic offsets edit one face (or one constituent of an imported
       // compound), not the whole body's extent. An affine body stretch moves
-      // unrelated geometry and snaps back as exact frames arrive. Without a
-      // recognized profile, keep the last exact body while the worker streams
-      // the requested edit; the handle still follows the pointer immediately.
+      // unrelated geometry and snaps back as exact frames arrive. A step
+      // profile moves only the face's own region, the way the exact move
+      // does. Without any profile, keep the last exact body while the worker
+      // streams the requested edit; the handle still follows the pointer.
       if (preview) {
         offsetBodyProxy = {
           preview,
