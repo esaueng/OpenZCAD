@@ -334,6 +334,154 @@ function expectFreshProjection(
 
 describe('linked projection constraint propagation before writeback', () => {
   it.each([
+    'sketch-only edit',
+    'unchanged alias',
+    'new alias',
+    'published parameter edit'
+  ] as const)(
+    'keeps transitive scalar readers qualified only when unchanged: %s',
+    async (edit) => {
+      const f = await constrainedPlate();
+      f.manager.execute(
+        commandFactories.setParameter({ name: 'p', expression: '6' })
+      );
+      f.manager.execute(
+        commandFactories.setParameter({ name: 'q', expression: 'p' })
+      );
+      f.manager.execute(
+        commandFactories.addSketch({
+          name: 'Independent parameter reader',
+          planeRef: plane,
+          objects: [
+            {
+              objectKind: 'rectangle',
+              width: 'p',
+              height: 2,
+              centerX: 100,
+              centerY: 0
+            }
+          ]
+        })
+      );
+      const independent = findSketch(
+        f.manager.document,
+        f.manager.document.sketchOrder.at(-1)!
+      )!;
+      const height = findSketch(
+        f.manager.document,
+        f.sketchId
+      )!.constraints!.find(
+        (constraint) => constraint.data.constraintKind === 'distance'
+      )!;
+      if (height.data.constraintKind !== 'distance')
+        throw new Error('Expected the plate height distance.');
+      f.manager.execute(
+        commandFactories.deleteSketchConstraint({
+          sketchId: f.sketchId,
+          constraintId: height.constraintId
+        })
+      );
+      f.manager.execute(
+        commandFactories.addSketchConstraint({
+          sketchId: f.sketchId,
+          constraint: { ...height.data, value: 'q' }
+        })
+      );
+      f.manager.execute(
+        commandFactories.setParameter({ name: 'w', expression: '32' })
+      );
+      f.manager.commitDerivedState(
+        await adapter.syncDocument(f.manager.document)
+      );
+      const before = f.manager.document;
+      const prefix: CadPatchProposal['operations'] =
+        edit === 'sketch-only edit' || edit === 'published parameter edit'
+          ? [
+              {
+                kind: 'set_sketch_dimension',
+                sketchId: independent.sketchId,
+                objectId: independent.objectIds[0]!,
+                field: 'width',
+                value: 8
+              }
+            ]
+          : [
+              {
+                kind: 'set_parameter',
+                name: edit === 'unchanged alias' ? 'q' : 'r',
+                expression: edit === 'unchanged alias' ? 'p' : 'q'
+              }
+            ];
+      if (edit === 'published parameter edit')
+        prefix.push({ kind: 'set_parameter', name: 'p', expression: '8' });
+      const proposal: CadPatchProposal = {
+        proposalId: 'scalar_dependency_read',
+        summary: 'Read a qualified profile through a transitive scalar alias.',
+        assumptions: [],
+        operations: [
+          ...prefix,
+          {
+            kind: 'add_extrude',
+            name: 'Qualified scalar copy',
+            sketchId: f.sketchId,
+            distance: 2,
+            samplePoint: { x: 26, y: 3 }
+          }
+        ]
+      };
+      if (edit === 'published parameter edit') {
+        expect(() => commandsForCadPatch(before, proposal)).toThrow(
+          /needs an exact rebuild/
+        );
+        expect(f.manager.document).toBe(before);
+        const updates = commandsForCadPatch(before, {
+          ...proposal,
+          operations: prefix
+        });
+        f.manager.runTransaction('Change scalar publisher', updates);
+        f.manager.commitDerivedState(
+          await adapter.syncDocument(f.manager.document)
+        );
+      }
+      const commands = commandsForCadPatch(
+        f.manager.document,
+        edit === 'published parameter edit'
+          ? { ...proposal, operations: [proposal.operations.at(-1)!] }
+          : proposal
+      );
+      f.manager.runTransaction('Append qualified scalar reader', commands);
+      const area = edit === 'published parameter edit' ? 256 : 192;
+      const feature = listFeaturesInOrder(f.manager.document).at(-1)!;
+      if (
+        feature.data.featureKind !== 'extrude' ||
+        !feature.data.profile ||
+        !('sourceArea' in feature.data.profile)
+      )
+        throw new Error('Expected a geometry-qualified profile.');
+      expect(feature.data.profile.sourceArea).toBeCloseTo(area, 6);
+      const bodyId = f.manager.document.bodyOrder.at(-1)!;
+      expect(
+        volume(await adapter.syncDocument(f.manager.document), bodyId)
+      ).toBeCloseTo(area * 2, 6);
+      const scope = getParameterScope(f.manager.document).scope;
+      expect(scope.p).toBe(edit === 'published parameter edit' ? 8 : 6);
+      expect(scope.q).toBe(scope.p);
+      const nodes = f.manager.document.nodes;
+      f.manager.undo();
+      f.manager.redo();
+      expect(f.manager.document.nodes).toEqual(nodes);
+      expect(
+        volume(
+          await adapter.syncDocument(
+            replayCommands(f.initial, f.manager.document.commandLog)
+          ),
+          bodyId
+        )
+      ).toBeCloseTo(area * 2, 6);
+    }
+  );
+
+  it.each([
     'rename',
     'unrelated sketch dimension',
     'unrelated feature dimension'
