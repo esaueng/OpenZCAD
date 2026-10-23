@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
-import { createProjectDocument } from '@openzcad/document-core';
-import { mergeCollaborationDocuments } from '@openzcad/cloudflare-adapters';
+import {
+  createProjectDocument,
+  mergeCollaborationDocuments
+} from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
   createRoomContext,

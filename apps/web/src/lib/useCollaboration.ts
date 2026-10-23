@@ -14,6 +14,7 @@ import {
   type ProjectDocument,
   type ProjectEditLease
 } from '@openzcad/shared';
+import { mergeCollaborationDocuments } from '@openzcad/document-core';
 import {
   clearUnresolvedConflict,
   conflictFromDocuments,
@@ -93,6 +94,12 @@ export interface CollaborationClientState {
 }
 
 const MAX_MESSAGE_BYTES = 900_000;
+/**
+ * Browser merges in a row without an acknowledgement. Each conflict means the
+ * room really moved, but a peer that keeps winning the race leaves this client
+ * on the manual reconciliation it had before the room stopped merging.
+ */
+const MAX_CONFLICT_MERGES = 3;
 const ROOM_CHANGED_MESSAGE = 'The room changed.';
 
 export function useCollaboration({
@@ -278,6 +285,7 @@ export function useCollaboration({
     let reconnectAttempt = 0;
     let pendingDocument: ProjectDocument | null = null;
     let acknowledgedDocument: ProjectDocument | null = null;
+    let conflictMerges = 0;
     drainDocumentRef.current = (signal) => {
       signal.throwIfAborted();
       if (!pendingDocument) return Promise.resolve(acknowledgedDocument);
@@ -340,6 +348,7 @@ export function useCollaboration({
     ) => {
       const submitted = keepMineAckRef.current?.document ?? pendingDocument;
       pendingDocument = null;
+      conflictMerges = 0;
       const local = documentRef.current;
       serverVersionRef.current = message.version;
       setRoomVersion(message.version);
@@ -415,7 +424,8 @@ export function useCollaboration({
     const sendDocument = (
       socket: WebSocket,
       type: 'hello' | 'document',
-      current = documentRef.current
+      current = documentRef.current,
+      resubmit = false
     ): boolean => {
       if (!isCurrentRoom() || !current || current.projectId !== projectId) {
         return false;
@@ -433,7 +443,8 @@ export function useCollaboration({
         return true;
       }
       if (
-        checkpointRef.current ||
+        // A merged resubmission completes the edit a named save is draining.
+        (checkpointRef.current && !(resubmit && checkpointDrainRef.current)) ||
         conflictRef.current ||
         readUnresolvedConflict(projectId, 'room') ||
         roleRef.current === 'viewer' ||
@@ -483,6 +494,14 @@ export function useCollaboration({
               acknowledge(message);
               return;
             }
+            if (
+              message.type === 'conflict' &&
+              (message.document.schemaVersion ?? 0) <=
+                PROJECT_DOCUMENT_SCHEMA_VERSION &&
+              mergeRoomConflict(socket, message)
+            ) {
+              return;
+            }
             pendingDocument = null;
             settleCheckpointDrain(
               new Error(
@@ -521,6 +540,53 @@ export function useCollaboration({
       return true;
     };
 
+    /**
+     * The room orders versions but never merges them (ADR-024 Phase 1). A
+     * stale submission comes back as a conflict carrying its base, and this
+     * browser merges the room's latest document with its current one — edits
+     * made while the submission was in flight included — then resubmits the
+     * result on the latest version. False leaves the conflict to the caller.
+     */
+    function mergeRoomConflict(
+      socket: WebSocket,
+      message: Extract<CollaborationServerMessage, { type: 'conflict' }>
+    ): boolean {
+      const { base, document: latest } = message;
+      const local = documentRef.current;
+      if (
+        !base ||
+        !local ||
+        local.projectId !== projectId ||
+        base.version !== baseVersionRef.current ||
+        conflictMerges >= MAX_CONFLICT_MERGES ||
+        keepMinePendingRef.current ||
+        conflictRef.current ||
+        readUnresolvedConflict(projectId, 'room') ||
+        roleRef.current === 'viewer' ||
+        (checkpointRef.current && !checkpointDrainRef.current)
+      ) {
+        return false;
+      }
+      const merged = mergeCollaborationDocuments(base, latest, local);
+      if (!merged) return false;
+      conflictMerges += 1;
+      pendingDocument = null;
+      serverVersionRef.current = latest.version;
+      setRoomVersion(latest.version);
+      baseVersionRef.current = latest.version;
+      documentRef.current = merged;
+      remoteHandlerRef.current(merged, { adopted: true });
+      sendDocument(socket, 'document', merged, true);
+      // Refused (say the lease lapsed): the merged document stays local on the
+      // latest base and goes out with the next ordinary publication.
+      if ((pendingDocument as ProjectDocument | null) !== merged) {
+        settleCheckpointDrain(
+          new Error('The room did not confirm the pending edit.')
+        );
+      }
+      return true;
+    }
+
     sendCurrentDocumentRef.current = (current) => {
       const socket = socketRef.current;
       if (isCurrentRoom() && socket?.readyState === WebSocket.OPEN) {
@@ -556,6 +622,7 @@ export function useCollaboration({
         if (!isCurrentRoom() || socketRef.current !== socket) return;
         reconnectAttempt = 0;
         pendingDocument = null;
+        conflictMerges = 0;
         lastSentVersionRef.current = null;
         leaseIdRef.current = null;
         leaseRef.current = null;
@@ -760,6 +827,13 @@ export function useCollaboration({
           return;
         }
         if (message.type === 'conflict') {
+          if (
+            (message.document.schemaVersion ?? 0) <=
+              PROJECT_DOCUMENT_SCHEMA_VERSION &&
+            mergeRoomConflict(socket, message)
+          ) {
+            return;
+          }
           settleCheckpointDrain(
             new Error('The room changed before the named save.')
           );

@@ -4285,12 +4285,19 @@ export type CollaborationServerMessage =
   | { type: 'document'; clientId: string; document: ProjectDocument }
   /**
    * Acknowledges an accepted submission. `document` is present only when the
-   * resolved document differs from what the sender submitted (a server-side
-   * merge), because the merged state is broadcast to every *other* socket and
-   * would otherwise never reach the sender.
+   * resolved document differs from what the sender submitted (canonical
+   * source aliases or a room-minted kept version), because the resolved state
+   * is broadcast to every *other* socket and would otherwise never reach the
+   * sender.
    */
   | { type: 'ack'; version: number; document?: ProjectDocument }
-  | { type: 'conflict'; document: ProjectDocument }
+  /**
+   * Refuses a submission. `document` is the room's latest. `base` is present
+   * when the submission descends from an older room version that the room
+   * still holds: the sender merges base, latest and its own document in the
+   * browser and resubmits against `document.version` (ADR-024 Phase 1).
+   */
+  | { type: 'conflict'; document: ProjectDocument; base?: ProjectDocument }
   | { type: 'lease-granted'; lease: ProjectEditLease }
   | {
       type: 'lease-denied';

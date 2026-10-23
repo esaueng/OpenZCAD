@@ -14,6 +14,8 @@ import {
 export type { ExpressionFieldDimension } from './parameter-expressions';
 import { localizeImportedSourceArtifacts } from './imported-source-artifacts';
 export { localizeImportedSourceArtifacts } from './imported-source-artifacts';
+import { mergeJsonRecords } from './collaboration-merge';
+export { hasJsonPrefix, sameJson } from './collaboration-merge';
 import {
   assertNoReferenceDimensionDependents,
   assertReferenceCommandSchema,
@@ -851,6 +853,53 @@ function assertParameterQuantity(node: ParameterNode): void {
     throw new Error(
       `Parameter "${node.name}" has an unknown type ${JSON.stringify(quantity)}.`
     );
+  }
+}
+
+/**
+ * Three-way merge of two room documents that both descend from `base`, or
+ * null when they conflict. The submitting browser runs it on the base and
+ * latest documents the room returns with a conflict (ADR-024 Phase 1), then
+ * resubmits the result against the latest version.
+ */
+export function mergeCollaborationDocuments(
+  base: ProjectDocument,
+  latest: ProjectDocument,
+  incoming: ProjectDocument
+): ProjectDocument | null {
+  const withoutVolatileState = (document: ProjectDocument) => {
+    const { version: _version, derived: _derived, ...stable } = document;
+    return stable;
+  };
+  if (
+    !Number.isSafeInteger(latest.version) ||
+    !Number.isSafeInteger(incoming.version) ||
+    Math.max(latest.version, incoming.version) >= Number.MAX_SAFE_INTEGER
+  )
+    return null;
+  const merged = mergeJsonRecords(
+    withoutVolatileState(base),
+    withoutVolatileState(latest),
+    withoutVolatileState(incoming)
+  );
+  if (!merged) return null;
+  // Each side is valid on its own, but a field-by-field merge can still
+  // compose an invalid document: one fork deletes an Objects folder while
+  // the other files a body in it. That is a conflict the submitter resolves,
+  // so a merge that does not validate is no merge.
+  try {
+    return normalizeDocument({
+      ...merged,
+      version: Math.max(latest.version, incoming.version) + 1,
+      derived: {
+        bodyRepresentations: {},
+        exportableBodyIds: [],
+        warnings: [],
+        updatedAt: nowIso()
+      }
+    } as unknown as ProjectDocument);
+  } catch {
+    return null;
   }
 }
 

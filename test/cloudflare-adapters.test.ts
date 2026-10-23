@@ -16,7 +16,8 @@ import {
 } from '@openzcad/shared';
 import {
   addPrimitiveFeature,
-  createProjectDocument
+  createProjectDocument,
+  mergeCollaborationDocuments
 } from '@openzcad/document-core';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { RevisionConflictError } from '@openzcad/persistence';
@@ -1206,13 +1207,18 @@ describe('cloudflare adapters', () => {
     expect(resolveCollaborationDocument(first, divergent).kind).toBe(
       'conflict'
     );
-    const merged = resolveCollaborationDocument(first, divergent, base);
-    expect(merged.kind).toBe('accept');
-    expect(merged.document.version).toBe(
-      Math.max(first.version, divergent.version) + 1
-    );
-    expect(merged.document.featureOrder).toHaveLength(2);
-    expect(merged.document.bodyOrder).toHaveLength(2);
+    // The room never merges (ADR-024 Phase 1): a stale submission is a
+    // conflict carrying its base, which the browser merges and resubmits.
+    const stale = resolveCollaborationDocument(first, divergent, base);
+    expect(stale).toEqual({ kind: 'conflict', document: first, base });
+    const merged = mergeCollaborationDocuments(base, first, divergent)!;
+    expect(merged.version).toBe(Math.max(first.version, divergent.version) + 1);
+    expect(merged.featureOrder).toHaveLength(2);
+    expect(merged.bodyOrder).toHaveLength(2);
+    expect(resolveCollaborationDocument(first, merged, first)).toEqual({
+      kind: 'accept',
+      document: merged
+    });
   });
 
   it('rejects a future-schema collaboration snapshot before normalization', async () => {
@@ -1287,7 +1293,7 @@ describe('cloudflare adapters', () => {
     });
   });
 
-  it('returns the merged document to the submitting client', async () => {
+  it('returns the base with a stale conflict and accepts the browser merge', async () => {
     const { context } = createRoomContext();
     const base = createProjectDocument('Race Room', toUserId('user_room'));
     // Two clients edit disjoint parts of the same base at the same time.
@@ -1320,22 +1326,35 @@ describe('cloudflare adapters', () => {
     expect(ackA.type).toBe('ack');
     expect(ackA.document).toBeUndefined();
 
-    // B's submission gets merged with A's. B never sees the broadcast (it is
-    // the sender), so the ack has to carry the merged document or B stays on a
-    // document that no longer matches the room while reporting itself synced.
-    const ackB = (await (
-      await room.fetch(submit('client_b', fromB, base.version))
-    ).json()) as { type: string; version: number; document?: typeof fromA };
-    expect(ackB.type).toBe('ack');
-    expect(ackB.document).toBeDefined();
+    // B is behind. The room does not merge: it refuses with its latest
+    // document and B's base, and stores nothing.
+    const staleB = await room.fetch(submit('client_b', fromB, base.version));
+    expect(staleB.status).toBe(409);
+    const conflict = (await staleB.json()) as {
+      type: string;
+      document: ProjectDocument;
+      base?: ProjectDocument;
+    };
+    expect(conflict).toMatchObject({
+      type: 'conflict',
+      document: { version: fromA.version },
+      base: { version: base.version }
+    });
 
-    const merged = ackB.document!;
-    expect(merged.version).toBe(ackB.version);
+    // B merges in the browser and resubmits on the room's latest version.
+    const merged = mergeCollaborationDocuments(
+      conflict.base!,
+      conflict.document,
+      fromB
+    )!;
     expect(merged.version).toBe(Math.max(fromA.version, fromB.version) + 1);
-    // Exact convergence: the merge kept both peers' work, and B's acked
-    // document is byte-identical to what the room now considers canonical.
     expect(merged.featureOrder).toHaveLength(2);
     expect(merged.bodyOrder).toHaveLength(2);
+    const ackB = (await (
+      await room.fetch(submit('client_b', merged, fromA.version))
+    ).json()) as { type: string; version: number; document?: typeof fromA };
+    // B already holds the merged document, so nothing is echoed back.
+    expect(ackB).toEqual({ type: 'ack', version: merged.version });
 
     const restored = createTestRoom(context, {});
     const ackC = (await (
@@ -1570,9 +1589,9 @@ describe('cloudflare adapters', () => {
     );
     expect(values.has(`room:history:${base.version}`)).toBe(true);
 
-    // The migrated history still serves as a merge ancestor, which is the only
-    // reason to carry it across at all.
-    const merged = (await (
+    // The migrated history still serves as the merge ancestor the room hands
+    // a stale browser, which is the only reason to carry it across at all.
+    const conflict = (await (
       await room.fetch(
         roomRequest(divergent, {
           clientId: 'client_legacy',
@@ -1580,9 +1599,9 @@ describe('cloudflare adapters', () => {
           baseVersion: base.version
         })
       )
-    ).json()) as { type: string; document?: ProjectDocument };
-    expect(merged.type).toBe('ack');
-    expect(merged.document?.featureOrder).toHaveLength(2);
+    ).json()) as { type: string; base?: ProjectDocument };
+    expect(conflict.type).toBe('conflict');
+    expect(conflict.base).toEqual(base);
   });
 
   it('leaves a migrated room alone when the legacy key reappears', async () => {

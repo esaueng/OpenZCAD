@@ -152,6 +152,8 @@ import {
   assertDocumentContentSchema,
   normalizeDocument,
   assertReferenceDocumentSchema,
+  hasJsonPrefix,
+  sameJson,
   withoutDerivedProjection
 } from '@openzcad/document-core';
 import {
@@ -5793,8 +5795,8 @@ const SOCKET_TICKET_TTL_MS = 30_000;
  */
 
 /**
- * Structural limits applied to client JSON before it reaches `normalizeDocument`
- * or the three-way merge, both of which recurse without a depth guard.
+ * Structural limits applied to client JSON before it reaches `normalizeDocument`,
+ * which recurses without a depth guard.
  */
 
 /** Largest HTTP snapshot body accepted, sized to fit one storable document. */
@@ -7169,9 +7171,9 @@ export class ProjectCollaborationRoom extends DurableObject {
         });
         return;
       }
-      // A merge produces a document the sender never had. The broadcast below
-      // skips the sender, so the merged state has to ride along on the ack or
-      // the sender stays silently divergent while reporting itself synced.
+      // Canonical source aliases produce a document the sender never had. The
+      // broadcast below skips the sender, so that state rides along on the ack
+      // or the sender stays silently divergent while reporting itself synced.
       // A kept version the browser minted rides along too: that echo is how
       // the sender adopts it, exactly as it adopted a room-minted one.
       this.send(
@@ -7193,7 +7195,12 @@ export class ProjectCollaborationRoom extends DurableObject {
       return;
     }
     if (resolution.kind === 'conflict') {
-      this.send(socket, { type: 'conflict', document: resolution.document });
+      // The base lets the submitter merge in the browser and resubmit.
+      this.send(socket, {
+        type: 'conflict',
+        document: resolution.document,
+        ...(resolution.base ? { base: resolution.base } : {})
+      });
     }
   }
 
@@ -7777,13 +7784,17 @@ export class ProjectCollaborationRoom extends DurableObject {
     }
     if (resolution.kind === 'conflict') {
       return Response.json(
-        { type: 'conflict', document: resolution.document },
+        {
+          type: 'conflict',
+          document: resolution.document,
+          ...(resolution.base ? { base: resolution.base } : {})
+        },
         { status: 409 }
       );
     }
     if (payload.checkpointReason !== undefined) {
-      // A save point names the clicked model, not a newer graph produced by
-      // a concurrent merge. History bookkeeping may be retained from the room.
+      // A save point names the clicked model, not a newer graph the room
+      // already holds. History bookkeeping may be retained from the room.
       const model = (value: ProjectDocument) => ({
         ...value,
         derived: null,
@@ -7810,8 +7821,8 @@ export class ProjectCollaborationRoom extends DurableObject {
         );
       } else {
         // The browser appended the save point (ADR-024 Phase 1). It names the
-        // exact lineage it was minted on, so anything the room had to merge
-        // in is a conflict the browser rebases and resubmits.
+        // exact lineage it was minted on, so anything else the room holds is
+        // a conflict the browser rebases and resubmits.
         if (resolution.document !== document) {
           return Response.json(
             {
@@ -8123,8 +8134,8 @@ function oversizeSnapshotResponse(): Response {
 }
 
 /**
- * Screens client JSON before `normalizeDocument` and the three-way merge walk
- * it. Both recurse, so a deeply nested payload would throw a RangeError out of
+ * Screens client JSON before `normalizeDocument` walks it. That walk
+ * recurses, so a deeply nested payload would throw a RangeError out of
  * a path with no natural place to report it. The walk here is iterative for the
  * same reason.
  */
@@ -8236,8 +8247,9 @@ function checkPersistedSize(
  * the sender submitted it has to travel back on the ack. A differing version is
  * exactly that signal: `accept` hands back the submitted document unchanged,
  * `same` hands back a content-identical document at the same version, and only
- * a merge mints a new version. `echoDocument` sends it regardless: canonical
- * sources were rewritten, or the sender adopts a kept version from the echo.
+ * a legacy kept version mints a new one. `echoDocument` sends it regardless:
+ * canonical sources were rewritten, or the sender adopts a kept version from
+ * the echo.
  */
 function ackFor(
   resolved: ProjectDocument,
@@ -8332,6 +8344,12 @@ export function resolveKeptCollaborationDocument(
   };
 }
 
+/**
+ * Orders a submission against the room's latest document. The room never
+ * merges (ADR-024 Phase 1): a submission that descends from a version the
+ * room has moved past is a conflict carrying that base, so the submitter can
+ * merge in the browser and resubmit against the latest version.
+ */
 export function resolveCollaborationDocument(
   latest: ProjectDocument | null,
   incoming: ProjectDocument,
@@ -8339,7 +8357,7 @@ export function resolveCollaborationDocument(
 ):
   | { kind: 'accept'; document: ProjectDocument }
   | { kind: 'same'; document: ProjectDocument }
-  | { kind: 'conflict'; document: ProjectDocument } {
+  | { kind: 'conflict'; document: ProjectDocument; base?: ProjectDocument } {
   if (!latest) {
     return { kind: 'accept', document: incoming };
   }
@@ -8353,16 +8371,12 @@ export function resolveCollaborationDocument(
     base.version < latest.version &&
     base.version < incoming.version;
   if (behindLatest) {
-    const merged = mergeCollaborationDocuments(base, latest, incoming);
-    if (merged) {
-      return { kind: 'accept', document: merged };
-    }
-    // The submission descends from a version the room has already moved past,
-    // and the two lines cannot be reconciled. Falling through to the version
-    // comparison below would accept it purely because its number is larger —
-    // silently discarding everything committed since `base`. A submitter that
-    // is provably behind can only ever be accepted by a successful merge.
-    return { kind: 'conflict', document: latest };
+    // The submission descends from a version the room has already moved past.
+    // Falling through to the version comparison below would accept it purely
+    // because its number is larger — silently discarding everything committed
+    // since `base`. A submitter that is provably behind is only ever accepted
+    // after it merges and resubmits on the latest version.
+    return { kind: 'conflict', document: latest, base };
   }
   if (incoming.version > latest.version) {
     // A larger version number is not evidence of descent. A client that edited
@@ -8433,177 +8447,6 @@ function sharesRevisionLineage(
   return start > 0 && hasJsonPrefix(incomingIds, latestIds.slice(start));
 }
 
-const MERGE_CONFLICT = Symbol('collaboration-merge-conflict');
-type JsonMergeValue =
-  | null
-  | boolean
-  | number
-  | string
-  | undefined
-  | JsonMergeValue[]
-  | { [key: string]: JsonMergeValue };
-
-function jsonComparison() {
-  let remaining = 2_000_000;
-  const memo = new WeakMap<object, WeakMap<object, boolean>>();
-  const charge = () => {
-    if (--remaining < 0)
-      throw new Error('Collaboration merge exceeds its work limit.');
-  };
-  const same = (left: unknown, right: unknown): boolean => {
-    charge();
-    if (left === right) return true;
-    if (Array.isArray(left) && Array.isArray(right)) {
-      if (left.length !== right.length) return false;
-      return left.every((value, index) =>
-        same(value ?? null, right[index] ?? null)
-      );
-    }
-    if (!isRecord(left) || !isRecord(right)) return false;
-    const cached = memo.get(left)?.get(right);
-    if (cached !== undefined) return cached;
-    const keys = Object.keys(left).filter((key) => left[key] !== undefined);
-    const rightKeys = Object.keys(right).filter(
-      (key) => right[key] !== undefined
-    );
-    const equal =
-      keys.length === rightKeys.length &&
-      keys.every(
-        (key) => Object.hasOwn(right, key) && same(left[key], right[key])
-      );
-    let pairs = memo.get(left);
-    if (!pairs) {
-      pairs = new WeakMap();
-      memo.set(left, pairs);
-    }
-    pairs.set(right, equal);
-    return equal;
-  };
-  return { same, charge };
-}
-
-function sameJson(left: unknown, right: unknown): boolean {
-  return jsonComparison().same(left, right);
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function hasJsonPrefix(
-  values: unknown[],
-  prefix: unknown[],
-  same = sameJson
-): boolean {
-  return (
-    values.length >= prefix.length &&
-    prefix.every((value, index) => same(value, values[index]))
-  );
-}
-
-function mergeJsonValue(
-  base: unknown,
-  latest: unknown,
-  incoming: unknown,
-  comparison: ReturnType<typeof jsonComparison>
-): JsonMergeValue | typeof MERGE_CONFLICT {
-  comparison.charge();
-  const same = comparison.same;
-  if (same(latest, incoming)) {
-    return structuredClone(latest) as JsonMergeValue;
-  }
-  if (same(base, latest)) {
-    return structuredClone(incoming) as JsonMergeValue;
-  }
-  if (same(base, incoming)) {
-    return structuredClone(latest) as JsonMergeValue;
-  }
-  if (Array.isArray(base) && Array.isArray(latest) && Array.isArray(incoming)) {
-    if (
-      !hasJsonPrefix(latest, base, same) ||
-      !hasJsonPrefix(incoming, base, same)
-    ) {
-      return MERGE_CONFLICT;
-    }
-    const merged = structuredClone(latest) as JsonMergeValue[];
-    for (const value of incoming.slice(base.length)) {
-      if (!merged.some((candidate) => same(candidate, value))) {
-        merged.push(structuredClone(value) as JsonMergeValue);
-      }
-    }
-    return merged;
-  }
-  if (isRecord(base) && isRecord(latest) && isRecord(incoming)) {
-    const merged: { [key: string]: JsonMergeValue } = {};
-    const keys = new Set([
-      ...Object.keys(base),
-      ...Object.keys(latest),
-      ...Object.keys(incoming)
-    ]);
-    for (const key of keys) {
-      const value = mergeJsonValue(
-        base[key],
-        latest[key],
-        incoming[key],
-        comparison
-      );
-      if (value === MERGE_CONFLICT) {
-        return MERGE_CONFLICT;
-      }
-      if (value !== undefined) {
-        merged[key] = value;
-      }
-    }
-    return merged;
-  }
-  return MERGE_CONFLICT;
-}
-
-export function mergeCollaborationDocuments(
-  base: ProjectDocument,
-  latest: ProjectDocument,
-  incoming: ProjectDocument
-): ProjectDocument | null {
-  const withoutVolatileState = (document: ProjectDocument) => {
-    const { version: _version, derived: _derived, ...stable } = document;
-    return stable;
-  };
-  if (
-    !Number.isSafeInteger(latest.version) ||
-    !Number.isSafeInteger(incoming.version) ||
-    Math.max(latest.version, incoming.version) >= Number.MAX_SAFE_INTEGER
-  )
-    return null;
-  let merged: JsonMergeValue | typeof MERGE_CONFLICT;
-  try {
-    merged = mergeJsonValue(
-      withoutVolatileState(base),
-      withoutVolatileState(latest),
-      withoutVolatileState(incoming),
-      jsonComparison()
-    );
-  } catch {
-    return null;
-  }
-  if (merged === MERGE_CONFLICT || !isRecord(merged)) {
-    return null;
-  }
-  // Each side is valid on its own, but a field-by-field merge can still
-  // compose an invalid document: one fork deletes an Objects folder while
-  // the other files a body in it. That is a conflict the submitter resolves,
-  // not a room failure, so a merge that does not validate is no merge.
-  try {
-    return normalizeDocument({
-      ...merged,
-      version: Math.max(latest.version, incoming.version) + 1,
-      derived: {
-        bodyRepresentations: {},
-        exportableBodyIds: [],
-        warnings: [],
-        updatedAt: nowIso()
-      }
-    } as unknown as ProjectDocument);
-  } catch {
-    return null;
-  }
 }

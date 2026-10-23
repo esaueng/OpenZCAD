@@ -3,7 +3,8 @@ import type { ProjectCollaborationRoom } from '@openzcad/cloudflare-adapters';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
   addPrimitiveFeature,
-  createProjectDocument
+  createProjectDocument,
+  mergeCollaborationDocuments
 } from '@openzcad/document-core';
 import {
   createRoomContext,
@@ -999,12 +1000,12 @@ describe('collaboration room socket handling', () => {
     });
   });
 
-  it('rejects a merge that would outgrow one storage value', async () => {
+  it('rejects a browser merge that would outgrow one storage value', async () => {
     const { context, values } = createRoomContext();
     const base = createProjectDocument('Bulk Room', toUserId('user_room'));
     // Each peer's document fits a socket frame on its own; only the merged
-    // result is unstorable, which is why the size guard has to run against the
-    // resolved document rather than the submitted one.
+    // result is unstorable, so the size guard has to run on the resubmission
+    // the browser builds from the conflict's base.
     const fromA = addPrimitiveFeature(base, {
       name: 'A',
       primitiveKind: 'box',
@@ -1038,8 +1039,37 @@ describe('collaboration room socket handling', () => {
     socket.sent.length = 0;
 
     await socket.receive(documentFrame(fromB, base.version));
+    const conflict = socket.lastFrame() as {
+      type: string;
+      document: ProjectDocument;
+      base?: ProjectDocument;
+    };
+    expect(conflict.type).toBe('conflict');
+    const merged = mergeCollaborationDocuments(
+      conflict.base!,
+      conflict.document,
+      fromB
+    )!;
+    // The merged document is too large for a socket frame, so the browser
+    // resubmits it over HTTP, as it does any oversize edit.
+    const resubmitted = await room.fetch(
+      new Request(`https://room.test/?projectId=${base.projectId}`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-openzcad-user-id': ownerIdentity.userId,
+          'x-openzcad-display-name': ownerIdentity.displayName,
+          'x-openzcad-project-role': ownerIdentity.role
+        },
+        body: JSON.stringify({
+          clientId: 'client_ws',
+          baseVersion: fromA.version,
+          document: merged
+        })
+      })
+    );
 
-    expect(socket.lastFrame()).toMatchObject({
+    await expect(resubmitted.json()).resolves.toMatchObject({
       type: 'error',
       code: 'document-too-large'
     });

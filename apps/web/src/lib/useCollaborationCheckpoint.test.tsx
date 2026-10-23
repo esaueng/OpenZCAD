@@ -974,6 +974,81 @@ describe('durable room checkpoints', () => {
     }
   );
 
+  it('merges a stale pending edit in the browser while a named save drains it', async () => {
+    const base = createProjectDocument('Draining merge', toUserId('owner'));
+    const responses: Array<(response: Response) => void> = [];
+    const fetch = vi.fn(
+      (_request: RequestInfo | URL, _options?: RequestInit) =>
+        new Promise<Response>((resolve) => responses.push(resolve))
+    );
+    vi.stubGlobal('fetch', fetch);
+    const hook = setup(base);
+    // The room confirms the joined base, so the oversized edit names it.
+    act(() => hook.socket.receive({ type: 'ack', version: base.version }));
+    const document = oversizedDocument(base);
+    hook.edit(document);
+    await waitFor(() => expect(fetch).toHaveBeenCalledOnce(), {
+      timeout: 2_000
+    });
+    const body = (index: number) =>
+      JSON.parse(fetch.mock.calls[index]![1]!.body as string) as {
+        baseVersion: number | null;
+        checkpointReason?: string;
+        document: ProjectDocument;
+      };
+    expect(body(0).baseVersion).toBe(base.version);
+    let settled!: Promise<unknown>;
+    act(() => {
+      settled = hook.result.current
+        .saveCheckpoint(document, 'Named after merge', hook.options)
+        .catch((error: unknown) => error);
+    });
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+    // Another member moved the room. The room refuses the pending edit with
+    // its base instead of merging; the browser merges and resubmits it as an
+    // ordinary edit despite the named save's publication barrier.
+    const remote = addPrimitiveFeature(base, {
+      name: 'Remote sphere',
+      primitiveKind: 'sphere',
+      dimensions: { radius: 2 }
+    });
+    await act(async () =>
+      responses[0]!(
+        new Response(
+          JSON.stringify({ type: 'conflict', document: remote, base }),
+          { status: 409 }
+        )
+      )
+    );
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    const merged = body(1);
+    expect(merged.baseVersion).toBe(remote.version);
+    expect(merged.checkpointReason).toBeUndefined();
+    expect(merged.document.featureOrder).toEqual([
+      ...remote.featureOrder,
+      ...document.featureOrder
+    ]);
+    // Only the resubmission's acknowledgement completes the drain; then the
+    // named save goes out on the merged version.
+    await act(async () =>
+      responses[1]!(
+        new Response(
+          JSON.stringify({ type: 'ack', version: merged.document.version })
+        )
+      )
+    );
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
+    expect(body(2)).toMatchObject({
+      baseVersion: merged.document.version,
+      checkpointReason: 'Named after merge'
+    });
+    hook.unmount();
+    await settled;
+  });
+
   it.each([
     'unreadable',
     'rejection',
