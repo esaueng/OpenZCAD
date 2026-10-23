@@ -176,10 +176,12 @@ export async function saveCollaborationCheckpoint(
       base: ProjectDocument,
       baseVersion: number | null
     ) => {
-      const minted = createAdvancingSavePoint(base, label);
       // The room stores it unread (ADR-024 Phase 1): refuse a version other
-      // members could not open; the save is then kept on this device.
-      assertStorableDocument(minted);
+      // members could not open (the save is then kept on this device), and
+      // send it as the checks normalized it.
+      const minted = assertStorableDocument(
+        createAdvancingSavePoint(base, label)
+      );
       const savedRevisionId = minted.revisions.at(-1)!.revisionId;
       const response = await abortableCheckpoint(
         desktopFetch(

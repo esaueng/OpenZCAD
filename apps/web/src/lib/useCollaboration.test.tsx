@@ -9,6 +9,7 @@ import {
 } from '@openzcad/document-core';
 import {
   KEPT_LOCAL_VERSION_REASON,
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
   type AuthSession,
   type CollaborationServerMessage,
@@ -677,6 +678,33 @@ describe('useCollaboration lease ordering', () => {
       unmount();
     }
   );
+
+  it('publishes the document as the checks normalized it', () => {
+    const base = createProjectDocument(
+      'Normalized send',
+      toUserId('user_normalized_send')
+    );
+    const { socket, rerender, unmount } = connectedOwner(base);
+    // An older schema stamp is migrated by the checks; the room receives the
+    // migrated form, as an account save would upload it.
+    const edited = addPrimitiveFeature(base, {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 1 }
+    });
+    rerender({ document: { ...edited, schemaVersion: 30 } });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(socket.frames().at(-1)).toMatchObject({
+      type: 'document',
+      document: {
+        version: edited.version,
+        schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION
+      }
+    });
+    unmount();
+  });
 
   it('never publishes a local document other members could not open', () => {
     const base = createProjectDocument(

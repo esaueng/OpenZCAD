@@ -127,7 +127,7 @@ export async function keepLocalRoomVersion(
   // The kept copy is a new committed choice, so it gets its own save revision
   // and a version past the room's. The browser mints both and the room only
   // checks them (ADR-024 Phase 1).
-  const kept = createSavedRevision(
+  const minted = createSavedRevision(
     {
       ...collaborationDocument(current),
       version: Math.max(expectedRemoteVersion, current.version) + 1
@@ -135,8 +135,9 @@ export async function keepLocalRoomVersion(
     KEPT_LOCAL_VERSION_REASON
   );
   // The room stores it unread (ADR-024 Phase 1): never publish a version
-  // other members could not open. The conflict stays for the user.
-  assertStorableDocument(kept);
+  // other members could not open, and send it as the checks normalized it.
+  // A refusal leaves the conflict for the user.
+  const kept = assertStorableDocument(minted);
   const body = {
     type: 'document' as const,
     clientId: clientId(),
