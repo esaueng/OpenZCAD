@@ -163,6 +163,17 @@ class FleetCheckoutFixtureTests(unittest.TestCase):
         result = self.provenance()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_direct_entrypoint_prepares_both_snapshots_before_vitest_setup(self):
+        result = self.provenance()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Ran 1 test", result.stderr)
+        fetches = self.fetches()
+        self.assertEqual(len(fetches), 1, fetches)
+        self.assertIn("--unshallow", fetches[0])
+        self.assertIn("+refs/heads/main:refs/remotes/origin/main", fetches[0])
+        self.assertEqual(git(self.checkout, "show", f"{self.previous}:{PREVIOUS['path']}"),
+                         "immutable comparison fixture")
+
     def test_fetched_off_main_active_pin_is_rejected(self):
         self.prepare()
         git(self.checkout, "fetch", "--quiet", "--no-tags", "origin", self.unlanded)

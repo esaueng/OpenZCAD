@@ -9,3 +9,5 @@ comparison pins fail closed. Comparison provenance uses the same immutable pin
 definition as the queue-policy oracle. Worktree edits cannot replace pinned bytes,
 including a policy larger than 128 KiB. Active workflows, pins, routing assertions
 and existing test/setup/job deadlines are unchanged.
+The direct preflight entrypoint also prepares both absent snapshots and their main
+ancestry in one transfer before Vitest setup, with a real cold-checkout regression.

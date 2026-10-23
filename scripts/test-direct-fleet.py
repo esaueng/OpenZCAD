@@ -6,6 +6,7 @@ import ast
 import json
 import re
 import subprocess
+import sys
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -13,11 +14,34 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CALLER = (ROOT / ".github/workflows/ci.yml").read_text()
 CALLEE, PIN = re.search(r"\.github/workflows/(fleet-ci(?:-v[0-9]+)?\.yml)@([a-f0-9]{40})", CALLER).groups()
+FIXTURE_REPO = re.search(r"uses: ([^/\s]+/[^/\s]+)/\.github/workflows/", CALLER)[1]
+COMPARISON = json.loads((ROOT / "scripts/fleet-test-fixtures.json").read_text())[FIXTURE_REPO]
+
+
+def snapshots():
+    active = subprocess.check_output(["git", "show", f"{PIN}:.github/workflows/{CALLEE}"],
+                                     cwd=ROOT, text=True, stderr=subprocess.DEVNULL)
+    subprocess.check_output(["git", "show", f"{COMPARISON['pin']}:{COMPARISON['path']}"],
+                            cwd=ROOT, stderr=subprocess.DEVNULL)
+    return active
+
+
 try:
-    TEXT = subprocess.check_output(["git", "show", f"{PIN}:.github/workflows/{CALLEE}"], cwd=ROOT, text=True, stderr=subprocess.DEVNULL)
+    TEXT = snapshots()
 except subprocess.CalledProcessError:
-    subprocess.run(["git", "fetch", "--no-tags", "--depth=1", "origin", PIN], cwd=ROOT, check=True)
-    TEXT = subprocess.check_output(["git", "show", f"{PIN}:.github/workflows/{CALLEE}"], cwd=ROOT, text=True)
+    # The workflow also runs this entrypoint before pnpm/Vitest setup. A cold
+    # checkout needs both snapshots and ancestry in the same main transfer.
+    command = ["git", "fetch", "--no-tags", "--quiet"]
+    if subprocess.check_output(["git", "rev-parse", "--is-shallow-repository"],
+                               cwd=ROOT, text=True).strip() == "true":
+        command.append("--unshallow")
+    subprocess.run(command + ["origin", "+refs/heads/main:refs/remotes/origin/main"],
+                   cwd=ROOT, check=True)
+    try:
+        TEXT = snapshots()
+    except subprocess.CalledProcessError:
+        print("Immutable active/comparison fixture data unavailable after main fetch", file=sys.stderr)
+        raise
 
 
 def main_contains(commit):
@@ -53,7 +77,6 @@ EXPRESSIONS = re.findall(
 )
 REPO = re.search(r"github.repository == '([^']+)'", TEXT)[1]
 REPO_ID = int(re.search(r"github.repository_id == '([0-9]+)'", TEXT)[1])
-COMPARISON = json.loads((ROOT / "scripts/fleet-test-fixtures.json").read_text())[REPO]
 
 
 class Context(dict):
