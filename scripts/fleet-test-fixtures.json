@@ -1,7 +1,8 @@
 {
   "esaueng/OpenZCAD": {
     "path": ".github/workflows/fleet-ci.yml",
-    "pin": "fe46bdaa8a64c92464fea42034284be34c58ceae"
+    "pin": "fe46bdaa8a64c92464fea42034284be34c58ceae",
+    "history_since": "2026-10-19T00:00:00Z"
   },
   "esaueng/remus": {
     "path": ".github/workflows/fleet-ci-v4.yml",

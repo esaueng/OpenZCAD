@@ -22,6 +22,7 @@ it.each([
   'cold_prepare_uses_one_main_transfer_and_warm_checkout_stays_offline',
   'partly_warm_checkout_still_prepares_comparison',
   'direct_entrypoint_prepares_both_snapshots_before_vitest_setup',
+  'cached_snapshots_still_need_main_ancestry_and_prepared_head_may_stay_shallow',
   'fetched_off_main_active_pin_is_rejected',
   'fetched_off_main_comparison_pin_is_rejected',
   'missing_comparison_fails_instead_of_skipping',

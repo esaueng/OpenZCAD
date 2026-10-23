@@ -5,10 +5,10 @@ import copy
 import ast
 import json
 import re
+import runpy
 import subprocess
 import sys
 import unittest
-from datetime import datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,17 +26,16 @@ def snapshots():
     return active
 
 
+def fetch_main_history():
+    runpy.run_path(str(ROOT / "scripts/prepare-fleet-test-fixtures.py"))["fetch_main_history"]()
+
+
 try:
     TEXT = snapshots()
 except subprocess.CalledProcessError:
     # The workflow also runs this entrypoint before pnpm/Vitest setup. A cold
     # checkout needs both snapshots and ancestry in the same main transfer.
-    command = ["git", "fetch", "--no-tags", "--quiet"]
-    if subprocess.check_output(["git", "rev-parse", "--is-shallow-repository"],
-                               cwd=ROOT, text=True).strip() == "true":
-        command.append("--unshallow")
-    subprocess.run(command + ["origin", "+refs/heads/main:refs/remotes/origin/main"],
-                   cwd=ROOT, check=True)
+    fetch_main_history()
     try:
         TEXT = snapshots()
     except subprocess.CalledProcessError:
@@ -45,7 +44,7 @@ except subprocess.CalledProcessError:
 
 
 def main_contains(commit):
-    """Whether origin/main reaches `commit`, fetching only the history needed."""
+    """Whether origin/main reaches `commit`, retaining both fixture histories."""
     def contains():
         return subprocess.run(
             ["git", "merge-base", "--is-ancestor", commit, "refs/remotes/origin/main"],
@@ -53,24 +52,7 @@ def main_contains(commit):
         ).returncode == 0
     if contains():
         return True
-    fetch = ["git", "fetch", "--no-tags", "--quiet"]
-    shallow = subprocess.check_output(
-        ["git", "rev-parse", "--is-shallow-repository"], cwd=ROOT, text=True
-    ).strip() == "true"
-    if shallow:
-        # Main's commits since a day before the pin are enough to walk to it;
-        # CI checkouts are shallow and full history is tens of megabytes.
-        committed = subprocess.check_output(["git", "show", "-s", "--format=%cI", commit], cwd=ROOT, text=True).strip()
-        since = datetime.fromisoformat(committed.replace("Z", "+00:00")) - timedelta(days=1)
-        fetch.append(f"--shallow-since={since.isoformat()}")
-    result = subprocess.run(
-        fetch + ["origin", "+refs/heads/main:refs/remotes/origin/main"],
-        cwd=ROOT, capture_output=True, text=True,
-    )
-    if result.returncode:
-        # Git cannot unshallow a pinned commit main does not reach ("error in
-        # object: unshallow ..."), so this is usually the same answer.
-        raise AssertionError(f"could not fetch main back to {commit}: {result.stderr.strip()}")
+    fetch_main_history()
     return contains()
 EXPRESSIONS = re.findall(
     r"^    runs-on: (?:&fleet-runner )?(\$\{\{ fromJSON\(.+\) \}\})$", TEXT, re.M

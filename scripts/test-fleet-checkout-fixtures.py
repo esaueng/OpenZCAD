@@ -59,6 +59,12 @@ class FleetCheckoutFixtureTests(unittest.TestCase):
         # Normal commits retain shared hooks and the approved public identity.
         git(cls.origin, "config", "user.name", "petertoday")
         git(cls.origin, "config", "user.email", "171875562+petertoday@users.noreply.github.com")
+        # A real cold fetch must leave unrelated old asset history behind.
+        # Keep this deterministic and public, including normal commit hooks.
+        (cls.origin / "old-asset.bin").write_bytes(bytes(range(256)) * 4096)
+        cls.commit("test(ci): irrelevant old asset", "2025-12-01T12:00:00+00:00")
+        cls.old_blob = git(cls.origin, "rev-parse", "HEAD:old-asset.bin")
+        (cls.origin / "old-asset.bin").unlink()
         workflows = cls.origin / ".github/workflows"
         workflows.mkdir(parents=True)
         (cls.origin / PREVIOUS["path"]).write_text("immutable comparison fixture\n")
@@ -74,6 +80,7 @@ class FleetCheckoutFixtureTests(unittest.TestCase):
             (scripts / name).write_bytes((ROOT / "scripts" / name).read_bytes())
         comparisons = json.loads(json.dumps(COMPARISONS))
         comparisons["esaueng/OpenZCAD"]["pin"] = cls.previous
+        comparisons["esaueng/OpenZCAD"]["history_since"] = "2025-12-31T00:00:00Z"
         (scripts / "fleet-test-fixtures.json").write_text(json.dumps(comparisons))
         cls.commit("test(ci): caller and preparer fixture", "2026-01-06T12:00:00+00:00")
         git(cls.origin, "checkout", "--quiet", "-b", "unlanded")
@@ -87,6 +94,7 @@ class FleetCheckoutFixtureTests(unittest.TestCase):
         git(cls.origin, "checkout", "--quiet", "main")
         (cls.root / "fixture.json").write_text(json.dumps({
             "previous": cls.previous, "pin": cls.pin, "unlanded": cls.unlanded,
+            "old_blob": cls.old_blob,
         }))
 
     @classmethod
@@ -143,12 +151,18 @@ class FleetCheckoutFixtureTests(unittest.TestCase):
         self.prepare()
         fetches = self.fetches()
         self.assertEqual(len(fetches), 1, fetches)
-        self.assertIn("--unshallow", fetches[0])
+        self.assertIn("--shallow-since=2025-12-31T00:00:00+00:00", fetches[0])
+        self.assertNotIn("--unshallow", fetches[0])
+        self.assertFalse(any(argument.startswith("--filter") for argument in fetches[0]))
         self.assertIn("+refs/heads/main:refs/remotes/origin/main", fetches[0])
         self.assertEqual(git(self.checkout, "rev-parse", "HEAD"), candidate)
         self.assertNotEqual(candidate, git(self.checkout, "rev-parse", "origin/main"))
         self.assertEqual(git(self.checkout, "show", f"{self.previous}:{PREVIOUS['path']}"),
                          "immutable comparison fixture")
+        self.assertNotEqual(subprocess.run(
+            ["git", "cat-file", "-e", self.old_blob], cwd=self.checkout,
+            env=ENV, capture_output=True,
+        ).returncode, 0, "cold preparation downloaded unrelated old asset history")
         git(self.checkout, "remote", "set-url", "origin", (self.root / "unavailable").as_uri())
         self.prepare()
         result = self.provenance()
@@ -169,10 +183,30 @@ class FleetCheckoutFixtureTests(unittest.TestCase):
         self.assertIn("Ran 1 test", result.stderr)
         fetches = self.fetches()
         self.assertEqual(len(fetches), 1, fetches)
-        self.assertIn("--unshallow", fetches[0])
+        self.assertIn("--shallow-since=2025-12-31T00:00:00+00:00", fetches[0])
+        self.assertNotIn("--unshallow", fetches[0])
         self.assertIn("+refs/heads/main:refs/remotes/origin/main", fetches[0])
         self.assertEqual(git(self.checkout, "show", f"{self.previous}:{PREVIOUS['path']}"),
                          "immutable comparison fixture")
+
+    def test_cached_snapshots_still_need_main_ancestry_and_prepared_head_may_stay_shallow(self):
+        candidate = git(self.checkout, "rev-parse", "HEAD")
+        git(self.checkout, "fetch", "--quiet", "--no-tags", "--depth=1",
+            "origin", self.pin, self.previous)
+        self.prepare()
+        self.assertEqual(len(self.fetches()), 1)
+        self.assertEqual(self.provenance().returncode, 0)
+        # Retain the synthetic candidate boundary independently of origin/main.
+        shallow = self.checkout / ".git/shallow"
+        boundaries = set(shallow.read_text().splitlines()) if shallow.exists() else set()
+        shallow.write_text("".join(value + "\n" for value in sorted(boundaries | {candidate})))
+        self.assertEqual(git(self.checkout, "rev-parse", "--is-shallow-repository"), "true")
+        git(self.checkout, "remote", "set-url", "origin", (self.root / "unavailable").as_uri())
+        self.prepare()
+        result = self.provenance()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len(self.fetches()), 1, "prepared main was fetched again for shallow PR HEAD")
+        self.assertEqual(git(self.checkout, "rev-parse", "HEAD"), candidate)
 
     def test_fetched_off_main_active_pin_is_rejected(self):
         self.prepare()
