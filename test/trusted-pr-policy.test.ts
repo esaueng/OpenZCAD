@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { FLEET_CI_PATH, FLEET_CI_PIN } from './fleet-workflow';
 
 const workflow = readFileSync(FLEET_CI_PATH, 'utf8');
@@ -20,9 +20,25 @@ function stepScript(name: string, source = workflow): string {
 }
 
 describe('required validation gate', () => {
+  beforeAll(() => {
+    // A depth-one CI checkout needs immutable Git objects and main history.
+    // Obtain fixtures in setup; every policy assertion still runs below
+    // under the unchanged test deadline, with fetch failures remaining fatal.
+    execFileSync('python3', ['scripts/prepare-fleet-test-fixtures.py'], {
+      encoding: 'utf8'
+    });
+  });
+
   it('retires the orphan OIDC workflow and exercises immutable fleet routing', () => {
     expect(existsSync('.github/workflows/trusted-pr.yml')).toBe(false);
     const result = spawnSync('python3', ['scripts/test-direct-fleet.py'], {
+      encoding: 'utf8'
+    });
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it('prepares cold Git evidence without bypassing offline or stale-pin assertions', () => {
+    const result = spawnSync('python3', ['scripts/test-fleet-test-fixtures.py'], {
       encoding: 'utf8'
     });
     expect(result.status, result.stderr).toBe(0);
@@ -145,5 +161,31 @@ describe('required validation gate', () => {
     expect(validation).toContain('- run: pnpm test:web\n');
     expect(validation).toContain('- run: pnpm test:parity-corpus\n');
     expect(validation).toContain('run: pnpm build\n');
+  });
+});
+
+describe('routing fixture deadlines', () => {
+  let evidence: {
+    control: { exit_code: number; five_second_timeout: boolean; fetches: number };
+    prepared: { exit_code: number; five_second_timeout: boolean; fetches: number };
+    fixture_delay_seconds: number;
+  };
+
+  beforeAll(() => {
+    evidence = JSON.parse(
+      execFileSync('python3', ['scripts/test-fleet-test-fixtures.py', '--deadline-evidence'], {
+        encoding: 'utf8'
+      })
+    ) as typeof evidence;
+  });
+
+  it('keeps a six-second fixture fetch outside the five-second policy test', () => {
+    expect(evidence.fixture_delay_seconds).toBe(6);
+    expect(evidence.control.fetches).toBe(1);
+    expect(evidence.control.exit_code).not.toBe(0);
+    expect(evidence.control.five_second_timeout).toBe(true);
+    expect(evidence.prepared.fetches).toBe(1);
+    expect(evidence.prepared.exit_code).toBe(0);
+    expect(evidence.prepared.five_second_timeout).toBe(false);
   });
 });
