@@ -152,6 +152,7 @@ import {
   assertDocumentContentSchema,
   normalizeDocument,
   assertReferenceDocumentSchema,
+  assertSketchProvenance,
   withoutDerivedProjection
 } from '@openzcad/document-core';
 import {
@@ -8178,6 +8179,7 @@ function checkClientDocument(value: unknown): CollaborationRejection | null {
     };
   }
   try {
+    assertSketchProvenance(value as unknown as ProjectDocument);
     assertDocumentContentSchema(value as unknown as ProjectDocument);
     assertReferenceDocumentSchema(value as unknown as ProjectDocument);
   } catch (error) {

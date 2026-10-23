@@ -11,7 +11,8 @@ import {
   createProjectDocument,
   findSketch
 } from '@openzcad/document-core';
-import { commandFactories } from '@openzcad/command-system';
+import { CommandManager, commandFactories } from '@openzcad/command-system';
+import { computeSketchProfileAnalysis } from '@openzcad/geometry';
 import {
   DEFAULT_APP_SETTINGS,
   MAX_ARTIFACT_UPLOAD_PARTS,
@@ -2770,6 +2771,141 @@ describe('worker api routes', () => {
         expect(saved.name).toBe(candidate.name);
         expect(saved.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
       });
+    }
+  );
+
+  describe.each(['boundary profile', 'conversion ownership'] as const)(
+    'schema-v37 account saves: %s',
+    (family) => {
+      it.each(['current node', 'nested replay log'] as const)(
+        'refuses every older %s carrier without writing, then accepts declared support',
+        async (carrier) => {
+          const created = await createProject(`${family} ${carrier}`);
+          const added = addSketchFeature(created.document, {
+            name: 'Legacy outline',
+            plane: 'XY',
+            objects: [
+              {
+                objectKind: 'rectangle',
+                width: 20,
+                height: 12,
+                centerX: 0,
+                centerY: 0
+              }
+            ]
+          });
+          const projectId = created.document.projectId;
+          const route = `/api/projects/${projectId}/document`;
+          const seeded = await worker.fetch(
+            put(route, {
+              projectId,
+              expectedVersion: created.document.version,
+              document: added.document
+            }),
+            env
+          );
+          expect(seeded.status).toBe(200);
+          const read = async () => {
+            const response = await worker.fetch(
+              new Request(`https://example.com/api/projects/${projectId}`),
+              env
+            );
+            expect(response.status).toBe(200);
+            return (await response.json()) as ProjectDocument;
+          };
+          const before = await read();
+          const sketch = findSketch(before, added.sketchId)!;
+          const objectId = sketch.objectIds[0]!;
+          const source = before.nodes[objectId]!;
+          if (source.kind !== 'sketch-object')
+            throw new Error('Missing source');
+          const manager = new CommandManager(before);
+          if (family === 'conversion ownership') {
+            manager.execute(
+              commandFactories.convertLegacySketchObject({
+                sketchId: added.sketchId,
+                sourceObjectId: objectId,
+                expectedSource: source.data
+              })
+            );
+          } else {
+            const profile = computeSketchProfileAnalysis(
+              [{ id: objectId, data: source.data }],
+              Number
+            ).profiles[0]!;
+            expect(profile.sourceBoundaryLoops).toBeDefined();
+            manager.execute(
+              commandFactories.extrudeSketch({
+                name: 'Authored plate',
+                sketchId: added.sketchId,
+                distance: 2,
+                profile: {
+                  profileId: profile.profileId,
+                  regionFingerprint: profile.regionFingerprint,
+                  sourceArea: profile.area,
+                  samplePoint: profile.samplePoint,
+                  sourceEntityIds: profile.sourceEntityIds,
+                  sourceBoundaryLoops: profile.sourceBoundaryLoops
+                }
+              })
+            );
+          }
+          const candidate = structuredClone(
+            carrier === 'current node' ? manager.document : before
+          );
+          if (carrier === 'current node') candidate.commandLog = [];
+          else {
+            const transaction = (payload: ProjectDocument['commandLog']) => ({
+              kind: 'transaction',
+              label: 'Stored schema-v37 edit',
+              replayVersion: 1,
+              timestamp: '2026-10-22T00:00:00.000Z',
+              payload
+            });
+            candidate.commandLog = [
+              transaction([transaction(manager.document.commandLog)])
+            ];
+            candidate.version += 1;
+          }
+          candidate.name = 'Provenance save awaiting validation';
+          const legacy: Partial<ProjectDocument> = candidate;
+          delete legacy.editHistory;
+          const send = () =>
+            worker.fetch(
+              put(route, {
+                projectId,
+                expectedVersion: before.version,
+                document: legacy
+              }),
+              env
+            );
+
+          for (const version of [33, 34, 35, 36, undefined]) {
+            if (version === undefined) delete legacy.schemaVersion;
+            else
+              legacy.schemaVersion =
+                version as ProjectDocument['schemaVersion'];
+            const refused = await send();
+            expect(refused.status, `schema ${version}`).toBe(400);
+            expect(await refused.json()).toEqual({
+              error:
+                'Sketch boundary provenance and promotion ownership require project schema v37 or newer.'
+            });
+            expect(await read()).toEqual(before);
+          }
+
+          // Only the declared schema changes. The ordinary authored feature or
+          // complete conversion command remains valid and is saved intact.
+          legacy.schemaVersion = PROJECT_DOCUMENT_SCHEMA_VERSION;
+          expect((await send()).status).toBe(200);
+          const saved = await read();
+          expect(saved.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
+          expect(saved.nodes).toEqual(candidate.nodes);
+          expect(saved.commandLog).toEqual(candidate.commandLog);
+          expect(saved.name).toBe(candidate.name);
+          expect(saved.version).toBe(candidate.version);
+        }
+      );
     }
   );
 

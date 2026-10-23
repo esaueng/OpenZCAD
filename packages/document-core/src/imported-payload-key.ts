@@ -44,6 +44,9 @@ function digestText(value: string): string {
   return `${value.length}:${low.toString(36)}${high.toString(36)}`;
 }
 
+/** Existing compact content digest; a stale-input guard, not an authenticity proof. */
+export { digestText as canonicalTextDigest };
+
 /**
  * Replaces an imported payload with a digest of itself.
  *
@@ -56,7 +59,9 @@ function digestText(value: string): string {
  * same input reduced to a constant-size token, so the key stays exactly as
  * sensitive to content while costing a walk instead of a 15 MB string.
  */
-export function keyableImportedNodeData(data: Record<string, unknown>): unknown {
+export function keyableImportedNodeData(
+  data: Record<string, unknown>
+): unknown {
   const featureKind = data.featureKind;
   if (
     featureKind === 'imported-mesh' &&
@@ -97,4 +102,3 @@ export function keyableImportedNodes(nodes: unknown): unknown {
   }
   return replaced ?? nodes;
 }
-

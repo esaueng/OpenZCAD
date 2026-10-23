@@ -3,16 +3,18 @@ import {
   computeSketchProfileAnalysis,
   profileBoundarySignatures,
   profileContainsPoint,
+  resolveBoundaryProfileReference,
   type SketchProfileAnalysisOptions,
   type SketchProfileDiagnostic,
   type SketchRegion
 } from '@openzcad/geometry';
-import type {
-  ProjectDocument,
-  SketchEntityProfileReference,
-  SketchNode,
-  SketchObjectNode,
-  SketchProfileReference
+import {
+  resolveSketchPromotionBoundaryTokens,
+  type ProjectDocument,
+  type SketchEntityProfileReference,
+  type SketchNode,
+  type SketchObjectNode,
+  type SketchProfileReference
 } from '@openzcad/shared';
 
 export interface ProfileReferenceData {
@@ -73,7 +75,10 @@ function resolveEntityProfiles(
  * Resolve the persisted region profiles of an extrude against the sketch's
  * current regions. Shared by both exact kernels so a document means the same
  * region — or fails with the same error — wherever it builds. Resolution is
- * fail-closed (ADR-010), in three tiers that narrow from exact to tolerant:
+ * fail-closed (ADR-010). A provenance-bearing reference uses only its
+ * canonical authored boundary loops. A unique match survives dimension
+ * edits; several exact matches require the stored area and sample witness.
+ * A changed authored topology refuses before the legacy tiers below:
  *
  * 1. the stored fingerprint (or `profileId`) matches a current region;
  * 2. exactly one current region is bounded by exactly the referenced
@@ -88,8 +93,8 @@ function resolveEntityProfiles(
  *
  * One reference kind opts out of geometric identity entirely: an
  * `{ all: true, sourceEntityIds }` reference resolves by entity id alone (see
- * `resolveEntityProfiles`). It is additive — every stored region reference
- * takes exactly the path it took before.
+ * `resolveEntityProfiles`). References without provenance retain their
+ * existing resolution behavior.
  */
 export function resolveRegionProfiles(
   document: ProjectDocument,
@@ -116,14 +121,35 @@ export function resolveRegionProfiles(
     (value) =>
       resolveParamValue(value, scope, 'sketch dimension', document.units),
     undefined,
-    options
+    {
+      ...options,
+      promotionBoundaryTokens: resolveSketchPromotionBoundaryTokens(
+        sketch.promotions ?? [],
+        new Map(objects.map(({ id, data }) => [id, data]))
+      )
+    }
   );
   const resolved = references.flatMap((reference) => {
     if (reference.all === true) {
+      if ('sourceBoundaryLoops' in reference)
+        throw new Error(
+          'Broken profile reference — entity-wide selection cannot carry boundary provenance.'
+        );
       return resolveEntityProfiles(
         reference,
         analysis.profiles,
         analysis.diagnostics
+      );
+    }
+    if (
+      'sourceBoundaryLoops' in reference &&
+      reference.sourceBoundaryLoops !== undefined
+    ) {
+      return resolveBoundaryProfileReference(
+        { ...reference, sourceBoundaryLoops: reference.sourceBoundaryLoops },
+        analysis.profiles,
+        analysis.tolerance,
+        profileContainsPoint
       );
     }
     const areaTolerance = Math.max(

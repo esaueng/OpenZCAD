@@ -148,10 +148,7 @@ describe('isEntityWideProfileSource', () => {
     // reference — which broke the moment the string was edited, the exact
     // edit text exists to support. The target's entities must ride through.
     expect(
-      profileReferencesForSelection(
-        [pick('legacy_1234', ['text_1'])],
-        isText
-      )
+      profileReferencesForSelection([pick('legacy_1234', ['text_1'])], isText)
     ).toEqual([{ all: true, sourceEntityIds: ['text_1'] }]);
   });
 
@@ -177,4 +174,34 @@ describe('isEntityWideProfileSource', () => {
     ).toBe(false);
     expect(isEntityWideProfileSource(undefined)).toBe(false);
   });
+});
+
+it('persists a detached complete boundary witness without changing text entity-wide references', () => {
+  const sourceBoundaryLoops = {
+    outer: [
+      'b1/ent_rect/rectangle/1/4/e/0',
+      'b1/ent_rect/rectangle/1/4/e/0',
+      'b1/ent_rect/rectangle/1/4/e/1',
+      'b1/ent_rect/rectangle/1/4/e/2',
+      'b1/ent_rect/rectangle/1/4/e/3'
+    ],
+    holes: [['p1/ent_hole/circle']]
+  };
+  const refs = profileReferencesForSelection(
+    [
+      pick('profile_rect', ['ent_rect', 'ent_hole'], { sourceBoundaryLoops }),
+      pick('profile_text', ['text_1'], { sourceBoundaryLoops })
+    ],
+    isText
+  );
+  expect(refs[0]).toMatchObject({ sourceBoundaryLoops });
+  expect(refs[1]).toEqual({ all: true, sourceEntityIds: ['text_1'] });
+  sourceBoundaryLoops.outer.pop();
+  sourceBoundaryLoops.holes[0]!.push('p1/other/circle');
+  expect(
+    refs[0]!.all === true ? null : refs[0]!.sourceBoundaryLoops?.outer
+  ).toHaveLength(5);
+  expect(
+    refs[0]!.all === true ? null : refs[0]!.sourceBoundaryLoops?.holes[0]
+  ).toHaveLength(1);
 });

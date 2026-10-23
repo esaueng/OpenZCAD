@@ -7,6 +7,8 @@ export * from './imported-mesh-payload';
 export * from './sketch-reference-dimensions';
 export * from './sketch-composites';
 export * from './sketch-composite-targets';
+export * from './sketch-boundary-provenance';
+export * from './sketch-promotions';
 export * from './mass-density';
 export * from './keymap-settings';
 export * from './drawings';
@@ -18,6 +20,8 @@ import type {
   SketchCompositeCornerTarget,
   SketchCompositeSideTarget
 } from './sketch-composite-targets';
+import type { BoundaryProvenance } from './sketch-boundary-provenance';
+import type { SketchPromotion } from './sketch-promotions';
 import type { ObjectFolderSet } from './object-folders';
 export * from './drawing-annotations';
 export * from './topology-reference';
@@ -158,7 +162,8 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
  */
 // v36 adds composite-named reference corners/sides with explicit topology.
 // Older clients must refuse instead of dropping or reinterpreting targets.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 36 as const;
+// v37 adds authored boundary provenance and explicit legacy conversion ownership.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 37 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -1005,6 +1010,8 @@ export interface SketchNode extends BaseNode {
    * object is never rewritten into one.
    */
   composites?: SketchComposite[];
+  /** Explicit legacy-to-line conversion witnesses and versioned aliases. */
+  promotions?: SketchPromotion[];
 }
 
 export interface SketchDimensionLabelPosition {
@@ -1095,6 +1102,10 @@ export type SketchConstraintKind = SketchConstraintData['constraintKind'];
 export interface SketchConstraint {
   constraintId: SketchConstraintId;
   data: SketchConstraintData;
+  /** Absent remains an ordinary user constraint. */
+  origin?: 'user' | 'promotion-structure';
+  /** Required only for structure owned by an explicit legacy conversion. */
+  promotionId?: string;
 }
 
 /**
@@ -1403,6 +1414,8 @@ export interface SketchRegionProfileReference {
   samplePoint: { x: number; y: number };
   sourceArea: number;
   sourceEntityIds?: string[];
+  /** Authored curve identity by loop, retaining repeated split-edge tokens. */
+  sourceBoundaryLoops?: BoundaryProvenance;
   /** Discriminator; a region reference never carries the entity-wide mode. */
   all?: false;
 }

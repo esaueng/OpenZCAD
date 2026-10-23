@@ -430,3 +430,27 @@ describe('persistent sketch dimensions', () => {
     ).toEqual([]);
   });
 });
+
+it('does not expose promotion-owned distances as editable driving labels', () => {
+  const f = fixture(
+    [{ objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 }],
+    (sketch) => ({
+      constraintKind: 'distance',
+      a: { objectId: sketch.objectIds[0]!, point: 'start' },
+      b: { objectId: sketch.objectIds[0]!, point: 'end' },
+      value: 10
+    })
+  );
+  const owned = f.constraints.map((constraint) => ({
+    ...constraint,
+    origin: 'promotion-structure' as const,
+    promotionId: 'spr_test'
+  }));
+  expect(sketchDimensionAnnotations(f.entries, owned, resolve, 'mm')).toEqual(
+    []
+  );
+  expect(
+    sketchDimensionAnnotations(f.entries, f.constraints, resolve, 'mm')
+  ).toHaveLength(1);
+  expect(owned).toHaveLength(1);
+});

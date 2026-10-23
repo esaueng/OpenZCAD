@@ -117,6 +117,9 @@ export function profileReferencesForSelection(
       regionFingerprint: profile.regionFingerprint,
       samplePoint: profile.samplePoint,
       sourceArea: profile.area,
+      ...(profile.sourceBoundaryLoops
+        ? { sourceBoundaryLoops: structuredClone(profile.sourceBoundaryLoops) }
+        : {}),
       ...(sourceEntityIds.length > 0 ? { sourceEntityIds } : {})
     });
   }

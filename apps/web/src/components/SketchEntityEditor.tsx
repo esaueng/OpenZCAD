@@ -85,6 +85,11 @@ interface SketchEntityEditorProps {
   error?: string | null;
   onApply(data: SketchObjectData): void;
   onDelete(): void;
+  /** Explicitly promote a committed legacy rectangle/polygon to line geometry. */
+  onConvertToEdges?(): void;
+  /** A promoted graph retains shape relations owned by its conversion. */
+  promotionSource?: 'rectangle' | 'polygon';
+  onReleaseShapeConstraints?(): void;
   /**
    * Turn the entity into construction geometry, or back (one undo step).
    * Absent, the editor has no construction toggle.
@@ -531,6 +536,9 @@ export function SketchEntityEditor({
   onDeleteConstraint,
   composite,
   onResizeComposite,
+  onConvertToEdges,
+  promotionSource,
+  onReleaseShapeConstraints,
   projection,
   onUnlinkProjection,
   onRepickProjection
@@ -564,6 +572,13 @@ export function SketchEntityEditor({
     ? geometryError(data, values, scope, units)
     : null;
   const valid = expressionsValid && !semanticError;
+  const committedValues = initialValues(data);
+  const unchanged = fields.every(
+    ({ key }) => values[key] === committedValues[key]
+  );
+  const convertible =
+    onConvertToEdges &&
+    (data.objectKind === 'rectangle' || data.objectKind === 'polygon');
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -601,6 +616,15 @@ export function SketchEntityEditor({
         <fieldset disabled={disabled} className="sketch-entity-values">
           {textAttrs && (
             <TextObjectFields value={textAttrs} onChange={setTextAttrs} />
+          )}
+          {promotionSource && (
+            <p className="muted">
+              This edge belongs to a converted {promotionSource}.{' '}
+              {onReleaseShapeConstraints
+                ? 'Conversion relations preserve its shape and can refuse conflicting edits.'
+                : 'Its conversion shape constraints have been released.'}{' '}
+              Undo conversion to restore the parametric shape.
+            </p>
           )}
           <fieldset disabled={linked} className="sketch-entity-fields">
             {fields.map(({ key, label, dimension = 'length' }) => (
@@ -663,6 +687,49 @@ export function SketchEntityEditor({
               Apply
             </button>
           </footer>
+          {promotionSource && onReleaseShapeConstraints && (
+            <>
+              <p className="muted">
+                Release the conversion's shape constraints to edit edges freely.
+                Your ordinary constraints remain.
+              </p>
+              {!unchanged && (
+                <p className="muted">
+                  Apply or discard field edits before releasing shape
+                  constraints.
+                </p>
+              )}
+              <button
+                type="button"
+                className="secondary"
+                disabled={disabled || !valid || !unchanged}
+                onClick={onReleaseShapeConstraints}
+              >
+                Release shape constraints
+              </button>
+            </>
+          )}
+          {convertible && (
+            <>
+              <p className="muted">
+                Replace this parametric shape with editable lines. Undo restores
+                the original shape.
+              </p>
+              {!unchanged && (
+                <p className="muted">
+                  Apply or discard field edits before converting.
+                </p>
+              )}
+              <button
+                type="button"
+                className="secondary"
+                disabled={disabled || !valid || !unchanged}
+                onClick={onConvertToEdges}
+              >
+                Convert to editable edges
+              </button>
+            </>
+          )}
         </fieldset>
       </form>
       {projection && (

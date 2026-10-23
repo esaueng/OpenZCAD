@@ -135,6 +135,7 @@ export function sketchDimensionAnnotations(
     };
   };
   for (const constraint of constraints) {
+    if (constraint.origin === 'promotion-structure') continue;
     const data = constraint.data;
     if (data.constraintKind === 'radius') {
       const object = byId.get(data.objectId);

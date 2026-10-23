@@ -5,6 +5,7 @@ import {
   resolveParamValue
 } from '@openzcad/document-core';
 import {
+  computeSketchProfileAnalysis,
   edgeDatumAxis,
   frameForPlaneRef,
   geometryTolerance,
@@ -19,8 +20,11 @@ import {
   type Vec3
 } from '@openzcad/geometry';
 import {
+  boundaryProvenanceEqual,
   FULL_REVOLVE_ANGLE_DEG,
   MAX_HELICAL_SWEEP_TURNS,
+  parseSketchBoundaryToken,
+  resolveSketchPromotionBoundaryTokens,
   type FaceWitnessV1,
   type FeatureNode,
   type ProjectDocument,
@@ -853,14 +857,14 @@ function addRegionSideRoles(input: {
   for (const loop of [input.region.outer, ...input.region.holes]) {
     for (const curve of loop.curves) {
       const data = input.objectsById.get(curve.sourceObjectId);
-      const prefix = `sweep.face.side.region.${input.token}.${curve.sourceObjectId}`;
+      const boundary = parseSketchBoundaryToken(curve.boundaryToken);
+      const sourceId = boundary?.objectId ?? curve.sourceObjectId;
+      const prefix = `sweep.face.side.region.${input.token}.${sourceId}`;
       if (curve.kind === 'line') {
-        const index = sourceSegmentIndex(
-          curve,
-          data,
-          input.scope,
-          input.documentUnits
-        );
+        const index =
+          boundary?.kind === 'composite'
+            ? boundary.edgeIndex
+            : sourceSegmentIndex(curve, data, input.scope, input.documentUnits);
         const key =
           index !== null
             ? `${index}`
@@ -985,7 +989,17 @@ export function buildRegionExtrude(
     const assignments: RemusSemanticAssignment[] = [];
     const diagnostics: RemusLineageState[] = [];
     const sourceEntityIds = [
-      ...new Set(group.flatMap((region) => region.sourceEntityIds))
+      ...new Set(
+        group.flatMap((region) =>
+          [region.outer, ...region.holes].flatMap((loop) =>
+            loop.curves.map(
+              (curve) =>
+                parseSketchBoundaryToken(curve.boundaryToken)?.objectId ??
+                curve.sourceObjectId
+            )
+          )
+        )
+      )
     ].sort();
     const token = sourceEntityIds.join('+');
     if (token.length === 0) {
@@ -1963,6 +1977,82 @@ export function buildSweep(
   };
 }
 
+/** Preserve the old first-object meaning using only its current owned edges. */
+function promotedDefaultProfile(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  firstObjectId: string,
+  scope: Record<string, number>
+) {
+  const promotion = sketch.promotions?.find(
+    (p) => p.edgeIds[0] === firstObjectId
+  );
+  if (!promotion) return undefined;
+  const allObjects = new Map(
+    sketch.objectIds.flatMap((id) => {
+      const node = document.nodes[id];
+      return node?.kind === 'sketch-object' ? [[id, node.data] as const] : [];
+    })
+  );
+  const aliases = resolveSketchPromotionBoundaryTokens(
+    [promotion],
+    allObjects
+  );
+  const edges = promotion.edgeIds.map((id) => {
+    const data = allObjects.get(id);
+    if (data?.objectKind !== 'line')
+      throw new Error('Converted default profile has a missing editable edge.');
+    return { id, data: { ...data, construction: false } };
+  });
+  const resolve = (value: ParamValue) =>
+    resolveParamValue(
+      value,
+      scope,
+      'converted profile coordinate',
+      document.units
+    );
+  const analysis = computeSketchProfileAnalysis(edges, resolve, undefined, {
+    promotionBoundaryTokens: new Map(
+      promotion.edgeIds.map((id) => [id, aliases.get(id)!])
+    )
+  });
+  const expected = {
+    outer: promotion.edgeIds.map((id) => aliases.get(id)!),
+    holes: []
+  };
+  const region = analysis.profiles[0];
+  if (
+    analysis.profiles.length !== 1 ||
+    !region?.sourceBoundaryLoops ||
+    !boundaryProvenanceEqual(region.sourceBoundaryLoops, expected)
+  )
+    throw new Error(
+      'Converted default profile no longer forms its complete authored closed boundary. Repair the editable edges.'
+    );
+  const vertices = edges.map(({ data }) => ({
+    x: resolve(data.x1),
+    y: resolve(data.y1)
+  }));
+  if (
+    edges.some(({ data }, i) => {
+      const next = vertices[(i + 1) % vertices.length]!;
+      return (
+        Math.hypot(resolve(data.x2) - next.x, resolve(data.y2) - next.y) >
+        analysis.tolerance
+      );
+    })
+  )
+    throw new Error(
+      'Converted default profile has disconnected or reversed authored edges. Repair the editable edges.'
+    );
+  return {
+    region,
+    vertices,
+    objectId: promotion.sourceObjectId,
+    data: promotion.sourceData
+  };
+}
+
 function buildStraightSweep(
   kernel: RemusKernel,
   document: ProjectDocument,
@@ -2016,6 +2106,9 @@ function buildStraightSweep(
       `Sketch "${sketch.name}" plane did not resolve at its history position.`
     );
   }
+  const promoted = promotedDefaultProfile(document, sketch, object.id, scope);
+  const sourceId = promoted?.objectId ?? String(object.id);
+  const sourceData = promoted?.data ?? object.data;
   if (feature.data.featureKind === 'extrude') {
     const distance = resolveParamValue(
       feature.data.distance,
@@ -2034,14 +2127,16 @@ function buildStraightSweep(
       document.units
     );
     const sweep = forwardSweep(extrudeBasis, totalDistance);
-    const face = makeProfileFace(
-      kernel,
-      object.data,
-      sweep.faceBasis,
-      0,
-      scope,
-      document.units
-    );
+    const face = promoted
+      ? makeRegionFace(kernel, promoted.region, sweep.faceBasis, warn)
+      : makeProfileFace(
+          kernel,
+          object.data,
+          sweep.faceBasis,
+          0,
+          scope,
+          document.units
+        );
     const solid = kernel.extrude(
       face,
       extrudeBasis.normal.x,
@@ -2055,23 +2150,19 @@ function buildStraightSweep(
         kernel,
         solid,
         feature,
-        String(object.id),
-        object.data,
+        sourceId,
+        sourceData,
         extrudeBasis,
         totalDistance,
         scope,
-        document.units
+        document.units,
+        promoted?.vertices
       )
     };
   }
-  const face = makeProfileFace(
-    kernel,
-    object.data,
-    basis,
-    0,
-    scope,
-    document.units
-  );
+  const face = promoted
+    ? makeRegionFace(kernel, promoted.region, basis, warn)
+    : makeProfileFace(kernel, object.data, basis, 0, scope, document.units);
 
   if (feature.data.axisRef && !revolveAxis) {
     throw new Error('Revolve datum axis did not resolve.');
@@ -2100,18 +2191,19 @@ function buildStraightSweep(
     solids: [solid],
     // A partial revolve of a non-circular profile is a deliberate ADR-011
     // hash-only body, not a lineage builder that quietly matched nothing.
-    lineage: revolveKeepsSemanticLineage(angleDeg, object.data)
+    lineage: revolveKeepsSemanticLineage(angleDeg, sourceData)
       ? buildRevolveLineage(
           kernel,
           solid,
           feature,
-          String(object.id),
-          object.data,
+          sourceId,
+          sourceData,
           basis,
           direction,
           point,
           scope,
-          document.units
+          document.units,
+          promoted?.vertices
         )
       : remusHashOnlyLineage('sweep', PARTIAL_REVOLVE_HASH_ONLY_REASON)
   };

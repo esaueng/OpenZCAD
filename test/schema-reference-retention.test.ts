@@ -10,13 +10,15 @@ import {
   createProjectDocument,
   extrudeSketch,
   findSketch,
-  normalizeDocument
+  normalizeDocument,
+  resolveParamValue
 } from '@openzcad/document-core';
 import { computeSketchRegions } from '@openzcad/geometry';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   createSketchCompositeCornerTarget,
+  resolveSketchPromotionBoundaryTokens,
   resolveSketchReferenceDimension,
   toArtifactId,
   toAssetId,
@@ -36,6 +38,7 @@ import {
   cornerRectangleShape
 } from '../apps/web/src/lib/sketch/composites';
 import { sketchEntitiesEditCommands } from '../apps/web/src/lib/sketch/editing';
+import { faceSketchAttachment } from '../apps/web/src/lib/faceSketchAttachment';
 import {
   backupFileBytes,
   checksum,
@@ -522,6 +525,274 @@ describe('serial schema retention for sketch reference distances', () => {
       expect(rebuilt.bodyRepresentations[f.bodyId]!.volume).toBeCloseTo(
         Math.PI * 50,
         8
+      );
+    } finally {
+      adapter.dispose();
+    }
+  });
+
+  it('converts a hole inside a held outline without losing mixed boundary provenance, attachments or retained v32 content', async () => {
+    const f = await authoredFixture(32);
+    const opened = normalizeDocument(structuredClone(f.saved));
+    const manager = new CommandManager(opened);
+    const shape = cornerRectangleShape({ x: 0, y: 0 }, { x: 20, y: 10 });
+    if (!shape) throw new Error('Holed plate fixture is degenerate');
+    const drawing = compositeCommands(shape, {
+      kind: 'new-sketch',
+      name: 'Held outline and legacy hole',
+      planeRef: { type: 'canonical', plane: 'XY', offset: 0 }
+    });
+    manager.execute(composeCommands(drawing.label, drawing.commands));
+    const sketchId = drawing.sketchId;
+    const hole = {
+      objectKind: 'rectangle' as const,
+      width: '2 mm',
+      height: 4,
+      centerX: 5,
+      centerY: 5
+    };
+    manager.execute(
+      commandFactories.addSketchObjects({ sketchId, objects: [hole] })
+    );
+    const sourceId = findSketch(manager.document, sketchId)!.objectIds.at(-1)!;
+    const composite = findSketch(manager.document, sketchId)!.composites![0]!;
+    const sketchObjects = (document: ProjectDocument) =>
+      new Map(
+        findSketch(document, sketchId)!.objectIds.map((id) => {
+          const node = document.nodes[id]!;
+          if (node.kind !== 'sketch-object')
+            throw new Error('Missing plate edge');
+          return [id, node.data] as const;
+        })
+      );
+    const regions = computeSketchRegions(
+      [...sketchObjects(manager.document)].map(([id, data]) => ({ id, data })),
+      (value) => resolveParamValue(value, {}, 'retained hole', 'mm')
+    );
+    const selected = regions.filter((region) =>
+      region.sourceEntityIds.includes(composite.edgeIds[0]!)
+    );
+    expect(selected).toHaveLength(1);
+    const source = selected[0]!;
+    expect(source.area).toBeCloseTo(192, 9);
+    const loops = source.sourceBoundaryLoops!;
+    expect(loops.outer).toHaveLength(4);
+    expect(loops.outer.every((token) => token.startsWith('p1/'))).toBe(true);
+    expect(loops.holes).toHaveLength(1);
+    expect(loops.holes[0]).toHaveLength(4);
+    expect(
+      loops.holes[0]!.every((token) => token.startsWith(`b1/${sourceId}/`))
+    ).toBe(true);
+    const pad = commandFactories.extrudeSketch({
+      name: 'Plate with retained hole',
+      sketchId,
+      distance: 3,
+      operation: 'new-body',
+      profile: {
+        profileId: source.profileId,
+        regionFingerprint: source.regionFingerprint,
+        sourceArea: source.area,
+        samplePoint: source.samplePoint,
+        sourceEntityIds: [...source.sourceEntityIds],
+        sourceBoundaryLoops: structuredClone(loops)
+      }
+    });
+    manager.execute(pad);
+    const padId = pad.payload.ids!.bodyId;
+    const adapter = await createExactKernelAdapter();
+    try {
+      const original = await adapter.syncDocument(manager.document);
+      expect(original.warnings).toEqual([]);
+      expect(original.bodyRepresentations[padId]!.volume).toBeCloseTo(576, 8);
+      const faceNames = original.bodyRepresentations[
+        padId
+      ]!.topology!.faces.map((face) => face.reference?.lineageName).sort();
+      expect(faceNames).toHaveLength(10);
+      expect(faceNames.every((name) => typeof name === 'string')).toBe(true);
+      const front = original.bodyRepresentations[padId]!.topology!.faces.find(
+        (face) =>
+          (face.geometry?.normal?.y ?? 0) < -0.99 &&
+          Math.abs(face.geometry?.center?.y ?? Infinity) < 1e-9
+      )!;
+      const attachment = faceSketchAttachment({
+        bodyId: padId,
+        pickedHash: front.hash,
+        face: front
+      });
+      if (!attachment.ok) throw new Error(attachment.reason);
+      expect(attachment.attachment).toBe('associative');
+      const attachedSketch = commandFactories.addSketch({
+        name: 'Retained face attachment',
+        planeRef: attachment.planeRef,
+        objects: [{ objectKind: 'circle', radius: 0.5, centerX: 0, centerY: 0 }]
+      });
+      manager.execute(attachedSketch);
+      const attachedSketchId = attachedSketch.payload.ids!.sketchId;
+      const boss = commandFactories.extrudeSketch({
+        name: 'Attached boss',
+        sketchId: attachedSketchId,
+        distance: 1,
+        operation: 'new-body'
+      });
+      manager.execute(boss);
+      const bossId = boss.payload.ids!.bodyId;
+      const beforeConversion = structuredClone(manager.document);
+      manager.execute(
+        commandFactories.convertLegacySketchObject({
+          sketchId,
+          sourceObjectId: sourceId,
+          expectedSource: hole
+        })
+      );
+      const convertedSketch = findSketch(manager.document, sketchId)!;
+      const promotion = structuredClone(convertedSketch.promotions![0]!);
+      expect(promotion.sourceObjectId).toBe(sourceId);
+      expect(promotion.sourceData).toEqual(hole);
+      expect(promotion.edgeIds).toHaveLength(4);
+      expect(manager.document.nodes[sourceId]).toBeUndefined();
+      const profileOf = (document: ProjectDocument) => {
+        const feature = document.nodes[pad.payload.ids!.featureNodeId]!;
+        if (
+          feature.kind !== 'feature' ||
+          feature.data.featureKind !== 'extrude'
+        )
+          throw new Error('Missing retained plate feature');
+        const profile = feature.data.profile;
+        if (
+          !profile ||
+          !('sourceBoundaryLoops' in profile) ||
+          !profile.sourceBoundaryLoops
+        )
+          throw new Error('Missing retained plate boundary provenance');
+        return profile;
+      };
+      expect(profileOf(manager.document).sourceBoundaryLoops).toEqual(loops);
+      const firstHoleEdge = sketchObjects(manager.document).get(
+        promotion.edgeIds[0]!
+      )!;
+      if (firstHoleEdge.objectKind !== 'line')
+        throw new Error('Expected converted line');
+      expect({
+        x1: resolveParamValue(firstHoleEdge.x1, {}, 'converted x1', 'mm'),
+        y1: resolveParamValue(firstHoleEdge.y1, {}, 'converted y1', 'mm'),
+        x2: resolveParamValue(firstHoleEdge.x2, {}, 'converted x2', 'mm'),
+        y2: resolveParamValue(firstHoleEdge.y2, {}, 'converted y2', 'mm')
+      }).toEqual({ x1: 4, y1: 3, x2: 6, y2: 3 });
+      const convertedRegions = computeSketchRegions(
+        [...sketchObjects(manager.document)].map(([id, data]) => ({
+          id,
+          data
+        })),
+        (value) =>
+          resolveParamValue(value, {}, 'retained converted hole', 'mm'),
+        undefined,
+        {
+          promotionBoundaryTokens: resolveSketchPromotionBoundaryTokens(
+            convertedSketch.promotions!,
+            sketchObjects(manager.document)
+          )
+        }
+      );
+      expect(
+        convertedRegions.find((region) =>
+          region.sourceEntityIds.includes(composite.edgeIds[0]!)
+        )!.sourceBoundaryLoops
+      ).toEqual(loops);
+      const converted = await adapter.syncDocument(manager.document);
+      expect(converted.warnings).toEqual([]);
+      expect(converted.bodyRepresentations[padId]!.volume).toBeCloseTo(576, 8);
+      expect(
+        converted.bodyRepresentations[padId]!.topology!.faces.map(
+          (face) => face.reference?.lineageName
+        ).sort()
+      ).toEqual(faceNames);
+      expect(converted.bodyRepresentations[bossId]!.volume).toBeCloseTo(
+        Math.PI / 4,
+        8
+      );
+      expect(
+        (converted.bodyRepresentations[bossId]!.bbox.min.x +
+          converted.bodyRepresentations[bossId]!.bbox.max.x) /
+          2
+      ).toBeCloseTo(10, 8);
+      const edits = await sketchEntitiesEditCommands(
+        manager.document,
+        sketchId,
+        compositeMemberUpdates(
+          composite,
+          [
+            { x: 0, y: 0 },
+            { x: 32, y: 0 },
+            { x: 32, y: 10 },
+            { x: 0, y: 10 }
+          ],
+          sketchObjects(manager.document)
+        ),
+        (document, id) => adapter.solveSketch(document, id),
+        'Widen outline around converted hole'
+      );
+      manager.execute(
+        composeCommands('Widen outline around converted hole', edits)
+      );
+      const resized = structuredClone(manager.document);
+      expect(profileOf(resized).sourceBoundaryLoops).toEqual(loops);
+      expect(findSketch(resized, sketchId)!.promotions).toEqual([promotion]);
+      expect(resized.drawings).toEqual(opened.drawings);
+      expect(resized.referenceImages).toEqual(opened.referenceImages);
+      expect(resized.assets).toEqual(opened.assets);
+      expect(
+        resized.editHistory!.entries.slice(
+          0,
+          opened.editHistory!.entries.length
+        )
+      ).toEqual(opened.editHistory!.entries);
+      manager.undo();
+      manager.undo();
+      expect(manager.document.nodes[sourceId]).toEqual(
+        beforeConversion.nodes[sourceId]
+      );
+      expect(findSketch(manager.document, sketchId)).not.toHaveProperty(
+        'promotions'
+      );
+      const undone = await adapter.syncDocument(manager.document);
+      expect(undone.warnings).toEqual([]);
+      expect(undone.bodyRepresentations[padId]!.volume).toBeCloseTo(576, 8);
+      manager.redo();
+      manager.redo();
+      const replayed = replayCommands(
+        f.replayBase,
+        manager.document.commandLog
+      );
+      expect(findSketch(replayed, sketchId)).toEqual(
+        findSketch(resized, sketchId)
+      );
+      expect(profileOf(replayed).sourceBoundaryLoops).toEqual(loops);
+      const restored = await backup(manager.document, f.pictureChecksum);
+      // Native JSON represents either sign of zero as 0, including the
+      // measured attachment basis. Compare the complete authored wire value.
+      expect(restored.document).toEqual(
+        JSON.parse(JSON.stringify(manager.document))
+      );
+      expect(backupFileBytes(restored.files[0]!)).toEqual(png);
+      const rebuilt = await adapter.syncDocument(restored.document);
+      expect(rebuilt.warnings).toEqual([]);
+      expect(rebuilt.bodyRepresentations[padId]!.volume).toBeCloseTo(936, 8);
+      expect(
+        rebuilt.bodyRepresentations[padId]!.topology!.faces.map(
+          (face) => face.reference?.lineageName
+        ).sort()
+      ).toEqual(faceNames);
+      expect(rebuilt.bodyRepresentations[bossId]!.volume).toBeCloseTo(
+        Math.PI / 4,
+        8
+      );
+      expect(
+        (rebuilt.bodyRepresentations[bossId]!.bbox.min.x +
+          rebuilt.bodyRepresentations[bossId]!.bbox.max.x) /
+          2
+      ).toBeCloseTo(16, 8);
+      expect(findSketch(restored.document, attachedSketchId)!.planeRef).toEqual(
+        JSON.parse(JSON.stringify(attachment.planeRef))
       );
     } finally {
       adapter.dispose();
