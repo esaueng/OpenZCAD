@@ -60,15 +60,16 @@ export function canonicalProjectContentKey(document: ProjectDocument): string {
 
 /**
  * The content a geometry rebuild reads: {@link canonicalProjectContentKey}
- * without the D01 drawing section or the I05 reference images. Sheets, views
- * and images are presentation over the model, so moving a view, retitling a
- * sheet or sliding an image must keep the ready geometry and every cached
+ * without the D01 drawing section or the I05 reference images and Objects folders. Sheets, views
+ * images and folders are presentation over the model, so moving a view, retitling a
+ * sheet or sliding an image or filing a body must keep the ready geometry and every cached
  * build. Comparisons of saved content (the conflict dialog) keep using the
  * full key, where such an edit is a real difference.
  */
 export function geometryContentKey(document: ProjectDocument): string {
   const {
     drawings: _drawings,
+    objectFolders: _objectFolders,
     referenceImages: _referenceImages,
     ...model
   } = document;

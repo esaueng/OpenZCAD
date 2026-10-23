@@ -7,6 +7,12 @@ import {
   sendAssistantPromptFiles,
   sendAssistantPromptKey
 } from '../lib/assistant/promptKeys';
+import {
+  browseCommands,
+  loadRecentCommands,
+  rankedCommands,
+  recordRecentCommand
+} from '../lib/commandSearch';
 import { ShortcutKeys } from './ShortcutKeys';
 
 const LIST_ID = 'command-palette-list';
@@ -33,6 +39,11 @@ export interface PaletteCommand {
   icon?: ReactNode;
   /** Non-null disables the row and explains why. */
   disabledReason?: string | null;
+  /**
+   * The command does not act on the current pick: an empty search leaves it
+   * out and a typed one ranks it lower (`lib/commandSearch.ts`).
+   */
+  offPick?: boolean;
   run(): void;
 }
 
@@ -76,64 +87,11 @@ interface CommandBarProps {
    * and focuses it, even to the same words twice.
    */
   draft?: { id: number; text: string } | null;
-}
-
-function wordStartsWith(value: string, token: string): boolean {
-  return value.split(/\s+/).some((word) => word.startsWith(token));
-}
-
-function tokenScore(command: PaletteCommand, token: string): number {
-  const label = command.label.toLowerCase();
-  if (label.startsWith(token)) {
-    return 4;
-  }
-  if (wordStartsWith(label, token)) {
-    return 3;
-  }
-  if (label.includes(token)) {
-    return 2;
-  }
-  // Declared on commands long before anything read them: "laser" never
-  // found the DXF outline export its keywords name.
-  if (
-    command.keywords?.some((keyword) => keyword.toLowerCase().startsWith(token))
-  ) {
-    return 2;
-  }
-  return wordStartsWith(command.group.toLowerCase(), token) ? 1 : 0;
-}
-
-function rankedCommands(
-  commands: PaletteCommand[],
-  query: string
-): PaletteCommand[] {
-  const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
-  if (tokens.length === 0) {
-    return commands;
-  }
-
-  const ranked = commands.flatMap((command, sourceIndex) => {
-    const scores = tokens.map((token) => tokenScore(command, token));
-    return scores.every((score) => score > 0)
-      ? [
-          {
-            command,
-            hasLabelMatch: scores.some((score) => score > 1),
-            score: scores.reduce((sum, score) => sum + score, 0),
-            sourceIndex
-          }
-        ]
-      : [];
-  });
-  const hasLabelMatch = ranked.some((entry) => entry.hasLabelMatch);
-
-  return ranked
-    .filter((entry) => !hasLabelMatch || entry.hasLabelMatch)
-    .sort(
-      (left, right) =>
-        right.score - left.score || left.sourceIndex - right.sourceIndex
-    )
-    .map(({ command }) => command);
+  /**
+   * What is picked, for the empty search's caption: "1 face". The list then
+   * holds only the commands that act on it.
+   */
+  pick?: string | null;
 }
 
 /**
@@ -175,12 +133,15 @@ export function CommandBar({
   busy = false,
   unread = false,
   context = null,
-  draft = null
+  draft = null,
+  pick = null
 }: CommandBarProps) {
   const [query, setQuery] = useState('');
   // Null is the default row: the ask row when there is one, else the best
   // match.
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  // Most recent first; read once, then kept in step with what runs here.
+  const [recentIds, setRecentIds] = useState(loadRecentCommands);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   // Where focus was before the bar took it, for Escape and for a command
@@ -199,9 +160,21 @@ export function CommandBar({
   const typed = query.slice(prefix.length);
   // The host rebuilds the command list every render; only rank it while
   // the list is up.
+  const browsing = typed.trim().length === 0;
+  const entries = useMemo(() => {
+    if (!open || !searching) {
+      return [];
+    }
+    return browsing
+      ? browseCommands(commands, recentIds)
+      : rankedCommands(commands, typed, recentIds).map((command) => ({
+          command,
+          recent: false
+        }));
+  }, [browsing, commands, open, recentIds, searching, typed]);
   const matches = useMemo(
-    () => (open && searching ? rankedCommands(commands, typed) : []),
-    [commands, open, searching, typed]
+    () => entries.map((entry) => entry.command),
+    [entries]
   );
   const hasMatches = matches.length > 0;
   // A question that names commands lists them above an "Ask" row; one that
@@ -290,6 +263,7 @@ export function CommandBar({
       return;
     }
     dismiss();
+    setRecentIds(recordRecentCommand(command.id));
     command.run();
   }
 
@@ -345,7 +319,11 @@ export function CommandBar({
               className={hasRows ? 'visually-hidden' : 'palette-empty'}
               role="status"
             >
-              {hasRows ? '' : 'No matching command.'}
+              {hasRows
+                ? ''
+                : browsing
+                  ? 'Nothing runs here now. Type to search every command.'
+                  : 'No matching command.'}
             </p>
             {hasRows && (
               <div
@@ -355,7 +333,7 @@ export function CommandBar({
                 aria-label="Commands"
                 ref={listRef}
               >
-                {matches.map((command, index) => (
+                {entries.map(({ command, recent }, index) => (
                   <button
                     key={command.id}
                     type="button"
@@ -387,7 +365,9 @@ export function CommandBar({
                         {command.disabledReason}
                       </small>
                     ) : (
-                      <small className="palette-group">{command.group}</small>
+                      <small className="palette-group">
+                        {recent ? 'Recent' : command.group}
+                      </small>
                     )}
                     {command.shortcut && (
                       <kbd>
@@ -426,7 +406,11 @@ export function CommandBar({
             )}
             {hasRows && (
               <p className="command-bar-keys" aria-hidden="true">
-                {clampedIndex === askIndex ? KEYS_ASK : KEYS_RUN}
+                {clampedIndex === askIndex
+                  ? KEYS_ASK
+                  : browsing && pick
+                    ? `For ${pick} · type to search all · ${KEYS_RUN}`
+                    : KEYS_RUN}
               </p>
             )}
           </div>
@@ -572,9 +556,11 @@ export function CommandBar({
                 const completed = activeCommand!;
                 setQuery(`${prefix}${completed.label}`);
                 setActiveIndex(
-                  rankedCommands(commands, completed.label).findIndex(
-                    (command) => command.id === completed.id
-                  )
+                  rankedCommands(
+                    commands,
+                    completed.label,
+                    recentIds
+                  ).findIndex((command) => command.id === completed.id)
                 );
               } else if (listShown && hasRows && event.key === 'ArrowDown') {
                 event.preventDefault();

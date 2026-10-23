@@ -9,12 +9,14 @@ export * from './sketch-composites';
 export * from './mass-density';
 export * from './keymap-settings';
 export * from './drawings';
-export * from './drawing-annotations';
-export * from './topology-reference';
-export * from './reference-images';
+export * from './object-folders';
 import type { DocumentHistory } from './document-history';
 import type { KeymapOverrides } from './keymap-settings';
 import type { DrawingSet } from './drawings';
+import type { ObjectFolderSet } from './object-folders';
+export * from './drawing-annotations';
+export * from './topology-reference';
+export * from './reference-images';
 import type { ReferenceImageSet } from './reference-images';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
@@ -138,8 +140,14 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
  * link on its next save, so the bump makes it refuse such a document.
  * Absent means an ordinary drawn object, so every older document loads
  * unchanged.
+ *
+ * v34 adds the U06 Objects folders (`ProjectDocument.objectFolders`): named,
+ * nestable folders and the bodies placed in them. Organization only — no
+ * rebuild reads it. Additive: absent means no folders. An older client would
+ * drop the section on its next save, so the bump makes it refuse such a
+ * document.
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 33 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 34 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -3069,6 +3077,11 @@ export interface ProjectDocument {
    */
   drawings?: DrawingSet;
   /**
+   * U06 Objects folders (schema v34): how the bodies are organized in the
+   * Objects browser. Never read by a rebuild. Absent means no folders.
+   */
+  objectFolders?: ObjectFolderSet;
+  /**
    * I05 reference images (schema v32). Canonical user content: which picture
    * lies where, never its pixels. Absent means the project has none.
    */
@@ -3734,10 +3747,7 @@ export interface E2eeReplaceIdentityRequest extends E2eeSetupRequest {
 }
 
 export type E2eeApprovalState =
-  | 'requested'
-  | 'responded'
-  | 'revealed'
-  | 'completed';
+  'requested' | 'responded' | 'revealed' | 'completed';
 
 export interface E2eeCreateApprovalRequest {
   deviceId: string;

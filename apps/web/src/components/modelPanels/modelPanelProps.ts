@@ -12,6 +12,7 @@ import type {
 } from '@openzcad/shared';
 import type { DiagnosticRow } from '../../lib/diagnosticsRows';
 import type { HistoryRowActions } from '../HistoryTimeline';
+import type { ObjectFolderActions } from './ObjectsPanel';
 
 /**
  * Everything the five model panels read from the open document and the
@@ -60,6 +61,10 @@ export interface ModelPanelSource {
   onSelectFeature(nodeId: string): void;
   onSelectBody(bodyId: string, additive: boolean): void;
   onToggleBodyVisibility(bodyId: string): void;
+  /** Renames a body in place from Objects (ZC-127): one undoable step. */
+  onRenameBody?(bodyId: BodyId, name: string): void;
+  /** Objects folders (ZC-128); absent, folders list but cannot be edited. */
+  objectFolderActions?: ObjectFolderActions;
   onToggleSketchVisibility(sketchId: string): void;
   /** Opens the feature menu at a point: a right-click, or a row's ⋯ button. */
   onFeatureContextMenu(

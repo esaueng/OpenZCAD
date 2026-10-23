@@ -5,6 +5,7 @@ import {
   documentEnvelopeError,
   assertDocumentTextBudget,
   drawingSetError,
+  objectFolderSetError,
   hasValidImportedMeshSources,
   hasValidImportedStepSources
 } from '@openzcad/shared';
@@ -497,6 +498,12 @@ function parseProjectDocument(
     const drawingsError = drawingSetError(record.drawings);
     if (drawingsError)
       throw badRequest(`"document.drawings": ${drawingsError}`);
+  }
+  // U06 folders fail closed in `normalizeDocument` the same way.
+  if (record.objectFolders !== undefined) {
+    const foldersError = objectFolderSetError(record.objectFolders);
+    if (foldersError)
+      throw badRequest(`"document.objectFolders": ${foldersError}`);
   }
   // I05: the same holds for the reference-image section.
   if (record.referenceImages !== undefined) {

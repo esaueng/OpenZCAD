@@ -19,6 +19,10 @@ export function assertMinimumProjectSchema(
     throw new Error(`${content} require project schema v${minimum} or newer.`);
 }
 
+export function assertObjectFolderSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 34, 'Objects folders');
+}
+
 export function assertSketchObjectContentSchema(
   data: SketchObjectData,
   version: unknown,
@@ -64,6 +68,13 @@ export function assertDocumentContentCommandSchema(
     if (!record(command) || seen.has(command)) continue;
     seen.add(command);
     if (command.kind === 'transaction') pending.push(command.payload);
+    if (
+      command.kind === 'objectFolder.create' ||
+      command.kind === 'objectFolder.rename' ||
+      command.kind === 'objectFolder.delete' ||
+      command.kind === 'objectFolder.move'
+    )
+      assertObjectFolderSchema(document.schemaVersion);
     if (!record(command.payload)) continue;
     switch (command.kind) {
       case 'sketch.add':
@@ -84,6 +95,15 @@ export function assertDocumentContentCommandSchema(
 
 /** Call after validating or dropping unreadable history at the entry boundary. */
 export function assertDocumentContentSchema(document: ProjectDocument): void {
+  if (document.objectFolders !== undefined)
+    assertObjectFolderSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'objectFolders' &&
+        (change.before !== undefined || change.after !== undefined)
+      )
+        assertObjectFolderSchema(document.schemaVersion);
   for (const node of documentNodesWithHistory(document))
     if (node.kind === 'sketch-object')
       assertSketchObjectContentSchema(

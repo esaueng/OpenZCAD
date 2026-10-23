@@ -29,6 +29,7 @@ import {
 } from './document-content-schema';
 export * from './document-content-schema';
 export * from './drawings';
+export * from './object-folders';
 export * from './reference-images';
 export {
   constantRigidTransform,
@@ -54,6 +55,7 @@ import {
   createId,
   deepClone,
   assertDrawingSet,
+  assertObjectFolderSet,
   assertReferenceImageSet,
   featureColor,
   isProjectCheckpoint,
@@ -871,6 +873,8 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   // Schema v30 drawings (v31 annotations): validated as written, never
   // synthesized or rewritten.
   assertDrawingSet(document.drawings);
+  // Schema v34 Objects folders: validated as written, never synthesized.
+  assertObjectFolderSet(document.objectFolders);
   // Schema v32 reference images: the same — validated, never rewritten.
   assertReferenceImageSet(document.referenceImages);
   for (const node of documentNodesWithHistory(document)) {

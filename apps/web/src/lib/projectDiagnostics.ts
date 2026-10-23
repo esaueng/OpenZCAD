@@ -106,11 +106,13 @@ export function createProjectDiagnosticBundle(
   // are left out entirely. Reference images likewise: their names come from
   // the user's file names, and their checksums and artifact ids identify the
   // pictures.
+  // Folder names are also private organization, unused by rebuilds.
   const commandLog = document.commandLog
     .filter(
       (command) =>
         command.kind !== 'node.metadata.set' &&
         !command.kind.startsWith('drawing.') &&
+        !command.kind.startsWith('objectFolder.') &&
         !command.kind.startsWith('reference-image.')
     )
     .map(sanitizeCommand);
@@ -133,6 +135,8 @@ export function createProjectDiagnosticBundle(
 
   delete diagnosticDocument.editHistory;
   delete diagnosticDocument.drawings;
+  // Folder names are the user's own words and no rebuild reads them.
+  delete diagnosticDocument.objectFolders;
   delete diagnosticDocument.referenceImages;
 
   const bodies = document.bodyOrder.flatMap((bodyId) => {

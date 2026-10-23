@@ -63,6 +63,61 @@ function renderPanel(overrides: Partial<PanelProps> = {}) {
 }
 
 describe('ObjectsPanel', () => {
+  it('renames a body in place: double-click or F2, Enter keeps, Escape cancels (ZC-127)', async () => {
+    const user = userEvent.setup();
+    const onRenameBody = vi.fn();
+    const plate = body('body-1', 'Plate');
+    const source = body('body-0', 'Source', true);
+    renderPanel({
+      features: [feature(1, { bodyId: plate.bodyId })],
+      representations: { [plate.bodyId]: plate, [source.bodyId]: source },
+      onRenameBody
+    });
+    const list = within(screen.getByRole('list', { name: 'Objects' }));
+
+    await user.dblClick(list.getByRole('button', { name: 'Plate' }));
+    const field = list.getByRole('textbox', { name: 'Rename body Plate' });
+    expect(field).toHaveFocus();
+    await user.clear(field);
+    await user.type(field, '  Base plate {Enter}');
+    expect(onRenameBody).toHaveBeenCalledWith('body-1', 'Base plate');
+    expect(list.queryByRole('textbox')).toBeNull();
+
+    // F2 from the row; Escape keeps the old name and returns focus.
+    const row = list.getByRole('button', { name: 'Plate' });
+    row.focus();
+    await user.keyboard('{F2}');
+    await user.type(
+      list.getByRole('textbox', { name: 'Rename body Plate' }),
+      'Lid{Escape}'
+    );
+    expect(onRenameBody).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() =>
+      expect(list.getByRole('button', { name: 'Plate' })).toHaveFocus()
+    );
+
+    // The row's rename button opens the same field.
+    await user.click(list.getByRole('button', { name: 'Rename body Plate' }));
+    await user.keyboard('{Escape}');
+    expect(onRenameBody).toHaveBeenCalledTimes(1);
+
+    // An empty or unchanged name is no edit.
+    await user.dblClick(list.getByRole('button', { name: 'Plate' }));
+    await user.clear(list.getByRole('textbox'));
+    await user.keyboard('{Enter}');
+    await user.dblClick(list.getByRole('button', { name: 'Plate' }));
+    await user.keyboard('{Enter}');
+    expect(onRenameBody).toHaveBeenCalledTimes(1);
+
+    // A consumed source body keeps the name it was combined with.
+    await user.click(screen.getByRole('button', { name: /1 source body/ }));
+    await user.dblClick(list.getByRole('button', { name: 'Source' }));
+    expect(list.queryByRole('textbox')).toBeNull();
+    expect(
+      list.queryByRole('button', { name: 'Rename body Source' })
+    ).toBeNull();
+  });
+
   it('says how to start when there are no objects', () => {
     renderPanel();
     expect(
