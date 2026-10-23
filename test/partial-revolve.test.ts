@@ -13,9 +13,12 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import { inspectTriangleMeshClosure } from '../packages/kernel-adapter/src/boolean-result-validation';
+import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
+import { buildDocumentHistory } from '../packages/kernel-adapter/src/exact-build-loop';
 import {
   FULL_REVOLVE_ANGLE_DEG,
   toUserId,
+  type BodyId,
   type BodyRepresentation,
   type ParamValue,
   type ProjectDocument,
@@ -567,44 +570,100 @@ describe('partial revolve mesh orientation', () => {
   }, 120_000);
 });
 
+/**
+ * Cross-section cut from an inner circle meeting an end plane, extruded by h.
+ * The blend center (x,r) is R+r from the inner circle's center, hence
+ * x=sqrt(R²+2Rr) and angle=asin(r/(R+r)). Integrating the two circle arcs
+ * around the removed corner gives the area below; no kernel measurement
+ * contributes to this oracle.
+ */
+function innerEndCapFilletCut(R: number, r: number, h: number): number {
+  const x = Math.sqrt(R * R + 2 * R * r);
+  const angle = Math.asin(r / (R + r));
+  return (h / 2) * (r * x - (Math.PI * r * r) / 2 + (r * r - R * R) * angle);
+}
+
+function expectStrictSolid(document: ProjectDocument, bodyId: BodyId): void {
+  const native = new RemusKernel();
+  try {
+    const solids = buildDocumentHistory(native, document).shapes.get(
+      bodyId
+    )?.solids;
+    expect(solids).toHaveLength(1);
+    expect(native.validateSolid(solids![0]!)).toBe(0);
+    expect(native.getSolidShells(solids![0]!)).toHaveLength(1);
+  } finally {
+    native.free();
+  }
+}
+
 describe('partial revolve and edge modifiers', () => {
-  it('explains a fillet refusal on a wedge instead of advising a smaller radius', async () => {
+  it('rounds both inner end-cap edges and explains the remaining wedge refusals', async () => {
     const { document, body } = await buildRevolve(annulusProfile(1), 90);
     const bodyId = getLatestBodyId(document)!;
     const edges = body!.topology!.edges;
     expect(edges).toHaveLength(12);
 
-    const outcomes = await Promise.all(
-      edges.map(async (edge) => {
-        const candidate = filletEdges(document, {
-          name: 'Round',
-          targetBodyId: bodyId,
-          edgeHashes: [edge.hash],
-          size: 0.1
-        }).document;
-        return (await kernel.syncDocument(candidate)).warnings;
-      })
-    );
-
-    // Every wedge edge used to refuse, with the volume-envelope guard below
-    // the kernel catching the two that once returned a doubled body. Between
-    // Remus c557ef5 and the B4 walking-trimmer/B20 pins the outer end-cap
-    // edge at the start angle rounded successfully; at pin 2.130.23 all
-    // twelve refuse again, typed, so the refusal maps to the same wedge
-    // explanation. The doubled-wedge test below keeps any success plausibly
-    // sized should the kernel regain that edge.
-    const accepted = edges.filter((_, index) => outcomes[index]!.length === 0);
-    expect(accepted).toEqual([]);
-    const refused = outcomes.filter((warnings) => warnings.length === 1);
-    expect(refused).toHaveLength(12);
-    // Every refusal still names the wedge. In particular none says "try a
-    // smaller radius", which is false at every radius here, and none says the
-    // edge no longer exists, which it does.
-    for (const warnings of refused) {
-      expect(warnings[0]).toContain('This body is a partial revolve');
-      expect(warnings[0]).not.toContain('Try a smaller radius');
-      expect(warnings[0]).not.toContain('no longer exists');
+    const source = JSON.stringify(document);
+    let accepted = 0;
+    let refused = 0;
+    for (const edge of edges) {
+      const candidate = filletEdges(document, {
+        name: 'Round',
+        targetBodyId: bodyId,
+        edgeHashes: [edge.hash],
+        size: 0.1
+      });
+      const derived = await kernel.syncDocument(candidate.document);
+      // The two vertical inner-radius end-cap edges now round. Identify them
+      // geometrically, independently of kernel hash or topology ordering.
+      const innerEndCap =
+        edge.curve?.type === 'LINE' &&
+        Math.abs(edge.length! - PROFILE_HEIGHT) < 1e-9 &&
+        [0, edge.points.length - 3].every(
+          (start) =>
+            Math.abs(
+              Math.hypot(edge.points[start]!, edge.points[start + 1]!) -
+                PROFILE_INNER_RADIUS
+            ) < 1e-9
+        );
+      if (innerEndCap) {
+        accepted += 1;
+        expect(derived.warnings).toEqual([]);
+        const rounded = derived.bodyRepresentations[candidate.bodyId]!;
+        expect(rounded).toBeDefined();
+        expect(rounded.faceCount).toBe(9);
+        expect(derived.exportableBodyIds).toContain(candidate.bodyId);
+        expect(derived.bodyRepresentations[bodyId]!.consumed).toBe(true);
+        expectSoundSolid(rounded, 2);
+        expect(meshSignedVolume(rounded.mesh)).toBeGreaterThan(0);
+        expectStrictSolid(candidate.document, candidate.bodyId);
+        const removed = innerEndCapFilletCut(
+          PROFILE_INNER_RADIUS,
+          0.1,
+          PROFILE_HEIGHT
+        );
+        expect(
+          Math.abs(rounded.volume - (partialRevolveVolume(90, 1) - removed))
+        ).toBeLessThan(1e-9);
+      } else {
+        refused += 1;
+        expect(derived.warnings).toHaveLength(1);
+        expect(derived.warnings[0]).toContain('This body is a partial revolve');
+        expect(derived.warnings[0]).not.toContain('Try a smaller radius');
+        expect(derived.warnings[0]).not.toContain('no longer exists');
+        expect(derived.bodyRepresentations[candidate.bodyId]).toBeUndefined();
+        const original = derived.bodyRepresentations[bodyId]!;
+        expect(original.consumed).toBe(false);
+        expect(
+          Math.abs(original.volume - partialRevolveVolume(90, 1))
+        ).toBeLessThan(1e-9);
+        expectSoundSolid(original, 2);
+      }
+      expect(JSON.stringify(document)).toBe(source);
     }
+    expect(accepted).toBe(2);
+    expect(refused).toBe(10);
   }, 300_000);
 
   /** The latest kernel must refuse or return a plausibly sized blend. */
