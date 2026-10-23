@@ -53,6 +53,7 @@ EXPRESSIONS = re.findall(
 )
 REPO = re.search(r"github.repository == '([^']+)'", TEXT)[1]
 REPO_ID = int(re.search(r"github.repository_id == '([0-9]+)'", TEXT)[1])
+COMPARISON = json.loads((ROOT / "scripts/fleet-test-fixtures.json").read_text())[REPO]
 
 
 class Context(dict):
@@ -290,6 +291,10 @@ class DirectFleetTests(unittest.TestCase):
         self.assertTrue(
             main_contains(PIN),
             f"ci.yml pins {CALLEE}@{PIN}, which main does not contain",
+        )
+        self.assertTrue(
+            main_contains(COMPARISON["pin"]),
+            f"comparison fixture {COMPARISON['path']}@{COMPARISON['pin']} is not contained in main",
         )
 
     def test_no_hosted_bootstrap_and_guard_before_checkout(self):

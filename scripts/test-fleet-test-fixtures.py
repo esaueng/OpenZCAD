@@ -131,8 +131,8 @@ class FleetFixtureTests(unittest.TestCase):
                 # Model both absent workflow objects, not just missing ancestry.
                 # Reads delegate to real Git after the one main fetch completes.
                 env["OPENZCAD_FIXTURE_MISSING_PINS"] = "1"
-                previous_source = (ROOT / "scripts/test-merge-queue-routing.py").read_text()
-                previous_pin = re.search(r'else "([a-f0-9]{40})"', previous_source)[1]
+                comparison = json.loads((ROOT / "scripts/fleet-test-fixtures.json").read_text())["esaueng/OpenZCAD"]
+                previous_pin = comparison["pin"]
                 for revision, path in ((pin, ".github/workflows/fleet-ci-v2.yml"),
                                        (previous_pin, ".github/workflows/fleet-ci.yml")):
                     absent = subprocess.run(["git", "show", f"{revision}:{path}"],

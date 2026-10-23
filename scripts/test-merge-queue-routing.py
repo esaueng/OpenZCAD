@@ -25,12 +25,12 @@ STAGED = ROOT / (".github/workflows/fleet-ci-v5.yml" if REMUS
                  else ".github/workflows/fleet-ci-v2.yml")
 TEXT = STAGED.read_text()
 def previous_workflow():
-    path = ".github/workflows/fleet-ci-v4.yml" if REMUS else ".github/workflows/fleet-ci.yml"
+    comparison = json.loads((ROOT / "scripts/fleet-test-fixtures.json").read_text())[POLICY.REPOSITORY]
+    path, pin = comparison["path"], comparison["pin"]
     previous = ROOT / path
     if previous.exists():
         return previous.read_text()
     # Activation retires the old file; keep comparing its immutable main bytes.
-    pin = "9e5b65b9e00f004d83eb583ab3934c863ad7956d" if REMUS else "fe46bdaa8a64c92464fea42034284be34c58ceae"
     command = ["git", "show", f"{pin}:{path}"]
     try:
         return subprocess.check_output(command, cwd=ROOT, text=True, stderr=subprocess.DEVNULL)
