@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENT_SCHEMA_VERSION } from '@openzcad/shared';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
@@ -17,7 +18,6 @@ import {
 } from '@openzcad/command-system';
 import { parseCadPatchProposal } from '@openzcad/ai-contracts';
 import {
-  PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
   type BodyId
 } from '@openzcad/shared';

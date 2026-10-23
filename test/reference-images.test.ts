@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENT_SCHEMA_VERSION } from '@openzcad/shared';
 import { describe, expect, it } from 'vitest';
 import {
   CommandManager,
@@ -15,7 +16,6 @@ import {
   calibratedReferenceImageWidth,
   isAcceptableReferenceImageArtifact,
   MAX_REFERENCE_IMAGE_BYTES,
-  PROJECT_DOCUMENT_SCHEMA_VERSION,
   referenceImageError,
   referenceImageHeaderSize,
   referenceImageHeight,

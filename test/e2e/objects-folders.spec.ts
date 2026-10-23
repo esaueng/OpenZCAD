@@ -162,6 +162,74 @@ test('renames a body and files bodies in folders, through undo and a reload (U06
     .toEqual(['Hardware', 'Lug', 'Pin', 'Frame base']);
 });
 
+for (const operation of ['Union', 'Subtract', 'Intersect'] as const) {
+  test(`single-body command browsing keeps ${operation} and seeds its first operand`, async ({
+    page
+  }, testInfo) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    page.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    await openDocument(page, threeBoxes(`Seeded ${operation}`));
+    await expect(page).toHaveURL(/^http:\/\/127\.0\.0\.1:\d+\/$/);
+    await expect(page).toHaveTitle('OpenZCAD');
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+    await objectsList(page)
+      .getByRole('button', { name: 'Base', exact: true })
+      .click();
+    await promptField(page).fill('/');
+    await expect(page.locator('.command-bar-keys')).toContainText('For 1 body');
+    const command = page
+      .getByRole('listbox', { name: 'Commands' })
+      .getByRole('option')
+      .filter({
+        has: page.locator('.palette-label', {
+          hasText: new RegExp(`^${operation}$`)
+        })
+      });
+    await expect(command).toHaveCount(1);
+    await command.click();
+    const inspector = page.getByRole('region', { name: 'Feature inspector' });
+    await expect(
+      inspector.getByRole('combobox', { name: 'Operation', exact: true })
+    ).toHaveValue(operation.toLowerCase());
+    const seededName =
+      operation === 'Subtract' ? 'Base, pick 1, base' : 'Base, pick 1';
+    await expect(
+      inspector.getByRole('button', { name: seededName, exact: true })
+    ).toHaveAttribute('aria-pressed', 'true');
+    await expect(
+      inspector.getByText(
+        'One body picked · pick at least one more to combine.'
+      )
+    ).toBeVisible();
+    await expect(
+      inspector.getByRole('button', { name: /^Create/ })
+    ).toBeDisabled();
+    await inspector.getByRole('button', { name: 'Lug', exact: true }).click();
+    await expect(
+      inspector.getByRole('button', { name: seededName, exact: true })
+    ).toHaveAttribute('aria-pressed', 'true');
+    await expect(
+      inspector.getByRole('button', { name: 'Lug, pick 2', exact: true })
+    ).toHaveAttribute('aria-pressed', 'true');
+    await expect(
+      inspector.getByRole('button', { name: /^Create/ })
+    ).toBeEnabled();
+    expect(errors).toEqual([]);
+    const screenshotPath = testInfo.outputPath(
+      `seeded-${operation.toLowerCase()}.png`
+    );
+    await page.screenshot({ path: screenshotPath });
+    await testInfo.attach(`seeded-${operation.toLowerCase()}`, {
+      path: screenshotPath,
+      contentType: 'image/png'
+    });
+  });
+}
+
 test('command search lists recent commands first and filters to the pick (U05)', async ({
   page
 }) => {

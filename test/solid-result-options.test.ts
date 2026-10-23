@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENT_SCHEMA_VERSION } from '@openzcad/shared';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
@@ -19,7 +20,6 @@ import {
 import { extrudeEditTargets } from '../apps/web/src/lib/extrudeEditing';
 import {
   FEATURE_SUPPRESSED_METADATA_KEY,
-  PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
   type BodyId,
   type BooleanKeepOriginals,

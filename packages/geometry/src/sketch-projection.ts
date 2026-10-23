@@ -408,6 +408,12 @@ export function projectableCurveFromTopology(
   if (closed) {
     return { kind: 'circle', ...circle };
   }
+  if (count < 3) {
+    return {
+      kind: 'unsupported',
+      curveType: 'circular arc without an interior sample'
+    };
+  }
   return {
     kind: 'circle',
     ...circle,

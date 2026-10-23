@@ -80,6 +80,10 @@ const CONTEXTS: Record<
     applies: [
       'transform',
       'scale',
+      // Boolean tools seed operand one from the pick, then ask for another.
+      'union',
+      'subtract',
+      'intersect',
       // Rotate about axis starts from the picked body (the Inspector seeds
       // its target from the selection).
       'axis-rotate',

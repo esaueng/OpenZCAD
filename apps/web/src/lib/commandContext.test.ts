@@ -115,6 +115,15 @@ describe('commandContextLabel', () => {
 });
 
 describe('the body context', () => {
+  it.each(['union', 'subtract', 'intersect'] as const)(
+    'keeps %s available to seed operand one from a single picked body',
+    (tool) => {
+      const body = commandContextFor(EVERY_KIND.body);
+      expect(toolApplies(body, tool)).toBe(true);
+      expect(body.primary).toBe('transform');
+    }
+  );
+
   it('keeps every tool that starts from a picked body, Rotate about axis included', () => {
     const body = commandContextFor(EVERY_KIND.body);
     for (const tool of [
