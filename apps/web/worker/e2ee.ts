@@ -358,12 +358,12 @@ function checkCompleteWraps(
     if (!has('account-key', target.targetId)) {
       invalid(`The account key is not sealed to ${target.targetId}`);
     }
-    if (identity && target.kind === 'recovery-key') {
+    if (identity) {
       if (!has('identity-key', target.targetId)) {
-        invalid('The identity key is not sealed to the recovery key');
+        invalid(`The identity key is not sealed to ${target.targetId}`);
       }
       if (!has('unlock-target-key', target.targetId)) {
-        invalid('The recovery target key is not wrapped');
+        invalid(`The unlock target key is not wrapped for ${target.targetId}`);
       }
     }
   }
@@ -861,15 +861,41 @@ async function handleAppend(
   const rotation =
     toHex(previous.accountKeyCommitment) !==
     toHex(list.head.accountKeyCommitment);
+  const newTargets = list.head.unlockTargets.filter(
+    (target) =>
+      !previous.unlockTargets.some((t) => t.targetId === target.targetId)
+  );
   checkWrapTargets(list.head, wraps);
   if (rotation) {
     checkCompleteWraps(list.head, wraps, { identity: false });
-  } else if (
+  } else if (wraps.some((w) => w.purpose === 'encryption-key')) {
+    invalid('Only a rotation replaces the encryption key wrap');
+  }
+  for (const target of newTargets) {
+    for (const purpose of [
+      'account-key',
+      'identity-key',
+      'unlock-target-key'
+    ] as const) {
+      if (
+        !wraps.some(
+          (w) => w.purpose === purpose && w.targetId === target.targetId
+        )
+      ) {
+        invalid(`A new unlock target requires ${purpose}`);
+      }
+    }
+  }
+  if (
     wraps.some(
-      (w) => w.purpose === 'encryption-key' || w.purpose === 'unlock-target-key'
+      (w) =>
+        (w.purpose === 'identity-key' || w.purpose === 'unlock-target-key') &&
+        !newTargets.some((target) => target.targetId === w.targetId)
     )
   ) {
-    invalid('Only a rotation replaces the encryption key wrap');
+    invalid(
+      'Only a new unlock target may supply identity and target-key wraps'
+    );
   }
   const newDevices = list.head.devices.filter(
     (device) => !previous.devices.some((d) => d.deviceId === device.deviceId)

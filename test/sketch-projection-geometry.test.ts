@@ -30,8 +30,9 @@ const v = (x: number, y: number, z: number) => ({ x, y, z });
 
 describe('projectEdgeToSketch', () => {
   it('drops a line onto the plane along its normal', () => {
-    expect(projected({ kind: 'line', start: v(1, 2, 9), end: v(4, 6, -2) }))
-      .toEqual({ objectKind: 'line', x1: 1, y1: 2, x2: 4, y2: 6 });
+    expect(
+      projected({ kind: 'line', start: v(1, 2, 9), end: v(4, 6, -2) })
+    ).toEqual({ objectKind: 'line', x1: 1, y1: 2, x2: 4, y2: 6 });
   });
 
   it('refuses a line along the normal, which collapses to a point', () => {
@@ -111,11 +112,7 @@ describe('projectEdgeToSketch', () => {
     const e2 = v(0, Math.cos(theta), Math.sin(theta));
     const at = (deg: number) => {
       const t = (deg * Math.PI) / 180;
-      return v(
-        2 * Math.cos(t),
-        2 * Math.sin(t) * e2.y,
-        2 * Math.sin(t) * e2.z
-      );
+      return v(2 * Math.cos(t), 2 * Math.sin(t) * e2.y, 2 * Math.sin(t) * e2.z);
     };
     const arc = projected({
       kind: 'circle',
@@ -141,15 +138,84 @@ describe('projectEdgeToSketch', () => {
       reason: expect.stringMatching(/edge-on/) as unknown
     });
     expect(
-      projectEdgeToSketch({ kind: 'unsupported', curveType: 'BSPLINE_CURVE' }, xy)
+      projectEdgeToSketch(
+        { kind: 'unsupported', curveType: 'BSPLINE_CURVE' },
+        xy
+      )
     ).toEqual({
       status: 'refused',
-      reason: expect.stringMatching(/bspline_curve edge cannot be projected/) as unknown
+      reason: expect.stringMatching(
+        /bspline_curve edge cannot be projected/
+      ) as unknown
     });
   });
 });
 
 describe('projectableCurveFromTopology', () => {
+  it('keeps proven full circles with only their closing endpoints', () => {
+    const circle = { center: v(0, 0, 0), axis: v(0, 0, 1), radius: 20 };
+    for (const vertexIds of [[3, 3] as [number, number], undefined]) {
+      expect(
+        projectableCurveFromTopology({
+          curve: { type: 'CIRCLE', circle },
+          vertexIds,
+          points: [20, 0, 0, 20, 0, 0]
+        })
+      ).toEqual({ kind: 'circle', ...circle });
+    }
+  });
+
+  for (const tilt of [0, Math.PI / 3]) {
+    for (const reverse of [false, true]) {
+      const angle = 0.2;
+      const at = (degrees: number) => {
+        const t = (degrees * Math.PI) / 180;
+        return [
+          20 * Math.cos(t),
+          20 * Math.sin(t) * Math.cos(tilt),
+          20 * Math.sin(t) * Math.sin(tilt)
+        ];
+      };
+      const circle = {
+        center: v(0, 0, 0),
+        axis: v(0, -Math.sin(tilt), Math.cos(tilt)),
+        radius: 20
+      };
+      it(`refuses a two-sample shallow arc, tilt=${tilt}, reversed=${reverse}`, () => {
+        const points = reverse
+          ? [...at(angle), ...at(0)]
+          : [...at(0), ...at(angle)];
+        const curve = projectableCurveFromTopology({
+          curve: { type: 'CIRCLE', circle },
+          vertexIds: [1, 2],
+          points
+        });
+        expect(projectEdgeToSketch(curve, xy)).toMatchObject({
+          status: 'refused'
+        });
+      });
+      it(`keeps the short sweep when a genuine interior sample exists, tilt=${tilt}, reversed=${reverse}`, () => {
+        const ends = reverse ? [angle, angle / 2, 0] : [0, angle / 2, angle];
+        const curve = projectableCurveFromTopology({
+          curve: { type: 'CIRCLE', circle },
+          vertexIds: [1, 2],
+          points: ends.flatMap(at)
+        });
+        const data = projected(curve);
+        if (tilt === 0) {
+          if (data.objectKind !== 'arc') throw new Error('expected an arc');
+          expect(data.startAngleDeg).toBeCloseTo(0, 9);
+          expect(data.endAngleDeg).toBeCloseTo(angle, 9);
+        } else {
+          if (data.objectKind !== 'ellipse')
+            throw new Error('expected an elliptical arc');
+          expect(data.startParamDeg).toBeCloseTo(0, 9);
+          expect(data.endParamDeg).toBeCloseTo(angle, 9);
+        }
+      });
+    }
+  }
+
   it('reads a line from its polyline ends and an unproven circle as unsupported', () => {
     expect(
       projectableCurveFromTopology({
@@ -209,13 +275,23 @@ describe('stored projection comparison', () => {
       endAngleDeg: 90
     };
     expect(
-      sameProjectedGeometry(arc, { ...arc, startAngleDeg: 270, endAngleDeg: 450 })
+      sameProjectedGeometry(arc, {
+        ...arc,
+        startAngleDeg: 270,
+        endAngleDeg: 450
+      })
     ).toBe(true);
     expect(sameProjectedGeometry(line, { ...arc })).toBe(false);
   });
 
   it('keeps line ends named after the edge comes back reversed', () => {
-    const reversed = { objectKind: 'line' as const, x1: 10, y1: 0, x2: 0, y2: 0 };
+    const reversed = {
+      objectKind: 'line' as const,
+      x1: 10,
+      y1: 0,
+      x2: 0,
+      y2: 0
+    };
     expect(orientLikeStored(line, reversed)).toEqual(line);
     const moved = { objectKind: 'line' as const, x1: 0, y1: 0, x2: 14, y2: 0 };
     expect(orientLikeStored(line, moved)).toEqual(moved);

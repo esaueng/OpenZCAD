@@ -26,6 +26,7 @@ import {
 } from '@openzcad/geometry';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
+  edgeTopologyWitnessHash,
   toUserId,
   type BodyId,
   type DerivedState,
@@ -129,6 +130,7 @@ describe('sketch projection in the document (v33)', () => {
         }
       }
     };
+    source.edgeReference.currentHash = edgeTopologyWitnessHash(source.edgeReference.witness);
     const sketched = addSketchFeature(blank(), {
       name: 'S',
       planeRef: above,
@@ -313,6 +315,107 @@ describe('sketch projection in the exact build', () => {
     expect(pick?.objects).toHaveLength(1);
     expect(pick?.objects[0]?.projection).toMatchObject({ mode: 'linked', source: { bodyId: fused.bodyId } });
   });
+
+  it.each(['cached', 'cold reopen'] as const)(
+    'resolves a saved new Boolean edge with empty selection demand: %s',
+    async (cacheMode) => {
+      const source = block(40);
+      const second = addPrimitiveFeature(source.document, {
+        name: 'Post',
+        primitiveKind: 'box',
+        dimensions: { width: 12, height: 10, depth: 30 }
+      });
+      const fused = booleanBodies(second, {
+        name: 'Fuse',
+        operation: 'union',
+        targetBodyIds: [source.bodyId, second.bodyOrder.at(-1)!]
+      });
+      const producer = listFeaturesInOrder(fused.document).find(
+        (feature) => feature.data.featureKind === 'boolean'
+      )!;
+      const idle = await adapter.syncDocument(
+        fused.document,
+        undefined,
+        undefined,
+        undefined,
+        { lineageDemand: [] }
+      );
+      const idleEdges = idle.bodyRepresentations[fused.bodyId]!.topology!.edges;
+      const demanded = await adapter.syncDocument(
+        fused.document,
+        undefined,
+        undefined,
+        undefined,
+        { lineageDemand: [fused.bodyId] }
+      );
+      const edge = demanded.bodyRepresentations[
+        fused.bodyId
+      ]!.topology!.edges.find(
+        (candidate) =>
+          candidate.reference?.producingFeatureId === producer.featureId &&
+          candidate.curve?.type === 'LINE' &&
+          Math.abs(candidate.points[0]! - candidate.points[3]!) > 1 &&
+          idleEdges.some(
+            (original) =>
+              original.hash === candidate.hash && !original.reference
+          )
+      );
+      expect(
+        edge,
+        'new Boolean edge unavailable from carrier-only lineage'
+      ).toBeDefined();
+      const object = projected(edge!, fused.bodyId, 'linked');
+      const sketched = addSketchFeature(fused.document, {
+        name: 'Saved Boolean edge',
+        planeRef: above,
+        objects: [object]
+      });
+      const objectId = findSketch(sketched.document, sketched.sketchId)!
+        .objectIds[0]!;
+      const reopened = normalizeDocument(
+        JSON.parse(JSON.stringify(sketched.document)) as ProjectDocument
+      );
+      const before = JSON.stringify(reopened);
+      // Restore a carrier-only cache, then introduce the persisted consumer;
+      // the other arm starts a completely new adapter with no UI selection.
+      await adapter.syncDocument(
+        fused.document,
+        undefined,
+        undefined,
+        undefined,
+        { lineageDemand: [] }
+      );
+      const reader =
+        cacheMode === 'cold reopen'
+          ? await createExactKernelAdapter()
+          : adapter;
+      try {
+        const result = await reader.syncDocument(
+          reopened,
+          undefined,
+          undefined,
+          undefined,
+          { lineageDemand: [] }
+        );
+        expect(result.sketchProjections?.[objectId]).toEqual({
+          status: 'current'
+        });
+        expect(result.warnings).toEqual([]);
+        expect(result.bodyRepresentations[fused.bodyId]!.volume).toBeCloseTo(
+          5000,
+          6
+        );
+        expect(
+          result.bodyRepresentations[fused.bodyId]!.topology!.edges.find(
+            (candidate) => candidate.hash === edge!.hash
+          )?.reference
+        ).toEqual(edge!.reference);
+        expect(JSON.stringify(reopened)).toBe(before);
+      } finally {
+        if (reader !== adapter) reader.dispose();
+      }
+    }
+  );
 
   it('re-projects exactly what a pick stored, so nothing is rewritten', async () => {
     const outline = await projectedOutline('linked');
@@ -600,6 +703,7 @@ describe('sketch projection in the exact build', () => {
         }
       }
     };
+    linked.projection.source.edgeReference.currentHash = edgeTopologyWitnessHash(linked.projection.source.edgeReference.witness);
     const sketched = addSketchFeature(blank(), {
       name: 'Solve',
       planeRef: above,

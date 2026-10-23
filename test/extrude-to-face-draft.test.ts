@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENT_SCHEMA_VERSION } from '@openzcad/shared';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
@@ -20,7 +21,6 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import {
-  PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
   type BodyId,
   type ExtrudeToFaceTarget,

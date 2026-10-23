@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENT_SCHEMA_VERSION } from '@openzcad/shared';
 import { describe, expect, it } from 'vitest';
 import {
   addSketchFeature,
@@ -6,7 +7,6 @@ import {
   normalizeDocument
 } from '@openzcad/document-core';
 import {
-  PROJECT_DOCUMENT_SCHEMA_VERSION,
   toSketchReferenceAnnotationId,
   toUserId,
   type SketchReferenceDimension

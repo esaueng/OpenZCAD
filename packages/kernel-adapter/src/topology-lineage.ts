@@ -18,6 +18,7 @@ export type {
 } from '@openzcad/shared';
 
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
+import { edgeTopologyWitnessSignature as edgeSignatureOfWitness } from '@openzcad/shared';
 import { fingerprintOfSignature } from './topology-fingerprint';
 
 /**
@@ -458,25 +459,6 @@ function inspectWitnessByKind(
 
 function pointSignature(point: QuantizedTopologyPoint): string {
   return point.join(',');
-}
-
-function edgeSignatureOfWitness(witness: EdgeWitnessV1): string {
-  if (witness.closed) {
-    return [
-      witness.curveType,
-      witness.length,
-      'C',
-      pointSignature(witness.center),
-      witness.axis ? pointSignature(witness.axis) : 'na'
-    ].join(':');
-  }
-  return [
-    witness.curveType,
-    witness.length,
-    ...witness.endpoints[0],
-    ...witness.endpoints[1],
-    ...witness.midpoint
-  ].join(':');
 }
 
 function analyticSignatureOfWitness(witness: FaceAnalyticWitnessV1): string {

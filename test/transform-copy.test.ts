@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENT_SCHEMA_VERSION } from '@openzcad/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   CommandManager,
@@ -24,7 +25,6 @@ import {
   BODY_OPACITY_METADATA_KEY,
   DEFAULT_BODY_COLOR,
   featureColor,
-  PROJECT_DOCUMENT_SCHEMA_VERSION,
   isInPlaceTransform,
   isTransformCopy,
   toBodyId,

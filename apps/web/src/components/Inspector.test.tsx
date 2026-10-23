@@ -12,6 +12,7 @@ import type {
   BodyId,
   BodyRepresentation,
   EdgeTopologyReferenceV5,
+  EdgeWitnessV1,
   FeatureNode,
   ProjectDocument,
   SketchObjectData,
@@ -27,7 +28,7 @@ import {
   commandFactories,
   type AnyCommand
 } from '@openzcad/command-system';
-import { DEFAULT_BODY_COLOR, toUserId } from '@openzcad/shared';
+import { DEFAULT_BODY_COLOR, edgeTopologyWitnessHash, toUserId } from '@openzcad/shared';
 import type { MassPropertiesRead } from '@openzcad/kernel-adapter/exact';
 import { MASS_DENSITY_STORAGE_KEY } from '../lib/massDensityPreference';
 import { Inspector } from './Inspector';
@@ -1504,6 +1505,9 @@ describe('Inspector sketch editing (S04)', () => {
 
   it('keeps a lone projected circle out of the one-shape form (I01)', () => {
     // Apply there would rebuild a plain circle and drop the edge link.
+    const witness: EdgeWitnessV1 = {
+      curveType: 'CIRCLE', length: 1, closed: true, center: [0, 0, 0], axis: null
+    };
     const props = sketchProps([
       {
         objectKind: 'circle',
@@ -1518,15 +1522,9 @@ describe('Inspector sketch editing (S04)', () => {
               kind: 'edge',
               producingFeatureId: 'feat_post' as never,
               lineageName: 'edge.rim',
-              currentHash: 1,
+              currentHash: edgeTopologyWitnessHash(witness),
               witnessVersion: 1,
-              witness: {
-                curveType: 'CIRCLE',
-                length: 1,
-                closed: true,
-                center: [0, 0, 0],
-                axis: null
-              }
+              witness
             }
           }
         }

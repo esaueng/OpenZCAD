@@ -136,6 +136,7 @@ import {
   findParameterReferences,
   findSketch,
   getParameterScope,
+  listParameters,
   newTypedParameterMisuse,
   parameterKindsOf,
   withParameterKinds,
@@ -205,6 +206,7 @@ import {
   type ReferenceImageUpdateInput,
   type ReferenceImageDeleteInput,
   resolveParamValue,
+  resolvedSketchDocument,
   resolveSketchInput,
   type RevolveInput,
   revolveSketch,
@@ -497,6 +499,62 @@ function featureReferences(
     if (planeRef?.type === 'datum') referenced.add(planeRef.datumFeatureId);
   }
   return referenced;
+}
+
+/**
+ * Qualified sketch reads depend on the history that existed at their own
+ * position. Follow identities through earlier producers, including linked
+ * object data and face/datum attachments, without making an unrelated edit
+ * invalidate every sketch. A later in-place body edit cannot affect a sketch
+ * earlier in history.
+ */
+function sketchReadDependencies(
+  document: ProjectDocument
+): Map<SketchId, Set<string>> {
+  const producers = new Map<string, Set<string>>();
+  const sketches = new Map<SketchId, Set<string>>();
+  const bodyIds = new Map<string, string[]>();
+  for (const body of listNodesByKind(document, 'body')) {
+    const ids = bodyIds.get(body.featureId) ?? [];
+    ids.push(body.bodyId);
+    bodyIds.set(body.featureId, ids);
+  }
+  for (const feature of listFeaturesInOrder(document)) {
+    const references = featureReferences(document, feature);
+    const sketch =
+      feature.data.featureKind === 'sketch'
+        ? findSketch(document, feature.data.sketchId)
+        : undefined;
+    if (sketch) {
+      collectDataStrings(sketch, references);
+      for (const id of sketch.objectIds) {
+        const object = document.nodes[id];
+        if (object?.kind === 'sketch-object')
+          collectDataStrings(object.data, references);
+      }
+    }
+    const dependencies = new Set<string>([feature.featureId]);
+    for (const id of references) {
+      for (const dependency of producers.get(id) ?? [])
+        dependencies.add(dependency);
+    }
+    // An in-place Move has no output body node: later readers of the same
+    // body must nevertheless depend on the Move and its own upstream inputs.
+    if (feature.data.featureKind === 'transform' && !feature.data.copy) {
+      producers.set(feature.data.targetBodyId, dependencies);
+    }
+    producers.set(feature.featureId, dependencies);
+    if (feature.bodyId) producers.set(feature.bodyId, dependencies);
+    for (const id of bodyIds.get(feature.featureId) ?? [])
+      producers.set(id, dependencies);
+    if (sketch) {
+      sketches.set(sketch.sketchId, dependencies);
+      producers.set(sketch.sketchId, dependencies);
+      producers.set(sketch.id, dependencies);
+      for (const id of sketch.objectIds) producers.set(id, dependencies);
+    }
+  }
+  return sketches;
 }
 
 /**
@@ -2830,6 +2888,19 @@ export function commandsForCadPatch(
   }
   const scope = new LocalBodyScope(document);
   let projectedDocument = document;
+  const originalSketchView = resolvedSketchDocument(document);
+  const originalSketchDependencies = sketchReadDependencies(document);
+  const invalidatedSketchReads = new Set<SketchId>();
+  const sketchReadOnlyAppends = new Set([
+    'add_primitive',
+    'add_sketch',
+    'add_face_sketch',
+    'add_datum_sketch',
+    'add_extrude',
+    'add_multi_profile_extrude',
+    'add_revolve',
+    'rename_feature'
+  ]);
   const parameterScope = projectedParameterScope(document, proposal);
   proposal.operations.forEach((operation) =>
     assertOperationExpressions(operation, parameterScope, document.units)
@@ -2856,7 +2927,8 @@ export function commandsForCadPatch(
     { sketchId: SketchId; objects: SketchObjectData[]; objectIds: EntityId[] }
   >();
   const resolveSketch = (
-    reference: string
+    reference: string,
+    needsProfileGeometry: boolean
   ): {
     sketchId: SketchId;
     objects: SketchObjectData[];
@@ -2877,8 +2949,28 @@ export function commandsForCadPatch(
     }
     const objects: SketchObjectData[] = [];
     const objectIds: EntityId[] = [];
+    let readDocument = needsProfileGeometry
+      ? resolvedSketchDocument(projectedDocument)
+      : projectedDocument;
+    if (
+      needsProfileGeometry &&
+      readDocument === projectedDocument &&
+      originalSketchView !== document &&
+      sketch.objectIds.some(
+        (id) => originalSketchView.nodes[id] !== document.nodes[id]
+      )
+    ) {
+      if (invalidatedSketchReads.has(sketch.sketchId)) {
+        throw new Error(
+          `Sketch ${reference} needs an exact rebuild after earlier edits before selecting a profile.`
+        );
+      }
+      // Keep only this unaffected sketch's qualified read snapshot. Every
+      // command still applies to the authored projectedDocument.
+      readDocument = originalSketchView;
+    }
     for (const objectId of sketch.objectIds) {
-      const node = projectedDocument.nodes[objectId];
+      const node = readDocument.nodes[objectId];
       if (node?.kind === 'sketch-object') {
         objects.push(node.data);
         objectIds.push(objectId);
@@ -3366,7 +3458,10 @@ export function commandsForCadPatch(
         });
       }
       case 'add_extrude': {
-        const sketch = resolveSketch(operation.sketchId);
+        const sketch = resolveSketch(
+          operation.sketchId,
+          Boolean(operation.samplePoint)
+        );
         let profile: ExtrudeInput['profile'];
         if (operation.samplePoint) {
           // Resolve the region reference now so the direct-manipulation and
@@ -3414,7 +3509,7 @@ export function commandsForCadPatch(
         return commandFactories.revolveSketch({
           name: operation.name,
           bodyName: numberedBodyName(projectedDocument, proposedName),
-          sketchId: resolveSketch(operation.sketchId).sketchId,
+          sketchId: resolveSketch(operation.sketchId, false).sketchId,
           axis: operation.axis,
           // Null is the schema's way of saying "omitted"; a full turn.
           angleDeg: operation.angleDeg ?? undefined,
@@ -3534,7 +3629,7 @@ export function commandsForCadPatch(
         });
       }
       case 'add_multi_profile_extrude': {
-        const sketch = resolveSketch(operation.sketchId);
+        const sketch = resolveSketch(operation.sketchId, true);
         const regions = computeSketchRegions(
           sketch.objects.map((data, index) => ({
             id: sketch.objectIds[index] ?? `object_${index}`,
@@ -3730,7 +3825,7 @@ export function commandsForCadPatch(
       case 'add_datum_revolve': {
         const ids = createBodyFeatureIds();
         const datumFeatureId = resolveDatumAxis(operation.datum);
-        const sketchId = resolveSketch(operation.sketchId).sketchId;
+        const sketchId = resolveSketch(operation.sketchId, false).sketchId;
         scope.declare(operation.localId, ids.bodyId);
         return commandFactories.revolveSketch({
           name: operation.name,
@@ -3979,9 +4074,42 @@ export function commandsForCadPatch(
   // one transaction.
   const commands: AnyCommand[] = [];
   for (const operation of proposal.operations) {
+    const previousParameter =
+      operation.kind === 'set_parameter'
+        ? listParameters(projectedDocument).find(
+            (parameter) => parameter.name === operation.name.trim()
+          )
+        : undefined;
+    const keepsOriginalSketchReads =
+      sketchReadOnlyAppends.has(operation.kind) ||
+      (operation.kind === 'set_parameter' &&
+        (!previousParameter ||
+          previousParameter.expression === operation.expression));
     const command = commandForOperation(operation);
     command.validate(projectedDocument);
     projectedDocument = command.apply(projectedDocument);
+    if (!keepsOriginalSketchReads) {
+      const editedSketch =
+        operation.kind === 'set_sketch_dimension'
+          ? findSketch(document, operation.sketchId)
+          : undefined;
+      const editedFeatureId =
+        operation.kind === 'set_feature_dimension'
+          ? operation.featureId
+          : editedSketch
+            ? listFeaturesInOrder(document).find(
+                (feature) =>
+                  feature.data.featureKind === 'sketch' &&
+                  feature.data.sketchId === editedSketch.sketchId
+              )?.featureId
+            : undefined;
+      // Unknown or structural edits conservatively require a rebuild. Known
+      // dimension edits invalidate only their own transitive history readers.
+      for (const [sketchId, dependencies] of originalSketchDependencies) {
+        if (!editedFeatureId || dependencies.has(editedFeatureId))
+          invalidatedSketchReads.add(sketchId);
+      }
+    }
     commands.push(command);
   }
   return commands;
