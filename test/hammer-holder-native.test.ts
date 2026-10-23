@@ -220,24 +220,40 @@ describe(
         expect(result.bodyRepresentations[fillet.bodyId]).toBeUndefined();
         expect(bodyOf(result, stage).consumed).toBe(false);
       }
-      // On the valid body the top plate edge under the arm foot is the next
-      // refusal boundary: the blend would end where the arm wall rises. (The
-      // inside-out body used to accept it, as a fragment of the real edge.)
+      // The reversed-plane/run-out repair now rounds the complete top edge
+      // under the arm foot. Verify a valid construction and its independent
+      // quarter-circle cut, rather than preserving the old refusal baseline.
       const topPlateEdge = edgeAt(body, 30, 37, 8);
-      const refusedTop = await adapter.syncDocument(
-        filletEdges(stage.document, {
-          name: 'Plate fillet',
-          targetBodyId: stage.bodyId,
-          edgeHashes: [topPlateEdge.hash],
-          size: 3
-        }).document
+      const topFillet = filletEdges(stage.document, {
+        name: 'Plate fillet',
+        targetBodyId: stage.bodyId,
+        edgeHashes: [topPlateEdge.hash],
+        size: 3
+      });
+      const roundedTop = await adapter.syncDocument(topFillet.document);
+      expect(roundedTop.warnings).toEqual([]);
+      expect(bodyOf(roundedTop, topFillet).faceCount).toBe(25);
+      expect(bodyOf(roundedTop, stage).consumed).toBe(true);
+      expect(roundedTop.exportableBodyIds).toContain(topFillet.bodyId);
+      const topInspection = inspect(topFillet);
+      expect(topInspection.strict).toBe(0);
+      expect(topInspection.relaxed).toBe(0);
+      expect(topInspection.report.issues).toEqual([]);
+      expect(topInspection.shells).toBe(1);
+      expect(topInspection.faces).toBe(25);
+      topInspection.bounds.forEach((value, i) =>
+        expect(value).toBeCloseTo([-37, -43, 0, 37, 10, 58][i]!, 6)
       );
-      expect(refusedTop.warnings).toEqual([
-        expect.stringContaining(
-          'Fillet could not be created on 1 selected edge with radius 3.'
-        )
-      ]);
-      expect(bodyOf(refusedTop, stage).consumed).toBe(false);
+      expect(topInspection.mesh).toMatchObject({
+        boundaryEdges: 0,
+        nonManifoldEdges: 0,
+        inconsistentWindingEdges: 0
+      });
+      // A 90-degree convex edge loses (square - quarter circle) * length.
+      const removedVolume = 30 * 3 ** 2 * (1 - Math.PI / 4);
+      expect(
+        Math.abs(body.volume - topInspection.volume - removedVolume)
+      ).toBeLessThan(1e-9);
       const plateEdge = edgeAt(body, 30, 37, 0);
       const fillet = filletEdges(stage.document, {
         name: 'Plate fillet',
