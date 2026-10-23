@@ -163,6 +163,7 @@ describe('sketch dimension overlay', () => {
   });
 
   it.each([
+    'topbar-island',
     'viewer-rail-stack',
     'workspace-column-float',
     'sketch-flyouts',
@@ -174,8 +175,9 @@ describe('sketch dimension overlay', () => {
     'moves a persisted label clear of an occupied %s beside the viewport',
     (className) => {
       const root = document.createElement('div');
-      root.className = 'viewer-area';
+      root.className = 'app-shell';
       const host = document.createElement('div');
+      host.className = 'viewer-area';
       const container = document.createElement('div');
       const rail = document.createElement('div');
       const label = document.createElement('button');
@@ -223,7 +225,10 @@ describe('sketch dimension overlay', () => {
         }
       });
 
-      avoidSketchDimensionOverlays(container, root);
+      avoidSketchDimensionOverlays(
+        container,
+        className === 'topbar-island' ? host : root
+      );
 
       const placed = label.getBoundingClientRect();
       expect(

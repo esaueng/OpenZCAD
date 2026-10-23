@@ -152,6 +152,7 @@ import {
   assertDocumentContentSchema,
   normalizeDocument,
   assertReferenceDocumentSchema,
+  assertSketchProvenance,
   hasJsonPrefix,
   sameJson,
   withoutDerivedProjection
@@ -8189,6 +8190,7 @@ function checkClientDocument(value: unknown): CollaborationRejection | null {
     };
   }
   try {
+    assertSketchProvenance(value as unknown as ProjectDocument);
     assertDocumentContentSchema(value as unknown as ProjectDocument);
     assertReferenceDocumentSchema(value as unknown as ProjectDocument);
   } catch (error) {

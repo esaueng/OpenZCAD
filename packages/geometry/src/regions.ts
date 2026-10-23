@@ -1,7 +1,13 @@
 import {
   MAX_SKETCH_ARC_SWEEP_DEGREES,
   MAX_SKETCH_POLYGON_SIDES,
+  canonicalBoundaryProvenance,
+  isSketchBoundaryEntityId,
+  makeSketchCompositeBoundaryToken,
+  makeSketchPrimitiveBoundaryToken,
+  parseSketchBoundaryToken,
   textSketchBudgetError,
+  type BoundaryProvenance,
   type ParamValue,
   type SketchObjectData
 } from '@openzcad/shared';
@@ -63,7 +69,7 @@ export interface Vec2Like {
 export type BezierControlPoints =
   readonly [Vec2Like] | readonly [Vec2Like, Vec2Like];
 
-export type RegionCurve =
+export type RegionCurve = (
   | { kind: 'line'; a: Vec2Like; b: Vec2Like; sourceObjectId: string }
   | {
       kind: 'arc';
@@ -122,7 +128,8 @@ export type RegionCurve =
       knots: number[];
       controls: Vec2Like[];
       sourceObjectId: string;
-    };
+    }
+) & { boundaryToken?: string };
 
 export type EllipseRegionCurve = Extract<RegionCurve, { kind: 'ellipse' }>;
 export type SplineRegionCurve = Extract<RegionCurve, { kind: 'spline' }>;
@@ -170,6 +177,8 @@ export interface SketchProfile {
   /** Canonical ids of every sketch entity contributing boundary geometry. */
   sourceEntityIds: string[];
   outer: RegionLoop;
+  /** Complete ordered authored boundaries; absent for primitive-only profiles. */
+  sourceBoundaryLoops?: BoundaryProvenance;
   holes: RegionLoop[];
   /** Positive signed area of the bounded cell after subtracting holes. */
   signedArea: number;
@@ -237,6 +246,8 @@ export type SketchProfileSource = (
 
 export interface SketchProfileAnalysisOptions {
   profileSource?: SketchProfileSource;
+  /** Explicit legacy-promotion aliases, validated before curve expansion. */
+  promotionBoundaryTokens?: ReadonlyMap<string, string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -282,7 +293,9 @@ interface SplCurve {
   sourceObjectId: string;
 }
 
-type Curve = SegCurve | ArcCurve | EllCurve | SplCurve;
+type Curve = (SegCurve | ArcCurve | EllCurve | SplCurve) & {
+  boundaryToken?: string;
+};
 type ParamCurve = EllCurve | SplCurve;
 
 const TWO_PI = Math.PI * 2;
@@ -332,7 +345,11 @@ function normalizeAngle(angle: number): number {
   return wrapped < 0 ? wrapped + TWO_PI : wrapped;
 }
 
-function closedPolyCurves(points: Vec2Like[], sourceObjectId: string): Curve[] {
+function closedPolyCurves(
+  points: Vec2Like[],
+  sourceObjectId: string,
+  topologyKind: 'rectangle' | 'regular-polygon'
+): Curve[] {
   const curves: Curve[] = [];
   for (let i = 0; i < points.length; i += 1) {
     const a = points[i]!;
@@ -343,7 +360,16 @@ function closedPolyCurves(points: Vec2Like[], sourceObjectId: string): Curve[] {
       ay: a.y,
       bx: b.x,
       by: b.y,
-      sourceObjectId
+      sourceObjectId,
+      ...(isSketchBoundaryEntityId(sourceObjectId)
+        ? {
+            boundaryToken: makeSketchCompositeBoundaryToken(
+              sourceObjectId,
+              { kind: topologyKind, version: 1, count: points.length },
+              i
+            )
+          }
+        : {})
     });
   }
   return curves;
@@ -381,7 +407,8 @@ function curvesForObject(
           { x: cx + x, y: cy + y },
           { x: cx - x, y: cy + y }
         ],
-        object.id
+        object.id,
+        'rectangle'
       );
     }
     case 'polygon': {
@@ -398,7 +425,7 @@ function curvesForObject(
           y: cy + Math.sin(angle) * radius
         });
       }
-      return closedPolyCurves(points, object.id);
+      return closedPolyCurves(points, object.id, 'regular-polygon');
     }
     case 'circle': {
       return [
@@ -632,7 +659,8 @@ interface ResolvedSketchCurves {
 function resolveSketchCurves(
   objects: SketchRegionObject[],
   resolve: (value: ParamValue) => number,
-  requestedTolerance?: number
+  requestedTolerance?: number,
+  promotionBoundaryTokens?: ReadonlyMap<string, string>
 ): ResolvedSketchCurves {
   const rawCurves: Curve[] = [];
   const diagnostics: SketchProfileDiagnostic[] = [];
@@ -649,7 +677,22 @@ function resolveSketchCurves(
       continue;
     }
     try {
-      rawCurves.push(...curvesForObject(object, resolve));
+      const curves = curvesForObject(object, resolve);
+      if (
+        isSketchBoundaryEntityId(object.id) &&
+        object.data.objectKind !== 'rectangle' &&
+        object.data.objectKind !== 'polygon' &&
+        object.data.objectKind !== 'text'
+      )
+        for (const curve of curves)
+          curve.boundaryToken = makeSketchPrimitiveBoundaryToken(
+            object.id,
+            object.data.objectKind
+          );
+      const alias = promotionBoundaryTokens?.get(object.id);
+      if (alias !== undefined)
+        for (const curve of curves) curve.boundaryToken = alias;
+      rawCurves.push(...curves);
     } catch {
       invalidEntityIds.add(object.id);
       diagnostics.push({
@@ -2283,6 +2326,35 @@ function loopFromCurves(curves: RegionCurve[]): RegionLoop {
   return { curves, polyline };
 }
 
+/** Qualify whole loops together; never drop an unqualified curve from a loop. */
+function sourceBoundaryLoopsFor(
+  outer: RegionLoop,
+  holes: readonly RegionLoop[]
+): BoundaryProvenance | undefined {
+  const loops = [outer, ...holes];
+  if (
+    !loops.some((loop) =>
+      loop.curves.some(
+        (curve) =>
+          parseSketchBoundaryToken(curve.boundaryToken)?.kind === 'composite'
+      )
+    )
+  )
+    return undefined;
+  if (
+    loops.some((loop) =>
+      loop.curves.some(
+        (curve) => parseSketchBoundaryToken(curve.boundaryToken) === null
+      )
+    )
+  )
+    return undefined;
+  return canonicalBoundaryProvenance({
+    outer: outer.curves.map((curve) => curve.boundaryToken!),
+    holes: holes.map((loop) => loop.curves.map((curve) => curve.boundaryToken!))
+  });
+}
+
 /**
  * Exact union of face-adjacent arrangement cells.
  *
@@ -2382,10 +2454,12 @@ export function mergeAdjacentProfiles(
     ...new Set(profiles.flatMap((profile) => profile.sourceEntityIds))
   ].sort();
   const regionFingerprint = regionFingerprintOf(outerValue.loop, holes);
+  const sourceBoundaryLoops = sourceBoundaryLoopsFor(outerValue.loop, holes);
   return {
     profileId: profileIdOf(outerValue.loop, holes, regionFingerprint),
     regionFingerprint,
     sourceEntityIds,
+    ...(sourceBoundaryLoops ? { sourceBoundaryLoops } : {}),
     outer: outerValue.loop,
     holes,
     signedArea: area,
@@ -2668,7 +2742,10 @@ function extractSketchProfiles(
           kind: 'line',
           a: edge.forward ? sub.start : sub.end,
           b: edge.forward ? sub.end : sub.start,
-          sourceObjectId: sub.curve.sourceObjectId
+          sourceObjectId: sub.curve.sourceObjectId,
+          ...(sub.curve.boundaryToken
+            ? { boundaryToken: sub.curve.boundaryToken }
+            : {})
         } satisfies RegionCurve;
       }
       if (sub.curve.kind === 'ell') {
@@ -2682,7 +2759,10 @@ function extractSketchProfiles(
           startParam: ellipse.start + (edge.forward ? sub.from : sub.to),
           endParam: ellipse.start + (edge.forward ? sub.to : sub.from),
           ccw: edge.forward,
-          sourceObjectId: sub.curve.sourceObjectId
+          sourceObjectId: sub.curve.sourceObjectId,
+          ...(sub.curve.boundaryToken
+            ? { boundaryToken: sub.curve.boundaryToken }
+            : {})
         } satisfies RegionCurve;
       }
       if (sub.curve.kind === 'spl') {
@@ -2702,7 +2782,10 @@ function extractSketchProfiles(
           degree: oriented.degree,
           knots: oriented.knots,
           controls,
-          sourceObjectId: sub.curve.sourceObjectId
+          sourceObjectId: sub.curve.sourceObjectId,
+          ...(sub.curve.boundaryToken
+            ? { boundaryToken: sub.curve.boundaryToken }
+            : {})
         } satisfies RegionCurve;
       }
       const startAngle = sub.curve.a0 + (edge.forward ? sub.from : sub.to);
@@ -2714,7 +2797,10 @@ function extractSketchProfiles(
         startAngle,
         endAngle,
         ccw: edge.forward,
-        sourceObjectId: sub.curve.sourceObjectId
+        sourceObjectId: sub.curve.sourceObjectId,
+        ...(sub.curve.boundaryToken
+          ? { boundaryToken: sub.curve.boundaryToken }
+          : {})
       } satisfies RegionCurve;
     });
 
@@ -2776,10 +2862,15 @@ function extractSketchProfiles(
       continue;
     }
     const regionFingerprint = regionFingerprintOf(outerLoop, holeRegionLoops);
+    const sourceBoundaryLoops = sourceBoundaryLoopsFor(
+      outerLoop,
+      holeRegionLoops
+    );
     regions.push({
       profileId: profileIdOf(outerLoop, holeRegionLoops, regionFingerprint),
       regionFingerprint,
       sourceEntityIds,
+      ...(sourceBoundaryLoops ? { sourceBoundaryLoops } : {}),
       outer: outerLoop,
       holes: holeRegionLoops,
       signedArea: area,
@@ -2894,7 +2985,54 @@ export function computeSketchProfileAnalysis(
   requestedTolerance?: number,
   options?: SketchProfileAnalysisOptions
 ): SketchProfileAnalysis {
-  const resolved = resolveSketchCurves(objects, resolve, requestedTolerance);
+  const aliases = options?.promotionBoundaryTokens;
+  if (aliases) {
+    const byId = new Map(objects.map((object) => [object.id, object.data]));
+    const assigned = new Set<string>();
+    const owners = new Map<
+      string,
+      {
+        kind: 'rectangle' | 'regular-polygon';
+        count: number;
+        indices: Set<number>;
+      }
+    >();
+    for (const [id, token] of aliases) {
+      const parsed = parseSketchBoundaryToken(token);
+      if (
+        byId.get(id)?.objectKind !== 'line' ||
+        parsed?.kind !== 'composite' ||
+        assigned.has(token)
+      )
+        throw new Error(
+          'Sketch promotion boundary aliases are missing, malformed or ambiguous.'
+        );
+      assigned.add(token);
+      const owner = owners.get(parsed.objectId);
+      if (
+        owner &&
+        (owner.count !== parsed.topology.count ||
+          owner.kind !== parsed.topology.kind)
+      )
+        throw new Error('Sketch promotion boundary topology is ambiguous.');
+      const group = owner ?? {
+        kind: parsed.topology.kind,
+        count: parsed.topology.count,
+        indices: new Set<number>()
+      };
+      group.indices.add(parsed.edgeIndex);
+      owners.set(parsed.objectId, group);
+    }
+    for (const owner of owners.values())
+      if (owner.indices.size !== owner.count)
+        throw new Error('Sketch promotion boundary aliases are partial.');
+  }
+  const resolved = resolveSketchCurves(
+    objects,
+    resolve,
+    requestedTolerance,
+    aliases
+  );
   const profiles = extractSketchProfiles(
     resolved.curves,
     resolved.tolerance,
@@ -2943,7 +3081,11 @@ export function regionAtPoint(
 }
 
 export function profileContainsPoint(
-  profile: SketchProfile,
+  profile: {
+    boundingBox: { min: Vec2Like; max: Vec2Like };
+    outer: { polyline: Vec2Like[] };
+    holes: { polyline: Vec2Like[] }[];
+  },
   point: Vec2Like
 ): boolean {
   return (

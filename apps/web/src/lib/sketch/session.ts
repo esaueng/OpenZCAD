@@ -12,10 +12,17 @@ import {
 import type { SketchMoveHandle } from '../interaction/machine';
 import {
   MAX_SKETCH_SPLINE_POINTS,
+  createSketchCompositeCornerTarget,
+  createSketchCompositeSideTarget,
+  resolveSketchCompositeCornerTarget,
+  type SketchComposite,
+  type SketchCompositeCornerTarget,
+  type SketchCompositeSideTarget,
   type SketchObjectData,
   type SketchPlaneFrame,
   type Vector3
 } from '@openzcad/shared';
+import { sketchCompositeTargetNames } from './compositeTargetNames';
 
 /**
  * Pure math for in-viewport sketching: pointer-to-plane projection, snapping,
@@ -699,6 +706,10 @@ export interface SnapTarget extends SketchPoint {
    * silently.
    */
   pointRef?: 'start' | 'end' | 'center';
+  /** Logical identity accompanies, never replaces, the driving primitive alias. */
+  compositeTarget?: SketchCompositeCornerTarget | SketchCompositeSideTarget;
+  /** Qualified shape/corner name displayed by the existing snap marker. */
+  label?: string;
 }
 
 /**
@@ -1035,8 +1046,16 @@ function segmentIntersection(
 /** Exact point candidates from the evaluated sketch, including line crossings. */
 export function collectSketchSnapTargets(
   objects: readonly { id: string; data: SketchObjectData }[],
-  resolve: (value: unknown) => number
+  resolve: (value: unknown) => number,
+  composites: readonly SketchComposite[] = [],
+  resolveCompositeValue: (
+    value: number | string
+  ) => number | undefined = resolve
 ): SnapTarget[] {
+  // Composite records have a separate budget; they do not consume the
+  // physical-object allowance or permit a partially named snap collection.
+  if (composites.length > SKETCH_SNAP_LIMITS.objects)
+    throw new SketchSnapLimitError('objects');
   checkSketchSnapInput(objects);
   const targets: SnapTarget[] = [
     { id: 'sketch-origin', x: 0, y: 0, kind: 'origin' }
@@ -1072,7 +1091,55 @@ export function collectSketchSnapTargets(
       }
     }
   }
-  return targets;
+  if (composites.length === 0) return targets;
+  const byId = new Map(objects.map((object) => [object.id, object.data]));
+  const names = sketchCompositeTargetNames(composites);
+  const sides = new Map<
+    string,
+    { composite: SketchComposite; index: number }
+  >();
+  for (const composite of composites) {
+    // A broken record still has ordinary line snaps, but cannot truthfully
+    // name them as corners or sides of the shape it used to describe.
+    if (
+      resolveSketchCompositeCornerTarget(
+        createSketchCompositeCornerTarget(composite, 0),
+        composites,
+        byId,
+        resolveCompositeValue
+      ).status !== 'resolved'
+    )
+      continue;
+    for (const [index, id] of composite.edgeIds.entries())
+      sides.set(id, { composite, index });
+  }
+  return targets.map((target) => {
+    const member = target.sourceId ? sides.get(target.sourceId) : undefined;
+    if (!member) return target;
+    const { composite, index } = member;
+    const name = names.get(composite.compositeId)!;
+    if (
+      target.kind === 'endpoint' &&
+      (target.pointRef === 'start' || target.pointRef === 'end')
+    ) {
+      const corner =
+        target.pointRef === 'start'
+          ? index
+          : (index + 1) % composite.edgeIds.length;
+      return {
+        ...target,
+        compositeTarget: createSketchCompositeCornerTarget(composite, corner),
+        label: `${name} · Corner ${corner + 1}`
+      };
+    }
+    return target.kind === 'midpoint'
+      ? {
+          ...target,
+          compositeTarget: createSketchCompositeSideTarget(composite, index),
+          label: `${name} · Side ${index + 1} midpoint`
+        }
+      : target;
+  });
 }
 
 export interface RankedSnapTarget {

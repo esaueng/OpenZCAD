@@ -83,6 +83,8 @@ import {
   documentTextBudgetError,
   resolveExportUnits,
   resolveSketchComposite,
+  resolveSketchPromotionBoundaryTokens,
+  type BoundaryProvenance,
   sketchCompositeOf,
   sketchCompositeSizeDimensions
 } from '@openzcad/shared';
@@ -145,6 +147,7 @@ import {
 import {
   CommandManager,
   commandFactories,
+  prepareLegacySketchConversion,
   duplicateFeatureCommands,
   duplicateFeatureRefusal,
   isParameterRetype,
@@ -280,6 +283,7 @@ import {
   type ConstraintPick,
   type DrivingDimensionKind
 } from './lib/sketch/constraints';
+import { resolveBoundaryRegionReference } from './lib/profileProvenance';
 import { sketchDimensionAnnotations } from './lib/sketch/dimensionAnnotations';
 import {
   SKETCH_RELATION_GLYPHS,
@@ -826,7 +830,8 @@ function regionTargetFor(region: RegionPickData): RegionTarget {
     regionFingerprint: region.regionFingerprint,
     samplePoint: region.samplePoint,
     area: region.area,
-    sourceEntityIds: region.sourceEntityIds
+    sourceEntityIds: region.sourceEntityIds,
+    sourceBoundaryLoops: region.sourceBoundaryLoops
   };
 }
 
@@ -7720,6 +7725,7 @@ export function App() {
         centroid: region.centroid,
         boundingBox: region.boundingBox,
         sourceEntityIds: region.sourceEntityIds,
+        sourceBoundaryLoops: region.sourceBoundaryLoops,
         area: region.area
       })) ?? [];
     if (available.length === 0) {
@@ -15017,7 +15023,8 @@ export function App() {
     try {
       profiles = computeSketchRegions(
         displayObjectsWithTextBudget(objects, textOutlineBudgetError),
-        resolve
+        resolve,
+        undefined, { promotionBoundaryTokens: resolveSketchPromotionBoundaryTokens(sketch?.promotions ?? [], new Map(objects.map(({ id, data }) => [id, data]))) }
       ).map((profile) => ({
         outer: profile.outer.polyline,
         holes: profile.holes.map((hole) => hole.polyline)
@@ -15061,6 +15068,7 @@ export function App() {
       snapTolerancePx: appSettings.sketching.snapTolerancePx,
       drawing: session.drawing,
       objects,
+      composites: sketch?.composites ?? [],
       profiles,
       selectedObjectId: session.selectedObjectId,
       parameterScope: parameterScope.scope,
@@ -15080,7 +15088,8 @@ export function App() {
           evalParamValue(value, parameterScope.scope, doc.units) ?? undefined,
         doc.units,
         sketch?.dimensionLabelPositions,
-        sketch?.referenceDimensions
+        sketch?.referenceDimensions,
+        sketch?.composites
       ),
       diagnosticPoints: sketchDiagnosticPoints
     };
@@ -15658,6 +15667,137 @@ export function App() {
     }
   }
 
+  async function handleConvertLegacySketchObject() {
+    const base = managerRef.current?.document;
+    const target = sketchEntityEditTarget(interactionRef.current);
+    if (!base || !target || sketchSolving || geometryBusy) return;
+    const sketchId = target.sketchId as SketchId;
+    const sourceObjectId = target.objectId as EntityId;
+    const source = base.nodes[sourceObjectId];
+    if (
+      source?.kind !== 'sketch-object' ||
+      (source.data.objectKind !== 'rectangle' &&
+        source.data.objectKind !== 'polygon')
+    )
+      return;
+    setSketchSolving(true);
+    setSketchEditError(null);
+    setSketchDiagnosticPoints([]);
+    try {
+      const command = commandFactories.convertLegacySketchObject(
+        prepareLegacySketchConversion(base, {
+          sketchId,
+          sourceObjectId,
+          expectedSource: structuredClone(source.data)
+        })
+      );
+      command.validate(base);
+      const prospective = command.apply(base);
+      const outcome = await geometry.solveSketch(prospective, sketchId);
+      if (
+        !outcome.converged ||
+        outcome.rolledBack ||
+        outcome.classification === 'unsatisfied'
+      )
+        throw new Error(
+          `${solveStatusLabel(outcome)}. Conversion was not saved.`
+        );
+      if (
+        await commitSketchEdit(
+          base,
+          sketchId,
+          [command],
+          'Convert to editable edges',
+          target.raceObjectId
+        )
+      ) {
+        const promotion = findSketch(
+          managerRef.current!.document,
+          sketchId
+        )?.promotions?.find((record) => record.sourceObjectId === sourceObjectId);
+        dispatchInteraction({
+          type: 'sketch-select-object',
+          objectId: promotion?.edgeIds[0] ?? null
+        });
+        setSketchSolveStatus(null);
+        setStatus(`Converted ${source.data.objectKind} to editable edges.`);
+      }
+    } catch (error) {
+      if (error instanceof FeatureBuildError) recordHistoryFailure(error, base);
+      const message = errorMessage(error, 'Conversion could not be applied.');
+      if (
+        interactionRef.current.mode === 'sketch' &&
+        interactionRef.current.session.sketchId === sketchId &&
+        interactionRef.current.session.selectedObjectId === sourceObjectId
+      )
+        setSketchEditError(message);
+      setStatus(message);
+    } finally {
+      setSketchSolving(false);
+    }
+  }
+
+  async function handleReleaseSketchPromotionStructure() {
+    const base = managerRef.current?.document;
+    const target = sketchEntityEditTarget(interactionRef.current);
+    if (!base || !target || sketchSolving || geometryBusy) return;
+    const sketchId = target.sketchId as SketchId;
+    const objectId = target.objectId as EntityId;
+    const promotion = findSketch(base, sketchId)?.promotions?.find((record) =>
+      [...record.edgeIds, record.centerSpokeId, ...record.helperIds].includes(
+        objectId
+      )
+    );
+    if (!promotion?.structureConstraintIds.length) return;
+    setSketchSolving(true);
+    setSketchEditError(null);
+    try {
+      const command = commandFactories.releaseSketchPromotionStructure({
+        sketchId,
+        promotionId: promotion.promotionId
+      });
+      command.validate(base);
+      const prospective = command.apply(base);
+      const outcome = await geometry.solveSketch(prospective, sketchId);
+      if (
+        !outcome.converged ||
+        outcome.rolledBack ||
+        outcome.classification === 'unsatisfied'
+      )
+        throw new Error(
+          `${solveStatusLabel(outcome)}. Shape constraints were kept.`
+        );
+      if (
+        await commitSketchEdit(
+          base,
+          sketchId,
+          [command],
+          'Release shape constraints',
+          target.raceObjectId
+        )
+      ) {
+        setSketchSolveStatus(null);
+        setStatus(
+          'Released conversion shape constraints. Ordinary constraints were kept.'
+        );
+      }
+    } catch (error) {
+      const message = errorMessage(
+        error,
+        'Shape constraints could not be released.'
+      );
+      if (
+        interactionRef.current.mode === 'sketch' &&
+        interactionRef.current.session.sketchId === sketchId &&
+        interactionRef.current.session.selectedObjectId === objectId
+      )
+        setSketchEditError(message);
+      setStatus(message);
+    } finally {
+      setSketchSolving(false);
+    }
+  }
+
   /**
    * Resizes the selected side's rectangle or polygon as one object: every
    * side and helper moves in one edit, solved together with the sketch's
@@ -16146,7 +16286,7 @@ export function App() {
     try {
       return {
         objects,
-        analysis: computeSketchProfileAnalysis(objects, resolveDocumentValue),
+        analysis: computeSketchProfileAnalysis(objects, resolveDocumentValue, undefined, { promotionBoundaryTokens: resolveSketchPromotionBoundaryTokens(editingSketchNode?.promotions ?? [], new Map(objects.map(({ id, data }) => [id, data]))) }),
         error: null
       };
     } catch (error) {
@@ -16181,7 +16321,9 @@ export function App() {
       sketchSolveStatus?.conflictingConstraintIds ?? []
     );
     const fullyDefined = sketchSolveStatus?.definedState === 'fully-defined';
-    return (editingSketchNode.constraints ?? []).map(
+    return (editingSketchNode.constraints ?? [])
+      .filter(({ origin }) => origin !== 'promotion-structure')
+      .map(
       ({ constraintId, data }) => ({
         constraintId: String(constraintId),
         label: describeConstraint(data, nameOf),
@@ -16212,6 +16354,7 @@ export function App() {
         : 'entity';
     };
     return (editingSketchNode.constraints ?? [])
+      .filter(({ origin }) => origin !== 'promotion-structure')
       .filter(({ data }) =>
         constraintReferencesObject(data, selectedSketchEntity.id)
       )
@@ -16300,6 +16443,13 @@ export function App() {
     parameterScope.scope,
     sketchReadDocument
   ]);
+
+  // A promotion owns every generated edge and construction helper.
+  const selectedPromotion = selectedSketchEntity
+    ? editingSketchNode?.promotions?.find((record) =>
+        [...record.edgeIds, record.centerSpokeId, ...record.helperIds].includes(selectedSketchEntity.id)
+      )
+    : undefined;
 
   // What the relations rail offers the selected entity: its kind, for the
   // refusal it names, and the relations that take it as their first pick.
@@ -17529,6 +17679,7 @@ export function App() {
           max: { x: number; y: number };
         };
         sourceEntityIds: string[];
+        sourceBoundaryLoops?: BoundaryProvenance;
         area: number;
         outer: { x: number; y: number }[];
         holes: { x: number; y: number }[][];
@@ -17543,7 +17694,8 @@ export function App() {
       try {
         regions = computeSketchRegions(
           displayObjectsWithTextBudget(objects, textOutlineBudgetError),
-          (value) => resolve(value)
+          (value) => resolve(value),
+          undefined, { promotionBoundaryTokens: resolveSketchPromotionBoundaryTokens(sketch.promotions ?? [], new Map(objects.map(({ id, data }) => [id, data]))) }
         ).map((region) => {
           const buildGroup = entityWideSourceKey(region.sourceEntityIds, (id) =>
             entityWideIds.has(id)
@@ -17555,6 +17707,7 @@ export function App() {
             centroid: region.centroid,
             boundingBox: region.boundingBox,
             sourceEntityIds: region.sourceEntityIds,
+            sourceBoundaryLoops: region.sourceBoundaryLoops,
             area: region.area,
             outer: region.outer.polyline,
             holes: region.holes.map((hole) => hole.polyline),
@@ -17626,7 +17779,19 @@ export function App() {
               candidate.sourceEntityIds.slice().sort().join('|') ===
               selected.sourceEntityIds.slice().sort().join('|')
           ) ?? [];
-        const profile =
+        let boundaryProfile: (typeof view.regions)[number] | undefined;
+        if (selected.sourceBoundaryLoops !== undefined) {
+          try {
+            boundaryProfile = resolveBoundaryRegionReference({
+              sourceBoundaryLoops: selected.sourceBoundaryLoops,
+              sourceArea: selected.area,
+              samplePoint: selected.samplePoint
+            }, view.regions);
+          } catch {
+            return [];
+          }
+        }
+        const profile = boundaryProfile ??
           view?.regions.find(
             (candidate) => candidate.profileId === selected.profileId
           ) ??
@@ -17647,6 +17812,7 @@ export function App() {
                 centroid: profile.centroid,
                 boundingBox: profile.boundingBox,
                 sourceEntityIds: profile.sourceEntityIds,
+                sourceBoundaryLoops: profile.sourceBoundaryLoops,
                 area: profile.area
               }
             ]
@@ -17657,7 +17823,8 @@ export function App() {
         remapped.every(
           (profile, index) =>
             profile.profileId === current[index]?.profileId &&
-            profile.regionFingerprint === current[index]?.regionFingerprint
+            profile.regionFingerprint === current[index]?.regionFingerprint &&
+            JSON.stringify(profile.sourceBoundaryLoops) === JSON.stringify(current[index]?.sourceBoundaryLoops)
         );
       return unchanged ? current : remapped;
     });
@@ -17724,7 +17891,8 @@ export function App() {
       });
       return computeSketchRegions(
         displayObjectsWithTextBudget(objects, documentTextBudgetError(current)),
-        resolve
+        resolve,
+        undefined, { promotionBoundaryTokens: resolveSketchPromotionBoundaryTokens(sketch.promotions ?? [], new Map(objects.map(({ id, data }) => [id, data]))) }
       ).map((region) => ({
         sketchId,
         profileId: region.profileId,
@@ -17733,6 +17901,7 @@ export function App() {
         centroid: region.centroid,
         boundingBox: region.boundingBox,
         sourceEntityIds: region.sourceEntityIds,
+        sourceBoundaryLoops: region.sourceBoundaryLoops,
         area: region.area
       }));
     } catch {
@@ -17803,6 +17972,7 @@ export function App() {
         centroid: candidate.centroid,
         boundingBox: candidate.boundingBox,
         sourceEntityIds: candidate.sourceEntityIds,
+        sourceBoundaryLoops: candidate.sourceBoundaryLoops,
         area: candidate.area
       })) ?? []
     );
@@ -17872,6 +18042,7 @@ export function App() {
               // entity-wide reference, so a drag-extruded label still rebuilds
               // after its string is edited.
               sourceEntityIds: target.sourceEntityIds,
+              sourceBoundaryLoops: target.sourceBoundaryLoops,
               area: target.area
             }
           ];
@@ -19894,6 +20065,16 @@ export function App() {
             ) ?? []
           );
         }
+        if (reference.sourceBoundaryLoops !== undefined) {
+          try {
+            return view ? [resolveBoundaryRegionReference({
+              ...reference,
+              sourceBoundaryLoops: reference.sourceBoundaryLoops
+            }, view.regions)] : [];
+          } catch {
+            return [];
+          }
+        }
         const sourceMatches = reference.sourceEntityIds
           ? (view?.regions.filter(
               (candidate) =>
@@ -19923,6 +20104,7 @@ export function App() {
         centroid: region.centroid,
         boundingBox: region.boundingBox,
         sourceEntityIds: region.sourceEntityIds,
+        sourceBoundaryLoops: region.sourceBoundaryLoops,
         area: region.area
       }));
       setSelectedProfiles(highlighted);
@@ -22907,6 +23089,7 @@ export function App() {
           centroid: region.centroid,
           boundingBox: region.boundingBox,
           sourceEntityIds: region.sourceEntityIds,
+          sourceBoundaryLoops: region.sourceBoundaryLoops,
           area: region.area
         };
         const [profile] = profileReferencesForSelection(
@@ -22919,7 +23102,8 @@ export function App() {
               {
                 id: `${view.sketchId}:${region.profileId}`,
                 label: `${sketchName} · Profile ${index + 1}`,
-                section: { sketchId: view.sketchId, profile }
+                section: { sketchId: view.sketchId, profile },
+                region: { outer: region.outer, holes: region.holes, boundingBox: region.boundingBox }
               }
             ];
       })
@@ -23283,6 +23467,11 @@ export function App() {
         void handleUpdateSketchEntity(data);
       }}
       onDelete={handleDeleteSketchEntity}
+      onConvertToEdges={() => void handleConvertLegacySketchObject()}
+      promotionSource={selectedPromotion?.sourceData.objectKind}
+      onReleaseShapeConstraints={selectedPromotion?.structureConstraintIds.length
+        ? () => void handleReleaseSketchPromotionStructure()
+        : undefined}
       onToggleConstruction={() => void handleToggleSketchConstruction()}
       composite={selectedComposite}
       onResizeComposite={(size, expressions) => {

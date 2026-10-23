@@ -1,9 +1,9 @@
 # S04: Constraint-capable composite sketch identity
 
 Status: **implemented for new drawings by the decision below (schema v26).**
-The sections after it are the original proposal, kept as history and as the
-design for the legacy parametric objects, which this decision leaves as they
-are.
+The original proposal below is retained as history and as the design for
+legacy parametric objects. S04-B defines named targets for new held-line
+shapes; S04-C adds explicit legacy conversion and authored boundary provenance.
 
 Baseline: OpenZCAD `main` at `efa2662910199e6d23d63f337e35d3d591614d21`.
 
@@ -78,10 +78,149 @@ The rules:
   record on save. `normalizeDocument` validates the record's shape and never
   synthesizes one.
 
-Still open under S04: corner and side snap or dimension targets that name
-a composite (S02-D), and the region-provenance tokens and the
-explicit-conversion command for the **legacy** parametric objects, as
-designed below.
+The next section delivers corner and side snap or reference-dimension targets
+for these held-line composites. Region-provenance tokens and the explicit
+conversion command for the **legacy** parametric objects are delivered by
+S04-C below. Untouched legacy objects keep their original representation.
+
+## Composite target identity (S04-B)
+
+This bounded slice builds on the held-line decision above and on S02-E in
+[PR #797](https://github.com/esaueng/OpenZCAD/pull/797). It uses additive schema
+v36 from that branch's v35 baseline; earlier coordinated schema migrations must
+be reconciled against the actual merged base before integration.
+
+A saved corner or side target names its composite ID, a zero-based index, and
+an immutable version-1 snapshot of the complete ordered side and helper IDs.
+Identity contains no coordinates. Indices must be finite integers in range;
+constructors and resolvers never wrap them. The current record must have the
+same ordered members, and the complete shape must resolve before any corner
+or side is published. Missing owners, changed topology, broken loops, missing
+helpers and changed helper ownership produce a named unresolved reference.
+No primitive, array-order or nearest-geometry fallback repairs one silently.
+
+Reference distances accept primitive points and composite corners; reference
+angles accept primitive lines and composite sides, including mixed targets.
+The palette and snapping expose human-readable corner/side names. Driving
+relations retain their existing real line/endpoint aliases and solver inputs.
+The same physical target selected through two aliases is refused as the same
+target. Absolute, horizontal and vertical reference modes keep their S02-E
+semantics along the sketch's axes; annotation identity, placements and targets
+survive resize, replay, undo/redo, backup and reopen.
+
+Deleting any side or helper would dissolve a named composite, so a saved
+composite-target annotation blocks that deletion until it is explicitly
+removed. Unrelated primitive reference/deletion behavior remains unchanged.
+Malformed descriptors are refused on load, including undo/redo nodes; a
+well-formed target whose topology no longer resolves stays visible and
+removable. Schema versions before v36 cannot carry composite-target records. An omitted
+schema version is not proof that these targets are supported.
+Legacy saves without them remain additive and do not synthesize descriptors.
+
+Acceptance covers rectangle methods and regular polygons, strict topology and
+ownership validation, reversed/reordered/replaced members, broken geometry,
+primitive/composite alias collisions, deletion and recovery, mixed and
+projected measurements, and saved command replay. Exact-kernel regressions
+must show unchanged geometry/solve inputs and cache keys for annotation-only
+edits, and analytic downstream extrusion results after resizing the real
+lines. Browser coverage must exercise creation, read-only activation, target
+retention, undo/reopen and compact controls.
+
+This slice does not add legacy parametric-object conversion, virtual solver
+geometry, datum targets, composite centers or legacy region-provenance tokens.
+The existing held lines remain the source of exact regions and lineage.
+
+## Legacy provenance and explicit conversion (S04-C)
+
+This implementation builds on [S04-B #800](https://github.com/esaueng/OpenZCAD/pull/800)
+and uses schema v37 from its v36 baseline. Independent pending schema changes
+must be reconciled with the actual merged base. This section supersedes the
+historical virtual-graph and promotion recipes below; it uses persisted legal
+primitive constraints, with no virtual solver operands.
+
+Conversion retains authored unit-aware source expressions. When generated
+coordinates combine a bare document-unit center with an explicit length or
+typed length parameter, each operand is expressed in document units before
+the affine sum. The generated edges remain live parameter expressions; no
+source witness, identity matcher or geometric tolerance is rewritten to make
+mixed-unit input fit.
+
+When linked projection constraints move neighboring geometry, conversion uses
+the project/version-qualified exact read view for profile qualification while
+keeping canonical authored expressions as the mutation base. A versioned optional
+`qualification` command payload stores changed numeric analysis geometry and a
+stable authored-input digest so full replay does not need transient kernel
+state. Projection verdicts must be current or moved at live preparation.
+Overrides never become neighboring authored values, and the unchanged profile
+resolver still rejects altered loop roles, hole multiplicity and boundary tokens.
+Native-copy project identity and artifact locations are excluded from the
+content digest; source checksums and actual modeling inputs remain included.
+The digest detects stale input and does not authenticate fabricated coordinates.
+
+Legacy rectangle/polygon arrangement curves now carry the fixed
+`b1/<entity>/<rectangle|regular-polygon>/1/<count>/e/<index>` token. Indices are
+zero-based, including zero; noncanonical decimals, unknown versions and
+invalid counts refuse. Mixed boundaries also carry
+`p1/<entity>/<line|circle|arc|ellipse|spline>` tokens for primitive curves.
+Every derived curve contributes one token. Outer and hole roles, cyclic order,
+reversal equivalence and repeated split-edge occurrences are preserved; holes
+form a sorted multiset of canonical loops. A profile carries
+`sourceBoundaryLoops` only when at least one legacy or promoted curve contributes.
+Primitive-only selections retain their earlier saved shape.
+
+References with this witness resolve only through exact loop provenance.
+Geometry may distinguish multiple exact topology matches, with a finite area
+and interior sample witness; it cannot repair a topology mismatch. Existing
+references without the field keep their previous resolver tiers. UI picks,
+re-picks, modeling operations and AI-created profile selections share this
+rule. Adding metadata does not change curve geometry, fingerprints or profile
+IDs, and loading old documents synthesizes no saved provenance.
+
+**Convert to editable edges** is explicit, available on an unchanged committed
+legacy rectangle or regular polygon. One replay command preassigns generated
+identities, validates every source parameter and replaces the object atomically.
+The promotion witness retains its prior raw parameters, construction state and
+name, ordered edges, a construction center spoke, owned structure IDs and a
+versioned map of vertex/edge/center aliases. Rectangle conversion adds one
+construction diagonal so the spoke's start remains the center under edits.
+
+The rectangle graph uses corner coincidents and H/V sides, raw width/height
+distances, diagonal endpoint coincidences and a midpoint relation for the
+center. Opposite-side equalities in the original recipe are omitted because
+they are redundant on a closed H/V rectangle. Polygons use corner coincidences,
+equal sides, raw radius distances from the center and a vertical center spoke
+to preserve the top-first phase. These graphs are independent on the pinned
+GCS. Coordinate expressions retain source parameter reads; dimensional values
+retain raw width/height/radius expressions. Existing legal user constraints
+retain their IDs, values and order. Unsupported saved legacy operands refuse
+before mutation rather than being dropped or guessed.
+
+Affected bounded downstream selections gain their precise old loop witness
+only during this conversion. Their aliases resolve to the generated lines;
+source-derived side/cap lineage remains available for attachments. A bounded
+selection is never widened to `all: true`. An older reference already authored
+with `all: true` retains that explicit entity-wide intent by remapping the
+source ID to its ordered generated edges. Malformed, ambiguous or incomplete
+aliases refuse. Typed boundary dependents protect source topology and member
+deletion; releasing structure does not discard aliases.
+
+Generated structure is hidden from ordinary relation and dimension controls,
+but remains present for solving, ownership checks and diagnostics. The separate
+**Release shape constraints** command removes only that owned structure while
+retaining user constraints and the promotion aliases, allowing deliberate free
+edge editing. Neither an edit nor a constraint request releases it implicitly.
+Deleting an unconsumed member dissolves its promotion and all owned structure;
+with downstream dependents it refuses. Undo restores the exact prior graph,
+source, aliases and references; redo/replay reuses every recorded identity.
+
+Schema validation covers current, readable undo/redo and replay-only profile,
+alias and ownership records, including nested transactions and saved log copies.
+Pre-v37 and unversioned carriers refuse these new fields; unreadable undo history retains the
+existing recovery policy. Exact tests qualify analytic solids, independent
+solver graphs and attached faces through conversion, resizing, replay and
+backup. Browser tests cover both shapes, refusal without a history edit,
+release/free editing, undo/reopen and compact controls. `ROADMAP.md` remains
+the only delivery ledger.
 
 ## Decision summary (original proposal)
 
@@ -384,7 +523,7 @@ edge-index    = 1*DIGIT
 rectangle and the resolved side count for a regular polygon. For example,
 `b1/ent_123e4567-e89b-12d3-a456-426614174000/rectangle/1/4/e/2` and
 `b1/ent_123e4567-e89b-12d3-a456-426614174000/regular-polygon/1/6/e/4` are valid. A token parser rejects
-unknown versions, zero/out-of-range indices, malformed IDs, and extra fields;
+unknown versions, out-of-range indices, malformed IDs, and extra fields;
 it does not normalize an unknown token into a near match. Primitive line and
 arc provenance continues to use existing `sourceEntityIds`; S04 tokens are
 only emitted for the rectangle/polygon boundaries they describe.

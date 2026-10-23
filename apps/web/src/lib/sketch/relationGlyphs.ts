@@ -163,6 +163,7 @@ export function sketchRelationGlyphs(
   };
 
   for (const constraint of constraints) {
+    if (constraint.origin === 'promotion-structure') continue;
     const data = constraint.data;
     if (
       data.constraintKind === 'distance' ||

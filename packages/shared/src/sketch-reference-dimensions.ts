@@ -2,6 +2,8 @@ import type {
   EntityId,
   ParamValue,
   SketchConstraint,
+  SketchComposite,
+  SketchCompositeId,
   SketchDimensionIdentity,
   SketchNode,
   SketchObjectData,
@@ -10,8 +12,19 @@ import type {
   SketchReferenceDimension,
   SketchReferenceDimensionData,
   SketchReferenceDistanceMode,
+  SketchReferencePointTarget,
+  SketchReferenceCurveTarget,
   UnitSystem
 } from './index';
+
+import {
+  isSketchCompositeCornerTarget,
+  isSketchCompositeSideTarget,
+  resolveSketchCompositeCornerTarget,
+  resolveSketchCompositeSideTarget,
+  resolveSketchCompositeTargetIdentity,
+  sketchCompositeTargetMemberIds
+} from './sketch-composite-targets';
 
 /**
  * S02-A — shared types and pure resolver for driven/reference dimensions.
@@ -146,8 +159,8 @@ export function isSketchReferenceDimensionData(
   switch (value.dimensionKind) {
     case 'distance':
       return (
-        isSketchPointRef(value.a) &&
-        isSketchPointRef(value.b) &&
+        (isSketchPointRef(value.a) || isSketchCompositeCornerTarget(value.a)) &&
+        (isSketchPointRef(value.b) || isSketchCompositeCornerTarget(value.b)) &&
         isDistanceMode(value.distanceMode) &&
         Object.keys(value).length === ('distanceMode' in value ? 4 : 3)
       );
@@ -157,8 +170,8 @@ export function isSketchReferenceDimensionData(
       );
     case 'angle':
       return (
-        typeof value.a === 'string' &&
-        typeof value.b === 'string' &&
+        (typeof value.a === 'string' || isSketchCompositeSideTarget(value.a)) &&
+        (typeof value.b === 'string' || isSketchCompositeSideTarget(value.b)) &&
         Object.keys(value).length === 3
       );
     default:
@@ -240,6 +253,154 @@ export function hasSketchReferenceDimensions(
   return (sketch.referenceDimensions ?? []).length > 0;
 }
 
+/** All saved geometry dependencies, including complete named composite topology. */
+export function sketchReferenceDimensionObjectIds(
+  data: SketchReferenceDimensionData
+): EntityId[] {
+  const pointIds = (target: SketchReferencePointTarget) =>
+    isSketchPointRef(target)
+      ? [target.objectId]
+      : sketchCompositeTargetMemberIds(target);
+  const curveIds = (target: SketchReferenceCurveTarget) =>
+    typeof target === 'string'
+      ? [target]
+      : sketchCompositeTargetMemberIds(target);
+  return [
+    ...new Set(
+      data.dimensionKind === 'distance'
+        ? [...pointIds(data.a), ...pointIds(data.b)]
+        : data.dimensionKind === 'angle'
+          ? [...curveIds(data.a), ...curveIds(data.b)]
+          : [data.objectId]
+    )
+  ];
+}
+
+type PrimitiveReferenceDimensionData =
+  | (Omit<
+      Extract<SketchReferenceDimensionData, { dimensionKind: 'distance' }>,
+      'a' | 'b'
+    > & {
+      a: SketchPointRef;
+      b: SketchPointRef;
+    })
+  | Extract<SketchReferenceDimensionData, { dimensionKind: 'radius' }>
+  | { dimensionKind: 'angle'; a: EntityId; b: EntityId };
+
+type LoweredReferenceTargets =
+  | { ok: true; data: PrimitiveReferenceDimensionData }
+  | { ok: false; reason: string };
+
+function pointTargetAliases(
+  target: SketchReferencePointTarget
+): SketchPointRef[] {
+  if (isSketchPointRef(target)) return [target];
+  const { edgeIds } = target.topology;
+  return [
+    { objectId: edgeIds[target.index]!, point: 'start' },
+    {
+      objectId: edgeIds[(target.index + edgeIds.length - 1) % edgeIds.length]!,
+      point: 'end'
+    }
+  ];
+}
+
+function lowerReferenceTargets(
+  objects: ReadonlyMap<EntityId, SketchObjectData>,
+  data: SketchReferenceDimensionData,
+  composites: readonly SketchComposite[],
+  resolve?: ReferenceValueResolve
+): LoweredReferenceTargets {
+  const point = (
+    target: SketchReferencePointTarget
+  ): { ok: true; ref: SketchPointRef } | { ok: false; reason: string } => {
+    if (isSketchPointRef(target)) return { ok: true, ref: target };
+    if (!isSketchCompositeCornerTarget(target))
+      return { ok: false, reason: 'the point target descriptor is malformed.' };
+    if (resolve) {
+      const result = resolveSketchCompositeCornerTarget(
+        target,
+        composites,
+        objects,
+        resolve
+      );
+      return result.status === 'resolved'
+        ? { ok: true, ref: result.pointRef }
+        : { ok: false, reason: result.reason };
+    }
+    const identity = resolveSketchCompositeTargetIdentity(
+      target,
+      composites,
+      objects
+    );
+    return identity.status === 'resolved'
+      ? {
+          ok: true,
+          ref: {
+            objectId: identity.composite.edgeIds[target.index]!,
+            point: 'start'
+          }
+        }
+      : { ok: false, reason: identity.reason };
+  };
+  const curve = (
+    target: SketchReferenceCurveTarget
+  ): { ok: true; id: EntityId } | { ok: false; reason: string } => {
+    if (typeof target === 'string') return { ok: true, id: target };
+    if (!isSketchCompositeSideTarget(target))
+      return { ok: false, reason: 'the side target descriptor is malformed.' };
+    if (resolve) {
+      const result = resolveSketchCompositeSideTarget(
+        target,
+        composites,
+        objects,
+        resolve
+      );
+      return result.status === 'resolved'
+        ? { ok: true, id: result.objectId }
+        : { ok: false, reason: result.reason };
+    }
+    const identity = resolveSketchCompositeTargetIdentity(
+      target,
+      composites,
+      objects
+    );
+    return identity.status === 'resolved'
+      ? { ok: true, id: identity.composite.edgeIds[target.index]! }
+      : { ok: false, reason: identity.reason };
+  };
+  if (data.dimensionKind === 'distance') {
+    const a = point(data.a);
+    if (!a.ok) return a;
+    const b = point(data.b);
+    if (!b.ok) return b;
+    // A logical held-line corner names both persisted endpoints meeting there.
+    // Ordinary primitive points retain their existing distinct-identity rule.
+    const aliasesA = pointTargetAliases(data.a);
+    const aliasesB = pointTargetAliases(data.b);
+    if (
+      (!isSketchPointRef(data.a) || !isSketchPointRef(data.b)) &&
+      aliasesA.some((x) =>
+        aliasesB.some((y) => x.objectId === y.objectId && x.point === y.point)
+      )
+    )
+      return {
+        ok: false,
+        reason:
+          'a reference distance needs two distinct points, not the same target twice.'
+      };
+    return { ok: true, data: { ...data, a: a.ref, b: b.ref } };
+  }
+  if (data.dimensionKind === 'angle') {
+    const a = curve(data.a);
+    if (!a.ok) return a;
+    const b = curve(data.b);
+    if (!b.ok) return b;
+    return { ok: true, data: { ...data, a: a.id, b: b.id } };
+  }
+  return { ok: true, data };
+}
+
 function annotationLabel(annotationId: string): string {
   return `Reference dimension "${annotationId}"`;
 }
@@ -296,9 +457,13 @@ function unsupportedKindMessage(kind: string): string {
  */
 export function validateSketchReferenceDimensionData(
   objectsById: ReadonlyMap<EntityId, SketchObjectData>,
-  data: SketchReferenceDimensionData,
-  annotationId?: string
+  targetData: SketchReferenceDimensionData,
+  annotationId?: string,
+  composites: readonly SketchComposite[] = []
 ): void {
+  const lowered = lowerReferenceTargets(objectsById, targetData, composites);
+  if (!lowered.ok) throw creationError(annotationId, lowered.reason);
+  const data = lowered.data;
   switch (data.dimensionKind) {
     case 'distance': {
       if (!isDistanceMode(data.distanceMode)) {
@@ -523,10 +688,23 @@ function resolvePoint(
 export function resolveSketchReferenceDimension(
   objectsById: ReadonlyMap<EntityId, SketchObjectData>,
   annotation: SketchReferenceDimension,
-  resolve: ReferenceValueResolve
+  resolve: ReferenceValueResolve,
+  composites: readonly SketchComposite[] = []
 ): SketchReferenceDimensionOutcome {
   const annotationId = String(annotation.annotationId);
-  const data = annotation.data;
+  const lowered = lowerReferenceTargets(
+    objectsById,
+    annotation.data,
+    composites,
+    resolve
+  );
+  if (!lowered.ok)
+    return unresolved(
+      annotation.data.dimensionKind,
+      annotationId,
+      lowered.reason
+    );
+  const data = lowered.data;
   switch (data.dimensionKind) {
     case 'distance': {
       if (!isDistanceMode(data.distanceMode)) {
@@ -788,15 +966,25 @@ export function referenceDimensionAccessibleName(
 /** Compact one-line description for a reference list row. */
 export function describeSketchReferenceDimension(
   data: SketchReferenceDimensionData,
-  nameOf: (objectId: EntityId) => string
+  nameOf: (objectId: EntityId) => string,
+  nameOfComposite: (compositeId: SketchCompositeId) => string = (id) =>
+    String(id)
 ): string {
+  const pointName = (target: SketchReferencePointTarget) =>
+    isSketchPointRef(target)
+      ? `${nameOf(target.objectId)}.${target.point}`
+      : `${nameOfComposite(target.compositeId)} · Corner ${target.index + 1}`;
+  const curveName = (target: SketchReferenceCurveTarget) =>
+    typeof target === 'string'
+      ? nameOf(target)
+      : `${nameOfComposite(target.compositeId)} · Side ${target.index + 1}`;
   switch (data.dimensionKind) {
     case 'distance':
-      return `Reference ${data.distanceMode && data.distanceMode !== 'absolute' ? `${data.distanceMode} ` : ''}distance · ${nameOf(data.a.objectId)}.${data.a.point} ↔ ${nameOf(data.b.objectId)}.${data.b.point}`;
+      return `Reference ${data.distanceMode && data.distanceMode !== 'absolute' ? `${data.distanceMode} ` : ''}distance · ${pointName(data.a)} ↔ ${pointName(data.b)}`;
     case 'radius':
       return `Reference radius · ${nameOf(data.objectId)}`;
     case 'angle':
-      return `Reference angle · ${nameOf(data.a)} ∠ ${nameOf(data.b)}`;
+      return `Reference angle · ${curveName(data.a)} ∠ ${curveName(data.b)}`;
   }
 }
 

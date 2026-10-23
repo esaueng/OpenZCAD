@@ -17,7 +17,7 @@ import {
   importedSolidValidation,
   validationErrorDescriptions
 } from './kernel-validation';
-import type { PlaneBasis, Vec3 } from '@openzcad/geometry';
+import type { PlaneBasis, Vec2Like, Vec3 } from '@openzcad/geometry';
 import type {
   BodyId,
   EdgeWitnessV1,
@@ -1304,7 +1304,9 @@ export function buildExtrudeLineage(
   basis: PlaneBasis,
   distance: number,
   scope: Record<string, number>,
-  documentUnits: UnitSystem
+  documentUnits: UnitSystem,
+  /** Current editable vertices in authored edge order after explicit promotion. */
+  profileVertices?: readonly Vec2Like[]
 ): RemusLineageState {
   const candidates = topologyCandidatesForSolid(kernel, solid);
   const assignments: RemusSemanticAssignment[] = [];
@@ -1372,7 +1374,8 @@ export function buildExtrudeLineage(
       diagnostics
     );
   } else {
-    const localPoints = profilePoints(data, scope, documentUnits);
+    const localPoints =
+      profileVertices ?? profilePoints(data, scope, documentUnits);
     const startPoints = localPoints.map((point) =>
       pointOnPlane(basis, point, 0)
     );
@@ -1436,7 +1439,9 @@ export function buildRevolveLineage(
   axisDirection: Vec3,
   axisPoint: Vec3,
   scope: Record<string, number>,
-  documentUnits: UnitSystem
+  documentUnits: UnitSystem,
+  /** Current editable vertices in authored edge order after explicit promotion. */
+  profileVertices?: readonly Vec2Like[]
 ): RemusLineageState {
   const candidates = topologyCandidatesForSolid(kernel, solid);
   const assignments: RemusSemanticAssignment[] = [];
@@ -1453,9 +1458,9 @@ export function buildRevolveLineage(
       'sweep'
     );
   } else {
-    const points = profilePoints(data, scope, documentUnits).map((point) =>
-      pointOnPlane(basis, point, 0)
-    );
+    const points = (
+      profileVertices ?? profilePoints(data, scope, documentUnits)
+    ).map((point) => pointOnPlane(basis, point, 0));
     const axis = normalized(axisDirection)!;
     const axisFoot = subtract(axisPoint, scale(axis, dot(axisPoint, axis)));
     const decomposition = (point: Vec3) => {

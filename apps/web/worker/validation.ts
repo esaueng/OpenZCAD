@@ -10,7 +10,8 @@ import {
 } from '@openzcad/shared';
 import {
   assertDocumentContentSchema,
-  assertReferenceDocumentSchema
+  assertReferenceDocumentSchema,
+  assertSketchProvenance
 } from '@openzcad/document-core';
 import {
   MAX_ARTIFACT_UPLOAD_PARTS,
@@ -487,6 +488,13 @@ function parseProjectDocument(
     assertDocumentHistory(value as ProjectDocument);
   } catch {
     throw badRequest('Invalid or unsupported project undo history.');
+  }
+  try {
+    assertSketchProvenance(value as ProjectDocument);
+  } catch (error) {
+    throw badRequest(
+      error instanceof Error ? error.message : 'Invalid sketch provenance.'
+    );
   }
   try {
     assertReferenceDocumentSchema(value as ProjectDocument);
