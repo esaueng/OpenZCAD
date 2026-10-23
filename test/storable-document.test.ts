@@ -9,6 +9,7 @@ import {
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { splitProjectStorageUpload } from '@openzcad/persistence';
 import {
+  MAX_DOCUMENT_VALUES,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
   type ProjectDocument
@@ -129,6 +130,21 @@ describe('assertStorableDocument', () => {
     expect(
       assertStorableDocument({ ...valid(), checkpoints: [null] }).checkpoints
     ).toEqual([]);
+  });
+
+  it('measures structure without the derived geometry it never stores or sends', () => {
+    const document = valid();
+    const dense = new Array(MAX_DOCUMENT_VALUES + 1).fill(0);
+    const withMesh = {
+      ...document,
+      derived: {
+        ...document.derived,
+        bodyRepresentations: { body_dense: { vertices: dense } }
+      }
+    } as unknown as ProjectDocument;
+    expect(() => assertStorableDocument(withMesh)).not.toThrow();
+    // The same values in stored content are still refused.
+    expect(refusal({ ...document, padding: dense })).toMatch(/more than/);
   });
 
   it('runs before every account write, so an invalid document is never uploaded', async () => {

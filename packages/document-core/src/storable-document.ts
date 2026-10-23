@@ -27,6 +27,20 @@ export class UnstorableDocumentError extends Error {
   }
 }
 
+/**
+ * The document as it is stored and sent: without the derived geometry, which
+ * the browser rebuilds and never uploads or relays. The structure guards
+ * measure this, so a dense live mesh does not count against them.
+ */
+function storedProjection(value: object): object {
+  const derived = (value as { derived?: unknown }).derived;
+  if (typeof derived !== 'object' || derived === null) return value;
+  return {
+    ...value,
+    derived: { ...derived, bodyRepresentations: {}, exportableBodyIds: [] }
+  };
+}
+
 function check(condition: unknown, message: string): void {
   if (!condition) throw new UnstorableDocumentError(message);
 }
@@ -64,9 +78,10 @@ export function assertStorableDocument(value: unknown): ProjectDocument {
     typeof value === 'object' && value !== null && !Array.isArray(value),
     'The project document must be an object.'
   );
-  const structure = documentStructureError(value);
+  const stored = storedProjection(value as object);
+  const structure = documentStructureError(stored);
   if (structure) throw new UnstorableDocumentError(structure);
-  const envelope = documentEnvelopeError(value);
+  const envelope = documentEnvelopeError(stored);
   if (envelope) throw new UnstorableDocumentError(envelope);
   const record = value as Record<string, unknown>;
   check(
