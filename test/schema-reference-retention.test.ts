@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CommandManager,
   commandFactories,
+  composeCommands,
   replayCommands
 } from '@openzcad/command-system';
 import {
@@ -11,9 +12,11 @@ import {
   findSketch,
   normalizeDocument
 } from '@openzcad/document-core';
+import { computeSketchRegions } from '@openzcad/geometry';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
+  createSketchCompositeCornerTarget,
   resolveSketchReferenceDimension,
   toArtifactId,
   toAssetId,
@@ -27,6 +30,12 @@ import {
   type ReferenceImageId,
   type SketchId
 } from '@openzcad/shared';
+import {
+  compositeCommands,
+  compositeMemberUpdates,
+  cornerRectangleShape
+} from '../apps/web/src/lib/sketch/composites';
+import { sketchEntitiesEditCommands } from '../apps/web/src/lib/sketch/editing';
 import {
   backupFileBytes,
   checksum,
@@ -226,8 +235,11 @@ function distances(document: ProjectDocument, sketchId: SketchId) {
     })
   );
   return sketch.referenceDimensions!.map((reference) =>
-    resolveSketchReferenceDimension(objects, reference, (value) =>
-      typeof value === 'number' ? value : undefined
+    resolveSketchReferenceDimension(
+      objects,
+      reference,
+      (value) => (typeof value === 'number' ? value : undefined),
+      sketch.composites
     )
   );
 }
@@ -353,6 +365,163 @@ describe('serial schema retention for sketch reference distances', () => {
       );
       expect(after.bodyRepresentations[f.bodyId]!.bbox).toEqual(
         before.bodyRepresentations[f.bodyId]!.bbox
+      );
+    } finally {
+      adapter.dispose();
+    }
+  });
+
+  it('retains mixed primitive/composite targets and v32 picture/drawing history through a solved resize, replay and backup', async () => {
+    const f = await authoredFixture(32);
+    const opened = normalizeDocument(structuredClone(f.saved));
+    const manager = new CommandManager(opened);
+    const shape = cornerRectangleShape({ x: 20, y: 0 }, { x: 40, y: 12 });
+    if (!shape) throw new Error('Held rectangle fixture is degenerate');
+    const drawing = compositeCommands(shape, {
+      kind: 'sketch',
+      sketchId: f.sketchId
+    });
+    manager.execute(composeCommands(drawing.label, drawing.commands));
+    const sketchObjects = (document: ProjectDocument) =>
+      new Map(
+        findSketch(document, f.sketchId)!.objectIds.map((id) => {
+          const node = document.nodes[id]!;
+          if (node.kind !== 'sketch-object')
+            throw new Error('Missing held rectangle member');
+          return [id, node.data] as const;
+        })
+      );
+    const composite = findSketch(manager.document, f.sketchId)!.composites![0]!;
+    const regions = computeSketchRegions(
+      [...sketchObjects(manager.document)].map(([id, data]) => ({ id, data })),
+      (value) => (typeof value === 'number' ? value : Number(value))
+    );
+    const selected = regions.filter((region) =>
+      region.sourceEntityIds.includes(composite.edgeIds[0]!)
+    );
+    expect(selected).toHaveLength(1);
+    const source = selected[0]!;
+    expect(source.area).toBeCloseTo(240, 9);
+    const pad = commandFactories.extrudeSketch({
+      name: 'Held rectangle pad',
+      sketchId: f.sketchId,
+      distance: 5,
+      operation: 'new-body',
+      profile: {
+        profileId: source.profileId,
+        regionFingerprint: source.regionFingerprint,
+        sourceArea: source.area,
+        samplePoint: source.samplePoint,
+        sourceEntityIds: [...source.sourceEntityIds]
+      }
+    });
+    manager.execute(pad);
+    const padId = pad.payload.ids!.bodyId;
+    const mixed = commandFactories.addSketchReferenceDimension({
+      sketchId: f.sketchId,
+      data: {
+        dimensionKind: 'distance',
+        distanceMode: 'horizontal',
+        a: { objectId: f.diagonalId, point: 'end' },
+        b: createSketchCompositeCornerTarget(composite, 1)
+      }
+    });
+    manager.runTransaction('Measure primitive to held corner', [
+      mixed,
+      commandFactories.setSketchReferenceLabelPosition({
+        sketchId: f.sketchId,
+        annotationId: mixed.payload.ids!.annotationId,
+        position: { x: -4, y: 18 }
+      })
+    ]);
+    const before = structuredClone(manager.document);
+    const references = findSketch(before, f.sketchId)!.referenceDimensions!;
+    expect(distances(before, f.sketchId)).toMatchObject([
+      { status: 'current', value: 5 },
+      { status: 'current', value: 37 }
+    ]);
+    const adapter = await createExactKernelAdapter();
+    try {
+      const original = await adapter.syncDocument(before);
+      expect(original.warnings).toEqual([]);
+      expect(original.bodyRepresentations[padId]!.volume).toBeCloseTo(1200, 8);
+      const faceNames = original.bodyRepresentations[
+        padId
+      ]!.topology!.faces.map((face) => face.reference?.lineageName).sort();
+      expect(faceNames).toHaveLength(6);
+      expect(faceNames.every((name) => typeof name === 'string')).toBe(true);
+      const edits = await sketchEntitiesEditCommands(
+        before,
+        f.sketchId,
+        compositeMemberUpdates(
+          composite,
+          [
+            { x: 20, y: 0 },
+            { x: 50, y: 0 },
+            { x: 50, y: 12 },
+            { x: 20, y: 12 }
+          ],
+          sketchObjects(before)
+        ),
+        (document, sketchId) => adapter.solveSketch(document, sketchId),
+        'Widen retained held rectangle'
+      );
+      manager.execute(composeCommands('Widen retained held rectangle', edits));
+      const resized = structuredClone(manager.document);
+      expect(distances(resized, f.sketchId)).toMatchObject([
+        { status: 'current', value: 5 },
+        { status: 'current', value: 47 }
+      ]);
+      expect(findSketch(resized, f.sketchId)!.referenceDimensions).toEqual(
+        references
+      );
+      expect(findSketch(resized, f.sketchId)!.composites).toEqual([composite]);
+      expect(resized.nodes[f.diagonalId]).toEqual(opened.nodes[f.diagonalId]);
+      expect(resized.drawings).toEqual(opened.drawings);
+      expect(resized.referenceImages).toEqual(opened.referenceImages);
+      expect(resized.assets).toEqual(opened.assets);
+      expect(
+        resized.editHistory!.entries.slice(
+          0,
+          opened.editHistory!.entries.length
+        )
+      ).toEqual(opened.editHistory!.entries);
+      manager.undo();
+      expect(findSketch(manager.document, f.sketchId)).toEqual(
+        findSketch(before, f.sketchId)
+      );
+      expect(distances(manager.document, f.sketchId)).toMatchObject([
+        { status: 'current', value: 5 },
+        { status: 'current', value: 37 }
+      ]);
+      manager.redo();
+      const replayed = replayCommands(
+        f.replayBase,
+        manager.document.commandLog
+      );
+      expect(findSketch(replayed, f.sketchId)).toEqual(
+        findSketch(resized, f.sketchId)
+      );
+      expect(replayed.drawings).toEqual(opened.drawings);
+      expect(replayed.referenceImages).toEqual(opened.referenceImages);
+      const restored = await backup(manager.document, f.pictureChecksum);
+      expect(restored.document).toEqual(manager.document);
+      expect(backupFileBytes(restored.files[0]!)).toEqual(png);
+      const rebuilt = await adapter.syncDocument(restored.document);
+      expect(rebuilt.warnings).toEqual([]);
+      expect(rebuilt.bodyRepresentations[padId]!.volume).toBeCloseTo(1800, 8);
+      expect(rebuilt.bodyRepresentations[padId]!.bbox).toEqual({
+        min: { x: 20, y: 0, z: 0 },
+        max: { x: 50, y: 12, z: 5 }
+      });
+      expect(
+        rebuilt.bodyRepresentations[padId]!.topology!.faces.map(
+          (face) => face.reference?.lineageName
+        ).sort()
+      ).toEqual(faceNames);
+      expect(rebuilt.bodyRepresentations[f.bodyId]!.volume).toBeCloseTo(
+        Math.PI * 50,
+        8
       );
     } finally {
       adapter.dispose();

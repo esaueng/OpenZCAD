@@ -15061,6 +15061,7 @@ export function App() {
       snapTolerancePx: appSettings.sketching.snapTolerancePx,
       drawing: session.drawing,
       objects,
+      composites: sketch?.composites ?? [],
       profiles,
       selectedObjectId: session.selectedObjectId,
       parameterScope: parameterScope.scope,
@@ -15080,7 +15081,8 @@ export function App() {
           evalParamValue(value, parameterScope.scope, doc.units) ?? undefined,
         doc.units,
         sketch?.dimensionLabelPositions,
-        sketch?.referenceDimensions
+        sketch?.referenceDimensions,
+        sketch?.composites
       ),
       diagnosticPoints: sketchDiagnosticPoints
     };

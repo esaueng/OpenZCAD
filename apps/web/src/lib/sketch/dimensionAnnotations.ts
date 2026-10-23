@@ -2,6 +2,7 @@ import type {
   SketchConstraint,
   SketchDimensionIdentity,
   SketchReferenceDimension,
+  SketchComposite,
   SketchDimensionLabelPosition,
   SketchObjectData,
   SketchPointRef
@@ -92,7 +93,8 @@ export function sketchDimensionAnnotations(
   resolve: Resolve,
   units: string,
   labelPositions?: Readonly<Record<string, SketchDimensionLabelPosition>>,
-  references: readonly SketchReferenceDimension[] = []
+  references: readonly SketchReferenceDimension[] = [],
+  composites: readonly SketchComposite[] = []
 ): SketchDimensionAnnotation[] {
   const byId = new Map(objects.map((object) => [object.id, object.data]));
   const scalar = (value: number | string): number | undefined => {
@@ -259,7 +261,8 @@ export function sketchDimensionAnnotations(
     const outcome = resolveSketchReferenceDimension(
       byId as Map<EntityId, SketchObjectData>,
       reference,
-      scalar
+      scalar,
+      composites
     );
     if (outcome.status !== 'current') continue; // The palette retains the named unresolved row.
     const base = {

@@ -24,7 +24,7 @@ import {
 import { buildSketchRelationGlyphs } from './viewer/sketchRelations';
 import type { SketchRelationGlyphChip } from '../lib/sketch/relationGlyphs';
 import type { SketchDimensionAnnotation } from '../lib/sketch/dimensionAnnotations';
-import type { SketchDimensionIdentity } from '@openzcad/shared';
+import type { SketchComposite, SketchDimensionIdentity } from '@openzcad/shared';
 import {
   disposeRetiringOverlays,
   disposeSettledOverlays,
@@ -327,7 +327,10 @@ import {
   type ReferenceTextureRequest
 } from './viewer/referenceImageRig';
 import type { DatumAxisDisplay } from '../lib/datumAxisDisplay';
-import { sketchValueResolver } from '../lib/sketch/valueResolver';
+import {
+  requiredValueResolver,
+  sketchValueResolver
+} from '../lib/sketch/valueResolver';
 import { reducesMotion } from '../lib/reducedMotion';
 import { traceFaceDrag } from '../lib/faceDragTrace';
 import {
@@ -447,6 +450,8 @@ export interface SketchModeState {
   drawing: boolean;
   /** Committed objects of the session's sketch, rendered in blue. */
   objects: { id: string; data: SketchObjectData }[];
+  /** Held-line shape identities qualify names without changing solver picks. */
+  composites?: readonly SketchComposite[];
   profiles: { outer: SketchPoint[]; holes: SketchPoint[][] }[];
   selectedObjectId: string | null;
   parameterScope: Record<string, number>;
@@ -6494,7 +6499,11 @@ export function ModelViewer({
         );
         if (resolved) {
           activeSketchSnap = resolved.target;
-          positionSketchSnapMarker(event, resolved.target.kind);
+          positionSketchSnapMarker(
+            event,
+            resolved.target.kind,
+            resolved.target.label
+          );
           latestSketchPoint = {
             x: resolved.target.x,
             y: resolved.target.y
@@ -6544,16 +6553,17 @@ export function ModelViewer({
 
     function positionSketchSnapMarker(
       event: PointerEvent,
-      kind: SnapTargetKind
+      kind: SnapTargetKind,
+      label = SKETCH_SNAP_LABELS[kind]
     ) {
       sketchSnapMarker.dataset.kind = kind;
       if (kind === 'grid') {
         delete sketchSnapMarker.dataset.label;
       } else {
-        sketchSnapMarker.dataset.label = SKETCH_SNAP_LABELS[kind];
+        sketchSnapMarker.dataset.label = label;
       }
       sketchSnapMarker.textContent = SKETCH_SNAP_GLYPHS[kind];
-      sketchSnapMarker.title = SKETCH_SNAP_LABELS[kind];
+      sketchSnapMarker.title = label;
       hud.showAtPointer(sketchSnapMarker, event);
     }
 
@@ -7452,7 +7462,9 @@ export function ModelViewer({
       try {
         targets = collectSketchSnapTargets(
           mode.objects.filter((object) => object.id !== id),
-          resolve
+          resolve,
+          mode.composites,
+          requiredValueResolver(mode.parameterScope, mode.units ?? 'mm')
         );
       } catch {
         targets = [{ id: 'sketch-origin', x: 0, y: 0, kind: 'origin' }];
@@ -12412,7 +12424,12 @@ export function ModelViewer({
     try {
       snapTargetsRef.current = collectSketchSnapTargets(
         sketchMode.objects,
-        resolve
+        resolve,
+        sketchMode.composites,
+        requiredValueResolver(
+          sketchMode.parameterScope,
+          sketchMode.units ?? 'mm'
+        )
       );
       setSketchSnapRefusal(null);
     } catch (error) {

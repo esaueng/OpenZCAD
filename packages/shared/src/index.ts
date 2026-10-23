@@ -6,6 +6,7 @@ export * from './imported-step-source';
 export * from './imported-mesh-payload';
 export * from './sketch-reference-dimensions';
 export * from './sketch-composites';
+export * from './sketch-composite-targets';
 export * from './mass-density';
 export * from './keymap-settings';
 export * from './drawings';
@@ -13,6 +14,10 @@ export * from './object-folders';
 import type { DocumentHistory } from './document-history';
 import type { KeymapOverrides } from './keymap-settings';
 import type { DrawingSet } from './drawings';
+import type {
+  SketchCompositeCornerTarget,
+  SketchCompositeSideTarget
+} from './sketch-composite-targets';
 import type { ObjectFolderSet } from './object-folders';
 export * from './drawing-annotations';
 export * from './topology-reference';
@@ -151,7 +156,9 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
  * absolute distance; horizontal/vertical measure sketch-local X/Y separation.
  * Older clients must refuse rather than show those as Euclidean distances.
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 35 as const;
+// v36 adds composite-named reference corners/sides with explicit topology.
+// Older clients must refuse instead of dropping or reinterpreting targets.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 36 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -1091,25 +1098,35 @@ export interface SketchConstraint {
 }
 
 /**
- * Target identity for an S02 reference (driven) dimension. The first slice
- * supports primitive sketch identities only: line endpoints, circle/arc
+ * Target identity for an S02 reference (driven) dimension. Supports primitive
+ * sketch identities: line endpoints, circle/arc
  * centers, and arc start/end points for distance; circles and arcs for
- * radius; line objects only for angle. Rectangle and polygon composite refs
- * wait for S04; datum/world-space targets wait for R01.
+ * radius; line objects and named held-line composite sides for angle. Named
+ * held-line corners also support distance; datum/world-space targets remain
+ * outside this contract.
  */
 export type SketchReferenceDistanceMode =
   'absolute' | 'horizontal' | 'vertical';
 
+/** Measured targets; driving constraints retain primitive point identities. */
+export type SketchReferencePointTarget =
+  SketchPointRef | SketchCompositeCornerTarget;
+export type SketchReferenceCurveTarget = EntityId | SketchCompositeSideTarget;
+
 export type SketchReferenceDimensionData =
   | {
       dimensionKind: 'distance';
-      a: SketchPointRef;
-      b: SketchPointRef;
+      a: SketchReferencePointTarget;
+      b: SketchReferencePointTarget;
       /** Absent is absolute; projected modes follow the sketch's local axes. */
       distanceMode?: SketchReferenceDistanceMode;
     }
   | { dimensionKind: 'radius'; objectId: EntityId }
-  | { dimensionKind: 'angle'; a: EntityId; b: EntityId };
+  | {
+      dimensionKind: 'angle';
+      a: SketchReferenceCurveTarget;
+      b: SketchReferenceCurveTarget;
+    };
 
 /**
  * A saved sketch annotation. It owns an `annotationId`, stores only target

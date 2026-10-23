@@ -947,6 +947,8 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   // a saved rectangle or polygon object stays the parametric object it was.
   // Schema v35 reference-distance modes are optional. Never fill one in:
   // an absent mode remains the saved absolute distance without rewriting it.
+  // Schema v36 composite reference targets are explicit snapshots. Never
+  // derive them from a legacy object or promote an older carrier silently.
   // Schema v16 -> v17 allows reference-form mesh payloads. Keep existing
   // embedded triangles and pre-release references as written; the version
   // boundary prevents older clients from accepting meshes they cannot rebuild.
