@@ -10,6 +10,18 @@
  */
 export { E2eeError, isE2eeError, type E2eeErrorCode } from './errors';
 export {
+  ecdhDeriveBits,
+  ecdsaSign,
+  isAgreementPrivateKey,
+  isExternalAgreementKey,
+  isExternalSigningKey,
+  isSigningPrivateKey,
+  type AgreementPrivateKey,
+  type ExternalAgreementKey,
+  type ExternalSigningKey,
+  type SigningPrivateKey
+} from './external-keys';
+export {
   fromBase32,
   fromBase64Url,
   fromHex,

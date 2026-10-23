@@ -1,0 +1,4 @@
+---
+row: L11
+---
+Phase 3, desktop Keychain groundwork: `@openzcad/crypto` accepts device private keys held outside WebCrypto (`ExternalSigningKey`, `ExternalAgreementKey`), so the desktop app can keep its device signing and unlock keys in the macOS Keychain and sign or derive natively without the bytes reaching script. Envelope and device-statement signing (`ecdsaSign`) and sealed-key opening (`ecdhDeriveBits`) take either a `CryptoKey` or an external key; host results are length-checked and failures stay `E2eeError`s. Browsers keep non-extractable `CryptoKey`s unchanged. Evidence: `packages/crypto/src/external-keys.test.ts` (external signatures verify for envelopes and approval grants, a seal opens through a host that sees only the ephemeral public key, malformed or failing host results and wrong key forms are refused).
