@@ -9,6 +9,7 @@ import {
   listFeaturesInOrder
 } from '@openzcad/document-core';
 import {
+  edgeTopologyWitnessHash,
   toUserId,
   type BodyId,
   type BodyRepresentation,
@@ -174,6 +175,9 @@ describe('Objects folders (U06, ZC-128)', () => {
         }
       }
     };
+    source.edgeReference.currentHash = edgeTopologyWitnessHash(
+      source.edgeReference.witness
+    );
     manager.execute(
       commandFactories.addSketch({
         name: 'Outline',
