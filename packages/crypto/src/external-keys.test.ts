@@ -123,9 +123,7 @@ describe('device keys held outside WebCrypto', () => {
       hostSigner(approver.privateKey),
       grant
     );
-    expect(await verifyDeviceApprovalGrant(signed, approverRaw)).toEqual(
-      grant
-    );
+    expect(await verifyDeviceApprovalGrant(signed, approverRaw)).toEqual(grant);
   });
 
   it('opens a sealed key through the host agreement', async () => {
@@ -184,6 +182,19 @@ describe('device keys held outside WebCrypto', () => {
     await rejectsWith(
       ecdhDeriveBits(
         { external: 'ecdh-p256', deriveBits: async () => new Uint8Array(31) },
+        peer.publicKey,
+        peerRaw
+      ),
+      'invalid-argument'
+    );
+    await rejectsWith(
+      ecdhDeriveBits(
+        {
+          external: 'ecdh-p256',
+          deriveBits: async () => {
+            throw new Error('Keychain locked');
+          }
+        },
         peer.publicKey,
         peerRaw
       ),

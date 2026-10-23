@@ -111,15 +111,24 @@ export async function ecdhDeriveBits(
       'Expected a P-256 ECDH private key'
     );
   }
-  const secret = isExternalAgreementKey(key)
-    ? await key.deriveBits(new Uint8Array(peerRaw))
-    : new Uint8Array(
-        await subtle().deriveBits(
-          { name: 'ECDH', public: peer },
-          key,
-          ECDH_SECRET_BYTES * 8
-        )
-      );
+  let secret: Uint8Array;
+  try {
+    secret = isExternalAgreementKey(key)
+      ? await key.deriveBits(new Uint8Array(peerRaw))
+      : new Uint8Array(
+          await subtle().deriveBits(
+            { name: 'ECDH', public: peer },
+            key,
+            ECDH_SECRET_BYTES * 8
+          )
+        );
+  } catch (cause) {
+    throw new E2eeError(
+      'invalid-argument',
+      'The agreement key cannot derive ECDH secrets',
+      { cause }
+    );
+  }
   if (
     !(secret instanceof Uint8Array) ||
     secret.byteLength !== ECDH_SECRET_BYTES
