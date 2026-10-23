@@ -1,12 +1,14 @@
 import {
   isDocumentHistory,
   MAX_CHECKPOINT_REASON_LENGTH,
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
   type CollaborationMember,
   type CollaborationServerMessage,
   type ProjectAccessRole,
   type ProjectDocument,
   type ProjectEditLease
 } from '@openzcad/shared';
+import { assertStorableDocument } from '@openzcad/document-core';
 import {
   copiedImportArchives,
   reconcileCopiedImportSources
@@ -127,6 +129,52 @@ function isLease(value: unknown, projectId: string): value is ProjectEditLease {
   );
 }
 
+/** Why the browser refuses a room document, or null when it can open it. */
+function unopenableReason(document: ProjectDocument): string | null {
+  try {
+    assertStorableDocument(document);
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : 'The document is invalid.';
+  }
+}
+
+/**
+ * The room stores what members send without reading it (ADR-024 Phase 1), so
+ * the browser checks every document it is handed before adopting one. A bad
+ * latest version becomes a refusal: this browser keeps its last good version
+ * and reports it. A document a newer client wrote is left to the caller,
+ * which asks the user to update instead.
+ */
+function refuseUnopenable(
+  message: CollaborationServerMessage
+): CollaborationServerMessage {
+  const document =
+    'document' in message && message.document ? message.document : null;
+  if (!document) return message;
+  if ((document.schemaVersion ?? 0) > PROJECT_DOCUMENT_SCHEMA_VERSION)
+    return message;
+  const reason = unopenableReason(document);
+  if (reason !== null) {
+    console.error(`Collaboration document refused: ${reason}`);
+    if (message.type === 'state') return { ...message, document: null };
+    if (message.type === 'ack')
+      return { type: 'ack', version: message.version };
+    return {
+      type: 'error',
+      code: 'document-invalid',
+      message: `The room holds a version this browser cannot open: ${reason}`
+    };
+  }
+  if (message.type === 'conflict' && message.base) {
+    if (unopenableReason(message.base) !== null) {
+      const { base: _base, ...withoutBase } = message;
+      return withoutBase;
+    }
+  }
+  return message;
+}
+
 /**
  * Parses and shape-checks a frame from the room. The Durable Object is the
  * trust boundary, but a self-defending client drops oversized, malformed, or
@@ -134,6 +182,14 @@ function isLease(value: unknown, projectId: string): value is ProjectEditLease {
  * throwing out of the message handler.
  */
 export function parseServerMessage(
+  raw: string,
+  projectId: string
+): CollaborationServerMessage | null {
+  const message = parseServerFrame(raw, projectId);
+  return message && refuseUnopenable(message);
+}
+
+function parseServerFrame(
   raw: string,
   projectId: string
 ): CollaborationServerMessage | null {

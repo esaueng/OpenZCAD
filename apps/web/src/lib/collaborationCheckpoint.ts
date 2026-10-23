@@ -1,4 +1,5 @@
 import {
+  assertStorableDocument,
   createAdvancingSavePoint,
   withEchoedSavePoints
 } from '@openzcad/document-core';
@@ -176,6 +177,9 @@ export async function saveCollaborationCheckpoint(
       baseVersion: number | null
     ) => {
       const minted = createAdvancingSavePoint(base, label);
+      // The room stores it unread (ADR-024 Phase 1): refuse a version other
+      // members could not open; the save is then kept on this device.
+      assertStorableDocument(minted);
       const savedRevisionId = minted.revisions.at(-1)!.revisionId;
       const response = await abortableCheckpoint(
         desktopFetch(

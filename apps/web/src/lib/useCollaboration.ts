@@ -14,7 +14,10 @@ import {
   type ProjectDocument,
   type ProjectEditLease
 } from '@openzcad/shared';
-import { mergeCollaborationDocuments } from '@openzcad/document-core';
+import {
+  assertStorableDocument,
+  mergeCollaborationDocuments
+} from '@openzcad/document-core';
 import {
   clearUnresolvedConflict,
   conflictFromDocuments,
@@ -454,6 +457,21 @@ export function useCollaboration({
         (lastSentVersionRef.current === current.version &&
           baseVersionRef.current === current.version)
       ) {
+        return false;
+      }
+      // The room stores submissions without reading them (ADR-024 Phase 1),
+      // so this browser refuses to publish a document other members could
+      // not open. Local edits stay as they are.
+      try {
+        assertStorableDocument(current);
+      } catch (error) {
+        console.error(
+          `Collaboration edit not sent: ${error instanceof Error ? error.message : String(error)}`
+        );
+        settleCheckpointDrain(
+          new Error('This version cannot be shared with the room.')
+        );
+        setStatus('rejected');
         return false;
       }
       pendingDocument = current;

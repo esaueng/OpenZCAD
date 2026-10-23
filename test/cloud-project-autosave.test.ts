@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   appendRevision,
+  assertStorableDocument,
   createProjectDocument,
-  createSavedRevision
+  createSavedRevision,
+  UnstorableDocumentError
 } from '@openzcad/document-core';
 import {
   JsonComplexityGuard,
@@ -796,6 +798,48 @@ describe('cloud project autosave — refusals', () => {
     controller.dispose();
   });
 
+  it('halts on an edit the browser refuses to upload and resumes with one it accepts', async () => {
+    // ADR-024 Phase 1: the browser runs the account's content checks itself
+    // before uploading. A refusal is permanent for that edit, not an outage.
+    const document = documentAt(2);
+    const unopenable = {
+      ...document,
+      version: 3,
+      objectFolders: 'folders'
+    } as unknown as ProjectDocument;
+    const attempts: number[] = [];
+    const { controller, statuses } = harness({
+      respond: async (input) => {
+        attempts.push(input.document.version);
+        assertStorableDocument(input.document);
+        return {
+          projectId: input.document.projectId,
+          version: input.document.version,
+          updatedAt: '2026-01-01T00:00:00.000Z'
+        };
+      }
+    });
+    controller.openProject(document.projectId, 2);
+    controller.schedule(unopenable);
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(lastState(statuses)).toBe('refused');
+    expect(statuses).not.toContain('offline');
+    expect(controller.isHalted).toBe(true);
+
+    // Another edit that is still unopenable does not retry.
+    controller.schedule({ ...unopenable, version: 4 });
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_RETRY_MS * 2);
+    expect(attempts).toEqual([3]);
+    controller.schedule(documentAt(5, document));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(attempts).toEqual([3, 5]);
+    expect(controller.syncedVersion).toBe(5);
+    expect(lastState(statuses)).toBe('synced');
+    controller.dispose();
+  });
+
   it('resumes only below the byte limit reported for a document-size refusal', async () => {
     const document = documentAt(2);
     const oversized = { ...document, version: 3, padding: 'x'.repeat(5_000) };
@@ -1131,15 +1175,23 @@ describe('cloud project autosave — refusals', () => {
         } as ProjectDocument);
         await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
         await controller.whenIdle();
-        expect(errors[0]).toBeInstanceOf(ApiError);
-        expect(errors[0]).toMatchObject({
-          status: 413,
-          message: 'Request JSON is too complex.',
-          code: 'DOCUMENT_TOO_COMPLEX'
-        });
-        expect((errors[0] as ApiError).details).not.toHaveProperty(
-          'limitBytes'
-        );
+        if (constraint === 'depth') {
+          // The browser runs the structure guards itself before uploading
+          // (ADR-024 Phase 1), so an over-deep document never reaches the
+          // Worker; the refusal halts the same way.
+          expect(errors[0]).toBeInstanceOf(UnstorableDocumentError);
+          expect((errors[0] as Error).message).toMatch(/deeper than/);
+        } else {
+          expect(errors[0]).toBeInstanceOf(ApiError);
+          expect(errors[0]).toMatchObject({
+            status: 413,
+            message: 'Request JSON is too complex.',
+            code: 'DOCUMENT_TOO_COMPLEX'
+          });
+          expect((errors[0] as ApiError).details).not.toHaveProperty(
+            'limitBytes'
+          );
+        }
         expect(lastState(statuses)).toBe('refused');
         for (const refusedPadding of [
           padding,

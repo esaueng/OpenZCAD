@@ -1,5 +1,5 @@
 import {
-  normalizeDocument,
+  assertStorableDocument,
   withoutDerivedProjection
 } from '@openzcad/document-core';
 import {
@@ -578,9 +578,11 @@ function bytesOfBase64(value: string): Uint8Array {
 /**
  * The browser's half of the storage projection (ADR-024 Phase 1): the
  * document as the account stores it, with its embedded import payloads split
- * into compressed uploads. The document is first normalized and stripped of
- * its derived projection, exactly as the account would, because the account
- * stores the projection only when it hydrates to the document it keeps.
+ * into compressed uploads. The document is first checked and normalized by
+ * every rule the account used to enforce (`assertStorableDocument`), so the
+ * browser never writes a document other devices cannot open, then stripped of
+ * its derived projection, because the account stores the projection only when
+ * it hydrates to the document it keeps.
  */
 export async function splitProjectStorageUpload(
   document: ProjectDocument
@@ -589,7 +591,7 @@ export async function splitProjectStorageUpload(
   storageAssets: ProjectStorageAssetUpload[];
 }> {
   const split = await splitProjectStorageAssets(
-    withoutDerivedProjection(normalizeDocument(document))
+    withoutDerivedProjection(assertStorableDocument(document))
   );
   return {
     document: split.document,

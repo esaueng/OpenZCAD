@@ -1,4 +1,7 @@
-import { createSavedRevision } from '@openzcad/document-core';
+import {
+  assertStorableDocument,
+  createSavedRevision
+} from '@openzcad/document-core';
 import {
   KEPT_LOCAL_VERSION_REASON,
   type ProjectAccessRole,
@@ -131,6 +134,9 @@ export async function keepLocalRoomVersion(
     },
     KEPT_LOCAL_VERSION_REASON
   );
+  // The room stores it unread (ADR-024 Phase 1): never publish a version
+  // other members could not open. The conflict stays for the user.
+  assertStorableDocument(kept);
   const body = {
     type: 'document' as const,
     clientId: clientId(),

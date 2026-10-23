@@ -16,6 +16,10 @@ import { localizeImportedSourceArtifacts } from './imported-source-artifacts';
 export { localizeImportedSourceArtifacts } from './imported-source-artifacts';
 import { mergeJsonRecords } from './collaboration-merge';
 export { hasJsonPrefix, sameJson } from './collaboration-merge';
+export {
+  assertStorableDocument,
+  UnstorableDocumentError
+} from './storable-document';
 import {
   assertNoReferenceDimensionDependents,
   assertReferenceCommandSchema,
