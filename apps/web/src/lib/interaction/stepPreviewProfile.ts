@@ -136,11 +136,19 @@ export function stepPreviewProfile(
         queue.push(neighbour);
       }
     }
-    if (moving.size > Math.max(8, infos.length / 2)) return null;
+    if (moving.size > infos.length / 2) return null;
   }
 
   const movingKeys = new Set<number>();
   for (const info of moving) for (const key of info.keys) movingKeys.add(key);
+  // Unless some wall keeps a vertex where it is, nothing stretches and the
+  // whole solid would simply translate.
+  if (
+    ![...stretching].some((info) =>
+      [...info.keys].some((key) => !movingKeys.has(key))
+    )
+  )
+    return null;
   // Each stretching triangle's normal is linear in the drag distance d:
   // N(d) = N0 + d·N1. It folds where N(d)·N0 reaches zero, which bounds the
   // push (`span`) and the pull (`reach`) the preview can show.

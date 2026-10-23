@@ -185,4 +185,32 @@ describe('whole-body step previews for planar face offsets', () => {
       adapter.dispose();
     }
   }, 60_000);
+
+  it('declines when the move would carry most of the solid', () => {
+    // A tetrahedron: every face meets each other one at a slope, so any
+    // pick would sweep the whole solid along rather than stretch anything.
+    const corners = [0, 0, 0, 10, 0, 0, 0, 10, 0, 0, 0, 10];
+    const triangles = [0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3];
+    const normals = [
+      { x: 0, y: 0, z: -1 },
+      { x: 0, y: -1, z: 0 },
+      { x: -1, y: 0, z: 0 },
+      { x: 1 / Math.sqrt(3), y: 1 / Math.sqrt(3), z: 1 / Math.sqrt(3) }
+    ];
+    const faces = normals.map((normal, index) => ({
+      topologyId: `face-${index}`,
+      hash: index,
+      triangleStart: index,
+      triangleCount: 1,
+      geometry: { surfaceType: 'plane', area: 1, center: normal, normal }
+    }));
+    const body = {
+      mesh: { vertices: corners, indices: triangles },
+      topology: { faces, edges: [] }
+    } as unknown as BodyRepresentation;
+    for (const face of faces)
+      expect(
+        stepPreviewProfile(body, face as unknown as FaceTopology)
+      ).toBeNull();
+  });
 });

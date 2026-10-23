@@ -19551,8 +19551,13 @@ export function App() {
 
   function reselectOffsetFace(target: FaceTarget, offset: number) {
     // An extrude cap or a box side edits a total length, whose handle does
-    // not restart from zero on the moved face.
-    if (target.extrudeFeatureId || target.resizeBodyFeatureId) return;
+    // not restart from zero on the moved face, unless the card was switched
+    // to a local Offset Face.
+    if (
+      !target.localFaceOffset &&
+      (target.extrudeFeatureId || target.resizeBodyFeatureId)
+    )
+      return;
     const bodyId = target.bodyId as BodyId;
     const faces =
       managerRef.current?.document.derived.bodyRepresentations[bodyId]
