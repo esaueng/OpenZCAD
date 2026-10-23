@@ -5,23 +5,46 @@ import copy
 import ast
 import json
 import re
+import runpy
 import subprocess
+import sys
 import unittest
-from datetime import datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CALLER = (ROOT / ".github/workflows/ci.yml").read_text()
 CALLEE, PIN = re.search(r"\.github/workflows/(fleet-ci(?:-v[0-9]+)?\.yml)@([a-f0-9]{40})", CALLER).groups()
+FIXTURE_REPO = re.search(r"uses: ([^/\s]+/[^/\s]+)/\.github/workflows/", CALLER)[1]
+COMPARISON = json.loads((ROOT / "scripts/fleet-test-fixtures.json").read_text())[FIXTURE_REPO]
+
+
+def snapshots():
+    active = subprocess.check_output(["git", "show", f"{PIN}:.github/workflows/{CALLEE}"],
+                                     cwd=ROOT, text=True, stderr=subprocess.DEVNULL)
+    subprocess.check_output(["git", "show", f"{COMPARISON['pin']}:{COMPARISON['path']}"],
+                            cwd=ROOT, stderr=subprocess.DEVNULL)
+    return active
+
+
+def fetch_main_history():
+    runpy.run_path(str(ROOT / "scripts/prepare-fleet-test-fixtures.py"))["fetch_main_history"]()
+
+
 try:
-    TEXT = subprocess.check_output(["git", "show", f"{PIN}:.github/workflows/{CALLEE}"], cwd=ROOT, text=True, stderr=subprocess.DEVNULL)
+    TEXT = snapshots()
 except subprocess.CalledProcessError:
-    subprocess.run(["git", "fetch", "--no-tags", "--depth=1", "origin", PIN], cwd=ROOT, check=True)
-    TEXT = subprocess.check_output(["git", "show", f"{PIN}:.github/workflows/{CALLEE}"], cwd=ROOT, text=True)
+    # The workflow also runs this entrypoint before pnpm/Vitest setup. A cold
+    # checkout needs both snapshots and ancestry in the same main transfer.
+    fetch_main_history()
+    try:
+        TEXT = snapshots()
+    except subprocess.CalledProcessError:
+        print("Immutable active/comparison fixture data unavailable after main fetch", file=sys.stderr)
+        raise
 
 
 def main_contains(commit):
-    """Whether origin/main reaches `commit`, fetching only the history needed."""
+    """Whether origin/main reaches `commit`, retaining both fixture histories."""
     def contains():
         return subprocess.run(
             ["git", "merge-base", "--is-ancestor", commit, "refs/remotes/origin/main"],
@@ -29,24 +52,7 @@ def main_contains(commit):
         ).returncode == 0
     if contains():
         return True
-    fetch = ["git", "fetch", "--no-tags", "--quiet"]
-    shallow = subprocess.check_output(
-        ["git", "rev-parse", "--is-shallow-repository"], cwd=ROOT, text=True
-    ).strip() == "true"
-    if shallow:
-        # Main's commits since a day before the pin are enough to walk to it;
-        # CI checkouts are shallow and full history is tens of megabytes.
-        committed = subprocess.check_output(["git", "show", "-s", "--format=%cI", commit], cwd=ROOT, text=True).strip()
-        since = datetime.fromisoformat(committed.replace("Z", "+00:00")) - timedelta(days=1)
-        fetch.append(f"--shallow-since={since.isoformat()}")
-    result = subprocess.run(
-        fetch + ["origin", "+refs/heads/main:refs/remotes/origin/main"],
-        cwd=ROOT, capture_output=True, text=True,
-    )
-    if result.returncode:
-        # Git cannot unshallow a pinned commit main does not reach ("error in
-        # object: unshallow ..."), so this is usually the same answer.
-        raise AssertionError(f"could not fetch main back to {commit}: {result.stderr.strip()}")
+    fetch_main_history()
     return contains()
 EXPRESSIONS = re.findall(
     r"^    runs-on: (?:&fleet-runner )?(\$\{\{ fromJSON\(.+\) \}\})$", TEXT, re.M
@@ -290,6 +296,10 @@ class DirectFleetTests(unittest.TestCase):
         self.assertTrue(
             main_contains(PIN),
             f"ci.yml pins {CALLEE}@{PIN}, which main does not contain",
+        )
+        self.assertTrue(
+            main_contains(COMPARISON["pin"]),
+            f"comparison fixture {COMPARISON['path']}@{COMPARISON['pin']} is not contained in main",
         )
 
     def test_no_hosted_bootstrap_and_guard_before_checkout(self):
