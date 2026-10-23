@@ -55,12 +55,18 @@ import type {
 import type { E2eeApi } from './e2eeApi';
 import { confirmApprovalCancellation } from './approvalCancellation';
 import {
+  browserPasskeys,
+  failedPasskeyEnrollment,
+  type PasskeyPrf
+} from './passkeys';
+import {
   DeviceListPinConflict,
   type DeviceKeyStore,
   type PinUpdateOptions,
   type StoredDevice
 } from './deviceStore';
 import {
+  keyOperationGuard,
   lockAccount,
   captureAccountKeyRead,
   clearCachedAccountKeys,
@@ -75,8 +81,8 @@ import {
  * these functions produce and relays the device-approval exchange.
  *
  * - A long-term identity key (ECDSA P-256) signs the device list. It is
- *   sealed only to the recovery key's certified target (and, later,
- *   passkeys'), never to a device, and is opened only briefly.
+ *   sealed only to recovery-key and passkey certified targets, never to a
+ *   device, and is opened only briefly.
  * - Each device has a signing key and an unlock key, both non-extractable.
  * - A random account key is sealed to every certified unlock target: each
  *   device's unlock key and the recovery-key target. The device list
@@ -84,13 +90,13 @@ import {
  * - The encryption key pair is wrapped under the account key.
  *
  * No project data is encrypted yet, and MLS is not wired in: project-key
- * epochs on device removal arrive with Phases 4 and 5. Passkey PRF unlock
- * and desktop Keychain storage are follow-ups; `UnlockTarget.kind`
- * `passkey` and `DeviceKeyStore` are their extension points.
+ * epochs on device removal arrive with Phases 4 and 5. Desktop Keychain
+ * storage is a follow-up through `DeviceKeyStore`.
  */
 
 export type EncryptionFlowErrorCode =
   | 'wrong-recovery-key'
+  | 'wrong-passkey'
   | 'not-unlocked'
   | 'not-certified'
   | 'scan-mismatch'
@@ -123,6 +129,10 @@ export interface E2eeContext {
   readonly now?: () => number;
   /** The initiating settings/account view still owns this operation. */
   readonly isCurrent?: () => boolean;
+  /** Browser WebAuthn PRF; injectable for regression tests. */
+  readonly passkeys?: PasskeyPrf;
+  /** Reject continuation after the session that started a passkey flow ends. */
+  readonly assertActive?: () => void;
   /**
    * Makes this device's key pairs; non-extractable by default. Tests and
    * Playwright fixtures inject extractable pairs to seed a browser.
@@ -612,6 +622,7 @@ async function persistDeviceList(
   isCurrent: () => boolean = () => ctx.isCurrent?.() !== false
 ): Promise<void> {
   try {
+    requireActiveKeyContext(ctx);
     await ctx.store.savePin(ctx.userId, list, options);
   } catch (error) {
     if (isCurrent()) clearCachedAccountKeys(ctx.userId);
@@ -631,6 +642,7 @@ export async function loadEncryption(
   const readCurrent = captureAccountKeyRead(ctx.userId);
   const isCurrent = () => readCurrent() && ctx.isCurrent?.() !== false;
   const requireCurrent = () => {
+    ctx.assertActive?.();
     if (!isCurrent())
       throw new EncryptionFlowError(
         'invalid-request',
@@ -697,6 +709,7 @@ export async function loadEncryption(
       'The device list belongs to another account.'
     );
   }
+  ctx.assertActive?.();
   const device = await ctx.store.loadDevice(ctx.userId);
   requireCurrent();
   const deviceStatus = statusOf(list, device, current.wraps);
@@ -757,28 +770,93 @@ export async function loadEncryption(
     : { kind: 'ready', account };
 }
 
-/**
- * Opens the identity key with the recovery key, briefly, for certifying,
- * revoking or replacing. The recovery target's wrap binds the identity key
- * hash under the recovery secret, so a server cannot pair a genuine target
- * with an identity of its own.
- */
+/** A recovery secret or a fresh, user-verified passkey ceremony. */
+export type UnlockAuthorization = Uint8Array | 'passkey';
+
+function passkeyContext(ctx: E2eeContext): E2eeContext {
+  const guard = keyOperationGuard(ctx.userId);
+  return {
+    ...ctx,
+    assertActive: () => {
+      requireActiveKeyContext(ctx);
+      guard();
+    }
+  };
+}
+
 async function openIdentity(
   ctx: E2eeContext,
   account: AccountView,
-  recoverySecret: Uint8Array
+  authorization: UnlockAuthorization
 ): Promise<{ identityPrivateKey: CryptoKey; accountKey: Bytes }> {
+  if (account.userId !== ctx.userId) {
+    throw new EncryptionFlowError(
+      'invalid-request',
+      'These keys belong to another account.'
+    );
+  }
+  if (authorization !== 'passkey') {
+    return openTargetIdentity(
+      ctx,
+      account,
+      recoveryTarget(account.list),
+      authorization
+    );
+  }
+  const selected = await (ctx.passkeys ?? browserPasskeys).get();
+  try {
+    ctx.assertActive?.();
+    const target = account.list.unlockTargets.find(
+      (item) => item.kind === 'passkey' && item.targetId === selected.targetId
+    );
+    if (!target) {
+      throw new EncryptionFlowError(
+        'wrong-passkey',
+        'That passkey is not certified for this identity. Use another passkey or your recovery key.'
+      );
+    }
+    const opened = await openTargetIdentity(
+      ctx,
+      account,
+      target,
+      selected.secret
+    );
+    try {
+      ctx.assertActive?.();
+      return opened;
+    } catch (error) {
+      opened.accountKey.fill(0);
+      throw error;
+    }
+  } finally {
+    selected.secret.fill(0);
+  }
+}
+
+/** Opens identity material for one operation; the target wrap binds its hash. */
+async function openTargetIdentity(
+  ctx: E2eeContext,
+  account: AccountView,
+  target: UnlockTarget,
+  secret: Uint8Array,
+  exportIdentity = false
+): Promise<{ identityPrivateKey: CryptoKey; accountKey: Bytes }> {
+  if (account.userId !== ctx.userId) {
+    throw new EncryptionFlowError(
+      'invalid-request',
+      'These keys belong to another account.'
+    );
+  }
   const { list } = account;
-  const target = recoveryTarget(list);
   let targetPkcs8: Bytes;
   try {
     targetPkcs8 = await unwrapKey(
-      recoverySecret,
+      secret,
       wrapOf(account, 'unlock-target-key', target.targetId),
       {
         purpose: 'unlock-target-key',
         userId: ctx.userId,
-        method: 'recovery-key',
+        method: targetMethod(target),
         unlockId: target.targetId,
         identityKeyHash: toHex(list.identityKeyHash)
       }
@@ -786,8 +864,10 @@ async function openIdentity(
   } catch (error) {
     if (isE2eeError(error, 'authentication-failed')) {
       throw new EncryptionFlowError(
-        'wrong-recovery-key',
-        'That recovery key does not open these keys.'
+        target.kind === 'passkey' ? 'wrong-passkey' : 'wrong-recovery-key',
+        target.kind === 'passkey'
+          ? 'That passkey does not open these keys.'
+          : 'That recovery key does not open these keys.'
       );
     }
     throw error;
@@ -801,7 +881,7 @@ async function openIdentity(
     ) {
       throw new EncryptionFlowError(
         'key-mismatch',
-        'The recovery key target does not match the device list.'
+        'The unlock target does not match the device list.'
       );
     }
     const recipient = {
@@ -814,7 +894,7 @@ async function openIdentity(
       {
         purpose: 'identity-key',
         userId: ctx.userId,
-        method: 'recovery-key',
+        method: targetMethod(target),
         unlockId: target.targetId
       }
     );
@@ -832,7 +912,7 @@ async function openIdentity(
       }
       const identityPrivateKey = await importSigningPrivateKey(
         identityPkcs8,
-        false
+        exportIdentity
       );
       const accountKey = await openSealedKey(
         recipient,
@@ -840,7 +920,7 @@ async function openIdentity(
         {
           purpose: 'account-key',
           userId: ctx.userId,
-          method: 'recovery-key',
+          method: targetMethod(target),
           unlockId: target.targetId
         }
       );
@@ -850,6 +930,7 @@ async function openIdentity(
           list.head.accountKeyCommitment
         )
       ) {
+        accountKey.fill(0);
         throw new EncryptionFlowError(
           'key-mismatch',
           'The account key does not match the one your device list certifies.'
@@ -914,6 +995,7 @@ async function acceptWrite(
 // --- Setup, enrolment, removal and replacement ----------------------------
 
 function requireActiveKeyContext(ctx: E2eeContext): void {
+  ctx.assertActive?.();
   if (ctx.isCurrent && !ctx.isCurrent())
     throw new EncryptionFlowError(
       'invalid-request',
@@ -978,22 +1060,156 @@ async function setUpEncryptionLocked(
  * Certifies this device with the recovery key: a new device, a device
  * approved read-only, or one whose identity was replaced elsewhere.
  */
-export async function enrollWithRecoveryKey(
+export function enrollWithRecoveryKey(
   ctx: E2eeContext,
   account: AccountView,
   recoverySecret: Uint8Array,
   label: string
 ): Promise<EncryptionState> {
+  return enrollWithUnlockMethod(ctx, account, recoverySecret, label);
+}
+
+/** Certifies this browser with a passkey; identity material is never cached. */
+export function enrollWithPasskey(
+  ctx: E2eeContext,
+  account: AccountView,
+  label: string
+): Promise<EncryptionState> {
+  return enrollWithUnlockMethod(passkeyContext(ctx), account, 'passkey', label);
+}
+
+/** Enrolls a discoverable PRF passkey, authorized by the current recovery key. */
+export async function addPasskey(
+  ctx: E2eeContext,
+  account: AccountView,
+  recoverySecret: Uint8Array
+): Promise<EncryptionState> {
+  ctx = passkeyContext(ctx);
   return ctx.store.withDeviceLock(ctx.userId, async () => {
     requireActiveKeyContext(ctx);
-    return enrollWithRecoveryKeyLocked(ctx, account, recoverySecret, label);
+    return addPasskeyLocked(ctx, account, recoverySecret);
   });
 }
 
-async function enrollWithRecoveryKeyLocked(
+async function addPasskeyLocked(
   ctx: E2eeContext,
   account: AccountView,
-  recoverySecret: Uint8Array,
+  recoverySecret: Uint8Array
+): Promise<EncryptionState> {
+  const opened = await openTargetIdentity(
+    ctx,
+    account,
+    recoveryTarget(account.list),
+    recoverySecret,
+    true
+  );
+  let secret: Bytes | undefined;
+  let targetPkcs8: Bytes | undefined;
+  let identityPkcs8: Bytes | undefined;
+  let enrollment: { label: string; targetId: string } | undefined;
+  try {
+    requireActiveKeyContext(ctx);
+    const selected = await (ctx.passkeys ?? browserPasskeys).create();
+    secret = selected.secret;
+    if (selected.enrollmentLabel) {
+      enrollment = {
+        label: selected.enrollmentLabel,
+        targetId: selected.targetId
+      };
+    }
+    ctx.assertActive?.();
+    const target = await generateEncryptionKeyPair(true);
+    const publicKey = await exportPublicKey(target.publicKey);
+    const targetId = selected.targetId;
+    const entry = nextDeviceListEntry(account.list, {
+      issuedAt: now(ctx),
+      addUnlockTargets: [
+        { kind: 'passkey', targetId, publicKey, addedAt: now(ctx) }
+      ]
+    });
+    targetPkcs8 = await exportPrivateKey(target.privateKey);
+    identityPkcs8 = await exportPrivateKey(opened.identityPrivateKey);
+    const wraps: E2eeWrapInput[] = [
+      {
+        purpose: 'unlock-target-key',
+        targetId,
+        wrapped: b64(
+          await wrapKey(secret, targetPkcs8, {
+            purpose: 'unlock-target-key',
+            userId: ctx.userId,
+            method: 'passkey-prf',
+            unlockId: targetId,
+            identityKeyHash: toHex(account.list.identityKeyHash)
+          })
+        )
+      },
+      {
+        purpose: 'identity-key',
+        targetId,
+        wrapped: b64(
+          await sealKey(publicKey, identityPkcs8, {
+            purpose: 'identity-key',
+            userId: ctx.userId,
+            method: 'passkey-prf',
+            unlockId: targetId
+          })
+        )
+      },
+      {
+        purpose: 'account-key',
+        targetId,
+        wrapped: b64(
+          await sealKey(publicKey, opened.accountKey, {
+            purpose: 'account-key',
+            userId: ctx.userId,
+            method: 'passkey-prf',
+            unlockId: targetId
+          })
+        )
+      }
+    ];
+    const signed = await signDeviceListEntry(opened.identityPrivateKey, entry);
+    requireActiveKeyContext(ctx);
+    const response = await ctx.api.appendDeviceList({
+      generation: account.generation,
+      entry: b64(signed.entry),
+      signature: b64(signed.signature),
+      wraps
+    });
+    await acceptWrite(ctx, response, {
+      identityKey: account.list.identityKey,
+      pin: account.list.pin,
+      written: signed.entry
+    });
+    return await loadEncryption(ctx);
+  } catch (error) {
+    throw enrollment
+      ? failedPasskeyEnrollment(error, enrollment.label, enrollment.targetId)
+      : error;
+  } finally {
+    opened.accountKey.fill(0);
+    secret?.fill(0);
+    targetPkcs8?.fill(0);
+    identityPkcs8?.fill(0);
+  }
+}
+
+async function enrollWithUnlockMethod(
+  ctx: E2eeContext,
+  account: AccountView,
+  authorization: UnlockAuthorization,
+  label: string
+): Promise<EncryptionState> {
+  return ctx.store.withDeviceLock(ctx.userId, async () => {
+    requireActiveKeyContext(ctx);
+    return enrollWithUnlockMethodLocked(ctx, account, authorization, label);
+  });
+}
+
+async function enrollWithUnlockMethodLocked(
+  ctx: E2eeContext,
+  account: AccountView,
+  authorization: UnlockAuthorization,
   label: string
 ): Promise<EncryptionState> {
   if (
@@ -1008,7 +1224,7 @@ async function enrollWithRecoveryKeyLocked(
   const { identityPrivateKey, accountKey } = await openIdentity(
     ctx,
     account,
-    recoverySecret
+    authorization
   );
   try {
     if (account.deviceStatus === 'certified') {
@@ -1096,72 +1312,131 @@ async function enrollWithRecoveryKeyLocked(
  * rotates the account key and encryption key in the same entry, sealing the
  * new account key to every surviving device and unlock target taken from
  * that verified list, never to a key the server offers. The removed device
- * keeps no wrap. Needs the recovery key, because only the identity key may
- * sign the entry.
+ * keeps no wrap. A recovery key or passkey opens the identity key to sign
+ * the entry.
  *
  * Project-key epochs follow in Phases 4 and 5; no project is encrypted yet.
  */
-export async function removeDevice(
+export function removeDevice(
   ctx: E2eeContext,
   account: AccountView,
   deviceId: string,
-  recoverySecret: Uint8Array
+  authorization: UnlockAuthorization
 ): Promise<EncryptionState> {
-  if (deviceId === account.device?.deviceId) {
-    throw new EncryptionFlowError(
-      'invalid-request',
-      'Remove this device by signing out and removing its keys.'
-    );
-  }
-  return rotateAccountKeys(ctx, account, recoverySecret, [deviceId]);
+  return rotateAccountKeys(
+    authorization === 'passkey' ? passkeyContext(ctx) : ctx,
+    account,
+    deviceId,
+    'device',
+    authorization
+  );
 }
 
-/** Revoke every read-only approval without trusting unsigned recipient keys. */
-export async function revokeReadOnlyDevices(
+export function removePasskey(
   ctx: E2eeContext,
   account: AccountView,
-  recoverySecret: Uint8Array
+  targetId: string,
+  authorization: UnlockAuthorization
 ): Promise<EncryptionState> {
-  // The server may omit approval wraps. Rotation must remain available even
-  // when it reports no read-only devices; only certified recipients survive.
-  return rotateAccountKeys(ctx, account, recoverySecret, []);
+  return rotateAccountKeys(
+    authorization === 'passkey' ? passkeyContext(ctx) : ctx,
+    account,
+    targetId,
+    'passkey',
+    authorization
+  );
+}
+
+/** Rotate even when the server omits every read-only approval wrap. */
+export function revokeReadOnlyDevices(
+  ctx: E2eeContext,
+  account: AccountView,
+  authorization: UnlockAuthorization
+): Promise<EncryptionState> {
+  return rotateAccountKeys(
+    authorization === 'passkey' ? passkeyContext(ctx) : ctx,
+    account,
+    '', // Aggregate rotation does not remove a certified id.
+    'read-only',
+    authorization
+  );
 }
 
 async function rotateAccountKeys(
   ctx: E2eeContext,
   account: AccountView,
-  recoverySecret: Uint8Array,
-  removeDeviceIds: readonly string[]
+  id: string,
+  kind: 'device' | 'passkey' | 'read-only',
+  authorization: UnlockAuthorization
 ): Promise<EncryptionState> {
+  return ctx.store.withDeviceLock(ctx.userId, async () => {
+    requireActiveKeyContext(ctx);
+    return rotateAccountKeysLocked(ctx, account, id, kind, authorization);
+  });
+}
+
+async function rotateAccountKeysLocked(
+  ctx: E2eeContext,
+  account: AccountView,
+  id: string,
+  kind: 'device' | 'passkey' | 'read-only',
+  authorization: UnlockAuthorization
+): Promise<EncryptionState> {
+  if (kind === 'device' && id === account.device?.deviceId) {
+    throw new EncryptionFlowError(
+      'invalid-request',
+      'Remove this device by signing out and removing its keys.'
+    );
+  }
   const { identityPrivateKey, accountKey: oldAccountKey } = await openIdentity(
     ctx,
     account,
-    recoverySecret
+    authorization
   );
   oldAccountKey.fill(0);
+  if (
+    kind === 'passkey' &&
+    !account.list.unlockTargets.some(
+      (t) => t.kind === 'passkey' && t.targetId === id
+    )
+  ) {
+    throw new EncryptionFlowError(
+      'invalid-request',
+      'That passkey is not certified.'
+    );
+  }
   const accountKey = generateSymmetricKey();
-  const encryption = await generateEncryptionKeyPair(true);
-  const entry = nextDeviceListEntry(account.list, {
-    issuedAt: now(ctx),
-    removeDeviceIds,
-    encryptionKey: await exportPublicKey(encryption.publicKey),
-    accountKeyCommitment: await accountKeyCommitment(accountKey)
-  });
-  const signed = await signDeviceListEntry(identityPrivateKey, entry);
-  const wraps = await accountWraps(ctx.userId, accountKey, encryption, entry);
-  accountKey.fill(0);
-  const response = await ctx.api.appendDeviceList({
-    generation: account.generation,
-    entry: b64(signed.entry),
-    signature: b64(signed.signature),
-    wraps
-  });
-  await acceptWrite(ctx, response, {
-    identityKey: account.list.identityKey,
-    pin: account.list.pin,
-    written: signed.entry
-  });
-  return loadEncryption(ctx);
+  try {
+    const encryption = await generateEncryptionKeyPair(true);
+    const entry = nextDeviceListEntry(account.list, {
+      issuedAt: now(ctx),
+      ...(kind === 'device'
+        ? { removeDeviceIds: [id] }
+        : kind === 'passkey'
+          ? { removeUnlockTargetIds: [id] }
+          : {}),
+      encryptionKey: await exportPublicKey(encryption.publicKey),
+      accountKeyCommitment: await accountKeyCommitment(accountKey)
+    });
+    const signed = await signDeviceListEntry(identityPrivateKey, entry);
+    const wraps = await accountWraps(ctx.userId, accountKey, encryption, entry);
+    accountKey.fill(0);
+    requireActiveKeyContext(ctx);
+    const response = await ctx.api.appendDeviceList({
+      generation: account.generation,
+      entry: b64(signed.entry),
+      signature: b64(signed.signature),
+      wraps
+    });
+    await acceptWrite(ctx, response, {
+      identityKey: account.list.identityKey,
+      pin: account.list.pin,
+      written: signed.entry
+    });
+    return loadEncryption(ctx);
+  } finally {
+    accountKey.fill(0);
+  }
 }
 
 /**

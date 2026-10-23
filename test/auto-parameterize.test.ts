@@ -26,6 +26,7 @@ import {
 import {
   FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
   FEATURE_SUPPRESSED_METADATA_KEY,
+  edgeTopologyWitnessHash,
   toUserId,
   type DirectEditOperation,
   type FaceTopologyReferenceV5,
@@ -559,6 +560,7 @@ describe('assistant auto-parameterization', () => {
         }
       }
     };
+    source.edgeReference.currentHash = edgeTopologyWitnessHash(source.edgeReference.witness);
     manager.execute(
       commandFactories.addSketch({
         name: 'Mixed projections',

@@ -65,6 +65,7 @@ describe('Objects folders (U06, schema v34)', () => {
     const saved = JSON.parse(
       JSON.stringify(manager.document)
     ) as ProjectDocument;
+    expect(saved.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     const older = { ...saved, schemaVersion: 30 } as unknown as ProjectDocument;
     const opened = normalizeDocument(older);
     expect('objectFolders' in opened).toBe(false);

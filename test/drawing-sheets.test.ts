@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENT_SCHEMA_VERSION } from '@openzcad/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   CommandManager,
@@ -16,7 +17,6 @@ import {
   drawingSetError,
   MAX_PROJECT_NAME_LENGTH,
   projectedViewSide,
-  PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
   type BodyId,
   type DrawingSheet,

@@ -114,8 +114,15 @@ test('a coincident copy asks before a tool, history, measure or selection transi
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await inspector.getByRole('button', { name: /^Create/ }).click();
   await expectBodyCount(page, 1);
+  // Exercise the transition guard after the viewport and command are ready.
+  await expect(page.locator('.viewer-host canvas')).toHaveAttribute(
+    'data-e2e-rendered-bodies',
+    '1'
+  );
+  await expect(page.getByRole('button', { name: /^Move \(M\)/ })).toBeEnabled();
   await page.keyboard.press('m');
   const overlay = page.getByRole('form', { name: 'Move controls' });
+  await expect(overlay).toBeVisible();
   const copy = overlay.getByRole('checkbox', {
     name: 'Copy (keep the original)'
   });

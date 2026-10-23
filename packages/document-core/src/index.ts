@@ -886,6 +886,7 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
     );
   }
   const document = withReadableHistory(input);
+  assertDocumentContentSchema(document);
   assertSketchProvenance(document);
   assertReferenceCommandSchema(document);
   // Schema v30 drawings (v31 annotations): validated as written, never

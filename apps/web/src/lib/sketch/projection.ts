@@ -8,6 +8,7 @@ import {
   listFeaturesInOrder
 } from '@openzcad/document-core';
 import {
+  orientLikeStored,
   projectEdgeToSketch,
   projectableCurveFromTopology,
   type PlaneBasis
@@ -292,7 +293,11 @@ export function repickedProjectionData(
     throw new Error('A re-picked source must keep a verified identity.');
   }
   // The object keeps its own construction role, whatever the pick carried.
-  const { construction: _ignored, ...geometry } = replacement;
+  const oriented =
+    replacement.objectKind === 'line'
+      ? orientLikeStored(current, replacement)
+      : replacement;
+  const { construction: _ignored, ...geometry } = oriented;
   return current.construction ? { ...geometry, construction: true } : geometry;
 }
 

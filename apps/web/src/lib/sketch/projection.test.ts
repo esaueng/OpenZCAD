@@ -8,6 +8,7 @@ import {
 } from '@openzcad/document-core';
 import { frameForPlaneRef } from '@openzcad/geometry';
 import {
+  edgeTopologyWitnessHash,
   toBodyId,
   toUserId,
   type BodyRepresentation,
@@ -42,7 +43,7 @@ const basis = frameForPlaneRef(plane, (value) => Number(value));
 const bodyId = toBodyId('body_block');
 
 function reference(name: string, hash: number): EdgeTopologyReferenceV5 {
-  return {
+  const result: EdgeTopologyReferenceV5 = {
     kind: 'edge',
     producingFeatureId: 'feat_block' as FeatureId,
     lineageName: name,
@@ -59,6 +60,8 @@ function reference(name: string, hash: number): EdgeTopologyReferenceV5 {
       midpoint: [0, 0, 0]
     }
   };
+  result.currentHash = edgeTopologyWitnessHash(result.witness);
+  return result;
 }
 
 const line = (
@@ -122,6 +125,42 @@ function modelDocument(): ProjectDocument {
 }
 
 describe('projectionFromPick', () => {
+  it.each([false, true])(
+    'refuses an unlinked two-sample arc without changing the document, reversed=%s',
+    (reversed) => {
+      const document = modelDocument();
+      const end = [20 * Math.cos(0.002), 20 * Math.sin(0.002), 5];
+      const start = [20, 0, 5];
+      const edge: EdgeTopology = {
+        topologyId: 'shallow',
+        hash: 90,
+        vertexIds: [1, 2],
+        curve: {
+          type: 'CIRCLE',
+          circle: {
+            center: { x: 0, y: 0, z: 5 },
+            axis: { x: 0, y: 0, z: 1 },
+            radius: 20
+          }
+        },
+        points: reversed ? [...end, ...start] : [...start, ...end]
+      };
+      document.derived.bodyRepresentations[bodyId]!.topology!.edges = [edge];
+      const before = JSON.stringify(document);
+      expect(() =>
+        projectionFromPick({
+          document,
+          sketch: null,
+          selection: { bodyId, kind: 'edge', topologyId: 'shallow', hash: 90 },
+          basis,
+          mode: 'unlinked',
+          construction: false
+        })
+      ).toThrow(/circular arc without an interior sample/);
+      expect(JSON.stringify(document)).toBe(before);
+    }
+  );
+
   it('retries an idle-skipped linked pick with verified lineage before refusing it', async () => {
     const document = modelDocument();
     let rebuilt = 0;
@@ -451,6 +490,28 @@ describe('repair, unlink and the words for each', () => {
         projection: replacement.projection
       })
     ).toThrow(/projects to a line/);
+  });
+
+  it('keeps constrained start and end identity when a re-picked line runs backward', () => {
+    const replacement: SketchObjectData = {
+      objectKind: 'line',
+      x1: 1.25,
+      y1: 0.25,
+      x2: 0.25,
+      y2: 0.25,
+      projection: {
+        mode: 'linked',
+        source: { bodyId, edgeReference: reference('edge.repicked', 2) }
+      }
+    };
+    const before = structuredClone(replacement);
+    expect(repickedProjectionData(linked, replacement)).toEqual({
+      ...replacement,
+      x1: 0.25,
+      x2: 1.25,
+      construction: true
+    });
+    expect(replacement).toEqual(before);
   });
 
   it('refuses a candidate whose new projection the build could not re-find', () => {

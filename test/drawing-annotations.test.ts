@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENT_SCHEMA_VERSION } from '@openzcad/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   CommandManager,
@@ -15,7 +16,6 @@ import {
   DRAWING_VIEW_FRAMES,
   drawingSetError,
   projectToView,
-  PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
   type BodyId,
   type BodyRepresentation,
@@ -208,6 +208,7 @@ function linear(
 
 describe('D02 annotation section (schema v31)', () => {
   it('is additive: a v30 sheet opens without annotations', () => {
+    // D02 took v31; I05's reference images are v32.
     const document = boxDocument();
     expect(document.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     const v30 = {

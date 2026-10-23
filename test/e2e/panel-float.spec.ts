@@ -26,8 +26,15 @@ import type { Locator, Page } from '@playwright/test';
 type Box = { x: number; y: number; width: number; height: number };
 
 async function box(locator: Locator): Promise<Box> {
-  const bounds = await locator.boundingBox();
-  expect(bounds).not.toBeNull();
+  // A handle re-arm can hide its HUD for one render frame, including just
+  // after a visibility assertion. Measure within the existing expect budget.
+  let bounds: Box | null = null;
+  await expect
+    .poll(async () => {
+      bounds = await locator.boundingBox();
+      return bounds;
+    })
+    .not.toBeNull();
   return bounds!;
 }
 
