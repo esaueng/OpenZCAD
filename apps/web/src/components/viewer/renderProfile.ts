@@ -56,7 +56,11 @@ export function currentRenderProfile(): RenderProfile {
   return renderProfile(
     {
       e2e: import.meta.env.VITE_E2E === '1',
-      fullRender: import.meta.env.VITE_E2E_FULL_RENDER === '1'
+      // OZ_PERF is baked into the bundle (vite.config.ts), so a perf build
+      // served by hand keeps the production renderer too.
+      fullRender:
+        import.meta.env.VITE_E2E_FULL_RENDER === '1' ||
+        Boolean(import.meta.env.OZ_PERF)
     },
     typeof window === 'undefined' ? undefined : (window as FullRenderScope)
   );

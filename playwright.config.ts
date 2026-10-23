@@ -96,7 +96,11 @@ export default defineConfig({
   webServer: {
     command: `VITE_E2E=1${FULL_RENDER_BUILD ? ' VITE_E2E_FULL_RENDER=1' : ''} pnpm --filter @openzcad/web build && pnpm --filter @openzcad/web preview --host 127.0.0.1 --port ${PORT}`,
     url: `http://127.0.0.1:${PORT}`,
-    reuseExistingServer: !process.env.CI && !FULL_RENDER_BUILD,
+    // A server named by PLAYWRIGHT_PORT was started on purpose (the face-drag
+    // probe prestarts one); otherwise a full-render run builds its own.
+    reuseExistingServer:
+      !process.env.CI &&
+      (!FULL_RENDER_BUILD || Boolean(process.env.PLAYWRIGHT_PORT)),
     timeout: 120_000
   }
 });
