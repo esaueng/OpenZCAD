@@ -15,6 +15,8 @@ import {
   generateRecoveryKey,
   generateSigningKeyPair,
   generateSymmetricKey,
+  isExternalAgreementKey,
+  isExternalSigningKey,
   nextDeviceListEntry,
   sealKey,
   signDeviceListEntry,
@@ -74,6 +76,11 @@ import type { E2eeSetupRequest } from '@openzcad/shared';
 import { d1Database, migratedDatabase } from './d1-sqlite';
 import { eraseAccountWithKeyCleanup } from '../apps/web/src/lib/e2ee/accountErasure';
 import { signOutAfterSaving } from '../apps/web/src/lib/e2ee/signOut';
+import {
+  createKeychainDeviceKeys,
+  keychainDeviceStore,
+  type KeychainHost
+} from '../apps/web/src/lib/e2ee/keychainDeviceKeys';
 import * as deviceStores from '../apps/web/src/lib/e2ee/deviceStore';
 import {
   allowKeySession,
@@ -478,8 +485,12 @@ describe('setup', () => {
     expect(account.list.devices.map((d) => d.label)).toEqual(['Laptop']);
     expect(account.fingerprint).toMatch(/^(\d{5} ){7}\d{5}$/);
     const stored = await laptop.store.loadDevice(USER);
-    expect(stored?.signing.privateKey.extractable).toBe(false);
-    expect(stored?.unlock.privateKey.extractable).toBe(false);
+    expect(
+      (stored?.signing.privateKey as CryptoKey | undefined)?.extractable
+    ).toBe(false);
+    expect(
+      (stored?.unlock.privateKey as CryptoKey | undefined)?.extractable
+    ).toBe(false);
     // The account key never reaches the server unwrapped: the only place a
     // 32-byte value derived from it appears is the commitment.
     expect(
@@ -4167,5 +4178,115 @@ describe('cross-tab pin persistence', () => {
     expect(trusted.list.devices).toHaveLength(1);
     expect(trusted.list.head.sequence).toBe(0);
     expect(await laptop.store.loadPin(USER)).toEqual(trusted.list.pin);
+  });
+});
+
+/**
+ * A stand-in for the desktop host: it holds non-extractable WebCrypto keys
+ * and hands back only public keys, signatures and secrets, as the Rust
+ * commands do (`apps/desktop/device-keys`).
+ */
+function fakeKeychainHost() {
+  const keys = new Map<string, { signing: CryptoKey; unlock: CryptoKey }>();
+  const calls = { sign: 0, derive: 0 };
+  let next = 0;
+  const host: KeychainHost = {
+    create: async () => {
+      const signing = await generateSigningKeyPair(false);
+      const unlock = await generateEncryptionKeyPair(false);
+      const keyId = `dk_${(++next).toString(16).padStart(32, '0')}`;
+      keys.set(keyId, {
+        signing: signing.privateKey,
+        unlock: unlock.privateKey
+      });
+      return {
+        keyId,
+        signingPublicKey: await exportPublicKey(signing.publicKey),
+        unlockPublicKey: await exportPublicKey(unlock.publicKey)
+      };
+    },
+    sign: async (keyId, message) => {
+      calls.sign++;
+      const key = keys.get(keyId);
+      if (!key) throw new Error('This device key is not in the Keychain.');
+      return new Uint8Array(
+        await crypto.subtle.sign(
+          { name: 'ECDSA', hash: 'SHA-256' },
+          key.signing,
+          new Uint8Array(message)
+        )
+      );
+    },
+    derive: async (keyId, peer) => {
+      calls.derive++;
+      const key = keys.get(keyId);
+      if (!key) throw new Error('This device key is not in the Keychain.');
+      const peerKey = await crypto.subtle.importKey(
+        'raw',
+        new Uint8Array(peer),
+        { name: 'ECDH', namedCurve: 'P-256' },
+        false,
+        []
+      );
+      return new Uint8Array(
+        await crypto.subtle.deriveBits(
+          { name: 'ECDH', public: peerKey },
+          key.unlock,
+          256
+        )
+      );
+    },
+    remove: async (keyId) => {
+      keys.delete(keyId);
+    }
+  };
+  return { host, keys, calls };
+}
+
+describe('desktop Keychain device keys', () => {
+  it('sets up, unlocks, signs and forgets a device whose private keys stay in the host', async () => {
+    const srv = server();
+    const keychain = fakeKeychainHost();
+    const mac: E2eeContext = {
+      ...device(srv),
+      store: keychainDeviceStore(memoryDeviceStore(), keychain.host),
+      createDeviceKeys: createKeychainDeviceKeys(keychain.host)
+    };
+    const recovery = await generateRecoveryKey();
+    const account = ready(
+      await setUpEncryption(mac, {
+        recoverySecret: recovery.secret,
+        label: 'Mac'
+      })
+    );
+    expect(keychain.keys.size).toBe(1);
+    const stored = (await mac.store.loadDevice(USER))!;
+    expect(isExternalSigningKey(stored.signing.privateKey)).toBe(true);
+    expect(isExternalAgreementKey(stored.unlock.privateKey)).toBe(true);
+
+    // A fresh session unlocks through the host's ECDH, never a CryptoKey.
+    lockAccount(USER);
+    const derives = keychain.calls.derive;
+    expect(ready(await loadEncryption(mac)).unlocked).toBe(true);
+    expect(keychain.calls.derive).toBeGreaterThan(derives);
+
+    // The device key signs the identity transition the server verifies.
+    const signs = keychain.calls.sign;
+    ready(
+      await replaceRecoveryKey(
+        mac,
+        ready(await loadEncryption(mac)),
+        (await generateRecoveryKey()).secret,
+        null
+      )
+    );
+    expect(keychain.calls.sign).toBeGreaterThan(signs);
+    expect(account.device?.deviceId).toBe(stored.deviceId);
+
+    // Forgetting the device removes its Keychain keys as well as the record.
+    await forgetThisDevice(mac);
+    expect(await mac.store.loadDevice(USER)).toBeNull();
+    expect(keychain.keys.size).toBe(0);
+    lockAccount(USER);
   });
 });

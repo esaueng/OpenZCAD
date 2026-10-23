@@ -205,8 +205,8 @@ describe.each(['memory', 'indexeddb'] as const)(
       const stored = (await right.loadDevice(USER))!;
       expect(stored.signingPublicKey).toEqual(a.signingPublicKey);
       expect(stored.unlockPublicKey).toEqual(a.unlockPublicKey);
-      expect(stored.signing.privateKey.extractable).toBe(false);
-      expect(stored.unlock.privateKey.extractable).toBe(false);
+      expect((stored.signing.privateKey as CryptoKey).extractable).toBe(false);
+      expect((stored.unlock.privateKey as CryptoKey).extractable).toBe(false);
       await left.saveDevice({
         ...stored,
         label: 'Updated',

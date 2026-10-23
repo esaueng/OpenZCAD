@@ -1,6 +1,8 @@
 import type {
+  AgreementPrivateKey,
   Bytes,
   DeviceListPin,
+  SigningPrivateKey,
   VerifiedDeviceList
 } from '@openzcad/crypto';
 
@@ -9,17 +11,28 @@ import type {
  *
  * The private halves are non-extractable `CryptoKey`s: IndexedDB stores them
  * by structured clone, and script can never read their bytes (ADR-024,
- * Unlock and devices). The desktop app will keep them in the macOS Keychain
- * instead; `DeviceKeyStore` is the seam for that (a follow-up).
+ * Unlock and devices). The desktop app keeps them in the macOS Keychain
+ * instead and signs and derives natively; there the private halves are
+ * external keys (`keychainDeviceKeys.ts`).
  */
+export interface DeviceSigningKeys {
+  readonly privateKey: SigningPrivateKey;
+  readonly publicKey: CryptoKey;
+}
+
+export interface DeviceUnlockKeys {
+  readonly privateKey: AgreementPrivateKey;
+  readonly publicKey: CryptoKey;
+}
+
 export interface StoredDevice {
   readonly userId: string;
   readonly deviceId: string;
   readonly label: string;
   /** ECDSA P-256; signs versions once certified. */
-  readonly signing: CryptoKeyPair;
+  readonly signing: DeviceSigningKeys;
   /** ECDH P-256; the account key is sealed to its public half. */
-  readonly unlock: CryptoKeyPair;
+  readonly unlock: DeviceUnlockKeys;
   readonly signingPublicKey: Bytes;
   readonly unlockPublicKey: Bytes;
   readonly createdAt: number;

@@ -40,6 +40,7 @@ import {
   type DeviceListEntry,
   type DeviceListPin,
   type ListedDevice,
+  type SigningPrivateKey,
   type UnlockTarget,
   type VerifiedDeviceList
 } from '@openzcad/crypto';
@@ -62,6 +63,8 @@ import {
 import {
   DeviceListPinConflict,
   type DeviceKeyStore,
+  type DeviceSigningKeys,
+  type DeviceUnlockKeys,
   type PinUpdateOptions,
   type StoredDevice
 } from './deviceStore';
@@ -118,8 +121,8 @@ export class EncryptionFlowError extends Error {
 }
 
 export interface DeviceKeyPairs {
-  readonly signing: CryptoKeyPair;
-  readonly unlock: CryptoKeyPair;
+  readonly signing: DeviceSigningKeys;
+  readonly unlock: DeviceUnlockKeys;
 }
 
 export interface E2eeContext {
@@ -1460,7 +1463,11 @@ export async function replaceRecoveryKey(
       'Only a certified device can replace the recovery key.'
     );
   }
-  let signer: { key: CryptoKey; raw: Uint8Array; kind: 'identity' | 'device' };
+  let signer: {
+    key: SigningPrivateKey;
+    raw: Uint8Array;
+    kind: 'identity' | 'device';
+  };
   if (oldRecoverySecret) {
     const opened = await openIdentity(ctx, account, oldRecoverySecret);
     opened.accountKey.fill(0);

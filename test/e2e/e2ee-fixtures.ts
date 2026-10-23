@@ -132,8 +132,8 @@ async function materialOf(
       ...rest,
       signingPublicKey: [...device.signingPublicKey],
       unlockPublicKey: [...device.unlockPublicKey],
-      signingPrivate: [...(await exportPrivateKey(signing.privateKey))],
-      unlockPrivate: [...(await exportPrivateKey(unlock.privateKey))]
+      signingPrivate: [...(await exportPrivateKey(signing.privateKey as CryptoKey))],
+      unlockPrivate: [...(await exportPrivateKey(unlock.privateKey as CryptoKey))]
     },
     pin: {
       identityKeyHash: [...pin.identityKeyHash],
