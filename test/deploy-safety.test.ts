@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import ts from 'typescript';
+import { foldEvidence, readFragments } from '../scripts/roadmap-evidence.mjs';
 import { UPLOAD_CLEANUP_CRON } from '../scripts/validate-deployment-config.mjs';
 import { FLEET_CI_PATH } from './fleet-workflow';
 
@@ -248,8 +249,13 @@ describe('documented facts match the code', () => {
     expect(declared).toBeDefined();
 
     for (const path of ['architecture.md', 'ROADMAP.md']) {
+      // Implementation PRs record schema evidence in fragments; the standalone
+      // fold PR updates the shared ledger later. Check that composed ledger.
+      const documented = path === 'ROADMAP.md'
+        ? foldEvidence(read(path), readFragments())
+        : read(path);
       const claimed = Array.from(
-        read(path).matchAll(/schema[- ]v(\d+)/gi),
+        documented.matchAll(/schema[- ]v(\d+)/gi),
         (match) => match[1]
       );
       // A doc may mention older schema versions in historical context; what it
