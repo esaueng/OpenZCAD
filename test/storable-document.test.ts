@@ -7,7 +7,10 @@ import {
   UnstorableDocumentError
 } from '@openzcad/document-core';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
-import { splitProjectStorageUpload } from '@openzcad/persistence';
+import {
+  normalizedForLoad,
+  splitProjectStorageUpload
+} from '@openzcad/persistence';
 import {
   MAX_DOCUMENT_VALUES,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
@@ -157,5 +160,21 @@ describe('assertStorableDocument', () => {
     await expect(splitProjectStorageUpload(valid())).resolves.toMatchObject({
       storageAssets: []
     });
+  });
+});
+
+describe('normalizedForLoad', () => {
+  it('returns a stored document it cannot normalize unchanged instead of failing the load', () => {
+    // The browser decides (ADR-024 Phase 1): it refuses the version and keeps
+    // its own copy, rather than the account answering with a server error.
+    const bad = {
+      ...valid(),
+      objectFolders: 'folders'
+    } as unknown as ProjectDocument;
+    expect(normalizedForLoad(bad)).toBe(bad);
+    const { schemaVersion: _schema, ...unversioned } = valid();
+    expect(
+      normalizedForLoad(unversioned as ProjectDocument).schemaVersion
+    ).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
   });
 });

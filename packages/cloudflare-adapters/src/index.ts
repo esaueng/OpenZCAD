@@ -160,6 +160,7 @@ import {
 import {
   decodeProjectStorageBody,
   hydrateProjectStorageSnapshot,
+  normalizedForLoad,
   prepareClientProjectStorageSnapshot,
   prepareProjectStorageSnapshot,
   PROJECT_OBJECT_STORAGE_PREFIX,
@@ -1138,7 +1139,7 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     const document = row.document_object_id
       ? await this.loadProjectObject(row.project_id, row.document_object_id)
-      : normalizeDocument(JSON.parse(row.document_json) as ProjectDocument);
+      : normalizedForLoad(JSON.parse(row.document_json) as ProjectDocument);
     return {
       projectId: row.project_id,
       name: row.name,
@@ -1941,7 +1942,7 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!row) throw new ProjectNotFoundError(projectId);
     const rawDocument = row.document_object_id
       ? await this.loadProjectObject(projectId, row.document_object_id)
-      : normalizeDocument(JSON.parse(row.document_json) as ProjectDocument);
+      : normalizedForLoad(JSON.parse(row.document_json) as ProjectDocument);
     const project = summaryFromRow(row);
     if (!project) throw new ProjectNotFoundError(projectId);
     return {
@@ -2091,7 +2092,7 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     const document = row.document_object_id
       ? await this.loadProjectObject(projectId, row.document_object_id)
-      : normalizeDocument(JSON.parse(row.document_json) as ProjectDocument);
+      : normalizedForLoad(JSON.parse(row.document_json) as ProjectDocument);
     return {
       document: await this.hydrateCopiedSourceAliases(document),
       origin: projectBranchPoint(head, {
@@ -2227,7 +2228,7 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     const document = row.document_object_id
       ? await this.loadProjectObject(projectId, row.document_object_id)
-      : normalizeDocument(JSON.parse(row.document_json) as ProjectDocument);
+      : normalizedForLoad(JSON.parse(row.document_json) as ProjectDocument);
     return this.hydrateCopiedSourceAliases(document);
   }
 
@@ -2293,7 +2294,7 @@ export class D1R2PersistenceService implements PersistenceService {
     // `loadProject`.
     const document = row.document_object_id
       ? await this.loadProjectObject(projectId, row.document_object_id)
-      : normalizeDocument(JSON.parse(row.document_json) as ProjectDocument);
+      : normalizedForLoad(JSON.parse(row.document_json) as ProjectDocument);
     return this.hydrateCopiedSourceAliases(document);
   }
 
@@ -4755,7 +4756,7 @@ export class D1R2PersistenceService implements PersistenceService {
         );
       }
     );
-    return normalizeDocument(hydrated);
+    return normalizedForLoad(hydrated);
   }
 
   /**

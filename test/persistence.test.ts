@@ -9,6 +9,7 @@ import type { RevisionConflictError } from '@openzcad/persistence';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   addPrimitiveFeature,
+  assertStorableDocument,
   createProjectDocument,
   withEchoedSavePoints,
   withoutDerivedProjection
@@ -58,7 +59,7 @@ describe('in-memory persistence', () => {
     expect(loaded?.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
   });
 
-  it('refuses to load a document stored by a newer client', async () => {
+  it('serves a document stored by a newer client unread, for the browser to refuse', async () => {
     const service = new InMemoryPersistenceService();
     const created = await service.createProject(userId, { name: 'Future' });
     const future = {
@@ -66,16 +67,20 @@ describe('in-memory persistence', () => {
       schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION + 84
     } as unknown as typeof created.document;
     // Same bypass the write guard a newer deployment would have used: the
-    // store holds a newer-schema blob, and every read path funnels through
-    // normalizeDocument — which must refuse rather than stamp the current schema.
+    // store holds a newer-schema blob. Loads normalize what this build can and
+    // serve the rest as stored (ADR-024 Phase 1); they never stamp the current
+    // schema on it, and the browser refuses it and asks for an update.
     (
       service as unknown as {
         projects: Map<string, typeof created.document>;
       }
     ).projects.set(created.document.projectId, future);
-    await expect(
-      service.loadProject(userId, created.document.projectId)
-    ).rejects.toThrow(/newer OpenZCAD|Unsupported project schema/i);
+    const loaded = (await service.loadProject(
+      userId,
+      created.document.projectId
+    ))!;
+    expect(loaded.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION + 84);
+    expect(() => assertStorableDocument(loaded)).toThrow(/newer OpenZCAD/);
   });
 
   it('resolves owner, editor, and viewer access without changing ownership', async () => {

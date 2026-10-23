@@ -45,6 +45,7 @@ import {
   normalizeDocument,
   normalizeDocumentHistory,
   reidentifyProjectDocument,
+  assertStorableDocument,
   withoutDerivedProjection
 } from '@openzcad/document-core';
 import { createId, toProjectId } from '@openzcad/shared';
@@ -94,6 +95,27 @@ export function isProjectDocumentUnavailableError(
     error.status === 503 &&
     error.code === PROJECT_DOCUMENT_UNAVAILABLE_CODE
   );
+}
+
+/**
+ * The account stores documents without reading them (ADR-024 Phase 1), so the
+ * browser checks every one it loads, as it checks every one it writes. A
+ * version this browser cannot open is reported like an unreadable account
+ * copy: the device copy stays open, and autosave waits for an explicit retry
+ * rather than overwriting either copy.
+ */
+function openableAccountDocument(document: ProjectDocument): ProjectDocument {
+  try {
+    return assertStorableDocument(document);
+  } catch (error) {
+    throw new ApiError(
+      503,
+      `The account copy of this project cannot be opened here: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      PROJECT_DOCUMENT_UNAVAILABLE_CODE
+    );
+  }
 }
 
 async function requestJson<T>(
@@ -311,11 +333,13 @@ export const api = {
       throw error;
     });
   },
-  loadProject: (projectId: string) =>
-    requestJson<ProjectDocument>(
-      `/api/projects/${encodeURIComponent(projectId)}`,
-      undefined,
-      { documentDownload: true }
+  loadProject: async (projectId: string) =>
+    openableAccountDocument(
+      await requestJson<ProjectDocument>(
+        `/api/projects/${encodeURIComponent(projectId)}`,
+        undefined,
+        { documentDownload: true }
+      )
     ),
   /**
    * Stores a copy of a project. With `revisionId`, the copy starts from that
@@ -363,8 +387,9 @@ export const api = {
    * stores it, which retention makes an ordinary outcome rather than a fault.
    */
   loadRevision: async (projectId: string, revisionId: string) => {
+    let document: ProjectDocument;
     try {
-      return await requestJson<ProjectDocument>(
+      document = await requestJson<ProjectDocument>(
         `/api/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}`,
         undefined,
         { documentDownload: true, expectedMissing: true }
@@ -375,6 +400,7 @@ export const api = {
       }
       throw error;
     }
+    return openableAccountDocument(document);
   },
   updateProject: (payload: UpdateProjectRequest, signal?: AbortSignal) =>
     requestJson<UpdateProjectResponse>(

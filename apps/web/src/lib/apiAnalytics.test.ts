@@ -2,6 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, ApiError } from './api';
 import { isAnalyticsEnabled, trackDetail, trackSize } from './analytics';
 import { desktopFetch } from './desktopBridge';
+import { createProjectDocument } from '@openzcad/document-core';
+import { toUserId } from '@openzcad/shared';
+
+// A real document: loads now refuse one this browser cannot open
+// (ADR-024 Phase 1). Its name carries multi-byte UTF-8 for the size check.
+const documentText = JSON.stringify(
+  createProjectDocument('測試⚙', toUserId('owner'))
+);
 
 vi.mock('./analytics', () => ({
   isAnalyticsEnabled: vi.fn(() => true),
@@ -20,13 +28,13 @@ describe('project download size observations', () => {
   it.each(['project', 'revision'] as const)(
     'measures the consumed UTF-8 JSON for a successful %s download',
     async (kind) => {
-      const text = '{ "name": "測試⚙", "version": 1 }';
+      const text = documentText;
       const response = new Response(text);
       vi.mocked(desktopFetch).mockResolvedValue(response);
       const loaded = kind === 'project'
         ? await api.loadProject('project')
         : await api.loadRevision('project', 'revision');
-      expect(loaded).toEqual(JSON.parse(text));
+      expect(loaded).toMatchObject({ name: '測試⚙' });
       expect(response.bodyUsed).toBe(true);
       expect(trackSize).toHaveBeenCalledExactlyOnceWith(
         'transfer_download', new TextEncoder().encode(text).byteLength
@@ -36,8 +44,10 @@ describe('project download size observations', () => {
 
   it('keeps successful downloads available without analytics consent', async () => {
     vi.mocked(isAnalyticsEnabled).mockReturnValue(false);
-    vi.mocked(desktopFetch).mockResolvedValue(new Response('{"version":1}'));
-    expect(await api.loadProject('project')).toEqual({ version: 1 });
+    vi.mocked(desktopFetch).mockResolvedValue(new Response(documentText));
+    expect(await api.loadProject('project')).toMatchObject({
+      name: '測試⚙'
+    });
     expect(trackSize).not.toHaveBeenCalled();
   });
 

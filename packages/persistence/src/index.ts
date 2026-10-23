@@ -417,6 +417,20 @@ export class DocumentTooLargeError extends Error {
 
 /** @throws DocumentTooLargeError when the serialized document exceeds the cap. */
 /**
+ * A stored document as loads return it: normalized when this build can, and
+ * otherwise exactly as stored (ADR-024 Phase 1). The browser checks every
+ * document it loads and refuses one it cannot open, keeping its own copy,
+ * so one bad version must not fail the whole request with a server error.
+ */
+export function normalizedForLoad(document: ProjectDocument): ProjectDocument {
+  try {
+    return normalizeDocument(document);
+  } catch {
+    return document;
+  }
+}
+
+/**
  * The checks a browser-built new project gets before the account stores it
  * (ADR-024 Phase 1): the creator owns it, it carries the requested name and an
  * id `createId` could have minted. The id is kept — later phases bind it into
@@ -1146,7 +1160,7 @@ export class InMemoryPersistenceService implements PersistenceService {
       mode: link.mode,
       document: sharedProjectSnapshotDocument(
         reconcileCopiedImportSources(
-          normalizeDocument(document),
+          normalizedForLoad(document),
           this.copiedImportSourceArchives.get(document.projectId) ?? []
         )
       )
@@ -1671,7 +1685,7 @@ export class InMemoryPersistenceService implements PersistenceService {
     try {
       await this.requireProjectRead(userId, projectId);
       return reconcileCopiedImportSources(
-        normalizeDocument(document),
+        normalizedForLoad(document),
         await this.loadCopiedImportArchives(userId, document.projectId)
       );
     } catch (error) {
@@ -1804,7 +1818,7 @@ export class InMemoryPersistenceService implements PersistenceService {
     );
     return stored
       ? reconcileCopiedImportSources(
-          normalizeDocument(stored.document),
+          normalizedForLoad(stored.document),
           await this.loadCopiedImportArchives(userId, stored.document.projectId)
         )
       : null;
