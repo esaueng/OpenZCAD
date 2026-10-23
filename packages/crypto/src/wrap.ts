@@ -11,11 +11,15 @@ import {
   type Bytes
 } from './bytes';
 import { E2eeError } from './errors';
+import {
+  ecdhDeriveBits,
+  isAgreementPrivateKey,
+  type AgreementPrivateKey
+} from './external-keys';
 import { PROJECT_ENVELOPE_KINDS } from './header';
 import {
   P256_PUBLIC_KEY_BYTES,
   exportPublicKey,
-  isP256Key,
   toEncryptionPublicKey
 } from './keys';
 import {
@@ -576,19 +580,15 @@ export async function wrapShareSnapshotKey(
 }
 
 async function sealKek(
-  privateKey: CryptoKey,
-  publicKey: CryptoKey,
+  privateKey: AgreementPrivateKey,
+  peer: { readonly key: CryptoKey; readonly raw: Bytes },
   ephemeralRaw: Uint8Array,
   recipientRaw: Uint8Array,
   purpose: WrapPurpose
 ): Promise<CryptoKey> {
-  const shared = await subtle().deriveBits(
-    { name: 'ECDH', public: publicKey },
-    privateKey,
-    256
-  );
+  const shared = await ecdhDeriveBits(privateKey, peer.key, peer.raw);
   return deriveAesGcmKey(
-    await importHkdfInput(new Uint8Array(shared)),
+    await importHkdfInput(shared),
     concatBytes(ephemeralRaw, recipientRaw),
     label(`v1 seal ${purpose}`)
   );
@@ -614,7 +614,7 @@ export async function sealKeyWith(
   const ciphertext = await aesGcmEncrypt(
     await sealKek(
       ephemeral.privateKey,
-      recipient.key,
+      recipient,
       ephemeralRaw,
       recipient.raw,
       context.purpose
@@ -659,7 +659,8 @@ export async function sealKey(
 }
 
 export interface SealRecipient {
-  readonly privateKey: CryptoKey;
+  /** A `CryptoKey`, or a desktop device key the native host holds. */
+  readonly privateKey: AgreementPrivateKey;
   /** Bound into the KDF, so a seal opens only for the key it named. */
   readonly publicKey: Uint8Array | CryptoKey;
 }
@@ -687,7 +688,7 @@ export async function openSealedKey(
   // Read the recipient once: the object may change while keys import.
   const privateKey = recipient?.privateKey;
   const publicKey = recipient?.publicKey;
-  if (!isP256Key(privateKey, 'ECDH', 'private')) {
+  if (!isAgreementPrivateKey(privateKey)) {
     throw new E2eeError(
       'invalid-argument',
       'Expected a P-256 ECDH private key'
@@ -702,7 +703,7 @@ export async function openSealedKey(
   try {
     kek = await sealKek(
       privateKey,
-      ephemeral.key,
+      ephemeral,
       ephemeralRaw,
       own.raw,
       context.purpose

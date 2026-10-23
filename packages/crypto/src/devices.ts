@@ -22,6 +22,7 @@ import {
   isP256Key
 } from './keys';
 import { KEY_BYTES, sha256, subtle } from './primitives';
+import { ecdsaSign, type SigningPrivateKey } from './external-keys';
 
 /**
  * The identity-signed device list (ADR-024, Key hierarchy and Unlock and
@@ -465,25 +466,13 @@ type StatementKind =
   'device list' | 'identity transition' | 'device approval grant';
 
 async function signStatement(
-  privateKey: CryptoKey,
+  privateKey: SigningPrivateKey,
   kind: StatementKind,
   statement: Uint8Array
 ): Promise<Bytes> {
-  if (
-    !isP256Key(privateKey, 'ECDSA', 'private') ||
-    !privateKey.usages?.includes('sign')
-  ) {
-    throw new E2eeError(
-      'invalid-argument',
-      'Expected a P-256 ECDSA private key with the sign usage'
-    );
-  }
-  const rs = new Uint8Array(
-    await subtle().sign(
-      { name: 'ECDSA', hash: 'SHA-256' },
-      privateKey,
-      concatBytes(label(`v1 ${kind} signature`), statement)
-    )
+  const rs = await ecdsaSign(
+    privateKey,
+    concatBytes(label(`v1 ${kind} signature`), statement)
   );
   return concatBytes(Uint8Array.of(STATEMENT_VERSION_1), rs);
 }
@@ -1091,7 +1080,7 @@ export function decodeIdentityTransition(
 }
 
 export async function signIdentityTransition(
-  signerPrivateKey: CryptoKey,
+  signerPrivateKey: SigningPrivateKey,
   value: IdentityTransition
 ): Promise<SignedStatement> {
   const statement = encodeTransition(value);
@@ -1238,7 +1227,7 @@ export function decodeDeviceApprovalGrant(
 }
 
 export async function signDeviceApprovalGrant(
-  approverSigningKey: CryptoKey,
+  approverSigningKey: SigningPrivateKey,
   value: DeviceApprovalGrant
 ): Promise<SignedStatement> {
   const statement = encodeGrant(value);

@@ -14,6 +14,11 @@ import { E2eeError } from './errors';
 import { HASH_BYTES, type ProjectEnvelopeHeader } from './header';
 import { importSigningPublicKey, isP256Key } from './keys';
 import { sha256, subtle } from './primitives';
+import {
+  ecdsaSign,
+  isSigningPrivateKey,
+  type SigningPrivateKey
+} from './external-keys';
 
 /**
  * Version signatures and the version hash chain. Which keys may sign (device
@@ -78,15 +83,12 @@ async function versionStatement(
  * snapshot). Output: `u8 version | u64 signedAt (Unix ms) | 64-byte r || s`.
  */
 export async function signProjectEnvelope(
-  privateKey: CryptoKey,
+  privateKey: SigningPrivateKey,
   envelope: Uint8Array,
   signedAt: number = Date.now()
 ): Promise<Bytes> {
   // Without the sign usage `subtle.sign` throws a native error.
-  if (
-    !isP256Key(privateKey, 'ECDSA', 'private') ||
-    !privateKey.usages?.includes('sign')
-  ) {
+  if (!isSigningPrivateKey(privateKey)) {
     throw new E2eeError(
       'invalid-argument',
       'Expected a P-256 ECDSA private key with the sign usage'
@@ -99,18 +101,9 @@ export async function signProjectEnvelope(
     );
   }
   const statement = await versionStatement(envelope, signedAt);
-  let rs: Bytes;
-  try {
-    rs = new Uint8Array(
-      await subtle().sign(ECDSA_SHA256, privateKey, statement)
-    );
-  } catch (cause) {
-    // Only an object that merely looks like a P-256 signing key gets here;
-    // keep the failure an E2eeError like every other one.
-    throw new E2eeError('invalid-argument', 'The signing key cannot sign', {
-      cause
-    });
-  }
+  // Failures, including a key that only looks like a P-256 signing key or a
+  // host that returns a malformed signature, are E2eeErrors like every other.
+  const rs = await ecdsaSign(privateKey, statement);
   return new ByteWriter()
     .u8(SIGNATURE_VERSION_1)
     .u64(signedAt)
