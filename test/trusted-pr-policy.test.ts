@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { FLEET_CI_PATH, FLEET_CI_PIN } from './fleet-workflow';
 
 const workflow = readFileSync(FLEET_CI_PATH, 'utf8');
@@ -20,9 +20,25 @@ function stepScript(name: string, source = workflow): string {
 }
 
 describe('required validation gate', () => {
+  beforeAll(() => {
+    // A depth-one CI checkout needs immutable Git objects and main history.
+    // Obtain fixtures in setup; every policy assertion still runs below
+    // under the unchanged test deadline, with fetch failures remaining fatal.
+    execFileSync('python3', ['scripts/prepare-fleet-test-fixtures.py'], {
+      encoding: 'utf8'
+    });
+  });
+
   it('retires the orphan OIDC workflow and exercises immutable fleet routing', () => {
     expect(existsSync('.github/workflows/trusted-pr.yml')).toBe(false);
     const result = spawnSync('python3', ['scripts/test-direct-fleet.py'], {
+      encoding: 'utf8'
+    });
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it('prepares cold Git evidence without bypassing offline or stale-pin assertions', () => {
+    const result = spawnSync('python3', ['scripts/test-fleet-test-fixtures.py'], {
       encoding: 'utf8'
     });
     expect(result.status, result.stderr).toBe(0);
