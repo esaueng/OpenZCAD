@@ -20,7 +20,7 @@ GIT = shutil.which("git")
 
 
 @contextmanager
-def git_fixture(*, main_is_pin=False):
+def git_fixture(*, main_is_pin=False, missing_pins=False):
     repository_environment = {
         "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
         "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -73,10 +73,13 @@ def git_fixture(*, main_is_pin=False):
         binaries = directory / "bin"
         binaries.mkdir()
         wrapper = binaries / "git"
+        ready = directory / "pins-ready"
         wrapper.write_text(
             "#!" + sys.executable + "\n"
             "import os, subprocess, sys, time\n"
             "from pathlib import Path\n"
+            "if os.environ.get('OPENZCAD_FIXTURE_MISSING_PINS') == '1' and len(sys.argv) > 2 and sys.argv[1] == 'show' and ':' in sys.argv[2] and not Path(os.environ['OPENZCAD_FIXTURE_PINS_READY']).exists():\n"
+            "    sys.exit('fixture workflow object is not present yet')\n"
             "if len(sys.argv) > 1 and sys.argv[1] == 'fetch':\n"
             "    with open(os.environ['OPENZCAD_FIXTURE_FETCH_LOG'], 'a') as log:\n"
             "        log.write('fetch\\n')\n"
@@ -93,6 +96,7 @@ def git_fixture(*, main_is_pin=False):
             "    else:\n"
             "        boundary.unlink(missing_ok=True)\n"
             f"    subprocess.run([{GIT!r}, 'update-ref', 'refs/remotes/origin/main', os.environ['OPENZCAD_FIXTURE_MAIN']], check=True)\n"
+            "    Path(os.environ['OPENZCAD_FIXTURE_PINS_READY']).touch()\n"
             "    sys.exit(0)\n"
             f"os.execv({GIT!r}, [{GIT!r}, *sys.argv[1:]])\n"
         )
@@ -100,6 +104,8 @@ def git_fixture(*, main_is_pin=False):
         log = directory / "fetch.log"
         env.update(PATH=str(binaries) + os.pathsep + clean_env["PATH"],
                    OPENZCAD_FIXTURE_MAIN=main,
+                   OPENZCAD_FIXTURE_MISSING_PINS="1" if missing_pins else "0",
+                   OPENZCAD_FIXTURE_PINS_READY=str(ready),
                    OPENZCAD_FIXTURE_FETCH_LOG=str(log),
                    OPENZCAD_FIXTURE_PREPARED_BOUNDARY=str(prepared_boundary),
                    OPENZCAD_FIXTURE_FETCH_BLOCKED="1")
@@ -122,6 +128,16 @@ class FleetFixtureTests(unittest.TestCase):
                 self.assertIn("test_pin_is_a_commit_main_already_contains", cold.stderr)
                 self.assertIn("fixture deliberately blocks fetch", cold.stderr)
 
+                # Model both absent workflow objects, not just missing ancestry.
+                # Reads delegate to real Git after the one main fetch completes.
+                env["OPENZCAD_FIXTURE_MISSING_PINS"] = "1"
+                previous_source = (ROOT / "scripts/test-merge-queue-routing.py").read_text()
+                previous_pin = re.search(r'else "([a-f0-9]{40})"', previous_source)[1]
+                for revision, path in ((pin, ".github/workflows/fleet-ci-v2.yml"),
+                                       (previous_pin, ".github/workflows/fleet-ci.yml")):
+                    absent = subprocess.run(["git", "show", f"{revision}:{path}"],
+                                            cwd=ROOT, env=env, capture_output=True)
+                    self.assertNotEqual(absent.returncode, 0)
                 env["OPENZCAD_FIXTURE_FETCH_BLOCKED"] = "0"
                 prepared = run_script("prepare-fleet-test-fixtures.py", env)
                 self.assertEqual(prepared.returncode, 0, prepared.stdout + prepared.stderr)
@@ -159,7 +175,7 @@ def deadline_evidence():
         with ExitStack() as stack:
             cases = []
             for name, path in (("control", control), ("prepared", source)):
-                env, log, _pin, _git = stack.enter_context(git_fixture())
+                env, log, _pin, _git = stack.enter_context(git_fixture(missing_pins=name == "prepared"))
                 env = {key: value for key, value in env.items()
                        if key != "VITEST" and not key.startswith("VITEST_")
                        and key not in ("NODE_CHANNEL_FD", "NODE_CHANNEL_SERIALIZATION_MODE")}
@@ -187,6 +203,8 @@ def deadline_evidence():
                               "five_second_timeout": "Test timed out in 5000ms" in output,
                               "fetches": len(log.read_text().splitlines()) if log.exists() else 0}
 
+            # The prepared case begins with both workflow objects unavailable;
+            # exactly one main transfer must supply them and ancestry.
             # Both six-second waits fit the existing ten-second setup deadline;
             # neither child changes Vitest's five-second test deadline.
             with ThreadPoolExecutor(max_workers=2) as executor:
