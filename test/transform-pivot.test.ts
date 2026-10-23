@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENT_SCHEMA_VERSION } from '@openzcad/shared';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
@@ -57,6 +58,7 @@ describe('transform pivot (M10)', () => {
 
   it('moves +10 then −10 back to exactly where it was', async () => {
     const { document, blockId } = block();
+    expect(document.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     const before = await bounds(document, blockId);
     let moved = transformBody(document, {
       name: 'Out',

@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENT_SCHEMA_VERSION } from '@openzcad/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   CommandManager,
@@ -209,6 +210,7 @@ describe('D02 annotation section (schema v31)', () => {
   it('is additive: a v30 sheet opens without annotations', () => {
     // D02 took v31; I05's reference images are v32.
     const document = boxDocument();
+    expect(document.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     const v30 = {
       ...document,
       schemaVersion: 30,
@@ -217,6 +219,7 @@ describe('D02 annotation section (schema v31)', () => {
     const opened = normalizeDocument(
       JSON.parse(JSON.stringify(v30)) as ProjectDocument
     );
+    expect(opened.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     expect('annotations' in opened.drawings!.sheets[0]!).toBe(false);
     expect(opened.drawings).toEqual(v30.drawings);
   });

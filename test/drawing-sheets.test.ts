@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENT_SCHEMA_VERSION } from '@openzcad/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   CommandManager,
@@ -118,6 +119,7 @@ function sheet(bodyIds: BodyId[], views?: DrawingView[]): DrawingSheet {
 describe('D01 drawing section (schema v30)', () => {
   it('is additive, and never added to a document without drawings', () => {
     const document = boxDocument();
+    expect(document.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     expect(document.drawings).toBeUndefined();
     const saved = JSON.parse(JSON.stringify(document)) as ProjectDocument;
     // An older document opens exactly as written: no empty section appears.

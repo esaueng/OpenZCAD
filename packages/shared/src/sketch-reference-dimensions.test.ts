@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { EntityId, SketchObjectData } from './index';
+import type {
+  EntityId,
+  SketchObjectData,
+  SketchReferenceDimensionData
+} from './index';
 import { toSketchReferenceAnnotationId } from './index';
 import {
   convertReferenceLengthForDisplay,
@@ -202,6 +206,79 @@ describe('S02-A reference dimension validation', () => {
 });
 
 describe('S02-A pure resolver', () => {
+  it.each([
+    ['absolute', 5],
+    ['horizontal', 3],
+    ['vertical', 4]
+  ] as const)(
+    'measures %s separation in the sketch frame',
+    (distanceMode, value) => {
+      const data: SketchReferenceDimensionData = {
+        dimensionKind: 'distance',
+        distanceMode,
+        a: { objectId: lineA, point: 'start' },
+        b: { objectId: lineA, point: 'end' }
+      };
+      expect(isSketchReferenceDimensionData(data)).toBe(true);
+      expect(
+        resolveSketchReferenceDimension(
+          objects(),
+          {
+            annotationId: toSketchReferenceAnnotationId('sref_projected'),
+            data
+          },
+          numberResolve
+        )
+      ).toMatchObject({ status: 'current', value, distanceMode });
+      expect(describeSketchReferenceDimension(data, String)).toContain(
+        distanceMode === 'absolute'
+          ? 'Reference distance'
+          : `Reference ${distanceMode} distance`
+      );
+    }
+  );
+
+  it('keeps projected distances nonnegative through rotation and reflection, including zero', () => {
+    const map = objects();
+    const annotation = {
+      annotationId: toSketchReferenceAnnotationId('sref_horizontal'),
+      data: {
+        dimensionKind: 'distance' as const,
+        distanceMode: 'horizontal' as const,
+        a: { objectId: lineA, point: 'start' as const },
+        b: { objectId: lineA, point: 'end' as const }
+      }
+    };
+    // The same 3-4-5 line rotated by 90 degrees, reflected, then made vertical.
+    for (const [x2, y2, expected] of [
+      [-4, 3, 4],
+      [4, 3, 4],
+      [0, 5, 0]
+    ]) {
+      map.set(lineA, { objectKind: 'line', x1: 0, y1: 0, x2: x2!, y2: y2! });
+      expect(
+        resolveSketchReferenceDimension(map, annotation, numberResolve)
+      ).toMatchObject({
+        status: 'current',
+        value: expected,
+        distanceMode: 'horizontal'
+      });
+    }
+    const unknown = { ...annotation.data, distanceMode: 'diagonal' };
+    expect(isSketchReferenceDimensionData(unknown)).toBe(false);
+    const refused = resolveSketchReferenceDimension(
+      map,
+      { ...annotation, data: unknown as never },
+      numberResolve
+    );
+    expect(refused.status).toBe('unresolved');
+    if (refused.status === 'unresolved')
+      expect(refused.reason).toContain('mode is unknown');
+    expect(() =>
+      validateSketchReferenceDimensionData(map, unknown as never)
+    ).toThrow(/mode is unknown/);
+  });
+
   it('measures a 3-4-5 distance from current geometry', () => {
     const outcome = resolveSketchReferenceDimension(
       objects(),

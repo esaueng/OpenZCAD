@@ -103,10 +103,9 @@ export function createProjectDiagnosticBundle(
   );
   // Drawing sheets carry title-block text (author, date, drawing number)
   // and add nothing a geometry diagnosis needs: the section and its commands
-  // are left out entirely. Reference images likewise: their names come from
-  // the user's file names, and their checksums and artifact ids identify the
-  // pictures.
-  // Folder names are also private organization, unused by rebuilds.
+  // are left out entirely. Objects folders likewise carry the user's own
+  // names, and reference-image names, checksums and artifact ids identify the
+  // tracing pictures. Neither section is needed to diagnose geometry.
   const commandLog = document.commandLog
     .filter(
       (command) =>

@@ -109,7 +109,7 @@ function volumeOf(derived: DerivedState, bodyId: BodyId): number {
 }
 
 describe('sketch projection in the document (v33)', () => {
-  it('is schema 33, additive, round-trips and refuses a malformed record', () => {
+  it('is additive, round-trips and refuses a malformed record', () => {
     const source = {
       bodyId: 'body_a' as BodyId,
       edgeReference: {

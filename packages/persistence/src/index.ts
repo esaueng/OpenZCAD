@@ -234,8 +234,8 @@ export function sharedProjectSnapshotDocument(
   // date and drawing-number text, and a share link opens no Draw workspace.
   // Objects folders (U06) are shared: they only organize bodies whose names
   // the visitor already sees, and carry no author, date or history.
-  // Reference images stay too: they are the owner's tracing underlays, and a
-  // share link serves import sources only, never their pictures.
+  // Reference images stay with the owner too: a share link serves import
+  // sources only, never their tracing pictures.
   const {
     editHistory: _editHistory,
     branchedFrom: _branchedFrom,

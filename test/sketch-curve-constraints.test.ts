@@ -303,6 +303,9 @@ describe('I01 document model', () => {
     const saved = JSON.parse(
       JSON.stringify(manager.document)
     ) as ProjectDocument;
+    expect(manager.document.schemaVersion).toBe(
+      PROJECT_DOCUMENT_SCHEMA_VERSION
+    );
     expect(saved.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     expect(normalizeDocument(saved)).toEqual(manager.document);
     // One past the current version, whatever later slices have taken.

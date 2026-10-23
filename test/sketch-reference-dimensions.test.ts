@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENT_SCHEMA_VERSION } from '@openzcad/shared';
 import { describe, expect, it } from 'vitest';
 import {
   addSketchFeature,
@@ -20,7 +21,9 @@ function user() {
 }
 
 describe('S02-A reference dimension schema envelope', () => {
-  it('retains additive reference dimensions in the current schema', () => {
+  it('creates reference-dimension documents in the current schema', () => {
+    const document = createProjectDocument('Reference schema', user());
+    expect(document.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
   });
 
   it('leaves a document without reference dimensions byte-identical', () => {

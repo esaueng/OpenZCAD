@@ -1,11 +1,37 @@
 # S02 — Driven and reference sketch dimensions
 
 **Status:** primitive S02-A/B/C implemented. `ROADMAP.md` remains the delivery
-ledger. S02-D composite/datum consumers, horizontal/vertical distance variants
-and a separate display-unit selector remain open.
+ledger. S02-D composite/datum consumers and a separate display-unit selector
+remain open.
 
-The implementation uses the already merged optional `referenceDimensions` field
-on schema v16; it introduces no new schema envelope. The existing sketch palette
+## Projected reference distances (S02-E)
+
+The initial acceptance was selected against schema v30. Integration assigns
+the optional `distanceMode` (`absolute`, `horizontal` or `vertical`) to schema
+v35, after D02 annotations (v31), reference images (v32), sketch projection
+(v33) and object folders (v34). Composite targets follow in v36 and conversion
+provenance in v37. Each field keeps its own introduction boundary; raising
+the current document version does not weaken earlier carrier checks.
+Omitted mode keeps every saved absolute reference unchanged.
+Horizontal and vertical values are the nonnegative X/Y separations in the
+sketch's local frame; zero projected distance is valid for distinct targets.
+Rotating or mirroring geometry recomputes those separations along the same
+sketch axes; moving the whole datum frame preserves them. Mode is target
+metadata, never an authored value, constraint or exact-history input.
+
+The existing reference palette authors the mode. Labels identify horizontal
+and vertical distances with H/V badges and full accessible names, and their
+dimension spans align with the measured axis, with witness lines back to both
+real targets. Stored identity, mode and label placement survive command replay,
+undo/redo, backup and reopen. Unknown modes are malformed, including in stored
+undo/redo nodes. Explicit modes in pre-v35 current, readable-history or replay
+carriers refuse before a command prefix can publish. Cover primitive units, zero projection, target edits and
+rotation/reflection, distinct read-only activation, and unchanged solve/cache
+evidence. Composite/datum targets, driving-distance modes and an independent
+display-unit selector are excluded.
+
+The initial implementation used the merged optional `referenceDimensions` field
+on schema v16 without a new schema envelope. The existing sketch palette
 authors primitive reference distances, radii and angles. Values are measured and
 read-only, labels carry Reference identity, and placement/deletion are ordinary
 replayable commands. Annotation edits preserve GCS evidence and exact-history
@@ -17,10 +43,11 @@ Evidence: `test/sketch-reference-commands.test.ts`,
 `test/e2e/sketch-reference-dimensions.spec.ts`. The original design below records
 the contracts and remaining consumers; it is not another priority queue.
 
-**Original design baseline:** OpenZCAD `main` at `efa2662910199e6d23d63f337e35d3d591614d21a`.
-The current canonical document schema is v15. The implementation must recheck
-the merged S01/S04/R01 base and join their single additive migration envelope;
-S02 must not reserve a separate schema bump.
+**Historical original design baseline:** OpenZCAD `main` at
+`efa2662910199e6d23d63f337e35d3d591614d21a`, then schema v15. The original
+shared-envelope proposal below records that design stage. The implemented
+primitive references were additive in v16; projected distances now use the
+separately coordinated v35 boundary above.
 
 ## Decision
 
@@ -255,13 +282,14 @@ S02 coordinates with the active designs as follows:
   the world annotation unavailable while preserving the local target record;
   no display frame or last-good frame is used as an exact replacement.
 
-All four designs must join one additive normalization envelope selected from
+The original design proposed that all four designs join one additive normalization envelope selected from
 the actual merged S01/S04/R01 base. S01 label placement remains optional and
 additive on the current v15 document. S02 reference dimensions, S04 tagged
 refs, and R01 datum/history fields are future fields that must be introduced
 under that one coordinated next schema envelope, with one newer-schema refusal
 and shared legacy fixtures. No design reserves or bumps a schema version
-independently. S02 itself does not edit `PROJECT_DOCUMENT_SCHEMA_VERSION`.
+independently. That historical proposal did not assign S02 its own version;
+the implemented projected-distance boundary is specified above.
 
 ## Bounded implementation slices
 

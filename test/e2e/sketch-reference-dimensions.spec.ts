@@ -135,6 +135,134 @@ async function addDistance(panel: Locator, objectId: string) {
     .click();
 }
 
+for (const [units, initial, changed] of [
+  ['mm', '25.4 mm', '50.8 mm'],
+  ['inch', '1 in', '2 in']
+] as const) {
+  test(`projected references in ${units} preserve modes, zero values and identity through edit, undo and reopen`, async ({
+    page
+  }, testInfo) => {
+    test.setTimeout(150_000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    const f = fixture(units);
+    await open(page, f.document);
+    const panel = page.getByRole('group', {
+      name: 'Reference dimensions',
+      exact: true
+    });
+    const mode = panel.getByRole('combobox', {
+      name: 'Distance type',
+      exact: true
+    });
+    await expect(
+      panel
+        .getByRole('combobox', { name: 'Reference type', exact: true })
+        .locator('option:checked')
+    ).toHaveText('Distance');
+    await mode.selectOption('horizontal');
+    await addDistance(panel, f.ids[0]!);
+    await mode.selectOption('vertical');
+    await addDistance(panel, f.ids[0]!);
+    await expect(panel.getByRole('listitem')).toHaveCount(2);
+    await expect(panel.getByRole('listitem').first()).toContainText(
+      initial + ' · Reference'
+    );
+    await expect(panel.getByRole('listitem').last()).toContainText(
+      `0 ${units === 'inch' ? 'in' : units} · Reference`
+    );
+    const horizontal = page.getByRole('button', {
+      name: `Reference horizontal distance, (H ${initial})`,
+      exact: true
+    });
+    await horizontal.click();
+    await horizontal.press('Enter');
+    await expect(
+      page.getByRole('dialog', { name: 'Distance value' })
+    ).toHaveCount(0);
+    await horizontal.press('ArrowRight');
+    const stored = findSketch(
+      await exportDocument(page),
+      f.document.sketchOrder[0]!
+    )!;
+    expect(stored.referenceDimensions!.map((r) => r.data)).toEqual(
+      ['horizontal', 'vertical'].map((distanceMode) => ({
+        dimensionKind: 'distance',
+        distanceMode,
+        a: { objectId: f.ids[0], point: 'start' },
+        b: { objectId: f.ids[0], point: 'end' }
+      }))
+    );
+    expect(
+      stored.dimensionLabelPositions?.[
+        stored.referenceDimensions![0]!.annotationId
+      ]
+    ).toEqual({ x: 1, y: 0 });
+    await page
+      .getByRole('region', { name: 'Sketch overview' })
+      .getByLabel('Selected geometry')
+      .selectOption(f.ids[0]!);
+    const editor = page.getByRole('form', { name: 'Edit line', exact: true });
+    await editor
+      .getByRole('textbox', { name: 'End X', exact: true })
+      .fill('50.8 mm');
+    await editor.getByRole('button', { name: 'Apply', exact: true }).click();
+    await expect(horizontal).toHaveCount(0);
+    const changedLabel = page.getByRole('button', {
+      name: `Reference horizontal distance, (H ${changed})`,
+      exact: true
+    });
+    await expect(changedLabel).toBeVisible();
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expect(horizontal).toBeVisible();
+    await page.getByRole('button', { name: 'Redo', exact: true }).click();
+    await expect(changedLabel).toBeVisible();
+    await panel.getByRole('listitem').last().scrollIntoViewIfNeeded();
+    await testInfo.attach(`projected-${units}`, {
+      body: await page.screenshot({
+        path: testInfo.outputPath(`projected-${units}.png`)
+      }),
+      contentType: 'image/png'
+    });
+    await page
+      .getByRole('button', { name: 'Finish Sketch', exact: true })
+      .click();
+    await expect(page.locator('.save-state')).toHaveClass(SAVED, READ_TIMEOUT);
+    await page.reload();
+    await expect(page.locator('.viewer-host canvas')).toBeVisible(READ_TIMEOUT);
+    await enter(page);
+    await expect(changedLabel).toBeVisible();
+    const reopened = findSketch(
+      await exportDocument(page),
+      f.document.sketchOrder[0]!
+    )!;
+    expect(reopened.referenceDimensions).toEqual(stored.referenceDimensions);
+    expect(reopened.dimensionLabelPositions).toEqual(
+      stored.dimensionLabelPositions
+    );
+    await page.setViewportSize({ width: 320, height: 568 });
+    const remove = panel.getByRole('button', {
+      name: /^Delete Reference vertical distance/
+    });
+    await remove.scrollIntoViewIfNeeded();
+    await expect(remove).toBeInViewport({ ratio: 1 });
+    expect(
+      await panel.evaluate((e) => e.scrollWidth <= e.clientWidth + 1)
+    ).toBe(true);
+    await testInfo.attach(`projected-${units}-phone`, {
+      body: await page.screenshot({
+        path: testInfo.outputPath(`projected-${units}-phone.png`)
+      }),
+      contentType: 'image/png'
+    });
+    await remove.click();
+    await expect(panel.getByRole('listitem')).toHaveCount(1);
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expect(panel.getByRole('listitem')).toHaveCount(2);
+    expect(errors).toEqual([]);
+  });
+}
+
 for (const [units, distance] of [
   ['mm', '25.4 mm'],
   ['cm', '2.54 cm'],

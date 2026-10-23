@@ -6,13 +6,17 @@ import {
 } from '@openzcad/persistence';
 import {
   addPrimitiveFeature,
-  createProjectDocument
+  addSketchFeature,
+  createProjectDocument,
+  findSketch
 } from '@openzcad/document-core';
+import { commandFactories } from '@openzcad/command-system';
 import {
   DEFAULT_APP_SETTINGS,
   MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_CLOUD_PROJECT_WRITE_BYTES,
   MAX_PROJECT_NAME_LENGTH,
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
   projectOrganization,
   toUserId,
   type CreateProjectResponse,
@@ -2554,6 +2558,114 @@ describe('worker api routes', () => {
       expect(response.status).toBe(400);
     }
   });
+
+  describe.each(['current annotation', 'nested replay log'] as const)(
+    'unversioned reference-distance account saves: %s',
+    (carrier) => {
+      it.each(['absolute', 'horizontal', 'vertical'] as const)(
+        'refuses an explicit %s mode without writing, then accepts its legacy omitted-mode form',
+        async (distanceMode) => {
+          const created = await createProject(
+            `Legacy ${carrier} ${distanceMode}`
+          );
+          const added = addSketchFeature(created.document, {
+            name: 'Diagonal',
+            plane: 'XY',
+            objects: [{ objectKind: 'line', x1: 0, y1: 0, x2: 30, y2: 40 }]
+          });
+          const projectId = created.document.projectId;
+          const route = `/api/projects/${projectId}/document`;
+          const seeded = await worker.fetch(
+            put(route, {
+              projectId,
+              expectedVersion: created.document.version,
+              document: added.document
+            }),
+            env
+          );
+          expect(seeded.status).toBe(200);
+          const read = async () => {
+            const response = await worker.fetch(
+              new Request(`https://example.com/api/projects/${projectId}`),
+              env
+            );
+            expect(response.status).toBe(200);
+            return (await response.json()) as ProjectDocument;
+          };
+          const before = await read();
+          const candidate = structuredClone(before);
+          candidate.name = 'Legacy write awaiting validation';
+          candidate.version += 1;
+          const sketch = findSketch(candidate, added.sketchId)!;
+          const objectId = sketch.objectIds[0]!;
+          const command = commandFactories.addSketchReferenceDimension({
+            sketchId: added.sketchId,
+            data: {
+              dimensionKind: 'distance',
+              distanceMode,
+              a: { objectId, point: 'start' },
+              b: { objectId, point: 'end' }
+            }
+          });
+          const recorded = command.serialize();
+          const data = recorded.payload.data;
+          if (carrier === 'current annotation') {
+            sketch.referenceDimensions = [
+              {
+                annotationId: recorded.payload.ids!.annotationId,
+                data
+              }
+            ];
+          } else {
+            const transaction = (payload: ProjectDocument['commandLog']) => ({
+              kind: 'transaction',
+              label: 'Saved annotation',
+              replayVersion: 1,
+              timestamp: '2026-10-22T00:00:00.000Z',
+              payload
+            });
+            candidate.commandLog = [transaction([transaction([recorded])])];
+          }
+          const legacy: Partial<ProjectDocument> = candidate;
+          delete legacy.schemaVersion;
+          delete legacy.editHistory;
+          const send = () =>
+            worker.fetch(
+              put(route, {
+                projectId,
+                expectedVersion: before.version,
+                document: legacy
+              }),
+              env
+            );
+
+          const refused = await send();
+          expect(refused.status).toBe(400);
+          expect(await refused.json()).toEqual({
+            error:
+              'Reference distance modes require project schema v35 or newer.'
+          });
+          expect(await read()).toEqual(before);
+
+          // Remove only the new field from the submitted wire payload, keeping
+          // its identity and every other document field exactly the same.
+          if (data.dimensionKind !== 'distance')
+            throw new Error('Missing distance fixture');
+          delete data.distanceMode;
+          const accepted = await send();
+          expect(accepted.status).toBe(200);
+          const saved = await read();
+          expect(saved.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
+          expect(saved.name).toBe(candidate.name);
+          expect(saved.version).toBe(candidate.version);
+          expect(saved.nodes).toEqual(candidate.nodes);
+          expect(saved.commandLog).toEqual(candidate.commandLog);
+          expect(JSON.stringify(saved)).not.toContain('distanceMode');
+          expect(saved.editHistory).toBeUndefined();
+        }
+      );
+    }
+  );
 
   it('returns a conflict response for stale revision writes', async () => {
     const created = await createProject('Revision Conflict');

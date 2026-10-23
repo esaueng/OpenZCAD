@@ -146,8 +146,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
  * rebuild reads it. Additive: absent means no folders. An older client would
  * drop the section on its next save, so the bump makes it refuse such a
  * document.
+ *
+ * v35 adds optional S02 reference-distance modes. Absent means the existing
+ * absolute distance; horizontal/vertical measure sketch-local X/Y separation.
+ * Older clients must refuse rather than show those as Euclidean distances.
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 34 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 35 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -1093,8 +1097,17 @@ export interface SketchConstraint {
  * radius; line objects only for angle. Rectangle and polygon composite refs
  * wait for S04; datum/world-space targets wait for R01.
  */
+export type SketchReferenceDistanceMode =
+  'absolute' | 'horizontal' | 'vertical';
+
 export type SketchReferenceDimensionData =
-  | { dimensionKind: 'distance'; a: SketchPointRef; b: SketchPointRef }
+  | {
+      dimensionKind: 'distance';
+      a: SketchPointRef;
+      b: SketchPointRef;
+      /** Absent is absolute; projected modes follow the sketch's local axes. */
+      distanceMode?: SketchReferenceDistanceMode;
+    }
   | { dimensionKind: 'radius'; objectId: EntityId }
   | { dimensionKind: 'angle'; a: EntityId; b: EntityId };
 

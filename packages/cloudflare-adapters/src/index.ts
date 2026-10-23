@@ -151,6 +151,7 @@ import {
   duplicateProjectDocument,
   assertDocumentContentSchema,
   normalizeDocument,
+  assertReferenceDocumentSchema,
   withoutDerivedProjection
 } from '@openzcad/document-core';
 import {
@@ -8174,6 +8175,16 @@ function checkClientDocument(value: unknown): CollaborationRejection | null {
     return {
       code: 'document-invalid',
       message: 'Collaboration document has invalid imported mesh data.'
+    };
+  }
+  try {
+    assertDocumentContentSchema(value as unknown as ProjectDocument);
+    assertReferenceDocumentSchema(value as unknown as ProjectDocument);
+  } catch (error) {
+    return {
+      code: 'document-invalid',
+      message:
+        error instanceof Error ? error.message : 'Invalid project content schema.'
     };
   }
   // `normalizeDocument` fails closed on a malformed U06 folder section; say

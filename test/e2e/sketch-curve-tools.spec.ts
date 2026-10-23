@@ -1,6 +1,9 @@
-import { PROJECT_DOCUMENT_SCHEMA_VERSION } from '@openzcad/shared';
 import type { Page } from '@playwright/test';
-import type { ProjectDocument, SketchObjectData } from '@openzcad/shared';
+import {
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
+  type ProjectDocument,
+  type SketchObjectData
+} from '@openzcad/shared';
 import { expect, stubApi, test } from './openzcad-fixtures';
 
 /**
@@ -152,7 +155,11 @@ test('the curve slot draws ellipses, elliptical arcs and both splines', async ({
   expect(sweep).toBeGreaterThan(90);
   expect(sweep).toBeLessThan(270);
 
-  expect(fit).toMatchObject({ objectKind: 'spline', method: 'fit', closed: true });
+  expect(fit).toMatchObject({
+    objectKind: 'spline',
+    method: 'fit',
+    closed: true
+  });
   expect(fit.points).toHaveLength(4);
   expect(control).toMatchObject({
     objectKind: 'spline',

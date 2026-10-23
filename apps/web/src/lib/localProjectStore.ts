@@ -1897,10 +1897,9 @@ export function projectRebuildInputs(document: ProjectDocument): unknown {
 }
 
 /**
- * The rebuild inputs that decide geometry: drawing sheets, reference images and Objects folders
- * and the undo history are rebuild inputs of the document (an edit to them
- * is real work), but no mesh depends on them — and every such edit also
- * records an undo entry.
+ * The rebuild inputs that decide geometry exclude drawing sheets, reference
+ * images, Objects folders and undo history. These are saved document content,
+ * but no mesh depends on them; every such edit also records an undo entry.
  */
 function projectGeometryInputs(document: ProjectDocument): unknown {
   const {

@@ -1,4 +1,3 @@
-import { assertObjectFolderSchema } from './document-content-schema';
 import {
   assertObjectFolderSet,
   deepClone,
@@ -9,6 +8,7 @@ import {
   type ObjectFolderSet,
   type ProjectDocument
 } from '@openzcad/shared';
+import { assertObjectFolderSchema } from './document-content-schema';
 
 /**
  * U06 Objects folder commands (schema v34). Each carries explicit ids and

@@ -124,8 +124,10 @@ function faceReference(
 }
 
 describe('datum axes in the document (v28)', () => {
-  it('is schema 28, additive, and round-trips without rewriting', () => {
-    const axis = withAxis(blank(), {
+  it('stores axes in the current schema, additively, and round-trips without rewriting', () => {
+    const initial = blank();
+    expect(initial.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
+    const axis = withAxis(initial, {
       kind: 'two-point',
       points: [at(0, 0, 0), at(0, 0, '5 + 5')]
     });

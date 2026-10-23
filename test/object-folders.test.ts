@@ -56,8 +56,11 @@ const folderOf = (document: ProjectDocument, bodyId: BodyId) =>
   objectFolderOfBody(document, bodyId);
 
 describe('Objects folders (U06, schema v34)', () => {
-  it('is schema 34, additive, and absent from a project without folders', () => {
+  it('is additive and absent from a project without folders', () => {
     const { manager } = threeBoxes();
+    expect(manager.document.schemaVersion).toBe(
+      PROJECT_DOCUMENT_SCHEMA_VERSION
+    );
     expect(manager.document.objectFolders).toBeUndefined();
     const saved = JSON.parse(
       JSON.stringify(manager.document)

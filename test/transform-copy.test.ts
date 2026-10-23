@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENT_SCHEMA_VERSION } from '@openzcad/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   CommandManager,
@@ -99,6 +100,7 @@ describe('transform copy (M10)', { timeout: 60_000 }, () => {
     const command = copyCommand(blockId);
     manager.execute(command);
     const document = manager.document;
+    expect(document.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     const ids = command.payload.ids!;
     expect('bodyId' in ids).toBe(true);
     const copyId = (ids as { bodyId: BodyId }).bodyId;

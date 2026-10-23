@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENT_SCHEMA_VERSION } from '@openzcad/shared';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
@@ -34,6 +35,7 @@ describe('typed parameters through the exact build (F05)', () => {
 
   it('builds a box from width + 5 mm and follows the parameter', async () => {
     let document = createProjectDocument('Typed', toUserId('user_f05'));
+    expect(document.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     document = setParameter(document, {
       name: 'width',
       expression: '10',
@@ -44,6 +46,7 @@ describe('typed parameters through the exact build (F05)', () => {
       primitiveKind: 'box',
       dimensions: { width: 'width + 5 mm', height: '1 cm', depth: 10 }
     });
+    expect(document.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     const [blockId] = document.bodyOrder as [BodyId];
     const manager = new CommandManager(document);
     const size = async () => {

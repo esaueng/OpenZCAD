@@ -121,8 +121,10 @@ function vertexOf(
 const v = (x: number, y: number, z: number): Vec3 => ({ x, y, z });
 
 describe('three-point and parallel planes in the document (v25)', () => {
-  it('is schema 25, additive, and round-trips without rewriting', () => {
-    const planed = withDatum(blank(), {
+  it('stores point planes in the current schema, additively, and round-trips without rewriting', () => {
+    const initial = blank();
+    expect(initial.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
+    const planed = withDatum(initial, {
       kind: 'three-point',
       points: [at(0, 0, 0), at('5 + 5', 0, 0), at(0, 10, 0)]
     });

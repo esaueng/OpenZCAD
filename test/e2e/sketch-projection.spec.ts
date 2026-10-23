@@ -1,5 +1,5 @@
-import { PROJECT_DOCUMENT_SCHEMA_VERSION } from '@openzcad/shared';
 import type { Locator, Page } from '@playwright/test';
+import { PROJECT_DOCUMENT_SCHEMA_VERSION } from '@openzcad/shared';
 import {
   expect,
   expectBodyCount,
@@ -147,7 +147,9 @@ test('a linked projection follows an upstream resize and shows its deleted sourc
   await waitForStillViewport(page);
   await page.keyboard.press('u');
   const link = rail.getByRole('radiogroup', { name: 'Projection link' });
-  await expect(link.getByRole('radio', { name: 'Linked', exact: true })).toBeChecked();
+  await expect(
+    link.getByRole('radio', { name: 'Linked', exact: true })
+  ).toBeChecked();
   const [faceCenter] = await screenPoints(canvas, [{ x: 10, y: 5 }]);
   await page.mouse.click(faceCenter!.x, faceCenter!.y);
   await expect(status).toContainText('Projected 4 linked edges.', {

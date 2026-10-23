@@ -1,4 +1,3 @@
-import { assertDocumentContentSchema } from '@openzcad/document-core';
 import {
   assertDocumentHistory,
   documentStructureError,
@@ -9,6 +8,10 @@ import {
   hasValidImportedMeshSources,
   hasValidImportedStepSources
 } from '@openzcad/shared';
+import {
+  assertDocumentContentSchema,
+  assertReferenceDocumentSchema
+} from '@openzcad/document-core';
 import {
   MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_CHECKPOINT_REASON_LENGTH,
@@ -484,6 +487,15 @@ function parseProjectDocument(
     assertDocumentHistory(value as ProjectDocument);
   } catch {
     throw badRequest('Invalid or unsupported project undo history.');
+  }
+  try {
+    assertReferenceDocumentSchema(value as ProjectDocument);
+  } catch (error) {
+    throw badRequest(
+      error instanceof Error
+        ? error.message
+        : 'Invalid reference dimension schema.'
+    );
   }
   try {
     assertDocumentTextBudget(value as ProjectDocument);

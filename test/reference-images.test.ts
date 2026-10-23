@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENT_SCHEMA_VERSION } from '@openzcad/shared';
 import { describe, expect, it } from 'vitest';
 import {
   CommandManager,
@@ -89,13 +90,15 @@ function boxDocument(): ProjectDocument {
 }
 
 describe('I05 reference-image section (schema v32)', () => {
-  it('retains schema-v32 images, additive, and never added to a document without images', () => {
+  it('uses the current schema additively and never adds a section without images', () => {
     const document = boxDocument();
+    expect(document.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     expect(document.referenceImages).toBeUndefined();
     const saved = JSON.parse(JSON.stringify(document)) as ProjectDocument;
     // An older document opens exactly as written: no empty section appears.
     const older = { ...saved, schemaVersion: 30 } as unknown as ProjectDocument;
     const opened = normalizeDocument(older);
+    expect(opened.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     expect('referenceImages' in opened).toBe(false);
     expect(opened.nodes).toEqual(saved.nodes);
   });

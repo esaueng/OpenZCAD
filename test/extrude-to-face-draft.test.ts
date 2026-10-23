@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENT_SCHEMA_VERSION } from '@openzcad/shared';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
@@ -173,9 +174,10 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
         draftAngleDeg: 3
       });
       expect(data).toHaveProperty('toFace.faceReference.kind', 'face');
-      // F01 took v29; D01's drawings are v30, D02's annotations v31,
-      // I05's reference images v32.
-      });
+      expect(result.document.schemaVersion).toBe(
+        PROJECT_DOCUMENT_SCHEMA_VERSION
+      );
+    });
 
     it('opens an older extrude and a v29 one exactly as written', async () => {
       const lifted = ceiling(project('Load'), 25);

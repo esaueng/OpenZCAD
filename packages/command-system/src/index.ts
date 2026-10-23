@@ -78,9 +78,13 @@ import {
   isFeatureRollbackSuppressed
 } from '@openzcad/shared';
 import {
+  assertDocumentContentSchema,
+  assertDocumentContentCommandSchema,
   addSketchComposite,
   type SketchCompositeAddInput,
   addSketchReferenceDimension,
+  assertReferenceCommandSchema,
+  assertReferenceDocumentSchema,
   deleteSketchReferenceDimension,
   setSketchReferenceLabelPosition,
   type SketchReferenceDimensionAddInput,
@@ -94,8 +98,6 @@ import {
   normalizeDocumentHistory,
   addPrimitiveFeature,
   addSketchConstraint,
-  assertDocumentContentSchema,
-  assertDocumentContentCommandSchema,
   addSketchFeature,
   addSketchObjects,
   addDatumAxis,
@@ -4208,6 +4210,7 @@ export class CommandManager {
   ) {
     assertDocumentHistory(document);
     assertDocumentContentSchema(document);
+    assertReferenceDocumentSchema(document);
   }
 
   private get history() {
@@ -4483,10 +4486,13 @@ export function replayCommands(
 ): ProjectDocument {
   assertDocumentHistory(initialDocument);
   assertDocumentContentSchema(initialDocument);
-  assertDocumentContentCommandSchema({
+  assertReferenceDocumentSchema(initialDocument);
+  const commandCarrier = {
     schemaVersion: initialDocument.schemaVersion,
     commandLog: serializedCommands
-  });
+  };
+  assertDocumentContentCommandSchema(commandCarrier);
+  assertReferenceCommandSchema(commandCarrier);
   let next = deepClone(initialDocument);
   next.commandLog = [];
   next.revisions = initialDocument.revisions.slice(0, 1);

@@ -33,6 +33,12 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import { preflightCadPatch } from '../apps/web/src/lib/aiPatchPreflight';
+import {
+  frameForPlaneRef,
+  projectableCurveFromTopology,
+  projectEdgeToSketch
+} from '@openzcad/geometry';
+import type { BodyId, SketchObjectData } from '@openzcad/shared';
 
 const noSelection: CadSelectionContext = {
   featureIds: [],
@@ -355,6 +361,185 @@ async function importedShaprBoxDocument(
 }
 
 describe('assistant auto-parameterization', () => {
+  it('preflights and atomically applies ordinary and unlinked dimensions beside linked projections', async () => {
+    const adapter = await createExactKernelAdapter();
+    try {
+      const manager = new CommandManager(
+        createProjectDocument(
+          'Mixed projections',
+          toUserId('user_auto_projection')
+        )
+      );
+      manager.execute(
+        commandFactories.addPrimitive({
+          name: 'Source rim',
+          primitiveKind: 'cylinder',
+          dimensions: { radius: '4 mm', height: '6 mm' }
+        })
+      );
+      const sourceId = manager.document.bodyOrder[0]!;
+      manager.execute(
+        commandFactories.addPrimitive({
+          name: 'Line source',
+          primitiveKind: 'box',
+          dimensions: { width: '2 mm', height: '3 mm', depth: '4 mm' }
+        })
+      );
+      const lineSourceId = manager.document.bodyOrder.at(-1)!;
+      manager.execute(
+        commandFactories.transformBody({
+          name: 'Tilted rim',
+          targetBodyId: sourceId,
+          copy: true,
+          translation: { x: 20, y: 0, z: 0 },
+          rotationDeg: { x: 45, y: 0, z: 0 }
+        })
+      );
+      const tiltedId = manager.document.bodyOrder.at(-1)!;
+      manager.document.derived = await adapter.syncDocument(manager.document);
+      const plane = { type: 'canonical', plane: 'XY', offset: 8 } as const;
+      const basis = frameForPlaneRef(plane, Number);
+      const project = (
+        bodyId: BodyId,
+        curveType: string,
+        kind: SketchObjectData['objectKind']
+      ): SketchObjectData => {
+        const edge = manager.document.derived.bodyRepresentations[
+          bodyId
+        ]!.topology!.edges.find(
+          (edge) => edge.curve?.type === curveType && edge.reference
+        );
+        if (!edge?.reference)
+          throw new Error('Expected a verified source edge.');
+        const projected = projectEdgeToSketch(
+          projectableCurveFromTopology(edge),
+          basis
+        );
+        if (projected.status !== 'projected') throw new Error(projected.reason);
+        expect(projected.data.objectKind).toBe(kind);
+        return {
+          ...projected.data,
+          projection: {
+            mode: 'linked',
+            source: { bodyId, edgeReference: edge.reference }
+          }
+        };
+      };
+      const circle = project(sourceId, 'CIRCLE', 'circle');
+      const ellipse = project(tiltedId, 'CIRCLE', 'ellipse');
+      const line = project(lineSourceId, 'LINE', 'line');
+      manager.execute(
+        commandFactories.addSketch({
+          name: 'Mixed',
+          planeRef: plane,
+          objects: [
+            circle,
+            ellipse,
+            line,
+            { ...circle, projection: { mode: 'unlinked' } },
+            { objectKind: 'circle', centerX: 40, centerY: 0, radius: 3 },
+            {
+              objectKind: 'ellipse',
+              centerX: 60,
+              centerY: 0,
+              radiusX: 5,
+              radiusY: 2,
+              rotationDeg: 0
+            },
+            {
+              objectKind: 'ellipse',
+              centerX: 80,
+              centerY: 0,
+              radiusX: 5,
+              radiusY: 2,
+              rotationDeg: 0,
+              startParamDeg: 0,
+              endParamDeg: 90
+            }
+          ]
+        })
+      );
+      const sketch = findSketch(
+        manager.document,
+        manager.document.sketchOrder[0]!
+      )!;
+      const linkedIds = sketch.objectIds.slice(0, 3);
+      const editableIds = sketch.objectIds.slice(3);
+      manager.document.derived = await adapter.syncDocument(manager.document);
+      for (const id of linkedIds)
+        expect(manager.document.derived.sketchProjections?.[id]).toEqual({
+          status: 'current'
+        });
+      const before = structuredClone(manager.document);
+      const proposal = createAutoParameterizeProposal(
+        manager.document,
+        noSelection
+      );
+      expect(proposal).not.toBeNull();
+      const parsed = parseCadPatchProposal(
+        structuredClone(proposal),
+        createCadDocumentDigest(manager.document)
+      );
+      const bindings = parsed.operations.flatMap((operation) =>
+        operation.kind === 'set_sketch_dimension' ? [operation] : []
+      );
+      expect(bindings.length).toBeGreaterThan(0);
+      expect(
+        bindings.some((operation) =>
+          linkedIds.some((id) => id === operation.objectId)
+        )
+      ).toBe(false);
+      for (const id of editableIds)
+        expect(bindings.some((operation) => operation.objectId === id)).toBe(
+          true
+        );
+      expect(
+        bindings
+          .filter((operation) => operation.objectId === editableIds[2])
+          .map((operation) => operation.field)
+      ).not.toContain('startParamDeg');
+      expect(
+        bindings
+          .filter((operation) => operation.objectId === editableIds[3])
+          .map((operation) => operation.field)
+      ).toEqual(expect.arrayContaining(['startParamDeg', 'endParamDeg']));
+      expect(
+        parsed.assumptions.some((message) =>
+          message.startsWith('Line and arc coordinates')
+        )
+      ).toBe(false);
+      const preflight = await preflightCadPatch(
+        manager.document,
+        parsed,
+        (candidate) => adapter.syncDocument(candidate)
+      );
+      expect(manager.document).toEqual(before);
+      manager.runTransaction(
+        'Auto-parameterize mixed geometry',
+        preflight.commands
+      );
+      expect(manager.document.editHistory!.cursor).toBe(
+        before.editHistory!.cursor + 1
+      );
+      expect(listParameters(manager.document)).toHaveLength(
+        parameterPatchOperations(parsed).length
+      );
+      for (const id of linkedIds)
+        expect(manager.document.nodes[id]).toEqual(before.nodes[id]);
+      for (const binding of bindings) {
+        expect(manager.document.nodes[binding.objectId]).toMatchObject({
+          data: { [binding.field]: binding.value }
+        });
+      }
+      manager.undo();
+      for (const id of sketch.objectIds)
+        expect(manager.document.nodes[id]).toEqual(before.nodes[id]);
+      expect(listParameters(manager.document)).toEqual([]);
+    } finally {
+      adapter.dispose();
+    }
+  });
+
   it('skips linked projections while applying ordinary and unlinked sketch parameters atomically', () => {
     const manager = new CommandManager(nativeDocument());
     const bodyId = manager.document.bodyOrder[0]!;
