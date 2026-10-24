@@ -6,6 +6,7 @@ import {
 } from '@openzcad/crypto';
 import * as deviceStores from './deviceStore';
 import * as e2eeApis from './e2eeApi';
+import * as mlsStores from './mls/sessionStore';
 import { signOutAfterSaving } from './signOut';
 import {
   keyOperationGuard,
@@ -43,7 +44,16 @@ async function fixture() {
     encryptionPrivateKey: unlock.privateKey
   });
   vi.spyOn(deviceStores, 'indexedDbDeviceStore').mockReturnValue(store);
-  return { userId, store, accountKey };
+  const mls = mlsStores.memoryMlsSessionStore();
+  await mls.getOrCreateStateKey(
+    userId,
+    await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+      'encrypt',
+      'decrypt'
+    ])
+  );
+  vi.spyOn(mlsStores, 'indexedDbMlsSessionStore').mockReturnValue(mls);
+  return { userId, store, accountKey, mls };
 }
 
 describe('saving before device-key sign-out', () => {
@@ -307,6 +317,27 @@ describe('saving before device-key sign-out', () => {
     expect(accountKey.some((byte) => byte !== 0)).toBe(true);
   });
 
+  it('keeps the device record when its MLS state cannot be forgotten', async () => {
+    const { userId, store, mls } = await fixture();
+    vi.spyOn(mls, 'deleteAccount').mockRejectedValueOnce(
+      new Error('MLS state busy')
+    );
+    const revokeSession = vi.fn(async () => {});
+    const input = {
+      userId,
+      keepDevice: false,
+      isCurrentSession: () => true,
+      savePending: async () => {},
+      revokeSession
+    };
+    await expect(signOutAfterSaving(input)).rejects.toThrow('MLS state busy');
+    expect(revokeSession).not.toHaveBeenCalled();
+    expect(await store.loadDevice(userId)).not.toBeNull();
+    await signOutAfterSaving(input);
+    expect(await mls.loadStateKey(userId)).toBeNull();
+    expect(await store.loadDevice(userId)).toBeNull();
+  });
+
   it('blocks session revocation on deletion failure, locks cached keys and allows retry', async () => {
     const { userId, store, accountKey } = await fixture();
     const pendingKeyOperation = keyOperationGuard(userId);
@@ -339,7 +370,7 @@ describe('saving before device-key sign-out', () => {
   it.each([true, false, undefined])(
     'saves before applying the %s choice and revoking the session',
     async (keepDevice) => {
-      const { userId, store } = await fixture();
+      const { userId, store, mls } = await fixture();
       const remove = vi.spyOn(store, 'deleteDevice');
       const order: string[] = [];
       await signOutAfterSaving({
@@ -361,6 +392,11 @@ describe('saving before device-key sign-out', () => {
       });
       expect(order).toEqual(['saved', 'revoked']);
       expect(remove).toHaveBeenCalledTimes(keepDevice === false ? 1 : 0);
+      // Not keeping the device also forgets its MLS state, so a later
+      // sign-in cannot reopen projects without unlocking again.
+      expect((await mls.loadStateKey(userId)) !== null).toBe(
+        keepDevice !== false
+      );
     }
   );
 });

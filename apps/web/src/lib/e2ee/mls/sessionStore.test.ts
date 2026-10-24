@@ -94,6 +94,41 @@ describe.each(backends)('MLS session store (%s)', (_, open) => {
       ]).toEqual([1, 2, 3]);
     }
   });
+
+  it('writes nothing once the key session has ended', async () => {
+    const store = await open();
+    await store.writeSessionIfCurrent(0, write(1));
+    await expect(
+      store.writeSessionIfCurrent(1, write(2), () => false)
+    ).rejects.toThrow();
+    const stored = await store.loadSession('user_a', 'prj_1');
+    expect(stored?.revision).toBe(1);
+    expect([...stored!.sealed]).toEqual([1, 1]);
+    expect(
+      (await store.writeSessionIfCurrent(1, write(3), () => true))?.revision
+    ).toBe(2);
+  });
+
+  it('forgets one account’s state key and sessions', async () => {
+    const store = await open();
+    const key = await crypto.subtle.generateKey(
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt']
+    );
+    await store.getOrCreateStateKey('user_a', key);
+    await store.getOrCreateStateKey('user_b', key);
+    await store.writeSessionIfCurrent(0, write(1));
+    await store.writeSessionIfCurrent(0, { ...write(2), projectId: 'prj_2' });
+    await store.writeSessionIfCurrent(0, { ...write(3), userId: 'user_b' });
+    await store.deleteAccount('user_a');
+    expect(await store.loadStateKey('user_a')).toBeNull();
+    expect(await store.loadSession('user_a', 'prj_1')).toBeNull();
+    expect(await store.loadSession('user_a', 'prj_2')).toBeNull();
+    // Another account on this device keeps its state.
+    expect(await store.loadStateKey('user_b')).not.toBeNull();
+    expect(await store.loadSession('user_b', 'prj_1')).not.toBeNull();
+  });
 });
 
 describe('project locks', () => {

@@ -1,4 +1,5 @@
 import { indexedDbDeviceStore, type DeviceKeyStore } from './deviceStore';
+import * as mlsStores from './mls/sessionStore';
 import { lockAccount } from './unlockedKeys';
 import { confirmKeySessionEnded } from './keySession';
 
@@ -29,7 +30,10 @@ export async function eraseAccountWithKeyCleanup<
     try {
       if (input.isCurrentSession()) input.onSignedOut();
     } finally {
-      if (input.userId) await store.forgetErasedIdentity(input.userId, pin);
+      if (input.userId) {
+        await store.forgetErasedIdentity(input.userId, pin);
+        await mlsStores.indexedDbMlsSessionStore().deleteAccount(input.userId);
+      }
     }
   }
   return result;

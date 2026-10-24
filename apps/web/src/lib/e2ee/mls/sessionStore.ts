@@ -53,12 +53,20 @@ export interface MlsSessionStore {
   /**
    * Write only if the stored revision is still `expectedRevision` (0: no
    * session yet). Returns the stored record, or null when another context
-   * wrote first; the caller must then re-read.
+   * wrote first; the caller must then re-read. When `isCurrent` returns
+   * false inside the write (the key session ended), nothing is written and
+   * the promise rejects.
    */
   writeSessionIfCurrent(
     expectedRevision: number,
-    next: MlsSessionWrite
+    next: MlsSessionWrite,
+    isCurrent?: () => boolean
   ): Promise<StoredMlsSession | null>;
+  /**
+   * Forget one account's MLS state on this device: its state key and every
+   * sealed session, so nothing here can reopen its projects.
+   */
+  deleteAccount(userId: string): Promise<void>;
   /** Serialize every operation on one project's MLS state across tabs. */
   withProjectLock<T>(
     userId: string,
@@ -96,6 +104,9 @@ function copyRecord(record: StoredMlsSession): StoredMlsSession {
   };
 }
 
+const keySessionEnded = () =>
+  new Error('The key session ended before the MLS state was written.');
+
 function nextRecord(
   current: StoredMlsSession | undefined,
   expectedRevision: number,
@@ -130,12 +141,18 @@ export function memoryMlsSessionStore(): MlsSessionStore {
       const record = sessions.get(id(userId, projectId));
       return record ? copyRecord(record) : null;
     },
-    writeSessionIfCurrent: async (expectedRevision, next) => {
+    writeSessionIfCurrent: async (expectedRevision, next, isCurrent) => {
+      if (isCurrent && !isCurrent()) throw keySessionEnded();
       const key = id(next.userId, next.projectId);
       const record = nextRecord(sessions.get(key), expectedRevision, next);
       if (!record) return null;
       sessions.set(key, record);
       return copyRecord(record);
+    },
+    deleteAccount: async (userId) => {
+      keys.delete(userId);
+      for (const [key, record] of sessions)
+        if (record.userId === userId) sessions.delete(key);
     },
     withProjectLock: (userId, projectId, run) => {
       const name = projectLockName(userId, projectId);
@@ -239,7 +256,7 @@ export function indexedDbMlsSessionStore(): MlsSessionStore {
           };
         }
       ),
-    writeSessionIfCurrent: (expectedRevision, next) => {
+    writeSessionIfCurrent: (expectedRevision, next, isCurrent) => {
       // Snapshot before the first await: the caller may reuse its buffers.
       const value = copyRecord({ ...next, revision: 0 });
       return transact<StoredMlsSession | null>(
@@ -251,6 +268,12 @@ export function indexedDbMlsSessionStore(): MlsSessionStore {
           // replaces.
           const read = objects.get([value.userId, value.projectId]);
           read.onsuccess = () => {
+            // Decided inside the transaction, so a teardown that lands
+            // before this point leaves the stored state untouched.
+            if (isCurrent && !isCurrent()) {
+              objects.transaction.abort();
+              return;
+            }
             const record = nextRecord(
               read.result as StoredMlsSession | undefined,
               expectedRevision,
@@ -261,6 +284,22 @@ export function indexedDbMlsSessionStore(): MlsSessionStore {
           };
         }
       );
+    },
+    deleteAccount: async (userId) => {
+      // Without IndexedDB this store never held anything to forget.
+      if (typeof indexedDB === 'undefined') return;
+      const db = await openDatabase();
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction([STATE_KEYS, SESSIONS], 'readwrite');
+        tx.oncomplete = () => resolve();
+        tx.onabort = tx.onerror = () =>
+          reject(tx.error ?? new Error('IndexedDB MLS transaction failed'));
+        tx.objectStore(STATE_KEYS).delete(userId);
+        // Every [userId, projectId] key: a string sorts below any array.
+        tx.objectStore(SESSIONS).delete(
+          IDBKeyRange.bound([userId], [userId, []])
+        );
+      });
     },
     withProjectLock: async (userId, projectId, run) => {
       if (typeof navigator === 'undefined' || !navigator.locks)

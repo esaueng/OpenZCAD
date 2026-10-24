@@ -313,8 +313,12 @@ export class MlsProjectSessions {
                 result.pendingCommit === undefined
                   ? (stored?.pendingCommit ?? null)
                   : result.pendingCommit
-            }
+            },
+            current
           );
+          // A teardown after the write committed still fails the operation:
+          // the caller must not act on (or send) its result.
+          guard();
           if (!written) throw new MlsSessionConflict();
           entry.revision = written.revision;
         }

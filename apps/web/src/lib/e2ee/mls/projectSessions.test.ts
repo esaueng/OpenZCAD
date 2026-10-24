@@ -281,4 +281,47 @@ describe('MLS project sessions', () => {
     expect(await sessions.projectKey(project)).toHaveLength(32);
     expect(started).toHaveLength(2);
   });
+
+  it.each(['during', 'after'] as const)(
+    'refuse a Commit when the key session ends %s its write',
+    async (when) => {
+      const shared = memoryMlsSessionStore();
+      const live: { sessions?: MlsProjectSessions } = {};
+      // Teardown lands while the write is in progress: inside it (before the
+      // revision check) or just after it committed.
+      const store: MlsSessionStore = {
+        ...shared,
+        writeSessionIfCurrent: async (expected, next, isCurrent) => {
+          if (expected === 0)
+            return shared.writeSessionIfCurrent(expected, next);
+          if (when === 'during') live.sessions!.clear();
+          const written = await shared.writeSessionIfCurrent(
+            expected,
+            next,
+            isCurrent
+          );
+          if (when === 'after') live.sessions!.clear();
+          return written;
+        }
+      };
+      const { sessions } = tab(store);
+      live.sessions = sessions;
+      const project = ref();
+      await sessions.createGroup(
+        project,
+        device(alice, 'alice_laptop'),
+        directory
+      );
+      await expect(sessions.commit(project, directory)).rejects.toMatchObject({
+        name: 'AbortError'
+      });
+      const stored = await shared.loadSession(
+        project.userId,
+        project.projectId
+      );
+      // During: nothing was written. After: the Commit is stored as pending
+      // (a later session resends or discards it) but was never returned.
+      expect(stored?.revision).toBe(when === 'during' ? 1 : 2);
+    }
+  );
 });
