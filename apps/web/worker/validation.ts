@@ -11,6 +11,7 @@ import {
   MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
   MAX_PROJECT_NAME_LENGTH,
   MAX_PROJECT_CHECKPOINTS,
+  MAX_PROJECT_REVISION_RECORDS,
   THUMBNAIL_CONTENT_TYPE,
   REFERENCE_IMAGE_CONTENT_TYPES,
   persistedDocumentBytes,
@@ -448,6 +449,9 @@ function parseProjectDocument(
     throw badRequest('"document" is missing required collections.');
   }
   if (
+    // Browsers keep the newest MAX_PROJECT_REVISION_RECORDS; a longer list
+    // stored unread would break every other browser's lineage check.
+    record.revisions.length > MAX_PROJECT_REVISION_RECORDS ||
     !record.revisions.every(isRevisionRecord) ||
     !Array.isArray(record.checkpoints) ||
     record.checkpoints.length > MAX_PROJECT_CHECKPOINTS ||

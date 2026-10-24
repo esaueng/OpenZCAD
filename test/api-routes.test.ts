@@ -3417,6 +3417,32 @@ describe('worker api routes', () => {
     );
   });
 
+  it('refuses a document with more revisions than browsers keep', async () => {
+    const created = await createProject('Long history');
+    const projectId = created.document.projectId;
+    const record = created.document.revisions[0]!;
+    // Stored unread, a longer list than the newest 500 every browser keeps
+    // would break every other browser's collaboration lineage check.
+    const response = await worker.fetch(
+      put(`/api/projects/${projectId}/document`, {
+        projectId,
+        expectedVersion: created.document.version,
+        document: {
+          ...created.document,
+          revisions: Array.from({ length: 501 }, (_, index) => ({
+            ...record,
+            revisionId: `rev_long_${index}`
+          }))
+        }
+      }),
+      env
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: '"document" has invalid revision or checkpoint history.'
+    });
+  });
+
   it('fences a document save against the version the account holds', async () => {
     const created = await createProject('Fenced');
     const projectId = created.document.projectId;

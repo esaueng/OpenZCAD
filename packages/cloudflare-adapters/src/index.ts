@@ -8164,6 +8164,10 @@ function checkClientDocument(value: unknown): CollaborationRejection | null {
     (value.editHistory !== undefined &&
       !isDocumentHistory(value.editHistory, String(value.projectId))) ||
     !Array.isArray(value.revisions) ||
+    // Browsers keep the newest MAX_PROJECT_REVISION_RECORDS; a longer list
+    // stored unread would leave every other editor's submission failing the
+    // lineage check (`sharesRevisionLineage`).
+    value.revisions.length > MAX_PROJECT_REVISION_RECORDS ||
     !value.revisions.every(isRevisionRecord) ||
     !Array.isArray(value.checkpoints) ||
     value.checkpoints.length > MAX_PROJECT_CHECKPOINTS ||
