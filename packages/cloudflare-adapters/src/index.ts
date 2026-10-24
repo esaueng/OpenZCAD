@@ -6,13 +6,12 @@ export {
   accountAiLimits
 } from './account-tiers';
 import {
-  assertDocumentTextBudget,
   documentStructureError,
   documentEnvelopeError,
+  accountReadFieldsError,
   hasValidImportedMeshSources,
   hasValidImportedStepSources,
-  isDocumentHistory,
-  objectFolderSetError
+  isDocumentHistory
 } from '@openzcad/shared';
 import { DurableObject } from 'cloudflare:workers';
 import {
@@ -149,10 +148,7 @@ import {
   createSavedRevision,
   createProjectDocument,
   duplicateProjectDocument,
-  assertDocumentContentSchema,
   normalizeDocument,
-  assertReferenceDocumentSchema,
-  assertSketchProvenance,
   hasJsonPrefix,
   sameJson,
   withoutDerivedProjection
@@ -1433,9 +1429,9 @@ export class D1R2PersistenceService implements PersistenceService {
       name: request.name,
       localProjectId
     });
-    const document = withoutDerivedProjection(
-      normalizeDocument(request.document!)
-    );
+    // Stored as the browser built it (ADR-024 Phase 1): the browser checked
+    // and normalized it, and the account no longer reads its contents.
+    const document = withoutDerivedProjection(request.document!);
     this.assertDocumentCanBeStored(document);
     if (await this.projectIdInUse(document)) throw projectIdTaken();
     return document;
@@ -1655,9 +1651,9 @@ export class D1R2PersistenceService implements PersistenceService {
       revisionId: request.revisionId,
       name: request.name
     });
-    const document = withoutDerivedProjection(
-      normalizeDocument(request.document!)
-    );
+    // Stored as the browser built it (ADR-024 Phase 1): the browser checked
+    // and normalized it, and the account no longer reads its contents.
+    const document = withoutDerivedProjection(request.document!);
     this.assertDocumentCanBeStored(document);
     if (await this.projectIdInUse(document)) throw projectIdTaken();
     await this.assertRevisionIdUnused(document.projectId, revision.revisionId);
@@ -2339,10 +2335,10 @@ export class D1R2PersistenceService implements PersistenceService {
       userId,
       request.projectId
     );
+    // Stored as the browser built it (ADR-024 Phase 1), apart from the
+    // trusted source aliases the account still resolves.
     const normalized = withoutDerivedProjection(
-      normalizeDocument(
-        reconcileCopiedImportSources(request.document, archives)
-      )
+      reconcileCopiedImportSources(request.document, archives)
     );
     const storage = reconciledClientStorage(options?.storage, archives);
     if (
@@ -2574,7 +2570,7 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     const access = await this.requireProjectEdit(userId, document.projectId);
-    const saved = withoutDerivedProjection(normalizeDocument(document));
+    const saved = withoutDerivedProjection(document);
     const revision = saved.revisions.at(-1);
     const checkpoint = saved.checkpoints.at(-1);
     if (
@@ -2945,10 +2941,10 @@ export class D1R2PersistenceService implements PersistenceService {
       userId,
       request.projectId
     );
+    // Stored as the browser built it (ADR-024 Phase 1), apart from the
+    // trusted source aliases the account still resolves.
     const normalized = withoutDerivedProjection(
-      normalizeDocument(
-        reconcileCopiedImportSources(request.document, archives)
-      )
+      reconcileCopiedImportSources(request.document, archives)
     );
     const storage = reconciledClientStorage(options?.storage, archives);
     if (
@@ -7128,7 +7124,8 @@ export class ProjectCollaborationRoom extends DurableObject {
       connection.userId,
       rawDocument.projectId
     );
-    const submitted = normalizeDocument(rawDocument);
+    // The browser checked and normalized it (ADR-024 Phase 1).
+    const submitted = rawDocument;
     const document = reconcileCopiedImportSources(
       submitted,
       this.sourceArchives
@@ -7763,7 +7760,8 @@ export class ProjectCollaborationRoom extends DurableObject {
     }
     this.projectId = projectId;
     await this.restoreTrustedSourceArchives(userId, projectId);
-    const submitted = normalizeDocument(payload.document);
+    // The browser checked and normalized it (ADR-024 Phase 1).
+    const submitted = payload.document;
     const document = reconcileCopiedImportSources(
       submitted,
       this.sourceArchives
@@ -8159,15 +8157,18 @@ function checkClientDocument(value: unknown): CollaborationRejection | null {
   }
   const complexity = documentStructureError(value);
   if (complexity) return { code: 'document-too-complex', message: complexity };
-  const envelope = documentEnvelopeError(value);
+  const envelope = documentEnvelopeError(value) ?? accountReadFieldsError(value);
   if (envelope) return { code: 'document-invalid', message: envelope };
   if (
     typeof value.schemaVersion !== 'number' ||
     value.schemaVersion > PROJECT_DOCUMENT_SCHEMA_VERSION ||
     (value.editHistory !== undefined &&
-      (value.schemaVersion !== PROJECT_DOCUMENT_SCHEMA_VERSION ||
-        !isDocumentHistory(value.editHistory, String(value.projectId)))) ||
+      !isDocumentHistory(value.editHistory, String(value.projectId))) ||
     !Array.isArray(value.revisions) ||
+    // Browsers keep the newest MAX_PROJECT_REVISION_RECORDS; a longer list
+    // stored unread would leave every other editor's submission failing the
+    // lineage check (`sharesRevisionLineage`).
+    value.revisions.length > MAX_PROJECT_REVISION_RECORDS ||
     !value.revisions.every(isRevisionRecord) ||
     !Array.isArray(value.checkpoints) ||
     value.checkpoints.length > MAX_PROJECT_CHECKPOINTS ||
@@ -8178,15 +8179,10 @@ function checkClientDocument(value: unknown): CollaborationRejection | null {
       message: 'Collaboration document history or schema version is invalid.'
     };
   }
-  try {
-    assertDocumentTextBudget(value as unknown as ProjectDocument);
-  } catch (error) {
-    return {
-      code: 'document-invalid',
-      message:
-        error instanceof Error ? error.message : 'Invalid project text budget.'
-    };
-  }
+  // ADR-024 Phase 1: the room checks the envelope and the parts it reads
+  // itself (history and imported sources, for archives and copies), and
+  // nothing else. Every browser runs the content checks before it submits a
+  // document and again before it adopts one.
   if (!hasValidImportedStepSources(value as unknown as ProjectDocument)) {
     return {
       code: 'document-invalid',
@@ -8197,40 +8193,6 @@ function checkClientDocument(value: unknown): CollaborationRejection | null {
     return {
       code: 'document-invalid',
       message: 'Collaboration document has invalid imported mesh data.'
-    };
-  }
-  try {
-    assertSketchProvenance(value as unknown as ProjectDocument);
-    assertDocumentContentSchema(value as unknown as ProjectDocument);
-    assertReferenceDocumentSchema(value as unknown as ProjectDocument);
-  } catch (error) {
-    return {
-      code: 'document-invalid',
-      message:
-        error instanceof Error ? error.message : 'Invalid project content schema.'
-    };
-  }
-  // `normalizeDocument` fails closed on a malformed U06 folder section; say
-  // so here, as the account route does, rather than fail the room.
-  const foldersError =
-    value.objectFolders === undefined
-      ? null
-      : objectFolderSetError(value.objectFolders);
-  if (foldersError) {
-    return {
-      code: 'document-invalid',
-      message: `Collaboration document has invalid Objects folders: ${foldersError}`
-    };
-  }
-  try {
-    assertDocumentContentSchema(value as unknown as ProjectDocument);
-  } catch (error) {
-    return {
-      code: 'document-invalid',
-      message:
-        error instanceof Error
-          ? error.message
-          : 'Invalid project content schema.'
     };
   }
   return null;

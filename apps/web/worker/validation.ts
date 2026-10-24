@@ -2,26 +2,19 @@ import {
   assertDocumentHistory,
   documentStructureError,
   documentEnvelopeError,
-  assertDocumentTextBudget,
-  drawingSetError,
-  objectFolderSetError,
+  accountReadFieldsError,
   hasValidImportedMeshSources,
   hasValidImportedStepSources
 } from '@openzcad/shared';
-import {
-  assertDocumentContentSchema,
-  assertReferenceDocumentSchema,
-  assertSketchProvenance
-} from '@openzcad/document-core';
 import {
   MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_CHECKPOINT_REASON_LENGTH,
   MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
   MAX_PROJECT_NAME_LENGTH,
   MAX_PROJECT_CHECKPOINTS,
+  MAX_PROJECT_REVISION_RECORDS,
   THUMBNAIL_CONTENT_TYPE,
   REFERENCE_IMAGE_CONTENT_TYPES,
-  referenceImageSetError,
   persistedDocumentBytes,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   PROJECT_STATUSES,
@@ -430,7 +423,10 @@ function parseProjectDocument(
   value: unknown,
   projectIdFromPath?: string
 ): ProjectDocument {
-  const invalid = documentStructureError(value) ?? documentEnvelopeError(value);
+  const invalid =
+    documentStructureError(value) ??
+    documentEnvelopeError(value) ??
+    accountReadFieldsError(value);
   if (invalid) throw badRequest(invalid);
   const record = asRecord(value, '"document"');
   if (projectIdFromPath === undefined) {
@@ -457,6 +453,9 @@ function parseProjectDocument(
     throw badRequest('"document" is missing required collections.');
   }
   if (
+    // Browsers keep the newest MAX_PROJECT_REVISION_RECORDS; a longer list
+    // stored unread would break every other browser's lineage check.
+    record.revisions.length > MAX_PROJECT_REVISION_RECORDS ||
     !record.revisions.every(isRevisionRecord) ||
     !Array.isArray(record.checkpoints) ||
     record.checkpoints.length > MAX_PROJECT_CHECKPOINTS ||
@@ -476,70 +475,18 @@ function parseProjectDocument(
       `"document.schemaVersion" is newer than this deployment supports (${PROJECT_DOCUMENT_SCHEMA_VERSION}). Reload to update.`
     );
   }
-  if (
-    record.editHistory !== undefined &&
-    record.schemaVersion !== PROJECT_DOCUMENT_SCHEMA_VERSION
-  ) {
-    throw badRequest(
-      'Reload to update before saving a project with undo history.'
-    );
-  }
+  // ADR-024 Phase 1: the account checks the envelope and the parts it reads
+  // itself, and nothing else. The browser runs every content check
+  // (`assertStorableDocument`) before it writes, and again before it opens
+  // a document, so a version it cannot open is refused there.
   try {
     assertDocumentHistory(value as ProjectDocument);
   } catch {
     throw badRequest('Invalid or unsupported project undo history.');
   }
-  try {
-    assertSketchProvenance(value as ProjectDocument);
-  } catch (error) {
-    throw badRequest(
-      error instanceof Error ? error.message : 'Invalid sketch provenance.'
-    );
-  }
-  try {
-    assertReferenceDocumentSchema(value as ProjectDocument);
-  } catch (error) {
-    throw badRequest(
-      error instanceof Error
-        ? error.message
-        : 'Invalid reference dimension schema.'
-    );
-  }
-  try {
-    assertDocumentTextBudget(value as ProjectDocument);
-  } catch (error) {
-    throw badRequest(
-      error instanceof Error ? error.message : 'Invalid project text budget.'
-    );
-  }
-  // D01: a malformed drawing section would make the project unopenable on
-  // every device (`normalizeDocument` fails closed on it), so refuse it here.
-  if (record.drawings !== undefined) {
-    const drawingsError = drawingSetError(record.drawings);
-    if (drawingsError)
-      throw badRequest(`"document.drawings": ${drawingsError}`);
-  }
-  // U06 folders fail closed in `normalizeDocument` the same way.
-  if (record.objectFolders !== undefined) {
-    const foldersError = objectFolderSetError(record.objectFolders);
-    if (foldersError)
-      throw badRequest(`"document.objectFolders": ${foldersError}`);
-  }
-  // I05: the same holds for the reference-image section.
-  if (record.referenceImages !== undefined) {
-    const imagesError = referenceImageSetError(record.referenceImages);
-    if (imagesError)
-      throw badRequest(`"document.referenceImages": ${imagesError}`);
-  }
-  try {
-    assertDocumentContentSchema(value as ProjectDocument);
-  } catch (error) {
-    throw badRequest(
-      error instanceof Error ? error.message : 'Invalid project content schema.'
-    );
-  }
-  // Undo and redo can restore imports that are absent from current nodes.
-  // Validate every copy before the document can be saved or shared.
+  // The account still reads imported sources (copies, archives, cleanup), so
+  // their references must be well formed, in history as in current nodes:
+  // undo and redo can restore imports that are absent from current nodes.
   if (!hasValidImportedStepSources(value as ProjectDocument)) {
     throw badRequest('"document" has invalid imported STEP source data.');
   }
