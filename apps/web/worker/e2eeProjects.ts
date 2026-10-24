@@ -18,7 +18,10 @@
  * Served by `handleE2eeRequest`, which has applied the key rollout gate,
  * key-table readiness and, for writes, the session/erasure write
  * authorization. Here: E2EE_PROJECTS_ENABLED, migrations 0031 and 0032
- * (503 without them), owner only, format-2 projects only.
+ * (503 without them), format-2 projects only. Since slice 5-2 every member
+ * (`project_members`) reads the group and sends Commits, and posts its own
+ * account-wrapped keys for an epoch (`POST …/keys`); only the owner creates
+ * the group.
  */
 import {
   decodeDeviceListEntry,
@@ -35,6 +38,7 @@ import type {
   E2eeProjectGroupRecord,
   E2eeProjectGroupResponse,
   E2eeProjectKeyPurpose,
+  E2eeProjectKeyUploadResponse,
   E2eeProjectKeyWrap,
   E2eeProjectKeysResponse,
   E2eeProjectLeafInput,
@@ -317,6 +321,98 @@ interface ProjectRow {
   member: number;
 }
 
+/** A caller's role in an encrypted project, as the server mirrors it. */
+export type EncryptedProjectRole = 'owner' | 'editor' | 'viewer';
+
+/**
+ * What a route needs of the caller (slice 5-2): `read` any member (and the
+ * owner); `write` the owner or an editor (document versions, content
+ * blobs, project info and measurements); `commit` any member, since every
+ * member's browser runs the MLS policy that decides what a Commit may do.
+ */
+export type EncryptedProjectNeed = 'read' | 'write' | 'commit';
+
+export interface EncryptedProjectAccess {
+  readonly role: EncryptedProjectRole;
+  readonly ownerUserId: string;
+}
+
+/**
+ * The caller's access to a live format-2 project, by its owner and
+ * `project_members` (slice 5-2). The server's roles are defense in depth:
+ * browsers check each version's author against the MLS roles of its epoch.
+ * With `allowDeleted` (reads, slice 4-8) the owner, and only the owner,
+ * also reaches a project in the recycle bin. A viewer's write is refused
+ * with 403 `E2EE_PROJECT_READ_ONLY`; anyone without access learns nothing.
+ */
+export async function requireEncryptedProjectAccess(
+  db: D1Database,
+  userId: string,
+  projectId: string,
+  need: EncryptedProjectNeed,
+  options: { allowDeleted?: boolean } = {}
+): Promise<EncryptedProjectAccess> {
+  const row = await db
+    .prepare(
+      `SELECT p.user_id, p.storage_format, p.status,
+         (SELECT m.role FROM project_members m
+          WHERE m.project_id = p.id AND m.user_id = ?) AS member_role
+       FROM projects p WHERE p.id = ?`
+    )
+    .bind(userId, projectId)
+    .first<{
+      user_id: string;
+      storage_format: number | null;
+      status: string | null;
+      member_role: string | null;
+    }>();
+  const notFound = (): never =>
+    refuse(404, 'PROJECT_NOT_FOUND', 'Project not found.');
+  if (!row) return notFound();
+  const role: EncryptedProjectRole | null =
+    row.user_id === userId
+      ? 'owner'
+      : row.member_role === 'editor' || row.member_role === 'viewer'
+        ? row.member_role
+        : null;
+  if (!role) return notFound();
+  if (
+    row.status === 'deleted' &&
+    (options.allowDeleted !== true || role !== 'owner')
+  ) {
+    return notFound();
+  }
+  if (row.storage_format !== 2) {
+    refuse(
+      409,
+      'E2EE_PROJECT_NOT_ENCRYPTED',
+      'This project is not end-to-end encrypted.'
+    );
+  }
+  if (need === 'write' && role === 'viewer') {
+    refuse(
+      403,
+      'E2EE_PROJECT_READ_ONLY',
+      'Viewers can read this encrypted project but cannot change it.'
+    );
+  }
+  return { role, ownerUserId: row.user_id };
+}
+
+/**
+ * The member fences inside write statements (slice 5-2), each bound with
+ * `fenceBinds(projectId, userId)`: a live format-2 project the caller owns
+ * or is a member of (`MEMBER_FENCE`), or owns or edits (`WRITER_FENCE`).
+ */
+const fenceOf = (roles: string) => `EXISTS (SELECT 1 FROM projects fp
+  WHERE fp.id = ? AND fp.storage_format = 2 AND fp.status <> 'deleted'
+    AND (fp.user_id = ? OR EXISTS (SELECT 1 FROM project_members fm
+         WHERE fm.project_id = fp.id AND fm.user_id = ?${roles})))`;
+export const MEMBER_FENCE = fenceOf('');
+export const WRITER_FENCE = fenceOf(" AND fm.role = 'editor'");
+export const fenceBinds = (projectId: string, userId: string) =>
+  [projectId, userId, userId] as const;
+
 /**
  * Owner of a live format-2 project; anything else is refused. With
  * `allowDeleted` (reads, slice 4-8) the owner also reaches a project in the
@@ -353,7 +449,7 @@ export async function requireOwnedEncryptedProject(
       refuse(
         403,
         'E2EE_PROJECT_OWNER_ONLY',
-        'Only the owner can use this encrypted project until sharing arrives.'
+        'Only the owner can do this in an encrypted project.'
       );
     }
     return notFound();
@@ -806,7 +902,7 @@ async function submitCommit(
         `INSERT INTO e2ee_mls_commits
            (project_id, epoch, kind, sender_user_id, sender_device_id, message, created_at)
          SELECT ?, ?, ?, ?, ?, ?, ?
-         WHERE ${authorization.sql} AND ${PROJECT_FENCE}
+         WHERE ${authorization.sql} AND ${MEMBER_FENCE}
            AND EXISTS (SELECT 1 FROM e2ee_project_groups
                        WHERE project_id = ? AND epoch = ? AND key_epoch_base = ?)
            AND ${signerList.sql}`
@@ -820,8 +916,7 @@ async function submitCommit(
         message,
         now,
         ...authorization.binds,
-        projectId,
-        userId,
+        ...fenceBinds(projectId, userId),
         projectId,
         epoch,
         group.key_epoch_base,
@@ -861,6 +956,119 @@ async function submitCommit(
     commit: commitRecord((await commitRow(db, projectId, epoch))!),
     group: groupRecord((await groupRow(db, projectId))!)
   } satisfies E2eeMlsCommitResponse);
+}
+
+/**
+ * `POST …/keys` (slice 5-2): the caller's own project-key and rejoin-PSK
+ * wraps for an epoch of the current group, posted by a member's device
+ * after it processed someone else's Commit. Never another user's: the rows
+ * are the caller's, under the caller's current account key. A wrap the
+ * caller already stored for that epoch and purpose is kept as it is.
+ */
+async function postWraps(
+  db: D1Database,
+  userId: string,
+  projectId: string,
+  authorization: Authorization,
+  body: Record<string, unknown>
+): Promise<Response> {
+  const deviceId = idField(body.deviceId, 'deviceId');
+  const keyEpoch = uintField(body.keyEpoch, 'keyEpoch', MAX_U32);
+  const account = await requireCertifiedDevice(db, userId, deviceId);
+  const wraps = wrapsField(body.wraps, keyEpoch, account);
+  const group = await requireGroup(db, projectId);
+  if (
+    keyEpoch < group.key_epoch_base ||
+    keyEpoch > group.key_epoch_base + group.epoch
+  ) {
+    refuse(
+      409,
+      'E2EE_EPOCH_UNKNOWN',
+      `Key epoch ${keyEpoch} is not an epoch of this project's group.`,
+      { keyEpoch: group.key_epoch_base + group.epoch }
+    );
+  }
+  const now = new Date().toISOString();
+  const results = await runBatch(
+    db,
+    wraps.map((wrap) =>
+      db
+        .prepare(
+          `INSERT INTO e2ee_project_keys
+             (user_id, project_id, key_epoch, purpose, account_key_generation,
+              account_key_sequence, wrapped, created_at)
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?
+           WHERE ${authorization.sql} AND ${MEMBER_FENCE}
+             AND EXISTS (SELECT 1 FROM e2ee_project_groups
+                         WHERE project_id = ? AND key_epoch_base <= ?
+                           AND key_epoch_base + epoch >= ?)
+           ON CONFLICT (user_id, project_id, key_epoch, purpose) DO NOTHING`
+        )
+        .bind(
+          userId,
+          projectId,
+          wrap.keyEpoch,
+          wrap.purpose,
+          wrap.accountKeyGeneration,
+          wrap.accountKeySequence,
+          wrap.wrapped,
+          now,
+          ...authorization.binds,
+          ...fenceBinds(projectId, userId),
+          projectId,
+          keyEpoch,
+          keyEpoch
+        )
+    )
+  );
+  const stored = (await listWrapRows(db, userId, projectId, keyEpoch)).filter(
+    (wrap) => wrap.keyEpoch === keyEpoch
+  );
+  // Nothing inserted: kept wraps, or a fence that did not hold.
+  const fenced =
+    results.every((result) => (result.meta?.changes ?? 0) === 1) ||
+    (await db
+      .prepare(`SELECT 1 AS ok WHERE ${authorization.sql} AND ${MEMBER_FENCE}`)
+      .bind(...authorization.binds, ...fenceBinds(projectId, userId))
+      .first<{ ok: number }>()) !== null;
+  if (!fenced || stored.length !== 2) {
+    refuse(
+      401,
+      'E2EE_SESSION_REQUIRED',
+      'Sign in again before changing encryption keys.'
+    );
+  }
+  return json({ wraps: stored } satisfies E2eeProjectKeyUploadResponse);
+}
+
+async function listWrapRows(
+  db: D1Database,
+  userId: string,
+  projectId: string,
+  keyEpoch: number
+): Promise<E2eeProjectKeyWrap[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT key_epoch, purpose, account_key_generation, account_key_sequence, wrapped
+       FROM e2ee_project_keys
+       WHERE user_id = ? AND project_id = ? AND key_epoch = ?
+       ORDER BY purpose`
+    )
+    .bind(userId, projectId, keyEpoch)
+    .all<{
+      key_epoch: number;
+      purpose: E2eeProjectKeyPurpose;
+      account_key_generation: number;
+      account_key_sequence: number;
+      wrapped: string;
+    }>();
+  return (results ?? []).map((row) => ({
+    keyEpoch: row.key_epoch,
+    purpose: row.purpose,
+    accountKeyGeneration: row.account_key_generation,
+    accountKeySequence: row.account_key_sequence,
+    wrapped: row.wrapped
+  }));
 }
 
 // --- Reads -----------------------------------------------------------------
@@ -1053,16 +1261,34 @@ export async function handleE2eeProjectRequest(
           'keys',
           'keys/archives'
         ].includes(route)) ||
-      (method === 'POST' && ['mls/commits', 'mls/group-info'].includes(route));
+      (method === 'POST' &&
+        ['mls/commits', 'mls/group-info', 'keys'].includes(route));
     if (!known) refuse(404, 'NOT_FOUND', 'Not found.');
-    // The owner reads a project in the recycle bin, as in plaintext (4-8).
-    await requireOwnedEncryptedProject(db, userId, projectId, {
-      allowDeleted: method === 'GET'
-    });
+    if (method === 'POST' && route === 'mls/group-info') {
+      // The group is made with the project, by its owner.
+      await requireOwnedEncryptedProject(db, userId, projectId);
+      return await createGroup(
+        db,
+        userId,
+        projectId,
+        authorization,
+        await readBody(request)
+      );
+    }
+    // Any member reads the group and sends Commits; the MLS policy in every
+    // member's browser decides what a Commit may change (slice 5-2). The
+    // owner reads a project in the recycle bin, as in plaintext (4-8).
+    await requireEncryptedProjectAccess(
+      db,
+      userId,
+      projectId,
+      method === 'GET' ? 'read' : 'commit',
+      { allowDeleted: method === 'GET' }
+    );
     if (method === 'POST') {
       const body = await readBody(request);
-      return route === 'mls/group-info'
-        ? await createGroup(db, userId, projectId, authorization, body)
+      return route === 'keys'
+        ? await postWraps(db, userId, projectId, authorization, body)
         : await submitCommit(db, userId, projectId, authorization, body);
     }
     switch (route) {

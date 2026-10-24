@@ -333,10 +333,19 @@ describe('project storage format (ADR-024 Phase 4, slice 4-1)', () => {
         )
       ).status
     ).toBe(204);
-    expect(
-      (await call('DELETE', `/api/projects/${projectId}/members/${MEMBER}`))
-        .status
-    ).toBe(204);
+    // Changing or removing a member is a Commit on an encrypted project
+    // (slice 5-2): the server's row alone is refused, as sharing is.
+    for (const method of ['PATCH', 'DELETE'] as const) {
+      const member = await call(
+        method,
+        `/api/projects/${projectId}/members/${MEMBER}`,
+        method === 'PATCH' ? { body: { role: 'viewer' } } : {}
+      );
+      expect(member.status, method).toBe(409);
+      expect(await member.json()).toMatchObject({
+        code: 'ENCRYPTED_PROJECT_SHARING_UNAVAILABLE'
+      });
+    }
     expect((await call('DELETE', `/api/projects/${projectId}`)).status).toBe(
       204
     );

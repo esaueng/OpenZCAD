@@ -23,6 +23,7 @@ import type {
   CommitRequest,
   DeviceDirectory,
   EpochChange,
+  EpochRecord,
   GroupInfoSummary,
   Mls,
   MlsSession,
@@ -560,6 +561,14 @@ export class MlsProjectSessions {
       claim,
       deviceSigningKey
     );
+  }
+
+  /**
+   * Decodes an archived epoch record (its GroupContext, tree and Commit),
+   * for reading the roles of a past epoch (slice 5-2). Needs no session.
+   */
+  async decodeEpochRecord(record: Uint8Array): Promise<EpochRecord> {
+    return (await this.loader.get()).decodeEpochRecord(record);
   }
 
   /** Sessions held in this page's memory (tests and diagnostics). */

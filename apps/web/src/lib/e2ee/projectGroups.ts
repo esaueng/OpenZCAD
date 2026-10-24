@@ -40,6 +40,13 @@
  *   dedupe secret (D8); the named replacement may rejoin a group whose last
  *   leaf of the user was revoked. An owner alone in a project may replace
  *   its group under an identity-signed reset (`resetProjectGroup`, D9).
+ * - **Members** (slice 5-2). With the co-members' verified device lists
+ *   (`ProjectGroupContext.members`) the directory, archives and version
+ *   authorship accept their devices, with their own revocation cutoffs;
+ *   a device that processes someone else's Commit posts its account's own
+ *   wraps of the new epoch (`postOwnEpochKeys`); and `epochRoles` reads
+ *   the roles each epoch's record holds, for checking a version's author
+ *   against the role held in its own epoch.
  *
  * Everything the server returns is checked before use: leaf certifications
  * against the device list (`buildDeviceDirectory`), archives against their
@@ -61,6 +68,7 @@ import {
   unwrapKey,
   verifyGroupReset,
   verifyProjectEnvelopeSignature,
+  verifyRevocationCutoffs,
   wrapKey,
   type ArchivedProjectKey,
   type GroupReset,
@@ -90,7 +98,10 @@ import type {
   E2eeMlsCommitsResponse,
   E2eeProjectGroupRecord,
   E2eeProjectGroupResponse,
+  E2eeMemberRevocationCutoffsResponse,
   E2eeProjectKeyPurpose,
+  E2eeProjectKeyUploadRequest,
+  E2eeProjectKeyUploadResponse,
   E2eeProjectKeyWrap,
   E2eeProjectKeysResponse,
   E2eeProjectLeavesResponse
@@ -103,6 +114,11 @@ import {
 } from './accountKeys';
 import { E2eeApiError } from './e2eeApi';
 import type { CertifyingDevice } from './mls/certify';
+import {
+  parseEpochContext,
+  projectGroupId,
+  type EpochContext
+} from './mls/epochRoles';
 import type { DirectoryInput, LeafCertification } from './mls/directory';
 import type { MlsProjectRef, MlsProjectSessions } from './mls/projectSessions';
 import type { StoredLeaf } from './mls/sessionStore';
@@ -150,6 +166,18 @@ export interface ProjectGroupsApi {
   ): Promise<E2eeKeyArchivesResponse>;
   /** The project's identity-authorized group resets (migration 0036). */
   resets?(projectId: string): Promise<E2eeGroupResetsResponse>;
+  /**
+   * Post this account's own wraps for an epoch it reached by processing
+   * someone else's Commit (slice 5-2, decision D1).
+   */
+  postKeys?(
+    projectId: string,
+    request: E2eeProjectKeyUploadRequest
+  ): Promise<E2eeProjectKeyUploadResponse>;
+  /** The other members' revocation cutoff statements (slice 5-2). */
+  memberCutoffs?(
+    projectId: string
+  ): Promise<E2eeMemberRevocationCutoffsResponse>;
   /** Replace a solo project's group (decision D9; migration 0036). */
   resetGroup?(
     projectId: string,
@@ -227,6 +255,9 @@ export function createProjectGroupsApi(
         })}`
       ),
     resets: (projectId) => call(`${base(projectId)}/mls/resets`),
+    postKeys: (projectId, request) =>
+      call(`${base(projectId)}/keys`, 'POST', request),
+    memberCutoffs: (projectId) => call(`${base(projectId)}/revocation-cutoffs`),
     resetGroup: (projectId, request) =>
       call(`${base(projectId)}/mls/reset`, 'POST', request)
   };
@@ -271,6 +302,21 @@ export interface ProjectGroupContext {
    * after its revocation, and the directory refuses the rest.
    */
   readonly revocations?: RevocationStatements;
+  /**
+   * The project's other members' verified, pinned device lists (slice 5-2;
+   * contacts and pins, slice 5-1, supply them). Without them a project is
+   * solo: a leaf, archive or version of any other account is refused.
+   */
+  readonly members?: ProjectMemberLists;
+}
+
+/** Where co-members' verified device lists come from (slice 5-2). */
+export interface ProjectMemberLists {
+  /**
+   * Verified, pinned device lists of the project's other members. A list
+   * for this account's own user is ignored: its own list is the account's.
+   */
+  lists(projectId: string): Promise<readonly VerifiedDeviceList[]>;
 }
 
 /** Where verified revocation cutoff statements come from. */
@@ -429,22 +475,55 @@ async function foreignLocalState(
 }
 
 /**
- * The verified directory input: this account's device list and every leaf
- * the registry holds. A solo group's leaves are all the owner's; a leaf of
- * anyone else is refused visibly, not dropped.
+ * This account's device list and the project's other members' (slice 5-2),
+ * one per user. Without `ctx.members` the project is solo.
+ */
+export async function projectDeviceLists(
+  ctx: ProjectGroupContext,
+  projectId: string
+): Promise<VerifiedDeviceList[]> {
+  const own = ctx.account.list;
+  const lists = [own];
+  if (!ctx.members) return lists;
+  for (const list of await ctx.members.lists(projectId)) {
+    if (list.userId === own.userId) continue;
+    if (lists.some((known) => known.userId === list.userId)) {
+      throw new ProjectGroupError(
+        'server-mismatch',
+        `Two device lists were given for ${list.userId}.`
+      );
+    }
+    lists.push(list);
+  }
+  return lists;
+}
+
+/**
+ * The verified directory input: every member's device list (slice 5-2;
+ * a solo project's is the owner's alone) and every leaf the registry
+ * holds. A leaf of an account whose list is not given is refused visibly,
+ * not dropped.
  */
 async function directoryFor(
   ctx: ProjectGroupContext,
   projectId: string,
   known?: E2eeProjectGroupRecord
 ): Promise<DirectoryInput> {
-  const revocationCutoffs = await directoryCutoffs(ctx, projectId, known);
+  const lists = await projectDeviceLists(ctx, projectId);
+  const revocationCutoffs = await directoryCutoffs(
+    ctx,
+    projectId,
+    lists,
+    known
+  );
   const { leaves } = await ctx.api.leaves(projectId);
   const certifications: LeafCertification[] = leaves.map((leaf) => {
-    if (leaf.userId !== ctx.account.userId) {
+    if (!lists.some((list) => list.userId === leaf.userId)) {
       throw new ProjectGroupError(
         'server-mismatch',
-        'The leaf registry of a solo project names another account.'
+        lists.length === 1
+          ? 'The leaf registry of a solo project names another account.'
+          : 'The leaf registry names an account that is not a member of this project.'
       );
     }
     return {
@@ -454,7 +533,7 @@ async function directoryFor(
       certification: bytes(leaf.certification)
     };
   });
-  return { lists: [ctx.account.list], certifications, revocationCutoffs };
+  return { lists, certifications, revocationCutoffs };
 }
 
 // --- Revocation cutoffs (slice 4-10) ---------------------------------------
@@ -586,18 +665,84 @@ function currentGeneration(ctx: ProjectGroupContext): number {
 async function directoryCutoffs(
   ctx: ProjectGroupContext,
   projectId: string,
+  lists: readonly VerifiedDeviceList[],
   known?: E2eeProjectGroupRecord
 ): Promise<Map<string, Map<string, number>>> {
-  const revoked = revokedDevices(ctx.account.list);
-  const devices = new Map<string, number>();
-  if (revoked.length) {
-    const group = known ?? (await fetchGroup(ctx, projectId));
-    const cutoffs = await projectRevocationCutoffs(ctx, projectId, group);
+  const out = new Map<string, Map<string, number>>();
+  let group = known;
+  const toEpochs = async (cutoffs: ReadonlyMap<string, ProjectCutoff>) => {
+    group ??= await fetchGroup(ctx, projectId);
+    const devices = new Map<string, number>();
     for (const [deviceId, cutoff] of cutoffs) {
       devices.set(deviceId, Math.max(0, cutoff.keyEpoch - group.keyEpochBase));
     }
+    return devices;
+  };
+  let own = new Map<string, number>();
+  if (revokedDevices(ctx.account.list).length) {
+    group ??= await fetchGroup(ctx, projectId);
+    own = await toEpochs(await projectRevocationCutoffs(ctx, projectId, group));
   }
-  return new Map([[ctx.account.userId, devices]]);
+  out.set(ctx.account.userId, own);
+  const members = await memberRevocationCutoffs(ctx, projectId, lists);
+  for (const [userId, cutoffs] of members) {
+    out.set(userId, await toEpochs(cutoffs));
+  }
+  return out;
+}
+
+/**
+ * The project's other members' revoked devices' cutoffs (slice 5-2), by
+ * user and device: from each member's identity-signed statements naming
+ * this project, verified against that member's list. A revoked device
+ * without one has no entry, and the directory refuses it rather than
+ * guess (slice 5-7 brings cutoffs for every shared project).
+ */
+export async function memberRevocationCutoffs(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  lists?: readonly VerifiedDeviceList[]
+): Promise<Map<string, Map<string, ProjectCutoff>>> {
+  const out = new Map<string, Map<string, ProjectCutoff>>();
+  const others = (lists ?? (await projectDeviceLists(ctx, projectId))).filter(
+    (list) =>
+      list.userId !== ctx.account.userId && revokedDevices(list).length > 0
+  );
+  if (others.length === 0 || !ctx.api.memberCutoffs) return out;
+  const { statements } = await ctx.api
+    .memberCutoffs(projectId)
+    .catch(() => ({ statements: [] }));
+  for (const list of others) {
+    const verified: RevocationCutoffs[] = [];
+    for (const record of statements) {
+      if (record.userId !== list.userId) continue;
+      const value = await verifyRevocationCutoffs(
+        {
+          statement: bytes(record.statement),
+          signature: bytes(record.signature)
+        },
+        list,
+        { generation: record.generation }
+      ).catch(() => null);
+      if (value) verified.push(value);
+    }
+    const devices = new Map<string, ProjectCutoff>();
+    for (const device of revokedDevices(list)) {
+      const named = verified
+        .filter((s) => s.entrySequence === device.revokedAt)
+        .flatMap((s) => s.cutoffs.filter((c) => c.projectId === projectId))
+        .sort((a, b) => b.cutoffEpoch - a.cutoffEpoch)[0];
+      if (named) {
+        devices.set(device.id, {
+          keyEpoch: named.cutoffEpoch,
+          head: named.head ?? null,
+          signed: true
+        });
+      }
+    }
+    out.set(list.userId, devices);
+  }
+  return out;
 }
 
 /** A new group is made after every revocation its creator's list holds. */
@@ -846,8 +991,10 @@ async function fetchArchive(
 
 /**
  * Verify and open one key archive: signed over exactly this envelope by a
- * device of this account, encrypted under `projectKey` for this project
- * and key epoch, and bound to the epoch authenticator it carries.
+ * device of a member (this account, or since slice 5-2 a co-member whose
+ * verified list `ctx.members` gives: any member may commit), encrypted
+ * under `projectKey` for this project and key epoch, and bound to the
+ * epoch authenticator it carries.
  */
 async function openArchive(
   ctx: ProjectGroupContext,
@@ -864,27 +1011,49 @@ async function openArchive(
   };
   if (archive.keyEpoch !== keyEpoch) refuse('names another epoch');
   const envelope = bytes(archive.envelope);
-  const signing = signerKey(ctx.account.list, archive.signerDeviceId);
-  if (!signing) refuse('is signed by a device this account never certified');
-  if (
-    !ctx.account.list.devices.some((d) => d.deviceId === archive.signerDeviceId)
-  ) {
-    // A removed device's archive counts only for epochs it could know.
-    // Without a known cutoff it is left to the key: such a device holds no
-    // project key of an epoch after its removal's rotation, so it cannot
-    // have encrypted that epoch's archive.
-    const cutoff = (await projectRevocationCutoffs(ctx, projectId)).get(
-      archive.signerDeviceId
-    );
-    if (cutoff && keyEpoch >= cutoff.keyEpoch) {
-      refuse('is signed by a removed device after its removal');
+  const lists = await projectDeviceLists(ctx, projectId);
+  // Device ids are not unique across accounts: any list's key may verify.
+  const candidates = lists.flatMap((list) => {
+    const key = signerKey(list, archive.signerDeviceId);
+    return key ? [{ list, key }] : [];
+  });
+  if (candidates.length === 0) {
+    refuse('is signed by a device no member’s list ever certified');
+  }
+  let signed = false;
+  let removedLate = false;
+  for (const { list, key } of candidates) {
+    if (!list.devices.some((d) => d.deviceId === archive.signerDeviceId)) {
+      // A removed device's archive counts only for epochs it could know.
+      // Without a known cutoff it is left to the key: such a device holds
+      // no project key of an epoch after its removal's rotation, so it
+      // cannot have encrypted that epoch's archive.
+      const cutoff = (
+        list.userId === ctx.account.userId
+          ? await projectRevocationCutoffs(ctx, projectId)
+          : ((await memberRevocationCutoffs(ctx, projectId, lists)).get(
+              list.userId
+            ) ?? new Map<string, ProjectCutoff>())
+      ).get(archive.signerDeviceId);
+      if (cutoff && keyEpoch >= cutoff.keyEpoch) {
+        removedLate = true;
+        continue;
+      }
+    }
+    if (
+      await verifyProjectEnvelopeSignature(
+        key,
+        envelope,
+        bytes(archive.signature)
+      ).catch(() => null)
+    ) {
+      signed = true;
+      break;
     }
   }
-  const signed = await verifyProjectEnvelopeSignature(
-    signing!,
-    envelope,
-    bytes(archive.signature)
-  ).catch(() => null);
+  if (!signed && removedLate) {
+    refuse('is signed by a removed device after its removal');
+  }
   if (!signed) refuse('does not carry its signer’s signature');
   try {
     const versionKey = await unwrapKey(
@@ -1796,9 +1965,157 @@ export async function catchUpProjectGroup(
         );
       }
       epoch = processed.change.epoch;
+      await afterProcessed(ctx, ref, projectId, group.keyEpochBase, commit);
     }
     if (!page.more) group = await fetchGroup(ctx, projectId);
   }
+}
+
+/**
+ * After a processed Commit: remember the new epoch's roles as this
+ * device's own session holds them (what `epochRoles` then answers), and,
+ * when someone else sent it, post this account's own wraps of the new
+ * epoch's project key and rejoin PSK (slice 5-2, decision D1), so its other
+ * devices can read and rejoin. The wraps are best effort: the Commit is
+ * processed either way, and another device of the account that later
+ * processes a Commit posts its own epoch's.
+ */
+async function afterProcessed(
+  ctx: ProjectGroupContext,
+  ref: MlsProjectRef,
+  projectId: string,
+  keyEpochBase: number,
+  commit: E2eeMlsCommitRecord
+): Promise<void> {
+  const status = await ctx.sessions.status(ref);
+  if (status.epoch === null) return;
+  const keyEpoch = keyEpochBase + status.epoch;
+  if (status.roles) {
+    knownRoles.set(rolesId(ctx, projectId, keyEpoch), status.roles);
+  }
+  if (commit.senderUserId === ctx.account.userId || !ctx.api.postKeys) return;
+  try {
+    await postOwnEpochKeys(
+      ctx,
+      projectId,
+      keyEpoch,
+      await ctx.sessions.epochMaterial(ref)
+    );
+  } catch {
+    // Best effort, as above.
+  }
+}
+
+/**
+ * Wraps `keyEpoch`'s project key and rejoin PSK under this account's
+ * current account key and posts them as its own (`POST …/keys`, slice
+ * 5-2). The server keeps a wrap already stored for that epoch.
+ */
+export async function postOwnEpochKeys(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  keyEpoch: number,
+  material: { readonly projectKey: Uint8Array; readonly rejoinPsk: RejoinPsk }
+): Promise<void> {
+  const device = requireDevice(ctx);
+  if (!ctx.api.postKeys) {
+    throw new ProjectGroupError(
+      'server-mismatch',
+      'This server cannot store a member’s own keys.'
+    );
+  }
+  const wraps = await wrapEpochKeys(
+    ctx,
+    projectId,
+    keyEpoch,
+    material.projectKey,
+    material.rejoinPsk
+  );
+  rememberProjectKey(
+    ctx.account.userId,
+    projectId,
+    keyEpoch,
+    material.projectKey
+  );
+  await ctx.api.postKeys(projectId, {
+    deviceId: device.deviceId,
+    keyEpoch,
+    wraps
+  });
+}
+
+// --- Roles of an epoch (slice 5-2) ------------------------------------------
+
+/** Roles this page verified, by account, project and key epoch. */
+const knownRoles = new Map<string, ProjectRoles>();
+const rolesId = (
+  ctx: ProjectGroupContext,
+  projectId: string,
+  keyEpoch: number
+) => JSON.stringify([ctx.account.userId, projectId, keyEpoch]);
+
+/**
+ * The MLS roles the project's group held in `keyEpoch` (slice 5-2): what
+ * this device's own session held when it reached that epoch, or the
+ * roles extension of the GroupContext in that epoch's key archive record,
+ * verified (signed by a member's device, opened under the epoch's project
+ * key and bound to its epoch authenticator) and checked to be this
+ * project's group at that epoch. Versions are tied to MLS authority by
+ * the role their author held in their own epoch.
+ */
+export async function epochRoles(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  keyEpoch: number
+): Promise<ProjectRoles> {
+  const id = rolesId(ctx, projectId, keyEpoch);
+  const known = knownRoles.get(id);
+  if (known) return known;
+  const { keyEpochBase, current } = await groupBaseForKeyEpoch(
+    ctx,
+    projectId,
+    keyEpoch
+  );
+  const epoch = keyEpoch - keyEpochBase;
+  if (current && ctx.device) {
+    const ref = refOf(ctx, ctx.device, projectId);
+    const status = (await ctx.sessions.leaf(ref))
+      ? await ctx.sessions.status(ref).catch(() => null)
+      : null;
+    if (status?.inGroup && status.epoch === epoch && status.roles) {
+      knownRoles.set(id, status.roles);
+      return status.roles;
+    }
+  }
+  const invalid = (why: string): never => {
+    throw new ProjectGroupError(
+      'archive-invalid',
+      `The key archive of epoch ${keyEpoch} ${why}.`
+    );
+  };
+  const body = await openArchive(
+    ctx,
+    projectId,
+    keyEpoch,
+    await projectKeyForEpoch(ctx, projectId, keyEpoch),
+    await fetchArchive(ctx, projectId, keyEpoch)
+  );
+  let parsed: EpochContext;
+  try {
+    parsed = parseEpochContext(
+      (await ctx.sessions.decodeEpochRecord(body.epochRecord)).groupContext
+    );
+  } catch {
+    return invalid('carries no readable roles');
+  }
+  if (
+    parsed.epoch !== epoch ||
+    !sameBytes(parsed.groupId, projectGroupId(projectId))
+  ) {
+    invalid('records another group or epoch');
+  }
+  knownRoles.set(id, parsed.roles);
+  return parsed.roles;
 }
 
 export type Recovery = 'none' | 'confirmed' | 'discarded' | 'resent';

@@ -46,6 +46,16 @@ export interface E2eeRevocationCutoffsResponse {
   projects: E2eeRemovalProjectRecord[];
 }
 
+/**
+ * `GET /api/e2ee/projects/:id/revocation-cutoffs` (slice 5-2): every
+ * other member's identity-signed revocation cutoff statements (the owner's
+ * included), for a member of the project. Browsers verify each against
+ * that member's verified device list before using it.
+ */
+export interface E2eeMemberRevocationCutoffsResponse {
+  statements: (E2eeRevocationCutoffRecord & { userId: string })[];
+}
+
 export interface E2eeRevocationCutoffRequest {
   generation: number;
   entrySequence: number;
