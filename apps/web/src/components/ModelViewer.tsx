@@ -326,8 +326,16 @@ type SketchMoveEvent = Extract<
 import type { PlaneBasis } from '@openzcad/geometry';
 import type { PlaneId, SketchObjectData } from '@openzcad/shared';
 import { buildPlanePickerRig } from './viewer/planePickerRig';
-import { buildDatumPlaneRig, type DatumPlaneRig } from './viewer/datumPlaneRig';
-import { buildDatumAxisRig, type DatumAxisRig } from './viewer/datumAxisRig';
+import {
+  buildDatumPlaneRig,
+  type DatumPlaneRig,
+  type DatumPlaneRigInput
+} from './viewer/datumPlaneRig';
+import {
+  buildDatumAxisRig,
+  type DatumAxisRig,
+  type DatumAxisRigInput
+} from './viewer/datumAxisRig';
 import type { DatumPlaneDisplay } from '../lib/datumPlaneDisplay';
 import type { ReferenceImageDisplay } from '../lib/referenceImageDisplay';
 import {
@@ -11883,16 +11891,15 @@ export function ModelViewer({
   // Committed datum planes (viewer/datumPlaneRig), rebuilt when the set,
   // a frame or the selection changes; the render loop keeps their size.
   const datumPlaneKey = JSON.stringify(
-    (datumPlanes ?? []).map(({ featureId, name, frame, selected }) => ({
+    (datumPlanes ?? []).map(({ featureId, frame, selected }) => ({
       featureId,
-      name,
       frame,
       selected
     }))
   );
   useEffect(() => {
     const context = contextRef.current;
-    const planes = JSON.parse(datumPlaneKey) as DatumPlaneDisplay[];
+    const planes = JSON.parse(datumPlaneKey) as DatumPlaneRigInput[];
     if (!context || planes.length === 0) {
       return;
     }
@@ -11996,16 +12003,15 @@ export function ModelViewer({
   // Committed datum axes (viewer/datumAxisRig), rebuilt when the set, a line
   // or the selection changes; the render loop keeps their length.
   const datumAxisKey = JSON.stringify(
-    (datumAxes ?? []).map(({ featureId, name, axis, selected }) => ({
+    (datumAxes ?? []).map(({ featureId, axis, selected }) => ({
       featureId,
-      name,
       axis,
       selected
     }))
   );
   useEffect(() => {
     const context = contextRef.current;
-    const axes = JSON.parse(datumAxisKey) as DatumAxisDisplay[];
+    const axes = JSON.parse(datumAxisKey) as DatumAxisRigInput[];
     if (!context || axes.length === 0) {
       return;
     }

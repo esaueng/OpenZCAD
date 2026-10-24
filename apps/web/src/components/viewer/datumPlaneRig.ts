@@ -7,18 +7,16 @@ import {
 } from '@openzcad/viewport';
 import type { DatumFrame } from '@openzcad/shared';
 import {
-  buildDatumLabel,
   DATUM_HIDDEN_DASHED,
   DATUM_HIDDEN_WIDTH_PX,
   DATUM_IDLE_COLOR,
-  DATUM_SELECTED_COLOR,
-  removeDatumLabels
+  DATUM_SELECTED_COLOR
 } from './datumStyle';
 
 /**
  * Scene-side rig for committed R01 datum planes, in the "solid frame" look:
  * a flat fill, a heavy square border, a dashed continuation where the part
- * hides the plane, and the plane's name boxed at its corner. Everything sits
+ * hides the plane. Everything sits
  * on the frame the exact build resolved. The quad is presentation only —
  * every consumer uses the infinite plane — so it adds nothing to the model's
  * bounds and holds a steady size on screen rather than claiming a world
@@ -29,7 +27,6 @@ import {
 
 export interface DatumPlaneRigInput {
   featureId: string;
-  name: string;
   frame: DatumFrame;
   selected: boolean;
 }
@@ -144,10 +141,7 @@ export function buildDatumPlaneRig(
       idle.push(fillMaterial, border.material, hidden.material);
     }
 
-    const label = buildDatumLabel(plane.name, plane.selected);
-    label.position.set(0.5, 0.5, 0);
-
-    holder.add(fill, hidden, border, label);
+    holder.add(fill, hidden, border);
     group.add(holder);
     scaled.push(holder);
   }
@@ -169,7 +163,6 @@ export function buildDatumPlaneRig(
       return fills;
     },
     dispose() {
-      removeDatumLabels(group);
       for (const item of disposables) item.dispose();
       group.clear();
     }

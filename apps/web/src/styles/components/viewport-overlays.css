@@ -342,27 +342,3 @@
 .viewer-label-layer > :not(.selection-callout-chip) {
   z-index: 1 !important;
 }
-
-/* A datum plane's or axis's name (viewer/datumStyle.ts), boxed at the
-   plane's corner or the axis's end. A dark HUD chip on either stage, with a
-   frame in the datum colour. CSS2DRenderer owns `transform` and centres the
-   chip on its anchor, so the standoff up and to the right rides on
-   `translate`. Clicks pass through to the model. */
-.viewport-datum-label {
-  pointer-events: none;
-  translate: calc(50% + 8px) calc(-50% - 4px);
-  padding: 3px 7px;
-  color: var(--color-viewport-text);
-  background: rgba(16, 18, 21, 0.9);
-  border: 1.5px solid var(--color-datum);
-  border-radius: var(--radius-sm);
-  font: 600 10.5px/1.2 var(--font-mono);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.viewport-datum-label[data-selected='true'] {
-  border-color: var(--color-select);
-  background: color-mix(in srgb, var(--color-select) 26%, rgb(16, 18, 21));
-}

@@ -16,16 +16,12 @@ const holderOf = (rig: { group: THREE.Group }, id: string) =>
   rig.group.children.find((object) => object.userData.datumFeatureId === id)!;
 const linesOf = (object: THREE.Object3D) =>
   object.children.filter((child): child is Line2 => child instanceof Line2);
-const labelOf = (object: THREE.Object3D) =>
-  object.children.find(
-    (child): child is CSS2DObject => child instanceof CSS2DObject
-  )!;
 
 describe('buildDatumPlaneRig', () => {
   it('sizes each plane by the pixel scale at its own origin', () => {
     const rig = buildDatumPlaneRig([
-      { featureId: 'near', name: 'Plane 1', frame: frame(0), selected: false },
-      { featureId: 'far', name: 'Plane 2', frame: frame(100), selected: true }
+      { featureId: 'near', frame: frame(0), selected: false },
+      { featureId: 'far', frame: frame(100), selected: true }
     ]);
     // Perspective: a world unit covers fewer pixels the farther it is.
     rig.setScale((point: THREE.Vector3) => 0.01 + point.z * 0.001);
@@ -36,7 +32,7 @@ describe('buildDatumPlaneRig', () => {
 
   it('offers only its fills as pick targets, each naming its datum', () => {
     const rig = buildDatumPlaneRig([
-      { featureId: 'lid', name: 'Lid', frame: frame(10), selected: false }
+      { featureId: 'lid', frame: frame(10), selected: false }
     ]);
     rig.setScale(() => 0.1);
     rig.group.updateMatrixWorld(true);
@@ -64,7 +60,7 @@ describe('buildDatumPlaneRig', () => {
 
   it('draws a heavy border and a dashed outline that shows through the part', () => {
     const rig = buildDatumPlaneRig([
-      { featureId: 'lid', name: 'Lid', frame: frame(10), selected: false }
+      { featureId: 'lid', frame: frame(10), selected: false }
     ]);
     const materials = linesOf(holderOf(rig, 'lid')).map(
       (line) => line.material
@@ -83,11 +79,10 @@ describe('buildDatumPlaneRig', () => {
       [
         {
           featureId: 'idle',
-          name: 'Plane 1',
           frame: frame(0),
           selected: false
         },
-        { featureId: 'sel', name: 'Plane 2', frame: frame(5), selected: true }
+        { featureId: 'sel', frame: frame(5), selected: true }
       ],
       { color: '#5d6a80' }
     );
@@ -98,10 +93,6 @@ describe('buildDatumPlaneRig', () => {
       ).color.getHexString();
     expect(fillColor('idle')).toBe('5d6a80');
     expect(fillColor('sel')).toBe(DATUM_SELECTED_COLOR.slice(1));
-    expect(labelOf(holderOf(rig, 'sel')).element.dataset.selected).toBe('true');
-    expect(labelOf(holderOf(rig, 'idle')).element.dataset.selected).toBe(
-      undefined
-    );
 
     rig.setColor('#b3bed0');
     expect(fillColor('idle')).toBe('b3bed0');
@@ -112,16 +103,16 @@ describe('buildDatumPlaneRig', () => {
     rig.dispose();
   });
 
-  it('labels each plane with its name and takes the label off the page on dispose', () => {
+  it('pins no name label to the plane, selected or not', () => {
     const rig = buildDatumPlaneRig([
-      { featureId: 'lid', name: 'Lid plane', frame: frame(0), selected: false }
+      { featureId: 'idle', frame: frame(0), selected: false },
+      { featureId: 'sel', frame: frame(5), selected: true }
     ]);
-    const label = labelOf(holderOf(rig, 'lid'));
-    expect(label.element.textContent).toBe('Lid plane');
-    expect(label.element.className).toBe('viewport-datum-label');
-    // The label renderer parents each element in its layer.
-    document.body.appendChild(label.element);
+    const labels: CSS2DObject[] = [];
+    rig.group.traverse((node) => {
+      if (node instanceof CSS2DObject) labels.push(node);
+    });
+    expect(labels).toEqual([]);
     rig.dispose();
-    expect(label.element.isConnected).toBe(false);
   });
 });

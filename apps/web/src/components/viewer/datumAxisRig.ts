@@ -6,18 +6,16 @@ import {
 } from '@openzcad/viewport';
 import type { DatumAxisLine } from '@openzcad/shared';
 import {
-  buildDatumLabel,
   DATUM_HIDDEN_DASHED,
   DATUM_HIDDEN_WIDTH_PX,
   DATUM_IDLE_COLOR,
-  DATUM_SELECTED_COLOR,
-  removeDatumLabels
+  DATUM_SELECTED_COLOR
 } from './datumStyle';
 
 /**
  * Scene-side rig for committed R01 datum axes, in the "solid frame" look: one
  * heavy solid line per axis with plain ends, a dashed continuation where the
- * part hides it, and its name boxed at one end. Each line is centred on the
+ * part hides it. Each line is centred on the
  * origin the exact build resolved and runs along its direction. Like a datum
  * plane's quad it is presentation only — every consumer turns about the
  * infinite line — so it holds a steady length on screen, adds nothing to the
@@ -26,7 +24,6 @@ import {
 
 export interface DatumAxisRigInput {
   featureId: string;
-  name: string;
   axis: DatumAxisLine;
   selected: boolean;
 }
@@ -100,10 +97,7 @@ export function buildDatumAxisRig(
       if (!entry.selected) idle.push(part.material);
     }
 
-    const label = buildDatumLabel(entry.name, entry.selected);
-    label.position.set(0.5, 0, 0);
-
-    holder.add(hidden, line, label);
+    holder.add(hidden, line);
     group.add(holder);
     holders.push(holder);
   }
@@ -120,7 +114,6 @@ export function buildDatumAxisRig(
       for (const material of idle) material.color.set(color);
     },
     dispose() {
-      removeDatumLabels(group);
       for (const item of disposables) item.dispose();
       group.clear();
     }
