@@ -61,6 +61,10 @@ import {
 } from './e2eeProjectPreferences';
 import { handleE2eeProjectRequest, isE2eeProjectPath } from './e2eeProjects';
 import {
+  handleE2eeDeviceRemovalRequest,
+  isE2eeDeviceRemovalPath
+} from './e2eeDeviceRemoval';
+import {
   blobBucket,
   handleE2eeContentBlobRequest,
   isE2eeContentBlobPath
@@ -1875,6 +1879,16 @@ export async function handleE2eeRequest(
         userId,
         db.authorization,
         () => readBody(request)
+      );
+    }
+    if (isE2eeDeviceRemovalPath(pathname)) {
+      // Revocation cutoffs and solo group resets (e2eeDeviceRemoval.ts).
+      return await handleE2eeDeviceRemovalRequest(
+        request,
+        rawDb,
+        userId,
+        projectsEnabled,
+        db.authorization
       );
     }
     if (isE2eeContentBlobPath(pathname)) {
