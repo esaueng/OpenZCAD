@@ -8,6 +8,7 @@ export {
 import {
   documentStructureError,
   documentEnvelopeError,
+  derivedEnvelopeError,
   hasValidImportedMeshSources,
   hasValidImportedStepSources,
   isDocumentHistory
@@ -8156,7 +8157,7 @@ function checkClientDocument(value: unknown): CollaborationRejection | null {
   }
   const complexity = documentStructureError(value);
   if (complexity) return { code: 'document-too-complex', message: complexity };
-  const envelope = documentEnvelopeError(value);
+  const envelope = documentEnvelopeError(value) ?? derivedEnvelopeError(value);
   if (envelope) return { code: 'document-invalid', message: envelope };
   if (
     typeof value.schemaVersion !== 'number' ||

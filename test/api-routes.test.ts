@@ -3443,6 +3443,24 @@ describe('worker api routes', () => {
     });
   });
 
+  it('refuses a document without its derived state instead of failing', async () => {
+    const created = await createProject('No derived');
+    const projectId = created.document.projectId;
+    const { derived: _derived, ...withoutDerived } = created.document;
+    const response = await worker.fetch(
+      put(`/api/projects/${projectId}/document`, {
+        projectId,
+        expectedVersion: created.document.version,
+        document: withoutDerived
+      }),
+      env
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: 'Project document is missing its derived state.'
+    });
+  });
+
   it('fences a document save against the version the account holds', async () => {
     const created = await createProject('Fenced');
     const projectId = created.document.projectId;

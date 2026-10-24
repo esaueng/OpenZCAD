@@ -1276,6 +1276,28 @@ describe('cloudflare adapters', () => {
     });
   });
 
+  it('rejects a collaboration snapshot without its derived state', async () => {
+    const { context } = createRoomContext();
+    const base = createProjectDocument('Bare Room', toUserId('user_room'));
+    const { derived: _derived, ...bare } = base;
+    const document = bare as unknown as ProjectDocument;
+    const room = createTestRoom(context, {});
+
+    const response = await room.fetch(
+      roomRequest(document, {
+        clientId: 'client_bare',
+        document,
+        baseVersion: null
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      type: 'error',
+      code: 'document-invalid'
+    });
+  });
+
   it('accepts undo and redo as forward collaboration revisions', () => {
     const manager = new CommandManager(
       createProjectDocument('Undo Room', toUserId('user_room'))

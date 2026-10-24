@@ -108,6 +108,25 @@ export function documentEnvelopeError(value: unknown): string | null {
   return null;
 }
 
+/**
+ * The derived block the account keeps when it strips derived geometry
+ * (`withoutDerivedProjection`): its warnings and update time. Browsers always
+ * send it; the account refuses a document without it rather than failing on
+ * it (ADR-024 Phase 1: the account no longer normalizes what it stores).
+ */
+export function derivedEnvelopeError(value: unknown): string | null {
+  const derived = isDocumentRecord(value) ? value.derived : undefined;
+  if (
+    !isDocumentRecord(derived) ||
+    !Array.isArray(derived.warnings) ||
+    !derived.warnings.every((warning) => typeof warning === 'string') ||
+    typeof derived.updatedAt !== 'string'
+  ) {
+    return 'Project document is missing its derived state.';
+  }
+  return null;
+}
+
 export const MAX_NODE_NAME_LENGTH = 200;
 export const MAX_EXPRESSION_LENGTH = 4_096;
 export function boundedName(value: string): string {
