@@ -1166,6 +1166,7 @@ describe('account-key history', () => {
           unwrapKey(stolen, fromBase64Url(row.wrapped), {
             purpose: 'previous-account-key',
             userId: USER,
+            generation: row.generation,
             keySequence: row.key_sequence
           })
         ).rejects.toMatchObject({ code: 'authentication-failed' });
@@ -1205,6 +1206,7 @@ describe('account-key history', () => {
             await wrapKey(generateSymmetricKey(), keys[1]!.key, {
               purpose: 'previous-account-key',
               userId: USER,
+              generation: 1,
               keySequence: 3
             })
           )

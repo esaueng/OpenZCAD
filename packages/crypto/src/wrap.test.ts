@@ -887,7 +887,12 @@ describe('project data wraps', () => {
       archivedEpoch: 1,
       underEpoch: 4
     },
-    { purpose: 'previous-account-key', userId: 'u1', keySequence: 3 }
+    {
+      purpose: 'previous-account-key',
+      userId: 'u1',
+      generation: 1,
+      keySequence: 3
+    }
   ];
 
   it('wraps each new purpose with AES-KW and opens it back', async () => {
@@ -960,8 +965,18 @@ describe('project data wraps', () => {
         archivedEpoch: 5,
         underEpoch: 4
       },
-      { purpose: 'previous-account-key', userId: '', keySequence: 0 },
-      { purpose: 'previous-account-key', userId: 'u', keySequence: 2 ** 32 }
+      {
+        purpose: 'previous-account-key',
+        userId: '',
+        generation: 1,
+        keySequence: 0
+      },
+      {
+        purpose: 'previous-account-key',
+        userId: 'u',
+        generation: 1,
+        keySequence: 2 ** 32
+      }
     ];
     for (const context of bad) {
       expect(() => encodeWrapContext(context as WrapContext)).toThrow(
@@ -996,6 +1011,7 @@ describe('project data wraps', () => {
         await wrapKey(keys[i + 1]!, keys[i]!, {
           purpose: 'previous-account-key',
           userId: 'u1',
+          generation: 1,
           keySequence: sequences[i]!
         })
       );
@@ -1006,6 +1022,7 @@ describe('project data wraps', () => {
       current = await unwrapKey(current, history.get(sequences[i]!)!, {
         purpose: 'previous-account-key',
         userId: 'u1',
+        generation: 1,
         keySequence: sequences[i]!
       });
       expect(current).toEqual(keys[i]);
@@ -1017,6 +1034,7 @@ describe('project data wraps', () => {
         unwrapKey(keys[0]!, wrapped, {
           purpose: 'previous-account-key',
           userId: 'u1',
+          generation: 1,
           keySequence
         }),
         'authentication-failed'
@@ -1027,7 +1045,19 @@ describe('project data wraps', () => {
       unwrapKey(keys[2]!, history.get(2)!, {
         purpose: 'previous-account-key',
         userId: 'u1',
+        generation: 1,
         keySequence: 5
+      }),
+      'authentication-failed'
+    );
+    // Sequences restart for each identity: a wrap relabelled with another
+    // generation does not open either.
+    await rejectsWith(
+      unwrapKey(keys[1]!, history.get(0)!, {
+        purpose: 'previous-account-key',
+        userId: 'u1',
+        generation: 2,
+        keySequence: 0
       }),
       'authentication-failed'
     );
@@ -1088,7 +1118,12 @@ describe('AES-KW on an engine that skips the integrity check', () => {
         archivedEpoch: 0,
         underEpoch: 1
       },
-      { purpose: 'previous-account-key', userId: 'u1', keySequence: 0 }
+      {
+        purpose: 'previous-account-key',
+        userId: 'u1',
+        generation: 1,
+        keySequence: 0
+      }
     ];
     const wraps = await Promise.all(
       contexts.map((context) => wrapKey(PROJECT_KEY, BLOB_KEY, context))

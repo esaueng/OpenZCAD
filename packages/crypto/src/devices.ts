@@ -385,7 +385,13 @@ export function encodeDeviceListEntry(entry: DeviceListEntry): Bytes {
       else writeId(writer, revocation.replacedBy);
     }
   }
-  return writer.finish();
+  const bytes = writer.finish();
+  // The same bound the decoder enforces, so nothing is signed that no
+  // verifier will accept.
+  if (bytes.byteLength > MAX_DEVICE_LIST_ENTRY_BYTES) {
+    throw new E2eeError('limit-exceeded', 'Device list entry is too large');
+  }
+  return bytes;
 }
 
 function kindFor<K extends string>(

@@ -255,7 +255,7 @@ UTF-8 string and type 2 a u64.
 | `share-version-key`      | KW     | projectId, shareId, versionId             | share key: a share snapshot's version key, for link visitors                                                             |
 | `rejoin-psk`             | KW     | userId, projectId, epoch                  | account key: an MLS epoch's rejoin PSK, for an External Commit after losing MLS state                                    |
 | `archived-project-key`   | KW     | projectId, archivedEpoch, underEpoch      | a later epoch's project key: an earlier project key; `archivedEpoch` must be below `underEpoch`                          |
-| `previous-account-key`   | KW     | userId, keySequence                       | the new account key: the account key it replaced, so older account-key wraps stay reachable                              |
+| `previous-account-key`   | KW     | userId, generation, keySequence           | the new account key: the account key it replaced, so older account-key wraps stay reachable                              |
 
 `version-key` accepts every project envelope kind, `project-info` and
 `key-archive` included. Integer fields are u32 values encoded as u64.

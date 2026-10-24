@@ -201,6 +201,12 @@ export type WrapContext =
       readonly purpose: 'previous-account-key';
       readonly userId: string;
       /**
+       * The identity generation the wrapped key belongs to. Key sequences
+       * restart for each identity, so without it a server could present one
+       * generation's wrap as another's.
+       */
+      readonly generation: number;
+      /**
        * Which account key is wrapped: the device-list sequence, within its
        * identity's list, of the entry that first committed to it (0 for an
        * identity's first key; see `accountKeySequence`).
@@ -279,7 +285,11 @@ const CONTEXT_FIELDS: Record<WrapPurpose, Record<string, FieldRule>> = {
     archivedEpoch: 'uint',
     underEpoch: 'uint'
   },
-  'previous-account-key': { userId: 'string', keySequence: 'uint' }
+  'previous-account-key': {
+    userId: 'string',
+    generation: 'uint',
+    keySequence: 'uint'
+  }
 };
 
 const MAX_CONTEXT_STRING = 256;

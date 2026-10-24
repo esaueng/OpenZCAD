@@ -410,6 +410,7 @@ async function historyWrap(
       await wrapKey(successorKey, replacedKey, {
         purpose: 'previous-account-key',
         userId,
+        generation: replaced.generation,
         keySequence: replaced.keySequence
       })
     )
@@ -1754,6 +1755,7 @@ export async function openAccountKeyChain(
         opened = await unwrapKey(key, fromBase64Url(row.wrapped), {
           purpose: 'previous-account-key',
           userId: ctx.userId,
+          generation: previous.generation,
           keySequence: previous.keySequence
         });
       } catch (error) {

@@ -610,6 +610,40 @@ describe('replacement devices (entry version 2)', () => {
     ).toBe(false);
   });
 
+  it('refuses to encode an entry larger than verifiers decode', async () => {
+    const { genesis } = await fixture(3);
+    // Every count at its limit with the longest ids, each revocation naming
+    // a replacement: within the shape rules, but past the decoder's bound.
+    const long = (prefix: string, index: number) =>
+      `${prefix}${String(index).padStart(3, '0')}`.padEnd(128, 'x');
+    const device = genesis.devices[0]!;
+    const distinct = (key: Uint8Array, index: number) => {
+      const copy = new Uint8Array(key);
+      copy[64] = index;
+      copy[63] = 0xa5;
+      return copy;
+    };
+    const oversized: DeviceListEntry = {
+      ...genesis,
+      sequence: 1,
+      previousEntryHash: new Uint8Array(32),
+      devices: Array.from({ length: 64 }, (_, index) => ({
+        ...device,
+        deviceId: long('dev_', index),
+        label: 'L'.repeat(64),
+        // Distinct bytes are enough here: encoding checks shape, not points.
+        signingKey: distinct(device.signingKey, 2 * index),
+        unlockKey: distinct(device.unlockKey, 2 * index + 1)
+      })),
+      revoked: Array.from({ length: 80 }, (_, index) => ({
+        kind: 'device' as const,
+        id: long('gone_', index),
+        replacedBy: long('dev_', 0)
+      }))
+    };
+    throwsWith(() => encodeDeviceListEntry(oversized), 'limit-exceeded');
+  });
+
   it('exposes the replacement on the revoked record across mixed versions', async () => {
     const f = await fixture(3);
     f.chain = await removal(f, 'dev_2');
