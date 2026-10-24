@@ -8,7 +8,7 @@ dependencies, so the same code runs in browsers, Web Workers, the Tauri
 WKWebView and Node 20+. Phase 3's account keys (device lists, unlock targets,
 device approval) are its first application use; Phase 4 adds the project
 data formats below (new envelope kinds, the version log, epoch bindings and
-bodies), and Phase 5 sharing (contacts lists and share links).
+bodies), and Phase 5 sharing (contacts lists, share links and invitations).
 
 All integers are big-endian. Every label below is UTF-8 and prefixed with
 `OpenZCAD E2EE `, so `v1 wrap version-key` means the bytes of
@@ -530,6 +530,29 @@ Their `code` is `authentication-failed` for a bad signature or an
 unauthorized signer, `chain-broken` for a dropped tombstone, and
 `context-mismatch` otherwise, expiry included.
 
+## Project invitations
+
+An invitation to an encrypted project (ADR-024, Sharing and collaboration;
+Phase 5) is a statement the owner's certified device signs with
+`v1 project invitation signature`:
+
+```
+"OZI" (4f 5a 49) | u8 version = 1 | u8 length + project id | u8 length + invitation id
+| u8 length + inviter user id | 32-byte invitee email hash | u8 role (1 editor, 2 viewer)
+| u64 issuedAt | u64 expiresAt | u8 length + signer device id | 32-byte signer key hash
+```
+
+`invitationEmailHash(email)` is `SHA-256(label "v1 invitation email hash" |
+UTF-8(lowercase(trim(email))))`, so the statement and the server's stored
+invitation hold a hash, not the address. An invitation lasts at most seven
+days. `verifyProjectInvitation(signed, signerKey, { now, expected })` takes
+the signing device's key from the owner's verified device list and checks,
+in order, canonical bytes, that the key's `publicKeyHash` is the named
+signer, the signature, `now` within `[issuedAt - 10 min, expiresAt)`, then
+the expected project, invitation, inviter and email hash. Refusals are
+`ProjectInvitationError`s with a `reason` (`signature`, `signer-mismatch`,
+`expired`, `not-yet-valid`, `context-mismatch`).
+
 ## Tests
 
 `vectors.test.ts` holds fixed vectors built from injected keys, blob ids, IVs,
@@ -540,11 +563,13 @@ project-data wraps, an epoch binding, a version log record, a key archive
 body, and the share-link formats: a share key hash, a delegation, a
 share-authority statement, a grant and a tombstone with recorded signatures
 checked by raw WebCrypto, a version 2 document body, and the `share-key` and
-`share-version-key` wraps. It also re-derives the nonce layout, both envelope classes, the content
+`share-version-key` wraps, and an invitation email hash and statement with a
+recorded signature. It also re-derives the nonce layout, both envelope classes, the content
 blob hash, the wrap and the epoch binding with raw WebCrypto. A
 change to a vector is a format change and needs a new version byte.
 `fuzz.test.ts` mutates valid inputs, version log records, contacts entries,
-share-link statements and bodies (version 2 included), and requires every parser to fail only with `E2eeError`. Functions that inject keys or randomness (`…With`,
+share-link statements and bodies (version 2 included) and invitation
+statements, and requires every parser to fail only with `E2eeError`. Functions that inject keys or randomness (`…With`,
 `envelopeKeyFromBytes`) are test-only and are not exported from the package
 entry.
 

@@ -33,6 +33,12 @@ import {
   verifyContactsList
 } from './contacts';
 import { E2eeError } from './errors';
+import {
+  decodeProjectInvitation,
+  invitationEmailHash,
+  signProjectInvitation,
+  verifyProjectInvitation
+} from './invitations';
 import { publicKeyHash } from './codes';
 import {
   decodeShareAuthority,
@@ -757,6 +763,58 @@ describe('share-link parser fuzzing', () => {
             });
           }
         })
+      );
+    }
+    for (const code of ['malformed', 'authentication-failed', 'ok']) {
+      expect(outcomes.get(code) ?? 0).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe('invitation parser fuzzing', () => {
+  it('invitation statements only throw E2eeError', async () => {
+    const device = await generateSigningKeyPair(false);
+    const deviceRaw = await exportPublicKey(device.publicKey);
+    const T = 1_760_000_000_000;
+    const signed = await signProjectInvitation(device.privateKey, {
+      projectId: 'p',
+      invitationId: 'inv_1',
+      inviterUserId: 'u_owner',
+      inviteeEmailHash: await invitationEmailHash('bob@example.com'),
+      role: 'editor',
+      issuedAt: T,
+      expiresAt: T + 3 * 86_400_000,
+      signerDeviceId: 'd1',
+      signerKeyHash: await publicKeyHash(deviceRaw)
+    });
+    const now = T + 86_400_000;
+    const outcomes = new Map<string, number>();
+    const count = (outcome: string) =>
+      outcomes.set(outcome, (outcomes.get(outcome) ?? 0) + 1);
+    for (let seed = 1; seed <= 300; seed += 1) {
+      const m = (bytes: Uint8Array) => mutate(seed, new Uint8Array(bytes));
+      count(
+        await onlyTypedErrors(() =>
+          decodeProjectInvitation(m(signed.statement))
+        )
+      );
+      count(
+        await onlyTypedErrors(() =>
+          verifyProjectInvitation(
+            { statement: m(signed.statement), signature: signed.signature },
+            deviceRaw,
+            { now }
+          )
+        )
+      );
+      count(
+        await onlyTypedErrors(() =>
+          verifyProjectInvitation(
+            { statement: signed.statement, signature: m(signed.signature) },
+            deviceRaw,
+            { now }
+          )
+        )
       );
     }
     for (const code of ['malformed', 'authentication-failed', 'ok']) {

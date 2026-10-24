@@ -524,7 +524,8 @@ export type StatementKind =
   | 'share delegation'
   | 'share authority'
   | 'share link grant'
-  | 'share link tombstone';
+  | 'share link tombstone'
+  | 'project invitation';
 
 /** @internal `u8 1 | r || s` over `label "v1 <kind> signature" | statement`. */
 export async function signStatement(
