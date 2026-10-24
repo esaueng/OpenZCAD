@@ -18004,6 +18004,11 @@ export function App() {
       setRevertPill(null);
     }
   }, [interaction.mode]);
+  // The offer is for the extrude just made, in the mode it was made in: it
+  // used to ride along through View, Tweak and Draw until a tool cleared it.
+  useEffect(() => {
+    setRevertPill(null);
+  }, [resolvedWorkspaceMode]);
 
   /** A detected bounded cell was clicked: update persistent profile selection. */
   function handleSelectRegion(
