@@ -2132,8 +2132,10 @@ button.command-rail:disabled {
   background: var(--color-accent);
 }
 
+/* Locked, the foot is not a control: the strip under the column passes
+   the pointer through to the model. */
 .panel-column-foot.is-off {
-  cursor: default;
+  pointer-events: none;
 }
 
 .panel-column-foot.is-off .panel-gap-grip {

@@ -380,6 +380,32 @@ test('a docked column fills the dock, its foot shortens it, and a second panel f
   await expect(foot).toHaveAttribute('aria-valuenow', '100');
 });
 
+test('a locked shortened column’s foot is no control and passes the pointer to the model', async ({
+  page
+}) => {
+  await openWorkspace(page, 'Locked foot', {
+    right: [['bodies']],
+    columnHeights: { bodies: 360 },
+    options: { locked: true }
+  });
+  const objects = modelPanel(page, 'Objects');
+  await expect(objects).toBeVisible();
+  await expect.poll(async () => (await box(objects)).height).toBe(360);
+  const foot = page.getByRole('separator', {
+    name: 'Resize the Objects column'
+  });
+  await expect(foot).toHaveAttribute('aria-disabled', 'true');
+  await expect(foot).toHaveAttribute('tabindex', '-1');
+  // The strip it stands in belongs to whatever is under it, not the foot.
+  const strip = await box(foot);
+  const hit = await page.evaluate(
+    ({ x, y }) =>
+      document.elementFromPoint(x, y)?.closest('.panel-column-foot') !== null,
+    { x: strip.x + strip.width / 2, y: strip.y + strip.height / 2 }
+  );
+  expect(hit).toBe(false);
+});
+
 test('a divider announces where it is drawn while its panels hug their content', async ({
   page
 }) => {
