@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
+import { fromBase64Url, parseEnvelope } from '@openzcad/crypto';
 import { withEncryptedProjectInfo } from '../../apps/web/worker/e2eeProjectDocuments';
 import { d1Database } from '../d1-sqlite';
 import { expect, expectBodyCount, stubApi, test } from './openzcad-fixtures';
@@ -219,5 +220,131 @@ test('imports a STEP file into an encrypted project and resolves it in a fresh b
   } finally {
     await fresh.close();
   }
+  expect(errors).toEqual([]);
+});
+
+/**
+ * ADR-024 Phase 4, slice 4-7: leaving an encrypted project publishes its
+ * shelf thumbnail as an encrypted thumbnail blob named by a new project
+ * info, never an artifact, and a fresh browser of the same device, holding
+ * no cached thumbnail, decrypts the project's name and its picture on the
+ * shelf: it learns the thumbnail's key from the verified project info and
+ * reads the blob through the decode worker, never the plaintext artifact
+ * download.
+ */
+test('decrypts shelf names and thumbnails of an encrypted project in a fresh browser', async ({
+  page,
+  browser
+}) => {
+  test.setTimeout(180_000);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const plaintextFiles: string[] = [];
+  const watchPlaintext = (target: Page) =>
+    target.on('request', (request) => {
+      const path = new URL(request.url()).pathname;
+      if (path === '/api/uploads' || path.startsWith('/api/artifacts')) {
+        plaintextFiles.push(`${request.method()} ${path}`);
+      }
+    });
+  watchPlaintext(page);
+  const server = createE2eeServer({ projectsEnabled: true });
+  await serveAccount(page, server);
+
+  await page.goto('/');
+  const seeded = await seedE2eeDevice(page, server);
+  const settings = await openEncryptionSettings(page);
+  const toggle = settings.getByRole('checkbox', {
+    name: 'Encrypt new projects'
+  });
+  await expect(toggle).toBeEnabled();
+  await toggle.click();
+  await expect(toggle).toBeChecked();
+  await page.keyboard.press('Escape');
+  await expect(settings).toHaveCount(0);
+
+  await page.getByLabel('Project name').fill('Secret shelf part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expectBodyCount(page, 1);
+  await expect(
+    page.getByRole('status', { name: 'Saved', exact: true })
+  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+
+  // Leaving the workspace captures the card and publishes it encrypted.
+  await page.getByTitle('Back to projects').click();
+  await expect
+    .poll(
+      () =>
+        count(
+          server,
+          "SELECT COUNT(*) AS n FROM e2ee_content_blobs WHERE kind = 'thumbnail'"
+        ),
+      { timeout: SYNC_BUDGET_MS }
+    )
+    .toBe(1);
+  const { blob_id: thumbnailId } = server.db
+    .prepare("SELECT blob_id FROM e2ee_content_blobs WHERE kind = 'thumbnail'")
+    .get() as { blob_id: string };
+  await expect
+    .poll(
+      () => {
+        const row = server.db
+          .prepare(
+            "SELECT envelope FROM e2ee_project_envelopes WHERE kind = 'project-info'"
+          )
+          .get() as { envelope: string };
+        const header = parseEnvelope(fromBase64Url(row.envelope)).header;
+        return header.class === 'project' ? header.blobIds : [];
+      },
+      { timeout: SYNC_BUDGET_MS }
+    )
+    .toEqual([thumbnailId]);
+  expect(count(server, 'SELECT COUNT(*) AS n FROM artifacts')).toBe(0);
+  const stored = [
+    JSON.stringify(server.db.prepare('SELECT * FROM projects').all()),
+    JSON.stringify(
+      server.db.prepare('SELECT * FROM e2ee_project_envelopes').all()
+    ),
+    ...[...server.objects.values()].map((bytes) =>
+      Buffer.from(bytes).toString('latin1')
+    )
+  ].join('\n');
+  expect(stored).not.toContain('Secret shelf part');
+  expect(stored).not.toContain('WEBPVP8');
+
+  // A fresh browser of the same device: no cached picture, no pins.
+  const fresh = await browser.newContext();
+  try {
+    const second = await fresh.newPage();
+    second.on('pageerror', (error) => errors.push(error.message));
+    watchPlaintext(second);
+    const thumbnailReads: string[] = [];
+    second.on('request', (request) => {
+      if (new URL(request.url()).pathname.endsWith(`/blobs/${thumbnailId}`)) {
+        thumbnailReads.push(request.method());
+      }
+    });
+    await serveAccount(second, server);
+    await second.goto('/');
+    await writeDevice(second, seeded.device);
+    await second.reload();
+    const card = second.locator('.start-tile-project', {
+      hasText: 'Secret shelf part'
+    });
+    await expect(card).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    const picture = card.locator('img');
+    await expect(picture).toHaveAttribute('src', /^data:image\/webp;base64,/, {
+      timeout: SYNC_BUDGET_MS
+    });
+    expect(thumbnailReads).toContain('GET');
+  } finally {
+    await fresh.close();
+  }
+  expect(plaintextFiles).toEqual([]);
   expect(errors).toEqual([]);
 });
