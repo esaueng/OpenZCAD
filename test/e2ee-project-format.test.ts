@@ -531,9 +531,8 @@ describe('encrypted projects required (decision D2)', () => {
     }
   });
 
-  it('creates plaintext projects while the flag is off or the account has not opted in', async () => {
+  it('creates plaintext projects while the account has not opted in', async () => {
     const off = await seed();
-    optIn(off.db, true);
     expect(
       (await off.call('POST', '/api/projects', { body: createBody() })).status
     ).toBe(201);
@@ -543,13 +542,35 @@ describe('encrypted projects required (decision D2)', () => {
       (await notOptedIn.call('POST', '/api/projects', { body: createBody() }))
         .status
     ).toBe(201);
-    // Keys alone do not open encrypted projects, even for a canary account.
-    const canaryOnly = await seed({ E2EE_KEYS_ENABLED: 'true' });
-    optIn(canaryOnly.db, true);
-    expect(
-      (await canaryOnly.call('POST', '/api/projects', { body: createBody() }))
-        .status
-    ).toBe(201);
+  });
+
+  it('refuses a plaintext insert in the same write, however it races the opt-in', async () => {
+    // The Worker's own check reads the opt-in first; migration 0031's trigger
+    // refuses the insert itself, so a preference written between that read
+    // and the insert (or a path that skips the read, as with the flag off)
+    // still stores no plaintext project for an opted-in account.
+    for (const env of [{}, { E2EE_KEYS_ENABLED: 'true' }, projectsOn]) {
+      const { call, db, plaintextId } = await seed(env);
+      const owned = () =>
+        (
+          db
+            .prepare('SELECT COUNT(*) AS n FROM projects WHERE user_id = ?')
+            .get(OWNER) as { n: number }
+        ).n;
+      const before = owned();
+      optIn(db, true);
+      for (const [path, body] of [
+        ['/api/projects', createBody()],
+        [`/api/projects/${plaintextId}/duplicate`, {}]
+      ] as const) {
+        const response = await call('POST', path, { body });
+        expect(response.status, `${path} ${JSON.stringify(env)}`).toBe(409);
+        expect(((await response.json()) as { code: string }).code).toBe(
+          ENCRYPTED_PROJECTS_REQUIRED_CODE
+        );
+      }
+      expect(owned()).toBe(before);
+    }
   });
 });
 

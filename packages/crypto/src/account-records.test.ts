@@ -122,12 +122,12 @@ describe('project preference records (ADR-024 D2)', () => {
 
   it('refuses non-canonical, unknown and malformed records', () => {
     for (const text of [
-      RECORD.replace('{', '{ '),
+      RECORD.replace(/^\{/, '{ '),
       '{"kind":"project-preferences","v":1,"userId":"user_alice","encryptNewProjects":true,"sequence":3}',
       RECORD.replace('"sequence":3', '"sequence":0'),
       RECORD.replace('"sequence":3', '"sequence":3.5'),
       RECORD.replace('true', '1'),
-      RECORD.replace('}', ',"extra":1}'),
+      RECORD.replace(/\}$/, ',"extra":1}'),
       'not json',
       '[]'
     ]) {

@@ -50,6 +50,24 @@ BEGIN
   SELECT RAISE(ABORT, 'ACCOUNT_ERASURE_IN_PROGRESS');
 END;
 
+-- Decision D2 in the same write as the project: an account that has opted
+-- in gets no new plaintext project, whichever path inserts it (create,
+-- adopt, duplicate) and however it races a preference write. The Worker
+-- checks first for a clear refusal; this closes the window between that read
+-- and the insert. The Worker maps the abort to 409 ENCRYPTED_PROJECTS_REQUIRED.
+-- Operations note: turning E2EE_PROJECTS_ENABLED off for an account that has
+-- opted in keeps refusing its plaintext creates until its row here is
+-- cleared or set to 0.
+CREATE TRIGGER IF NOT EXISTS e2ee_projects_require_encryption
+BEFORE INSERT ON projects
+WHEN NEW.storage_format = 1 AND EXISTS (
+  SELECT 1 FROM e2ee_project_preferences
+  WHERE user_id = NEW.user_id AND encrypt_new_projects = 1
+)
+BEGIN
+  SELECT RAISE(ABORT, 'ENCRYPTED_PROJECTS_REQUIRED');
+END;
+
 -- A stored opt-in never moves backwards, whoever writes it.
 CREATE TRIGGER IF NOT EXISTS e2ee_project_preference_sequence_forward
 BEFORE UPDATE ON e2ee_project_preferences

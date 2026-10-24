@@ -39,6 +39,7 @@ import {
   PROJECT_INVITATION_RATE_LIMIT,
   PROJECT_INVITATION_RATE_WINDOW_SECONDS,
   PROJECT_MEMBER_CAP,
+  EncryptedProjectsRequiredError,
   ProjectNotFoundError,
   ProjectSharingError,
   RevisionConflictError,
@@ -5531,6 +5532,10 @@ function projectQuotaError(
   limits?: { projectLimit: number; projectStorageLimitBytes: number }
 ): unknown {
   const message = error instanceof Error ? error.message : String(error);
+  // Decision D2, enforced by 0031's trigger inside the insert itself.
+  if (message.includes('ENCRYPTED_PROJECTS_REQUIRED')) {
+    return new EncryptedProjectsRequiredError();
+  }
   if (message.includes('project_account_count_quota')) {
     return new ProjectQuotaError(
       'count',
