@@ -66,6 +66,12 @@ export class MlsSessionMissing extends Error {
 interface Entry {
   readonly session: MlsSession;
   revision: number;
+  /**
+   * The stored session's leaf. Revisions restart at 1 after a session is
+   * discarded, so a new session (always a new leaf) at the revision this
+   * page cached is told apart by its leaf.
+   */
+  readonly leafKey: Uint8Array;
 }
 
 interface LeafCreation {
@@ -419,6 +425,44 @@ export class MlsProjectSessions {
     });
   }
 
+  /**
+   * Delete this device's MLS state for one project, so the project can be
+   * created or joined afresh: a group whose creation never reached the
+   * server, or state the server's group never accepted. With `leafKey`,
+   * only the session holding that leaf is deleted, so state another tab
+   * replaced it with meanwhile survives. Runs under the same account and
+   * project locks as every other operation. Returns whether anything was
+   * deleted.
+   */
+  discardSession(ref: MlsProjectRef, leafKey?: Uint8Array): Promise<boolean> {
+    const { current, guard } = this.sessionGuard();
+    guard();
+    const id = JSON.stringify([ref.userId, ref.projectId]);
+    return this.store.withAccountLock(ref.userId, 'shared', () =>
+      this.store.withProjectLock(ref.userId, ref.projectId, async () => {
+        guard();
+        const stored = await this.store.loadSession(ref.userId, ref.projectId);
+        guard();
+        if (!stored) return false;
+        if (stored.deviceId !== ref.deviceId)
+          throw new Error(
+            'This project’s encryption state belongs to another device.'
+          );
+        if (leafKey && !sameBytes(stored.leaf.signatureKey, leafKey))
+          return false;
+        this.drop(id);
+        const deleted = await this.store.deleteSessionIfCurrent(
+          ref.userId,
+          ref.projectId,
+          stored.revision,
+          current
+        );
+        guard();
+        return deleted;
+      })
+    );
+  }
+
   /** This device's stored leaf for the project, or null without a session. */
   async leaf(ref: MlsProjectRef): Promise<StoredLeaf | null> {
     const { guard } = this.sessionGuard();
@@ -513,8 +557,14 @@ export class MlsProjectSessions {
             'This project’s encryption state belongs to another device.'
           );
         let entry = this.sessions.get(id);
-        if (entry && entry.revision !== (stored?.revision ?? 0)) {
-          // Another tab moved the state on: reopen from storage.
+        if (
+          entry &&
+          (entry.revision !== (stored?.revision ?? 0) ||
+            (stored !== null &&
+              !sameBytes(entry.leafKey, stored.leaf.signatureKey)))
+        ) {
+          // Another tab moved the state on, or replaced it: reopen from
+          // storage.
           this.drop(id);
           entry = undefined;
         }
@@ -523,7 +573,11 @@ export class MlsProjectSessions {
           const opened = await this.openOrCreate(mls, ref, stored, op.create);
           guard();
           leaf = opened.leaf;
-          entry = { session: opened.session, revision: stored?.revision ?? 0 };
+          entry = {
+            session: opened.session,
+            revision: stored?.revision ?? 0,
+            leafKey: new Uint8Array(opened.leaf.signatureKey)
+          };
           this.sessions.set(id, entry);
         }
         let directory: DeviceDirectory | null = null;

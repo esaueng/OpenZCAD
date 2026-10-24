@@ -8,6 +8,10 @@
  *   from epoch 0) and uploads, in one write: its leaf certification, the
  *   epoch-zero GroupInfo, the epoch's project key and rejoin PSK wrapped
  *   under the account key (decision D1), and the epoch's signed key archive.
+ *   Creation is safe to retry: local state the server never accepted is
+ *   discarded (when the upload fails, or on the next attempt after a
+ *   crash), and a project another device already made a group for is
+ *   joined instead.
  * - **Join an own device** (decision D3: no KeyPackages until Phase 5).
  *   The device fetches the leaf registry and builds the verified directory,
  *   the newest GroupInfo and account-wrapped rejoin PSK, and every key
@@ -82,6 +86,7 @@ import { E2eeApiError } from './e2eeApi';
 import type { CertifyingDevice } from './mls/certify';
 import type { DirectoryInput, LeafCertification } from './mls/directory';
 import type { MlsProjectRef, MlsProjectSessions } from './mls/projectSessions';
+import type { StoredLeaf } from './mls/sessionStore';
 import { rememberProjectKey, unlockedProjectKey } from './unlockedProjectKeys';
 
 // --- API -------------------------------------------------------------------
@@ -325,6 +330,51 @@ async function fetchGroup(
     }
     throw error;
   }
+}
+
+/** The project's group, or null when it has none yet. */
+async function serverGroup(
+  ctx: ProjectGroupContext,
+  projectId: string
+): Promise<E2eeProjectGroupRecord | null> {
+  try {
+    return await fetchGroup(ctx, projectId);
+  } catch (error) {
+    if (error instanceof ProjectGroupError && error.code === 'no-group')
+      return null;
+    throw error;
+  }
+}
+
+/**
+ * This device's leaf when it holds in-group MLS state the server's group
+ * never accepted: the leaf is missing from the project's leaf registry
+ * although the project has a group. That is a group this device made whose
+ * creation never landed (a crash or a closed page before the upload
+ * settled) while another device's creation did. Such state must never be
+ * caught up or committed from, since the server cannot tell its Commits
+ * from the real group's. A provisional rejoin is left to recovery, and
+ * with no group on the server nothing is decided here.
+ */
+async function foreignLocalState(
+  ctx: ProjectGroupContext,
+  ref: MlsProjectRef,
+  projectId: string
+): Promise<StoredLeaf | null> {
+  const leaf = await ctx.sessions.leaf(ref);
+  if (!leaf) return null;
+  const status = await ctx.sessions.status(ref);
+  if (!status.inGroup || status.pendingRejoin) return null;
+  const key = b64(leaf.signatureKey);
+  const { leaves } = await ctx.api.leaves(projectId);
+  const registered = leaves.some(
+    (l) =>
+      l.userId === ref.userId &&
+      l.deviceId === ref.deviceId &&
+      l.leafKey === key
+  );
+  if (registered) return null;
+  return (await serverGroup(ctx, projectId)) ? leaf : null;
 }
 
 /**
@@ -727,6 +777,18 @@ const previousKeysOf = (
 /**
  * Create the project's MLS group with this device as the owner's only
  * leaf, and store its epoch 0 on the server in one write.
+ *
+ * Safe to retry. The local group exists before the server's, so:
+ * - a project that already has a group (another device of the owner made
+ *   it, or this one did) is joined instead (`joinProjectGroup`);
+ * - local state an earlier attempt left without reaching the server (a
+ *   crash between building and uploading) is discarded first;
+ * - when building or uploading fails, the server is asked what happened.
+ *   If it holds this very group, only the answer was lost and creation
+ *   succeeded. If another device's creation won, the local group is
+ *   discarded and this device joins the winner's by external Commit.
+ *   Otherwise (offline, the database not ready, a refusal) the local group
+ *   is discarded and the error thrown, so a retry starts clean.
  */
 export async function createProjectGroup(
   ctx: ProjectGroupContext,
@@ -734,52 +796,86 @@ export async function createProjectGroup(
 ): Promise<ProjectGroupState> {
   const device = requireDevice(ctx);
   const ref = refOf(ctx, device, projectId);
+  if (await serverGroup(ctx, projectId)) {
+    return joinProjectGroup(ctx, projectId);
+  }
+  // The server has no group, so nothing stored here belongs to one.
+  const stale = await ctx.sessions.leaf(ref);
+  if (stale) await ctx.sessions.discardSession(ref, stale.signatureKey);
   const change = await ctx.sessions.createGroup(ref, device, {
     lists: [ctx.account.list],
     certifications: []
   });
-  if (!change.epochRecord) {
-    throw new Error('A new MLS group produced no epoch record.');
-  }
-  const material = await ctx.sessions.epochMaterial(ref);
   const leaf = (await ctx.sessions.leaf(ref))!;
-  const keyEpoch = 0;
-  const archive = await sealArchive(
-    device,
-    projectId,
-    keyEpoch,
-    material.projectKey,
-    {
-      previousKeys: [],
-      dedupeSecret: generateAssetDedupeSecret(),
-      epochRecord: change.epochRecord,
-      epochAuthenticator: material.epochAuthenticator
+  let groupInfo: string | null = null;
+  try {
+    if (!change.epochRecord) {
+      throw new Error('A new MLS group produced no epoch record.');
     }
-  );
-  const { group } = await ctx.api.createGroup(projectId, {
-    groupId: `grp_${toHexId()}`,
-    deviceId: device.deviceId,
-    groupInfo: b64(material.groupInfo),
-    leaf: {
-      leafKey: b64(leaf.signatureKey),
-      certification: b64(leaf.certification)
-    },
-    wraps: await wrapEpochKeys(
-      ctx,
+    const material = await ctx.sessions.epochMaterial(ref);
+    groupInfo = b64(material.groupInfo);
+    const keyEpoch = 0;
+    const archive = await sealArchive(
+      device,
       projectId,
       keyEpoch,
       material.projectKey,
-      material.rejoinPsk
-    ),
-    archive
-  });
-  rememberProjectKey(
-    ctx.account.userId,
-    projectId,
-    keyEpoch,
-    material.projectKey
-  );
-  return { epoch: group.epoch, keyEpoch: group.keyEpochBase + group.epoch };
+      {
+        previousKeys: [],
+        dedupeSecret: generateAssetDedupeSecret(),
+        epochRecord: change.epochRecord,
+        epochAuthenticator: material.epochAuthenticator
+      }
+    );
+    const { group } = await ctx.api.createGroup(projectId, {
+      groupId: `grp_${toHexId()}`,
+      deviceId: device.deviceId,
+      groupInfo,
+      leaf: {
+        leafKey: b64(leaf.signatureKey),
+        certification: b64(leaf.certification)
+      },
+      wraps: await wrapEpochKeys(
+        ctx,
+        projectId,
+        keyEpoch,
+        material.projectKey,
+        material.rejoinPsk
+      ),
+      archive
+    });
+    rememberProjectKey(
+      ctx.account.userId,
+      projectId,
+      keyEpoch,
+      material.projectKey
+    );
+    return { epoch: group.epoch, keyEpoch: group.keyEpochBase + group.epoch };
+  } catch (error) {
+    let group: E2eeProjectGroupRecord | null = null;
+    try {
+      group = await serverGroup(ctx, projectId);
+    } catch {
+      // Offline or refused: what the server holds stays unknown.
+    }
+    if (group && groupInfo !== null && group.initialGroupInfo === groupInfo) {
+      // This device's creation landed; only its answer was lost.
+      rememberProjectKey(
+        ctx.account.userId,
+        projectId,
+        group.keyEpochBase,
+        await ctx.sessions.projectKey(ref)
+      );
+      return { epoch: 0, keyEpoch: group.keyEpochBase };
+    }
+    // A discard that fails too leaves the state to the next attempt, which
+    // discards it before building again.
+    await ctx.sessions
+      .discardSession(ref, leaf.signatureKey)
+      .catch(() => undefined);
+    if (group) return joinProjectGroup(ctx, projectId);
+    throw error;
+  }
 }
 
 function toHexId(): string {
@@ -919,7 +1015,12 @@ export async function joinProjectGroup(
 ): Promise<ProjectGroupState> {
   const device = requireDevice(ctx);
   const ref = refOf(ctx, device, projectId);
-  if (await ctx.sessions.leaf(ref)) {
+  const foreign = await foreignLocalState(ctx, ref, projectId);
+  if (foreign) {
+    // A group of this device's own that the server never accepted: drop it
+    // and join the server's.
+    await ctx.sessions.discardSession(ref, foreign.signatureKey);
+  } else if (await ctx.sessions.leaf(ref)) {
     // Resolve a rejoin a crash left pending before deciding anything.
     await recoverProjectGroup(ctx, projectId);
     const status = await ctx.sessions.status(ref);
@@ -1085,6 +1186,14 @@ export async function catchUpProjectGroup(
     throw new ProjectGroupError(
       'no-session',
       'This device has not joined the project’s group yet.'
+    );
+  }
+  const foreign = await foreignLocalState(ctx, ref, projectId);
+  if (foreign) {
+    await ctx.sessions.discardSession(ref, foreign.signatureKey);
+    throw new ProjectGroupError(
+      'no-session',
+      'This device’s encryption state for the project was never part of its group and was discarded. Join the group again.'
     );
   }
   await recoverProjectGroup(ctx, projectId);

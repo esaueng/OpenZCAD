@@ -361,6 +361,24 @@ function groupEpoch(srv: Server, projectId: string): number {
   ).epoch;
 }
 
+const isCreatePost = (path: string, init: RequestInit) =>
+  init.method === 'POST' && path.endsWith('/mls/group-info');
+
+/** The leaf keys the server registered for one device in a project. */
+function registeredLeaves(
+  srv: Server,
+  projectId: string,
+  deviceId: string
+): string[] {
+  return (
+    srv.db
+      .prepare(
+        'SELECT leaf_key FROM e2ee_project_leaves WHERE project_id = ? AND device_id = ? ORDER BY created_at, leaf_key'
+      )
+      .all(projectId, deviceId) as { leaf_key: string }[]
+  ).map((row) => row.leaf_key);
+}
+
 /**
  * Two Commit submissions race: both read the group before either batch
  * runs, then the batches run one after the other. In 'fence' mode the
@@ -505,16 +523,28 @@ describe('solo MLS groups', () => {
         hex(await projectKeyForEpoch(desktop.ctx, projectId, keyEpoch))
       ).toBe(hex(await projectKeyForEpoch(laptop.ctx, projectId, keyEpoch)));
     }
-    // A second group for the project is refused, whoever builds it.
+    // Creating a group the project already has joins it instead (a device
+    // that lost its state here); the server keeps its one group.
+    const groupId = srv.db
+      .prepare('SELECT group_id FROM e2ee_project_groups WHERE project_id = ?')
+      .get(projectId);
     const rival = device(srv, owner, 'owner_desktop');
-    await expect(
-      createProjectGroup(rival.ctx, projectId)
-    ).rejects.toMatchObject({
-      status: 409,
-      code: 'E2EE_GROUP_EXISTS'
+    expect(await createProjectGroup(rival.ctx, projectId)).toEqual({
+      epoch: 3,
+      keyEpoch: 3
     });
-    expect(count(srv, 'e2ee_project_leaves', projectId)).toBe(2);
-    expect(count(srv, 'e2ee_key_archives', projectId)).toBe(3);
+    expect(
+      srv.db
+        .prepare(
+          'SELECT group_id FROM e2ee_project_groups WHERE project_id = ?'
+        )
+        .all(projectId)
+    ).toEqual([groupId]);
+    expect(count(srv, 'e2ee_key_archives', projectId)).toBe(4);
+    await catchUpProjectGroup(laptop.ctx, projectId);
+    expect(await currentKey(rival, owner, 'owner_desktop', projectId)).toBe(
+      await currentKey(laptop, owner, 'owner_laptop', projectId)
+    );
   });
 
   it('refuses a duplicate epoch, and the loser rebases onto the winner', async () => {
@@ -1181,6 +1211,207 @@ describe('solo MLS groups', () => {
         )
         .all(projectId)
     ).toEqual([{ sender_user_id: null, sender_device_id: null }]);
+  });
+});
+
+describe('creating a group again', () => {
+  it('leaves no MLS state behind when the upload fails, and a retry creates the group', async () => {
+    const srv = newServer();
+    const projectId = seedProject(srv);
+    const laptop = device(srv, owner, 'owner_laptop');
+    const stateRef = ref(owner, 'owner_laptop', projectId);
+
+    // Offline from the upload on: nothing reaches the server.
+    let offline = false;
+    laptop.before = async (path, init) => {
+      if (isCreatePost(path, init)) offline = true;
+      if (offline) throw new TypeError('offline');
+    };
+    await expect(createProjectGroup(laptop.ctx, projectId)).rejects.toThrow(
+      'offline'
+    );
+    expect(await laptop.store.loadSession(OWNER, projectId)).toBeNull();
+    expect(await laptop.sessions.leaf(stateRef)).toBeNull();
+
+    // The server refuses the upload (encrypted projects off for the
+    // account): nothing stays either.
+    offline = false;
+    laptop.before = async (path, init) => {
+      if (isCreatePost(path, init)) srv.env.E2EE_PROJECTS_ENABLED = 'false';
+    };
+    laptop.after = async () => {
+      srv.env.E2EE_PROJECTS_ENABLED = 'true';
+    };
+    await expect(
+      createProjectGroup(laptop.ctx, projectId)
+    ).rejects.toMatchObject({ status: 501, code: 'FEATURE_DISABLED' });
+    expect(await laptop.store.loadSession(OWNER, projectId)).toBeNull();
+    expect(count(srv, 'e2ee_project_groups', projectId)).toBe(0);
+
+    // The retry starts clean and the group works.
+    laptop.before = laptop.after = undefined;
+    expect(await createProjectGroup(laptop.ctx, projectId)).toEqual({
+      epoch: 0,
+      keyEpoch: 0
+    });
+    expect(registeredLeaves(srv, projectId, 'owner_laptop')).toEqual([
+      toBase64Url((await laptop.sessions.leaf(stateRef))!.signatureKey)
+    ]);
+    expect(await commitProjectGroup(laptop.ctx, projectId)).toEqual({
+      epoch: 1,
+      keyEpoch: 1
+    });
+  });
+
+  it('counts a creation whose answer was lost as created', async () => {
+    const srv = newServer();
+    const projectId = seedProject(srv);
+    const laptop = device(srv, owner, 'owner_laptop');
+    laptop.after = async (path, init) => {
+      if (isCreatePost(path, init)) {
+        laptop.after = undefined;
+        throw new TypeError('connection reset');
+      }
+    };
+    expect(await createProjectGroup(laptop.ctx, projectId)).toEqual({
+      epoch: 0,
+      keyEpoch: 0
+    });
+    expect(
+      await laptop.sessions.status(ref(owner, 'owner_laptop', projectId))
+    ).toMatchObject({ inGroup: true, epoch: 0 });
+    expect(hex(await projectKeyForEpoch(laptop.ctx, projectId, 0))).toBe(
+      await currentKey(laptop, owner, 'owner_laptop', projectId)
+    );
+    expect(await commitProjectGroup(laptop.ctx, projectId)).toEqual({
+      epoch: 1,
+      keyEpoch: 1
+    });
+  });
+
+  it('discards its own group when another device created one first, and joins the winner’s', async () => {
+    const srv = newServer();
+    const projectId = seedProject(srv);
+    const laptop = device(srv, owner, 'owner_laptop');
+    const desktop = device(srv, owner, 'owner_desktop');
+
+    // The desktop built its group; the laptop's creation lands first.
+    const created: { status: number; body: unknown }[] = [];
+    desktop.before = async (path, init) => {
+      if (!isCreatePost(path, init)) return;
+      desktop.before = undefined;
+      await createProjectGroup(laptop.ctx, projectId);
+    };
+    desktop.after = async (path, init, response) => {
+      if (isCreatePost(path, init))
+        created.push({
+          status: response!.status,
+          body: await response!.json()
+        });
+    };
+    expect(await createProjectGroup(desktop.ctx, projectId)).toEqual({
+      epoch: 1,
+      keyEpoch: 1
+    });
+    expect(created).toMatchObject([
+      { status: 409, body: { code: 'E2EE_GROUP_EXISTS' } }
+    ]);
+    expect(count(srv, 'e2ee_project_groups', projectId)).toBe(1);
+    expect(
+      srv.db
+        .prepare(
+          'SELECT epoch, kind, sender_device_id FROM e2ee_mls_commits WHERE project_id = ?'
+        )
+        .all(projectId)
+    ).toEqual([
+      { epoch: 0, kind: 'external', sender_device_id: 'owner_desktop' }
+    ]);
+    expect(registeredLeaves(srv, projectId, 'owner_desktop')).toEqual([
+      toBase64Url(
+        (await desktop.sessions.leaf(ref(owner, 'owner_desktop', projectId)))!
+          .signatureKey
+      )
+    ]);
+    await catchUpProjectGroup(laptop.ctx, projectId);
+    expect(await currentKey(desktop, owner, 'owner_desktop', projectId)).toBe(
+      await currentKey(laptop, owner, 'owner_laptop', projectId)
+    );
+  });
+
+  it('discards state a crash left before the upload settled, then creates or joins', async () => {
+    const srv = newServer();
+    const store = memoryMlsSessionStore();
+    /** The page dies with the upload in flight: nothing is cleaned up. */
+    const crash = async (projectId: string) => {
+      const dying = device(srv, owner, 'owner_desktop', {
+        ...store,
+        deleteSessionIfCurrent: async () => {
+          throw new TypeError('page closed');
+        }
+      });
+      dying.before = async (path, init) => {
+        if (isCreatePost(path, init)) throw new TypeError('page closed');
+      };
+      await expect(createProjectGroup(dying.ctx, projectId)).rejects.toThrow(
+        'page closed'
+      );
+      const left = await store.loadSession(OWNER, projectId);
+      expect(left).not.toBeNull();
+      return left!;
+    };
+
+    // No group on the server: the next creation discards the leftover.
+    const lonely = seedProject(srv);
+    const leftover = await crash(lonely);
+    const retry = device(srv, owner, 'owner_desktop', store);
+    expect(await createProjectGroup(retry.ctx, lonely)).toEqual({
+      epoch: 0,
+      keyEpoch: 0
+    });
+    const fresh = (await retry.sessions.leaf(
+      ref(owner, 'owner_desktop', lonely)
+    ))!;
+    expect(hex(fresh.signatureKey)).not.toBe(hex(leftover.leaf.signatureKey));
+    expect(registeredLeaves(srv, lonely, 'owner_desktop')).toEqual([
+      toBase64Url(fresh.signatureKey)
+    ]);
+
+    // Another device created the group meanwhile: the leftover is never
+    // caught up or committed from, and joining replaces it.
+    const contested = seedProject(srv);
+    await crash(contested);
+    const laptop = device(srv, owner, 'owner_laptop');
+    await createProjectGroup(laptop.ctx, contested);
+    const stale = device(srv, owner, 'owner_desktop', store);
+    await expect(
+      commitProjectGroup(stale.ctx, contested)
+    ).rejects.toMatchObject({ code: 'no-session' });
+    expect(count(srv, 'e2ee_mls_commits', contested)).toBe(0);
+    expect(await store.loadSession(OWNER, contested)).toBeNull();
+    expect(await joinProjectGroup(stale.ctx, contested)).toEqual({
+      epoch: 1,
+      keyEpoch: 1
+    });
+
+    // The same leftover reached through join directly is replaced too.
+    const third = seedProject(srv);
+    await crash(third);
+    await createProjectGroup(laptop.ctx, third);
+    const joiner = device(srv, owner, 'owner_desktop', store);
+    expect(await joinProjectGroup(joiner.ctx, third)).toEqual({
+      epoch: 1,
+      keyEpoch: 1
+    });
+    await catchUpProjectGroup(laptop.ctx, third);
+    expect(await currentKey(joiner, owner, 'owner_desktop', third)).toBe(
+      await currentKey(laptop, owner, 'owner_laptop', third)
+    );
+    expect(registeredLeaves(srv, third, 'owner_desktop')).toEqual([
+      toBase64Url(
+        (await joiner.sessions.leaf(ref(owner, 'owner_desktop', third)))!
+          .signatureKey
+      )
+    ]);
   });
 });
 

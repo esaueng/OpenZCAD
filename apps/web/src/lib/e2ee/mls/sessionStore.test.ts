@@ -109,6 +109,31 @@ describe.each(backends)('MLS session store (%s)', (_, open) => {
     ).toBe(2);
   });
 
+  it('deletes one project’s session only at the expected revision', async () => {
+    const store = await open();
+    await store.writeSessionIfCurrent(0, write(1));
+    await store.writeSessionIfCurrent(1, write(2));
+    await store.writeSessionIfCurrent(0, { ...write(3), projectId: 'prj_2' });
+    // A stale revision, or no session, deletes nothing.
+    expect(await store.deleteSessionIfCurrent('user_a', 'prj_1', 1)).toBe(
+      false
+    );
+    expect(await store.deleteSessionIfCurrent('user_a', 'prj_9', 0)).toBe(
+      false
+    );
+    // An ended key session refuses without deleting.
+    await expect(
+      store.deleteSessionIfCurrent('user_a', 'prj_1', 2, () => false)
+    ).rejects.toThrow();
+    expect((await store.loadSession('user_a', 'prj_1'))?.revision).toBe(2);
+    expect(await store.deleteSessionIfCurrent('user_a', 'prj_1', 2)).toBe(true);
+    expect(await store.loadSession('user_a', 'prj_1')).toBeNull();
+    // Only that project: the account's other sessions stay.
+    expect(await store.loadSession('user_a', 'prj_2')).not.toBeNull();
+    // A new session for the project starts again from revision 1.
+    expect((await store.writeSessionIfCurrent(0, write(4)))?.revision).toBe(1);
+  });
+
   it('forgets one account’s state key and sessions', async () => {
     const store = await open();
     const key = await crypto.subtle.generateKey(
