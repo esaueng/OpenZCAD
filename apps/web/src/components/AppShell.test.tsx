@@ -247,6 +247,26 @@ describe('AppShell', () => {
     }
   });
 
+  // The column is drawn at a rail's width from this class, so it must hold
+  // before the rail's lazy chunk arrives (an empty column here) and through
+  // the exit, and go with the column.
+  it('marks the workspace as holding a column for as long as one is mounted', () => {
+    vi.useFakeTimers();
+    try {
+      const { container, rerender } = renderShell(null, <div />);
+      const workspace = () => container.querySelector('.workspace');
+      expect(workspace()?.classList.contains('has-column')).toBe(true);
+      rerender(shell(null, null));
+      expect(workspace()?.classList.contains('has-column')).toBe(true);
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      expect(workspace()?.classList.contains('has-column')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('removes the column and its splitter together', () => {
     const { container } = renderShell(null, null);
     expect(container.querySelector('.workspace-column-float')).toBeNull();
