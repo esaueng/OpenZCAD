@@ -11325,10 +11325,22 @@ export function App() {
     setTool(null);
     clearSelection();
     if (managerRef.current.undoFloorTrimmed) {
-      announce(UNDO_FLOOR_TRIMMED_NOTICE, {
-        label: 'Revisions',
-        run: () => showModelPanel('revisions')
-      });
+      // Panels are Build's alone: Tweak, View and Draw render none, so the
+      // action goes to Build first. Where Build is locked (a shared link, a
+      // read-only seat) there is nowhere to show Revisions, so no action.
+      announce(
+        UNDO_FLOOR_TRIMMED_NOTICE,
+        workspaceModeLock('build') === null
+          ? {
+              label: 'Revisions',
+              run: () => {
+                if (workspaceModeRef.current !== 'build')
+                  handleWorkspaceMode('build');
+                showModelPanel('revisions');
+              }
+            }
+          : undefined
+      );
     } else {
       setToast(null);
     }

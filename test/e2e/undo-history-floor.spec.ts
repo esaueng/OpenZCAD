@@ -12,8 +12,8 @@ import {
  * Past its limits the undo history drops its oldest steps. That used to raise
  * a notice that never left the screen — on every open, for the life of the
  * project. Now nothing is said while modeling; the undo that reaches the
- * oldest kept step says so and offers Revisions, and the spent Undo button
- * and palette command say why they are spent.
+ * oldest kept step says so and offers Revisions — from any workspace — and
+ * the spent Undo button and palette command say why they are spent.
  */
 test('says the undo history was trimmed only when undo reaches its floor', async ({
   page
@@ -46,32 +46,30 @@ test('says the undo history was trimmed only when undo reaches its floor', async
   await expect(notice).toHaveCount(0);
   await expect(undo).toBeEnabled();
 
-  await undo.click();
-  await expect(page.getByLabel('Expression for p1')).toHaveCount(0);
-  // The dropped step's parameter stays: there is nothing left to undo it.
-  await expect(page.getByLabel('Expression for p0')).toBeVisible();
-  await expect(undo).toBeDisabled();
+  // The last kept step is a parameter edit, so Tweak can undo it — from the
+  // keyboard, since Tweak has no viewer bar — and Tweak draws no panels, so
+  // the notice's action has to bring Build back first.
+  const tweak = page.getByRole('button', { name: 'Tweak', exact: true });
+  const build = page.getByRole('button', { name: 'Build', exact: true });
+  await tweak.click();
+  await expect(tweak).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('ControlOrMeta+z');
   await expect(notice).toContainText('Oldest undo step kept');
 
-  // The pointer is still on Undo from the press, which keeps its help shut;
-  // it reopens on a fresh hover.
-  await page
-    .getByRole('toolbar', { name: 'Viewer bar' })
-    .getByRole('button', { name: 'Redo', exact: true })
-    .hover();
-  await undo.hover();
-  await expect(page.getByRole('tooltip')).toContainText(
-    'No older undo steps kept'
-  );
-
-  await expect(railPanelButton(page, 'Revisions')).toHaveAttribute(
-    'aria-pressed',
-    'false'
-  );
   await notice.getByRole('button', { name: 'Revisions' }).click();
+  await expect(build).toHaveAttribute('aria-pressed', 'true');
   await expect(railPanelButton(page, 'Revisions')).toHaveAttribute(
     'aria-pressed',
     'true'
   );
   await expect(modelPanel(page, 'Revisions')).toBeVisible();
+  // The dropped step's parameter stays: there is nothing left to undo it.
+  await expect(page.getByLabel('Expression for p0')).toHaveCount(1);
+  await expect(page.getByLabel('Expression for p1')).toHaveCount(0);
+
+  await expect(undo).toBeDisabled();
+  await undo.hover();
+  await expect(page.getByRole('tooltip')).toContainText(
+    'No older undo steps kept'
+  );
 });
