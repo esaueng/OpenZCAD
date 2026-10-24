@@ -477,7 +477,12 @@ test('a sketch hides the dock and an open unpinned panel and restores both', asy
   const unpinned = modelPanel(page, 'History');
   await expect(docked).toHaveClass(/is-docked/);
   await expect(unpinned).toHaveClass(/is-unpinned/);
-  const railDocked = await box(page.locator('.instrument-rail'));
+  const rail = page.locator('.instrument-rail');
+  const stageWidth = page.viewportSize()!.width;
+  // At the dock's inner edge: the column and its dock gap in from the edge.
+  await expect
+    .poll(async () => (await box(rail)).x)
+    .toBeLessThan(stageWidth - 10 - 40 - 299);
 
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
@@ -488,11 +493,10 @@ test('a sketch hides the dock and an open unpinned panel and restores both', asy
   await expect(
     page.locator('.panel-column, .panel-unpinned, .panel-lane-float')
   ).toHaveCount(0);
-  // The rail slides back by the dock's width (a 296px column and its 4px
-  // dock gap) once its transition lands.
+  // The rail slides back to the screen's edge once its transition lands.
   await expect
-    .poll(async () => (await box(page.locator('.instrument-rail'))).x)
-    .toBeGreaterThan(railDocked.x + 299);
+    .poll(async () => (await box(rail)).x)
+    .toBeCloseTo(stageWidth - 10 - 40, 0);
   // Suspension is not a preference: the stored layout keeps both.
   expect(await storedLayout(page)).toMatchObject({
     right: [['parameters']],

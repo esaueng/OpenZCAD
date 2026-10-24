@@ -342,7 +342,8 @@ test('keeps every workspace surface inside a narrow viewport', async ({
     '.panel-lane-float',
     '.viewer-area',
     '.assistant-panel',
-    '.viewport-readout',
+    // The readout draws only in a sketch; the scale bar holds the corner.
+    '.viewport-scale-indicator',
     '.command-bar',
     '.instrument-rail'
   ];
@@ -370,12 +371,14 @@ test('keeps every workspace surface inside a narrow viewport', async ({
   expect(sidebarBounds!.x + sidebarBounds!.width).toBeLessThan(
     viewerBounds!.x + viewerBounds!.width - 100
   );
-  // The bottom chrome is the readout under the column and the search bar
-  // beside it; on a phone they share one row and must not overlap.
-  const readoutBounds = await page.locator('.viewport-readout').boundingBox();
+  // The bottom chrome is the scale bar in the corner above the search bar
+  // (the readout draws only in a sketch); on a phone they must not overlap.
+  const rulerBounds = await page
+    .locator('.viewport-scale-indicator')
+    .boundingBox();
   const barBounds = await page.locator('.command-bar').boundingBox();
-  expect(readoutBounds!.x + readoutBounds!.width).toBeLessThanOrEqual(
-    barBounds!.x + 0.5
+  expect(rulerBounds!.y + rulerBounds!.height).toBeLessThanOrEqual(
+    barBounds!.y + 0.5
   );
   await expect(page.locator('.viewer-rail-stack')).toBeVisible();
 

@@ -476,11 +476,22 @@
    window's, or the left dock's inner edge when a panel is docked there —
    under the left rail, which lifts to stand on it in a short window
    (--readout-reserve). It is narrower than the lanes' start, so the search
-   bar never reaches it, and in a sketch it stands on the readout. */
+   bar never reaches it. */
 .workspace.column-layout .viewport-scale-indicator {
   left: calc(var(--island-gap) + var(--left-dock-w, 0px));
   right: auto;
   bottom: calc(var(--island-gap) + var(--readout-rows));
+}
+
+/* The sketch rail is the tall one, with Finish at its foot: it keeps the
+   whole band, and the bar stands beside it, on the readout, instead. */
+.workspace.column-layout:has(.viewport-readout .viewport-dock-snap) {
+  --scale-rule-reserve: 0px;
+}
+
+.workspace.column-layout:has(.viewport-readout .viewport-dock-snap)
+  .viewport-scale-indicator {
+  left: calc(var(--island-gap) * 2 + var(--rail-w) + var(--left-dock-w, 0px));
 }
 
 /* A phone has no room beside the rail: the rule lies along the foot in the
@@ -491,7 +502,9 @@
     --scale-rule-reserve: var(--readout-h);
   }
 
-  .workspace.column-layout .viewport-scale-indicator {
+  .workspace.column-layout .viewport-scale-indicator,
+  .workspace.column-layout:has(.viewport-readout .viewport-dock-snap)
+    .viewport-scale-indicator {
     left: var(--island-gap);
     bottom: calc(var(--island-gap) * 2 + var(--command-bar-h));
   }
@@ -2037,12 +2050,13 @@ button.command-rail:disabled {
   pointer-events: auto;
 }
 
-/* The gap is the 4px dock gap; its grab area reaches 4px into each panel's
-   frame edge, so the divider stays as easy to take as the 8px one was. */
-.panel-gap::before {
+/* The gap is the 4px dock gap; its grab area reaches 2px into each panel's
+   frame edge, so the divider is as easy to take as the 8px one was. No
+   further: a header's buttons start 2.5px under the frame's top edge. */
+.panel-gap:not(.is-off)::before {
   content: '';
   position: absolute;
-  inset: -4px 0;
+  inset: -2px 0;
 }
 
 .panel-gap-grip {

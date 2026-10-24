@@ -51,7 +51,7 @@ async function expectNoticeLaneClear(page: Page) {
     return {
       toast: box('.toast'),
       bar: box('.command-bar-row'),
-      readout: box('.viewport-readout'),
+      ruler: box('.viewport-scale-indicator'),
       rows: {
         status: box('.workspace-toast-body'),
         pill: box('.activity-pill'),
@@ -63,12 +63,13 @@ async function expectNoticeLaneClear(page: Page) {
   // The search bar is the chrome the lane stands on.
   expect(lane.bar).not.toBeNull();
   expect(lane.toast!.bottom).toBeLessThanOrEqual(lane.bar!.top);
-  // The readout sits in the bottom-left corner, under the column.
-  expect(lane.readout).not.toBeNull();
+  // The scale bar stands in the bottom-left corner, under the column (the
+  // readout there draws only in a sketch).
+  expect(lane.ruler).not.toBeNull();
   expect(
-    lane.toast!.right <= lane.readout!.left ||
-      lane.toast!.left >= lane.readout!.right ||
-      lane.toast!.bottom <= lane.readout!.top
+    lane.toast!.right <= lane.ruler!.left ||
+      lane.toast!.left >= lane.ruler!.right ||
+      lane.toast!.bottom <= lane.ruler!.top
   ).toBe(true);
   // A running or warning status keeps its own row under the toast (a
   // settled one steps aside rather than repeat it), as do the activity pill
