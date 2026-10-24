@@ -897,25 +897,22 @@ describe('device removal across encrypted projects', () => {
       wrapped: string;
     }[];
     expect(rotatedWraps.length).toBeGreaterThan(0);
+    expect(rotatedWraps.map((wrap) => wrap.purpose)).toContain('rejoin-psk');
+    const currentAccountKey = new Uint8Array(unlockedAccount(USER)!.accountKey);
     for (const wrap of rotatedWraps) {
+      // Both purposes bind the row's key epoch (a rejoin PSK's, not its MLS
+      // epoch), so this is the context the browsers wrap and open under.
+      const context = {
+        purpose: wrap.purpose,
+        userId: USER,
+        projectId: rotatedId,
+        keyEpoch: wrap.key_epoch
+      };
+      expect(
+        await unwrapKey(currentAccountKey, fromBase64Url(wrap.wrapped), context)
+      ).toHaveLength(32);
       await expect(
-        unwrapKey(
-          oldAccountKey,
-          fromBase64Url(wrap.wrapped),
-          wrap.purpose === 'project-key'
-            ? {
-                purpose: 'project-key',
-                userId: USER,
-                projectId: rotatedId,
-                keyEpoch: wrap.key_epoch
-              }
-            : {
-                purpose: 'rejoin-psk',
-                userId: USER,
-                projectId: rotatedId,
-                epoch: wrap.key_epoch
-              }
-        )
+        unwrapKey(oldAccountKey, fromBase64Url(wrap.wrapped), context)
       ).rejects.toThrow();
     }
   });
@@ -1290,6 +1287,78 @@ describe('solo group reset (decision D9)', () => {
     expect((await wiped.store.loadProject(projectId)).name).toBe(
       'Desktop after reset'
     );
+  });
+
+  it('binds a rejoin PSK to its key epoch, not its MLS epoch, across a reset', async () => {
+    const srv = newServer();
+    const { recovery, laptop } = await setUp(srv);
+    const desktop = await enroll(srv, recovery.secret, 'Desktop');
+    await refresh(laptop);
+    const projectId = await createEncrypted(laptop, 'Bracket');
+    await saveEdit(desktop, projectId, 'Desktop edit');
+    const prior = groupRow(srv, projectId);
+    const priorKeyEpoch = prior.key_epoch_base + prior.epoch;
+    const wiped = newDeviceLike(laptop);
+    use(wiped, laptop.account);
+    await resetProjectGroup(
+      wiped.groups,
+      projectId,
+      {
+        generation: 1,
+        sign: (reset) =>
+          signGroupResetWithIdentity(
+            wiped.e2ee,
+            wiped.account,
+            recovery.secret,
+            reset
+          )
+      },
+      GROUP_RESET_CONFIRMATION
+    );
+    const rejoinRow = (keyEpoch: number) =>
+      srv.db
+        .prepare(
+          `SELECT wrapped, account_key_generation, account_key_sequence
+           FROM e2ee_project_keys
+           WHERE project_id = ? AND key_epoch = ? AND purpose = 'rejoin-psk'`
+        )
+        .get(projectId, keyEpoch) as {
+        wrapped: string;
+        account_key_generation: number;
+        account_key_sequence: number;
+      };
+    // MLS epoch 0 twice: key epoch 0 of the replaced group and the new
+    // group's first key epoch, two different PSKs under the same account key.
+    const before = rejoinRow(0);
+    const after = rejoinRow(priorKeyEpoch + 1);
+    expect(after.wrapped).not.toBe(before.wrapped);
+    expect([after.account_key_generation, after.account_key_sequence]).toEqual([
+      before.account_key_generation,
+      before.account_key_sequence
+    ]);
+    const serve = (wrapped: string) =>
+      srv.db
+        .prepare(
+          `UPDATE e2ee_project_keys SET wrapped = ?
+           WHERE project_id = ? AND key_epoch = ? AND purpose = 'rejoin-psk'`
+        )
+        .run(wrapped, projectId, priorKeyEpoch + 1);
+
+    // The server serves the replaced group's MLS-epoch-0 PSK as the new
+    // group's: the wrap names key epoch 0, so it does not open.
+    serve(before.wrapped);
+    await refresh(desktop);
+    await expect(
+      joinProjectGroup(desktop.groups, projectId)
+    ).rejects.toMatchObject({ code: 'authentication-failed' });
+    expect(groupRow(srv, projectId).epoch).toBe(0);
+
+    // The genuine wrap opens, and the desktop rejoins the new group.
+    serve(after.wrapped);
+    expect(await joinProjectGroup(desktop.groups, projectId)).toEqual({
+      epoch: 1,
+      keyEpoch: priorKeyEpoch + 2
+    });
   });
 
   it('refuses a reset while anyone else is in the project, or by anyone else', async () => {

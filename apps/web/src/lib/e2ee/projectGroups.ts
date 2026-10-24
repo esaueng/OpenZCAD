@@ -620,11 +620,16 @@ const projectKeyContext = (
   keyEpoch: number
 ): WrapContext => ({ purpose: 'project-key', userId, projectId, keyEpoch });
 
+/**
+ * A rejoin PSK's wrap binds its key epoch, the row it is stored and looked
+ * up by, not its MLS epoch: MLS epochs restart at 0 after a group reset
+ * (slice 4-10), key epochs never do (decision D10).
+ */
 const rejoinPskContext = (
   userId: string,
   projectId: string,
-  epoch: number
-): WrapContext => ({ purpose: 'rejoin-psk', userId, projectId, epoch });
+  keyEpoch: number
+): WrapContext => ({ purpose: 'rejoin-psk', userId, projectId, keyEpoch });
 
 /** The project key and rejoin PSK of `keyEpoch` under the current account key. */
 async function wrapEpochKeys(
@@ -661,7 +666,7 @@ async function wrapEpochKeys(
           await wrapKey(
             account.key,
             psk.secret,
-            rejoinPskContext(userId, projectId, psk.epoch)
+            rejoinPskContext(userId, projectId, keyEpoch)
           )
         )
       }
@@ -1435,13 +1440,12 @@ async function newestRejoinPsk(
       'No rejoin key for this project is stored for this account.'
     );
   }
-  const epoch = newest.keyEpoch - group.keyEpochBase;
   return {
-    epoch,
+    epoch: newest.keyEpoch - group.keyEpochBase,
     secret: await openWrap(
       ctx,
       newest,
-      rejoinPskContext(ctx.account.userId, projectId, epoch)
+      rejoinPskContext(ctx.account.userId, projectId, newest.keyEpoch)
     )
   };
 }
