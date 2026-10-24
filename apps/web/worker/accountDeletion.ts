@@ -1,4 +1,5 @@
 import { e2eeErasureTables } from './e2ee';
+import { contactErasureStatements } from './e2eeContacts';
 import { projectGroupErasureStatements } from './e2eeProjects';
 import { deviceRemovalErasureStatements } from './e2eeDeviceRemoval';
 import {
@@ -474,7 +475,10 @@ export async function deleteAccountData(
             input.scope
           )),
           // Before migration 0036 there are no revocation cutoffs.
-          ...(await deviceRemovalErasureStatements(db, session.userId))
+          ...(await deviceRemovalErasureStatements(db, session.userId)),
+          // Before migration 0037 there is no contacts table; its rows go
+          // before the identities they reference.
+          ...(await contactErasureStatements(db, session.userId))
         ]
       )
     );

@@ -553,6 +553,18 @@ export const isE2eeDeviceRemovalStorageReady = cachedSchemaProbe(
   (row) => row?.ready === 2
 );
 
+/**
+ * Whether migration 0037's contacts table exists (ADR-024 Phase 5, contacts
+ * and verified pins). Only the contacts routes and account erasure name it,
+ * each after asking this, so a database without the migration keeps
+ * serving ordinary traffic and the other key routes.
+ */
+export const isE2eeContactStorageReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM sqlite_master
+   WHERE type = 'table' AND name = 'e2ee_contact_entries'`,
+  (row) => row?.ready === 1
+);
+
 /** An encrypted blob's opaque object key: no file name, no kind. */
 export function encryptedBlobObjectKey(
   projectId: string,
