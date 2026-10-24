@@ -1,14 +1,16 @@
 // Built with the web app's Vite by run.mjs (this package has no
 // dependencies of its own):
-//   pnpm --filter @openzcad/web exec vite build --config "$PWD/packages/mls/browser/vite.config.mjs"
-const root = new URL('.', import.meta.url).pathname;
+//   node apps/web/node_modules/vite/bin/vite.js build --config packages/mls/browser/vite.config.mjs
+import { fileURLToPath } from 'node:url';
+
+const root = fileURLToPath(new URL('.', import.meta.url));
 
 export default {
   root,
   base: './',
   logLevel: 'warn',
   build: {
-    outDir: `${root}dist`,
+    outDir: fileURLToPath(new URL('dist', import.meta.url)),
     emptyOutDir: true,
     target: 'es2022',
     // The WASM must stay a separate lazily fetched asset.

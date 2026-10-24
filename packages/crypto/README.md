@@ -397,3 +397,47 @@ change to a vector is a format change and needs a new version byte.
 and requires every parser to fail only with `E2eeError`. Functions that inject keys or randomness (`…With`,
 `envelopeKeyFromBytes`) are test-only and are not exported from the package
 entry.
+
+### Real browsers
+
+The Vitest suites run on Node's WebCrypto. `browser/scenarios.ts` runs the
+package on each browser engine's own WebCrypto and web streams instead:
+project envelopes and content blobs over many chunks (one-shot, incremental
+writer and reader, and streams, with and without gzip), tampering, truncation
+and a gzip bomb; AES-KW and AES-GCM wraps, including a PKCS #8 private key
+and a non-extractable unlock key, and the refusals of every AES-KW purpose;
+sealing and opening; project-envelope, version-chain, device-list,
+approval-grant and identity-transition signatures; the project data formats
+(`project-info` and `key-archive` envelopes with their bodies, the epoch
+binding, the document body's revision hashes, the `rejoin-psk`,
+`archived-project-key` and `previous-account-key` wraps, and
+`verifyVersionLog` and `verifyAuthoredLogRecord` with their refusals); the
+external-key seam (`ecdsaSign`, `ecdhDeriveBits` through a host stand-in);
+and the fixed vectors from `vectors.test.ts`, which must come out
+byte-identical in every engine.
+
+```bash
+pnpm exec playwright install chromium webkit firefox   # once
+pnpm --filter @openzcad/crypto test:browser            # Chromium, WebKit, Firefox
+pnpm --filter @openzcad/crypto test:browser -- --chromium-only
+pnpm --filter @openzcad/crypto test:browser -- --browsers=chromium,firefox --verbose
+```
+
+It builds the page with the web app's Vite, serves it on `127.0.0.1` (a
+secure context, so `crypto.subtle` exists) and prints pass, warning and
+failure counts per browser; only failures fail the run. It needs downloaded
+browsers, so it is not part of `pnpm test`;
+`test/crypto-browser-scenarios.test.ts` runs the same steps in Node there so
+they cannot go stale, and requires that none of them warns.
+
+Every step goes through the package and must pass on every engine, except
+the `engine` probe, which calls raw WebCrypto: does an AES-KW unwrap under a
+wrong key, or of altered bytes, fail as RFC 3394 requires? Playwright's
+Windows WebKit build does not (it returns a zeroed key), and the probe then
+reports a warning, not a failure, because the package does not rely on the
+engine here (see Security notes). The `wrap` steps show that directly: every
+AES-KW purpose refuses a wrong parent key, another context and altered bytes
+on the engine as it is, and again with `crypto.subtle.unwrapKey` replaced by
+a stand-in that hands back a zeroed key for whatever the engine would refuse.
+Each of those refusals follows an unwrap that returned a key, so it is the
+package's re-wrap check that refuses.

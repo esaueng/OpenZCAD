@@ -28,7 +28,7 @@ export default tseslint.config(
   },
   {
     // Node scripts that also pass closures to the page (window).
-    files: ["packages/mls/browser/*.mjs"],
+    files: ["packages/mls/browser/*.mjs", "packages/crypto/browser/*.mjs"],
     languageOptions: {
       globals: {
         URL: "readonly",
