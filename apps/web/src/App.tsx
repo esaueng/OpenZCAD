@@ -97,6 +97,7 @@ import {
   saveImportedProject
 } from './lib/localProjectStore';
 import {
+  Fragment,
   Suspense,
   useCallback,
   useEffect,
@@ -23232,19 +23233,29 @@ export function App() {
   // as every other feature's body is: a pick opens no card, so History is
   // where a body's volume is read. A feature that keeps its target's body
   // (a hole, a shell) names it itself.
-  const modelingEditBody = (() => {
-    if (!modelingEditFeature) return null;
-    let bodyId = modelingEditFeature.bodyId ?? null;
+  // Every body the feature produced: a split leaves two, and with no card
+  // for a pick, its History card is the only place either half is read.
+  const modelingEditBodies = (() => {
+    if (!modelingEditFeature) return [];
+    const bodyIds = new Set<BodyId>();
     for (const node of Object.values(doc.nodes)) {
       if (
         node.kind === 'body' &&
         node.featureId === modelingEditFeature.featureId
       ) {
-        bodyId = node.bodyId;
-        break;
+        bodyIds.add(node.bodyId);
       }
     }
-    return bodyId ? (renderedRepresentations[bodyId] ?? null) : null;
+    if (bodyIds.size === 0 && modelingEditFeature.bodyId) {
+      bodyIds.add(modelingEditFeature.bodyId);
+    }
+    if (modelingEditFeature.data.featureKind === 'split') {
+      bodyIds.add(modelingEditFeature.data.secondBodyId);
+    }
+    return [...bodyIds].flatMap((bodyId) => {
+      const body = renderedRepresentations[bodyId];
+      return body ? [body] : [];
+    });
   })();
   const modelingOperation: ModelingOperationKind | null =
     tool === 'mirror' ||
@@ -25243,14 +25254,19 @@ export function App() {
                       }}
                     />
                   )}
-                  {modelingEditBody && (
-                    <BodyMeasurements
-                      body={modelingEditBody}
-                      units={doc.units}
-                      document={doc}
-                      worker={geometry}
-                    />
-                  )}
+                  {modelingEditBodies.map((body) => (
+                    <Fragment key={body.bodyId}>
+                      {modelingEditBodies.length > 1 && (
+                        <h3 className="section-title">{body.name}</h3>
+                      )}
+                      <BodyMeasurements
+                        body={body}
+                        units={doc.units}
+                        document={doc}
+                        worker={geometry}
+                      />
+                    </Fragment>
+                  ))}
                 </div>
               </section>
             ) : tool === 'reference-image' && openReferenceImageEntry ? (

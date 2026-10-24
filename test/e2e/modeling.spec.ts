@@ -1522,6 +1522,10 @@ test('preflights and splits a box into two live half bodies', async ({
   ).toBeVisible();
   await expectBodyCount(page, 2);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  // A pick opens no card, so the Split's History card reads out both halves.
+  const splitCard = await bodyCardFromHistory(page);
+  await expect(splitCard.getByText(/mm³/)).toHaveCount(2);
+  await expect(splitCard).toContainText('Box 1 (back)');
   expect(consoleErrors).toEqual([]);
 });
 
