@@ -15,7 +15,11 @@ import type { PrimitiveGhost } from '../lib/primitiveGhost';
 import { buildPrimitiveGhostRig } from './viewer/primitiveGhostRig';
 import { currentRenderProfile } from './viewer/renderProfile';
 import { createdBodiesToFrame, type AutoFrameRequest } from '../lib/autoFrame';
-import { readStagePalette, watchStageTheme } from '../lib/stagePalette';
+import {
+  readDatumColor,
+  readStagePalette,
+  watchStageTheme
+} from '../lib/stagePalette';
 import { mark, measure, timed } from '../lib/perf';
 import { recordEditPhase } from '../lib/editTrace';
 import {
@@ -2552,6 +2556,10 @@ export function ModelViewer({
     paintStage();
     const stopWatchingTheme = watchStageTheme(() => {
       paintStage();
+      // Datum planes and axes take the theme's datum colour too.
+      const datumColor = readDatumColor(host);
+      datumPlaneRigRef.current?.setColor(datumColor);
+      datumAxisRigRef.current?.setColor(datumColor);
       requestRender();
     });
 
@@ -11795,8 +11803,9 @@ export function ModelViewer({
   // Committed datum planes (viewer/datumPlaneRig), rebuilt when the set,
   // a frame or the selection changes; the render loop keeps their size.
   const datumPlaneKey = JSON.stringify(
-    (datumPlanes ?? []).map(({ featureId, frame, selected }) => ({
+    (datumPlanes ?? []).map(({ featureId, name, frame, selected }) => ({
       featureId,
+      name,
       frame,
       selected
     }))
@@ -11807,11 +11816,14 @@ export function ModelViewer({
     if (!context || planes.length === 0) {
       return;
     }
-    const rig = buildDatumPlaneRig(planes);
+    const canvas = context.renderer.domElement;
+    const rig = buildDatumPlaneRig(planes, {
+      color: readDatumColor(canvas),
+      resolution: context.fatLineResolution()
+    });
     rig.setScale(() => 0.05);
     context.scene.add(rig.group);
     datumPlaneRigRef.current = rig;
-    const canvas = context.renderer.domElement;
     if (E2E_CANVAS_HOOKS_ENABLED) {
       canvas.dataset.e2eDatumPlanes = JSON.stringify(
         planes.map(({ featureId, frame }) => ({
@@ -11904,8 +11916,9 @@ export function ModelViewer({
   // Committed datum axes (viewer/datumAxisRig), rebuilt when the set, a line
   // or the selection changes; the render loop keeps their length.
   const datumAxisKey = JSON.stringify(
-    (datumAxes ?? []).map(({ featureId, axis, selected }) => ({
+    (datumAxes ?? []).map(({ featureId, name, axis, selected }) => ({
       featureId,
+      name,
       axis,
       selected
     }))
@@ -11916,11 +11929,14 @@ export function ModelViewer({
     if (!context || axes.length === 0) {
       return;
     }
-    const rig = buildDatumAxisRig(axes);
+    const canvas = context.renderer.domElement;
+    const rig = buildDatumAxisRig(axes, {
+      color: readDatumColor(canvas),
+      resolution: context.fatLineResolution()
+    });
     rig.setScale(() => 0.05);
     context.scene.add(rig.group);
     datumAxisRigRef.current = rig;
-    const canvas = context.renderer.domElement;
     if (E2E_CANVAS_HOOKS_ENABLED) {
       canvas.dataset.e2eDatumAxes = JSON.stringify(
         axes.map(({ featureId, axis }) => ({ featureId, ...axis }))
