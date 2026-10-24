@@ -77,3 +77,4 @@ export * from './selection/hoverDwell';
 
 export * from './gizmo/cylinderProfilePreview';
 export * from './gizmo/stepStretchPreview';
+export * from './gizmo/bodyGhost';
