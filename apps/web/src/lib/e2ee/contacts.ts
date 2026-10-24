@@ -351,7 +351,10 @@ export async function inspectContact(
   requireActive(ctx);
   const record = book.list?.contacts.get(contactUserId);
   const pin = await ctx.pins.readContact(userId, contactUserId);
-  if (!response.identity || response.userId !== contactUserId) {
+  if (response.userId !== contactUserId) {
+    throw new ContactsError('invalid', 'The server answered for another user.');
+  }
+  if (!response.identity) {
     return {
       userId: contactUserId,
       email,
