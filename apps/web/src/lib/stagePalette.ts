@@ -49,6 +49,22 @@ export function readStagePalette(element: Element): StagePalette {
   return palette;
 }
 
+/** `--color-datum` in the dark theme, and the fallback when it is unreadable. */
+const DARK_DATUM_COLOR = '#b3bed0';
+
+/**
+ * The colour committed datum planes and axes are drawn in. A steel that
+ * reads on the graphite stage is too faint on the pale one, so each theme
+ * sets its own `--color-datum`.
+ */
+export function readDatumColor(element: Element): string {
+  const value = window
+    .getComputedStyle(element)
+    .getPropertyValue('--color-datum')
+    .trim();
+  return HEX.test(value) ? expandHex(value) : DARK_DATUM_COLOR;
+}
+
 /**
  * Calls `onChange` whenever the resolved theme may have changed: the
  * Appearance setting rewrites `data-theme` on the root, and under 'system'
