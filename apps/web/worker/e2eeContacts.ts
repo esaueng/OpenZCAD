@@ -34,7 +34,10 @@ import type {
   E2eeContactsEntryRecord,
   E2eeContactsResponse
 } from '@openzcad/shared';
-import { isE2eeContactStorageReady } from '@openzcad/cloudflare-adapters';
+import {
+  isE2eeContactStorageReady,
+  isE2eeInvitationStorageReady
+} from '@openzcad/cloudflare-adapters';
 import type { E2eeWriteAuthorization } from './e2eeWriteAuthorization';
 
 export const CONTACTS_ROUTE = '/api/e2ee/contacts';
@@ -154,6 +157,8 @@ async function relatedPeople(
   userId: string
 ): Promise<E2eeContactPerson[]> {
   const now = Math.floor(Date.now() / 1000);
+  // Accepted encrypted invitations (migration 0038), when the table exists.
+  const encryptedInvitations = await isE2eeInvitationStorageReady(db);
   const { results } = await db
     .prepare(
       `WITH related(user_id, email_known) AS (
@@ -176,7 +181,18 @@ async function relatedPeople(
          SELECT i.invited_by_user_id, 1 FROM project_invitations i
            WHERE i.revoked_at IS NULL AND (i.accepted_by_user_id = ?1 OR (
              i.accepted_at IS NULL AND i.expires_at >= ?2
-             AND i.email = (SELECT email FROM users WHERE id = ?1)))
+             AND i.email = (SELECT email FROM users WHERE id = ?1)))${
+               encryptedInvitations
+                 ? `
+         UNION ALL
+         SELECT e.accepted_by_user_id, 1 FROM e2ee_invitations e
+           WHERE e.invited_by_user_id = ?1 AND e.accepted_by_user_id IS NOT NULL
+             AND e.revoked_at IS NULL
+         UNION ALL
+         SELECT e.invited_by_user_id, 1 FROM e2ee_invitations e
+           WHERE e.accepted_by_user_id = ?1 AND e.revoked_at IS NULL`
+                 : ''
+             }
        )
        SELECT r.user_id AS user_id,
               CASE WHEN MAX(r.email_known) = 1 THEN u.email END AS email
@@ -200,6 +216,17 @@ async function mayLookUp(
 ): Promise<boolean> {
   if (userId === targetId) return true;
   const now = Math.floor(Date.now() / 1000);
+  // An accepted encrypted invitation relates its two sides (migration
+  // 0038): the invitee checks the owner's statement signature, the owner
+  // the invitee's KeyPackage leaves. Before acceptance the server knows
+  // only the email's hash, so a pending one relates nobody.
+  const encrypted = (await isE2eeInvitationStorageReady(db))
+    ? `
+         OR EXISTS (SELECT 1 FROM e2ee_invitations e
+           WHERE e.revoked_at IS NULL AND (
+             (e.invited_by_user_id = ?1 AND e.accepted_by_user_id = ?2)
+             OR (e.invited_by_user_id = ?2 AND e.accepted_by_user_id = ?1)))`
+    : '';
   const row = await db
     .prepare(
       `SELECT
@@ -217,7 +244,7 @@ async function mayLookUp(
                AND i.email = (SELECT email FROM users WHERE id = ?2))))
              OR (i.invited_by_user_id = ?2 AND (i.accepted_by_user_id = ?1 OR (
                i.accepted_at IS NULL AND i.expires_at >= ?3
-               AND i.email = (SELECT email FROM users WHERE id = ?1))))))
+               AND i.email = (SELECT email FROM users WHERE id = ?1))))))${encrypted}
          AS related`
     )
     .bind(userId, targetId, now)

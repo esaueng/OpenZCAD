@@ -580,6 +580,27 @@ export const isE2eeAssistantConsentStorageReady = cachedSchemaProbe(
   (row) => row?.ready === 10
 );
 
+/** The tables migration 0038 adds, children before the invitations. */
+export const E2EE_INVITATION_TABLES = Object.freeze([
+  'e2ee_welcomes',
+  'e2ee_key_packages',
+  'e2ee_invitations'
+] as const);
+
+/**
+ * Whether migration 0038 is installed: invitations to encrypted projects,
+ * their KeyPackages and Welcomes (ADR-024 Phase 5, slice 5-3a). Only the
+ * encrypted invitation and KeyPackage routes, the Add form of a Commit,
+ * contacts lookups, project purge and account erasure name its tables,
+ * each after asking this; a failed probe answers "missing", so ordinary
+ * traffic and plaintext invitations keep working without the migration.
+ */
+export const isE2eeInvitationStorageReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM sqlite_master WHERE type = 'table' AND name IN
+   ('e2ee_invitations', 'e2ee_key_packages', 'e2ee_welcomes')`,
+  (row) => row?.ready === E2EE_INVITATION_TABLES.length
+);
+
 /** An encrypted blob's opaque object key: no file name, no kind. */
 export function encryptedBlobObjectKey(
   projectId: string,
@@ -5969,6 +5990,14 @@ export class D1R2PersistenceService implements PersistenceService {
     if (await isE2eeAssistantConsentStorageReady(this.env.DB)) {
       groupTables.push(
         'DELETE FROM e2ee_assistant_consents WHERE project_id IN'
+      );
+    }
+    // Encrypted invitations, KeyPackages and Welcomes (migration 0038).
+    if (await isE2eeInvitationStorageReady(this.env.DB)) {
+      groupTables.push(
+        ...E2EE_INVITATION_TABLES.map(
+          (table) => `DELETE FROM ${table} WHERE project_id IN`
+        )
       );
     }
     // The child rows declare ON DELETE CASCADE, but foreign-key enforcement is
