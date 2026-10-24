@@ -367,6 +367,7 @@ import {
   isProjectFormatUnsupportedError
 } from './lib/api';
 import { assistantDisabledReason } from './lib/assistant/encryptedProject';
+import { useAssistantConsentGate } from './lib/assistant/consentGate';
 import {
   retainEncryptionStatus,
   useEncryptionStatus
@@ -6909,6 +6910,27 @@ export function App() {
             : []
     }),
     [selectedBodyIds, selectedEdges, selectedFeature, selectedTopology]
+  );
+  // ADR-024 Phase 6: an encrypted project's assistant reads it only with this
+  // account's per-project consent. Null (no gate) for a plaintext project.
+  // A project opened directly while the listing is unavailable has no
+  // summary; this page's own marker still says it is encrypted (#869).
+  const assistantProject:
+    | Pick<ProjectSummary, 'projectId' | 'storageFormat'>
+    | undefined = doc
+    ? (projects.find((project) => project.projectId === doc.projectId) ??
+      (isEncryptedProject(doc.projectId)
+        ? {
+            projectId: doc.projectId,
+            storageFormat: PROJECT_STORAGE_FORMAT_E2EE_V1
+          }
+        : undefined))
+    : undefined;
+  const assistantConsent = useAssistantConsentGate(
+    session?.userId ?? null,
+    cloudFunctionsEnabled && appSettings.assistant.enabled
+      ? assistantProject
+      : undefined
   );
 
   const edgeModifierBody = useMemo<BodyRepresentation | null>(() => {
@@ -27280,9 +27302,10 @@ export function App() {
               onDraft={draftPrompt}
               onActivity={setAssistantActivity}
               disabledReason={assistantDisabledReason(
-                projects.find((project) => project.projectId === doc.projectId),
-                isEncryptedProject(doc.projectId)
+                assistantProject,
+                assistantConsent
               )}
+              consent={assistantConsent}
             />
           </ErrorBoundary>
         ) : null

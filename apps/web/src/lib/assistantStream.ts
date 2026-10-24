@@ -77,6 +77,8 @@ export interface AssistantTurnRequest {
 
 export interface AssistantStatus {
   configured: boolean;
+  /** Whose key: absent from older Workers (a deployment key then). */
+  source?: 'deployment' | 'personal';
   provider: string;
   model: string;
   reasoningEffort: string;

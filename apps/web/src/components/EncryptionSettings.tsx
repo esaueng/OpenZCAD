@@ -74,6 +74,7 @@ import { Group, Notice, SettingRow, Status } from './settingsControls';
 import { ProjectEncryptionPreference } from './ProjectEncryptionPreference';
 import { EncryptedProjectRecovery } from './EncryptedProjectRecovery';
 import { EncryptionContacts } from './EncryptionContacts';
+import { AssistantAccessSettings } from './AssistantAccessSettings';
 import '../styles/components/encryption.css';
 
 /**
@@ -253,6 +254,10 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
         </>
       )}
       <ProjectEncryptionPreference
+        userId={userId}
+        unlocked={state.kind === 'ready' && state.account.unlocked}
+      />
+      <AssistantAccessSettings
         userId={userId}
         unlocked={state.kind === 'ready' && state.account.unlocked}
       />
