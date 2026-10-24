@@ -9,6 +9,8 @@ const GHOST_EDGE_OPACITY = 0.45;
 export interface BodyGhost {
   /** Add beside the body it was taken from. */
   readonly object: THREE.Group;
+  /** Follows the section view when it moves or closes under a kept ghost. */
+  setClippingPlane(plane: THREE.Plane | null): void;
   dispose(): void;
 }
 
@@ -132,6 +134,16 @@ export function createBodyGhost(
   });
   return {
     object,
+    setClippingPlane(plane) {
+      const planes = plane ? [plane] : null;
+      object.traverse((child) => {
+        const material = (child as THREE.Mesh).material as
+          THREE.Material | undefined;
+        if (!material) return;
+        material.clippingPlanes = planes;
+        material.needsUpdate = true;
+      });
+    },
     dispose() {
       object.removeFromParent();
       geometry.dispose();

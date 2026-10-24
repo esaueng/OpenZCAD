@@ -59,6 +59,14 @@ describe('the offset body ghost', () => {
     });
     for (const material of materials(ghost.object))
       expect(material.clippingPlanes).toEqual([plane]);
+    // A section that moves or closes under a kept ghost takes it along.
+    const moved = new THREE.Plane(new THREE.Vector3(0, 0, 1), 1);
+    ghost.setClippingPlane(moved);
+    for (const material of materials(ghost.object))
+      expect(material.clippingPlanes).toEqual([moved]);
+    ghost.setClippingPlane(null);
+    for (const material of materials(ghost.object))
+      expect(material.clippingPlanes).toBeNull();
     const uncut = createBodyGhost(body());
     for (const material of materials(uncut.object))
       expect(material.clippingPlanes ?? null).toBeNull();

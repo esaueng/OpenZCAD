@@ -2351,6 +2351,9 @@ export function ModelViewer({
     null
   );
   const offsetGhostClearRef = useRef<(() => void) | null>(null);
+  const offsetGhostClipRef = useRef<
+    ((plane: THREE.Plane | null) => void) | null
+  >(null);
   const offsetBodyProxyControllerRef = useRef<VisualProxyController | null>(
     null
   );
@@ -3232,6 +3235,9 @@ export function ModelViewer({
       requestRender();
     }
     offsetGhostClearRef.current = clearOffsetGhost;
+    offsetGhostClipRef.current = (plane) => {
+      offsetGhost?.setClippingPlane(plane);
+    };
     function discardOffsetBodyProxy() {
       offsetBodyProxy?.preview.restore();
       offsetBodyProxy = null;
@@ -10035,6 +10041,7 @@ export function ModelViewer({
       offsetBodyProxyControllerRef.current = null;
       offsetGhostClearRef.current?.();
       offsetGhostClearRef.current = null;
+      offsetGhostClipRef.current = null;
       moveGizmoHudRef.current = null;
       if (orientationDragRef.current === orientationDragControls) {
         orientationDragRef.current = null;
@@ -12753,9 +12760,14 @@ export function ModelViewer({
     if (!context) {
       return;
     }
+    const sectionPlane = settings.sectionView
+      ? sectionClippingPlane(settings.sectionView)
+      : null;
+    // An offset ghost stands outside the body group: cut it the same way.
+    offsetGhostClipRef.current?.(sectionPlane);
     applySectionPlane(
       context.bodyGroup,
-      settings.sectionView ? sectionClippingPlane(settings.sectionView) : null,
+      sectionPlane,
       // The mode is read from the ref, not the deps: the display-mode effect
       // owns a mode CHANGE, and re-running this one for it would rebuild the
       // section geometry to no purpose.
