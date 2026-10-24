@@ -1,4 +1,4 @@
-import { useLayoutEffect, type RefObject } from 'react';
+import { useLayoutEffect, useRef, type RefObject } from 'react';
 
 const FOCUSABLE = [
   'a[href]',
@@ -314,6 +314,7 @@ export function useModalFocus(
     workspaceKeys = false
   }: ModalFocusOptions = {}
 ): void {
+  const registrationRef = useRef<ModalRegistration | null>(null);
   useLayoutEffect(() => {
     if (!enabled) {
       return;
@@ -335,9 +336,11 @@ export function useModalFocus(
       workspaceKeys
     };
     modalStack.push(registration);
+    registrationRef.current = registration;
     refreshActiveModal();
 
     return () => {
+      registrationRef.current = null;
       const index = modalStack.indexOf(registration);
       if (index !== -1) {
         modalStack.splice(index, 1);
@@ -345,4 +348,25 @@ export function useModalFocus(
       refreshActiveModal(opener);
     };
   }, [autoFocus, enabled, initialFocusRef, ref, workspaceKeys]);
+
+  // The ref can be handed a new element while the hook stays mounted: an
+  // owner that renders the dialog in another branch (Settings over the start
+  // screen, then over the workspace a restored project opens) replaces the
+  // node, not the ref. Left on the detached one, the registration stopped
+  // counting, so the background stayed live and the next modal to mount
+  // inerted this one. Follow the ref to whatever element it holds now.
+  useLayoutEffect(() => {
+    const registration = registrationRef.current;
+    const dialog = ref.current;
+    if (!registration || !dialog || registration.dialog === dialog) {
+      return;
+    }
+    if (registration === activeModal) {
+      // Give the old node's background back before inerting the new one's.
+      deactivateModal(registration);
+      activeModal = null;
+    }
+    registration.dialog = dialog;
+    refreshActiveModal();
+  });
 }
