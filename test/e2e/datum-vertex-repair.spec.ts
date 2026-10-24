@@ -447,6 +447,18 @@ test('stages all lost plane vertices atomically, cancels, and retries a refused 
   const before = await stored(page, f.document.name);
   await setSelectionFilter(page, 'Face');
   await arm(page, f.featureName, true);
+  // The repair picks edges whatever the manual filter says: Q changes
+  // nothing and says so, rather than announcing a filter it would ignore.
+  const viewer = page.locator('.viewer-shell');
+  await expect(viewer).toHaveAttribute('data-selection-filter', 'edge');
+  await page.evaluate(() =>
+    (document.activeElement as HTMLElement | null)?.blur?.()
+  );
+  await page.keyboard.press('q');
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Vertex repair picks edges only'
+  );
+  await expect(viewer).toHaveAttribute('data-selection-filter', 'edge');
   const first = await locate(page, f.replacementBody);
   await page.mouse.click(first.x, first.y);
   await expect(page.getByRole('contentinfo')).toContainText('Re-pick point 3');

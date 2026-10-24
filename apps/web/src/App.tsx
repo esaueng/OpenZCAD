@@ -22245,6 +22245,17 @@ export function App() {
           toggleXray();
           return;
         case 'selection-filter': {
+          // A vertex repair picks edges whatever the manual filter says
+          // (selectionFilter above; picking a sketch plane, which forces
+          // faces, never reaches this key). Q changes nothing there, so it
+          // says so rather than announcing a filter the viewer would ignore.
+          if (datumRepair?.vertices) {
+            setStatus(
+              'Vertex repair picks edges only; the filter cycles again once it ends.',
+              { unlogged: true }
+            );
+            return;
+          }
           // Advances from the filter in force, not from the manual one: with
           // a tool choosing the filter those differ, and stepping from the
           // manual slot would make the first press appear to do nothing.
