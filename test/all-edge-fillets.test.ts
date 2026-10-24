@@ -197,6 +197,7 @@ describe('whole-part fillet requests', () => {
     'add a filet on all the edges',
     'Please add a fillet to all edges',
     'Could you round every edge?',
+    '\u2003Could you please round every edge.!?\u2003',
     'Fillet each edge',
     'round over all edges'
   ])('recognizes %s without a provider', (prompt) => {
@@ -225,7 +226,9 @@ describe('whole-part fillet requests', () => {
     'Fillet all edges except the hole rims',
     'Fillet the selected edges',
     'Fillet all edges and drill a hole',
-    'Add a 2 mm fillet to all edges by 1 mm'
+    'Add a 2 mm fillet to all edges by 1 mm',
+    'Fillet all edges! ?',
+    'Fillet all edges!?x'
   ])('leaves other instructions to the provider: %s', (prompt) => {
     expect(parseAllEdgesFilletRequest(prompt)).toBeNull();
   });

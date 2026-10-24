@@ -1341,8 +1341,8 @@
 /* In Build the column is the verb rail: one icon wide, the instrument
    rail's mirror. The column, the resizer and the lanes all read --column-w,
    so they follow; the readout under the rail is wider than the rail, so the
-   bottom lanes start after the readout instead. The sketch card and Tweak's
-   parameters keep the stored width. */
+   bottom lanes start after the readout instead. The sketch and Tweak rails
+   are the same width (see `has-column` below). */
 .workspace.column-layout {
   --readout-min-w: 96px;
 }
@@ -1435,9 +1435,15 @@
   }
 }
 
-.workspace.column-layout:has(
-    .workspace-column-float :is(.command-rail, .sketch-rail, .tweak-rail)
-  ) {
+/* Every column the app draws is a rail — the verb rail, the sketch rail or
+   Tweak's — so the column is a rail's width whenever one is mounted.
+   AppShell marks that with `has-column` rather than the stylesheet asking
+   `:has(.command-rail)` of the whole workspace: the rail is a lazy chunk,
+   so the first Build after a reload in another mode drew a 232px empty
+   column until it arrived, and a :has() on an ancestor this far up is one a
+   browser can miss re-matching when the rail is inserted, which left the
+   rail standing in a column-wide island until a reload. */
+.workspace.column-layout.has-column {
   --column-w: var(--rail-w);
   --lane-start: calc(
     max(var(--column-w), var(--readout-min-w)) + var(--island-gap) * 2
@@ -1453,10 +1459,7 @@
   );
 }
 
-.viewer-area:has(
-    .workspace-column-float :is(.command-rail, .sketch-rail, .tweak-rail)
-  )
-  .workspace-column-float {
+.workspace.has-column .viewer-area .workspace-column-float {
   top: var(--stage-middle);
   bottom: auto;
   /* Centred, a rail taller than the stage ran under the top bar and off the
@@ -1617,10 +1620,7 @@
 
 /* The rails are not resizable, and the command, sketch and Tweak rails are
    all the column holds today, so the splitter shows in no mode. */
-.viewer-area:has(
-    .workspace-column-float :is(.command-rail, .sketch-rail, .tweak-rail)
-  )
-  .sidebar-resizer {
+.workspace.has-column .viewer-area .sidebar-resizer {
   display: none;
 }
 

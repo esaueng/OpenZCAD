@@ -16,6 +16,7 @@ import type {
   GroupInfoSummary,
   LeafInfo,
   LeafInit,
+  JoinArchive,
   PendingCommit,
   Processed,
   ProjectRoles,
@@ -51,7 +52,7 @@ export interface EngineApi {
   createGroup(id: number, rejoinWindow: number): EpochChange;
   keyPackage(id: number): Uint8Array;
   inspectWelcome(id: number, welcome: Uint8Array): GroupInfoSummary;
-  join(id: number, welcome: Uint8Array): EpochChange;
+  join(id: number, welcome: Uint8Array, archive: JoinArchive): EpochChange;
   commit(id: number, request: CommitRequest): PendingCommit;
   confirmCommit(id: number): EpochChange;
   discardCommit(id: number): void;
@@ -325,8 +326,20 @@ export class MlsEngine implements EngineApi {
     );
   }
 
-  join(id: number, welcome: Uint8Array): EpochChange {
-    return change(parse(this.run(() => this.session(id).join(welcome))));
+  join(id: number, welcome: Uint8Array, archive: JoinArchive): EpochChange {
+    if (!archive)
+      throw new MlsError('input', 'a join requires the epoch archive');
+    return change(
+      parse(
+        this.run(() =>
+          this.session(id).join(
+            welcome,
+            archive.initialGroupInfo,
+            archive.epochRecords
+          )
+        )
+      )
+    );
   }
 
   commit(id: number, request: CommitRequest): PendingCommit {
@@ -397,13 +410,17 @@ export class MlsEngine implements EngineApi {
     groupInfo: Uint8Array,
     request: RejoinRequest
   ): RejoinResult {
+    if (!request.archive)
+      throw new MlsError('input', 'a rejoin requires the epoch archive');
     const out = parse<{ commit: string; change: ChangeJson }>(
       this.run(() =>
         this.session(id).rejoin(
           groupInfo,
           checkEpoch(request.psk.epoch),
           request.psk.secret,
-          request.replaceLeaf
+          request.replaceLeaf,
+          request.archive.initialGroupInfo,
+          request.archive.epochRecords
         )
       )
     );

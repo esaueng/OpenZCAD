@@ -7,6 +7,7 @@
 //! `kind` (`policy`, `mls`, `state`, `input`) and, for policy refusals,
 //! `reasons`, each with a stable `code`.
 
+mod archive;
 mod directory;
 mod error;
 mod model;
@@ -161,8 +162,14 @@ impl MlsSession {
         json(&self.inner.inspect_welcome(welcome).map_err(to_js)?)
     }
 
-    pub fn join(&mut self, welcome: &[u8]) -> Result<String, JsValue> {
-        json(&self.inner.join(welcome).map_err(to_js)?)
+    pub fn join(
+        &mut self,
+        welcome: &[u8],
+        initial_group_info: &[u8],
+        records: Vec<js_sys::Uint8Array>,
+    ) -> Result<String, JsValue> {
+        let records: Vec<_> = records.iter().map(|r| r.to_vec()).collect();
+        json(&self.inner.join(welcome, initial_group_info, &records).map_err(to_js)?)
     }
 
     /// `spec_json`: `{ remove?, setRoles?, dropUsers?, rejoinWindow? }`.
@@ -219,8 +226,16 @@ impl MlsSession {
         psk_epoch: u64,
         psk: &[u8],
         remove: Option<u32>,
+        initial_group_info: &[u8],
+        records: Vec<js_sys::Uint8Array>,
     ) -> Result<String, JsValue> {
-        json(&self.inner.rejoin(group_info, psk_epoch, psk, remove).map_err(to_js)?)
+        let records: Vec<_> = records.iter().map(|r| r.to_vec()).collect();
+        json(
+            &self
+                .inner
+                .rejoin(group_info, psk_epoch, psk, remove, initial_group_info, &records)
+                .map_err(to_js)?,
+        )
     }
 
     /// The room accepted the external Commit.
