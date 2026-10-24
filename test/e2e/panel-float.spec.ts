@@ -311,9 +311,7 @@ test('a gap drag or a window resize the page loses is cancelled, and the next on
 }) => {
   await openWorkspace(page, 'Lost gestures', {
     ...LONE_WINDOW,
-    right: [['history', 'bodies']],
-    // Panels that fill their shares: an empty project's hug their content.
-    options: { fit: false }
+    right: [['history', 'bodies']]
   });
   const stored = () =>
     page.evaluate(() => {

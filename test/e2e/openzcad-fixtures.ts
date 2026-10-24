@@ -1087,6 +1087,8 @@ export interface SeedPanelLayout {
   unpinned?: SeedPanelId | null;
   recent?: SeedPanelId[];
   weights?: Partial<Record<SeedPanelId, number>>;
+  /** Shortened docked columns, keyed by their panels (`bodies+history`). */
+  columnHeights?: Record<string, number>;
   /**
    * View options: Hide all, Lock, Compact rows, Fit panels to content and
    * the column width.
@@ -1095,7 +1097,7 @@ export interface SeedPanelLayout {
     hidden?: boolean;
     locked?: boolean;
     compact?: boolean;
-    fit?: boolean;
+    hug?: boolean;
     width?: 'narrow' | 'regular' | 'wide';
   };
 }

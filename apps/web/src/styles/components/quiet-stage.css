@@ -2094,6 +2094,54 @@ button.command-rail:disabled {
   visibility: hidden;
 }
 
+/* The handle under a docked column: drag it up to end the column short,
+   back down (or double-click) to fill the dock. It stands in the island
+   gap under the column, reaching 2px into the panel's frame as a gap does.
+   A full column's grip stays faint until it is hovered, so a column that
+   fills the dock reads as one edge. */
+.panel-column-foot {
+  position: absolute;
+  z-index: var(--z-inspector-float);
+  height: 8px;
+  display: grid;
+  place-items: center;
+  cursor: row-resize;
+  touch-action: none;
+  pointer-events: auto;
+}
+
+.panel-column-foot:not(.is-off)::before {
+  content: '';
+  position: absolute;
+  inset: -2px 0 0;
+}
+
+.panel-column-foot .panel-gap-grip {
+  opacity: 0.45;
+}
+
+.panel-column-foot.is-shortened .panel-gap-grip,
+.panel-column-foot:hover .panel-gap-grip,
+.panel-column-foot:active .panel-gap-grip,
+.panel-column-foot:focus-visible .panel-gap-grip {
+  opacity: 1;
+}
+
+.panel-column-foot:hover .panel-gap-grip,
+.panel-column-foot:active .panel-gap-grip {
+  background: var(--color-accent);
+}
+
+/* Locked, the foot is not a control: the strip under the column passes
+   the pointer through to the model. */
+.panel-column-foot.is-off {
+  pointer-events: none;
+}
+
+.panel-column-foot.is-off .panel-gap-grip {
+  visibility: hidden;
+}
+
 /* The unpinned panel stands beside the rail's inner edge (and past the
    relations while sketching), from under the top islands to a gap above
    the bottom-right corner, as the right lane does: the cube stands at the

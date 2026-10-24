@@ -47,7 +47,7 @@ const WIDTHS: ReadonlyArray<{ id: PanelWidth; label: string }> = [
   { id: 'wide', label: 'Large' }
 ];
 
-export type ViewOptionsToggle = 'hidden' | 'locked' | 'compact' | 'fit';
+export type ViewOptionsToggle = 'hidden' | 'locked' | 'compact' | 'hug';
 
 export interface ViewOptionsMenuProps {
   options: PanelLayoutOptions;
@@ -246,8 +246,8 @@ function ViewOptionsList({
         <ViewOptionsItem
           role="menuitemcheckbox"
           label="Fit panels to content"
-          checked={options.fit}
-          onSelect={() => onToggle('fit')}
+          checked={options.hug}
+          onSelect={() => onToggle('hug')}
         />
       </div>
       <div
