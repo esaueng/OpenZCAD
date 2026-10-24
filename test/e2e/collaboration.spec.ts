@@ -92,7 +92,7 @@ for (const fromPublicShare of [false, true]) {
       route.fulfill({
         json: {
           document: publicDocument,
-          project: { name: publicDocument.name },
+          project: { projectId: publicDocument.projectId, name: publicDocument.name },
           mode: 'tweak'
         }
       })
@@ -241,7 +241,7 @@ for (const stage of ['accept', 'document', 'public share'] as const) {
       route.fulfill({
         json: {
           document: latest,
-          project: { name: latest.name },
+          project: { projectId: latest.projectId, name: latest.name },
           mode: 'tweak'
         }
       })
@@ -401,7 +401,7 @@ for (const stage of ['accept', 'document', 'public share'] as const) {
       route.fulfill({
         json: {
           document: shared,
-          project: { name: shared.name },
+          project: { projectId: shared.projectId, name: shared.name },
           mode: 'tweak'
         }
       })
@@ -518,7 +518,7 @@ test('allows signed-out invitation sign-in while a superseded share request is p
     requested = true;
     await gate;
     await route.fulfill({
-      json: { document, project: { name: document.name }, mode: 'tweak' }
+      json: { document, project: { projectId: document.projectId, name: document.name }, mode: 'tweak' }
     });
   });
   await page.goto('/');
@@ -567,7 +567,7 @@ test('opens a public link instead of resuming an older retained invitation', asy
   });
   await page.route('**/api/share/*', (route) =>
     route.fulfill({
-      json: { document, project: { name: document.name }, mode: 'tweak' }
+      json: { document, project: { projectId: document.projectId, name: document.name }, mode: 'tweak' }
     })
   );
   await page.goto(`/#share=${'p'.repeat(43)}`);
@@ -648,7 +648,7 @@ for (const active of [false, true]) {
       requested = true;
       await gate;
       await route.fulfill({
-        json: { document, project: { name: document.name }, mode: 'tweak' }
+        json: { document, project: { projectId: document.projectId, name: document.name }, mode: 'tweak' }
       });
     });
     await page.goto('/');
@@ -705,7 +705,7 @@ for (const status of [404, 503]) {
     await page.route('**/api/share/*', (route) =>
       route.request().url().endsWith('a'.repeat(43))
         ? route.fulfill({
-            json: { document, project: { name: document.name }, mode: 'tweak' }
+            json: { document, project: { projectId: document.projectId, name: document.name }, mode: 'tweak' }
           })
         : route.fulfill({ status, json: { error: 'Replacement unavailable.' } })
     );
@@ -809,7 +809,7 @@ for (const action of ['create', 'demo', 'import'] as const) {
             ? {
                 json: {
                   document,
-                  project: { name: document.name },
+                  project: { projectId: document.projectId, name: document.name },
                   mode: 'tweak'
                 }
               }
@@ -927,7 +927,7 @@ test('cancels a pending share on Back and leaves an active share when its fragme
     requested = true;
     if (delay) await delayed;
     await route.fulfill({
-      json: { document, project: { name: document.name }, mode: 'tweak' }
+      json: { document, project: { projectId: document.projectId, name: document.name }, mode: 'tweak' }
     });
   });
   await page.goto('/');
@@ -992,7 +992,7 @@ for (const departure of ['fragment', 'home'] as const) {
       const document =
         documents[route.request().url().endsWith('a'.repeat(43)) ? 0 : 1]!;
       return route.fulfill({
-        json: { document, project: { name: document.name }, mode: 'tweak' }
+        json: { document, project: { projectId: document.projectId, name: document.name }, mode: 'tweak' }
       });
     });
     await page.goto('/');
@@ -1033,7 +1033,7 @@ test('makes a durable share copy without storing the owner snapshot', async ({
   const document = createProjectDocument('Anonymous source', toUserId('owner'));
   await page.route('**/api/share/*', (route) =>
     route.fulfill({
-      json: { document, project: { name: document.name }, mode: 'tweak' }
+      json: { document, project: { projectId: document.projectId, name: document.name }, mode: 'tweak' }
     })
   );
   await page.goto(`/#share=${'p'.repeat(43)}`);

@@ -155,6 +155,11 @@ class World {
     readonly projectId: string
   ) {}
 
+  remember(change: EpochChange): void {
+    if (change.epochRecord && change.epoch > 0)
+      this.archive.epochRecords[change.epoch - 1] = change.epochRecord;
+  }
+
   snapshot(): DeviceDirectory {
     return {
       users: [...this.directory].map(([userId, devices]) => ({
@@ -1841,7 +1846,306 @@ const archiveVerification = suite<{ mls: Mls }>({
   }))
 });
 
+// The archive format belongs to the application. These test-only AES-GCM
+// envelopes demonstrate that no plaintext transcript needs to reach the room.
+async function encryptHistory(secret: Uint8Array, archive: JoinArchive) {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    Uint8Array.from(secret),
+    'AES-GCM',
+    false,
+    ['encrypt']
+  );
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const plaintext = new TextEncoder().encode(
+    JSON.stringify({
+      initialGroupInfo: [...archive.initialGroupInfo],
+      epochRecords: archive.epochRecords.map((r) => [...r])
+    })
+  );
+  return {
+    iv,
+    bytes: await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext)
+  };
+}
+
+async function decryptHistory(
+  secret: Uint8Array,
+  encrypted: Awaited<ReturnType<typeof encryptHistory>>
+) {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    Uint8Array.from(secret),
+    'AES-GCM',
+    false,
+    ['decrypt']
+  );
+  const plaintext = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: encrypted.iv },
+    key,
+    encrypted.bytes
+  );
+  const decoded = JSON.parse(new TextDecoder().decode(plaintext)) as {
+    initialGroupInfo: number[];
+    epochRecords: number[][];
+  };
+  return {
+    initialGroupInfo: Uint8Array.from(decoded.initialGroupInfo),
+    epochRecords: decoded.epochRecords.map((r) => Uint8Array.from(r))
+  };
+}
+
+async function currentDevices(world: World): Promise<Device[]> {
+  const members: Device[] = [];
+  for (const device of world.devices) {
+    if (device.live && (await device.session.status()).inGroup)
+      members.push(device);
+  }
+  return members;
+}
+
+const stagedArchives = suite({
+  name: 'encrypted archives and provisional membership',
+  async setup(mls: Mls) {
+    const world = new World(mls, project('staged-archives'));
+    const owner = await world.device('A', 'owner');
+    const removed = await world.device('A', 'removed');
+    await createProject(world, owner, 16);
+    await addDevices(world, owner, [], [removed]);
+    const stalePsk = world.newestPsk('A');
+    await advance(world, owner, [removed], {
+      remove: [await indexOf(removed)]
+    });
+    return { world, owner, stalePsk };
+  },
+  steps: [
+    {
+      name: 'a provisional Welcome decrypts an encrypted archive, stays blocked after reopen, and retries after rejection',
+      async run({ world, owner }) {
+        const fresh = await world.device('A', 'welcome-device');
+        const { welcome } = await advance(world, owner, [], {
+          add: [await fresh.session.keyPackage()]
+        });
+        assert(welcome, 'a Welcome');
+        const encrypted = await encryptHistory(
+          await owner.session.projectKey(),
+          world.archive
+        );
+        await fresh.session.beginJoin(welcome);
+        assert(
+          (await fresh.session.status()).pendingArchive,
+          'archive verification is pending'
+        );
+        for (const operation of [
+          () => fresh.session.projectKey(),
+          () => fresh.session.rejoinPsk(),
+          () => fresh.session.groupInfo(),
+          () => fresh.session.commit(),
+          () => fresh.session.process(welcome)
+        ]) {
+          await failsWith(operation, 'state');
+        }
+        const stateKey = await generateStateKey();
+        const sealed = await fresh.session.seal(stateKey);
+        await fresh.session.free();
+        fresh.session = await world.mls.open(sealed, stateKey, world.projectId);
+        await world.publish();
+        await failsWith(() => fresh.session.projectKey(), 'state');
+        await failsWith(
+          () =>
+            fresh.session.completeJoin({
+              initialGroupInfo: world.archive.initialGroupInfo,
+              epochRecords: []
+            }),
+          'input'
+        );
+        assert(
+          !(await fresh.session.status()).inGroup,
+          'failed verification rolled back the Welcome'
+        );
+        await fresh.session.beginJoin(welcome);
+        await fresh.session.discardJoin();
+        await fresh.session.beginJoin(welcome);
+        const history = await decryptHistory(
+          await fresh.session.archiveKey(),
+          encrypted
+        );
+        await fresh.session.completeJoin(history);
+        await failsWith(() => fresh.session.archiveKey(), 'state');
+        await world.storePsks([fresh]);
+        return agree([owner, fresh]);
+      }
+    },
+    {
+      name: 'an external rejoin decrypts the accepted new-epoch archive before verification and confirmation',
+      async run({ world, owner }) {
+        const members = await currentDevices(world);
+        const fresh = await world.device('A', 'rejoin-device');
+        const groupInfo = await owner.session.groupInfo();
+        const request = { psk: world.newestPsk('A') };
+        await fresh.session.beginRejoin(groupInfo, request);
+        await fresh.session.discardRejoin();
+        const result = await fresh.session.beginRejoin(groupInfo, request);
+        await failsWith(() => fresh.session.confirmRejoin(), 'state');
+        await failsWith(() => fresh.session.projectKey(), 'state');
+        for (const member of members) {
+          const processed = await member.session.process(result.commit);
+          assert(
+            processed.kind === 'commit',
+            'the existing member accepted the external Commit'
+          );
+          world.remember(processed.change);
+        }
+        const encrypted = await encryptHistory(
+          await owner.session.projectKey(),
+          world.archive
+        );
+        const stateKey = await generateStateKey();
+        const sealed = await fresh.session.seal(stateKey);
+        await fresh.session.free();
+        fresh.session = await world.mls.open(sealed, stateKey, world.projectId);
+        await world.publish();
+        await failsWith(() => fresh.session.confirmRejoin(), 'state');
+        const history = await decryptHistory(
+          await fresh.session.archiveKey(),
+          encrypted
+        );
+        await fresh.session.completeRejoin(history);
+        await failsWith(() => fresh.session.projectKey(), 'state');
+        await fresh.session.confirmRejoin();
+        await world.storePsks([fresh, ...members]);
+        return agree([fresh, ...members]);
+      }
+    },
+    {
+      name: 'an accepted rejoin survives bad archive downloads after its old PSK expires, and reopens for retry',
+      async run({ world }) {
+        const solo = new World(
+          world.mls,
+          project('archive-retry-minimum-window')
+        );
+        const owner = await solo.device('A', 'owner');
+        await createProject(solo, owner, 1);
+        assert(
+          (await owner.session.status()).roles?.rejoinWindow === 1,
+          'minimum retention window'
+        );
+        const fresh = await solo.device('A', 'rejoining-device');
+        const originalPsk = solo.newestPsk('A');
+        const result = await fresh.session.beginRejoin(
+          await owner.session.groupInfo(),
+          { psk: originalPsk }
+        );
+        const accepted = await owner.session.process(result.commit);
+        assert(
+          accepted.kind === 'commit',
+          'the room advanced to the external Commit'
+        );
+        solo.remember(accepted.change);
+        const encrypted = await encryptHistory(
+          await owner.session.projectKey(),
+          solo.archive
+        );
+        const archiveKey = await fresh.session.archiveKey();
+        const malformed = {
+          ...solo.archive,
+          epochRecords: [...solo.archive.epochRecords]
+        };
+        malformed.epochRecords[0] = new Uint8Array([
+          ...malformed.epochRecords[0]!,
+          0
+        ]);
+        const later = await advance(solo, owner, []);
+        const stranded = await solo.device('A', 'retry-with-old-psk');
+        const currentInfo = await owner.session.groupInfo();
+        await refused(
+          () =>
+            stranded.session.rejoin(currentInfo, {
+              psk: originalPsk,
+              archive: solo.archive
+            }),
+          ['rejoin-psk-outside-window']
+        );
+        for (const bad of [
+          { initialGroupInfo: solo.archive.initialGroupInfo, epochRecords: [] },
+          malformed
+        ]) {
+          await failsWith(() => fresh.session.completeRejoin(bad), 'input');
+          const status = await fresh.session.status();
+          assert(
+            status.inGroup && status.pendingArchive && status.pendingRejoin,
+            'accepted provisional state survived a download error'
+          );
+          assert(
+            equalBytes(await fresh.session.archiveKey(), archiveKey),
+            'the archive key was preserved'
+          );
+          await failsWith(() => fresh.session.projectKey(), 'state');
+          await failsWith(() => fresh.session.confirmRejoin(), 'state');
+        }
+        const key = await generateStateKey();
+        const sealed = await fresh.session.seal(key);
+        await fresh.session.free();
+        fresh.session = await solo.mls.open(sealed, key, solo.projectId);
+        await solo.publish();
+        await fresh.session.completeRejoin(
+          await decryptHistory(await fresh.session.archiveKey(), encrypted)
+        );
+        await fresh.session.confirmRejoin();
+        await fresh.session.process(later.commit);
+        return agree([owner, fresh]);
+      }
+    },
+    {
+      name: 'even a supplied provisional archive cannot confirm a stale rejoin; the session rolls back and retries',
+      async run({ world, owner, stalePsk }) {
+        const members = await currentDevices(world);
+        const fresh = await world.device('A', 'removed');
+        const groupInfo = await owner.session.groupInfo();
+        // Force a malicious client's provisional Commit. Completion must
+        // independently recheck the genuine pre-Commit removal cutoffs.
+        await fresh.session.insecureSkipSendChecksForTests(true);
+        const result = await fresh.session.beginRejoin(groupInfo, {
+          psk: stalePsk
+        });
+        await refused(
+          () => owner.session.process(result.commit),
+          ['rejoin-psk-before-leaf-removal']
+        );
+        assert(result.change.epochRecord, 'a provisional epoch record');
+        const encrypted = await encryptHistory(
+          await fresh.session.archiveKey(),
+          {
+            ...world.archive,
+            epochRecords: [
+              ...world.archive.epochRecords,
+              result.change.epochRecord
+            ]
+          }
+        );
+        const history = await decryptHistory(
+          await fresh.session.archiveKey(),
+          encrypted
+        );
+        await refused(
+          () => fresh.session.completeRejoin(history),
+          ['rejoin-psk-before-leaf-removal']
+        );
+        const status = await fresh.session.status();
+        assert(
+          !status.inGroup && !status.pendingArchive && !status.pendingRejoin,
+          'failed archive verification restored the original state'
+        );
+        await failsWith(() => fresh.session.archiveKey(), 'state');
+        await fresh.session.insecureSkipSendChecksForTests(false);
+        return rejoin(world, fresh, owner, world.newestPsk('A'), members);
+      }
+    }
+  ]
+});
+
 export const scenarioSuites: ScenarioSuite[] = [
+  stagedArchives,
   archiveVerification,
   main,
   rejoinRules,

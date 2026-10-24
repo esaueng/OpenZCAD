@@ -94,6 +94,14 @@ for (const filter of ['Face', 'Any'] as const) {
     ).toContainText('Two rim fillets');
     const canvas = page.locator('.viewer-host canvas');
     const inspector = page.getByRole('region', { name: 'Feature inspector' });
+    // A pick opens no card: History marks the row that owns it, and that
+    // row opens the owner's editor.
+    const openOwner = async (row: number) => {
+      await expect(inspector).toHaveCount(0);
+      const owner = page.locator('.feature-row').nth(row);
+      await expect(owner).toHaveClass(/selected/);
+      await owner.locator('.feature-row-main').click();
+    };
     await expect
       .poll(async () => (await blend(canvas, 3))?.blendRadius, {
         timeout: 30_000
@@ -113,11 +121,7 @@ for (const filter of ['Face', 'Any'] as const) {
         lineageName: 'modifier.cylinder.face.cap.end'
       });
     await planarFace(canvas, { x: 0, y: 0, z: 1 });
-    await expect(inspector.getByLabel('Radius', { exact: true })).toHaveCount(
-      0
-    );
-    await expect(inspector.getByLabel('More actions')).toHaveCount(0);
-    await inspector.getByRole('button', { name: 'Edit', exact: true }).click();
+    await openOwner(0);
     await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
       '46'
     );
@@ -149,13 +153,9 @@ for (const filter of ['Face', 'Any'] as const) {
       });
     }
     await clickBlend(3);
-    await expect(inspector.getByLabel('Radius', { exact: true })).toHaveCount(
-      0
-    );
-    await expect(inspector.getByLabel('More actions')).toHaveCount(0);
     if (filter === 'Face')
       await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
-    await inspector.getByRole('button', { name: 'Edit', exact: true }).click();
+    await openOwner(1);
     await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
       '3'
     );
@@ -172,11 +172,7 @@ for (const filter of ['Face', 'Any'] as const) {
       .toBe(topOwner);
     expect((await blend(canvas, 4))?.producingFeatureId).toBe(bottomOwner);
     await clickBlend(4);
-    await expect(inspector.getByLabel('Radius', { exact: true })).toHaveCount(
-      0
-    );
-    await expect(inspector.getByLabel('More actions')).toHaveCount(0);
-    await inspector.getByRole('button', { name: 'Edit', exact: true }).click();
+    await openOwner(2);
     await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
       '4'
     );
@@ -198,11 +194,7 @@ for (const filter of ['Face', 'Any'] as const) {
       .poll(async () => (await blend(canvas, 5))?.producingFeatureId)
       .toBe(bottomOwner);
     await clickBlend(2);
-    await expect(inspector.getByLabel('Radius', { exact: true })).toHaveCount(
-      0
-    );
-    await expect(inspector.getByLabel('More actions')).toHaveCount(0);
-    await inspector.getByRole('button', { name: 'Edit', exact: true }).click();
+    await openOwner(1);
     await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
       '2'
     );

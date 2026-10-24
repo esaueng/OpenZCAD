@@ -130,6 +130,10 @@
   /* Reference geometry (sketch construction lines). Magenta, well away from
      the signal hue so a construction line never reads as a selection. */
   --color-construction: #ef91ef;
+  /* Datum planes and axes you add (viewer/datumStyle.ts). Steel, apart from
+     the axis hues and the selection, light enough for the graphite stage;
+     the light theme deepens it. */
+  --color-datum: #b3bed0;
   --color-handle-x: #ef6a6a;
   --color-handle-y: #6fd66f;
   --color-handle-z: #5f8fef;
@@ -333,6 +337,7 @@
   --color-cube-hover: #e2e9f8;
   --color-cube-seam: #8e8e93;
   --color-cube-label: #1d1d1f;
+  --color-datum: #5d6a80;
 }
 
 /* 'system' under a light OS: the same palette, resolved by the browser. */
@@ -373,6 +378,7 @@
     --color-cube-hover: #e2e9f8;
     --color-cube-seam: #8e8e93;
     --color-cube-label: #1d1d1f;
+    --color-datum: #5d6a80;
   }
 }
 

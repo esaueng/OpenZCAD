@@ -7,7 +7,8 @@ import {
   locateEdge,
   setSelectionFilter,
   stubApi,
-  WORKSPACE_SESSION_STORAGE_KEY
+  WORKSPACE_SESSION_STORAGE_KEY,
+  revealModelPanel
 } from './openzcad-fixtures';
 import type { Locator, Page } from '@playwright/test';
 
@@ -328,12 +329,13 @@ test('Space centres and faces an exact planar selection head-on', async ({
   await expect(
     faceOperation.getByRole('button', { name: 'Selection: Sketch' })
   ).toBeVisible();
-  // The viewport pick demotes its inferred feature to an object readout. Space
+  // A viewport pick opens no card; the Selection card names the face. Space
   // still belongs to the selected face without an editable field retaining it.
   await expect(radiusInput).toHaveCount(0);
+  await expect(inspector).toHaveCount(0);
   await expect(
-    inspector.getByRole('heading', { name: 'Bottom face' })
-  ).toBeVisible();
+    page.locator('.selection-card .selection-callout-name')
+  ).toContainText('Bottom face');
 
   const cameraPose = async () =>
     page.evaluate((storageKey) => {
@@ -1556,9 +1558,10 @@ test('box selection releases the previous direct-edit target', async ({
   await page.mouse.click(facePoint!.x, facePoint!.y);
   await expect(page.locator('.selection-callout-chip')).toBeVisible();
   await expect(status).toContainText('resize the body');
+  // A direct pick opens no card beside the Selection card.
   await expect(
     page.getByRole('region', { name: 'Feature inspector' })
-  ).toBeVisible();
+  ).toHaveCount(0);
   await expect
     .poll(
       async () => {
@@ -1836,12 +1839,12 @@ test('a shortcut still fires when a panel opened because you selected something'
   await expect(page.locator('.body-row')).toHaveCount(1);
   await page.keyboard.press('Escape');
 
-  // A body pick shows its definition first; opening that feature's editor
+  // A body pick opens no card. Opening its feature's editor from History
   // must preserve workspace shortcuts instead of focusing a dimension field.
   await page.getByRole('button', { name: /^Box 1/ }).click();
-  await expect(inspector.getByLabel('Width (X)')).toHaveCount(0);
-  await expect(inspector.getByText('Defined by')).toBeVisible();
-  await inspector.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(inspector).toHaveCount(0);
+  await revealModelPanel(page, 'History');
+  await page.locator('.feature-row-main', { hasText: 'Box' }).first().click();
   const width = inspector.getByLabel('Width (X)');
   await expect(width).toBeVisible();
   await expect(width).not.toBeFocused();
@@ -2173,12 +2176,19 @@ test('the selection callout follows the body it names through a move', async ({
     .click();
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
-  // Selecting the body raises the name callout over it.
+  // Selecting the body names it in the Selection card, not over the model;
+  // a running Move hangs the name callout over the body it moves.
   await page
     .getByRole('list', { name: 'Objects' })
     .getByRole('button', { name: /^Box/ })
     .click();
   const callout = page.locator('.selection-callout');
+  await expect(page.locator('.selection-card')).toBeVisible();
+  await expect(callout).toHaveCount(0);
+
+  await page.keyboard.press('m');
+  await expect(page.getByRole('form', { name: 'Move controls' })).toBeVisible();
+  const overlay = page.getByRole('form', { name: 'Move controls' });
   await expect(callout).toHaveCount(1);
 
   // Read the CSS transform, not the page rect: the callout is placed in the
@@ -2188,10 +2198,6 @@ test('the selection callout follows the body it names through a move', async ({
     callout.evaluate((element) => (element as HTMLElement).style.transform);
   const resting = await placement();
   expect(resting).toContain('translate(');
-
-  await page.keyboard.press('m');
-  await expect(page.getByRole('form', { name: 'Move controls' })).toBeVisible();
-  const overlay = page.getByRole('form', { name: 'Move controls' });
 
   // The callout lives in the overlay group rather than under the body, so it
   // used to sit still while the body slid out from under its own name.
@@ -2208,8 +2214,8 @@ test('the selection callout follows the body it names through a move', async ({
   await expect.poll(placement).not.toBe(moved);
 
   // Cancelling is one Escape back to nothing selected, so the callout goes
-  // with the Move. Selecting the body again finds it at its resting pose:
-  // the cancel restored the callout's anchor, not just the mesh.
+  // with the Move. Moving the body again finds it at its resting pose: the
+  // cancel restored the callout's anchor, not just the mesh.
   await page.keyboard.press('Escape');
   await expect(overlay).toBeHidden();
   await expect(callout).toHaveCount(0);
@@ -2217,6 +2223,8 @@ test('the selection callout follows the body it names through a move', async ({
     .getByRole('list', { name: 'Objects' })
     .getByRole('button', { name: /^Box/ })
     .click();
+  await page.keyboard.press('m');
+  await expect(overlay).toBeVisible();
   await expect(callout).toHaveCount(1);
   await expect.poll(placement).toBe(resting);
 });
@@ -2272,10 +2280,13 @@ test('a viewport callout keeps its position while it animates in', async ({
     .getByRole('button', { name: /^Create/ })
     .click();
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+  // A running Move hangs the name callout over the body it moves.
   await page
     .getByRole('list', { name: 'Objects' })
     .getByRole('button', { name: /^Box/ })
     .click();
+  await page.keyboard.press('m');
+  await expect(page.getByRole('form', { name: 'Move controls' })).toBeVisible();
 
   const callout = page.locator('.selection-callout').first();
   await expect(callout).toBeVisible();

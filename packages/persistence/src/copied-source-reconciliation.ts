@@ -6,6 +6,7 @@ import {
   type ProjectId
 } from '@openzcad/shared';
 import { ArtifactStorageError, type PersistenceService } from './index';
+import { isUnreadableStoredDocument } from './stored-document';
 
 export interface CopiedImportArchive {
   projectId: ProjectId;
@@ -118,6 +119,8 @@ export function reconcileCopiedImportSources(
   document: ProjectDocument,
   archives: readonly CopiedImportArchive[]
 ): ProjectDocument {
+  // A stored document this build could not read is served as stored.
+  if (isUnreadableStoredDocument(document)) return document;
   const mapped = new Map(
     archives
       .filter((archive) => archive.projectId === document.projectId)

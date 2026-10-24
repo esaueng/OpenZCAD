@@ -6,6 +6,13 @@ import {
   sharedImportSourceUrl
 } from './projectShareClient';
 import { ProjectSharingApiError } from './projectSharing';
+import { createProjectDocument } from '@openzcad/document-core';
+import { sharedProjectSnapshotDocument } from '@openzcad/persistence';
+import { toUserId } from '@openzcad/shared';
+
+const sharedDocument = sharedProjectSnapshotDocument(
+  createProjectDocument('One', toUserId('owner'))
+);
 
 function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
@@ -30,8 +37,12 @@ describe('project share link client', () => {
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
       .mockResolvedValueOnce(
         jsonResponse({
-          project: { projectId: 'project/one', name: 'One', mode: 'tweak' },
-          document: {}
+          project: {
+            projectId: sharedDocument.projectId,
+            name: 'One',
+            mode: 'tweak'
+          },
+          document: sharedDocument
         })
       );
     const client = createProjectShareLinkClient(fetcher);
@@ -75,6 +86,45 @@ describe('project share link client', () => {
     await expect(client.fetchSharedProject('bad_token')).rejects.toMatchObject({
       name: 'ProjectSharingApiError',
       status: 500
+    });
+  });
+
+  it('opens only a shared model this browser can open', async () => {
+    // The account serves the shared model unread (ADR-024 Phase 1).
+    const project = {
+      projectId: sharedDocument.projectId,
+      name: 'One',
+      mode: 'tweak'
+    };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          project,
+          document: { ...sharedDocument, objectFolders: 'folders' }
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          project: { ...project, projectId: 'project/other' },
+          document: sharedDocument
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ project, document: sharedDocument })
+      );
+    const client = createProjectShareLinkClient(fetcher);
+    await expect(client.fetchSharedProject('bad_model')).rejects.toThrow(
+      /objectFolders/
+    );
+    // A valid model that claims another project is not this link's model.
+    await expect(client.fetchSharedProject('other_model')).rejects.toThrow(
+      /different project/
+    );
+    await expect(
+      client.fetchSharedProject('good_model')
+    ).resolves.toMatchObject({
+      document: { projectId: sharedDocument.projectId }
     });
   });
 

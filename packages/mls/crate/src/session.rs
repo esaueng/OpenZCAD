@@ -45,7 +45,8 @@ pub type ProjectConfig = WithIdentityProvider<
     >,
 >;
 
-const STATE_VERSION: u8 = 1;
+// Version 1 could persist removal history trusted from an inviter alone.
+const STATE_VERSION: u8 = 2;
 const EPOCH_RECORD_VERSION: u8 = 1;
 
 fn cipher_suite() -> Res<impl CipherSuiteProvider> {
@@ -181,6 +182,8 @@ pub struct Status {
     pub own_index: Option<u32>,
     pub pending_commit: bool,
     pub pending_rejoin: bool,
+    pub pending_join: bool,
+    pub pending_archive: bool,
     pub members: Vec<LeafInfo>,
     pub roles: Option<RolesInfo>,
 }
@@ -242,6 +245,20 @@ struct StoredPending {
     roster: Vec<StoredLeaf>,
 }
 
+#[derive(Clone, MlsSize, MlsEncode, MlsDecode)]
+struct PendingJoin {
+    backup: Vec<u8>,
+    extensions: ExtensionList,
+}
+
+#[derive(Clone, MlsSize, MlsEncode, MlsDecode)]
+struct PendingRejoinArchive {
+    group_info: Vec<u8>,
+    psk_epoch: u64,
+    psk: Vec<u8>,
+    remove: Option<u32>,
+}
+
 #[derive(MlsSize, MlsEncode, MlsDecode)]
 struct StoredSession {
     version: u8,
@@ -261,6 +278,8 @@ struct StoredSession {
     /// The session as it was before an external Commit the room has not
     /// accepted yet.
     rejoin_backup: Option<Vec<u8>>,
+    join_pending: Option<PendingJoin>,
+    rejoin_archive: Option<PendingRejoinArchive>,
 }
 
 /// One epoch of the history archive (ADR-024, "Historical authority"): the
@@ -299,6 +318,8 @@ pub struct Session {
     pending: Option<StoredPending>,
     removed: bool,
     rejoin_backup: Option<Vec<u8>>,
+    join_pending: Option<PendingJoin>,
+    rejoin_archive: Option<PendingRejoinArchive>,
 }
 
 fn check_id(label: &str, value: &[u8]) -> Res<()> {
@@ -333,6 +354,8 @@ impl Session {
             pending: None,
             removed: false,
             rejoin_backup: None,
+            join_pending: None,
+            rejoin_archive: None,
         })
     }
 
@@ -502,10 +525,20 @@ impl Session {
     }
 
     pub fn join(&mut self, welcome: &[u8], initial_group_info: &[u8], records: &[Vec<u8>]) -> Res<EpochChange> {
+        self.begin_join(welcome)?;
+        self.complete_join(initial_group_info, records)
+    }
+
+    /// Open the Welcome provisionally for archive decryption. Every normal
+    /// group operation remains blocked until complete_join verifies history.
+    pub fn begin_join(&mut self, welcome: &[u8]) -> Res<()> {
         self.require_no_group()?;
         let backup = self.export()?;
-        match self.join_verified(welcome, initial_group_info, records) {
-            Ok(change) => Ok(change),
+        match self.join_provisional(welcome) {
+            Ok(extensions) => {
+                self.join_pending = Some(PendingJoin { backup, extensions });
+                Ok(())
+            }
             Err(error) => {
                 self.restore_from(&backup)?;
                 Err(error)
@@ -513,7 +546,7 @@ impl Session {
         }
     }
 
-    fn join_verified(&mut self, welcome: &[u8], initial_group_info: &[u8], records: &[Vec<u8>]) -> Res<EpochChange> {
+    fn join_provisional(&mut self, welcome: &[u8]) -> Res<ExtensionList> {
         let message = MlsMessage::from_bytes(welcome)?;
         let (group, info) = self.client()?.join_group(None, &message, None)?;
         if group.group_id() != group_id(&self.project_id).as_slice() {
@@ -526,25 +559,60 @@ impl Session {
             self.groups.restore(None);
             return Err(Error::policy(shape));
         }
-        let verified = crate::archive::verify(
-            initial_group_info,
-            records,
-            group.context(),
-            &group.export_tree().to_bytes()?,
-            info.group_info_extensions(),
-        )?;
-        self.policy.removals.lock().unwrap().merge(&verified);
         self.group = Some(group);
-        self.enter_epoch()?;
-        self.write()?;
-        Ok(EpochChange {
-            epoch: self.group()?.current_epoch(),
-            removed_self: false,
-            removed: Vec::new(),
-            added: Vec::new(),
-            roles_changed: false,
-            epoch_record: None,
-        })
+        Ok(info.group_info_extensions().clone())
+    }
+
+    pub fn complete_join(&mut self, initial_group_info: &[u8], records: &[Vec<u8>]) -> Res<EpochChange> {
+        let pending = self
+            .join_pending
+            .clone()
+            .ok_or_else(|| Error::state("no Welcome join is pending"))?;
+        let result = (|| {
+            let group = self.group()?;
+            let verified = crate::archive::verify(
+                initial_group_info,
+                records,
+                group.context(),
+                &group.export_tree().to_bytes()?,
+                &pending.extensions,
+            )?;
+            self.policy.removals.lock().unwrap().merge(&verified);
+            self.join_pending = None;
+            self.enter_epoch()?;
+            self.write()?;
+            Ok(EpochChange {
+                epoch: self.group()?.current_epoch(),
+                removed_self: false,
+                removed: Vec::new(),
+                added: Vec::new(),
+                roles_changed: false,
+                epoch_record: None,
+            })
+        })();
+        if result.is_err() {
+            self.restore_from(&pending.backup)?;
+        }
+        result
+    }
+
+    pub fn discard_join(&mut self) -> Res<()> {
+        let pending = self
+            .join_pending
+            .clone()
+            .ok_or_else(|| Error::state("no Welcome join is pending"))?;
+        self.restore_from(&pending.backup)
+    }
+
+    /// Untrusted exporter for archive decryption only, before admission.
+    pub fn archive_key(&self) -> Res<Vec<u8>> {
+        if self.join_pending.is_none() && self.rejoin_archive.is_none() {
+            return Err(Error::state("no join archive is pending"));
+        }
+        Ok(self
+            .group()?
+            .export_secret(PROJECT_KEY_LABEL, &self.project_id, 32)?
+            .to_vec())
     }
 
     /// Build a Commit. It includes every proposal received this epoch. The
@@ -834,6 +902,27 @@ impl Session {
         initial_group_info: &[u8],
         records: &[Vec<u8>],
     ) -> Res<RejoinResult> {
+        self.start_rejoin(group_info, psk_epoch, psk, remove, Some((initial_group_info, records)))
+    }
+
+    pub fn begin_rejoin(
+        &mut self,
+        group_info: &[u8],
+        psk_epoch: u64,
+        psk: &[u8],
+        remove: Option<u32>,
+    ) -> Res<RejoinResult> {
+        self.start_rejoin(group_info, psk_epoch, psk, remove, None)
+    }
+
+    fn start_rejoin(
+        &mut self,
+        group_info: &[u8],
+        psk_epoch: u64,
+        psk: &[u8],
+        remove: Option<u32>,
+        archive: Option<(&[u8], &[Vec<u8>])>,
+    ) -> Res<RejoinResult> {
         if self.rejoin_backup.is_some() {
             return Err(Error::state("a rejoin is already pending"));
         }
@@ -842,26 +931,36 @@ impl Session {
         }
         let backup = self.export()?;
         let verified = (|| {
-            let info = MlsMessage::from_bytes(group_info)?
-                .into_group_info()
-                .ok_or_else(|| Error::input("not a GroupInfo message"))?;
-            let tree = info
-                .extensions()
-                .get_as::<RatchetTreeExt>()
-                .map_err(|_| Error::input("malformed ratchet tree"))?
-                .ok_or_else(|| Error::input("missing ratchet tree"))?;
-            crate::archive::verify(
-                initial_group_info,
-                records,
-                info.group_context(),
-                &tree.tree_data.to_bytes()?,
-                info.extensions(),
-            )?;
+            if let Some((initial_group_info, records)) = archive {
+                let info = MlsMessage::from_bytes(group_info)?
+                    .into_group_info()
+                    .ok_or_else(|| Error::input("not a GroupInfo message"))?;
+                let tree = info
+                    .extensions()
+                    .get_as::<RatchetTreeExt>()
+                    .map_err(|_| Error::input("malformed ratchet tree"))?
+                    .ok_or_else(|| Error::input("missing ratchet tree"))?;
+                crate::archive::verify(
+                    initial_group_info,
+                    records,
+                    info.group_context(),
+                    &tree.tree_data.to_bytes()?,
+                    info.extensions(),
+                )?;
+            }
             self.rejoin_provisional(group_info, psk_epoch, psk, remove)
         })();
         match verified {
             Ok(result) => {
                 self.rejoin_backup = Some(backup);
+                if archive.is_none() {
+                    self.rejoin_archive = Some(PendingRejoinArchive {
+                        group_info: group_info.to_vec(),
+                        psk_epoch,
+                        psk: psk.to_vec(),
+                        remove,
+                    });
+                }
                 Ok(result)
             }
             Err(error) => {
@@ -871,7 +970,58 @@ impl Session {
         }
     }
 
+    /// Replay the accepted new-epoch archive, then recheck this request
+    /// against its authentic pre-Commit history, excluding its own removal.
+    pub fn complete_rejoin(&mut self, initial_group_info: &[u8], records: &[Vec<u8>]) -> Res<()> {
+        let request = self
+            .rejoin_archive
+            .clone()
+            .ok_or_else(|| Error::state("no rejoin archive is pending"))?;
+        let backup = self
+            .rejoin_backup
+            .clone()
+            .ok_or_else(|| Error::state("no rejoin is pending"))?;
+        let group = self.group()?;
+        // An accepted Commit cannot be resubmitted after a bad download. Keep
+        // its provisional state retryable even after the original PSK expires.
+        let verified = crate::archive::replay(
+            initial_group_info,
+            records,
+            group.context(),
+            &group.export_tree().to_bytes()?,
+        )?;
+        let result: Res<()> = (|| {
+            let mut validation = Session::import(&backup, &self.project_id)?;
+            validation.policy.directory.set(self.policy.directory.get());
+            validation.rejoin(
+                &request.group_info,
+                request.psk_epoch,
+                &request.psk,
+                request.remove,
+                initial_group_info,
+                &records[..records.len() - 1],
+            )?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                *self.policy.removals.lock().unwrap() = verified;
+                self.rejoin_archive = None;
+                self.write()
+            }
+            Err(error) => {
+                if error.kind == "policy" {
+                    self.restore_from(&backup)?;
+                }
+                Err(error)
+            }
+        }
+    }
+
     pub fn confirm_rejoin(&mut self) -> Res<()> {
+        if self.rejoin_archive.is_some() {
+            return Err(Error::state("verify the rejoin archive before confirming"));
+        }
         self.rejoin_backup
             .take()
             .map(|_| ())
@@ -899,6 +1049,9 @@ impl Session {
     }
 
     fn settled(&self) -> Res<()> {
+        if self.join_pending.is_some() {
+            return Err(Error::state("verify or discard the pending Welcome join first"));
+        }
         if self.rejoin_backup.is_some() {
             return Err(Error::state("confirm or discard the pending rejoin first"));
         }
@@ -1158,6 +1311,8 @@ impl Session {
             own_index,
             pending_commit: pending,
             pending_rejoin: self.rejoin_backup.is_some(),
+            pending_join: self.join_pending.is_some(),
+            pending_archive: self.join_pending.is_some() || self.rejoin_archive.is_some(),
             members,
             roles,
         })
@@ -1234,12 +1389,21 @@ impl Session {
             pending: self.pending.clone(),
             removed: self.removed,
             rejoin_backup: self.rejoin_backup.clone(),
+            join_pending: self.join_pending.clone(),
+            rejoin_archive: self.rejoin_archive.clone(),
         }
         .mls_encode_to_vec()
         .map_err(Error::codec)
     }
 
     pub fn import(bytes: &[u8], expected_project: &[u8]) -> Res<Session> {
+        if let Some(&version) = bytes.first() {
+            if version != STATE_VERSION {
+                return Err(Error::state(format!(
+                    "session state version {version} is not {STATE_VERSION}"
+                )));
+            }
+        }
         let mut input = bytes;
         let stored = StoredSession::mls_decode(&mut input).map_err(Error::codec)?;
         if !input.is_empty() {
@@ -1271,6 +1435,8 @@ impl Session {
             pending: stored.pending,
             removed: stored.removed,
             rejoin_backup: stored.rejoin_backup,
+            join_pending: stored.join_pending,
+            rejoin_archive: stored.rejoin_archive,
         };
         for kp in stored.key_packages {
             session.key_packages.insert(kp.id, kp.data);
@@ -1533,6 +1699,31 @@ mod archive_tests {
         let other = fixture(); // same project and epoch count, different chain
         assert!(f.joiner.join(&welcome, &other.initial, &archive).is_err());
         assert_eq!(f.joiner.export().unwrap(), before);
+        f.joiner.join(&welcome, &f.initial, &archive).unwrap();
+    }
+
+    #[test]
+    fn archive_rejects_trailing_message_bytes_and_preserves_retry() {
+        let mut f = fixture();
+        let removals = f.owner.policy.removals.lock().unwrap().clone();
+        let (welcome, archive) = invitation(&mut f, Some(removals));
+        let before = f.joiner.export().unwrap();
+        let mut padded_initial = f.initial.clone();
+        padded_initial.push(0);
+        assert!(f.joiner.join(&welcome, &padded_initial, &archive).is_err());
+        assert_eq!(f.joiner.export().unwrap(), before);
+        for proposal in [false, true] {
+            let mut padded = archive.clone();
+            let mut record = EpochRecordV1::mls_decode(&mut padded[1].as_slice()).unwrap();
+            if proposal {
+                record.proposals[0].push(0);
+            } else {
+                record.commit.push(0);
+            }
+            padded[1] = record.mls_encode_to_vec().unwrap();
+            assert!(f.joiner.join(&welcome, &f.initial, &padded).is_err());
+            assert_eq!(f.joiner.export().unwrap(), before);
+        }
         f.joiner.join(&welcome, &f.initial, &archive).unwrap();
     }
 }

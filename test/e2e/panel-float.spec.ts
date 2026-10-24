@@ -613,10 +613,17 @@ test('a window floated over a live handle leaves its value chip clear and reacha
   ).toBe(true);
 });
 
-test('a window dropped over a selection callout moves the callout clear', async ({
+test('a window floating over the Selection card leaves its verbs pressable', async ({
   page
 }) => {
-  await openWorkspace(page, 'Callout clear', { right: [] });
+  // A window over the left of the stage, clear of the rail but across the
+  // card that hangs above it.
+  await openWorkspace(page, 'Card over window', {
+    right: [],
+    floats: [
+      { id: 'over-card', x: 80, y: 0, w: 560, h: 600, panels: ['history'] }
+    ]
+  });
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
   await page
     .getByRole('region', { name: 'Feature inspector' })
@@ -624,35 +631,24 @@ test('a window dropped over a selection callout moves the callout clear', async 
     .click();
   await expectBodyCount(page, 1);
   await page.keyboard.press('Escape');
-  // A body picked from its row: a callout with no handle's value chip, so
-  // nothing but the panel layer can ask the scene to place it again.
   await selectBodyFromObjects(page);
-  const callout = page.locator('.selection-callout-chip');
-  await expect(page.locator('.handle-value-chip:not([hidden])')).toHaveCount(0);
-  await modelPanel(page, 'Objects')
-    .getByRole('button', { name: 'Pop out Objects' })
-    .click();
-  const window = windowOf(page, 'Objects');
+  const card = page.locator('.selection-card');
+  const move = card.getByRole('button', { name: 'Selection: Move' });
+  await expect(move).toBeVisible();
+  const window = windowOf(page, 'History');
   await expect(window).toBeVisible();
-  const before = await box(callout);
-  expect(overlaps(before, await box(window))).toBe(false);
-
-  const heading = await box(
-    modelPanel(page, 'Objects').locator('.model-panel-title')
-  );
-  const centre = {
-    x: before.x + before.width / 2,
-    y: before.y + before.height / 2
-  };
-  await page.mouse.move(heading.x + 24, heading.y + heading.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(heading.x + 40, heading.y + 30, { steps: 3 });
-  await page.mouse.move(centre.x - 60, centre.y - 40, { steps: 12 });
-  await page.mouse.up();
-  // The window now stands where the callout was, and the callout steps out.
-  expect(overlaps(await box(window), before)).toBe(true);
-  await expect(callout).toBeVisible();
-  await expect
-    .poll(async () => overlaps(await box(callout), await box(window)))
-    .toBe(false);
+  // The window covers the card's place; the card, which carries the pick's
+  // only verbs, stays on top of it and takes its own presses.
+  expect(overlaps(await box(window), await box(card))).toBe(true);
+  const owned = await move.evaluate((button) => {
+    const rect = button.getBoundingClientRect();
+    const hit = document.elementFromPoint(
+      rect.left + rect.width / 2,
+      rect.top + rect.height / 2
+    );
+    return Boolean(hit && button.contains(hit));
+  });
+  expect(owned).toBe(true);
+  await move.click();
+  await expect(page.getByRole('form', { name: 'Move controls' })).toBeVisible();
 });

@@ -145,7 +145,10 @@ test('a viewport body pick settles the typed Move once before changing selection
   await pickBody();
   await ask.getByRole('button', { name: 'Discard' }).click();
   await expect(move).toHaveCount(0);
-  await expect(inspector).toBeVisible();
+  // The new pick lands: the Selection card names it, and a viewport pick
+  // opens no card of its own.
+  await expect(page.locator('.selection-card')).toBeVisible();
+  await expect(inspector).toHaveCount(0);
   await expect(moveRows).toHaveCount(0);
   await page.keyboard.press('Escape');
 

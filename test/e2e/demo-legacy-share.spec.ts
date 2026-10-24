@@ -72,7 +72,7 @@ for (const [name, value] of [
       route.fulfill({
         json: {
           document: shared,
-          project: { name: shared.name },
+          project: { projectId: shared.projectId, name: shared.name },
           mode: 'tweak'
         }
       })

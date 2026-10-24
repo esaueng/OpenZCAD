@@ -16,8 +16,8 @@ import {
   stubApi,
   test,
   waitForStillViewport,
-  revealModelPanel,
-  MODEL_ONLY
+  MODEL_ONLY,
+  bodyCardFromHistory
 } from './openzcad-fixtures';
 import {
   OPEN_SANS_AREA_AT_10,
@@ -291,12 +291,7 @@ async function exportedDocument(page: Page): Promise<ProjectDocument> {
 
 /** The plate's volume as the inspector reads it out. */
 async function plateVolume(page: Page): Promise<number> {
-  await revealModelPanel(page, 'Objects');
-  await page.locator('.body-row:not(.consumed) .body-row-main').last().click();
-  const readout = page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByText(/mm³/)
-    .first();
+  const readout = (await bodyCardFromHistory(page)).getByText(/mm³/).first();
   await expect(readout).toBeVisible();
   return Number(((await readout.textContent()) ?? '').replace(/[^\d.]/g, ''));
 }

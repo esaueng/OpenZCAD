@@ -15,7 +15,8 @@ import {
   expectBodyCount,
   selectBodyFromObjects,
   revealModelPanel,
-  MODEL_ONLY
+  MODEL_ONLY,
+  bodyCardFromHistory
 } from './openzcad-fixtures';
 
 interface RegionHandle {
@@ -226,12 +227,7 @@ test('Shift-picked regions extrude together from any one of their arrows', async
   expect(depth).toBeGreaterThan(0);
   expect(depth).toBeLessThanOrEqual(8);
 
-  await revealModelPanel(page, 'Objects');
-  await page.locator('.body-row:not(.consumed) .body-row-main').last().click();
-  const readout = page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByText(/mm³/)
-    .first();
+  const readout = (await bodyCardFromHistory(page)).getByText(/mm³/).first();
   await expect(readout).toBeVisible();
   const volume = Number(
     ((await readout.textContent()) ?? '').replace(/[^\d.]/g, '')

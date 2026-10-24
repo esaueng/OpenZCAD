@@ -5,6 +5,7 @@ import { DEFAULT_REJOIN_WINDOW } from './constants';
 import type { AsyncEngineApi } from './engine';
 import type {
   BuildInfo,
+  BeginRejoinRequest,
   CommitRequest,
   DeviceDirectory,
   EpochChange,
@@ -130,6 +131,24 @@ export class MlsSession {
     return this.api.join(this.id, welcome, archive);
   }
 
+  /** Open only enough provisional state to decrypt the archive. */
+  beginJoin(welcome: Uint8Array): Promise<void> {
+    return this.api.beginJoin(this.id, welcome);
+  }
+
+  completeJoin(archive: JoinArchive): Promise<EpochChange> {
+    return this.api.completeJoin(this.id, archive);
+  }
+
+  discardJoin(): Promise<void> {
+    return this.api.discardJoin(this.id);
+  }
+
+  /** Untrusted exporter for archive decryption before admission completes. */
+  archiveKey(): Promise<Uint8Array> {
+    return this.api.archiveKey(this.id);
+  }
+
   /**
    * Build a Commit (including every proposal received this epoch). It stays
    * pending until the room accepts it (`confirmCommit`) or another Commit
@@ -186,6 +205,19 @@ export class MlsSession {
 
   confirmRejoin(): Promise<void> {
     return this.api.confirmRejoin(this.id);
+  }
+
+  /** Build a provisional external Commit when the old archive is unavailable. */
+  beginRejoin(
+    groupInfo: Uint8Array,
+    request: BeginRejoinRequest
+  ): Promise<RejoinResult> {
+    return this.api.beginRejoin(this.id, groupInfo, request);
+  }
+
+  /** Verify the new-epoch archive and the original request's removal cutoffs. */
+  completeRejoin(archive: JoinArchive): Promise<void> {
+    return this.api.completeRejoin(this.id, archive);
   }
 
   discardRejoin(): Promise<void> {

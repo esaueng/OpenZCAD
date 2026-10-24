@@ -1,4 +1,29 @@
 import type { ProjectDocument } from '@openzcad/shared';
+import { isProjectDocumentUnavailableError } from './api';
+
+/**
+ * What a freshness poll fetched for the open project: the newer account
+ * document, a verdict that the account copy needs repair, or nothing to act
+ * on (an outage or a missing copy, which the next poll or write rediscovers).
+ * A version this browser cannot open is reported as an unreadable account
+ * copy (ADR-024 Phase 1), and the poll must stop sync the way opening does.
+ */
+export async function loadAccountRefresh(
+  load: () => Promise<ProjectDocument | null>
+): Promise<
+  | { kind: 'document'; document: ProjectDocument }
+  | { kind: 'repair'; error: Error }
+  | { kind: 'skip' }
+> {
+  try {
+    const document = await load();
+    return document ? { kind: 'document', document } : { kind: 'skip' };
+  } catch (error) {
+    return isProjectDocumentUnavailableError(error)
+      ? { kind: 'repair', error }
+      : { kind: 'skip' };
+  }
+}
 
 /** Commit a pulled account document only while its local baseline is unchanged. */
 export async function applyAccountProjectRefresh(options: {

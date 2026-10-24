@@ -44,6 +44,12 @@ export interface DragRig {
    */
   chipLine?(): { start: THREE.Vector3; end: THREE.Vector3 } | null;
   /**
+   * Hides the rig's own drawing of the change (a face offset's hatched band)
+   * while the body itself shows it, as a deformed solid over a ghost of the
+   * part as it was.
+   */
+  setChangeShownByBody?(shown: boolean): void;
+  /**
    * Advances the rig's own eased state — its entrance, and whether the
    * pointer is over it. Returns true while something is still moving, so the
    * render loop knows to keep drawing. Rigs without eased state omit it.

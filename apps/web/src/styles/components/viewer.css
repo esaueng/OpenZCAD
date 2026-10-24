@@ -810,7 +810,9 @@
    rather than the shell so it clears the shell's overflow clip. */
 .toast {
   position: absolute;
-  bottom: calc(var(--lane-base, 48px) + var(--lane-status, 0px));
+  bottom: calc(
+    var(--lane-base, 48px) + var(--lane-status, 0px) + var(--lane-refusal, 0px)
+  );
   /* Centred on the lane, which is the viewer's centre unless the first-run
      tour or a phone width narrows one side of it. */
   left: calc((var(--notice-start, 12px) + 100% - var(--notice-end, 12px)) / 2);

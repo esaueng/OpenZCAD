@@ -257,7 +257,7 @@ test('a command started from the selection chip takes the face-drag rig down', a
   await expect(sizePill).toHaveCount(0);
 });
 
-test('fits the face selection chip and orientation cube beside the inspector', async ({
+test('fits the face Selection card and orientation cube at every width', async ({
   page
 }) => {
   await page.setViewportSize({ width: 1024, height: 700 });
@@ -266,13 +266,13 @@ test('fits the face selection chip and orientation cube beside the inspector', a
   const facePoint = await findFacePoint(page);
   await page.mouse.click(facePoint.x, facePoint.y);
 
-  // The face's operation rides the selection chip (F11): there is no
-  // column-top card to fit any more, so the chip is what has to hold.
+  // The face's operation rides the Selection card (F11), and a direct pick
+  // opens no inspector beside it: the card is what has to hold.
   const card = page.getByRole('region', { name: 'Resize Body operation' });
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await expect(card).toBeVisible();
   await expect(card).toHaveClass(/selection-callout-chip/);
-  await expect(inspector).toBeVisible();
+  await expect(inspector).toHaveCount(0);
   await expect(page.locator('.tool-card')).toHaveCount(0);
 
   const measure = () =>
@@ -283,18 +283,14 @@ test('fits the face selection chip and orientation cube beside the inspector', a
         '.selection-callout-verbs'
       );
       const cube = viewer.querySelector<SVGElement>('.orientation-cube');
-      const inspectorElement = viewer.querySelector<HTMLElement>(
-        '.inspector-float > *'
-      );
-      if (!chip || !name || !verbs || !cube || !inspectorElement) {
-        throw new Error('Expected the selection chip, cube, and inspector.');
+      if (!chip || !name || !verbs || !cube) {
+        throw new Error('Expected the Selection card and the cube.');
       }
 
       const chipBox = chip.getBoundingClientRect();
       const nameBox = name.getBoundingClientRect();
       const verbsBox = verbs.getBoundingClientRect();
       const cubeBox = cube.getBoundingClientRect();
-      const inspectorBox = inspectorElement.getBoundingClientRect();
       const cubeHit = document.elementFromPoint(
         cubeBox.left + cubeBox.width / 2,
         cubeBox.top + cubeBox.height / 2
@@ -325,7 +321,6 @@ test('fits the face selection chip and orientation cube beside the inspector', a
         phase:
           chip.querySelector('.selection-callout-phase')?.textContent ?? null,
         cubeIntersectsChip: intersects(cubeBox, chipBox),
-        cubeIntersectsInspector: intersects(cubeBox, inspectorBox),
         cubeOwnsItsCentre: Boolean(cubeHit && cube.contains(cubeHit)),
         chipBox: {
           left: chipBox.left,
@@ -338,18 +333,12 @@ test('fits the face selection chip and orientation cube beside the inspector', a
           right: cubeBox.right,
           top: cubeBox.top,
           bottom: cubeBox.bottom
-        },
-        inspectorBox: {
-          left: inspectorBox.left,
-          right: inspectorBox.right,
-          top: inspectorBox.top,
-          bottom: inspectorBox.bottom
         }
       };
     });
 
   // The column-top card once squeezed its copy to two characters below
-  // ~1000px. The chip that replaced it has to hold at every width too.
+  // ~1000px. The Selection card that replaced it has to hold at every width.
   for (const width of [1440, 1100, 990, 900]) {
     await page.setViewportSize({ width, height: 700 });
     await page.waitForTimeout(150);
@@ -361,7 +350,6 @@ test('fits the face selection chip and orientation cube beside the inspector', a
     expect(geometry.verbsHitTestable, where).toBe(true);
     expect(geometry.phase, where).toBeNull();
     expect(geometry.cubeIntersectsChip, where).toBe(false);
-    expect(geometry.cubeIntersectsInspector, where).toBe(false);
     expect(geometry.cubeOwnsItsCentre, where).toBe(true);
   }
 });
@@ -1122,7 +1110,7 @@ test('a face click raises one selection chip with verbs and no other surface', a
  * bracket. The faces the feature made are lit instead, and the chip names
  * the feature.
  */
-test('a consumed History feature lights its own faces and is named on the chip', async ({
+test('a consumed History feature lights its own faces and is named on its card', async ({
   page
 }) => {
   test.setTimeout(150_000);
@@ -1131,9 +1119,13 @@ test('a consumed History feature lights its own faces and is named on the chip',
     .locator('.feature-row-main', { hasText: /^Boss$/ })
     .first()
     .click();
-  const chip = page.locator('.selection-callout-chip');
-  await expect(chip).toHaveCount(1);
-  await expect(chip.locator('.selection-callout-name')).toHaveText('Boss');
+  // The row's own card names the feature; neither a Selection card nor a
+  // label over the faces repeats it.
+  await expect(
+    page.getByRole('region', { name: 'Feature inspector' })
+  ).toContainText('Boss');
+  await expect(page.locator('.selection-callout-chip')).toHaveCount(0);
+  await expect(page.locator('.selection-callout')).toHaveCount(0);
   await page.screenshot({
     path: test.info().outputPath('history-focus.png')
   });
