@@ -3220,12 +3220,15 @@ export function ModelViewer({
       });
       context.scene.add(offsetGhost.object);
       offsetRigRef.current?.setChangeShownByBody?.(true);
+      if (E2E_CANVAS_HOOKS_ENABLED)
+        renderer.domElement.dataset.e2eOffsetGhost = '1';
     }
     function clearOffsetGhost() {
       if (!offsetGhost) return;
       offsetGhost.dispose();
       offsetGhost = null;
       offsetRigRef.current?.setChangeShownByBody?.(false);
+      delete renderer.domElement.dataset.e2eOffsetGhost;
       requestRender();
     }
     offsetGhostClearRef.current = clearOffsetGhost;
@@ -3815,6 +3818,9 @@ export function ModelViewer({
       if (cylinderRadiusRigRef.current) {
         cylinderRadiusRigRef.current.setValue(value);
       } else if (offsetRigRef.current) {
+        // A typed value previews like a drag: solid over the old part's
+        // ghost, taken before the proxy deforms the body.
+        if (Math.abs(value) > 1e-9) beginOffsetGhost();
         offsetRigRef.current.setValue(value);
         queueOffsetBodyProxy(value);
       } else {
@@ -9193,10 +9199,11 @@ export function ModelViewer({
           Math.abs(finalOffset) > 1e-9
         ) {
           queueOffsetBodyProxy(finalOffset);
-          if (!onOffsetCommitRef.current(finalOffset)) {
-            clearOffsetGhost();
+          // A refused release can keep the last value that built on screen,
+          // still uncommitted, so its ghost stays too; a restored body
+          // clears the ghost when it is installed.
+          if (!onOffsetCommitRef.current(finalOffset))
             restoreOffsetBodyProxy();
-          }
         } else {
           clearOffsetGhost();
           restoreOffsetBodyProxy();
