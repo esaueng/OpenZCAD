@@ -147,11 +147,31 @@ describe('Keychain device store', () => {
     });
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const store = keychainDeviceStore(cloningStore(), keychain);
-    await store.saveDevice(await device(keychain));
-    await expect(store.deleteDevice(USER)).resolves.toBeUndefined();
-    expect(await store.loadDevice(USER)).toBeNull();
+    await store.saveDevice(await device(keychain, 'dev_first'));
+    // Replacing the device leaves the old keys unused: removal is housekeeping.
+    await expect(
+      store.saveDevice(await device(keychain, 'dev_second'))
+    ).resolves.toBeUndefined();
+    expect((await store.loadDevice(USER))?.deviceId).toBe('dev_second');
     expect(error).toHaveBeenCalled();
     error.mockRestore();
+  });
+
+  it('keeps the record when the Keychain refuses an explicit device removal', async () => {
+    const { host: keychain, live } = host();
+    const store = keychainDeviceStore(cloningStore(), keychain);
+    await store.saveDevice(await device(keychain));
+    const remove = keychain.remove;
+    keychain.remove = vi.fn(async () => {
+      throw new Error('Keychain locked');
+    });
+    await expect(store.deleteDevice(USER)).rejects.toThrow('Keychain locked');
+    // The key id survives, so removal can be retried.
+    expect(await store.loadDevice(USER)).not.toBeNull();
+    keychain.remove = remove;
+    await store.deleteDevice(USER);
+    expect(await store.loadDevice(USER)).toBeNull();
+    expect(live.size).toBe(0);
   });
 
   it('removes freshly created keys when their public keys cannot be imported', async () => {

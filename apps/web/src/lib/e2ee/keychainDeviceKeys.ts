@@ -161,8 +161,9 @@ async function forget(host: KeychainHost, keyId: string | null) {
 /**
  * A device store whose private keys live in the Keychain. Every write keeps
  * the record and its key id together; keys a write leaves unreferenced (a
- * replaced device, a losing setup race, a deleted device) are removed from
- * the Keychain afterwards.
+ * replaced device, a losing setup race) are removed from the Keychain
+ * afterwards, best effort. Deleting a device removes its keys first and fails,
+ * keeping the record, if the Keychain refuses.
  */
 export function keychainDeviceStore(
   inner: DeviceKeyStore,
@@ -202,9 +203,12 @@ export function keychainDeviceStore(
       return replaced;
     },
     deleteDevice: async (userId) => {
+      // An explicit removal: the keys go first, and a Keychain failure
+      // rejects with the record kept, so the caller can retry. Deleting the
+      // record first would lose the only key id while the keys remain.
       const previous = deviceKeyId(await inner.loadDevice(userId));
+      if (previous !== null) await host.remove(previous);
       await inner.deleteDevice(userId);
-      await forget(host, previous);
     },
     clearApprovalIfCurrent: (userId, approvalId) =>
       inner.clearApprovalIfCurrent(userId, approvalId),
