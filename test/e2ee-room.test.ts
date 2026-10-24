@@ -5,7 +5,9 @@
  * against the real Worker routes over SQLite and the Worker's own room class
  * (`apps/web/worker/e2eeRoom.ts`) on fake Durable Object storage.
  */
+import { createHash } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   addPrimitiveFeature,
   createSavedRevision,
@@ -19,6 +21,7 @@ import type {
 import worker from '../apps/web/worker/index';
 import { ProjectCollaborationRoom } from '../apps/web/worker/e2eeRoom';
 import { forgetAllProjectKeys } from '../apps/web/src/lib/e2ee/unlockedProjectKeys';
+import type { StoredMeasurementRecord } from '../apps/web/src/lib/measurementRecord';
 import {
   createEncryptedRoomCodec,
   type EncryptedRoomCodec
@@ -488,5 +491,137 @@ describe('encrypted collaboration room (ADR-024 slice 4-9)', () => {
     expect(await b.next('error')).toMatchObject({ code: 'document-invalid' });
     // Nothing was accepted: the pin stays where it was.
     expect(await desktop.pins.read(OWNER, projectId)).toEqual(pinned);
+  });
+});
+
+// --- Integration with slices 4-6 and 4-7 -------------------------------------
+
+const sha256 = (bytes: Uint8Array) =>
+  createHash('sha256').update(bytes).digest('hex');
+
+function stepBytes(label: string): Uint8Array<ArrayBuffer> {
+  return new TextEncoder().encode(
+    `ISO-10303-21;\nHEADER;\nFILE_NAME('${label}');\n${'DATA;\n'.repeat(200)}END-ISO-10303-21;\n`
+  );
+}
+
+/** The document with one more STEP import naming `artifactId`. */
+function withImport(
+  document: ProjectDocument,
+  artifactId: string,
+  bytes: Uint8Array
+): ProjectDocument {
+  const manager = new CommandManager(document);
+  manager.execute(
+    commandFactories.importStep({
+      name: 'Bracket source',
+      sourceName: 'secret-bracket.step',
+      artifactId,
+      stepSourceRef: {
+        marker: 'openzcad-source-ref',
+        version: 1,
+        hashAlgorithm: 'sha256',
+        checksumSha256: sha256(bytes),
+        logicalBytes: bytes.byteLength
+      }
+    })
+  );
+  return manager.document;
+}
+
+const archiveStep = (d: Device, projectId: string, bytes: Uint8Array) =>
+  d.blobs.archive(projectId, {
+    fileName: 'secret-bracket.step',
+    contentType: 'model/step',
+    kind: 'step-import',
+    body: new Blob([bytes as Uint8Array<ArrayBuffer>])
+  });
+
+const envelopeRows = (srv: Server, projectId: string) =>
+  rows<{ kind: string; scope: string; sequence: number; envelope: string }>(
+    srv,
+    `SELECT kind, scope, sequence, envelope FROM e2ee_project_envelopes
+     WHERE project_id = ? ORDER BY kind, scope`,
+    projectId
+  );
+
+describe('the room beside content blobs and replaced envelopes', () => {
+  it('records a room version’s blobs as an account save does, and chains the renamed info', async () => {
+    const srv = roomServer();
+    const { laptop, desktop, created, projectId, a, b } = await twoDevices(srv);
+    await a.next('state');
+    await b.next('state');
+    // Measurements, saved beside the document (slice 4-7).
+    await laptop.measurements.saveProjectMeasurements({
+      projectId,
+      expectedRevision: 0,
+      record: {
+        projectId,
+        version: 1,
+        updatedAt: '2026-10-24T01:00:00.000Z',
+        display: { unit: 'mm', precision: 2, radialDisplay: 'diameter' },
+        measurements: []
+      } as unknown as StoredMeasurementRecord
+    });
+    const before = envelopeRows(srv, projectId);
+    expect(before.map((row) => [row.kind, row.sequence])).toEqual([
+      ['measurements', 1],
+      ['project-info', 1]
+    ]);
+
+    const step = stepBytes('room');
+    const blobId = await archiveStep(laptop, projectId, step);
+    const next = {
+      ...withImport(created, blobId, step),
+      name: 'Renamed bracket'
+    };
+    await a.send(next, created.version);
+    expect(await a.next('ack')).toEqual({ type: 'ack', version: next.version });
+    // The room's write named the blob for garbage collection (4-6).
+    expect(
+      rows<{ document_version: number; blob_id: string }>(
+        srv,
+        `SELECT v.document_version, b.blob_id FROM e2ee_version_blobs b
+         JOIN e2ee_project_versions v
+           ON v.project_id = b.project_id AND v.version_hash = b.version_hash
+         WHERE b.project_id = ?`,
+        projectId
+      )
+    ).toEqual([{ document_version: next.version, blob_id: blobId }]);
+    // The relayed version opens with its file on the other device.
+    expect((await b.next('document')).document.version).toBe(next.version);
+    expect(await desktop.blobs.read(projectId, blobId)).toEqual(step);
+
+    // The name followed through the project info's own chain (4-7); the
+    // measurements envelope is untouched.
+    const after = envelopeRows(srv, projectId);
+    expect(after.map((row) => [row.kind, row.sequence])).toEqual([
+      ['measurements', 1],
+      ['project-info', 2]
+    ]);
+    expect(after[0]).toEqual(before[0]);
+    expect(await desktop.store.info.read(projectId)).toMatchObject({
+      sequence: 2,
+      body: { name: 'Renamed bracket' }
+    });
+  });
+
+  it('refuses a room version naming a blob the account no longer holds', async () => {
+    const srv = roomServer();
+    const { laptop, created, projectId, a, b } = await twoDevices(srv);
+    await a.next('state');
+    await b.next('state');
+    const step = stepBytes('claimed');
+    const blobId = await archiveStep(laptop, projectId, step);
+    // Collection claimed it before any version named it.
+    srv.db
+      .prepare(
+        "UPDATE e2ee_content_blobs SET state = 'deleting' WHERE blob_id = ?"
+      )
+      .run(blobId);
+    await a.send(withImport(created, blobId, step), created.version);
+    expect(await a.next('error')).toMatchObject({ code: 'document-invalid' });
+    expect(count(srv, 'e2ee_project_versions', projectId)).toBe(1);
+    expect(count(srv, 'e2ee_version_blobs', projectId)).toBe(0);
   });
 });

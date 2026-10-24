@@ -17,6 +17,7 @@
  */
 import {
   ProjectCollaborationRoom as AdapterProjectCollaborationRoom,
+  isE2eeContentBlobStorageReady,
   isE2eeProjectGroupStorageReady,
   isE2eeProjectVersionStorageReady,
   isProjectStorageFormatReady,
@@ -26,6 +27,7 @@ import {
 } from '@openzcad/cloudflare-adapters';
 import { parseEnvelope, toHex, versionHash } from '@openzcad/crypto';
 import { projectBucket } from './e2ee';
+import { blobBucket } from './e2eeContentBlobs';
 import { RouteError, requireOwnedEncryptedProject } from './e2eeProjects';
 import { roomVersionStore } from './e2eeProjectDocuments';
 import { sessionHashWriteAuthorization } from './e2eeWriteAuthorization';
@@ -71,17 +73,24 @@ export function e2eeRoomAccount(env: CloudflareEnv): E2eeRoomAccount | null {
   const db = env.DB;
   if (!db) return null;
   const bucket = projectBucket(env);
+  // Content blobs (slice 4-6): a room version naming blobs gets the same
+  // checks, blob rows and garbage collection as an account save.
+  const blobs = async () => ({
+    ready: await isE2eeContentBlobStorageReady(db),
+    bucket: blobBucket(env)
+  });
   const development =
     env.ENVIRONMENT === 'development' && env.AUTH_MODE === 'development';
   const ready = async () =>
     (await isProjectStorageFormatReady(db)) &&
     (await isE2eeProjectGroupStorageReady(db)) &&
     (await isE2eeProjectVersionStorageReady(db));
-  const readContext = (userId: string) => ({
+  const readContext = async (userId: string) => ({
     db,
     bucket,
     userId,
-    authorization: { sql: '0', binds: [] }
+    authorization: { sql: '0', binds: [] },
+    blobs: await blobs()
   });
 
   return {
@@ -137,7 +146,7 @@ export function e2eeRoomAccount(env: CloudflareEnv): E2eeRoomAccount | null {
       const row = await roomVersionStore.rowByHash(db, projectId, hash);
       if (!row) return null;
       try {
-        return await roomVersionStore.versionBody(readContext(''), row);
+        return await roomVersionStore.versionBody(await readContext(''), row);
       } catch {
         // Pruned, or its storage cannot be read: browsers read the account.
         return null;
@@ -172,7 +181,13 @@ export function e2eeRoomAccount(env: CloudflareEnv): E2eeRoomAccount | null {
       try {
         await requireOwnedEncryptedProject(db, input.userId, input.projectId);
         const saved = await roomVersionStore.writeVersion(
-          { db, bucket, userId: input.userId, authorization },
+          {
+            db,
+            bucket,
+            userId: input.userId,
+            authorization,
+            blobs: await blobs()
+          },
           input.projectId,
           {
             expectedVersion: input.expectedVersion,

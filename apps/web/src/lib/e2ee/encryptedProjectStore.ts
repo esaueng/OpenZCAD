@@ -1457,11 +1457,8 @@ export function createEncryptedProjectStore(
 
   // --- The live room (slice 4-9) ---------------------------------------------
 
-  /** Key material behind a room version this page sealed, until its ack. */
-  const roomMaterials = new WeakMap<
-    EncryptedRoomSealed,
-    { device: CertifyingDevice; material: Material }
-  >();
+  /** Room versions this page sealed, until their ack. */
+  const roomSealed = new WeakSet<EncryptedRoomSealed>();
 
   /**
    * The account's log from `since` through the room's head, which the room
@@ -1643,7 +1640,7 @@ export function createEncryptedProjectStore(
         wrappedVersionKey: sealed.wrappedVersionKey,
         signerDeviceId: sealed.signerDeviceId
       };
-      roomMaterials.set(result, { device, material });
+      roomSealed.add(result);
       return result;
     },
 
@@ -1688,10 +1685,11 @@ export function createEncryptedProjectStore(
         infoSequence: previous?.infoSequence ?? 0
       };
       heads.set(projectId, state);
-      const keys = roomMaterials.get(sealed);
-      roomMaterials.delete(sealed);
-      // The shelf's name follows the document, as after an account save.
-      if (keys) await syncInfo(keys.device, keys.material, projectId, state);
+      const ours = roomSealed.delete(sealed);
+      // The shelf's name follows the document, as after an account save:
+      // through the project info's own chain (slice 4-7), keeping its
+      // thumbnail and archived exports.
+      if (ours) await syncInfo(projectId, state);
       return state;
     },
 
