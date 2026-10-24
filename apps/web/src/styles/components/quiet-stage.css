@@ -494,6 +494,20 @@
   left: calc(var(--island-gap) * 2 + var(--rail-w) + var(--left-dock-w, 0px));
 }
 
+/* Up to 860px tall the left rail has no room to lift for the bar: the
+   Selection card hangs above it (selection-card.css), and lifted it ran off
+   the top bar. There the bar stands beside the rail instead, as in a
+   sketch, and the rail keeps its centre. */
+@media (max-height: 860px) {
+  .workspace.column-layout {
+    --scale-rule-reserve: 0px;
+  }
+
+  .workspace.column-layout .viewport-scale-indicator {
+    left: calc(var(--island-gap) * 2 + var(--rail-w) + var(--left-dock-w, 0px));
+  }
+}
+
 /* A phone has no room beside the rail: the rule lies along the foot in the
    bottom-left corner, above the search row and under the measurement
    sheet's foot (ViewportScaleIndicator draws it lying at this width). */

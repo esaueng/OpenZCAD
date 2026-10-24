@@ -28,9 +28,11 @@
 
 /* Over the right lane, as the chip was: on a phone the drawer spans the
    stage, and a card under it would carry verbs and a way out no press can
-   reach. The float and the lane share a z-index, so the later lane won. */
+   reach. The float and the lane share a z-index, so the later lane won.
+   Over a floating model panel too: a window may stand anywhere, the top bar
+   included (--z-panel-float), but never over the pick's only verbs. */
 .workspace-column-float:has(> .selection-card) {
-  z-index: calc(var(--z-inspector-float) + 1);
+  z-index: calc(var(--z-panel-float) + 8);
 }
 
 .selection-card-header {
