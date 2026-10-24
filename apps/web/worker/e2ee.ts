@@ -90,7 +90,13 @@ import {
   isE2eeProjectEnvelopePath
 } from './e2eeProjectEnvelopes';
 import {
+  handleE2eeProjectMigrationRequest,
+  isE2eeProjectMigrationPath
+} from './e2eeProjectMigrations';
+import { migrationLeaseOf } from './e2eeMigrationLease';
+import {
   isE2eeProjectGroupStorageReady,
+  isE2eeProjectMigrationStorageReady,
   isE2eeProjectVersionStorageReady
 } from '@openzcad/cloudflare-adapters';
 
@@ -120,6 +126,8 @@ export interface E2eeRouteEnv {
   /** Where encrypted document bodies above the inline size live. */
   PROJECT_STORAGE?: unknown;
   ARTIFACTS?: unknown;
+  /** Project rooms, which a migration locks and purges (slice 7-1). */
+  PROJECT_ROOM?: unknown;
 }
 
 /** The project-storage bucket, as the persistence layer picks it. */
@@ -1813,7 +1821,10 @@ export async function e2eeErasureTables(
  * rollout decision for this account; `config` answers either way so the
  * browser can tell "off" from "unreachable". `projectsEnabled` is the
  * encrypted-projects decision (E2EE_PROJECTS_ENABLED, ADR-024 Phase 4),
- * reported disabled while migration 0031 is missing.
+ * reported disabled while migration 0031 is missing. `migrationEnabled`
+ * is the decision to move plaintext projects to encrypted storage
+ * (E2EE_MIGRATION_ENABLED, ADR-024 Phase 7), reported disabled while
+ * migration 0042 is missing.
  */
 /** Without a host, the invitation routes stay closed. */
 const CLOSED_INVITATIONS: E2eeInvitationHost = {
@@ -1832,7 +1843,9 @@ export async function handleE2eeRequest(
   enabled: boolean,
   projectsEnabled = false,
   /** The invitation routes' email, sender and sharing rollout (5-3a). */
-  invitations: E2eeInvitationHost = CLOSED_INVITATIONS
+  invitations: E2eeInvitationHost = CLOSED_INVITATIONS,
+  /** Moving plaintext projects to encrypted storage (slice 7-1). */
+  migrationEnabled = false
 ): Promise<Response> {
   const { pathname } = new URL(request.url);
   const method = request.method;
@@ -1841,16 +1854,23 @@ export async function handleE2eeRequest(
     if (pathname === '/api/e2ee/config' && method === 'GET') {
       const keysReady =
         enabled && Boolean(env.DB) && (await isE2eeKeyStorageReady(env.DB!));
+      const projectsReady =
+        keysReady &&
+        projectsEnabled &&
+        (await isE2eeProjectPreferenceStorageReady(env.DB)) &&
+        // Encrypted projects need their MLS group tables (migration 0032)
+        // and their version tables (migration 0033).
+        (await isE2eeProjectGroupStorageReady(env.DB)) &&
+        (await isE2eeProjectVersionStorageReady(env.DB));
+      // Reported only once open, so a closed deployment answers as before.
+      const migrationReady =
+        projectsReady &&
+        migrationEnabled &&
+        (await isE2eeProjectMigrationStorageReady(env.DB));
       return json({
         enabled: keysReady,
-        projectsEnabled:
-          keysReady &&
-          projectsEnabled &&
-          (await isE2eeProjectPreferenceStorageReady(env.DB)) &&
-          // Encrypted projects need their MLS group tables (migration 0032)
-          // and their version tables (migration 0033).
-          (await isE2eeProjectGroupStorageReady(env.DB)) &&
-          (await isE2eeProjectVersionStorageReady(env.DB))
+        projectsEnabled: projectsReady,
+        ...(migrationReady ? { migrationEnabled: true } : {})
       });
     }
     if (!enabled) {
@@ -1914,6 +1934,19 @@ export async function handleE2eeRequest(
         () => readBody(request)
       );
     }
+    // Slice 7-1: the staging lease, only while migration is open.
+    const migrationLease = migrationLeaseOf(request, migrationEnabled);
+    if (isE2eeProjectMigrationPath(pathname)) {
+      // Moving a plaintext project to encrypted storage.
+      return await handleE2eeProjectMigrationRequest(
+        request,
+        env,
+        userId,
+        migrationEnabled,
+        db.authorization,
+        migrationLease
+      );
+    }
     if (isE2eeDeviceRemovalPath(pathname)) {
       // Revocation cutoffs and solo group resets (e2eeDeviceRemoval.ts).
       return await handleE2eeDeviceRemovalRequest(
@@ -1965,7 +1998,8 @@ export async function handleE2eeRequest(
         env,
         userId,
         projectsEnabled,
-        db.authorization
+        db.authorization,
+        migrationLease
       );
     }
     if (isE2eeProjectDocumentPath(pathname)) {
@@ -1977,7 +2011,8 @@ export async function handleE2eeRequest(
         userId,
         projectsEnabled,
         db.authorization,
-        blobBucket(env)
+        blobBucket(env),
+        migrationLease
       );
     }
     if (isE2eeProjectEnvelopePath(pathname)) {
@@ -1987,7 +2022,8 @@ export async function handleE2eeRequest(
         rawDb,
         userId,
         projectsEnabled,
-        db.authorization
+        db.authorization,
+        migrationLease
       );
     }
     if (isE2eeInvitationPath(pathname)) {
@@ -2009,7 +2045,8 @@ export async function handleE2eeRequest(
         rawDb,
         userId,
         projectsEnabled,
-        db.authorization
+        db.authorization,
+        migrationLease
       );
     }
     if (pathname === '/api/e2ee/account' && method === 'GET') {

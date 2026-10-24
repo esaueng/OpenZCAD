@@ -34,6 +34,7 @@ export * from './e2ee-device-removal';
 export * from './e2ee-contacts';
 export * from './e2ee-assistant-consents';
 export * from './e2ee-invitations';
+export * from './e2ee-project-migrations';
 import type { ReferenceImageSet } from './reference-images';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
@@ -3834,6 +3835,13 @@ export interface E2eeConfigResponse {
    * this account and their storage is installed. Absent from older Workers.
    */
   projectsEnabled?: boolean;
+  /**
+   * Moving existing plaintext projects to encrypted storage
+   * (E2EE_MIGRATION_ENABLED, ADR-024 Phase 7) is open to this account and
+   * its storage (migration 0042) is installed. Present (true) only then;
+   * absent while closed and from older Workers.
+   */
+  migrationEnabled?: boolean;
 }
 
 /**

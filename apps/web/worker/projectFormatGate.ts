@@ -19,8 +19,10 @@ import {
   ProjectNotFoundError,
   type ProjectAccess
 } from '@openzcad/persistence';
-import type { UserId } from '@openzcad/shared';
+import { PROJECT_MIGRATING_CODE, type UserId } from '@openzcad/shared';
 import { isProjectStorageFormatReady } from '@openzcad/cloudflare-adapters';
+import { isProjectMigrating } from './e2eeMigrationLease';
+import { SharingRequestError } from './sharing';
 
 /**
  * - `metadata`: never touches document content (shelf state, deletion, and
@@ -60,6 +62,8 @@ const SHARE_ROUTES: ReadonlyArray<{ method: string; rest: RegExp }> = [
 ];
 
 const ROOM_ROUTE = /^\/collaboration(?:\/ticket)?$/;
+/** Requests that only read; they keep working while a project migrates. */
+const READ_METHODS = new Set(['GET', 'HEAD']);
 
 /** The rule for one request, or null when it names no single project. */
 export function projectRouteFormatRule(
@@ -81,6 +85,37 @@ export function projectRouteFormatRule(
         ? 'room'
         : 'document';
   return { projectId, rule };
+}
+
+/**
+ * Slice 7-1: refuses a plaintext write to a project staged for encryption
+ * with 409 PROJECT_MIGRATING, for a caller who can read it (anyone else
+ * gets the handler's usual 404). Only while E2EE_MIGRATION_ENABLED is on.
+ */
+export async function assertProjectNotMigrating(
+  db: D1Database | undefined,
+  persistence: {
+    requireProjectRead(
+      userId: UserId,
+      projectId: string
+    ): Promise<ProjectAccess>;
+  },
+  userId: UserId,
+  projectId: string,
+  migrationEnabled: boolean
+): Promise<void> {
+  if (!(await isProjectMigrating(db, projectId, migrationEnabled))) return;
+  try {
+    await persistence.requireProjectRead(userId, projectId);
+  } catch (error) {
+    if (error instanceof ProjectNotFoundError) return;
+    throw error;
+  }
+  throw new SharingRequestError(
+    409,
+    PROJECT_MIGRATING_CODE,
+    'This project is being moved to encrypted storage. It opens read-only until that finishes.'
+  );
 }
 
 /** Room access on a project that is not plaintext. */
@@ -113,7 +148,14 @@ export async function assertProjectRouteFormat(
    * owner of an encrypted project reaches its room, which relays ciphertext
    * (ADR-024 slice 4-9), and so do its members (slice 5-6).
    */
-  encryptedRoom = false
+  encryptedRoom = false,
+  /**
+   * Moving plaintext projects to encrypted storage is on
+   * (E2EE_MIGRATION_ENABLED, ADR-024 slice 7-1): while a project is staged,
+   * its plaintext writes, named saves, sharing and room refuse with 409
+   * PROJECT_MIGRATING, and its reads keep working. Off, nothing is asked.
+   */
+  migrationEnabled = false
 ): Promise<void> {
   const route = projectRouteFormatRule(method, pathname);
   if (!db || !route || route.rule === 'metadata') return;
@@ -124,7 +166,20 @@ export async function assertProjectRouteFormat(
     .prepare('SELECT storage_format FROM projects WHERE id = ?')
     .bind(route.projectId)
     .first<{ storage_format?: number | null }>();
-  if (!row || isPlaintextStorageFormat(row.storage_format)) return;
+  if (!row) return;
+  if (isPlaintextStorageFormat(row.storage_format)) {
+    const reads = route.rule === 'document' && READ_METHODS.has(method);
+    if (!reads) {
+      await assertProjectNotMigrating(
+        db,
+        persistence,
+        userId,
+        route.projectId,
+        migrationEnabled
+      );
+    }
+    return;
+  }
   let access: ProjectAccess;
   try {
     access = await persistence.requireProjectRead(userId, route.projectId);
