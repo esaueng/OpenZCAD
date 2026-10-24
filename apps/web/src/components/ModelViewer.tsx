@@ -3840,23 +3840,33 @@ export function ModelViewer({
     offsetChipRef.current = offsetChip;
 
     // U09: the in-place command's value chip. Tapping it opens the keypad,
-    // exactly as the offset chip does for a face or region drag.
-    const commandChip = hud.create('handle-value-chip');
-    commandChip.dataset.testid = 'command-handle-value';
-    commandChip.hidden = true;
-    commandChip.addEventListener('click', () => {
-      const rig = commandRigRef.current;
-      if (rig) onOpenCommandKeypadRef.current?.(rig.value());
-    });
+    // exactly as the offset chip does for a face or region drag. It exists
+    // only while a command has a handle: a hidden second value chip would
+    // be one more `.handle-value-chip` than the page shows.
+    let commandChip: HTMLDivElement | null = null;
+    const makeCommandChip = () => {
+      const chip = hud.create('handle-value-chip');
+      chip.dataset.testid = 'command-handle-value';
+      chip.addEventListener('click', () => {
+        const rig = commandRigRef.current;
+        if (rig) onOpenCommandKeypadRef.current?.(rig.value());
+      });
+      return chip;
+    };
     /** Places the command chip at its rig's anchor; hides it without one. */
     function updateCommandChip() {
       const rig = commandRigRef.current;
       if (!rig) {
-        if (!commandChip.hidden) commandChip.hidden = true;
+        if (commandChip) {
+          commandChip.remove();
+          commandChip = null;
+        }
         if (E2E_CANVAS_HOOKS_ENABLED)
           delete renderer.domElement.dataset.e2eCommandHandle;
         return;
       }
+      commandChip ??= makeCommandChip();
+      const chip = commandChip;
       if (E2E_CANVAS_HOOKS_ENABLED) {
         // The handle's ball in page pixels, for specs that drag it the way a
         // hand would rather than reaching into the command.
@@ -3871,15 +3881,15 @@ export function ModelViewer({
       const scale = (rig.group.userData.gizmoScale as number | undefined) ?? 1;
       const ndc = rig.chipAnchor(scale).project(context.activeCamera);
       if (ndc.z > 1 || ndc.z < -1) {
-        commandChip.hidden = true;
+        chip.hidden = true;
         keypadAnchorRef.current?.(null);
         return;
       }
       const x = ((ndc.x + 1) / 2) * canvasCssWidth;
       const y = ((1 - ndc.y) / 2) * canvasCssHeight;
       const text = `${formatNumber(Math.round(rig.value() * 10) / 10)}°`;
-      if (commandChip.textContent !== text) commandChip.textContent = text;
-      hud.showAt(commandChip, x, y);
+      if (chip.textContent !== text) chip.textContent = text;
+      hud.showAt(chip, x, y);
       keypadAnchorRef.current?.({ x, y });
     }
 
