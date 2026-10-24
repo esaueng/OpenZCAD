@@ -5370,14 +5370,10 @@ export function App() {
           !cancelled &&
           managerRef.current?.document?.projectId === current.projectId
         ) {
-          // The account moved to a version this browser cannot open: stop
-          // syncing this project exactly as opening it would.
-          accountDocumentUnavailableProjectIdRef.current = current.projectId;
-          setCloudAvailable(false);
-          setSaveState('repair');
-          setStatus(
-            'The account copy needs repair. Your work remains saved on this device; click Repair needed to retry.'
-          );
+          // The account moved to a version this browser cannot open: halt
+          // the controller, so no queued edit writes against that head, and
+          // enter repair through its status, exactly as a refused write does.
+          controller.haltForRepair(current.projectId, fetched.error);
           return;
         }
         const remote = fetched.kind === 'document' ? fetched.document : null;
