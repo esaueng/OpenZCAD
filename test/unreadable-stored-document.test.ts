@@ -68,6 +68,21 @@ describe('unreadable stored documents', () => {
     ).projects.set(created.document.projectId, malformed);
     const loaded = await service.loadProject(owner, created.document.projectId);
     expect(loaded).toMatchObject({ nodes: null });
+    // A malformed document without its own id loads by the requested id.
+    const { projectId: _id, ...anonymous } = malformed as unknown as Record<
+      string,
+      unknown
+    >;
+    (service as unknown as { projects: Map<string, unknown> }).projects.set(
+      created.document.projectId,
+      anonymous
+    );
+    expect(
+      await service.loadProject(owner, created.document.projectId)
+    ).toMatchObject({ nodes: null });
+    (
+      service as unknown as { projects: Map<string, ProjectDocument> }
+    ).projects.set(created.document.projectId, malformed);
     await service.createProjectShareLink(owner, created.document.projectId, {
       shareLinkId: 'share_unreadable',
       mode: 'tweak',
