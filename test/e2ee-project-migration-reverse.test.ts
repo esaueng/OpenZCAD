@@ -744,6 +744,27 @@ describe('turning an encrypted project back into plaintext', () => {
         expect(((await ticket.json()) as { code: string }).code).toBe(
           PROJECT_MIGRATING_CODE
         );
+        // Nor may it be shared meanwhile: share links (5-10), proposals
+        // (5-5), invitations and KeyPackages (5-3a).
+        for (const [method, path] of [
+          ['POST', 'share-links'],
+          ['PUT', 'share-links/share_1/snapshot'],
+          ['POST', 'mls/proposals'],
+          ['POST', 'invitations'],
+          ['POST', 'key-packages'],
+          ['POST', 'key-packages/claim']
+        ] as const) {
+          const refused = await srv.call(
+            method,
+            `/api/e2ee/projects/${projectId}/${path}`,
+            { body: {} }
+          );
+          expect(refused.status, path).toBe(409);
+          expect(
+            ((await refused.json()) as { code: string }).code,
+            path
+          ).toBe(PROJECT_MIGRATING_CODE);
+        }
         // Without the lease, the plaintext routes still refuse it.
         expect(
           (await srv.call('GET', `/api/projects/${projectId}`)).status

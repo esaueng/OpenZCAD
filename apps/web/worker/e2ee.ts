@@ -120,6 +120,16 @@ import {
  */
 const ENCRYPTED_CONTENT_WRITE_ROUTE =
   /^\/api\/e2ee\/projects\/([^/]+)\/(?:document|versions|revisions(?:\/[^/]+)?|info|measurements|view-states(?:\/[^/]+)?|blobs(?:\/.*)?)$/;
+/**
+ * Writes that would share an encrypted project, or settle a member's
+ * departure, while its plaintext is staged (slice 7-3 with Phase 5): share
+ * links and their keys, authority and snapshots (5-10), proposals (5-5),
+ * new invitations and KeyPackages (5-3a). Revoking an invitation stays
+ * open. The reverse cutover refuses a shared project anyway; this keeps a
+ * staging from being undone by a write it cannot see.
+ */
+const ENCRYPTED_SHARING_WRITE_ROUTE =
+  /^\/api\/e2ee\/projects\/([^/]+)\/(?:share-links(?:\/.*)?|mls\/proposals|invitations|key-packages(?:\/claim)?)$/;
 
 interface WriteDatabase extends D1Database {
   authorization: E2eeWriteAuthorization;
@@ -2108,9 +2118,11 @@ export async function handleE2eeRequest(
       );
     }
     // Slice 7-3: while its plaintext is staged, an encrypted project's
-    // content stays as the staging read it.
+    // content and sharing stay as the staging read them.
     if (reverseWritesGated && !['GET', 'HEAD'].includes(method)) {
-      const content = ENCRYPTED_CONTENT_WRITE_ROUTE.exec(pathname);
+      const content =
+        ENCRYPTED_CONTENT_WRITE_ROUTE.exec(pathname) ??
+        ENCRYPTED_SHARING_WRITE_ROUTE.exec(pathname);
       let projectId: string | null = null;
       try {
         projectId = content ? decodeURIComponent(content[1]!) : null;
