@@ -307,6 +307,38 @@ export function isEncryptedProject(projectId: string | null | undefined) {
 }
 
 /**
+ * Whether new projects of this account are created encrypted (decision
+ * D2): the Worker opens encrypted projects to it and its stored opt-in says
+ * so. It reads the opt-in without its MAC (only the account key can check
+ * that), which errs toward encrypting; the Worker refuses plaintext creates
+ * for an opted-in account either way. Loads no crypto, and anything but a
+ * clear yes, an older Worker or a static host included, reads as no.
+ */
+export async function encryptsNewProjects(): Promise<boolean> {
+  try {
+    const config = await desktopFetch('/api/e2ee/config', {
+      credentials: 'same-origin'
+    });
+    if (!config.ok) return false;
+    const { enabled, projectsEnabled } = (await config.json()) as {
+      enabled?: unknown;
+      projectsEnabled?: unknown;
+    };
+    if (enabled !== true || projectsEnabled !== true) return false;
+    const response = await desktopFetch('/api/e2ee/project-preferences', {
+      credentials: 'same-origin'
+    });
+    if (!response.ok) return false;
+    const { preference } = (await response.json()) as {
+      preference?: { encryptNewProjects?: unknown } | null;
+    };
+    return preference?.encryptNewProjects === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Runs `plaintext` unless the project is known to be encrypted; a
  * plaintext route that answers PROJECT_FORMAT_UNSUPPORTED marks it and the
  * call moves to the encrypted store. Writes never fall back: a write sends
@@ -474,10 +506,7 @@ export const api = {
       rememberProjectFormats([created.project]);
       return created;
     };
-    if (
-      !payload.document &&
-      (await (await encryptedProjects()).encryptsNewProjects())
-    ) {
+    if (!payload.document && (await encryptsNewProjects())) {
       return encrypted();
     }
     try {
@@ -551,8 +580,7 @@ export const api = {
     // A minted id that already names a project is a one-in-2^122 collision:
     // mint another once rather than failing the save. An account that
     // encrypts new projects (D2) is never sent the plaintext document.
-    return encryptedProjects()
-      .then((module) => module.encryptsNewProjects())
+    return encryptsNewProjects()
       .then((encrypts) => {
         if (encrypts) {
           throw new ApiError(

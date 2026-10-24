@@ -36,7 +36,6 @@ const { store, encryptedModule } = vi.hoisted(() => {
     store,
     encryptedModule: {
       encryptedProjectStore: vi.fn(async () => store),
-      encryptsNewProjects: vi.fn(async () => false),
       createEncryptedProject: vi.fn(),
       encryptedProjectNames: vi.fn(async () => new Map<string, string>())
     }
@@ -70,6 +69,19 @@ function sentPlaintextTo(path: string): boolean {
         input.startsWith(path) &&
         !['GET', undefined].includes(init?.method)
     );
+}
+
+/** The Worker's config and the account's stored opt-in; anything else via `rest`. */
+function optIn(encrypt: boolean, rest: () => Response = () => json({}, 404)) {
+  vi.mocked(desktopFetch).mockImplementation(async (input) => {
+    if (input === '/api/e2ee/config') {
+      return json({ enabled: true, projectsEnabled: true });
+    }
+    if (input === '/api/e2ee/project-preferences') {
+      return json({ preference: { encryptNewProjects: encrypt } });
+    }
+    return rest();
+  });
 }
 
 function listEncrypted(projectId: string, info?: unknown) {
@@ -233,7 +245,7 @@ describe('dispatch on the storage format', () => {
       document: documentOf('proj_new')
     };
     encryptedModule.createEncryptedProject.mockResolvedValue(created);
-    encryptedModule.encryptsNewProjects.mockResolvedValueOnce(true);
+    optIn(true);
     await expect(
       api.createProject({
         name: 'Secret',
@@ -244,8 +256,7 @@ describe('dispatch on the storage format', () => {
     expect(isEncryptedProject('proj_new')).toBe(true);
 
     // A Worker that refuses a plaintext create for that reason moves it too.
-    encryptedModule.encryptsNewProjects.mockResolvedValueOnce(false);
-    vi.mocked(desktopFetch).mockResolvedValue(
+    optIn(false, () =>
       json({ error: 'Required', code: ENCRYPTED_PROJECTS_REQUIRED_CODE }, 409)
     );
     await expect(
@@ -258,7 +269,7 @@ describe('dispatch on the storage format', () => {
   });
 
   it('never sends a device project to an account that encrypts new projects', async () => {
-    encryptedModule.encryptsNewProjects.mockResolvedValueOnce(true);
+    optIn(true);
     await expect(
       api.adoptProject(
         createProjectDocument('Device', 'user_1' as never),

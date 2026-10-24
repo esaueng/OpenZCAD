@@ -133,36 +133,6 @@ export async function encryptedProjectStore(): Promise<EncryptedProjectStore> {
   return opened.store;
 }
 
-/**
- * Whether new projects of this account are created encrypted: the Worker
- * opens encrypted projects to it and its stored opt-in says so. Reading the
- * server's opt-in without its MAC errs toward encrypting; the Worker
- * refuses plaintext creates for an opted-in account either way (D2).
- */
-export async function encryptsNewProjects(): Promise<boolean> {
-  try {
-    const config = await desktopFetch('/api/e2ee/config', {
-      credentials: 'same-origin'
-    });
-    if (!config.ok) return false;
-    const { enabled, projectsEnabled } = (await config.json()) as {
-      enabled?: unknown;
-      projectsEnabled?: unknown;
-    };
-    if (enabled !== true || projectsEnabled !== true) return false;
-    const response = await desktopFetch('/api/e2ee/project-preferences', {
-      credentials: 'same-origin'
-    });
-    if (!response.ok) return false;
-    const { preference } = (await response.json()) as {
-      preference?: { encryptNewProjects?: unknown } | null;
-    };
-    return preference?.encryptNewProjects === true;
-  } catch {
-    return false;
-  }
-}
-
 export async function createEncryptedProject(
   request: CreateProjectRequest
 ): Promise<CreateProjectResponse> {
