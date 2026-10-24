@@ -353,7 +353,13 @@ import { newBlendFacePick } from './lib/blendRearm';
 import { exactEntryShortcut, isTypingTarget } from './lib/exactEntryShortcut';
 import { DeferredExactEntry } from './lib/deferredExactEntry';
 import type { SketchSolveStatus } from './components/SketchToolRail';
-import { ApiError, api, isProjectDocumentUnavailableError } from './lib/api';
+import {
+  ApiError,
+  api,
+  isProjectDocumentUnavailableError,
+  isProjectFormatUnsupportedError
+} from './lib/api';
+import { assistantDisabledReason } from './lib/assistant/encryptedProject';
 import {
   loadAccountProjectResult,
   type AccountProjectLoadResult
@@ -1391,6 +1397,8 @@ import {
 import {
   applyLocalProjectOrganizations,
   mergeProjectSummaries,
+  PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
+  projectNeedsUpdate,
   resolveShelfThumbnail
 } from './lib/projectShelf';
 import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
@@ -5581,7 +5589,10 @@ export function App() {
           lastSyncedVersion
         );
         let restoredDocument =
-          restoredOutcome.choice === 'none'
+          restoredOutcome.choice === 'none' ||
+          // An encrypted account copy (ADR-024 Phase 4) is not reopened from
+          // a device copy the account would refuse to save.
+          isProjectFormatUnsupportedError(rememberedRemoteResult.error)
             ? null
             : restoredOutcome.choice === 'diverged'
               ? restoredOutcome.local
@@ -10401,6 +10412,13 @@ export function App() {
     projectId: string,
     isCurrent: () => boolean = beginProjectNavigation()
   ) {
+    // A project the account stores in a format this build cannot open
+    // (ADR-024 Phase 4) is not loaded at all, nor its device copy opened.
+    const listed = projects.find((project) => project.projectId === projectId);
+    if (listed && projectNeedsUpdate(listed)) {
+      if (isCurrent()) setStatus(PROJECT_FORMAT_UNSUPPORTED_MESSAGE);
+      return;
+    }
     const activeProjectSince = snapshotActiveProject();
     const finishBusy = startNavigationBusy();
     try {
@@ -10451,6 +10469,11 @@ export function App() {
         ]);
       const remoteDocument = remoteResult.document;
       if (!isCurrent()) return;
+      if (isProjectFormatUnsupportedError(remoteResult.error)) {
+        // The account would refuse every save of a device copy too.
+        setStatus(remoteResult.error.message);
+        return;
+      }
       setArtifacts(artifactList);
       // A project this device holds alone is not in the account, and the
       // account says so with a 404. That is the ordinary answer, not an
@@ -25900,6 +25923,9 @@ export function App() {
               request={assistantRequest}
               onDraft={draftPrompt}
               onActivity={setAssistantActivity}
+              disabledReason={assistantDisabledReason(
+                projects.find((project) => project.projectId === doc.projectId)
+              )}
             />
           </ErrorBoundary>
         ) : null

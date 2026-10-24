@@ -69,6 +69,7 @@ import {
   subscribeKeySessionVersion
 } from '../lib/e2ee/keySession';
 import { Group, Notice, SettingRow, Status } from './settingsControls';
+import { ProjectEncryptionPreference } from './ProjectEncryptionPreference';
 import '../styles/components/encryption.css';
 
 /**
@@ -238,6 +239,10 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
           onReload={reload}
         />
       )}
+      <ProjectEncryptionPreference
+        userId={userId}
+        unlocked={state.kind === 'ready' && state.account.unlocked}
+      />
     </div>
   );
 }

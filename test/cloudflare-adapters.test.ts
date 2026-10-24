@@ -54,6 +54,16 @@ function roomRequest(
   });
 }
 
+/**
+ * The first statement a call prepared, past the once-per-isolate schema
+ * probe for migration 0031's storage-format column (ADR-024 Phase 4).
+ */
+function firstQuery(prepare: { mock: { calls: unknown[][] } }): string {
+  return prepare.mock.calls
+    .map((call) => String(call[0]))
+    .filter((query) => !query.includes("pragma_table_info('projects')"))[0]!;
+}
+
 describe('cloudflare adapters', () => {
   it('keeps typed feature flags off unless explicitly enabled', () => {
     expect(CLOUDFLARE_BOOLEAN_FLAGS).toEqual([
@@ -63,6 +73,7 @@ describe('cloudflare adapters', () => {
       'PROJECT_EDIT_LEASES_ENFORCED',
       'PROJECT_PERSONAL_SYNC_ENABLED',
       'E2EE_KEYS_ENABLED',
+      'E2EE_PROJECTS_ENABLED',
       'AI_PATCH_DIRECT_EDIT_ENABLED',
       'AI_PATCH_GROWING_HOLDER_ENABLED',
       'AI_PATCH_HOLE_CONTROL_ENABLED',
@@ -254,7 +265,7 @@ describe('cloudflare adapters', () => {
         1_800_000_000
       )
     ).rejects.toMatchObject({ code: 'INVITATION_NOT_FOUND' });
-    expect(prepare.mock.calls[0]?.[0]).toContain("p.status != 'deleted'");
+    expect(firstQuery(prepare)).toContain("p.status != 'deleted'");
     expect(statements[0]).toContain("p.status != 'deleted'");
   });
 
@@ -732,11 +743,11 @@ describe('cloudflare adapters', () => {
     expect(listed.projects[0]?.thumbnailArtifactId).toBe('artifact_thumbnail');
     // Pinned-first, then manual order: the ordering has to come from SQL,
     // because the list is not re-sorted after it is read.
-    expect(prepare.mock.calls[0]?.[0]).toContain(
+    expect(firstQuery(prepare)).toContain(
       'ORDER BY p.pinned DESC, p.sort_order ASC, p.updated_at DESC'
     );
-    expect(prepare.mock.calls[0]?.[0]).toContain('project_members');
-    expect(prepare.mock.calls[0]?.[0]).toContain("p.status != 'deleted'");
+    expect(firstQuery(prepare)).toContain('project_members');
+    expect(firstQuery(prepare)).toContain("p.status != 'deleted'");
   });
 
   it('replaces a finalized D1 thumbnail and deletes its superseded object', async () => {

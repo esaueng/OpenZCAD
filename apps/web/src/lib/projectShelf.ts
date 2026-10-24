@@ -1,11 +1,32 @@
 import {
   compareProjectSummaries,
+  isSupportedProjectFormat,
+  PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
   projectOrganization,
+  SUPPORTED_PROJECT_FORMATS,
   type ProjectOrganization,
   type ProjectStatus,
   type ProjectSummary
 } from '@openzcad/shared';
 import type { ProjectThumbnailRecord } from './localProjectStore';
+
+/** What a shelf card says for a project stored in a format this build cannot open. */
+export const PROJECT_UPDATE_REQUIRED_LABEL =
+  'Update OpenZCAD to open this project';
+export { PROJECT_FORMAT_UNSUPPORTED_MESSAGE };
+
+/**
+ * Whether this build can open the project the listing describes (ADR-024
+ * Phase 4). A project in a newer storage format — end-to-end encrypted,
+ * until this build can decrypt it — is shown locked and is never loaded:
+ * its account copy is ciphertext, and the Worker refuses it anyway.
+ */
+export function projectNeedsUpdate(
+  project: Pick<ProjectSummary, 'storageFormat'>,
+  supported: readonly number[] = SUPPORTED_PROJECT_FORMATS
+): boolean {
+  return !isSupportedProjectFormat(project.storageFormat, supported);
+}
 
 /**
  * Whether a device record was rendered from the version a listing describes.
@@ -49,6 +70,9 @@ export async function resolveShelfThumbnail(
     download(artifactId: string): Promise<string>;
   }
 ): Promise<string | null | undefined> {
+  // A locked card shows no preview: the account's image of an encrypted
+  // project is not one this build can show.
+  if (projectNeedsUpdate(project)) return undefined;
   const cached = await host.loadCached(project.projectId).catch(() => null);
   const cachedSource = cachedThumbnailSource(cached, project);
   if (cachedSource !== undefined || !project.thumbnailArtifactId) {
@@ -119,10 +143,14 @@ export function mergeProjectSummaries(
     const organization = existing.organization ?? project.organization;
     const thumbnailArtifactId =
       project.thumbnailArtifactId ?? existing.thumbnailArtifactId;
+    // The account decides how it stores the project: a device record from
+    // before it was encrypted must not make it look openable again.
+    const storageFormat = project.storageFormat ?? existing.storageFormat;
     merged.set(project.projectId, {
       ...newest,
       ...(thumbnailArtifactId ? { thumbnailArtifactId } : {}),
-      ...(organization ? { organization } : {})
+      ...(organization ? { organization } : {}),
+      ...(storageFormat !== undefined ? { storageFormat } : {})
     });
   }
   return [...merged.values()].sort(compareProjectSummaries);

@@ -455,7 +455,10 @@ describe('encryption key routes', () => {
     const srv = server();
     srv.enabled = false;
     const api = createE2eeApi(fetcherFor(srv, USER));
-    expect(await api.config()).toEqual({ enabled: false });
+    expect(await api.config()).toEqual({
+      enabled: false,
+      projectsEnabled: false
+    });
     const closed = await refusal(api.account());
     expect([closed.status, closed.code]).toEqual([501, 'FEATURE_DISABLED']);
 
@@ -465,7 +468,10 @@ describe('encryption key routes', () => {
     );
     const unmigrated = { db: bare, enabled: true };
     const unmigratedApi = createE2eeApi(fetcherFor(unmigrated, USER));
-    expect(await unmigratedApi.config()).toEqual({ enabled: false });
+    expect(await unmigratedApi.config()).toEqual({
+      enabled: false,
+      projectsEnabled: false
+    });
     const missing = await refusal(unmigratedApi.account());
     expect([missing.status, missing.code]).toEqual([503, 'E2EE_UNAVAILABLE']);
   });
@@ -2950,11 +2956,15 @@ describe('the Worker entry point', () => {
 
   it('keeps the routes closed until E2EE_KEYS_ENABLED is set', async () => {
     const closed = await workerFetch(devEnv(), '/api/e2ee/config');
-    expect(await closed.json()).toEqual({ enabled: false });
+    expect(await closed.json()).toEqual({
+      enabled: false,
+      projectsEnabled: false
+    });
     expect((await workerFetch(devEnv(), '/api/e2ee/account')).status).toBe(501);
     const open = devEnv({ E2EE_KEYS_ENABLED: 'true' });
     expect(await (await workerFetch(open, '/api/e2ee/config')).json()).toEqual({
-      enabled: true
+      enabled: true,
+      projectsEnabled: false
     });
     expect(await (await workerFetch(open, '/api/e2ee/account')).json()).toEqual(
       { current: null, previous: [] }

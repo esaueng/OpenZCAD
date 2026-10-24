@@ -1120,6 +1120,23 @@
   font-size: var(--fs-xs);
 }
 
+/* A project stored in a format this build cannot open (end-to-end
+   encrypted): a lock in place of the preview, and what to do about it. */
+.start-tile-update {
+  color: var(--color-warning);
+  font-size: var(--fs-xs);
+}
+
+.start-tile-thumb .start-tile-lock {
+  width: 28px;
+  height: 28px;
+  color: var(--color-text-subtle);
+}
+
+.start-tile-badge.is-locked {
+  color: var(--color-text-muted);
+}
+
 /* An original's recovery copies, one press from being shown beside it. */
 .start-tile-copies {
   display: flex;

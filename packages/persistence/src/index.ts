@@ -308,7 +308,21 @@ export interface ProjectAccess {
   projectId: string;
   ownerUserId: UserId;
   role: ProjectAccessRole;
+  /**
+   * The project's storage format (ADR-024 Phase 4). Absent from stores that
+   * predate formats, which hold plaintext; see `assertPlaintextProject`.
+   */
+  storageFormat?: number;
 }
+
+export {
+  assertPlaintextProject,
+  assertShareableProject,
+  EncryptedProjectSharingError,
+  EncryptedProjectsRequiredError,
+  isPlaintextStorageFormat,
+  ProjectFormatUnsupportedError
+} from './project-format';
 
 /**
  * Deliberately covers both missing and unauthorized projects so callers can
