@@ -152,6 +152,13 @@ interface AssistantPanelProps {
   onDraft?(text: string): void;
   /** Tells the prompt line whether a reply is streaming, and what it can see. */
   onActivity?(activity: AssistantActivity): void;
+  /**
+   * Why the assistant is off for this project, when it is: an end-to-end
+   * encrypted project until per-project consent (ADR-024 decision D7). It
+   * then behaves as with no provider — nothing is sent, attach and ask are
+   * disabled — and this is the notice it shows.
+   */
+  disabledReason?: string | null;
 }
 
 let entrySequence = 0;
@@ -314,7 +321,8 @@ export function AssistantPanel({
   prompting = false,
   request = null,
   onDraft,
-  onActivity
+  onActivity,
+  disabledReason = null
 }: AssistantPanelProps) {
   const hideKey = useKeymap().label('assistant-toggle');
   const [analyzedDocument, setAnalyzedDocument] =
@@ -399,11 +407,14 @@ export function AssistantPanel({
     [selection]
   );
   const thinking = conversation.status === 'thinking';
-  const configured = status?.configured ?? false;
-  const unavailable = status ? !status.configured : statusError !== null;
+  const configured = !disabledReason && (status?.configured ?? false);
+  const unavailable =
+    Boolean(disabledReason) ||
+    (status ? !status.configured : statusError !== null);
   // Worded at render: signing in changes what the user can do about it.
-  const statusNotice =
-    status && !status.configured
+  const statusNotice = disabledReason
+    ? disabledReason
+    : status && !status.configured
       ? unconfiguredAssistantMessage({
           provider: status.provider,
           signedIn,

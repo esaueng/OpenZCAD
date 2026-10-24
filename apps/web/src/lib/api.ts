@@ -53,7 +53,12 @@ import {
   assertStorableDocument,
   withoutDerivedProjection
 } from '@openzcad/document-core';
-import { createId, toProjectId } from '@openzcad/shared';
+import {
+  createId,
+  PROJECT_FORMAT_UNSUPPORTED_CODE,
+  PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
+  toProjectId
+} from '@openzcad/shared';
 import { splitProjectStorageUpload } from '@openzcad/persistence';
 import { desktopFetch, isDesktopApp } from './desktopBridge';
 
@@ -100,6 +105,32 @@ export function isProjectDocumentUnavailableError(
     error.status === 503 &&
     error.code === PROJECT_DOCUMENT_UNAVAILABLE_CODE
   );
+}
+
+/**
+ * The account holds this project in a storage format this build cannot open
+ * (end-to-end encrypted, ADR-024 Phase 4). Not an outage and not a repair:
+ * the only remedy is a newer OpenZCAD, so callers neither retry nor fall back
+ * to a device copy that the account would refuse to save.
+ */
+export function isProjectFormatUnsupportedError(
+  error: unknown
+): error is ApiError {
+  return (
+    error instanceof ApiError && error.code === PROJECT_FORMAT_UNSUPPORTED_CODE
+  );
+}
+
+/** The refusal with this build's own wording, whatever the Worker said. */
+function withProjectFormatMessage(error: unknown): unknown {
+  return isProjectFormatUnsupportedError(error)
+    ? new ApiError(
+        409,
+        PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
+        PROJECT_FORMAT_UNSUPPORTED_CODE,
+        error.details
+      )
+    : error;
 }
 
 /**
@@ -373,7 +404,9 @@ export const api = {
         `/api/projects/${encodeURIComponent(projectId)}`,
         undefined,
         { documentDownload: true }
-      ),
+      ).catch((error: unknown) => {
+        throw withProjectFormatMessage(error);
+      }),
       projectId
     ),
   /**
@@ -433,7 +466,7 @@ export const api = {
       if (error instanceof ApiError && error.status === 404) {
         return null;
       }
-      throw error;
+      throw withProjectFormatMessage(error);
     }
     return openableAccountDocument(document, projectId);
   },

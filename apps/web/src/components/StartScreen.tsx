@@ -19,6 +19,7 @@ import {
   LayoutGrid,
   List,
   LoaderCircle,
+  Lock,
   MoreHorizontal,
   Pin,
   Plus,
@@ -43,7 +44,12 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import { generateCutePartName } from '../lib/cutePartName';
-import { bucketProjectsByShelf, moveItem } from '../lib/projectShelf';
+import {
+  bucketProjectsByShelf,
+  moveItem,
+  PROJECT_UPDATE_REQUIRED_LABEL,
+  projectNeedsUpdate
+} from '../lib/projectShelf';
 import { syncRunTotals, type SyncEntry } from '../lib/syncRun';
 import type { DemoDefinition } from '../lib/demoDefinitions';
 import { BrandMark } from './BrandMark';
@@ -596,15 +602,27 @@ export function StartScreen({
     const recoveryOf = recoveryCopyOf(project.name);
     const copies =
       recoveryOf === null ? (recoveryCounts.get(project.name) ?? 0) : 0;
+    // Stored in a format this build cannot open (end-to-end encrypted, ADR-024
+    // Phase 4): shown locked, never loaded, and offered only shelf actions.
+    const locked = projectNeedsUpdate(project);
 
     const preview = (
       <>
         <span className="start-tile-thumb">
-          <PartThumbnail
-            project={project}
-            loadThumbnail={loadThumbnail}
-            publishThumbnail={publishThumbnail}
-          />
+          {locked ? (
+            <>
+              <Lock className="start-tile-lock" aria-hidden="true" />
+              <span className="start-tile-thumb-empty" aria-hidden="true">
+                End-to-end encrypted
+              </span>
+            </>
+          ) : (
+            <PartThumbnail
+              project={project}
+              loadThumbnail={loadThumbnail}
+              publishThumbnail={publishThumbnail}
+            />
+          )}
         </span>
         <span className="start-tile-body">
           <strong className="start-tile-name">{project.name}</strong>
@@ -622,6 +640,11 @@ export function StartScreen({
               {project.revisionCount === 1 ? 'save' : 'saves'}
             </span>
           </small>
+          {locked && (
+            <small className="start-tile-update">
+              {PROJECT_UPDATE_REQUIRED_LABEL}
+            </small>
+          )}
           {trashed && (
             <small className="start-tile-purge">
               {daysLeft === 0
@@ -692,6 +715,16 @@ export function StartScreen({
               </span>
             )
           )}
+          {locked && (
+            <span
+              className="start-tile-badge is-locked"
+              role="img"
+              aria-label="End-to-end encrypted"
+              title="End-to-end encrypted. Update OpenZCAD to open this project."
+            >
+              <Lock size={12} aria-hidden="true" />
+            </span>
+          )}
           {recoveryOf !== null && !trashed && (
             <span className="start-tile-badge is-recovery">
               <span className="start-tile-badge-text">Recovery copy</span>
@@ -743,8 +776,15 @@ export function StartScreen({
           setDropId(null);
         }}
       >
-        {trashed ? (
-          <div className="start-tile-open is-static">{preview}</div>
+        {trashed || locked ? (
+          // A locked card opens nothing: loading it would only fetch a
+          // refusal (or ciphertext) this build cannot read.
+          <div
+            className="start-tile-open is-static"
+            title={locked ? PROJECT_UPDATE_REQUIRED_LABEL : undefined}
+          >
+            {preview}
+          </div>
         ) : (
           <button
             type="button"
@@ -887,19 +927,21 @@ export function StartScreen({
               items[next]?.focus();
             }}
           >
-            <button
-              type="button"
-              role="menuitem"
-              tabIndex={-1}
-              onClick={() => {
-                // Keep a mounted opener for the modal's focus restoration.
-                closeMenu(project.projectId);
-                setPropertiesProject(project);
-              }}
-            >
-              <Info size={13} aria-hidden="true" />
-              Properties
-            </button>
+            {!locked && (
+              <button
+                type="button"
+                role="menuitem"
+                tabIndex={-1}
+                onClick={() => {
+                  // Keep a mounted opener for the modal's focus restoration.
+                  closeMenu(project.projectId);
+                  setPropertiesProject(project);
+                }}
+              >
+                <Info size={13} aria-hidden="true" />
+                Properties
+              </button>
+            )}
             {trashed ? (
               <>
                 <button
@@ -928,7 +970,7 @@ export function StartScreen({
               </>
             ) : (
               <>
-                {localOnly && (
+                {localOnly && !locked && (
                   <button
                     type="button"
                     role="menuitem"
@@ -942,18 +984,20 @@ export function StartScreen({
                     Save to my account
                   </button>
                 )}
-                <button
-                  type="button"
-                  role="menuitem"
-                  tabIndex={-1}
-                  onClick={() => {
-                    closeMenu(project.projectId);
-                    onDuplicate(project);
-                  }}
-                >
-                  <Copy size={13} aria-hidden="true" />
-                  Duplicate
-                </button>
+                {!locked && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    tabIndex={-1}
+                    onClick={() => {
+                      closeMenu(project.projectId);
+                      onDuplicate(project);
+                    }}
+                  >
+                    <Copy size={13} aria-hidden="true" />
+                    Duplicate
+                  </button>
+                )}
                 {shelf === 'active' ? (
                   <button
                     type="button"

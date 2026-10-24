@@ -1,4 +1,8 @@
 import { e2eeErasureTables } from './e2ee';
+import {
+  isE2eeProjectPreferenceStorageReady,
+  projectPreferenceErasureStatement
+} from './e2eeProjectPreferences';
 import type {
   AccountDeletionPreview,
   AccountDeletionScope,
@@ -242,7 +246,8 @@ function profileCleanupStatements(
   email: string | undefined,
   authRateBucket: string | undefined,
   scope: 'profile' | 'all',
-  e2eeTables: readonly string[]
+  e2eeTables: readonly string[],
+  e2eeProjectPreferencesReady = false
 ): D1PreparedStatement[] {
   const statements: D1PreparedStatement[] = [];
   if (email) {
@@ -277,6 +282,10 @@ function profileCleanupStatements(
         )
         .bind(authRateBucket, `${authRateBucket}:ip:*`)
     );
+  }
+  if (e2eeProjectPreferencesReady) {
+    // The "Encrypt new projects" opt-in (migration 0031) is profile data too.
+    statements.push(projectPreferenceErasureStatement(db, userId));
   }
   // End-to-end encryption keys are profile data: device labels and public
   // keys besides the wrapped keys and the account-key history. The users row
@@ -436,7 +445,9 @@ export async function deleteAccountData(
         input.scope,
         // Before migration 0029 the tables do not exist, and before 0030 the
         // history table does not; deletion must keep working either way.
-        await e2eeErasureTables(db)
+        await e2eeErasureTables(db),
+        // Before migration 0031 there is no opt-in table.
+        await isE2eeProjectPreferenceStorageReady(db)
       )
     );
   }

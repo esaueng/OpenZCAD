@@ -2,6 +2,11 @@ import { releaseDevelopmentE2eeWrite } from './e2eeWriteAuthorization';
 import { accountConsent, publishCensus } from './glimpseCensus';
 import { handleGlimpseUsage, countApi, type GlimpseEnv } from './glimpse';
 import { handleE2eeRequest } from './e2ee';
+import { accountRequiresEncryptedProjects } from './e2eeProjectPreferences';
+import {
+  assertPlaintextRoomAccess,
+  assertProjectRouteFormat
+} from './projectFormatGate';
 import { enforceApiRateLimit, publicRequestBucket } from './apiRateLimit';
 import {
   FREECAD_WORKER_PATH,
@@ -20,6 +25,8 @@ import {
   createPersistenceService,
   isCloudflareFeatureEnabled,
   isE2eeKeysEnabled,
+  isE2eeProjectsEnabled,
+  isProjectStorageFormatReady,
   projectCollaborationRollout,
   type ProjectCollaborationRollout,
   type CloudflareEnv
@@ -27,7 +34,12 @@ import {
 import {
   ArtifactQuotaError,
   ArtifactStorageError,
+  assertPlaintextProject,
+  assertShareableProject,
   DocumentTooLargeError,
+  EncryptedProjectSharingError,
+  EncryptedProjectsRequiredError,
+  ProjectFormatUnsupportedError,
   ProjectAdoptionError,
   ProjectQuotaError,
   ProjectNotFoundError,
@@ -136,6 +148,7 @@ import {
   saveProjectMeasurements
 } from './projectMeasurements';
 import {
+  ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE_CODE,
   MAX_ARTIFACT_PART_BYTES,
   MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_CLOUD_PROJECT_WRITE_BYTES,
@@ -598,6 +611,56 @@ function emailDeliveryErrorCode(error: unknown): string {
     : 'UNKNOWN';
 }
 
+/**
+ * Decision D2: once an account opts in to encrypting new projects, the
+ * Worker stores no new plaintext project for it — create, adopt or copy.
+ * Only while encrypted projects are open to the account.
+ */
+async function assertPlaintextCreationAllowed(
+  env: Env,
+  session: { userId: string; email?: string | null }
+): Promise<void> {
+  if (
+    isE2eeProjectsEnabled(env, session.email ?? undefined) &&
+    (await accountRequiresEncryptedProjects(env.DB, session.userId))
+  ) {
+    throw new EncryptedProjectsRequiredError();
+  }
+}
+
+/**
+ * Whether the assistant may see this project (decision D7): never an
+ * encrypted one until per-project consent lands (Phase 6). Only a project
+ * the caller owns or is a member of is looked up, so the answer reveals
+ * nothing about other accounts' projects.
+ */
+async function assertAssistantProjectAllowed(
+  env: Env,
+  userId: string,
+  projectId: string
+): Promise<void> {
+  // Before migration 0031 every project is plaintext.
+  if (!(await isProjectStorageFormatReady(env.DB))) return;
+  const row = await env.DB!.prepare(
+    `SELECT p.storage_format FROM projects p
+     WHERE p.id = ? AND (
+       p.user_id = ? OR EXISTS (
+         SELECT 1 FROM project_members pm
+         WHERE pm.project_id = p.id AND pm.user_id = ?
+       )
+     )`
+  )
+    .bind(projectId, userId, userId)
+    .first<{ storage_format: number | null }>();
+  if (row && row.storage_format !== null && row.storage_format !== 1) {
+    throw new SharingRequestError(
+      409,
+      ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE_CODE,
+      'The assistant is not available on end-to-end encrypted projects yet.'
+    );
+  }
+}
+
 async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const { pathname } = url;
@@ -805,9 +868,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         await publicRequestBucket(request, env, 'socket'),
         60
       );
+      const plaintextOnly = (await isProjectStorageFormatReady(env.DB))
+        ? ' AND storage_format = 1'
+        : '';
       const exists = await env
         .DB!.prepare(
-          "SELECT id FROM projects WHERE id = ? AND status != 'deleted'"
+          `SELECT id FROM projects WHERE id = ? AND status != 'deleted'${plaintextOnly}`
         )
         .bind(projectId)
         .first<{ id: string }>();
@@ -1054,6 +1120,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const userId = identity.userId;
     await assertAccountNotErasing(env.DB, userId);
     const payload = parseAssistantProposalRequest(await readJsonBody(request));
+    await assertAssistantProjectAllowed(env, userId, payload.digest.projectId);
     const assistant = await resolveUserAssistant(userId, env, identity.email);
     if (!assistant.effective.configured) {
       return json(
@@ -1107,7 +1174,8 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         request,
         env,
         session,
-        isE2eeKeysEnabled(env, session.email)
+        isE2eeKeysEnabled(env, session.email),
+        isE2eeProjectsEnabled(env, session.email)
       );
     } finally {
       // Authentication may have admitted a development write before a
@@ -1210,6 +1278,16 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       503
     );
   }
+
+  // ADR-024 Phase 4: every /api/projects/:id route meets the storage-format
+  // gate before its handler parses a body or reads anything.
+  await assertProjectRouteFormat(
+    env.DB,
+    persistence,
+    userId,
+    request.method,
+    pathname
+  );
 
   if (request.method === 'GET' && pathname === '/api/settings') {
     return json(await getAppSettings(userId, env, session.email));
@@ -1352,6 +1430,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'POST' && pathname === '/api/projects') {
+    await assertPlaintextCreationAllowed(env, session);
     const opened = await openProjectStorageRequest(
       await readJsonBody(request, MAX_CLOUD_PROJECT_WRITE_BYTES)
     );
@@ -1394,7 +1473,11 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       );
     }
     const projectId = invitationsMatch[1]!;
-    await persistence.requireProjectOwner(userId, projectId);
+    // Before the name lookup below, which would refuse an encrypted project
+    // as unreadable rather than as unshareable.
+    assertShareableProject(
+      await persistence.requireProjectOwner(userId, projectId)
+    );
     const project = await persistence.loadProject(userId, projectId);
     if (!project) {
       throw new ProjectNotFoundError(projectId);
@@ -1571,6 +1654,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   if (request.method === 'POST' && collaborationTicketMatch) {
     const projectId = collaborationTicketMatch[1]!;
     const access = await persistence.requireProjectRead(userId, projectId);
+    assertPlaintextRoomAccess(access);
     if (!(await isProjectSharingPreferenceEnabled(access.ownerUserId, env))) {
       return json(
         {
@@ -1598,6 +1682,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   const duplicateMatch = PROJECT_DUPLICATE_ROUTE.exec(pathname);
   if (request.method === 'POST' && duplicateMatch) {
+    await assertPlaintextCreationAllowed(env, session);
     const opened = await openProjectStorageRequest(
       await readJsonBody(request, MAX_CLOUD_PROJECT_WRITE_BYTES)
     );
@@ -1623,6 +1708,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     assertSameOrigin(request);
     const projectId = collaborationMatch[1]!;
     const access = await persistence.requireProjectRead(userId, projectId);
+    assertPlaintextRoomAccess(access);
     if (!(await isProjectSharingPreferenceEnabled(access.ownerUserId, env))) {
       return json(
         {
@@ -1674,7 +1760,9 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     (request.method === 'GET' || request.method === 'PUT')
   ) {
     const projectId = workspaceSessionsMatch[1]!;
-    await persistence.requireProjectRead(userId, projectId);
+    assertPlaintextProject(
+      await persistence.requireProjectRead(userId, projectId)
+    );
     if (!env.DB)
       return json({ error: 'Workspace session storage is unavailable.' }, 503);
     if (request.method === 'GET')
@@ -1691,13 +1779,17 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   if (request.method === 'GET' && measurementsMatch) {
     const projectId = measurementsMatch[1]!;
-    await persistence.requireProjectRead(userId, projectId);
+    assertPlaintextProject(
+      await persistence.requireProjectRead(userId, projectId)
+    );
     return json(await loadProjectMeasurements(env.DB!, projectId, userId));
   }
 
   if (request.method === 'PUT' && measurementsMatch) {
     const projectId = measurementsMatch[1]!;
-    await persistence.requireProjectEdit(userId, projectId);
+    assertPlaintextProject(
+      await persistence.requireProjectEdit(userId, projectId)
+    );
     const input = parseSaveProjectMeasurementsRequest(
       await readJsonBody(request, MAX_PROJECT_MEASUREMENT_BYTES + 16 * 1024),
       projectId
@@ -1709,7 +1801,9 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   if (request.method === 'DELETE' && measurementsMatch) {
     const projectId = measurementsMatch[1]!;
-    await persistence.requireProjectEdit(userId, projectId);
+    assertPlaintextProject(
+      await persistence.requireProjectEdit(userId, projectId)
+    );
     const expectedRevision = parseDeleteProjectMeasurementsRequest(
       await readJsonBody(request, 1024)
     );
@@ -2080,6 +2174,13 @@ async function dispatchApiRequest(
     }
     if (error instanceof ProjectNotFoundError) {
       return json({ error: error.message }, 404);
+    }
+    if (
+      error instanceof ProjectFormatUnsupportedError ||
+      error instanceof EncryptedProjectSharingError ||
+      error instanceof EncryptedProjectsRequiredError
+    ) {
+      return json({ error: error.message, code: error.code }, 409);
     }
     if (error instanceof RevisionNotFoundError) {
       return json({ error: error.message, code: 'REVISION_NOT_FOUND' }, 404);

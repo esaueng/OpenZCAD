@@ -54,6 +54,11 @@ import {
   releaseDevelopmentE2eeWrite,
   type E2eeWriteAuthorization
 } from './e2eeWriteAuthorization';
+import {
+  PROJECT_PREFERENCES_ROUTE,
+  handleProjectPreferenceRequest,
+  isE2eeProjectPreferenceStorageReady
+} from './e2eeProjectPreferences';
 
 interface WriteDatabase extends D1Database {
   authorization: E2eeWriteAuthorization;
@@ -1651,22 +1656,30 @@ export async function e2eeErasureTables(
 /**
  * Handles `/api/e2ee/*` for an authenticated session. `enabled` is the
  * rollout decision for this account; `config` answers either way so the
- * browser can tell "off" from "unreachable".
+ * browser can tell "off" from "unreachable". `projectsEnabled` is the
+ * encrypted-projects decision (E2EE_PROJECTS_ENABLED, ADR-024 Phase 4),
+ * reported disabled while migration 0031 is missing.
  */
 export async function handleE2eeRequest(
   request: Request,
   env: E2eeRouteEnv,
   session: E2eeRouteSession,
-  enabled: boolean
+  enabled: boolean,
+  projectsEnabled = false
 ): Promise<Response> {
   const { pathname } = new URL(request.url);
   const method = request.method;
   let authorization: E2eeWriteAuthorization | null = null;
   try {
     if (pathname === '/api/e2ee/config' && method === 'GET') {
+      const keysReady =
+        enabled && Boolean(env.DB) && (await isE2eeKeyStorageReady(env.DB!));
       return json({
-        enabled:
-          enabled && Boolean(env.DB) && (await isE2eeKeyStorageReady(env.DB!))
+        enabled: keysReady,
+        projectsEnabled:
+          keysReady &&
+          projectsEnabled &&
+          (await isE2eeProjectPreferenceStorageReady(env.DB))
       });
     }
     if (!enabled) {
@@ -1707,6 +1720,29 @@ export async function handleE2eeRequest(
         dispose: async () => {}
       }
     };
+    if (pathname === PROJECT_PREFERENCES_ROUTE) {
+      if (!projectsEnabled) {
+        refuse(
+          501,
+          'FEATURE_DISABLED',
+          'Encrypted projects are not available for this account yet.'
+        );
+      }
+      if (!(await isE2eeProjectPreferenceStorageReady(rawDb))) {
+        refuse(
+          503,
+          'E2EE_UNAVAILABLE',
+          'Encrypted projects are unavailable until the database is updated.'
+        );
+      }
+      return await handleProjectPreferenceRequest(
+        request,
+        rawDb,
+        userId,
+        db.authorization,
+        () => readBody(request)
+      );
+    }
     if (pathname === '/api/e2ee/account' && method === 'GET') {
       return json(await loadAccount(db, userId));
     }

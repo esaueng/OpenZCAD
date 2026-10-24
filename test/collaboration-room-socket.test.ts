@@ -521,6 +521,8 @@ describe('collaboration room socket handling', () => {
               return { results: [] };
             },
             first: async () => {
+              // The storage-format schema probe answers "not installed".
+              if (query.includes('pragma_table_info')) return null;
               if (query.includes('user_id AS owner_user_id'))
                 return { owner_user_id: 'user_room' };
               if (query.startsWith('SELECT 1 AS allowed'))

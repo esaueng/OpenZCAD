@@ -1,10 +1,29 @@
 import { createHash } from 'node:crypto';
+import { register } from 'node:module';
 import { defineConfig } from '@playwright/test';
 import {
   privateArtifactPaths,
   privatePlaywrightOutput
 } from './test/support/privateArtifacts';
 import { fullRenderBuild } from './test/support/renderBuild';
+
+// The encryption fixtures run real Worker routes in Node, and those import
+// `@openzcad/cloudflare-adapters`, whose Durable Object base class comes from
+// the Workers runtime module `cloudflare:workers`. Node's loader refuses that
+// scheme, so resolve it to the same stand-in the Vitest projects alias.
+register(
+  `data:text/javascript,${encodeURIComponent(
+    `export async function resolve(specifier, context, next) {
+      if (specifier === 'cloudflare:workers') {
+        return {
+          shortCircuit: true,
+          url: 'data:text/javascript,export class DurableObject { constructor() {} }'
+        };
+      }
+      return next(specifier, context);
+    }`
+  )}`
+);
 
 // Private runs need final CLI destinations checked before Playwright's cleanup;
 // globalSetup and test hooks run after it has already removed output folders.

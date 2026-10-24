@@ -3249,7 +3249,51 @@ export interface ProjectSummary {
    * instead of silently overwriting one that does exist elsewhere.
    */
   organization?: ProjectOrganization;
+  /**
+   * How the account stores this project (ADR-024 Phase 4): 1 plaintext, 2
+   * end-to-end encrypted (e2ee-v1). Absent means 1, which is what every
+   * store wrote before formats existed. A browser opens only the formats in
+   * {@link SUPPORTED_PROJECT_FORMATS} and asks for an update otherwise; a
+   * format introduced after this build is listed too, as any number.
+   */
+  storageFormat?: number;
 }
+
+/** 1 = plaintext, 2 = end-to-end encrypted (e2ee-v1). */
+export type ProjectStorageFormat = 1 | 2;
+export const PROJECT_STORAGE_FORMAT_PLAINTEXT =
+  1 satisfies ProjectStorageFormat;
+export const PROJECT_STORAGE_FORMAT_E2EE_V1 = 2 satisfies ProjectStorageFormat;
+
+/**
+ * The project storage formats this build can open. Format 2 joins when the
+ * browser can decrypt it (ADR-024 slice 4-5); until then a build refuses an
+ * encrypted project instead of mistaking its ciphertext for a document.
+ */
+export const SUPPORTED_PROJECT_FORMATS: readonly ProjectStorageFormat[] = [
+  PROJECT_STORAGE_FORMAT_PLAINTEXT
+];
+
+/** Whether this build opens a project stored in `format` (absent = 1). */
+export function isSupportedProjectFormat(
+  format: number | undefined,
+  supported: readonly number[] = SUPPORTED_PROJECT_FORMATS
+): boolean {
+  return supported.includes(format ?? PROJECT_STORAGE_FORMAT_PLAINTEXT);
+}
+
+/** The Worker's refusal of a project stored in a format this build cannot open. */
+export const PROJECT_FORMAT_UNSUPPORTED_CODE = 'PROJECT_FORMAT_UNSUPPORTED';
+export const PROJECT_FORMAT_UNSUPPORTED_MESSAGE =
+  'This project is end-to-end encrypted. Update OpenZCAD to open it.';
+/** Invitations, share links and member rooms are refused on encrypted projects. */
+export const ENCRYPTED_PROJECT_SHARING_UNAVAILABLE_CODE =
+  'ENCRYPTED_PROJECT_SHARING_UNAVAILABLE';
+/** An account that opted in to encryption may not store new plaintext projects. */
+export const ENCRYPTED_PROJECTS_REQUIRED_CODE = 'ENCRYPTED_PROJECTS_REQUIRED';
+/** The assistant is off on encrypted projects until per-project consent (D7). */
+export const ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE_CODE =
+  'ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE';
 
 /**
  * Folds a partial shelf edit into the current state. The archived/deleted
@@ -3765,6 +3809,34 @@ export interface E2eePreviousIdentityRecord {
 
 export interface E2eeConfigResponse {
   enabled: boolean;
+  /**
+   * Encrypted projects (E2EE_PROJECTS_ENABLED, ADR-024 Phase 4) are open to
+   * this account and their storage is installed. Absent from older Workers.
+   */
+  projectsEnabled?: boolean;
+}
+
+/**
+ * The account's "encrypt new projects" opt-in as the Worker stores it. The
+ * browser trusts only `record` and `recordMac` (base64url canonical JSON
+ * and its HMAC under the account key); the other fields are the Worker's
+ * reading of the record, for its own refusals.
+ */
+export interface E2eeProjectPreferenceRecord {
+  record: string;
+  recordMac: string;
+  encryptNewProjects: boolean;
+  sequence: number;
+  updatedAt: string;
+}
+
+export interface E2eeProjectPreferenceResponse {
+  preference: E2eeProjectPreferenceRecord | null;
+}
+
+export interface E2eeSaveProjectPreferenceRequest {
+  record: string;
+  recordMac: string;
 }
 
 export interface E2eeAccountResponse {

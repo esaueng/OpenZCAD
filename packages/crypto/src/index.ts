@@ -263,3 +263,14 @@ export {
   type ProjectExportEntry,
   type ProjectInfoBody
 } from './bodies';
+export {
+  ACCOUNT_RECORD_MAC_BYTES,
+  MAX_PROJECT_PREFERENCES_BYTES,
+  PROJECT_PREFERENCES_MAC_INFO,
+  PROJECT_PREFERENCES_VERSION_1,
+  decodeProjectPreferences,
+  encodeProjectPreferences,
+  macProjectPreferences,
+  openProjectPreferences,
+  type ProjectPreferences
+} from './account-records';

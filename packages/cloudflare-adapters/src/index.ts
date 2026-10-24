@@ -39,12 +39,16 @@ import {
   PROJECT_INVITATION_RATE_LIMIT,
   PROJECT_INVITATION_RATE_WINDOW_SECONDS,
   PROJECT_MEMBER_CAP,
+  EncryptedProjectsRequiredError,
   ProjectNotFoundError,
   ProjectSharingError,
   RevisionConflictError,
   RevisionIdCollisionError,
   RevisionNotFoundError,
   assertClientSavePoint,
+  assertPlaintextProject,
+  assertShareableProject,
+  isPlaintextStorageFormat,
   prepareInitialProjectDocument,
   SavePointRequestError,
   projectIdTaken,
@@ -209,6 +213,14 @@ export interface CloudflareEnv {
    * secrets.
    */
   E2EE_CANARY_EMAILS?: string;
+  /**
+   * Opens encrypted projects (ADR-024 Phase 4): the "Encrypt new projects"
+   * opt-in and, once an account opts in, the refusal of new plaintext
+   * projects. Closed unless set to a true value, and only for accounts the
+   * key routes are open to (E2EE_KEYS_ENABLED or E2EE_CANARY_EMAILS);
+   * requires migration 0031 in D1 first.
+   */
+  E2EE_PROJECTS_ENABLED?: string;
   AI_PATCH_DIRECT_EDIT_ENABLED?: string;
   AI_PATCH_GROWING_HOLDER_ENABLED?: string;
   AI_PATCH_HOLE_CONTROL_ENABLED?: string;
@@ -295,6 +307,7 @@ export const CLOUDFLARE_BOOLEAN_FLAGS = [
   'PROJECT_EDIT_LEASES_ENFORCED',
   'PROJECT_PERSONAL_SYNC_ENABLED',
   'E2EE_KEYS_ENABLED',
+  'E2EE_PROJECTS_ENABLED',
   'AI_PATCH_DIRECT_EDIT_ENABLED',
   'AI_PATCH_GROWING_HOLDER_ENABLED',
   'AI_PATCH_HOLE_CONTROL_ENABLED',
@@ -388,6 +401,68 @@ export function isE2eeKeysEnabled(env: CloudflareEnv, email?: string): boolean {
   );
 }
 
+/**
+ * Whether one authenticated account may use encrypted projects (ADR-024
+ * Phase 4). Requires the key routes for the account (`isE2eeKeysEnabled`,
+ * which is where the E2EE_CANARY_EMAILS allowlist applies) and the
+ * E2EE_PROJECTS_ENABLED flag itself, so a canary account sees nothing new
+ * until the flag is deliberately turned on. Both default closed.
+ */
+export function isE2eeProjectsEnabled(
+  env: CloudflareEnv,
+  email?: string
+): boolean {
+  return (
+    isCloudflareFeatureEnabled(env, 'E2EE_PROJECTS_ENABLED') &&
+    isE2eeKeysEnabled(env, email)
+  );
+}
+
+/**
+ * Probes a schema object once per D1 binding (one per isolate). A proven
+ * answer of "installed" is kept for the isolate's life; "missing" is kept
+ * for a minute, so a migration applied later is noticed without a redeploy
+ * and a database without it costs one cheap pragma read a minute, not one
+ * per request. A probe that fails is neither: it throws and caches nothing,
+ * so a format-sensitive caller fails closed rather than reading an encrypted
+ * row as plaintext, and the next request probes again.
+ */
+export function cachedSchemaProbe(
+  sql: string,
+  installed: (row: Record<string, unknown> | null) => boolean,
+  missingTtlMs = 60_000
+): (db: D1Database | undefined) => Promise<boolean> {
+  const ready = new WeakSet<D1Database>();
+  const missingUntil = new WeakMap<D1Database, number>();
+  return async (db) => {
+    if (!db) return false;
+    if (ready.has(db)) return true;
+    if ((missingUntil.get(db) ?? 0) > Date.now()) return false;
+    const found = installed(
+      await db.prepare(sql).bind().first<Record<string, unknown>>()
+    );
+    if (found) {
+      ready.add(db);
+      missingUntil.delete(db);
+    } else {
+      missingUntil.set(db, Date.now() + missingTtlMs);
+    }
+    return found;
+  };
+}
+
+/**
+ * Whether migration 0031's `projects.storage_format` exists (ADR-024 Phase
+ * 4). Ordinary project traffic must never depend on that migration: until
+ * the column is there, no statement names it, every project is plaintext
+ * (format 1), and every format guard passes.
+ */
+export const isProjectStorageFormatReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM pragma_table_info('projects')
+   WHERE name = 'storage_format'`,
+  (row) => row?.ready === 1
+);
+
 type UploadReservationState =
   'legacy' | 'open' | 'uploading' | 'completing' | 'completed' | 'aborting';
 
@@ -451,6 +526,24 @@ export { projectCopyDocumentDigest };
 export class D1R2PersistenceService implements PersistenceService {
   constructor(private readonly env: CloudflareEnv) {}
 
+  /**
+   * `, <prefix>storage_format` once migration 0031 is installed, and nothing
+   * before it: no statement may name a column the database lacks, and a
+   * row without the column reads as plaintext.
+   */
+  private async storageFormatColumn(prefix: string): Promise<string> {
+    return (await isProjectStorageFormatReady(this.env.DB))
+      ? `, ${prefix}storage_format`
+      : '';
+  }
+
+  /** ` AND <prefix>storage_format = 1` once migration 0031 is installed. */
+  private async plaintextOnly(prefix: string): Promise<string> {
+    return (await isProjectStorageFormatReady(this.env.DB))
+      ? ` AND ${prefix}storage_format = 1`
+      : '';
+  }
+
   async requireProjectRead(
     userId: UserId,
     projectId: string
@@ -499,6 +592,7 @@ export class D1R2PersistenceService implements PersistenceService {
     ) {
       throw new ProjectNotFoundError(projectId);
     }
+    assertPlaintextProject(access);
     return access;
   }
 
@@ -583,7 +677,9 @@ export class D1R2PersistenceService implements PersistenceService {
         input
       );
     }
-    await this.requireProjectOwner(ownerUserId, projectId);
+    assertShareableProject(
+      await this.requireProjectOwner(ownerUserId, projectId)
+    );
     const windowStart =
       Math.floor(input.createdAt / PROJECT_INVITATION_RATE_WINDOW_SECONDS) *
       PROJECT_INVITATION_RATE_WINDOW_SECONDS;
@@ -746,6 +842,8 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     const access = await this.requireProjectOwner(ownerUserId, projectId);
+    // Changing a role grants access; on an encrypted project that is sharing.
+    assertShareableProject(access);
     if (memberUserId === access.ownerUserId) {
       throw new ProjectSharingError(
         'OWNER_IMMUTABLE',
@@ -838,7 +936,7 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     const invitation = await this.env.DB.prepare(
-      `SELECT i.id, i.project_id, i.role, p.user_id AS owner_user_id
+      `SELECT i.id, i.project_id, i.role, p.user_id AS owner_user_id${await this.storageFormatColumn('p.')}
        FROM project_invitations i
        INNER JOIN projects p ON p.id = i.project_id
        LEFT JOIN user_settings owner_settings
@@ -863,6 +961,7 @@ export class D1R2PersistenceService implements PersistenceService {
         project_id: string;
         role: ProjectMemberRole;
         owner_user_id: UserId;
+        storage_format?: number | null;
       }>();
     if (!invitation) {
       throw new ProjectSharingError(
@@ -870,6 +969,10 @@ export class D1R2PersistenceService implements PersistenceService {
         'Project invitation is invalid or expired.'
       );
     }
+    assertShareableProject({
+      projectId: invitation.project_id,
+      ...storageFormatOf(invitation)
+    });
     if (invitation.owner_user_id === userId) {
       throw new ProjectSharingError(
         'OWNER_IMMUTABLE',
@@ -888,7 +991,7 @@ export class D1R2PersistenceService implements PersistenceService {
              LEFT JOIN user_settings owner_settings
                ON owner_settings.user_id = p.user_id
              WHERE p.id = project_invitations.project_id
-               AND p.status != 'deleted'
+               AND p.status != 'deleted'${await this.plaintextOnly('p.')}
                AND COALESCE(
                  CASE WHEN json_valid(owner_settings.settings_json)
                    THEN json_extract(
@@ -969,7 +1072,9 @@ export class D1R2PersistenceService implements PersistenceService {
         input
       );
     }
-    await this.requireProjectOwner(ownerUserId, projectId);
+    assertShareableProject(
+      await this.requireProjectOwner(ownerUserId, projectId)
+    );
     try {
       await this.env.DB.prepare(
         `INSERT INTO project_share_links
@@ -1108,7 +1213,7 @@ export class D1R2PersistenceService implements PersistenceService {
        WHERE l.token_hash = ?
          AND l.revoked_at IS NULL
          AND l.created_at > ?
-         AND p.status != 'deleted'
+         AND p.status != 'deleted'${await this.plaintextOnly('p.')}
          AND COALESCE(
            CASE WHEN json_valid(owner_settings.settings_json)
              THEN json_extract(
@@ -1179,7 +1284,7 @@ export class D1R2PersistenceService implements PersistenceService {
          AND l.revoked_at IS NULL
          AND l.created_at > ?
          AND a.id = ?
-         AND p.status != 'deleted'
+         AND p.status != 'deleted'${await this.plaintextOnly('p.')}
          AND COALESCE(
            CASE WHEN json_valid(owner_settings.settings_json)
              THEN json_extract(
@@ -1268,7 +1373,7 @@ export class D1R2PersistenceService implements PersistenceService {
        WHERE l.token_hash = ? AND l.revoked_at IS NULL
          AND l.created_at > ?
          AND a.id = ? AND a.kind IN ('step-import', 'mesh-payload')
-         AND p.status != 'deleted'
+         AND p.status != 'deleted'${await this.plaintextOnly('p.')}
          AND COALESCE(
            CASE WHEN json_valid(owner_settings.settings_json)
              THEN json_extract(owner_settings.settings_json, '$.collaboration.enabled')
@@ -1301,6 +1406,7 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().listProjects(userId);
     }
+    const format = await this.storageFormatColumn('p.');
     const statement = isCloudflareFeatureEnabled(
       this.env,
       'PROJECT_SHARING_ENABLED'
@@ -1308,7 +1414,7 @@ export class D1R2PersistenceService implements PersistenceService {
       ? this.env.DB.prepare(
           `SELECT p.id, p.name, p.updated_at, p.document_json,
                   p.document_version, p.last_revision_id, p.revision_count,
-                  p.status, p.pinned, p.sort_order, p.deleted_at, p.archived_at,
+                  p.status, p.pinned, p.sort_order, p.deleted_at, p.archived_at${format},
                   (SELECT a.id FROM artifacts a
                     WHERE a.project_id = p.id AND a.kind = 'thumbnail'
                     ORDER BY a.created_at DESC LIMIT 1) AS thumbnail_artifact_id
@@ -1337,7 +1443,7 @@ export class D1R2PersistenceService implements PersistenceService {
       : this.env.DB.prepare(
           `SELECT p.id, p.name, p.updated_at, p.document_json,
                   p.document_version, p.last_revision_id, p.revision_count,
-                  p.status, p.pinned, p.sort_order, p.deleted_at, p.archived_at,
+                  p.status, p.pinned, p.sort_order, p.deleted_at, p.archived_at${format},
                   (SELECT a.id FROM artifacts a
                     WHERE a.project_id = p.id AND a.kind = 'thumbnail'
                     ORDER BY a.created_at DESC LIMIT 1) AS thumbnail_artifact_id
@@ -1535,6 +1641,10 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().duplicateProject(userId, request);
     }
+    // The source is checked before either copy path reads anything of it.
+    assertPlaintextProject(
+      await this.requireProjectRead(userId, request.projectId)
+    );
     const prepared = request.document
       ? await this.prepareClientCopy(userId, request)
       : await this.prepareServerCopy(userId, request);
@@ -1942,9 +2052,10 @@ export class D1R2PersistenceService implements PersistenceService {
     const access = await this.requireProjectEdit(userId, projectId);
     if (access.ownerUserId !== userId)
       throw new ProjectNotFoundError(projectId);
+    assertPlaintextProject(access);
     const row = await this.env
       .DB!.prepare(
-        `${PROJECT_SUMMARY_COLUMNS}, document_object_id FROM projects WHERE id = ? AND user_id = ?`
+        `${projectSummaryColumns(await this.storageFormatColumn(''))}, document_object_id FROM projects WHERE id = ? AND user_id = ?`
       )
       .bind(projectId, userId)
       .first<ProjectRow & { document_object_id: string | null }>();
@@ -2119,7 +2230,7 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().updateProject(userId, request);
     }
     const row = await this.env.DB.prepare(
-      `${PROJECT_SUMMARY_COLUMNS} FROM projects WHERE id = ? AND user_id = ?`
+      `${projectSummaryColumns(await this.storageFormatColumn(''))} FROM projects WHERE id = ? AND user_id = ?`
     )
       .bind(request.projectId, userId)
       .first<ProjectRow>();
@@ -2218,17 +2329,19 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().loadProject(userId, projectId);
     }
+    let access: ProjectAccess;
     try {
-      await this.requireProjectRead(userId, projectId);
+      access = await this.requireProjectRead(userId, projectId);
     } catch (error) {
       if (error instanceof ProjectNotFoundError) {
         return null;
       }
       throw error;
     }
+    assertPlaintextProject(access);
     const row = await this.env.DB.prepare(
       `SELECT document_json, document_object_id FROM projects
-       WHERE id = ? AND (user_id = ? OR status != 'deleted')`
+       WHERE id = ? AND (user_id = ? OR status != 'deleted')${await this.plaintextOnly('')}`
     )
       .bind(projectId, userId)
       .first<{ document_json: string; document_object_id: string | null }>();
@@ -2248,7 +2361,7 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().listRevisions(userId, projectId);
     }
-    await this.requireProjectRead(userId, projectId);
+    assertPlaintextProject(await this.requireProjectRead(userId, projectId));
     const rows = await this.env.DB.prepare(
       `SELECT id, reason, created_at, author_user_id, document_bytes
        FROM revisions
@@ -2287,7 +2400,7 @@ export class D1R2PersistenceService implements PersistenceService {
         revisionId
       );
     }
-    await this.requireProjectRead(userId, projectId);
+    assertPlaintextProject(await this.requireProjectRead(userId, projectId));
     const row = await this.env.DB.prepare(
       `SELECT document_json, document_object_id
        FROM revisions
@@ -2570,6 +2683,7 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     const access = await this.requireProjectEdit(userId, document.projectId);
+    assertPlaintextProject(access);
     const saved = withoutDerivedProjection(document);
     const revision = saved.revisions.at(-1);
     const checkpoint = saved.checkpoints.at(-1);
@@ -3136,6 +3250,9 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().createUploadSession(userId, request);
     }
     const access = await this.requireProjectEdit(userId, request.projectId);
+    // Artifact and upload routes are not under /api/projects/:id, so the
+    // Worker's format gate does not see them: refuse here too.
+    assertPlaintextProject(access);
     if (!this.env.ARTIFACTS) {
       throw new ArtifactStorageError();
     }
@@ -3395,6 +3512,9 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     const access = await this.requireProjectEdit(userId, upload.projectId);
+    // A session opened before the project became encrypted writes no
+    // plaintext into it afterwards.
+    assertPlaintextProject(access);
     if (!this.env.ARTIFACTS) {
       throw new ArtifactStorageError();
     }
@@ -3955,7 +4075,9 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().finalizeArtifact(userId, request);
     }
-    await this.requireProjectEdit(userId, request.projectId);
+    assertPlaintextProject(
+      await this.requireProjectEdit(userId, request.projectId)
+    );
     const existingArtifact = await this.env.DB.prepare(
       `SELECT id, project_id, kind, name, object_key, content_type, bytes,
               metadata_json, created_at
@@ -4193,6 +4315,7 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     const expectedKind = originalKind ?? 'mesh-payload';
     const access = await this.requireProjectEdit(userId, projectId);
+    assertPlaintextProject(access);
     // Finalized originals have no trusted uploader identity. Retain their
     // owner-only removal policy while editors can compensate unused payloads.
     if (originalKind && access.role !== 'owner')
@@ -4386,7 +4509,7 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().listArtifacts(userId, projectId);
     }
-    await this.requireProjectRead(userId, projectId);
+    assertPlaintextProject(await this.requireProjectRead(userId, projectId));
     const rows = await this.env.DB.prepare(
       `SELECT id, project_id, kind, name, object_key, content_type, bytes, metadata_json, created_at FROM artifacts WHERE project_id = ? ORDER BY created_at DESC`
     )
@@ -4410,7 +4533,11 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!row) {
       return { artifact: null };
     }
-    await this.requireProjectRead(userId, row.project_id);
+    // Reached by artifact id, outside /api/projects/:id: a retained id must
+    // not read an encrypted project's earlier plaintext artifacts.
+    assertPlaintextProject(
+      await this.requireProjectRead(userId, row.project_id)
+    );
     return { artifact: artifactFromRow(row) };
   }
 
@@ -5206,27 +5333,29 @@ export class D1R2PersistenceService implements PersistenceService {
     userId: UserId,
     projectId: string
   ): Promise<ProjectAccess> {
+    const format = await this.storageFormatColumn('');
     if (!isCloudflareFeatureEnabled(this.env, 'PROJECT_SHARING_ENABLED')) {
       const row = await this.env
         .DB!.prepare(
-          `SELECT user_id AS owner_user_id
+          `SELECT user_id AS owner_user_id${format}
            FROM projects
            WHERE id = ? AND user_id = ?`
         )
         .bind(projectId, userId)
-        .first<{ owner_user_id: UserId }>();
+        .first<{ owner_user_id: UserId; storage_format?: number | null }>();
       if (!row) {
         throw new ProjectNotFoundError(projectId);
       }
       return {
         projectId,
         ownerUserId: row.owner_user_id,
-        role: 'owner'
+        role: 'owner',
+        ...storageFormatOf(row)
       };
     }
     const row = await this.env
       .DB!.prepare(
-        `SELECT p.user_id AS owner_user_id,
+        `SELECT p.user_id AS owner_user_id${await this.storageFormatColumn('p.')},
                 CASE
                   WHEN p.user_id = ? THEN 'owner'
                   WHEN p.status = 'deleted' THEN NULL
@@ -5261,6 +5390,7 @@ export class D1R2PersistenceService implements PersistenceService {
       .first<{
         owner_user_id: UserId;
         resolved_role: ProjectAccess['role'] | null;
+        storage_format?: number | null;
       }>();
     if (!row?.resolved_role) {
       throw new ProjectNotFoundError(projectId);
@@ -5268,7 +5398,8 @@ export class D1R2PersistenceService implements PersistenceService {
     return {
       projectId,
       ownerUserId: row.owner_user_id,
-      role: row.resolved_role
+      role: row.resolved_role,
+      ...storageFormatOf(row)
     };
   }
 
@@ -5414,6 +5545,10 @@ function projectQuotaError(
   limits?: { projectLimit: number; projectStorageLimitBytes: number }
 ): unknown {
   const message = error instanceof Error ? error.message : String(error);
+  // Decision D2, enforced by 0031's trigger inside the insert itself.
+  if (message.includes('ENCRYPTED_PROJECTS_REQUIRED')) {
+    return new EncryptedProjectsRequiredError();
+  }
   if (message.includes('project_account_count_quota')) {
     return new ProjectQuotaError(
       'count',
@@ -5559,11 +5694,13 @@ function projectObjectEnvelope(
 }
 
 /**
- * Columns every project summary is built from. Kept as one string so the list
+ * Columns every project summary is built from. Kept in one place so the list
  * and single-row reads cannot drift apart and hand `summaryFromRow` a shape it
  * does not expect.
  */
-const PROJECT_SUMMARY_COLUMNS = `SELECT id, name, updated_at, document_json, document_version, last_revision_id, revision_count, status, pinned, sort_order, deleted_at, archived_at, (SELECT a.id FROM artifacts a WHERE a.project_id = projects.id AND a.kind = 'thumbnail' ORDER BY a.created_at DESC LIMIT 1) AS thumbnail_artifact_id`;
+function projectSummaryColumns(format: string): string {
+  return `SELECT id, name, updated_at, document_json, document_version, last_revision_id, revision_count, status, pinned, sort_order, deleted_at, archived_at${format}, (SELECT a.id FROM artifacts a WHERE a.project_id = projects.id AND a.kind = 'thumbnail' ORDER BY a.created_at DESC LIMIT 1) AS thumbnail_artifact_id`;
+}
 
 interface ProjectRow {
   id: string;
@@ -5579,6 +5716,8 @@ interface ProjectRow {
   deleted_at: string | null;
   archived_at: string | null;
   thumbnail_artifact_id?: string | null;
+  /** Absent only from rows read through an older column list. */
+  storage_format?: number | null;
 }
 
 interface RevisionRow {
@@ -5637,8 +5776,56 @@ function organizationFromRow(row: ProjectRow): ProjectOrganization {
   };
 }
 
+/**
+ * The storage format to carry on a resolved access or summary. Plaintext is
+ * left implicit; anything else (2, or a value this build does not know) is
+ * carried as stored so every guard refuses it.
+ */
+function storageFormatOf(row: { storage_format?: number | null }): {
+  storageFormat?: number;
+} {
+  return isPlaintextStorageFormat(row.storage_format)
+    ? {}
+    : { storageFormat: Number(row.storage_format) };
+}
+
+/**
+ * The listing of a project this build cannot read (ADR-024 Phase 4). Built
+ * from row columns only: an encrypted project's document_json is never
+ * parsed, its stored name is not a name, and its thumbnail is not an image
+ * an older browser can show.
+ */
+function encryptedSummaryFromRow(row: ProjectRow): ProjectSummary | null {
+  // Any format this build cannot read is listed locked, never dropped, so a
+  // later format still shows up (as "update to open") and can be deleted.
+  if (isPlaintextStorageFormat(row.storage_format)) return null;
+  return {
+    projectId: toProjectId(row.id),
+    name: ENCRYPTED_PROJECT_PLACEHOLDER_NAME,
+    ...(row.last_revision_id
+      ? { lastRevisionId: toRevisionId(row.last_revision_id) }
+      : {}),
+    revisionCount:
+      typeof row.revision_count === 'number' ? row.revision_count : 0,
+    updatedAt: row.updated_at,
+    ...(typeof row.document_version === 'number'
+      ? { documentVersion: row.document_version }
+      : {}),
+    organization: organizationFromRow(row),
+    storageFormat: Number(row.storage_format)
+  };
+}
+
+/** Shown on the shelf for a project whose real name is encrypted. */
+export const ENCRYPTED_PROJECT_PLACEHOLDER_NAME = 'Encrypted project';
+
 /** Null when the stored document is unreadable, so the caller can skip it. */
 function summaryFromRow(row: ProjectRow): ProjectSummary | null {
+  if (!isPlaintextStorageFormat(row.storage_format)) {
+    // Never fall through to parsing: an unknown format is skipped like a
+    // corrupt row rather than read as plaintext.
+    return encryptedSummaryFromRow(row);
+  }
   if (
     typeof row.document_version === 'number' &&
     typeof row.revision_count === 'number'
@@ -8157,7 +8344,8 @@ function checkClientDocument(value: unknown): CollaborationRejection | null {
   }
   const complexity = documentStructureError(value);
   if (complexity) return { code: 'document-too-complex', message: complexity };
-  const envelope = documentEnvelopeError(value) ?? accountReadFieldsError(value);
+  const envelope =
+    documentEnvelopeError(value) ?? accountReadFieldsError(value);
   if (envelope) return { code: 'document-invalid', message: envelope };
   if (
     typeof value.schemaVersion !== 'number' ||
