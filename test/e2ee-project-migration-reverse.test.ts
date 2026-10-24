@@ -1019,7 +1019,17 @@ describe('who may turn encryption off', () => {
                (id, project_id, mode, token_hash, created_by_user_id, created_at)
              VALUES ('link_1', ?, 'view', ?, ?, 1)`
           )
-          .run(projectId, 'h'.repeat(64), OWNER)
+          .run(projectId, 'h'.repeat(64), OWNER),
+      // A live encrypted share link (slice 5-10).
+      () =>
+        srv.db
+          .prepare(
+            `INSERT INTO e2ee_share_links
+               (project_id, share_id, token_hash, mode, share_key_hash,
+                owner_identity_hash, created_by_user_id, created_at)
+             VALUES (?, 'share_1', ?, 'view', ?, ?, ?, 'now')`
+          )
+          .run(projectId, 'l'.repeat(64), 'k'.repeat(43), 'o'.repeat(43), OWNER)
     ];
     for (const share of shares) {
       share();
@@ -1032,6 +1042,9 @@ describe('who may turn encryption off', () => {
         .run(projectId);
       srv.db
         .prepare('DELETE FROM project_share_links WHERE project_id = ?')
+        .run(projectId);
+      srv.db
+        .prepare('DELETE FROM e2ee_share_links WHERE project_id = ?')
         .run(projectId);
     }
     expect(migrationRow(srv, projectId)).toMatchObject({

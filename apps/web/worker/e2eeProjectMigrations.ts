@@ -5,8 +5,10 @@
  * role is a state machine and a janitor. It never transforms content:
  *
  * - `POST …/migration` starts (or resumes, once a lease lapsed) a staging:
- *   owner only, a live plaintext project with no members or pending
- *   invitations (decision M7), nothing staged left over. It hands the
+ *   owner only, a live plaintext project with no members, no pending
+ *   invitations (plaintext, or encrypted ones of slice 5-3a) and no live
+ *   encrypted share link (slice 5-10) (decision M7), nothing staged left
+ *   over. It hands the
  *   owner's device a lease. While staging, the plaintext routes refuse
  *   writes, named saves and the room with 409 PROJECT_MIGRATING
  *   (`projectFormatGate.ts`), reads keep working, and the encrypted-project
@@ -38,7 +40,7 @@
  * Slice 7-3, the beta-only reverse path (E2EE_REVERSE_ENABLED, migration
  * 0043), runs the same machine with direction `decrypt` for an encrypted
  * project only its owner holds (no members, share links or pending
- * invitations, plaintext or encrypted) on an account whose "Encrypt new
+ * invitations, plaintext or encrypted, slices 5-3a and 5-10) on an account whose "Encrypt new
  * projects" opt-in is off (decision D2):
  *
  * - The start locks the encrypted room; while staging, encrypted content
@@ -83,10 +85,12 @@ import {
   D1R2PersistenceService,
   isE2eeContentBlobStorageReady,
   isE2eeDeviceRemovalStorageReady,
+  isE2eeInvitationStorageReady,
   isE2eeProjectGroupStorageReady,
   isE2eeProjectMigrationStorageReady,
   isE2eeProjectVersionStorageReady,
   isE2eeReverseStorageReady,
+  isE2eeShareLinkStorageReady,
   isProjectStorageFormatReady,
   type CloudflareEnv
 } from '@openzcad/cloudflare-adapters';
@@ -316,26 +320,95 @@ async function requireOwnedProject(
   return row;
 }
 
-/** Decision M7: members and pending invitations, by the same SQL as the fences. */
-const SHARED_SQL = `(EXISTS (SELECT 1 FROM project_members sm
+/**
+ * Which of Phase 5's sharing tables exist: encrypted invitations (slice
+ * 5-3a, migration 0038) and encrypted share links (slice 5-10, migration
+ * 0040). A shared check names only the ones installed.
+ */
+interface SharingTables {
+  readonly invitations: boolean;
+  readonly shareLinks: boolean;
+}
+
+async function sharingTables(db: D1Database): Promise<SharingTables> {
+  const [invitations, shareLinks] = await Promise.all([
+    isE2eeInvitationStorageReady(db),
+    isE2eeShareLinkStorageReady(db)
+  ]);
+  return { invitations, shareLinks };
+}
+
+/**
+ * Pending encrypted invitations and live encrypted share links, as extra
+ * `OR` terms of a shared check (aliases prefixed with `alias`). Binds:
+ * the project id and the time in milliseconds for invitations, then the
+ * project id for links.
+ */
+function encryptedSharingSql(alias: string, tables: SharingTables): string {
+  return `${
+    tables.invitations
+      ? `
+    OR EXISTS (SELECT 1 FROM e2ee_invitations ${alias}ei
+               WHERE ${alias}ei.project_id = ? AND ${alias}ei.completed_at IS NULL
+                 AND ${alias}ei.revoked_at IS NULL AND ${alias}ei.expires_at > ?)`
+      : ''
+  }${
+    tables.shareLinks
+      ? `
+    OR EXISTS (SELECT 1 FROM e2ee_share_links ${alias}el
+               WHERE ${alias}el.project_id = ? AND ${alias}el.revoked_at IS NULL)`
+      : ''
+  }`;
+}
+
+function encryptedSharingBinds(
+  projectId: string,
+  now: number,
+  tables: SharingTables
+): unknown[] {
+  return [
+    ...(tables.invitations ? [projectId, now] : []),
+    ...(tables.shareLinks ? [projectId] : [])
+  ];
+}
+
+/**
+ * Decision M7: members and pending invitations (plaintext, and encrypted
+ * ones where installed), plus live encrypted share links, by the same SQL
+ * in the checks and the fences. Live plaintext share links do not block:
+ * the cutover revokes them (decision M8).
+ */
+function sharedSql(tables: SharingTables): string {
+  return `(EXISTS (SELECT 1 FROM project_members sm
                      WHERE sm.project_id = ?)
   OR EXISTS (SELECT 1 FROM project_invitations si
              WHERE si.project_id = ? AND si.accepted_at IS NULL
-               AND si.revoked_at IS NULL AND si.expires_at >= ?))`;
-const sharedBinds = (projectId: string, nowSeconds: number) => [
+               AND si.revoked_at IS NULL AND si.expires_at >= ?)${encryptedSharingSql(
+    's',
+    tables
+  )})`;
+}
+
+const sharedBinds = (
+  projectId: string,
+  now: number,
+  tables: SharingTables
+): unknown[] => [
   projectId,
   projectId,
-  nowSeconds
+  Math.floor(now / 1000),
+  ...encryptedSharingBinds(projectId, now, tables)
 ];
 
 async function requireUnshared(
   db: D1Database,
   projectId: string,
-  nowSeconds: number
+  now: number,
+  tables: SharingTables
 ): Promise<void> {
   const shared = await db
-    .prepare(`SELECT ${SHARED_SQL} AS shared`)
-    .bind(...sharedBinds(projectId, nowSeconds))
+    .prepare(`SELECT ${sharedSql(tables)} AS shared`)
+    .bind(...sharedBinds(projectId, now, tables))
     .first<{ shared: number }>();
   if (shared?.shared) {
     refuse(
@@ -485,8 +558,8 @@ async function start(
   }
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
-  const nowSeconds = Math.floor(now / 1000);
-  await requireUnshared(ctx.db, projectId, nowSeconds);
+  const sharing = await sharingTables(ctx.db);
+  await requireUnshared(ctx.db, projectId, now, sharing);
   const leaseId = newLeaseId();
   const expiresAt = now + E2EE_MIGRATION_LEASE_TTL_MS;
   if (existing?.state === 'staging') {
@@ -573,7 +646,7 @@ async function start(
            FROM projects p
            WHERE p.id = ? AND p.user_id = ? AND p.storage_format = 1
              AND p.status <> 'deleted' AND ${ctx.authorization.sql}
-             AND NOT ${SHARED_SQL} AND NOT ${STAGED_ROWS_SQL}
+             AND NOT ${sharedSql(sharing)} AND NOT ${STAGED_ROWS_SQL}
            ON CONFLICT (project_id) DO UPDATE SET
              direction = excluded.direction, state = 'staging',
              device_id = excluded.device_id, lease_id = excluded.lease_id,
@@ -599,7 +672,7 @@ async function start(
           projectId,
           ctx.userId,
           ...ctx.authorization.binds,
-          ...sharedBinds(projectId, nowSeconds),
+          ...sharedBinds(projectId, now, sharing),
           ...stagedRowsBinds(projectId)
         )
     ]);
@@ -612,7 +685,7 @@ async function start(
           'Another device is encrypting this project.'
         );
       }
-      await requireUnshared(ctx.db, projectId, nowSeconds);
+      await requireUnshared(ctx.db, projectId, now, sharing);
       refuse(
         401,
         'E2EE_SESSION_REQUIRED',
@@ -770,7 +843,8 @@ async function cutover(
     );
   }
   const nowSeconds = Math.floor(now / 1000);
-  await requireUnshared(ctx.db, projectId, nowSeconds);
+  const sharing = await sharingTables(ctx.db);
+  await requireUnshared(ctx.db, projectId, now, sharing);
   const stagedBinds = [
     projectId,
     row.staged_version,
@@ -846,7 +920,7 @@ async function cutover(
            AND COALESCE((SELECT revision FROM project_measurements
                          WHERE project_id = ?), 0)
                = e2ee_project_migrations.source_measurement_revision
-           AND NOT ${SHARED_SQL}
+           AND NOT ${sharedSql(sharing)}
            AND ${STAGED_SQL}
            AND NOT EXISTS (${UNCOVERED_SQL})`
       )
@@ -866,7 +940,7 @@ async function cutover(
         projectId,
         ctx.userId,
         projectId,
-        ...sharedBinds(projectId, nowSeconds),
+        ...sharedBinds(projectId, now, sharing),
         ...stagedBinds,
         projectId,
         row.staged_version
@@ -1549,31 +1623,28 @@ async function purge(ctx: Context, projectId: string): Promise<Response> {
 
 /**
  * Who else can open an encrypted project, by the same SQL in the checks and
- * the fences: members, pending plaintext invitations, live share links and
- * (since migration 0038, when installed) pending encrypted invitations.
- * Binds: the project id three times and the time in seconds, then the
- * project id and the time in milliseconds for encrypted invitations.
+ * the fences: members, pending plaintext invitations, live plaintext share
+ * links and, where installed, pending encrypted invitations (migration
+ * 0038) and live encrypted share links (migration 0040). Binds: the
+ * project id three times and the time in seconds, then
+ * {@link encryptedSharingBinds}.
  */
-function decryptSharedSql(encryptedInvitations: boolean): string {
+function decryptSharedSql(tables: SharingTables): string {
   return `(EXISTS (SELECT 1 FROM project_members dsm WHERE dsm.project_id = ?)
     OR EXISTS (SELECT 1 FROM project_invitations dsi
                WHERE dsi.project_id = ? AND dsi.accepted_at IS NULL
                  AND dsi.revoked_at IS NULL AND dsi.expires_at >= ?)
     OR EXISTS (SELECT 1 FROM project_share_links dsl
-               WHERE dsl.project_id = ? AND dsl.revoked_at IS NULL)${
-                 encryptedInvitations
-                   ? `
-    OR EXISTS (SELECT 1 FROM e2ee_invitations dei
-               WHERE dei.project_id = ? AND dei.completed_at IS NULL
-                 AND dei.revoked_at IS NULL AND dei.expires_at > ?)`
-                   : ''
-               })`;
+               WHERE dsl.project_id = ? AND dsl.revoked_at IS NULL)${encryptedSharingSql(
+                 'd',
+                 tables
+               )})`;
 }
 
 function decryptSharedBinds(
   projectId: string,
   now: number,
-  encryptedInvitations: boolean
+  tables: SharingTables
 ): unknown[] {
   const seconds = Math.floor(now / 1000);
   return [
@@ -1581,19 +1652,8 @@ function decryptSharedBinds(
     projectId,
     seconds,
     projectId,
-    ...(encryptedInvitations ? [projectId, now] : [])
+    ...encryptedSharingBinds(projectId, now, tables)
   ];
-}
-
-/** Whether slice 5-3a's encrypted invitations (migration 0038) exist. */
-async function hasEncryptedInvitations(db: D1Database): Promise<boolean> {
-  const row = await db
-    .prepare(
-      `SELECT COUNT(*) AS ready FROM sqlite_master
-       WHERE type = 'table' AND name = 'e2ee_invitations'`
-    )
-    .first<{ ready: number }>();
-  return row?.ready === 1;
 }
 
 /** Decision D2: an account that opted in cannot hold new plaintext. */
@@ -1660,21 +1720,21 @@ async function requireDecryptable(
   ctx: Context,
   projectId: string,
   now: number
-): Promise<boolean> {
-  const encryptedInvitations = await hasEncryptedInvitations(ctx.db);
+): Promise<SharingTables> {
+  const sharing = await sharingTables(ctx.db);
   const row = await ctx.db
     .prepare(
-      `SELECT ${decryptSharedSql(encryptedInvitations)} AS shared,
+      `SELECT ${decryptSharedSql(sharing)} AS shared,
               ${OPTED_IN_SQL} AS opted_in`
     )
     .bind(
-      ...decryptSharedBinds(projectId, now, encryptedInvitations),
+      ...decryptSharedBinds(projectId, now, sharing),
       ctx.userId
     )
     .first<{ shared: number; opted_in: number }>();
   if (row?.opted_in) decryptOptedIn();
   if (row?.shared) decryptShared();
-  return encryptedInvitations;
+  return sharing;
 }
 
 async function startDecrypt(
@@ -1715,7 +1775,7 @@ async function startDecrypt(
   }
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
-  const encryptedInvitations = await requireDecryptable(ctx, projectId, now);
+  const sharing = await requireDecryptable(ctx, projectId, now);
   const leaseId = newLeaseId();
   const expiresAt = now + E2EE_MIGRATION_LEASE_TTL_MS;
   if (existing?.state === 'staging') {
@@ -1803,7 +1863,7 @@ async function startDecrypt(
            FROM projects p
            WHERE p.id = ? AND p.user_id = ? AND p.storage_format = 2
              AND p.status <> 'deleted' AND ${ctx.authorization.sql}
-             AND NOT ${decryptSharedSql(encryptedInvitations)}
+             AND NOT ${decryptSharedSql(sharing)}
              AND NOT ${OPTED_IN_SQL}
              AND NOT ${PLAINTEXT_ROWS_SQL}
            ON CONFLICT (project_id) DO UPDATE SET
@@ -1831,7 +1891,7 @@ async function startDecrypt(
           projectId,
           ctx.userId,
           ...ctx.authorization.binds,
-          ...decryptSharedBinds(projectId, now, encryptedInvitations),
+          ...decryptSharedBinds(projectId, now, sharing),
           ctx.userId,
           ...plaintextRowsBinds(projectId)
         )
@@ -1925,7 +1985,7 @@ async function cutoverDecrypt(
       'This project changed after turning its encryption off began. Abandon it and start again.'
     );
   }
-  const encryptedInvitations = await requireDecryptable(ctx, projectId, now);
+  const sharing = await requireDecryptable(ctx, projectId, now);
   if (row.staged_version < 1 || !row.staged_hash) {
     refuse(
       409,
@@ -1994,7 +2054,7 @@ async function cutoverDecrypt(
                          AND cp.document_version < e2ee_project_migrations.staged_version)
            AND ${ENCRYPTED_MEASUREMENTS_SQL}
                = e2ee_project_migrations.source_measurement_revision
-           AND NOT ${decryptSharedSql(encryptedInvitations)}
+           AND NOT ${decryptSharedSql(sharing)}
            AND NOT ${OPTED_IN_SQL}
            AND EXISTS (SELECT 1 FROM project_document_objects
                        WHERE id = ? AND project_id = ? AND state = 'committed')
@@ -2017,7 +2077,7 @@ async function cutoverDecrypt(
         projectId,
         ctx.userId,
         projectId,
-        ...decryptSharedBinds(projectId, now, encryptedInvitations),
+        ...decryptSharedBinds(projectId, now, sharing),
         ctx.userId,
         head.objectId,
         projectId,
