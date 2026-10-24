@@ -482,11 +482,12 @@ function createSweepGhost(
 }
 
 /**
- * The face-offset handle ("B refined"): a pin on the face normal that stands
- * on the outer end of the change — the new face when adding, the old level
- * when cutting — with a white change arrow on the same axis between the two
- * levels, a dashed ring at the old level (coral when cutting), and, when the
- * face's outline is known, the band of wall the change adds or removes.
+ * The face-offset handle: a pin on the face normal that rides the face to its
+ * new level, both ways, with a dashed white dimension on the same axis back
+ * to the old level that the value label rides, a dashed ring at the old level
+ * (coral when cutting), and, when the face's outline is known, the band of
+ * wall the change adds or removes. A body that shows the change itself hides
+ * the band (`setChangeShownByBody`).
  */
 export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
   const kind = 'offset-face';
@@ -512,14 +513,14 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
   const worldGroup = new THREE.Group();
   worldGroup.name = `${kind}-handle-world`;
 
-  // The change itself, measured: a solid white arrow on the pin's axis
-  // between the old level and the new, heads at both ends.
+  // The change itself, measured: a dashed white dimension on the pin's axis
+  // from the old level to the pin, heads at both ends.
   const changeArrow = createDimensionGraphic({
     color: SELECTION_SEMANTICS.change.arrow,
     linewidth: 1.8,
     opacity: 0.95,
     renderOrder: 29,
-    dashed: false,
+    dashed: true,
     keepProgram: true
   });
   changeArrow.object.name = 'offset-change-arrow';
@@ -561,6 +562,8 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
 
   let current = 0;
   let warned = false;
+  let bodyShowsChange = false;
+  let line: { start: THREE.Vector3; end: THREE.Vector3 } | null = null;
   const presence = createRigPresence([group, worldGroup]);
 
   /**
@@ -627,21 +630,20 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
       const tip = origin.clone().addScaledVector(direction, value);
       const engaged = Math.abs(value) > 1e-9;
       const cutting = value < -1e-9;
-      // The pin stands on the outer end of the change: the new face when
-      // adding, the old level when cutting, where the removed slab began.
-      const outer = cutting ? origin : tip;
-      const inner = cutting ? tip : origin;
-      group.position.copy(outer);
+      // The pin rides the face it drags, to the new level either way.
+      group.position.copy(tip);
       const scale = (group.userData.gizmoScale as number | undefined) ?? 1;
-      // The arrow runs up the axis from the inner level and stops short of
-      // the pin, its head pointing at the handle rather than under it.
-      const arrowEnd = outer
+      // The dimension runs from the old level towards the pin and stops
+      // short of it, its head pointing at the handle rather than under it.
+      const sense = cutting ? -1 : 1;
+      const arrowEnd = tip
         .clone()
-        .addScaledVector(direction, -DIMENSION_CLEARANCE * scale);
-      const room = arrowEnd.clone().sub(inner).dot(direction) > 0;
+        .addScaledVector(direction, -sense * DIMENSION_CLEARANCE * scale);
+      const room = arrowEnd.clone().sub(origin).dot(direction) * sense > 0;
       changeArrow.object.visible = engaged && room;
-      if (engaged && room) {
-        changeArrow.update(inner, arrowEnd, scale);
+      line = engaged && room ? { start: origin.clone(), end: arrowEnd } : null;
+      if (line) {
+        changeArrow.update(line.start, line.end, scale);
       }
       oldLevel.object.visible = engaged;
       oldLevel.object.scale.setScalar(scale);
@@ -651,15 +653,21 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
           : SELECTION_SEMANTICS.change.oldLevel
       );
       band?.update(value);
+      if (band) band.object.visible = !bodyShowsChange;
       if (ghost) {
-        ghost.visible = engaged;
+        ghost.visible = engaged && !bodyShowsChange;
       }
       if (sweep) {
-        sweep.mesh.visible = engaged;
+        sweep.mesh.visible = engaged && !bodyShowsChange;
         if (engaged) {
           sweep.update(value);
         }
       }
+    },
+    setChangeShownByBody(shown) {
+      if (bodyShowsChange === shown) return;
+      bodyShowsChange = shown;
+      rig.setValue(current);
     },
     value() {
       return current;
@@ -673,15 +681,13 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
       group.userData.previewWarning = warning;
     },
     chipAnchor() {
-      // The pin's own centre, wherever it stands: the label sits beside the
-      // pin, and the viewport offsets it in screen pixels, so a
+      // The pin's own centre: a label too long for its line hangs beside
+      // the pin, and the viewport offsets it in screen pixels, so a
       // foreshortened direction can never fold it back onto the arrow head.
-      return current < -1e-9
-        ? origin.clone()
-        : origin.clone().addScaledVector(direction, current);
+      return origin.clone().addScaledVector(direction, current);
     },
     chipLine() {
-      return null;
+      return line ? { start: line.start.clone(), end: line.end.clone() } : null;
     },
     dispose() {
       changeArrow.dispose();

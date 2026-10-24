@@ -72,11 +72,11 @@ describe('the offset-face rig', () => {
     expect(rig.origin.z).toBe(3);
   });
 
-  it('stands on the old level while cutting: the outer end of the change', () => {
+  it('rides the face to its new level while cutting', () => {
     const rig = offsetRig();
     rig.setValue(-2);
     expect(rig.value()).toBe(-2);
-    expect(rig.group.position.z).toBeCloseTo(3, 6);
+    expect(rig.group.position.z).toBeCloseTo(3 - 2, 6);
   });
 
   it('anchors its chip on the pin itself, whatever the frame scale', () => {
@@ -87,10 +87,15 @@ describe('the offset-face rig', () => {
     rig.setValue(5);
     expect(rig.chipAnchor(2).z).toBeCloseTo(3 + 5, 6);
     expect(rig.chipAnchor(20).z).toBeCloseTo(3 + 5, 6);
-    // Cutting, the pin — and so the label — stays at the old level.
+    // Cutting, the pin rides the face down to its new level too.
     rig.setValue(-4);
-    expect(rig.chipAnchor(2).z).toBeCloseTo(3, 6);
-    // The label rides beside the pin, never along a line.
+    expect(rig.chipAnchor(2).z).toBeCloseTo(3 - 4, 6);
+    // The label rides the dashed dimension from the old level to the pin.
+    const line = rig.chipLine?.();
+    expect(line?.start.z).toBeCloseTo(3, 6);
+    expect(line!.end.z).toBeLessThan(3);
+    expect(line!.end.z).toBeGreaterThan(3 - 4);
+    rig.setValue(0);
     expect(rig.chipLine?.()).toBeNull();
   });
 
@@ -144,7 +149,7 @@ describe('the offset-face rig', () => {
     expect(Math.abs(ringNormal.y)).toBeCloseTo(1, 6);
   });
 
-  it('measures the change with a solid white arrow between the two levels', () => {
+  it('measures the change with a dashed white dimension between the two levels', () => {
     const rig = offsetRig();
     const arrow = rig.worldGroup.getObjectByName('offset-change-arrow')!;
     const ring = rig.worldGroup.getObjectByName('offset-old-level')!;
@@ -156,8 +161,8 @@ describe('the offset-face rig', () => {
     const line = arrow.children[0] as THREE.Object3D & {
       material: { gapSize: number; color: THREE.Color };
     };
-    // Solid: a dash with no gap, sharing the dashed line's program.
-    expect(line.material.gapSize).toBe(0);
+    // Dashed, like a drawing's dimension.
+    expect(line.material.gapSize).toBeGreaterThan(0);
     expect(line.material.color.getHex()).toBe(0xffffff);
     // Nothing to measure at rest.
     expect(arrow.visible).toBe(false);
@@ -181,6 +186,31 @@ describe('the offset-face rig', () => {
     expect(ringLine.material.color.getHex()).toBe(0xffffff);
     rig.setValue(-3);
     expect(ringLine.material.color.getHex()).toBe(0xff644d);
+  });
+
+  it('hides its band while the body shows the change itself', () => {
+    const rig = buildOffsetFaceHandle({
+      origin: { x: 2, y: 2, z: 3 },
+      direction: { x: 0, y: 0, z: 1 },
+      ghostGeometry: null,
+      band: {
+        loops: [
+          [
+            { x: 0, y: 0, z: 3 },
+            { x: 4, y: 0, z: 3 },
+            { x: 4, y: 4, z: 3 },
+            { x: 0, y: 4, z: 3 }
+          ]
+        ]
+      }
+    });
+    const band = rig.worldGroup.getObjectByName('offset-change-band')!;
+    rig.setValue(2);
+    expect(band.visible).toBe(true);
+    rig.setChangeShownByBody?.(true);
+    expect(band.visible).toBe(false);
+    rig.setChangeShownByBody?.(false);
+    expect(band.visible).toBe(true);
   });
 
   it('sweeps the face outline into a band of the change, green adding and coral cutting', () => {

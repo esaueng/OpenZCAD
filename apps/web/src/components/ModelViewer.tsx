@@ -95,6 +95,8 @@ import {
   createCylinderProfilePreview,
   createLinearProfilePreview,
   createStepStretchPreview,
+  createBodyGhost,
+  type BodyGhost,
   type LinearPreviewProfile,
   type StepPreviewProfile,
   type CylinderPreviewProfile,
@@ -2348,6 +2350,7 @@ export function ModelViewer({
   const cylinderRadiusProxyControllerRef = useRef<VisualProxyController | null>(
     null
   );
+  const offsetGhostClearRef = useRef<(() => void) | null>(null);
   const offsetBodyProxyControllerRef = useRef<VisualProxyController | null>(
     null
   );
@@ -3192,6 +3195,36 @@ export function ModelViewer({
       pending: number | null;
       requestedAt: number;
     } | null = null;
+    // While a face offset is dragged and then validated, the body shows the
+    // part as it will be — the viewport proxy or the exact preview — and a
+    // ghost of the part as it was shows what a cut removes, with the dragged
+    // face at its old place. The rig's hatched band would say it twice.
+    let offsetGhost: BodyGhost | null = null;
+    function beginOffsetGhost() {
+      if (offsetGhost) return;
+      const target = offsetHandleRef.current;
+      const object = target && context.objectsByBodyId.get(target.bodyId);
+      if (!target || !(object instanceof THREE.Mesh)) return;
+      const face = context.renderedBodies
+        ?.find((body) => body.bodyId === target.bodyId)
+        ?.topology?.faces.find(
+          (candidate) => candidate.topologyId === target.topologyId
+        );
+      offsetGhost = createBodyGhost(object as THREE.Mesh, {
+        ...(face ? { faceRange: face } : {}),
+        resolution: context.fatLineResolution()
+      });
+      context.scene.add(offsetGhost.object);
+      offsetRigRef.current?.setChangeShownByBody?.(true);
+    }
+    function clearOffsetGhost() {
+      if (!offsetGhost) return;
+      offsetGhost.dispose();
+      offsetGhost = null;
+      offsetRigRef.current?.setChangeShownByBody?.(false);
+      requestRender();
+    }
+    offsetGhostClearRef.current = clearOffsetGhost;
     function discardOffsetBodyProxy() {
       offsetBodyProxy?.preview.restore();
       offsetBodyProxy = null;
@@ -8463,6 +8496,8 @@ export function ModelViewer({
             pixelsPerUnit: screen.pixelsPerUnit,
             initialOffset: armedRig.value()
           };
+          // The ghost copies the body before the proxy deforms it.
+          beginOffsetGhost();
           beginOffsetBodyProxy();
           offsetDragActiveRef.current = true;
           onDirectManipulationChangeRef.current(true);
@@ -9141,6 +9176,7 @@ export function ModelViewer({
         );
         if (moved < 4) {
           rig?.setValue(completed.initialOffset);
+          clearOffsetGhost();
           restoreOffsetBodyProxy();
           onOffsetCancelRef.current();
           selectAtPointer(event);
@@ -9153,8 +9189,12 @@ export function ModelViewer({
           Math.abs(finalOffset) > 1e-9
         ) {
           queueOffsetBodyProxy(finalOffset);
-          if (!onOffsetCommitRef.current(finalOffset)) restoreOffsetBodyProxy();
+          if (!onOffsetCommitRef.current(finalOffset)) {
+            clearOffsetGhost();
+            restoreOffsetBodyProxy();
+          }
         } else {
+          clearOffsetGhost();
           restoreOffsetBodyProxy();
           onOffsetCancelRef.current();
         }
@@ -9982,6 +10022,8 @@ export function ModelViewer({
       openExactEntryRef.current = null;
       cylinderRadiusProxyControllerRef.current = null;
       offsetBodyProxyControllerRef.current = null;
+      offsetGhostClearRef.current?.();
+      offsetGhostClearRef.current = null;
       moveGizmoHudRef.current = null;
       if (orientationDragRef.current === orientationDragControls) {
         orientationDragRef.current = null;
@@ -10189,6 +10231,9 @@ export function ModelViewer({
       // before its old Three object is disposed and replaced.
       cylinderRadiusProxyControllerRef.current?.discard();
       offsetBodyProxyControllerRef.current?.discard();
+      // Exact frames replace bodies mid-drag; once the drag is over, the
+      // next bodies are the committed or restored part.
+      if (!offsetDragActiveRef.current) offsetGhostClearRef.current?.();
       // The manager owns hover-slot geometry even while the slots are
       // parented under bodies, so it must detach them before body disposal.
       context.selection.resetForRebuild();
@@ -11265,6 +11310,7 @@ export function ModelViewer({
       context.requestRender();
       return;
     }
+    offsetGhostClearRef.current?.();
     offsetBodyProxyControllerRef.current?.restore();
     // Recognized primitive profiles have a disposable viewport preview.
     // Generic face edits stream exact worker geometry so unrelated faces and

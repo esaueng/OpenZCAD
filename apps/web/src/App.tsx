@@ -6279,8 +6279,15 @@ export function App() {
     ).filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId));
     // G2: what a command preview would make is drawn in the preview hue
     // until it is applied, including edits that retain an existing body ID.
-    return currentFaceGeometryPreview ||
-      (previewDoc && !currentGeometrySnapshot)
+    // A face offset is the exception: the viewer draws its result solid over
+    // a ghost of the part as it was, and a hue change mid-drag would read as
+    // a different part.
+    const faceOffsetPreview =
+      currentFaceGeometryPreview &&
+      interaction.mode === 'face' &&
+      interaction.op === 'offset-face';
+    return !faceOffsetPreview &&
+      (currentFaceGeometryPreview || (previewDoc && !currentGeometrySnapshot))
       ? tintPreviewResultBodies(bodies, representations)
       : bodies;
   }, [
@@ -6288,6 +6295,7 @@ export function App() {
     hiddenBodyIds,
     currentGeometrySnapshot,
     currentFaceGeometryPreview,
+    interaction,
     previewDoc,
     representations
   ]);
