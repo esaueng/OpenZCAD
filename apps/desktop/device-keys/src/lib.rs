@@ -14,7 +14,7 @@
 
 use p256::ecdsa::signature::Signer;
 use p256::ecdsa::{Signature, SigningKey};
-use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::elliptic_curve::sec1::ToSec1Point;
 use p256::{PublicKey, SecretKey};
 
 /// Bytes of an uncompressed P-256 public key.
@@ -92,11 +92,7 @@ fn random_secret(fill_random: FillRandom<'_>) -> Result<SecretKey, String> {
 }
 
 fn public_bytes(secret: &SecretKey) -> Vec<u8> {
-    secret
-        .public_key()
-        .to_encoded_point(false)
-        .as_bytes()
-        .to_vec()
+    secret.public_key().to_sec1_point(false).as_bytes().to_vec()
 }
 
 fn load_secret(store: &dyn SecretStore, account: &str) -> Result<SecretKey, String> {
