@@ -3,8 +3,9 @@
  * reset (ADR-024 Phase 4, slice 4-10; roadmap L11; decision D9):
  *
  * - `GET /api/e2ee/revocation-cutoffs`: the caller's identity-signed
- *   revocation cutoff statements, and each owned encrypted project's group
- *   state and newest head, which a removing browser names cutoffs from.
+ *   revocation cutoff statements, and the group state and newest head of
+ *   each encrypted project the caller owns or (slice 5-7) is a member of,
+ *   which a removing browser names cutoffs from.
  * - `PUT /api/e2ee/revocation-cutoffs`: store the statement of one revoking
  *   device-list entry. A later statement for the same entry may replace it
  *   only if every project keeps a cutoff no lower.
@@ -215,14 +216,20 @@ async function listCutoffs(db: D1Database, userId: string) {
               (SELECT v.version_hash FROM e2ee_project_versions v
                WHERE v.project_id = g.project_id
                ORDER BY v.document_version DESC LIMIT 1) AS head_hash,
-              p.status = 'deleted' AS trashed
+              p.status = 'deleted' AS trashed,
+              p.user_id <> ? AS member
        FROM e2ee_project_groups g JOIN projects p ON p.id = g.project_id
        -- A project in the recycle bin (slice 4-8) is named too: it can be
        -- restored, and its removed device's versions must stay readable.
-       WHERE p.user_id = ? AND p.storage_format = 2
+       -- So are shared projects (slice 5-7): the removed device held their
+       -- keys too, and their other members read its versions.
+       WHERE p.storage_format = 2
+         AND p.id IN (SELECT id FROM projects WHERE user_id = ?
+                      UNION
+                      SELECT project_id FROM project_members WHERE user_id = ?)
        ORDER BY g.project_id LIMIT ?`
     )
-    .bind(userId, MAX_PROJECTS)
+    .bind(userId, userId, userId, MAX_PROJECTS)
     .all<{
       project_id: string;
       generation: number;
@@ -231,6 +238,7 @@ async function listCutoffs(db: D1Database, userId: string) {
       head_version: number | null;
       head_hash: string | null;
       trashed: number;
+      member: number;
     }>();
   return json({
     statements: (results ?? []).map(cutoffRecord),
@@ -243,7 +251,8 @@ async function listCutoffs(db: D1Database, userId: string) {
         row.head_version === null || row.head_hash === null
           ? null
           : { documentVersion: row.head_version, versionHash: row.head_hash },
-      ...(row.trashed ? { trashed: true } : {})
+      ...(row.trashed ? { trashed: true } : {}),
+      ...(row.member ? { member: true } : {})
     }))
   } satisfies E2eeRevocationCutoffsResponse);
 }

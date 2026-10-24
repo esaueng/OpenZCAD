@@ -56,6 +56,12 @@
  *   (and viewers, `commitPendingDepartures`) commit departures. A Commit
  *   that removes someone replaces the dedupe secret (decision M5) and tells
  *   `ProjectGroupContext.onMembersRemoved`.
+ * - **Shared device removal** (slice 5-7). A member's removal rotates the
+ *   shared projects it is in like owned ones; co-members judge its removed
+ *   device by its signed cutoffs (directory, archives, authorship and
+ *   `revokedCommitter`). In a shared project a revoked device no signed
+ *   statement names the project for gets `UNSIGNED_SHARED_CUTOFF` in the
+ *   directory, the same in every member's browser.
  *
  * Everything the server returns is checked before use: leaf certifications
  * against the device list (`buildDeviceDirectory`), archives against their
@@ -724,7 +730,39 @@ function currentGeneration(ctx: ProjectGroupContext): number {
   return ctx.account.generation ?? 1;
 }
 
-/** The directory's cutoffs: MLS epochs of the current group (never below 0). */
+/**
+ * The MLS cutoff of a shared project's revoked device that no signed
+ * statement names the project for (slice 5-7): every epoch so far, as if
+ * the device knew every rejoin PSK. The policy then refuses that account's
+ * External Commits by rejoin PSK in this project (`rejoin-psk-before-
+ * revocation`), and nothing else: its devices holding leaves keep working,
+ * the project stays usable for everyone, and the device itself signs
+ * nothing anyone accepts, since it is revoked. See `directoryCutoffs`.
+ */
+export const UNSIGNED_SHARED_CUTOFF = Number.MAX_SAFE_INTEGER;
+
+/**
+ * The directory's cutoffs: MLS epochs of the current group (never below 0).
+ *
+ * In a solo project (only this account's list) a revoked device has the
+ * cutoff its identity-signed statement names, or the start of a group made
+ * after its revocation (`projectRevocationCutoffs`), and none otherwise, so
+ * the directory refuses it (slice 4-10).
+ *
+ * In a shared project every member's browser must reach the same cutoffs,
+ * or a Commit one accepts is one another refuses and that browser stops.
+ * So only what every member can verify counts: each account's statements
+ * naming the project. A revoked device of any account (this one included)
+ * that no statement names the project for gets `UNSIGNED_SHARED_CUTOFF`
+ * instead of refusing the directory (the slice 5-2 gap, closed in 5-7).
+ * Typical cases: a device revoked before its account joined the project
+ * (statements only name projects that existed then), or one revoked by a
+ * removal that never stored a statement naming the project. Neither the
+ * derivation from this account's own wraps nor a guess of 0 is used here:
+ * the others cannot check the first, and the second could let a sibling
+ * rejoin with a PSK the revoked device knows. Until a statement names the
+ * project, such an account's further devices join only by a Welcome.
+ */
 async function directoryCutoffs(
   ctx: ProjectGroupContext,
   projectId: string,
@@ -732,24 +770,43 @@ async function directoryCutoffs(
   known?: E2eeProjectGroupRecord
 ): Promise<Map<string, Map<string, number>>> {
   const out = new Map<string, Map<string, number>>();
+  const shared = lists.length > 1;
   let group = known;
-  const toEpochs = async (cutoffs: ReadonlyMap<string, ProjectCutoff>) => {
+  const toEpochs = async (
+    list: VerifiedDeviceList,
+    cutoffs: ReadonlyMap<string, ProjectCutoff>
+  ) => {
     group ??= await fetchGroup(ctx, projectId);
     const devices = new Map<string, number>();
     for (const [deviceId, cutoff] of cutoffs) {
+      if (shared && !cutoff.signed) continue;
       devices.set(deviceId, Math.max(0, cutoff.keyEpoch - group.keyEpochBase));
+    }
+    if (shared) {
+      for (const revoked of revokedDevices(list)) {
+        if (!devices.has(revoked.id)) {
+          devices.set(revoked.id, UNSIGNED_SHARED_CUTOFF);
+        }
+      }
     }
     return devices;
   };
   let own = new Map<string, number>();
   if (revokedDevices(ctx.account.list).length) {
     group ??= await fetchGroup(ctx, projectId);
-    own = await toEpochs(await projectRevocationCutoffs(ctx, projectId, group));
+    own = await toEpochs(
+      ctx.account.list,
+      await projectRevocationCutoffs(ctx, projectId, group)
+    );
   }
   out.set(ctx.account.userId, own);
   const members = await memberRevocationCutoffs(ctx, projectId, lists);
-  for (const [userId, cutoffs] of members) {
-    out.set(userId, await toEpochs(cutoffs));
+  for (const list of lists) {
+    if (list.userId === ctx.account.userId) continue;
+    const cutoffs = members.get(list.userId);
+    if (cutoffs || revokedDevices(list).length) {
+      out.set(list.userId, await toEpochs(list, cutoffs ?? new Map()));
+    }
   }
   return out;
 }
@@ -757,9 +814,10 @@ async function directoryCutoffs(
 /**
  * The project's other members' revoked devices' cutoffs (slice 5-2), by
  * user and device: from each member's identity-signed statements naming
- * this project, verified against that member's list. A revoked device
- * without one has no entry, and the directory refuses it rather than
- * guess (slice 5-7 brings cutoffs for every shared project).
+ * this project, verified against that member's list. Since slice 5-7 a
+ * member's removal signs a cutoff for every project it is in. A revoked
+ * device without one has no entry here: version authorship refuses its
+ * versions, and the directory gives it `UNSIGNED_SHARED_CUTOFF`.
  */
 export async function memberRevocationCutoffs(
   ctx: ProjectGroupContext,
@@ -2177,6 +2235,47 @@ async function reportRemovals(
   }
 }
 
+/**
+ * Whether a co-member's removed device may still know `keyEpoch`'s project
+ * key (slice 5-7), so nothing new may be written under it: its leaf is
+ * still in the group (it learns every new epoch), or its account's signed
+ * cutoff names a later key epoch (the rotation has not landed). Only that
+ * member's own devices can rotate (the policy lets a member remove only its
+ * own identity's leaves); until one does, this browser reads but does not
+ * write. Returns the member's user id, or null. This account's own removed
+ * devices are `ensureProjectRotated`'s, before any write.
+ */
+export async function pendingMemberRotation(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  keyEpoch: number
+): Promise<string | null> {
+  const device = requireDevice(ctx);
+  const { members } = await ctx.sessions.status(refOf(ctx, device, projectId));
+  // A group of this account's leaves alone asks nothing more of the server.
+  if (members.every((m) => m.userId === ctx.account.userId)) return null;
+  const lists = (await projectDeviceLists(ctx, projectId)).filter(
+    (list) =>
+      list.userId !== ctx.account.userId && revokedDevices(list).length > 0
+  );
+  if (lists.length === 0) return null;
+  const cutoffs = await memberRevocationCutoffs(ctx, projectId, lists);
+  for (const list of lists) {
+    for (const revoked of revokedDevices(list)) {
+      const cutoff = cutoffs.get(list.userId)?.get(revoked.id);
+      if (
+        members.some(
+          (m) => m.userId === list.userId && m.deviceId === revoked.id
+        ) ||
+        (cutoff && keyEpoch < cutoff.keyEpoch)
+      ) {
+        return list.userId;
+      }
+    }
+  }
+  return null;
+}
+
 // --- Commit, catch up, recover --------------------------------------------
 
 interface BuiltCommit {
@@ -2690,11 +2789,44 @@ async function requireCurrentGeneration(
 }
 
 /**
+ * The revoked devices' cutoffs of the account that sent `commit`: this
+ * account's own, or a co-member's from its signed statements (slice 5-7).
+ */
+async function senderCutoffs(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  group: E2eeProjectGroupRecord,
+  commit: E2eeMlsCommitRecord
+): Promise<ReadonlyMap<string, ProjectCutoff>> {
+  const sender = commit.senderUserId;
+  return sender && sender !== ctx.account.userId
+    ? ((await memberRevocationCutoffs(ctx, projectId)).get(sender) ??
+        new Map<string, ProjectCutoff>())
+    : await projectRevocationCutoffs(ctx, projectId, group);
+}
+
+/** A Commit sequenced before the epoch a removal's rotation was made in. */
+const beforeRotation = (
+  group: E2eeProjectGroupRecord,
+  commit: E2eeMlsCommitRecord,
+  cutoff: ProjectCutoff | undefined
+) =>
+  cutoff?.signed === true &&
+  group.keyEpochBase + commit.epoch < cutoff.keyEpoch - 1;
+
+const missedHistory = () =>
+  new ProjectGroupError(
+    'no-session',
+    'This device must rejoin the project: it missed Commits from a device that has since been removed.'
+  );
+
+/**
  * A Commit the policy refused because a revoked device signed it. One sent
  * before the epoch the removal's rotation was made in is history this state
  * can no longer process: the device rejoins from the key archives
  * (`no-session`). One sent in or after that epoch is a removed device's
- * later Commit, and is refused (`removed-device`).
+ * later Commit, and is refused (`removed-device`). A co-member's removed
+ * device (slice 5-7) is judged by that member's own signed cutoffs.
  */
 async function revokedCommitter(
   ctx: ProjectGroupContext,
@@ -2702,23 +2834,61 @@ async function revokedCommitter(
   group: E2eeProjectGroupRecord,
   commit: E2eeMlsCommitRecord
 ): Promise<ProjectGroupError> {
-  const cutoffs = await projectRevocationCutoffs(ctx, projectId, group);
+  const cutoffs = await senderCutoffs(ctx, projectId, group, commit);
   const cutoff = commit.senderDeviceId
     ? cutoffs.get(commit.senderDeviceId)
     : undefined;
-  if (
-    cutoff?.signed &&
-    group.keyEpochBase + commit.epoch < cutoff.keyEpoch - 1
-  ) {
-    return new ProjectGroupError(
-      'no-session',
-      'This device must rejoin the project: it missed Commits from a device that has since been removed.'
-    );
-  }
+  if (beforeRotation(group, commit, cutoff)) return missedHistory();
   return new ProjectGroupError(
     'removed-device',
     `The server delivered a Commit for epoch ${commit.epoch} signed by a removed device. It was refused.`
   );
+}
+
+/**
+ * The directory for processing a co-member's Commit that today's directory
+ * refuses because of that member's later device removal (slice 5-7): a
+ * Commit its since-removed device sent, or an External Commit of another of
+ * its devices with a rejoin PSK from before the revocation. When the
+ * member's signed cutoff places the removal's rotation after the Commit,
+ * the Commit was valid when it was made, and the removed devices count as
+ * active for it (`DirectoryInput.activeAt`). Null when nothing qualifies.
+ *
+ * Without this a member whose devices were all behind could not follow:
+ * rejoining needs that account's wraps of the current epoch, which only a
+ * device that processed it posts. This account's own removed devices keep
+ * slice 4-10's way (rejoin from the archives: the rotation carried this
+ * account's wraps). Only signed cutoffs count, never
+ * `UNSIGNED_SHARED_CUTOFF`, so an unsigned revocation never lets anything
+ * through.
+ */
+async function historicalDirectory(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  group: E2eeProjectGroupRecord,
+  directory: DirectoryInput,
+  commit: E2eeMlsCommitRecord
+): Promise<DirectoryInput | null> {
+  const sender = commit.senderUserId;
+  if (!sender || sender === ctx.account.userId) return null;
+  const cutoffs = (
+    await memberRevocationCutoffs(ctx, projectId, directory.lists)
+  ).get(sender);
+  const active = new Set<string>();
+  for (const [deviceId, cutoff] of cutoffs ?? []) {
+    if (beforeRotation(group, commit, cutoff)) active.add(deviceId);
+  }
+  if (active.size === 0) return null;
+  const devices = new Map(directory.revocationCutoffs?.get(sender) ?? []);
+  for (const deviceId of active) devices.delete(deviceId);
+  return {
+    ...directory,
+    revocationCutoffs: new Map([
+      ...(directory.revocationCutoffs ?? []),
+      [sender, devices]
+    ]),
+    activeAt: new Map([[sender, active]])
+  };
 }
 
 /**
@@ -2838,10 +3008,31 @@ export async function catchUpProjectGroup(
           commit
         );
       } catch (error) {
-        if (isPolicyRefusal(error, 'credential-revoked')) {
-          throw await revokedCommitter(ctx, projectId, group, commit);
+        const revoked = isPolicyRefusal(error, 'credential-revoked');
+        const historic =
+          revoked || isPolicyRefusal(error, 'rejoin-psk-before-revocation')
+            ? await historicalDirectory(
+                ctx,
+                projectId,
+                group,
+                directory,
+                commit
+              )
+            : null;
+        if (!historic) {
+          if (revoked) {
+            throw await revokedCommitter(ctx, projectId, group, commit);
+          }
+          throw error;
         }
-        throw error;
+        processed = await processCommit(
+          ctx,
+          ref,
+          projectId,
+          group,
+          historic,
+          commit
+        );
       }
       if (processed.kind !== 'commit') {
         throw new ProjectGroupError(
