@@ -7,6 +7,7 @@
  * handed over in process, standing in for the Welcome of slice 5-3), plus
  * the forged-write and refusal helpers those tests share.
  */
+import type { DatabaseSync } from 'node:sqlite';
 import { expect } from 'vitest';
 import {
   epochBinding,
@@ -99,9 +100,11 @@ export async function sharedProject(
   accounts: readonly Account[],
   owner: Account,
   member: Account,
-  role: MemberRole
+  role: MemberRole,
+  /** The database, when not every migration is applied. */
+  db?: DatabaseSync
 ) {
-  const srv = newServer(accounts);
+  const srv = newServer(accounts, db);
   const laptop = device(srv, owner, 'owner_laptop', {
     members: accounts.filter((a) => a !== owner)
   });

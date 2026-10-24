@@ -4888,8 +4888,11 @@ export function App() {
   // workspace is the parameters, and Make a copy is the road to Build.
   const buildModeDisabledReason = shareSession
     ? 'This is a shared link — Make a copy to open Build mode'
-    : !sharedProjectDisabled && encryptedMemberRole === 'viewer'
-      ? 'This shared project is read-only'
+    : !sharedProjectDisabled && encryptedMemberEditReason
+      ? // An encrypted member who may not edit (a viewer, or one whose role
+        // is not known, or no longer exists) is held in View, as a
+        // read-only collaborator is (slice 5-4).
+        encryptedMemberEditReason
       : !sharedProjectDisabled &&
           cloudAvailable &&
           session &&
@@ -27661,6 +27664,12 @@ export function App() {
                     activeSection: 'encryption'
                   });
                   setSettingsOpen(true);
+                }}
+                onLeft={() => {
+                  // Leaving an encrypted project (slice 5-5): its access is
+                  // gone, so go back to the projects that remain.
+                  setSharingOpen(false);
+                  void handleGoHome();
                 }}
                 onClose={() => setSharingOpen(false)}
               />

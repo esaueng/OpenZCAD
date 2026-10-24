@@ -14,7 +14,9 @@
  * - **Dropped identities** (`dropUsers`, the owner's removal of a member
  *   with all of its leaves): only the owner states them, never itself. The
  *   member's `project_members` row goes in the same batch, with an access
- *   event; a member who already left (slice 5-5) has no row left to drop.
+ *   event, and so do its wraps of the project's keys and its assistant
+ *   consent (slice 5-5, `accessCleanupStatements`); a member who already
+ *   left has no row left to drop, and lost the rest when it left.
  * - **The roles a new epoch holds.** Every Commit carries its new epoch's
  *   GroupInfo, whose GroupContext lists the roles every member's MLS policy
  *   agreed on. The Worker compares them with the current epoch's (from the
@@ -35,6 +37,7 @@ import {
   type EpochContext
 } from '../src/lib/e2ee/mls/epochRoles';
 import { CHAINED, idField, invalid, record, refuse } from './e2eeProjects';
+import { accessCleanupStatements, removalEvent } from './e2eeProposals';
 
 type MemberRole = E2eeMlsRoleChange['role'];
 
@@ -50,6 +53,11 @@ export interface PreparedMembership {
   readonly dropped: readonly string[];
   /** Chained after the rest of the Commit's batch (each changes one row). */
   chained(now: string): D1PreparedStatement[];
+  /**
+   * After every chained statement: what a removed member kept (any number
+   * of rows), gated on its removal's access event having landed.
+   */
+  readonly tail: readonly D1PreparedStatement[];
   /** Explains a batch that did not land although the epoch was free. */
   explain(): Promise<never>;
 }
@@ -256,10 +264,26 @@ export async function prepareMembershipCommit(
         })
       ]
     : [];
+  // A removed member's wraps and consents go with its row (slice 5-5).
+  const removal = removalEvent({ encrypted: true, epoch });
+  const tail: D1PreparedStatement[] = [];
+  for (const id of drops) {
+    if (!droppedRows.get(id)) continue;
+    tail.push(
+      ...(await accessCleanupStatements(
+        db,
+        projectId,
+        id,
+        removal.landedSql,
+        removal.landedBinds(projectId, id)
+      ))
+    );
+  }
   return {
     gateSql,
     gateBinds,
     dropped: drops,
+    tail,
     chained: (now) => {
       const seconds = Math.floor(Date.parse(now) / 1000);
       const metadata = JSON.stringify({ encrypted: true, epoch });
@@ -301,7 +325,7 @@ export async function prepareMembershipCommit(
                SELECT ?, ?, ?, 'member-removed', ?, ?, ?
                WHERE ${CHAINED}`
             )
-            .bind(projectId, userId, id, role, seconds, metadata),
+            .bind(projectId, userId, id, role, seconds, removal.metadata),
           // The server's mirror of the identity the Commit drops.
           db
             .prepare(

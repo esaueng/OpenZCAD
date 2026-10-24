@@ -65,6 +65,13 @@ export interface EncryptedSharingClient {
     userId: string,
     role: ProjectMemberRole
   ): Promise<void>;
+  /** The owner's removal of a member (slice 5-5): an MLS Commit. */
+  remove(projectId: string, userId: string): Promise<void>;
+  /**
+   * This account leaves (slice 5-5): a SelfRemove proposal, on which the
+   * server drops its access at once.
+   */
+  leave(projectId: string): Promise<void>;
 }
 
 /** The page's client: crypto loads with the first encrypted dialog. */
@@ -107,6 +114,14 @@ export const pageEncryptedSharingClient: EncryptedSharingClient = {
     const { changeEncryptedMemberRole } =
       await import('../lib/e2ee/memberships');
     await changeEncryptedMemberRole(projectId, userId, role);
+  },
+  async remove(projectId, userId) {
+    const { removeEncryptedMember } = await import('../lib/e2ee/memberships');
+    await removeEncryptedMember(projectId, userId);
+  },
+  async leave(projectId) {
+    const { leaveEncryptedProject } = await import('../lib/e2ee/memberships');
+    await leaveEncryptedProject(projectId);
   }
 };
 
@@ -155,6 +170,8 @@ export interface ProjectSharingDialogProps {
   encryptedClient?: EncryptedSharingClient;
   /** Opens Settings › Encryption at this person's code comparison. */
   onVerifyContact?(userId: string): void;
+  /** This account left the encrypted project (slice 5-5). */
+  onLeft?(): void;
   onClose(): void;
 }
 
@@ -294,6 +311,7 @@ export function ProjectSharingDialog({
   encrypted = false,
   encryptedClient = pageEncryptedSharingClient,
   onVerifyContact,
+  onLeft,
   onClose
 }: ProjectSharingDialogProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -315,6 +333,7 @@ export function ProjectSharingDialog({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [anchor, setAnchor] = useState<PopoverAnchor | null>(null);
+  const [confirmingLeave, setConfirmingLeave] = useState(false);
   const actionOriginRef = useRef<HTMLElement | null>(null);
   useModalFocus(dialogRef, { autoFocus: true });
 
@@ -816,6 +835,25 @@ export function ProjectSharingDialog({
                           <option value="editor">Editor</option>
                         </select>
                       ) : null}
+                      {member && encrypted && isOwner ? (
+                        <button
+                          type="button"
+                          className="sharing-row-action"
+                          aria-label={`Remove ${name}`}
+                          disabled={interactionBusy}
+                          onClick={() =>
+                            void mutate(`remove:${member.userId}`, async () => {
+                              await encryptedClient.remove(
+                                projectId,
+                                member.userId
+                              );
+                              await refresh();
+                            })
+                          }
+                        >
+                          Remove
+                        </button>
+                      ) : null}
                       {member && !encrypted ? (
                         <>
                           <select
@@ -1049,6 +1087,60 @@ export function ProjectSharingDialog({
                 ? 'Connecting to project sharing. Your cloud access has not been confirmed yet.'
                 : 'Only the project owner can manage members and invitations.'}
             </p>
+          ) : null}
+          {!localProject && encrypted && isOwner ? (
+            <p className="sharing-empty">
+              Removing someone keeps them out of every later version. What they
+              already opened or saved stays with them.
+            </p>
+          ) : null}
+          {!localProject &&
+          encrypted &&
+          (role === 'editor' || role === 'viewer') ? (
+            confirmingLeave ? (
+              <div
+                className="sharing-leave"
+                role="group"
+                aria-label="Leave this project"
+              >
+                <p>
+                  You lose access to this project at once and are not told of
+                  later changes. To come back, the owner has to invite you
+                  again.
+                </p>
+                <button
+                  type="button"
+                  disabled={interactionBusy}
+                  onClick={() =>
+                    void mutate('leave', async () => {
+                      await encryptedClient.leave(projectId);
+                      setConfirmingLeave(false);
+                      onLeft?.();
+                    })
+                  }
+                >
+                  Leave project
+                </button>
+                <button
+                  type="button"
+                  disabled={interactionBusy}
+                  onClick={() => setConfirmingLeave(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <div className="sharing-leave-row">
+                <button
+                  type="button"
+                  className="sharing-row-action"
+                  disabled={interactionBusy}
+                  onClick={() => setConfirmingLeave(true)}
+                >
+                  Leave project…
+                </button>
+              </div>
+            )
           ) : null}
         </div>
 

@@ -65,6 +65,12 @@ export interface E2eeProjectGroupRecord {
   /** The signed epoch-zero GroupInfo every join archive starts from. */
   initialGroupInfo: string;
   updatedAt: string;
+  /**
+   * Proposals stored for the current epoch that no Commit settled yet
+   * (slice 5-5, migration 0039: a departing member's SelfRemove). Absent
+   * without the migration.
+   */
+  pendingProposals?: number;
 }
 
 export interface E2eeProjectGroupResponse {
@@ -122,6 +128,66 @@ export interface E2eeMlsCommitRequest {
    * list them (checked as for `roles`).
    */
   dropUsers?: string[];
+  /**
+   * The hashes (SHA-256 hex of the message) of the stored proposals of this
+   * epoch the Commit applies by reference (slice 5-5, migration 0039), and
+   * of those the committer's MLS engine refused. Together they must name
+   * every proposal still pending in the epoch, or the Commit is refused
+   * (409 `E2EE_PROPOSALS_PENDING`).
+   */
+  proposals?: string[];
+  rejectedProposals?: string[];
+}
+
+/** What a stored proposal asks for (slice 5-5): so far only leaving. */
+export type E2eeMlsProposalKind = 'self-remove';
+
+/** A proposal stored for another member to commit (migration 0039). */
+export interface E2eeMlsProposalRecord {
+  /** The key epoch it was sent in (key-epoch base + MLS epoch). */
+  keyEpoch: number;
+  /** SHA-256 hex of the message bytes. */
+  proposalHash: string;
+  kind: E2eeMlsProposalKind;
+  /** Null once the sender's account was erased. */
+  senderUserId: string | null;
+  senderDeviceId: string | null;
+  /** The MLS PublicMessage proposal. */
+  message: string;
+  createdAt: string;
+}
+
+/**
+ * `GET /api/e2ee/projects/:id/mls/proposals[?keyEpoch=]` (a member): the
+ * proposals still pending in that key epoch (the current one by default),
+ * those its Commit applied by reference (which every member must process
+ * before that Commit), and the members who left by one and hold no
+ * membership any more, for the owner to drop from the roles. Empty, with
+ * `available: false`, until migration 0039 is applied.
+ */
+export interface E2eeMlsProposalsResponse {
+  available: boolean;
+  keyEpoch: number;
+  proposals: E2eeMlsProposalRecord[];
+  committed: E2eeMlsProposalRecord[];
+  departed: string[];
+}
+
+/**
+ * `POST …/mls/proposals` (a member other than the owner): leave by a
+ * SelfRemove proposal sent in the group's current MLS `epoch`. The Worker
+ * drops the sender's access in the same batch (decision M4).
+ */
+export interface E2eeMlsProposalRequest {
+  epoch: number;
+  /** The sending device, certified in the caller's newest device list. */
+  deviceId: string;
+  kind: E2eeMlsProposalKind;
+  message: string;
+}
+
+export interface E2eeMlsProposalResponse {
+  proposal: E2eeMlsProposalRecord;
 }
 
 /** One member’s new role in an owner’s `setRoles` Commit (slice 5-4). */
