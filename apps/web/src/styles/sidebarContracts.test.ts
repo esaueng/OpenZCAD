@@ -72,10 +72,29 @@ describe('body rows on touch screens', () => {
 describe('model panels', () => {
   const stage = sheet('quiet-stage.css');
 
-  it('keeps the bottom-right corner out of the dock band', () => {
-    // The cube and the scale bar stay in the corner: the band the dock is
-    // projected onto stops above it, as the drawer's lane did.
-    expect(rule(stage, '\n.panel-dock-layer')).toMatch(
+  it('runs the docks the full height, the corners at their inner edges', () => {
+    // The layer is the whole viewer area (a window goes anywhere on it);
+    // its padding is the docks' band, down to the window's foot.
+    const layer = rule(stage, '\n.panel-dock-layer');
+    expect(layer).toMatch(/inset:\s*0/);
+    expect(layer).toMatch(/padding-top:\s*var\(--stage-top\)/);
+    expect(layer).toMatch(/padding-bottom:\s*var\(--island-gap\)/);
+    // So nothing in the bottom corners is ever under a docked panel: the
+    // cube (with the ruler on it) stands inside the instrument rail at the
+    // right dock's edge, and the readout at the left dock's.
+    expect(
+      rule(
+        stage,
+        '\n.workspace.column-layout .viewer-rail-stack,\n.workspace.column-layout .viewer-area.has-inspector .viewer-rail-stack'
+      )
+    ).toMatch(
+      /right:\s*calc\(var\(--lane-end\) - var\(--right-peek-w, 0px\)\)/
+    );
+    expect(rule(stage, '\n.viewport-readout')).toMatch(
+      /left:\s*calc\(var\(--island-gap\) \+ var\(--left-dock-w, 0px\)\)/
+    );
+    // The unpinned slot still stops above the corner, as the right lane does.
+    expect(rule(stage, '\n.panel-unpinned')).toMatch(
       /bottom:\s*calc\(var\(--stage-corner-h\) \+ var\(--island-gap\)\)/
     );
   });

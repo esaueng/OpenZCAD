@@ -851,6 +851,12 @@ export function ViewerShell({
       {!hideViewerToolbar && (
         <>
           <div className="viewer-rail-stack">
+            {/* The scale stands on the cube, so the corner is one stack
+                as narrow as the cube wherever the cube goes. */}
+            <ViewportScaleIndicator
+              scaleSinkRef={scaleIndicatorRef}
+              units={units}
+            />
             <OrientationWidget
               orientationRef={orientationRef}
               onSelectView={onView}
@@ -865,8 +871,12 @@ export function ViewerShell({
         </>
       )}
       {modeOverlay}
-      {/* The scale sits beside the orientation cube in every layout. */}
-      <ViewportScaleIndicator scaleSinkRef={scaleIndicatorRef} units={units} />
+      {hideViewerToolbar && (
+        <ViewportScaleIndicator
+          scaleSinkRef={scaleIndicatorRef}
+          units={units}
+        />
+      )}
     </section>
   );
 }

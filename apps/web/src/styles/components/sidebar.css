@@ -61,6 +61,35 @@
   box-shadow: none;
 }
 
+/* Find and the type filter on one row: the search takes what the type
+   picker, sized to its longest option, leaves. */
+.object-toolbar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.object-toolbar > .object-filter {
+  min-width: 0;
+  margin-bottom: 0;
+  gap: 6px;
+  padding: 0 6px;
+}
+
+.object-filter-search {
+  flex: 1 1 auto;
+}
+
+.object-filter-type {
+  flex: 0 0 auto;
+  max-width: 55%;
+}
+
+.object-toolbar .object-filter :is(select, input) {
+  min-height: 28px;
+  padding-block: 2px;
+}
+
 .param-list {
   display: grid;
   gap: 3px;
@@ -174,6 +203,11 @@
   height: 24px;
   min-width: 24px;
   padding: 0 2px;
+  /* The glyph alone: the native arrow took a third of the cell and made
+     every row read "– ⌄". The border on hover marks it as a picker. */
+  appearance: none;
+  text-align: center;
+  text-align-last: center;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -217,6 +251,14 @@
 
 .param-description::placeholder {
   color: var(--color-text-subtle);
+}
+
+/* An empty description only takes a row while its entry is being worked
+   in: a field under every exposed parameter doubled the table's height.
+   Focus anywhere in the row opens it, so Tab still reaches it from the
+   row's controls; a written description always shows. */
+.param-entry:not(:focus-within) > .param-description:placeholder-shown {
+  display: none;
 }
 
 /* Curation toggle: which parameters a Tweak workspace or share link offers.

@@ -1069,11 +1069,15 @@ export interface SeedPanelLayout {
   unpinned?: SeedPanelId | null;
   recent?: SeedPanelId[];
   weights?: Partial<Record<SeedPanelId, number>>;
-  /** View options: Hide all, Lock, Compact rows and the column width. */
+  /**
+   * View options: Hide all, Lock, Compact rows, Fit panels to content and
+   * the column width.
+   */
   options?: {
     hidden?: boolean;
     locked?: boolean;
     compact?: boolean;
+    fit?: boolean;
     width?: 'narrow' | 'regular' | 'wide';
   };
 }

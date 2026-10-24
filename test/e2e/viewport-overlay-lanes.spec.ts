@@ -228,13 +228,15 @@ for (const { width, compact, minLane, phoneBar } of [
 // not the fixed 520px that read as a sliver on a wide monitor. From 1600px
 // it also stands taller with larger type, and the hint above it keeps to the
 // bar's column; every lane offset reads the bar's height, so the stack
-// follows it. Narrower than 1252px the bar gives way before anything else:
-// it shrinks (to 292px at 1024px, dropping its ⌘K badge under 360px) rather
-// than run under the ruler in the corner, and only from 1011px down does the
-// ruler take the phone's bottom-left place and the bar the lane again.
+// follows it. The bar is centred between the docks (here one right column,
+// which runs the window's full height), and where they leave little room it
+// gives way before anything else: it shrinks (to 286px at 1024px, dropping
+// its ⌘K badge under 360px) rather than run under the cube and the ruler
+// standing on it, and only from 1011px down, where the cube steps up above
+// the search row, does the bar have the lane again (to the dock's edge).
 for (const { width, bar, height, type, key } of [
-  { width: 900, bar: 520, height: 38, type: '13px', key: true },
-  { width: 1024, bar: 292, height: 38, type: '13px', key: false },
+  { width: 900, bar: 468, height: 38, type: '13px', key: true },
+  { width: 1024, bar: 286, height: 38, type: '13px', key: false },
   { width: 1280, bar: 520, height: 38, type: '13px', key: true },
   { width: 1920, bar: 730, height: 42, type: '14px', key: true },
   { width: 2560, bar: 760, height: 42, type: '14px', key: true }

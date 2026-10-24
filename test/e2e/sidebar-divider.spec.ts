@@ -45,12 +45,12 @@ for (const width of [1440, 390]) {
     expect(columnBounds!.y).toBeGreaterThanOrEqual(stageTop - 0.5);
     // The instrument rail rises into place too; within 2px once it has,
     // since the translate lands on a half pixel for an odd height. It stands
-    // centred while it fits above the bottom-right corner — the band the
-    // panel docks stand in ends there — and past that it lifts just enough
-    // for its foot to stand on the band's: with Revisions and Diagnostics
-    // it is 522px tall, which at a phone width reached the view cube.
+    // centred while it fits above the bottom-right corner — the right lane
+    // beside it ends there — and past that it lifts just enough for its
+    // foot to stand on the lane's: with Revisions and Diagnostics it is
+    // 522px tall, which at a phone width reached the view cube.
     const rail = page.locator('.instrument-rail');
-    const band = await page.locator('.panel-dock-layer').boundingBox();
+    const band = await page.locator('.stage-right').boundingBox();
     const bandBottom = band!.y + band!.height;
     await expect
       .poll(async () => {

@@ -411,7 +411,11 @@ test('the Move menu places a panel by keyboard: new columns, a named column and 
 test('a gap resizes from its arrow keys and Home splits it evenly', async ({
   page
 }) => {
-  await openWorkspace(page, 'Gap keys', { right: [['history', 'parameters']] });
+  // Panels that fill their shares: an empty project's all hug their content.
+  await openWorkspace(page, 'Gap keys', {
+    right: [['history', 'parameters']],
+    options: { fit: false }
+  });
   const gap = page.getByRole('separator', {
     name: 'Resize History and Parameters'
   });

@@ -268,8 +268,10 @@ test('Pin docks, two pinned panels stack, and a closed panel reopens at home', a
 test('the gap between stacked panels resizes them, and a double-click splits them evenly', async ({
   page
 }) => {
+  // Panels that fill their shares: an empty project's all hug their content.
   await openWorkspace(page, 'Gap check', {
-    right: [['history', 'parameters']]
+    right: [['history', 'parameters']],
+    options: { fit: false }
   });
   const history = modelPanel(page, 'History');
   const parameters = modelPanel(page, 'Parameters');
@@ -323,7 +325,8 @@ test('a double-click split leaves the rest of the stack its height when a neighb
   page
 }) => {
   await openWorkspace(page, 'Split check', {
-    right: [['history', 'parameters', 'revisions']]
+    right: [['history', 'parameters', 'revisions']],
+    options: { fit: false }
   });
   const history = modelPanel(page, 'History');
   const parameters = modelPanel(page, 'Parameters');
@@ -667,10 +670,13 @@ for (const [label, layout] of [
 test('a five-panel column at a 390px window scrolls and keeps every header control reachable', async ({
   page
 }) => {
-  await openWorkspace(page, 'Short check', ALL_PANELS_DOCKED, {
-    width: 1280,
-    height: 390
-  });
+  // Each at its 90px minimum: none hugs a shorter content.
+  await openWorkspace(
+    page,
+    'Short check',
+    { ...ALL_PANELS_DOCKED, options: { fit: false } },
+    { width: 1280, height: 390 }
+  );
   const column = page.locator('.panel-column');
   await expect(column).toHaveClass(/is-scrolling/);
   const stage = await box(column);
@@ -1101,6 +1107,17 @@ for (const theme of ['dark', 'light'] as const) {
       await expect(header).toBeVisible();
       const controls = header.locator('button');
       await expect.poll(() => controls.count()).toBeGreaterThanOrEqual(2);
+      // The phone lane slides in: hit-test where the panel comes to rest,
+      // not a frame of its arrival.
+      await header.evaluate(
+        (element, selector) =>
+          Promise.all(
+            (element.closest(selector) as HTMLElement)
+              .getAnimations({ subtree: true })
+              .map((animation) => animation.finished)
+          ),
+        host
+      );
       for (const control of await controls.all()) {
         const target = await control.evaluate((button) => {
           const bounds = button.getBoundingClientRect();

@@ -102,9 +102,10 @@ describe('column and panel sizes', () => {
   it('stops the right lane above the bottom-right corner', () => {
     const css = sheet('quiet-stage.css');
     expect(rule(css, '.stage-right').bottom).toContain('var(--stage-corner-h)');
-    expect(px(rule(css, '.workspace.column-layout')['--stage-corner-h'])).toBe(
-      96
-    );
+    // The 88px cube 4px off the edge, and the ruler standing on it.
+    const root = rule(css, '.workspace.column-layout');
+    expect(root['--stage-corner-h']).toBe('calc(96px + var(--scale-stack-h))');
+    expect(px(root['--scale-stack-h'])).toBe(44);
   });
 
   it('keeps the activity log clear of the instrument rail', () => {

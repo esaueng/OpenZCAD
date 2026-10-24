@@ -688,48 +688,52 @@ export function ObjectsPanel({
 
   return (
     <>
-      <div className="object-filter">
-        <Layers size={13} aria-hidden="true" />
-        <select
-          aria-label="Filter objects by type"
-          value={objectFilter}
-          onChange={(event) => setObjectFilter(event.target.value)}
-        >
-          <option value="all">All objects</option>
-          <option value="bodies">Bodies</option>
-          <option value="sketches">Sketches</option>
-          <option value="planes">Planes</option>
-          <option value="axes">Axes</option>
-          <option value="images">Images</option>
-        </select>
-      </div>
-      <div className="object-filter">
-        <Search size={13} aria-hidden="true" />
-        <input
-          type="search"
-          aria-label="Find an object by name"
-          placeholder="Find an object"
-          value={objectQuery}
-          onChange={(event) => setObjectQuery(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Escape' && objectQuery) {
-              event.preventDefault();
-              event.stopPropagation();
-              setObjectQuery('');
-            }
-          }}
-        />
-        {foldersEditable && document && (
-          <button
-            type="button"
-            className="object-folder-new"
-            aria-label="New folder"
-            title="New folder — the selected bodies go into it"
-            onClick={createFolder}
+      {/* Find and the type filter share one row: two full-width rows of
+          controls stood above a list that was often one row long. */}
+      <div className="object-toolbar">
+        <div className="object-filter object-filter-search">
+          <Search size={13} aria-hidden="true" />
+          <input
+            type="search"
+            aria-label="Find an object by name"
+            placeholder="Find an object"
+            value={objectQuery}
+            onChange={(event) => setObjectQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape' && objectQuery) {
+                event.preventDefault();
+                event.stopPropagation();
+                setObjectQuery('');
+              }
+            }}
+          />
+          {foldersEditable && document && (
+            <button
+              type="button"
+              className="object-folder-new"
+              aria-label="New folder"
+              title="New folder — the selected bodies go into it"
+              onClick={createFolder}
+            >
+              <FolderPlus size={13} aria-hidden="true" />
+            </button>
+          )}
+        </div>
+        <div className="object-filter object-filter-type">
+          <Layers size={13} aria-hidden="true" />
+          <select
+            aria-label="Filter objects by type"
+            value={objectFilter}
+            onChange={(event) => setObjectFilter(event.target.value)}
           >
-            <FolderPlus size={13} aria-hidden="true" />
-          </button>
-        )}
+            <option value="all">All objects</option>
+            <option value="bodies">Bodies</option>
+            <option value="sketches">Sketches</option>
+            <option value="planes">Planes</option>
+            <option value="axes">Axes</option>
+            <option value="images">Images</option>
+          </select>
+        </div>
       </div>
       <div className="feature-list" role="list" aria-label="Objects">
         {geometryPending && (

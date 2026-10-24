@@ -198,6 +198,7 @@ describe('panel layout presets', () => {
         hidden: false,
         locked: false,
         compact: true,
+        fit: true,
         width: 'wide'
       });
       // A preset is a fresh arrangement: no homes, nothing unpinned.
@@ -1024,7 +1025,7 @@ describe('reopening a panel that had a column to itself', () => {
 
 describe('floating windows', () => {
   const stage: PanelStage = { width: 1200, height: 800 };
-  const { top, bottom, gap } = DEFAULT_PANEL_INSETS;
+  const { top } = DEFAULT_PANEL_INSETS;
 
   it('grows by 240px within the stage', () => {
     expect(grownFloatRect({ x: 100, y: 100, w: 300, h: 200 }, stage)).toEqual({
@@ -1036,11 +1037,11 @@ describe('floating windows', () => {
     // Near the bottom it moves up to grow.
     const low = grownFloatRect({ x: 100, y: 500, w: 300, h: 200 }, stage);
     expect(low.h).toBe(200 + FLOAT_GROWTH);
-    expect(low.y + low.h).toBe(stage.height - bottom);
+    expect(low.y + low.h).toBe(stage.height);
     // Never taller than the stage.
-    const tall = grownFloatRect({ x: 100, y: 100, w: 300, h: 600 }, stage);
-    expect(tall.h).toBe(stage.height - bottom - top);
-    expect(tall.y).toBe(top);
+    const tall = grownFloatRect({ x: 100, y: 100, w: 300, h: 900 }, stage);
+    expect(tall.h).toBe(stage.height);
+    expect(tall.y).toBe(0);
   });
 
   it('is clamped to the stage when shown, the stored window untouched', () => {
@@ -1053,17 +1054,32 @@ describe('floating windows', () => {
     const small: PanelStage = { width: 900, height: 390 };
     const geometry = computePanelGeometry(layout, small);
     const shown = geometry.floats[0]!;
-    expect(shown.x).toBeGreaterThanOrEqual(gap);
-    expect(shown.x + shown.w).toBeLessThanOrEqual(small.width - gap);
-    expect(shown.y).toBeGreaterThanOrEqual(top);
-    expect(shown.y + shown.h).toBeLessThanOrEqual(small.height - bottom);
+    expect(shown.x).toBeGreaterThanOrEqual(0);
+    expect(shown.x + shown.w).toBeLessThanOrEqual(small.width);
+    expect(shown.y).toBeGreaterThanOrEqual(0);
+    expect(shown.y + shown.h).toBeLessThanOrEqual(small.height);
     expect(layout.floats[0]).toMatchObject({ x: 1100, y: 700, w: 400, h: 600 });
     expect(clampFloatRect({ x: -50, y: -50, w: 300, h: 400 }, small)).toEqual({
-      x: gap,
-      y: top,
+      x: 0,
+      y: 0,
       w: 300,
-      h: small.height - bottom - top
+      h: small.height
     });
+  });
+
+  it('may stand anywhere on the stage, over the top islands too', () => {
+    const layout = popOutPanel(modelOnly(), 'history', {
+      x: 0,
+      y: 0,
+      w: 300,
+      h: 300
+    });
+    const shown = computePanelGeometry(layout, stage).floats[0]!;
+    // Above the docks' top inset (the top bar) and against the stage edge.
+    expect(shown).toMatchObject({ x: 0, y: 0, w: 300, h: 300 });
+    expect(shown.y).toBeLessThan(top);
+    const corner = moveFloat(layout, 'float-1', { x: 900, y: 500 }, stage);
+    expect(corner.floats[0]).toMatchObject({ x: 900, y: 500 });
   });
 
   it('resizes between 260 and 600px wide and from 160px tall', () => {
@@ -1079,11 +1095,11 @@ describe('floating windows', () => {
     expect(small.h).toBe(FLOAT_MIN_HEIGHT);
     const big = resizeFloat(layout, id, { w: 5000, h: 5000 }, stage).floats[0]!;
     expect(big.w).toBe(FLOAT_MAX_WIDTH);
-    expect(big.h).toBe(stage.height - bottom - 100);
+    expect(big.h).toBe(stage.height - 100);
     // Against the right edge the stage wins over the maximum.
     const edge = moveFloat(layout, id, { x: 800, y: 100 }, stage);
     expect(resizeFloat(edge, id, { w: 600, h: 300 }, stage).floats[0]!.w).toBe(
-      stage.width - gap - 800
+      stage.width - 800
     );
     expect(resizeFloat(layout, 'missing', { w: 400, h: 400 }, stage)).toBe(
       layout
@@ -1176,8 +1192,8 @@ describe('floating windows', () => {
     const moved = moveFloat(layout, 'float-1', { x: -400, y: 5000 }, stage);
     expect(moved.floats.at(-1)).toMatchObject({
       id: 'float-1',
-      x: gap,
-      y: stage.height - bottom - 300
+      x: 0,
+      y: stage.height - 300
     });
   });
 });
@@ -1436,6 +1452,103 @@ describe('gap resizing with a held panel', () => {
     const reopened = openPanel(closePanel(layout, 'parameters'), 'parameters');
     expect(reopened.right).toEqual(layout.right);
     expect(reopened.weights).toEqual(weights);
+  });
+});
+
+describe('docked panels hugging their content', () => {
+  const column = (): PanelLayout =>
+    layoutWith({ right: [['parameters', 'bodies', 'history']] });
+
+  it('draws a panel no taller than its natural height', () => {
+    const stage: PanelStage = { ...STAGE, naturals: { bodies: 120 } };
+    const plain = computePanelGeometry(column(), STAGE);
+    const hugged = computePanelGeometry(column(), stage);
+    expect(hugged.panels.bodies!.h).toBe(120);
+    // The others share what it leaves, and the column still fills.
+    const freed = plain.panels.bodies!.h - 120;
+    expect(hugged.panels.parameters!.h).toBeCloseTo(
+      plain.panels.parameters!.h + freed / 2,
+      6
+    );
+    expect(hugged.panels.history!.h).toBeCloseTo(
+      plain.panels.history!.h + freed / 2,
+      6
+    );
+    expect(hugged.columns[0]!.contentHeight).toBe(hugged.columns[0]!.h);
+  });
+
+  it('ends a column short when every panel hugs, giving the model the rest', () => {
+    const stage: PanelStage = {
+      ...STAGE,
+      naturals: { parameters: 200, bodies: 60, history: 150 }
+    };
+    const geometry = computePanelGeometry(column(), stage);
+    // Under 90px is that panel's minimum too.
+    expect(geometry.panels.bodies!.h).toBe(60);
+    expect(geometry.panels.history!.y).toBe(
+      geometry.dock.top + 200 + 60 + PANEL_STACK_GAP * 2
+    );
+    expect(geometry.columns[0]!.contentHeight).toBe(
+      200 + 60 + 150 + PANEL_STACK_GAP * 2
+    );
+    // Nothing to trade between two hugging panels.
+    expect(geometry.gaps.every((gap) => !gap.enabled)).toBe(true);
+  });
+
+  it('fills every share with Fit panels to content off', () => {
+    const plain = computePanelGeometry(column(), STAGE);
+    const unfit = computePanelGeometry(setOption(column(), 'fit', false), {
+      ...STAGE,
+      naturals: { parameters: 100, bodies: 60, history: 150 }
+    });
+    expect(unfit.panels).toEqual(plain.panels);
+    // A stored layout without the option fits, as a new one does.
+    expect(normalizePanelLayout({ right: [['history']] }).options.fit).toBe(
+      true
+    );
+    expect(
+      normalizePanelLayout({ right: [['history']], options: { fit: false } })
+        .options.fit
+    ).toBe(false);
+  });
+
+  it('never hugs a window: its panels fill the height it was given', () => {
+    const layout = popOutPanel(modelOnly(), 'history', {
+      x: 100,
+      y: 100,
+      w: 300,
+      h: 400
+    });
+    const geometry = computePanelGeometry(layout, {
+      ...STAGE,
+      naturals: { history: 120 }
+    });
+    expect(geometry.panels.history!.h).toBe(400);
+  });
+
+  it('drags a gap from the drawn heights, never past a panel’s content', () => {
+    const stage: PanelStage = { ...STAGE, naturals: { bodies: 150 } };
+    const layout = column();
+    const before = computePanelGeometry(layout, stage);
+    const gap = before.gaps.find((candidate) => candidate.above === 'bodies')!;
+    expect(gap.shown).toMatchObject({ above: 150, aboveMax: 150 });
+    // Growing the hugging panel is refused; shrinking it follows the pointer.
+    expect(
+      resizeGap(layout, 'bodies', 'history', 40, gap.pxPerWeight, gap.shown)
+    ).toBe(layout);
+    const after = computePanelGeometry(
+      resizeGap(layout, 'bodies', 'history', -40, gap.pxPerWeight, gap.shown),
+      stage
+    );
+    expect(after.panels.bodies!.h).toBeCloseTo(110, 6);
+    expect(after.panels.history!.h).toBeCloseTo(
+      before.panels.history!.h + 40,
+      6
+    );
+    expect(after.panels.parameters!.h).toBeCloseTo(
+      before.panels.parameters!.h,
+      6
+    );
   });
 });
 
@@ -2812,6 +2925,7 @@ describe('panel layout persistence', () => {
       hidden: false,
       locked: true,
       compact: false,
+      fit: true,
       width: 'regular'
     });
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();

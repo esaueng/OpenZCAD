@@ -244,11 +244,12 @@ test('a floating window moves on its grip’s arrow keys and resizes with Shift 
   // Narrowed past its minimum, it stops at 260px.
   for (let k = 0; k < 10; k++) await page.keyboard.press('Shift+ArrowLeft');
   await expect.poll(async () => (await box(window)).width).toBe(260);
-  // Moved past the stage's edge, it stops a gap inside it.
+  // Moved past the stage's edge, it stops at it: a window may go anywhere
+  // on the stage, as long as all of it stays on screen.
   for (let k = 0; k < 50; k++) await page.keyboard.press('ArrowLeft');
   await expect
     .poll(async () => (await box(window)).x - layer.x)
-    .toBeCloseTo(10, 0);
+    .toBeCloseTo(0, 0);
 
   const corner = window.getByRole('button', {
     name: 'Resize Parameters window'
@@ -260,7 +261,7 @@ test('a floating window moves on its grip’s arrow keys and resizes with Shift 
   await expect.poll(async () => (await box(window)).height).toBe(160);
   await expect(corner).toBeFocused();
   expect(await storedFloats(page)).toMatchObject([
-    { x: 10, w: 600, h: 160, panels: ['parameters'] }
+    { x: 0, w: 600, h: 160, panels: ['parameters'] }
   ]);
 });
 
@@ -269,7 +270,9 @@ test('a gap drag or a window resize the page loses is cancelled, and the next on
 }) => {
   await openWorkspace(page, 'Lost gestures', {
     ...LONE_WINDOW,
-    right: [['history', 'bodies']]
+    right: [['history', 'bodies']],
+    // Panels that fill their shares: an empty project's hug their content.
+    options: { fit: false }
   });
   const stored = () =>
     page.evaluate(() => {
@@ -354,7 +357,8 @@ function zOrder(page: Page) {
   return page.locator('.panel-float').evaluateAll((windows) =>
     windows
       .map((element) => ({
-        z: Number((element as HTMLElement).style.zIndex),
+        // Computed: the inline value is the stage's base plus the z-order.
+        z: Number(getComputedStyle(element).zIndex),
         panel: element.querySelector('.model-panel')?.getAttribute('aria-label')
       }))
       .sort((a, b) => a.z - b.z)

@@ -26,10 +26,14 @@ const VIEWPORTS = [
   { width: 1280, height: 720 }
 ] as const;
 
+// Every panel fills its share, so the specs below can read the presets'
+// proportions and drag the gaps: an empty project's panels all hug their
+// content otherwise.
 const FULL_WORKSPACE: SeedPanelLayout = {
   left: [['bodies', 'history']],
   right: [['parameters', 'revisions']],
-  weights: { revisions: 0.32 }
+  weights: { revisions: 0.32 },
+  options: { fit: false }
 };
 
 async function box(locator: Locator): Promise<Box> {
@@ -56,6 +60,7 @@ interface StoredLayout {
     hidden: boolean;
     locked: boolean;
     compact: boolean;
+    fit: boolean;
     width: string;
   };
 }
@@ -169,7 +174,7 @@ for (const viewport of VIEWPORTS) {
     await openWorkspace(
       page,
       `Presets ${at}`,
-      { ...FULL_WORKSPACE, options: { compact: true } },
+      { ...FULL_WORKSPACE, options: { fit: false, compact: true } },
       viewport
     );
     const menu = await viewOptions(page);
@@ -232,6 +237,7 @@ for (const viewport of VIEWPORTS) {
         hidden: false,
         locked: false,
         compact: true,
+        fit: false,
         width: 'regular'
       }
     });
@@ -333,7 +339,7 @@ for (const viewport of VIEWPORTS) {
             panels: ['diagnostics']
           }
         ],
-        options: { locked: true }
+        options: { fit: false, locked: true }
       },
       viewport
     );
