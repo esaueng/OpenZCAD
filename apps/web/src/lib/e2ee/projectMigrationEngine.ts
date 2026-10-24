@@ -37,6 +37,17 @@
  *    map names every retained save state.
  * 5. **Cutover**, then the purge, a bounded step per call, to completion.
  *
+ * **Shared projects** (slice 7-4, decision M7(a)), when the staging clients
+ * carry an invitation context: before anything is staged, the project's
+ * members get re-add invitations (`migrationMembers.ts`), and the engine
+ * goes no further until every member published a KeyPackage and the owner
+ * verified them (phase `members`, which lists who needs to do what); the
+ * project is not locked meanwhile. Once staged, and just before the
+ * cutover, each member is re-added by Welcome with their current role
+ * (phase `readding`). The cutover revokes the plaintext links and pending
+ * invitations (decision M8); the progress lists them, so the page can
+ * offer encrypted ones.
+ *
  * **Resumable.** The staged version log is the journal: on a resume the
  * engine verifies the staged head, reads its signed revision map (and
  * opens each staged save state, which hands this page their blob keys, so
@@ -61,6 +72,15 @@ import type { EncryptedDocumentsApi } from './encryptedDocumentsApi';
 import { EXPORT_ARTIFACT_KINDS, exportMetadata } from './encryptedProjectInfo';
 import type { EncryptedProjectStore } from './encryptedProjectStore';
 import type { MigrationPlaintextSource } from './migrationPlaintextSource';
+import type { InvitationContext } from './invitations';
+import {
+  MigrationMembersNotReadyError,
+  prepareMigrationMembers,
+  readdMigrationMembers,
+  requireMembersReady,
+  type MigrationMember,
+  type MigrationSharing
+} from './migrationMembers';
 import type { ProjectGroupContext } from './projectGroups';
 import {
   withMigrationLease,
@@ -82,6 +102,12 @@ export interface MigrationStagingClients {
   readonly viewStates: EncryptedViewStates;
   readonly groups: ProjectGroupContext;
   readonly documents: EncryptedDocumentsApi;
+  /**
+   * Slice 7-4: invitations over these clients (their leased fetcher), with
+   * which a shared project's members are re-added. Without it the engine
+   * leaves members to the Worker, which refuses a project that has any.
+   */
+  readonly invitations?: InvitationContext;
 }
 
 /** Where this page keeps the lease of a staging it may resume after a reload. */
@@ -107,6 +133,10 @@ export type MigrationPhase =
   | 'head'
   | 'details'
   | 'checking'
+  /** Slice 7-4: waiting for members to be ready; nothing is staged. */
+  | 'members'
+  /** Slice 7-4: adding the members back, just before the cutover. */
+  | 'readding'
   | 'cutover'
   | 'purging'
   | 'done'
@@ -142,6 +172,16 @@ export interface MigrationProgress {
    */
   readonly plaintextLocked?: boolean;
   readonly error?: MigrationError;
+  /** Slice 7-4: a shared project's members and where each stands. */
+  readonly members?: readonly MigrationMember[];
+  /**
+   * Slice 7-4 (decision M8): the plaintext links and pending invitations
+   * the cutover revoked, which the page offers to reissue encrypted.
+   */
+  readonly revoked?: {
+    readonly shareLinks: MigrationSharing['shareLinks'];
+    readonly invitations: MigrationSharing['invitations'];
+  };
 }
 
 export interface MigrationEngineDeps {
@@ -212,7 +252,16 @@ export function migrationErrorOf(error: unknown): MigrationError {
         code,
         retryable: false,
         message:
-          'This project is shared. Encrypting shared projects is not available yet; remove its members and pending invitations first.'
+          'This project has a pending encrypted invitation or a live encrypted share link, which encrypting it cannot carry over. Revoke them first.'
+      };
+    case E2EE_MIGRATION_CODES.membersNotReady:
+      return {
+        code,
+        retryable: true,
+        message:
+          error instanceof MigrationMembersNotReadyError
+            ? `${message} Encryption starts once everyone listed below is ready.`
+            : message
       };
     case E2EE_MIGRATION_CODES.leased:
       return {
@@ -435,6 +484,10 @@ export function createProjectMigrationEngine(
           report({ phase: 'paused' });
           throw error;
         }
+        if (error instanceof MigrationMembersNotReadyError) {
+          report({ phase: 'members', error: migrationErrorOf(error) });
+          throw error;
+        }
         if (
           codeOf(error) === E2EE_MIGRATION_CODES.leaseLost &&
           resumes < MAX_RESUMES
@@ -479,13 +532,28 @@ export function createProjectMigrationEngine(
       // An earlier attempt's cleanup is unfinished: finish it first.
       await stepAll(() => migrations.abandon(projectId));
     }
-    report({
-      phase: 'starting',
-      error: undefined,
-      // A staging left over (resumed, or another device's) holds it locked;
-      // an abandoned one no longer does.
-      plaintextLocked: status?.state === 'staging'
-    });
+    // A staging left over (resumed, or another device's) holds it locked;
+    // an abandoned one no longer does.
+    const plaintextLocked = status?.state === 'staging';
+    // Slice 7-4: a shared project's members are readied first, and
+    // nothing is staged (or locked) until every one of them is ready. A
+    // resumed staging that waits for a member still reads as locked.
+    const invitations = staging().invitations;
+    let sharing: MigrationSharing | null = null;
+    if (invitations) {
+      await check('members');
+      sharing = await prepareMigrationMembers(
+        invitations,
+        migrations,
+        projectId
+      );
+      report({
+        plaintextLocked,
+        ...(sharing.members.length ? { members: sharing.members } : {})
+      });
+      requireMembersReady(sharing);
+    }
+    report({ phase: 'starting', error: undefined, plaintextLocked });
     const { lease, migration } = await acquire(projectId, status);
     report({ plaintextLocked: true });
     const resuming = status?.state === 'staging';
@@ -500,11 +568,38 @@ export function createProjectMigrationEngine(
     const renewal = renewLease(projectId, lease);
     try {
       await stage(project, migration, check, report, current);
+      if (invitations && sharing?.members.length) {
+        await check('readd');
+        report({ phase: 'readding' });
+        sharing = await readdMigrationMembers(
+          invitations,
+          migrations,
+          projectId,
+          lease
+        );
+        report({ members: sharing.members });
+      } else if (invitations) {
+        // What the cutover revokes, as it stands now.
+        sharing = await prepareMigrationMembers(
+          invitations,
+          migrations,
+          projectId,
+          lease
+        );
+      }
       await check('cutover');
       report({ phase: 'cutover' });
       await migrations.cutover(projectId, lease);
     } finally {
       renewal.stop();
+    }
+    if (sharing && (sharing.shareLinks.length || sharing.invitations.length)) {
+      report({
+        revoked: {
+          shareLinks: sharing.shareLinks,
+          invitations: sharing.invitations
+        }
+      });
     }
     leases.delete(projectId);
     currentLease = null;

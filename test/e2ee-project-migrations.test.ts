@@ -602,7 +602,9 @@ describe('the migration lease', () => {
         })
       )
     ).toMatchObject({ status: 501 });
-    // Decision M7: a member, or a pending invitation, blocks it.
+    // Decision M7(a), since slice 7-4: a member who is not ready to be
+    // re-added blocks it (a pending plaintext invitation no longer does:
+    // the cutover revokes it, as it does plaintext links).
     srv.db
       .prepare(
         `INSERT INTO project_members
@@ -617,26 +619,12 @@ describe('the migration lease', () => {
           deviceId: 'owner_laptop'
         })
       )
-    ).toMatchObject({ status: 409, code: 'E2EE_MIGRATION_SHARED' });
+    ).toMatchObject({
+      status: 409,
+      code: 'E2EE_MIGRATION_MEMBERS_NOT_READY',
+      details: { members: [{ userId: OTHER, reason: 'not-invited' }] }
+    });
     srv.db.prepare('DELETE FROM project_members').run();
-    const now = Math.floor(Date.now() / 1000);
-    srv.db
-      .prepare(
-        `INSERT INTO project_invitations
-           (id, project_id, email, role, token_hash, invited_by_user_id,
-            created_at, expires_at)
-         VALUES ('inv_1', ?, 'friend@example.com', 'viewer', ?, ?, ?, ?)`
-      )
-      .run(plain.projectId, 'b'.repeat(64), OWNER, now - 10, now + 3600);
-    expect(
-      await errorOf(
-        api.start(plain.projectId, {
-          direction: 'encrypt',
-          deviceId: 'owner_laptop'
-        })
-      )
-    ).toMatchObject({ status: 409, code: 'E2EE_MIGRATION_SHARED' });
-    srv.db.prepare('DELETE FROM project_invitations').run();
     // So does a pending encrypted invitation (slice 5-3a), should one name
     // the project.
     insertEncryptedInvitation(srv, plain.projectId);
@@ -1203,20 +1191,24 @@ describe('the cutover', () => {
     srv.db
       .prepare('UPDATE projects SET document_version = document_version - 1')
       .run();
-    // Decision M7 holds at the cutover too.
-    const now = Math.floor(Date.now() / 1000);
+    // Decision M7(a) holds at the cutover too: a member who joined
+    // meanwhile (a plaintext invitation accepted during the staging) was
+    // never re-added.
     srv.db
       .prepare(
-        `INSERT INTO project_invitations
-           (id, project_id, email, role, token_hash, invited_by_user_id,
-            created_at, expires_at)
-         VALUES ('inv_pending', ?, 'friend@example.com', 'viewer', ?, ?, ?, ?)`
+        `INSERT INTO project_members
+           (project_id, user_id, role, added_by_user_id, created_at, updated_at)
+         VALUES (?, ?, 'viewer', ?, 1, 1)`
       )
-      .run(plain.projectId, 'c'.repeat(64), OWNER, now - 10, now + 3600);
+      .run(plain.projectId, OTHER, OWNER);
     expect(
       await errorOf(s.api.cutover(plain.projectId, s.lease))
-    ).toMatchObject({ status: 409, code: 'E2EE_MIGRATION_SHARED' });
-    srv.db.prepare('DELETE FROM project_invitations').run();
+    ).toMatchObject({
+      status: 409,
+      code: 'E2EE_MIGRATION_MEMBERS_NOT_READY',
+      details: { members: [{ userId: OTHER, reason: 'not-readded' }] }
+    });
+    srv.db.prepare('DELETE FROM project_members').run();
     const cut = await s.api.cutover(plain.projectId, s.lease);
     expect(cut.migration).toMatchObject({
       state: 'cutover',

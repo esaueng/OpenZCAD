@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import { Lock, Pause, Play, RefreshCcw, X } from 'lucide-react';
+import {
+  Copy,
+  Link2,
+  Lock,
+  Mail,
+  Pause,
+  Play,
+  RefreshCcw,
+  X
+} from 'lucide-react';
 import type { E2eeConfigResponse } from '@openzcad/shared';
 import { desktopFetch } from '../lib/desktopBridge';
 import {
@@ -7,6 +16,11 @@ import {
   type MigrationController
 } from '../lib/e2ee/projectMigrations';
 import type { MigrationProgress } from '../lib/e2ee/projectMigrationEngine';
+import {
+  migrationMemberAction,
+  type MigrationMember,
+  type MigrationMemberState
+} from '../lib/e2ee/migrationMembers';
 import { Group, Meter, Notice, SettingRow, Status } from './settingsControls';
 
 const MB = 1024 * 1024;
@@ -40,6 +54,10 @@ function phaseLabel(progress: MigrationProgress): string {
       return 'Encrypting files and details…';
     case 'checking':
       return 'Checking…';
+    case 'members':
+      return 'Waiting for members';
+    case 'readding':
+      return 'Adding members back…';
     case 'cutover':
       return 'Switching to encrypted storage…';
     case 'purging':
@@ -145,8 +163,14 @@ function MigrationPanel({ controller }: { controller: MigrationController }) {
             expire.
           </li>
           <li>
-            Shared projects cannot be encrypted yet. Original mesh files and
-            image snapshots stored with a project are not carried over.
+            A shared project is encrypted once every member has set up
+            encryption and you have compared codes with each of them. They are
+            added back with their current roles. Its share links and pending
+            invitations stop working; you can create encrypted ones afterwards.
+          </li>
+          <li>
+            Original mesh files and image snapshots stored with a project are
+            not carried over.
           </li>
           <li>
             While a project is being encrypted it opens read-only. Close it in
@@ -234,6 +258,195 @@ function MigrationPanel({ controller }: { controller: MigrationController }) {
   );
 }
 
+const MEMBER_STATE_LABELS: Record<MigrationMemberState, string> = {
+  'needs-encryption': 'Needs encryption',
+  'needs-invitation': 'Preparing',
+  'waiting-for-keys': 'Waiting for their keys',
+  verify: 'Compare codes',
+  ready: 'Ready',
+  readded: 'Added back'
+};
+
+const roleLabel = (role: MigrationMember['role']) =>
+  role === 'editor' ? 'Editor' : 'Viewer';
+
+/** Slice 7-4: a shared project's members and what each still needs. */
+function MemberReadiness({
+  name,
+  members
+}: {
+  name: string;
+  members: readonly MigrationMember[];
+}) {
+  return (
+    <ul
+      className="encryption-migration-members"
+      aria-label={`Members of ${name}`}
+    >
+      {members.map((member) => (
+        <li key={member.userId}>
+          <span className="encryption-migration-member">
+            <strong>{member.email ?? 'A member'}</strong>
+            {` · ${roleLabel(member.role)} · `}
+            <Status
+              tone={
+                member.state === 'ready' || member.state === 'readded'
+                  ? 'good'
+                  : 'warning'
+              }
+            >
+              {MEMBER_STATE_LABELS[member.state]}
+            </Status>
+          </span>
+          <span className="encryption-migration-member-action">
+            {migrationMemberAction(member)}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * Slice 7-4 (decision M8): after a shared project's cutover, encrypted
+ * links in place of the revoked plaintext ones, and encrypted invitations
+ * in place of the revoked pending ones.
+ */
+function RevokedFollowUps({
+  progress,
+  busy,
+  controller
+}: {
+  progress: MigrationProgress;
+  busy: boolean;
+  controller: MigrationController;
+}) {
+  const [working, setWorking] = useState(false);
+  const [links, setLinks] = useState<
+    { shareId: string; url: string; mode: string; pending: boolean }[]
+  >([]);
+  const [message, setMessage] = useState<string | null>(null);
+  const revoked = progress.revoked;
+  const linkCount = revoked?.shareLinks.length ?? 0;
+  const invitationCount = revoked?.invitations.length ?? 0;
+  if (!linkCount && !invitationCount && !links.length && !message) return null;
+  const run = async (task: () => Promise<string | null>) => {
+    setWorking(true);
+    setMessage(null);
+    try {
+      setMessage(await task());
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setWorking(false);
+    }
+  };
+  return (
+    <div className="encryption-migration-followups">
+      {linkCount ? (
+        <Notice
+          tone="info"
+          action={
+            <button
+              className="secondary"
+              type="button"
+              disabled={busy || working}
+              onClick={() =>
+                void run(async () => {
+                  const created = await controller.reissueLinks(
+                    progress.projectId
+                  );
+                  setLinks(
+                    created.map((link) => ({
+                      shareId: link.shareId,
+                      url: link.url,
+                      mode: link.mode,
+                      pending: link.pending.length > 0
+                    }))
+                  );
+                  return null;
+                })
+              }
+            >
+              <Link2 size={13} aria-hidden="true" />
+              Create encrypted link{linkCount === 1 ? '' : 's'}
+            </button>
+          }
+        >
+          {linkCount === 1
+            ? 'Its share link stopped working when it was encrypted.'
+            : `Its ${linkCount} share links stopped working when it was encrypted.`}{' '}
+          Encrypted links have new addresses; send them to whoever had the old
+          ones.
+        </Notice>
+      ) : null}
+      {invitationCount ? (
+        <Notice
+          tone="info"
+          action={
+            <button
+              className="secondary"
+              type="button"
+              disabled={busy || working}
+              onClick={() =>
+                void run(async () => {
+                  const result = await controller.reinvite(progress.projectId);
+                  return result.failed.length
+                    ? `${result.invited.length} invited; ${result.failed.length} could not be invited. Try again.`
+                    : `Invited ${result.invited.join(', ')} to the encrypted project.`;
+                })
+              }
+            >
+              <Mail size={13} aria-hidden="true" />
+              Invite again
+            </button>
+          }
+        >
+          {invitationCount === 1
+            ? `The pending invitation to ${revoked!.invitations[0]!.email} was revoked.`
+            : `${invitationCount} pending invitations were revoked.`}{' '}
+          Invite them again to the encrypted project.
+        </Notice>
+      ) : null}
+      {links.length ? (
+        <ul
+          className="encryption-migration-links"
+          aria-label={`New links of ${progress.name}`}
+        >
+          {links.map((link) => (
+            <li key={link.shareId}>
+              <code>{link.url}</code>
+              <button
+                className="secondary"
+                type="button"
+                onClick={() =>
+                  void navigator.clipboard
+                    ?.writeText(link.url)
+                    .catch(() => undefined)
+                }
+              >
+                <Copy size={13} aria-hidden="true" />
+                Copy
+              </button>
+              {link.pending ? (
+                <span className="encryption-migration-member-action">
+                  Confirm it in the project’s sharing dialog before visitors can
+                  open it.
+                </span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {message ? (
+        <p className="encryption-migration-member-action" role="status">
+          {message}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function ProjectRow({
   progress,
   busy,
@@ -243,7 +456,10 @@ function ProjectRow({
   busy: boolean;
   controller: MigrationController;
 }) {
-  const stopped = progress.phase === 'error' || progress.phase === 'paused';
+  const stopped =
+    progress.phase === 'error' ||
+    progress.phase === 'paused' ||
+    progress.phase === 'members';
   const active =
     progress.phase !== 'waiting' && progress.phase !== 'done' && !stopped;
   return (
@@ -280,9 +496,19 @@ function ProjectRow({
               onClick={() => void controller.run([progress.projectId])}
             >
               <RefreshCcw size={13} aria-hidden="true" />
-              {progress.phase === 'paused' ? 'Resume' : 'Retry'}
+              {progress.phase === 'paused'
+                ? 'Resume'
+                : progress.phase === 'members'
+                  ? 'Check again'
+                  : 'Retry'}
             </button>
-            {progress.cutOver ? null : (
+            {/* Nothing to cancel once cut over (only the purge remains),
+                nor while members are waited for before anything is staged;
+                a resumed staging that waits for a member can still be
+                dropped. */}
+            {progress.cutOver ||
+            (progress.phase === 'members' &&
+              !progress.plaintextLocked) ? null : (
               <button
                 className="secondary"
                 type="button"
@@ -297,7 +523,7 @@ function ProjectRow({
           </span>
         ) : null}
       </SettingRow>
-      {active || stopped ? (
+      {(active || stopped) && progress.phase !== 'members' ? (
         <Meter
           used={progress.bytesDone}
           limit={Math.max(progress.bytesTotal, 1)}
@@ -309,6 +535,16 @@ function ProjectRow({
         <p className="encryption-migration-error" role="alert">
           {progress.error.message}
         </p>
+      ) : null}
+      {progress.members?.length && progress.phase !== 'done' ? (
+        <MemberReadiness name={progress.name} members={progress.members} />
+      ) : null}
+      {progress.phase === 'done' ? (
+        <RevokedFollowUps
+          progress={progress}
+          busy={busy}
+          controller={controller}
+        />
       ) : null}
     </div>
   );

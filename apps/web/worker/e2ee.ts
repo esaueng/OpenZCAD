@@ -2272,7 +2272,9 @@ export async function handleE2eeRequest(
         projectsEnabled,
         db.authorization,
         invitations,
-        () => readBody(request)
+        () => readBody(request),
+        // Slice 7-4: re-adding a shared plaintext project's members.
+        { open: migrationEnabled, lease: migrationLease }
       );
     }
     if (isE2eeProjectPath(pathname)) {
