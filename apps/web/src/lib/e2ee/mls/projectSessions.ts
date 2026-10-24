@@ -208,7 +208,12 @@ export class MlsProjectSessions {
 
   /** The stored Commit the room has not ruled on, if any. */
   async pendingCommit(ref: MlsProjectRef): Promise<PendingCommit | null> {
+    const { guard } = this.sessionGuard();
+    guard();
     const stored = await this.store.loadSession(ref.userId, ref.projectId);
+    // A teardown during the read must not hand back the ended session's
+    // Commit for resending.
+    guard();
     if (stored && stored.deviceId !== ref.deviceId) return null;
     return stored?.pendingCommit ? copyPending(stored.pendingCommit) : null;
   }
@@ -252,15 +257,36 @@ export class MlsProjectSessions {
     return key;
   }
 
-  private async operate<T>(ref: MlsProjectRef, op: Operation<T>): Promise<T> {
+  /** Checks that this page's key session (and these sessions) still hold. */
+  private sessionGuard(): { current: () => boolean; guard: () => void } {
     const generation = this.generation;
     const revision = getKeySessionRevision();
     const current = () =>
       this.generation === generation && isCurrentKeySession(revision);
-    const guard = () => {
-      if (!current()) throw aborted();
+    return {
+      current,
+      guard: () => {
+        if (!current()) throw aborted();
+      }
     };
+  }
+
+  private async operate<T>(ref: MlsProjectRef, op: Operation<T>): Promise<T> {
+    const { current, guard } = this.sessionGuard();
     guard();
+    // Shared with every other operation on the account; account deletion
+    // (destructive sign-out, erasure) takes it exclusively.
+    return this.store.withAccountLock(ref.userId, 'shared', () =>
+      this.operateLocked(ref, op, current, guard)
+    );
+  }
+
+  private operateLocked<T>(
+    ref: MlsProjectRef,
+    op: Operation<T>,
+    current: () => boolean,
+    guard: () => void
+  ): Promise<T> {
     const id = JSON.stringify([ref.userId, ref.projectId]);
     return this.store.withProjectLock(ref.userId, ref.projectId, async () => {
       guard();

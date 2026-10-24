@@ -64,9 +64,20 @@ export interface MlsSessionStore {
   ): Promise<StoredMlsSession | null>;
   /**
    * Forget one account's MLS state on this device: its state key and every
-   * sealed session, so nothing here can reopen its projects.
+   * sealed session, so nothing here can reopen its projects. Holds the
+   * account lock exclusively, so it waits for project operations already
+   * running in any tab and removes what they wrote.
    */
   deleteAccount(userId: string): Promise<void>;
+  /**
+   * Every project operation holds its account's lock shared; deletion holds
+   * it exclusively. Taken before the project lock.
+   */
+  withAccountLock<T>(
+    userId: string,
+    mode: 'shared' | 'exclusive',
+    run: () => Promise<T>
+  ): Promise<T>;
   /** Serialize every operation on one project's MLS state across tabs. */
   withProjectLock<T>(
     userId: string,
@@ -121,12 +132,50 @@ function nextRecord(
 
 const projectLockName = (userId: string, projectId: string) =>
   `openzcad-e2ee-mls:${JSON.stringify([userId, projectId])}`;
+const accountLockName = (userId: string) =>
+  `openzcad-e2ee-mls-account:${JSON.stringify(userId)}`;
+
+/** A shared/exclusive account lock within one realm (the memory store). */
+function memoryAccountLocks() {
+  const locks = new Map<
+    string,
+    { tail: Promise<void>; readers: Set<Promise<void>> }
+  >();
+  const settle = (active: Promise<unknown>) =>
+    active.then(
+      () => {},
+      () => {}
+    );
+  return <T>(
+    userId: string,
+    mode: 'shared' | 'exclusive',
+    run: () => Promise<T>
+  ): Promise<T> => {
+    let lock = locks.get(userId);
+    if (!lock) {
+      lock = { tail: Promise.resolve(), readers: new Set() };
+      locks.set(userId, lock);
+    }
+    if (mode === 'shared') {
+      const active = lock.tail.then(run);
+      const settled = settle(active);
+      const readers = lock.readers;
+      readers.add(settled);
+      void settled.then(() => readers.delete(settled));
+      return active;
+    }
+    const active = Promise.all([lock.tail, ...lock.readers]).then(run);
+    lock.tail = settle(active);
+    return active;
+  };
+}
 
 /** Tests, and a store whose contexts share one JavaScript realm. */
 export function memoryMlsSessionStore(): MlsSessionStore {
   const keys = new Map<string, CryptoKey>();
   const sessions = new Map<string, StoredMlsSession>();
   const locks = new Map<string, Promise<void>>();
+  const withAccountLock = memoryAccountLocks();
   const id = (userId: string, projectId: string) =>
     JSON.stringify([userId, projectId]);
   return {
@@ -149,11 +198,13 @@ export function memoryMlsSessionStore(): MlsSessionStore {
       sessions.set(key, record);
       return copyRecord(record);
     },
-    deleteAccount: async (userId) => {
-      keys.delete(userId);
-      for (const [key, record] of sessions)
-        if (record.userId === userId) sessions.delete(key);
-    },
+    deleteAccount: (userId) =>
+      withAccountLock(userId, 'exclusive', async () => {
+        keys.delete(userId);
+        for (const [key, record] of sessions)
+          if (record.userId === userId) sessions.delete(key);
+      }),
+    withAccountLock,
     withProjectLock: (userId, projectId, run) => {
       const name = projectLockName(userId, projectId);
       const active = (locks.get(name) ?? Promise.resolve()).then(run);
@@ -288,18 +339,39 @@ export function indexedDbMlsSessionStore(): MlsSessionStore {
     deleteAccount: async (userId) => {
       // Without IndexedDB this store never held anything to forget.
       if (typeof indexedDB === 'undefined') return;
-      const db = await openDatabase();
-      await new Promise<void>((resolve, reject) => {
-        const tx = db.transaction([STATE_KEYS, SESSIONS], 'readwrite');
-        tx.oncomplete = () => resolve();
-        tx.onabort = tx.onerror = () =>
-          reject(tx.error ?? new Error('IndexedDB MLS transaction failed'));
-        tx.objectStore(STATE_KEYS).delete(userId);
-        // Every [userId, projectId] key: a string sorts below any array.
-        tx.objectStore(SESSIONS).delete(
-          IDBKeyRange.bound([userId], [userId, []])
+      const forget = async () => {
+        const db = await openDatabase();
+        await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction([STATE_KEYS, SESSIONS], 'readwrite');
+          tx.oncomplete = () => resolve();
+          tx.onabort = tx.onerror = () =>
+            reject(tx.error ?? new Error('IndexedDB MLS transaction failed'));
+          tx.objectStore(STATE_KEYS).delete(userId);
+          // Every [userId, projectId] key: a string sorts below any array.
+          tx.objectStore(SESSIONS).delete(
+            IDBKeyRange.bound([userId], [userId, []])
+          );
+        });
+      };
+      // Without Web Locks no project operation can run here (the locks
+      // refuse), so there is nothing to wait for.
+      if (typeof navigator === 'undefined' || !navigator.locks) return forget();
+      return navigator.locks.request(
+        accountLockName(userId),
+        { mode: 'exclusive' },
+        forget
+      );
+    },
+    withAccountLock: async (userId, mode, run) => {
+      if (typeof navigator === 'undefined' || !navigator.locks)
+        throw new Error(
+          'This browser cannot safely coordinate encrypted projects across tabs.'
         );
-      });
+      return navigator.locks.request(
+        accountLockName(userId),
+        { mode },
+        async () => run()
+      );
     },
     withProjectLock: async (userId, projectId, run) => {
       if (typeof navigator === 'undefined' || !navigator.locks)

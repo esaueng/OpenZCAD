@@ -324,4 +324,63 @@ describe('MLS project sessions', () => {
       expect(stored?.revision).toBe(when === 'during' ? 1 : 2);
     }
   );
+
+  it('make account deletion wait for an operation in flight, then remove its state', async () => {
+    const shared = memoryMlsSessionStore();
+    let entered!: () => void;
+    const writing = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // Another tab's group creation is mid-write when this tab signs out.
+    const store: MlsSessionStore = {
+      ...shared,
+      writeSessionIfCurrent: async (expected, next, isCurrent) => {
+        entered();
+        await held;
+        return shared.writeSessionIfCurrent(expected, next, isCurrent);
+      }
+    };
+    const { sessions } = tab(store);
+    const project = ref();
+    const creating = sessions.createGroup(
+      project,
+      device(alice, 'alice_laptop'),
+      directory
+    );
+    await writing;
+    let deleted = false;
+    const deleting = shared.deleteAccount(project.userId).then(() => {
+      deleted = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(deleted).toBe(false);
+    release();
+    await creating;
+    await deleting;
+    expect(await shared.loadSession(project.userId, project.projectId)).toBe(
+      null
+    );
+    expect(await shared.loadStateKey(project.userId)).toBeNull();
+  });
+
+  it('refuse to hand back a pending Commit after key-session teardown', async () => {
+    const store = memoryMlsSessionStore();
+    const project = ref();
+    const { sessions } = tab(store);
+    await sessions.createGroup(
+      project,
+      device(alice, 'alice_laptop'),
+      directory
+    );
+    await sessions.commit(project, directory);
+    expect(await sessions.pendingCommit(project)).not.toBeNull();
+    beginKeySessionTeardown();
+    await expect(sessions.pendingCommit(project)).rejects.toMatchObject({
+      name: 'AbortError'
+    });
+  });
 });

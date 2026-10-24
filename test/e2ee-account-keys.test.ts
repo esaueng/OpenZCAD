@@ -2323,6 +2323,38 @@ describe('profile deletion', () => {
     forget.mockRestore();
   });
 
+  it('still forgets the MLS state when device-key cleanup fails after erasure', async () => {
+    const srv = server();
+    const { laptop } = await setUp(srv);
+    const mls = mlsStores.memoryMlsSessionStore();
+    await mls.getOrCreateStateKey(
+      USER,
+      await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+        'encrypt'
+      ])
+    );
+    const forget = vi
+      .spyOn(mlsStores, 'indexedDbMlsSessionStore')
+      .mockReturnValue(mls);
+    await expect(
+      eraseAccountWithKeyCleanup({
+        userId: USER,
+        store: {
+          ...laptop.store,
+          forgetErasedIdentity: async () => {
+            throw new Error('Device database unavailable');
+          }
+        },
+        isCurrentSession: () => true,
+        erase: async () => ({ signedOut: true }),
+        onSignedOut: () => {}
+      })
+    ).rejects.toThrow('Device database unavailable');
+    // The separate MLS database was still cleared.
+    expect(await mls.loadStateKey(USER)).toBeNull();
+    forget.mockRestore();
+  });
+
   it.each(['profile', 'all'] as const)(
     'allows fresh encryption setup after confirmed %s erasure',
     async (scope) => {
