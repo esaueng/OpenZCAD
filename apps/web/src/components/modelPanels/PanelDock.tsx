@@ -306,7 +306,20 @@ export function PanelDock({
   }, [measured]);
 
   const shown: PanelLayoutPreview = dragView?.shown ?? localLayout ?? layout;
-  const geometry = stage && !hidden ? computePanelGeometry(shown, stage) : null;
+  // A drag's landing slot hugs what the dragged panel will: the preview is
+  // drawn as the drop will be, not taller.
+  const shownStage =
+    stage && dragView && stage.naturals?.[dragView.id] !== undefined
+      ? {
+          ...stage,
+          naturals: {
+            ...stage.naturals,
+            [PANEL_SLOT]: stage.naturals[dragView.id]
+          }
+        }
+      : stage;
+  const geometry =
+    shownStage && !hidden ? computePanelGeometry(shown, shownStage) : null;
   const docked = geometry && !geometry.phone ? geometry : null;
   // The unpinned panel's width stays what it was while a panel is dragged:
   // lifting the unpinned panel out must not slide the right lane over.

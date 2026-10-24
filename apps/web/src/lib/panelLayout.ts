@@ -263,7 +263,7 @@ export interface PanelStage {
    * never drawn taller (it hugs its content and its column's other panels
    * take the rest); a panel without one fills its share.
    */
-  naturals?: Partial<Record<PanelId, number>>;
+  naturals?: Partial<Record<PanelEntry, number>>;
 }
 
 const DEFAULT_OPTIONS: PanelLayoutOptions = {
@@ -2063,10 +2063,11 @@ export function computePanelGeometry(
 
   // A docked panel hugs its content (Fit panels to content); a window keeps
   // the height it was given, so its panels fill it.
+  // A drop preview's slot carries the dragged panel's natural height
+  // (`naturals[PANEL_SLOT]`), so the preview is drawn as the drop will be.
   const capOf = (entry: PanelEntry): number =>
-    (layout.options.fit && entry !== PANEL_SLOT
-      ? stage.naturals?.[entry]
-      : undefined) ?? Number.POSITIVE_INFINITY;
+    (layout.options.fit ? stage.naturals?.[entry] : undefined) ??
+    Number.POSITIVE_INFINITY;
   const stack = (
     entries: PanelEntry[],
     rect: Rect,

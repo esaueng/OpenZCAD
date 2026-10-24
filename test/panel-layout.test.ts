@@ -1568,6 +1568,31 @@ describe('docked panels hugging their content', () => {
     expect(flexible.enabled).toBe(true);
   });
 
+  it('draws a drop preview’s slot no taller than the dragged panel', () => {
+    // Revisions (60px of content) dragged into a column with History: the
+    // slot hugs what the drop will, and History keeps the rest.
+    const base = layoutWith({
+      right: [['history']],
+      left: [['revisions']]
+    });
+    const preview = previewLayout(
+      beginDrag(base, 'revisions'),
+      'revisions',
+      { kind: 'column', side: 'right', column: 0, index: 1 },
+      STAGE
+    )!;
+    const geometry = computePanelGeometry(preview, {
+      ...STAGE,
+      naturals: { revisions: 60, [PANEL_SLOT]: 60 }
+    });
+    const dock = geometry.dock.bottom - geometry.dock.top;
+    expect(geometry.panels[PANEL_SLOT]!.h).toBe(60);
+    expect(geometry.panels.history!.h).toBeCloseTo(
+      dock - 60 - PANEL_STACK_GAP,
+      6
+    );
+  });
+
   it('never hugs a window: its panels fill the height it was given', () => {
     const layout = popOutPanel(modelOnly(), 'history', {
       x: 100,
