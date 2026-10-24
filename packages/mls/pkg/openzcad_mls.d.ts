@@ -41,7 +41,7 @@ export class MlsSession {
     insecureSkipSendChecksForTests(skip: boolean): void;
     inspectGroupInfo(group_info: Uint8Array): string;
     inspectWelcome(welcome: Uint8Array): string;
-    join(welcome: Uint8Array): string;
+    join(welcome: Uint8Array, initial_group_info: Uint8Array, records: Uint8Array[]): string;
     keyPackage(): Uint8Array;
     process(message: Uint8Array): string;
     projectKey(): Uint8Array;
@@ -51,7 +51,7 @@ export class MlsSession {
     /**
      * `remove`: a stale leaf of this user to replace in the same Commit.
      */
-    rejoin(group_info: Uint8Array, psk_epoch: bigint, psk: Uint8Array, remove?: number | null): string;
+    rejoin(group_info: Uint8Array, psk_epoch: bigint, psk: Uint8Array, remove: number | null | undefined, initial_group_info: Uint8Array, records: Uint8Array[]): string;
     rejoinPsk(): string;
     /**
      * Replace the verified device directory (JSON, see `DeviceDirectory`).
@@ -103,14 +103,14 @@ export interface InitOutput {
     readonly mlssession_insecureSkipSendChecksForTests: (a: number, b: number) => void;
     readonly mlssession_inspectGroupInfo: (a: number, b: number, c: number, d: number) => void;
     readonly mlssession_inspectWelcome: (a: number, b: number, c: number, d: number) => void;
-    readonly mlssession_join: (a: number, b: number, c: number, d: number) => void;
+    readonly mlssession_join: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly mlssession_keyPackage: (a: number, b: number) => void;
     readonly mlssession_process: (a: number, b: number, c: number, d: number) => void;
     readonly mlssession_projectKey: (a: number, b: number) => void;
     readonly mlssession_proposeAdd: (a: number, b: number, c: number, d: number) => void;
     readonly mlssession_proposeSelfRemove: (a: number, b: number) => void;
     readonly mlssession_proposeUpdate: (a: number, b: number) => void;
-    readonly mlssession_rejoin: (a: number, b: number, c: number, d: number, e: bigint, f: number, g: number, h: number) => void;
+    readonly mlssession_rejoin: (a: number, b: number, c: number, d: number, e: bigint, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => void;
     readonly mlssession_rejoinPsk: (a: number, b: number) => void;
     readonly mlssession_setDirectory: (a: number, b: number, c: number, d: number) => void;
     readonly mlssession_signatureKey: (a: number, b: number) => void;

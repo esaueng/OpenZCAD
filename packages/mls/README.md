@@ -40,7 +40,7 @@ const sealed = await session.seal(stateKey); // non-extractable AES-256-GCM
 | Incoming proposals and Commits          | `process`                                                                                |
 | Rejoin by external Commit               | `groupInfo`, `inspectGroupInfo`, `rejoin`, `confirmRejoin`, `discardRejoin`, `rejoinPsk` |
 | Keys and codes                          | `projectKey`, `epochAuthenticator`                                                       |
-| History archive                         | `EpochChange.epochRecord`, `decodeEpochRecord`                                           |
+| History archive                         | `EpochChange.epochRecord`, `decodeEpochRecord`, `JoinArchive`                                           |
 | Verify members before joining           | `inspectWelcome`, `leafCertificationPayload`                                             |
 | Persist                                 | `seal`, `Mls.open`                                                                       |
 
@@ -90,9 +90,33 @@ A refusal is an `MlsError` of kind `policy` whose `reasons` carry stable codes.
   An external Commit removes at most one leaf, so the replacement removes the
   rest in its next Commit; until then they can sign nothing anyone accepts.
 
-Leaf-removal records come from the group's own Commits. A member who joins
-by Welcome, or rejoins, starts from the records in the committer's signed
-GroupInfo (extension 0xF0A3); records can only make rejoin stricter.
+Leaf-removal records come from the group's own Commits. A signature on the
+committer's GroupInfo (extension 0xF0A3) alone cannot prove those records are
+complete: an inviter could omit a removal and make a joiner accept a stale
+rejoin or removed signing key that established members reject (#817).
+
+Both `join(welcome, archive)` and `rejoin(groupInfo, { psk, archive, ... })`
+therefore require a `JoinArchive`: retain the signed epoch-zero `groupInfo()`
+at group creation, then append every accepted `EpochChange.epochRecord` for
+epochs 1 through the joining epoch, including the Commit producing the Welcome.
+The app decrypts these records before calling the package. The verifier uses
+mls-rs's public observer to authenticate proposals and Commits, checks each
+record's context and tree and the final joining context/tree, and derives
+removals from the applied proposals and prior roster. Carried removals must
+match exactly, independent of order or duplicate entries; missing history,
+omitted records and fabricated records fail closed. Failed joins restore the
+session and its one-use KeyPackages, so a valid invitation can be retried.
+
+This authenticates the public transcript, not historical device-list policy,
+PSK possession or the secret key schedule. Live credential, role, and rejoin
+checks still run unchanged. Today's revocations do not retroactively invalidate
+old archived signatures. Full replay from epoch zero is currently required;
+checkpoint-based replay remains future work. A malicious inviter can still
+present an entirely different group fork to a new device without a prior pin;
+this is the existing fork-consistency limit, not proof of the same history.
+The archive argument is a required API change in this private package, which
+has no application callers yet. EpochRecordV1 and sealed-state formats stay
+unchanged; no migration is needed.
 
 ## Build and test
 
