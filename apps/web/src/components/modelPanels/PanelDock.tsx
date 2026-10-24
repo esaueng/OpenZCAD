@@ -554,7 +554,8 @@ export function PanelDock({
     if (height === null) return;
     event.preventDefault();
     event.stopPropagation();
-    const next = resizeColumn(layout, panels, height, dockHeight);
+    // A step is exact: no snap, so a step up from a full column shortens it.
+    const next = resizeColumn(layout, panels, height, dockHeight, 0);
     if (next !== layout) onLayout(next);
   };
 

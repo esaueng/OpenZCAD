@@ -378,6 +378,18 @@ test('a docked column fills the dock, its foot shortens it, and a second panel f
     .poll(async () => (await box(objects)).height)
     .toBeCloseTo(full.height, 0);
   await expect(foot).toHaveAttribute('aria-valuenow', '100');
+
+  // From the keyboard too: a step up from full shortens it by exactly 10px,
+  // and End fills the dock again.
+  await foot.focus();
+  await page.keyboard.press('ArrowUp');
+  await expect
+    .poll(async () => (await box(objects)).height)
+    .toBeCloseTo(full.height - 10, 0);
+  await page.keyboard.press('End');
+  await expect
+    .poll(async () => (await box(objects)).height)
+    .toBeCloseTo(full.height, 0);
 });
 
 test('a locked shortened column’s foot is no control and passes the pointer to the model', async ({

@@ -384,15 +384,18 @@ export function columnMinimum(count: number): number {
 
 /**
  * Sets how tall a docked column of `panels` is drawn, given the dock's
- * height. Within `COLUMN_FILL_SNAP` of the dock's foot (or past it) the
- * column fills the dock again; it never goes under its panels' minimums.
- * Locked, nothing changes.
+ * height. Within `snap` of the dock's foot (or past it) the column fills
+ * the dock again; it never goes under its panels' minimums. A drag snaps
+ * by `COLUMN_FILL_SNAP`; a keyboard step passes 0, or a step up from a
+ * full column would land inside the snap and never shorten it. Locked,
+ * nothing changes.
  */
 export function resizeColumn(
   layout: PanelLayout,
   panels: readonly PanelId[],
   height: number,
-  dockHeight: number
+  dockHeight: number,
+  snap = COLUMN_FILL_SNAP
 ): PanelLayout {
   const key = columnKey(panels);
   if (
@@ -403,7 +406,7 @@ export function resizeColumn(
   ) {
     return layout;
   }
-  const fills = height >= dockHeight - COLUMN_FILL_SNAP;
+  const fills = height >= dockHeight - Math.max(0, snap);
   const next = fills
     ? null
     : Math.round(clamp(height, columnMinimum(panels.length), dockHeight));
@@ -2368,7 +2371,8 @@ export const DROP_SUPPRESSED = 'suppressed';
  * `PANEL_RAIL_DRAG_CLEARANCE`. Pass the geometry of the layout without the preview (from
  * `beginDrag`), so the preview making room cannot move the target away from
  * the cursor. Windows win over docks, the topmost first; then the docked
- * columns (a parked column is not a target); then each side's new-column span, which covers the rail plus one
+ * columns (a parked column is not a target, nor the model under a shortened
+ * one); then each side's new-column span, which covers the rail plus one
  * column so the rail sliding inward while it is hovered cannot flicker it.
  */
 export function hitTest(
@@ -2413,6 +2417,10 @@ export function hitTest(
     return null;
   }
   for (const column of geometry.columns) {
+    // Under a shortened column is the model: a drop there floats.
+    if (column.shortened && point.y > column.y + column.h + DOCK_HIT_SLACK) {
+      continue;
+    }
     if (point.x >= column.x && point.x <= column.x + column.w) {
       return {
         kind: 'column',

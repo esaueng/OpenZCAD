@@ -1777,6 +1777,46 @@ describe('column heights', () => {
     expect(loadPanelLayout(storage).columnHeights).toEqual({ bodies: 300 });
   });
 
+  it('shortens a full column by an exact step when the snap is off', () => {
+    const dock = dockOf(single());
+    // A drag step of 10px up lands inside the snap and still fills; a
+    // keyboard step (no snap) shortens the column by exactly that.
+    expect(
+      resizeColumn(single(), ['bodies'], dock - 10, dock).columnHeights
+    ).toEqual({});
+    const stepped = resizeColumn(single(), ['bodies'], dock - 10, dock, 0);
+    expect(stepped.columnHeights).toEqual({ bodies: dock - 10 });
+    // Stepping back down to the foot fills the dock again.
+    expect(
+      resizeColumn(stepped, ['bodies'], dock, dock, 0).columnHeights
+    ).toEqual({});
+  });
+
+  it('floats a drop on the model under a shortened column', () => {
+    const layout = layoutWith({
+      right: [['bodies']],
+      columnHeights: { bodies: 300 }
+    });
+    const geometry = computePanelGeometry(layout, STAGE);
+    const column = geometry.columns[0]!;
+    const x = column.x + column.w / 2;
+    expect(hitTest(geometry, { x, y: column.y + 100 })).toMatchObject({
+      kind: 'column',
+      side: 'right',
+      column: 0
+    });
+    // Just past its foot still docks, as the dock's own ends do.
+    expect(hitTest(geometry, { x, y: column.y + column.h + 4 })).toMatchObject({
+      kind: 'column'
+    });
+    expect(hitTest(geometry, { x, y: column.y + column.h + 60 })).toBeNull();
+    // A full column takes drops down to the dock's foot.
+    const full = computePanelGeometry(single(), STAGE);
+    expect(hitTest(full, { x, y: full.dock.bottom - 10 })).toMatchObject({
+      kind: 'column'
+    });
+  });
+
   it('is a rearrangement no preset matches, and a preset fills every column', () => {
     const layout = applyPreset(defaultPanelLayout(), 'review');
     expect(matchingPreset(layout)).toBe('review');
