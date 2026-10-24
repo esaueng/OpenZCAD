@@ -915,8 +915,11 @@ impl Session {
             .rejoin_backup
             .clone()
             .ok_or_else(|| Error::state("no rejoin is pending"))?;
-        let result = (|| {
-            let records = verify_history(&self.project_id, self.group()?.context(), history)?;
+        // The room may already have accepted this external Commit. A bad
+        // download must leave its provisional key/state available for retry;
+        // the old PSK might no longer be eligible to submit another Commit.
+        let records = verify_history(&self.project_id, self.group()?.context(), history)?;
+        let result: Res<LeafRemovals> = (|| {
             let mut validation = Session::import(&backup, &self.project_id)?;
             validation.policy.directory.set(self.policy.directory.get());
             validation.rejoin_provisional(
@@ -935,7 +938,9 @@ impl Session {
                 self.write()
             }
             Err(error) => {
-                self.restore_from(&backup)?;
+                if error.kind == "policy" {
+                    self.restore_from(&backup)?;
+                }
                 Err(error)
             }
         }

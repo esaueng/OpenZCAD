@@ -1084,7 +1084,9 @@ this decision rests on is
   the archive under the new epoch's exporter. The rejoiner verifies that full
   chain and rechecks its original request against the authenticated pre-Commit
   cutoffs before it can confirm. Normal group operations stay blocked, including
-  after sealed-state restoration; rejection or discard restores the old state.
+  after sealed-state restoration. Malformed archive downloads preserve an
+  accepted provisional rejoin for retry; verified policy rejection or explicit
+  discard restores the old state.
   A solo recovery uses the account-key-wrapped historical project keys to
   decrypt the archive or follows the existing reset rules. The room relays
   ciphertext and never needs the plaintext membership transcript.

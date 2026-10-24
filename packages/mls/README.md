@@ -69,8 +69,10 @@ epoch's exporter. The joiner decrypts it with `archiveKey()`, calls
 `confirmRejoin()` after room acceptance. Completion also rechecks the original
 request against the authenticated pre-Commit removal cutoffs; the replacement
 in this Commit does not count as its own prior removal. `confirmRejoin()`
-refuses an unverified archive. Rejected or discarded joins restore all state,
-including across `seal`/`open`. If no established member can supply the archive,
+refuses an unverified archive. A malformed archive leaves the provisional
+external rejoin available for retry, including across `seal`/`open`, because
+the room may already have accepted its Commit. A verified policy rejection
+or explicit discard restores the prior state. If no established member can supply the archive,
 recover the account-key-wrapped project keys and use `rejoin(..., { history })`,
 or the ADR's recovery Add/reset path; missing history is never accepted.
 

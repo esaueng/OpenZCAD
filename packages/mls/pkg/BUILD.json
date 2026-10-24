@@ -5,7 +5,7 @@
   "files": {
     "openzcad_mls.d.ts": "80189f90f6b52952c5493354683f62f9ce613d0488c795808e5de8badd5627c9",
     "openzcad_mls.js": "8a696bc9e056b7af61c788e67b2c54dbff78fd740fc5247381ace1773f260581",
-    "openzcad_mls_bg.wasm": "71ef3cb334b824ea3b42980826d1d377c27b7da9d4c5043d71f4391e9e021758",
+    "openzcad_mls_bg.wasm": "cea8cf8ed6d5fd5bab016800f3348c27e83712fec1b7b4667ac4a548590c262c",
     "openzcad_mls_bg.wasm.d.ts": "4a740c11658337eafa252d0baf1dd4790692b5e1d64f24df158c335ceb6ee2c1",
     "snippets/mls-rs-core-f99cdecbb456b09c/inline0.js": "6739cfe5b7f2a23d65a1c2a0912a691701e50793dca7c0f95c89dae38861c2f6"
   },
@@ -19,7 +19,7 @@
     "crate/src/lib.rs": "a947c1404af9597b378bbb711bf96cacb76fc1848732c96036917e1235dc34c6",
     "crate/src/model.rs": "4e264b2f2cf220c29e6c34f85762b0a4f9005b3f99515270e943e74f083f3eb2",
     "crate/src/policy.rs": "4c574edd530eb2e96ab4efd2dee818d470008d6eea6a3171aca9d2ffd317f155",
-    "crate/src/session.rs": "1b4c06df1d28486a862aa833dc7916fc592abf7c16d5ee21e05159c2807db833",
+    "crate/src/session.rs": "54bbef351f4d75845eb6f8ccee1b2d53acc5a8c64b035e7c65c3a5cde375d476",
     "crate/src/storage.rs": "3457d58a90e2971e1260b7850a01d3e9c2378f38b169ee0a7fdcf425d4ef3183"
   }
 }

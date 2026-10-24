@@ -410,7 +410,7 @@ async function createProject(
   rejoinWindow?: number
 ): Promise<EpochChange> {
   const change = await owner.session.createGroup(
-    rejoinWindow ? { rejoinWindow } : {}
+    rejoinWindow === undefined ? {} : { rejoinWindow }
   );
   world.remember(change);
   await world.storePsks([owner]);
@@ -1982,6 +1982,76 @@ const stagedArchives = suite({
         await fresh.session.confirmRejoin();
         await world.storePsks([fresh, ...members]);
         return agree([fresh, ...members]);
+      }
+    },
+    {
+      name: 'an accepted rejoin survives bad archive downloads after its old PSK expires, and reopens for retry',
+      async run({ world }) {
+        const solo = new World(
+          world.mls,
+          project('archive-retry-minimum-window')
+        );
+        const owner = await solo.device('A', 'owner');
+        await createProject(solo, owner, 1);
+        assert(
+          (await owner.session.status()).roles?.rejoinWindow === 1,
+          'minimum retention window'
+        );
+        const fresh = await solo.device('A', 'rejoining-device');
+        const originalPsk = solo.newestPsk('A');
+        const result = await fresh.session.beginRejoin(
+          await owner.session.groupInfo(),
+          { psk: originalPsk }
+        );
+        const accepted = await owner.session.process(result.commit);
+        assert(
+          accepted.kind === 'commit',
+          'the room advanced to the external Commit'
+        );
+        solo.remember(accepted.change);
+        const encrypted = await encryptHistory(
+          await owner.session.projectKey(),
+          solo.history()
+        );
+        const archiveKey = await fresh.session.archiveKey();
+        const malformed = solo.history();
+        malformed[1] = new Uint8Array([...malformed[1]!, 0]);
+        const later = await advance(solo, owner, []);
+        const stranded = await solo.device('A', 'retry-with-old-psk');
+        const currentInfo = await owner.session.groupInfo();
+        await refused(
+          () =>
+            stranded.session.rejoin(currentInfo, {
+              psk: originalPsk,
+              history: solo.history()
+            }),
+          ['rejoin-psk-outside-window']
+        );
+        for (const bad of [[], malformed]) {
+          await failsWith(() => fresh.session.completeRejoin(bad), 'input');
+          const status = await fresh.session.status();
+          assert(
+            status.inGroup && status.pendingArchive && status.pendingRejoin,
+            'accepted provisional state survived a download error'
+          );
+          assert(
+            equalBytes(await fresh.session.archiveKey(), archiveKey),
+            'the archive key was preserved'
+          );
+          await failsWith(() => fresh.session.projectKey(), 'state');
+          await failsWith(() => fresh.session.confirmRejoin(), 'state');
+        }
+        const key = await generateStateKey();
+        const sealed = await fresh.session.seal(key);
+        await fresh.session.free();
+        fresh.session = await solo.mls.open(sealed, key, solo.projectId);
+        await solo.publish();
+        await fresh.session.completeRejoin(
+          await decryptHistory(await fresh.session.archiveKey(), encrypted)
+        );
+        await fresh.session.confirmRejoin();
+        await fresh.session.process(later.commit);
+        return agree([owner, fresh]);
       }
     },
     {

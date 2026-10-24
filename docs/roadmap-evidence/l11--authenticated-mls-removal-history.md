@@ -8,7 +8,8 @@ sealed sessions use version 2; the unused package API requires the archive
 and refuses old state. Rust also refuses revoked devices without an explicit
 revocation cutoff, matching TypeScript. Staged joins expose only the provisional
 archive-decryption capability, keep normal operations and rejoin confirmation
-blocked through sealed-state restoration, and roll back failed verification;
+blocked through sealed-state restoration, preserve provisional external state
+for malformed-archive retry, and roll back verified policy rejection or discard;
 external rejoins recheck the original cutoffs after decrypting the accepted
 new-epoch archive. Evidence:
 `packages/mls/src/{scenarios,boundary.test}.ts`, the Node and Worker-protocol
