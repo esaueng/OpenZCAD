@@ -449,6 +449,9 @@ export async function deleteAccountData(
       email && env.AUTH_OTP_PEPPER
         ? await authEmailRateLimitBucket(email, env.AUTH_OTP_PEPPER)
         : undefined;
+    // Before migration 0029 the tables do not exist, and before 0030 the
+    // history table does not; deletion must keep working either way.
+    const e2eeTables = await e2eeErasureTables(db);
     await db.batch(
       profileCleanupStatements(
         db,
@@ -456,9 +459,7 @@ export async function deleteAccountData(
         email,
         authRateBucket,
         input.scope,
-        // Before migration 0029 the tables do not exist, and before 0030 the
-        // history table does not; deletion must keep working either way.
-        await e2eeErasureTables(db),
+        e2eeTables,
         // Before migration 0031 there is no opt-in table.
         await isE2eeProjectPreferenceStorageReady(db),
         // Before migration 0032 there are no MLS group tables, and before
@@ -477,8 +478,10 @@ export async function deleteAccountData(
           // Before migration 0036 there are no revocation cutoffs.
           ...(await deviceRemovalErasureStatements(db, session.userId)),
           // Before migration 0037 there is no contacts table; its rows go
-          // before the identities they reference.
-          ...(await contactErasureStatements(db, session.userId))
+          // before the identities they reference, and only beside them.
+          ...(e2eeTables.length > 0
+            ? await contactErasureStatements(db, session.userId)
+            : [])
         ]
       )
     );

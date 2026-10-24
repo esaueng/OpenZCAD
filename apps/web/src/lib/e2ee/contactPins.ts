@@ -265,9 +265,11 @@ export function indexedDbContactPins(): ContactPinStore {
       const db = await openDatabase();
       return new Promise((resolve, reject) => {
         const tx = db.transaction(CONTACTS, 'readonly');
-        const request = tx
-          .objectStore(CONTACTS)
-          .getAll(IDBKeyRange.bound([userId, ''], [userId, '￿']));
+        const request = tx.objectStore(CONTACTS).getAll(
+          // Arrays sort after every string, so this spans every
+          // contact id of `userId`.
+          IDBKeyRange.bound([userId, ''], [userId, []])
+        );
         request.onsuccess = () =>
           resolve(
             (request.result as unknown[])
