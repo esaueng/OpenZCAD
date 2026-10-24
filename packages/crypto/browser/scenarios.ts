@@ -711,7 +711,12 @@ const KW_CONTEXTS: readonly WrapContext[] = [
     archivedEpoch: 1,
     underEpoch: 2
   },
-  { purpose: 'previous-account-key', userId: 'user-1', keySequence: 3 }
+  {
+    purpose: 'previous-account-key',
+    userId: 'user-1',
+    generation: 1,
+    keySequence: 3
+  }
 ];
 
 /** Byte positions flipped in a 41-byte KW wrap: first, middle and last. */
@@ -988,6 +993,7 @@ const kwRefusalSteps: CryptoScenario[] = [
       const previous: WrapContext = {
         purpose: 'previous-account-key',
         userId: 'user-1',
+        generation: 1,
         keySequence: 3
       };
       const contexts = [rejoin, archived, previous];
@@ -2376,10 +2382,11 @@ const vectorSteps: CryptoScenario[] = [
           {
             purpose: 'previous-account-key',
             userId: 'usr_1',
+            generation: 1,
             keySequence: 2
           },
-          '0b6b657953657175656e636502000000000000000207707572706f736501001470726576696f75732d6163636f756e742d6b6579067573657249640100057573725f31',
-          '027f4251784af3dc15f1f93023ca8856d804c42523c9d3c6cff4ad293e0fdd8eb18d102aa9a073ed08'
+          '0a67656e65726174696f6e0200000000000000010b6b657953657175656e636502000000000000000207707572706f736501001470726576696f75732d6163636f756e742d6b6579067573657249640100057573725f31',
+          '02074482bb3f13c74326b5d84666116da1a3fb53382684e8a90f074a4fa7f72370f85068e749d51f07'
         ]
       ];
       for (const [context, encoded, wrap] of cases) {
