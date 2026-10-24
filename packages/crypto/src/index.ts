@@ -253,16 +253,22 @@ export {
   MAX_REVISION_HASHES,
   decodeEncryptedDocumentBody,
   decodeKeyArchiveBody,
+  decodeMeasurementsBody,
   decodeProjectInfoBody,
+  decodeViewStateBody,
   encodeEncryptedDocumentBody,
   encodeKeyArchiveBody,
+  encodeMeasurementsBody,
   encodeProjectInfoBody,
+  encodeViewStateBody,
   type ArchivedProjectKey,
   type BodyEnvelopeHeader,
   type EncryptedDocumentBody,
   type KeyArchiveBody,
+  type MeasurementsBody,
   type ProjectExportEntry,
-  type ProjectInfoBody
+  type ProjectInfoBody,
+  type ViewStateBody
 } from './bodies';
 export {
   ACCOUNT_RECORD_MAC_BYTES,
