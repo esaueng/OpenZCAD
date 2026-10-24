@@ -45,13 +45,14 @@ const METADATA_ROUTES: ReadonlyArray<{ method: string; rest: RegExp }> = [
   { method: 'GET', rest: /^\/share-links$/ },
   { method: 'DELETE', rest: /^\/share-links\/[^/]+$/ },
   { method: 'DELETE', rest: /^\/invitations\/[^/]+$/ },
-  { method: 'PATCH', rest: /^\/members\/[^/]+$/ },
   { method: 'DELETE', rest: /^\/members\/[^/]+$/ }
 ];
 
 const SHARE_ROUTES: ReadonlyArray<{ method: string; rest: RegExp }> = [
   { method: 'POST', rest: /^\/invitations$/ },
-  { method: 'POST', rest: /^\/share-links$/ }
+  { method: 'POST', rest: /^\/share-links$/ },
+  // A role change can grant stronger access, so it is sharing too.
+  { method: 'PATCH', rest: /^\/members\/[^/]+$/ }
 ];
 
 const ROOM_ROUTE = /^\/collaboration(?:\/ticket)?$/;

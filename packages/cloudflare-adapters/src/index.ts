@@ -423,7 +423,9 @@ export function isE2eeProjectsEnabled(
  * answer of "installed" is kept for the isolate's life; "missing" is kept
  * for a minute, so a migration applied later is noticed without a redeploy
  * and a database without it costs one cheap pragma read a minute, not one
- * per request. A failed probe reads as missing.
+ * per request. A probe that fails is neither: it throws and caches nothing,
+ * so a format-sensitive caller fails closed rather than reading an encrypted
+ * row as plaintext, and the next request probes again.
  */
 export function cachedSchemaProbe(
   sql: string,
@@ -436,12 +438,9 @@ export function cachedSchemaProbe(
     if (!db) return false;
     if (ready.has(db)) return true;
     if ((missingUntil.get(db) ?? 0) > Date.now()) return false;
-    let found: boolean;
-    try {
-      found = installed(await db.prepare(sql).first<Record<string, unknown>>());
-    } catch {
-      found = false;
-    }
+    const found = installed(
+      await db.prepare(sql).bind().first<Record<string, unknown>>()
+    );
     if (found) {
       ready.add(db);
       missingUntil.delete(db);
@@ -843,6 +842,8 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     const access = await this.requireProjectOwner(ownerUserId, projectId);
+    // Changing a role grants access; on an encrypted project that is sharing.
+    assertShareableProject(access);
     if (memberUserId === access.ownerUserId) {
       throw new ProjectSharingError(
         'OWNER_IMMUTABLE',

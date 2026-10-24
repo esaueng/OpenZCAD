@@ -183,6 +183,8 @@ describe('cloudflare adapters', () => {
     const prepare = vi.fn((query: string) => ({
       bind: vi.fn(() => ({
         first: vi.fn(async () => {
+          // The storage-format schema probe answers "not installed".
+          if (query.includes('pragma_table_info')) return null;
           expect(query).toContain('LEFT JOIN user_settings owner_settings');
           expect(query).toContain("'$.collaboration.enabled'");
           expect(query).toContain("WHEN p.status = 'deleted' THEN NULL");
@@ -208,6 +210,8 @@ describe('cloudflare adapters', () => {
     const prepare = vi.fn((query: string) => ({
       bind: vi.fn(() => ({
         first: vi.fn(async () => {
+          // The storage-format schema probe answers "not installed".
+          if (query.includes('pragma_table_info')) return null;
           expect(query).toContain('LEFT JOIN user_settings owner_settings');
           expect(query).toContain("'$.collaboration.enabled'");
           expect(query).toContain("p.status != 'deleted'");
@@ -686,7 +690,8 @@ describe('cloudflare adapters', () => {
       }
     ];
     const all = vi.fn(async () => ({ results: rows }));
-    const bind = vi.fn(() => ({ all }));
+    // first() answers the storage-format schema probe: not installed.
+    const bind = vi.fn(() => ({ all, first: async () => null }));
     const prepare = vi.fn(() => ({ bind }));
     const consoleError = vi
       .spyOn(console, 'error')
@@ -727,7 +732,10 @@ describe('cloudflare adapters', () => {
         }
       ]
     }));
-    const prepare = vi.fn((_query: string) => ({ bind: () => ({ all }) }));
+    const prepare = vi.fn((_query: string) => ({
+      // first() answers the storage-format schema probe: not installed.
+      bind: () => ({ all, first: async () => null })
+    }));
     const service = new D1R2PersistenceService({
       DB: { prepare } as unknown as D1Database,
       PROJECT_SHARING_ENABLED: 'true'

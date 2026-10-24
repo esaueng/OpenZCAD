@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it, vi } from 'vitest';
 import worker from '../apps/web/worker/index';
 import {
+  cachedSchemaProbe,
   D1R2PersistenceService,
   ENCRYPTED_PROJECT_PLACEHOLDER_NAME,
   isProjectStorageFormatReady
@@ -545,6 +546,54 @@ describe('project storage format (ADR-024 Phase 4, slice 4-1)', () => {
     const listed = projects.find((p) => p.projectId === plaintextId);
     expect(listed).toMatchObject({ storageFormat: 3 });
     expect(listed?.name).not.toBe('Plain bracket');
+  });
+
+  it('refuses a member role change as sharing', async () => {
+    const { call, projectId, service } = await seed();
+    const response = await call(
+      'PATCH',
+      `/api/projects/${projectId}/members/${MEMBER}`,
+      { user: OWNER, body: { role: 'viewer' } }
+    );
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { code: string }).code).toBe(
+      ENCRYPTED_PROJECT_SHARING_UNAVAILABLE_CODE
+    );
+    // The persistence service refuses it too, whoever calls it.
+    await expect(
+      service.updateProjectMemberRole(
+        OWNER,
+        projectId,
+        toUserId(MEMBER),
+        'editor',
+        2
+      )
+    ).rejects.toMatchObject({
+      code: ENCRYPTED_PROJECT_SHARING_UNAVAILABLE_CODE
+    });
+  });
+
+  it('fails closed and caches nothing when a schema probe errors', async () => {
+    const probe = cachedSchemaProbe(
+      'SELECT 1 AS ready',
+      (row) => row?.ready === 1
+    );
+    let failing = true;
+    const db = {
+      prepare: () => ({
+        bind: () => ({
+          first: async () => {
+            if (failing) throw new Error('D1 is briefly unavailable');
+            return { ready: 1 };
+          }
+        })
+      })
+    } as unknown as Parameters<typeof probe>[0];
+    // An error is not "column missing": a format-sensitive caller must not
+    // read an encrypted row as plaintext on the strength of it.
+    await expect(probe(db)).rejects.toThrow('briefly unavailable');
+    failing = false;
+    await expect(probe(db)).resolves.toBe(true);
   });
 
   it('refuses invitations and share links on the HTTP routes as sharing', async () => {

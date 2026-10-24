@@ -292,6 +292,8 @@ describe('project share links (persistence)', () => {
           return { results: [] };
         },
         first: async () => {
+          // The storage-format schema probe answers "not installed".
+          if (query.includes('pragma_table_info')) return null;
           queries.push(query);
           if (query.includes('FROM project_share_links l')) {
             expect(bindings).toEqual(['hash_source', expect.any(Number)]);

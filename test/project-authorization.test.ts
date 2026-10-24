@@ -281,6 +281,8 @@ describe('project authorization', () => {
     const prepare = (sql: string) => ({
       bind: (...bindings: unknown[]) => ({
         first: async () => {
+          // The storage-format schema probe answers "not installed".
+          if (sql.includes('pragma_table_info')) return null;
           if (sql.includes('AS resolved_role')) {
             return { owner_user_id: owner, resolved_role: 'viewer' };
           }
