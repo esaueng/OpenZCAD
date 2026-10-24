@@ -3338,7 +3338,7 @@ export function compareProjectSummaries(
     : left.projectId.localeCompare(right.projectId);
 }
 
-const COPY_SUFFIX_PATTERN = /\s*\(copy(?: (\d+))?\)$/i;
+const COPY_SUFFIX_PATTERN = /\(copy(?: (\d+))?\)$/i;
 
 /**
  * Name for a copy of `baseName` that does not collide with `existingNames`.
@@ -3353,7 +3353,10 @@ export function duplicateProjectName(
   const taken = new Set(
     [...existingNames].map((name) => name.trim().toLowerCase())
   );
-  const root = baseName.trim().replace(COPY_SUFFIX_PATTERN, '') || 'Untitled';
+  const trimmed = baseName.trim();
+  const suffix = COPY_SUFFIX_PATTERN.exec(trimmed);
+  const root =
+    (suffix ? trimmed.slice(0, suffix.index).trimEnd() : trimmed) || 'Untitled';
   for (let index = 1; ; index += 1) {
     const suffix = index === 1 ? ' (copy)' : ` (copy ${index})`;
     // The suffix is what makes the name unique, so the root is what gives way

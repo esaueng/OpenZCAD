@@ -175,6 +175,9 @@ impl DeviceDirectory {
                     "revoked" => true,
                     other => return Err(Error::input(format!("device status {other:?}"))),
                 };
+                if revoked && device.revocation_cutoff_epoch.is_none() {
+                    return Err(Error::input("revoked device has no revocationCutoffEpoch"));
+                }
                 let leaf_keys = device
                     .leaf_keys
                     .iter()

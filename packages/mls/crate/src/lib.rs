@@ -7,6 +7,7 @@
 //! `kind` (`policy`, `mls`, `state`, `input`) and, for policy refusals,
 //! `reasons`, each with a stable `code`.
 
+mod archive;
 mod directory;
 mod error;
 mod model;
@@ -161,8 +162,39 @@ impl MlsSession {
         json(&self.inner.inspect_welcome(welcome).map_err(to_js)?)
     }
 
-    pub fn join(&mut self, welcome: &[u8]) -> Result<String, JsValue> {
-        json(&self.inner.join(welcome).map_err(to_js)?)
+    pub fn join(
+        &mut self,
+        welcome: &[u8],
+        initial_group_info: &[u8],
+        records: Vec<js_sys::Uint8Array>,
+    ) -> Result<String, JsValue> {
+        let records: Vec<_> = records.iter().map(|r| r.to_vec()).collect();
+        json(&self.inner.join(welcome, initial_group_info, &records).map_err(to_js)?)
+    }
+
+    #[wasm_bindgen(js_name = beginJoin)]
+    pub fn begin_join(&mut self, welcome: &[u8]) -> Result<(), JsValue> {
+        self.inner.begin_join(welcome).map_err(to_js)
+    }
+
+    #[wasm_bindgen(js_name = completeJoin)]
+    pub fn complete_join(
+        &mut self,
+        initial_group_info: &[u8],
+        records: Vec<js_sys::Uint8Array>,
+    ) -> Result<String, JsValue> {
+        let records: Vec<_> = records.iter().map(|r| r.to_vec()).collect();
+        json(&self.inner.complete_join(initial_group_info, &records).map_err(to_js)?)
+    }
+
+    #[wasm_bindgen(js_name = discardJoin)]
+    pub fn discard_join(&mut self) -> Result<(), JsValue> {
+        self.inner.discard_join().map_err(to_js)
+    }
+
+    #[wasm_bindgen(js_name = archiveKey)]
+    pub fn archive_key(&self) -> Result<Vec<u8>, JsValue> {
+        self.inner.archive_key().map_err(to_js)
     }
 
     /// `spec_json`: `{ remove?, setRoles?, dropUsers?, rejoinWindow? }`.
@@ -219,8 +251,42 @@ impl MlsSession {
         psk_epoch: u64,
         psk: &[u8],
         remove: Option<u32>,
+        initial_group_info: &[u8],
+        records: Vec<js_sys::Uint8Array>,
     ) -> Result<String, JsValue> {
-        json(&self.inner.rejoin(group_info, psk_epoch, psk, remove).map_err(to_js)?)
+        let records: Vec<_> = records.iter().map(|r| r.to_vec()).collect();
+        json(
+            &self
+                .inner
+                .rejoin(group_info, psk_epoch, psk, remove, initial_group_info, &records)
+                .map_err(to_js)?,
+        )
+    }
+
+    #[wasm_bindgen(js_name = beginRejoin)]
+    pub fn begin_rejoin(
+        &mut self,
+        group_info: &[u8],
+        psk_epoch: u64,
+        psk: &[u8],
+        remove: Option<u32>,
+    ) -> Result<String, JsValue> {
+        json(
+            &self
+                .inner
+                .begin_rejoin(group_info, psk_epoch, psk, remove)
+                .map_err(to_js)?,
+        )
+    }
+
+    #[wasm_bindgen(js_name = completeRejoin)]
+    pub fn complete_rejoin(
+        &mut self,
+        initial_group_info: &[u8],
+        records: Vec<js_sys::Uint8Array>,
+    ) -> Result<(), JsValue> {
+        let records: Vec<_> = records.iter().map(|r| r.to_vec()).collect();
+        self.inner.complete_rejoin(initial_group_info, &records).map_err(to_js)
     }
 
     /// The room accepted the external Commit.

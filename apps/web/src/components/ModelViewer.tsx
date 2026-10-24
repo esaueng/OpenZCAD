@@ -15,7 +15,11 @@ import type { PrimitiveGhost } from '../lib/primitiveGhost';
 import { buildPrimitiveGhostRig } from './viewer/primitiveGhostRig';
 import { currentRenderProfile } from './viewer/renderProfile';
 import { createdBodiesToFrame, type AutoFrameRequest } from '../lib/autoFrame';
-import { readStagePalette, watchStageTheme } from '../lib/stagePalette';
+import {
+  readDatumColor,
+  readStagePalette,
+  watchStageTheme
+} from '../lib/stagePalette';
 import { mark, measure, timed } from '../lib/perf';
 import { recordEditPhase } from '../lib/editTrace';
 import {
@@ -95,6 +99,8 @@ import {
   createCylinderProfilePreview,
   createLinearProfilePreview,
   createStepStretchPreview,
+  createBodyGhost,
+  type BodyGhost,
   type LinearPreviewProfile,
   type StepPreviewProfile,
   type CylinderPreviewProfile,
@@ -2348,6 +2354,10 @@ export function ModelViewer({
   const cylinderRadiusProxyControllerRef = useRef<VisualProxyController | null>(
     null
   );
+  const offsetGhostClearRef = useRef<(() => void) | null>(null);
+  const offsetGhostClipRef = useRef<
+    ((plane: THREE.Plane | null) => void) | null
+  >(null);
   const offsetBodyProxyControllerRef = useRef<VisualProxyController | null>(
     null
   );
@@ -2552,6 +2562,10 @@ export function ModelViewer({
     paintStage();
     const stopWatchingTheme = watchStageTheme(() => {
       paintStage();
+      // Datum planes and axes take the theme's datum colour too.
+      const datumColor = readDatumColor(host);
+      datumPlaneRigRef.current?.setColor(datumColor);
+      datumAxisRigRef.current?.setColor(datumColor);
       requestRender();
     });
 
@@ -3192,6 +3206,46 @@ export function ModelViewer({
       pending: number | null;
       requestedAt: number;
     } | null = null;
+    // While a face offset is dragged and then validated, the body shows the
+    // part as it will be — the viewport proxy or the exact preview — and a
+    // ghost of the part as it was shows what a cut removes, with the dragged
+    // face at its old place. The rig's hatched band would say it twice.
+    let offsetGhost: BodyGhost | null = null;
+    function beginOffsetGhost() {
+      if (offsetGhost) return;
+      const target = offsetHandleRef.current;
+      const object = target && context.objectsByBodyId.get(target.bodyId);
+      if (!target || !(object instanceof THREE.Mesh)) return;
+      const face = context.renderedBodies
+        ?.find((body) => body.bodyId === target.bodyId)
+        ?.topology?.faces.find(
+          (candidate) => candidate.topologyId === target.topologyId
+        );
+      offsetGhost = createBodyGhost(object as THREE.Mesh, {
+        ...(face ? { faceRange: face } : {}),
+        resolution: context.fatLineResolution(),
+        // The ghost stands outside the body group the section clips.
+        clippingPlane: sectionViewRef.current
+          ? sectionClippingPlane(sectionViewRef.current)
+          : null
+      });
+      context.scene.add(offsetGhost.object);
+      offsetRigRef.current?.setChangeShownByBody?.(true);
+      if (E2E_CANVAS_HOOKS_ENABLED)
+        renderer.domElement.dataset.e2eOffsetGhost = '1';
+    }
+    function clearOffsetGhost() {
+      if (!offsetGhost) return;
+      offsetGhost.dispose();
+      offsetGhost = null;
+      offsetRigRef.current?.setChangeShownByBody?.(false);
+      delete renderer.domElement.dataset.e2eOffsetGhost;
+      requestRender();
+    }
+    offsetGhostClearRef.current = clearOffsetGhost;
+    offsetGhostClipRef.current = (plane) => {
+      offsetGhost?.setClippingPlane(plane);
+    };
     function discardOffsetBodyProxy() {
       offsetBodyProxy?.preview.restore();
       offsetBodyProxy = null;
@@ -3778,6 +3832,9 @@ export function ModelViewer({
       if (cylinderRadiusRigRef.current) {
         cylinderRadiusRigRef.current.setValue(value);
       } else if (offsetRigRef.current) {
+        // A typed value previews like a drag: solid over the old part's
+        // ghost, taken before the proxy deforms the body.
+        if (Math.abs(value) > 1e-9) beginOffsetGhost();
         offsetRigRef.current.setValue(value);
         queueOffsetBodyProxy(value);
       } else {
@@ -8463,6 +8520,8 @@ export function ModelViewer({
             pixelsPerUnit: screen.pixelsPerUnit,
             initialOffset: armedRig.value()
           };
+          // The ghost copies the body before the proxy deforms it.
+          beginOffsetGhost();
           beginOffsetBodyProxy();
           offsetDragActiveRef.current = true;
           onDirectManipulationChangeRef.current(true);
@@ -9141,6 +9200,7 @@ export function ModelViewer({
         );
         if (moved < 4) {
           rig?.setValue(completed.initialOffset);
+          clearOffsetGhost();
           restoreOffsetBodyProxy();
           onOffsetCancelRef.current();
           selectAtPointer(event);
@@ -9153,8 +9213,13 @@ export function ModelViewer({
           Math.abs(finalOffset) > 1e-9
         ) {
           queueOffsetBodyProxy(finalOffset);
-          if (!onOffsetCommitRef.current(finalOffset)) restoreOffsetBodyProxy();
+          // A refused release can keep the last value that built on screen,
+          // still uncommitted, so its ghost stays too; a restored body
+          // clears the ghost when it is installed.
+          if (!onOffsetCommitRef.current(finalOffset))
+            restoreOffsetBodyProxy();
         } else {
+          clearOffsetGhost();
           restoreOffsetBodyProxy();
           onOffsetCancelRef.current();
         }
@@ -9982,6 +10047,9 @@ export function ModelViewer({
       openExactEntryRef.current = null;
       cylinderRadiusProxyControllerRef.current = null;
       offsetBodyProxyControllerRef.current = null;
+      offsetGhostClearRef.current?.();
+      offsetGhostClearRef.current = null;
+      offsetGhostClipRef.current = null;
       moveGizmoHudRef.current = null;
       if (orientationDragRef.current === orientationDragControls) {
         orientationDragRef.current = null;
@@ -10189,6 +10257,9 @@ export function ModelViewer({
       // before its old Three object is disposed and replaced.
       cylinderRadiusProxyControllerRef.current?.discard();
       offsetBodyProxyControllerRef.current?.discard();
+      // Exact frames replace bodies mid-drag; once the drag is over, the
+      // next bodies are the committed or restored part.
+      if (!offsetDragActiveRef.current) offsetGhostClearRef.current?.();
       // The manager owns hover-slot geometry even while the slots are
       // parented under bodies, so it must detach them before body disposal.
       context.selection.resetForRebuild();
@@ -11265,6 +11336,7 @@ export function ModelViewer({
       context.requestRender();
       return;
     }
+    offsetGhostClearRef.current?.();
     offsetBodyProxyControllerRef.current?.restore();
     // Recognized primitive profiles have a disposable viewport preview.
     // Generic face edits stream exact worker geometry so unrelated faces and
@@ -11795,8 +11867,9 @@ export function ModelViewer({
   // Committed datum planes (viewer/datumPlaneRig), rebuilt when the set,
   // a frame or the selection changes; the render loop keeps their size.
   const datumPlaneKey = JSON.stringify(
-    (datumPlanes ?? []).map(({ featureId, frame, selected }) => ({
+    (datumPlanes ?? []).map(({ featureId, name, frame, selected }) => ({
       featureId,
+      name,
       frame,
       selected
     }))
@@ -11807,11 +11880,14 @@ export function ModelViewer({
     if (!context || planes.length === 0) {
       return;
     }
-    const rig = buildDatumPlaneRig(planes);
+    const canvas = context.renderer.domElement;
+    const rig = buildDatumPlaneRig(planes, {
+      color: readDatumColor(canvas),
+      resolution: context.fatLineResolution()
+    });
     rig.setScale(() => 0.05);
     context.scene.add(rig.group);
     datumPlaneRigRef.current = rig;
-    const canvas = context.renderer.domElement;
     if (E2E_CANVAS_HOOKS_ENABLED) {
       canvas.dataset.e2eDatumPlanes = JSON.stringify(
         planes.map(({ featureId, frame }) => ({
@@ -11904,8 +11980,9 @@ export function ModelViewer({
   // Committed datum axes (viewer/datumAxisRig), rebuilt when the set, a line
   // or the selection changes; the render loop keeps their length.
   const datumAxisKey = JSON.stringify(
-    (datumAxes ?? []).map(({ featureId, axis, selected }) => ({
+    (datumAxes ?? []).map(({ featureId, name, axis, selected }) => ({
       featureId,
+      name,
       axis,
       selected
     }))
@@ -11916,11 +11993,14 @@ export function ModelViewer({
     if (!context || axes.length === 0) {
       return;
     }
-    const rig = buildDatumAxisRig(axes);
+    const canvas = context.renderer.domElement;
+    const rig = buildDatumAxisRig(axes, {
+      color: readDatumColor(canvas),
+      resolution: context.fatLineResolution()
+    });
     rig.setScale(() => 0.05);
     context.scene.add(rig.group);
     datumAxisRigRef.current = rig;
-    const canvas = context.renderer.domElement;
     if (E2E_CANVAS_HOOKS_ENABLED) {
       canvas.dataset.e2eDatumAxes = JSON.stringify(
         axes.map(({ featureId, axis }) => ({ featureId, ...axis }))
@@ -12696,9 +12776,14 @@ export function ModelViewer({
     if (!context) {
       return;
     }
+    const sectionPlane = settings.sectionView
+      ? sectionClippingPlane(settings.sectionView)
+      : null;
+    // An offset ghost stands outside the body group: cut it the same way.
+    offsetGhostClipRef.current?.(sectionPlane);
     applySectionPlane(
       context.bodyGroup,
-      settings.sectionView ? sectionClippingPlane(settings.sectionView) : null,
+      sectionPlane,
       // The mode is read from the ref, not the deps: the display-mode effect
       // owns a mode CHANGE, and re-running this one for it would rebuild the
       // section geometry to no purpose.

@@ -165,8 +165,9 @@ describe('lazy entry patterns', () => {
 
   it.each([
     'assets/meshImportWorker-nqCWfpSW.js',
-    'assets/shaprImportWorker-CCF_vbm3.js'
-  ])('covers the disposable import worker %s', (file) => {
+    'assets/shaprImportWorker-CCF_vbm3.js',
+    'assets/e2eeDecodeWorker-Dq3k1xZa.js'
+  ])('covers the disposable worker %s', (file) => {
     expect(LAZY_ENTRY_PATTERNS.some((pattern) => pattern.test(file))).toBe(
       true
     );

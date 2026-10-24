@@ -1061,6 +1061,50 @@ this decision rests on is
   policy callbacks, the rejoin rules, the history-archive replay, and the
   crate itself at that version.
 
+  **Welcome removal-history limitation and resolution (issue #817).** The
+  original integration carried leaf-removal records in the committer-signed
+  GroupInfo extension (0xF0A3). Fabricated extra records can make rejoins
+  stricter, but the signature does not prove completeness: any current
+  member allowed to commit an Add, including a viewer recovering an existing
+  member's device, could omit records. A joiner would then accept a stale
+  rejoin or a removed signing key that established members, which processed
+  the removing Commits, reject. The owner accepted this existing-member
+  attack for #784's merge; that acceptance did not make omission safe.
+
+  Joining by Welcome and rejoining by external Commit now require the
+  epoch-record archive. Starting with the signed epoch-zero GroupInfo, the
+  browser verifies every public proposal and Commit through the target
+  epoch, checks each resulting GroupContext and public tree against its
+  record, and binds the final state to the joining GroupInfo. It derives
+  removal records from applied Remove and SelfRemove proposals and the prior
+  tree, then requires exact agreement with the carried records. Missing,
+  omitted or fabricated history is refused before admission; a failed join
+  restores the previous session and KeyPackages. This keeps the existing
+  role, credential, PSK and removal rules and the V1 archive format.
+  Callers must retain the initial GroupInfo and supply the
+  complete archive; checkpoints are not yet supported by this verifier.
+
+  Encrypted archives use provisional admission: a Welcome join can export
+  only the key needed to decrypt its archive until verification completes.
+  An external rejoin without the old archive submits a provisional Commit;
+  existing members validate it independently and supply the archive under the
+  new epoch's exporter. The joiner verifies that chain and rechecks its
+  original request against the pre-Commit cutoffs before confirmation.
+  Normal group operations remain blocked across sealed-state restoration.
+  Malformed downloads preserve an accepted provisional rejoin for retry;
+  verified policy rejection or explicit discard restores its prior state.
+  Session contents use version 2 and reject version 1, which could retain
+  previously unverified cutoffs. The outer sealed envelope is unchanged.
+  Rust also rejects a revoked directory device without its cutoff, matching
+  TypeScript. Application integration and checkpoint replay remain later work.
+
+  This check authenticates the public transcript and removals. It does not
+  re-evaluate historical device-list authorization from today's revocations,
+  or prove historical PSK possession or secret schedules. Historical version
+  authorization still needs the checkpoint and device-list evidence described
+  above. An inviter presenting a wholly different fork to a new device with
+  no previous pin remains within the existing fork-consistency limitation.
+
 The pieces marked Replaced above are superseded, and Phases 3 and 5 are
 scoped around MLS group operations. Phase 2 keeps only the envelope, nonce,
 wrapping, decompression, dedupe and fingerprint work.
