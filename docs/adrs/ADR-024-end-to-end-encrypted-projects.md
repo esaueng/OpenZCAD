@@ -1162,7 +1162,15 @@ above; the settled product decisions are unchanged.
   says a leaf's credential is the device signing key, each device instead
   generates a leaf signing key per project, and the device signing key, which
   the identity key certifies, certifies it for that project. Credential
-  checks follow that two-step chain back to the device list.
+  checks follow that two-step chain back to the device list. The leaf key
+  signs only MLS messages. Project envelopes (versions, share snapshots,
+  measurements, view state) stay signed by the author's certified device
+  signing key, as [Version integrity](#version-integrity) states, so a
+  verifier needs only device lists to identify the author. A version is tied
+  to MLS authority by its epoch binding plus a check that the identified
+  device holds a leaf, certified by that device, with an editing role in the
+  version's epoch, which is the "role of the author's leaf in that epoch"
+  check under [What MLS does not give](#what-mls-does-not-give-and-what-it-adds).
 - **Owners rejoin their own solo groups.** An owner device that lost its MLS
   state rejoins a group by External Commit, using the rejoin PSK wrapped
   under the account key. KeyPackages are deferred to Phase 5, where

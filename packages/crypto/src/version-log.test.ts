@@ -502,6 +502,10 @@ describe('verifyAuthoredEnvelope', () => {
       header: { documentVersion: 1 }
     });
     expect(verified.versionHash).toEqual(signed!.record.versionHash);
+    // What the caller needs for the leaf-role check in the version's epoch:
+    // the signing device (above) and the epoch the header names.
+    expect(Number.isInteger(verified.header.keyEpoch)).toBe(true);
+    expect(verified.header.epochBindingHash).toHaveLength(32);
     // The log record alone is enough.
     await expect(
       verifyAuthoredLogRecord(signed!.record, {

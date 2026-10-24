@@ -643,7 +643,16 @@ export async function verifyAuthoredLogRecord(
   };
 }
 
-/** `verifyAuthoredLogRecord` for a whole signed envelope. */
+/**
+ * `verifyAuthoredLogRecord` for a whole signed envelope.
+ *
+ * Project envelopes are signed by the author's certified device signing key,
+ * not by an MLS leaf key (ADR-024, Version integrity and the 2026-10-24
+ * amendment). This identifies that device; binding the version to MLS
+ * authority is the caller's next step: check that the returned device holds a
+ * leaf it certified, with an editing role, in the epoch the returned header
+ * names (`keyEpoch`, `epochBindingHash`).
+ */
 export async function verifyAuthoredEnvelope(
   envelope: Uint8Array,
   signature: Uint8Array,
