@@ -28,7 +28,7 @@ const future: ProjectSummary = {
   ...encrypted,
   projectId: toProjectId('proj_future'),
   name: 'Future project',
-  storageFormat: 3 as unknown as 2
+  storageFormat: 3
 };
 const plaintext: ProjectSummary = {
   projectId: toProjectId('proj_plain'),
