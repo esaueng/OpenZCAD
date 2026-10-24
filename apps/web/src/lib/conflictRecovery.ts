@@ -4,8 +4,8 @@ import type {
   ProjectEditLease
 } from '@openzcad/shared';
 import {
-  projectPreservesLocalWork,
-  syncComparableDocument
+  projectRebuildInputs,
+  projectsHaveSameRebuildInputs
 } from './localProjectStore';
 
 const CONFLICT_MARKER_PREFIX = 'openzcad-unresolved-project-conflict:';
@@ -228,12 +228,17 @@ function fnv1a64(text: string): string {
 }
 
 /**
- * Identifies the work a recovery copy preserves, including saved history.
- * Version fences, ownership and derived meshes do not constitute new work.
- * An earlier copy of the same model cannot preserve a later named save point.
+ * Identifies what a recovery copy would preserve: the document's rebuild
+ * inputs, and nothing about how it got there. A recovery project is born
+ * without its source's revisions and save points (they stay with the
+ * source), so they cannot tell two copies apart — and keying on them
+ * reopened the September burst: a keep-mine is a fenced write that stamps a
+ * new save point on the same model, the room and the account (or a second
+ * tab) cite that resaved document in their next dialog, and every hop came
+ * back under a fresh key and wrote another copy.
  */
 export function recoveryCopyKey(document: ProjectDocument): string {
-  return `work:${fnv1a64(canonicalJson(syncComparableDocument(document)))}`;
+  return `content:${fnv1a64(canonicalJson(projectRebuildInputs(document)))}`;
 }
 
 /**
@@ -338,8 +343,8 @@ export function recoveryCopyName(
  * are known to be valid, the side the user is NOT keeping is written as a
  * recovery project before invoking a handler that can replace either side of
  * the conflict — but only when there is something to preserve: not when the
- * chosen copy already retains the losing copy's model and history, or
- * that exact work already has a recovery project. The same conflict can be
+ * two sides would rebuild to the same model, and not when that model already
+ * has a recovery project. The same conflict can be
  * re-raised by every room frame, a failed handler can be retried, and the
  * room and the account can pass one divergence back and forth under new
  * version numbers; none of
@@ -407,9 +412,11 @@ export async function resolveProjectConflict(
     marker.remoteVersion === conflict.remoteDocument.version;
   // An explicit "save a local copy" is honoured even when the two sides match:
   // the user asked for the project, not for a judgement about its contents.
+  // Otherwise a losing side that rebuilds to the kept model holds nothing a
+  // recovery project could carry; its save points stay with the project.
   const nothingToPreserve =
     resolution !== 'save-local-copy' &&
-    projectPreservesLocalWork(losingDocument, winningDocument);
+    projectsHaveSameRebuildInputs(losingDocument, winningDocument);
   const alreadyPreserved =
     (markerMatches && (marker.recoveryCopies ?? []).includes(copyKey)) ||
     readRecoveryLedger(conflict.projectId).includes(copyKey);
@@ -473,6 +480,6 @@ export function recoveryCopyNote(outcome: ConflictResolutionOutcome): string {
     case 'already-preserved':
       return 'the other version already had a recovery copy';
     case 'nothing-to-preserve':
-      return 'the chosen version already contains your model and saved history';
+      return 'both versions held the same model, so nothing was discarded';
   }
 }
