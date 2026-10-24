@@ -101,7 +101,30 @@ export function revolveAxisCandidates(
       choice: { datumFeatureId: featureId }
     });
   }
-  return candidates;
+  // A datum axis lying along a sketch axis would draw over it, and a click
+  // could not say which was meant. The datum is the user's own construction
+  // (and follows its sources), so it stands in for the sketch axis.
+  return candidates.filter(
+    (candidate) =>
+      !('axis' in candidate.choice) ||
+      !candidates.some(
+        (other) =>
+          'datumFeatureId' in other.choice && collinear(candidate, other)
+      )
+  );
+}
+
+/** Whether two lines are the same line, either way round. */
+function collinear(
+  a: Pick<RevolveAxisCandidate, 'origin' | 'direction'>,
+  b: Pick<RevolveAxisCandidate, 'origin' | 'direction'>
+): boolean {
+  const da = scaled(a.direction, 1 / length(a.direction));
+  const db = scaled(b.direction, 1 / length(b.direction));
+  if (Math.abs(Math.abs(dot(da, db)) - 1) > IN_PLANE_TOLERANCE) return false;
+  const offset = sub(b.origin, a.origin);
+  const across = sub(offset, scaled(da, dot(offset, da)));
+  return length(across) <= IN_PLANE_TOLERANCE;
 }
 
 /**

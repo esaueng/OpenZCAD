@@ -57,6 +57,25 @@ describe('revolve axis candidates', () => {
   });
 });
 
+describe('a datum axis along a sketch axis', () => {
+  it('stands in for that sketch axis instead of drawing over it', () => {
+    const candidates = revolveAxisCandidates(
+      FRONT,
+      {
+        ['z' as FeatureId]: {
+          origin: { x: 0, y: 0, z: 5 },
+          direction: { x: 0, y: 0, z: -1 }
+        }
+      },
+      () => 'Axis 1'
+    );
+    expect(candidates.map((c) => c.id)).toEqual([
+      'sketch-horizontal',
+      'datum:z'
+    ]);
+  });
+});
+
 describe('a picked sketch line', () => {
   it('maps a line on the vertical axis to the vertical axis', () => {
     expect(sketchAxisForLine({ x: 0, y: 2 }, { x: 0, y: 9 })).toBe('vertical');
