@@ -1,0 +1,47 @@
+name: MLS WASM
+on:
+  # The MLS WASM in packages/mls/pkg is committed. This rebuilds it from the
+  # crate with the pinned toolchain and fails unless the result is
+  # byte-identical, so a committed build can be reproduced on any machine.
+  pull_request:
+    paths:
+      - packages/mls/crate/**
+      - packages/mls/pkg/**
+      - packages/mls/build.sh
+      - .github/workflows/mls-wasm.yml
+  push:
+    branches: [main]
+    paths:
+      - packages/mls/crate/**
+      - packages/mls/pkg/**
+      - packages/mls/build.sh
+      - .github/workflows/mls-wasm.yml
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  reproduce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned Rust toolchain and wasm-bindgen CLI
+        run: |
+          toolchain="$(sed -n 's/^channel = "\(.*\)"$/\1/p' packages/mls/crate/rust-toolchain.toml)"
+          rustup toolchain install "$toolchain" --profile minimal --target wasm32-unknown-unknown
+          cargo install wasm-bindgen-cli --version 0.2.126 --locked
+      - name: Rebuild and compare with the committed pkg
+        run: packages/mls/build.sh --check
+      - name: Keep the fresh build for inspection
+        if: failure()
+        run: |
+          packages/mls/build.sh
+          git status --short packages/mls/pkg
+      - if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mls-pkg
+          path: packages/mls/pkg
+          retention-days: 7
