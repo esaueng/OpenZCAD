@@ -641,7 +641,15 @@ export interface PersistenceService {
   getStorageUsage(userId: UserId): Promise<AccountStorageUsage>;
   createUploadSession(
     userId: UserId,
-    request: CreateUploadSessionRequest
+    request: CreateUploadSessionRequest,
+    /**
+     * ADR-024 Phase 7, slice 7-3: a decrypted file of an encrypted project
+     * its owner is turning back into plaintext, under the decrypt lease this
+     * SQL fence names. Stores without D1 ignore it.
+     */
+    options?: {
+      decryptStaging?: { sql: string; binds: readonly unknown[] };
+    }
   ): Promise<CreateUploadSessionResponse>;
   putUpload(
     userId: UserId,

@@ -1,0 +1,216 @@
+/**
+ * The plaintext staging writes of the beta-only reverse path (ADR-024
+ * Phase 7, slice 7-3; roadmap L11). While its owner turns an encrypted
+ * project back into plaintext, the browser that holds the decrypt lease
+ * writes the decrypted plaintext under the same project id through the
+ * ordinary plaintext routes, each request naming the lease
+ * (`x-e2ee-migration-lease`):
+ *
+ * - `POST /api/projects/:id/revisions`: a save state, under its own id;
+ * - `PUT /api/projects/:id/document`: the head, at a version above the
+ *   encrypted head's;
+ * - `POST /api/uploads` (then the upload and finalize routes): a file.
+ *
+ * Each lands beside the ciphertext and never touches the project row, which
+ * the cutover (`e2eeProjectMigrations.ts`) points at the staged head. Every
+ * statement carries the lease in its own SQL. Without the reverse path open
+ * (E2EE_REVERSE_ENABLED with migration, and migration 0043), or without a
+ * held lease, nothing here applies and the routes answer as before (an
+ * encrypted project's plaintext routes refuse with 409).
+ */
+import type {
+  ClientProjectStorage,
+  PersistenceService
+} from '@openzcad/persistence';
+import {
+  E2EE_MIGRATION_CODES,
+  type ProjectDocument,
+  type SaveProjectDocumentRequest,
+  type SaveProjectDocumentResponse,
+  type SaveRevisionRequest,
+  type UserId
+} from '@openzcad/shared';
+import {
+  D1R2PersistenceService,
+  DecryptStagingLeaseError,
+  isE2eeReverseStorageReady
+} from '@openzcad/cloudflare-adapters';
+import {
+  checkStagingLease,
+  decryptStagingFence,
+  migrationLeaseOf,
+  type StagingLease
+} from './e2eeMigrationLease';
+import { recordDecryptStagedHead } from './e2eeProjectMigrations';
+import { RouteError } from './e2eeProjects';
+import { SharingRequestError } from './sharing';
+
+/** A plaintext write running under a held decrypt lease. */
+export interface DecryptStaging {
+  readonly projectId: string;
+  readonly lease: StagingLease;
+  readonly fence: { sql: string; binds: unknown[] };
+}
+
+const LEASE_LOST_MESSAGE =
+  'This project’s migration lease lapsed or moved to another device. Start the migration again to resume.';
+
+/** The project routes a decrypt staging writes through. */
+const STAGING_ROUTES: ReadonlyArray<{ method: string; path: RegExp }> = [
+  { method: 'POST', path: /^\/api\/projects\/([^/]+)\/revisions$/ },
+  { method: 'PUT', path: /^\/api\/projects\/([^/]+)\/document$/ }
+];
+
+/** The project a staging write names on a project route, or null. */
+export function decryptStagingRouteProject(
+  method: string,
+  pathname: string
+): string | null {
+  for (const route of STAGING_ROUTES) {
+    if (route.method !== method) continue;
+    const match = route.path.exec(pathname);
+    if (!match) continue;
+    try {
+      return decodeURIComponent(match[1]!);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * The decrypt staging a request runs under: the reverse path is open to
+ * the account, the request names a lease, and it is the live lease of the
+ * caller's encrypted project being turned back into plaintext. Null when
+ * any of that is missing, so the route answers as it always did; 409
+ * E2EE_MIGRATION_LEASE_LOST when the project is staged under another or a
+ * lapsed lease.
+ */
+export async function decryptStagingFor(
+  db: D1Database | undefined,
+  request: Request,
+  userId: string,
+  projectId: string,
+  reverseEnabled: boolean
+): Promise<DecryptStaging | null> {
+  if (!reverseEnabled || !db) return null;
+  const leaseId = migrationLeaseOf(request, true);
+  if (!leaseId) return null;
+  if (!(await isE2eeReverseStorageReady(db))) return null;
+  const check = await checkStagingLease(
+    db,
+    projectId,
+    userId,
+    leaseId,
+    Date.now(),
+    'decrypt'
+  );
+  if (!check) return null;
+  if (check.kind === 'lost') {
+    throw new SharingRequestError(
+      409,
+      E2EE_MIGRATION_CODES.leaseLost,
+      LEASE_LOST_MESSAGE
+    );
+  }
+  return {
+    projectId,
+    lease: check.lease,
+    fence: decryptStagingFence(projectId, userId, check.lease)
+  };
+}
+
+function stagingService(
+  persistence: PersistenceService
+): D1R2PersistenceService {
+  if (!(persistence instanceof D1R2PersistenceService)) {
+    throw new SharingRequestError(
+      503,
+      'E2EE_UNAVAILABLE',
+      'Turning encryption off needs the account’s project storage.'
+    );
+  }
+  return persistence;
+}
+
+/** The persistence layer's and the migration module's refusals, as JSON. */
+async function translated<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (error instanceof DecryptStagingLeaseError) {
+      throw new SharingRequestError(
+        409,
+        E2EE_MIGRATION_CODES.leaseLost,
+        LEASE_LOST_MESSAGE
+      );
+    }
+    if (error instanceof RouteError) {
+      throw new SharingRequestError(error.status, error.code, error.message);
+    }
+    throw error;
+  }
+}
+
+/** `POST /api/projects/:id/revisions` under a decrypt lease. */
+export async function stageDecryptedRevision(
+  persistence: PersistenceService,
+  userId: UserId,
+  payload: SaveRevisionRequest,
+  storage: ClientProjectStorage | undefined,
+  staging: DecryptStaging
+): Promise<ProjectDocument> {
+  if (payload.savedRevisionId === undefined) {
+    throw new SharingRequestError(
+      400,
+      'SAVE_POINT_INVALID',
+      'A staged save state names its own revision id.'
+    );
+  }
+  const revisionId = payload.savedRevisionId;
+  await translated(() =>
+    stagingService(persistence).stageDecryptedDocument(userId, {
+      projectId: staging.projectId,
+      document: payload.document,
+      ...(storage ? { storage } : {}),
+      revision: { revisionId, reason: payload.reason.trim() },
+      fence: staging.fence
+    })
+  );
+  return payload.document;
+}
+
+/** `PUT /api/projects/:id/document` under a decrypt lease: the head. */
+export async function stageDecryptedHead(
+  persistence: PersistenceService,
+  db: D1Database,
+  userId: UserId,
+  payload: SaveProjectDocumentRequest,
+  storage: ClientProjectStorage | undefined,
+  staging: DecryptStaging
+): Promise<SaveProjectDocumentResponse> {
+  const stored = await translated(() =>
+    stagingService(persistence).stageDecryptedDocument(userId, {
+      projectId: staging.projectId,
+      document: payload.document,
+      ...(storage ? { storage } : {}),
+      fence: staging.fence
+    })
+  );
+  await translated(() =>
+    recordDecryptStagedHead(
+      db,
+      staging.projectId,
+      userId,
+      staging.lease,
+      stored.version,
+      stored.checksumSha256
+    )
+  );
+  return {
+    projectId: payload.projectId,
+    version: stored.version,
+    updatedAt: new Date().toISOString()
+  };
+}

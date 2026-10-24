@@ -14,6 +14,12 @@ import {
   assertProjectRouteFormat
 } from './projectFormatGate';
 import { sweepProjectMigrations } from './e2eeProjectMigrations';
+import {
+  decryptStagingFor,
+  decryptStagingRouteProject,
+  stageDecryptedHead,
+  stageDecryptedRevision
+} from './e2eeReverseStaging';
 import { encryptedRoomHeaders, notifyEncryptedRoom } from './e2eeRoom';
 import { enforceApiRateLimit, publicRequestBucket } from './apiRateLimit';
 import {
@@ -35,6 +41,7 @@ import {
   isE2eeKeysEnabled,
   isE2eeMigrationEnabled,
   isE2eeProjectsEnabled,
+  isE2eeReverseEnabled,
   isProjectStorageFormatReady,
   projectCollaborationRollout,
   type ProjectCollaborationRollout,
@@ -1290,7 +1297,11 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         isE2eeKeysEnabled(env, session.email),
         isE2eeProjectsEnabled(env, session.email),
         encryptedInvitationHost(env, session),
-        isE2eeMigrationEnabled(env, session.email)
+        isE2eeMigrationEnabled(env, session.email),
+        isE2eeReverseEnabled(env, session.email),
+        // Slice 7-3: as for plaintext writes, the global flags decide.
+        isCloudflareFeatureEnabled(env, 'E2EE_MIGRATION_ENABLED') &&
+          isCloudflareFeatureEnabled(env, 'E2EE_REVERSE_ENABLED')
       );
       // A Commit or an account write the project's room should hear about.
       await notifyEncryptedRoom(env, request, response);
@@ -1397,19 +1408,39 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     );
   }
 
+  // ADR-024 slice 7-3: a save state or the head of an encrypted project
+  // its owner is turning back into plaintext, written under the decrypt
+  // lease beside the ciphertext. Null for every other request (and while
+  // the reverse path is closed), which meets the gate below as before.
+  const reverseOpen = isE2eeReverseEnabled(env, session.email);
+  const stagingProjectId = reverseOpen
+    ? decryptStagingRouteProject(request.method, pathname)
+    : null;
+  const decryptStaging = stagingProjectId
+    ? await decryptStagingFor(
+        env.DB,
+        request,
+        userId,
+        stagingProjectId,
+        reverseOpen
+      )
+    : null;
+
   // ADR-024 Phase 4: every /api/projects/:id route meets the storage-format
   // gate before its handler parses a body or reads anything.
-  await assertProjectRouteFormat(
-    env.DB,
-    persistence,
-    userId,
-    request.method,
-    pathname,
-    isE2eeProjectsEnabled(env, session.email),
-    // ADR-024 slice 7-1: every caller of a staged project (members too)
-    // meets the refusal, so the global flag decides, not the account's.
-    isCloudflareFeatureEnabled(env, 'E2EE_MIGRATION_ENABLED')
-  );
+  if (!decryptStaging) {
+    await assertProjectRouteFormat(
+      env.DB,
+      persistence,
+      userId,
+      request.method,
+      pathname,
+      isE2eeProjectsEnabled(env, session.email),
+      // ADR-024 slice 7-1: every caller of a staged project (members too)
+      // meets the refusal, so the global flag decides, not the account's.
+      isCloudflareFeatureEnabled(env, 'E2EE_MIGRATION_ENABLED')
+    );
+  }
 
   if (request.method === 'GET' && pathname === '/api/settings') {
     return json(await getAppSettings(userId, env, session.email));
@@ -1978,6 +2009,17 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       revisionsMatch[1]
     );
     const payload = parseSaveRevisionRequest(opened.body, revisionsMatch[1]!);
+    if (decryptStaging) {
+      return json(
+        await stageDecryptedRevision(
+          persistence,
+          userId,
+          payload,
+          opened.storage,
+          decryptStaging
+        )
+      );
+    }
     return json(
       await persistence.saveRevision(userId, payload, {
         storage: opened.storage
@@ -2014,6 +2056,18 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       opened.body,
       documentMatch[1]!
     );
+    if (decryptStaging) {
+      return json(
+        await stageDecryptedHead(
+          persistence,
+          env.DB!,
+          userId,
+          payload,
+          opened.storage,
+          decryptStaging
+        )
+      );
+    }
     return json(
       await persistence.saveDocument(userId, payload, {
         storage: opened.storage
@@ -2025,6 +2079,25 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const payload = parseCreateUploadSessionRequest(
       await readJsonBody(request)
     );
+    // Slice 7-3: a decrypted file of an encrypted project its owner is
+    // turning back into plaintext, under the decrypt lease.
+    const uploadStaging = reverseOpen
+      ? await decryptStagingFor(
+          env.DB,
+          request,
+          userId,
+          payload.projectId,
+          reverseOpen
+        )
+      : null;
+    if (uploadStaging) {
+      return json(
+        await persistence.createUploadSession(userId, payload, {
+          decryptStaging: uploadStaging.fence
+        }),
+        201
+      );
+    }
     // A project staged for encryption takes no new plaintext files (7-1).
     await assertProjectNotMigrating(
       env.DB,
