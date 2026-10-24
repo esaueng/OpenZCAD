@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { D1R2PersistenceService } from '@openzcad/cloudflare-adapters';
 import {
   createProjectDocument,
+  importStepBody,
   withoutDerivedProjection
 } from '@openzcad/document-core';
 import {
+  decodeProjectStorageBody,
+  hydratedForLoad,
   InMemoryPersistenceService,
+  prepareProjectStorageSnapshot,
   isUnreadableStoredDocument,
   markUnreadableStoredDocument,
   normalizedForLoad,
@@ -104,4 +108,68 @@ describe('unreadable stored documents', () => {
       service.loadSharedProjectByTokenHash('unreadable-token-hash')
     ).rejects.toBeInstanceOf(ProjectObjectStorageError);
   });
+});
+
+describe('hydratedForLoad', () => {
+  async function stored() {
+    const document = importStepBody(createProjectDocument('Stored', owner), {
+      name: 'Part',
+      artifactId: 'artifact_local_part',
+      sourceName: 'part.step',
+      stepText: 'ISO-10303-21; HEADER; ENDSEC; DATA; ENDSEC; END-ISO-10303-21;'
+    }).document;
+    const prepared = await prepareProjectStorageSnapshot(document);
+    expect(prepared.assets.length).toBeGreaterThan(0);
+    const read = async (reference: { objectKey: string }) => {
+      const asset = prepared.assets.find(
+        (candidate) => candidate.objectKey === reference.objectKey
+      )!;
+      return decodeProjectStorageBody(
+        asset.storedBody.slice().buffer,
+        asset.contentEncoding,
+        asset.logicalBytes
+      );
+    };
+    return { document, snapshot: prepared.snapshot, read };
+  }
+
+  it('hydrates and normalizes a readable object', async () => {
+    const { document, snapshot, read } = await stored();
+    const loaded = await hydratedForLoad(snapshot, document.projectId, read);
+    expect(loaded.projectId).toBe(document.projectId);
+    expect(isUnreadableStoredDocument(loaded)).toBe(false);
+  });
+
+  it('reports a failing asset read as it is, not as unreadable contents', async () => {
+    // A transient R2 outage stays an outage instead of entering repair.
+    const { document, snapshot } = await stored();
+    const outage = new TypeError('network connection lost');
+    await expect(
+      hydratedForLoad(snapshot, document.projectId, async () => {
+        throw outage;
+      })
+    ).rejects.toBe(outage);
+  });
+
+  it('serves contents it cannot walk as stored, for the browser to refuse', async () => {
+    const { document, snapshot, read } = await stored();
+    const malformed = {
+      ...snapshot,
+      document: {
+        ...(snapshot.document as Record<string, unknown>),
+        nodes: null
+      }
+    };
+    const loaded = await hydratedForLoad(malformed, document.projectId, read);
+    expect(isUnreadableStoredDocument(loaded)).toBe(true);
+  });
+
+  it.each([null, 'snapshot', 3])(
+    'reports a stored %s as an unreadable account copy',
+    async (value) => {
+      await expect(
+        hydratedForLoad(value, 'project', async () => new Uint8Array())
+      ).rejects.toBeInstanceOf(ProjectObjectStorageError);
+    }
+  );
 });

@@ -159,9 +159,8 @@ import {
 } from '@openzcad/document-core';
 import {
   decodeProjectStorageBody,
-  hydrateProjectStorageSnapshot,
+  hydratedForLoad,
   isUnreadableStoredDocument,
-  markUnreadableStoredDocument,
   normalizedForLoad,
   prepareClientProjectStorageSnapshot,
   prepareProjectStorageSnapshot,
@@ -171,8 +170,7 @@ import {
   type ClientProjectStorage,
   type PreparedProjectStorageSnapshot,
   type ProjectStorageAssetObject,
-  type ProjectStorageAssetReference,
-  type ProjectStorageSnapshot
+  type ProjectStorageAssetReference
 } from '@openzcad/persistence';
 
 export {
@@ -4745,37 +4743,23 @@ export class D1R2PersistenceService implements PersistenceService {
         'Project document object failed its integrity check.'
       );
     }
-    const snapshot = JSON.parse(
-      new TextDecoder().decode(logicalBody)
-    ) as ProjectStorageSnapshot;
-    let hydrated: ProjectDocument;
-    try {
-      hydrated = await hydrateProjectStorageSnapshot(
-        snapshot,
-        projectId,
-        async (reference: ProjectStorageAssetReference) => {
-          const asset = await bucket.get(reference.objectKey);
-          if (!asset) {
-            throw new ProjectObjectStorageError(
-              `Project asset ${reference.objectKey} is missing from storage.`
-            );
-          }
-          return decodeProjectStorageBody(
-            await asset.arrayBuffer(),
-            reference.contentEncoding,
-            reference.logicalBytes
+    return hydratedForLoad(
+      JSON.parse(new TextDecoder().decode(logicalBody)) as unknown,
+      projectId,
+      async (reference: ProjectStorageAssetReference) => {
+        const asset = await bucket.get(reference.objectKey);
+        if (!asset) {
+          throw new ProjectObjectStorageError(
+            `Project asset ${reference.objectKey} is missing from storage.`
           );
         }
-      );
-    } catch (error) {
-      // A storage fault is the account's to report. Contents this build
-      // cannot walk are the browser's to refuse (ADR-024 Phase 1).
-      if (error instanceof ProjectObjectStorageError) throw error;
-      return markUnreadableStoredDocument(
-        snapshot as unknown as ProjectDocument
-      );
-    }
-    return normalizedForLoad(hydrated);
+        return decodeProjectStorageBody(
+          await asset.arrayBuffer(),
+          reference.contentEncoding,
+          reference.logicalBytes
+        );
+      }
+    );
   }
 
   /**

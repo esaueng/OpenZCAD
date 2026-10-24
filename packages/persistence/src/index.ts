@@ -5,6 +5,7 @@ import {
   type ImportSourceCopyRef
 } from './copy-import-sources';
 export {
+  hydratedForLoad,
   isUnreadableStoredDocument,
   markUnreadableStoredDocument,
   normalizedForLoad

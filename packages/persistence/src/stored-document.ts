@@ -1,6 +1,11 @@
 import { normalizeDocument } from '@openzcad/document-core';
 import type { ProjectDocument } from '@openzcad/shared';
-import { ProjectObjectStorageError } from './project-storage-snapshot';
+import {
+  hydrateProjectStorageSnapshot,
+  ProjectObjectStorageError,
+  type ProjectStorageAssetReference,
+  type ProjectStorageSnapshot
+} from './project-storage-snapshot';
 
 /** Stored documents this build could not normalize, served as stored. */
 const unreadable = new WeakSet<object>();
@@ -41,4 +46,44 @@ export function isUnreadableStoredDocument(document: unknown): boolean {
     document !== null &&
     unreadable.has(document)
   );
+}
+
+/**
+ * An object-stored document as loads return it (ADR-024 Phase 1). A failure
+ * reading an asset (an R2 outage, a body that will not decode) is reported
+ * as it is, and so is a storage-envelope fault. Only a failure walking the
+ * document's own contents serves the snapshot as stored, for the browser to
+ * refuse. A stored value that is not even an object is an unreadable copy.
+ */
+export async function hydratedForLoad(
+  snapshot: unknown,
+  projectId: string,
+  readAsset: (reference: ProjectStorageAssetReference) => Promise<Uint8Array>
+): Promise<ProjectDocument> {
+  if (typeof snapshot !== 'object' || snapshot === null)
+    throw new ProjectObjectStorageError(
+      'The stored project document is unreadable.'
+    );
+  let storageFault: { error: unknown } | null = null;
+  let hydrated: ProjectDocument;
+  try {
+    hydrated = await hydrateProjectStorageSnapshot(
+      snapshot as ProjectStorageSnapshot,
+      projectId,
+      async (reference) => {
+        try {
+          return await readAsset(reference);
+        } catch (error) {
+          storageFault = { error };
+          throw error;
+        }
+      }
+    );
+  } catch (error) {
+    const fault = storageFault as { error: unknown } | null;
+    if (fault) throw fault.error;
+    if (error instanceof ProjectObjectStorageError) throw error;
+    return markUnreadableStoredDocument(snapshot as ProjectDocument);
+  }
+  return normalizedForLoad(hydrated);
 }
