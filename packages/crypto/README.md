@@ -190,7 +190,9 @@ this project, which the caller passes in a map keyed by
 `authorCutoffKey(userId, deviceId)`: below the cutoff's document version, or
 the cutoff version itself by hash. Refusals are `AuthorshipError`s
 (`unknown-signer`, `ambiguous-signer` when two lists certify the same key,
-`revoked-without-cutoff`, `outside-cutoff`), all `authentication-failed`. A
+`revoked-without-cutoff`, `outside-cutoff`), all `authentication-failed`. Both copy and check the
+record, the device keys and every cutoff (each hash buffer included) before
+their first await, so a caller editing the map meanwhile changes nothing. A
 stolen device picks its own version numbers, so a version below a cutoff is
 trusted only once the caller also shows it is an ancestor of the cutoff
 head, for example with a version log that contains both.
