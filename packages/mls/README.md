@@ -53,6 +53,27 @@ require an ordered array of every record from epoch zero through the Welcome
 or GroupInfo epoch. Deliver the Add's accepted epoch record with its Welcome.
 Missing history is an error; retrying a failed join preserves its KeyPackage.
 
+For an encrypted archive, use the staged API. `beginJoin(welcome)` opens a
+provisional group and `archiveKey()` yields its exporter for decrypting the
+key archive and epoch records in the browser. Call `completeJoin(history)`
+only with those decrypted records, or `discardJoin()` to restore the prior
+session. Normal group operations remain blocked until verification succeeds;
+the provisional key and decrypted content are untrusted for document use.
+
+A rejoin can use `beginRejoin(groupInfo, { psk, replaceLeaf? })` when it cannot
+decrypt the old epoch's archive. Seal the provisional state, send its external
+Commit, and wait for the room's decision. Established members independently
+validate that Commit before supplying the archive encrypted under the **new**
+epoch's exporter. The joiner decrypts it with `archiveKey()`, calls
+`completeRejoin(history)` with the chain through that new epoch, then
+`confirmRejoin()` after room acceptance. Completion also rechecks the original
+request against the authenticated pre-Commit removal cutoffs; the replacement
+in this Commit does not count as its own prior removal. `confirmRejoin()`
+refuses an unverified archive. Rejected or discarded joins restore all state,
+including across `seal`/`open`. If no established member can supply the archive,
+recover the account-key-wrapped project keys and use `rejoin(..., { history })`,
+or the ADR's recovery Add/reset path; missing history is never accepted.
+
 Epoch records and sealed session contents are now version 2. Version 1 sessions
 are refused because their removal state may have trusted an inviter's omissions;
 there is no automatic migration. Version 2 records add the signed epoch-zero

@@ -183,6 +183,8 @@ pub struct Status {
     pub own_index: Option<u32>,
     pub pending_commit: bool,
     pub pending_rejoin: bool,
+    pub pending_join: bool,
+    pub pending_archive: bool,
     pub members: Vec<LeafInfo>,
     pub roles: Option<RolesInfo>,
 }
@@ -244,6 +246,14 @@ struct StoredPending {
     roster: Vec<StoredLeaf>,
 }
 
+#[derive(Clone, MlsSize, MlsEncode, MlsDecode)]
+struct PendingRejoinArchive {
+    group_info: Vec<u8>,
+    psk_epoch: u64,
+    psk: Vec<u8>,
+    remove: Option<u32>,
+}
+
 #[derive(MlsSize, MlsEncode, MlsDecode)]
 struct StoredSession {
     version: u8,
@@ -263,6 +273,8 @@ struct StoredSession {
     /// The session as it was before an external Commit the room has not
     /// accepted yet.
     rejoin_backup: Option<Vec<u8>>,
+    join_backup: Option<Vec<u8>>,
+    rejoin_archive: Option<PendingRejoinArchive>,
 }
 
 /// One epoch of the history archive (ADR-024, "Historical authority"): the
@@ -304,6 +316,8 @@ pub struct Session {
     pending: Option<StoredPending>,
     removed: bool,
     rejoin_backup: Option<Vec<u8>>,
+    join_backup: Option<Vec<u8>>,
+    rejoin_archive: Option<PendingRejoinArchive>,
 }
 
 fn check_id(label: &str, value: &[u8]) -> Res<()> {
@@ -338,6 +352,8 @@ impl Session {
             pending: None,
             removed: false,
             rejoin_backup: None,
+            join_backup: None,
+            rejoin_archive: None,
         })
     }
 
@@ -507,10 +523,20 @@ impl Session {
     }
 
     pub fn join(&mut self, welcome: &[u8], history: &[Vec<u8>]) -> Res<EpochChange> {
+        self.begin_join(welcome)?;
+        self.complete_join(history)
+    }
+
+    /// Open the Welcome provisionally so its exporter can decrypt the key
+    /// archive. No normal group operation is allowed until complete_join.
+    pub fn begin_join(&mut self, welcome: &[u8]) -> Res<()> {
         self.require_no_group()?;
         let backup = self.export()?;
-        match self.join_verified(welcome, history) {
-            Ok(change) => Ok(change),
+        match self.join_provisional(welcome) {
+            Ok(()) => {
+                self.join_backup = Some(backup);
+                Ok(())
+            }
             Err(error) => {
                 // join_group consumes a KeyPackage before application checks.
                 self.restore_from(&backup)?;
@@ -519,7 +545,7 @@ impl Session {
         }
     }
 
-    fn join_verified(&mut self, welcome: &[u8], history: &[Vec<u8>]) -> Res<EpochChange> {
+    fn join_provisional(&mut self, welcome: &[u8]) -> Res<()> {
         let message = MlsMessage::from_bytes(welcome)?;
         let (group, _) = self.client()?.join_group(None, &message, None)?;
         if group.group_id() != group_id(&self.project_id).as_slice() {
@@ -532,19 +558,54 @@ impl Session {
             self.groups.restore(None);
             return Err(Error::policy(shape));
         }
-        let records = verify_history(&self.project_id, group.context(), history)?;
-        *self.policy.removals.lock().unwrap() = records;
         self.group = Some(group);
-        self.enter_epoch()?;
-        self.write()?;
-        Ok(EpochChange {
-            epoch: self.group()?.current_epoch(),
-            removed_self: false,
-            removed: Vec::new(),
-            added: Vec::new(),
-            roles_changed: false,
-            epoch_record: None,
-        })
+        Ok(())
+    }
+
+    pub fn complete_join(&mut self, history: &[Vec<u8>]) -> Res<EpochChange> {
+        let backup = self
+            .join_backup
+            .clone()
+            .ok_or_else(|| Error::state("no Welcome join is pending"))?;
+        let result = (|| {
+            let records = verify_history(&self.project_id, self.group()?.context(), history)?;
+            *self.policy.removals.lock().unwrap() = records;
+            self.join_backup = None;
+            self.enter_epoch()?;
+            self.write()?;
+            Ok(EpochChange {
+                epoch: self.group()?.current_epoch(),
+                removed_self: false,
+                removed: Vec::new(),
+                added: Vec::new(),
+                roles_changed: false,
+                epoch_record: None,
+            })
+        })();
+        if result.is_err() {
+            self.restore_from(&backup)?;
+        }
+        result
+    }
+
+    pub fn discard_join(&mut self) -> Res<()> {
+        let backup = self
+            .join_backup
+            .clone()
+            .ok_or_else(|| Error::state("no Welcome join is pending"))?;
+        self.restore_from(&backup)
+    }
+
+    /// Decryption capability for the provisional archive only. The state is
+    /// not yet trusted for document reads/writes, PSKs or further handshakes.
+    pub fn archive_key(&self) -> Res<Vec<u8>> {
+        if self.join_backup.is_none() && self.rejoin_archive.is_none() {
+            return Err(Error::state("no join archive is pending"));
+        }
+        Ok(self
+            .group()?
+            .export_secret(PROJECT_KEY_LABEL, &self.project_id, 32)?
+            .to_vec())
     }
 
     /// Build a Commit. It includes every proposal received this epoch. The
@@ -783,6 +844,27 @@ impl Session {
         remove: Option<u32>,
         history: &[Vec<u8>],
     ) -> Res<RejoinResult> {
+        self.start_rejoin(group_info, psk_epoch, psk, remove, Some(history))
+    }
+
+    pub fn begin_rejoin(
+        &mut self,
+        group_info: &[u8],
+        psk_epoch: u64,
+        psk: &[u8],
+        remove: Option<u32>,
+    ) -> Res<RejoinResult> {
+        self.start_rejoin(group_info, psk_epoch, psk, remove, None)
+    }
+
+    fn start_rejoin(
+        &mut self,
+        group_info: &[u8],
+        psk_epoch: u64,
+        psk: &[u8],
+        remove: Option<u32>,
+        history: Option<&[Vec<u8>]>,
+    ) -> Res<RejoinResult> {
         if self.rejoin_backup.is_some() {
             return Err(Error::state("a rejoin is already pending"));
         }
@@ -793,6 +875,14 @@ impl Session {
         match self.rejoin_provisional(group_info, psk_epoch, psk, remove, history) {
             Ok(result) => {
                 self.rejoin_backup = Some(backup);
+                if history.is_none() {
+                    self.rejoin_archive = Some(PendingRejoinArchive {
+                        group_info: group_info.to_vec(),
+                        psk_epoch,
+                        psk: psk.to_vec(),
+                        remove,
+                    });
+                }
                 Ok(result)
             }
             Err(error) => {
@@ -803,10 +893,52 @@ impl Session {
     }
 
     pub fn confirm_rejoin(&mut self) -> Res<()> {
+        if self.rejoin_archive.is_some() {
+            return Err(Error::state("verify the rejoin archive before confirming"));
+        }
         self.rejoin_backup
             .take()
             .map(|_| ())
             .ok_or_else(|| Error::state("no rejoin is pending"))
+    }
+
+    /// An established member may now supply the archive encrypted under the
+    /// provisional *new* epoch's exporter after accepting this external
+    /// Commit. Verify it, then recheck the original request with its genuine
+    /// pre-Commit cutoffs; this Commit's own replacement is not a prior cutoff.
+    pub fn complete_rejoin(&mut self, history: &[Vec<u8>]) -> Res<()> {
+        let request = self
+            .rejoin_archive
+            .clone()
+            .ok_or_else(|| Error::state("no rejoin archive is pending"))?;
+        let backup = self
+            .rejoin_backup
+            .clone()
+            .ok_or_else(|| Error::state("no rejoin is pending"))?;
+        let result = (|| {
+            let records = verify_history(&self.project_id, self.group()?.context(), history)?;
+            let mut validation = Session::import(&backup, &self.project_id)?;
+            validation.policy.directory.set(self.policy.directory.get());
+            validation.rejoin_provisional(
+                &request.group_info,
+                request.psk_epoch,
+                &request.psk,
+                request.remove,
+                Some(&history[..history.len() - 1]),
+            )?;
+            Ok(records)
+        })();
+        match result {
+            Ok(records) => {
+                *self.policy.removals.lock().unwrap() = records;
+                self.rejoin_archive = None;
+                self.write()
+            }
+            Err(error) => {
+                self.restore_from(&backup)?;
+                Err(error)
+            }
+        }
     }
 
     pub fn discard_rejoin(&mut self) -> Res<()> {
@@ -830,6 +962,9 @@ impl Session {
     }
 
     fn settled(&self) -> Res<()> {
+        if self.join_backup.is_some() {
+            return Err(Error::state("verify or discard the pending Welcome join first"));
+        }
         if self.rejoin_backup.is_some() {
             return Err(Error::state("confirm or discard the pending rejoin first"));
         }
@@ -842,7 +977,7 @@ impl Session {
         psk_epoch: u64,
         psk: &[u8],
         remove: Option<u32>,
-        history: &[Vec<u8>],
+        history: Option<&[Vec<u8>]>,
     ) -> Res<RejoinResult> {
         if self.removed {
             self.removed = false;
@@ -881,9 +1016,13 @@ impl Session {
             .unwrap_or_default();
         // Derive cutoffs from the transcript before applying this Commit's
         // policy. The outer transaction restores them on any failure.
-        let records = verify_history(&self.project_id, info.group_context(), history)?;
+        let records = history
+            .map(|history| verify_history(&self.project_id, info.group_context(), history))
+            .transpose()?;
         let records_before = self.policy.removals.lock().unwrap().clone();
-        self.policy.removals.lock().unwrap().merge(&records);
+        if let Some(records) = records {
+            self.policy.removals.lock().unwrap().merge(&records);
+        }
         self.psks.restore(Vec::new());
         self.psks.insert(psk_epoch, psk.to_vec(), u64::MAX);
         let mut builder = self
@@ -1092,6 +1231,8 @@ impl Session {
             own_index,
             pending_commit: pending,
             pending_rejoin: self.rejoin_backup.is_some(),
+            pending_join: self.join_backup.is_some(),
+            pending_archive: self.join_backup.is_some() || self.rejoin_archive.is_some(),
             members,
             roles,
         })
@@ -1168,6 +1309,8 @@ impl Session {
             pending: self.pending.clone(),
             removed: self.removed,
             rejoin_backup: self.rejoin_backup.clone(),
+            join_backup: self.join_backup.clone(),
+            rejoin_archive: self.rejoin_archive.clone(),
         }
         .mls_encode_to_vec()
         .map_err(Error::codec)
@@ -1205,6 +1348,8 @@ impl Session {
             pending: stored.pending,
             removed: stored.removed,
             rejoin_backup: stored.rejoin_backup,
+            join_backup: stored.join_backup,
+            rejoin_archive: stored.rejoin_archive,
         };
         for kp in stored.key_packages {
             session.key_packages.insert(kp.id, kp.data);

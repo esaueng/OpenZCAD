@@ -5,6 +5,7 @@ import { DEFAULT_REJOIN_WINDOW } from './constants';
 import type { AsyncEngineApi } from './engine';
 import type {
   BuildInfo,
+  BeginRejoinRequest,
   CommitRequest,
   DeviceDirectory,
   EpochChange,
@@ -129,6 +130,25 @@ export class MlsSession {
     return this.api.join(this.id, welcome, history);
   }
 
+  /** Open only enough state to decrypt the archive; normal group use is blocked. */
+  beginJoin(welcome: Uint8Array): Promise<void> {
+    return this.api.beginJoin(this.id, welcome);
+  }
+
+  /** Verify the decrypted archive before accepting this Welcome. */
+  completeJoin(history: Uint8Array[]): Promise<EpochChange> {
+    return this.api.completeJoin(this.id, history);
+  }
+
+  discardJoin(): Promise<void> {
+    return this.api.discardJoin(this.id);
+  }
+
+  /** Provisional exporter for archive decryption only, before history is trusted. */
+  archiveKey(): Promise<Uint8Array> {
+    return this.api.archiveKey(this.id);
+  }
+
   /**
    * Build a Commit (including every proposal received this epoch). It stays
    * pending until the room accepts it (`confirmCommit`) or another Commit
@@ -181,6 +201,19 @@ export class MlsSession {
    */
   rejoin(groupInfo: Uint8Array, request: RejoinRequest): Promise<RejoinResult> {
     return this.api.rejoin(this.id, groupInfo, request);
+  }
+
+  /** Build a provisional external Commit when the old archive is unavailable. */
+  beginRejoin(
+    groupInfo: Uint8Array,
+    request: BeginRejoinRequest
+  ): Promise<RejoinResult> {
+    return this.api.beginRejoin(this.id, groupInfo, request);
+  }
+
+  /** Verify the archive through the new epoch, then recheck the original rejoin policy. */
+  completeRejoin(history: Uint8Array[]): Promise<void> {
+    return this.api.completeRejoin(this.id, history);
   }
 
   confirmRejoin(): Promise<void> {

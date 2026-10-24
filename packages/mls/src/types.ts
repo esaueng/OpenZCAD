@@ -140,6 +140,8 @@ export interface RejoinRequest {
   replaceLeaf?: number;
 }
 
+export type BeginRejoinRequest = Omit<RejoinRequest, 'history'>;
+
 export interface RejoinResult {
   commit: Uint8Array;
   change: EpochChange;
@@ -165,6 +167,8 @@ export interface SessionStatus {
   pendingCommit: boolean;
   /** An external rejoin the room has not accepted yet. */
   pendingRejoin: boolean;
+  pendingJoin: boolean;
+  pendingArchive: boolean;
   members: LeafInfo[];
   roles: ProjectRoles | null;
 }

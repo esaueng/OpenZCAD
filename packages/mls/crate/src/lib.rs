@@ -164,6 +164,27 @@ impl MlsSession {
         json(&self.inner.join(welcome, &history).map_err(to_js)?)
     }
 
+    #[wasm_bindgen(js_name = beginJoin)]
+    pub fn begin_join(&mut self, welcome: &[u8]) -> Result<(), JsValue> {
+        self.inner.begin_join(welcome).map_err(to_js)
+    }
+
+    #[wasm_bindgen(js_name = completeJoin)]
+    pub fn complete_join(&mut self, history: Vec<js_sys::Uint8Array>) -> Result<String, JsValue> {
+        let history: Vec<_> = history.iter().map(|r| r.to_vec()).collect();
+        json(&self.inner.complete_join(&history).map_err(to_js)?)
+    }
+
+    #[wasm_bindgen(js_name = discardJoin)]
+    pub fn discard_join(&mut self) -> Result<(), JsValue> {
+        self.inner.discard_join().map_err(to_js)
+    }
+
+    #[wasm_bindgen(js_name = archiveKey)]
+    pub fn archive_key(&self) -> Result<Vec<u8>, JsValue> {
+        self.inner.archive_key().map_err(to_js)
+    }
+
     /// `spec_json`: `{ remove?, setRoles?, dropUsers?, rejoinWindow? }`.
     pub fn commit(&mut self, spec_json: &str, key_packages: Vec<js_sys::Uint8Array>) -> Result<String, JsValue> {
         let spec: CommitSpec =
@@ -227,6 +248,28 @@ impl MlsSession {
                 .rejoin(group_info, psk_epoch, psk, remove, &history)
                 .map_err(to_js)?,
         )
+    }
+
+    #[wasm_bindgen(js_name = beginRejoin)]
+    pub fn begin_rejoin(
+        &mut self,
+        group_info: &[u8],
+        psk_epoch: u64,
+        psk: &[u8],
+        remove: Option<u32>,
+    ) -> Result<String, JsValue> {
+        json(
+            &self
+                .inner
+                .begin_rejoin(group_info, psk_epoch, psk, remove)
+                .map_err(to_js)?,
+        )
+    }
+
+    #[wasm_bindgen(js_name = completeRejoin)]
+    pub fn complete_rejoin(&mut self, history: Vec<js_sys::Uint8Array>) -> Result<(), JsValue> {
+        let history: Vec<_> = history.iter().map(|r| r.to_vec()).collect();
+        self.inner.complete_rejoin(&history).map_err(to_js)
     }
 
     /// The room accepted the external Commit.

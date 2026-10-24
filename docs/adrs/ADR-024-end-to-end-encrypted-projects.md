@@ -1077,6 +1077,18 @@ this decision rests on is
   sealed sessions use version 2; version 1 state is refused rather than retaining
   unverified cutoffs. The unused package's join API now requires the archive.
 
+  Archive decryption happens while membership is provisional. A Welcome join
+  exposes only an archive-decryption exporter until transcript verification
+  completes. An external rejoin without the old archive can submit a
+  provisional Commit: existing members validate it independently, then supply
+  the archive under the new epoch's exporter. The rejoiner verifies that full
+  chain and rechecks its original request against the authenticated pre-Commit
+  cutoffs before it can confirm. Normal group operations stay blocked, including
+  after sealed-state restoration; rejection or discard restores the old state.
+  A solo recovery uses the account-key-wrapped historical project keys to
+  decrypt the archive or follows the existing reset rules. The room relays
+  ciphertext and never needs the plaintext membership transcript.
+
   Public replay cannot verify historical confirmation MACs or PSK possession
   without epoch secrets, and does not authenticate historical application
   permissions. Current MLS cryptographic and credential checks still run in
