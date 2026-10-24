@@ -24,6 +24,10 @@
  *    them, registers their leaves, stores the Welcome for each and inserts
  *    the `project_members` row with the invitation's role.
  * 5. Each added device reads its Welcome: `GET …/welcome?deviceId=`.
+ *
+ * Slice 5-3b adds the owner's view of each invitation's KeyPackages
+ * (`keyPackages`, `claimedKeyPackages`), the group epoch an invitee's
+ * leaf is certified from (`groupEpoch`) and `GET /api/e2ee/invitations/sent`.
  */
 import type { E2eeProjectLeafInput } from './e2ee-project-groups';
 
@@ -57,6 +61,19 @@ export interface E2eeInvitationRecord {
   /** The epoch the owner's Add Commit was sent in. */
   completedEpoch: number | null;
   revokedAt: string | null;
+  /**
+   * The owner's lists (`list`, `sent`; slice 5-3b): the invitee's
+   * published KeyPackages no claim took yet, and those the owner claimed
+   * that no Add consumed. Absent from the invitee's answers.
+   */
+  keyPackages?: number;
+  claimedKeyPackages?: number;
+  /**
+   * The invitee's answers (`accept`, `accepted`; slice 5-3b): the
+   * project's MLS group epoch now, which a KeyPackage's leaf is certified
+   * from (`certifiedEpoch`). A hint the server gives; null without a group.
+   */
+  groupEpoch?: number | null;
 }
 
 export interface E2eeInvitationResponse {
@@ -168,6 +185,12 @@ export interface E2eeInvitationsApi {
   accept(request: E2eeAcceptInvitationRequest): Promise<E2eeInvitationResponse>;
   /** Invitations this account accepted that no Add completed yet. */
   accepted(): Promise<E2eeInvitationsResponse>;
+  /**
+   * Invitations this account sent that their invitee accepted and no Add
+   * completed yet, across its projects (slice 5-3b): what the owner's next
+   * session completes.
+   */
+  sent(): Promise<E2eeInvitationsResponse>;
   publishKeyPackage(
     projectId: string,
     request: E2eePublishKeyPackageRequest
@@ -223,6 +246,7 @@ export function createE2eeInvitationsApi(fetcher: Fetch): E2eeInvitationsApi {
       ),
     accept: (request) => call('/api/e2ee/invitations/accept', 'POST', request),
     accepted: () => call('/api/e2ee/invitations'),
+    sent: () => call('/api/e2ee/invitations/sent'),
     publishKeyPackage: (projectId, request) =>
       call(`${project(projectId)}/key-packages`, 'POST', request),
     claimKeyPackages: (projectId, request) =>

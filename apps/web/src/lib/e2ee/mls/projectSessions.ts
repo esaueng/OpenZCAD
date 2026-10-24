@@ -25,6 +25,7 @@ import type {
   EpochChange,
   EpochRecord,
   GroupInfoSummary,
+  JoinArchive,
   Mls,
   MlsSession,
   PendingCommit,
@@ -444,6 +445,101 @@ export class MlsProjectSessions {
             welcome: null
           }
         };
+      }
+    });
+  }
+
+  /**
+   * A KeyPackage for an invitation (slice 5-3b): this device's leaf for the
+   * project, certified from `certifiedEpoch` (the group's current epoch as
+   * the invitation reports it), and one KeyPackage whose private keys stay
+   * in the stored session until a Welcome uses them. A groupless session an
+   * earlier KeyPackage left is reused, with its leaf: a Welcome for either
+   * KeyPackage then joins. A session in a group is refused.
+   */
+  keyPackage(
+    ref: MlsProjectRef,
+    device: CertifyingDevice,
+    certifiedEpoch: number
+  ): Promise<Uint8Array> {
+    if (device.userId !== ref.userId || device.deviceId !== ref.deviceId) {
+      return Promise.reject(
+        new Error('The certifying device is not the one named.')
+      );
+    }
+    return this.operate(ref, {
+      create: { device, certifiedEpoch },
+      mutate: true,
+      run: async (session) => {
+        const status = await session.status();
+        if (
+          status.inGroup ||
+          status.pendingRejoin ||
+          status.pendingJoin ||
+          status.pendingArchive
+        )
+          throw new Error('This device already holds the project’s group.');
+        return { value: await session.keyPackage() };
+      }
+    });
+  }
+
+  /**
+   * Open a Welcome provisionally (`beginJoin`): only the joined epoch's
+   * exporter (`archiveKey`) is available until `completeJoin` has verified
+   * the whole history archive; `discardJoin` restores the KeyPackage
+   * session. The provisional state is stored, and stays blocked across a
+   * reload.
+   */
+  beginJoin(
+    ref: MlsProjectRef,
+    directory: DirectoryInput,
+    welcome: Uint8Array
+  ): Promise<void> {
+    return this.operate(ref, {
+      directory,
+      mutate: true,
+      run: async (session) => {
+        await session.beginJoin(welcome);
+        return { value: undefined, pendingCommit: null };
+      }
+    });
+  }
+
+  /**
+   * The provisional Welcome's exporter, for decrypting the history archive
+   * only: untrusted until `completeJoin` verifies that archive.
+   */
+  archiveKey(ref: MlsProjectRef): Promise<Uint8Array> {
+    return this.operate(ref, {
+      mutate: false,
+      run: async (session) => ({ value: await session.archiveKey() })
+    });
+  }
+
+  /** Verify the join archive against the Welcome (#817) and join. */
+  completeJoin(
+    ref: MlsProjectRef,
+    directory: DirectoryInput,
+    archive: JoinArchive
+  ): Promise<EpochChange> {
+    return this.operate(ref, {
+      directory,
+      mutate: true,
+      run: async (session) => ({
+        value: await session.completeJoin(archive),
+        pendingCommit: null
+      })
+    });
+  }
+
+  /** Drop a provisional Welcome join and restore the KeyPackage session. */
+  discardJoin(ref: MlsProjectRef): Promise<void> {
+    return this.operate(ref, {
+      mutate: true,
+      run: async (session) => {
+        await session.discardJoin();
+        return { value: undefined, pendingCommit: null };
       }
     });
   }

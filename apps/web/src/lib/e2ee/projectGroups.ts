@@ -104,7 +104,9 @@ import type {
   E2eeProjectKeyUploadResponse,
   E2eeProjectKeyWrap,
   E2eeProjectKeysResponse,
-  E2eeProjectLeavesResponse
+  E2eeProjectLeavesResponse,
+  E2eeMlsAddRequest,
+  E2eeWelcomeResponse
 } from '@openzcad/shared';
 import { desktopFetch } from '../desktopBridge';
 import {
@@ -183,6 +185,11 @@ export interface ProjectGroupsApi {
     projectId: string,
     request: E2eeGroupResetRequest
   ): Promise<E2eeProjectGroupResponse>;
+  /**
+   * The newest Welcome an owner's Add stored for this device (slice 5-3b,
+   * migration 0038; 404 `E2EE_WELCOME_NOT_FOUND` when none).
+   */
+  welcome?(projectId: string, deviceId: string): Promise<E2eeWelcomeResponse>;
 }
 
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -259,7 +266,9 @@ export function createProjectGroupsApi(
       call(`${base(projectId)}/keys`, 'POST', request),
     memberCutoffs: (projectId) => call(`${base(projectId)}/revocation-cutoffs`),
     resetGroup: (projectId, request) =>
-      call(`${base(projectId)}/mls/reset`, 'POST', request)
+      call(`${base(projectId)}/mls/reset`, 'POST', request),
+    welcome: (projectId, deviceId) =>
+      call(`${base(projectId)}/welcome${query({ deviceId })}`)
   };
 }
 
@@ -846,10 +855,61 @@ async function openWrap(
   }
 }
 
+/** Project and account pairs whose own session is being synchronized. */
+const syncing = new Set<string>();
+
+/**
+ * Bring this device's own session up to `keyEpoch` before a read gives up
+ * on it (slice 5-3b; the slice 5-2 gap). Wraps of an epoch exist for this
+ * account only once one of its devices processed that epoch, and roles of
+ * an epoch come from its key archive (under that epoch's key) or from this
+ * device's own session at it. So a device whose session is behind a
+ * member's Commit, an External Commit of their other device above all,
+ * catches up here (processing posts the account's own wraps of the epoch),
+ * and a device whose KeyPackage an owner's Add consumed joins by its
+ * Welcome. True when the session moved; any failure leaves the read as it
+ * was.
+ */
+async function syncOwnSession(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  keyEpoch: number
+): Promise<boolean> {
+  const device = ctx.device;
+  if (!device) return false;
+  const ref = refOf(ctx, device, projectId);
+  const id = JSON.stringify([ref.userId, projectId]);
+  if (syncing.has(id)) return false;
+  syncing.add(id);
+  try {
+    if (!(await ctx.sessions.leaf(ref))) return false;
+    const status = await ctx.sessions.status(ref);
+    if (!status.inGroup) {
+      if (status.removed || status.pendingRejoin) return false;
+      return (await joinProjectByWelcome(ctx, projectId)) !== null;
+    }
+    if (status.epoch === null || status.pendingCommit) return false;
+    const group = await fetchGroup(ctx, projectId);
+    const own = group.keyEpochBase + status.epoch;
+    if (keyEpoch <= own || keyEpoch > group.keyEpochBase + group.epoch) {
+      return false;
+    }
+    const caught = await catchUpProjectGroup(ctx, projectId);
+    return caught.keyEpoch > own;
+  } catch {
+    return false;
+  } finally {
+    syncing.delete(id);
+  }
+}
+
 /**
  * The project key of `keyEpoch`: the page cache, the account-key wrap
  * (decision D1; the only source on a read-only approved device, D4), the
  * local session when it is at that epoch, or a later epoch's key archive.
+ * Before the local session and the archives, a device whose own session is
+ * behind `keyEpoch`, or holds a KeyPackage an Add consumed, synchronizes
+ * (`syncOwnSession`) and looks again.
  */
 export async function projectKeyForEpoch(
   ctx: ProjectGroupContext,
@@ -863,17 +923,25 @@ export async function projectKeyForEpoch(
     rememberProjectKey(userId, projectId, keyEpoch, key);
     return key;
   };
-  const { wraps } = await ctx.api.keys(projectId, {
-    keyEpoch,
-    purpose: 'project-key'
-  });
-  const wrap = wraps.find(
-    (w) => w.keyEpoch === keyEpoch && w.purpose === 'project-key'
-  );
-  if (wrap) {
-    return remember(
-      await openWrap(ctx, wrap, projectKeyContext(userId, projectId, keyEpoch))
+  const wrapped = async () => {
+    const { wraps } = await ctx.api.keys(projectId, {
+      keyEpoch,
+      purpose: 'project-key'
+    });
+    const wrap = wraps.find(
+      (w) => w.keyEpoch === keyEpoch && w.purpose === 'project-key'
     );
+    return wrap
+      ? openWrap(ctx, wrap, projectKeyContext(userId, projectId, keyEpoch))
+      : null;
+  };
+  const first = await wrapped();
+  if (first) return remember(first);
+  if (await syncOwnSession(ctx, projectId, keyEpoch)) {
+    const synced = unlockedProjectKey(userId, projectId, keyEpoch);
+    if (synced) return synced;
+    const again = await wrapped();
+    if (again) return remember(again);
   }
   if (ctx.device) {
     const ref = refOf(ctx, ctx.device, projectId);
@@ -1144,15 +1212,20 @@ interface History {
 /**
  * The group's history through its current epoch: the newest project key
  * from the account wrap, every earlier one from the newest archive, and
- * every epoch's record from its archive (the join archive's records).
+ * every epoch's record from its archive (the join archive's records). A
+ * Welcome join (slice 5-3b) reads it through the epoch it joins instead,
+ * with that epoch's key from the provisional session.
  */
 async function loadHistory(
   ctx: ProjectGroupContext,
   projectId: string,
-  group: E2eeProjectGroupRecord
+  group: E2eeProjectGroupRecord,
+  joined?: { readonly epoch: number; readonly key: Uint8Array }
 ): Promise<History> {
-  const target = group.keyEpochBase + group.epoch;
-  const newestKey = await projectKeyForEpoch(ctx, projectId, target);
+  const targetEpoch = joined?.epoch ?? group.epoch;
+  const target = group.keyEpochBase + targetEpoch;
+  const newestKey =
+    joined?.key ?? (await projectKeyForEpoch(ctx, projectId, target));
   const newest = await openArchive(
     ctx,
     projectId,
@@ -1166,7 +1239,7 @@ async function loadHistory(
   keys.set(target, newestKey);
   const records: Uint8Array[] = [];
   let after = group.keyEpochBase;
-  while (records.length < group.epoch) {
+  while (records.length < targetEpoch) {
     const page = await ctx.api.archives(projectId, { after });
     for (const archive of page.archives) {
       const expected = group.keyEpochBase + records.length + 1;
@@ -1190,9 +1263,9 @@ async function loadHistory(
           : await openArchive(ctx, projectId, expected, key, archive);
       records.push(body.epochRecord);
       after = archive.keyEpoch;
-      if (records.length === group.epoch) break;
+      if (records.length === targetEpoch) break;
     }
-    if (records.length < group.epoch && !page.more) {
+    if (records.length < targetEpoch && !page.more) {
       throw new ProjectGroupError(
         'archive-invalid',
         'The project’s key archives end before its current epoch.'
@@ -1353,6 +1426,8 @@ async function submitPending(
      * access, so blob tags under the old one must not continue.
      */
     readonly replaceDedupeSecret?: boolean;
+    /** An owner's Add states its invitation, KeyPackages and Welcome. */
+    readonly add?: E2eeMlsAddRequest;
   }
 ): Promise<Submitted> {
   const ref = refOf(ctx, device, projectId);
@@ -1421,7 +1496,8 @@ async function submitPending(
         next.projectKey,
         next.rejoinPsk
       ),
-      archive
+      archive,
+      ...(pending.add ? { add: pending.add } : {})
     });
     if (!sameBytes(bytes(response.commit.message), pending.commit)) {
       throw new ProjectGroupError(
@@ -1491,6 +1567,9 @@ export async function joinProjectGroup(
   } else if (await ctx.sessions.leaf(ref)) {
     // Resolve a rejoin a crash left pending before deciding anything.
     await recoverProjectGroup(ctx, projectId);
+    // A device an owner's Add brought in joins by its Welcome (slice 5-3b).
+    const welcomed = await joinProjectByWelcome(ctx, projectId);
+    if (welcomed) return await ensureProjectRotated(ctx, projectId, welcomed);
     const status = await ctx.sessions.status(ref);
     if (status.inGroup) {
       try {
@@ -1574,6 +1653,97 @@ export async function joinProjectGroup(
     'epoch-lost',
     'The project kept changing while this device joined. Try again.'
   );
+}
+
+/**
+ * Join by the Welcome an owner's Add stored for this device (slice 5-3b),
+ * when this device published the KeyPackage it consumed. Null when no
+ * Welcome waits (no KeyPackage from this device, or none was added).
+ *
+ * The Welcome opens provisionally (`beginJoin`); its exporter decrypts the
+ * joined epoch's key archive, whose earlier keys open every earlier
+ * archive; the epoch records of epochs 1 through the joined one, from the
+ * signed initial GroupInfo, are the join archive `completeJoin` verifies
+ * against the Welcome (#817): an inviter, or a server, that omits or
+ * alters history is refused, and the KeyPackage session is restored, so a
+ * complete history can still join with the same Welcome. Only then is the
+ * joined epoch's key trusted: this account posts its own wraps of it (the
+ * project key and rejoin PSK, decision D1), which its other devices read
+ * and rejoin with, and the device catches up on later Commits.
+ */
+export async function joinProjectByWelcome(
+  ctx: ProjectGroupContext,
+  projectId: string
+): Promise<ProjectGroupState | null> {
+  const device = requireDevice(ctx);
+  const ref = refOf(ctx, device, projectId);
+  if (!ctx.api.welcome || !(await ctx.sessions.leaf(ref))) return null;
+  const status = await ctx.sessions.status(ref);
+  if (status.inGroup || status.removed || status.pendingRejoin) return null;
+  // A provisional join a reload interrupted starts again from the Welcome.
+  if (status.pendingJoin || status.pendingArchive) {
+    await ctx.sessions.discardJoin(ref);
+  }
+  let welcome: E2eeWelcomeResponse['welcome'];
+  try {
+    welcome = (await ctx.api.welcome(projectId, device.deviceId)).welcome;
+  } catch (error) {
+    if (isApiError(error, 'E2EE_WELCOME_NOT_FOUND')) return null;
+    throw error;
+  }
+  const group = await fetchGroup(ctx, projectId);
+  const epoch = welcome.epoch + 1;
+  if (!Number.isSafeInteger(epoch) || epoch < 1 || epoch > group.epoch) {
+    throw new ProjectGroupError(
+      'server-mismatch',
+      `The server's Welcome joins epoch ${epoch}, but the group is at ${group.epoch}.`
+    );
+  }
+  const directory = await directoryFor(ctx, projectId, group);
+  await ctx.sessions.beginJoin(ref, directory, bytes(welcome.welcome));
+  let history: History;
+  try {
+    // Untrusted until completeJoin: it only opens the archives.
+    const joinedKey = await ctx.sessions.archiveKey(ref);
+    history = await loadHistory(ctx, projectId, group, {
+      epoch,
+      key: joinedKey
+    });
+    await ctx.sessions.completeJoin(ref, directory, {
+      initialGroupInfo: bytes(group.initialGroupInfo),
+      epochRecords: history.records
+    });
+  } catch (error) {
+    await ctx.sessions.discardJoin(ref).catch(() => undefined);
+    throw error;
+  }
+  const material = await ctx.sessions.epochMaterial(ref);
+  const keyEpoch = group.keyEpochBase + epoch;
+  if (
+    material.epoch !== epoch ||
+    !sameBytes(material.projectKey, history.keys.get(keyEpoch)!)
+  ) {
+    throw new ProjectGroupError(
+      'server-mismatch',
+      `The Welcome did not join epoch ${epoch}.`
+    );
+  }
+  const joined = await ctx.sessions.status(ref);
+  if (joined.roles) {
+    knownRoles.set(rolesId(ctx, projectId, keyEpoch), joined.roles);
+  }
+  for (const [historic, key] of history.keys) {
+    rememberProjectKey(ctx.account.userId, projectId, historic, key);
+  }
+  if (ctx.api.postKeys) {
+    try {
+      await postOwnEpochKeys(ctx, projectId, keyEpoch, material);
+    } catch {
+      // Best effort, as after processing a Commit: the next processed
+      // Commit posts that epoch's wraps.
+    }
+  }
+  return await catchUpProjectGroup(ctx, projectId);
 }
 
 const stateOf = (group: E2eeProjectGroupRecord): ProjectGroupState => ({
@@ -1732,6 +1902,8 @@ interface BuiltCommit {
   readonly request: CommitRequest;
   /** The Commit carries a due rotation: replace the dedupe secret. */
   readonly rotation: boolean;
+  /** An owner's Add of an invitee (slice 5-3b). */
+  readonly invitee?: InviteeAddition;
 }
 
 /**
@@ -1755,7 +1927,10 @@ async function commitLoop(
     const group = await fetchGroup(ctx, projectId);
     const built = await build(await ctx.sessions.status(ref), group);
     if (!built) return caught;
-    const directory = await directoryFor(ctx, projectId, group);
+    const directory = withInvitee(
+      await directoryFor(ctx, projectId, group),
+      built.invitee
+    );
     const pending = await ctx.sessions.commit(ref, directory, built.request);
     const submitted = await submitPending(
       ctx,
@@ -1763,7 +1938,13 @@ async function commitLoop(
       projectId,
       group.keyEpochBase,
       directory,
-      { commit: pending.commit, replaceDedupeSecret: built.rotation }
+      {
+        commit: pending.commit,
+        replaceDedupeSecret: built.rotation,
+        ...(built.invitee
+          ? { add: addRequest(built.invitee, pending.welcome) }
+          : {})
+      }
     );
     if (submitted.accepted) {
       await ctx.sessions.confirmCommit(ref, directory);
@@ -1801,6 +1982,127 @@ export function commitProjectGroup(
       request: { ...request, ...(remove.length ? { remove } : {}) },
       rotation: true
     };
+  });
+}
+
+// --- Adding an invitee (slice 5-3b) -----------------------------------------
+
+/** One KeyPackage of the invitee, as the owner's claim returned it. */
+export interface InviteeKeyPackage {
+  readonly deviceId: string;
+  readonly keyPackage: Uint8Array;
+  /** Hex SHA-256 of `keyPackage`, as the Add names it. */
+  readonly keyPackageHash: string;
+  /** The device's certified leaf for this project, which it carries. */
+  readonly leafKey: Uint8Array;
+  readonly certification: Uint8Array;
+}
+
+/** What the owner's Add brings in, all checked by the caller first. */
+export interface InviteeAddition {
+  readonly invitationId: string;
+  readonly userId: string;
+  /** The role the owner-signed invitation statement names. */
+  readonly role: 'editor' | 'viewer';
+  /**
+   * The invitee's device list, which the owner verified (slice 5-1):
+   * every KeyPackage's leaf is certified by one of its devices.
+   */
+  readonly list: VerifiedDeviceList;
+  readonly keyPackages: readonly InviteeKeyPackage[];
+}
+
+/**
+ * The directory an Add is built and confirmed with: the members' as usual,
+ * plus the invitee's verified list and the leaves of the claimed
+ * KeyPackages, which the registry holds only once the Add lands. The
+ * invitee's revoked devices get cutoff 0 where nothing names one: they
+ * were revoked before this group could give them a key, so none of its
+ * rejoin PSKs is one they may know of.
+ */
+function withInvitee(
+  directory: DirectoryInput,
+  invitee: InviteeAddition | undefined
+): DirectoryInput {
+  if (!invitee) return directory;
+  const listed = directory.lists.some((list) => list.userId === invitee.userId);
+  const cutoffs = new Map(directory.revocationCutoffs ?? []);
+  const devices = new Map(cutoffs.get(invitee.userId) ?? []);
+  for (const revoked of revokedDevices(invitee.list)) {
+    if (!devices.has(revoked.id)) devices.set(revoked.id, 0);
+  }
+  cutoffs.set(invitee.userId, devices);
+  return {
+    lists: listed ? directory.lists : [...directory.lists, invitee.list],
+    certifications: [
+      ...directory.certifications,
+      ...invitee.keyPackages.map((entry): LeafCertification => ({
+        userId: invitee.userId,
+        deviceId: entry.deviceId,
+        leafKey: entry.leafKey,
+        certification: entry.certification
+      }))
+    ],
+    revocationCutoffs: cutoffs
+  };
+}
+
+function addRequest(
+  invitee: InviteeAddition,
+  welcome: Uint8Array | null
+): E2eeMlsAddRequest {
+  if (!welcome) throw new Error('An Add produced no Welcome.');
+  return {
+    invitationId: invitee.invitationId,
+    keyPackages: invitee.keyPackages.map((entry) => ({
+      userId: invitee.userId,
+      deviceId: entry.deviceId,
+      keyPackageHash: entry.keyPackageHash
+    })),
+    welcome: b64(welcome)
+  };
+}
+
+/**
+ * The owner's Add of an invitee (ADR-024, Sharing and collaboration; slice
+ * 5-3b): one Commit adds every claimed KeyPackage (decision M3: each
+ * invitee device that published one; the others rejoin from them) and
+ * lists the identity in the roles with the invitation's role. It travels
+ * with the Welcome, the invitation and the KeyPackages it consumes (the
+ * Worker refuses any other set), the new epoch's GroupInfo, the owner's
+ * own wraps of the new epoch and its key archive, whose records the
+ * invitee's join verifies. The policy (only the owner adds identities) and
+ * the directory (each new leaf certified by a device of the verified list)
+ * run as for any Commit; a Commit that lost its epoch is rebuilt on the
+ * winner with the same KeyPackages. A rotation a removal left due rides
+ * along.
+ */
+export function addInvitee(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  invitee: InviteeAddition
+): Promise<ProjectGroupState> {
+  if (invitee.list.userId !== invitee.userId) {
+    return Promise.reject(
+      new ProjectGroupError(
+        'server-mismatch',
+        'The invitee’s device list is another account’s.'
+      )
+    );
+  }
+  if (invitee.keyPackages.length === 0) {
+    return Promise.reject(
+      new ProjectGroupError('key-missing', 'The invitee has no KeyPackage.')
+    );
+  }
+  return commitLoop(ctx, projectId, async (status, group) => {
+    const rotation = await rotationRequest(ctx, projectId, status, group);
+    const request: CommitRequest = {
+      add: invitee.keyPackages.map((entry) => entry.keyPackage),
+      setRoles: [{ userId: invitee.userId, role: invitee.role }],
+      ...(rotation?.remove?.length ? { remove: rotation.remove } : {})
+    };
+    return { request, rotation: rotation !== null, invitee };
   });
 }
 
@@ -2171,7 +2473,13 @@ export async function recoverProjectGroup(
       `The server's group is at epoch ${group.epoch} with no Commit for epoch ${epoch}.`
     );
   }
-  if (await rotationRequest(ctx, projectId, status, group)) {
+  // An Add (it carries a Welcome) is never sent again without the
+  // invitation and KeyPackages it states (slice 5-3b): the owner's next
+  // completion builds it afresh from the claim.
+  if (
+    pending.welcome ||
+    (await rotationRequest(ctx, projectId, status, group))
+  ) {
     await ctx.sessions.discardCommit(ref);
     return 'discarded';
   }
