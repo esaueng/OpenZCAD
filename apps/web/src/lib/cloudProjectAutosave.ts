@@ -8,6 +8,8 @@ import {
   type SaveProjectDocumentResponse
 } from '@openzcad/shared';
 import {
+  assertStorableDocument,
+  UnstorableDocumentError,
   withEchoedSavePoints,
   withoutDerivedProjection
 } from '@openzcad/document-core';
@@ -211,6 +213,12 @@ export class CloudProjectAutosave {
    * limit may resume a size refusal; other halts need an explicit new baseline.
    */
   #halted: 'conflict' | 'repair' | 'refused' | null = null;
+  /**
+   * The browser refused to upload an edit other devices could not open
+   * (ADR-024 Phase 1). Like a size refusal, a newer edit that passes the same
+   * checks resumes saving; repeating the refused one never would.
+   */
+  #contentRefusal: { editEpoch: number } | null = null;
   #sizeRefusal: {
     editEpoch: number;
     limitBytes: number;
@@ -332,6 +340,7 @@ export class CloudProjectAutosave {
     };
     this.#halted = this.#conflictProjectId === projectId ? 'conflict' : null;
     this.#sizeRefusal = null;
+    this.#contentRefusal = null;
     this.#automaticRetries = 0;
     if (this.#halted) {
       this.#emit(this.#halted);
@@ -375,6 +384,7 @@ export class CloudProjectAutosave {
     this.#pendingSince = null;
     this.#halted = null;
     this.#sizeRefusal = null;
+    this.#contentRefusal = null;
     this.#conflictProjectId = null;
     this.#automaticRetries = 0;
   }
@@ -404,6 +414,7 @@ export class CloudProjectAutosave {
     this.#pendingSince = null;
     this.#halted = null;
     this.#sizeRefusal = null;
+    this.#contentRefusal = null;
     this.#conflictProjectId = null;
     this.#automaticRetries = 0;
     this.#emit('synced');
@@ -449,6 +460,19 @@ export class CloudProjectAutosave {
       ) {
         this.#halted = null;
         this.#sizeRefusal = null;
+      }
+    }
+    if (
+      this.#halted === 'refused' &&
+      this.#contentRefusal &&
+      this.#pending.editEpoch > this.#contentRefusal.editEpoch
+    ) {
+      try {
+        assertStorableDocument(document);
+        this.#halted = null;
+        this.#contentRefusal = null;
+      } catch {
+        // Still refused; keep waiting for an edit that fixes it.
       }
     }
     if (this.#halted) {
@@ -658,6 +682,21 @@ export class CloudProjectAutosave {
   #handleFailure(next: PendingSave, error: unknown): SaveResult {
     const status = error instanceof ApiError ? error.status : null;
     this.#sizeRefusal = null;
+    this.#contentRefusal = null;
+
+    // The browser would not upload it: other devices could not open it.
+    // Retrying the same edit changes nothing, so halt until a newer one
+    // passes the checks, and never report it as a network failure.
+    if (error instanceof UnstorableDocumentError) {
+      this.#requeue(next);
+      this.#halted = 'refused';
+      this.#contentRefusal = { editEpoch: next.editEpoch };
+      this.#emit('refused', error);
+      if (this.#pending && this.#pending.editEpoch > next.editEpoch) {
+        this.schedule(this.#pending.document);
+      }
+      return { state: 'halted' };
+    }
 
     // Divergence. Hand the decision up and stop writing — a retry would either
     // fail identically or, worse, succeed against a version the user never saw.

@@ -14,7 +14,10 @@ import {
   type ProjectDocument,
   type ProjectEditLease
 } from '@openzcad/shared';
-import { mergeCollaborationDocuments } from '@openzcad/document-core';
+import {
+  assertStorableDocument,
+  mergeCollaborationDocuments
+} from '@openzcad/document-core';
 import {
   clearUnresolvedConflict,
   conflictFromDocuments,
@@ -430,16 +433,17 @@ export function useCollaboration({
       if (!isCurrentRoom() || !current || current.projectId !== projectId) {
         return false;
       }
-      const payload = JSON.stringify({
-        type,
-        clientId: id,
-        displayName,
-        baseVersion: baseVersionRef.current,
-        document: type === 'hello' ? null : collaborationDocument(current),
-        ...(leaseIdRef.current ? { leaseId: leaseIdRef.current } : {})
-      });
+      const frame = (document: ProjectDocument | null) =>
+        JSON.stringify({
+          type,
+          clientId: id,
+          displayName,
+          baseVersion: baseVersionRef.current,
+          document: document && collaborationDocument(document),
+          ...(leaseIdRef.current ? { leaseId: leaseIdRef.current } : {})
+        });
       if (type === 'hello') {
-        socket.send(payload);
+        socket.send(frame(null));
         return true;
       }
       if (
@@ -456,6 +460,24 @@ export function useCollaboration({
       ) {
         return false;
       }
+      // The room stores submissions without reading them (ADR-024 Phase 1),
+      // so this browser refuses to publish a document other members could
+      // not open. Local edits stay as they are. What goes out is the document
+      // as the checks normalized it, the same form an account save uploads.
+      let normalized: ProjectDocument;
+      try {
+        normalized = assertStorableDocument(current);
+      } catch (error) {
+        console.error(
+          `Collaboration edit not sent: ${error instanceof Error ? error.message : String(error)}`
+        );
+        settleCheckpointDrain(
+          new Error('This version cannot be shared with the room.')
+        );
+        setStatus('rejected');
+        return false;
+      }
+      const payload = frame(normalized);
       pendingDocument = current;
       lastSentVersionRef.current = current.version;
       if (new TextEncoder().encode(payload).byteLength > MAX_MESSAGE_BYTES) {
@@ -468,7 +490,7 @@ export function useCollaboration({
             body: JSON.stringify({
               clientId: id,
               baseVersion: baseVersionRef.current,
-              document: collaborationDocument(current),
+              document: collaborationDocument(normalized),
               leaseId: leaseIdRef.current
             })
           }

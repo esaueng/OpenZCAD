@@ -9,6 +9,7 @@ import {
 } from '@openzcad/document-core';
 import {
   KEPT_LOCAL_VERSION_REASON,
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
   type AuthSession,
   type CollaborationServerMessage,
@@ -677,6 +678,75 @@ describe('useCollaboration lease ordering', () => {
       unmount();
     }
   );
+
+  it('publishes the document as the checks normalized it', () => {
+    const base = createProjectDocument(
+      'Normalized send',
+      toUserId('user_normalized_send')
+    );
+    const { socket, rerender, unmount } = connectedOwner(base);
+    // An older schema stamp is migrated by the checks; the room receives the
+    // migrated form, as an account save would upload it.
+    const edited = addPrimitiveFeature(base, {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 1 }
+    });
+    rerender({
+      document: { ...edited, schemaVersion: 30 } as unknown as ProjectDocument
+    });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(socket.frames().at(-1)).toMatchObject({
+      type: 'document',
+      document: {
+        version: edited.version,
+        schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION
+      }
+    });
+    unmount();
+  });
+
+  it('never publishes a local document other members could not open', () => {
+    const base = createProjectDocument(
+      'Unpublishable',
+      toUserId('user_unpublishable')
+    );
+    const { result, socket, rerender, unmount } = connectedOwner(base);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const sent = socket.sent.length;
+    rerender({
+      document: {
+        ...base,
+        version: base.version + 1,
+        objectFolders: 'folders'
+      } as unknown as ProjectDocument
+    });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(socket.sent).toHaveLength(sent);
+    expect(result.current.status).toBe('rejected');
+    // A valid edit afterwards goes out as usual.
+    const fixed = {
+      ...addPrimitiveFeature(base, {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 1, height: 1, depth: 1 }
+      }),
+      version: base.version + 2
+    };
+    rerender({ document: fixed });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(socket.frames().at(-1)).toMatchObject({
+      type: 'document',
+      document: { version: fixed.version }
+    });
+    unmount();
+  });
 
   it('keeps a conflict for manual reconciliation when the browser merge cannot combine the edits', () => {
     const base = createProjectDocument(
@@ -1964,6 +2034,56 @@ describe('parseServerMessage', () => {
         document.projectId
       )
     ).toBeNull();
+  });
+
+  it('refuses room documents this browser cannot open and keeps its last good version', () => {
+    const bad = {
+      ...document,
+      version: document.version + 1,
+      objectFolders: 'folders'
+    } as unknown as ProjectDocument;
+    const parse = (frame: unknown) =>
+      parseServerMessage(JSON.stringify(frame), document.projectId);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    for (const frame of [
+      { type: 'document', clientId: 'peer', document: bad },
+      { type: 'conflict', document: bad }
+    ]) {
+      const refused = parse(frame);
+      expect(refused).toMatchObject({
+        type: 'error',
+        code: 'document-invalid'
+      });
+      expect(refused?.type === 'error' && refused.message).toMatch(
+        /objectFolders/
+      );
+    }
+    expect(
+      parse({
+        type: 'state',
+        members: [],
+        document: bad,
+        role: 'editor',
+        lease: null
+      })
+    ).toMatchObject({ type: 'state', document: null, role: 'editor' });
+    expect(parse({ type: 'ack', version: 3, document: bad })).toEqual({
+      type: 'ack',
+      version: 3
+    });
+    const latest = { ...document, version: document.version + 2 };
+    expect(
+      parse({
+        type: 'conflict',
+        document: latest,
+        base: { ...bad, version: document.version + 1 }
+      })
+    ).toEqual({ type: 'conflict', document: latest });
+    // A newer client's document is left for the update prompt, not refused.
+    const newer = { ...bad, schemaVersion: 9_999 };
+    expect(
+      parse({ type: 'document', clientId: 'peer', document: newer })
+    ).toMatchObject({ type: 'document' });
   });
 
   it('keeps a usable conflict base and drops one the client cannot use', () => {
