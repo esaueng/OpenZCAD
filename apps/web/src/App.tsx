@@ -7085,6 +7085,13 @@ export function App() {
     ? `${renderedSelectedTopology.bodyId}:${renderedSelectedTopology.topologyId ?? renderedSelectedTopology.hash ?? ''}`
     : null;
   const editFaceOpen = selectionKey !== null && editFaceKey === selectionKey;
+  // Any other pick, or none, forgets it: coming back to the face is a new
+  // pick, and its card waits for Edit face again.
+  useEffect(() => {
+    if (editFaceKey !== null && editFaceKey !== selectionKey) {
+      setEditFaceKey(null);
+    }
+  }, [editFaceKey, selectionKey]);
   /**
    * The selection chip anchored to the pick: name, key measurement, the
    * verbs for that kind of pick and the clear action (lib/selectionCallout).
@@ -7143,6 +7150,13 @@ export function App() {
   // Exactly when the card has an edit to offer: an imported hole or blend
   // with no operation armed on it (an armed one is edited at its handle,
   // and the card then hides its own copy of the value).
+  // The selection is the one a History row made: its feature pinned and
+  // nothing finer than its body picked since.
+  const historyRowSelection =
+    featureSelectionSource === 'pinned' &&
+    selectedEdges.length === 0 &&
+    (renderedSelectedTopology === null ||
+      renderedSelectedTopology.kind === 'body');
   const calloutImportedFace = (() => {
     if (calloutKind !== 'face' || renderedSelectedTopology === null) {
       return false;
@@ -24232,9 +24246,13 @@ export function App() {
             footer={columnFooter}
             selection={
               // A History row's own card names the feature it opened, so
-              // the Selection card would only repeat it, behind that card.
+              // the Selection card would only repeat it, behind that card:
+              // whether the row's result is consumed (a focus) or a live
+              // body the row selected. A face or edge picked since is a
+              // pick of its own, and its verbs show.
               calloutWithOperation &&
               !historyFocus &&
+              !historyRowSelection &&
               interaction.mode !== 'sketch' ? (
                 <SelectionCard content={calloutWithOperation} />
               ) : null

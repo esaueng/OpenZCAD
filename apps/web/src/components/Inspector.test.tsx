@@ -946,6 +946,23 @@ describe('imported face recognition display', () => {
     });
   }
 
+  it('opens the face editor, not just the readout, when Edit face asks for an inferred feature', () => {
+    render(
+      <Inspector
+        {...importedProps({
+          selectedFeature: feature,
+          featureSelectionSource: 'inferred',
+          directPickDetails: true
+        })}
+      />
+    );
+    const inspector = screen.getByRole('region', { name: 'Feature inspector' });
+    expect(inspector).toHaveClass('object-readout');
+    expect(
+      screen.getByRole('region', { name: 'Selected face properties' })
+    ).toBeInTheDocument();
+  });
+
   it('shows a recognized kind with its dimensions and keeps the through-hole edit path', () => {
     const onResizeThroughHole = vi.fn();
     render(

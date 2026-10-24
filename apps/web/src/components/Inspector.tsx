@@ -2375,6 +2375,29 @@ export function Inspector(props: InspectorProps) {
             units={units}
           />
         ) : null}
+        {/* Opened by the Selection card's Edit face: the imported face's own
+            edits are what was asked for, not just its provenance. */}
+        {props.directPickDetails &&
+          !commandSession &&
+          selectedTopology?.kind === 'face' &&
+          selectedBody?.source === 'imported-step' && (
+            <FaceDirectEdit
+              key={`${selectedBody.bodyId}:${selectedTopology.hash ?? selectedTopology.topologyId}`}
+              body={selectedBody}
+              selection={selectedTopology}
+              scope={scope}
+              units={units}
+              onResizeThroughHole={props.onResizeThroughHole}
+              onRemoveFaceFeature={props.onRemoveFaceFeature}
+              recognition={props.recognition}
+              recognitionPending={props.recognitionPending}
+              recognitionError={props.recognitionError}
+              recognitionDocument={props.recognitionDocument}
+              recognitionQuery={props.recognitionQuery}
+              recognitionCache={props.recognitionCache}
+              recognitionWorker={props.recognitionWorker}
+            />
+          )}
         {selectedBody && (
           <BodyStats
             body={selectedBody}
