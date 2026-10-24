@@ -1095,7 +1095,7 @@ export interface SeedPanelLayout {
     hidden?: boolean;
     locked?: boolean;
     compact?: boolean;
-    fit?: boolean;
+    hug?: boolean;
     width?: 'narrow' | 'regular' | 'wide';
   };
 }

@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
@@ -14,6 +15,7 @@ import {
   beginDrag,
   clampFloatRect,
   closePanel,
+  columnMinimum,
   computePanelGeometry,
   defaultFloatRect,
   DROP_SUPPRESSED,
@@ -36,11 +38,13 @@ import {
   popOutPanel,
   popOutRect,
   previewLayout,
+  resizeColumn,
   resizeFloat,
   resizeGap,
   splitGapEvenly,
   unpinPanel,
   wouldExceedCap,
+  type ColumnGeometry,
   type DockSide,
   type GapGeometry,
   type PanelEntry,
@@ -509,6 +513,48 @@ export function PanelDock({
     if (next === null) return;
     event.preventDefault();
     event.stopPropagation();
+    if (next !== layout) onLayout(next);
+  };
+
+  /**
+   * A docked column's foot: where it is drawn, the dock's height, and the
+   * panels whose column height it sets (none while a drop preview or the
+   * lock leaves nothing to resize).
+   */
+  const columnFoot = (column: ColumnGeometry) => {
+    const dockHeight = docked!.dock.bottom - docked!.dock.top;
+    // A column whose panels all hug their content ends where they do.
+    const drawn = column.overflowing
+      ? column.h
+      : Math.min(column.h, column.contentHeight);
+    const panels = column.panels.filter(
+      (entry): entry is PanelId => entry !== PANEL_SLOT
+    );
+    const enabled =
+      !layout.options.locked &&
+      panels.length > 0 &&
+      panels.length === column.panels.length;
+    return { dockHeight, drawn, panels, enabled };
+  };
+
+  const footKey = (
+    event: ReactKeyboardEvent<HTMLElement>,
+    column: ColumnGeometry
+  ) => {
+    const { dockHeight, drawn, panels, enabled } = columnFoot(column);
+    if (!enabled) return;
+    const height =
+      event.key === 'ArrowUp'
+        ? drawn - KEY_STEP
+        : event.key === 'ArrowDown'
+          ? drawn + KEY_STEP
+          : event.key === 'End'
+            ? dockHeight
+            : null;
+    if (height === null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const next = resizeColumn(layout, panels, height, dockHeight);
     if (next !== layout) onLayout(next);
   };
 
@@ -1091,6 +1137,88 @@ export function PanelDock({
     </>
   );
 
+  const renderColumn = (column: ColumnGeometry) => (
+    <div
+      className={`panel-column${column.overflowing ? ' is-scrolling' : ''}`}
+      data-side={column.side}
+      style={{
+        left: column.x,
+        top: column.y,
+        width: column.w,
+        height: column.h
+      }}
+    >
+      <div
+        className="panel-column-stack"
+        style={{ height: column.contentHeight }}
+      >
+        {renderStack(
+          column.panels,
+          column,
+          'docked',
+          (gap) =>
+            gap.container.kind === 'column' &&
+            gap.container.side === column.side &&
+            gap.container.column === column.column
+        )}
+      </div>
+    </div>
+  );
+
+  /**
+   * The handle under a docked column: drag it up to end the column short,
+   * down to the dock's foot (or double-click it) to fill the dock again.
+   */
+  const renderColumnFoot = (column: ColumnGeometry) => {
+    const { dockHeight, drawn, panels, enabled } = columnFoot(column);
+    if (panels.length === 0) return null;
+    const percent = (value: number) =>
+      dockHeight > 0 ? Math.round((100 * value) / dockHeight) : 100;
+    const minimum = columnMinimum(panels.length);
+    return (
+      <div
+        className={`panel-column-foot${enabled ? '' : ' is-off'}${
+          column.shortened ? ' is-shortened' : ''
+        }`}
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label={`Resize the ${titlesOf(panels)} column`}
+        aria-valuemin={percent(Math.min(minimum, drawn))}
+        aria-valuemax={100}
+        aria-valuenow={percent(drawn)}
+        aria-disabled={enabled ? undefined : true}
+        tabIndex={enabled ? 0 : -1}
+        title={
+          enabled
+            ? column.shortened
+              ? 'Drag to resize · double-click to fill the height'
+              : 'Drag up to shorten the column'
+            : undefined
+        }
+        style={{
+          left: column.x,
+          top: column.y + drawn,
+          width: column.w
+        }}
+        onPointerDown={(event) => {
+          if (!enabled) return;
+          startLocal(event, (base, _dx, dy) =>
+            resizeColumn(base, panels, drawn + dy, dockHeight)
+          );
+        }}
+        {...localHandlers}
+        onKeyDown={(event) => footKey(event, column)}
+        onDoubleClick={() => {
+          if (!enabled) return;
+          const next = resizeColumn(layout, panels, dockHeight, dockHeight);
+          if (next !== layout) onLayout(next);
+        }}
+      >
+        <span className="panel-gap-grip" aria-hidden="true" />
+      </div>
+    );
+  };
+
   // Windows keep one DOM order and take their stacking from the z-order,
   // so raising one never moves an element that has focus.
   const windows = docked
@@ -1107,32 +1235,10 @@ export function PanelDock({
       ref={layerRef}
     >
       {docked?.columns.map((column) => (
-        <div
-          key={`${column.side}-${column.column}`}
-          className={`panel-column${column.overflowing ? ' is-scrolling' : ''}`}
-          data-side={column.side}
-          style={{
-            left: column.x,
-            top: column.y,
-            width: column.w,
-            height: column.h
-          }}
-        >
-          <div
-            className="panel-column-stack"
-            style={{ height: column.contentHeight }}
-          >
-            {renderStack(
-              column.panels,
-              column,
-              'docked',
-              (gap) =>
-                gap.container.kind === 'column' &&
-                gap.container.side === column.side &&
-                gap.container.column === column.column
-            )}
-          </div>
-        </div>
+        <Fragment key={`${column.side}-${column.column}`}>
+          {renderColumn(column)}
+          {!dragView && renderColumnFoot(column)}
+        </Fragment>
       ))}
       {slot && slot.id !== PANEL_SLOT && (
         <div

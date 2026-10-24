@@ -268,10 +268,8 @@ test('Pin docks, two pinned panels stack, and a closed panel reopens at home', a
 test('the gap between stacked panels resizes them, and a double-click splits them evenly', async ({
   page
 }) => {
-  // Panels that fill their shares: an empty project's all hug their content.
   await openWorkspace(page, 'Gap check', {
-    right: [['history', 'parameters']],
-    options: { fit: false }
+    right: [['history', 'parameters']]
   });
   const history = modelPanel(page, 'History');
   const parameters = modelPanel(page, 'Parameters');
@@ -321,13 +319,75 @@ test('the gap between stacked panels resizes them, and a double-click splits the
   await expect(gap).toHaveAttribute('aria-valuenow', '50');
 });
 
+test('a docked column fills the dock, its foot shortens it, and a second panel fills it again', async ({
+  page
+}) => {
+  await openWorkspace(page, 'Column foot', { right: [['bodies']] });
+  const objects = modelPanel(page, 'Objects');
+  await expect(objects).toBeVisible();
+  const column = page.locator('.panel-column[data-side="right"]');
+  // Filled to the dock's foot: an island gap above the window's foot.
+  const viewport = page.viewportSize()!;
+  const full = await box(objects);
+  expect(viewport.height - (full.y + full.height)).toBeCloseTo(10, 0);
+
+  const foot = page.getByRole('separator', {
+    name: 'Resize the Objects column'
+  });
+  await expect(foot).toHaveAttribute('aria-valuenow', '100');
+  const handle = await box(foot);
+  const start = { x: handle.x + handle.width / 2, y: handle.y + 4 };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x, start.y - 150, { steps: 4 });
+  await page.mouse.move(start.x, start.y - 300, { steps: 4 });
+  await page.mouse.up();
+  await expect
+    .poll(async () => full.height - (await box(objects)).height)
+    .toBeCloseTo(300, 0);
+  expect((await box(column)).height).toBeCloseTo(full.height - 300, 0);
+  // The foot follows the column's end, and the height is the device's.
+  expect((await box(foot)).y).toBeCloseTo(handle.y - 300, 0);
+  await page.reload();
+  await expect(objects).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(async () => (await box(objects)).height)
+    .toBeCloseTo(full.height - 300, 0);
+
+  // Another panel docked in the column fills the dock again, both sharing it.
+  await railPanelButton(page, 'History').click();
+  await modelPanel(page, 'History')
+    .getByRole('button', { name: 'Pin History' })
+    .click();
+  await expect.poll(() => dockedTitles(page)).toHaveLength(1);
+  expect((await dockedTitles(page))[0]!.sort()).toEqual(['History', 'Objects']);
+  await expect
+    .poll(async () => (await box(column)).height)
+    .toBeCloseTo(full.height, 0);
+
+  // Back on its own, Objects returns to the height it was given; a
+  // double-click on the foot fills the dock.
+  await modelPanel(page, 'History')
+    .getByRole('button', { name: 'Close History' })
+    .click();
+  await expect
+    .poll(async () => (await box(objects)).height)
+    .toBeCloseTo(full.height - 300, 0);
+  await foot.dblclick();
+  await expect
+    .poll(async () => (await box(objects)).height)
+    .toBeCloseTo(full.height, 0);
+  await expect(foot).toHaveAttribute('aria-valuenow', '100');
+});
+
 test('a divider announces where it is drawn while its panels hug their content', async ({
   page
 }) => {
-  // Fit panels to content is on by default: an empty project's panels are
-  // drawn at their content's height, not their equal stored weights.
+  // With Fit panels to content on, an empty project's panels are drawn at
+  // their content's height, not their equal stored weights.
   await openWorkspace(page, 'Fitted divider', {
-    right: [['history', 'revisions', 'parameters']]
+    right: [['history', 'revisions', 'parameters']],
+    options: { hug: true }
   });
   const history = modelPanel(page, 'History');
   const revisions = modelPanel(page, 'Revisions');
@@ -356,8 +416,7 @@ test('a double-click split leaves the rest of the stack its height when a neighb
   page
 }) => {
   await openWorkspace(page, 'Split check', {
-    right: [['history', 'parameters', 'revisions']],
-    options: { fit: false }
+    right: [['history', 'parameters', 'revisions']]
   });
   const history = modelPanel(page, 'History');
   const parameters = modelPanel(page, 'Parameters');
@@ -708,13 +767,11 @@ for (const [label, layout] of [
 test('a five-panel column at a 390px window scrolls and keeps every header control reachable', async ({
   page
 }) => {
-  // Each at its 90px minimum: none hugs a shorter content.
-  await openWorkspace(
-    page,
-    'Short check',
-    { ...ALL_PANELS_DOCKED, options: { fit: false } },
-    { width: 1280, height: 390 }
-  );
+  // Each at its 90px minimum.
+  await openWorkspace(page, 'Short check', ALL_PANELS_DOCKED, {
+    width: 1280,
+    height: 390
+  });
   const column = page.locator('.panel-column');
   await expect(column).toHaveClass(/is-scrolling/);
   const stage = await box(column);

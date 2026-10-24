@@ -13,7 +13,7 @@ const OPTIONS: PanelLayoutOptions = {
   hidden: false,
   locked: false,
   compact: false,
-  fit: true,
+  hug: false,
   width: 'regular'
 };
 

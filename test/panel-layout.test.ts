@@ -5,6 +5,8 @@ import {
   clampFloatRect,
   clampFloatsToStage,
   closePanel,
+  COLUMN_FILL_SNAP,
+  columnKey,
   commitPreview,
   computePanelGeometry,
   DEFAULT_PANEL_INSETS,
@@ -53,6 +55,7 @@ import {
   presentPanel,
   previewLayout,
   raiseFloat,
+  resizeColumn,
   resizeFloat,
   resizeGap,
   savePanelLayout,
@@ -200,7 +203,7 @@ describe('panel layout presets', () => {
         hidden: false,
         locked: false,
         compact: true,
-        fit: true,
+        hug: false,
         width: 'wide'
       });
       // A preset is a fresh arrangement: no homes, nothing unpinned.
@@ -1478,8 +1481,11 @@ describe('gap resizing with a held panel', () => {
 });
 
 describe('docked panels hugging their content', () => {
+  // Fit panels to content is opt-in: docked panels fill by default.
+  const hugging = (parts: Partial<PanelLayout>): PanelLayout =>
+    setOption(layoutWith(parts), 'hug', true);
   const column = (): PanelLayout =>
-    layoutWith({ right: [['parameters', 'bodies', 'history']] });
+    hugging({ right: [['parameters', 'bodies', 'history']] });
 
   it('draws a panel no taller than its natural height', () => {
     const stage: PanelStage = { ...STAGE, naturals: { bodies: 120 } };
@@ -1517,27 +1523,31 @@ describe('docked panels hugging their content', () => {
     expect(geometry.gaps.every((gap) => !gap.enabled)).toBe(true);
   });
 
-  it('fills every share with Fit panels to content off', () => {
+  it('fills every share with Fit panels to content off, the default', () => {
     const plain = computePanelGeometry(column(), STAGE);
-    const unfit = computePanelGeometry(setOption(column(), 'fit', false), {
+    const unfit = computePanelGeometry(setOption(column(), 'hug', false), {
       ...STAGE,
       naturals: { parameters: 100, bodies: 60, history: 150 }
     });
     expect(unfit.panels).toEqual(plain.panels);
-    // A stored layout without the option fits, as a new one does.
-    expect(normalizePanelLayout({ right: [['history']] }).options.fit).toBe(
-      true
-    );
+    expect(unfit.columns[0]!.contentHeight).toBe(unfit.columns[0]!.h);
+    expect(defaultPanelLayout().options.hug).toBe(false);
+    // A stored layout without the option fills, as a new one does; the
+    // `fit` key it replaced defaulted on and is ignored.
     expect(
-      normalizePanelLayout({ right: [['history']], options: { fit: false } })
-        .options.fit
+      normalizePanelLayout({ right: [['history']], options: { fit: true } })
+        .options.hug
     ).toBe(false);
+    expect(
+      normalizePanelLayout({ right: [['history']], options: { hug: true } })
+        .options.hug
+    ).toBe(true);
   });
 
   it('gives a light panel the room a heavy neighbour’s cap frees', () => {
     // Weighted 1:100, History's share is under 90px; Parameters hugs 100px
     // of content, so History takes the rest of the column, not 90px.
-    const layout = layoutWith({
+    const layout = hugging({
       right: [['history', 'parameters']],
       weights: { ...modelOnly().weights, history: 1, parameters: 100 }
     });
@@ -1571,7 +1581,7 @@ describe('docked panels hugging their content', () => {
   it('draws a drop preview’s slot no taller than the dragged panel', () => {
     // Revisions (60px of content) dragged into a column with History: the
     // slot hugs what the drop will, and History keeps the rest.
-    const base = layoutWith({
+    const base = hugging({
       right: [['history']],
       left: [['revisions']]
     });
@@ -1594,7 +1604,7 @@ describe('docked panels hugging their content', () => {
   });
 
   it('never hugs a window: its panels fill the height it was given', () => {
-    const layout = popOutPanel(modelOnly(), 'history', {
+    const layout = popOutPanel(setOption(modelOnly(), 'hug', true), 'history', {
       x: 100,
       y: 100,
       w: 300,
@@ -1630,6 +1640,156 @@ describe('docked panels hugging their content', () => {
       before.panels.parameters!.h,
       6
     );
+  });
+});
+
+describe('column heights', () => {
+  const single = (): PanelLayout => layoutWith({ right: [['bodies']] });
+  const dockOf = (layout: PanelLayout, stage: PanelStage = STAGE) => {
+    const geometry = computePanelGeometry(layout, stage);
+    return geometry.dock.bottom - geometry.dock.top;
+  };
+
+  it('fills the dock until the user gives a column a height', () => {
+    const geometry = computePanelGeometry(single(), STAGE);
+    const dock = dockOf(single());
+    expect(geometry.columns[0]!.h).toBe(dock);
+    expect(geometry.columns[0]!.shortened).toBe(false);
+    expect(geometry.panels.bodies!.h).toBe(dock);
+  });
+
+  it('ends a shortened column at its height, its panels sharing it', () => {
+    const layout = layoutWith({ right: [['bodies', 'history']] });
+    const shortened = resizeColumn(
+      layout,
+      ['bodies', 'history'],
+      400,
+      dockOf(layout)
+    );
+    expect(shortened.columnHeights).toEqual({ 'bodies+history': 400 });
+    const geometry = computePanelGeometry(shortened, STAGE);
+    expect(geometry.columns[0]!.h).toBe(400);
+    expect(geometry.columns[0]!.shortened).toBe(true);
+    expect(geometry.panels.bodies!.h).toBeCloseTo(
+      (400 - PANEL_STACK_GAP) / 2,
+      6
+    );
+    expect(geometry.panels.history!.y + geometry.panels.history!.h).toBeCloseTo(
+      geometry.dock.top + 400,
+      6
+    );
+    // The gap between them still trades height inside the column.
+    expect(geometry.gaps[0]!.enabled).toBe(true);
+  });
+
+  it('fills again near the dock’s foot and never goes under the minimums', () => {
+    const dock = dockOf(single());
+    const short = resizeColumn(single(), ['bodies'], 300, dock);
+    expect(short.columnHeights).toEqual({ bodies: 300 });
+    // Within the snap of the foot, or past it, the column fills again.
+    const filled = resizeColumn(
+      short,
+      ['bodies'],
+      dock - COLUMN_FILL_SNAP,
+      dock
+    );
+    expect(filled.columnHeights).toEqual({});
+    expect(
+      resizeColumn(short, ['bodies'], dock + 50, dock).columnHeights
+    ).toEqual({});
+    expect(resizeColumn(single(), ['bodies'], 10, dock).columnHeights).toEqual({
+      bodies: PANEL_MIN_HEIGHT
+    });
+    expect(
+      resizeColumn(
+        layoutWith({ right: [['bodies', 'history']] }),
+        ['bodies', 'history'],
+        10,
+        dock
+      ).columnHeights
+    ).toEqual({ 'bodies+history': PANEL_MIN_HEIGHT * 2 + PANEL_STACK_GAP });
+    // A no-op and the lock both return the layout unchanged.
+    const full = single();
+    expect(resizeColumn(full, ['bodies'], dock, dock)).toBe(full);
+    const locked = setOption(single(), 'locked', true);
+    expect(resizeColumn(locked, ['bodies'], 300, dock)).toBe(locked);
+  });
+
+  it('fills when another panel joins a shortened column and returns its height when it leaves', () => {
+    const dock = dockOf(single());
+    const short = resizeColumn(single(), ['bodies'], 300, dock);
+    const joined = placePanel(
+      short,
+      'history',
+      { kind: 'column', side: 'right', column: 0, index: 1 },
+      STAGE
+    );
+    expect(joined.right).toEqual([['bodies', 'history']]);
+    const together = computePanelGeometry(joined, STAGE);
+    expect(together.columns[0]!.h).toBe(dock);
+    expect(together.columns[0]!.shortened).toBe(false);
+    const alone = computePanelGeometry(closePanel(joined, 'history'), STAGE);
+    expect(alone.columns[0]!.h).toBe(300);
+  });
+
+  it('keys a height by its set of panels, whatever their order', () => {
+    expect(columnKey(['history', 'bodies'])).toBe(
+      columnKey(['bodies', 'history'])
+    );
+    expect(columnKey([PANEL_SLOT, 'bodies'])).toBeNull();
+    const layout = layoutWith({
+      right: [['history', 'bodies']],
+      columnHeights: { 'bodies+history': 360 }
+    });
+    expect(computePanelGeometry(layout, STAGE).columns[0]!.h).toBe(360);
+  });
+
+  it('ends a column at the dock’s foot on a window shorter than its height', () => {
+    const layout = layoutWith({
+      right: [['bodies']],
+      columnHeights: { bodies: 700 }
+    });
+    const stage: PanelStage = { width: 1440, height: 600 };
+    const geometry = computePanelGeometry(layout, stage);
+    expect(geometry.columns[0]!.h).toBe(dockOf(layout, stage));
+    expect(geometry.columns[0]!.shortened).toBe(false);
+  });
+
+  it('stores heights safely and keeps them through a reload', () => {
+    const normalized = normalizePanelLayout({
+      right: [['bodies']],
+      columnHeights: {
+        bodies: 320.4,
+        'history+bodies': 300,
+        'bodies+bodies': 300,
+        nonsense: 300,
+        history: 'tall',
+        parameters: 12
+      }
+    });
+    expect(normalized.columnHeights).toEqual({
+      bodies: 320,
+      parameters: PANEL_MIN_HEIGHT
+    });
+    const storage = memoryStorage();
+    const short = resizeColumn(single(), ['bodies'], 300, dockOf(single()));
+    expect(savePanelLayout(short, storage)).toBe(true);
+    expect(loadPanelLayout(storage).columnHeights).toEqual({ bodies: 300 });
+  });
+
+  it('is a rearrangement no preset matches, and a preset fills every column', () => {
+    const layout = applyPreset(defaultPanelLayout(), 'review');
+    expect(matchingPreset(layout)).toBe('review');
+    const short = resizeColumn(
+      layout,
+      ['history', 'revisions'],
+      400,
+      dockOf(layout)
+    );
+    expect(matchingPreset(short)).toBeNull();
+    const picked = applyPreset(short, 'review');
+    expect(picked.columnHeights).toEqual({});
+    expect(matchingPreset(picked)).toBe('review');
   });
 });
 
@@ -3012,7 +3172,7 @@ describe('panel layout persistence', () => {
       hidden: false,
       locked: true,
       compact: false,
-      fit: true,
+      hug: false,
       width: 'regular'
     });
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
