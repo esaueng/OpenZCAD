@@ -12,6 +12,7 @@ import {
   KERNEL_WASM_ASSET_PATTERN,
   LAZY_ENTRY_PATTERNS,
   launcherMarkerLeaks,
+  MLS_WASM_ASSET_PATTERN,
   TRANSLATOR_WASM_ASSET_PATTERN,
   KERNEL_WASM_POLICY,
   kernelPolicyToolchain,
@@ -78,6 +79,14 @@ const APPROVED_LAZY_ASSETS = [
     pattern: /^assets\/sqlite3-.*\.wasm$/,
     maxBytes: 1024 * 1024,
     reason: 'SQLite parser, loaded only in a one-shot Shapr3D import worker'
+  },
+  {
+    // 1,047,287 bytes at mls-rs 0.56.0, within 1.3 kB of the default budget;
+    // a version bump is a reviewed change of its own (ADR-024).
+    pattern: MLS_WASM_ASSET_PATTERN,
+    maxBytes: 1.5 * 1024 * 1024,
+    reason:
+      'MLS group-key layer, loaded only in its Worker for an encrypted project'
   }
 ];
 

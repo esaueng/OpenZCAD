@@ -120,6 +120,9 @@ importers:
       '@openzcad/kernel-adapter':
         specifier: workspace:*
         version: link:../../packages/kernel-adapter
+      '@openzcad/mls':
+        specifier: workspace:*
+        version: link:../../packages/mls
       '@openzcad/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence
