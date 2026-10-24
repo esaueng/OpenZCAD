@@ -565,6 +565,21 @@ export const isE2eeContactStorageReady = cachedSchemaProbe(
   (row) => row?.ready === 1
 );
 
+/**
+ * Whether migration 0041's assistant-consent table exists (ADR-024 Phase 6,
+ * slice 6-1). Only the consent routes, the assistant gate for encrypted
+ * projects, project purge and account erasure name it, each after asking
+ * this, so a database without the migration keeps serving ordinary traffic
+ * and the assistant keeps refusing encrypted projects as before.
+ */
+export const isE2eeAssistantConsentStorageReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM pragma_table_info('e2ee_assistant_consents')
+   WHERE name IN ('user_id', 'project_id', 'allowed', 'copy_version', 'route',
+                  'record', 'record_mac', 'sequence', 'updated_at',
+                  'revoked_at')`,
+  (row) => row?.ready === 10
+);
+
 /** An encrypted blob's opaque object key: no file name, no kind. */
 export function encryptedBlobObjectKey(
   projectId: string,
@@ -5948,6 +5963,12 @@ export class D1R2PersistenceService implements PersistenceService {
         `UPDATE e2ee_content_blobs SET state = 'deleting'
          WHERE state = 'committed' AND project_id IN`,
         'DELETE FROM e2ee_content_blobs WHERE project_id IN'
+      );
+    }
+    // Assistant consents on encrypted projects (migration 0041).
+    if (await isE2eeAssistantConsentStorageReady(this.env.DB)) {
+      groupTables.push(
+        'DELETE FROM e2ee_assistant_consents WHERE project_id IN'
       );
     }
     // The child rows declare ON DELETE CASCADE, but foreign-key enforcement is
