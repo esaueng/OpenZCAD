@@ -11,6 +11,7 @@ import type {
   EpochRecord,
   GroupInfoSummary,
   LeafInit,
+  JoinArchive,
   PendingCommit,
   Processed,
   RejoinPsk,
@@ -124,8 +125,9 @@ export class MlsSession {
     return this.api.inspectWelcome(this.id, welcome);
   }
 
-  join(welcome: Uint8Array): Promise<EpochChange> {
-    return this.api.join(this.id, welcome);
+  /** Join only after the full archive agrees with the Welcome removal history. */
+  join(welcome: Uint8Array, archive: JoinArchive): Promise<EpochChange> {
+    return this.api.join(this.id, welcome, archive);
   }
 
   /**
