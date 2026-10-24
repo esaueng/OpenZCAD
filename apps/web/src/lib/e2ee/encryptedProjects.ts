@@ -332,7 +332,7 @@ export async function openMigrationStaging(): Promise<{
   deviceId: string;
   open: (fetcher: Fetch) => MigrationStagingClients;
 }> {
-  const userId = await sessionUserId();
+  const { userId } = await pageSession();
   const e2ee: E2eeContext = {
     userId,
     api: createE2eeApi(),
