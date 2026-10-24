@@ -17,7 +17,13 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import { faceSketchAttachment } from '../../apps/web/src/lib/faceSketchAttachment';
-import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  stubApi,
+  expectBodyCount,
+  waitForStillViewport
+} from './openzcad-fixtures';
 
 /**
  * F01 (schema v29): an extrude reaches a face picked in the viewport, with a
@@ -206,11 +212,20 @@ test('creates a drafted extrude up to a face picked in the viewport', async ({
   // From the default view the ceiling's top face (z = 26) is the one in sight.
   const top = await faceOf(document, ceiling.bodyId, 1);
   const canvas = await open(page, document);
+  // Opening Extrude glides the post's profile out from under the card. Let
+  // it, then find the ceiling's face in the view that leaves: reopened, the
+  // profile is already clear and nothing moves.
+  const card = page.getByRole('region', { name: 'Extrude operation' });
+  await page.locator('.feature-row-main', { hasText: 'Post sketch' }).click();
+  await page.keyboard.press('e');
+  await expect(card).toBeVisible();
+  await waitForStillViewport(page);
+  await page.keyboard.press('Escape');
+  await expect(card).toHaveCount(0);
   const point = await pointOverFace(page, canvas, top.topologyId);
 
   await page.locator('.feature-row-main', { hasText: 'Post sketch' }).click();
   await page.keyboard.press('e');
-  const card = page.getByRole('region', { name: 'Extrude operation' });
   // Explicit: inferred, a post through the ceiling would add to it.
   await page
     .getByRole('combobox', { name: 'Extrude operation', exact: true })

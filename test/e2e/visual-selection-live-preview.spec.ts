@@ -4,7 +4,8 @@ import {
   test,
   stubApi,
   expectConsumedBodyCount,
-  revealModelPanel
+  revealModelPanel,
+  waitForStillViewport
 } from './openzcad-fixtures';
 
 // Streamed preview frames arrive much later on the 2-core CI runners under
@@ -1002,6 +1003,9 @@ test('streams an exact extrude preview while a region drag is held', async ({
       timeout: PREVIEW_BUDGET_MS
     })
     .not.toBeNull();
+  // The Extrude card may glide the profile out from under it; grab the
+  // arrow where it settles.
+  await waitForStillViewport(page);
   const handle = await canvas.evaluate((element) => ({
     x: Number(element.dataset.e2eHandleX),
     y: Number(element.dataset.e2eHandleY),
