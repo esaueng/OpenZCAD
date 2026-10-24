@@ -1205,6 +1205,29 @@ export function createEncryptedProjectStore(
         ...groups,
         api: {
           ...groups.api,
+          // The project row is written together with its group, so until
+          // that write lands the Worker knows no such project. To
+          // createProjectGroup, which asks for an existing group before
+          // building one and again after a failed upload, that is a project
+          // without a group yet.
+          group: async (id) => {
+            try {
+              return await groups.api.group(id);
+            } catch (error) {
+              if (
+                error instanceof E2eeApiError &&
+                error.status === 404 &&
+                error.code === 'PROJECT_NOT_FOUND'
+              ) {
+                throw new E2eeApiError(
+                  404,
+                  error.message,
+                  'E2EE_GROUP_NOT_FOUND'
+                );
+              }
+              throw error;
+            }
+          },
           // The group's epoch 0 travels with the project row, its first
           // version and its project info, in one write.
           createGroup: async (id, groupRequest) => {

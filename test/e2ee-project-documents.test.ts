@@ -639,6 +639,38 @@ describe('writes', () => {
     expect(headOf(srv, projectId)).toEqual(head);
   });
 
+  it('creates a project the Worker does not know yet, and retries a failed create cleanly', async () => {
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const document = initialDocument('Retry');
+    const projectId = document.projectId;
+    const ref = { userId: OWNER, deviceId: 'owner_laptop', projectId };
+    // The upload never reaches the Worker: the project, its group and its
+    // first version are written together or not at all.
+    laptop.before = async (path, init) => {
+      if (path === '/api/e2ee/projects' && init.method === 'POST') {
+        throw new TypeError('Failed to fetch');
+      }
+    };
+    await expect(
+      laptop.store.createProject({ name: 'Retry', initialDocument: document })
+    ).rejects.toThrow();
+    expect(count(srv, 'e2ee_project_groups', projectId)).toBe(0);
+    // The group this device built for the failed create is gone, so the
+    // retry builds a fresh one instead of tripping over the old state.
+    expect(await laptop.sessions.leaf(ref)).toBeNull();
+
+    laptop.before = undefined;
+    const created = await laptop.store.createProject({
+      name: 'Retry',
+      initialDocument: document
+    });
+    expect(created.project).toMatchObject({ projectId, storageFormat: 2 });
+    expect(count(srv, 'e2ee_project_groups', projectId)).toBe(1);
+    const desktop = device(srv, owner, 'owner_desktop');
+    expect((await desktop.store.loadProject(projectId)).name).toBe('Retry');
+  });
+
   it('keeps the last good version through every refused write', async () => {
     const srv = server();
     const laptop = device(srv, owner, 'owner_laptop');
