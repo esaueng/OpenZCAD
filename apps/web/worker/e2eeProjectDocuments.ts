@@ -18,7 +18,11 @@
  *   against `e2ee_project_groups`;
  * - the signer is a device the caller's newest device list certifies, and
  *   the signature verifies under its signing key;
- * - retained ciphertext counts against the owner's project storage.
+ * - retained ciphertext counts against the owner's project storage;
+ * - the project-info envelope (`PUT …/info`) carries its sequence as its
+ *   version and names the hash of the one it replaces (slice 4-7), and its
+ *   header may name committed thumbnail and archived-export blobs, which
+ *   garbage collection then keeps.
  *
  * Served by `handleE2eeRequest` after the key rollout gate, key-table
  * readiness and, for writes, the session/erasure write authorization. Here:
@@ -361,18 +365,29 @@ interface InfoInput {
   envelope: string;
   envelopeBytes: Uint8Array;
   keyEpoch: number;
+  /** The previous project-info envelope's hash, as the header names it. */
+  previousHash: string | null;
+  /** Thumbnail and archived-export blobs the header names (slice 4-7). */
+  blobIds: readonly string[];
   wrappedVersionKey: string;
   signature: string;
   signerDeviceId: string;
   signerList: SignerList;
 }
 
+/**
+ * A project-info envelope: this project's, at the sequence the request
+ * names (its header's document version), signed by a certified device of
+ * the caller. Its header may name content blobs (the thumbnail and the
+ * archived exports) once migration 0034 stores them.
+ */
 async function infoInput(
   ctx: Context,
   value: unknown,
   projectId: string
 ): Promise<InfoInput> {
   const input = record(value, 'info');
+  const sequence = uintField(input.sequence, 'info.sequence');
   const envelope = bytesField(input.envelope, 'info.envelope', {
     max: MAX_INFO_ENVELOPE_BYTES
   });
@@ -385,12 +400,24 @@ async function infoInput(
   if (
     header.class !== 'project' ||
     header.kind !== 'project-info' ||
-    header.projectId !== projectId ||
-    header.blobIds.length > 0
+    header.projectId !== projectId
   ) {
-    invalid(
-      'info.envelope must be this project’s project-info envelope, without content blobs'
-    );
+    invalid('info.envelope must be this project’s project-info envelope');
+  }
+  if (header.documentVersion !== sequence) {
+    invalid('info.envelope must carry info.sequence as its version');
+  }
+  if (header.blobIds.length > 0) {
+    if (!ctx.blobs.ready) {
+      refuse(
+        409,
+        'E2EE_CONTENT_BLOBS_UNAVAILABLE',
+        'Encrypted projects cannot store thumbnails or exports yet.'
+      );
+    }
+    if (header.blobIds.some((id) => !E2EE_BLOB_ID_PATTERN.test(id))) {
+      invalid('Every blob id must be 32 lowercase hex characters');
+    }
   }
   const signature = bytesField(input.signature, 'info.signature', {
     exact: VERSION_SIGNATURE_BYTES
@@ -404,10 +431,14 @@ async function infoInput(
   );
   return {
     signerList,
-    sequence: uintField(input.sequence, 'info.sequence'),
+    sequence,
     envelope: envelope.text,
     envelopeBytes: envelope.bytes,
     keyEpoch: header.keyEpoch,
+    previousHash: header.previousVersionHash
+      ? toHex(header.previousVersionHash)
+      : null,
+    blobIds: header.blobIds,
     wrappedVersionKey: bytesField(
       input.wrappedVersionKey,
       'info.wrappedVersionKey',
@@ -1172,6 +1203,14 @@ async function createProject(
       'The project info is written under key epoch 0 by the creating device'
     );
   }
+  // The first link of the project info's own chain, naming no files yet.
+  if (
+    info.sequence !== 1 ||
+    info.previousHash !== null ||
+    info.blobIds.length > 0
+  ) {
+    invalid('The first project info is sequence 1, with no previous one');
+  }
   const body = await storeBody(ctx, projectId, version);
   const now = new Date().toISOString();
   const db = ctx.db;
@@ -1234,7 +1273,7 @@ async function createProject(
       )
       .bind(
         projectId,
-        info.sequence === 0 ? 1 : info.sequence,
+        info.sequence,
         info.keyEpoch,
         info.envelope,
         info.wrappedVersionKey,
@@ -1307,6 +1346,43 @@ async function saveInfo(
       { keyEpoch }
     );
   }
+  // The project info keeps its own chain (slice 4-7): each one names the
+  // hash of the one it replaces, which the Worker computes itself.
+  const stored = await infoRow(ctx.db, projectId);
+  const sequenceConflict = (sequence: number): never =>
+    refuse(
+      409,
+      'E2EE_SEQUENCE_CONFLICT',
+      'A newer project info was saved meanwhile.',
+      { sequence }
+    );
+  if (stored && stored.sequence >= info.sequence) {
+    sequenceConflict(stored.sequence);
+  }
+  const storedHash = stored
+    ? toHex(await hashVersion(fromBase64Url(stored.envelope)))
+    : null;
+  if (info.previousHash !== storedHash) {
+    refuse(
+      409,
+      'E2EE_INFO_MISMATCH',
+      'This project info does not build on the stored one. Reload it and save again.',
+      { sequence: stored?.sequence ?? 0 }
+    );
+  }
+  await requireInfoBlobs(ctx, projectId, info.blobIds);
+  // Named only when the header names blobs (they need migration 0034).
+  const named = info.blobIds.length
+    ? {
+        sql: `AND NOT EXISTS (
+             SELECT 1 FROM json_each(?) named WHERE NOT EXISTS (
+               SELECT 1 FROM e2ee_content_blobs blobs
+               WHERE blobs.project_id = ? AND blobs.blob_id = named.value
+                 AND blobs.state = 'committed'
+                 AND blobs.kind IN ('thumbnail', 'export')))`,
+        binds: [JSON.stringify(info.blobIds), projectId]
+      }
+    : { sql: '', binds: [] };
   const infoFence = deviceListUnchanged(ctx.userId, info.signerList);
   const now = new Date().toISOString();
   const results = await runVersionBatch(ctx, [
@@ -1320,6 +1396,7 @@ async function saveInfo(
            AND EXISTS (SELECT 1 FROM e2ee_project_groups
                        WHERE project_id = ? AND key_epoch_base + epoch = ?)
            AND ${infoFence.sql}
+           ${named.sql}
          ON CONFLICT (project_id, kind, scope) DO UPDATE SET
            sequence = excluded.sequence, key_epoch = excluded.key_epoch,
            envelope = excluded.envelope,
@@ -1327,7 +1404,8 @@ async function saveInfo(
            signature = excluded.signature,
            signer_device_id = excluded.signer_device_id,
            updated_at = excluded.updated_at
-         WHERE excluded.sequence > e2ee_project_envelopes.sequence`
+         WHERE excluded.sequence > e2ee_project_envelopes.sequence
+           AND e2ee_project_envelopes.sequence = ?`
       )
       .bind(
         projectId,
@@ -1343,31 +1421,65 @@ async function saveInfo(
         ctx.userId,
         projectId,
         keyEpoch,
-        ...infoFence.binds
+        ...infoFence.binds,
+        ...named.binds,
+        stored?.sequence ?? 0
       )
   ]);
   if ((results[0]?.meta?.changes ?? 0) !== 1) {
     if (await deviceListMoved(ctx.db, ctx.userId, info.signerList)) {
       refuseDeviceListMoved();
     }
-    const stored = await infoRow(ctx.db, projectId);
-    if (stored && stored.sequence >= info.sequence) {
-      refuse(
-        409,
-        'E2EE_SEQUENCE_CONFLICT',
-        'A newer project info was saved meanwhile.',
-        { sequence: stored.sequence }
-      );
+    const current = await infoRow(ctx.db, projectId);
+    if (current && current.sequence !== (stored?.sequence ?? 0)) {
+      sequenceConflict(current.sequence);
     }
+    await requireInfoBlobs(ctx, projectId, info.blobIds);
     refuse(
       401,
       'E2EE_SESSION_REQUIRED',
       'Sign in again before saving this encrypted project.'
     );
   }
+  // A replaced thumbnail or a dropped export is no longer named.
+  if (ctx.blobs.ready) {
+    await collectContentBlobs(ctx.db, ctx.blobs.bucket, projectId);
+  }
   return json({
     info: envelopeRecord(projectId, (await infoRow(ctx.db, projectId))!)
   } satisfies E2eeProjectInfoResponse);
+}
+
+/**
+ * The blobs a project-info header names are committed thumbnails or
+ * exports of this project; the write fences on the same in its own SQL.
+ */
+async function requireInfoBlobs(
+  ctx: Context,
+  projectId: string,
+  blobIds: readonly string[]
+): Promise<void> {
+  if (blobIds.length === 0) return;
+  const unknown = await unknownBlobIds(ctx.db, projectId, blobIds);
+  if (unknown.length) {
+    refuse(
+      409,
+      'E2EE_BLOB_UNKNOWN',
+      'This project info names files the account does not hold for this project. Upload them again.',
+      { blobIds: unknown.slice(0, 64) }
+    );
+  }
+  const { results } = await ctx.db
+    .prepare(
+      `SELECT blob_id FROM e2ee_content_blobs
+       WHERE project_id = ? AND kind NOT IN ('thumbnail', 'export')
+         AND blob_id IN (SELECT value FROM json_each(?))`
+    )
+    .bind(projectId, JSON.stringify(blobIds))
+    .all<{ blob_id: string }>();
+  if ((results ?? []).length) {
+    invalid('A project info names only thumbnails and archived exports');
+  }
 }
 
 // --- Reads -----------------------------------------------------------------

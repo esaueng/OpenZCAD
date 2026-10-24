@@ -348,9 +348,11 @@ describe('content blobs', () => {
     expect(laptop.references.get(projectId, unknown)).toBeNull();
   });
 
-  it('keeps original mesh files, thumbnails and exports on the device', async () => {
+  it('keeps original mesh files and snapshots on the device', async () => {
     const { srv, laptop, projectId } = await encryptedProject();
-    for (const kind of ['stl-import', 'thumbnail', 'step-export'] as const) {
+    // Thumbnails and exports are encrypted blobs since slice 4-7
+    // (e2ee-project-info.test.ts).
+    for (const kind of ['stl-import', 'mesh-import', 'snapshot'] as const) {
       await refusedWith(
         laptop.blobs.archive(projectId, {
           fileName: 'x',
@@ -577,7 +579,7 @@ describe('the Worker', () => {
         body
       });
     expect(
-      (await call({ blobId: 'a'.repeat(32), kind: 'thumbnail' })).status
+      (await call({ blobId: 'a'.repeat(32), kind: 'snapshot' })).status
     ).toBe(409);
     expect(
       (await call({ blobId: 'A'.repeat(32), kind: 'import-source' })).status

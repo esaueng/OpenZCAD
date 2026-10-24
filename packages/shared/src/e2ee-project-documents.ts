@@ -92,12 +92,62 @@ export interface E2eeProjectEnvelopeUpload {
   signerDeviceId: string;
 }
 
+/** The small project envelopes the account replaces as a whole. */
+export type E2eeReplacedEnvelopeKind =
+  'project-info' | 'measurements' | 'view-state';
+
 export interface E2eeProjectEnvelopeRecord extends E2eeProjectEnvelopeUpload {
   projectId: string;
-  kind: 'project-info';
+  kind: E2eeReplacedEnvelopeKind;
   keyEpoch: number;
   updatedAt: string;
 }
+
+/**
+ * `PUT /api/e2ee/projects/:id/measurements` (slice 4-7): the next
+ * measurements envelope. Its header's document version is
+ * `expectedRevision + 1` and its previous-version hash names the stored
+ * envelope's (none for the first); the revision stays plaintext, so the
+ * Worker fences on it as it does for plaintext measurements.
+ */
+export interface E2eeMeasurementsUpload {
+  expectedRevision: number;
+  envelope: string;
+  wrappedVersionKey: string;
+  signature: string;
+  signerDeviceId: string;
+}
+
+/** `GET` and `PUT …/measurements`: the stored envelope, if any. */
+export interface E2eeMeasurementsResponse {
+  /** 0 before the first save; then the stored envelope's sequence. */
+  revision: number;
+  measurements: E2eeProjectEnvelopeRecord | null;
+}
+
+/**
+ * `PUT /api/e2ee/projects/:id/view-states/:sessionId` (slice 4-7): one
+ * workspace session's view state for the caller. `sequence` (the header's
+ * document version) only moves forward; `documentVersion` is the document
+ * version the view was taken at, plaintext so the Worker can refuse a view
+ * of a version it has not stored yet, as for plaintext sessions.
+ */
+export interface E2eeViewStateUpload {
+  sequence: number;
+  documentVersion: number;
+  envelope: string;
+  wrappedVersionKey: string;
+  signature: string;
+  signerDeviceId: string;
+}
+
+/** `GET …/view-states`: the caller's recent sessions, newest first. */
+export interface E2eeViewStatesResponse {
+  sessions: (E2eeProjectEnvelopeRecord & { sessionId: string })[];
+}
+
+/** Error code of a measurements write that lost a race. */
+export const E2EE_MEASUREMENT_CONFLICT_CODE = 'MEASUREMENT_REVISION_CONFLICT';
 
 /**
  * `POST /api/e2ee/projects`: the format-2 project row, its MLS group (as

@@ -71,6 +71,10 @@ import {
   type E2eeObjectBucket
 } from './e2eeProjectDocuments';
 import {
+  handleE2eeProjectEnvelopeRequest,
+  isE2eeProjectEnvelopePath
+} from './e2eeProjectEnvelopes';
+import {
   isE2eeProjectGroupStorageReady,
   isE2eeProjectVersionStorageReady
 } from '@openzcad/cloudflare-adapters';
@@ -1893,6 +1897,16 @@ export async function handleE2eeRequest(
         projectsEnabled,
         db.authorization,
         blobBucket(env)
+      );
+    }
+    if (isE2eeProjectEnvelopePath(pathname)) {
+      // Encrypted measurements and view state (e2eeProjectEnvelopes.ts).
+      return await handleE2eeProjectEnvelopeRequest(
+        request,
+        rawDb,
+        userId,
+        projectsEnabled,
+        db.authorization
       );
     }
     if (isE2eeProjectPath(pathname)) {

@@ -1,7 +1,8 @@
 /**
  * Encrypted content blobs (ADR-024 Phase 4, content blobs; roadmap L11):
- * the imported sources, mesh payloads and reference-image pictures of
- * end-to-end encrypted projects, under `/api/e2ee/projects/:id/blobs…`.
+ * the imported sources, mesh payloads, reference-image pictures,
+ * thumbnails and archived exports of end-to-end encrypted projects, under
+ * `/api/e2ee/projects/:id/blobs…`.
  *
  * A browser encrypts a blob under its own random key, proposes the blob id
  * its envelope header carries, and uploads the ciphertext through the
@@ -23,8 +24,11 @@
  *
  * Document versions name their blobs in the header (`blobIds`); the Worker
  * accepts a version only when every one is a committed blob of the project
- * and records the references (`e2ee_version_blobs`). Garbage collection
- * reads the references of retained versions only (`collectContentBlobs`).
+ * and records the references (`e2ee_version_blobs`). The project-info
+ * envelope names the thumbnail and archived exports the same way (slice
+ * 4-7); it is replaced as a whole, so its header is read back instead of
+ * recorded. Garbage collection keeps the blobs of retained versions and of
+ * the current project info (`collectContentBlobs`).
  *
  * Served by `handleE2eeRequest` after the key rollout gate, key-table
  * readiness and, for writes, the session/erasure write authorization. Here:
@@ -33,6 +37,8 @@
  */
 import {
   envelopeBodyLength,
+  fromBase64Url,
+  parseEnvelope,
   parseEnvelopeShape,
   PLAINTEXT_CEILINGS
 } from '@openzcad/crypto';
@@ -143,7 +149,7 @@ function kindOf(value: unknown): E2eeUploadableBlobKind {
     refuse(
       409,
       'E2EE_BLOB_KIND_UNAVAILABLE',
-      'Only imported sources and mesh payloads are stored encrypted so far.'
+      'Only imported sources, mesh payloads, thumbnails and archived exports are stored encrypted.'
     );
   }
   return value as E2eeUploadableBlobKind;
@@ -485,6 +491,33 @@ export function insertVersionBlobs(
 }
 
 /**
+ * The blob ids the project's current project-info envelope names in its
+ * header, and its sequence (0 without one). An info the Worker cannot read
+ * back reports sequence -1, which no claim fences on, so nothing is
+ * collected while it stands.
+ */
+export async function infoBlobIds(
+  db: D1Database,
+  projectId: string
+): Promise<{ sequence: number; blobIds: readonly string[] }> {
+  const row = await db
+    .prepare(
+      `SELECT sequence, envelope FROM e2ee_project_envelopes
+       WHERE project_id = ? AND kind = 'project-info' AND scope = ''`
+    )
+    .bind(projectId)
+    .first<{ sequence: number; envelope: string }>();
+  if (!row) return { sequence: 0, blobIds: [] };
+  try {
+    const { header } = parseEnvelope(fromBase64Url(row.envelope));
+    if (header.class !== 'project') throw new Error('not a project envelope');
+    return { sequence: row.sequence, blobIds: header.blobIds };
+  } catch {
+    return { sequence: -1, blobIds: [] };
+  }
+}
+
+/**
  * Garbage collection, after a save prunes bodies: references of versions
  * whose body is gone are dropped, and blobs that no retained version (the
  * head or a named save) names and that are older than the grace period are
@@ -504,6 +537,10 @@ export async function collectContentBlobs(
     const before = new Date(
       now - E2EE_UNREFERENCED_BLOB_GRACE_MS
     ).toISOString();
+    // The project info names the thumbnail and archived exports (slice
+    // 4-7). The claim below fences on the info it read, so an info saved
+    // meanwhile makes this pass claim nothing rather than the wrong blob.
+    const info = await infoBlobIds(db, projectId);
     await db.batch([
       db
         .prepare(
@@ -524,10 +561,22 @@ export async function collectContentBlobs(
              SELECT blob_id FROM e2ee_content_blobs blobs
              WHERE blobs.project_id = ? AND blobs.state = 'committed'
                AND blobs.created_at < ? AND NOT ${RETAINED_REFERENCE}
+               AND blobs.blob_id NOT IN (SELECT value FROM json_each(?))
              LIMIT ?
-           )`
+           ) AND COALESCE((
+             SELECT sequence FROM e2ee_project_envelopes
+             WHERE project_id = ? AND kind = 'project-info' AND scope = ''
+           ), 0) = ?`
         )
-        .bind(projectId, projectId, before, COLLECT_BATCH)
+        .bind(
+          projectId,
+          projectId,
+          before,
+          JSON.stringify(info.blobIds),
+          COLLECT_BATCH,
+          projectId,
+          info.sequence
+        )
     ]);
     if (!bucket) return;
     const { results } = await db
