@@ -11,6 +11,7 @@ import {
   type DeviceKeyStore,
   type StoredDevice
 } from './deviceStore';
+import { NativeDeviceKeysError } from '../desktopBridge';
 import {
   createKeychainDeviceKeys,
   keychainDeviceStore,
@@ -72,6 +73,11 @@ async function device(
     createdAt: 1,
     approval: null
   };
+}
+
+function keyIdOf(device: StoredDevice): string {
+  return (device.signing.privateKey as unknown as { keychainKeyId: string })
+    .keychainKeyId;
 }
 
 describe('Keychain device store', () => {
@@ -183,5 +189,106 @@ describe('Keychain device store', () => {
     });
     await expect(createKeychainDeviceKeys(keychain)()).rejects.toThrow();
     expect(live.size).toBe(0);
+  });
+
+  it.each([
+    'getOrCreateDevice',
+    'replaceDeviceIfCurrent',
+    'saveDevice'
+  ] as const)(
+    'removes the candidate keys when IndexedDB rejects %s',
+    async (write) => {
+      const { host: keychain, live } = host();
+      const inner = cloningStore();
+      const store = keychainDeviceStore(
+        {
+          ...inner,
+          [write]: async () => {
+            throw new Error('IndexedDB transaction aborted');
+          }
+        },
+        keychain
+      );
+      // A device is stored already, except for first setup.
+      const kept =
+        write === 'getOrCreateDevice'
+          ? null
+          : await device(keychain, 'dev_kept');
+      if (kept) await keychainDeviceStore(inner, keychain).saveDevice(kept);
+      const candidate = await device(keychain, 'dev_candidate');
+      const attempt =
+        write === 'getOrCreateDevice'
+          ? store.getOrCreateDevice(candidate)
+          : write === 'replaceDeviceIfCurrent'
+            ? store.replaceDeviceIfCurrent(kept, candidate)
+            : store.saveDevice(candidate);
+      await expect(attempt).rejects.toThrow('IndexedDB transaction aborted');
+      // The candidate's keys are gone; the stored device keeps its own.
+      expect([...live]).toEqual(kept ? [keyIdOf(kept)] : []);
+      expect((await store.loadDevice(USER))?.deviceId ?? null).toBe(
+        kept?.deviceId ?? null
+      );
+    }
+  );
+
+  it('discards an abandoned candidate unless the stored record holds its keys', async () => {
+    const { host: keychain, live } = host();
+    const inner = cloningStore();
+    const store = keychainDeviceStore(inner, keychain);
+    const stored = await device(keychain, 'dev_stored');
+    await store.saveDevice(stored);
+    // The stored device's own keys are never discarded.
+    await store.discardCandidate(stored);
+    expect(live.has(keyIdOf(stored))).toBe(true);
+    const abandoned = await device(keychain, 'dev_abandoned');
+    await store.discardCandidate(abandoned);
+    expect([...live]).toEqual([keyIdOf(stored)]);
+    // When the record cannot be read, a stray key is safer than a lost one.
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const unreadable = keychainDeviceStore(
+      {
+        ...inner,
+        loadDevice: async () => {
+          throw new Error('IndexedDB unavailable');
+        }
+      },
+      keychain
+    );
+    const unsure = await device(keychain, 'dev_unsure');
+    await unreadable.discardCandidate(unsure);
+    expect(live.has(keyIdOf(unsure))).toBe(true);
+    expect(error).toHaveBeenCalled();
+    error.mockRestore();
+  });
+
+  it('retries removing keys a failed native creation left behind', async () => {
+    const { host: keychain, live } = host();
+    const leftover = `dk_${'f'.repeat(32)}`;
+    const create = keychain.create;
+    keychain.create = async () => {
+      // The host stored the signing key and could not remove it again.
+      live.add(leftover);
+      throw new NativeDeviceKeysError('Keychain write failed', leftover);
+    };
+    const remove = keychain.remove;
+    keychain.remove = vi.fn(async () => {
+      throw new Error('Keychain locked');
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const makeKeys = createKeychainDeviceKeys(keychain);
+    await expect(makeKeys()).rejects.toThrow('Keychain write failed');
+    // Removing it right away failed too, so the id is kept for a retry.
+    expect(keychain.remove).toHaveBeenCalledWith(leftover);
+    expect(live.has(leftover)).toBe(true);
+    keychain.create = create;
+    keychain.remove = remove;
+    // The next creation removes the leftover first.
+    const keys = await makeKeys();
+    expect(live.has(leftover)).toBe(false);
+    expect([...live]).toEqual([
+      (keys.signing.privateKey as unknown as { keychainKeyId: string })
+        .keychainKeyId
+    ]);
+    error.mockRestore();
   });
 });

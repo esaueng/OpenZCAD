@@ -268,22 +268,43 @@ export function normalizeDeviceLabel(label: string): string {
   return text || 'This device';
 }
 
-async function newStoredDevice(
+/**
+ * Makes this device's keys and hands the new device record to `persist`,
+ * whose first step must be the store write that takes it.
+ *
+ * Until that write, nothing holds the private keys but this call: on desktop
+ * they are Keychain items reachable only through the key id in memory here.
+ * So if the flow stops first (the settings close or the session changes
+ * while the keys are being created or imported, or the public keys fail to
+ * export), the store discards them. From the write on, the store owns them:
+ * it keeps them only if its record holds them, whatever the write's outcome.
+ */
+async function withNewDevice<T>(
   ctx: E2eeContext,
-  label: string
-): Promise<StoredDevice> {
+  label: string,
+  requireCurrent: () => void,
+  persist: (candidate: StoredDevice) => Promise<T>
+): Promise<T> {
   const keys = await (ctx.createDeviceKeys ?? defaultDeviceKeys)();
-  return {
-    userId: ctx.userId,
-    deviceId: randomId('dev_'),
-    label: normalizeDeviceLabel(label),
-    signing: keys.signing,
-    unlock: keys.unlock,
-    signingPublicKey: await exportPublicKey(keys.signing.publicKey),
-    unlockPublicKey: await exportPublicKey(keys.unlock.publicKey),
-    createdAt: now(ctx),
-    approval: null
-  };
+  let candidate: StoredDevice;
+  try {
+    candidate = {
+      userId: ctx.userId,
+      deviceId: randomId('dev_'),
+      label: normalizeDeviceLabel(label),
+      signing: keys.signing,
+      unlock: keys.unlock,
+      signingPublicKey: await exportPublicKey(keys.signing.publicKey),
+      unlockPublicKey: await exportPublicKey(keys.unlock.publicKey),
+      createdAt: now(ctx),
+      approval: null
+    };
+    requireCurrent();
+  } catch (error) {
+    await ctx.store.discardCandidate({ userId: ctx.userId, ...keys });
+    throw error;
+  }
+  return persist(candidate);
 }
 
 function listed(device: StoredDevice, addedAt: number): ListedDevice {
@@ -1077,9 +1098,12 @@ async function setUpEncryptionLocked(
       'This browser already trusts an encryption identity. Recover it instead of setting up a replacement.'
     );
   }
-  const candidate = await newStoredDevice(ctx, options.label);
-  requireActiveKeyContext(ctx);
-  const device = await ctx.store.getOrCreateDevice(candidate);
+  const device = await withNewDevice(
+    ctx,
+    options.label,
+    () => requireActiveKeyContext(ctx),
+    (candidate) => ctx.store.getOrCreateDevice(candidate)
+  );
   const created = await newIdentity(
     ctx,
     options.recoverySecret,
@@ -1303,18 +1327,27 @@ async function enrollWithUnlockMethodLocked(
       account.deviceStatus === 'removed' &&
       account.device?.deviceId === stored.deviceId
     ) {
-      const candidate = await newStoredDevice(ctx, label);
-      requireActiveKeyContext(ctx);
-      if (!(await ctx.store.replaceDeviceIfCurrent(stored, candidate)))
+      device = await withNewDevice(
+        ctx,
+        label,
+        () => requireActiveKeyContext(ctx),
+        async (candidate) =>
+          (await ctx.store.replaceDeviceIfCurrent(stored, candidate))
+            ? candidate
+            : null
+      );
+      if (!device)
         throw new EncryptionFlowError(
           'invalid-request',
           'The device changed in another tab. Refresh and try again.'
         );
-      device = candidate;
     } else if (!device) {
-      const candidate = await newStoredDevice(ctx, label);
-      requireActiveKeyContext(ctx);
-      device = await ctx.store.getOrCreateDevice(candidate);
+      device = await withNewDevice(
+        ctx,
+        label,
+        () => requireActiveKeyContext(ctx),
+        (candidate) => ctx.store.getOrCreateDevice(candidate)
+      );
     }
     const entry = nextDeviceListEntry(account.list, {
       issuedAt: now(ctx),
@@ -1899,18 +1932,24 @@ export async function requestApproval(
       account?.deviceStatus === 'removed' &&
       account.device?.deviceId === stored.deviceId
     ) {
-      const candidate = await newStoredDevice(ctx, label);
-      requireCurrent();
-      if (!(await ctx.store.replaceDeviceIfCurrent(stored, candidate)))
+      device = await withNewDevice(
+        ctx,
+        label,
+        requireCurrent,
+        async (candidate) =>
+          (await ctx.store.replaceDeviceIfCurrent(stored, candidate))
+            ? candidate
+            : null
+      );
+      if (!device)
         throw new EncryptionFlowError(
           'invalid-request',
           'The device changed in another tab. Refresh and try again.'
         );
-      device = candidate;
     } else if (!device) {
-      const candidate = await newStoredDevice(ctx, label);
-      requireCurrent();
-      device = await ctx.store.getOrCreateDevice(candidate);
+      device = await withNewDevice(ctx, label, requireCurrent, (candidate) =>
+        ctx.store.getOrCreateDevice(candidate)
+      );
     }
     // Stage the only private keys before publishing their public halves.
     // The cross-tab lock serializes requests; CAS also detects explicit key

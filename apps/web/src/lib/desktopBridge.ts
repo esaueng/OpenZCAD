@@ -349,6 +349,31 @@ async function invokeDeviceKeys<T>(
 }
 
 /**
+ * A failed Keychain key creation. `keyId` names keys the host stored but
+ * could not remove again; they stay in the Keychain until a later
+ * `deleteNativeDeviceKeys(keyId)` succeeds, and this is their only name.
+ */
+export class NativeDeviceKeysError extends Error {
+  constructor(
+    message: string,
+    readonly keyId: string | null
+  ) {
+    super(message);
+    this.name = 'NativeDeviceKeysError';
+  }
+}
+
+function nativeCreateError(error: unknown): unknown {
+  if (typeof error !== 'object' || error === null) return error;
+  const { message, keyId } = error as { message?: unknown; keyId?: unknown };
+  if (typeof message !== 'string') return error;
+  return new NativeDeviceKeysError(
+    message,
+    typeof keyId === 'string' ? keyId : null
+  );
+}
+
+/**
  * Creates this desktop's device signing and unlock keys in the Keychain
  * (ADR-024, Unlock and devices). The private halves never enter the WebView.
  */
@@ -357,7 +382,9 @@ export async function createNativeDeviceKeys(): Promise<NativeDeviceKeys> {
     keyId: string;
     signingPublicKey: number[];
     unlockPublicKey: number[];
-  }>('create_device_keys');
+  }>('create_device_keys').catch((error: unknown) => {
+    throw nativeCreateError(error);
+  });
   return {
     keyId: created.keyId,
     signingPublicKey: Uint8Array.from(created.signingPublicKey),

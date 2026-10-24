@@ -42,6 +42,26 @@ pub struct DeviceKeyPublics {
     pub unlock_public_key: Vec<u8>,
 }
 
+/// Why [`create`] failed, and what it may have left behind.
+///
+/// `key_id` is set only when a key was stored and removing it failed too:
+/// the store may still hold keys under that id, and it is their only name.
+/// The caller passes it to [`delete`] later instead of losing it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateError {
+    pub message: String,
+    pub key_id: Option<String>,
+}
+
+impl From<String> for CreateError {
+    fn from(message: String) -> Self {
+        CreateError {
+            message,
+            key_id: None,
+        }
+    }
+}
+
 /// Fills a buffer with cryptographically secure random bytes.
 pub type FillRandom<'a> = &'a mut dyn FnMut(&mut [u8]) -> Result<(), String>;
 
@@ -106,11 +126,12 @@ fn load_secret(store: &dyn SecretStore, account: &str) -> Result<SecretKey, Stri
 
 /// Creates a signing and an unlock key, stores both, and returns their
 /// public halves under a fresh key id. If the second write fails the first is
-/// removed, so a failed creation leaves nothing behind.
+/// removed, so a failed creation leaves nothing behind; if that removal fails
+/// as well, the error carries the key id so the caller can retry [`delete`].
 pub fn create(
     store: &dyn SecretStore,
     fill_random: FillRandom<'_>,
-) -> Result<DeviceKeyPublics, String> {
+) -> Result<DeviceKeyPublics, CreateError> {
     let mut id = [0u8; KEY_ID_HEX_BYTES];
     fill_random(&mut id)?;
     let key_id = format!("{KEY_ID_PREFIX}{}", hex(&id));
@@ -123,9 +144,12 @@ pub fn create(
     let mut unlock_bytes = unlock.to_bytes();
     let stored = store.put(&unlock_account(&key_id), &unlock_bytes);
     unlock_bytes.fill(0);
-    if let Err(error) = stored {
-        let _ = store.delete(&signing_account(&key_id));
-        return Err(error);
+    if let Err(message) = stored {
+        let key_id = store
+            .delete(&signing_account(&key_id))
+            .err()
+            .map(|_| key_id);
+        return Err(CreateError { message, key_id });
     }
     Ok(DeviceKeyPublics {
         signing_public_key: public_bytes(&signing),
@@ -215,13 +239,15 @@ mod tests {
     use super::*;
     use p256::ecdsa::signature::Verifier;
     use p256::ecdsa::VerifyingKey;
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
 
     #[derive(Default)]
     struct MemoryStore {
         secrets: RefCell<HashMap<String, Vec<u8>>>,
         fail_account: Option<String>,
+        /// Deletions fail while set, as a locked Keychain's would.
+        fail_delete: Cell<bool>,
     }
 
     impl SecretStore for MemoryStore {
@@ -238,6 +264,9 @@ mod tests {
             Ok(self.secrets.borrow().get(account).cloned())
         }
         fn delete(&self, account: &str) -> Result<(), String> {
+            if self.fail_delete.get() {
+                return Err("delete failed".to_string());
+            }
             self.secrets.borrow_mut().remove(account);
             Ok(())
         }
@@ -343,7 +372,56 @@ mod tests {
             fail_account: Some(unlock_account(&key_id)),
             ..MemoryStore::default()
         };
-        assert!(create(&store, &mut counter_random()).is_err());
+        assert_eq!(
+            create(&store, &mut counter_random()),
+            Err(CreateError {
+                message: "store failed".to_string(),
+                key_id: None
+            })
+        );
+        assert!(store.secrets.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_failed_cleanup_returns_the_key_id_for_a_retry() {
+        let mut random = counter_random();
+        let mut probe = [0u8; KEY_ID_HEX_BYTES];
+        random(&mut probe).unwrap();
+        let key_id = format!("{KEY_ID_PREFIX}{}", hex(&probe));
+        let store = MemoryStore {
+            fail_account: Some(unlock_account(&key_id)),
+            fail_delete: Cell::new(true),
+            ..MemoryStore::default()
+        };
+        // The signing key was stored, the unlock key was not, and removing
+        // the signing key failed: the error keeps the only name for it.
+        let error = create(&store, &mut counter_random()).unwrap_err();
+        assert_eq!(error.message, "store failed");
+        assert_eq!(error.key_id.as_deref(), Some(key_id.as_str()));
+        assert!(store
+            .secrets
+            .borrow()
+            .contains_key(&signing_account(&key_id)));
+        // Once the store works again, deleting by that id removes it.
+        store.fail_delete.set(false);
+        delete(&store, error.key_id.as_deref().unwrap()).expect("retry delete");
+        assert!(store.secrets.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_failed_first_write_names_no_key() {
+        let mut random = counter_random();
+        let mut probe = [0u8; KEY_ID_HEX_BYTES];
+        random(&mut probe).unwrap();
+        let key_id = format!("{KEY_ID_PREFIX}{}", hex(&probe));
+        let store = MemoryStore {
+            fail_account: Some(signing_account(&key_id)),
+            fail_delete: Cell::new(true),
+            ..MemoryStore::default()
+        };
+        // Nothing was stored, so there is nothing to retry.
+        let error = create(&store, &mut counter_random()).unwrap_err();
+        assert_eq!(error.key_id, None);
         assert!(store.secrets.borrow().is_empty());
     }
 
@@ -392,7 +470,10 @@ mod tests {
     fn random_failures_surface() {
         let store = MemoryStore::default();
         let mut failing = |_: &mut [u8]| Err::<(), String>("no entropy".to_string());
-        assert_eq!(create(&store, &mut failing), Err("no entropy".to_string()));
+        assert_eq!(
+            create(&store, &mut failing),
+            Err(CreateError::from("no entropy".to_string()))
+        );
         assert!(store.secrets.borrow().is_empty());
     }
 }

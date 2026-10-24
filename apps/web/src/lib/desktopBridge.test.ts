@@ -4,9 +4,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
+  createNativeDeviceKeys,
   desktopCollaborationUrl,
   desktopFetch,
   isDesktopApp,
+  NativeDeviceKeysError,
   nativeCadFile,
   protectDesktopClose,
   saveCadBinaryFile
@@ -289,5 +291,33 @@ describe('desktop bridge', () => {
     await expect(desktopCollaborationUrl('proj_native')).rejects.toThrow(
       /not allowed/i
     );
+  });
+
+  it('keeps the key id a failed Keychain creation could not remove', async () => {
+    markDesktopRuntime();
+    const keyId = 'dk_' + 'a'.repeat(32);
+    vi.mocked(invoke).mockRejectedValue({
+      message: 'OpenZCAD could not save its device key to the Keychain.',
+      keyId
+    });
+    const failed = await createNativeDeviceKeys().catch(
+      (error: unknown) => error
+    );
+    expect(failed).toBeInstanceOf(NativeDeviceKeysError);
+    expect(failed).toMatchObject({
+      message: 'OpenZCAD could not save its device key to the Keychain.',
+      keyId
+    });
+    expect(invoke).toHaveBeenCalledWith('create_device_keys', undefined);
+
+    // A failure that left nothing behind names no key.
+    vi.mocked(invoke).mockRejectedValue({
+      message: 'No entropy.',
+      keyId: null
+    });
+    await expect(createNativeDeviceKeys()).rejects.toMatchObject({
+      name: 'NativeDeviceKeysError',
+      keyId: null
+    });
   });
 });

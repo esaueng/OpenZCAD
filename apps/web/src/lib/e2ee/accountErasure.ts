@@ -32,12 +32,21 @@ export async function eraseAccountWithKeyCleanup<
     try {
       if (input.isCurrentSession()) input.onSignedOut();
     } finally {
-      // Separate databases: one failing cleanup must not skip the other.
-      if (input.userId)
+      // Independent cleanups: one failing must not skip the others.
+      if (input.userId) {
+        const userId = input.userId;
         cleanup = await Promise.allSettled([
-          store.forgetErasedIdentity(input.userId, pin),
-          mlsStores.indexedDbMlsSessionStore().deleteAccount(input.userId)
+          store.forgetErasedIdentity(userId, pin),
+          mlsStores.indexedDbMlsSessionStore().deleteAccount(userId),
+          // The erased account's device keys open nothing any more. On
+          // desktop the Keychain keys go before the record, so a refused
+          // native removal keeps the record and its key id. User ids are
+          // stable per email, so the account's own later flows reach it:
+          // another erasure or signing out without keeping the device
+          // retries the removal, and a new setup reuses the keys.
+          store.withDeviceLock(userId, () => store.deleteDevice(userId))
         ]);
+      }
     }
     for (const outcome of cleanup)
       if (outcome.status === 'rejected') throw outcome.reason;
