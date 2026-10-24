@@ -642,16 +642,15 @@ async function assertAssistantProjectAllowed(
 ): Promise<void> {
   // Before migration 0031 every project is plaintext.
   if (!(await isProjectStorageFormatReady(env.DB))) return;
-  const row = await env
-    .DB!.prepare(
-      `SELECT p.storage_format FROM projects p
+  const row = await env.DB!.prepare(
+    `SELECT p.storage_format FROM projects p
      WHERE p.id = ? AND (
        p.user_id = ? OR EXISTS (
          SELECT 1 FROM project_members pm
          WHERE pm.project_id = p.id AND pm.user_id = ?
        )
      )`
-    )
+  )
     .bind(projectId, userId, userId)
     .first<{ storage_format: number | null }>();
   if (row && row.storage_format !== null && row.storage_format !== 1) {
@@ -1815,12 +1814,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const expectedRevision = parseDeleteProjectMeasurementsRequest(
       await readJsonBody(request, 1024)
     );
-    await deleteProjectMeasurements(
-      env.DB!,
-      projectId,
-      userId,
-      expectedRevision
-    );
+    await deleteProjectMeasurements(env.DB!, projectId, userId, expectedRevision);
     return new Response(null, { status: 204 });
   }
 
