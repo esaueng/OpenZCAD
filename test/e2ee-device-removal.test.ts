@@ -37,6 +37,7 @@ import {
 } from '@openzcad/document-core';
 import {
   toUserId,
+  type E2eeProjectEnvelopeRecord,
   type E2eeRevocationCutoffsResponse,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -1084,6 +1085,122 @@ describe('device removal across encrypted projects', () => {
       wrapRow(srv, projectId, before + 1).map((w) => w.account_key_sequence)
     ).toEqual([accountKeySequences(laptop.account.list).at(-1)]);
     expect((await statementsOf(srv)).statements).toEqual([]);
+  });
+
+  it('keeps a removed device’s project info readable inside its cutoff only', async () => {
+    const { srv, recovery, laptop, desktop, phone, projects } =
+      await threeDevices(1);
+    const projectId = projects[0]!;
+    // The phone renames it: the project info (slice 4-7) is the phone's.
+    await saveEdit(phone, projectId, 'Phone name');
+    const phoneId = deviceIdOf(phone);
+    const info = await srv.call('GET', `/api/e2ee/projects/${projectId}/info`);
+    const { info: record } = (await info.json()) as {
+      info: E2eeProjectEnvelopeRecord;
+    };
+    expect(record.signerDeviceId).toBe(phoneId);
+
+    const { participant } = participantFor(laptop);
+    use(
+      laptop,
+      ready(
+        await removeDevice(
+          laptop.e2ee,
+          laptop.account,
+          phoneId,
+          recovery.secret,
+          participant
+        )
+      )
+    );
+    // Signed below the phone's cutoff epoch: still the project's name.
+    await refresh(desktop);
+    expect((await desktop.store.info.read(projectId)).body?.name).toBe(
+      'Phone name'
+    );
+    expect(await desktop.store.projectName(record)).toBe('Phone name');
+    // A cutoff at or below its epoch refuses it, as it refuses versions.
+    const strict = createEncryptedProjectStore({
+      groups: desktop.groups,
+      api: createEncryptedDocumentsApi((path, init) =>
+        desktop.fetcher(path, init)
+      ),
+      blobReferences: desktop.references,
+      pins: memoryVersionPins(),
+      cutoffs: async () =>
+        new Map([[`${USER} ${phoneId}`, { keyEpoch: record.keyEpoch }]])
+    });
+    expect(await strict.projectName(record)).toBeNull();
+  });
+
+  it('names a project in the recycle bin, which reads and rotates once restored', async () => {
+    const { srv, recovery, laptop, desktop, phone, projects } =
+      await threeDevices(2);
+    for (const projectId of projects) {
+      await saveEdit(phone, projectId, 'Phone edit');
+      await saveEdit(desktop, projectId, 'Desktop edit');
+      await saveEdit(phone, projectId, 'Phone again');
+    }
+    const [binned, active] = projects as [string, string];
+    const patch = (status: string) =>
+      srv.call('PATCH', `/api/projects/${binned}`, { body: { status } });
+    // Slice 4-8: the owner trashes it; nobody writes while it is there.
+    expect((await patch('deleted')).status).toBe(200);
+    const predicted = keyEpochOf(srv, binned) + 1;
+    const head = headRow(srv, binned);
+    const phoneId = deviceIdOf(phone);
+
+    const { participant, seen } = participantFor(laptop);
+    use(
+      laptop,
+      ready(
+        await removeDevice(
+          laptop.e2ee,
+          laptop.account,
+          phoneId,
+          recovery.secret,
+          participant
+        )
+      )
+    );
+    // Rotated where it can be; the binned project waits for its restore.
+    expect(seen.outcome?.rotated).toEqual([active]);
+    expect(seen.outcome?.left.map((item) => item.projectId)).toEqual([binned]);
+    expect(seen.outcome?.cutoffsStored).toBe(true);
+    expect(keyEpochOf(srv, binned)).toBe(predicted - 1);
+    // The statement names it too, at its next epoch and its newest head.
+    const { statements } = await statementsOf(srv);
+    const statement = await verifyRevocationCutoffs(
+      {
+        statement: fromBase64Url(statements[0]!.statement),
+        signature: fromBase64Url(statements[0]!.signature)
+      },
+      laptop.account.list,
+      { generation: 1 }
+    );
+    const cutoff = statement.cutoffs.find((c) => c.projectId === binned);
+    expect(cutoff?.cutoffEpoch).toBe(predicted);
+    expect(toHex(cutoff!.head!.versionHash)).toBe(head.version_hash);
+
+    // In the bin, the owner still reads the phone's versions.
+    await refresh(desktop);
+    expect((await desktop.store.loadProject(binned)).name).toBe('Phone again');
+    // Restored, the next writer rotates the phone out before saving, at the
+    // epoch the statement named.
+    expect((await patch('active')).status).toBe(200);
+    await saveEdit(desktop, binned, 'Desktop after restore');
+    expect(keyEpochOf(srv, binned)).toBe(predicted);
+    const status = await desktop.sessions.status({
+      userId: USER,
+      deviceId: deviceIdOf(desktop),
+      projectId: binned
+    });
+    expect(status.members.map((m) => m.deviceId)).not.toContain(phoneId);
+    // A fresh browser verifies the whole history, the phone's part included.
+    const fresh = await refresh(newDeviceLike(desktop));
+    expect((await fresh.store.loadProject(binned)).name).toBe(
+      'Desktop after restore'
+    );
   });
 });
 

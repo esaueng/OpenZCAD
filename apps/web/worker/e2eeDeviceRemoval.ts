@@ -198,9 +198,12 @@ async function listCutoffs(db: D1Database, userId: string) {
                ORDER BY v.document_version DESC LIMIT 1) AS head_version,
               (SELECT v.version_hash FROM e2ee_project_versions v
                WHERE v.project_id = g.project_id
-               ORDER BY v.document_version DESC LIMIT 1) AS head_hash
+               ORDER BY v.document_version DESC LIMIT 1) AS head_hash,
+              p.status = 'deleted' AS trashed
        FROM e2ee_project_groups g JOIN projects p ON p.id = g.project_id
-       WHERE p.user_id = ? AND p.storage_format = 2 AND p.status <> 'deleted'
+       -- A project in the recycle bin (slice 4-8) is named too: it can be
+       -- restored, and its removed device's versions must stay readable.
+       WHERE p.user_id = ? AND p.storage_format = 2
        ORDER BY g.project_id LIMIT ?`
     )
     .bind(userId, MAX_PROJECTS)
@@ -211,6 +214,7 @@ async function listCutoffs(db: D1Database, userId: string) {
       epoch: number;
       head_version: number | null;
       head_hash: string | null;
+      trashed: number;
     }>();
   return json({
     statements: (results ?? []).map(cutoffRecord),
@@ -222,7 +226,8 @@ async function listCutoffs(db: D1Database, userId: string) {
       head:
         row.head_version === null || row.head_hash === null
           ? null
-          : { documentVersion: row.head_version, versionHash: row.head_hash }
+          : { documentVersion: row.head_version, versionHash: row.head_hash },
+      ...(row.trashed ? { trashed: true } : {})
     }))
   } satisfies E2eeRevocationCutoffsResponse);
 }

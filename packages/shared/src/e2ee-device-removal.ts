@@ -32,6 +32,11 @@ export interface E2eeRemovalProjectRecord {
   epoch: number;
   /** The newest accepted version, if the project has one. */
   head: { documentVersion: number; versionHash: string } | null;
+  /**
+   * In the recycle bin (slice 4-8): a removal names it in its cutoffs but
+   * cannot rotate it; the next writer does once it is restored.
+   */
+  trashed?: true;
 }
 
 export interface E2eeRevocationCutoffsResponse {

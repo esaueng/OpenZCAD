@@ -381,6 +381,15 @@ export function removalParticipant(
             });
             continue;
           }
+          if (project.trashed) {
+            // Nobody commits to a trashed project; its cutoff is signed,
+            // and the next writer rotates it once it is restored.
+            left.push({
+              projectId: project.projectId,
+              reason: 'In the recycle bin: rotated once it is restored.'
+            });
+            continue;
+          }
           const state = await joinProjectGroup(groups, project.projectId);
           rotated.push(project.projectId);
           const named = predicted.get(project.projectId);

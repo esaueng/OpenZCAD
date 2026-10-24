@@ -1348,8 +1348,47 @@ export function createEncryptedProjectStore(
   }
 
   /**
+   * The key a replaced envelope's signer signs with: a device this account
+   * lists, or a removed one (slice 4-10) for an envelope under a key epoch
+   * below its cutoff, which it could know. Version cutoffs' heads order
+   * document versions only, so a replaced envelope is held to the key
+   * epoch alone.
+   */
+  async function replacedSigningKey(
+    record: E2eeProjectEnvelopeRecord
+  ): Promise<Uint8Array> {
+    const live = list().devices.find(
+      (d) => d.deviceId === record.signerDeviceId
+    );
+    if (live) return live.signingKey;
+    const removed = signingKeyOf(list(), record.signerDeviceId);
+    if (removed) {
+      let cutoff: VersionCutoff | undefined;
+      try {
+        cutoff = (await cutoffsFor(record.projectId)).get(
+          authorCutoffKey(userId, record.signerDeviceId)
+        );
+      } catch {
+        cutoff = undefined;
+      }
+      if (cutoff?.keyEpoch !== undefined && record.keyEpoch < cutoff.keyEpoch) {
+        return removed;
+      }
+      throw integrity(
+        'author',
+        'This envelope was signed by a removed device after it was removed.'
+      );
+    }
+    throw integrity(
+      'author',
+      'This envelope is not signed by a device this account lists.'
+    );
+  }
+
+  /**
    * Opens a replaced envelope (project info, measurements, view state):
-   * signed by a device this account lists, bound to its key epoch, of the
+   * signed by a device this account lists (or a removed one inside its
+   * cutoff), bound to its key epoch, of the
    * kind, project, sequence and epoch the account named, then decoded by
    * its body codec.
    */
@@ -1358,17 +1397,9 @@ export function createEncryptedProjectStore(
     kind: E2eeReplacedEnvelopeKind
   ): Promise<OpenedReplaced> {
     const envelope = bytes(record.envelope);
-    const signer = list().devices.find(
-      (d) => d.deviceId === record.signerDeviceId
-    );
-    if (!signer) {
-      throw integrity(
-        'author',
-        'This envelope is not signed by a device this account lists.'
-      );
-    }
+    const signingKey = await replacedSigningKey(record);
     const signed = await verifyProjectEnvelopeSignature(
-      signer.signingKey,
+      signingKey,
       envelope,
       bytes(record.signature)
     ).catch(() => null);
