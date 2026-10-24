@@ -37,7 +37,11 @@ describe('project share link client', () => {
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
       .mockResolvedValueOnce(
         jsonResponse({
-          project: { projectId: 'project/one', name: 'One', mode: 'tweak' },
+          project: {
+            projectId: sharedDocument.projectId,
+            name: 'One',
+            mode: 'tweak'
+          },
           document: sharedDocument
         })
       );
@@ -87,7 +91,11 @@ describe('project share link client', () => {
 
   it('opens only a shared model this browser can open', async () => {
     // The account serves the shared model unread (ADR-024 Phase 1).
-    const project = { projectId: 'project/one', name: 'One', mode: 'tweak' };
+    const project = {
+      projectId: sharedDocument.projectId,
+      name: 'One',
+      mode: 'tweak'
+    };
     const fetcher = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
@@ -97,11 +105,21 @@ describe('project share link client', () => {
         })
       )
       .mockResolvedValueOnce(
+        jsonResponse({
+          project: { ...project, projectId: 'project/other' },
+          document: sharedDocument
+        })
+      )
+      .mockResolvedValueOnce(
         jsonResponse({ project, document: sharedDocument })
       );
     const client = createProjectShareLinkClient(fetcher);
     await expect(client.fetchSharedProject('bad_model')).rejects.toThrow(
       /objectFolders/
+    );
+    // A valid model that claims another project is not this link's model.
+    await expect(client.fetchSharedProject('other_model')).rejects.toThrow(
+      /different project/
     );
     await expect(
       client.fetchSharedProject('good_model')

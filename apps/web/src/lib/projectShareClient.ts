@@ -5,7 +5,10 @@ import type {
   ProjectShareLinkSummary,
   SharedProjectResponse
 } from '@openzcad/shared';
-import { assertStorableDocument } from '@openzcad/document-core';
+import {
+  assertStorableDocument,
+  UnstorableDocumentError
+} from '@openzcad/document-core';
 import { desktopFetch } from './desktopBridge';
 import { ProjectSharingApiError } from './projectSharing';
 
@@ -139,8 +142,14 @@ export function createProjectShareLinkClient(
       }
       const shared = (await response.json()) as SharedProjectResponse;
       // The account serves the shared model unread (ADR-024 Phase 1); the
-      // visitor opens only a document this browser can open.
-      return { ...shared, document: assertStorableDocument(shared.document) };
+      // visitor opens only a document this browser can open, and only as the
+      // project the link names.
+      const document = assertStorableDocument(shared.document);
+      if (document.projectId !== shared.project.projectId)
+        throw new UnstorableDocumentError(
+          'The shared model belongs to a different project.'
+        );
+      return { ...shared, document };
     }
   };
 }

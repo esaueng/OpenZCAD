@@ -7,9 +7,10 @@ import { toUserId } from '@openzcad/shared';
 
 // A real document: loads now refuse one this browser cannot open
 // (ADR-024 Phase 1). Its name carries multi-byte UTF-8 for the size check.
-const documentText = JSON.stringify(
-  createProjectDocument('測試⚙', toUserId('owner'))
-);
+const document = createProjectDocument('測試⚙', toUserId('owner'));
+const documentText = JSON.stringify(document);
+// Loads also refuse a copy of a different project, so request this one.
+const projectId = document.projectId;
 
 vi.mock('./analytics', () => ({
   isAnalyticsEnabled: vi.fn(() => true),
@@ -32,8 +33,8 @@ describe('project download size observations', () => {
       const response = new Response(text);
       vi.mocked(desktopFetch).mockResolvedValue(response);
       const loaded = kind === 'project'
-        ? await api.loadProject('project')
-        : await api.loadRevision('project', 'revision');
+        ? await api.loadProject(projectId)
+        : await api.loadRevision(projectId, 'revision');
       expect(loaded).toMatchObject({ name: '測試⚙' });
       expect(response.bodyUsed).toBe(true);
       expect(trackSize).toHaveBeenCalledExactlyOnceWith(
@@ -45,7 +46,7 @@ describe('project download size observations', () => {
   it('keeps successful downloads available without analytics consent', async () => {
     vi.mocked(isAnalyticsEnabled).mockReturnValue(false);
     vi.mocked(desktopFetch).mockResolvedValue(new Response(documentText));
-    expect(await api.loadProject('project')).toMatchObject({
+    expect(await api.loadProject(projectId)).toMatchObject({
       name: '測試⚙'
     });
     expect(trackSize).not.toHaveBeenCalled();
@@ -53,11 +54,11 @@ describe('project download size observations', () => {
 
   it('treats a pruned revision as an ordinary null result without failure metrics', async () => {
     vi.mocked(desktopFetch).mockResolvedValue(new Response('{"error":"pruned"}', { status: 404 }));
-    expect(await api.loadRevision('project', 'revision')).toBeNull();
+    expect(await api.loadRevision(projectId, 'revision')).toBeNull();
     expect(trackDetail).not.toHaveBeenCalled();
     expect(trackSize).not.toHaveBeenCalled();
     vi.mocked(desktopFetch).mockResolvedValue(new Response('{"error":"missing"}', { status: 404 }));
-    await expect(api.loadProject('project')).rejects.toBeInstanceOf(ApiError);
+    await expect(api.loadProject(projectId)).rejects.toBeInstanceOf(ApiError);
     expect(trackDetail).toHaveBeenCalledWith('error_cloud_load');
     expect(trackDetail).toHaveBeenCalledWith('cloud_status', 'other');
   });
@@ -66,8 +67,8 @@ describe('project download size observations', () => {
     vi.mocked(desktopFetch).mockResolvedValueOnce(
       new Response('{"error":"unavailable"}', { status: 503 })
     ).mockResolvedValueOnce(new Response('invalid JSON'));
-    await expect(api.loadProject('project')).rejects.toBeInstanceOf(ApiError);
-    await expect(api.loadRevision('project', 'revision')).rejects.toThrow();
+    await expect(api.loadProject(projectId)).rejects.toBeInstanceOf(ApiError);
+    await expect(api.loadRevision(projectId, 'revision')).rejects.toThrow();
     expect(trackSize).not.toHaveBeenCalled();
   });
 
