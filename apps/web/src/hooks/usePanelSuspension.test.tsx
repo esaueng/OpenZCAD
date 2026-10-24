@@ -5,23 +5,17 @@ import { usePanelSuspension } from './usePanelSuspension';
 interface Props {
   commandFoldOpen: boolean;
   sketching: boolean;
-  phase: string | null;
-  pointerDown?: boolean;
 }
 
 const IDLE: Props = {
   commandFoldOpen: true,
-  sketching: false,
-  phase: null
+  sketching: false
 };
 
 function renderSuspension(initialProps: Props = IDLE) {
   return renderHook(
-    ({ commandFoldOpen, sketching, phase, pointerDown }: Props) =>
-      usePanelSuspension(
-        { commandFoldOpen },
-        { sketching, phase, pointerDown }
-      ),
+    ({ commandFoldOpen, sketching }: Props) =>
+      usePanelSuspension({ commandFoldOpen }, { sketching }),
     { initialProps }
   );
 }
@@ -41,49 +35,6 @@ describe('usePanelSuspension', () => {
     expect(result.current.panelsHidden).toBe(false);
     expect(result.current.commandFoldOpen).toBe(true);
     expect(result.current.foldHidden).toBe(false);
-  });
-
-  it('holds a drag from engage through validation, then restores', () => {
-    const { result, rerender } = renderSuspension({ ...IDLE, phase: 'armed' });
-    expect(result.current.panelsHidden).toBe(false);
-
-    rerender({ ...IDLE, phase: 'dragging' });
-    // Hidden on the very render the drag engages, not one frame later.
-    expect(result.current.panelsHidden).toBe(true);
-    expect(result.current.commandFoldOpen).toBe(false);
-
-    rerender({ ...IDLE, phase: 'validating' });
-    expect(result.current.panelsHidden).toBe(true);
-
-    // The commit landed and the selection cleared.
-    rerender(IDLE);
-    expect(result.current.panelsHidden).toBe(false);
-    expect(result.current.commandFoldOpen).toBe(true);
-  });
-
-  it('restores after a refused drag as well', () => {
-    const { result, rerender } = renderSuspension({
-      ...IDLE,
-      phase: 'dragging'
-    });
-    expect(result.current.panelsHidden).toBe(true);
-    rerender({ ...IDLE, phase: 'validating' });
-    rerender({ ...IDLE, phase: 'failed' });
-    expect(result.current.panelsHidden).toBe(false);
-  });
-
-  it('does not bring the panels back for a value refused mid-drag', () => {
-    const { result, rerender } = renderSuspension({
-      ...IDLE,
-      phase: 'dragging',
-      pointerDown: true
-    });
-    rerender({ ...IDLE, phase: 'failed', pointerDown: true });
-    expect(result.current.panelsHidden).toBe(true);
-    rerender({ ...IDLE, phase: 'dragging', pointerDown: true });
-    expect(result.current.panelsHidden).toBe(true);
-    rerender({ ...IDLE, phase: 'armed', pointerDown: false });
-    expect(result.current.panelsHidden).toBe(false);
   });
 
   it('keeps the panels the user asks for, for the rest of that mode only', () => {

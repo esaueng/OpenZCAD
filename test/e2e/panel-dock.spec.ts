@@ -21,8 +21,8 @@ import type { Locator, Page } from '@playwright/test';
   beside the instrument rail, Pin docks it in the right dock against the
   screen edge, and the rail stands on the dock's inner edge. Every other
   spec runs with all five docked; this one covers how they open, dock,
-  stack, resize, step aside, migrate and fall back to one panel at a time
-  on a phone-width stage. Dragging, the left dock and floating windows
+  stack, resize, step aside for a sketch (not a drag), migrate and fall back
+  to one panel at a time on a phone-width stage. Dragging, the left dock and floating windows
   (slice 4) are `panel-drag.spec.ts` and `panel-float.spec.ts`.
 */
 
@@ -559,14 +559,14 @@ test('a sketch hides the dock and an open unpinned panel and restores both', asy
   await expect(docked).toBeVisible();
 });
 
-test('a drag on the model suspends the dock and an open unpinned panel until it ends', async ({
+test('a drag on the model keeps the dock and an open unpinned panel where they are', async ({
   page
 }) => {
   // Wide enough that the inspector, past the dock and the unpinned panel,
   // stays clear of the face the drag starts on.
   await openWorkspace(
     page,
-    'Drag suspend check',
+    'Drag keeps panels check',
     { right: [['parameters']], unpinned: 'history' },
     { width: 1920, height: 1000 }
   );
@@ -584,11 +584,19 @@ test('a drag on the model suspends the dock and an open unpinned panel until it 
   await expect(
     page.locator('.selection-callout-phase-dot[aria-label="Dragging"]')
   ).toBeVisible();
-  await expect(page.locator('.model-panel')).toHaveCount(0);
+  // The docks sit beside the model, not over it: hiding them mid-drag only
+  // made them vanish and the rail jump until the release validated.
+  const rail = page.locator('.instrument-rail');
+  const railBefore = await rail.boundingBox();
+  await page.mouse.move(face.x + 40, face.y - 30, { steps: 2 });
+  await expect(docked).toBeVisible();
+  await expect(unpinned).toBeVisible();
+  expect(await rail.boundingBox()).toEqual(railBefore);
   await page.mouse.up();
-  await expect(docked).toBeVisible({ timeout: 15_000 });
+  await expect(docked).toBeVisible();
   await expect(unpinned).toBeVisible();
   await expect(unpinned).toHaveClass(/is-unpinned/);
+  expect(await rail.boundingBox()).toEqual(railBefore);
 });
 
 test('⌘K opens a parameter unpinned and focuses it, and reveals a panel mid-sketch', async ({
