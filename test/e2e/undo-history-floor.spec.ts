@@ -72,4 +72,12 @@ test('says the undo history was trimmed only when undo reaches its floor', async
   await expect(page.getByRole('tooltip')).toContainText(
     'No older undo steps kept'
   );
+
+  // Its action closed the notice. A spent ⌘Z undoes nothing, so it must not
+  // raise it again.
+  await expect(notice).toHaveCount(0);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(page.getByLabel('Expression for p0')).toHaveCount(1);
+  await page.waitForTimeout(500);
+  await expect(notice).toHaveCount(0);
 });

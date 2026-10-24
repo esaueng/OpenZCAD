@@ -11307,6 +11307,9 @@ export function App() {
       return;
     }
     const label = managerRef.current.undoLabel;
+    // A spent ⌘Z still lands here and leaves the history where it was; only
+    // the undo that steps off the last kept entry reaches the floor.
+    const undid = managerRef.current.canUndo;
     try {
       const next = managerRef.current.undo();
       if (drawingOnly || folderOnly || imageOnly)
@@ -11324,7 +11327,7 @@ export function App() {
     setMoveCommitHold(null);
     setTool(null);
     clearSelection();
-    if (managerRef.current.undoFloorTrimmed) {
+    if (undid && managerRef.current.undoFloorTrimmed) {
       // Panels are Build's alone: Tweak, View and Draw render none, so the
       // action goes to Build first. Where Build is locked (a shared link, a
       // read-only seat) there is nowhere to show Revisions, so no action.
