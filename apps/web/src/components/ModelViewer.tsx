@@ -225,7 +225,11 @@ import {
   RIGHT_LANE_MODEL_PANELS,
   SELECTION_CALLOUT_CHIP_CLASS
 } from '../lib/selectionCalloutView';
-import { measureFitFrame } from '../lib/fitFrame';
+import {
+  measureFitFrame,
+  measurePickFrame,
+  shiftIntoFrame
+} from '../lib/fitFrame';
 import type { DimensionMode } from '../lib/keypad';
 import type { ViewportCameraState } from '../lib/workspaceSession';
 import type { MeasurementViewportAnnotation } from '../lib/measurements';
@@ -1720,6 +1724,12 @@ function stepRetiringRigs(retiring: DragRig[], dtMs: number): boolean {
 
 /** Screen gap between a pin's centre and its value chip. */
 const PIN_CHIP_GAP_PX = 44;
+
+/**
+ * How far inside the right lane's edge a pin's value chip may start before
+ * it swaps to the pin's other side: room for the chip itself.
+ */
+const CHIP_LANE_CLEARANCE_PX = 72;
 /** A dimension line shorter than this on screen cannot carry its label. */
 const LINE_LABEL_MIN_PX = 150;
 /** Air between the mode tag and the value pill along the line. */
@@ -6280,7 +6290,7 @@ export function ModelViewer({
           // editor. Rather than clamp the chip back onto the pin, swap it to
           // the pin's other side; only if that is under the editor too does
           // it clamp, so exact entry remains reachable.
-          if (screen.x > inspectorLeft - 72) {
+          if (screen.x > inspectorLeft - CHIP_LANE_CLEARANCE_PX) {
             screen = {
               x: pinScreen.x - sideX * PIN_CHIP_GAP_PX,
               y: pinScreen.y - sideY * PIN_CHIP_GAP_PX
@@ -6288,7 +6298,7 @@ export function ModelViewer({
           }
           screen = {
             ...screen,
-            x: Math.min(screen.x, inspectorLeft - 72)
+            x: Math.min(screen.x, inspectorLeft - CHIP_LANE_CLEARANCE_PX)
           };
         }
       }
@@ -11854,6 +11864,140 @@ export function ModelViewer({
       context.requestRender();
     };
   }, [regionHandle, sketchViews]);
+
+  // The picked regions' Extrude card opens at the head of the right lane,
+  // over the stage's right third, and a profile there — where Finish Sketch
+  // tends to leave one — had its arrow and preview drawn under the card.
+  // Once the card is laid out, glide the view sideways (no orbit, no zoom)
+  // just far enough to put the regions and their arrows in the stage the
+  // panels leave clear. Once per pick: a value change keeps the key, and
+  // an orbit afterwards is the user's own.
+  const regionClearanceKey = regionHandle
+    ? [
+        regionHandle.sketchId,
+        regionHandle.regionFingerprint,
+        ...(regionHandle.followers ?? []).map(
+          (follower) => follower.regionFingerprint
+        )
+      ].join('|')
+    : null;
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !regionClearanceKey) {
+      return;
+    }
+    const [sketchId, ...fingerprints] = regionClearanceKey.split('|');
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        if (offsetDragActiveRef.current) {
+          return;
+        }
+        // The arrows (and, below, the value chip) must stay reachable; the
+        // regions themselves too when they fit in the clear stage.
+        const arrows = new THREE.Box3();
+        for (const rig of [
+          regionRigRef.current,
+          ...regionFollowerRigsRef.current
+        ]) {
+          if (rig) {
+            arrows.expandByObject(rig.group);
+          }
+        }
+        const target = arrows.clone();
+        for (const child of regionGroupRef.current?.children ?? []) {
+          const pick = child.userData.region as RegionPickData | undefined;
+          if (
+            pick &&
+            pick.sketchId === sketchId &&
+            fingerprints.includes(String(pick.regionFingerprint))
+          ) {
+            target.expandByObject(child);
+          }
+        }
+        if (target.isEmpty()) {
+          return;
+        }
+        const canvas = context.renderer.domElement;
+        const bounds = canvas.getBoundingClientRect();
+        const camera = context.activeCamera;
+        const span = (box: THREE.Box3) => {
+          const rect = { left: Infinity, top: 0, right: -Infinity, bottom: 0 };
+          if (box.isEmpty()) {
+            return rect;
+          }
+          const corner = new THREE.Vector3();
+          for (let index = 0; index < 8; index += 1) {
+            corner
+              .set(
+                index & 1 ? box.max.x : box.min.x,
+                index & 2 ? box.max.y : box.min.y,
+                index & 4 ? box.max.z : box.min.z
+              )
+              .project(camera);
+            const x = bounds.left + ((corner.x + 1) / 2) * bounds.width;
+            rect.left = Math.min(rect.left, x);
+            rect.right = Math.max(rect.right, x);
+          }
+          return rect;
+        };
+        const screen = span(target);
+        const reach = span(arrows);
+        // The value chip hangs right of the armed arrow's pin, and swaps to
+        // its left only when the card would cover it; keep its own side
+        // clear so it stays where it reads, not under the tool fold.
+        const pin = regionRigRef.current?.group.position
+          .clone()
+          .project(camera);
+        if (pin) {
+          const chipEnd =
+            bounds.left +
+            ((pin.x + 1) / 2) * bounds.width +
+            PIN_CHIP_GAP_PX +
+            CHIP_LANE_CLEARANCE_PX;
+          screen.right = Math.max(screen.right, chipEnd);
+          reach.left = Math.min(reach.left, chipEnd);
+          reach.right = Math.max(reach.right, chipEnd);
+        }
+        const shift = shiftIntoFrame(
+          screen,
+          bounds,
+          measurePickFrame(canvas),
+          reach.left <= reach.right ? reach : screen
+        );
+        // Only away from the card: a pick under the column or the tool fold
+        // on the left was never under it, and stays where the user put it.
+        if (shift > -1 || !(bounds.width > 0)) {
+          return;
+        }
+        // Where the regions' centre must move to, at its own depth: the
+        // camera travels the opposite way, parallel to the screen.
+        const anchor = target.getCenter(new THREE.Vector3());
+        const moved = anchor.clone().project(camera);
+        moved.x += (shift / bounds.width) * 2;
+        moved.unproject(camera);
+        const travel = anchor.sub(moved);
+        const perspective = context.camera;
+        const heldUp = perspective.up.clone();
+        context.startCameraTween(
+          {
+            position: perspective.position.clone().add(travel),
+            target: context.controls.target.clone().add(travel),
+            near: perspective.near,
+            far: perspective.far,
+            // A held roll (a face view) stays as it is.
+            ...(heldUp.z === 1 ? {} : { up: heldUp })
+          },
+          () => {
+            if (context.projection === 'orthographic') {
+              context.syncOrthographic(false);
+            }
+          },
+          { ease: viewJumpEase }
+        );
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [regionClearanceKey]);
 
   // Ghost planes while the Sketch tool waits for one. Installed and torn
   // down with the armed state; the render loop keeps their screen size.

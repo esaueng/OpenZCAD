@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { measureFitFrame } from './fitFrame';
+import { measureFitFrame, measurePickFrame, shiftIntoFrame } from './fitFrame';
 
 function placed(
   element: HTMLElement,
@@ -22,9 +22,7 @@ function placed(
   return element;
 }
 
-function stage(
-  panels: 'none' | 'docked' | 'unpinned' | 'phone' = 'none'
-) {
+function stage(panels: 'none' | 'docked' | 'unpinned' | 'phone' = 'none') {
   const area = document.createElement('div');
   area.className = 'viewer-area';
   const canvas = placed(document.createElement('canvas'), 0, 0, 1024, 768);
@@ -98,5 +96,64 @@ describe('measureFitFrame', () => {
     const canvas = placed(document.createElement('canvas'), 0, 0, 800, 600);
     document.body.append(canvas);
     expect(measureFitFrame(canvas)).toBeUndefined();
+  });
+});
+
+describe('measurePickFrame', () => {
+  it('keeps a pick clear of the open tool fold as well as the card', () => {
+    const canvas = stage('docked');
+    const column = placed(document.createElement('div'), 10, 260, 50, 590);
+    column.className = 'workspace-column-float';
+    // The fold hangs outside the column's own box.
+    const fold = placed(document.createElement('div'), 60, 260, 304, 740);
+    fold.className = 'command-flyout';
+    column.append(fold);
+    canvas.closest('.viewer-area')!.append(column);
+    const frame = measurePickFrame(canvas)!;
+    expect(frame.minX).toBeCloseTo(((304 + 12) / 1024) * 2 - 1, 12);
+    expect(frame.maxX).toBeCloseTo(((668 - 12) / 1024) * 2 - 1, 12);
+    // Narrower than Fit would frame into, but a profile fits in it.
+    expect(measureFitFrame(canvas)?.minX).toBeCloseTo(
+      ((50 + 12) / 1024) * 2 - 1,
+      12
+    );
+  });
+});
+
+describe('shiftIntoFrame', () => {
+  const canvas = { left: 0, top: 0, right: 1000, bottom: 800 };
+  // Clear from 100px to 600px: a card over the right of the stage.
+  const frame = { minX: -0.8, maxX: 0.2, minY: -1, maxY: 1 };
+  const at = (left: number, right: number) => ({
+    left,
+    top: 200,
+    right,
+    bottom: 300
+  });
+
+  it('leaves a target that is already clear where it is', () => {
+    expect(shiftIntoFrame(at(200, 400), canvas, frame)).toBe(0);
+    expect(shiftIntoFrame(at(200, 400), canvas, undefined)).toBe(0);
+  });
+
+  it('moves a target under the card left just far enough to clear it', () => {
+    expect(shiftIntoFrame(at(550, 700), canvas, frame)).toBeCloseTo(-100);
+  });
+
+  it('moves a target under the left column right', () => {
+    expect(shiftIntoFrame(at(40, 160), canvas, frame)).toBeCloseTo(60);
+  });
+
+  it('centres a target wider than the clear band', () => {
+    expect(shiftIntoFrame(at(300, 900), canvas, frame)).toBeCloseTo(-250);
+  });
+
+  it('keeps only the core of a target wider than the band clear', () => {
+    // The region spans the stage; its arrow is under the card.
+    expect(shiftIntoFrame(at(0, 900), canvas, frame, at(560, 680))).toBeCloseTo(
+      -80
+    );
+    // Its arrow already clear, nothing moves.
+    expect(shiftIntoFrame(at(0, 900), canvas, frame, at(300, 400))).toBe(0);
   });
 });
