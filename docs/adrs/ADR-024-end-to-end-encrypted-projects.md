@@ -287,10 +287,14 @@ cached with ordinary unlocked account keys. Session teardown invalidates
 pending passkey continuations.
 
 This account-key work remains behind the existing off-by-default
-`E2EE_KEYS_ENABLED` gate and `E2EE_CANARY_EMAILS` allowlist. Migration
-`0029_e2ee_account_keys.sql` must be applied with separate authorization
-before either is enabled; configuration reports disabled while the tables
-are missing. The passkey follow-up requires no additional schema migration.
+`E2EE_KEYS_ENABLED` gate and `E2EE_CANARY_EMAILS` allowlist. Migrations
+`0029_e2ee_account_keys.sql` and `0030_e2ee_account_key_history.sql` must be
+applied with separate authorization before either is enabled; configuration
+reports disabled while the tables are missing. The passkey follow-up
+requires no additional schema migration. Every account-key rotation stores
+the replaced key wrapped under its successor (`previous-account-key`), so
+the newest account key opens every older one and no older key opens a newer
+one.
 Enabling account keys is not completion of project encryption, migration,
 MLS integration or the Phase 8 outside review. Real authenticator and
 browser compatibility qualification remains a rollout prerequisite;

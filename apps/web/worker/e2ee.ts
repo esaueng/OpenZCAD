@@ -6,16 +6,19 @@
  *
  * It still checks what it can, as defense in depth: every chain it stores
  * verifies under the user's identity key, entries extend the stored head,
- * a rotation replaces every account-key wrap at once, and a setup carries
- * the wraps without which the account could not be unlocked again. Browsers
- * verify all of it themselves and never trust these checks.
+ * a rotation replaces every account-key wrap at once and carries the
+ * replaced account key wrapped under the new one (the account-key history),
+ * and a setup carries the wraps without which the account could not be
+ * unlocked again. Browsers verify all of it themselves and never trust these
+ * checks.
  *
- * Closed unless `isE2eeKeysEnabled`; refused with 503 until migration 0029
- * is in D1.
+ * Closed unless `isE2eeKeysEnabled`; refused with 503 until migrations 0029
+ * and 0030 are in D1.
  */
 import {
   E2eeError,
   MAX_LISTED_DEVICES,
+  accountKeySequence,
   decodeDeviceApprovalGrant,
   decodeDeviceListEntry,
   decodeIdentityTransition,
@@ -34,6 +37,8 @@ import {
   type VerifiedDeviceList
 } from '@openzcad/crypto';
 import type {
+  E2eeAccountKeyHistoryInput,
+  E2eeAccountKeyHistoryRecord,
   E2eeAccountResponse,
   E2eeApprovalRecord,
   E2eeApprovalState,
@@ -205,6 +210,65 @@ function parseWraps(value: unknown): E2eeWrapInput[] {
       wrapped: wrap.wrapped
     };
   });
+}
+
+/** Bytes of an AES-KW wrap (`u8 2 | 40 bytes`), as `previous-account-key` makes. */
+const HISTORY_WRAP_BYTES = 41;
+
+/**
+ * The replaced account key wrapped under the new one. A rotation without it
+ * would strand every key wrapped under the old account key, so it is as
+ * required as the account-key wraps, and it must name the key it replaces.
+ */
+function parseHistory(
+  value: unknown,
+  expected: { generation: number; keySequence: number }
+): E2eeAccountKeyHistoryInput {
+  if (value === undefined || value === null) {
+    invalid('A rotation must carry the replaced account key (history)');
+  }
+  const history = record(value, 'history');
+  if (
+    history.generation !== expected.generation ||
+    history.keySequence !== expected.keySequence
+  ) {
+    invalid(
+      `The history must wrap account key ${expected.generation}:${expected.keySequence}`
+    );
+  }
+  const wrapped = bytesField(history.wrapped, 'history.wrapped', {
+    exact: HISTORY_WRAP_BYTES
+  });
+  if (wrapped[0] !== 2) invalid('history.wrapped is not an AES-KW wrap');
+  return {
+    generation: expected.generation,
+    keySequence: expected.keySequence,
+    wrapped: history.wrapped as string
+  };
+}
+
+function insertHistory(
+  db: D1Database,
+  userId: string,
+  history: E2eeAccountKeyHistoryInput,
+  now: string,
+  guard: { sql: string; binds: unknown[] }
+): D1PreparedStatement {
+  // No ON CONFLICT: a key is replaced once, and a duplicate aborts the batch.
+  return db
+    .prepare(
+      `INSERT INTO e2ee_account_key_history
+         (user_id, generation, key_sequence, wrapped, created_at)
+       SELECT ?, ?, ?, ?, ? WHERE ${guard.sql}`
+    )
+    .bind(
+      userId,
+      history.generation,
+      history.keySequence,
+      history.wrapped,
+      now,
+      ...guard.binds
+    );
 }
 
 function signedEntryOf(body: Record<string, unknown>): {
@@ -559,6 +623,8 @@ async function writeGeneration(
      * instead of slipping past it.
      */
     previousHead: { sequence: number; entryHash: string } | null;
+    /** For a replacement: the replaced identity's account key, wrapped. */
+    history: E2eeAccountKeyHistoryInput | null;
   }
 ): Promise<boolean> {
   const now = new Date().toISOString();
@@ -631,6 +697,9 @@ async function writeGeneration(
     ...input.wraps.map((wrap) =>
       insertWrap(db, userId, input.generation, 0, wrap, now, guard)
     ),
+    ...(input.history
+      ? [insertHistory(db, userId, input.history, now, guard)]
+      : []),
     // A replaced identity's wraps open nothing anyone should use again.
     // Expire old approvals, retaining receipts for the per-account hourly cap.
     db
@@ -674,6 +743,9 @@ async function handleSetup(
   if (list.head.previousIdentityKeyHash !== null) {
     invalid('A first setup replaces no identity');
   }
+  if (body.history !== undefined) {
+    invalid('A first setup replaces no account key');
+  }
   checkWrapTargets(list.head, wraps);
   checkCompleteWraps(list.head, wraps, { identity: true });
   if (await currentIdentity(db, userId)) {
@@ -687,7 +759,8 @@ async function handleSetup(
     entryHash: toHex(list.headHash),
     wraps,
     transition: null,
-    previousHead: null
+    previousHead: null,
+    history: null
   });
   if (!written) {
     refuse(409, 'E2EE_ALREADY_SET_UP', 'Encryption keys are already set up.');
@@ -764,6 +837,11 @@ async function handleReplaceIdentity(
     oldIdentityKey,
     (await entryRows(db, userId, current.generation)).map(toSigned)
   );
+  // The new account key must carry the replaced identity's current one.
+  const history = parseHistory(body.history, {
+    generation: current.generation,
+    keySequence: accountKeySequence(oldList)
+  });
   let signerKey: Uint8Array | undefined;
   if (decoded.signer === 'identity') {
     signerKey = oldIdentityKey;
@@ -805,7 +883,8 @@ async function handleReplaceIdentity(
     previousHead: {
       sequence: oldList.head.sequence,
       entryHash: toHex(oldList.headHash)
-    }
+    },
+    history
   });
   if (!written) {
     refuse(
@@ -866,10 +945,20 @@ async function handleAppend(
       !previous.unlockTargets.some((t) => t.targetId === target.targetId)
   );
   checkWrapTargets(list.head, wraps);
+  let history: E2eeAccountKeyHistoryInput | null = null;
   if (rotation) {
     checkCompleteWraps(list.head, wraps, { identity: false });
-  } else if (wraps.some((w) => w.purpose === 'encryption-key')) {
-    invalid('Only a rotation replaces the encryption key wrap');
+    history = parseHistory(body.history, {
+      generation: current.generation,
+      keySequence: accountKeySequence(list, previous.sequence)
+    });
+  } else {
+    if (wraps.some((w) => w.purpose === 'encryption-key')) {
+      invalid('Only a rotation replaces the encryption key wrap');
+    }
+    if (body.history !== undefined) {
+      invalid('Only a rotation replaces the account key');
+    }
   }
   for (const target of newTargets) {
     for (const purpose of [
@@ -992,7 +1081,8 @@ async function handleAppend(
         now,
         guard
       )
-    )
+    ),
+    ...(history ? [insertHistory(db, userId, history, now, guard)] : [])
   ];
   const results = await db.batch(statements);
   if ((results[0]?.meta?.changes ?? 0) !== 1) {
@@ -1496,21 +1586,42 @@ const APPROVAL_ACTION_ROUTE =
 /** Cache only proven readiness, so a later migration needs no redeploy. */
 const readyDatabases = new WeakSet<D1Database>();
 
-export async function isE2eeKeyStorageReady(db: D1Database): Promise<boolean> {
-  if (readyDatabases.has(db)) return true;
+/**
+ * Which E2EE key tables D1 holds: `missing` before migration 0029,
+ * `keys-only` with 0029 but not 0030 (the account-key history), `ready`
+ * with both. Any other answer is refused, so erasure never omits rows it
+ * cannot see.
+ */
+export type E2eeKeyStorage = 'missing' | 'keys-only' | 'ready';
+
+/** Every E2EE key table, children before parents, for erasure. */
+export const E2EE_KEY_TABLES = Object.freeze([
+  'e2ee_account_key_history',
+  'e2ee_key_wraps',
+  'e2ee_device_list_entries',
+  'e2ee_identities',
+  'e2ee_device_approvals'
+] as const);
+
+export async function e2eeKeyStorage(db: D1Database): Promise<E2eeKeyStorage> {
+  if (readyDatabases.has(db)) return 'ready';
   const row = await db
     .prepare(
-      `SELECT COUNT(*) AS tables FROM sqlite_master
+      `SELECT COUNT(*) AS tables,
+              COALESCE(SUM(name = 'e2ee_account_key_history'), 0) AS history
+         FROM sqlite_master
          WHERE type = 'table' AND name IN (
            'e2ee_identities', 'e2ee_device_list_entries',
-           'e2ee_key_wraps', 'e2ee_device_approvals'
+           'e2ee_key_wraps', 'e2ee_device_approvals',
+           'e2ee_account_key_history'
          )`
     )
-    .first<{ tables: number }>();
+    .first<{ tables: number; history: number }>();
   // Only a successful count of zero proves there is no E2EE profile data.
   // Unknown or partial readiness must not let erasure omit existing key rows.
-  if (row?.tables === 0) return false;
-  if (row?.tables !== 4) {
+  if (row?.tables === 0) return 'missing';
+  if (row?.tables === 4 && row.history === 0) return 'keys-only';
+  if (row?.tables !== 5 || row.history !== 1) {
     refuse(
       503,
       'E2EE_UNAVAILABLE',
@@ -1518,7 +1629,23 @@ export async function isE2eeKeyStorageReady(db: D1Database): Promise<boolean> {
     );
   }
   readyDatabases.add(db);
-  return true;
+  return 'ready';
+}
+
+/** True only when every key table, the account-key history included, exists. */
+export async function isE2eeKeyStorageReady(db: D1Database): Promise<boolean> {
+  return (await e2eeKeyStorage(db)) === 'ready';
+}
+
+/** The key tables erasure must clear, children first; none before 0029. */
+export async function e2eeErasureTables(
+  db: D1Database
+): Promise<readonly string[]> {
+  const storage = await e2eeKeyStorage(db);
+  if (storage === 'missing') return [];
+  return storage === 'ready'
+    ? E2EE_KEY_TABLES
+    : E2EE_KEY_TABLES.filter((table) => table !== 'e2ee_account_key_history');
 }
 
 /**
@@ -1582,6 +1709,31 @@ export async function handleE2eeRequest(
     };
     if (pathname === '/api/e2ee/account' && method === 'GET') {
       return json(await loadAccount(db, userId));
+    }
+    if (pathname === '/api/e2ee/account-key-history' && method === 'GET') {
+      // Only the session's own rows: wraps open nothing without the newer
+      // account key, but another user's history is still not theirs to read.
+      const { results } = await db
+        .prepare(
+          `SELECT generation, key_sequence, wrapped, created_at
+           FROM e2ee_account_key_history WHERE user_id = ?
+           ORDER BY generation, key_sequence`
+        )
+        .bind(userId)
+        .all<{
+          generation: number;
+          key_sequence: number;
+          wrapped: string;
+          created_at: string;
+        }>();
+      return json({
+        history: (results ?? []).map((row): E2eeAccountKeyHistoryRecord => ({
+          generation: row.generation,
+          keySequence: row.key_sequence,
+          wrapped: row.wrapped,
+          createdAt: row.created_at
+        }))
+      });
     }
     if (pathname === '/api/e2ee/setup' && method === 'POST') {
       return json(await handleSetup(db, userId, await readBody(request)), 201);

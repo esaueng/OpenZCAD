@@ -194,11 +194,23 @@ export type WrapContext =
       /**
        * A replaced account key under its successor, so project keys and
        * rejoin PSKs wrapped under the old account key stay reachable after
-       * a rotation.
+       * a rotation. Each rotation writes one, so the newest account key
+       * opens every older one by walking back; an older key opens none of
+       * the newer ones.
        */
       readonly purpose: 'previous-account-key';
       readonly userId: string;
-      /** Which account key this is, counting from 0 for the first. */
+      /**
+       * The identity generation the wrapped key belongs to. Key sequences
+       * restart for each identity, so without it a server could present one
+       * generation's wrap as another's.
+       */
+      readonly generation: number;
+      /**
+       * Which account key is wrapped: the device-list sequence, within its
+       * identity's list, of the entry that first committed to it (0 for an
+       * identity's first key; see `accountKeySequence`).
+       */
       readonly keySequence: number;
     };
 
@@ -273,7 +285,11 @@ const CONTEXT_FIELDS: Record<WrapPurpose, Record<string, FieldRule>> = {
     archivedEpoch: 'uint',
     underEpoch: 'uint'
   },
-  'previous-account-key': { userId: 'string', keySequence: 'uint' }
+  'previous-account-key': {
+    userId: 'string',
+    generation: 'uint',
+    keySequence: 'uint'
+  }
 };
 
 const MAX_CONTEXT_STRING = 256;
