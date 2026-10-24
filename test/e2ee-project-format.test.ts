@@ -461,6 +461,92 @@ describe('project storage format (ADR-024 Phase 4, slice 4-1)', () => {
     ).resolves.toBeNull();
   });
 
+  it('refuses the artifact and upload routes that sit outside /api/projects/:id', async () => {
+    const { call, db, projectId } = await seed();
+    // An upload session opened while the project was still plaintext.
+    db.prepare('UPDATE projects SET storage_format = 1 WHERE id = ?').run(
+      projectId
+    );
+    const opened = await call('POST', '/api/uploads', {
+      user: OWNER,
+      body: {
+        projectId,
+        fileName: 'part.step',
+        contentType: 'model/step',
+        kind: 'step-export'
+      }
+    });
+    expect(opened.status).toBe(201);
+    const { session } = (await opened.json()) as {
+      session: { uploadSessionId: string; artifactId: string };
+    };
+    db.prepare('UPDATE projects SET storage_format = 2 WHERE id = ?').run(
+      projectId
+    );
+    const refused = async (response: Response, label: string) => {
+      expect(response.status, label).toBe(409);
+      expect(((await response.json()) as { code: string }).code, label).toBe(
+        PROJECT_FORMAT_UNSUPPORTED_CODE
+      );
+    };
+    // A retained artifact id reads none of the project's earlier artifacts.
+    for (const user of [OWNER, MEMBER]) {
+      for (const path of [
+        '/api/artifacts/artifact_thumb',
+        '/api/artifacts/artifact_thumb/download'
+      ])
+        await refused(await call('GET', path, { user }), `${user} ${path}`);
+    }
+    // No new plaintext upload, and none through a session opened earlier.
+    await refused(
+      await call('POST', '/api/uploads', {
+        user: OWNER,
+        body: {
+          projectId,
+          fileName: 'more.step',
+          contentType: 'model/step',
+          kind: 'step-export'
+        }
+      }),
+      'create upload'
+    );
+    await refused(
+      await call('PUT', `/api/uploads/${session.uploadSessionId}/content`, {
+        user: OWNER,
+        body: 'png'
+      }),
+      'upload content'
+    );
+    await refused(
+      await call('POST', '/api/artifacts/finalize', {
+        user: OWNER,
+        body: {
+          projectId,
+          artifactId: session.artifactId,
+          uploadSessionId: session.uploadSessionId
+        }
+      }),
+      'finalize'
+    );
+  });
+
+  it('lists a project in a format this build does not know as locked', async () => {
+    const { call, db, plaintextId } = await seed();
+    // A later migration may add a format; this build must still show it.
+    db.exec('PRAGMA ignore_check_constraints = ON');
+    db.prepare('UPDATE projects SET storage_format = 3 WHERE id = ?').run(
+      plaintextId
+    );
+    const response = await call('GET', '/api/projects', { user: OWNER });
+    expect(response.status).toBe(200);
+    const { projects } = (await response.json()) as {
+      projects: { projectId: string; storageFormat?: number; name: string }[];
+    };
+    const listed = projects.find((p) => p.projectId === plaintextId);
+    expect(listed).toMatchObject({ storageFormat: 3 });
+    expect(listed?.name).not.toBe('Plain bracket');
+  });
+
   it('refuses invitations and share links on the HTTP routes as sharing', async () => {
     const { call, projectId } = await seed({
       PROJECT_INVITATION_EMAIL_FROM: 'invites@example.test',

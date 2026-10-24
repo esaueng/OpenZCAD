@@ -3253,9 +3253,10 @@ export interface ProjectSummary {
    * How the account stores this project (ADR-024 Phase 4): 1 plaintext, 2
    * end-to-end encrypted (e2ee-v1). Absent means 1, which is what every
    * store wrote before formats existed. A browser opens only the formats in
-   * {@link SUPPORTED_PROJECT_FORMATS} and asks for an update otherwise.
+   * {@link SUPPORTED_PROJECT_FORMATS} and asks for an update otherwise; a
+   * format introduced after this build is listed too, as any number.
    */
-  storageFormat?: ProjectStorageFormat;
+  storageFormat?: number;
 }
 
 /** 1 = plaintext, 2 = end-to-end encrypted (e2ee-v1). */

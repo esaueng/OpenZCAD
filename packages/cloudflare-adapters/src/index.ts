@@ -3249,6 +3249,9 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().createUploadSession(userId, request);
     }
     const access = await this.requireProjectEdit(userId, request.projectId);
+    // Artifact and upload routes are not under /api/projects/:id, so the
+    // Worker's format gate does not see them: refuse here too.
+    assertPlaintextProject(access);
     if (!this.env.ARTIFACTS) {
       throw new ArtifactStorageError();
     }
@@ -3508,6 +3511,9 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     const access = await this.requireProjectEdit(userId, upload.projectId);
+    // A session opened before the project became encrypted writes no
+    // plaintext into it afterwards.
+    assertPlaintextProject(access);
     if (!this.env.ARTIFACTS) {
       throw new ArtifactStorageError();
     }
@@ -4068,7 +4074,9 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().finalizeArtifact(userId, request);
     }
-    await this.requireProjectEdit(userId, request.projectId);
+    assertPlaintextProject(
+      await this.requireProjectEdit(userId, request.projectId)
+    );
     const existingArtifact = await this.env.DB.prepare(
       `SELECT id, project_id, kind, name, object_key, content_type, bytes,
               metadata_json, created_at
@@ -4524,7 +4532,11 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!row) {
       return { artifact: null };
     }
-    await this.requireProjectRead(userId, row.project_id);
+    // Reached by artifact id, outside /api/projects/:id: a retained id must
+    // not read an encrypted project's earlier plaintext artifacts.
+    assertPlaintextProject(
+      await this.requireProjectRead(userId, row.project_id)
+    );
     return { artifact: artifactFromRow(row) };
   }
 
@@ -5783,7 +5795,9 @@ function storageFormatOf(row: { storage_format?: number | null }): {
  * an older browser can show.
  */
 function encryptedSummaryFromRow(row: ProjectRow): ProjectSummary | null {
-  if (row.storage_format !== 2) return null;
+  // Any format this build cannot read is listed locked, never dropped, so a
+  // later format still shows up (as "update to open") and can be deleted.
+  if (isPlaintextStorageFormat(row.storage_format)) return null;
   return {
     projectId: toProjectId(row.id),
     name: ENCRYPTED_PROJECT_PLACEHOLDER_NAME,
@@ -5797,7 +5811,7 @@ function encryptedSummaryFromRow(row: ProjectRow): ProjectSummary | null {
       ? { documentVersion: row.document_version }
       : {}),
     organization: organizationFromRow(row),
-    storageFormat: 2
+    storageFormat: Number(row.storage_format)
   };
 }
 
@@ -8329,7 +8343,8 @@ function checkClientDocument(value: unknown): CollaborationRejection | null {
   }
   const complexity = documentStructureError(value);
   if (complexity) return { code: 'document-too-complex', message: complexity };
-  const envelope = documentEnvelopeError(value) ?? accountReadFieldsError(value);
+  const envelope =
+    documentEnvelopeError(value) ?? accountReadFieldsError(value);
   if (envelope) return { code: 'document-invalid', message: envelope };
   if (
     typeof value.schemaVersion !== 'number' ||
