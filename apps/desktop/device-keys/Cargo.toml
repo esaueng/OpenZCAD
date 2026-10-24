@@ -1,0 +1,12 @@
+[package]
+name = "openzcad-device-keys"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[dependencies]
+p256 = { version = "=0.14.0", default-features = false, features = ["arithmetic", "ecdh", "ecdsa", "std"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7.0"

@@ -10,6 +10,7 @@ on:
       - apps/desktop/src-tauri/Cargo.lock
       - apps/desktop/src-tauri/vendor/**
       - apps/desktop/glib-regression/**
+      - apps/desktop/device-keys/**
       - .github/workflows/dependency-audit.yml
   push:
     branches: [main]
@@ -42,6 +43,7 @@ jobs:
           persist-credentials: false
       - run: cargo install cargo-audit --locked --version 0.22.2
       - run: cargo audit --file apps/desktop/src-tauri/Cargo.lock
+      - run: cargo audit --file apps/desktop/device-keys/Cargo.lock
       - name: Verify desktop GLib backport resolution
         run: |
           cargo metadata --locked --format-version 1 --manifest-path apps/desktop/src-tauri/Cargo.toml |
@@ -52,3 +54,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev pkg-config
       - name: Run optimized GLib iterator regression
         run: cargo test --release --locked --manifest-path apps/desktop/glib-regression/Cargo.toml
+      - name: Test the desktop device-key crate
+        run: |
+          cargo fmt --check --manifest-path apps/desktop/device-keys/Cargo.toml
+          cargo clippy --locked --all-targets --manifest-path apps/desktop/device-keys/Cargo.toml -- -D warnings
+          cargo test --locked --manifest-path apps/desktop/device-keys/Cargo.toml

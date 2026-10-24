@@ -1,4 +1,5 @@
-import { indexedDbDeviceStore, type DeviceKeyStore } from './deviceStore';
+import type { DeviceKeyStore } from './deviceStore';
+import { deviceKeyStore } from './keychainDeviceKeys';
 import * as mlsStores from './mls/sessionStore';
 import { lockAccount } from './unlockedKeys';
 import { confirmKeySessionEnded } from './keySession';
@@ -18,7 +19,7 @@ export async function eraseAccountWithKeyCleanup<
       throw new Error('The signed-in account changed. Try deleting again.');
   };
   requireCurrent();
-  const store = input.store ?? indexedDbDeviceStore();
+  const store = input.store ?? deviceKeyStore();
   const pin = input.userId ? await store.loadPin(input.userId) : null;
   requireCurrent();
   const result = await input.erase();

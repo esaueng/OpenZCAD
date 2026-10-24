@@ -1,5 +1,6 @@
 import { lockAccount } from './unlockedKeys';
-import { indexedDbDeviceStore, type DeviceKeyStore } from './deviceStore';
+import type { DeviceKeyStore } from './deviceStore';
+import { deviceKeyStore } from './keychainDeviceKeys';
 import * as mlsStores from './mls/sessionStore';
 import { createE2eeApi } from './e2eeApi';
 import { confirmApprovalCancellation } from './approvalCancellation';
@@ -25,7 +26,7 @@ export async function endKeySession(
   keepDevice: boolean,
   requireCurrentSession: () => void
 ): Promise<void> {
-  const store = indexedDbDeviceStore();
+  const store = deviceKeyStore();
   await store.withDeviceLock(userId, () =>
     clearDeviceUnderLock(store, userId, keepDevice, requireCurrentSession)
   );
@@ -80,7 +81,7 @@ export async function signOutAfterSaving(input: {
   const teardown = beginKeySessionTeardown();
   try {
     if (input.userId && input.keepDevice !== undefined) {
-      const store = indexedDbDeviceStore();
+      const store = deviceKeyStore();
       const userId = input.userId;
       const keepDevice = input.keepDevice;
       await store.withDeviceLock(userId, async () => {

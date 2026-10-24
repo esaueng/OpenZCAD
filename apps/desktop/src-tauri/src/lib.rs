@@ -7,6 +7,7 @@ use tauri::{
 };
 
 mod desktop_auth;
+mod device_keys;
 
 use desktop_auth::{
     cancel_desktop_sign_in, desktop_api_request, desktop_collaboration_url, poll_desktop_sign_in,
@@ -288,7 +289,11 @@ pub fn run() {
             poll_desktop_sign_in,
             cancel_desktop_sign_in,
             desktop_api_request,
-            desktop_collaboration_url
+            desktop_collaboration_url,
+            device_keys::create_device_keys,
+            device_keys::sign_with_device_key,
+            device_keys::derive_with_device_key,
+            device_keys::delete_device_keys
         ])
         .run(tauri::generate_context!())
         .expect("error while running OpenZCAD");

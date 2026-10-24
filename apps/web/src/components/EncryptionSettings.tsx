@@ -48,10 +48,11 @@ import {
   type NewDeviceApprovalStep
 } from '../lib/e2ee/accountKeys';
 import { createE2eeApi, E2eeApiError } from '../lib/e2ee/e2eeApi';
+import { DeviceListPinConflict } from '../lib/e2ee/deviceStore';
 import {
-  DeviceListPinConflict,
-  indexedDbDeviceStore
-} from '../lib/e2ee/deviceStore';
+  deviceKeyFactory,
+  deviceKeyStore
+} from '../lib/e2ee/keychainDeviceKeys';
 import {
   PasskeyError,
   passkeysAvailable,
@@ -111,7 +112,8 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
     return {
       userId,
       api: createE2eeApi(),
-      store: indexedDbDeviceStore(),
+      store: deviceKeyStore(),
+      createDeviceKeys: deviceKeyFactory(),
       isCurrent: () => lifetime.active && isCurrentKeySession(revision)
     };
   }, [userId, lifetime]);

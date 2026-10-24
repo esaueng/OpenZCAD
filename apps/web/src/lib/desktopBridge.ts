@@ -327,3 +327,70 @@ export async function protectDesktopClose(
     }
   });
 }
+
+/** A device key pair the macOS Keychain holds; only public halves cross. */
+export interface NativeDeviceKeys {
+  keyId: string;
+  signingPublicKey: Uint8Array;
+  unlockPublicKey: Uint8Array;
+}
+
+async function invokeDeviceKeys<T>(
+  command: string,
+  args?: Record<string, unknown>
+): Promise<T> {
+  if (!isDesktopApp()) {
+    throw new Error(
+      'Keychain device keys are only available in the macOS app.'
+    );
+  }
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<T>(command, args);
+}
+
+/**
+ * Creates this desktop's device signing and unlock keys in the Keychain
+ * (ADR-024, Unlock and devices). The private halves never enter the WebView.
+ */
+export async function createNativeDeviceKeys(): Promise<NativeDeviceKeys> {
+  const created = await invokeDeviceKeys<{
+    keyId: string;
+    signingPublicKey: number[];
+    unlockPublicKey: number[];
+  }>('create_device_keys');
+  return {
+    keyId: created.keyId,
+    signingPublicKey: Uint8Array.from(created.signingPublicKey),
+    unlockPublicKey: Uint8Array.from(created.unlockPublicKey)
+  };
+}
+
+/** ECDSA P-256/SHA-256 with the Keychain signing key: the 64-byte r || s. */
+export async function signWithNativeDeviceKey(
+  keyId: string,
+  message: Uint8Array
+): Promise<Uint8Array> {
+  return Uint8Array.from(
+    await invokeDeviceKeys<number[]>('sign_with_device_key', {
+      keyId,
+      message: Array.from(message)
+    })
+  );
+}
+
+/** The 32-byte ECDH secret between the Keychain unlock key and `peer`. */
+export async function deriveWithNativeDeviceKey(
+  keyId: string,
+  peer: Uint8Array
+): Promise<Uint8Array> {
+  return Uint8Array.from(
+    await invokeDeviceKeys<number[]>('derive_with_device_key', {
+      keyId,
+      peer: Array.from(peer)
+    })
+  );
+}
+
+export async function deleteNativeDeviceKeys(keyId: string): Promise<void> {
+  await invokeDeviceKeys<void>('delete_device_keys', { keyId });
+}
