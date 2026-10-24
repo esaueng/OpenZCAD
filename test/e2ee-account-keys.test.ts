@@ -952,6 +952,9 @@ describe('replacing the recovery key', () => {
   });
 });
 
+/** Key flows run many WebCrypto rounds; the shared runner is often loaded. */
+const KEY_FLOW_TIMEOUT_MS = 30_000;
+
 describe('account-key history', () => {
   /** The account key this page holds unlocked now, copied. */
   const currentKey = () => new Uint8Array(unlockedAccount(USER)!.accountKey);
@@ -1011,433 +1014,492 @@ describe('account-key history', () => {
     return { recovery, laptop, phone, tablet, account, keys };
   }
 
-  it('opens all four keys after three rotations', async () => {
-    const srv = server();
-    const { laptop, account, keys } = await rotatedThrice(srv);
-    // Entries 0 setup, 1 and 2 enrolments, 3 and 4 removals, 5 revocation.
-    expect(keys.map((k) => k.keySequence)).toEqual([0, 3, 4, 5]);
-    expect(new Set(keys.map((k) => toHex(k.key))).size).toBe(4);
-    // One row per replaced key, named by the entry that committed to it.
-    const rows = historyRows(srv.db);
-    expect(rows.map((r) => [r.generation, r.key_sequence])).toEqual([
-      [1, 0],
-      [1, 3],
-      [1, 4]
-    ]);
-    expect(rows.every((r) => r.wrapped.length === 55)).toBe(true);
-    for (const { keySequence, key } of keys) {
-      const opened = await openAccountKeyChain(laptop, account, keySequence);
-      expect(toHex(opened)).toBe(toHex(key));
-    }
-    // A sequence that names no account key, or a later one, is refused.
-    await flowRefusal(
-      openAccountKeyChain(laptop, account, 1),
-      'invalid-request'
-    );
-    await flowRefusal(
-      openAccountKeyChain(laptop, account, 6),
-      'invalid-request'
-    );
-    await flowRefusal(
-      openAccountKeyChain(laptop, account, 0, 2),
-      'invalid-request'
-    );
-    // Locked, nothing opens.
-    lockAccount(USER);
-    await flowRefusal(openAccountKeyChain(laptop, account, 0), 'not-unlocked');
-  });
+  it(
+    'opens all four keys after three rotations',
+    async () => {
+      const srv = server();
+      const { laptop, account, keys } = await rotatedThrice(srv);
+      // Entries 0 setup, 1 and 2 enrolments, 3 and 4 removals, 5 revocation.
+      expect(keys.map((k) => k.keySequence)).toEqual([0, 3, 4, 5]);
+      expect(new Set(keys.map((k) => toHex(k.key))).size).toBe(4);
+      // One row per replaced key, named by the entry that committed to it.
+      const rows = historyRows(srv.db);
+      expect(rows.map((r) => [r.generation, r.key_sequence])).toEqual([
+        [1, 0],
+        [1, 3],
+        [1, 4]
+      ]);
+      expect(rows.every((r) => r.wrapped.length === 55)).toBe(true);
+      for (const { keySequence, key } of keys) {
+        const opened = await openAccountKeyChain(laptop, account, keySequence);
+        expect(toHex(opened)).toBe(toHex(key));
+      }
+      // A sequence that names no account key, or a later one, is refused.
+      await flowRefusal(
+        openAccountKeyChain(laptop, account, 1),
+        'invalid-request'
+      );
+      await flowRefusal(
+        openAccountKeyChain(laptop, account, 6),
+        'invalid-request'
+      );
+      await flowRefusal(
+        openAccountKeyChain(laptop, account, 0, 2),
+        'invalid-request'
+      );
+      // Locked, nothing opens.
+      lockAccount(USER);
+      await flowRefusal(
+        openAccountKeyChain(laptop, account, 0),
+        'not-unlocked'
+      );
+    },
+    KEY_FLOW_TIMEOUT_MS
+  );
 
-  it('carries every key across replaced and pruned identities', async () => {
-    const srv = server();
-    const { laptop, keys } = await rotatedThrice(srv);
-    lockAccount(USER);
-    let account = ready(await loadEncryption(laptop));
-    // Five replacements signed by this device: generations 1 and 2 are
-    // pruned from e2ee_identities, but their history stays.
-    const generationKeys = [currentKey()];
-    for (let replacement = 0; replacement < 5; replacement += 1) {
-      const next = (await generateRecoveryKey()).secret;
-      account = ready(await replaceRecoveryKey(laptop, account, next, null));
-      generationKeys.push(currentKey());
-    }
-    expect(account.generation).toBe(6);
-    expect(
-      count(
-        srv.db,
-        'SELECT COUNT(*) AS n FROM e2ee_identities WHERE user_id = ? AND generation = 1',
-        USER
-      )
-    ).toBe(0);
-    expect(
-      historyRows(srv.db).map((r) => [r.generation, r.key_sequence])
-    ).toEqual([
-      [1, 0],
-      [1, 3],
-      [1, 4],
-      [1, 5],
-      [2, 0],
-      [3, 0],
-      [4, 0],
-      [5, 0]
-    ]);
-    for (const { keySequence, key } of keys) {
+  it(
+    'carries every key across replaced and pruned identities',
+    async () => {
+      const srv = server();
+      const { laptop, keys } = await rotatedThrice(srv);
+      lockAccount(USER);
+      let account = ready(await loadEncryption(laptop));
+      // Five replacements signed by this device: generations 1 and 2 are
+      // pruned from e2ee_identities, but their history stays.
+      const generationKeys = [currentKey()];
+      for (let replacement = 0; replacement < 5; replacement += 1) {
+        const next = (await generateRecoveryKey()).secret;
+        account = ready(await replaceRecoveryKey(laptop, account, next, null));
+        generationKeys.push(currentKey());
+      }
+      expect(account.generation).toBe(6);
       expect(
-        toHex(await openAccountKeyChain(laptop, account, keySequence, 1))
-      ).toBe(toHex(key));
-    }
-    for (let generation = 2; generation <= 6; generation += 1) {
+        count(
+          srv.db,
+          'SELECT COUNT(*) AS n FROM e2ee_identities WHERE user_id = ? AND generation = 1',
+          USER
+        )
+      ).toBe(0);
       expect(
-        toHex(await openAccountKeyChain(laptop, account, 0, generation))
-      ).toBe(toHex(generationKeys[generation - 1]!));
-    }
-  });
+        historyRows(srv.db).map((r) => [r.generation, r.key_sequence])
+      ).toEqual([
+        [1, 0],
+        [1, 3],
+        [1, 4],
+        [1, 5],
+        [2, 0],
+        [3, 0],
+        [4, 0],
+        [5, 0]
+      ]);
+      for (const { keySequence, key } of keys) {
+        expect(
+          toHex(await openAccountKeyChain(laptop, account, keySequence, 1))
+        ).toBe(toHex(key));
+      }
+      for (let generation = 2; generation <= 6; generation += 1) {
+        expect(
+          toHex(await openAccountKeyChain(laptop, account, 0, generation))
+        ).toBe(toHex(generationKeys[generation - 1]!));
+      }
+    },
+    KEY_FLOW_TIMEOUT_MS
+  );
 
-  it('writes the history when the old recovery key signs the replacement', async () => {
-    const srv = server();
-    const { recovery, laptop, account } = await setUp(srv);
-    const first = currentKey();
-    const after = ready(
-      await replaceRecoveryKey(
-        laptop,
-        account,
-        (await generateRecoveryKey()).secret,
-        recovery.secret
-      )
-    );
-    expect(after.generation).toBe(2);
-    expect(toHex(await openAccountKeyChain(laptop, after, 0, 1))).toBe(
-      toHex(first)
-    );
-  });
-
-  it('gives a removed device’s old key no way into the newer ones', async () => {
-    const srv = server();
-    const { recovery, laptop } = await setUp(srv);
-    const phone = await enrolled(srv, recovery.secret, 'Phone');
-    lockAccount(USER);
-    // What the phone held before it was removed.
-    const phoneView = ready(await loadEncryption(phone.ctx));
-    expect(phoneView.unlocked).toBe(true);
-    const stolen = currentKey();
-    const stolenSequence = accountKeySequence(phoneView.list);
-    lockAccount(USER);
-    let account = ready(await loadEncryption(laptop));
-    account = ready(
-      await removeDevice(
-        laptop,
-        account,
-        phone.account.device!.deviceId,
-        recovery.secret
-      )
-    );
-    account = ready(
-      await revokeReadOnlyDevices(laptop, account, recovery.secret)
-    );
-    const newer = [currentKey()];
-    // The laptop's chain opens the stolen key: history only goes back.
-    expect(
-      toHex(await openAccountKeyChain(laptop, account, stolenSequence))
-    ).toBe(toHex(stolen));
-    // The stolen key opens no history row, so none of the newer keys.
-    const rows = historyRows(srv.db);
-    expect(rows).toHaveLength(2);
-    for (const row of rows) {
-      await expect(
-        unwrapKey(stolen, fromBase64Url(row.wrapped), {
-          purpose: 'previous-account-key',
-          userId: USER,
-          keySequence: row.key_sequence
-        })
-      ).rejects.toMatchObject({ code: 'authentication-failed' });
-    }
-    expect(newer.map(toHex)).not.toContain(toHex(stolen));
-    // Nor is anything sealed to the removed device any more.
-    expect(
-      count(
-        srv.db,
-        'SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE target_id = ?',
-        phone.account.device!.deviceId
-      )
-    ).toBe(0);
-    lockAccount(USER);
-    const removed = ready(await loadEncryption(phone.ctx));
-    expect(removed.deviceStatus).toBe('removed');
-    await flowRefusal(
-      openAccountKeyChain(phone.ctx, removed, stolenSequence),
-      'not-unlocked'
-    );
-  });
-
-  it('refuses a history row the newer key did not make', async () => {
-    const srv = server();
-    const { laptop, account, keys } = await rotatedThrice(srv);
-    // A server that swaps a row for a wrap under the wrong key.
-    srv.db
-      .prepare(
-        'UPDATE e2ee_account_key_history SET wrapped = ? WHERE key_sequence = 3'
-      )
-      .run(
-        toBase64Url(
-          await wrapKey(generateSymmetricKey(), keys[1]!.key, {
-            purpose: 'previous-account-key',
-            userId: USER,
-            keySequence: 3
-          })
+  it(
+    'writes the history when the old recovery key signs the replacement',
+    async () => {
+      const srv = server();
+      const { recovery, laptop, account } = await setUp(srv);
+      const first = currentKey();
+      const after = ready(
+        await replaceRecoveryKey(
+          laptop,
+          account,
+          (await generateRecoveryKey()).secret,
+          recovery.secret
         )
       );
-    await flowRefusal(openAccountKeyChain(laptop, account, 0), 'key-mismatch');
-    // A server that omits a row.
-    srv.db
-      .prepare('DELETE FROM e2ee_account_key_history WHERE key_sequence = 4')
-      .run();
-    await flowRefusal(openAccountKeyChain(laptop, account, 0), 'missing-wrap');
-  });
+      expect(after.generation).toBe(2);
+      expect(toHex(await openAccountKeyChain(laptop, after, 0, 1))).toBe(
+        toHex(first)
+      );
+    },
+    KEY_FLOW_TIMEOUT_MS
+  );
 
-  it('is refused by the Worker when a rotation omits or misnames it', async () => {
-    const srv = server();
-    const { recovery, laptop } = await setUp(srv);
-    const phone = await enrolled(srv, recovery.secret, 'Phone');
-    lockAccount(USER);
-    const account = ready(await loadEncryption(laptop));
-    const entries = () =>
-      count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_device_list_entries');
-    const before = entries();
-    const tampered = (
-      change: (
-        request: Parameters<E2eeContext['api']['appendDeviceList']>[0]
-      ) => Parameters<E2eeContext['api']['appendDeviceList']>[0]
-    ): E2eeContext => ({
-      ...laptop,
-      api: {
-        ...laptop.api,
-        appendDeviceList: (request) =>
-          laptop.api.appendDeviceList(change(request))
-      }
-    });
-    const cases: ((
-      request: Parameters<E2eeContext['api']['appendDeviceList']>[0]
-    ) => Parameters<E2eeContext['api']['appendDeviceList']>[0])[] = [
-      ({ history: _history, ...request }) => request,
-      (request) => ({
-        ...request,
-        history: { ...request.history!, keySequence: 1 }
-      }),
-      (request) => ({
-        ...request,
-        history: { ...request.history!, generation: 2 }
-      }),
-      (request) => ({
-        ...request,
-        history: {
-          ...request.history!,
-          wrapped: toBase64Url(new Uint8Array(40))
-        }
-      }),
-      (request) => ({
-        ...request,
-        history: {
-          ...request.history!,
-          wrapped: toBase64Url(new Uint8Array(41).fill(1))
-        }
-      })
-    ];
-    for (const change of cases) {
-      const refused = await refusal(
-        removeDevice(
-          tampered(change),
+  it(
+    'gives a removed device’s old key no way into the newer ones',
+    async () => {
+      const srv = server();
+      const { recovery, laptop } = await setUp(srv);
+      const phone = await enrolled(srv, recovery.secret, 'Phone');
+      lockAccount(USER);
+      // What the phone held before it was removed.
+      const phoneView = ready(await loadEncryption(phone.ctx));
+      expect(phoneView.unlocked).toBe(true);
+      const stolen = currentKey();
+      const stolenSequence = accountKeySequence(phoneView.list);
+      lockAccount(USER);
+      let account = ready(await loadEncryption(laptop));
+      account = ready(
+        await removeDevice(
+          laptop,
           account,
           phone.account.device!.deviceId,
           recovery.secret
+        )
+      );
+      account = ready(
+        await revokeReadOnlyDevices(laptop, account, recovery.secret)
+      );
+      const newer = [currentKey()];
+      // The laptop's chain opens the stolen key: history only goes back.
+      expect(
+        toHex(await openAccountKeyChain(laptop, account, stolenSequence))
+      ).toBe(toHex(stolen));
+      // The stolen key opens no history row, so none of the newer keys.
+      const rows = historyRows(srv.db);
+      expect(rows).toHaveLength(2);
+      for (const row of rows) {
+        await expect(
+          unwrapKey(stolen, fromBase64Url(row.wrapped), {
+            purpose: 'previous-account-key',
+            userId: USER,
+            keySequence: row.key_sequence
+          })
+        ).rejects.toMatchObject({ code: 'authentication-failed' });
+      }
+      expect(newer.map(toHex)).not.toContain(toHex(stolen));
+      // Nor is anything sealed to the removed device any more.
+      expect(
+        count(
+          srv.db,
+          'SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE target_id = ?',
+          phone.account.device!.deviceId
+        )
+      ).toBe(0);
+      lockAccount(USER);
+      const removed = ready(await loadEncryption(phone.ctx));
+      expect(removed.deviceStatus).toBe('removed');
+      await flowRefusal(
+        openAccountKeyChain(phone.ctx, removed, stolenSequence),
+        'not-unlocked'
+      );
+    },
+    KEY_FLOW_TIMEOUT_MS
+  );
+
+  it(
+    'refuses a history row the newer key did not make',
+    async () => {
+      const srv = server();
+      const { laptop, account, keys } = await rotatedThrice(srv);
+      // A server that swaps a row for a wrap under the wrong key.
+      srv.db
+        .prepare(
+          'UPDATE e2ee_account_key_history SET wrapped = ? WHERE key_sequence = 3'
+        )
+        .run(
+          toBase64Url(
+            await wrapKey(generateSymmetricKey(), keys[1]!.key, {
+              purpose: 'previous-account-key',
+              userId: USER,
+              keySequence: 3
+            })
+          )
+        );
+      await flowRefusal(
+        openAccountKeyChain(laptop, account, 0),
+        'key-mismatch'
+      );
+      // A server that omits a row.
+      srv.db
+        .prepare('DELETE FROM e2ee_account_key_history WHERE key_sequence = 4')
+        .run();
+      await flowRefusal(
+        openAccountKeyChain(laptop, account, 0),
+        'missing-wrap'
+      );
+    },
+    KEY_FLOW_TIMEOUT_MS
+  );
+
+  it(
+    'is refused by the Worker when a rotation omits or misnames it',
+    async () => {
+      const srv = server();
+      const { recovery, laptop } = await setUp(srv);
+      const phone = await enrolled(srv, recovery.secret, 'Phone');
+      lockAccount(USER);
+      const account = ready(await loadEncryption(laptop));
+      const entries = () =>
+        count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_device_list_entries');
+      const before = entries();
+      const tampered = (
+        change: (
+          request: Parameters<E2eeContext['api']['appendDeviceList']>[0]
+        ) => Parameters<E2eeContext['api']['appendDeviceList']>[0]
+      ): E2eeContext => ({
+        ...laptop,
+        api: {
+          ...laptop.api,
+          appendDeviceList: (request) =>
+            laptop.api.appendDeviceList(change(request))
+        }
+      });
+      const cases: ((
+        request: Parameters<E2eeContext['api']['appendDeviceList']>[0]
+      ) => Parameters<E2eeContext['api']['appendDeviceList']>[0])[] = [
+        ({ history: _history, ...request }) => request,
+        (request) => ({
+          ...request,
+          history: { ...request.history!, keySequence: 1 }
+        }),
+        (request) => ({
+          ...request,
+          history: { ...request.history!, generation: 2 }
+        }),
+        (request) => ({
+          ...request,
+          history: {
+            ...request.history!,
+            wrapped: toBase64Url(new Uint8Array(40))
+          }
+        }),
+        (request) => ({
+          ...request,
+          history: {
+            ...request.history!,
+            wrapped: toBase64Url(new Uint8Array(41).fill(1))
+          }
+        })
+      ];
+      for (const change of cases) {
+        const refused = await refusal(
+          removeDevice(
+            tampered(change),
+            account,
+            phone.account.device!.deviceId,
+            recovery.secret
+          )
+        );
+        expect([refused.status, refused.code]).toEqual([
+          400,
+          'E2EE_REQUEST_INVALID'
+        ]);
+      }
+      expect(entries()).toBe(before);
+      expect(historyRows(srv.db)).toEqual([]);
+      // A history wrap on an entry that rotates nothing is refused too.
+      const tablet = device(srv);
+      const fresh = ready(await loadEncryption(tablet));
+      const extra = await refusal(
+        enrollWithRecoveryKey(
+          {
+            ...tablet,
+            api: {
+              ...tablet.api,
+              appendDeviceList: (request) =>
+                tablet.api.appendDeviceList({
+                  ...request,
+                  history: {
+                    generation: 1,
+                    keySequence: 0,
+                    wrapped: toBase64Url(new Uint8Array(41).fill(2))
+                  }
+                })
+            }
+          },
+          fresh,
+          recovery.secret,
+          'Tablet'
+        )
+      );
+      expect([extra.status, extra.code]).toEqual([400, 'E2EE_REQUEST_INVALID']);
+      expect(entries()).toBe(before);
+    },
+    KEY_FLOW_TIMEOUT_MS
+  );
+
+  it(
+    'is refused by the Worker when a replacement or a setup misuses it',
+    async () => {
+      const srv = server();
+      const { laptop, account } = await setUp(srv);
+      const refused = await refusal(
+        replaceRecoveryKey(
+          {
+            ...laptop,
+            api: {
+              ...laptop.api,
+              replaceIdentity: ({ history: _history, ...request }) =>
+                laptop.api.replaceIdentity(
+                  request as Parameters<
+                    E2eeContext['api']['replaceIdentity']
+                  >[0]
+                )
+            }
+          },
+          account,
+          (await generateRecoveryKey()).secret,
+          null
         )
       );
       expect([refused.status, refused.code]).toEqual([
         400,
         'E2EE_REQUEST_INVALID'
       ]);
-    }
-    expect(entries()).toBe(before);
-    expect(historyRows(srv.db)).toEqual([]);
-    // A history wrap on an entry that rotates nothing is refused too.
-    const tablet = device(srv);
-    const fresh = ready(await loadEncryption(tablet));
-    const extra = await refusal(
-      enrollWithRecoveryKey(
-        {
-          ...tablet,
-          api: {
-            ...tablet.api,
-            appendDeviceList: (request) =>
-              tablet.api.appendDeviceList({
-                ...request,
-                history: {
-                  generation: 1,
-                  keySequence: 0,
-                  wrapped: toBase64Url(new Uint8Array(41).fill(2))
-                }
-              })
+      expect(count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_identities')).toBe(
+        1
+      );
+      const other = server(migratedDatabase());
+      const ctx = device(other);
+      const setupRefused = await refusal(
+        setUpEncryption(
+          {
+            ...ctx,
+            api: {
+              ...ctx.api,
+              setup: (request) =>
+                ctx.api.setup({
+                  ...request,
+                  history: {
+                    generation: 1,
+                    keySequence: 0,
+                    wrapped: toBase64Url(new Uint8Array(41).fill(2))
+                  }
+                } as E2eeSetupRequest)
+            }
+          },
+          {
+            recoverySecret: (await generateRecoveryKey()).secret,
+            label: 'Laptop'
           }
-        },
-        fresh,
-        recovery.secret,
-        'Tablet'
-      )
-    );
-    expect([extra.status, extra.code]).toEqual([400, 'E2EE_REQUEST_INVALID']);
-    expect(entries()).toBe(before);
-  });
+        )
+      );
+      expect([setupRefused.status, setupRefused.code]).toEqual([
+        400,
+        'E2EE_REQUEST_INVALID'
+      ]);
+    },
+    KEY_FLOW_TIMEOUT_MS
+  );
 
-  it('is refused by the Worker when a replacement or a setup misuses it', async () => {
-    const srv = server();
-    const { laptop, account } = await setUp(srv);
-    const refused = await refusal(
-      replaceRecoveryKey(
-        {
-          ...laptop,
-          api: {
-            ...laptop.api,
-            replaceIdentity: ({ history: _history, ...request }) =>
-              laptop.api.replaceIdentity(
-                request as Parameters<E2eeContext['api']['replaceIdentity']>[0]
-              )
-          }
-        },
-        account,
-        (await generateRecoveryKey()).secret,
-        null
-      )
-    );
-    expect([refused.status, refused.code]).toEqual([
-      400,
-      'E2EE_REQUEST_INVALID'
-    ]);
-    expect(count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_identities')).toBe(1);
-    const other = server(migratedDatabase());
-    const ctx = device(other);
-    const setupRefused = await refusal(
-      setUpEncryption(
-        {
-          ...ctx,
-          api: {
-            ...ctx.api,
-            setup: (request) =>
-              ctx.api.setup({
-                ...request,
-                history: {
-                  generation: 1,
-                  keySequence: 0,
-                  wrapped: toBase64Url(new Uint8Array(41).fill(2))
-                }
-              } as E2eeSetupRequest)
-          }
-        },
-        {
-          recoverySecret: (await generateRecoveryKey()).secret,
-          label: 'Laptop'
-        }
-      )
-    );
-    expect([setupRefused.status, setupRefused.code]).toEqual([
-      400,
-      'E2EE_REQUEST_INVALID'
-    ]);
-  });
-
-  it('serves only the caller’s own history', async () => {
-    const srv = server();
-    await rotatedThrice(srv);
-    const BOB = 'user_bob';
-    srv.db
-      .prepare('INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)')
-      .run(BOB, 'bob@example.com', '2026-10-20T00:00:00.000Z');
-    const bob = device(srv, BOB);
-    const bobRecovery = await generateRecoveryKey();
-    // Before Bob has any history, his answer is empty, not Alice's.
-    expect(await bob.api.accountKeyHistory()).toEqual({ history: [] });
-    const bobAccount = ready(
-      await setUpEncryption(bob, {
-        recoverySecret: bobRecovery.secret,
-        label: 'Bob laptop'
-      })
-    );
-    await revokeReadOnlyDevices(bob, bobAccount, bobRecovery.secret);
-    const aliceRows = historyRows(srv.db, USER).map((r) => r.wrapped);
-    const bobHistory = (await bob.api.accountKeyHistory()).history;
-    expect(bobHistory.map((r) => [r.generation, r.keySequence])).toEqual([
-      [1, 0]
-    ]);
-    expect(bobHistory.map((r) => r.wrapped)).toEqual(
-      historyRows(srv.db, BOB).map((r) => r.wrapped)
-    );
-    expect(bobHistory.some((r) => aliceRows.includes(r.wrapped))).toBe(false);
-    const aliceHistory = (await device(srv).api.accountKeyHistory()).history;
-    expect(aliceHistory.map((r) => r.wrapped)).toEqual(aliceRows);
-  });
-
-  it('is erased with the account, with or without the users row', async () => {
-    const srv = server();
-    await rotatedThrice(srv);
-    expect(historyRows(srv.db)).toHaveLength(3);
-    const { deleteAccountData } =
-      await import('../apps/web/worker/accountDeletion');
-    await deleteAccountData(
-      { userId: USER as never, displayName: 'Alice', mode: 'development' },
-      { scope: 'profile', confirmation: 'DELETE CLOUD PROFILE' },
-      { DB: d1Database(srv.db) },
-      {} as never
-    );
-    expect(count(srv.db, 'SELECT COUNT(*) AS n FROM users')).toBe(1);
-    expect(
-      count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_account_key_history')
-    ).toBe(0);
-
-    const cascade = server();
-    await rotatedThrice(cascade);
-    expect(historyRows(cascade.db)).toHaveLength(3);
-    cascade.db.prepare('DELETE FROM users WHERE id = ?').run(USER);
-    expect(
-      count(cascade.db, 'SELECT COUNT(*) AS n FROM e2ee_account_key_history')
-    ).toBe(0);
-  });
-
-  it('is fenced while an erasure is in progress', async () => {
-    const srv = server();
-    srv.db
-      .prepare('INSERT INTO account_erasure_requests VALUES (?, ?, ?, ?)')
-      .run(USER, 'profile', 1, 1);
-    expect(() =>
+  it(
+    'serves only the caller’s own history',
+    async () => {
+      const srv = server();
+      await rotatedThrice(srv);
+      const BOB = 'user_bob';
       srv.db
-        .prepare('INSERT INTO e2ee_account_key_history VALUES (?, 1, 0, ?, ?)')
-        .run(USER, 'A'.repeat(55), '2026-10-24T00:00:00.000Z')
-    ).toThrow(/ACCOUNT_ERASURE_IN_PROGRESS/);
-  });
+        .prepare('INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)')
+        .run(BOB, 'bob@example.com', '2026-10-20T00:00:00.000Z');
+      const bob = device(srv, BOB);
+      const bobRecovery = await generateRecoveryKey();
+      // Before Bob has any history, his answer is empty, not Alice's.
+      expect(await bob.api.accountKeyHistory()).toEqual({ history: [] });
+      const bobAccount = ready(
+        await setUpEncryption(bob, {
+          recoverySecret: bobRecovery.secret,
+          label: 'Bob laptop'
+        })
+      );
+      await revokeReadOnlyDevices(bob, bobAccount, bobRecovery.secret);
+      const aliceRows = historyRows(srv.db, USER).map((r) => r.wrapped);
+      const bobHistory = (await bob.api.accountKeyHistory()).history;
+      expect(bobHistory.map((r) => [r.generation, r.keySequence])).toEqual([
+        [1, 0]
+      ]);
+      expect(bobHistory.map((r) => r.wrapped)).toEqual(
+        historyRows(srv.db, BOB).map((r) => r.wrapped)
+      );
+      expect(bobHistory.some((r) => aliceRows.includes(r.wrapped))).toBe(false);
+      const aliceHistory = (await device(srv).api.accountKeyHistory()).history;
+      expect(aliceHistory.map((r) => r.wrapped)).toEqual(aliceRows);
+    },
+    KEY_FLOW_TIMEOUT_MS
+  );
 
-  it('keeps routes closed but erasure working before migration 0030', async () => {
-    const srv = server();
-    await setUp(srv);
-    srv.db.exec('DROP TABLE e2ee_account_key_history');
-    const api = createE2eeApi(fetcherFor(srv, USER));
-    expect(await api.config()).toEqual({ enabled: false });
-    const closed = await refusal(api.account());
-    expect([closed.status, closed.code]).toEqual([503, 'E2EE_UNAVAILABLE']);
-    const { deleteAccountData } =
-      await import('../apps/web/worker/accountDeletion');
-    await expect(
-      deleteAccountData(
+  it(
+    'is erased with the account, with or without the users row',
+    async () => {
+      const srv = server();
+      await rotatedThrice(srv);
+      expect(historyRows(srv.db)).toHaveLength(3);
+      const { deleteAccountData } =
+        await import('../apps/web/worker/accountDeletion');
+      await deleteAccountData(
         { userId: USER as never, displayName: 'Alice', mode: 'development' },
         { scope: 'profile', confirmation: 'DELETE CLOUD PROFILE' },
         { DB: d1Database(srv.db) },
         {} as never
-      )
-    ).resolves.toMatchObject({ ok: true });
-    for (const table of [
-      'e2ee_identities',
-      'e2ee_device_list_entries',
-      'e2ee_key_wraps',
-      'e2ee_device_approvals'
-    ]) {
-      expect(count(srv.db, `SELECT COUNT(*) AS n FROM ${table}`)).toBe(0);
-    }
-  });
+      );
+      expect(count(srv.db, 'SELECT COUNT(*) AS n FROM users')).toBe(1);
+      expect(
+        count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_account_key_history')
+      ).toBe(0);
+
+      const cascade = server();
+      await rotatedThrice(cascade);
+      expect(historyRows(cascade.db)).toHaveLength(3);
+      cascade.db.prepare('DELETE FROM users WHERE id = ?').run(USER);
+      expect(
+        count(cascade.db, 'SELECT COUNT(*) AS n FROM e2ee_account_key_history')
+      ).toBe(0);
+    },
+    KEY_FLOW_TIMEOUT_MS
+  );
+
+  it(
+    'is fenced while an erasure is in progress',
+    async () => {
+      const srv = server();
+      srv.db
+        .prepare('INSERT INTO account_erasure_requests VALUES (?, ?, ?, ?)')
+        .run(USER, 'profile', 1, 1);
+      expect(() =>
+        srv.db
+          .prepare(
+            'INSERT INTO e2ee_account_key_history VALUES (?, 1, 0, ?, ?)'
+          )
+          .run(USER, 'A'.repeat(55), '2026-10-24T00:00:00.000Z')
+      ).toThrow(/ACCOUNT_ERASURE_IN_PROGRESS/);
+    },
+    KEY_FLOW_TIMEOUT_MS
+  );
+
+  it(
+    'keeps routes closed but erasure working before migration 0030',
+    async () => {
+      const srv = server();
+      await setUp(srv);
+      srv.db.exec('DROP TABLE e2ee_account_key_history');
+      const api = createE2eeApi(fetcherFor(srv, USER));
+      expect(await api.config()).toEqual({ enabled: false });
+      const closed = await refusal(api.account());
+      expect([closed.status, closed.code]).toEqual([503, 'E2EE_UNAVAILABLE']);
+      const { deleteAccountData } =
+        await import('../apps/web/worker/accountDeletion');
+      await expect(
+        deleteAccountData(
+          { userId: USER as never, displayName: 'Alice', mode: 'development' },
+          { scope: 'profile', confirmation: 'DELETE CLOUD PROFILE' },
+          { DB: d1Database(srv.db) },
+          {} as never
+        )
+      ).resolves.toMatchObject({ ok: true });
+      for (const table of [
+        'e2ee_identities',
+        'e2ee_device_list_entries',
+        'e2ee_key_wraps',
+        'e2ee_device_approvals'
+      ]) {
+        expect(count(srv.db, `SELECT COUNT(*) AS n FROM ${table}`)).toBe(0);
+      }
+    },
+    KEY_FLOW_TIMEOUT_MS
+  );
 });
 
 describe('recovery-key replacement lock', () => {
@@ -1486,83 +1548,93 @@ describe('recovery-key replacement lock', () => {
     return { ctx, events, release, settle };
   }
 
-  it('serializes a replacement and a removal from the same browser', async () => {
-    const srv = server();
-    const { recovery, laptop } = await setUp(srv);
-    const phone = await enrolled(srv, recovery.secret, 'Phone');
-    lockAccount(USER);
-    const account = ready(await loadEncryption(laptop));
-    const { ctx, events, release, settle } = instrumented(laptop);
-    const replaced = replaceRecoveryKey(
-      ctx,
-      account,
-      (await generateRecoveryKey()).secret,
-      null
-    );
-    while (!events.includes('replace:1')) await settle();
-    const removal = removeDevice(
-      ctx,
-      account,
-      phone.account.device!.deviceId,
-      recovery.secret
-    );
-    // The replacement holds the lock; the removal waits however long.
-    await settle();
-    expect(events).toEqual(['lock:1', 'replace:1']);
-    release();
-    expect(ready(await replaced).generation).toBe(2);
-    // It then runs against the identity it was given, which is gone.
-    const refused = await refusal(removal);
-    expect([refused.status, refused.code]).toEqual([
-      409,
-      'E2EE_GENERATION_CONFLICT'
-    ]);
-    expect(events).toEqual([
-      'lock:1',
-      'replace:1',
-      'unlock:1',
-      'lock:2',
-      'append',
-      'unlock:2'
-    ]);
-  });
+  it(
+    'serializes a replacement and a removal from the same browser',
+    async () => {
+      const srv = server();
+      const { recovery, laptop } = await setUp(srv);
+      const phone = await enrolled(srv, recovery.secret, 'Phone');
+      lockAccount(USER);
+      const account = ready(await loadEncryption(laptop));
+      const { ctx, events, release, settle } = instrumented(laptop);
+      const replaced = replaceRecoveryKey(
+        ctx,
+        account,
+        (await generateRecoveryKey()).secret,
+        null
+      );
+      while (!events.includes('replace:1')) await settle();
+      const removal = removeDevice(
+        ctx,
+        account,
+        phone.account.device!.deviceId,
+        recovery.secret
+      );
+      // The replacement holds the lock; the removal waits however long.
+      await settle();
+      expect(events).toEqual(['lock:1', 'replace:1']);
+      release();
+      expect(ready(await replaced).generation).toBe(2);
+      // It then runs against the identity it was given, which is gone.
+      const refused = await refusal(removal);
+      expect([refused.status, refused.code]).toEqual([
+        409,
+        'E2EE_GENERATION_CONFLICT'
+      ]);
+      expect(events).toEqual([
+        'lock:1',
+        'replace:1',
+        'unlock:1',
+        'lock:2',
+        'append',
+        'unlock:2'
+      ]);
+    },
+    KEY_FLOW_TIMEOUT_MS
+  );
 
-  it('serializes two replacements from the same browser', async () => {
-    const srv = server();
-    const { laptop, account } = await setUp(srv);
-    const { ctx, events, release, settle } = instrumented(laptop);
-    const first = replaceRecoveryKey(
-      ctx,
-      account,
-      (await generateRecoveryKey()).secret,
-      null
-    );
-    while (!events.includes('replace:1')) await settle();
-    const second = replaceRecoveryKey(
-      ctx,
-      account,
-      (await generateRecoveryKey()).secret,
-      null
-    );
-    await settle();
-    expect(events).toEqual(['lock:1', 'replace:1']);
-    release();
-    expect(ready(await first).generation).toBe(2);
-    const refused = await refusal(second);
-    expect([refused.status, refused.code]).toEqual([
-      409,
-      'E2EE_GENERATION_CONFLICT'
-    ]);
-    expect(events).toEqual([
-      'lock:1',
-      'replace:1',
-      'unlock:1',
-      'lock:2',
-      'replace:2',
-      'unlock:2'
-    ]);
-    expect(count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_identities')).toBe(2);
-  });
+  it(
+    'serializes two replacements from the same browser',
+    async () => {
+      const srv = server();
+      const { laptop, account } = await setUp(srv);
+      const { ctx, events, release, settle } = instrumented(laptop);
+      const first = replaceRecoveryKey(
+        ctx,
+        account,
+        (await generateRecoveryKey()).secret,
+        null
+      );
+      while (!events.includes('replace:1')) await settle();
+      const second = replaceRecoveryKey(
+        ctx,
+        account,
+        (await generateRecoveryKey()).secret,
+        null
+      );
+      await settle();
+      expect(events).toEqual(['lock:1', 'replace:1']);
+      release();
+      expect(ready(await first).generation).toBe(2);
+      const refused = await refusal(second);
+      expect([refused.status, refused.code]).toEqual([
+        409,
+        'E2EE_GENERATION_CONFLICT'
+      ]);
+      expect(events).toEqual([
+        'lock:1',
+        'replace:1',
+        'unlock:1',
+        'lock:2',
+        'replace:2',
+        'unlock:2'
+      ]);
+      expect(count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_identities')).toBe(
+        2
+      );
+    },
+    KEY_FLOW_TIMEOUT_MS
+  );
 });
 
 describe('device approval', () => {
