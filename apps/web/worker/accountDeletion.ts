@@ -1,4 +1,5 @@
 import { e2eeErasureTables } from './e2ee';
+import { projectGroupErasureStatements } from './e2eeProjects';
 import {
   isE2eeProjectPreferenceStorageReady,
   projectPreferenceErasureStatement
@@ -247,7 +248,8 @@ function profileCleanupStatements(
   authRateBucket: string | undefined,
   scope: 'profile' | 'all',
   e2eeTables: readonly string[],
-  e2eeProjectPreferencesReady = false
+  e2eeProjectPreferencesReady = false,
+  projectGroupStatements: readonly D1PreparedStatement[] = []
 ): D1PreparedStatement[] {
   const statements: D1PreparedStatement[] = [];
   if (email) {
@@ -287,6 +289,8 @@ function profileCleanupStatements(
     // The "Encrypt new projects" opt-in (migration 0031) is profile data too.
     statements.push(projectPreferenceErasureStatement(db, userId));
   }
+  // Encrypted projects' key wraps and leaf certifications (migration 0032).
+  statements.push(...projectGroupStatements);
   // End-to-end encryption keys are profile data: device labels and public
   // keys besides the wrapped keys and the account-key history. The users row
   // survives a profile deletion, so its cascade cannot be relied on here.
@@ -447,7 +451,9 @@ export async function deleteAccountData(
         // history table does not; deletion must keep working either way.
         await e2eeErasureTables(db),
         // Before migration 0031 there is no opt-in table.
-        await isE2eeProjectPreferenceStorageReady(db)
+        await isE2eeProjectPreferenceStorageReady(db),
+        // Before migration 0032 there are no MLS group tables.
+        await projectGroupErasureStatements(db, session.userId, input.scope)
       )
     );
   }

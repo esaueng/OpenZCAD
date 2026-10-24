@@ -26,6 +26,7 @@ import type { ObjectFolderSet } from './object-folders';
 export * from './drawing-annotations';
 export * from './topology-reference';
 export * from './reference-images';
+export * from './e2ee-project-groups';
 import type { ReferenceImageSet } from './reference-images';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
