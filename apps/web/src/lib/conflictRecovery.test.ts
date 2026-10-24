@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createProjectDocument } from '@openzcad/document-core';
+import {
+  createProjectDocument,
+  createSavedRevision
+} from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
   clearUnresolvedConflict,
@@ -315,11 +318,12 @@ describe('collaboration conflict recovery', () => {
     expect(again.writeRecoveryCopy).not.toHaveBeenCalled();
   });
 
-  // A keep-mine is a fenced write that mints a new version of the same model,
-  // and the room and the account each cite that new version in their next
-  // dialog. A version-fence change alone must not mint another recovery.
-  // New saved or undo history is separate work and still needs preservation.
-  it('copies unchanged work once however many versions it is cited under', async () => {
+  // A keep-mine is a fenced write that mints a new version of the same model
+  // with a "Kept this device’s version" save point on top, and the room and
+  // the account each cite that resaved document in their next dialog. Keyed
+  // on anything that includes saved history, the same model came back under
+  // a fresh key on every hop, and every hop wrote another recovery project.
+  it('copies a model once however many versions and save points it is cited under', async () => {
     const base = createProjectDocument('Conflict', owner);
     const context = {
       role: 'owner' as const,
@@ -338,7 +342,12 @@ describe('collaboration conflict recovery', () => {
     );
     expect(first.writeRecoveryCopy).toHaveBeenCalledTimes(1);
 
-    const resaved = version(mine, 28);
+    // What every hop looks like: the same model as `mine`, resaved by a
+    // fenced write under a new version with a fresh revision and checkpoint.
+    const resaved = createSavedRevision(
+      version(mine, 28),
+      'Kept this device’s version'
+    );
     for (const [local, remote, resolution] of [
       [resaved, theirs, 'use-remote'],
       [theirs, resaved, 'keep-mine'],
@@ -356,7 +365,54 @@ describe('collaboration conflict recovery', () => {
     }
   });
 
-  it('preserves a new save point even when an earlier copy of the same model exists', async () => {
+  // Two tabs (or devices) on one project, each answering "keep mine": every
+  // answer is a fenced write that stamps a "Kept this device’s version" save
+  // point on the kept model, so the other side's next dialog cites that model
+  // with history it has never seen. Two models diverged, so two recovery
+  // projects, however many times the dialogs come back.
+  it('writes one copy per model while two writers keep their own versions', async () => {
+    const base = createProjectDocument('Merry Llama', owner);
+    const context = {
+      role: 'owner' as const,
+      lease: null,
+      leasesEnforced: false
+    };
+    let left = edited(base, 27, 'left');
+    let right = edited(base, 27, 'right');
+    const keep = (document: ProjectDocument, over: ProjectDocument) =>
+      createSavedRevision(
+        version(document, over.version + 1),
+        'Kept this device’s version'
+      );
+    let written = 0;
+    for (let round = 0; round < 5; round += 1) {
+      const leftTab = handlers();
+      await resolveProjectConflict(
+        conflictFromDocuments(left, right, 'account'),
+        'keep-mine',
+        context,
+        leftTab
+      );
+      written += vi.mocked(leftTab.writeRecoveryCopy).mock.calls.length;
+      left = keep(left, right);
+
+      const rightTab = handlers();
+      await resolveProjectConflict(
+        conflictFromDocuments(right, left, 'account'),
+        'keep-mine',
+        context,
+        rightTab
+      );
+      written += vi.mocked(rightTab.writeRecoveryCopy).mock.calls.length;
+      right = keep(right, left);
+    }
+    expect(written).toBe(2);
+  });
+
+  // A recovery project is born with no save points of its own (its source's
+  // stay with the source), so a later save point on an already-copied model
+  // is not something another copy could preserve.
+  it('does not copy a model again for a save point a copy cannot carry', async () => {
     const base = createProjectDocument('Saved history', owner);
     const local = version(base, 8);
     const checkpoint = {
@@ -377,29 +433,21 @@ describe('collaboration conflict recovery', () => {
     };
     const first = handlers();
     await resolveProjectConflict(
-      conflictFromDocuments(local, edited(base, 9, 'different'), 'account'),
-      'use-remote',
+      conflictFromDocuments(edited(base, 9, 'different'), local, 'account'),
+      'keep-mine',
       context,
       first
     );
+    expect(first.writeRecoveryCopy).toHaveBeenCalledWith(local);
     const keep = handlers();
     const outcome = await resolveProjectConflict(
-      conflictFromDocuments(local, remote, 'account'),
+      conflictFromDocuments(edited(base, 10, 'different'), remote, 'account'),
       'keep-mine',
       context,
       keep
     );
-    expect(outcome.recoveryCopy).toBe('written');
-    expect(keep.writeRecoveryCopy).toHaveBeenCalledWith(remote);
-    const retry = handlers();
-    const retried = await resolveProjectConflict(
-      conflictFromDocuments(local, remote, 'account'),
-      'keep-mine',
-      context,
-      retry
-    );
-    expect(retried.recoveryCopy).toBe('already-preserved');
-    expect(retry.writeRecoveryCopy).not.toHaveBeenCalled();
+    expect(outcome.recoveryCopy).toBe('already-preserved');
+    expect(keep.writeRecoveryCopy).not.toHaveBeenCalled();
   });
 
   it('writes nothing when the chosen copy already preserves the losing model and history', async () => {

@@ -1,9 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   addSketchFeature,
+  assertStorableDocument,
   createProjectDocument,
   findSketch,
   normalizeDocument,
+  UnstorableDocumentError,
   updateSketch,
   updateSketchObject
 } from '@openzcad/document-core';
@@ -19,10 +21,7 @@ import {
   topologyHashOfWitness
 } from '../packages/kernel-adapter/src/topology-lineage';
 import worker from '../apps/web/worker/index';
-import {
-  HttpError,
-  parseSaveProjectDocumentRequest
-} from '../apps/web/worker/validation';
+import { parseSaveProjectDocumentRequest } from '../apps/web/worker/validation';
 import {
   createRoomContext,
   createTestRoom,
@@ -123,9 +122,21 @@ function fixture(
   return { ...added, objectId, data: node.data };
 }
 const invalid = /without a verified source edge/;
+/** The message the browser refuses `document` with before any write. */
+function browserRefusal(document: unknown): string {
+  try {
+    assertStorableDocument(document);
+  } catch (error) {
+    expect(error).toBeInstanceOf(UnstorableDocumentError);
+    return (error as Error).message;
+  }
+  throw new Error('The browser accepted the document.');
+}
 
+// ADR-024 Phase 1: the account parse reads only the envelope, so the browser
+// refuses these before it writes and the account lets them through unread.
 it.each(invalidReferences)(
-  'rejects %s before loading, native edits or account parsing',
+  'rejects %s before loading, native edits or a browser write',
   (_name, ref) => {
     expect(resolveTopologyReference(ref, [])).toMatchObject({
       status: 'failed',
@@ -152,8 +163,8 @@ it.each(invalidReferences)(
         object: f.data
       })
     ).toThrow(invalid);
-    let failure: unknown;
-    try {
+    expect(browserRefusal(f.document)).toMatch(invalid);
+    expect(() =>
       parseSaveProjectDocumentRequest(
         {
           projectId: f.document.projectId,
@@ -161,12 +172,8 @@ it.each(invalidReferences)(
           document: f.document
         },
         f.document.projectId
-      );
-    } catch (error) {
-      failure = error;
-    }
-    expect(failure).toBeInstanceOf(HttpError);
-    expect((failure as HttpError).status).toBe(400);
+      )
+    ).not.toThrow();
     expect(f.document).toEqual(before);
     expect(ordinary.document).toEqual(ordinaryBefore);
   }
@@ -204,6 +211,9 @@ it.each([
     expect(normalizeDocument(f.document).nodes[f.objectId]).toEqual(
       f.document.nodes[f.objectId]
     );
+    expect(assertStorableDocument(f.document).nodes[f.objectId]).toEqual(
+      f.document.nodes[f.objectId]
+    );
     expect(() =>
       parseSaveProjectDocumentRequest(
         {
@@ -234,8 +244,10 @@ function request(path: string, method: string, body?: unknown) {
         })
   });
 }
+// The browser refuses these before any account write; the account checks
+// only the envelope, so the same document is stored unread.
 it.each(invalidReferences.slice(0, 2))(
-  'account refuses %s without changing stored data',
+  'browser refuses %s before the account stores it unread',
   async (_name, ref) => {
     const created = await worker.fetch(
       request('/api/projects', 'POST', { name: 'Reference refusal' }),
@@ -246,10 +258,8 @@ it.each(invalidReferences.slice(0, 2))(
       document: ReturnType<typeof createProjectDocument>;
     };
     const path = `/api/projects/${original.document.projectId}`;
-    const before: unknown = await (
-      await worker.fetch(request(path, 'GET'), env)
-    ).json();
     const f = fixture(ref, original.document);
+    expect(browserRefusal(f.document)).toMatch(invalid);
     const response = await worker.fetch(
       request(`${path}/document`, 'PUT', {
         projectId: f.document.projectId,
@@ -258,10 +268,11 @@ it.each(invalidReferences.slice(0, 2))(
       }),
       env
     );
-    expect(response.status).toBe(400);
-    expect(
-      await (await worker.fetch(request(path, 'GET'), env)).json()
-    ).toEqual(before);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      projectId: f.document.projectId,
+      version: original.document.version + 1
+    });
   }
 );
 
@@ -273,14 +284,16 @@ afterAll(() => {
   sockets.restore();
 });
 describe.each(['http', 'websocket'] as const)(
-  '%s room refuses malformed references',
+  '%s room stores malformed references unread',
   (transport) => {
     it.each(invalidReferences.slice(0, 2))(
-      'rejects %s before storage',
+      'browser refuses %s before submitting; the room stores it unread',
       async (_name, ref) => {
         const { document } = fixture(ref),
           { context, values } = createRoomContext(),
           room = createTestRoom(context, {});
+        // ADR-024 Phase 1: the room checks only the envelope.
+        expect(browserRefusal(document)).toMatch(invalid);
         const url = `https://room.test/?projectId=${document.projectId}`;
         const headers = {
           'x-openzcad-user-id': document.ownerUserId,
@@ -326,11 +339,8 @@ describe.each(['http', 'websocket'] as const)(
           );
           result = socket.lastFrame();
         }
-        expect(result).toMatchObject({
-          type: 'error',
-          code: 'document-invalid'
-        });
-        expect(values.has('room:latest')).toBe(false);
+        expect(result).toMatchObject({ type: 'ack' });
+        expect(values.get('room:latest')).toEqual(document);
       }
     );
   }

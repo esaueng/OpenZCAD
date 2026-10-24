@@ -7,10 +7,12 @@ import {
 } from '@openzcad/command-system';
 import {
   addPrimitiveFeature,
+  assertStorableDocument,
   createProjectDocument,
   duplicateProjectDocument,
   normalizeDocument,
-  normalizedReferenceImageRotation
+  normalizedReferenceImageRotation,
+  UnstorableDocumentError
 } from '@openzcad/document-core';
 import {
   calibratedReferenceImageWidth,
@@ -178,7 +180,7 @@ describe('I05 reference-image section (schema v32)', () => {
     ).toThrow(/not found/);
   });
 
-  it('validates the section on load and at the account edge', () => {
+  it('validates the section on load and in the browser before any account write', () => {
     for (const bad of [
       image({ width: 0 }),
       image({ opacity: 0 }),
@@ -205,12 +207,17 @@ describe('I05 reference-image section (schema v32)', () => {
       } as ProjectDocument;
       expect(() => normalizeDocument(document)).toThrow();
       const wire = JSON.parse(JSON.stringify(document)) as ProjectDocument;
-      expect(() =>
+      expect(() => assertStorableDocument(wire)).toThrow(
+        UnstorableDocumentError
+      );
+      expect(() => assertStorableDocument(wire)).toThrow(/referenceImages/);
+      // ADR-024 Phase 1: the account stores section contents unread.
+      expect(
         parseSaveProjectDocumentRequest(
           { projectId: wire.projectId, expectedVersion: 0, document: wire },
           wire.projectId
-        )
-      ).toThrow(/referenceImages/);
+        ).document
+      ).toBe(wire);
     }
     expect(referenceImageSetError({ images: [] })).toMatch(/absent/);
     expect(referenceImageSetError({ images: [image(), image()] })).toMatch(

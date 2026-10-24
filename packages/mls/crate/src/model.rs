@@ -22,7 +22,9 @@ pub const PROJECT_KEY_LABEL: &[u8] = b"openzcad project key";
 pub const REJOIN_PSK_LABEL: &[u8] = b"openzcad rejoin psk";
 pub const REJOIN_PSK_PREFIX: &str = "ozc-rejoin/";
 pub const GROUP_ID_PREFIX: &[u8] = b"openzcad/project/";
-pub const CERTIFICATION_LABEL: &[u8] = b"openzcad mls leaf certification v1";
+/// Version 2 adds the certified epoch. Version 1 (no epoch) is no longer
+/// produced or accepted; the label keeps the two payloads apart.
+pub const CERTIFICATION_LABEL: &[u8] = b"openzcad mls leaf certification v2";
 
 pub const ROLES_VERSION: u8 = 1;
 pub const MAX_ID_BYTES: usize = 256;
@@ -247,14 +249,20 @@ struct CertificationPayload<'a> {
     device_id: &'a [u8],
     cipher_suite: u16,
     signature_key: &'a [u8],
+    certified_epoch: u64,
 }
 
 /// The bytes a device signs to certify a per-project leaf signing key.
+/// `certified_epoch` is the group epoch from which the certification counts
+/// (the group's current epoch when the device certifies). Because the device
+/// signs it, the app can check the epoch it hands the policy as
+/// `certified_epoch` in the directory, which a server cannot then change.
 pub fn certification_payload(
     project_id: &[u8],
     user_id: &[u8],
     device_id: &[u8],
     signature_key: &[u8],
+    certified_epoch: u64,
 ) -> Result<Vec<u8>, Error> {
     CertificationPayload {
         label: CERTIFICATION_LABEL,
@@ -263,6 +271,7 @@ pub fn certification_payload(
         device_id,
         cipher_suite: *SUITE,
         signature_key,
+        certified_epoch,
     }
     .mls_encode_to_vec()
     .map_err(Error::codec)

@@ -8,7 +8,12 @@
  *   from `VerifiedDeviceList`s the caller has already verified and pinned;
  * - which leaf keys each device certified for this project comes from leaf
  *   certifications, each checked here against the certifying device's
- *   signing key (`verifyLeafCertification`).
+ *   signing key (`verifyLeafCertification`);
+ * - the epoch each leaf key's certification counts from (`certifiedEpoch`,
+ *   which a recovery Add needs to be no earlier than the identity's latest
+ *   leaf removal) is part of what the device signed, so it is passed on only
+ *   once that signature verifies over it. Two verified certifications of one
+ *   key keep the earlier epoch, which can only refuse more.
  *
  * Anything that cannot be verified is refused with an `MlsDirectoryError`
  * rather than left out, so a forged or unattributable record is visible
@@ -24,10 +29,6 @@
  *   refused (`revocation-cutoff-missing`): dropping the device would drop
  *   its cutoff and let a sibling rejoin with an older PSK, and guessing 0
  *   would be a silent default.
- * - **`certifiedEpoch`.** Neither the leaf certification payload nor the
- *   device list binds the epoch from which a certification counts, so none
- *   is set. The policy reads a missing value as "before the latest leaf
- *   removal", which refuses every recovery Add; it never relaxes a rule.
  * - **`replacedBy`.** Device-list revocations do not name a replacement
  *   device, so the last-leaf rejoin exception is unavailable.
  */
@@ -45,6 +46,7 @@ export interface LeafCertification {
   readonly userId: string;
   readonly deviceId: string;
   readonly leafKey: Uint8Array;
+  /** As the leaf credential carries it: the signed epoch is inside. */
   readonly certification: Uint8Array;
 }
 
@@ -169,22 +171,35 @@ export async function buildDeviceDirectory(
         `A leaf certification names device ${claim.deviceId}, which the device list of ${claim.userId} does not certify.`
       );
     }
-    const valid =
-      device.signingKey !== undefined &&
-      (await verifyLeafCertification(
-        mls,
-        { projectId, ...claim },
-        device.signingKey
-      ));
-    if (!valid) {
+    const verified =
+      device.signingKey === undefined
+        ? null
+        : await verifyLeafCertification(
+            mls,
+            { projectId, ...claim },
+            device.signingKey
+          );
+    if (!verified) {
       throw new MlsDirectoryError(
         'certification-invalid',
         `The leaf certification of device ${claim.deviceId} of ${claim.userId} does not verify.`
       );
     }
-    if (!device.leafKeys.some((leaf) => sameBytes(leaf.key, claim.leafKey))) {
-      // No certifiedEpoch: nothing verified binds one (see above).
-      device.leafKeys.push({ key: new Uint8Array(claim.leafKey) });
+    // Only now, verified, does the signed epoch reach the policy.
+    const { certifiedEpoch } = verified;
+    const known = device.leafKeys.find((leaf) =>
+      sameBytes(leaf.key, claim.leafKey)
+    );
+    if (!known) {
+      device.leafKeys.push({
+        key: new Uint8Array(claim.leafKey),
+        certifiedEpoch
+      });
+    } else if (
+      known.certifiedEpoch !== undefined &&
+      certifiedEpoch < known.certifiedEpoch
+    ) {
+      known.certifiedEpoch = certifiedEpoch;
     }
   }
   return {

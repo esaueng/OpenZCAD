@@ -204,9 +204,12 @@ class World {
       deviceId
     });
     const key = await session.signatureKey();
-    // The certification is the device's signature over this payload; the
-    // policy only reads the verified directory, so any bytes stand in here.
-    const payload = await session.certificationPayload();
+    // The certification is the device's signature over this payload, which
+    // binds the epoch the directory records; the policy only reads the
+    // verified directory, so any bytes stand in for the signature here.
+    const payload = await session.certificationPayload(
+      certifiedEpoch ?? this.latestEpoch
+    );
     await session.certify(payload.slice(-16));
     if (certified) {
       this.record(userId, deviceId).leafKeys.push(
@@ -537,6 +540,54 @@ const main = suite<MainCast>({
           'A2 added'
         );
         return agree([a1, a2]);
+      }
+    },
+    {
+      name: 'the leaf certification payload binds the certified epoch',
+      async run({ world, mls, a1 }) {
+        const key = await a1.session.signatureKey();
+        const own = await a1.session.certificationPayload(3);
+        const checked = await mls.leafCertificationPayload(
+          world.projectId,
+          'A',
+          'A1',
+          key,
+          3
+        );
+        assert(equalBytes(own, checked), 'both payload forms agree');
+        const later = await a1.session.certificationPayload(4);
+        assert(!equalBytes(own, later), 'another epoch, another payload');
+        const label = new TextEncoder().encode(
+          'openzcad mls leaf certification v2'
+        );
+        assert(
+          own[0] === label.length &&
+            equalBytes(own.subarray(1, 1 + label.length), label),
+          'the v2 label comes first'
+        );
+        assert(
+          equalBytes(
+            own.subarray(-8),
+            new Uint8Array([0, 0, 0, 0, 0, 0, 0, 3])
+          ),
+          'the epoch is the last field, a big-endian u64'
+        );
+        const negative = await failsWith(
+          () => a1.session.certificationPayload(-1),
+          'input'
+        );
+        const unsafe = await failsWith(
+          () =>
+            mls.leafCertificationPayload(
+              world.projectId,
+              'A',
+              'A1',
+              key,
+              2 ** 53
+            ),
+          'input'
+        );
+        return `${negative}; ${unsafe}`;
       }
     },
     {

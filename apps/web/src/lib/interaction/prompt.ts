@@ -65,8 +65,10 @@ function armedStep(state: InteractionState): string {
           return 'Drag the arrow to resize the body, or type an exact distance · The opposite side stays fixed';
         }
         // The key is the user's: a remap is named, an unbound one omitted.
+        // Kept short: the lane is one line, and at a common bar width the
+        // longer wording ellipsized the Escape rung off its end.
         return [
-          'Drag the arrow to push or pull the face, or type an exact distance',
+          'Drag to push or pull the face, or type an exact distance',
           keyHint(activeKeymap(), 'view-normal-to-face', 'faces it head-on')
         ]
           .filter(Boolean)

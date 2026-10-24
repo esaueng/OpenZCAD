@@ -451,7 +451,8 @@ export function prepareInitialProjectDocument(
       'The new project name does not match the request.'
     );
   }
-  const document = withoutDerivedProjection(normalizeDocument(source));
+  // Stored as the browser built it (ADR-024 Phase 1).
+  const document = withoutDerivedProjection(source);
   assertPersistableDocument(document);
   return document;
 }
@@ -1299,9 +1300,8 @@ export class InMemoryPersistenceService implements PersistenceService {
       name: request.name,
       localProjectId
     });
-    const document = withoutDerivedProjection(
-      normalizeDocument(request.document!)
-    );
+    // Stored as the browser built it (ADR-024 Phase 1).
+    const document = withoutDerivedProjection(request.document!);
     assertPersistableDocument(document);
     if (this.projects.has(document.projectId)) throw projectIdTaken();
     return document;
@@ -1490,9 +1490,8 @@ export class InMemoryPersistenceService implements PersistenceService {
       revisionId: request.revisionId,
       name: request.name
     });
-    const document = withoutDerivedProjection(
-      normalizeDocument(request.document!)
-    );
+    // Stored as the browser built it (ADR-024 Phase 1).
+    const document = withoutDerivedProjection(request.document!);
     assertPersistableDocument(document);
     if (
       (await projectCopyDocumentDigest(document)) !== request.documentDigest
@@ -1714,11 +1713,11 @@ export class InMemoryPersistenceService implements PersistenceService {
     ) {
       throw new RevisionConflictError(request.projectId, existing.version);
     }
-    const normalized = normalizeDocument(
-      reconcileCopiedImportSources(
-        request.document,
-        await this.loadCopiedImportArchives(userId, request.projectId)
-      )
+    // Stored as the browser built it (ADR-024 Phase 1), apart from the
+    // trusted source aliases the account still resolves.
+    const normalized = reconcileCopiedImportSources(
+      request.document,
+      await this.loadCopiedImportArchives(userId, request.projectId)
     );
     if (
       normalized.projectId !== request.projectId ||
@@ -1945,12 +1944,12 @@ export class InMemoryPersistenceService implements PersistenceService {
     ) {
       throw new RevisionConflictError(request.projectId, existing.version);
     }
+    // Stored as the browser built it (ADR-024 Phase 1), apart from the
+    // trusted source aliases the account still resolves.
     const normalized = withoutDerivedProjection(
-      normalizeDocument(
-        reconcileCopiedImportSources(
-          request.document,
-          await this.loadCopiedImportArchives(userId, request.projectId)
-        )
+      reconcileCopiedImportSources(
+        request.document,
+        await this.loadCopiedImportArchives(userId, request.projectId)
       )
     );
     if (

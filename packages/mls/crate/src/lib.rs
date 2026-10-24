@@ -46,20 +46,22 @@ pub fn build_info() -> String {
     )
 }
 
-/// The bytes a device signs to certify a leaf key, for verifying other
-/// members' leaves.
+/// The bytes a device signs to certify a leaf key from `certified_epoch`,
+/// for verifying other members' leaves.
 #[wasm_bindgen(js_name = leafCertificationPayload)]
 pub fn leaf_certification_payload(
     project_id: &str,
     user_id: &str,
     device_id: &str,
     signature_key: &[u8],
+    certified_epoch: u64,
 ) -> Result<Vec<u8>, JsValue> {
     model::certification_payload(
         project_id.as_bytes(),
         user_id.as_bytes(),
         device_id.as_bytes(),
         signature_key,
+        certified_epoch,
     )
     .map_err(to_js)
 }
@@ -129,9 +131,11 @@ impl MlsSession {
         self.inner.signature_key()
     }
 
+    /// The bytes this device signs to certify the leaf key from
+    /// `certified_epoch`, the group's current epoch.
     #[wasm_bindgen(js_name = certificationPayload)]
-    pub fn certification_payload(&self) -> Result<Vec<u8>, JsValue> {
-        self.inner.certification_payload().map_err(to_js)
+    pub fn certification_payload(&self, certified_epoch: u64) -> Result<Vec<u8>, JsValue> {
+        self.inner.certification_payload(certified_epoch).map_err(to_js)
     }
 
     pub fn certify(&mut self, certification: &[u8]) -> Result<(), JsValue> {

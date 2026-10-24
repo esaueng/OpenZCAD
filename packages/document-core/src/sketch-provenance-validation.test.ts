@@ -22,6 +22,10 @@ import {
   normalizeDocument
 } from './index';
 import { assertSketchProvenance } from './sketch-provenance-validation';
+import {
+  assertStorableDocument,
+  UnstorableDocumentError
+} from './storable-document';
 
 import {
   createRoomContext,
@@ -567,8 +571,11 @@ afterAll(() => {
 describe.each(['http', 'websocket'])(
   'S04 provenance %s collaboration boundary',
   (transport) => {
+    // ADR-024 Phase 1: the room checks only the envelope, so the browser
+    // refuses backdated provenance before it submits, and the room stores
+    // the same document unread.
     it.each(['boundary profile', 'promotion ownership'] as const)(
-      'refuses backdated and accepts current %s without rewriting',
+      'browser refuses backdated %s; the room stores both versions without rewriting',
       async (family) => {
         for (const carrier of ['current', 'nested log'] as const)
           for (const version of [36, PROJECT_DOCUMENT_SCHEMA_VERSION]) {
@@ -588,6 +595,13 @@ describe.each(['http', 'websocket'])(
             document.schemaVersion =
               version as ProjectDocument['schemaVersion'];
             const before = structuredClone(document);
+            if (version === 36)
+              expect(() => assertStorableDocument(document)).toThrow(
+                new UnstorableDocumentError(
+                  'Sketch boundary provenance and promotion ownership require project schema v37 or newer.'
+                )
+              );
+            else expect(() => assertStorableDocument(document)).not.toThrow();
             const { context, values } = createRoomContext();
             const room = createTestRoom(context, {});
             const url = `https://room.test/?projectId=${document.projectId}`;
@@ -637,20 +651,11 @@ describe.each(['http', 'websocket'])(
               );
               result = socket.lastFrame();
             }
-            if (version === 36) {
-              expect(result).toMatchObject({
-                type: 'error',
-                code: 'document-invalid',
-                message:
-                  'Sketch boundary provenance and promotion ownership require project schema v37 or newer.'
-              });
-              expect(values.has('room:latest')).toBe(false);
-            } else {
-              expect(result).toMatchObject({ type: 'ack' });
-              const stored = values.get('room:latest') as ProjectDocument;
-              expect(stored.nodes).toEqual(before.nodes);
-              expect(stored.commandLog).toEqual(before.commandLog);
-            }
+            expect(result).toMatchObject({ type: 'ack' });
+            const stored = values.get('room:latest') as ProjectDocument;
+            expect(stored.schemaVersion).toBe(version);
+            expect(stored.nodes).toEqual(before.nodes);
+            expect(stored.commandLog).toEqual(before.commandLog);
             expect(document).toEqual(before);
           }
       }

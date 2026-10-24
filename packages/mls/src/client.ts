@@ -31,18 +31,25 @@ export class Mls {
     return this.api.buildInfo();
   }
 
-  /** The bytes a device signs to certify a leaf key. */
+  /**
+   * The bytes a device signs to certify a leaf key from `certifiedEpoch`
+   * (label `openzcad mls leaf certification v2`, project id, user id,
+   * device id, cipher suite, leaf key, epoch), for verifying another
+   * member's certification.
+   */
   leafCertificationPayload(
     projectId: string,
     userId: string,
     deviceId: string,
-    signatureKey: Uint8Array
+    signatureKey: Uint8Array,
+    certifiedEpoch: number
   ): Promise<Uint8Array> {
     return this.api.leafCertificationPayload(
       projectId,
       userId,
       deviceId,
-      signatureKey
+      signatureKey,
+      certifiedEpoch
     );
   }
 
@@ -52,7 +59,8 @@ export class Mls {
 
   /**
    * A new per-project leaf signing key for this device. Certify it with the
-   * device key (`certificationPayload`, then `certify`) before use.
+   * device key (`certificationPayload(certifiedEpoch)`, then `certify`)
+   * before use.
    */
   async generate(init: LeafInit): Promise<MlsSession> {
     return new MlsSession(
@@ -96,8 +104,14 @@ export class MlsSession {
     return this.api.signatureKey(this.id);
   }
 
-  certificationPayload(): Promise<Uint8Array> {
-    return this.api.certificationPayload(this.id);
+  /**
+   * The bytes this device signs to certify its leaf key. `certifiedEpoch` is
+   * the group's current epoch at certification time; the policy lets a
+   * recovery Add through only for a key certified at or after the
+   * identity's latest leaf removal.
+   */
+  certificationPayload(certifiedEpoch: number): Promise<Uint8Array> {
+    return this.api.certificationPayload(this.id, certifiedEpoch);
   }
 
   certify(certification: Uint8Array): Promise<void> {

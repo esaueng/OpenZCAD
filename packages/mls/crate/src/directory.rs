@@ -29,8 +29,9 @@ pub trait DeviceListVerifier: Send + Sync {
     /// than those in `except`: the first epoch of this group whose rejoin PSK that device
     /// must not know. A rejoin PSK must be from this epoch or later.
     fn revocation_cutoff(&self, user_id: &[u8], except: &[Vec<u8>]) -> Option<u64>;
-    /// The group epoch from which this leaf key's certification counts, if
-    /// the device list records one.
+    /// The group epoch from which this leaf key's certification counts: the
+    /// `certified_epoch` the certifying device signed in the certification
+    /// payload, which the app verifies before it sets one.
     fn certified_epoch(&self, user_id: &[u8], device_id: &[u8], signature_key: &[u8]) -> Option<u64>;
     /// Every revoked device whose revocation named this device as its
     /// replacement.
@@ -40,8 +41,8 @@ pub trait DeviceListVerifier: Send + Sync {
 #[derive(Clone, Debug, Default)]
 pub struct DeviceEntry {
     pub revoked: bool,
-    /// Verified leaf keys, each with the group epoch its certification
-    /// took effect in, when the device list records one.
+    /// Verified leaf keys, each with the signed group epoch its
+    /// certification counts from, when the app supplied one.
     pub leaf_keys: Vec<(Vec<u8>, Option<u64>)>,
     pub replaced_by: Option<Vec<u8>>,
     /// For a revoked device: the per-project cutoff its revocation carries.

@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   addSketchFeature,
+  assertStorableDocument,
   createProjectDocument,
-  importStepBody
+  importStepBody,
+  UnstorableDocumentError
 } from '@openzcad/document-core';
 import {
   toUserId,
@@ -140,7 +142,9 @@ describe.each(parsers)(
       expect(parse(document).document).toBe(document);
     });
 
-    it('rejects text over per-object and collective limits with HTTP 400', () => {
+    // ADR-024 Phase 1: the text budget is content, so the browser enforces
+    // it before any account write and the account stores the envelope unread.
+    it('refuses text over per-object and collective limits in the browser, not at the account', () => {
       const documents = [
         textDocument(1, MAX_TEXT_OBJECT_CODE_UNITS + 1),
         textDocument(5, MAX_TEXT_OBJECT_CODE_UNITS),
@@ -151,17 +155,16 @@ describe.each(parsers)(
       for (const node of Object.values(detached.nodes))
         if (node.kind === 'sketch') node.objectIds = [];
       for (const document of documents) {
-        expect(() => parse(document)).toThrow(/outline limit/);
-        try {
-          parse(document);
-        } catch (error) {
-          expect((error as HttpError).status).toBe(400);
-        }
+        expect(() => assertStorableDocument(document)).toThrow(
+          UnstorableDocumentError
+        );
+        expect(() => assertStorableDocument(document)).toThrow(/outline limit/);
+        expect(parse(document).document).toBe(document);
       }
     });
 
     it.each(['before', 'after'] as const)(
-      'rejects oversized text in a %s history snapshot',
+      'refuses oversized text in a %s history snapshot in the browser, not at the account',
       (side) => {
         const manager = new CommandManager(textDocument(1, 1));
         manager.execute(
@@ -188,7 +191,11 @@ describe.each(parsers)(
             }
           }
         });
-        expect(() => parse(document)).toThrow(/outline limit/);
+        expect(() => assertStorableDocument(document)).toThrow(
+          UnstorableDocumentError
+        );
+        expect(() => assertStorableDocument(document)).toThrow(/outline limit/);
+        expect(parse(document).document).toBe(document);
       }
     );
 

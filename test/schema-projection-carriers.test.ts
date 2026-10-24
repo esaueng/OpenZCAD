@@ -6,9 +6,11 @@ import {
 } from '@openzcad/command-system';
 import {
   addSketchFeature,
+  assertStorableDocument,
   createProjectDocument,
   findSketch,
   normalizeDocument,
+  UnstorableDocumentError,
   updateSketch,
   updateSketchObject
 } from '@openzcad/document-core';
@@ -22,10 +24,7 @@ import {
   type SketchObjectData
 } from '@openzcad/shared';
 import worker from '../apps/web/worker/index';
-import {
-  HttpError,
-  parseSaveProjectDocumentRequest
-} from '../apps/web/worker/validation';
+import { parseSaveProjectDocumentRequest } from '../apps/web/worker/validation';
 import {
   parseProjectBackup,
   importProjectCopy
@@ -59,6 +58,16 @@ const carriers = [
   'redo splice log'
 ] as const;
 type Carrier = (typeof carriers)[number];
+/** The message the browser refuses `document` with before any write. */
+function browserRefusal(document: unknown): string {
+  try {
+    assertStorableDocument(document);
+  } catch (error) {
+    expect(error).toBeInstanceOf(UnstorableDocumentError);
+    return (error as Error).message;
+  }
+  throw new Error('The browser accepted the document.');
+}
 function fixture(
   base = createProjectDocument(
     'Projection schema',
@@ -157,6 +166,14 @@ function carried(
   };
   return document;
 }
+/**
+ * Why the browser refuses a malformed or backdated (v32) carrier. The browser
+ * normalizes first, so a backdated carrier, undo history included, is refused
+ * by normalization's schema floor before any later content check reads it.
+ */
+function carrierRefusal(malformed: boolean): RegExp {
+  return malformed ? /without a verified source edge/ : floor;
+}
 
 it.each(carriers)(
   'rejects invalid declared projection versions in %s without mutation',
@@ -189,8 +206,11 @@ it('refuses a fractional future schema without mutating its projection carriers'
   expect(document).toEqual(before);
 });
 
+// ADR-024 Phase 1: the account reads only the envelope, so the browser refuses
+// malformed projection metadata before it writes, and the account parse lets
+// the same envelope-valid document through unread.
 it.each(carriers)(
-  'translates malformed projection metadata in %s to HTTP400',
+  'refuses malformed projection metadata in %s in the browser before any account write',
   (carrier) => {
     const document = carried(
         fixture(),
@@ -199,8 +219,8 @@ it.each(carriers)(
         PROJECT_DOCUMENT_SCHEMA_VERSION
       ),
       before = clone(document);
-    let failure: unknown;
-    try {
+    expect(browserRefusal(document)).toMatch(carrierRefusal(true));
+    expect(() =>
       parseSaveProjectDocumentRequest(
         {
           projectId: document.projectId,
@@ -208,12 +228,8 @@ it.each(carriers)(
           document
         },
         document.projectId
-      );
-    } catch (error) {
-      failure = error;
-    }
-    expect(failure).toBeInstanceOf(HttpError);
-    expect((failure as HttpError).status).toBe(400);
+      )
+    ).not.toThrow();
     expect(document).toEqual(before);
   }
 );
@@ -348,28 +364,27 @@ function request(path: string, method: string, body?: unknown) {
         })
   });
 }
+// ADR-024 Phase 1: the browser refuses these before any account write; the
+// account checks only the envelope, so the same document is stored unread.
 it.each(carriers)(
-  'account refuses malformed and backdated %s before storage',
+  'browser refuses malformed and backdated %s before the account stores it unread',
   async (carrier) => {
-    const created = await worker.fetch(
-      request('/api/projects', 'POST', { name: 'Projection refusal' }),
-      env
-    );
-    expect(created.status).toBe(201);
-    const { document: original } =
-      (await created.json()) as CreateProjectResponse;
-    const path = `/api/projects/${original.projectId}`;
-    const before: unknown = await (
-      await worker.fetch(request(path, 'GET'), env)
-    ).json();
-    const f = fixture(original);
     for (const malformed of [true, false]) {
+      const created = await worker.fetch(
+        request('/api/projects', 'POST', { name: 'Projection refusal' }),
+        env
+      );
+      expect(created.status).toBe(201);
+      const { document: original } =
+        (await created.json()) as CreateProjectResponse;
+      const path = `/api/projects/${original.projectId}`;
       const document = carried(
-        f,
+        fixture(original),
         carrier,
         malformed,
         malformed ? PROJECT_DOCUMENT_SCHEMA_VERSION : 32
       );
+      expect(browserRefusal(document)).toMatch(carrierRefusal(malformed));
       const response = await worker.fetch(
         request(`${path}/document`, 'PUT', {
           projectId: original.projectId,
@@ -378,10 +393,11 @@ it.each(carriers)(
         }),
         env
       );
-      expect(response.status).toBe(400);
-      expect(
-        await (await worker.fetch(request(path, 'GET'), env)).json()
-      ).toEqual(before);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        projectId: original.projectId,
+        version: original.version + 1
+      });
     }
   }
 );
@@ -397,7 +413,7 @@ describe.each(['http', 'websocket'] as const)(
   '%s room projection guard',
   (transport) => {
     it.each(carriers)(
-      'refuses malformed and backdated %s as document-invalid before storage',
+      'browser refuses malformed and backdated %s before submitting; the room stores it unread',
       async (carrier) => {
         for (const malformed of [true, false]) {
           const document = carried(
@@ -406,6 +422,8 @@ describe.each(['http', 'websocket'] as const)(
             malformed,
             malformed ? PROJECT_DOCUMENT_SCHEMA_VERSION : 32
           );
+          // ADR-024 Phase 1: the room checks only the envelope.
+          expect(browserRefusal(document)).toMatch(carrierRefusal(malformed));
           const { context, values } = createRoomContext(),
             room = createTestRoom(context, {});
           const url = `https://room.test/?projectId=${document.projectId}`;
@@ -455,11 +473,8 @@ describe.each(['http', 'websocket'] as const)(
             );
             result = socket.lastFrame();
           }
-          expect(result).toMatchObject({
-            type: 'error',
-            code: 'document-invalid'
-          });
-          expect(values.has('room:latest')).toBe(false);
+          expect(result).toMatchObject({ type: 'ack' });
+          expect(values.get('room:latest')).toEqual(document);
         }
       }
     );

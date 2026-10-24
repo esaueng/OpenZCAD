@@ -9,6 +9,7 @@ import {
   type CloudflareEnv
 } from '@openzcad/cloudflare-adapters';
 import {
+  MAX_PROJECT_REVISION_RECORDS,
   toArtifactId,
   toProjectId,
   toUploadSessionId,
@@ -1244,6 +1245,62 @@ describe('cloudflare adapters', () => {
       code: 'document-invalid'
     });
   });
+
+  it('rejects a collaboration snapshot with more revisions than browsers keep', async () => {
+    const { context } = createRoomContext();
+    const base = createProjectDocument('Long Room', toUserId('user_room'));
+    const record = base.revisions[0]!;
+    const oversized = {
+      ...base,
+      // Stored unread, a longer list than the newest 500 every browser keeps
+      // would fail every other editor's lineage check.
+      revisions: Array.from(
+        { length: MAX_PROJECT_REVISION_RECORDS + 1 },
+        (_, index) => ({ ...record, revisionId: `rev_long_${index}` })
+      )
+    } as unknown as ProjectDocument;
+    const room = createTestRoom(context, {});
+
+    const response = await room.fetch(
+      roomRequest(oversized, {
+        clientId: 'client_long',
+        document: oversized,
+        baseVersion: null
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      type: 'error',
+      code: 'document-invalid'
+    });
+  });
+
+  it.each(['derived', 'assets'] as const)(
+    'rejects a collaboration snapshot without its %s',
+    async (field) => {
+      const { context } = createRoomContext();
+      const base = createProjectDocument('Bare Room', toUserId('user_room'));
+      const bare: Record<string, unknown> = { ...base };
+      delete bare[field];
+      const document = bare as unknown as ProjectDocument;
+      const room = createTestRoom(context, {});
+
+      const response = await room.fetch(
+        roomRequest(document, {
+          clientId: 'client_bare',
+          document,
+          baseVersion: null
+        })
+      );
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({
+        type: 'error',
+        code: 'document-invalid'
+      });
+    }
+  );
 
   it('accepts undo and redo as forward collaboration revisions', () => {
     const manager = new CommandManager(

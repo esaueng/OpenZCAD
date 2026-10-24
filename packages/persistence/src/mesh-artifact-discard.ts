@@ -20,7 +20,11 @@ export function isMeshImportArchiveKind(kind: string): boolean {
 export function importArtifactIds(document: ProjectDocument): string[] {
   const ids = new Set<string>();
   for (const asset of documentAssetsWithHistory(document)) {
-    if (asset.artifactId && !asset.artifactId.startsWith('artifact_local_'))
+    if (
+      typeof asset.artifactId === 'string' &&
+      asset.artifactId &&
+      !asset.artifactId.startsWith('artifact_local_')
+    )
       ids.add(asset.artifactId);
   }
   for (const node of documentNodesWithHistory(document)) {

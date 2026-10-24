@@ -185,7 +185,8 @@ async function armChamferedTopCapOffset(page: Page) {
   // Nothing stands over the arrow: the press reaches the canvas.
   expect(
     await canvas.evaluate(
-      (element, point) => document.elementFromPoint(point.x, point.y) === element,
+      (element, point) =>
+        document.elementFromPoint(point.x, point.y) === element,
       start
     )
   ).toBe(true);
@@ -440,11 +441,9 @@ test('reuses an exact frame on reversal and waits for complete validation on rel
   await expect(
     page.getByRole('region', { name: 'Offset Face operation' })
   ).toContainText('Validating');
-  // A released drag keeps the panels suspended through validation; opening
-  // one explicitly must still disclose the preview's incomplete analysis.
-  await page
-    .getByRole('button', { name: 'Objects panel', exact: true })
-    .click();
+  // While the release validates, the open Objects panel must disclose the
+  // preview's incomplete analysis.
+  await revealModelPanel(page, 'Objects');
   await expect(page.getByText('Preparing model details…')).toBeVisible();
   await expect(page.getByRole('contentinfo')).not.toContainText(
     'Cylinder height set to 31 mm.'
@@ -643,9 +642,8 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
       .getByRole('region', { name: 'Offset Face operation' })
       .locator('.selection-callout-phase-dot')
   ).toHaveAttribute('aria-label', 'Dragging');
-  // The drag has the stage: every panel (and the History count) steps
-  // aside until the gesture ends; the count is checked again once it has.
-  await expect(page.locator('.model-panel')).toHaveCount(0);
+  // The panels stay put through the drag, and a preview adds no feature.
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   expect(await editPresentationMeasures(page)).toEqual(baseMeasures);
 
   // Still holding the button, drive the total below zero. The kernel refuses
@@ -1387,12 +1385,9 @@ for (const surface of ['top-cap', 'wall'] as const) {
       )
       .toBe(1);
     expect(await fullRequests()).toBe(fullBefore + 1);
-    await page
-      .getByRole('button', { name: 'Objects panel', exact: true })
-      .click();
+    await revealModelPanel(page, 'Objects');
     await expect(page.getByText('Preparing model details…')).toBeVisible();
     // The preview cannot change history before the complete worker result.
-    // The Objects press brought every panel back, History among them.
     await revealModelPanel(page, 'History');
     await expect(page.locator('.feature-row')).toHaveCount(2);
     expect(await editPresentationMeasures(page)).toEqual(beforeMeasures);

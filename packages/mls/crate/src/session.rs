@@ -363,12 +363,13 @@ impl Session {
         self.public_key.to_vec()
     }
 
-    pub fn certification_payload(&self) -> Res<Vec<u8>> {
+    pub fn certification_payload(&self, certified_epoch: u64) -> Res<Vec<u8>> {
         certification_payload(
             &self.project_id,
             &self.user_id,
             &self.device_id,
             self.public_key.as_bytes(),
+            certified_epoch,
         )
     }
 

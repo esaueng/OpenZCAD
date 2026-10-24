@@ -7,9 +7,11 @@ import {
 } from '@openzcad/command-system';
 import {
   addPrimitiveFeature,
+  assertStorableDocument,
   createProjectDocument,
   normalizeDocument,
-  setParameter
+  setParameter,
+  UnstorableDocumentError
 } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
@@ -147,7 +149,7 @@ describe('D01 drawing section (schema v30)', () => {
     );
   });
 
-  it('refuses malformed sections by name, on load and at the account edge', () => {
+  it('refuses malformed sections by name, on load and in the browser before any account write', () => {
     const ids = boxDocument().bodyOrder;
     const cases: [unknown, RegExp][] = [
       [
@@ -251,12 +253,18 @@ describe('D01 drawing section (schema v30)', () => {
         string,
         unknown
       >;
-      expect(() =>
+      expect(() => assertStorableDocument(wire)).toThrow(
+        UnstorableDocumentError
+      );
+      expect(() => assertStorableDocument(wire)).toThrow(/drawings/);
+      expect(() => assertStorableDocument(wire)).toThrow(message);
+      // ADR-024 Phase 1: the account stores section contents unread.
+      expect(
         parseSaveProjectDocumentRequest(
           { projectId: document.projectId, expectedVersion: 0, document: wire },
           document.projectId
-        )
-      ).toThrow(/drawings/);
+        ).document
+      ).toBe(wire);
     }
     expect(drawingSetError({ sheets: [sheet(ids)] })).toBeNull();
   });

@@ -8,7 +8,11 @@ export class MlsSession {
     archiveKey(): Uint8Array;
     beginJoin(welcome: Uint8Array): void;
     beginRejoin(group_info: Uint8Array, psk_epoch: bigint, psk: Uint8Array, remove?: number | null): string;
-    certificationPayload(): Uint8Array;
+    /**
+     * The bytes this device signs to certify the leaf key from
+     * `certified_epoch`, the group's current epoch.
+     */
+    certificationPayload(certified_epoch: bigint): Uint8Array;
     certify(certification: Uint8Array): void;
     /**
      * `spec_json`: `{ remove?, setRoles?, dropUsers?, rejoinWindow? }`.
@@ -78,10 +82,10 @@ export function buildInfo(): string;
 export function decodeEpochRecord(bytes: Uint8Array): string;
 
 /**
- * The bytes a device signs to certify a leaf key, for verifying other
- * members' leaves.
+ * The bytes a device signs to certify a leaf key from `certified_epoch`,
+ * for verifying other members' leaves.
  */
-export function leafCertificationPayload(project_id: string, user_id: string, device_id: string, signature_key: Uint8Array): Uint8Array;
+export function leafCertificationPayload(project_id: string, user_id: string, device_id: string, signature_key: Uint8Array, certified_epoch: bigint): Uint8Array;
 
 export function rejoinPskId(epoch: bigint): Uint8Array;
 
@@ -92,11 +96,11 @@ export interface InitOutput {
     readonly __wbg_mlssession_free: (a: number, b: number) => void;
     readonly buildInfo: (a: number) => void;
     readonly decodeEpochRecord: (a: number, b: number, c: number) => void;
-    readonly leafCertificationPayload: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
+    readonly leafCertificationPayload: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: bigint) => void;
     readonly mlssession_archiveKey: (a: number, b: number) => void;
     readonly mlssession_beginJoin: (a: number, b: number, c: number, d: number) => void;
     readonly mlssession_beginRejoin: (a: number, b: number, c: number, d: number, e: bigint, f: number, g: number, h: number) => void;
-    readonly mlssession_certificationPayload: (a: number, b: number) => void;
+    readonly mlssession_certificationPayload: (a: number, b: number, c: bigint) => void;
     readonly mlssession_certify: (a: number, b: number, c: number, d: number) => void;
     readonly mlssession_commit: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly mlssession_completeJoin: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
