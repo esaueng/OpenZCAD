@@ -63,11 +63,17 @@ interface Entry {
   revision: number;
 }
 
+interface LeafCreation {
+  readonly device: CertifyingDevice;
+  /** The group's current epoch, which the certification is signed from. */
+  readonly certifiedEpoch: number;
+}
+
 interface Operation<T> {
   /** Policy input; required before anything the policy checks. */
   readonly directory?: DirectoryInput;
   /** Generate and certify a new leaf when no session is stored. */
-  readonly create?: CertifyingDevice;
+  readonly create?: LeafCreation;
   /** Seal and write the session afterwards. */
   readonly mutate: boolean;
   run(
@@ -131,14 +137,15 @@ export class MlsProjectSessions {
     }
     return this.operate(ref, {
       directory,
-      create: device,
+      // A new group starts at epoch 0: the creator's leaf counts from there.
+      create: { device, certifiedEpoch: 0 },
       mutate: true,
       run: async (session, stored) => {
         if (stored) throw new Error('This project already has MLS state.');
-        return {
-          value: await session.createGroup(options),
-          pendingCommit: null
-        };
+        const created = await session.createGroup(options);
+        if (created.epoch !== 0)
+          throw new Error('A new MLS group did not start at epoch 0.');
+        return { value: created, pendingCommit: null };
       }
     });
   }
@@ -363,7 +370,7 @@ export class MlsProjectSessions {
     mls: Mls,
     ref: MlsProjectRef,
     stored: StoredMlsSession | null,
-    create: CertifyingDevice | undefined
+    create: LeafCreation | undefined
   ): Promise<{ session: MlsSession; leaf: StoredLeaf }> {
     if (stored) {
       const key = await this.stateKey(ref.userId, false);
@@ -379,7 +386,11 @@ export class MlsProjectSessions {
       deviceId: ref.deviceId
     });
     try {
-      const certification = await certifyLeaf(session, create);
+      const certification = await certifyLeaf(
+        session,
+        create.device,
+        create.certifiedEpoch
+      );
       return {
         session,
         leaf: { signatureKey: await session.signatureKey(), certification }

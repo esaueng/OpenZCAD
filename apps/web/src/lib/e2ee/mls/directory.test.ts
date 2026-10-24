@@ -3,7 +3,12 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { Mls, MlsSession } from '@openzcad/mls';
 import { inProcessMls } from '../../../../../../packages/mls/src/test-support';
-import { certifyLeaf, verifyLeafCertification } from './certify';
+import { ecdsaSign } from '@openzcad/crypto';
+import {
+  certifyLeaf,
+  claimedCertifiedEpoch,
+  verifyLeafCertification
+} from './certify';
 import {
   buildDeviceDirectory,
   MlsDirectoryError,
@@ -26,14 +31,19 @@ beforeAll(async () => {
 async function leaf(
   account: TestAccount,
   deviceId: string,
-  projectId = PROJECT
+  projectId = PROJECT,
+  certifiedEpoch = 0
 ): Promise<{ session: MlsSession; certification: LeafCertification }> {
   const session = await mls.generate({
     projectId,
     userId: account.userId,
     deviceId
   });
-  const certification = await certifyLeaf(session, device(account, deviceId));
+  const certification = await certifyLeaf(
+    session,
+    device(account, deviceId),
+    certifiedEpoch
+  );
   return {
     session,
     certification: {
@@ -43,6 +53,13 @@ async function leaf(
       certification
     }
   };
+}
+
+/** The same certification, claiming another epoch than the one signed. */
+function claiming(certification: Uint8Array, epoch: number): Uint8Array {
+  const copy = new Uint8Array(certification);
+  new DataView(copy.buffer).setBigUint64(1, BigInt(epoch));
+  return copy;
 }
 
 async function refusal(promise: Promise<unknown>): Promise<string> {
@@ -56,10 +73,20 @@ async function refusal(promise: Promise<unknown>): Promise<string> {
 }
 
 describe('leaf certifications', () => {
-  it('sign the package payload with the device key and verify against it', async () => {
-    const { certification } = await leaf(alice, 'alice_laptop');
-    expect(certification.certification).toHaveLength(65);
-    expect(certification.certification[0]).toBe(1);
+  it('sign the package payload, epoch included, with the device key and verify against it', async () => {
+    const { session, certification } = await leaf(
+      alice,
+      'alice_laptop',
+      PROJECT,
+      7
+    );
+    // u8 version 2 | u64 epoch | r || s
+    expect(certification.certification).toHaveLength(73);
+    expect(certification.certification[0]).toBe(2);
+    expect([...certification.certification.subarray(1, 9)]).toEqual([
+      0, 0, 0, 0, 0, 0, 0, 7
+    ]);
+    expect(claimedCertifiedEpoch(certification.certification)).toBe(7);
     const signingKey = alice.list.devices[0]!.signingKey;
     expect(
       await verifyLeafCertification(
@@ -67,29 +94,100 @@ describe('leaf certifications', () => {
         { projectId: PROJECT, ...certification },
         signingKey
       )
+    ).toEqual({ certifiedEpoch: 7 });
+    // The signature is over the session's own payload for that epoch.
+    expect(
+      await crypto.subtle.verify(
+        { name: 'ECDSA', hash: 'SHA-256' },
+        await crypto.subtle.importKey(
+          'raw',
+          new Uint8Array(signingKey),
+          { name: 'ECDSA', namedCurve: 'P-256' },
+          false,
+          ['verify']
+        ),
+        new Uint8Array(certification.certification.subarray(9)),
+        new Uint8Array(await session.certificationPayload(7))
+      )
     ).toBe(true);
-    // Bound to the project, the device and the key it names.
+    // Bound to the project, the device, the key and the epoch it names.
     expect(
       await verifyLeafCertification(
         mls,
         { projectId: 'prj_other', ...certification },
         signingKey
       )
-    ).toBe(false);
+    ).toBeNull();
     expect(
       await verifyLeafCertification(
         mls,
         { projectId: PROJECT, ...certification, deviceId: 'alice_other' },
         signingKey
       )
-    ).toBe(false);
+    ).toBeNull();
     expect(
       await verifyLeafCertification(
         mls,
         { projectId: PROJECT, ...certification },
         bob.list.devices[0]!.signingKey
       )
-    ).toBe(false);
+    ).toBeNull();
+    for (const epoch of [6, 8, 0])
+      expect(
+        await verifyLeafCertification(
+          mls,
+          {
+            projectId: PROJECT,
+            ...certification,
+            certification: claiming(certification.certification, epoch)
+          },
+          signingKey
+        )
+      ).toBeNull();
+  });
+
+  it('refuse a version 1 certification, which signs no epoch', async () => {
+    const session = await mls.generate({
+      projectId: PROJECT,
+      userId: alice.userId,
+      deviceId: 'alice_laptop'
+    });
+    // A version 1 certification: u8 1 | r || s, with no epoch to verify.
+    const rs = await ecdsaSign(
+      device(alice, 'alice_laptop').signing.privateKey,
+      new Uint8Array(await session.certificationPayload(0))
+    );
+    const v1 = new Uint8Array(65);
+    v1[0] = 1;
+    v1.set(rs, 1);
+    expect(claimedCertifiedEpoch(v1)).toBeNull();
+    expect(
+      await verifyLeafCertification(
+        mls,
+        {
+          projectId: PROJECT,
+          userId: alice.userId,
+          deviceId: 'alice_laptop',
+          leafKey: await session.signatureKey(),
+          certification: v1
+        },
+        alice.list.devices[0]!.signingKey
+      )
+    ).toBeNull();
+  });
+
+  it('refuse to certify from something that is not an epoch', async () => {
+    for (const epoch of [-1, 0.5, 2 ** 53]) {
+      const session = await mls.generate({
+        projectId: PROJECT,
+        userId: alice.userId,
+        deviceId: 'alice_laptop'
+      });
+      await expect(
+        certifyLeaf(session, device(alice, 'alice_laptop'), epoch)
+      ).rejects.toThrow('group epoch');
+      expect((await session.status()).certified).toBe(false);
+    }
   });
 
   it('accept an external signer such as a Keychain-held key', async () => {
@@ -100,25 +198,29 @@ describe('leaf certifications', () => {
     });
     const inner = device(alice, 'alice_laptop').signing.privateKey;
     let calls = 0;
-    const certification = await certifyLeaf(session, {
-      userId: alice.userId,
-      deviceId: 'alice_laptop',
-      signing: {
-        privateKey: {
-          external: 'ecdsa-p256-sha256',
-          async sign(message) {
-            calls++;
-            return new Uint8Array(
-              await crypto.subtle.sign(
-                { name: 'ECDSA', hash: 'SHA-256' },
-                inner,
-                new Uint8Array(message)
-              )
-            );
+    const certification = await certifyLeaf(
+      session,
+      {
+        userId: alice.userId,
+        deviceId: 'alice_laptop',
+        signing: {
+          privateKey: {
+            external: 'ecdsa-p256-sha256',
+            async sign(message) {
+              calls++;
+              return new Uint8Array(
+                await crypto.subtle.sign(
+                  { name: 'ECDSA', hash: 'SHA-256' },
+                  inner,
+                  new Uint8Array(message)
+                )
+              );
+            }
           }
         }
-      }
-    });
+      },
+      3
+    );
     expect(calls).toBe(1);
     expect(
       await verifyLeafCertification(
@@ -132,7 +234,7 @@ describe('leaf certifications', () => {
         },
         alice.list.devices[0]!.signingKey
       )
-    ).toBe(true);
+    ).toEqual({ certifiedEpoch: 3 });
   });
 
   it('refuse to certify another device’s leaf', async () => {
@@ -142,7 +244,7 @@ describe('leaf certifications', () => {
       deviceId: 'alice_laptop'
     });
     await expect(
-      certifyLeaf(session, device(bob, 'bob_phone'))
+      certifyLeaf(session, device(bob, 'bob_phone'), 0)
     ).rejects.toThrow('different device');
   });
 });
@@ -164,9 +266,66 @@ describe('device directory', () => {
       ['bob_phone', 'active'],
       ['bob_tablet', 'active']
     ]);
-    expect(bobDevices[0]!.leafKeys).toEqual([{ key: b.certification.leafKey }]);
-    // No certifiedEpoch: nothing verified binds one yet.
-    expect(bobDevices[0]!.leafKeys[0]!.certifiedEpoch).toBeUndefined();
+    // The epoch the device signed, verified, reaches the policy.
+    expect(bobDevices[0]!.leafKeys).toEqual([
+      { key: b.certification.leafKey, certifiedEpoch: 0 }
+    ]);
+  });
+
+  it('refuses a certification whose claimed epoch differs from the signed one', async () => {
+    const b = await leaf(bob, 'bob_phone', PROJECT, 2);
+    for (const epoch of [9, 1]) {
+      expect(
+        await refusal(
+          buildDeviceDirectory(mls, PROJECT, {
+            lists: [bob.list],
+            certifications: [
+              {
+                ...b.certification,
+                certification: claiming(b.certification.certification, epoch)
+              }
+            ]
+          })
+        )
+      ).toBe('certification-invalid');
+    }
+    const directory = await buildDeviceDirectory(mls, PROJECT, {
+      lists: [bob.list],
+      certifications: [b.certification]
+    });
+    expect(directory.users[0]!.devices[0]!.leafKeys).toEqual([
+      { key: b.certification.leafKey, certifiedEpoch: 2 }
+    ]);
+  });
+
+  it('keeps the earlier epoch when one key carries two verified certifications', async () => {
+    const b = await leaf(bob, 'bob_phone', PROJECT, 5);
+    // The same device's signature over the same key from epoch 2.
+    const earlier = new Uint8Array(73);
+    earlier[0] = 2;
+    new DataView(earlier.buffer).setBigUint64(1, 2n);
+    earlier.set(
+      await ecdsaSign(
+        device(bob, 'bob_phone').signing.privateKey,
+        new Uint8Array(await b.session.certificationPayload(2))
+      ),
+      9
+    );
+    for (const order of [
+      [b.certification.certification, earlier],
+      [earlier, b.certification.certification]
+    ]) {
+      const directory = await buildDeviceDirectory(mls, PROJECT, {
+        lists: [bob.list],
+        certifications: order.map((certification) => ({
+          ...b.certification,
+          certification
+        }))
+      });
+      expect(directory.users[0]!.devices[0]!.leafKeys).toEqual([
+        { key: b.certification.leafKey, certifiedEpoch: 2 }
+      ]);
+    }
   });
 
   it('refuses a forged certification', async () => {
@@ -334,6 +493,53 @@ describe('device directory', () => {
         })
       );
       expect(codes).toContain('credential-revoked');
+    });
+
+    it('lets a recovery Add through only for a key certified at or after the latest removal', async () => {
+      const a = await owner();
+      const phone = await leaf(bob, 'bob_phone');
+      // bob_tablet certifies two leaf keys: one at epoch 1, held back while
+      // a leaf of Bob is removed in epoch 2, and one at epoch 2.
+      const early = await leaf(bob, 'bob_tablet', PROJECT, 1);
+      const late = await leaf(bob, 'bob_tablet', PROJECT, 2);
+      await a.session.setDirectory(
+        await buildDeviceDirectory(mls, PROJECT, {
+          lists: [alice.list, bob.list],
+          certifications: [
+            a.certification,
+            phone.certification,
+            early.certification,
+            late.certification
+          ]
+        })
+      );
+      await a.session.createGroup();
+      await a.session.commit({
+        add: [await phone.session.keyPackage()],
+        setRoles: [{ userId: bob.userId, role: 'editor' }]
+      });
+      expect((await a.session.confirmCommit()).epoch).toBe(1);
+      const phoneIndex = (await a.session.status()).members.find(
+        (member) => member.deviceId === 'bob_phone'
+      )!.index;
+      await a.session.commit({ remove: [phoneIndex] });
+      const removal = await a.session.confirmCommit();
+      expect(removal.epoch).toBe(2);
+      expect(removal.removed.map((leaf) => leaf.deviceId)).toEqual([
+        'bob_phone'
+      ]);
+      // Bob is still listed as an editor: adding a leaf for him is a
+      // recovery Add, which needs a key certified from epoch 2 or later.
+      const codes = await refusedCodes(
+        a.session.commit({ add: [await early.session.keyPackage()] })
+      );
+      expect(codes).toContain('leaf-certified-before-removal');
+      const pending = await a.session.commit({
+        add: [await late.session.keyPackage()]
+      });
+      expect(pending.welcome).not.toBeNull();
+      const added = await a.session.confirmCommit();
+      expect(added.added.map((leaf) => leaf.deviceId)).toEqual(['bob_tablet']);
     });
   });
 });

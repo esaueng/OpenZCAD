@@ -21,8 +21,9 @@ package yet: Phases 3 and 5 wire it in.
 const { loadMls, generateStateKey } = await import('@openzcad/mls');
 const mls = loadMls();
 const session = await mls.generate({ projectId, userId, deviceId });
+// certifiedEpoch: the group's current epoch (0 for a group about to be created)
 await session.certify(
-  await signWithDeviceKey(await session.certificationPayload())
+  await signWithDeviceKey(await session.certificationPayload(certifiedEpoch))
 );
 await session.setDirectory(verifiedDeviceLists); // before any other operation
 await session.createGroup();
@@ -83,6 +84,15 @@ A refusal is an `MlsError` of kind `policy` whose `reasons` carry stable codes.
   existing role. Such a recovery Add, whoever commits it, needs a leaf key
   certified at or after the identity's latest leaf removal (`certifiedEpoch` in the
   directory). A leaf key once removed from the group is never added back.
+- **The certified epoch is signed.** The leaf certification payload
+  (`leafCertificationPayload`, `certificationPayload`) is the MLS encoding of
+  the label `openzcad mls leaf certification v2`, project id, user id, device
+  id, cipher suite, leaf key and `certifiedEpoch` (u64): the group's current
+  epoch when the device certified the key. The policy cannot verify
+  signatures, so the app sets `certifiedEpoch` in the directory only from a
+  certification whose signature it has checked over that epoch; a server
+  cannot move it. Version 1 of the payload (no epoch, label `... v1`) is
+  no longer produced.
 - **Otherwise a member changes only its own identity:** Update of its leaf,
   SelfRemove, Remove of another leaf of its own identity. Viewers' Commits
   therefore change nobody else's access; they may still carry other members'

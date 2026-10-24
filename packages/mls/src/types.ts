@@ -62,11 +62,13 @@ export interface LeafKeyCertification {
   /** The per-project leaf signing key. */
   key: Uint8Array;
   /**
-   * The group epoch from which the certification counts, as the device list
-   * records it. A recovery Add (a leaf for an identity already listed, with
-   * its unchanged role) needs one no earlier than the identity's latest leaf
-   * removal, whoever commits it, the owner included; a missing value counts
-   * as before that removal.
+   * The group epoch from which the certification counts: the
+   * `certifiedEpoch` the certifying device signed in the leaf certification
+   * payload (`leafCertificationPayload`). Set it only after verifying that
+   * signature over this epoch; the policy cannot check it. A recovery Add (a
+   * leaf for an identity already listed, with its unchanged role) needs one
+   * no earlier than the identity's latest leaf removal, whoever commits it,
+   * the owner included; a missing value counts as before that removal.
    */
   certifiedEpoch?: number;
 }

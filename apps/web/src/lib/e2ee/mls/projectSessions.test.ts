@@ -8,6 +8,7 @@ import {
   beginKeySessionTeardown,
   getKeySessionRevision
 } from '../keySession';
+import { claimedCertifiedEpoch } from './certify';
 import type { DirectoryInput } from './directory';
 import { createMlsLoader } from './loader';
 import {
@@ -79,6 +80,8 @@ describe('MLS project sessions', () => {
     const stored = await store.loadSession(project.userId, project.projectId);
     expect(stored).toMatchObject({ revision: 1, pendingCommit: null });
     expect(hex(stored!.sealed.subarray(0, 4))).toBe('4f5a4d53'); // "OZMS"
+    // The creator's leaf is certified from the new group's epoch 0.
+    expect(claimedCertifiedEpoch(stored!.leaf.certification)).toBe(0);
 
     // A reload: a new page, a new Worker, the same IndexedDB.
     const reloaded = tab(store).sessions;

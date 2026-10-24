@@ -39,7 +39,8 @@ export interface EngineApi {
     projectId: string,
     userId: string,
     deviceId: string,
-    signatureKey: Uint8Array
+    signatureKey: Uint8Array,
+    certifiedEpoch: number
   ): Uint8Array;
   decodeEpochRecord(record: Uint8Array): EpochRecord;
   generate(init: LeafInit): number;
@@ -47,7 +48,7 @@ export interface EngineApi {
   seal(id: number, key: CryptoKey): Promise<Uint8Array>;
   free(id: number): void;
   signatureKey(id: number): Uint8Array;
-  certificationPayload(id: number): Uint8Array;
+  certificationPayload(id: number, certifiedEpoch: number): Uint8Array;
   certify(id: number, certification: Uint8Array): void;
   setDirectory(id: number, directory: DeviceDirectory): void;
   createGroup(id: number, rejoinWindow: number): EpochChange;
@@ -235,14 +236,17 @@ export class MlsEngine implements EngineApi {
     projectId: string,
     userId: string,
     deviceId: string,
-    signatureKey: Uint8Array
+    signatureKey: Uint8Array,
+    certifiedEpoch: number
   ): Uint8Array {
+    const epoch = checkEpoch(certifiedEpoch);
     return this.run(() =>
       this.wasm.leafCertificationPayload(
         projectId,
         userId,
         deviceId,
-        signatureKey
+        signatureKey,
+        epoch
       )
     );
   }
@@ -309,8 +313,9 @@ export class MlsEngine implements EngineApi {
     return this.run(() => this.session(id).signatureKey());
   }
 
-  certificationPayload(id: number): Uint8Array {
-    return this.run(() => this.session(id).certificationPayload());
+  certificationPayload(id: number, certifiedEpoch: number): Uint8Array {
+    const epoch = checkEpoch(certifiedEpoch);
+    return this.run(() => this.session(id).certificationPayload(epoch));
   }
 
   certify(id: number, certification: Uint8Array): void {

@@ -94,12 +94,15 @@ export class MlsSession {
         }
     }
     /**
+     * The bytes this device signs to certify the leaf key from
+     * `certified_epoch`, the group's current epoch.
+     * @param {bigint} certified_epoch
      * @returns {Uint8Array}
      */
-    certificationPayload() {
+    certificationPayload(certified_epoch) {
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.mlssession_certificationPayload(retptr, this.__wbg_ptr);
+            wasm.mlssession_certificationPayload(retptr, this.__wbg_ptr, certified_epoch);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
@@ -880,15 +883,16 @@ export function decodeEpochRecord(bytes) {
 }
 
 /**
- * The bytes a device signs to certify a leaf key, for verifying other
- * members' leaves.
+ * The bytes a device signs to certify a leaf key from `certified_epoch`,
+ * for verifying other members' leaves.
  * @param {string} project_id
  * @param {string} user_id
  * @param {string} device_id
  * @param {Uint8Array} signature_key
+ * @param {bigint} certified_epoch
  * @returns {Uint8Array}
  */
-export function leafCertificationPayload(project_id, user_id, device_id, signature_key) {
+export function leafCertificationPayload(project_id, user_id, device_id, signature_key, certified_epoch) {
     try {
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
         const ptr0 = passStringToWasm0(project_id, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
@@ -899,7 +903,7 @@ export function leafCertificationPayload(project_id, user_id, device_id, signatu
         const len2 = WASM_VECTOR_LEN;
         const ptr3 = passArray8ToWasm0(signature_key, wasm.__wbindgen_export3);
         const len3 = WASM_VECTOR_LEN;
-        wasm.leafCertificationPayload(retptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+        wasm.leafCertificationPayload(retptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, certified_epoch);
         var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
         var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
         var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
