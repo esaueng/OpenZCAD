@@ -1,4 +1,5 @@
 import type {
+  E2eeAccountKeyHistoryResponse,
   E2eeAccountResponse,
   E2eeAppendDeviceListRequest,
   E2eeApprovalRecord,
@@ -30,6 +31,8 @@ export class E2eeApiError extends Error {
 export interface E2eeApi {
   config(): Promise<E2eeConfigResponse>;
   account(): Promise<E2eeAccountResponse>;
+  /** This account's replaced account keys, each wrapped under its successor. */
+  accountKeyHistory(): Promise<E2eeAccountKeyHistoryResponse>;
   setup(request: E2eeSetupRequest): Promise<E2eeAccountResponse>;
   appendDeviceList(
     request: E2eeAppendDeviceListRequest
@@ -96,6 +99,7 @@ export function createE2eeApi(fetcher: Fetch = desktopFetch): E2eeApi {
   return {
     config: () => call(fetcher, '/api/e2ee/config'),
     account: () => call(fetcher, '/api/e2ee/account'),
+    accountKeyHistory: () => call(fetcher, '/api/e2ee/account-key-history'),
     setup: (request) => call(fetcher, '/api/e2ee/setup', 'POST', request),
     appendDeviceList: (request) =>
       call(fetcher, '/api/e2ee/device-list', 'POST', request),

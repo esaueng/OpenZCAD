@@ -204,7 +204,7 @@ export interface CloudflareEnv {
   /**
    * Opens the end-to-end encryption key routes (ADR-024 Phase 3): identity
    * keys, device lists, wrapped keys and device approval. Closed unless set
-   * to a true value; requires migration 0029 in D1 first.
+   * to a true value; requires migrations 0029 and 0030 in D1 first.
    */
   E2EE_KEYS_ENABLED?: string;
   /**

@@ -3780,16 +3780,41 @@ export interface E2eeSetupRequest {
   wraps: E2eeWrapInput[];
 }
 
+/**
+ * A replaced account key wrapped under its successor (AES-KW purpose
+ * `previous-account-key`). `generation` and `keySequence` name the replaced
+ * key: its identity generation and the device-list sequence of the entry
+ * that first committed to it.
+ */
+export interface E2eeAccountKeyHistoryInput {
+  generation: number;
+  keySequence: number;
+  wrapped: string;
+}
+
+export interface E2eeAccountKeyHistoryRecord extends E2eeAccountKeyHistoryInput {
+  createdAt: string;
+}
+
+export interface E2eeAccountKeyHistoryResponse {
+  /** The caller's own history, oldest key first. */
+  history: E2eeAccountKeyHistoryRecord[];
+}
+
 export interface E2eeAppendDeviceListRequest {
   generation: number;
   entry: string;
   signature: string;
   wraps: E2eeWrapInput[];
+  /** Required exactly when the entry rotates the account key. */
+  history?: E2eeAccountKeyHistoryInput;
 }
 
 export interface E2eeReplaceIdentityRequest extends E2eeSetupRequest {
   generation: number;
   transition: E2eeSignedStatementRecord;
+  /** The replaced identity's current account key under the new one. */
+  history: E2eeAccountKeyHistoryInput;
 }
 
 export type E2eeApprovalState =
