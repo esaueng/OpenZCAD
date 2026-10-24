@@ -8,8 +8,10 @@ import {
   addPrimitiveFeature,
   addSketchComposite,
   addSketchFeature,
+  assertStorableDocument,
   createProjectDocument,
-  findSketch
+  findSketch,
+  UnstorableDocumentError
 } from '@openzcad/document-core';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { computeSketchProfileAnalysis } from '@openzcad/geometry';
@@ -737,7 +739,7 @@ describe('worker api routes', () => {
       {
         ...env,
         AUTH_MODE: 'email-code',
-        DB: {prepare: () => ({bind: () => ({first: async () => null})})},
+        DB: { prepare: () => ({ bind: () => ({ first: async () => null }) }) },
         TURNSTILE_SITE_KEY: 'public-site-key',
         TURNSTILE_SECRET_KEY: 'secret-never-returned'
       } as never
@@ -1496,7 +1498,7 @@ describe('worker api routes', () => {
       {
         ...env,
         AUTH_MODE: 'email-code',
-        DB: {prepare: () => ({bind: () => ({first: async () => null})})},
+        DB: { prepare: () => ({ bind: () => ({ first: async () => null }) }) },
         OPENROUTER_API_KEY: 'secret-test-value'
       } as never
     );
@@ -2566,7 +2568,7 @@ describe('worker api routes', () => {
     'unversioned reference-distance account saves: %s',
     (carrier) => {
       it.each(['absolute', 'horizontal', 'vertical'] as const)(
-        'refuses an explicit %s mode without writing, then accepts its legacy omitted-mode form',
+        'refuses an explicit %s mode in the browser before any account write, then the account accepts its legacy omitted-mode form',
         async (distanceMode) => {
           const created = await createProject(
             `Legacy ${carrier} ${distanceMode}`
@@ -2642,12 +2644,17 @@ describe('worker api routes', () => {
               env
             );
 
-          const refused = await send();
-          expect(refused.status).toBe(400);
-          expect(await refused.json()).toEqual({
-            error:
-              'Reference distance modes require project schema v35 or newer.'
-          });
+          // ADR-024 Phase 1: the browser runs the content checks before any
+          // account write. It writes only declared schemas, so it refuses the
+          // unversioned form outright and a declared older one by name.
+          expect(() => assertStorableDocument(legacy)).toThrow(
+            UnstorableDocumentError
+          );
+          expect(() =>
+            assertStorableDocument({ ...legacy, schemaVersion: 34 })
+          ).toThrow(
+            'Reference distance modes require project schema v35 or newer.'
+          );
           expect(await read()).toEqual(before);
 
           // Remove only the new field from the submitted wire payload, keeping
@@ -2665,10 +2672,23 @@ describe('worker api routes', () => {
           expect(saved.commandLog).toEqual(candidate.commandLog);
           expect(JSON.stringify(saved)).not.toContain('distanceMode');
           expect(saved.editHistory).toBeUndefined();
+
+          // The account no longer reads contents, so it stores the refused
+          // form unread when something other than the browser sends it.
+          data.distanceMode = distanceMode;
+          const stored = await worker.fetch(
+            put(route, {
+              projectId,
+              expectedVersion: saved.version,
+              document: { ...legacy, version: saved.version + 1 }
+            }),
+            env
+          );
+          expect(stored.status).toBe(200);
         }
       );
 
-      it('refuses unversioned composite targets without a distance mode or any account write', async () => {
+      it('refuses unversioned composite targets without a distance mode in the browser before any account write', async () => {
         const created = await createProject(`Legacy composite ${carrier}`);
         const added = addSketchFeature(created.document, {
           name: 'Held rectangle',
@@ -2753,23 +2773,42 @@ describe('worker api routes', () => {
             }),
             env
           );
-        const refused = await send();
-        expect(refused.status).toBe(400);
-        expect(await refused.json()).toEqual({
-          error:
-            'Composite reference targets require project schema v36 or newer.'
-        });
+        // ADR-024 Phase 1: the browser runs the content checks before any
+        // account write, refusing the unversioned form outright and a
+        // declared older one by name.
+        expect(() => assertStorableDocument(legacy)).toThrow(
+          UnstorableDocumentError
+        );
+        expect(() =>
+          assertStorableDocument({ ...legacy, schemaVersion: 35 })
+        ).toThrow(
+          'Composite reference targets require project schema v36 or newer.'
+        );
         expect(await read()).toEqual(before);
 
         // The same valid targets save once the writer declares support. The
         // earlier refusal came from the carrier boundary, not their geometry.
         legacy.schemaVersion = PROJECT_DOCUMENT_SCHEMA_VERSION;
+        expect(() => assertStorableDocument(legacy)).not.toThrow();
         expect((await send()).status).toBe(200);
         const saved = await read();
         expect(saved.nodes).toEqual(candidate.nodes);
         expect(saved.commandLog).toEqual(candidate.commandLog);
         expect(saved.name).toBe(candidate.name);
         expect(saved.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
+
+        // The account no longer reads contents, so it stores the refused
+        // form unread when something other than the browser sends it.
+        delete legacy.schemaVersion;
+        const stored = await worker.fetch(
+          put(route, {
+            projectId,
+            expectedVersion: saved.version,
+            document: { ...legacy, version: saved.version + 1 }
+          }),
+          env
+        );
+        expect(stored.status).toBe(200);
       });
     }
   );
@@ -2778,7 +2817,7 @@ describe('worker api routes', () => {
     'schema-v37 account saves: %s',
     (family) => {
       it.each(['current node', 'nested replay log'] as const)(
-        'refuses every older %s carrier without writing, then accepts declared support',
+        'refuses every older %s carrier in the browser before any account write, then accepts declared support',
         async (carrier) => {
           const created = await createProject(`${family} ${carrier}`);
           const added = addSketchFeature(created.document, {
@@ -2880,23 +2919,29 @@ describe('worker api routes', () => {
               env
             );
 
+          // ADR-024 Phase 1: the browser runs the content checks before any
+          // account write. It writes only declared schemas, so it refuses the
+          // unversioned form outright and each declared older one by name.
           for (const version of [33, 34, 35, 36, undefined]) {
             if (version === undefined) delete legacy.schemaVersion;
             else
               legacy.schemaVersion =
                 version as ProjectDocument['schemaVersion'];
-            const refused = await send();
-            expect(refused.status, `schema ${version}`).toBe(400);
-            expect(await refused.json()).toEqual({
-              error:
-                'Sketch boundary provenance and promotion ownership require project schema v37 or newer.'
-            });
+            expect(
+              () => assertStorableDocument(legacy),
+              `schema ${version}`
+            ).toThrow(
+              version === undefined
+                ? UnstorableDocumentError
+                : 'Sketch boundary provenance and promotion ownership require project schema v37 or newer.'
+            );
             expect(await read()).toEqual(before);
           }
 
           // Only the declared schema changes. The ordinary authored feature or
           // complete conversion command remains valid and is saved intact.
           legacy.schemaVersion = PROJECT_DOCUMENT_SCHEMA_VERSION;
+          expect(() => assertStorableDocument(legacy)).not.toThrow();
           expect((await send()).status).toBe(200);
           const saved = await read();
           expect(saved.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
@@ -2904,6 +2949,23 @@ describe('worker api routes', () => {
           expect(saved.commandLog).toEqual(candidate.commandLog);
           expect(saved.name).toBe(candidate.name);
           expect(saved.version).toBe(candidate.version);
+
+          // The account no longer reads contents, so it stores an older
+          // declared carrier unread when something other than the browser
+          // sends it.
+          const stored = await worker.fetch(
+            put(route, {
+              projectId,
+              expectedVersion: saved.version,
+              document: {
+                ...legacy,
+                schemaVersion: 36,
+                version: saved.version + 1
+              }
+            }),
+            env
+          );
+          expect(stored.status).toBe(200);
         }
       );
     }
@@ -3282,7 +3344,11 @@ describe('worker api routes', () => {
   it('adopts a device-local document under its account identity', async () => {
     const local = createProjectDocument('Adopted', toUserId('user_local'));
     const response = await worker.fetch(
-      post('/api/projects', { name: local.name, document: local, adoptionProtocolVersion: 1 }),
+      post('/api/projects', {
+        name: local.name,
+        document: local,
+        adoptionProtocolVersion: 1
+      }),
       env
     );
     expect(response.status).toBe(201);
@@ -3290,7 +3356,9 @@ describe('worker api routes', () => {
     expect(created.document.projectId).not.toBe(local.projectId);
 
     const loaded = await worker.fetch(
-      new Request(`https://example.com/api/projects/${created.document.projectId}`),
+      new Request(
+        `https://example.com/api/projects/${created.document.projectId}`
+      ),
       env
     );
     expect(loaded.status).toBe(200);
@@ -3300,11 +3368,19 @@ describe('worker api routes', () => {
   it('answers a second adoption of the same project with 409 ALREADY_ADOPTED', async () => {
     const local = createProjectDocument('Twice', toUserId('user_local'));
     await worker.fetch(
-      post('/api/projects', { name: local.name, document: local, adoptionProtocolVersion: 1 }),
+      post('/api/projects', {
+        name: local.name,
+        document: local,
+        adoptionProtocolVersion: 1
+      }),
       env
     );
     const again = await worker.fetch(
-      post('/api/projects', { name: local.name, document: local, adoptionProtocolVersion: 1 }),
+      post('/api/projects', {
+        name: local.name,
+        document: local,
+        adoptionProtocolVersion: 1
+      }),
       env
     );
     expect(again.status).toBe(409);
@@ -3788,11 +3864,28 @@ describe('save-state history routes', () => {
 
 describe('Glimpse cloud consent authentication boundary', () => {
   it('does not expose account permission to unauthenticated callers', async () => {
-    const response=await worker.fetch(new Request('https://example.com/api/glimpse/account-consent'), {...env,AUTH_MODE:'email-code',DB:{prepare:()=>({bind:()=>({first:async()=>null})})}} as never);
+    const response = await worker.fetch(
+      new Request('https://example.com/api/glimpse/account-consent'),
+      {
+        ...env,
+        AUTH_MODE: 'email-code',
+        DB: { prepare: () => ({ bind: () => ({ first: async () => null }) }) }
+      } as never
+    );
     expect(response.status).toBe(401);
   });
   it('rejects cross-origin account consent changes before reading or writing account data', async () => {
-    const response=await worker.fetch(new Request('https://example.com/api/glimpse/account-consent',{method:'POST',headers:{Origin:'https://other.example','Content-Type':'application/json'},body:JSON.stringify({enabled:true,version:2})}),env);
+    const response = await worker.fetch(
+      new Request('https://example.com/api/glimpse/account-consent', {
+        method: 'POST',
+        headers: {
+          Origin: 'https://other.example',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ enabled: true, version: 2 })
+      }),
+      env
+    );
     expect(response.status).toBe(403);
   });
 });

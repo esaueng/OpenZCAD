@@ -7,9 +7,11 @@ import {
 import {
   addSketchComposite,
   addSketchFeature,
+  assertStorableDocument,
   createProjectDocument,
   findSketch,
-  normalizeDocument
+  normalizeDocument,
+  UnstorableDocumentError
 } from '@openzcad/document-core';
 import { computeSketchProfileAnalysis } from '@openzcad/geometry';
 import {
@@ -223,6 +225,20 @@ function carried(
   else Object.assign(document, { schemaVersion: version });
   return document;
 }
+/** Asserts the browser refuses `document` for its schema before any write. */
+function expectBrowserRefusal(document: unknown, label: string): void {
+  let refusal: unknown;
+  try {
+    assertStorableDocument(document);
+  } catch (error) {
+    refusal = error;
+  }
+  expect(refusal, label).toBeInstanceOf(UnstorableDocumentError);
+  expect((refusal as Error).message, label).toMatch(/schema/);
+}
+/** Whether the server still refuses `version` at the envelope (ADR-024). */
+const newerThanDeployment = (version: unknown) =>
+  typeof version === 'number' && version > PROJECT_DOCUMENT_SCHEMA_VERSION;
 function request(path: string, method: string, body?: unknown) {
   return new Request(`https://example.com${path}`, {
     method,
@@ -291,7 +307,12 @@ describe.each(families)(
           expect(document).toEqual(before);
         }
     });
-    it('refuses account saves atomically for current and saved command carriers', async () => {
+    // ADR-024 Phase 1: the browser refuses every backdated, fractional and
+    // absent version before it writes. The account checks only the envelope:
+    // it still refuses a version newer than this deployment atomically, and
+    // stores the rest unread, so a load returns them unread for the browser
+    // to refuse again.
+    it('browser refuses backdated carriers before the account stores them unread', async () => {
       const created = await worker.fetch(
         request('/api/projects', 'POST', { name: `Matrix ${name}` }),
         env
@@ -300,9 +321,6 @@ describe.each(families)(
       const { document: original } =
         (await created.json()) as CreateProjectResponse;
       const path = `/api/projects/${original.projectId}`;
-      const storedBefore: unknown = await (
-        await worker.fetch(request(path, 'GET'), env)
-      ).json();
       const f = fixture(name, original);
       for (const carrier of carriers)
         for (const version of [
@@ -311,21 +329,36 @@ describe.each(families)(
           floor + 0.5,
           undefined
         ]) {
+          const label = `${carrier}:${version}`;
+          const storedBefore = (await (
+            await worker.fetch(request(path, 'GET'), env)
+          ).json()) as ProjectDocument;
           const document = carried(f, carrier, version);
           const before = clone(document);
+          expectBrowserRefusal(document, label);
           const response = await worker.fetch(
             request(`${path}/document`, 'PUT', {
               projectId: original.projectId,
-              expectedVersion: original.version,
+              expectedVersion: storedBefore.version,
               document
             }),
             env
           );
-          expect(response.status, `${carrier}:${version}`).toBe(400);
-          expect(await response.json()).toHaveProperty('error');
-          expect(
-            await (await worker.fetch(request(path, 'GET'), env)).json()
-          ).toEqual(storedBefore);
+          const stored = (await (
+            await worker.fetch(request(path, 'GET'), env)
+          ).json()) as ProjectDocument;
+          if (newerThanDeployment(version)) {
+            expect(response.status, label).toBe(400);
+            expect(await response.json()).toHaveProperty('error');
+            expect(stored).toEqual(storedBefore);
+          } else {
+            expect(response.status, label).toBe(200);
+            expect(stored.schemaVersion, label).toBe(version);
+            expect(stored.nodes, label).toEqual(before.nodes);
+            expect(stored.commandLog, label).toEqual(before.commandLog);
+            expect(stored.editHistory, label).toEqual(before.editHistory);
+            expectBrowserRefusal(stored, label);
+          }
           expect(document).toEqual(before);
         }
     });
@@ -364,8 +397,11 @@ describe.each(families)(
         expect(stored.editHistory).toEqual(current.editHistory);
       }
     });
+    // ADR-024 Phase 1: the browser refuses every non-current version before
+    // it submits. The room checks only the envelope: it still refuses an
+    // absent or newer version, and stores the rest unread.
     it.each(['http', 'websocket'] as const)(
-      'refuses %s room writes before storage and retains valid current history',
+      'browser refuses backdated %s room writes; the room stores them unread and retains valid current history',
       async (transport) => {
         const f = fixture(name);
         for (const carrier of carriers)
@@ -376,8 +412,11 @@ describe.each(families)(
             undefined,
             PROJECT_DOCUMENT_SCHEMA_VERSION
           ]) {
+            const label = `${carrier}:${version}`;
             const document = carried(f, carrier, version);
             const before = clone(document);
+            if (version !== PROJECT_DOCUMENT_SCHEMA_VERSION)
+              expectBrowserRefusal(document, label);
             const { context, values } = createRoomContext();
             const room = createTestRoom(context, {});
             const url = `https://room.test/?projectId=${document.projectId}`;
@@ -428,17 +467,16 @@ describe.each(families)(
               );
               result = socket.lastFrame();
             }
-            if (version === PROJECT_DOCUMENT_SCHEMA_VERSION) {
-              expect(result, `${carrier}:${version}`).toMatchObject({
-                type: 'ack'
-              });
+            if (version !== undefined && !newerThanDeployment(version)) {
+              expect(result, label).toMatchObject({ type: 'ack' });
               const stored = values.get('room:latest') as ProjectDocument;
-              expect(stored.nodes).toEqual(before.nodes);
-              expect(stored.commandLog).toEqual(before.commandLog);
-              expect(stored.editHistory).toEqual(before.editHistory);
-              expect(stored.objectFolders).toEqual(before.objectFolders);
+              expect(stored.schemaVersion, label).toBe(version);
+              expect(stored.nodes, label).toEqual(before.nodes);
+              expect(stored.commandLog, label).toEqual(before.commandLog);
+              expect(stored.editHistory, label).toEqual(before.editHistory);
+              expect(stored.objectFolders, label).toEqual(before.objectFolders);
             } else {
-              expect(result, `${carrier}:${version}`).toMatchObject({
+              expect(result, label).toMatchObject({
                 type: 'error',
                 code: 'document-invalid'
               });

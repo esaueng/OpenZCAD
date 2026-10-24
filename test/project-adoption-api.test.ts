@@ -62,10 +62,17 @@ describe('account adoption from an unopened device snapshot', () => {
       return Response.json(await store.createProject(owner, request));
     });
 
-    // The raw shelf snapshot reproduces the reported Worker refusal.
-    expect(() =>
-      parseCreateProjectRequest({ name: local.name, document: local })
-    ).toThrow('Reload to update before saving a project with undo history.');
+    // ADR-024 Phase 1: the account no longer reads the schema of undo
+    // history, so it would store the raw shelf snapshot unread; the browser
+    // still upgrades it before writing (the mock above checks the schema).
+    expect(
+      parseCreateProjectRequest({
+        name: local.name,
+        adoptionProtocolVersion: 2,
+        localProjectId: local.projectId,
+        document: local
+      }).document?.schemaVersion
+    ).toBe(14);
     const adopted = await api.adoptProject(local, owner);
     expect(local).toEqual(original);
     const saved = (await store.loadProject(owner, adopted.document.projectId))!;

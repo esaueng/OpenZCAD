@@ -2,8 +2,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   addSketchFeature,
+  assertStorableDocument,
   createProjectDocument,
-  importStepBody
+  importStepBody,
+  UnstorableDocumentError
 } from '@openzcad/document-core';
 import {
   toUserId,
@@ -118,7 +120,7 @@ async function submission(transport: string, document: ProjectDocument) {
 describe.each(['http', 'websocket'])(
   'import sources in %s collaboration snapshots',
   (transport) => {
-    it('rejects excessive text in current, historical and repeated-reference forms before storage', async () => {
+    it('refuses excessive text in current, historical and repeated-reference forms in the browser before submission', async () => {
       for (const location of [
         'current',
         'before',
@@ -174,14 +176,17 @@ describe.each(['http', 'websocket'])(
                   [location]: oversized
                 }
           );
-        const { result, values } = await submission(transport, document);
-        expect(result).toMatchObject({
-          code: 'document-invalid'
-        });
-        expect((result as { message?: unknown }).message).toMatch(
-          /outline limit/
+        // ADR-024 Phase 1: the browser refuses the text budget before it
+        // submits; the room no longer reads contents and stores it as sent.
+        expect(() => assertStorableDocument(document)).toThrow(
+          UnstorableDocumentError
         );
-        expect(values.has('room:latest')).toBe(false);
+        expect(() => assertStorableDocument(document)).toThrow(/outline limit/);
+        const { result, values } = await submission(transport, document);
+        expect(result).toMatchObject({ type: 'ack' });
+        expect((values.get('room:latest') as ProjectDocument).nodes).toEqual(
+          document.nodes
+        );
       }
     });
 

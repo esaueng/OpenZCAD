@@ -8,11 +8,13 @@ import {
   addSketchComposite,
   addSketchFeature,
   addSketchReferenceDimension,
+  assertStorableDocument,
   createProjectDocument,
   deleteSketchObject,
   findSketch,
   normalizeDocument,
-  referenceDimensionObjectIds
+  referenceDimensionObjectIds,
+  UnstorableDocumentError
 } from '@openzcad/document-core';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
@@ -555,8 +557,11 @@ afterAll(() => {
 describe.each(['http', 'websocket'])(
   'S04 %s collaboration schema boundary',
   (transport) => {
+    // ADR-024 Phase 1: the room checks only the envelope, so the browser
+    // refuses backdated named targets before it submits, and the room stores
+    // the same document unread.
     it.each(['distance', 'angle'] as const)(
-      'refuses backdated and accepts current %s named targets without rewriting',
+      'browser refuses backdated %s named targets; the room stores both versions without rewriting',
       async (kind) => {
         for (const carrier of ['current', 'nested log'] as const)
           for (const version of [35, PROJECT_DOCUMENT_SCHEMA_VERSION]) {
@@ -586,6 +591,13 @@ describe.each(['http', 'websocket'])(
               ];
             }
             const before = structuredClone(document);
+            if (version === 35)
+              expect(() => assertStorableDocument(document)).toThrow(
+                new UnstorableDocumentError(
+                  'Composite reference targets require project schema v36 or newer.'
+                )
+              );
+            else expect(() => assertStorableDocument(document)).not.toThrow();
             const { context, values } = createRoomContext();
             const room = createTestRoom(context, {});
             const url = `https://room.test/?projectId=${document.projectId}`;
@@ -635,20 +647,11 @@ describe.each(['http', 'websocket'])(
               );
               result = socket.lastFrame();
             }
-            if (version === 35) {
-              expect(result).toMatchObject({
-                type: 'error',
-                code: 'document-invalid',
-                message:
-                  'Composite reference targets require project schema v36 or newer.'
-              });
-              expect(values.has('room:latest')).toBe(false);
-            } else {
-              expect(result).toMatchObject({ type: 'ack' });
-              const stored = values.get('room:latest') as ProjectDocument;
-              expect(stored.nodes).toEqual(before.nodes);
-              expect(stored.commandLog).toEqual(before.commandLog);
-            }
+            expect(result).toMatchObject({ type: 'ack' });
+            const stored = values.get('room:latest') as ProjectDocument;
+            expect(stored.schemaVersion).toBe(version);
+            expect(stored.nodes).toEqual(before.nodes);
+            expect(stored.commandLog).toEqual(before.commandLog);
             expect(document).toEqual(before);
           }
       }

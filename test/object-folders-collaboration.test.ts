@@ -1,8 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
+  assertStorableDocument,
   createProjectDocument,
-  mergeCollaborationDocuments
+  mergeCollaborationDocuments,
+  UnstorableDocumentError
 } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
@@ -90,9 +92,10 @@ async function submission(transport: string, document: ProjectDocument) {
 }
 
 /**
- * U06 folders at the collaboration edge: a malformed section is refused as
- * `document-invalid` before storage — not left to throw inside
- * `normalizeDocument` and fail the room as `internal`.
+ * U06 folders at the collaboration edge. Since ADR-024 Phase 1 the room no
+ * longer reads (or normalizes) contents on save: the browser refuses a
+ * malformed section by name before it submits, and the room stores whatever
+ * envelope-valid document it is sent without failing as `internal`.
  */
 describe.each(['http', 'websocket'])(
   'Objects folders in %s collaboration snapshots',
@@ -106,15 +109,20 @@ describe.each(['http', 'websocket'])(
       ).toEqual(document.objectFolders);
     });
 
-    it('refuses a malformed folder section by name, before storage', async () => {
+    it('refuses a malformed folder section by name in the browser, before submission', async () => {
       const document = filedDocument();
       document.objectFolders!.folders[0]!.parentId = 'folder_missing';
-      const { result, values } = await submission(transport, document);
-      expect(result).toMatchObject({ code: 'document-invalid' });
-      expect((result as { message?: unknown }).message).toMatch(
-        /Objects folders: .*does not exist/
+      expect(() => assertStorableDocument(document)).toThrow(
+        UnstorableDocumentError
       );
-      expect(values.has('room:latest')).toBe(false);
+      expect(() => assertStorableDocument(document)).toThrow(
+        /"document\.objectFolders": .*does not exist/
+      );
+      const { result, values } = await submission(transport, document);
+      expect(result).toMatchObject({ type: 'ack' });
+      expect(
+        (values.get('room:latest') as ProjectDocument).objectFolders
+      ).toEqual(document.objectFolders);
     });
   }
 );

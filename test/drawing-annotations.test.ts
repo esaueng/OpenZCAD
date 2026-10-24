@@ -7,9 +7,11 @@ import {
 } from '@openzcad/command-system';
 import {
   addPrimitiveFeature,
+  assertStorableDocument,
   createProjectDocument,
   normalizeDocument,
-  setParameter
+  setParameter,
+  UnstorableDocumentError
 } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
@@ -265,7 +267,7 @@ describe('D02 annotation section (schema v31)', () => {
     expect(JSON.stringify(saved.drawings)).not.toMatch(/"value"|"label"/);
   });
 
-  it('refuses malformed annotations by name, on load and at the account edge', async () => {
+  it('refuses malformed annotations by name, on load and in the browser before any account write', async () => {
     const { document, bodyId, top } = await boxModel();
     const ref = refOf(bodyId, top);
     const good = linear(id('w'), 'horizontal', ref, 'first', ref, 'second');
@@ -433,12 +435,18 @@ describe('D02 annotation section (schema v31)', () => {
         string,
         unknown
       >;
-      expect(() =>
+      expect(() => assertStorableDocument(wire)).toThrow(
+        UnstorableDocumentError
+      );
+      expect(() => assertStorableDocument(wire)).toThrow(/drawings/);
+      expect(() => assertStorableDocument(wire)).toThrow(message);
+      // ADR-024 Phase 1: the account stores section contents unread.
+      expect(
         parseSaveProjectDocumentRequest(
           { projectId: broken.projectId, expectedVersion: 0, document: wire },
           broken.projectId
-        )
-      ).toThrow(/drawings/);
+        ).document
+      ).toBe(wire);
     }
     expect(
       drawingSetError({ sheets: [sheetOf(document.bodyOrder, [good, good])] })

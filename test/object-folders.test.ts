@@ -5,11 +5,13 @@ import {
   replayCommands
 } from '@openzcad/command-system';
 import {
+  assertStorableDocument,
   createProjectDocument,
   nextObjectFolderName,
   normalizeDocument,
   objectFolderOfBody,
-  objectFolderPlacements
+  objectFolderPlacements,
+  UnstorableDocumentError
 } from '@openzcad/document-core';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
@@ -307,7 +309,7 @@ describe('Objects folders (U06, schema v34)', () => {
     expect(folderOf(opened, base)).toBe('folder_a');
   });
 
-  it('refuses malformed sections by name, on load and at the account edge', () => {
+  it('refuses malformed sections by name, on load and in the browser before any account write', () => {
     const { manager, base } = threeBoxes();
     const cases: [unknown, RegExp][] = [
       [{ folders: 'nope', placements: {} }, /not a folder list/],
@@ -352,7 +354,13 @@ describe('Objects folders (U06, schema v34)', () => {
         objectFolders: section
       } as ProjectDocument;
       expect(() => normalizeDocument(wire)).toThrow(message);
-      expect(() =>
+      expect(() => assertStorableDocument(wire)).toThrow(
+        UnstorableDocumentError
+      );
+      expect(() => assertStorableDocument(wire)).toThrow(/objectFolders/);
+      expect(() => assertStorableDocument(wire)).toThrow(message);
+      // ADR-024 Phase 1: the account stores section contents unread.
+      expect(
         parseSaveProjectDocumentRequest(
           {
             projectId: wire.projectId,
@@ -360,8 +368,8 @@ describe('Objects folders (U06, schema v34)', () => {
             document: wire
           },
           wire.projectId
-        )
-      ).toThrow(/objectFolders/);
+        ).document
+      ).toBe(wire);
     }
   });
 

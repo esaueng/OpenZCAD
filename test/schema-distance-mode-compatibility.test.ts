@@ -6,9 +6,11 @@ import {
 } from '@openzcad/command-system';
 import {
   addSketchFeature,
+  assertStorableDocument,
   createProjectDocument,
   findSketch,
-  normalizeDocument
+  normalizeDocument,
+  UnstorableDocumentError
 } from '@openzcad/document-core';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
@@ -34,6 +36,17 @@ const introduced = 35;
 const modes = ['absolute', 'horizontal', 'vertical'] as const;
 const upgrade = /Reference distance modes require project schema v35 or newer/;
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
+/** The message the browser refuses `document` with before any write. */
+function browserRefusal(document: unknown): string {
+  try {
+    assertStorableDocument(document);
+  } catch (error) {
+    expect(error).toBeInstanceOf(UnstorableDocumentError);
+    return (error as Error).message;
+  }
+  throw new Error('The browser accepted the document.');
+}
 
 function fixture() {
   const added = addSketchFeature(
@@ -469,12 +482,18 @@ afterAll(() => {
 describe.each(['http', 'websocket'])(
   'S02 %s collaboration schema guard',
   (transport) => {
+    // ADR-024 Phase 1: the room checks only the envelope, so the browser
+    // refuses a backdated mode before it submits, and the room stores the
+    // same document unread.
     it.each(modes)(
-      'refuses backdated %s mode carriers before storing a snapshot',
+      'browser refuses backdated %s mode carriers before the room stores a snapshot unread',
       async (mode) => {
         for (const carrier of ['current node', 'current nested log'] as const) {
           const document = carried(carrier, 34, mode);
           const before = clone(document);
+          expect(browserRefusal(document)).toBe(
+            'Reference distance modes require project schema v35 or newer.'
+          );
           const { context, values } = createRoomContext();
           const room = createTestRoom(context, {});
           const url = `https://room.test/?projectId=${document.projectId}`;
@@ -524,13 +543,8 @@ describe.each(['http', 'websocket'])(
             );
             result = socket.lastFrame();
           }
-          expect(result).toMatchObject({
-            type: 'error',
-            code: 'document-invalid',
-            message:
-              'Reference distance modes require project schema v35 or newer.'
-          });
-          expect(values.has('room:latest')).toBe(false);
+          expect(result).toMatchObject({ type: 'ack' });
+          expect(values.get('room:latest')).toEqual(before);
           expect(document).toEqual(before);
         }
       }

@@ -7,13 +7,16 @@ import {
 import {
   addSketchFeature,
   addSketchObjects,
+  assertStorableDocument,
   createObjectFolder,
   createProjectDocument,
   findSketch,
   normalizeDocument,
+  UnstorableDocumentError,
   updateSketch,
   updateSketchObject
 } from '@openzcad/document-core';
+import { splitProjectStorageUpload } from '@openzcad/persistence';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
@@ -25,10 +28,7 @@ import {
   type SketchObjectData
 } from '@openzcad/shared';
 import worker from '../apps/web/worker/index';
-import {
-  HttpError,
-  parseSaveProjectDocumentRequest
-} from '../apps/web/worker/validation';
+import { parseSaveProjectDocumentRequest } from '../apps/web/worker/validation';
 import {
   createRoomContext,
   createTestRoom,
@@ -254,6 +254,23 @@ function refusesWithoutMutation(document: ProjectDocument, error: RegExp) {
   expect(document).toEqual(before);
 }
 
+/**
+ * ADR-024 Phase 1: the account and the room store contents unread, so the
+ * browser refuses a carrier its schema cannot hold before it writes, submits
+ * or adopts one. It writes only declared schemas, so a missing one is refused
+ * outright; a declared older one is refused by the carrier's own name.
+ */
+function browserRefuses(document: ProjectDocument, error?: RegExp) {
+  const before = clone(document);
+  expect(() => assertStorableDocument(document)).toThrow(
+    UnstorableDocumentError
+  );
+  if (error) expect(() => assertStorableDocument(document)).toThrow(error);
+  expect(document).toEqual(before);
+}
+const backdated = (kind: 'projection' | 'folders') =>
+  kind === 'projection' ? 32 : 33;
+
 describe.each(['projection', 'folders'] as const)(
   '%s carrier minimum schema',
   (kind) => {
@@ -380,46 +397,47 @@ it('keeps the legacy unreadable-history drop policy', () => {
 });
 
 it.each(['projection', 'folders'] as const)(
-  'maps missing-schema %s to a named Worker400',
+  'refuses missing-schema %s in the browser while the Worker parses it unread',
   (kind) => {
     const document = carried(kind, 'current', undefined);
     const before = clone(document);
-    try {
-      parseSaveProjectDocumentRequest(
-        {
-          projectId: document.projectId,
-          expectedVersion: document.version,
-          document
-        },
-        document.projectId
-      );
-      throw new Error('Expected refusal.');
-    } catch (error) {
-      expect(error).toBeInstanceOf(HttpError);
-      expect((error as HttpError).status).toBe(400);
-      expect((error as Error).message).toMatch(
-        kind === 'projection' ? projectionError : foldersError
-      );
-    }
+    browserRefuses(document);
+    browserRefuses(
+      carried(kind, 'current', backdated(kind)),
+      kind === 'projection' ? projectionError : foldersError
+    );
+    const parsed = parseSaveProjectDocumentRequest(
+      {
+        projectId: document.projectId,
+        expectedVersion: document.version,
+        document
+      },
+      document.projectId
+    );
+    expect(parsed.document).toEqual(before);
     expect(document).toEqual(before);
   }
 );
 
 it.each(['projection', 'folders'] as const)(
-  'maps missing-schema nested %s command logs to a named Worker400',
+  'refuses missing-schema nested %s command logs in the browser while the Worker parses them unread',
   (kind) => {
     const document = carried(kind, 'nested log', undefined);
     const before = clone(document);
-    expect(() =>
-      parseSaveProjectDocumentRequest(
-        {
-          projectId: document.projectId,
-          expectedVersion: document.version,
-          document
-        },
-        document.projectId
-      )
-    ).toThrow(kind === 'projection' ? projectionError : foldersError);
+    browserRefuses(document);
+    browserRefuses(
+      carried(kind, 'nested log', backdated(kind)),
+      kind === 'projection' ? projectionError : foldersError
+    );
+    const parsed = parseSaveProjectDocumentRequest(
+      {
+        projectId: document.projectId,
+        expectedVersion: document.version,
+        document
+      },
+      document.projectId
+    );
+    expect(parsed.document).toEqual(before);
     expect(document).toEqual(before);
   }
 );
@@ -443,7 +461,7 @@ function request(path: string, method: string, body?: unknown) {
 }
 
 it.each(['projection', 'folders'] as const)(
-  'refuses account %s saves without changing stored content',
+  'refuses account %s saves in the browser before any account write',
   async (kind) => {
     const createdResponse = await worker.fetch(
       request('/api/projects', 'POST', { name: 'Schema refusal' }),
@@ -465,45 +483,23 @@ it.each(['projection', 'folders'] as const)(
           }).document
         : { ...original, objectFolders: clone(folders) };
     changed = versioned(changed, undefined);
-    const response = await worker.fetch(
-      request(`${path}/document`, 'PUT', {
-        projectId: original.projectId,
-        expectedVersion: original.version,
-        document: changed
-      }),
-      env
-    );
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({
-      error:
-        kind === 'projection'
-          ? 'Sketch projections require project schema v33 or newer.'
-          : 'Objects folders require project schema v34 or newer.'
-    });
-    expect(
-      await (await worker.fetch(request(path, 'GET'), env)).json()
-    ).toEqual(before);
     const logDocument = versioned(original, undefined);
     const command =
       kind === 'projection'
         ? projectionCommands(fixture())[0]!
         : folderCommands()[0]!;
     logDocument.commandLog = [transaction([transaction([command])])];
-    const refusedLog = await worker.fetch(
-      request(`${path}/document`, 'PUT', {
-        projectId: original.projectId,
-        expectedVersion: original.version,
-        document: logDocument
-      }),
-      env
-    );
-    expect(refusedLog.status).toBe(400);
-    expect(await refusedLog.json()).toEqual({
-      error:
-        kind === 'projection'
-          ? 'Sketch projections require project schema v33 or newer.'
-          : 'Objects folders require project schema v34 or newer.'
-    });
+    const error = kind === 'projection' ? projectionError : foldersError;
+    for (const document of [changed, logDocument]) {
+      browserRefuses(document);
+      // Every account write passes through this split, so none is sent.
+      await expect(splitProjectStorageUpload(document)).rejects.toThrow(
+        UnstorableDocumentError
+      );
+      await expect(
+        splitProjectStorageUpload(versioned(document, backdated(kind)))
+      ).rejects.toThrow(error);
+    }
     expect(
       await (await worker.fetch(request(path, 'GET'), env)).json()
     ).toEqual(before);
@@ -518,6 +514,23 @@ it.each(['projection', 'folders'] as const)(
       env
     );
     expect(accepted.status).toBe(200);
+    // The account no longer reads contents, so it stores what it is sent.
+    let version = original.version;
+    for (const document of [changed, logDocument]) {
+      const stored = await worker.fetch(
+        request(`${path}/document`, 'PUT', {
+          projectId: original.projectId,
+          expectedVersion: version,
+          document: {
+            ...document,
+            version: Math.max(document.version, version)
+          }
+        }),
+        env
+      );
+      expect(stored.status).toBe(200);
+      ({ version } = (await stored.json()) as { version: number });
+    }
   }
 );
 
@@ -533,12 +546,12 @@ describe.each(['http', 'websocket'])(
   '%s collaboration schema guard',
   (transport) => {
     it.each(['projection', 'folders'] as const)(
-      'refuses backdated %s before storage',
+      'refuses backdated %s in the browser and stores it unread',
       async (kind) => {
-        const document = carried(
-          kind,
-          'current',
-          kind === 'projection' ? 32 : 33
+        const document = carried(kind, 'current', backdated(kind));
+        browserRefuses(
+          document,
+          kind === 'projection' ? projectionError : foldersError
         );
         const { context, values } = createRoomContext();
         const room = createTestRoom(context, {});
@@ -587,15 +600,10 @@ describe.each(['http', 'websocket'])(
           );
           result = socket.lastFrame();
         }
-        expect(result).toMatchObject({
-          type: 'error',
-          code: 'document-invalid',
-          message:
-            kind === 'projection'
-              ? 'Sketch projections require project schema v33 or newer.'
-              : 'Objects folders require project schema v34 or newer.'
-        });
-        expect(values.has('room:latest')).toBe(false);
+        // The room checks only the envelope; each browser refuses these
+        // contents before it submits or adopts them.
+        expect(result).toMatchObject({ type: 'ack' });
+        expect(values.has('room:latest')).toBe(true);
       }
     );
   }
