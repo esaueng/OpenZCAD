@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { selectionCapabilities } from './interaction/capabilities';
 import { LIVE_DIAMETER_ATTRIBUTE } from './liveLabels';
 import {
+  editFaceVerb,
   MAX_SELECTION_VERBS,
   selectionCalloutVerbs,
   type SelectionCalloutContent,
@@ -152,6 +153,25 @@ describe('selectionCalloutVerbs', () => {
         }).length
       ).toBeLessThanOrEqual(3);
     }
+  });
+});
+
+describe('editFaceVerb', () => {
+  it('offers the imported face edit, pressed while its card is open', () => {
+    expect(editFaceVerb(false)).toMatchObject({
+      id: 'edit-face',
+      disabled: false,
+      pressed: false
+    });
+    expect(editFaceVerb(true).pressed).toBe(true);
+  });
+
+  it('is disabled with the reason while the project cannot be edited', () => {
+    const reason = 'This project is open in another tab';
+    expect(editFaceVerb(false, reason)).toMatchObject({
+      disabled: true,
+      title: reason
+    });
   });
 });
 

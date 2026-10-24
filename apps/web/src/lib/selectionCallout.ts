@@ -39,13 +39,21 @@ import { activeKeymap, toolCommandId } from './keymap';
 export type SelectionCalloutVerbId =
   `action:${SelectionActionId}` | `tool:${ToolId}` | 'edit-face';
 
-/** The imported face's edit verb, drawn pressed while its card is open. */
-export function editFaceVerb(open: boolean): SelectionCalloutVerb {
+/**
+ * The imported face's edit verb, drawn pressed while its card is open, and
+ * disabled with the reason while the project cannot be edited here.
+ */
+export function editFaceVerb(
+  open: boolean,
+  disabledReason: string | null = null
+): SelectionCalloutVerb {
   return {
     id: 'edit-face',
     label: 'Edit face',
-    title: 'Resize a hole or remove a fillet on this imported face',
-    disabled: false,
+    title:
+      disabledReason ??
+      'Resize a hole or remove a fillet on this imported face',
+    disabled: disabledReason !== null,
     pressed: open
   };
 }

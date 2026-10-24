@@ -7184,7 +7184,9 @@ export function App() {
             pressedAction: calloutPressedAction,
             availability
           }),
-          ...(calloutImportedFace ? [editFaceVerb(editFaceOpen)] : [])
+          ...(calloutImportedFace
+            ? [editFaceVerb(editFaceOpen, editDisabledReason)]
+            : [])
         ])
       : '[]';
   const selectionCallout = useMemo<SelectionCalloutContent | null>(() => {

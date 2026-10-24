@@ -170,12 +170,13 @@
 }
 
 .selection-refusal-lane .selection-callout-diagnostic {
-  flex-wrap: nowrap;
-  gap: 6px;
+  /* The ways out wrap under the sentence when the lane is too narrow for
+     both (a phone, a long culprit name), rather than running off it. */
+  flex-wrap: wrap;
+  gap: 4px 6px;
   width: auto;
   min-width: 0;
   max-width: min(640px, 100%);
-  max-height: 44px;
   padding: 4px 6px 4px 12px;
   color: var(--color-text);
   background: var(--color-surface);
@@ -187,7 +188,7 @@
 }
 
 .selection-refusal-lane .selection-callout-error {
-  flex: 1 1 auto;
+  flex: 1 1 240px;
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -197,8 +198,12 @@
 }
 
 .selection-refusal-lane .selection-callout-recovery {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   white-space: nowrap;
+  text-overflow: ellipsis;
   color: var(--color-text);
   background: transparent;
   border: var(--border-thin);
@@ -206,6 +211,16 @@
 
 .selection-refusal-lane .selection-callout-recovery:hover {
   background: var(--color-surface-hover);
+}
+
+/* Narrow, the ways out wrap to a second row: the Undo toast stands clear of
+   the taller row. (A query on the viewer area styles only what is inside
+   it, so the toast takes the larger offset itself.) */
+@container viewer-area (max-width: 719px) {
+  .viewer-area:has(.selection-refusal-lane .selection-callout-diagnostic)
+    .toast {
+    --lane-refusal: 92px;
+  }
 }
 
 @container viewer-area (min-width: 1240px) {
