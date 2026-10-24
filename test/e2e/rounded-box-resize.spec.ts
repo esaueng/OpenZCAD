@@ -126,8 +126,12 @@ test('resizes a rounded box from its minimum side with exact entry, drag, cancel
   ).toBeVisible();
   // The exact projection stays at the committed dimension while the disposable
   // body, edge and highlight buffers follow the hand. No worker result may
-  // replace it with an older pointer value during this gesture.
-  await expect(page.locator('.panel-body')).toContainText('40 × 28 × 10 mm');
+  // replace it with an older pointer value during this gesture: the edit
+  // sync count below proves it. (A direct pick opens no readout card to read
+  // the committed size from mid-drag; checkShape reads it from History.)
+  await expect(
+    page.getByRole('region', { name: 'Feature inspector' })
+  ).toHaveCount(0);
   await page.screenshot({
     path: testInfo.outputPath('rounded-box-resize-preview.png')
   });
@@ -209,17 +213,21 @@ test('resizes a rounded box from its minimum side with exact entry, drag, cancel
   );
   // The label pair beside the pin stays out from under the right lane: on
   // CI's font metrics it once reached into the inspector, which took the
-  // click meant for the value.
-  const lane = await page.locator('.stage-right > *').first().boundingBox();
+  // click meant for the value. A pick opens no card, so the lane holds
+  // something only when a panel is open there.
   const valueBox = await page
     .getByTestId('direct-manipulation-value')
     .boundingBox();
   const tagBox = await page
     .getByTestId('direct-manipulation-mode')
     .boundingBox();
-  expect(lane).not.toBeNull();
-  expect(valueBox!.x + valueBox!.width).toBeLessThanOrEqual(lane!.x);
-  expect(tagBox!.x + tagBox!.width).toBeLessThanOrEqual(lane!.x);
+  const lanes = page.locator('.stage-right > *');
+  if ((await lanes.count()) > 0) {
+    const lane = await lanes.first().boundingBox();
+    expect(lane).not.toBeNull();
+    expect(valueBox!.x + valueBox!.width).toBeLessThanOrEqual(lane!.x);
+    expect(tagBox!.x + tagBox!.width).toBeLessThanOrEqual(lane!.x);
+  }
   await page.getByTestId('direct-manipulation-value').click();
   await expect(
     page.getByRole('dialog', { name: 'Offset value' })

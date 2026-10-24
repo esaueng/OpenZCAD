@@ -184,6 +184,8 @@ interface ViewerShellProps {
    * said the same things away from the pick.
    */
   selectionCallout: SelectionCalloutContent | null;
+  /** Whether the pick wears a label in the viewport (ModelViewer). */
+  pickLabel?: boolean;
   /** Consumed bodies a History row brings into focus, drawn as ghosts. */
   focusGhostBodies?: readonly BodyRepresentation[];
   /** The surviving faces a History row brings into focus, lit as selected. */
@@ -410,6 +412,7 @@ export function ViewerShell({
   railExtras = null,
   viewMode = false,
   selectionCallout,
+  pickLabel,
   focusGhostBodies,
   focusFaces,
   canUndo,
@@ -673,6 +676,7 @@ export function ViewerShell({
         selectedTopology={selectedTopology}
         previewFaceHighlights={previewFaceHighlights}
         selectionCallout={selectionCallout}
+        pickLabel={pickLabel}
         {...(focusGhostBodies ? { focusGhostBodies } : {})}
         {...(focusFaces ? { focusFaces } : {})}
         selectedEdges={selectedEdges}

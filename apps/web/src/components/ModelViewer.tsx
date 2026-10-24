@@ -756,6 +756,13 @@ export interface ModelViewerProps {
    * measurement, verbs, clear. Null leaves the name-only label.
    */
   selectionCallout?: SelectionCalloutContent | null;
+  /**
+   * Whether the pick wears a label in the viewport at all. Off while the
+   * workspace's Selection card names the pick and carries its verbs, so the
+   * model shows only the handle and its value. Several picked bodies still
+   * wear their pick numbers: those say which body is which, not what to do.
+   */
+  pickLabel?: boolean;
   /** Consumed bodies a History row brings into focus, drawn as ghosts. */
   focusGhostBodies?: readonly GeometryBodyRepresentation[];
   /** Exact edges highlighted for a single edge-modifier operation. */
@@ -1873,6 +1880,7 @@ export function ModelViewer({
   previewFaceHighlights,
   focusFaces = NO_FOCUS_FACES,
   selectionCallout = null,
+  pickLabel = true,
   focusGhostBodies,
   selectedEdges,
   pickListEnabled,
@@ -2019,6 +2027,8 @@ export function ModelViewer({
   // every overlay and replaying their fades.
   const selectionCalloutRef = useRef(selectionCallout);
   selectionCalloutRef.current = selectionCallout;
+  const pickLabelRef = useRef(pickLabel);
+  pickLabelRef.current = pickLabel;
   const focusGhostBodiesRef = useRef(focusGhostBodies);
   focusGhostBodiesRef.current = focusGhostBodies;
   const selectionCalloutElementRef = useRef<HTMLElement | null>(null);
@@ -3061,6 +3071,10 @@ export function ModelViewer({
         labelRenderer.domElement,
         radius === null ? null : radius * 2
       );
+      // The workspace's Selection card names the pick outside the viewer.
+      const card =
+        labelRenderer.domElement.ownerDocument.querySelector('.selection-card');
+      if (card) setLiveDiameter(card, radius === null ? null : radius * 2);
     }
 
     function restoreCylinderRadiusProxy() {
@@ -10909,6 +10923,7 @@ export function ModelViewer({
       bodyId: string | null,
       extraClass = ''
     ) => {
+      if (!pickLabelRef.current) return;
       const top = box.getCenter(new THREE.Vector3());
       top.z = box.max.z + calloutLift(box, unitsRef.current);
       const label = makeLabel(`selection-callout${extraClass}`, '');
@@ -11044,7 +11059,8 @@ export function ModelViewer({
     focusGhostBodies,
     sketchMode,
     units,
-    xrayFactor
+    xrayFactor,
+    pickLabel
   ]);
 
   useEffect(() => {

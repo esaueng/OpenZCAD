@@ -9,7 +9,13 @@ import {
   type ProjectDocument,
   type SketchObjectData
 } from '@openzcad/shared';
-import { expect, revealModelPanel, stubApi, test } from './openzcad-fixtures';
+import {
+  expect,
+  revealModelPanel,
+  stubApi,
+  test,
+  bodyCardFromHistory
+} from './openzcad-fixtures';
 
 const READY = { timeout: 30_000 };
 const SAVED = /\bis-(?:local|synced)(?:\s|$)/;
@@ -148,14 +154,9 @@ async function exportDocument(page: Page): Promise<ProjectDocument> {
   ).document;
 }
 
-async function volume(page: Page, bodyName = 'Conversion solid') {
-  await revealModelPanel(page, 'Objects');
-  await page
-    .locator('.body-row:not(.consumed) .body-row-main', {
-      hasText: bodyName
-    })
-    .click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+/** The volume of the body the last History row built. */
+async function volume(page: Page) {
+  const inspector = await bodyCardFromHistory(page);
   const value = inspector
     .locator('.kv-grid b', { hasText: /^volume$/ })
     .locator('xpath=following-sibling::span[1]');
@@ -387,7 +388,7 @@ test('converts a hole inside a real projected constrained plate without replacin
   await page
     .getByRole('button', { name: 'Finish Sketch', exact: true })
     .click();
-  const originalVolume = await volume(page, 'Qualified plate');
+  const originalVolume = await volume(page);
   expect(originalVolume).toMatch(/^564(?:\.|\s)/);
   await enter(page, sketchName);
   const selected = page
@@ -434,10 +435,10 @@ test('converts a hole inside a real projected constrained plate without replacin
     .getByRole('button', { name: 'Finish Sketch', exact: true })
     .click();
   await expect(page.locator('.save-state')).toHaveClass(SAVED, READY);
-  expect(await volume(page, 'Qualified plate')).toBe(originalVolume);
+  expect(await volume(page)).toBe(originalVolume);
   await page.reload();
   await expect(page.locator('.viewer-host canvas')).toBeVisible(READY);
-  expect(await volume(page, 'Qualified plate')).toBe(originalVolume);
+  expect(await volume(page)).toBe(originalVolume);
   await enter(page, sketchName);
   await selected.selectOption(promotion.edgeIds[0]!);
   const reopened = await exportDocument(page);

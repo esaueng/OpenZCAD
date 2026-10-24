@@ -1,5 +1,10 @@
 import type { Page } from '@playwright/test';
-import { expect, stubApi, test, revealModelPanel } from './openzcad-fixtures';
+import {
+  expect,
+  stubApi,
+  test,
+  bodyCardFromHistory
+} from './openzcad-fixtures';
 
 /**
  * Production QA CAD-004 (2026-10-11), ROADMAP F05: in an inch project the Box
@@ -24,10 +29,9 @@ async function createInchProject(page: Page, name: string) {
 }
 
 async function bodyReadout(page: Page) {
-  await revealModelPanel(page, 'Objects');
-  await page.locator('.body-row:not(.consumed) .body-row-main').first().click();
-  await expect(inspectorOf(page).getByText(/in³/).first()).toBeVisible();
-  return inspectorOf(page);
+  const inspector = await bodyCardFromHistory(page);
+  await expect(inspector.getByText(/in³/).first()).toBeVisible();
+  return inspector;
 }
 
 test('sizes a box with mixed-unit expressions in an inch project, through undo, reload and STEP', async ({

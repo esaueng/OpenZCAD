@@ -6,7 +6,12 @@ import {
   loftedHollowDuct,
   upperDuctSectionEdit
 } from '../fixtures/lofted-hollow-duct';
-import { expect, test, stubApi, revealModelPanel } from './openzcad-fixtures';
+import {
+  expect,
+  test,
+  stubApi,
+  bodyCardFromHistory
+} from './openzcad-fixtures';
 
 /**
  * Production QA CAD-002 (2026-10-11): narrowing a shelled loft's upper section
@@ -43,12 +48,9 @@ async function createProject(page: Page, name: string) {
   await expect(page.locator('.save-state')).toHaveClass(/is-synced/);
 }
 
-async function bodyReadout(page: Page, bodyName: RegExp) {
-  await revealModelPanel(page, 'Objects');
-  await page
-    .locator('.body-row:not(.consumed) .body-row-main', { hasText: bodyName })
-    .click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+/** The card of the body the last History row built. */
+async function bodyReadout(page: Page) {
+  const inspector = await bodyCardFromHistory(page);
   await expect(inspector.getByText(/mm³/).first()).toBeVisible();
   return inspector;
 }
@@ -82,7 +84,7 @@ test('refuses an upstream section edit that strands a dependent shell, and keeps
   const status = page.getByRole('contentinfo');
   await expect(status).toContainText('warnings0', { timeout: 30_000 });
 
-  let inspector = await bodyReadout(page, /Offset rectangular transition/);
+  let inspector = await bodyReadout(page);
   await expect(inspector).toContainText('12630.86 mm³');
 
   // History: the upper section's Width 40 → 30, then Apply.
@@ -116,14 +118,14 @@ test('refuses an upstream section edit that strands a dependent shell, and keeps
   ).toBeVisible();
   await page.keyboard.press('Escape');
 
-  inspector = await bodyReadout(page, /Offset rectangular transition/);
+  inspector = await bodyReadout(page);
   await expect(inspector).toContainText('12630.86 mm³');
   await expect(inspector).toContainText(/faces\s*10/);
 
   // Nothing reached history: a reload reopens the hollow duct.
   await page.reload();
   await expect(status).toContainText('warnings0', { timeout: 30_000 });
-  inspector = await bodyReadout(page, /Offset rectangular transition/);
+  inspector = await bodyReadout(page);
   await expect(inspector).toContainText('12630.86 mm³');
 
   // The hollow body exports; the STEP holds its ten faces, not six.

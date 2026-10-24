@@ -220,7 +220,7 @@ test('an edge pick carries its operation on the chip, refusal included', async (
     )
     .toBe(true);
 
-  // One surface: the chip on the pick is the operation, and no second chip
+  // One surface: the Selection card is the operation, and no second card
   // stands at the top of the column saying the same.
   const chip = page.locator('.selection-callout-chip');
   const operation = page.getByRole('region', { name: 'Fillet operation' });
@@ -248,7 +248,7 @@ test('an edge pick carries its operation on the chip, refusal included', async (
   await fillet.click();
   await expect(operation).toBeVisible();
 
-  // The chip stays on top of the model and takes its own presses.
+  // The card stays on top of the model and takes its own presses.
   const hit = await fillet.evaluate((button) => {
     const box = button.getBoundingClientRect();
     const target = document.elementFromPoint(
@@ -259,7 +259,8 @@ test('an edge pick carries its operation on the chip, refusal included', async (
   });
   expect(hit).toBe(true);
 
-  // A refusal is said on the chip, with the way out, not on a second card.
+  // The card marks the refusal; the notice lane says it, with the way out,
+  // and no second card opens.
   await page.getByTestId('direct-manipulation-value').click();
   const keypad = page.getByRole('dialog', { name: 'Radius value' });
   await keypad.getByRole('textbox').fill('40');
@@ -267,20 +268,14 @@ test('an edge pick carries its operation on the chip, refusal included', async (
   await expect(chip.locator('.selection-callout-phase')).toHaveText('Failed', {
     timeout: 60_000
   });
-  const refusal = chip.getByRole('alert');
+  await expect(chip.getByRole('alert')).toHaveCount(0);
+  const refusal = page.locator('.selection-refusal-lane').getByRole('alert');
   await expect(refusal).toBeVisible();
   await expect(refusal).toContainText(/radius/i);
   await expect(page.locator('.tool-card')).toHaveCount(0);
-  // The refusal wraps inside the chip rather than stretching it across
-  // the viewport.
-  const widths = await chip.evaluate((element) => ({
-    chip: element.getBoundingClientRect().width,
-    refusal: element
-      .querySelector('.selection-callout-diagnostic')!
-      .getBoundingClientRect().width
-  }));
-  expect(widths.refusal).toBeLessThanOrEqual(widths.chip);
-  expect(widths.chip).toBeLessThan(720);
+  // The lane row stays under the search bar's width rather than stretching
+  // across the viewport.
+  expect((await refusal.boundingBox())!.width).toBeLessThanOrEqual(640.5);
 
   // The handle's own riding label stays: the chip did not replace it.
   await expect(page.getByTestId('direct-manipulation-value')).toBeVisible();
@@ -409,7 +404,7 @@ async function maxCardsSeen(page: Page) {
   Batch 6b's probe: with a feature's inspector up, a face pick raised the
   face's operation card beside it — two cards for one pick — and the same
   from the other side. One card at a time: the face's operation rides the
-  chip on the pick, and a History row disarms it.
+  Selection card, and a History row disarms it.
 */
 test('a face pick and a History row never show two cards at once', async ({
   page
@@ -430,9 +425,11 @@ test('a face pick and a History row never show two cards at once', async ({
   await expect(operation).toBeVisible();
   await page.waitForTimeout(800);
   let seen = await maxCardsSeen(page);
-  expect(seen.max, JSON.stringify(seen)).toBe(1);
-  // The face's operation is on the chip on the pick, not a second card.
+  expect(seen.max, JSON.stringify(seen)).toBeLessThanOrEqual(1);
+  // The face's operation is on the Selection card, not a second card, and
+  // a direct pick closes the History row's card rather than keeping it.
   await expect(operation).toHaveClass(/selection-callout-chip/);
+  await expect(inspector).toHaveCount(0);
 
   // A face armed first, then a History row.
   await page.keyboard.press('Escape');
