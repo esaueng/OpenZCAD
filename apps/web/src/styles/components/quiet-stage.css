@@ -26,12 +26,17 @@
   --lane-right: calc(var(--lane-start) + var(--right-dock-w, 0px));
   /* The readout under the column, and what the column leaves it. */
   --readout-h: 32px;
-  --readout-reserve: var(--readout-h);
+  /* The bottom-left corner under the left rail: the upright scale bar
+     (200px at most, its value under it, and a gap) and, in a sketch, the
+     readout's rows under that. The rail stands on what they take. */
+  --scale-rule-reserve: 232px;
+  --readout-rows: 0px;
+  --readout-reserve: calc(var(--readout-rows) + var(--scale-rule-reserve));
   /* The bottom-right corner of the model, measured from the right dock's
      inner edge: the instrument rail's band (and the relations', sketching),
-     the cube with the ruler standing on it, then 12px of clearance. The bar
-     is centred between the docks, so it can be the room between them less
-     twice this before its ends run under the cube. */
+     the cube, then 12px of clearance. The bar is centred between the docks,
+     so it can be the room between them less twice this before its ends run
+     under the cube. */
   --stage-corner-w: calc(
     var(--lane-end) - var(--right-panels-w) + 144px + 12px
   );
@@ -39,13 +44,10 @@
   --stage-between-docks: calc(
     100vw - var(--left-dock-w, 0px) - var(--right-dock-w, 0px)
   );
-  /* The ruler standing on the cube: its rule, value and the stack's gap. */
-  --scale-stack-h: 44px;
-  /* How far the corner's stack (the ruler on the 88px cube, 4px off the
-     edge) stands above the window's bottom edge, with a few pixels to
-     spare. The right lane stops a gap above it, so no card in the lane ever
-     reaches the cube or the ruler. */
-  --stage-corner-h: calc(96px + var(--scale-stack-h));
+  /* How far the corner's cube stack (88px, 4px off the edge) stands above
+     the window's bottom edge, with a few pixels to spare. The right lane
+     stops a gap above it, so no card in the lane ever reaches the cube. */
+  --stage-corner-h: 96px;
   /* The notice lane's status row, which the cube steps above where it
      shares that band: a 28px toast 8px over the bar. The cube's offset
      adds an island gap above it. More would lift a phone's instrument
@@ -80,6 +82,12 @@
   }
 }
 
+/* A sketch is the only time the readout draws (its snap segment says so),
+   and the column keeps one row for it. */
+.workspace.column-layout:has(.viewport-readout .viewport-dock-snap) {
+  --readout-rows: calc(var(--readout-h) + var(--island-gap));
+}
+
 /* Sketching adds the snap and grid spacing to the readout. The island hugs
    its segments and wraps them once they outgrow the column, so the height
    the column and the resizer reserve above it allows for two rows there. */
@@ -87,7 +95,7 @@
     .viewport-readout .viewport-dock-grid:not([hidden])
   ) {
   --readout-h: 32px;
-  --readout-reserve: 60px;
+  --readout-rows: calc(60px + var(--island-gap));
 }
 
 /* ── The top islands ─────────────────────────────────────── */
@@ -410,6 +418,13 @@
   display: none;
 }
 
+/* With no sketch open there is nothing to read: no empty island. */
+.viewport-readout:not(
+  :has(.viewport-dock-snap, .viewport-dock-grid:not([hidden]))
+) {
+  display: none;
+}
+
 /* The island is the only frame: its segments are flat text, so a chip
    inside it never draws a second box. A hairline centred in the gap before
    the snap and grid segments tells them apart in a sketch; only the filter,
@@ -422,7 +437,6 @@
   overflow: clip;
 }
 
-.viewport-readout .viewport-dock-filter,
 .viewport-readout .viewport-dock-snap,
 .viewport-readout .viewport-dock-grid {
   height: 24px;
@@ -436,8 +450,8 @@
   position: relative;
 }
 
-/* -5px centres the 1px line in the 9px gap. */
-.viewport-readout .viewport-dock-snap::before,
+/* -5px centres the 1px line in the 9px gap. The snap leads the island now,
+   so only the grid has a segment before it. */
 .viewport-readout .viewport-dock-grid::before {
   content: '';
   position: absolute;
@@ -448,12 +462,7 @@
   background: var(--color-border);
 }
 
-.viewport-readout .viewport-dock-filter:hover {
-  background: var(--color-surface-hover);
-}
-
-/* The cube, with the ruler standing on it, is the model's bottom-right
-   corner: inside the instrument rail (and the relations, sketching), which
+/* The cube is the model's bottom-right corner: inside the instrument rail (and the relations, sketching), which
    stands at the right dock's inner edge. The dock runs the window's full
    height, and the rail — as tall as the stage in a laptop window — never
    reaches the cube there. An unpinned panel stops above it, as the right
@@ -463,26 +472,27 @@
   right: calc(var(--lane-end) - var(--right-peek-w, 0px));
 }
 
-/* The scale bar stands on the cube, in the cube's stack, so it follows the
-   cube wherever a narrow or short window moves it. */
-.viewer-rail-stack > .viewport-scale-indicator {
-  position: static;
+/* The scale bar stands upright against the model's left edge — the
+   window's, or the left dock's inner edge when a panel is docked there —
+   under the left rail, which lifts to stand on it in a short window
+   (--readout-reserve). It is narrower than the lanes' start, so the search
+   bar never reaches it, and in a sketch it stands on the readout. */
+.workspace.column-layout .viewport-scale-indicator {
+  left: calc(var(--island-gap) + var(--left-dock-w, 0px));
+  right: auto;
+  bottom: calc(var(--island-gap) + var(--readout-rows));
 }
 
-/* A phone's measurement workbench is a sheet across the bottom that rises
-   only above the search row, so there the ruler keeps its own place, in the
-   bottom-left corner above the search row, under the sheet's foot. The
-   window is the viewer area (nothing transforms the stack), so fixed is the
-   stage's corner; the cube's stack no longer carries it. */
+/* A phone has no room beside the rail: the rule lies along the foot in the
+   bottom-left corner, above the search row and under the measurement
+   sheet's foot (ViewportScaleIndicator draws it lying at this width). */
 @media (max-width: 620px) {
   .workspace.column-layout {
-    --scale-stack-h: 0px;
+    --scale-rule-reserve: var(--readout-h);
   }
 
-  .viewer-rail-stack > .viewport-scale-indicator {
-    position: fixed;
+  .workspace.column-layout .viewport-scale-indicator {
     left: var(--island-gap);
-    right: auto;
     bottom: calc(var(--island-gap) * 2 + var(--command-bar-h));
   }
 }
@@ -1305,8 +1315,7 @@
     /* The cube stands above the search bar and its status row (below), and
        the lane above it. */
     --stage-corner-h: calc(
-      var(--island-gap) * 2 + var(--command-bar-h) + var(--status-row-h) +
-        92px + var(--scale-stack-h)
+      var(--island-gap) * 2 + var(--command-bar-h) + var(--status-row-h) + 92px
     );
   }
 
@@ -1369,8 +1378,7 @@
     display: block;
   }
 
-  .viewport-readout:has(.viewport-dock-snap)
-    :is(.viewport-dock-filter-label, .viewport-readout-word) {
+  .viewport-readout:has(.viewport-dock-snap) .viewport-readout-word {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -1421,7 +1429,7 @@
     --lane-right: calc(var(--island-gap) + var(--right-dock-w, 0px));
     /* The cube stands 52px up here (workspace-column.css); the right lane
        stops above it all the same. */
-    --stage-corner-h: calc(52px + 92px + var(--scale-stack-h));
+    --stage-corner-h: calc(52px + 92px);
   }
 }
 
@@ -1549,9 +1557,7 @@
    on a phone, and the right lane stops above it. */
 @media (min-width: 521px) and (max-width: 960px) and (max-height: 657px) {
   .workspace.column-layout {
-    --stage-corner-h: calc(
-      56px + var(--status-row-h) + 92px + var(--scale-stack-h)
-    );
+    --stage-corner-h: calc(56px + var(--status-row-h) + 92px);
   }
 
   .workspace.column-layout .viewer-rail-stack,

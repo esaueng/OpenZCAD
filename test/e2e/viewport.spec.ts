@@ -234,9 +234,9 @@ test('the viewport scale indicator tracks zoom in document units', async ({
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toHaveAttribute('data-e2e-camera-distance', /.+/);
   const initialLabel = await indicator.textContent();
-  // The scale bar resizes with zoom; nothing around it may move. It sits
-  // beside the cube now, and the readout's controls are the nearest chrome.
-  const dock = page.locator('.viewport-readout');
+  // The scale bar resizes with zoom; nothing around it may move. It stands
+  // upright beside the verb rail, the nearest chrome.
+  const dock = page.locator('.workspace-column-float');
   const control = dock.getByRole('button').first();
   const initialDock = await dock.boundingBox();
   const initialControl = await control.boundingBox();
@@ -246,11 +246,16 @@ test('the viewport scale indicator tracks zoom in document units', async ({
     expect(await dock.boundingBox()).toEqual(initialDock);
     expect(await control.boundingBox()).toEqual(initialControl);
   };
-  const initialWidth = await rule.evaluate(
-    (element) => element.getBoundingClientRect().width
-  );
-  expect(initialWidth).toBeGreaterThanOrEqual(80);
-  expect(initialWidth).toBeLessThanOrEqual(200.1);
+  // Upright, the rule's length is its height; it stays 18px across.
+  const ruleLength = () =>
+    rule.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      return { length: bounds.height, across: bounds.width };
+    });
+  const initial = await ruleLength();
+  expect(initial.across).toBeCloseTo(18, 0);
+  expect(initial.length).toBeGreaterThanOrEqual(80);
+  expect(initial.length).toBeLessThanOrEqual(200.1);
 
   // Dispatch explicit wheel notches to the canvas so this layout regression
   // does not depend on native compositor input delivery on loaded CI hosts.
@@ -267,11 +272,9 @@ test('the viewport scale indicator tracks zoom in document units', async ({
       { timeout: 20_000 }
     )
     .not.toBe(initialLabel);
-  const zoomedWidth = await rule.evaluate(
-    (element) => element.getBoundingClientRect().width
-  );
-  expect(zoomedWidth).toBeGreaterThanOrEqual(80);
-  expect(zoomedWidth).toBeLessThanOrEqual(200.1);
+  const zoomed = await ruleLength();
+  expect(zoomed.length).toBeGreaterThanOrEqual(80);
+  expect(zoomed.length).toBeLessThanOrEqual(200.1);
   const zoomedLabel = await indicator.textContent();
   await expect
     .poll(
@@ -1175,15 +1178,8 @@ test('double-clicking a face selects its whole body', async ({ page }) => {
   await expectBodyCount(page, 1);
   await page.keyboard.press('Escape');
 
-  // The dock's filter chip cycles; click until it reads Face.
-  const filterChip = page.getByRole('button', { name: /^Selection filter:/ });
-  for (let step = 0; step < 8; step += 1) {
-    if ((await filterChip.getAttribute('aria-label'))?.includes(': Face')) {
-      break;
-    }
-    await filterChip.click();
-  }
-  await expect(filterChip).toHaveAttribute('aria-label', /: Face/);
+  // Q cycles the filter; step it round to Face.
+  await setSelectionFilter(page, 'Face');
 
   const canvas = page.locator('.viewer-host canvas');
   const bounds = await canvas.boundingBox();
@@ -1208,7 +1204,11 @@ test('double-clicking a face selects its whole body', async ({ page }) => {
     clientY: spot.y
   });
   await expect(label).toHaveText('Box 1');
-  await expect(filterChip).toHaveAttribute('aria-label', /: Face/);
+  // The double-click took the body without changing the filter.
+  await expect(page.locator('.viewer-shell')).toHaveAttribute(
+    'data-selection-filter',
+    'face'
+  );
 });
 
 test('double-clicking a filleted rim takes the whole run of edges', async ({
@@ -1340,8 +1340,9 @@ test('the selection filter changes what a click takes', async ({ page }) => {
   await expectBodyCount(page, 1);
   await page.keyboard.press('Escape');
 
-  const filterChip = page.getByRole('button', { name: /^Selection filter:/ });
-  await expect(filterChip).toHaveAttribute('aria-label', /: Any/);
+  // Nothing on screen names the filter; the viewer carries it.
+  const viewer = page.locator('.viewer-shell');
+  await expect(viewer).toHaveAttribute('data-selection-filter', 'any');
 
   const canvas = page.locator('.viewer-host canvas');
   const bounds = await canvas.boundingBox();
@@ -1359,36 +1360,38 @@ test('the selection filter changes what a click takes', async ({ page }) => {
   await expect(label).toContainText('face');
 
   // Narrowing to bodies resolves the same click to the whole solid instead.
-  // The dock's chip cycles the filter; step it round to Body.
-  const cycleTo = async (name: string) => {
-    for (let step = 0; step < 8; step += 1) {
-      if ((await filterChip.getAttribute('aria-label'))?.includes(name)) {
-        return;
-      }
-      await filterChip.click();
-    }
-  };
-  await cycleTo(': Body');
+  // Q cycles the filter; step it round to Body.
+  await setSelectionFilter(page, 'Body');
   await page.mouse.click(spot.x, spot.y);
   await expect(label).toHaveText('Box 1');
 
-  // Round again to Any before the keyboard check below.
-  await cycleTo(': Any');
-  await expect(filterChip).toHaveAttribute('aria-label', /: Any/);
+  // Round again to Any before the keyboard check below: past the last kind
+  // Q hands the filter back to the tool, whose own choice here is Any.
+  await setSelectionFilter(page, 'Any');
+  await expect(viewer).toHaveAttribute('data-selection-filter-source', 'tool');
 
   // Q steps one along from the filter in force. Pressed here, with nothing
-  // focused, it moves off Any rather than reasserting it.
+  // focused, it moves off Any rather than reasserting it, and says so.
+  await page.evaluate(() =>
+    (document.activeElement as HTMLElement | null)?.blur?.()
+  );
   await page.keyboard.press('q');
-  await expect(filterChip).toHaveAttribute('aria-label', /: Body/);
-  // Round the cycle to hand the filter back to the tool.
-  await cycleTo(': Any');
-  await expect(filterChip).toHaveClass(/automatic/);
+  await expect(viewer).toHaveAttribute('data-selection-filter', 'body');
+  await expect(page.getByRole('contentinfo')).toContainText('Selecting body');
+  // Past the last kind, Q hands the filter back to the tool.
+  for (const kind of ['face', 'edge', 'sketch']) {
+    await page.keyboard.press('q');
+    await expect(viewer).toHaveAttribute('data-selection-filter', kind);
+  }
+  await page.keyboard.press('q');
+  await expect(viewer).toHaveAttribute('data-selection-filter-source', 'tool');
+  await expect(viewer).toHaveAttribute('data-selection-filter', 'any');
 
-  // Arming Fillet narrows to edges on its own, and shows that the choice is
-  // the tool's rather than the user's.
+  // Arming Fillet narrows to edges on its own: the choice is the tool's
+  // rather than the user's.
   await page.getByRole('button', { name: /^Fillet/ }).click();
-  await expect(filterChip).toHaveAttribute('aria-label', /: Edge/);
-  await expect(filterChip).toHaveClass(/automatic/);
+  await expect(viewer).toHaveAttribute('data-selection-filter', 'edge');
+  await expect(viewer).toHaveAttribute('data-selection-filter-source', 'tool');
 });
 
 test('dragging a box selects several bodies at once', async ({ page }) => {

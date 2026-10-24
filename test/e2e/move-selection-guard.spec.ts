@@ -53,18 +53,7 @@ async function startMove(page: Page) {
 
 /** Use the manual Q route, including while the Move card owns selection. */
 async function cycleSelectionFilter(page: Page, mode: 'Face' | 'Sketch') {
-  const filter = page.getByRole('button', { name: /^Selection filter:/ });
-  await filter.focus();
-  for (let step = 0; step < 8; step += 1) {
-    const label = (await filter.getAttribute('aria-label'))!;
-    if (label.includes(`: ${mode}.`)) break;
-    await page.keyboard.press('q');
-    await expect(filter).not.toHaveAttribute('aria-label', label);
-  }
-  await expect(filter).toHaveAttribute(
-    'aria-label',
-    new RegExp(`: ${mode}\\.`)
-  );
+  await setSelectionFilter(page, mode);
 }
 
 async function backupProject(page: Page): Promise<ProjectDocument> {

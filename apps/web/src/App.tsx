@@ -610,7 +610,10 @@ import {
   MoveInstruction,
   ProfileQuickAction
 } from './components/DirectModelingOverlays';
-import { SELECTION_FILTERS } from '@openzcad/viewport/types';
+import {
+  SELECTION_FILTERS,
+  SELECTION_FILTER_LABELS
+} from '@openzcad/viewport/types';
 import { effectiveSelectionFilter } from './lib/selectionFilter';
 import {
   bodyFeature,
@@ -15065,7 +15068,13 @@ export function App() {
       profiles = computeSketchRegions(
         displayObjectsWithTextBudget(objects, textOutlineBudgetError),
         resolve,
-        undefined, { promotionBoundaryTokens: resolveSketchPromotionBoundaryTokens(sketch?.promotions ?? [], new Map(objects.map(({ id, data }) => [id, data]))) }
+        undefined,
+        {
+          promotionBoundaryTokens: resolveSketchPromotionBoundaryTokens(
+            sketch?.promotions ?? [],
+            new Map(objects.map(({ id, data }) => [id, data]))
+          )
+        }
       ).map((profile) => ({
         outer: profile.outer.polyline,
         holes: profile.holes.map((hole) => hole.polyline)
@@ -15755,7 +15764,9 @@ export function App() {
         const promotion = findSketch(
           managerRef.current!.document,
           sketchId
-        )?.promotions?.find((record) => record.sourceObjectId === sourceObjectId);
+        )?.promotions?.find(
+          (record) => record.sourceObjectId === sourceObjectId
+        );
         dispatchInteraction({
           type: 'sketch-select-object',
           objectId: promotion?.edgeIds[0] ?? null
@@ -16327,7 +16338,17 @@ export function App() {
     try {
       return {
         objects,
-        analysis: computeSketchProfileAnalysis(objects, resolveDocumentValue, undefined, { promotionBoundaryTokens: resolveSketchPromotionBoundaryTokens(editingSketchNode?.promotions ?? [], new Map(objects.map(({ id, data }) => [id, data]))) }),
+        analysis: computeSketchProfileAnalysis(
+          objects,
+          resolveDocumentValue,
+          undefined,
+          {
+            promotionBoundaryTokens: resolveSketchPromotionBoundaryTokens(
+              editingSketchNode?.promotions ?? [],
+              new Map(objects.map(({ id, data }) => [id, data]))
+            )
+          }
+        ),
         error: null
       };
     } catch (error) {
@@ -16364,8 +16385,7 @@ export function App() {
     const fullyDefined = sketchSolveStatus?.definedState === 'fully-defined';
     return (editingSketchNode.constraints ?? [])
       .filter(({ origin }) => origin !== 'promotion-structure')
-      .map(
-      ({ constraintId, data }) => ({
+      .map(({ constraintId, data }) => ({
         constraintId: String(constraintId),
         label: describeConstraint(data, nameOf),
         targets: constraintInspectionTargets(
@@ -16379,8 +16399,7 @@ export function App() {
           data.constraintKind === 'distance' ||
           data.constraintKind === 'angle' ||
           data.constraintKind === 'radius'
-      })
-    );
+      }));
   }, [editingSketchNode, doc, sketchSolveStatus]);
 
   /** The selected entity's own constraints, for the entity editor's list. */
@@ -16488,7 +16507,9 @@ export function App() {
   // A promotion owns every generated edge and construction helper.
   const selectedPromotion = selectedSketchEntity
     ? editingSketchNode?.promotions?.find((record) =>
-        [...record.edgeIds, record.centerSpokeId, ...record.helperIds].includes(selectedSketchEntity.id)
+        [...record.edgeIds, record.centerSpokeId, ...record.helperIds].includes(
+          selectedSketchEntity.id
+        )
       )
     : undefined;
 
@@ -17736,7 +17757,13 @@ export function App() {
         regions = computeSketchRegions(
           displayObjectsWithTextBudget(objects, textOutlineBudgetError),
           (value) => resolve(value),
-          undefined, { promotionBoundaryTokens: resolveSketchPromotionBoundaryTokens(sketch.promotions ?? [], new Map(objects.map(({ id, data }) => [id, data]))) }
+          undefined,
+          {
+            promotionBoundaryTokens: resolveSketchPromotionBoundaryTokens(
+              sketch.promotions ?? [],
+              new Map(objects.map(({ id, data }) => [id, data]))
+            )
+          }
         ).map((region) => {
           const buildGroup = entityWideSourceKey(region.sourceEntityIds, (id) =>
             entityWideIds.has(id)
@@ -17823,16 +17850,20 @@ export function App() {
         let boundaryProfile: (typeof view.regions)[number] | undefined;
         if (selected.sourceBoundaryLoops !== undefined) {
           try {
-            boundaryProfile = resolveBoundaryRegionReference({
-              sourceBoundaryLoops: selected.sourceBoundaryLoops,
-              sourceArea: selected.area,
-              samplePoint: selected.samplePoint
-            }, view.regions);
+            boundaryProfile = resolveBoundaryRegionReference(
+              {
+                sourceBoundaryLoops: selected.sourceBoundaryLoops,
+                sourceArea: selected.area,
+                samplePoint: selected.samplePoint
+              },
+              view.regions
+            );
           } catch {
             return [];
           }
         }
-        const profile = boundaryProfile ??
+        const profile =
+          boundaryProfile ??
           view?.regions.find(
             (candidate) => candidate.profileId === selected.profileId
           ) ??
@@ -17865,7 +17896,8 @@ export function App() {
           (profile, index) =>
             profile.profileId === current[index]?.profileId &&
             profile.regionFingerprint === current[index]?.regionFingerprint &&
-            JSON.stringify(profile.sourceBoundaryLoops) === JSON.stringify(current[index]?.sourceBoundaryLoops)
+            JSON.stringify(profile.sourceBoundaryLoops) ===
+              JSON.stringify(current[index]?.sourceBoundaryLoops)
         );
       return unchanged ? current : remapped;
     });
@@ -17933,7 +17965,13 @@ export function App() {
       return computeSketchRegions(
         displayObjectsWithTextBudget(objects, documentTextBudgetError(current)),
         resolve,
-        undefined, { promotionBoundaryTokens: resolveSketchPromotionBoundaryTokens(sketch.promotions ?? [], new Map(objects.map(({ id, data }) => [id, data]))) }
+        undefined,
+        {
+          promotionBoundaryTokens: resolveSketchPromotionBoundaryTokens(
+            sketch.promotions ?? [],
+            new Map(objects.map(({ id, data }) => [id, data]))
+          )
+        }
       ).map((region) => ({
         sketchId,
         profileId: region.profileId,
@@ -19760,8 +19798,8 @@ export function App() {
       return;
     const bodyId = target.bodyId as BodyId;
     const faces =
-      managerRef.current?.document.derived.bodyRepresentations[bodyId]
-        ?.topology?.faces;
+      managerRef.current?.document.derived.bodyRepresentations[bodyId]?.topology
+        ?.faces;
     const vector = (value: [number, number, number]) => ({
       x: value[0],
       y: value[1],
@@ -20173,10 +20211,17 @@ export function App() {
         }
         if (reference.sourceBoundaryLoops !== undefined) {
           try {
-            return view ? [resolveBoundaryRegionReference({
-              ...reference,
-              sourceBoundaryLoops: reference.sourceBoundaryLoops
-            }, view.regions)] : [];
+            return view
+              ? [
+                  resolveBoundaryRegionReference(
+                    {
+                      ...reference,
+                      sourceBoundaryLoops: reference.sourceBoundaryLoops
+                    },
+                    view.regions
+                  )
+                ]
+              : [];
           } catch {
             return [];
           }
@@ -22203,9 +22248,26 @@ export function App() {
           // Advances from the filter in force, not from the manual one: with
           // a tool choosing the filter those differ, and stepping from the
           // manual slot would make the first press appear to do nothing.
+          // Past the last kind a manual filter is handed back to the active
+          // tool, as the readout's filter chip did before it was removed.
           const at = SELECTION_FILTERS.indexOf(selectionFilter);
-          setManualSelectionFilter(
-            SELECTION_FILTERS[(at + 1) % SELECTION_FILTERS.length] ?? 'any'
+          const handsBack =
+            manualSelectionFilter !== null &&
+            at === SELECTION_FILTERS.length - 1;
+          const next = handsBack
+            ? null
+            : (SELECTION_FILTERS[(at + 1) % SELECTION_FILTERS.length] ?? 'any');
+          setManualSelectionFilter(next);
+          // Nothing on screen names the filter, so the press says what it
+          // chose.
+          const again = menuShortcut('selection-filter');
+          setStatus(
+            next === null
+              ? 'Selection filter: back to the active tool.'
+              : `Selecting ${SELECTION_FILTER_LABELS[next].toLowerCase()}${
+                  again ? ` · ${again} cycles` : ''
+                }.`,
+            { unlogged: true }
           );
           return;
         }
@@ -23214,7 +23276,11 @@ export function App() {
                 id: `${view.sketchId}:${region.profileId}`,
                 label: `${sketchName} · Profile ${index + 1}`,
                 section: { sketchId: view.sketchId, profile },
-                region: { outer: region.outer, holes: region.holes, boundingBox: region.boundingBox }
+                region: {
+                  outer: region.outer,
+                  holes: region.holes,
+                  boundingBox: region.boundingBox
+                }
               }
             ];
       })
@@ -23580,9 +23646,11 @@ export function App() {
       onDelete={handleDeleteSketchEntity}
       onConvertToEdges={() => void handleConvertLegacySketchObject()}
       promotionSource={selectedPromotion?.sourceData.objectKind}
-      onReleaseShapeConstraints={selectedPromotion?.structureConstraintIds.length
-        ? () => void handleReleaseSketchPromotionStructure()
-        : undefined}
+      onReleaseShapeConstraints={
+        selectedPromotion?.structureConstraintIds.length
+          ? () => void handleReleaseSketchPromotionStructure()
+          : undefined
+      }
       onToggleConstruction={() => void handleToggleSketchConstruction()}
       composite={selectedComposite}
       onResizeComposite={(size, expressions) => {
@@ -24326,9 +24394,6 @@ export function App() {
             dockExtras={
               !tweakMode ? (
                 <ViewportDockExtras
-                  selectionFilter={selectionFilter}
-                  selectionFilterIsAutomatic={manualSelectionFilter === null}
-                  onSelectionFilter={setManualSelectionFilter}
                   snap={
                     interaction.mode === 'sketch'
                       ? {
@@ -24343,6 +24408,7 @@ export function App() {
             }
             viewMode={modelingLocked}
             selectionCallout={calloutWithOperation}
+            selectionFilterAutomatic={manualSelectionFilter === null}
             focusGhostBodies={focusGhostBodies}
             {...(focusFaces ? { focusFaces } : {})}
             canUndo={!viewMode && undoAvailable}

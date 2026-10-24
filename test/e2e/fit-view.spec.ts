@@ -109,12 +109,13 @@ test('picking a face leaves the scale bar alone', async ({ page }) => {
   await createBox(page, 'Scale Pick Part');
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toHaveAttribute('data-e2e-camera-distance', /.+/);
+  // Upright beside the rail: the rule's length is its height.
   const rule = page.getByTestId('viewport-scale-rule');
   await expect(rule).toBeVisible({ timeout: 15_000 });
   const box = await canvas.boundingBox();
   const before = await settledCamera(canvas);
   const widthBefore = await rule.evaluate(
-    (element) => element.getBoundingClientRect().width
+    (element) => element.getBoundingClientRect().height
   );
 
   // Click the solid off-centre: the orbit pivot moves to the picked depth.
@@ -131,7 +132,7 @@ test('picking a face leaves the scale bar alone', async ({ page }) => {
   // A frame later the bar would have redrawn at the new pivot depth.
   await page.waitForTimeout(200);
   const widthAfter = await rule.evaluate(
-    (element) => element.getBoundingClientRect().width
+    (element) => element.getBoundingClientRect().height
   );
   expect(Math.abs(widthAfter - widthBefore)).toBeLessThan(0.5);
 });

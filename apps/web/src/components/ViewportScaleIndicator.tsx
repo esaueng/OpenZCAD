@@ -1,10 +1,24 @@
 import { Grid3x3 } from 'lucide-react';
-import { useEffect, useRef, type MutableRefObject } from 'react';
+import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { formatViewportScale, type ViewportScale } from '@openzcad/viewport';
 import { watchStageTheme } from '../lib/stagePalette';
 
 const BAR_HEIGHT_PX = 18;
 const DIVISIONS = 10;
+/**
+ * Wider than a phone the rule stands upright at the model's left edge; on a
+ * phone it lies along the foot, under the measurement sheet, as it always
+ * has. Keep in step with the ruler rules in quiet-stage.css.
+ */
+const UPRIGHT_QUERY = '(min-width: 621px)';
+
+function prefersUpright(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia(UPRIGHT_QUERY).matches
+  );
+}
 
 export type ViewportScaleSink = (scale: ViewportScale | null) => void;
 
@@ -35,22 +49,38 @@ function readRuleColors(canvas: HTMLCanvasElement): RuleColors {
   };
 }
 
+/**
+ * Draws the rule `lengthPx` long. Lying down, the ticks rise from the
+ * baseline along its foot; upright, the baseline runs down its left side
+ * and the ticks reach right, into the model. The drawing is the lying rule
+ * turned a quarter, so both read the same.
+ */
 function drawRule(
   canvas: HTMLCanvasElement,
-  widthPx: number,
-  { primary, secondary, accent }: RuleColors
+  lengthPx: number,
+  { primary, secondary, accent }: RuleColors,
+  upright: boolean
 ) {
-  const cssWidth = Math.max(widthPx, 1);
+  const cssWidth = Math.max(lengthPx, 1);
   const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
-  canvas.style.setProperty('--viewport-scale-width', `${cssWidth}px`);
-  canvas.width = Math.max(1, Math.round(cssWidth * pixelRatio));
-  canvas.height = Math.round(BAR_HEIGHT_PX * pixelRatio);
+  canvas.style.setProperty('--viewport-scale-length', `${cssWidth}px`);
+  const along = Math.max(1, Math.round(cssWidth * pixelRatio));
+  const across = Math.round(BAR_HEIGHT_PX * pixelRatio);
+  canvas.width = upright ? across : along;
+  canvas.height = upright ? along : across;
 
   const context = canvas.getContext('2d');
   if (!context) {
     return;
   }
-  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  // Upright: the lying rule's x runs up the canvas (its start at the foot,
+  // like a measured height) and its y runs left to right, mirrored so the
+  // baseline is on the left.
+  if (upright) {
+    context.setTransform(0, -pixelRatio, -pixelRatio, 0, across, along);
+  } else {
+    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  }
   context.clearRect(0, 0, cssWidth, BAR_HEIGHT_PX);
 
   const left = 1;
@@ -103,6 +133,16 @@ export function ViewportScaleIndicator({
   // a zoom or a face drag, where a style read after the frame's DOM writes
   // forced a synchronous style recalculation each time.
   const colorsRef = useRef<RuleColors | null>(null);
+  const [upright, setUpright] = useState(prefersUpright);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const query = window.matchMedia(UPRIGHT_QUERY);
+    const follow = () => setUpright(query.matches);
+    follow();
+    query.addEventListener('change', follow);
+    return () => query.removeEventListener('change', follow);
+  }, []);
 
   useEffect(() => {
     const update = (scale: ViewportScale | null) => {
@@ -132,7 +172,7 @@ export function ViewportScaleIndicator({
       }
 
       colorsRef.current ??= readRuleColors(canvas);
-      drawRule(canvas, scale.widthPx, colorsRef.current);
+      drawRule(canvas, scale.widthPx, colorsRef.current, upright);
       value.value = label;
       value.textContent = label;
       root.setAttribute(
@@ -143,6 +183,8 @@ export function ViewportScaleIndicator({
     };
 
     scaleSinkRef.current = update;
+    // A new orientation redraws the rule it already has.
+    lastRenderedRef.current = null;
     update(lastScaleRef.current);
     // The rule's colours are baked into the canvas, so a theme change has to
     // redraw it; the label is CSS and follows on its own.
@@ -157,7 +199,7 @@ export function ViewportScaleIndicator({
         scaleSinkRef.current = null;
       }
     };
-  }, [scaleSinkRef, units]);
+  }, [scaleSinkRef, units, upright]);
 
   return (
     // One image named by its label ("Viewport scale … : 20 mm"), not a live
@@ -166,7 +208,7 @@ export function ViewportScaleIndicator({
     // div was never exposed at all.
     <div
       ref={rootRef}
-      className="viewport-scale-indicator"
+      className={`viewport-scale-indicator${upright ? ' is-upright' : ''}`}
       data-testid="viewport-scale-indicator"
       role="img"
       hidden

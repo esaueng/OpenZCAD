@@ -101,12 +101,12 @@ test('a header drag stacks a panel at the slot it previews, and the emptied left
     right: [['parameters', 'history']]
   });
   // The left dock: Objects against the edge, the verb rail on its inner
-  // edge, and the bottom lane starting past both.
+  // edge a dock gap away, and the bottom lane starting past both.
   const left = await box(page.locator('.panel-column[data-side="left"]'));
   expect(left.x).toBeCloseTo(10, 0);
   await expect
     .poll(async () => (await box(verbRail(page))).x - (left.x + left.width))
-    .toBeCloseTo(10, 0);
+    .toBeCloseTo(4, 0);
   const lane = await box(page.locator('.command-bar-lane'));
   expect(lane.x).toBeGreaterThan(left.x + left.width);
   expect(
@@ -115,7 +115,7 @@ test('a header drag stacks a panel at the slot it previews, and the emptied left
       .evaluate((element) =>
         getComputedStyle(element).getPropertyValue('--left-dock-w').trim()
       )
-  ).toBe('306px');
+  ).toBe('300px');
 
   const railBefore = await box(verbRail(page));
   const historyBefore = await box(modelPanel(page, 'History'));
@@ -166,7 +166,8 @@ test('a drag past either rail makes a new column, the rail sliding over while it
   await openWorkspace(page, 'Drag to a new column', {
     right: [['parameters', 'history']]
   });
-  const step = 306;
+  // A 296px column and the 4px dock gap.
+  const step = 300;
 
   // Left: just past the verb rail, at the screen's edge.
   const verbBefore = await box(verbRail(page));
@@ -485,13 +486,14 @@ async function capWidths(page: Page) {
     const style = getComputedStyle(element);
     return {
       rail: parseFloat(style.getPropertyValue('--rail-w')),
-      gap: parseFloat(style.getPropertyValue('--island-gap'))
+      gap: parseFloat(style.getPropertyValue('--island-gap')),
+      between: parseFloat(style.getPropertyValue('--dock-gap'))
     };
   });
   const column = (await box(page.locator('.panel-column').first())).width;
   const side = tokens.gap + tokens.rail + tokens.gap;
   const fitting = (columns: number) =>
-    Math.ceil((side * 2 + columns * (column + tokens.gap)) / 0.6);
+    Math.ceil((side * 2 + columns * (column + tokens.between)) / 0.6);
   return {
     essentials: fitting(2),
     // At or below 720px nothing docks at all.
@@ -537,8 +539,9 @@ test('the docks keep the model 40% of the stage, parking the left column first, 
     right: [['parameters']]
   });
   const widths = await capWidths(page);
-  // Today's tokens: 40px rails, 10px gaps and 296px columns.
-  expect(widths).toEqual({ essentials: 1220, one: 721 });
+  // Today's tokens: 40px rails, 10px island gaps, 4px dock gaps and 296px
+  // columns.
+  expect(widths).toEqual({ essentials: 1200, one: 721 });
   const height = 900;
 
   await page.setViewportSize({ width: widths.essentials, height });

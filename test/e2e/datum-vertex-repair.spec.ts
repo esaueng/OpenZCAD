@@ -458,12 +458,10 @@ test('stages all lost plane vertices atomically, cancels, and retries a refused 
   await expect(page.getByRole('contentinfo')).toContainText(
     'Vertex repair canceled'
   );
-  await expect(
-    page.getByRole('button', {
-      name: 'Selection filter: Face. Cycle.',
-      exact: true
-    })
-  ).toBeVisible();
+  await expect(page.locator('.viewer-shell')).toHaveAttribute(
+    'data-selection-filter',
+    'face'
+  );
   expect(await drawn(page)).toHaveLength(0);
   await arm(page, f.featureName, true);
   await page.mouse.click(first.x, first.y);

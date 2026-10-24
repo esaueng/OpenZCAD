@@ -114,11 +114,14 @@ test('search bar and toast clear the column at phone width', async ({
   expect(toastBox).not.toBeNull();
   expect(toastBox!.x).toBeGreaterThanOrEqual(right);
 
-  // The readout sits under the column, and every control in it is reachable:
-  // nothing floats over it at this width.
+  // Outside a sketch the readout has nothing to say and does not draw; the
+  // ruler lies in the bottom-left corner above the search row.
   const readout = page.locator('.viewport-readout');
-  const readoutBox = await readout.boundingBox();
-  expect(readoutBox!.x + readoutBox!.width).toBeLessThanOrEqual(barBox!.x);
+  await expect(readout).toBeHidden();
+  const ruler = page.getByTestId('viewport-scale-indicator');
+  await expect(ruler).toBeVisible();
+  const rulerBox = (await ruler.boundingBox())!;
+  expect(rulerBox.y + rulerBox.height).toBeLessThanOrEqual(barBox!.y);
   const covered = await readout.evaluate((el) =>
     [...el.querySelectorAll('button')]
       .filter((button) => {
@@ -162,7 +165,7 @@ for (const { width, compact, minLane, phoneBar } of [
     await expect(grid).toHaveText(/^Grid \S+ mm$/);
 
     const icons = readout.locator('.viewport-readout-icon');
-    await expect(icons).toHaveCount(3);
+    await expect(icons).toHaveCount(2);
     for (const icon of await icons.all()) {
       await (compact ? expect(icon).toBeVisible() : expect(icon).toBeHidden());
     }
@@ -180,16 +183,15 @@ for (const { width, compact, minLane, phoneBar } of [
       expect(wordWidth).toBeGreaterThan(10);
     }
 
-    // Filter, snap and grid used to outgrow the width a sketch reserves and
-    // wrap the grid onto a second row, led by a stray separator.
+    // Snap and grid (and the selection filter, before it left) used to
+    // outgrow the width a sketch reserves and wrap the grid onto a second
+    // row, led by a stray separator.
     const tops = await readout.evaluate((el) =>
-      [
-        ...el.querySelectorAll(
-          '.viewport-dock-filter, .viewport-dock-snap, .viewport-dock-grid'
-        )
-      ].map((segment) => segment.getBoundingClientRect().top)
+      [...el.querySelectorAll('.viewport-dock-snap, .viewport-dock-grid')].map(
+        (segment) => segment.getBoundingClientRect().top
+      )
     );
-    expect(tops).toHaveLength(3);
+    expect(tops).toHaveLength(2);
     for (const top of tops) {
       expect(Math.abs(top - tops[0]!)).toBeLessThan(1);
     }
@@ -230,13 +232,13 @@ for (const { width, compact, minLane, phoneBar } of [
 // bar's column; every lane offset reads the bar's height, so the stack
 // follows it. The bar is centred between the docks (here one right column,
 // which runs the window's full height), and where they leave little room it
-// gives way before anything else: it shrinks (to 286px at 1024px, dropping
+// gives way before anything else: it shrinks (to 292px at 1024px, dropping
 // its ⌘K badge under 360px) rather than run under the cube and the ruler
 // standing on it, and only from 1011px down, where the cube steps up above
 // the search row, does the bar have the lane again (to the dock's edge).
 for (const { width, bar, height, type, key } of [
-  { width: 900, bar: 468, height: 38, type: '13px', key: true },
-  { width: 1024, bar: 286, height: 38, type: '13px', key: false },
+  { width: 900, bar: 474, height: 38, type: '13px', key: true },
+  { width: 1024, bar: 292, height: 38, type: '13px', key: false },
   { width: 1280, bar: 520, height: 38, type: '13px', key: true },
   { width: 1920, bar: 730, height: 42, type: '14px', key: true },
   { width: 2560, bar: 760, height: 42, type: '14px', key: true }

@@ -212,9 +212,9 @@ test('Pin docks, two pinned panels stack, and a closed panel reopens at home', a
     modelPanel(page, 'History').getByRole('button', { name: 'Pin History' })
   ).toHaveAttribute('aria-pressed', 'true');
   expect(await dockedTitles(page)).toEqual([['History']]);
-  // The rail moved to the dock's inner edge: a gap from the column, which
-  // stands a gap from the screen's edge.
-  expect(await dockWidth()).toBe('306px');
+  // The rail moved to the dock's inner edge: a dock gap from the column,
+  // which stands an island gap from the screen's edge.
+  expect(await dockWidth()).toBe('300px');
   const column = await box(page.locator('.panel-column'));
   expect(viewport.width - (column.x + column.width)).toBeCloseTo(10, 0);
   await expect
@@ -222,7 +222,7 @@ test('Pin docks, two pinned panels stack, and a closed panel reopens at home', a
       const rail = await box(page.locator('.instrument-rail'));
       return column.x - (rail.x + rail.width);
     })
-    .toBeCloseTo(10, 0);
+    .toBeCloseTo(4, 0);
 
   // A second pin stacks under it in the same column, from the footer's Pin.
   await railPanelButton(page, 'Parameters').click();
@@ -488,8 +488,11 @@ test('a sketch hides the dock and an open unpinned panel and restores both', asy
   await expect(
     page.locator('.panel-column, .panel-unpinned, .panel-lane-float')
   ).toHaveCount(0);
-  const railSketch = await box(page.locator('.instrument-rail'));
-  expect(railSketch.x).toBeGreaterThan(railDocked.x + 300);
+  // The rail slides back by the dock's width (a 296px column and its 4px
+  // dock gap) once its transition lands.
+  await expect
+    .poll(async () => (await box(page.locator('.instrument-rail'))).x)
+    .toBeGreaterThan(railDocked.x + 299);
   // Suspension is not a preference: the stored layout keeps both.
   expect(await storedLayout(page)).toMatchObject({
     right: [['parameters']],

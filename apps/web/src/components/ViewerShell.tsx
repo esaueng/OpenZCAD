@@ -171,6 +171,12 @@ interface ViewerShellProps {
    * drawer's Objects, History and Parameters buttons.
    */
   railExtras?: ReactNode;
+  /**
+   * Whether the active tool chose the selection filter (or Q did). Nothing
+   * on screen names the filter (the status line says what Q chose), so the
+   * viewer carries both as data for tests and tooling.
+   */
+  selectionFilterAutomatic?: boolean;
   hideViewerToolbar?: boolean;
   /**
    * View mode drops the utility rail — its controls move to the floating view
@@ -405,6 +411,7 @@ export function ViewerShell({
   appearancePreview,
   modeOverlay,
   hideViewerToolbar = false,
+  selectionFilterAutomatic = true,
   dockLayout = false,
   dockExtras = null,
   railExtras = null,
@@ -637,6 +644,10 @@ export function ViewerShell({
     <section
       className={`viewer-shell${viewMode ? ' view-mode' : ''}`}
       aria-label="3D viewport"
+      data-selection-filter={selectionFilter}
+      data-selection-filter-source={
+        selectionFilterAutomatic ? 'tool' : 'manual'
+      }
     >
       {projectThumbnailSync ? (
         <ProjectThumbnailSyncAgent
@@ -851,12 +862,6 @@ export function ViewerShell({
       {!hideViewerToolbar && (
         <>
           <div className="viewer-rail-stack">
-            {/* The scale stands on the cube, so the corner is one stack
-                as narrow as the cube wherever the cube goes. */}
-            <ViewportScaleIndicator
-              scaleSinkRef={scaleIndicatorRef}
-              units={units}
-            />
             <OrientationWidget
               orientationRef={orientationRef}
               onSelectView={onView}
@@ -871,12 +876,8 @@ export function ViewerShell({
         </>
       )}
       {modeOverlay}
-      {hideViewerToolbar && (
-        <ViewportScaleIndicator
-          scaleSinkRef={scaleIndicatorRef}
-          units={units}
-        />
-      )}
+      {/* Upright at the model's left edge, or along the foot on a phone. */}
+      <ViewportScaleIndicator scaleSinkRef={scaleIndicatorRef} units={units} />
     </section>
   );
 }

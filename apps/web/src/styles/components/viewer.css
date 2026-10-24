@@ -83,10 +83,24 @@
   display: none;
 }
 
+/* Upright, the rule stands on the value, its ticks reaching right. */
+.viewport-scale-indicator.is-upright {
+  align-items: flex-start;
+}
+
+.viewer-shell .viewport-scale-indicator.is-upright canvas.viewport-scale-rule {
+  width: 18px !important;
+  height: var(--viewport-scale-length, 1px) !important;
+}
+
+.viewport-scale-indicator.is-upright .viewport-scale-value {
+  font-size: 13px;
+}
+
 .viewer-shell canvas.viewport-scale-rule {
   display: block;
   flex: 0 0 auto;
-  width: var(--viewport-scale-width, 1px) !important;
+  width: var(--viewport-scale-length, 1px) !important;
   height: 18px !important;
 }
 
