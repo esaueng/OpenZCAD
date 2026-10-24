@@ -2,7 +2,8 @@
  * Seeded fuzzing of every parser that reads bytes the server hands back:
  * both envelope classes (structure and decryption, one-shot and
  * incremental), wrapped and sealed keys, version signatures, version log
- * records, device-list entries, revocation cutoffs and the document,
+ * records, device-list entries, revocation cutoffs, contacts entries and
+ * the document,
  * project-info and key-archive bodies. Whatever
  * the input, each call either succeeds or throws an `E2eeError`; never a
  * TypeError, RangeError or a DOMException leaking out of WebCrypto.
@@ -25,6 +26,11 @@ import {
   verifyDeviceList,
   verifyRevocationCutoffs
 } from './devices';
+import {
+  nextContactsEntry,
+  signContactsEntry,
+  verifyContactsList
+} from './contacts';
 import { E2eeError } from './errors';
 import {
   exportPublicKey,
@@ -446,6 +452,70 @@ describe('parser fuzzing', () => {
           )
         )
       );
+    }
+    for (const code of ['malformed', 'authentication-failed']) {
+      expect(outcomes.get(code) ?? 0).toBeGreaterThan(0);
+    }
+  });
+
+  it('contacts entries only throw E2eeError', async () => {
+    const identity = await generateSigningKeyPair(false);
+    const identityRaw = await exportPublicKey(identity.publicKey);
+    const verify = await signContactsEntry(
+      identity.privateKey,
+      nextContactsEntry(null, 'u1', {
+        issuedAt: 1,
+        action: 'verify',
+        contactUserId: 'u2',
+        identityKeyHash: patternBytes(32, 1),
+        deviceListHead: { sequence: 3, entryHash: patternBytes(32, 2) }
+      })
+    );
+    const list = await verifyContactsList(identityRaw, [verify]);
+    const outcomes = new Map<string, number>();
+    const count = (outcome: string) =>
+      outcomes.set(outcome, (outcomes.get(outcome) ?? 0) + 1);
+    for (const action of ['advance', 'key-changed'] as const) {
+      const next = await signContactsEntry(
+        identity.privateKey,
+        nextContactsEntry(list, 'u1', {
+          issuedAt: 2,
+          action,
+          contactUserId: 'u2',
+          identityKeyHash: patternBytes(32, 1),
+          deviceListHead:
+            action === 'advance'
+              ? { sequence: 4, entryHash: patternBytes(32, 3) }
+              : null
+        })
+      );
+      for (let seed = 1; seed <= 300; seed += 1) {
+        count(
+          await onlyTypedErrors(() =>
+            verifyContactsList(
+              identityRaw,
+              [
+                verify,
+                {
+                  entry: mutate(seed, new Uint8Array(next.entry)),
+                  signature: next.signature
+                }
+              ],
+              { pin: list.pin }
+            )
+          )
+        );
+        count(
+          await onlyTypedErrors(() =>
+            verifyContactsList(identityRaw, [
+              {
+                entry: verify.entry,
+                signature: mutate(seed, new Uint8Array(verify.signature))
+              }
+            ])
+          )
+        );
+      }
     }
     for (const code of ['malformed', 'authentication-failed']) {
       expect(outcomes.get(code) ?? 0).toBeGreaterThan(0);

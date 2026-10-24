@@ -513,14 +513,17 @@ export async function accountKeyCommitment(
 
 // --- Statements signed by the identity key or a device key ----------------
 
-type StatementKind =
+/** @internal What an identity- or device-signed statement is, for its label. */
+export type StatementKind =
   | 'device list'
   | 'identity transition'
   | 'device approval grant'
   | 'revocation cutoffs'
-  | 'group reset';
+  | 'group reset'
+  | 'contacts list';
 
-async function signStatement(
+/** @internal `u8 1 | r || s` over `label "v1 <kind> signature" | statement`. */
+export async function signStatement(
   privateKey: SigningPrivateKey,
   kind: StatementKind,
   statement: Uint8Array
@@ -532,7 +535,8 @@ async function signStatement(
   return concatBytes(Uint8Array.of(STATEMENT_VERSION_1), rs);
 }
 
-async function verifyingKey(publicKey: Uint8Array | CryptoKey): Promise<{
+/** @internal A public key to verify with, and its raw bytes. */
+export async function verifyingKey(publicKey: Uint8Array | CryptoKey): Promise<{
   key: CryptoKey;
   raw: Bytes;
 }> {
@@ -549,7 +553,8 @@ async function verifyingKey(publicKey: Uint8Array | CryptoKey): Promise<{
   return { key: publicKey, raw: await exportPublicKey(publicKey) };
 }
 
-async function statementValid(
+/** @internal Whether `signature` is `kind`'s signature over `statement`. */
+export async function statementValid(
   key: CryptoKey,
   kind: StatementKind,
   statement: Uint8Array,
