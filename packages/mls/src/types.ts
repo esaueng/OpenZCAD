@@ -132,7 +132,18 @@ export interface RejoinPsk {
   secret: Uint8Array;
 }
 
+/** Full public transcript through the target epoch, decrypted by the app.
+ * Retain the epoch-zero signed GroupInfo when creating the archive. Records
+ * are the unchanged EpochRecordV1 bytes for epochs 1..target, in order.
+ * Verification authenticates the transcript/tree, not past device-list policy.
+ */
+export interface JoinArchive {
+  initialGroupInfo: Uint8Array;
+  epochRecords: Uint8Array[];
+}
+
 export interface RejoinRequest {
+  archive: JoinArchive;
   psk: RejoinPsk;
   /** A stale leaf of this user to replace in the same external Commit. */
   replaceLeaf?: number;
@@ -142,6 +153,8 @@ export interface RejoinResult {
   commit: Uint8Array;
   change: EpochChange;
 }
+
+export type BeginRejoinRequest = Omit<RejoinRequest, 'archive'>;
 
 /** A GroupInfo or Welcome read before acting on it. Unverified hints. */
 export interface GroupInfoSummary {
@@ -163,6 +176,8 @@ export interface SessionStatus {
   pendingCommit: boolean;
   /** An external rejoin the room has not accepted yet. */
   pendingRejoin: boolean;
+  pendingJoin: boolean;
+  pendingArchive: boolean;
   members: LeafInfo[];
   roles: ProjectRoles | null;
 }

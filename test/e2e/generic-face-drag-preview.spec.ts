@@ -110,8 +110,10 @@ test('a generic imported side drags the whole body and stays selected after the 
       Number(await canvas.getAttribute('data-e2e-height-proxy-offset'))
     )
     .toBeGreaterThan(10);
-  // The body itself carries the extension, rounds and all, before release.
+  // The body itself carries the extension, rounds and all, before release,
+  // over a ghost of the part as it was.
   await expect.poll(() => maxX(canvas)).toBeGreaterThan(90);
+  await expect(canvas).toHaveAttribute('data-e2e-offset-ghost', '1');
   const dragged = Number(
     await canvas.getAttribute('data-e2e-height-proxy-offset')
   );
@@ -121,6 +123,7 @@ test('a generic imported side drags the whole body and stays selected after the 
     timeout: 30_000
   });
   await expect.poll(() => maxX(canvas)).toBeCloseTo(80 + dragged, 3);
+  await expect(canvas).not.toHaveAttribute('data-e2e-offset-ghost');
   // The moved face is still the selection, armed for another drag, rather
   // than a whole-body selection offering Move.
   await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
@@ -132,4 +135,51 @@ test('a generic imported side drags the whole body and stays selected after the 
     after[field].forEach((value, axis) =>
       expect(value).toBeCloseTo(before[field][axis]!, 6)
     );
+});
+
+test('a typed offset previews over the ghost too, until it is applied', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const { document } = await roundedPlateDocument();
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Import project…' }).click();
+  await page.getByLabel('Import project backup').setInputFiles({
+    name: 'plate.openzcad',
+    mimeType: 'application/json',
+    buffer: Buffer.from(
+      JSON.stringify({
+        format: 'openzcad-project',
+        version: 1,
+        document,
+        files: []
+      })
+    )
+  });
+  await expectBodyCount(page, 1);
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toHaveAttribute('data-e2e-camera-distance', /.+/);
+  await expect
+    .poll(async () => {
+      await canvas.evaluate((element) =>
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-select-planar-face', {
+            detail: { normal: { x: 1, y: 0, z: 0 } }
+          })
+        )
+      );
+      return canvas.getAttribute('data-e2e-handle-x');
+    })
+    .not.toBeNull();
+  await page.getByTestId('direct-manipulation-value').click();
+  const keypad = page.getByRole('dialog', { name: 'Offset value' });
+  await keypad.getByRole('textbox').fill('-3');
+  // An uncommitted cut is never drawn as if it were the part: the removed
+  // material stays visible as the ghost.
+  await expect(canvas).toHaveAttribute('data-e2e-offset-ghost', '1');
+  await keypad.getByRole('button', { name: 'Apply offset' }).click();
+  await expect.poll(() => maxX(canvas)).toBeCloseTo(77, 3);
+  await expect(canvas).not.toHaveAttribute('data-e2e-offset-ghost');
 });

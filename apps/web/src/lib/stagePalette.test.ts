@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DARK_STAGE_PALETTE } from '@openzcad/viewport';
-import { readStagePalette, watchStageTheme } from './stagePalette';
+import {
+  readDatumColor,
+  readStagePalette,
+  watchStageTheme
+} from './stagePalette';
 
 describe('readStagePalette', () => {
   afterEach(() => {
@@ -59,5 +63,25 @@ describe('watchStageTheme', () => {
     await Promise.resolve();
     expect(onChange).toHaveBeenCalledTimes(1);
     delete document.documentElement.dataset.theme;
+  });
+});
+
+describe('readDatumColor', () => {
+  afterEach(() => {
+    document.documentElement.removeAttribute('style');
+  });
+
+  it('reads the theme datum colour, short form included', () => {
+    const root = document.documentElement;
+    root.style.setProperty('--color-datum', '#5d6a80');
+    expect(readDatumColor(root)).toBe('#5d6a80');
+    root.style.setProperty('--color-datum', '#abc');
+    expect(readDatumColor(root)).toBe('#aabbcc');
+  });
+
+  it('falls back to the graphite-stage steel when the token is unreadable', () => {
+    const root = document.documentElement;
+    root.style.setProperty('--color-datum', 'steel');
+    expect(readDatumColor(root)).toBe('#b3bed0');
   });
 });

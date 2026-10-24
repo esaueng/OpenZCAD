@@ -26,7 +26,8 @@ export type PolicyReasonCode =
   | 'rejoin-psk-outside-window'
   | 'role-forbidden'
   | 'role-not-listed'
-  | 'roles-invalid';
+  | 'roles-invalid'
+  | 'removal-history-mismatch';
 
 export interface PolicyReason {
   code: PolicyReasonCode;

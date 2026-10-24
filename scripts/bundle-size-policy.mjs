@@ -45,6 +45,8 @@ export const LAZY_ENTRY_PATTERNS = [
   /^assets\/sqlite3-.*\.wasm$/,
   /^assets\/shaprImportWorker-.*\.js$/,
   /^assets\/meshImportWorker-.*\.js$/,
+  // ADR-024 decode worker: decrypts and inflates encrypted project data.
+  /^assets\/e2eeDecodeWorker-.*\.js$/,
   /^assets\/text-loader-.*\.js$/
 ];
 

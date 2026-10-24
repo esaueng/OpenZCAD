@@ -5,12 +5,14 @@ import { DEFAULT_REJOIN_WINDOW } from './constants';
 import type { AsyncEngineApi } from './engine';
 import type {
   BuildInfo,
+  BeginRejoinRequest,
   CommitRequest,
   DeviceDirectory,
   EpochChange,
   EpochRecord,
   GroupInfoSummary,
   LeafInit,
+  JoinArchive,
   PendingCommit,
   Processed,
   RejoinPsk,
@@ -124,8 +126,27 @@ export class MlsSession {
     return this.api.inspectWelcome(this.id, welcome);
   }
 
-  join(welcome: Uint8Array): Promise<EpochChange> {
-    return this.api.join(this.id, welcome);
+  /** Join only after the full archive agrees with the Welcome removal history. */
+  join(welcome: Uint8Array, archive: JoinArchive): Promise<EpochChange> {
+    return this.api.join(this.id, welcome, archive);
+  }
+
+  /** Open only enough provisional state to decrypt the archive. */
+  beginJoin(welcome: Uint8Array): Promise<void> {
+    return this.api.beginJoin(this.id, welcome);
+  }
+
+  completeJoin(archive: JoinArchive): Promise<EpochChange> {
+    return this.api.completeJoin(this.id, archive);
+  }
+
+  discardJoin(): Promise<void> {
+    return this.api.discardJoin(this.id);
+  }
+
+  /** Untrusted exporter for archive decryption before admission completes. */
+  archiveKey(): Promise<Uint8Array> {
+    return this.api.archiveKey(this.id);
   }
 
   /**
@@ -184,6 +205,19 @@ export class MlsSession {
 
   confirmRejoin(): Promise<void> {
     return this.api.confirmRejoin(this.id);
+  }
+
+  /** Build a provisional external Commit when the old archive is unavailable. */
+  beginRejoin(
+    groupInfo: Uint8Array,
+    request: BeginRejoinRequest
+  ): Promise<RejoinResult> {
+    return this.api.beginRejoin(this.id, groupInfo, request);
+  }
+
+  /** Verify the new-epoch archive and the original request's removal cutoffs. */
+  completeRejoin(archive: JoinArchive): Promise<void> {
+    return this.api.completeRejoin(this.id, archive);
   }
 
   discardRejoin(): Promise<void> {
