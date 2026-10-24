@@ -58,3 +58,18 @@ export function suppressFeatureToastMessage(
     ? `${verb} ${name}`
     : `${verb} ${name} · ${countLabel(newlyNeedingRepair, 'later feature', 'later features')} now ${newlyNeedingRepair === 1 ? 'needs' : 'need'} repair`;
 }
+
+/**
+ * Why Undo is spent when older steps were dropped to keep the history within
+ * its limits. "Nothing to undo" would be untrue: there was more, it was just
+ * not kept. The Undo button's help and the palette's disabled reason share it.
+ */
+export const UNDO_FLOOR_TRIMMED_REASON = 'No older undo steps kept';
+
+/**
+ * Raised by the undo that reaches that floor — the one moment a dropped step
+ * matters — with Revisions as the action, since save points are how to go
+ * back further.
+ */
+export const UNDO_FLOOR_TRIMMED_NOTICE =
+  'Oldest undo step kept · save points go further back';

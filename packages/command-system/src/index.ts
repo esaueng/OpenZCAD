@@ -4314,6 +4314,16 @@ export class CommandManager {
   get canRedo(): boolean {
     return !!this.history && this.history.cursor < this.history.entries.length;
   }
+  /**
+   * Whether undo has reached the oldest kept step of a history that dropped
+   * older ones to stay within its limits — so "nothing to undo" would be
+   * wrong: there was more, it just was not kept.
+   */
+  get undoFloorTrimmed(): boolean {
+    return (
+      !!this.history && this.history.cursor === 0 && this.history.trimmed > 0
+    );
+  }
   get undoLabel(): string | null {
     return (
       this.history?.entries[(this.history?.cursor ?? 0) - 1]?.label ?? null

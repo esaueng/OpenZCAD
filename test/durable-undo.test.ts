@@ -175,6 +175,37 @@ describe('durable undo', () => {
     ).toBe(true);
   });
 
+  it('reports the undo floor as trimmed only once every kept step is undone', () => {
+    const rename = (manager: CommandManager, index: number) =>
+      manager.execute(
+        commandFactories.renameNode({
+          nodeId: manager.document.rootNodeId,
+          name: `Part ${index}`
+        })
+      );
+    const untrimmed = new CommandManager(initial());
+    rename(untrimmed, 0);
+    untrimmed.undo();
+    expect(untrimmed.canUndo).toBe(false);
+    expect(untrimmed.undoFloorTrimmed).toBe(false);
+
+    let trimmed = new CommandManager(initial());
+    for (let index = 0; index <= MAX_UNDO_STEPS; index++)
+      rename(trimmed, index);
+    expect(trimmed.document.editHistory?.trimmed).toBe(1);
+    expect(trimmed.undoFloorTrimmed).toBe(false);
+    for (let index = 1; index < MAX_UNDO_STEPS; index++) trimmed.undo();
+    expect(trimmed.undoFloorTrimmed).toBe(false);
+    trimmed.undo();
+    expect(trimmed.canUndo).toBe(false);
+    expect(trimmed.undoFloorTrimmed).toBe(true);
+    // The floor is the document's, so it outlives a reload; a redo leaves it.
+    trimmed = reopen(trimmed);
+    expect(trimmed.undoFloorTrimmed).toBe(true);
+    trimmed.redo();
+    expect(trimmed.undoFloorTrimmed).toBe(false);
+  });
+
   it('rejects corrupt history and protected-field patches', () => {
     const a = new CommandManager(initial());
     a.execute(box());
