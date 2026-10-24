@@ -4594,7 +4594,8 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   fillet: ['endRadius', 'radiusLaw'],
   chamfer: ['angleDeg', 'distance2'],
   // R01: clearing a datum axis returns to the sketch or world axis.
-  revolve: ['axisRef'],
+  // U09: clearing a revolve's region returns it to the first-object profile.
+  revolve: ['axisRef', 'profile'],
   pattern: ['axisRef'],
   transform: ['axisRotation']
 };

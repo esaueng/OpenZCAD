@@ -5,7 +5,8 @@ import {
   findSketch,
   getLatestBodyId,
   getLatestSketchId,
-  revolveSketch
+  revolveSketch,
+  updateFeature
 } from '@openzcad/document-core';
 import { computeSketchRegions } from '@openzcad/geometry';
 import {
@@ -162,6 +163,55 @@ describe('region revolve', () => {
     ).toBe(false);
     expect(withProfile.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
   });
+
+  it('drops the region when the revolve is retargeted to another sketch', async () => {
+    const edges = edgeSketch();
+    const edgeSketchId = getLatestSketchId(edges)!;
+    const reference = regionReference(edges);
+    // A second, earlier-in-history sketch whose first object is a closed
+    // rectangle: the profile a retargeted revolve falls back to.
+    const withOther = addSketchFeature(edges, {
+      name: 'Other',
+      plane: 'XZ',
+      offset: 0,
+      object: {
+        objectKind: 'rectangle',
+        width: OUTER - INNER,
+        height: HEIGHT,
+        centerX: (INNER + OUTER) / 2,
+        centerY: HEIGHT / 2
+      }
+    }).document;
+    const otherSketchId = getLatestSketchId(withOther)!;
+    const revolved = revolveSketch(withOther, {
+      name: 'Revolve',
+      sketchId: edgeSketchId,
+      axis: 'vertical',
+      profile: reference
+    }).document;
+    const feature = Object.values(revolved.nodes).find(
+      (node) => node.kind === 'feature' && node.featureKind === 'revolve'
+    );
+    if (feature?.kind !== 'feature') throw new Error('no revolve');
+    const retargeted = updateFeature(revolved, {
+      featureId: feature.featureId,
+      data: {
+        featureKind: 'revolve',
+        sketchId: otherSketchId,
+        axis: 'vertical'
+      },
+      clearData: ['profile']
+    });
+    const data = (
+      retargeted.nodes[feature.id] as { data: Record<string, unknown> }
+    ).data;
+    expect('profile' in data).toBe(false);
+    const derived = await kernel.syncDocument(retargeted);
+    const body = derived.bodyRepresentations[feature.bodyId!];
+    expect(
+      Math.abs(body!.volume - pappus(FULL_REVOLVE_ANGLE_DEG))
+    ).toBeLessThan(1e-6);
+  }, 120_000);
 
   it('still refuses the first-object path on a four-edge sketch', async () => {
     // Without a profile the revolve reads the first object, a lone line. This

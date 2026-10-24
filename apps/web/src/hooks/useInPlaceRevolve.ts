@@ -103,7 +103,8 @@ export interface InPlaceRevolve {
   previewAngle(value: number): void;
   setAngle(value: number, raw?: string): void;
   done(): boolean;
-  cancel(): void;
+  /** Ends the command; `quiet` when another action already says why. */
+  cancel(quiet?: boolean): void;
 }
 
 function toWorld(basis: PlaneBasis, point: { x: number; y: number }): Vector3 {
@@ -230,6 +231,10 @@ export function useInPlaceRevolve(
   const axisId = axis?.id ?? null;
   useEffect(() => {
     if (!profile || !axisId) return;
+    // LivePreview keeps a completed frame by value alone, so the same angle
+    // on a new profile or axis would republish the old solid: drop it first.
+    preview.clear();
+    setPreviewValid(false);
     preview.request(sessionRef.current?.angle ?? 360);
   }, [profile, axisId, preview]);
 
@@ -307,11 +312,15 @@ export function useInPlaceRevolve(
     return true;
   }, [canFinish, end]);
 
-  const cancel = useCallback(() => {
-    if (!sessionRef.current) return;
-    end();
-    optionsRef.current.onStatus('Revolve canceled; nothing was added.');
-  }, [end]);
+  const cancel = useCallback(
+    (quiet = false) => {
+      if (!sessionRef.current) return;
+      end();
+      if (!quiet)
+        optionsRef.current.onStatus('Revolve canceled; nothing was added.');
+    },
+    [end]
+  );
 
   return {
     active: session !== null,

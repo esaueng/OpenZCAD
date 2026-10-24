@@ -283,3 +283,95 @@ test('Escape leaves an in-place Revolve with nothing added', async ({
   await expect(bar).toHaveCount(0);
   await expectBodyCount(page, 1);
 });
+
+test('an unapplied Move is asked about before Revolve starts', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  let document = createProjectDocument(
+    'Revolve after Move',
+    toUserId('user_e2e')
+  );
+  document = addPrimitiveFeature(document, {
+    name: 'Marker',
+    primitiveKind: 'box',
+    dimensions: { width: 6, height: 6, depth: 6 }
+  });
+  document = addSketchFeature(document, {
+    name: 'Profile',
+    plane: 'XZ',
+    offset: 0,
+    object: {
+      objectKind: 'rectangle',
+      width: 10,
+      height: 10,
+      centerX: -15,
+      centerY: 5
+    }
+  }).document;
+  await openDocument(page, document);
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
+    timeout: 30_000
+  });
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  const move = page.getByRole('form', { name: 'Move controls' });
+  await move.getByLabel('Move X in mm').fill('5');
+
+  const moreTools = page.getByRole('button', { name: /^More tools/ });
+  if ((await moreTools.getAttribute('aria-expanded')) !== 'true') {
+    await moreTools.click();
+  }
+  await page.getByRole('button', { name: /^Revolve \(R\)/ }).click();
+  const ask = page.getByRole('alertdialog', { name: 'Apply the Move first?' });
+  await expect(ask).toBeVisible();
+  await expect(
+    page.getByRole('group', { name: 'Revolve command' })
+  ).toHaveCount(0);
+  await ask.getByRole('button', { name: 'Discard' }).click();
+  await expect(
+    page.getByRole('group', { name: 'Revolve command' })
+  ).toBeVisible();
+  await expect(move).toHaveCount(0);
+});
+
+test('switching workspace ends an in-place Revolve', async ({ page }) => {
+  test.setTimeout(90_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  let document = createProjectDocument(
+    'Revolve then View',
+    toUserId('user_e2e')
+  );
+  document = addPrimitiveFeature(document, {
+    name: 'Marker',
+    primitiveKind: 'box',
+    dimensions: { width: 6, height: 6, depth: 6 }
+  });
+  // Revolve needs a closed profile to be available at all.
+  document = addSketchFeature(document, {
+    name: 'Profile',
+    plane: 'XZ',
+    offset: 0,
+    object: {
+      objectKind: 'rectangle',
+      width: 10,
+      height: 10,
+      centerX: -15,
+      centerY: 5
+    }
+  }).document;
+  await openDocument(page, document);
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
+    timeout: 30_000
+  });
+  await page.keyboard.press('r');
+  const bar = page.getByRole('group', { name: 'Revolve command' });
+  await expect(bar).toBeVisible();
+  const modes = page.getByRole('group', { name: 'Workspace mode' });
+  await modes.getByRole('button', { name: 'View', exact: true }).click();
+  await expect(bar).toHaveCount(0);
+  await modes.getByRole('button', { name: 'Build', exact: true }).click();
+  await expect(bar).toHaveCount(0);
+});

@@ -7933,17 +7933,6 @@ export function App() {
   function launchTool(nextTool: ToolId, modelingFeature?: FeatureNode) {
     const current = managerRef.current?.document;
     if (modelingFeature && !current) return;
-    // U09: a new Revolve runs in place, with no card. Editing an existing
-    // one still opens its card until history edits re-arm the handles.
-    if (
-      nextTool === 'revolve' &&
-      !modelingFeature &&
-      !toolDisabledReason(nextTool, availability)
-    ) {
-      startInPlaceRevolve();
-      return;
-    }
-    if (inPlaceRevolveRef.current.active) inPlaceRevolveRef.current.cancel();
     const request = {
       tool: nextTool,
       historyFeature:
@@ -8154,6 +8143,13 @@ export function App() {
       return;
     }
     if (applyMove && !confirmMove()) return;
+    // U09: a new Revolve runs in place, with no card, once any unapplied
+    // Move has been applied or discarded above. Editing an existing one
+    // still opens its card until history edits re-arm the handles.
+    if (nextTool === 'revolve' && !feature) {
+      startInPlaceRevolve();
+      return;
+    }
     if (!openTool(nextTool) || !feature || !data) return;
     // Only after Apply/Discard: Cancel must leave the Move's target and the
     // current editor untouched. The edit uses its own consumed source body.
@@ -8406,6 +8402,10 @@ export function App() {
 
   /** Closes the feature panel alone, leaving the selection where it is. */
   function closeFeaturePanel() {
+    // An in-place command is the panel it replaced: whatever closes panels
+    // (another tool, a workspace switch, Measure) ends it too, quietly,
+    // since the action that closed it says what happened.
+    inPlaceRevolveRef.current.cancel(true);
     extrudeEditRequest.current += 1;
     // The mode hint the panel set ("Move/Rotate: drag the arrows…") describes
     // a state the user has just left; it must not outlive the panel.
@@ -25991,8 +25991,21 @@ export function App() {
                           angleDeg: value.angleDeg,
                           ...(value.axisRef ? { axisRef: value.axisRef } : {})
                         },
-                        // R01: the sketch axis is the absent datum axis.
-                        ...(value.axisRef ? {} : { clearData: ['axisRef'] })
+                        // R01: the sketch axis is the absent datum axis. U09:
+                        // a region picked in the old sketch names nothing in
+                        // a new one, so a retarget falls back to the new
+                        // sketch's first profile.
+                        ...(() => {
+                          const cleared = [
+                            ...(value.axisRef ? [] : ['axisRef']),
+                            ...(feature.data.featureKind === 'revolve' &&
+                            feature.data.profile &&
+                            value.sketchId !== feature.data.sketchId
+                              ? ['profile']
+                              : [])
+                          ];
+                          return cleared.length ? { clearData: cleared } : {};
+                        })()
                       },
                       `Edit ${value.name}`
                     ),

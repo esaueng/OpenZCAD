@@ -126,6 +126,18 @@ describe('useInPlaceRevolve', () => {
     expect(publishPreview).toHaveBeenLastCalledWith(null);
   });
 
+  it('rebuilds for a new axis instead of republishing the old solid', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start(PICK));
+    act(() => hook.result.current.pickAxis('sketch-vertical'));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    const before = built.length;
+    act(() => hook.result.current.pickAxis('sketch-horizontal'));
+    await waitFor(() => expect(built.length).toBeGreaterThan(before));
+    expect(built.at(-1)?.axis).toEqual({ axis: 'horizontal' });
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+  });
+
   it('commits a typed expression rather than its value', async () => {
     const { hook, commit } = setup();
     act(() => hook.result.current.start(PICK));
@@ -161,6 +173,15 @@ describe('useInPlaceRevolve', () => {
       hook.result.current.pickProfile({ ...PICK, regionFingerprint: 8 })
     );
     expect(hook.result.current.axisId).toBe('sketch-vertical');
+  });
+
+  it('ends quietly when another action closes it', () => {
+    const onStatus = vi.fn();
+    const { hook } = setup({ onStatus });
+    act(() => hook.result.current.start(PICK));
+    act(() => hook.result.current.cancel(true));
+    expect(hook.result.current.active).toBe(false);
+    expect(onStatus).not.toHaveBeenCalled();
   });
 
   it('cancels without committing and clears the preview', () => {
