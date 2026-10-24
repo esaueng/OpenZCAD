@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi
+} from 'vitest';
 import {
   appendRevision,
   assertStorableDocument,
@@ -31,6 +39,17 @@ import {
   parseSaveProjectDocumentRequest,
   type HttpError
 } from '../apps/web/worker/validation';
+import {
+  createEncrypted,
+  device as encryptedDevice,
+  makeAccount,
+  newServer as newEncryptedServer,
+  reload as encryptedReload,
+  type Account,
+  type Device as EncryptedDevice
+} from './support/e2ee-documents';
+
+const E2EE_OWNER = 'user_autosave';
 
 const owner = toUserId('user_owner');
 
@@ -1612,5 +1631,180 @@ describe('a divergence the reconciler found rather than the account', () => {
     await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_MAX_WAIT_MS * 2);
 
     expect(saves).toHaveLength(1);
+  });
+});
+/**
+ * ADR-024 Phase 4, slice 4-5: autosave of an end-to-end encrypted project
+ * goes through the encrypted store (`encryptedProjectStore.ts`), against
+ * the real Worker routes over SQLite. Its refusals read like the plaintext
+ * route's, so the controller needs no second code path.
+ */
+describe('cloud project autosave — the encrypted transport', () => {
+  let account: Account;
+
+  beforeAll(async () => {
+    account = await makeAccount(E2EE_OWNER, ['laptop', 'desktop'], ['tablet']);
+  });
+
+  function encryptedHarness(d: EncryptedDevice) {
+    const statuses: CloudProjectAutosaveStatus[] = [];
+    const conflicts: { projectId: string; accountVersion: number }[] = [];
+    const synced: number[] = [];
+    const controller = new CloudProjectAutosave({
+      connectivity: testConnectivity().connectivity,
+      idleDelayMs: PROJECT_AUTOSAVE_IDLE_MS,
+      maxWaitMs: PROJECT_AUTOSAVE_MAX_WAIT_MS,
+      retryDelayMs: 1_000,
+      now: () => Date.now(),
+      api: d.store,
+      onStatus: (status) => statuses.push(status),
+      onConflict: ({ projectId, accountVersion }) =>
+        conflicts.push({ projectId, accountVersion }),
+      onSynced: ({ version }) => synced.push(version)
+    });
+    return { controller, statuses, conflicts, synced };
+  }
+
+  async function settle(controller: CloudProjectAutosave) {
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+  }
+
+  it('writes signed ciphertext versions fenced on the acknowledged one', async () => {
+    const srv = newEncryptedServer([account]);
+    const laptop = encryptedDevice(srv, account, 'laptop');
+    const { document } = await createEncrypted(laptop, 'Bracket');
+    const { controller, statuses, synced } = encryptedHarness(laptop);
+    controller.openProject(document.projectId, document.version);
+    const next = {
+      ...document,
+      name: 'Autosaved',
+      version: document.version + 1
+    };
+    controller.schedule(next);
+    await settle(controller);
+    expect(lastState(statuses)).toBe('synced');
+    expect(synced).toEqual([next.version]);
+    controller.schedule({ ...next, version: next.version + 1 });
+    await settle(controller);
+    expect(synced).toEqual([next.version, next.version + 1]);
+    const stored = srv.db
+      .prepare(
+        'SELECT document_version, key_epoch FROM e2ee_project_versions WHERE project_id = ? ORDER BY document_version'
+      )
+      .all(document.projectId);
+    expect(stored).toEqual([
+      { document_version: document.version, key_epoch: 0 },
+      { document_version: next.version, key_epoch: 0 },
+      { document_version: next.version + 1, key_epoch: 0 }
+    ]);
+    expect(JSON.stringify(stored)).not.toContain('Autosaved');
+    await expect(
+      encryptedDevice(srv, account, 'desktop').store.loadProject(
+        document.projectId
+      )
+    ).resolves.toMatchObject({ name: 'Autosaved', version: next.version + 1 });
+    controller.dispose();
+  });
+
+  it('stops on a newer head another device wrote and reports its version', async () => {
+    const srv = newEncryptedServer([account]);
+    const laptop = encryptedDevice(srv, account, 'laptop');
+    const { document } = await createEncrypted(laptop, 'Bracket');
+    const desktop = encryptedDevice(srv, account, 'desktop');
+    const theirs = await desktop.store.loadProject(document.projectId);
+    await desktop.store.saveProjectDocument({
+      projectId: document.projectId,
+      expectedVersion: theirs.version,
+      document: { ...theirs, version: theirs.version + 5 }
+    });
+    const { controller, statuses, conflicts } = encryptedHarness(laptop);
+    controller.openProject(document.projectId, document.version);
+    controller.schedule({ ...document, version: document.version + 1 });
+    await settle(controller);
+    expect(lastState(statuses)).toBe('conflict');
+    expect(conflicts).toEqual([
+      { projectId: document.projectId, accountVersion: theirs.version + 5 }
+    ]);
+    controller.dispose();
+  });
+
+  it('halts for repair when the account rolls back the head it builds on', async () => {
+    const srv = newEncryptedServer([account]);
+    const laptop = encryptedDevice(srv, account, 'laptop');
+    const { document } = await createEncrypted(laptop, 'Bracket');
+    const projectId = document.projectId;
+    const v1 = srv.db
+      .prepare('SELECT * FROM e2ee_project_versions WHERE project_id = ?')
+      .all(projectId) as Record<string, string | number | null>[];
+    await laptop.store.saveProjectDocument({
+      projectId,
+      expectedVersion: document.version,
+      document: { ...document, version: document.version + 1 }
+    });
+    // The account forgets version 2 and serves version 1 again.
+    srv.db.exec('DROP TRIGGER e2ee_project_version_immutable');
+    srv.db
+      .prepare('DELETE FROM e2ee_project_versions WHERE project_id = ?')
+      .run(projectId);
+    const columns = Object.keys(v1[0]!);
+    srv.db
+      .prepare(
+        `INSERT INTO e2ee_project_versions (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`
+      )
+      .run(...Object.values(v1[0]!));
+    srv.db
+      .prepare('UPDATE projects SET document_version = ? WHERE id = ?')
+      .run(document.version, projectId);
+    // A reloaded page, its pin at version 2, is told the account holds 1.
+    const page = encryptedReload(srv, laptop);
+    const { controller, statuses } = encryptedHarness(page);
+    controller.openProject(projectId, document.version);
+    controller.schedule({ ...document, version: document.version + 2 });
+    await settle(controller);
+    expect(lastState(statuses)).toBe('repair');
+    expect(controller.hasPendingChanges).toBe(true);
+    expect(
+      srv.db
+        .prepare(
+          'SELECT COUNT(*) AS n FROM e2ee_project_versions WHERE project_id = ?'
+        )
+        .get(projectId)
+    ).toEqual({ n: 1 });
+    controller.dispose();
+  });
+
+  it('refuses an edit the encrypted format cannot hold yet, and a read-only device', async () => {
+    const srv = newEncryptedServer([account]);
+    const laptop = encryptedDevice(srv, account, 'laptop');
+    const { document } = await createEncrypted(laptop, 'Bracket');
+    const imported = {
+      ...document,
+      version: document.version + 1,
+      nodes: {
+        ...document.nodes,
+        imported: { kind: 'feature', featureKind: 'imported-mesh' }
+      }
+    } as unknown as ProjectDocument;
+    const first = encryptedHarness(laptop);
+    first.controller.openProject(document.projectId, document.version);
+    first.controller.schedule(imported);
+    await settle(first.controller);
+    expect(lastState(first.statuses)).toBe('refused');
+    expect(first.statuses.at(-1)?.error).toBeInstanceOf(
+      UnstorableDocumentError
+    );
+    first.controller.dispose();
+
+    const tablet = encryptedDevice(srv, account, null);
+    const second = encryptedHarness(tablet);
+    second.controller.openProject(document.projectId, document.version);
+    second.controller.schedule({ ...document, version: document.version + 1 });
+    await settle(second.controller);
+    expect(lastState(second.statuses)).toBe('refused');
+    expect(second.statuses.at(-1)?.error).toMatchObject({
+      code: 'E2EE_READ_ONLY_DEVICE'
+    });
+    second.controller.dispose();
   });
 });

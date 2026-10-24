@@ -1,0 +1,446 @@
+/**
+ * Shared harness for encrypted document tests (ADR-024 Phase 4, slice 4-5):
+ * accounts with real device lists, the real Worker over SQLite with an
+ * in-memory object bucket, and Node devices that run the real client
+ * modules (`projectGroups.ts`, `encryptedProjectStore.ts`) with the
+ * in-process MLS engine.
+ */
+import { readFileSync, readdirSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
+import { vi } from 'vitest';
+import worker from '../../apps/web/worker/index';
+import {
+  accountKeyCommitment,
+  deviceListEntryHash,
+  exportPublicKey,
+  generateEncryptionKeyPair,
+  generateSigningKeyPair,
+  generateSymmetricKey,
+  nextDeviceListEntry,
+  signDeviceListEntry,
+  toBase64Url,
+  toHex,
+  verifyDeviceList,
+  type DeviceListEntry,
+  type ListedDevice,
+  type SignedDeviceListEntry,
+  type VerifiedDeviceList,
+  type VersionCutoff
+} from '@openzcad/crypto';
+import {
+  createProjectDocument,
+  withoutDerivedProjection
+} from '@openzcad/document-core';
+import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import { inProcessMls } from '../../packages/mls/src/test-support';
+import {
+  createProjectGroupsApi,
+  type ProjectGroupContext
+} from '../../apps/web/src/lib/e2ee/projectGroups';
+import { MlsProjectSessions } from '../../apps/web/src/lib/e2ee/mls/projectSessions';
+import { createMlsLoader } from '../../apps/web/src/lib/e2ee/mls/loader';
+import {
+  memoryMlsSessionStore,
+  type MlsSessionStore
+} from '../../apps/web/src/lib/e2ee/mls/sessionStore';
+import type { CertifyingDevice } from '../../apps/web/src/lib/e2ee/mls/certify';
+import {
+  createEncryptedDocumentsApi,
+  type EncryptedDocumentsApi
+} from '../../apps/web/src/lib/e2ee/encryptedDocumentsApi';
+import {
+  createEncryptedProjectStore,
+  type EncryptedProjectStore,
+  type EncryptedProjectWarning
+} from '../../apps/web/src/lib/e2ee/encryptedProjectStore';
+import {
+  memoryVersionPins,
+  type VersionPinStore
+} from '../../apps/web/src/lib/e2ee/versionPins';
+import { migratedDatabase, sqliteD1 } from './sqlite-d1';
+
+export const OWNER = 'user_owner';
+export const OTHER = 'user_other';
+const NOW = '2026-10-24T00:00:00.000Z';
+const ADDED_AT = 1_700_000_000_000;
+
+// --- Accounts --------------------------------------------------------------
+
+export interface Account {
+  userId: string;
+  list: VerifiedDeviceList;
+  devices: Map<string, CertifyingDevice>;
+  accountKey: Uint8Array;
+  /** Rows the Worker reads the device list from. */
+  seed(db: DatabaseSync): void;
+  /** Revokes a device in a new identity-signed entry, seeded into `db`. */
+  revoke(db: DatabaseSync, deviceId: string): Promise<void>;
+}
+
+const ecdhPublic = async () =>
+  exportPublicKey((await generateEncryptionKeyPair()).publicKey);
+
+export async function makeAccount(
+  userId: string,
+  certified: readonly string[],
+  readOnly: readonly string[] = []
+): Promise<Account> {
+  const identity = await generateSigningKeyPair(false);
+  const identityRaw = await exportPublicKey(identity.publicKey);
+  const devices = new Map<string, CertifyingDevice>();
+  const listed: ListedDevice[] = [];
+  for (const deviceId of [...certified, ...readOnly]) {
+    const signing = await generateSigningKeyPair(false);
+    devices.set(deviceId, { userId, deviceId, signing });
+    if (!certified.includes(deviceId)) continue;
+    listed.push({
+      deviceId,
+      label: deviceId,
+      signingKey: await exportPublicKey(signing.publicKey),
+      unlockKey: await ecdhPublic(),
+      addedAt: ADDED_AT
+    });
+  }
+  const accountKey = generateSymmetricKey();
+  const genesis: DeviceListEntry = {
+    userId,
+    sequence: 0,
+    previousEntryHash: null,
+    issuedAt: ADDED_AT,
+    previousIdentityKeyHash: null,
+    encryptionKey: await ecdhPublic(),
+    accountKeyCommitment: await accountKeyCommitment(accountKey),
+    devices: listed,
+    unlockTargets: [
+      {
+        kind: 'recovery-key',
+        targetId: 'rk_1',
+        publicKey: await ecdhPublic(),
+        addedAt: ADDED_AT
+      }
+    ],
+    revoked: []
+  };
+  const chain: SignedDeviceListEntry[] = [
+    await signDeviceListEntry(identity.privateKey, genesis)
+  ];
+  const hashes = [toHex(await deviceListEntryHash(chain[0]!.entry))];
+  const insertEntry = (db: DatabaseSync, sequence: number) => {
+    const signed = chain[sequence]!;
+    db.prepare(
+      `INSERT INTO e2ee_device_list_entries
+         (user_id, generation, sequence, entry, signature, entry_hash, created_at)
+       VALUES (?, 1, ?, ?, ?, ?, ?)`
+    ).run(
+      userId,
+      sequence,
+      toBase64Url(signed.entry),
+      toBase64Url(signed.signature),
+      hashes[sequence]!,
+      NOW
+    );
+  };
+  const account: Account = {
+    userId,
+    list: await verifyDeviceList(identityRaw, chain),
+    devices,
+    accountKey,
+    seed(db) {
+      db.prepare(
+        `INSERT INTO e2ee_identities (user_id, generation, identity_key, created_at)
+         VALUES (?, 1, ?, ?)`
+      ).run(userId, toBase64Url(identityRaw), NOW);
+      insertEntry(db, 0);
+    },
+    async revoke(db, deviceId) {
+      // A revocation rotates the account key; project-key wraps made under
+      // the old one stay readable through the account-key history, which
+      // these tests do not need: they keep the old key for reading.
+      const nextKey = generateSymmetricKey();
+      const entry = nextDeviceListEntry(account.list, {
+        issuedAt: ADDED_AT + chain.length * 1000,
+        removeDeviceIds: [deviceId],
+        encryptionKey: await ecdhPublic(),
+        accountKeyCommitment: await accountKeyCommitment(nextKey)
+      });
+      const signed = await signDeviceListEntry(identity.privateKey, entry);
+      chain.push(signed);
+      hashes.push(toHex(await deviceListEntryHash(signed.entry)));
+      insertEntry(db, chain.length - 1);
+      account.list = await verifyDeviceList(identityRaw, chain);
+    }
+  };
+  return account;
+}
+
+// --- Server ----------------------------------------------------------------
+
+export interface Bucket {
+  objects: Map<string, ArrayBuffer>;
+  put: ReturnType<typeof vi.fn>;
+  get: ReturnType<typeof vi.fn>;
+  head: ReturnType<typeof vi.fn>;
+  delete: ReturnType<typeof vi.fn>;
+}
+
+export function objectBucket(): Bucket {
+  const objects = new Map<string, ArrayBuffer>();
+  return {
+    objects,
+    put: vi.fn(async (key: string, body: ArrayBuffer | Uint8Array) => {
+      objects.set(key, new Uint8Array(body).slice().buffer);
+    }),
+    get: vi.fn(async (key: string) => {
+      const body = objects.get(key);
+      return body
+        ? { arrayBuffer: async () => body.slice(0), size: body.byteLength }
+        : null;
+    }),
+    head: vi.fn(async (key: string) => {
+      const body = objects.get(key);
+      return body ? { size: body.byteLength } : null;
+    }),
+    delete: vi.fn(async (key: string) => {
+      objects.delete(key);
+    })
+  };
+}
+
+export interface Server {
+  db: DatabaseSync;
+  env: Record<string, unknown>;
+  bucket: Bucket;
+  statements: string[];
+  call(
+    method: string,
+    path: string,
+    options?: {
+      user?: string;
+      body?: unknown;
+      raw?: Uint8Array<ArrayBuffer>;
+      contentType?: string;
+    }
+  ): Promise<Response>;
+}
+
+export function newServer(
+  accounts: readonly Account[],
+  db: DatabaseSync = migratedDatabase(),
+  extraEnv: Record<string, unknown> = {}
+): Server {
+  for (const account of accounts) {
+    db.prepare(
+      'INSERT INTO users (id, email, created_at) VALUES (?, NULL, ?)'
+    ).run(account.userId, NOW);
+    account.seed(db);
+  }
+  const statements: string[] = [];
+  const bucket = objectBucket();
+  const room = vi.fn(
+    async () => new Response(JSON.stringify({ ok: true }), { status: 200 })
+  );
+  const env: Record<string, unknown> = {
+    ENVIRONMENT: 'development',
+    AUTH_MODE: 'development',
+    DB: sqliteD1(db, { onStatement: (sql) => statements.push(sql) }),
+    PROJECT_STORAGE: bucket,
+    ARTIFACTS: bucket,
+    PROJECT_SHARING_ENABLED: 'true',
+    PROJECT_PERSONAL_SYNC_ENABLED: 'true',
+    PROJECT_ROOM: { getByName: vi.fn(() => ({ fetch: room })) },
+    E2EE_KEYS_ENABLED: 'true',
+    E2EE_PROJECTS_ENABLED: 'true',
+    ...extraEnv
+  };
+  const call: Server['call'] = (method, path, options = {}) =>
+    worker.fetch(
+      new Request(`https://example.com${path}`, {
+        method,
+        headers: {
+          'x-openzcad-development-user': options.user ?? OWNER,
+          ...(options.raw
+            ? {
+                'content-type':
+                  options.contentType ?? 'application/octet-stream'
+              }
+            : options.body === undefined
+              ? {}
+              : { 'content-type': 'application/json' })
+        },
+        ...(options.raw
+          ? { body: options.raw }
+          : options.body === undefined
+            ? {}
+            : { body: JSON.stringify(options.body) })
+      }),
+      env
+    );
+  return { db, env, bucket, statements, call };
+}
+
+/** Every tracked migration before `number`, as `pnpm deploy:beta` may leave D1. */
+export function databaseBefore(number: number): DatabaseSync {
+  const dir = new URL('../../apps/web/migrations/', import.meta.url);
+  const db = new DatabaseSync(':memory:');
+  for (const file of readdirSync(dir)
+    .filter(
+      (name) =>
+        name.endsWith('.sql') && Number.parseInt(name.slice(0, 4), 10) < number
+    )
+    .sort()) {
+    db.exec(readFileSync(new URL(file, dir), 'utf8'));
+  }
+  return db;
+}
+
+// --- Devices ---------------------------------------------------------------
+
+export type Hook = (path: string, init: RequestInit) => Promise<void>;
+
+export interface Device {
+  account: Account;
+  deviceId: string | null;
+  groups: ProjectGroupContext;
+  documents: EncryptedDocumentsApi;
+  store: EncryptedProjectStore;
+  sessions: MlsProjectSessions;
+  mls: MlsSessionStore;
+  pins: VersionPinStore;
+  warnings: EncryptedProjectWarning[];
+  fetcher(path: string, init?: RequestInit): Promise<Response>;
+  /** Runs before a request reaches the Worker. */
+  before?: Hook;
+  /** Rewrites the Worker's answer before the device sees it. */
+  answer?: (
+    path: string,
+    init: RequestInit,
+    response: Response
+  ) => Promise<Response>;
+}
+
+export interface DeviceOptions {
+  mls?: MlsSessionStore;
+  pins?: VersionPinStore;
+  cutoffs?: Map<string, VersionCutoff>;
+  now?: () => number;
+}
+
+/** One device: its own engine, MLS store and pins over the shared server. */
+export function device(
+  srv: Server,
+  account: Account,
+  deviceId: string | null,
+  options: DeviceOptions = {}
+): Device {
+  const mls = options.mls ?? memoryMlsSessionStore();
+  const pins = options.pins ?? memoryVersionPins();
+  const sessions = new MlsProjectSessions(
+    mls,
+    createMlsLoader(async () => inProcessMls())
+  );
+  const result = {
+    account,
+    deviceId,
+    sessions,
+    mls,
+    pins,
+    warnings: []
+  } as unknown as Device;
+  result.fetcher = async (path: string, init: RequestInit = {}) => {
+    await result.before?.(path, init);
+    const response = await worker.fetch(
+      new Request(`https://example.com${path}`, {
+        ...init,
+        headers: {
+          ...(init.headers as Record<string, string>),
+          'x-openzcad-development-user': account.userId
+        }
+      }),
+      srv.env
+    );
+    return result.answer ? result.answer(path, init, response) : response;
+  };
+  const fetcher = (path: string, init?: RequestInit) =>
+    result.fetcher(path, init);
+  result.groups = {
+    api: createProjectGroupsApi(fetcher),
+    sessions,
+    account: {
+      userId: account.userId,
+      get list() {
+        return account.list;
+      },
+      currentAccountKey: async () => ({
+        key: new Uint8Array(account.accountKey),
+        generation: 1,
+        keySequence: 0
+      }),
+      openAccountKey: async () => {
+        throw new Error('no older account key in this test');
+      }
+    },
+    device: deviceId ? account.devices.get(deviceId)! : null
+  };
+  result.documents = createEncryptedDocumentsApi(fetcher);
+  result.store = createEncryptedProjectStore({
+    groups: result.groups,
+    api: result.documents,
+    pins,
+    ...(options.cutoffs ? { cutoffs: async () => options.cutoffs! } : {}),
+    ...(options.now ? { now: options.now } : {}),
+    onWarning: (warning) => result.warnings.push(warning)
+  });
+  return result;
+}
+
+/** A device reloaded: a new page and engine over the same storage. */
+export const reload = (srv: Server, old: Device, options: DeviceOptions = {}) =>
+  device(srv, old.account, old.deviceId, {
+    mls: old.mls,
+    pins: old.pins,
+    ...options
+  });
+
+export function initialDocument(
+  name = 'Bracket',
+  userId = OWNER
+): ProjectDocument {
+  return withoutDerivedProjection(
+    createProjectDocument(name, toUserId(userId))
+  );
+}
+
+export async function createEncrypted(d: Device, name = 'Bracket') {
+  return d.store.createProject({
+    name,
+    initialDocument: initialDocument(name, d.account.userId)
+  });
+}
+
+/** The same document with one more edit: a new name and version. */
+export function edited(
+  document: ProjectDocument,
+  name?: string
+): ProjectDocument {
+  return {
+    ...document,
+    name: name ?? document.name,
+    version: document.version + 1
+  };
+}
+
+export function rows<T>(
+  srv: Server,
+  sql: string,
+  ...binds: (string | number)[]
+): T[] {
+  return srv.db.prepare(sql).all(...binds) as T[];
+}
+
+export function count(srv: Server, table: string, projectId: string): number {
+  return (
+    srv.db
+      .prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE project_id = ?`)
+      .get(projectId) as { n: number }
+  ).n;
+}
