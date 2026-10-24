@@ -76,6 +76,7 @@ export {
   decodePayload,
   envelopeBodyLength,
   parseEnvelope,
+  parseEnvelopeShape,
   plaintextCap,
   type ContentBlobEncryptStream,
   type ContentBlobOptions,

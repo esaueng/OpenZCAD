@@ -75,7 +75,8 @@ Call everything before chunk 0 the _prefix_.
 Changing any header byte, dropping, reordering or duplicating a chunk, cutting
 the file short, or moving a chunk or body into another envelope fails
 authentication. `parseEnvelope` checks structure without a key, which is all a
-server can do.
+server can do; `parseEnvelopeShape(head, length)` runs the same checks from the
+prefix and the total length, for a body held in an object store.
 
 ### Decompression limits
 
