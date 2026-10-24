@@ -19,12 +19,12 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 mls-rs = { version = "=0.56.0", default-features = false, features = [
   "std",
+  "external_client",
   "by_ref_proposal",
   "custom_proposal",
   "self_remove_proposal",
   "psk",
   "tree_index",
-  "external_client",
 ] }
 mls-rs-core = { version = "=0.27.0", default-features = false, features = ["std"] }
 mls-rs-codec = "=0.7.0"

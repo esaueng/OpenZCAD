@@ -1,17 +1,15 @@
 ---
 row: L11
 ---
-Issue #817: Welcome joins and external rejoins derive removal cutoffs from a
-complete public MLS epoch transcript, bound to the joining GroupContext,
-rather than trusting an inviter's GroupInfo removal hints. Epoch records and
-sealed sessions use version 2; the unused package API requires the archive
-and refuses old state. Rust also refuses revoked devices without an explicit
-revocation cutoff, matching TypeScript. Staged joins expose only the provisional
-archive-decryption capability, keep normal operations and rejoin confirmation
-blocked through sealed-state restoration, preserve provisional external state
-for malformed-archive retry, and roll back verified policy rejection or discard;
-external rejoins recheck the original cutoffs after decrypting the accepted
-new-epoch archive. Evidence:
-`packages/mls/src/{scenarios,boundary.test}.ts`, the Node and Worker-protocol
-scenario runs, and the regenerated pinned WASM. Application integration and
-checkpoint-based replay remain open.
+Issue #817 follow-up to the archive verifier in PR #839: provisional Welcome
+and external-rejoin admission exposes only archive decryption until the
+existing `JoinArchive` verifies; normal operations and confirmation remain
+blocked across sealed-state restoration. Malformed downloads preserve an
+accepted provisional rejoin for retry after its original PSK expires, while
+verified policy rejection or discard restores prior state. Session contents
+use version 2 and reject legacy unverified cutoffs; `EpochRecordV1` and the
+archive API stay unchanged. Rust refuses revoked directory devices without a
+cutoff, preserving zero. Archive messages reject trailing bytes. Evidence:
+`packages/mls/src/{scenarios,boundary.test}.ts` and native archive regressions,
+plus the regenerated pinned WASM. Application integration and checkpoint
+replay remain open.

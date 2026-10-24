@@ -12,6 +12,7 @@ import type {
   EpochRecord,
   GroupInfoSummary,
   LeafInit,
+  JoinArchive,
   PendingCommit,
   Processed,
   RejoinPsk,
@@ -125,26 +126,25 @@ export class MlsSession {
     return this.api.inspectWelcome(this.id, welcome);
   }
 
-  /** Join only after replaying every epoch record through the Welcome epoch. */
-  join(welcome: Uint8Array, history: Uint8Array[]): Promise<EpochChange> {
-    return this.api.join(this.id, welcome, history);
+  /** Join only after the full archive agrees with the Welcome removal history. */
+  join(welcome: Uint8Array, archive: JoinArchive): Promise<EpochChange> {
+    return this.api.join(this.id, welcome, archive);
   }
 
-  /** Open only enough state to decrypt the archive; normal group use is blocked. */
+  /** Open only enough provisional state to decrypt the archive. */
   beginJoin(welcome: Uint8Array): Promise<void> {
     return this.api.beginJoin(this.id, welcome);
   }
 
-  /** Verify the decrypted archive before accepting this Welcome. */
-  completeJoin(history: Uint8Array[]): Promise<EpochChange> {
-    return this.api.completeJoin(this.id, history);
+  completeJoin(archive: JoinArchive): Promise<EpochChange> {
+    return this.api.completeJoin(this.id, archive);
   }
 
   discardJoin(): Promise<void> {
     return this.api.discardJoin(this.id);
   }
 
-  /** Provisional exporter for archive decryption only, before history is trusted. */
+  /** Untrusted exporter for archive decryption before admission completes. */
   archiveKey(): Promise<Uint8Array> {
     return this.api.archiveKey(this.id);
   }
@@ -203,6 +203,10 @@ export class MlsSession {
     return this.api.rejoin(this.id, groupInfo, request);
   }
 
+  confirmRejoin(): Promise<void> {
+    return this.api.confirmRejoin(this.id);
+  }
+
   /** Build a provisional external Commit when the old archive is unavailable. */
   beginRejoin(
     groupInfo: Uint8Array,
@@ -211,13 +215,9 @@ export class MlsSession {
     return this.api.beginRejoin(this.id, groupInfo, request);
   }
 
-  /** Verify the archive through the new epoch, then recheck the original rejoin policy. */
-  completeRejoin(history: Uint8Array[]): Promise<void> {
-    return this.api.completeRejoin(this.id, history);
-  }
-
-  confirmRejoin(): Promise<void> {
-    return this.api.confirmRejoin(this.id);
+  /** Verify the new-epoch archive and the original request's removal cutoffs. */
+  completeRejoin(archive: JoinArchive): Promise<void> {
+    return this.api.completeRejoin(this.id, archive);
   }
 
   discardRejoin(): Promise<void> {

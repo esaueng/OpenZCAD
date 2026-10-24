@@ -17,6 +17,7 @@ import type {
   GroupInfoSummary,
   LeafInfo,
   LeafInit,
+  JoinArchive,
   PendingCommit,
   Processed,
   ProjectRoles,
@@ -52,9 +53,9 @@ export interface EngineApi {
   createGroup(id: number, rejoinWindow: number): EpochChange;
   keyPackage(id: number): Uint8Array;
   inspectWelcome(id: number, welcome: Uint8Array): GroupInfoSummary;
-  join(id: number, welcome: Uint8Array, history: Uint8Array[]): EpochChange;
+  join(id: number, welcome: Uint8Array, archive: JoinArchive): EpochChange;
   beginJoin(id: number, welcome: Uint8Array): void;
-  completeJoin(id: number, history: Uint8Array[]): EpochChange;
+  completeJoin(id: number, archive: JoinArchive): EpochChange;
   discardJoin(id: number): void;
   archiveKey(id: number): Uint8Array;
   commit(id: number, request: CommitRequest): PendingCommit;
@@ -77,7 +78,7 @@ export interface EngineApi {
     groupInfo: Uint8Array,
     request: BeginRejoinRequest
   ): RejoinResult;
-  completeRejoin(id: number, history: Uint8Array[]): void;
+  completeRejoin(id: number, archive: JoinArchive): void;
   discardRejoin(id: number): void;
   status(id: number): SessionStatus;
   projectKey(id: number): Uint8Array;
@@ -254,7 +255,6 @@ export class MlsEngine implements EngineApi {
       ratchetTree: string;
       commit: string;
       proposals: string[];
-      groupInfo: string;
     }>(this.run(() => this.wasm.decodeEpochRecord(record)));
     return {
       version: json.version,
@@ -262,8 +262,7 @@ export class MlsEngine implements EngineApi {
       groupContext: fromHex(json.groupContext),
       ratchetTree: fromHex(json.ratchetTree),
       commit: fromHex(json.commit),
-      proposals: json.proposals.map(fromHex),
-      groupInfo: fromHex(json.groupInfo)
+      proposals: json.proposals.map(fromHex)
     };
   }
 
@@ -338,9 +337,19 @@ export class MlsEngine implements EngineApi {
     );
   }
 
-  join(id: number, welcome: Uint8Array, history: Uint8Array[]): EpochChange {
+  join(id: number, welcome: Uint8Array, archive: JoinArchive): EpochChange {
+    if (!archive)
+      throw new MlsError('input', 'a join requires the epoch archive');
     return change(
-      parse(this.run(() => this.session(id).join(welcome, history)))
+      parse(
+        this.run(() =>
+          this.session(id).join(
+            welcome,
+            archive.initialGroupInfo,
+            archive.epochRecords
+          )
+        )
+      )
     );
   }
 
@@ -348,9 +357,18 @@ export class MlsEngine implements EngineApi {
     this.run(() => this.session(id).beginJoin(welcome));
   }
 
-  completeJoin(id: number, history: Uint8Array[]): EpochChange {
+  completeJoin(id: number, archive: JoinArchive): EpochChange {
+    if (!archive)
+      throw new MlsError('input', 'a join requires the epoch archive');
     return change(
-      parse(this.run(() => this.session(id).completeJoin(history)))
+      parse(
+        this.run(() =>
+          this.session(id).completeJoin(
+            archive.initialGroupInfo,
+            archive.epochRecords
+          )
+        )
+      )
     );
   }
 
@@ -430,6 +448,8 @@ export class MlsEngine implements EngineApi {
     groupInfo: Uint8Array,
     request: RejoinRequest
   ): RejoinResult {
+    if (!request.archive)
+      throw new MlsError('input', 'a rejoin requires the epoch archive');
     const out = parse<{ commit: string; change: ChangeJson }>(
       this.run(() =>
         this.session(id).rejoin(
@@ -437,7 +457,8 @@ export class MlsEngine implements EngineApi {
           checkEpoch(request.psk.epoch),
           request.psk.secret,
           request.replaceLeaf,
-          request.history
+          request.archive.initialGroupInfo,
+          request.archive.epochRecords
         )
       )
     );
@@ -466,8 +487,15 @@ export class MlsEngine implements EngineApi {
     return { commit: fromHex(out.commit), change: change(out.change) };
   }
 
-  completeRejoin(id: number, history: Uint8Array[]): void {
-    this.run(() => this.session(id).completeRejoin(history));
+  completeRejoin(id: number, archive: JoinArchive): void {
+    if (!archive)
+      throw new MlsError('input', 'a rejoin requires the epoch archive');
+    this.run(() =>
+      this.session(id).completeRejoin(
+        archive.initialGroupInfo,
+        archive.epochRecords
+      )
+    );
   }
 
   discardRejoin(id: number): void {

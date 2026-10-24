@@ -44,7 +44,7 @@ use crate::model::{
 pub struct PolicyState {
     pub directory: SharedDirectory,
     /// Recorded by this member from the group's own Commits (and seeded from
-    /// verified transcript replay on join).
+    /// a signed GroupInfo on join).
     pub removals: Arc<Mutex<LeafRemovals>>,
     /// Test-only: a client that skips its own send-side checks, so tests can
     /// prove receivers refuse. Receivers never skip.

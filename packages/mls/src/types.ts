@@ -132,20 +132,29 @@ export interface RejoinPsk {
   secret: Uint8Array;
 }
 
+/** Full public transcript through the target epoch, decrypted by the app.
+ * Retain the epoch-zero signed GroupInfo when creating the archive. Records
+ * are the unchanged EpochRecordV1 bytes for epochs 1..target, in order.
+ * Verification authenticates the transcript/tree, not past device-list policy.
+ */
+export interface JoinArchive {
+  initialGroupInfo: Uint8Array;
+  epochRecords: Uint8Array[];
+}
+
 export interface RejoinRequest {
-  /** Complete epoch records, from epoch zero through the GroupInfo epoch. */
-  history: Uint8Array[];
+  archive: JoinArchive;
   psk: RejoinPsk;
   /** A stale leaf of this user to replace in the same external Commit. */
   replaceLeaf?: number;
 }
 
-export type BeginRejoinRequest = Omit<RejoinRequest, 'history'>;
-
 export interface RejoinResult {
   commit: Uint8Array;
   change: EpochChange;
 }
+
+export type BeginRejoinRequest = Omit<RejoinRequest, 'archive'>;
 
 /** A GroupInfo or Welcome read before acting on it. Unverified hints. */
 export interface GroupInfoSummary {
@@ -197,6 +206,4 @@ export interface EpochRecord {
   commit: Uint8Array;
   /** MLSMessage proposals the Commit applied by reference. */
   proposals: Uint8Array[];
-  /** Signed bootstrap GroupInfo in epoch zero; empty in later records. */
-  groupInfo: Uint8Array;
 }

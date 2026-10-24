@@ -25,8 +25,7 @@ await session.certify(
   await signWithDeviceKey(await session.certificationPayload())
 );
 await session.setDirectory(verifiedDeviceLists); // before any other operation
-const created = await session.createGroup();
-// Archive created.epochRecord, then each accepted Commit's epochRecord.
+await session.createGroup();
 const projectKey = await session.projectKey();
 const sealed = await session.seal(stateKey); // non-extractable AES-256-GCM
 ```
@@ -41,46 +40,33 @@ const sealed = await session.seal(stateKey); // non-extractable AES-256-GCM
 | Incoming proposals and Commits          | `process`                                                                                |
 | Rejoin by external Commit               | `groupInfo`, `inspectGroupInfo`, `rejoin`, `confirmRejoin`, `discardRejoin`, `rejoinPsk` |
 | Keys and codes                          | `projectKey`, `epochAuthenticator`                                                       |
-| History archive                         | `EpochChange.epochRecord`, `decodeEpochRecord`                                           |
+| History archive                         | `EpochChange.epochRecord`, `decodeEpochRecord`, `JoinArchive`                                           |
 | Verify members before joining           | `inspectWelcome`, `leafCertificationPayload`                                             |
 | Persist                                 | `seal`, `Mls.open`                                                                       |
 
 Seal and store the session after every operation that changes it, before
 sending its output to the room. A reopened session needs `setDirectory` again.
-Keep the accepted epoch records separately in the encrypted history archive.
-Both `join(welcome, history)` and `rejoin(groupInfo, { psk, history, ... })`
-require an ordered array of every record from epoch zero through the Welcome
-or GroupInfo epoch. Deliver the Add's accepted epoch record with its Welcome.
-Missing history is an error; retrying a failed join preserves its KeyPackage.
 
-For an encrypted archive, use the staged API. `beginJoin(welcome)` opens a
-provisional group and `archiveKey()` yields its exporter for decrypting the
-key archive and epoch records in the browser. Call `completeJoin(history)`
-only with those decrypted records, or `discardJoin()` to restore the prior
-session. Normal group operations remain blocked until verification succeeds;
-the provisional key and decrypted content are untrusted for document use.
+For an encrypted archive, `beginJoin(welcome)` opens a provisional group and
+`archiveKey()` yields its exporter for decrypting the key archive and epoch
+records in the browser. Supply the resulting `JoinArchive` to
+`completeJoin(archive)`, or call `discardJoin()` to restore the prior session.
+Normal group operations remain blocked until verification succeeds; the
+provisional key and decrypted content are untrusted for document use.
 
-A rejoin can use `beginRejoin(groupInfo, { psk, replaceLeaf? })` when it cannot
-decrypt the old epoch's archive. Seal the provisional state, send its external
-Commit, and wait for the room's decision. Established members independently
-validate that Commit before supplying the archive encrypted under the **new**
-epoch's exporter. The joiner decrypts it with `archiveKey()`, calls
-`completeRejoin(history)` with the chain through that new epoch, then
-`confirmRejoin()` after room acceptance. Completion also rechecks the original
-request against the authenticated pre-Commit removal cutoffs; the replacement
-in this Commit does not count as its own prior removal. `confirmRejoin()`
-refuses an unverified archive. A malformed archive leaves the provisional
-external rejoin available for retry, including across `seal`/`open`, because
-the room may already have accepted its Commit. A verified policy rejection
-or explicit discard restores the prior state. If no established member can supply the archive,
-recover the account-key-wrapped project keys and use `rejoin(..., { history })`,
-or the ADR's recovery Add/reset path; missing history is never accepted.
-
-Epoch records and sealed session contents are now version 2. Version 1 sessions
-are refused because their removal state may have trusted an inviter's omissions;
-there is no automatic migration. Version 2 records add the signed epoch-zero
-GroupInfo needed to bootstrap transcript replay. This is a breaking change to
-the package's API and stored state; the application does not use the package yet.
+If a rejoin cannot decrypt the old epoch's archive, use
+`beginRejoin(groupInfo, { psk, replaceLeaf? })`, seal the provisional state,
+and submit its external Commit. Established members independently validate
+that Commit before supplying the archive under the **new** epoch's exporter.
+Decrypt it with `archiveKey()`, call `completeRejoin(archive)` with the chain
+through the new epoch, then `confirmRejoin()` after room acceptance.
+Completion rechecks the original request against its authenticated pre-Commit
+removal cutoffs; this Commit's replacement is not its own prior removal.
+Normal operations and unverified confirmation remain blocked across `seal`/`open`.
+A malformed archive preserves an accepted provisional rejoin for retry;
+verified policy rejection or explicit discard restores the prior state. A
+solo recovery uses the account-key-wrapped historical project keys with
+`rejoin(..., { archive })`, or the ADR's recovery Add/reset path.
 
 ## Policy
 
@@ -125,20 +111,37 @@ A refusal is an `MlsError` of kind `policy` whose `reasons` carry stable codes.
   An external Commit removes at most one leaf, so the replacement removes the
   rest in its next Commit; until then they can sign nothing anyone accepts.
 
-Leaf-removal records come from the group's own Commits. A member who joins
-by Welcome, or rejoins, derives them by replaying the complete public epoch
-transcript with the pinned `mls-rs` observer. It verifies signatures, tree
-evolution and transcript hashes, compares each record's context and tree,
-and binds the result to the joining MLS GroupContext. GroupInfo removal
-hints (the former extension 0xF0A3) are neither sent nor trusted.
+Leaf-removal records come from the group's own Commits. A signature on the
+committer's GroupInfo (extension 0xF0A3) alone cannot prove those records are
+complete: an inviter could omit a removal and make a joiner accept a stale
+rejoin or removed signing key that established members reject (#817).
 
-The observer does not know historical epoch secrets, so this replay does not
-verify historical confirmation MACs, PSK possession or application permissions.
-The real MLS join or external Commit builder still verifies the current
-cryptographic state and credential policy. Archive replay remains possible
-after a historical device is revoked. This prevents omitted removal history
-within the accepted transcript; it does not prevent a malicious insider from
-inviting someone into an entirely different group fork.
+Both `join(welcome, archive)` and `rejoin(groupInfo, { psk, archive, ... })`
+therefore require a `JoinArchive`: retain the signed epoch-zero `groupInfo()`
+at group creation, then append every accepted `EpochChange.epochRecord` for
+epochs 1 through the joining epoch, including the Commit producing the Welcome.
+The app decrypts these records before completing admission. The verifier uses
+mls-rs's public observer to authenticate proposals and Commits, checks each
+record's context and tree and the final joining context/tree, and derives
+removals from the applied proposals and prior roster. Carried removals must
+match exactly, independent of order or duplicate entries; missing history,
+omitted records and fabricated records fail closed. Failed joins restore the
+session and its one-use KeyPackages, so a valid invitation can be retried.
+
+This authenticates the public transcript, not historical device-list policy,
+PSK possession or the secret key schedule. Live credential, role, and rejoin
+checks still run unchanged. Today's revocations do not retroactively invalidate
+old archived signatures. Full replay from epoch zero is currently required;
+checkpoint-based replay remains future work. A malicious inviter can still
+present an entirely different group fork to a new device without a prior pin;
+this is the existing fork-consistency limit, not proof of the same history.
+The archive argument is a required API change in this private package, which
+has no application callers yet. `EpochRecordV1` and `JoinArchive` stay unchanged.
+Sealed session contents now use version 2: version 1 sessions are refused
+because their stored removal records may have trusted an inviter's omissions.
+The sealed envelope format is unchanged; no automatic session migration is
+provided. Rust rejects revoked devices without an explicit revocation cutoff,
+matching the TypeScript directory guard; cutoff zero remains valid.
 
 ## Build and test
 

@@ -27,7 +27,6 @@ use mls_rs_crypto_rustcrypto::RustCryptoProvider;
 use serde::Serialize;
 
 use crate::error::{Error, Res};
-use crate::history::verify_history;
 use crate::model::*;
 use crate::policy::{PolicyState, ProjectIdentity, ProjectRules};
 use crate::storage::{GroupStore, PskStore, StoredEpoch, StoredGroup};
@@ -46,9 +45,9 @@ pub type ProjectConfig = WithIdentityProvider<
     >,
 >;
 
-// Version 1 could persist removal records trusted from a single inviter.
+// Version 1 could persist removal history trusted from an inviter alone.
 const STATE_VERSION: u8 = 2;
-pub const EPOCH_RECORD_VERSION: u8 = 2;
+const EPOCH_RECORD_VERSION: u8 = 1;
 
 fn cipher_suite() -> Res<impl CipherSuiteProvider> {
     RustCryptoProvider::with_enabled_cipher_suites(vec![SUITE])
@@ -247,6 +246,12 @@ struct StoredPending {
 }
 
 #[derive(Clone, MlsSize, MlsEncode, MlsDecode)]
+struct PendingJoin {
+    backup: Vec<u8>,
+    extensions: ExtensionList,
+}
+
+#[derive(Clone, MlsSize, MlsEncode, MlsDecode)]
 struct PendingRejoinArchive {
     group_info: Vec<u8>,
     psk_epoch: u64,
@@ -273,7 +278,7 @@ struct StoredSession {
     /// The session as it was before an external Commit the room has not
     /// accepted yet.
     rejoin_backup: Option<Vec<u8>>,
-    join_backup: Option<Vec<u8>>,
+    join_pending: Option<PendingJoin>,
     rejoin_archive: Option<PendingRejoinArchive>,
 }
 
@@ -282,7 +287,7 @@ struct StoredSession {
 /// every proposal that Commit applied by reference. The app encrypts it under
 /// that epoch's exported key.
 #[derive(MlsSize, MlsEncode, MlsDecode)]
-pub struct EpochRecordV2 {
+pub struct EpochRecordV1 {
     pub version: u8,
     pub epoch: u64,
     pub group_context: Vec<u8>,
@@ -290,9 +295,6 @@ pub struct EpochRecordV2 {
     /// Empty for the group's first epoch.
     pub commit: Vec<u8>,
     pub proposals: Vec<Vec<u8>>,
-    /// Signed GroupInfo for epoch zero, to bootstrap public transcript replay.
-    /// Empty in later records; their Commits supply the confirmation tags.
-    pub group_info: Vec<u8>,
 }
 
 // ---------------------------------------------------------------------------
@@ -316,7 +318,7 @@ pub struct Session {
     pending: Option<StoredPending>,
     removed: bool,
     rejoin_backup: Option<Vec<u8>>,
-    join_backup: Option<Vec<u8>>,
+    join_pending: Option<PendingJoin>,
     rejoin_archive: Option<PendingRejoinArchive>,
 }
 
@@ -352,7 +354,7 @@ impl Session {
             pending: None,
             removed: false,
             rejoin_backup: None,
-            join_backup: None,
+            join_pending: None,
             rejoin_archive: None,
         })
     }
@@ -522,32 +524,31 @@ impl Session {
         ))
     }
 
-    pub fn join(&mut self, welcome: &[u8], history: &[Vec<u8>]) -> Res<EpochChange> {
+    pub fn join(&mut self, welcome: &[u8], initial_group_info: &[u8], records: &[Vec<u8>]) -> Res<EpochChange> {
         self.begin_join(welcome)?;
-        self.complete_join(history)
+        self.complete_join(initial_group_info, records)
     }
 
-    /// Open the Welcome provisionally so its exporter can decrypt the key
-    /// archive. No normal group operation is allowed until complete_join.
+    /// Open the Welcome provisionally for archive decryption. Every normal
+    /// group operation remains blocked until complete_join verifies history.
     pub fn begin_join(&mut self, welcome: &[u8]) -> Res<()> {
         self.require_no_group()?;
         let backup = self.export()?;
         match self.join_provisional(welcome) {
-            Ok(()) => {
-                self.join_backup = Some(backup);
+            Ok(extensions) => {
+                self.join_pending = Some(PendingJoin { backup, extensions });
                 Ok(())
             }
             Err(error) => {
-                // join_group consumes a KeyPackage before application checks.
                 self.restore_from(&backup)?;
                 Err(error)
             }
         }
     }
 
-    fn join_provisional(&mut self, welcome: &[u8]) -> Res<()> {
+    fn join_provisional(&mut self, welcome: &[u8]) -> Res<ExtensionList> {
         let message = MlsMessage::from_bytes(welcome)?;
-        let (group, _) = self.client()?.join_group(None, &message, None)?;
+        let (group, info) = self.client()?.join_group(None, &message, None)?;
         if group.group_id() != group_id(&self.project_id).as_slice() {
             self.groups.restore(None);
             return Err(Error::input("the Welcome is for a different project"));
@@ -559,18 +560,25 @@ impl Session {
             return Err(Error::policy(shape));
         }
         self.group = Some(group);
-        Ok(())
+        Ok(info.group_info_extensions().clone())
     }
 
-    pub fn complete_join(&mut self, history: &[Vec<u8>]) -> Res<EpochChange> {
-        let backup = self
-            .join_backup
+    pub fn complete_join(&mut self, initial_group_info: &[u8], records: &[Vec<u8>]) -> Res<EpochChange> {
+        let pending = self
+            .join_pending
             .clone()
             .ok_or_else(|| Error::state("no Welcome join is pending"))?;
         let result = (|| {
-            let records = verify_history(&self.project_id, self.group()?.context(), history)?;
-            *self.policy.removals.lock().unwrap() = records;
-            self.join_backup = None;
+            let group = self.group()?;
+            let verified = crate::archive::verify(
+                initial_group_info,
+                records,
+                group.context(),
+                &group.export_tree().to_bytes()?,
+                &pending.extensions,
+            )?;
+            self.policy.removals.lock().unwrap().merge(&verified);
+            self.join_pending = None;
             self.enter_epoch()?;
             self.write()?;
             Ok(EpochChange {
@@ -583,23 +591,22 @@ impl Session {
             })
         })();
         if result.is_err() {
-            self.restore_from(&backup)?;
+            self.restore_from(&pending.backup)?;
         }
         result
     }
 
     pub fn discard_join(&mut self) -> Res<()> {
-        let backup = self
-            .join_backup
+        let pending = self
+            .join_pending
             .clone()
             .ok_or_else(|| Error::state("no Welcome join is pending"))?;
-        self.restore_from(&backup)
+        self.restore_from(&pending.backup)
     }
 
-    /// Decryption capability for the provisional archive only. The state is
-    /// not yet trusted for document reads/writes, PSKs or further handshakes.
+    /// Untrusted exporter for archive decryption only, before admission.
     pub fn archive_key(&self) -> Res<Vec<u8>> {
-        if self.join_backup.is_none() && self.rejoin_archive.is_none() {
+        if self.join_pending.is_none() && self.rejoin_archive.is_none() {
             return Err(Error::state("no join archive is pending"));
         }
         Ok(self
@@ -655,6 +662,42 @@ impl Session {
         }
 
         let roster = self.roster_snapshot()?;
+        // Adds received by reference (cached proposals) produce a Welcome too.
+        let adding = !key_packages.is_empty()
+            || self
+                .group()?
+                .get_cached_proposals()
+                .iter()
+                .any(|cached| matches!(cached.proposal(), Proposal::Add(_)));
+        // A joiner learns removal cutoffs only from the Welcome's GroupInfo,
+        // and the new tree no longer shows leaves this Commit removes, so the
+        // records include this Commit's own removals: explicit Removes, the
+        // dropped users' leaves, and cached Remove and SelfRemove proposals.
+        let mut removals = self.policy.removals.lock().unwrap().clone();
+        if adding {
+            let mut leaving = remove.clone();
+            for cached in self.group()?.get_cached_proposals() {
+                match (cached.proposal(), cached.sender()) {
+                    (Proposal::Remove(r), _) => leaving.push(r.to_remove()),
+                    (Proposal::SelfRemove(_), mls_rs::group::Sender::Member(index)) => leaving.push(*index),
+                    _ => {}
+                }
+            }
+            let records = roster
+                .iter()
+                .filter(|leaf| leaving.contains(&leaf.index))
+                .filter_map(|leaf| {
+                    let credential = DeviceCredential::from_identity(&leaf.identity).ok()?;
+                    Some(LeafRemoval {
+                        user_id: credential.user_id,
+                        device_id: credential.device_id,
+                        signature_key: leaf.identity.signature_key.to_vec(),
+                        epoch: next_epoch,
+                    })
+                })
+                .collect();
+            removals.merge(&LeafRemovals { records });
+        }
         let group = self.group_mut()?;
         let mut builder = group.commit_builder();
         for key_package in key_packages {
@@ -665,6 +708,13 @@ impl Session {
         }
         if next != roles {
             builder = builder.set_group_context_ext(next.to_extensions()?)?;
+        }
+        if adding {
+            let mut extensions = ExtensionList::new();
+            extensions
+                .set_from(removals)
+                .map_err(|e| Error::state(format!("{e:?}")))?;
+            builder = builder.set_group_info_ext(extensions);
         }
         let output = builder.build()?;
         let commit = output.commit_message().to_bytes()?;
@@ -777,10 +827,17 @@ impl Session {
     }
 
     /// A GroupInfo that lets a device of a listed member rejoin by external
-    /// Commit. Removal records are derived from its verified epoch history.
+    /// Commit, carrying this member's leaf-removal records.
     pub fn group_info(&self) -> Res<Vec<u8>> {
         self.settled()?;
-        let message = self.group()?.group_info_message_allowing_ext_commit(true)?;
+        let mut extensions = ExtensionList::new();
+        let removals = self.policy.removals.lock().unwrap().clone();
+        extensions
+            .set_from(removals)
+            .map_err(|e| Error::state(format!("{e:?}")))?;
+        let message = self
+            .group()?
+            .group_info_message_allowing_ext_commit_with_extensions(true, extensions)?;
         Ok(message.to_bytes()?)
     }
 
@@ -842,9 +899,10 @@ impl Session {
         psk_epoch: u64,
         psk: &[u8],
         remove: Option<u32>,
-        history: &[Vec<u8>],
+        initial_group_info: &[u8],
+        records: &[Vec<u8>],
     ) -> Res<RejoinResult> {
-        self.start_rejoin(group_info, psk_epoch, psk, remove, Some(history))
+        self.start_rejoin(group_info, psk_epoch, psk, remove, Some((initial_group_info, records)))
     }
 
     pub fn begin_rejoin(
@@ -863,7 +921,7 @@ impl Session {
         psk_epoch: u64,
         psk: &[u8],
         remove: Option<u32>,
-        history: Option<&[Vec<u8>]>,
+        archive: Option<(&[u8], &[Vec<u8>])>,
     ) -> Res<RejoinResult> {
         if self.rejoin_backup.is_some() {
             return Err(Error::state("a rejoin is already pending"));
@@ -872,10 +930,30 @@ impl Session {
             return Err(Error::state("this session already has a group"));
         }
         let backup = self.export()?;
-        match self.rejoin_provisional(group_info, psk_epoch, psk, remove, history) {
+        let verified = (|| {
+            if let Some((initial_group_info, records)) = archive {
+                let info = MlsMessage::from_bytes(group_info)?
+                    .into_group_info()
+                    .ok_or_else(|| Error::input("not a GroupInfo message"))?;
+                let tree = info
+                    .extensions()
+                    .get_as::<RatchetTreeExt>()
+                    .map_err(|_| Error::input("malformed ratchet tree"))?
+                    .ok_or_else(|| Error::input("missing ratchet tree"))?;
+                crate::archive::verify(
+                    initial_group_info,
+                    records,
+                    info.group_context(),
+                    &tree.tree_data.to_bytes()?,
+                    info.extensions(),
+                )?;
+            }
+            self.rejoin_provisional(group_info, psk_epoch, psk, remove)
+        })();
+        match verified {
             Ok(result) => {
                 self.rejoin_backup = Some(backup);
-                if history.is_none() {
+                if archive.is_none() {
                     self.rejoin_archive = Some(PendingRejoinArchive {
                         group_info: group_info.to_vec(),
                         psk_epoch,
@@ -892,21 +970,9 @@ impl Session {
         }
     }
 
-    pub fn confirm_rejoin(&mut self) -> Res<()> {
-        if self.rejoin_archive.is_some() {
-            return Err(Error::state("verify the rejoin archive before confirming"));
-        }
-        self.rejoin_backup
-            .take()
-            .map(|_| ())
-            .ok_or_else(|| Error::state("no rejoin is pending"))
-    }
-
-    /// An established member may now supply the archive encrypted under the
-    /// provisional *new* epoch's exporter after accepting this external
-    /// Commit. Verify it, then recheck the original request with its genuine
-    /// pre-Commit cutoffs; this Commit's own replacement is not a prior cutoff.
-    pub fn complete_rejoin(&mut self, history: &[Vec<u8>]) -> Res<()> {
+    /// Replay the accepted new-epoch archive, then recheck this request
+    /// against its authentic pre-Commit history, excluding its own removal.
+    pub fn complete_rejoin(&mut self, initial_group_info: &[u8], records: &[Vec<u8>]) -> Res<()> {
         let request = self
             .rejoin_archive
             .clone()
@@ -915,25 +981,31 @@ impl Session {
             .rejoin_backup
             .clone()
             .ok_or_else(|| Error::state("no rejoin is pending"))?;
-        // The room may already have accepted this external Commit. A bad
-        // download must leave its provisional key/state available for retry;
-        // the old PSK might no longer be eligible to submit another Commit.
-        let records = verify_history(&self.project_id, self.group()?.context(), history)?;
-        let result: Res<LeafRemovals> = (|| {
+        let group = self.group()?;
+        // An accepted Commit cannot be resubmitted after a bad download. Keep
+        // its provisional state retryable even after the original PSK expires.
+        let verified = crate::archive::replay(
+            initial_group_info,
+            records,
+            group.context(),
+            &group.export_tree().to_bytes()?,
+        )?;
+        let result: Res<()> = (|| {
             let mut validation = Session::import(&backup, &self.project_id)?;
             validation.policy.directory.set(self.policy.directory.get());
-            validation.rejoin_provisional(
+            validation.rejoin(
                 &request.group_info,
                 request.psk_epoch,
                 &request.psk,
                 request.remove,
-                Some(&history[..history.len() - 1]),
+                initial_group_info,
+                &records[..records.len() - 1],
             )?;
-            Ok(records)
+            Ok(())
         })();
         match result {
-            Ok(records) => {
-                *self.policy.removals.lock().unwrap() = records;
+            Ok(()) => {
+                *self.policy.removals.lock().unwrap() = verified;
                 self.rejoin_archive = None;
                 self.write()
             }
@@ -944,6 +1016,16 @@ impl Session {
                 Err(error)
             }
         }
+    }
+
+    pub fn confirm_rejoin(&mut self) -> Res<()> {
+        if self.rejoin_archive.is_some() {
+            return Err(Error::state("verify the rejoin archive before confirming"));
+        }
+        self.rejoin_backup
+            .take()
+            .map(|_| ())
+            .ok_or_else(|| Error::state("no rejoin is pending"))
     }
 
     pub fn discard_rejoin(&mut self) -> Res<()> {
@@ -967,7 +1049,7 @@ impl Session {
     }
 
     fn settled(&self) -> Res<()> {
-        if self.join_backup.is_some() {
+        if self.join_pending.is_some() {
             return Err(Error::state("verify or discard the pending Welcome join first"));
         }
         if self.rejoin_backup.is_some() {
@@ -982,7 +1064,6 @@ impl Session {
         psk_epoch: u64,
         psk: &[u8],
         remove: Option<u32>,
-        history: Option<&[Vec<u8>]>,
     ) -> Res<RejoinResult> {
         if self.removed {
             self.removed = false;
@@ -1019,14 +1100,13 @@ impl Session {
                     .collect()
             })
             .unwrap_or_default();
-        // Derive cutoffs from the transcript before applying this Commit's
-        // policy. The outer transaction restores them on any failure.
-        let records = history
-            .map(|history| verify_history(&self.project_id, info.group_context(), history))
-            .transpose()?;
+        // The carried records apply to this Commit's own policy check, and are
+        // rolled back if the external Commit fails (a forged GroupInfo must
+        // not leave cutoffs behind).
+        let carried = info.extensions().get_as::<LeafRemovals>().ok().flatten();
         let records_before = self.policy.removals.lock().unwrap().clone();
-        if let Some(records) = records {
-            self.policy.removals.lock().unwrap().merge(&records);
+        if let Some(records) = &carried {
+            self.policy.removals.lock().unwrap().merge(records);
         }
         self.psks.restore(Vec::new());
         self.psks.insert(psk_epoch, psk.to_vec(), u64::MAX);
@@ -1188,18 +1268,13 @@ impl Session {
 
     fn epoch_record(&self, commit: Vec<u8>, proposals: Vec<Vec<u8>>) -> Res<Vec<u8>> {
         let group = self.group()?;
-        EpochRecordV2 {
+        EpochRecordV1 {
             version: EPOCH_RECORD_VERSION,
             epoch: group.current_epoch(),
             group_context: group.context().mls_encode_to_vec().map_err(Error::codec)?,
             ratchet_tree: group.export_tree().to_bytes()?,
             commit,
             proposals,
-            group_info: if group.current_epoch() == 0 {
-                self.group_info()?
-            } else {
-                Vec::new()
-            },
         }
         .mls_encode_to_vec()
         .map_err(Error::codec)
@@ -1236,8 +1311,8 @@ impl Session {
             own_index,
             pending_commit: pending,
             pending_rejoin: self.rejoin_backup.is_some(),
-            pending_join: self.join_backup.is_some(),
-            pending_archive: self.join_backup.is_some() || self.rejoin_archive.is_some(),
+            pending_join: self.join_pending.is_some(),
+            pending_archive: self.join_pending.is_some() || self.rejoin_archive.is_some(),
             members,
             roles,
         })
@@ -1314,7 +1389,7 @@ impl Session {
             pending: self.pending.clone(),
             removed: self.removed,
             rejoin_backup: self.rejoin_backup.clone(),
-            join_backup: self.join_backup.clone(),
+            join_pending: self.join_pending.clone(),
             rejoin_archive: self.rejoin_archive.clone(),
         }
         .mls_encode_to_vec()
@@ -1322,6 +1397,13 @@ impl Session {
     }
 
     pub fn import(bytes: &[u8], expected_project: &[u8]) -> Res<Session> {
+        if let Some(&version) = bytes.first() {
+            if version != STATE_VERSION {
+                return Err(Error::state(format!(
+                    "session state version {version} is not {STATE_VERSION}"
+                )));
+            }
+        }
         let mut input = bytes;
         let stored = StoredSession::mls_decode(&mut input).map_err(Error::codec)?;
         if !input.is_empty() {
@@ -1353,7 +1435,7 @@ impl Session {
             pending: stored.pending,
             removed: stored.removed,
             rejoin_backup: stored.rejoin_backup,
-            join_backup: stored.join_backup,
+            join_pending: stored.join_pending,
             rejoin_archive: stored.rejoin_archive,
         };
         for kp in stored.key_packages {
@@ -1387,5 +1469,261 @@ fn proposal_name(proposal: &Proposal) -> &'static str {
         Proposal::Custom(_) => "custom",
         #[allow(unreachable_patterns)]
         _ => "other",
+    }
+}
+
+#[cfg(test)]
+mod archive_tests {
+    use super::*;
+    use crate::directory::DeviceDirectory;
+    use std::sync::Arc;
+
+    struct Fixture {
+        owner: Session,
+        joiner: Session,
+        initial: Vec<u8>,
+        records: Vec<Vec<u8>>,
+        key_package: Vec<u8>,
+    }
+
+    fn record(change: EpochChange) -> Vec<u8> {
+        hex::decode(change.epoch_record.unwrap()).unwrap()
+    }
+
+    fn session(device: &[u8]) -> Session {
+        let mut session = Session::generate(b"archive-test", b"A", device).unwrap();
+        session.certify(b"verified device certification").unwrap();
+        session
+    }
+
+    fn fixture() -> Fixture {
+        let mut owner = session(b"owner");
+        let mut removed = session(b"removed");
+        let joiner = session(b"joiner");
+        let devices: Vec<_> = [&owner, &removed, &joiner]
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "deviceId": display_id(&s.device_id), "status": "active",
+                    "leafKeys": [{"key": h(&s.signature_key()), "certifiedEpoch": 2}]
+                })
+            })
+            .collect();
+        let json = serde_json::json!({"users": [{"userId": "A", "devices": devices}]}).to_string();
+        for s in [&owner, &removed, &joiner] {
+            s.policy
+                .directory
+                .set(Arc::new(DeviceDirectory::from_json(&json).unwrap()));
+        }
+        owner.create_group(16).unwrap();
+        let initial = owner.group_info().unwrap();
+        let add = owner
+            .commit(CommitSpec::default(), vec![removed.key_package().unwrap()])
+            .unwrap();
+        let mut records = vec![record(owner.confirm_commit().unwrap())];
+        removed
+            .join(&hex::decode(add.welcome.unwrap()).unwrap(), &initial, &records)
+            .unwrap();
+        // The archive must carry and authenticate a referenced SelfRemove.
+        owner.process(&removed.propose_self_remove().unwrap()).unwrap();
+        owner.commit(CommitSpec::default(), vec![]).unwrap();
+        records.push(record(owner.confirm_commit().unwrap()));
+        assert_eq!(owner.policy.removals.lock().unwrap().records.len(), 1);
+        let key_package = joiner.key_package().unwrap();
+        Fixture {
+            owner,
+            joiner,
+            initial,
+            records,
+            key_package,
+        }
+    }
+
+    fn invitation(f: &mut Fixture, carried: Option<LeafRemovals>) -> (Vec<u8>, Vec<Vec<u8>>) {
+        // A valid MLS Commit and signature, with attacker-selected GroupInfo
+        // extensions. No production test bypass is exposed for these fixtures.
+        let roster = f.owner.roster_snapshot().unwrap();
+        let mut builder = f
+            .owner
+            .group_mut()
+            .unwrap()
+            .commit_builder()
+            .add_member(MlsMessage::from_bytes(&f.key_package).unwrap())
+            .unwrap();
+        if let Some(carried) = carried {
+            let mut extensions = ExtensionList::new();
+            extensions.set_from(carried).unwrap();
+            builder = builder.set_group_info_ext(extensions);
+        }
+        let output = builder.build().unwrap();
+        let welcome = output.welcome_messages()[0].to_bytes().unwrap();
+        let commit = output.commit_message().to_bytes().unwrap();
+        let description = f.owner.group_mut().unwrap().apply_pending_commit().unwrap();
+        let mut records = f.records.clone();
+        records.push(record(f.owner.after_commit(&roster, description, commit).unwrap()));
+        (welcome, records)
+    }
+
+    fn retry_with_valid(f: &mut Fixture, owner_backup: &[u8]) {
+        f.owner.restore_from(owner_backup).unwrap();
+        let records = f.owner.policy.removals.lock().unwrap().clone();
+        let (welcome, archive) = invitation(f, Some(records));
+        f.joiner.join(&welcome, &f.initial, &archive).unwrap();
+        assert_eq!(
+            f.joiner.policy.removals.lock().unwrap().clone(),
+            f.owner.policy.removals.lock().unwrap().clone()
+        );
+        assert_eq!(f.joiner.project_key().unwrap(), f.owner.project_key().unwrap());
+    }
+
+    #[test]
+    fn welcome_rejects_omitted_or_absent_removals_and_can_retry() {
+        for carried in [None, Some(LeafRemovals::default())] {
+            let mut f = fixture();
+            let owner_backup = f.owner.export().unwrap();
+            let joiner_backup = f.joiner.export().unwrap();
+            let (welcome, archive) = invitation(&mut f, carried);
+            let error = f.joiner.join(&welcome, &f.initial, &archive).err().unwrap();
+            assert_eq!(error.reasons[0].code, "removal-history-mismatch");
+            assert_eq!(f.joiner.export().unwrap(), joiner_backup);
+            retry_with_valid(&mut f, &owner_backup);
+        }
+    }
+
+    #[test]
+    fn welcome_rejects_fabricated_removals_and_can_retry() {
+        let mut f = fixture();
+        let owner_backup = f.owner.export().unwrap();
+        let joiner_backup = f.joiner.export().unwrap();
+        let mut fabricated = f.owner.policy.removals.lock().unwrap().clone();
+        let mut extra = fabricated.records[0].clone();
+        extra.epoch += 1;
+        fabricated.records.push(extra);
+        let (welcome, archive) = invitation(&mut f, Some(fabricated));
+        let error = f.joiner.join(&welcome, &f.initial, &archive).err().unwrap();
+        assert_eq!(error.reasons[0].code, "removal-history-mismatch");
+        assert_eq!(f.joiner.export().unwrap(), joiner_backup);
+        retry_with_valid(&mut f, &owner_backup);
+    }
+
+    #[test]
+    fn welcome_accepts_exact_archive_and_preserves_removed_key_guard() {
+        let mut f = fixture();
+        let removals = f.owner.policy.removals.lock().unwrap().clone();
+        let (welcome, archive) = invitation(&mut f, Some(removals.clone()));
+        f.joiner.join(&welcome, &f.initial, &archive).unwrap();
+        let state = f.joiner.policy.removals.lock().unwrap();
+        assert_eq!(*state, removals);
+        assert!(state.key_was_removed(&removals.records[0].signature_key));
+    }
+
+    #[test]
+    fn rejoin_rejects_omitted_and_fabricated_history_without_changing_state() {
+        let mut f = fixture();
+        let authentic = f.owner.policy.removals.lock().unwrap().clone();
+        let mut fabricated = authentic.clone();
+        let mut extra = fabricated.records[0].clone();
+        extra.epoch += 1;
+        fabricated.records.push(extra);
+        let before = f.joiner.export().unwrap();
+        let psk = f.owner.rejoin_psk().unwrap();
+        for carried in [LeafRemovals::default(), fabricated] {
+            *f.owner.policy.removals.lock().unwrap() = carried;
+            let info = f.owner.group_info().unwrap();
+            let error = f
+                .joiner
+                .rejoin(
+                    &info,
+                    psk.epoch,
+                    &hex::decode(&psk.secret).unwrap(),
+                    None,
+                    &f.initial,
+                    &f.records,
+                )
+                .err()
+                .unwrap();
+            assert_eq!(error.reasons[0].code, "removal-history-mismatch");
+            assert_eq!(f.joiner.export().unwrap(), before);
+        }
+        *f.owner.policy.removals.lock().unwrap() = authentic;
+        let info = f.owner.group_info().unwrap();
+        f.joiner
+            .rejoin(
+                &info,
+                psk.epoch,
+                &hex::decode(psk.secret).unwrap(),
+                None,
+                &f.initial,
+                &f.records,
+            )
+            .unwrap();
+        f.joiner.confirm_rejoin().unwrap();
+        assert!(f.joiner.group().is_ok());
+    }
+
+    #[test]
+    fn welcome_rejects_missing_reordered_tampered_and_unrelated_archive() {
+        let mut f = fixture();
+        let removals = f.owner.policy.removals.lock().unwrap().clone();
+        let (welcome, archive) = invitation(&mut f, Some(removals));
+        let before = f.joiner.export().unwrap();
+        let mut variants = vec![archive[1..].to_vec()];
+        let mut reordered = archive.clone();
+        reordered.swap(0, 1);
+        variants.push(reordered);
+        // Change a signed referenced proposal; changing only the encoded
+        // roster/removal list would leave this source-to-sink path untested.
+        let mut tampered = archive.clone();
+        let mut epoch = EpochRecordV1::mls_decode(&mut tampered[1].as_slice()).unwrap();
+        // The final bytes are the membership tag (not verifiable by an
+        // observer without epoch secrets); corrupt the signed portion.
+        let signed = epoch.proposals[0].len() - 40;
+        epoch.proposals[0][signed] ^= 1;
+        tampered[1] = epoch.mls_encode_to_vec().unwrap();
+        variants.push(tampered);
+        let mut altered_tree = archive.clone();
+        let mut epoch = EpochRecordV1::mls_decode(&mut altered_tree[1].as_slice()).unwrap();
+        epoch.ratchet_tree[0] ^= 1;
+        altered_tree[1] = epoch.mls_encode_to_vec().unwrap();
+        variants.push(altered_tree);
+        let mut truncated = archive.clone();
+        truncated[1].pop();
+        variants.push(truncated);
+        for (index, records) in variants.into_iter().enumerate() {
+            assert!(
+                f.joiner.join(&welcome, &f.initial, &records).is_err(),
+                "archive variant {index}"
+            );
+            assert_eq!(f.joiner.export().unwrap(), before);
+        }
+        let other = fixture(); // same project and epoch count, different chain
+        assert!(f.joiner.join(&welcome, &other.initial, &archive).is_err());
+        assert_eq!(f.joiner.export().unwrap(), before);
+        f.joiner.join(&welcome, &f.initial, &archive).unwrap();
+    }
+
+    #[test]
+    fn archive_rejects_trailing_message_bytes_and_preserves_retry() {
+        let mut f = fixture();
+        let removals = f.owner.policy.removals.lock().unwrap().clone();
+        let (welcome, archive) = invitation(&mut f, Some(removals));
+        let before = f.joiner.export().unwrap();
+        let mut padded_initial = f.initial.clone();
+        padded_initial.push(0);
+        assert!(f.joiner.join(&welcome, &padded_initial, &archive).is_err());
+        assert_eq!(f.joiner.export().unwrap(), before);
+        for proposal in [false, true] {
+            let mut padded = archive.clone();
+            let mut record = EpochRecordV1::mls_decode(&mut padded[1].as_slice()).unwrap();
+            if proposal {
+                record.proposals[0].push(0);
+            } else {
+                record.commit.push(0);
+            }
+            padded[1] = record.mls_encode_to_vec().unwrap();
+            assert!(f.joiner.join(&welcome, &f.initial, &padded).is_err());
+            assert_eq!(f.joiner.export().unwrap(), before);
+        }
+        f.joiner.join(&welcome, &f.initial, &archive).unwrap();
     }
 }

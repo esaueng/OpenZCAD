@@ -16,6 +16,7 @@ pub const SUITE: CipherSuite = CipherSuite::P256_AES128;
 /// Private-use extension and credential types (RFC 9420 §17.3, 0xF000+).
 pub const ROLES_EXT: ExtensionType = ExtensionType::new(0xF0A1);
 pub const DEVICE_CREDENTIAL: CredentialType = CredentialType::new(0xF0A2);
+pub const REMOVALS_EXT: ExtensionType = ExtensionType::new(0xF0A3);
 
 pub const PROJECT_KEY_LABEL: &[u8] = b"openzcad project key";
 pub const REJOIN_PSK_LABEL: &[u8] = b"openzcad rejoin psk";
@@ -280,10 +281,18 @@ pub struct LeafRemoval {
     pub epoch: u64,
 }
 
-/// Removal records derived from accepted Commits or verified epoch history.
+/// Removal records carried in GroupInfo (Welcome and external-commit
+/// GroupInfo), so a joiner starts with the committer's records instead of
+/// none. Signed by the committer as part of the GroupInfo.
 #[derive(Clone, Debug, Default, PartialEq, Eq, MlsSize, MlsEncode, MlsDecode)]
 pub struct LeafRemovals {
     pub records: Vec<LeafRemoval>,
+}
+
+impl MlsCodecExtension for LeafRemovals {
+    fn extension_type() -> ExtensionType {
+        REMOVALS_EXT
+    }
 }
 
 impl LeafRemovals {

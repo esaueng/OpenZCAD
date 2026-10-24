@@ -3,23 +3,23 @@
   "target": "wasm32-unknown-unknown",
   "wasmBindgen": "0.2.126",
   "files": {
-    "openzcad_mls.d.ts": "80189f90f6b52952c5493354683f62f9ce613d0488c795808e5de8badd5627c9",
-    "openzcad_mls.js": "8a696bc9e056b7af61c788e67b2c54dbff78fd740fc5247381ace1773f260581",
-    "openzcad_mls_bg.wasm": "cea8cf8ed6d5fd5bab016800f3348c27e83712fec1b7b4667ac4a548590c262c",
-    "openzcad_mls_bg.wasm.d.ts": "4a740c11658337eafa252d0baf1dd4790692b5e1d64f24df158c335ceb6ee2c1",
+    "openzcad_mls.d.ts": "af33d31e3d6541e6ec19fe4ffc0b8f01549c24624d494ebbc54056c6596ac9df",
+    "openzcad_mls.js": "42d9dc7a0a8c757f0fcc8aa960c5c7bbb4e21c6c436e2cbe3939b4d05cc51d24",
+    "openzcad_mls_bg.wasm": "1d8a8d06767677710a405bd952e7968675d998d4342cd9d4037673bb6c674651",
+    "openzcad_mls_bg.wasm.d.ts": "e3f02506964727bebf98e0472690649820e9a2e7f792179823a4e6cbd7320e1c",
     "snippets/mls-rs-core-f99cdecbb456b09c/inline0.js": "6739cfe5b7f2a23d65a1c2a0912a691701e50793dca7c0f95c89dae38861c2f6"
   },
   "sources": {
     "crate/Cargo.lock": "3bd532e7a8c5984d2a750c25c2b0bd75a331223198ef6acd1662bf8dacb59f8a",
-    "crate/Cargo.toml": "8d04e32d6e6978516dc37a00fc3e149d354a3b289b7b822ef9bdb71fdab89ea0",
+    "crate/Cargo.toml": "52e79cc64a417084889a5a922967ea92484d08bc8e00a4d89c7efc5f51529eb3",
     "crate/rust-toolchain.toml": "6a1afceac10cad1fda6c96b91c730cef9b65529c16993abd259fd0abf75c2c98",
+    "crate/src/archive.rs": "11a26f63c425f1255adc61920f47af081fcbe27b4dc59d30b7770eee5ff5f5da",
     "crate/src/directory.rs": "ea5eba8fa2140fe0bb4ac064fee7731c989ea49fa7aa57333a5435352c0ecf07",
     "crate/src/error.rs": "2d6df2b6335a5dafa353e5caf906c57b0b70db6fbb980bb120b53ff0c004736e",
-    "crate/src/history.rs": "fdddaa5fc0aa591e26ba9615dafa25e4023f6c3bb7d6d594360e2f7da46b52fe",
-    "crate/src/lib.rs": "a947c1404af9597b378bbb711bf96cacb76fc1848732c96036917e1235dc34c6",
-    "crate/src/model.rs": "4e264b2f2cf220c29e6c34f85762b0a4f9005b3f99515270e943e74f083f3eb2",
-    "crate/src/policy.rs": "4c574edd530eb2e96ab4efd2dee818d470008d6eea6a3171aca9d2ffd317f155",
-    "crate/src/session.rs": "54bbef351f4d75845eb6f8ccee1b2d53acc5a8c64b035e7c65c3a5cde375d476",
+    "crate/src/lib.rs": "c4f6f5dac23437461a5eee7a8a769de7da0635666cba18a700e92a020a7c05f0",
+    "crate/src/model.rs": "2ea3d1507ae521a63efd10c6117b7ee2c72d856a046a46d4d024315d27d63315",
+    "crate/src/policy.rs": "4e8f6fc32eb3f5bb815a81a329c7e54076c047f49d040dae4b0c8b804a82c464",
+    "crate/src/session.rs": "392b1980ec943b5290ebedb354ebb9b7f90f82da43eb615aa2310d35a2f929b5",
     "crate/src/storage.rs": "3457d58a90e2971e1260b7850a01d3e9c2378f38b169ee0a7fdcf425d4ef3183"
   }
 }
