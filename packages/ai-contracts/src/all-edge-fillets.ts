@@ -23,12 +23,13 @@ const UNIT_TO_MM: Record<UnitSystem, number> = {
 
 /** Deliberately accepts one whole-part operation, never a qualified subset. */
 export function parseAllEdgesFilletRequest(prompt: string) {
-  const text = prompt
+  let text = prompt
     .trim()
     .replace(/^(?:can|could|would)\s+you\s+/i, '')
-    .replace(/^please\s+/i, '')
-    .replace(/[.!?]+$/, '')
-    .trim();
+    .replace(/^please\s+/i, '');
+  let end = text.length;
+  while (end > 0 && '.!?'.includes(text.charAt(end - 1))) end -= 1;
+  text = text.slice(0, end).trim();
   const added = ADD_FILLET.exec(text);
   const remainder = added
     ? text.slice(added[0].length)

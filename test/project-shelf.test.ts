@@ -191,6 +191,18 @@ describe('reordering', () => {
 });
 
 describe('copy names', () => {
+  it.each([
+    ['Bracket(copy)', 'Bracket (copy)'],
+    ['Bracket\t\u2003(COPY 0002)', 'Bracket (copy)'],
+    ['(copy 2)', 'Untitled (copy)'],
+    ['\u2003\t', 'Untitled (copy)'],
+    ['Bracket\tother', 'Bracket\tother (copy)'],
+    ['Bracket (copy )', 'Bracket (copy ) (copy)'],
+    ['Bracket (copy 2)x', 'Bracket (copy 2)x (copy)']
+  ])('normalizes %j to %j', (source, expected) => {
+    expect(duplicateProjectName(source, [])).toBe(expected);
+  });
+
   it('extends the counter instead of nesting suffixes', () => {
     expect(duplicateProjectName('Bracket', [])).toBe('Bracket (copy)');
     expect(duplicateProjectName('Bracket', ['Bracket (copy)'])).toBe(
