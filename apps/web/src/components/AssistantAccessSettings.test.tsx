@@ -20,6 +20,7 @@ import {
 } from '../lib/e2ee/assistantConsent';
 import { E2eeApiError } from '../lib/e2ee/e2eeApi';
 import { lockAccount, rememberUnlockedAccount } from '../lib/e2ee/unlockedKeys';
+import { api as appApi } from '../lib/api';
 import { AssistantAccessSettings } from './AssistantAccessSettings';
 import { AssistantConsentSummary } from './assistant/AssistantConsentSummary';
 
@@ -226,5 +227,33 @@ describe('the project properties row (ADR-024 6-1, M6)', () => {
       />
     );
     expect(await screen.findByText(/did not verify/)).toBeTruthy();
+  });
+});
+
+describe('Settings › Encryption › Assistant access, once per mount', () => {
+  it('reads the consents and the shelf once, not on every render', async () => {
+    unlock();
+    const { api } = fakeApi([await row('proj_a', 3)]);
+    const shelf = vi
+      .spyOn(appApi, 'listProjects')
+      .mockImplementation(listProjects);
+    try {
+      render(
+        <AssistantAccessSettings
+          userId={USER}
+          unlocked
+          api={api}
+          pins={memoryConsentPins()}
+        />
+      );
+      expect(await screen.findByText('Secret bracket')).toBeTruthy();
+      // Before the fix each render made a new default `listProjects`, so
+      // the reload effect ran again after every answer, without end.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(api.list).toHaveBeenCalledTimes(1);
+      expect(shelf).toHaveBeenCalledTimes(1);
+    } finally {
+      shelf.mockRestore();
+    }
   });
 });

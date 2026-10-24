@@ -32,6 +32,14 @@ function routeWords(route: string): string {
 }
 
 /**
+ * The shelf, for project names. One function for every render: a default
+ * made per render changed `reload` each time, and its effect then ran on
+ * every render, each run rendering again, so the section asked the Worker
+ * (and decrypted the shelf) without end.
+ */
+const defaultListProjects = () => appApi.listProjects();
+
+/**
  * Settings › Encryption › "Assistant access" (ADR-024 Phase 6, slice 6-1):
  * the encrypted projects this account lets the assistant read, each
  * verified against the account key and this device's pin, with Revoke.
@@ -44,7 +52,7 @@ export function AssistantAccessSettings({
   unlocked,
   api: injectedApi,
   pins: injectedPins,
-  listProjects = () => appApi.listProjects()
+  listProjects = defaultListProjects
 }: {
   userId: string;
   unlocked: boolean;
