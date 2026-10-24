@@ -1340,6 +1340,40 @@
   line-height: 1.5;
 }
 
+/* Encrypted share links (slice 5-10): each link's state on its row, and
+   the owner's confirmation or a reissue offer stated above the list. */
+.sharing-share-notice,
+.sharing-share-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+.sharing-share-confirm .sharing-tag,
+.sharing-share-confirm .sharing-share-url {
+  flex-basis: 100%;
+}
+
+.sharing-share-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.sharing-share-row-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  font-size: var(--fs-xs);
+}
+
+.sharing-share-row-text [data-status='needs-confirming'] {
+  color: var(--color-warning);
+}
+
 .sharing-local h3 {
   margin: 0 0 var(--sp-1);
   font-size: var(--fs-sm);

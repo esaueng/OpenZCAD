@@ -214,8 +214,12 @@ test('invites to an encrypted project, verifies both ways and opens it as the in
   await alice.getByRole('button', { name: /Open project sharing/ }).click();
   const dialog = alice.getByRole('dialog', { name: 'Project sharing' });
   await expect(dialog).toBeVisible();
+  // Its only link is an encrypted one (slice 5-10), never a plaintext one.
+  await expect(
+    dialog.getByRole('region', { name: 'Encrypted share links' })
+  ).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Create link' })).toHaveCount(
-    0
+    1
   );
   await dialog.getByLabel('Email').fill(BOB_EMAIL);
   // Editor invitations need enforced edit leases (the plaintext rule the

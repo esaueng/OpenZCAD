@@ -2,6 +2,7 @@ import { e2eeErasureTables } from './e2ee';
 import { contactErasureStatements } from './e2eeContacts';
 import { invitationErasureStatements } from './e2eeInvitations';
 import { proposalErasureStatements } from './e2eeProposals';
+import { shareLinkErasureStatements } from './e2eeShareLinks';
 import { projectGroupErasureStatements } from './e2eeProjects';
 import { assistantConsentErasureStatements } from './e2eeAssistantConsents';
 import { deviceRemovalErasureStatements } from './e2eeDeviceRemoval';
@@ -492,7 +493,10 @@ export async function deleteAccountData(
           ...(await invitationErasureStatements(db, session.userId, email)),
           // Proposals it sent in other owners' projects lose their sender
           // (migration 0039), when the table exists.
-          ...(await proposalErasureStatements(db, session.userId, input.scope))
+          ...(await proposalErasureStatements(db, session.userId, input.scope)),
+          // The account's share delegation, and with `all` its user id on
+          // share-link rows in other owners' projects (migration 0040).
+          ...(await shareLinkErasureStatements(db, session.userId, input.scope))
         ]
       )
     );

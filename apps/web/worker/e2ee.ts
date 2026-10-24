@@ -65,6 +65,10 @@ import {
   isE2eeAssistantConsentStorageReady
 } from './e2eeAssistantConsents';
 import { handleE2eeProjectRequest, isE2eeProjectPath } from './e2eeProjects';
+import {
+  handleE2eeShareLinkRequest,
+  isE2eeShareLinkPath
+} from './e2eeShareLinks';
 import { handleE2eeContactsRequest, isE2eeContactsPath } from './e2eeContacts';
 import {
   handleE2eeInvitationRequest,
@@ -1987,6 +1991,19 @@ export async function handleE2eeRequest(
         rawDb,
         userId,
         projectsEnabled,
+        db.authorization
+      );
+    }
+    if (isE2eeShareLinkPath(pathname)) {
+      // Share links of encrypted projects and share delegations
+      // (e2eeShareLinks.ts, slice 5-10).
+      return await handleE2eeShareLinkRequest(
+        request,
+        rawDb,
+        projectBucket(env),
+        userId,
+        projectsEnabled,
+        invitations.sharingEnabled,
         db.authorization
       );
     }

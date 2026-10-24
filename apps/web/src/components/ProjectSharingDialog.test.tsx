@@ -18,6 +18,7 @@ import {
   type EncryptedSharingClient
 } from './ProjectSharingDialog';
 import type { OwnerInvitation } from '../lib/e2ee/invitations';
+import type { EncryptedShareLinkClient } from './EncryptedShareLinks';
 
 const owner = toUserId('user_sharing_owner');
 const member = toUserId('user_sharing_member');
@@ -808,6 +809,21 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
     };
   }
 
+  function encryptedShareLinkClient(): EncryptedShareLinkClient {
+    return {
+      list: vi.fn(async () => ({
+        links: [],
+        needsConfirmation: false,
+        retired: []
+      })),
+      create: vi.fn(async () => ({ url: 'https://app.example/#share=x' })),
+      revoke: vi.fn(async () => undefined),
+      confirm: vi.fn(async () => undefined),
+      reissue: vi.fn(async () => undefined),
+      subscribeRemovals: vi.fn(() => () => undefined)
+    };
+  }
+
   function encryptedClient(
     invitations: OwnerInvitation[]
   ): EncryptedSharingClient {
@@ -849,6 +865,7 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
     ]);
     const onVerifyContact = vi.fn();
     const links = shareLinkClient();
+    const encryptedLinks = encryptedShareLinkClient();
     const user = userEvent.setup();
     render(
       <ProjectSharingDialog
@@ -860,6 +877,7 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
         shareLinkClient={links}
         encrypted
         encryptedClient={encrypted}
+        encryptedShareLinkClient={encryptedLinks}
         editorInvitationsEnabled={false}
         onVerifyContact={onVerifyContact}
         onClose={vi.fn()}
@@ -874,14 +892,21 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
     ).toBeVisible();
     // Completed ones are members now, not pending rows.
     expect(screen.queryByText(/^Added/)).not.toBeInTheDocument();
-    // No share links yet (slice 5-10); what the metadata route lists is
-    // still shown.
+    // Share links are the encrypted ones (slice 5-10), never the plaintext
+    // routes'; what the metadata route lists is still shown.
     expect(
-      screen.queryByRole('button', { name: 'Create link' })
-    ).not.toBeInTheDocument();
+      screen.getByRole('region', { name: 'Encrypted share links' })
+    ).toBeVisible();
+    await waitFor(() =>
+      expect(encryptedLinks.list).toHaveBeenCalledWith('proj_encrypted')
+    );
+    expect(screen.getAllByRole('button', { name: 'Create link' })).toHaveLength(
+      1
+    );
     expect(screen.queryByText('pending@example.com')).toBeVisible();
     expect(sharingClient.getProjectSharing).toHaveBeenCalled();
     expect(links.listProjectShareLinks).not.toHaveBeenCalled();
+    expect(links.createProjectShareLink).not.toHaveBeenCalled();
 
     // Roles change by the owner's MLS Commit (slice 5-4), never through the
     // plaintext route, and editors need no edit-lease rollout.
@@ -972,6 +997,10 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
         onClose={vi.fn()}
       />
     );
+    // Only the owner manages share links.
+    expect(
+      screen.queryByRole('region', { name: 'Encrypted share links' })
+    ).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Leave project…' }));
     const confirm = screen.getByRole('group', { name: 'Leave this project' });
     expect(confirm).toHaveTextContent(

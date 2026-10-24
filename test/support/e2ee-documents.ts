@@ -53,7 +53,8 @@ import {
 import {
   createEncryptedProjectStore,
   type EncryptedProjectStore,
-  type EncryptedProjectWarning
+  type EncryptedProjectWarning,
+  type EncryptedShareHead
 } from '../../apps/web/src/lib/e2ee/encryptedProjectStore';
 import {
   memoryVersionPins,
@@ -78,6 +79,8 @@ import {
   type EncryptedViewStates
 } from '../../apps/web/src/lib/e2ee/replacedEnvelopes';
 import { migratedDatabase, sqliteD1 } from './sqlite-d1';
+import { createE2eeShareLinksApi } from '@openzcad/shared';
+import type { ShareLinksContext } from '../../apps/web/src/lib/e2ee/shareLinks';
 
 export const OWNER = 'user_owner';
 export const OTHER = 'user_other';
@@ -91,6 +94,8 @@ export interface Account {
   list: VerifiedDeviceList;
   devices: Map<string, CertifyingDevice>;
   accountKey: Uint8Array;
+  /** The identity's private key (share delegations, slice 5-10). */
+  identityPrivateKey: CryptoKey;
   /** Rows the Worker reads the device list from. */
   seed(db: DatabaseSync): void;
   /** Revokes a device in a new identity-signed entry, seeded into `db`. */
@@ -165,6 +170,7 @@ export async function makeAccount(
     list: await verifyDeviceList(identityRaw, chain),
     devices,
     accountKey,
+    identityPrivateKey: identity.privateKey,
     seed(db) {
       db.prepare(
         `INSERT INTO e2ee_identities (user_id, generation, identity_key, created_at)
@@ -400,6 +406,13 @@ export interface Device {
   files: ProjectFilesDeps;
   measurements: EncryptedMeasurements;
   viewStates: EncryptedViewStates;
+  /** Share links (slice 5-10), over this device's store and groups. */
+  shareLinks: ShareLinksContext;
+  /**
+   * What the page does after each write it made (slice 5-10: republishing
+   * share snapshots), when `DeviceOptions.onVersionWritten` asks for it.
+   */
+  shareWork: Promise<unknown>[];
   fetcher(path: string, init?: RequestInit): Promise<Response>;
   /** Runs before a request reaches the Worker. */
   before?: Hook;
@@ -432,6 +445,15 @@ export interface DeviceOptions {
    * lists, as contacts and pins (slice 5-1) will supply them.
    */
   members?: readonly Account[];
+  /**
+   * Runs after each version this device wrote (the page republishes share
+   * snapshots there, slice 5-10); its promise is kept in `shareWork`.
+   */
+  onVersionWritten?: (
+    d: Device,
+    projectId: string,
+    head: EncryptedShareHead
+  ) => Promise<unknown>;
 }
 
 /** One device: its own engine, MLS store and pins over the shared server. */
@@ -453,7 +475,8 @@ export function device(
     sessions,
     mls,
     pins,
-    warnings: []
+    warnings: [],
+    shareWork: []
   } as unknown as Device;
   result.fetcher = async (path: string, init: RequestInit = {}) => {
     await result.before?.(path, init);
@@ -526,8 +549,25 @@ export function device(
       : {}),
     ...(options.cutoffs ? { cutoffs: async () => options.cutoffs! } : {}),
     ...(options.now ? { now: options.now } : {}),
-    onWarning: (warning) => result.warnings.push(warning)
+    onWarning: (warning) => result.warnings.push(warning),
+    ...(options.onVersionWritten
+      ? {
+          onVersionWritten: (projectId: string, head: EncryptedShareHead) => {
+            const work = options.onVersionWritten!(result, projectId, head);
+            result.shareWork.push(work);
+            return work.then(() => undefined);
+          }
+        }
+      : {})
   });
+  result.shareLinks = {
+    groups: result.groups,
+    store: result.store,
+    api: createE2eeShareLinksApi(fetcher),
+    blobReferences: result.references,
+    origin: 'https://app.example',
+    ...(options.now ? { now: options.now } : {})
+  };
   result.files = {
     info: result.store.info,
     references: result.references,

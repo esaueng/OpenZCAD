@@ -1,7 +1,11 @@
 import { releaseDevelopmentE2eeWrite } from './e2eeWriteAuthorization';
 import { accountConsent, publishCensus } from './glimpseCensus';
 import { handleGlimpseUsage, countApi, type GlimpseEnv } from './glimpse';
-import { handleE2eeRequest } from './e2ee';
+import { handleE2eeRequest, projectBucket } from './e2ee';
+import {
+  handleEncryptedSharedSnapshot,
+  isEncryptedSharedSnapshotPath
+} from './e2eeShareLinks';
 import type { E2eeInvitationHost } from './e2eeInvitations';
 import { withEncryptedProjectInfo } from './e2eeProjectDocuments';
 import { accountRequiresEncryptedProjects } from './e2eeProjectPreferences';
@@ -644,8 +648,8 @@ function encryptedInvitationHost(
     },
     emailConfigured: Boolean(
       env.EMAIL &&
-        env.PROJECT_INVITATION_EMAIL_FROM?.trim() &&
-        env.PUBLIC_APP_ORIGIN?.trim()
+      env.PROJECT_INVITATION_EMAIL_FROM?.trim() &&
+      env.PUBLIC_APP_ORIGIN?.trim()
     ),
     sendInvitationEmail: async (details) => {
       const config = projectInvitationEmailConfig(env);
@@ -714,15 +718,16 @@ async function assertAssistantProjectAllowed(
   const userId = identity.userId;
   // Before migration 0031 every project is plaintext.
   if (!(await isProjectStorageFormatReady(env.DB))) return null;
-  const row = await env.DB!.prepare(
-    `SELECT p.storage_format FROM projects p
+  const row = await env
+    .DB!.prepare(
+      `SELECT p.storage_format FROM projects p
      WHERE p.id = ? AND (
        p.user_id = ? OR EXISTS (
          SELECT 1 FROM project_members pm
          WHERE pm.project_id = p.id AND pm.user_id = ?
        )
      )`
-  )
+    )
     .bind(projectId, userId, userId)
     .first<{ storage_format: number | null }>();
   if (row && row.storage_format !== null && row.storage_format !== 1) {
@@ -893,6 +898,22 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       },
       200,
       { 'cache-control': 'no-store' }
+    );
+  }
+
+  // Anonymous reads of encrypted projects' share links (ADR-024 slice
+  // 5-10): the token is the whole authorization, as above, and the route
+  // serves only a signed share-snapshot envelope with what a visitor checks
+  // it with, never a plaintext project. It needs the deployment-wide
+  // E2EE_PROJECTS_ENABLED flag and sharing rollout (an anonymous caller has
+  // no email for the canaries); everything else is one opaque 404.
+  if (request.method === 'GET' && isEncryptedSharedSnapshotPath(pathname)) {
+    return handleEncryptedSharedSnapshot(
+      pathname,
+      env.DB,
+      projectBucket(env),
+      isCloudflareFeatureEnabled(env, 'E2EE_PROJECTS_ENABLED') &&
+        projectCollaborationRollout(env).sharingEnabled
     );
   }
 
@@ -1937,7 +1958,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const expectedRevision = parseDeleteProjectMeasurementsRequest(
       await readJsonBody(request, 1024)
     );
-    await deleteProjectMeasurements(env.DB!, projectId, userId, expectedRevision);
+    await deleteProjectMeasurements(
+      env.DB!,
+      projectId,
+      userId,
+      expectedRevision
+    );
     return new Response(null, { status: 204 });
   }
 

@@ -13,6 +13,11 @@
  * keys and device-list pins) would block on every tab still holding it at
  * version 1. Pins written before slice 4-7 read with no info hash and no
  * envelope pins.
+ *
+ * Since slice 5-10 a pin also records the share-link tombstones this
+ * browser has seen in the project (link ids), so a later head that lists a
+ * revoked link as active is refused even after a reload; pins written
+ * before read with none.
  */
 
 /** A replaced envelope's pin: its sequence and lowercase hex hash. */
@@ -38,6 +43,8 @@ export interface ProjectVersionPin {
    * (`view-state:<sessionId>`), by key.
    */
   readonly envelopes: Readonly<Record<string, EnvelopePin>>;
+  /** Share-link ids whose tombstones this browser has seen (slice 5-10). */
+  readonly tombstones?: readonly string[];
 }
 
 /** A head to pin: what `advance` swaps in. */
@@ -79,6 +86,40 @@ export interface VersionPinStore {
     key: string,
     next: EnvelopePin
   ): Promise<boolean>;
+  /**
+   * Records share-link tombstones seen in the project (slice 5-10). Ids are
+   * only ever added. Optional: a store without it remembers none.
+   */
+  addTombstones?(
+    userId: string,
+    projectId: string,
+    shareIds: readonly string[]
+  ): Promise<void>;
+}
+
+/** Most tombstoned link ids one pin keeps (`MAX_SHARE_TOMBSTONES`). */
+const MAX_TOMBSTONES = 4096;
+const SHARE_ID = /^[!-~]{1,128}$/;
+
+/** The tombstone ids a pin records, valid ones only. */
+function tombstonesOf(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((id): id is string => typeof id === 'string' && SHARE_ID.test(id))
+    .slice(0, MAX_TOMBSTONES);
+}
+
+function withTombstones(
+  current: ProjectVersionPin | null,
+  shareIds: readonly string[]
+): ProjectVersionPin | null {
+  const known = new Set(current?.tombstones ?? []);
+  const added = tombstonesOf(shareIds).filter((id) => !known.has(id));
+  if (!added.length) return null;
+  return {
+    ...(current ?? emptyPin()),
+    tombstones: [...known, ...added].slice(-MAX_TOMBSTONES)
+  };
 }
 
 const HASH = /^[0-9a-f]{64}$/;
@@ -112,6 +153,7 @@ function readPin(value: unknown): ProjectVersionPin | null {
   ) {
     return null;
   }
+  const tombstones = tombstonesOf((pin as { tombstones?: unknown }).tombstones);
   const envelopes: Record<string, EnvelopePin> = {};
   if (typeof pin.envelopes === 'object' && pin.envelopes !== null) {
     for (const [key, entry] of Object.entries(pin.envelopes)) {
@@ -127,7 +169,8 @@ function readPin(value: unknown): ProjectVersionPin | null {
       typeof pin.infoHash === 'string' && HASH.test(pin.infoHash)
         ? pin.infoHash
         : null,
-    envelopes
+    envelopes,
+    ...(tombstones.length ? { tombstones } : {})
   };
 }
 
@@ -264,7 +307,12 @@ export function memoryVersionPins(): VersionPinStore {
         raisedInfo(current, sequence, hash ?? null)
       ),
     advanceEnvelope: async (userId, projectId, key, next) =>
-      update(userId, projectId, (current) => raisedEnvelope(current, key, next))
+      update(userId, projectId, (current) =>
+        raisedEnvelope(current, key, next)
+      ),
+    addTombstones: async (userId, projectId, shareIds) => {
+      update(userId, projectId, (current) => withTombstones(current, shareIds));
+    }
   };
 }
 
@@ -345,7 +393,12 @@ export function indexedDbVersionPins(): VersionPinStore {
         await transact(userId, projectId, (current) =>
           raisedEnvelope(current, key, next)
         )
-      ).changed
+      ).changed,
+    addTombstones: async (userId, projectId, shareIds) => {
+      await transact(userId, projectId, (current) =>
+        withTombstones(current, shareIds)
+      );
+    }
   };
 }
 
