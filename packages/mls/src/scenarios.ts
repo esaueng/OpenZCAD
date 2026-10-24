@@ -121,6 +121,7 @@ function only(
 // Cast: devices, the verified device directory, the users' PSK stores
 
 interface Device {
+  world: World;
   name: string;
   userId: string;
   deviceId: string;
@@ -137,6 +138,7 @@ interface DeviceRecord {
 
 class World {
   readonly devices: Device[] = [];
+  private readonly epochHistory: Uint8Array[] = [];
   private readonly directory = new Map<string, Map<string, DeviceRecord>>();
   /** Each user's rejoin PSKs as that user's devices store them on the
    * server, wrapped under the account key (ADR-024, "Long-offline devices"). */
@@ -148,6 +150,15 @@ class World {
     readonly mls: Mls,
     readonly projectId: string
   ) {}
+
+  remember(change: EpochChange): void {
+    if (change.epochRecord)
+      this.epochHistory[change.epoch] = change.epochRecord;
+  }
+
+  history(): Uint8Array[] {
+    return [...this.epochHistory];
+  }
 
   snapshot(): DeviceDirectory {
     return {
@@ -203,6 +214,7 @@ class World {
       );
     }
     const device: Device = {
+      world: this,
       name: deviceId,
       userId,
       deviceId,
@@ -354,6 +366,7 @@ async function advance(
 }> {
   const pending = await committer.session.commit(request);
   const change = await committer.session.confirmCommit();
+  world.remember(change);
   const live: Device[] = [];
   for (const d of others) {
     const processed = await d.session.process(pending.commit);
@@ -371,7 +384,7 @@ async function join(
   devices: Device[]
 ): Promise<void> {
   assert(welcome, 'the Commit produced no Welcome');
-  for (const d of devices) await d.session.join(welcome);
+  for (const d of devices) await d.session.join(welcome, world.history());
   await world.storePsks(devices);
 }
 
@@ -399,6 +412,7 @@ async function createProject(
   const change = await owner.session.createGroup(
     rejoinWindow ? { rejoinWindow } : {}
   );
+  world.remember(change);
   await world.storePsks([owner]);
   return change;
 }
@@ -413,11 +427,13 @@ async function rejoin(
 ): Promise<string> {
   const groupInfo = await groupInfoFrom.session.groupInfo();
   const result = await joiner.session.rejoin(groupInfo, {
+    history: world.history(),
     psk,
     ...(replaceLeaf === undefined ? {} : { replaceLeaf })
   });
   await deliver(result.commit, receivers);
   await joiner.session.confirmRejoin();
+  world.remember(result.change);
   await world.storePsks([joiner, ...receivers]);
   return `PSK of epoch ${psk.epoch} accepted; now epoch ${result.change.epoch}`;
 }
@@ -433,6 +449,7 @@ async function tryRejoin(
   await joiner.session.insecureSkipSendChecksForTests(true);
   const groupInfo = await groupInfoFrom.session.groupInfo();
   const result = await joiner.session.rejoin(groupInfo, {
+    history: groupInfoFrom.world.history(),
     psk,
     ...(replaceLeaf === undefined ? {} : { replaceLeaf })
   });
@@ -653,7 +670,7 @@ const main = suite<MainCast>({
       async run({ world, a1, a2, b1, b2 }) {
         const first = await a2.session.commit();
         const second = await b1.session.commit();
-        await a2.session.confirmCommit();
+        world.remember(await a2.session.confirmCommit());
         await b1.session.discardCommit();
         await deliver(first.commit, [a1, b1, b2!]);
         await world.storePsks([a1, a2, b1, b2!]);
@@ -801,10 +818,12 @@ const rejoinRules = suite<RejoinCast>({
         solo.retire(s1);
         const s2 = await solo.device('S', 'S2');
         const result = await s2.session.rejoin(groupInfo, {
+          history: solo.history(),
           psk: solo.newestPsk('S'),
           replaceLeaf: stale
         });
         await s2.session.confirmRejoin();
+        solo.remember(result.change);
         await solo.storePsks([s2]);
         await tick(solo, s2, []);
         const status = await s2.session.status();
@@ -931,6 +950,7 @@ const rejoinRules = suite<RejoinCast>({
         await failsWith(
           () =>
             removed.session.rejoin(new Uint8Array([1]), {
+              history: world.history(),
               psk: { epoch: 0, secret: new Uint8Array(32) }
             }),
           'mls'
@@ -943,6 +963,7 @@ const rejoinRules = suite<RejoinCast>({
         const a8 = await world.device('A', 'A8');
         const groupInfo = await a1.session.groupInfo();
         const lost = await a8.session.rejoin(groupInfo, {
+          history: world.history(),
           psk: world.psk('A', await epochOf(a1))
         });
         let status = await a8.session.status();
@@ -1583,7 +1604,7 @@ interface RecordsCast {
 }
 
 const carriedRecords = suite<RecordsCast>({
-  name: 'removal records carried in GroupInfo',
+  name: 'removal records authenticated by epoch history',
   async setup(mls) {
     const world = new World(mls, project('records'));
     const a1 = await world.device('A', 'A1');
@@ -1640,7 +1661,7 @@ const carriedRecords = suite<RecordsCast>({
       }
     },
     {
-      name: "a recreated device's own client refuses a stale rejoin using the GroupInfo's records, then rejoins",
+      name: "a recreated device's own client refuses a stale rejoin using authenticated history, then rejoins",
       async run({ world, a1, b1 }) {
         const a6 = await world.device('A', 'A6');
         await addDevices(world, a1, [b1], [a6]);
@@ -1652,7 +1673,10 @@ const carriedRecords = suite<RecordsCast>({
         const groupInfo = await a1.session.groupInfo();
         const local = await refused(
           () =>
-            fresh.session.rejoin(groupInfo, { psk: world.psk('A', joined) }),
+            fresh.session.rejoin(groupInfo, {
+              history: world.history(),
+              psk: world.psk('A', joined)
+            }),
           ...only('rejoin-psk-before-leaf-removal')
         );
         assert(
@@ -1667,6 +1691,109 @@ const carriedRecords = suite<RecordsCast>({
           [a1, b1]
         );
         return `${local}; ${accepted}`;
+      }
+    },
+    {
+      name: 'incomplete, reordered, tampered and substituted Welcome history is refused without consuming its KeyPackage',
+      async run({ world, a1, b1 }) {
+        const newcomer = await world.device('A', 'archive-joiner');
+        const { welcome } = await advance(world, a1, [b1], {
+          add: [await newcomer.session.keyPackage()]
+        });
+        assert(welcome, 'a Welcome');
+        await failsWith(() => newcomer.session.join(welcome, []), 'input');
+        const history = world.history();
+        const reversed = [...history];
+        [reversed[1], reversed[2]] = [reversed[2]!, reversed[1]!];
+        const trailing = [...history];
+        trailing[1] = new Uint8Array([...trailing[1]!, 0]);
+        const corrupted = history.map((record) => record.slice());
+        const decoded = await world.mls.decodeEpochRecord(corrupted[1]!);
+        const offset = corrupted[1]!.findIndex((_, i, bytes) =>
+          decoded.commit.every((byte, j) => bytes[i + j] === byte)
+        );
+        assert(
+          offset >= 0 && decoded.commit.length > 10,
+          'the archived Commit'
+        );
+        corrupted[1]![offset + 10]! ^= 1;
+        // A cryptographically valid alternate chain under the same project
+        // id still does not authenticate this Welcome's transcript.
+        const other = new World(world.mls, world.projectId);
+        const z1 = await other.device('A', 'other-owner');
+        await createProject(other, z1, 8);
+        await tick(other, z1, [], history.length - 1);
+        for (const bad of [
+          [],
+          history.slice(1),
+          history.slice(0, -1),
+          reversed,
+          trailing,
+          corrupted,
+          other.history()
+        ]) {
+          let rejected = false;
+          try {
+            await newcomer.session.join(welcome, bad);
+          } catch (error) {
+            assert(error instanceof MlsError, String(error));
+            assert(
+              error.kind === 'input' || error.kind === 'mls',
+              error.message
+            );
+            rejected = true;
+          }
+          assert(rejected, 'unverified history was accepted');
+          assert(
+            !(await newcomer.session.status()).inGroup,
+            'a failed join left no group'
+          );
+        }
+        await newcomer.session.join(welcome, history);
+        await world.storePsks([newcomer]);
+        // Its accepted Welcome no longer carries a LeafRemovals hint. The
+        // derived transcript history must still block the removed key.
+        const removed = world.devices.find((d) => d.deviceId === 'A2');
+        assert(removed && !removed.live, 'A2 was removed');
+        const removedKey = await removed.session.keyPackage();
+        await refused(
+          () => newcomer.session.commit({ add: [removedKey] }),
+          ['leaf-key-reused']
+        );
+        return agree([a1, b1, newcomer]);
+      }
+    },
+    {
+      name: 'a rejoin refuses missing or truncated history, then retries successfully',
+      async run({ world, a1 }) {
+        const fresh = await world.device('A', 'archive-rejoiner');
+        const groupInfo = await a1.session.groupInfo();
+        const psk = world.newestPsk('A');
+        await failsWith(
+          () => fresh.session.rejoin(groupInfo, { psk, history: [] }),
+          'input'
+        );
+        await failsWith(
+          () =>
+            fresh.session.rejoin(groupInfo, {
+              psk,
+              history: world.history().slice(1)
+            }),
+          'input'
+        );
+        assert(
+          !(await fresh.session.status()).inGroup,
+          'failed rejoin left no group'
+        );
+        const receivers = world.devices.filter((d) => d.live && d !== fresh);
+        // Independent archive-only groups share the project id in these
+        // attacks; only devices in the actual group receive the Commit.
+        const actual = [];
+        for (const d of receivers) {
+          if ((await d.session.status()).epoch === (await epochOf(a1)))
+            actual.push(d);
+        }
+        return rejoin(world, fresh, a1, psk, actual);
       }
     },
     {
@@ -1688,7 +1815,7 @@ const carriedRecords = suite<RecordsCast>({
         // Refused while verifying the GroupInfo (its tree or its signature).
         let refusal = '';
         try {
-          await a4.session.rejoin(forged, { psk });
+          await a4.session.rejoin(forged, { history: other.history(), psk });
         } catch (error) {
           assert(error instanceof MlsError, String(error));
           refusal = error.kind;

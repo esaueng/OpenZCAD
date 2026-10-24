@@ -25,7 +25,8 @@ await session.certify(
   await signWithDeviceKey(await session.certificationPayload())
 );
 await session.setDirectory(verifiedDeviceLists); // before any other operation
-await session.createGroup();
+const created = await session.createGroup();
+// Archive created.epochRecord, then each accepted Commit's epochRecord.
 const projectKey = await session.projectKey();
 const sealed = await session.seal(stateKey); // non-extractable AES-256-GCM
 ```
@@ -46,6 +47,17 @@ const sealed = await session.seal(stateKey); // non-extractable AES-256-GCM
 
 Seal and store the session after every operation that changes it, before
 sending its output to the room. A reopened session needs `setDirectory` again.
+Keep the accepted epoch records separately in the encrypted history archive.
+Both `join(welcome, history)` and `rejoin(groupInfo, { psk, history, ... })`
+require an ordered array of every record from epoch zero through the Welcome
+or GroupInfo epoch. Deliver the Add's accepted epoch record with its Welcome.
+Missing history is an error; retrying a failed join preserves its KeyPackage.
+
+Epoch records and sealed session contents are now version 2. Version 1 sessions
+are refused because their removal state may have trusted an inviter's omissions;
+there is no automatic migration. Version 2 records add the signed epoch-zero
+GroupInfo needed to bootstrap transcript replay. This is a breaking change to
+the package's API and stored state; the application does not use the package yet.
 
 ## Policy
 
@@ -91,8 +103,19 @@ A refusal is an `MlsError` of kind `policy` whose `reasons` carry stable codes.
   rest in its next Commit; until then they can sign nothing anyone accepts.
 
 Leaf-removal records come from the group's own Commits. A member who joins
-by Welcome, or rejoins, starts from the records in the committer's signed
-GroupInfo (extension 0xF0A3); records can only make rejoin stricter.
+by Welcome, or rejoins, derives them by replaying the complete public epoch
+transcript with the pinned `mls-rs` observer. It verifies signatures, tree
+evolution and transcript hashes, compares each record's context and tree,
+and binds the result to the joining MLS GroupContext. GroupInfo removal
+hints (the former extension 0xF0A3) are neither sent nor trusted.
+
+The observer does not know historical epoch secrets, so this replay does not
+verify historical confirmation MACs, PSK possession or application permissions.
+The real MLS join or external Commit builder still verifies the current
+cryptographic state and credential policy. Archive replay remains possible
+after a historical device is revoked. This prevents omitted removal history
+within the accepted transcript; it does not prevent a malicious insider from
+inviting someone into an entirely different group fork.
 
 ## Build and test
 

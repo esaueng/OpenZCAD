@@ -27,6 +27,7 @@ use mls_rs_crypto_rustcrypto::RustCryptoProvider;
 use serde::Serialize;
 
 use crate::error::{Error, Res};
+use crate::history::verify_history;
 use crate::model::*;
 use crate::policy::{PolicyState, ProjectIdentity, ProjectRules};
 use crate::storage::{GroupStore, PskStore, StoredEpoch, StoredGroup};
@@ -45,8 +46,9 @@ pub type ProjectConfig = WithIdentityProvider<
     >,
 >;
 
-const STATE_VERSION: u8 = 1;
-const EPOCH_RECORD_VERSION: u8 = 1;
+// Version 1 could persist removal records trusted from a single inviter.
+const STATE_VERSION: u8 = 2;
+pub const EPOCH_RECORD_VERSION: u8 = 2;
 
 fn cipher_suite() -> Res<impl CipherSuiteProvider> {
     RustCryptoProvider::with_enabled_cipher_suites(vec![SUITE])
@@ -268,7 +270,7 @@ struct StoredSession {
 /// every proposal that Commit applied by reference. The app encrypts it under
 /// that epoch's exported key.
 #[derive(MlsSize, MlsEncode, MlsDecode)]
-pub struct EpochRecordV1 {
+pub struct EpochRecordV2 {
     pub version: u8,
     pub epoch: u64,
     pub group_context: Vec<u8>,
@@ -276,6 +278,9 @@ pub struct EpochRecordV1 {
     /// Empty for the group's first epoch.
     pub commit: Vec<u8>,
     pub proposals: Vec<Vec<u8>>,
+    /// Signed GroupInfo for epoch zero, to bootstrap public transcript replay.
+    /// Empty in later records; their Commits supply the confirmation tags.
+    pub group_info: Vec<u8>,
 }
 
 // ---------------------------------------------------------------------------
@@ -501,10 +506,22 @@ impl Session {
         ))
     }
 
-    pub fn join(&mut self, welcome: &[u8]) -> Res<EpochChange> {
+    pub fn join(&mut self, welcome: &[u8], history: &[Vec<u8>]) -> Res<EpochChange> {
         self.require_no_group()?;
+        let backup = self.export()?;
+        match self.join_verified(welcome, history) {
+            Ok(change) => Ok(change),
+            Err(error) => {
+                // join_group consumes a KeyPackage before application checks.
+                self.restore_from(&backup)?;
+                Err(error)
+            }
+        }
+    }
+
+    fn join_verified(&mut self, welcome: &[u8], history: &[Vec<u8>]) -> Res<EpochChange> {
         let message = MlsMessage::from_bytes(welcome)?;
-        let (group, info) = self.client()?.join_group(None, &message, None)?;
+        let (group, _) = self.client()?.join_group(None, &message, None)?;
         if group.group_id() != group_id(&self.project_id).as_slice() {
             self.groups.restore(None);
             return Err(Error::input("the Welcome is for a different project"));
@@ -515,9 +532,8 @@ impl Session {
             self.groups.restore(None);
             return Err(Error::policy(shape));
         }
-        if let Ok(Some(records)) = info.group_info_extensions().get_as::<LeafRemovals>() {
-            self.policy.removals.lock().unwrap().merge(&records);
-        }
+        let records = verify_history(&self.project_id, group.context(), history)?;
+        *self.policy.removals.lock().unwrap() = records;
         self.group = Some(group);
         self.enter_epoch()?;
         self.write()?;
@@ -578,42 +594,6 @@ impl Session {
         }
 
         let roster = self.roster_snapshot()?;
-        // Adds received by reference (cached proposals) produce a Welcome too.
-        let adding = !key_packages.is_empty()
-            || self
-                .group()?
-                .get_cached_proposals()
-                .iter()
-                .any(|cached| matches!(cached.proposal(), Proposal::Add(_)));
-        // A joiner learns removal cutoffs only from the Welcome's GroupInfo,
-        // and the new tree no longer shows leaves this Commit removes, so the
-        // records include this Commit's own removals: explicit Removes, the
-        // dropped users' leaves, and cached Remove and SelfRemove proposals.
-        let mut removals = self.policy.removals.lock().unwrap().clone();
-        if adding {
-            let mut leaving = remove.clone();
-            for cached in self.group()?.get_cached_proposals() {
-                match (cached.proposal(), cached.sender()) {
-                    (Proposal::Remove(r), _) => leaving.push(r.to_remove()),
-                    (Proposal::SelfRemove(_), mls_rs::group::Sender::Member(index)) => leaving.push(*index),
-                    _ => {}
-                }
-            }
-            let records = roster
-                .iter()
-                .filter(|leaf| leaving.contains(&leaf.index))
-                .filter_map(|leaf| {
-                    let credential = DeviceCredential::from_identity(&leaf.identity).ok()?;
-                    Some(LeafRemoval {
-                        user_id: credential.user_id,
-                        device_id: credential.device_id,
-                        signature_key: leaf.identity.signature_key.to_vec(),
-                        epoch: next_epoch,
-                    })
-                })
-                .collect();
-            removals.merge(&LeafRemovals { records });
-        }
         let group = self.group_mut()?;
         let mut builder = group.commit_builder();
         for key_package in key_packages {
@@ -624,13 +604,6 @@ impl Session {
         }
         if next != roles {
             builder = builder.set_group_context_ext(next.to_extensions()?)?;
-        }
-        if adding {
-            let mut extensions = ExtensionList::new();
-            extensions
-                .set_from(removals)
-                .map_err(|e| Error::state(format!("{e:?}")))?;
-            builder = builder.set_group_info_ext(extensions);
         }
         let output = builder.build()?;
         let commit = output.commit_message().to_bytes()?;
@@ -743,17 +716,10 @@ impl Session {
     }
 
     /// A GroupInfo that lets a device of a listed member rejoin by external
-    /// Commit, carrying this member's leaf-removal records.
+    /// Commit. Removal records are derived from its verified epoch history.
     pub fn group_info(&self) -> Res<Vec<u8>> {
         self.settled()?;
-        let mut extensions = ExtensionList::new();
-        let removals = self.policy.removals.lock().unwrap().clone();
-        extensions
-            .set_from(removals)
-            .map_err(|e| Error::state(format!("{e:?}")))?;
-        let message = self
-            .group()?
-            .group_info_message_allowing_ext_commit_with_extensions(true, extensions)?;
+        let message = self.group()?.group_info_message_allowing_ext_commit(true)?;
         Ok(message.to_bytes()?)
     }
 
@@ -809,7 +775,14 @@ impl Session {
     /// Commit ([`Self::confirm_rejoin`]); if another Commit wins the epoch,
     /// [`Self::discard_rejoin`] restores the session as it was. Any failure
     /// restores it too.
-    pub fn rejoin(&mut self, group_info: &[u8], psk_epoch: u64, psk: &[u8], remove: Option<u32>) -> Res<RejoinResult> {
+    pub fn rejoin(
+        &mut self,
+        group_info: &[u8],
+        psk_epoch: u64,
+        psk: &[u8],
+        remove: Option<u32>,
+        history: &[Vec<u8>],
+    ) -> Res<RejoinResult> {
         if self.rejoin_backup.is_some() {
             return Err(Error::state("a rejoin is already pending"));
         }
@@ -817,7 +790,7 @@ impl Session {
             return Err(Error::state("this session already has a group"));
         }
         let backup = self.export()?;
-        match self.rejoin_provisional(group_info, psk_epoch, psk, remove) {
+        match self.rejoin_provisional(group_info, psk_epoch, psk, remove, history) {
             Ok(result) => {
                 self.rejoin_backup = Some(backup);
                 Ok(result)
@@ -869,6 +842,7 @@ impl Session {
         psk_epoch: u64,
         psk: &[u8],
         remove: Option<u32>,
+        history: &[Vec<u8>],
     ) -> Res<RejoinResult> {
         if self.removed {
             self.removed = false;
@@ -905,14 +879,11 @@ impl Session {
                     .collect()
             })
             .unwrap_or_default();
-        // The carried records apply to this Commit's own policy check, and are
-        // rolled back if the external Commit fails (a forged GroupInfo must
-        // not leave cutoffs behind).
-        let carried = info.extensions().get_as::<LeafRemovals>().ok().flatten();
+        // Derive cutoffs from the transcript before applying this Commit's
+        // policy. The outer transaction restores them on any failure.
+        let records = verify_history(&self.project_id, info.group_context(), history)?;
         let records_before = self.policy.removals.lock().unwrap().clone();
-        if let Some(records) = &carried {
-            self.policy.removals.lock().unwrap().merge(records);
-        }
+        self.policy.removals.lock().unwrap().merge(&records);
         self.psks.restore(Vec::new());
         self.psks.insert(psk_epoch, psk.to_vec(), u64::MAX);
         let mut builder = self
@@ -1073,13 +1044,18 @@ impl Session {
 
     fn epoch_record(&self, commit: Vec<u8>, proposals: Vec<Vec<u8>>) -> Res<Vec<u8>> {
         let group = self.group()?;
-        EpochRecordV1 {
+        EpochRecordV2 {
             version: EPOCH_RECORD_VERSION,
             epoch: group.current_epoch(),
             group_context: group.context().mls_encode_to_vec().map_err(Error::codec)?,
             ratchet_tree: group.export_tree().to_bytes()?,
             commit,
             proposals,
+            group_info: if group.current_epoch() == 0 {
+                self.group_info()?
+            } else {
+                Vec::new()
+            },
         }
         .mls_encode_to_vec()
         .map_err(Error::codec)

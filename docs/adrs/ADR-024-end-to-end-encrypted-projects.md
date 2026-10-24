@@ -1061,6 +1061,30 @@ this decision rests on is
   policy callbacks, the rejoin rules, the history-archive replay, and the
   crate itself at that version.
 
+  **Removal-history completeness (issue #817).** The initial group-key layer
+  seeded a Welcome joiner's or external rejoiner's removal cutoffs from a
+  committer-signed GroupInfo extension. Extra records can make rejoin stricter,
+  but an inviter can omit records and make it looser, so that signature alone
+  does not establish agreement with established members. The risk was accepted
+  for the initial groundwork merge (#784); it is not a sufficient integration
+  contract. Joins and rejoins now require the full epoch-record archive from
+  epoch zero, including its signed bootstrap GroupInfo. The pinned `mls-rs`
+  public observer reconstructs removals from signed Commits and their referenced
+  proposals, verifies each context and tree, and requires an exact terminal
+  GroupContext match with the MLS join or external Commit. Missing or mismatched
+  history is refused. This preserves external Commits' single-leaf replacement
+  without requiring a forbidden GroupContextExtensions proposal. Records and
+  sealed sessions use version 2; version 1 state is refused rather than retaining
+  unverified cutoffs. The unused package's join API now requires the archive.
+
+  Public replay cannot verify historical confirmation MACs or PSK possession
+  without epoch secrets, and does not authenticate historical application
+  permissions. Current MLS cryptographic and credential checks still run in
+  the real join. A malicious insider can still invite a newcomer into a
+  different fork; comparing project state codes remains necessary for that
+  MLS limitation. Checkpoint-based replay and application wiring remain later
+  work; this implementation replays the whole archive.
+
 The pieces marked Replaced above are superseded, and Phases 3 and 5 are
 scoped around MLS group operations. Phase 2 keeps only the envelope, nonce,
 wrapping, decompression, dedupe and fingerprint work.

@@ -124,8 +124,9 @@ export class MlsSession {
     return this.api.inspectWelcome(this.id, welcome);
   }
 
-  join(welcome: Uint8Array): Promise<EpochChange> {
-    return this.api.join(this.id, welcome);
+  /** Join only after replaying every epoch record through the Welcome epoch. */
+  join(welcome: Uint8Array, history: Uint8Array[]): Promise<EpochChange> {
+    return this.api.join(this.id, welcome, history);
   }
 
   /**

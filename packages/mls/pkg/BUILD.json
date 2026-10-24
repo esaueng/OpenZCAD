@@ -3,22 +3,23 @@
   "target": "wasm32-unknown-unknown",
   "wasmBindgen": "0.2.126",
   "files": {
-    "openzcad_mls.d.ts": "f1e8a5c4fc16eba7f6d8de82160a9a3d1dae85929c96afd65204af79b8e14c22",
-    "openzcad_mls.js": "bd37ce8abe8663742d4ca14f64e1dcc151b76c80f8cdc18adfc806d29fa63294",
-    "openzcad_mls_bg.wasm": "c73fde4460c2999be89b4ed7e2c189372b5326b3d5f429cdcf832d4e7d98bafb",
-    "openzcad_mls_bg.wasm.d.ts": "e90c4bb17f51bf4bc7d846aa0b5b80057eaf4b0f3dee5b0839eef55d10fc1a00",
+    "openzcad_mls.d.ts": "fc7d3fe15ffc2e4954beeeaecc15f69dc936868e418502bc5f66204356af43e9",
+    "openzcad_mls.js": "1940184dd97b0a950785cd28abb92a01b9ac45f6c6d796f1f9cf0785e05807ea",
+    "openzcad_mls_bg.wasm": "68c28748073844cb346f8d3fd105fa5eaea8bee49531f3183707766d11663a19",
+    "openzcad_mls_bg.wasm.d.ts": "3bf3483dbb676e6e3decb8b6be1a08c699dbaf69bb1b44162574cf7c905b2485",
     "snippets/mls-rs-core-f99cdecbb456b09c/inline0.js": "6739cfe5b7f2a23d65a1c2a0912a691701e50793dca7c0f95c89dae38861c2f6"
   },
   "sources": {
     "crate/Cargo.lock": "3bd532e7a8c5984d2a750c25c2b0bd75a331223198ef6acd1662bf8dacb59f8a",
-    "crate/Cargo.toml": "daefba1776446da29efa3799957d17132b104d318fdeb36a6841bc776022235c",
+    "crate/Cargo.toml": "8d04e32d6e6978516dc37a00fc3e149d354a3b289b7b822ef9bdb71fdab89ea0",
     "crate/rust-toolchain.toml": "6a1afceac10cad1fda6c96b91c730cef9b65529c16993abd259fd0abf75c2c98",
-    "crate/src/directory.rs": "5c32f089be1a2c1ec19640af60902cea57eb11f55cb9b988245d454355b6ec21",
+    "crate/src/directory.rs": "ea5eba8fa2140fe0bb4ac064fee7731c989ea49fa7aa57333a5435352c0ecf07",
     "crate/src/error.rs": "2d6df2b6335a5dafa353e5caf906c57b0b70db6fbb980bb120b53ff0c004736e",
-    "crate/src/lib.rs": "e3cf79ef1ebf2d9436aad7ed49f0e7072737ac05e3fd108deaa4bdd0fbc32f88",
-    "crate/src/model.rs": "2ea3d1507ae521a63efd10c6117b7ee2c72d856a046a46d4d024315d27d63315",
-    "crate/src/policy.rs": "4e8f6fc32eb3f5bb815a81a329c7e54076c047f49d040dae4b0c8b804a82c464",
-    "crate/src/session.rs": "092377e1982a86ace618fb1b07bd78feab0d80f1fd2e6dc6d8182e4dec50ecc3",
+    "crate/src/history.rs": "fdddaa5fc0aa591e26ba9615dafa25e4023f6c3bb7d6d594360e2f7da46b52fe",
+    "crate/src/lib.rs": "1d9843d88b36e67e29f1c6f13ccd49fe7e436287302ad33215d097dcafe0998f",
+    "crate/src/model.rs": "4e264b2f2cf220c29e6c34f85762b0a4f9005b3f99515270e943e74f083f3eb2",
+    "crate/src/policy.rs": "4c574edd530eb2e96ab4efd2dee818d470008d6eea6a3171aca9d2ffd317f155",
+    "crate/src/session.rs": "045e4df85b2e4c02ff1612cec7a6d0bf87098b161265c11f4a2acde8e8a993fb",
     "crate/src/storage.rs": "3457d58a90e2971e1260b7850a01d3e9c2378f38b169ee0a7fdcf425d4ef3183"
   }
 }

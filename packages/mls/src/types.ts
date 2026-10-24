@@ -133,6 +133,8 @@ export interface RejoinPsk {
 }
 
 export interface RejoinRequest {
+  /** Complete epoch records, from epoch zero through the GroupInfo epoch. */
+  history: Uint8Array[];
   psk: RejoinPsk;
   /** A stale leaf of this user to replace in the same external Commit. */
   replaceLeaf?: number;
@@ -191,4 +193,6 @@ export interface EpochRecord {
   commit: Uint8Array;
   /** MLSMessage proposals the Commit applied by reference. */
   proposals: Uint8Array[];
+  /** Signed bootstrap GroupInfo in epoch zero; empty in later records. */
+  groupInfo: Uint8Array;
 }

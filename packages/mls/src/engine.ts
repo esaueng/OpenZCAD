@@ -51,7 +51,7 @@ export interface EngineApi {
   createGroup(id: number, rejoinWindow: number): EpochChange;
   keyPackage(id: number): Uint8Array;
   inspectWelcome(id: number, welcome: Uint8Array): GroupInfoSummary;
-  join(id: number, welcome: Uint8Array): EpochChange;
+  join(id: number, welcome: Uint8Array, history: Uint8Array[]): EpochChange;
   commit(id: number, request: CommitRequest): PendingCommit;
   confirmCommit(id: number): EpochChange;
   discardCommit(id: number): void;
@@ -243,6 +243,7 @@ export class MlsEngine implements EngineApi {
       ratchetTree: string;
       commit: string;
       proposals: string[];
+      groupInfo: string;
     }>(this.run(() => this.wasm.decodeEpochRecord(record)));
     return {
       version: json.version,
@@ -250,7 +251,8 @@ export class MlsEngine implements EngineApi {
       groupContext: fromHex(json.groupContext),
       ratchetTree: fromHex(json.ratchetTree),
       commit: fromHex(json.commit),
-      proposals: json.proposals.map(fromHex)
+      proposals: json.proposals.map(fromHex),
+      groupInfo: fromHex(json.groupInfo)
     };
   }
 
@@ -325,8 +327,10 @@ export class MlsEngine implements EngineApi {
     );
   }
 
-  join(id: number, welcome: Uint8Array): EpochChange {
-    return change(parse(this.run(() => this.session(id).join(welcome))));
+  join(id: number, welcome: Uint8Array, history: Uint8Array[]): EpochChange {
+    return change(
+      parse(this.run(() => this.session(id).join(welcome, history)))
+    );
   }
 
   commit(id: number, request: CommitRequest): PendingCommit {
@@ -403,7 +407,8 @@ export class MlsEngine implements EngineApi {
           groupInfo,
           checkEpoch(request.psk.epoch),
           request.psk.secret,
-          request.replaceLeaf
+          request.replaceLeaf,
+          request.history
         )
       )
     );

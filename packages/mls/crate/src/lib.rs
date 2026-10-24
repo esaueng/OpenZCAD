@@ -9,6 +9,7 @@
 
 mod directory;
 mod error;
+mod history;
 mod model;
 mod policy;
 mod session;
@@ -68,15 +69,10 @@ pub fn rejoin_psk_id(epoch: u64) -> Vec<u8> {
     model::rejoin_psk_id(epoch).to_vec()
 }
 
-/// Decode a history-archive epoch record (see `EpochRecordV1`).
+/// Decode a history-archive epoch record (see `EpochRecordV2`).
 #[wasm_bindgen(js_name = decodeEpochRecord)]
 pub fn decode_epoch_record(bytes: &[u8]) -> Result<String, JsValue> {
-    use mls_rs_codec::MlsDecode;
-    let mut input = bytes;
-    let record = session::EpochRecordV1::mls_decode(&mut input).map_err(|e| to_js(Error::codec(e)))?;
-    if !input.is_empty() || record.version != 1 {
-        return Err(to_js(Error::input("not a version 1 epoch record")));
-    }
+    let record = history::decode_record(bytes).map_err(to_js)?;
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
     struct Out {
@@ -86,6 +82,7 @@ pub fn decode_epoch_record(bytes: &[u8]) -> Result<String, JsValue> {
         ratchet_tree: String,
         commit: String,
         proposals: Vec<String>,
+        group_info: String,
     }
     json(&Out {
         version: record.version,
@@ -94,6 +91,7 @@ pub fn decode_epoch_record(bytes: &[u8]) -> Result<String, JsValue> {
         ratchet_tree: hex::encode(&record.ratchet_tree),
         commit: hex::encode(&record.commit),
         proposals: record.proposals.iter().map(hex::encode).collect(),
+        group_info: hex::encode(&record.group_info),
     })
 }
 
@@ -161,8 +159,9 @@ impl MlsSession {
         json(&self.inner.inspect_welcome(welcome).map_err(to_js)?)
     }
 
-    pub fn join(&mut self, welcome: &[u8]) -> Result<String, JsValue> {
-        json(&self.inner.join(welcome).map_err(to_js)?)
+    pub fn join(&mut self, welcome: &[u8], history: Vec<js_sys::Uint8Array>) -> Result<String, JsValue> {
+        let history: Vec<_> = history.iter().map(|r| r.to_vec()).collect();
+        json(&self.inner.join(welcome, &history).map_err(to_js)?)
     }
 
     /// `spec_json`: `{ remove?, setRoles?, dropUsers?, rejoinWindow? }`.
@@ -219,8 +218,15 @@ impl MlsSession {
         psk_epoch: u64,
         psk: &[u8],
         remove: Option<u32>,
+        history: Vec<js_sys::Uint8Array>,
     ) -> Result<String, JsValue> {
-        json(&self.inner.rejoin(group_info, psk_epoch, psk, remove).map_err(to_js)?)
+        let history: Vec<_> = history.iter().map(|r| r.to_vec()).collect();
+        json(
+            &self
+                .inner
+                .rejoin(group_info, psk_epoch, psk, remove, &history)
+                .map_err(to_js)?,
+        )
     }
 
     /// The room accepted the external Commit.
