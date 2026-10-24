@@ -554,6 +554,26 @@ describe('cloud project autosave — refusals', () => {
     controller.dispose();
   });
 
+  it('halts a queued edit when a poll finds the account copy needs repair', async () => {
+    // ADR-024 Phase 1: a freshness poll that meets an account version this
+    // browser cannot open must stop the edit already queued from writing.
+    const { controller, saves, statuses } = harness();
+    const document = documentAt(2);
+    controller.openProject(document.projectId, 2);
+    controller.schedule(documentAt(3, document));
+    controller.haltForRepair('some-other-project');
+    expect(controller.isHalted).toBe(false);
+    const refusal = new Error('The account copy cannot be opened here.');
+    controller.haltForRepair(document.projectId, refusal);
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS * 10);
+    await controller.whenIdle();
+    expect(saves).toHaveLength(0);
+    expect(lastState(statuses)).toBe('repair');
+    expect(controller.isHalted).toBe(true);
+    expect(controller.hasPendingChanges).toBe(true);
+    controller.dispose();
+  });
+
   it('does not keep retrying after a conflict', async () => {
     // A blind retry either fails identically or, worse, succeeds against a
     // version the user never saw.

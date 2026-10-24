@@ -1,0 +1,4 @@
+---
+row: L11
+---
+Phase 1f, account loads checked in the browser: `api.loadProject` and `api.loadRevision` run `assertStorableDocument` on every document the account returns, and the share-link client does the same for the shared model. A version this browser cannot open is reported as the unreadable-account-copy error (503 `PROJECT_DOCUMENT_UNAVAILABLE`), so opening keeps the device copy in repair mode and autosave waits rather than replacing either copy; older documents still migrate as they always have. Loads on the server stop failing on such a document: `normalizedForLoad` returns it as stored when this build cannot normalize it, so the browser decides instead of the request ending in a 500. Evidence: `apps/web/src/lib/accountDocumentLoads.test.ts`, the shared-model case in `apps/web/src/lib/projectShareClient.test.ts`, and the `normalizedForLoad` cases in `test/storable-document.test.ts`.

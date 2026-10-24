@@ -303,14 +303,16 @@ test('previews and reverses a box fillet backed by verified evolution lineage', 
   await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
 
   // A radius the kernel cannot build on this box is refused at the handle:
-  // the cause lands in the tool card in the kernel's plain words, the chip
+  // the cause lands in the notice lane in the kernel's plain words, the
+  // Selection card marks the operation Failed, the chip
   // turns to its warning state, and the last radius that built stays on
   // screen instead of the blend vanishing. 30 is wider than the narrower of
   // the two faces beside any edge of the default 30 × 18 × 24 box, so no
   // round fits. (This used to be 12, which does fit: it was refused only
   // while the round's cylinder face reported a full-circle bounding box.)
   await keypad.getByRole('textbox').fill('30');
-  await expect(editFillet).toContainText('Try a smaller radius', {
+  const refusal = page.locator('.selection-refusal-lane');
+  await expect(refusal).toContainText('Try a smaller radius', {
     timeout: 30_000
   });
   await expect(editFillet).toContainText('Failed');
@@ -327,7 +329,7 @@ test('previews and reverses a box fillet backed by verified evolution lineage', 
     })
     .toBeCloseTo(3, 6);
   await expect(chip).not.toHaveAttribute('data-state', 'warning');
-  await expect(editFillet).not.toContainText('Try a smaller radius');
+  await expect(refusal).toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect
     .poll(async () => (await readBlend(canvas))?.blendRadius ?? null)
@@ -342,9 +344,11 @@ test('previews and reverses a box fillet backed by verified evolution lineage', 
     .poll(async () => (await readBlend(canvas))?.blendRadius ?? null)
     .toBeCloseTo(2, 6);
 
-  // The floating Inspector can overlap the narrow quick-actions rail at this
-  // viewport. Close it as a user would before exercising global history.
-  await page.getByRole('button', { name: 'Close panel' }).click();
+  // A direct pick opens no card, so nothing covers the quick-actions rail
+  // at this viewport before global history is exercised.
+  await expect(
+    page.getByRole('region', { name: 'Feature inspector' })
+  ).toHaveCount(0);
   await page.getByRole('button', { name: 'Undo' }).click();
   await expect
     .poll(async () => (await readBlend(canvas))?.blendRadius ?? null)
@@ -397,16 +401,16 @@ test('resizes an imported analytic blend twice without reselection', async ({
   expect((await readBlend(canvas))?.producingFeatureId).toBeTruthy();
   expect(await readBlend(canvas, true)).not.toBeNull();
 
+  // A direct pick opens no card: the Selection card names the blend, and
+  // its armed edit is made at the handle, so the card offers no Edit face.
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await expect(inspector.getByRole('heading')).toHaveText('Blend face R3');
-  await expect(inspector).toContainText('Measurements');
-  await expect(inspector).toContainText(
-    'Selected face. Drag an available face handle to adjust its shape, or edit the feature that made it in History.'
-  );
+  await expect(inspector).toHaveCount(0);
   await expect(
-    inspector.getByRole('button', { name: 'Edit', exact: true })
+    page.locator('.selection-card .selection-callout-name')
+  ).toContainText('Blend face R3');
+  await expect(
+    page.getByRole('button', { name: 'Selection: Edit face' })
   ).toHaveCount(0);
-  await expect(inspector.getByLabel('More actions')).toHaveCount(0);
   await expect(
     page.getByRole('region', { name: 'Selected face properties' })
   ).toHaveCount(0);
@@ -522,9 +526,11 @@ test('still refuses an oversize radius after a slow blend preview', async ({
   // pass: the next value was dropped and no refusal ever reached the card.
   // 30 is genuinely oversize for this box; see the first test.
   await keypad.getByRole('textbox').fill('30');
-  await expect(editFillet).toContainText('Try a smaller radius', {
-    timeout: 30_000
-  });
+  await expect(page.locator('.selection-refusal-lane')).toContainText(
+    'Try a smaller radius',
+    { timeout: 30_000 }
+  );
+  await expect(editFillet).toContainText('Failed');
   await expect(chip).toHaveAttribute('data-state', 'warning');
   expect((await readBlend(canvas))?.blendRadius ?? null).toBeCloseTo(2, 6);
   await keypad.getByRole('textbox').fill('3');

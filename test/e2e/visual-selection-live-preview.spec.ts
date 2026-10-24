@@ -780,7 +780,11 @@ test('keeps the last value that built when a drag is released on a refusal', asy
   // The model still shows the last value that built, and the card offers to
   // keep it instead of sending the hand back to find it.
   expect(await readAxisLength()).toBeCloseTo(lastValid, 4);
-  await card.getByRole('button', { name: /^Keep / }).click();
+  // The refusal and its Keep stand in the notice lane.
+  await page
+    .locator('.selection-refusal-lane')
+    .getByRole('button', { name: /^Keep / })
+    .click();
   await expect(page.getByRole('contentinfo')).toContainText(
     /Cylinder height set to \d+(\.\d+)? mm\./,
     { timeout: PREVIEW_BUDGET_MS }
@@ -853,7 +857,11 @@ test('retains the last accepted shape when release validation beats an invalid p
     path: retainedPreview,
     contentType: 'image/png'
   });
-  await card.getByRole('button', { name: /^Keep / }).click();
+  // The refusal and its Keep stand in the notice lane.
+  await page
+    .locator('.selection-refusal-lane')
+    .getByRole('button', { name: /^Keep / })
+    .click();
   await expect(page.getByRole('contentinfo')).toContainText(
     'Cylinder height set to 33 mm.',
     { timeout: PREVIEW_BUDGET_MS }

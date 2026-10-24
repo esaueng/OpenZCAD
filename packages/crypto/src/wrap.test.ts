@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { concatBytes } from './bytes';
+import { concatBytes, fromHex } from './bytes';
 import { E2eeError, type E2eeErrorCode } from './errors';
 import {
   exportPrivateKey,
@@ -874,5 +874,228 @@ describe('sealing to a public key', () => {
       importEncryptionPrivateKey(patternBytes(40)),
       'malformed'
     );
+  });
+});
+
+describe('project data wraps', () => {
+  const ACCOUNT_KEY = patternBytes(32, 0x50);
+  const CONTEXTS: WrapContext[] = [
+    { purpose: 'rejoin-psk', userId: 'u1', projectId: 'p', epoch: 12 },
+    {
+      purpose: 'archived-project-key',
+      projectId: 'p',
+      archivedEpoch: 1,
+      underEpoch: 4
+    },
+    { purpose: 'previous-account-key', userId: 'u1', keySequence: 3 }
+  ];
+
+  it('wraps each new purpose with AES-KW and opens it back', async () => {
+    for (const context of CONTEXTS) {
+      const wrapped = await wrapKey(ACCOUNT_KEY, BLOB_KEY, context);
+      expect(wrapped[0]).toBe(2);
+      expect(wrapped.byteLength).toBe(41);
+      expect(await unwrapKey(ACCOUNT_KEY, wrapped, context)).toEqual(BLOB_KEY);
+    }
+  });
+
+  it('binds every field, and no purpose opens another', async () => {
+    const moved = (context: WrapContext, change: object): WrapContext => ({
+      ...context,
+      ...change
+    });
+    const cases: [WrapContext, WrapContext[]][] = [
+      [
+        CONTEXTS[0]!,
+        [
+          moved(CONTEXTS[0]!, { userId: 'u2' }),
+          moved(CONTEXTS[0]!, { projectId: 'q' }),
+          moved(CONTEXTS[0]!, { epoch: 13 })
+        ]
+      ],
+      [
+        CONTEXTS[1]!,
+        [
+          moved(CONTEXTS[1]!, { projectId: 'q' }),
+          moved(CONTEXTS[1]!, { archivedEpoch: 2 }),
+          moved(CONTEXTS[1]!, { underEpoch: 5 })
+        ]
+      ],
+      [
+        CONTEXTS[2]!,
+        [
+          moved(CONTEXTS[2]!, { userId: 'u2' }),
+          moved(CONTEXTS[2]!, { keySequence: 4 })
+        ]
+      ]
+    ];
+    for (const [context, others] of cases) {
+      const wrapped = await wrapKey(ACCOUNT_KEY, BLOB_KEY, context);
+      for (const other of [
+        ...others,
+        ...CONTEXTS.filter((c) => c !== context)
+      ]) {
+        await rejectsWith(
+          unwrapKey(ACCOUNT_KEY, wrapped, other),
+          'authentication-failed'
+        );
+      }
+    }
+  });
+
+  it('validates the new contexts', async () => {
+    const bad: unknown[] = [
+      { purpose: 'rejoin-psk', userId: 'u1', projectId: 'p' },
+      { purpose: 'rejoin-psk', userId: 'u1', projectId: 'p', epoch: -1 },
+      { purpose: 'rejoin-psk', userId: 'u1', projectId: 'p', keyEpoch: 1 },
+      {
+        purpose: 'archived-project-key',
+        projectId: 'p',
+        archivedEpoch: 4,
+        underEpoch: 4
+      },
+      {
+        purpose: 'archived-project-key',
+        projectId: 'p',
+        archivedEpoch: 5,
+        underEpoch: 4
+      },
+      { purpose: 'previous-account-key', userId: '', keySequence: 0 },
+      { purpose: 'previous-account-key', userId: 'u', keySequence: 2 ** 32 }
+    ];
+    for (const context of bad) {
+      expect(() => encodeWrapContext(context as WrapContext)).toThrow(
+        expect.objectContaining({ code: 'invalid-argument' }) as unknown
+      );
+    }
+    await rejectsWith(
+      wrapKey(ACCOUNT_KEY, patternBytes(40), CONTEXTS[0]!),
+      'invalid-argument'
+    );
+  });
+
+  it('are never sealed', async () => {
+    const member = await generateEncryptionKeyPair();
+    for (const context of CONTEXTS) {
+      await rejectsWith(
+        sealKey(member.publicKey, BLOB_KEY, context as unknown as SealContext),
+        'invalid-argument'
+      );
+    }
+  });
+
+  it('version keys of the new envelope kinds wrap under the project key', async () => {
+    for (const kind of ['project-info', 'key-archive'] as const) {
+      const context: WrapContext = { ...BLOB_CONTEXT, kind };
+      const wrapped = await wrapKey(PROJECT_KEY, BLOB_KEY, context);
+      expect(await unwrapKey(PROJECT_KEY, wrapped, context)).toEqual(BLOB_KEY);
+      await rejectsWith(
+        unwrapKey(PROJECT_KEY, wrapped, BLOB_CONTEXT),
+        'authentication-failed'
+      );
+    }
+  });
+});
+
+describe('AES-KW on an engine that skips the integrity check', () => {
+  /**
+   * Playwright's Windows WebKit build returns a zeroed key from an AES-KW
+   * unwrap under the wrong KEK, or of a tampered wrap, instead of throwing.
+   * This stub behaves the same way, so the package must catch it itself.
+   */
+  function nonVerifyingEngine() {
+    const subtle = crypto.subtle;
+    const original = subtle.unwrapKey.bind(subtle);
+    const zeroed = vi.fn();
+    const spy = vi
+      .spyOn(subtle, 'unwrapKey')
+      .mockImplementation(
+        async (...args: Parameters<SubtleCrypto['unwrapKey']>) => {
+          try {
+            return await original(...args);
+          } catch {
+            zeroed();
+            return subtle.importKey(
+              'raw',
+              new Uint8Array(32),
+              'AES-GCM',
+              true,
+              ['encrypt']
+            );
+          }
+        }
+      );
+    return { spy, zeroed };
+  }
+
+  it('still refuses a wrong key, a wrong context and a flipped byte', async () => {
+    const contexts: WrapContext[] = [
+      BLOB_CONTEXT,
+      { purpose: 'share-key', projectId: 'p', keyEpoch: 1, shareId: 's' },
+      { purpose: 'rejoin-psk', userId: 'u1', projectId: 'p', epoch: 3 },
+      {
+        purpose: 'archived-project-key',
+        projectId: 'p',
+        archivedEpoch: 0,
+        underEpoch: 1
+      },
+      { purpose: 'previous-account-key', userId: 'u1', keySequence: 0 }
+    ];
+    const wraps = await Promise.all(
+      contexts.map((context) => wrapKey(PROJECT_KEY, BLOB_KEY, context))
+    );
+    const { spy, zeroed } = nonVerifyingEngine();
+    try {
+      for (const [i, context] of contexts.entries()) {
+        const wrapped = wraps[i]!;
+        await rejectsWith(
+          unwrapKey(patternBytes(32, 0x77), wrapped, context),
+          'authentication-failed'
+        );
+        await rejectsWith(
+          unwrapKey(PROJECT_KEY, wrapped, contexts[(i + 1) % contexts.length]!),
+          'authentication-failed'
+        );
+        for (const at of [1, 20, 40]) {
+          const flipped = new Uint8Array(wrapped);
+          flipped[at]! ^= 0x01;
+          await rejectsWith(
+            unwrapKey(PROJECT_KEY, flipped, context),
+            'authentication-failed'
+          );
+        }
+        // A valid unwrap still opens.
+        expect(await unwrapKey(PROJECT_KEY, wrapped, context)).toEqual(
+          BLOB_KEY
+        );
+      }
+      // The stub really did hand back zeroed keys instead of refusing.
+      expect(zeroed).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('keeps the fixed KW vector byte-identical and opening', async () => {
+    // The `wrap v1 vector` in vectors.test.ts.
+    const kek = patternBytes(32, 0x10);
+    const secret = patternBytes(32, 0x30);
+    const context: WrapContext = {
+      purpose: 'version-key',
+      projectId: 'prj_1',
+      keyEpoch: 1,
+      kind: 'document',
+      versionId: '5'
+    };
+    const vector = fromHex(
+      '02bbbd0963d86843d8312990b54c24a975feb9cbf435334efaba7d1078736e81400335de6fcee2946f'
+    );
+    expect(await wrapKey(kek, secret, context)).toEqual(vector);
+    const { spy } = nonVerifyingEngine();
+    try {
+      expect(await unwrapKey(kek, vector, context)).toEqual(secret);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

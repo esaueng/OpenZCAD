@@ -84,7 +84,7 @@ describe('device keys held outside WebCrypto', () => {
         projectId: 'project-a',
         documentVersion: 1,
         previousVersionHash: null,
-        rosterEntryHash: patternBytes(32, 0xb0),
+        epochBindingHash: patternBytes(32, 0xb0),
         schemaVersion: 23,
         keyEpoch: 1,
         chunkSize: 64

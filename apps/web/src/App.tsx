@@ -97,6 +97,7 @@ import {
   saveImportedProject
 } from './lib/localProjectStore';
 import {
+  Fragment,
   Suspense,
   useCallback,
   useEffect,
@@ -413,7 +414,10 @@ import {
   PROJECT_TOO_LARGE_FOR_ACCOUNT,
   type WorkspaceSaveState
 } from './lib/cloudProjectAutosave';
-import { applyAccountProjectRefresh } from './lib/accountProjectRefresh';
+import {
+  applyAccountProjectRefresh,
+  loadAccountRefresh
+} from './lib/accountProjectRefresh';
 import {
   decideProjectSync,
   shouldPollForFreshness
@@ -700,6 +704,8 @@ import {
   type SelectionActionId
 } from './lib/interaction/capabilities';
 import {
+  editFaceVerb,
+  faceDetailsVerb,
   selectionCalloutVerbs,
   type SelectionCalloutContent,
   type SelectionCalloutKind,
@@ -1037,6 +1043,25 @@ const LazyCommandCard = lazyWithStaleChunkNotice(() =>
     default: module.CommandCard
   }))
 );
+// The pick's verbs and its refusal: drawn on every selection, but only once
+// a model is open, so they wait with the workspace rather than the launcher.
+const LazySelectionCard = lazyWithStaleChunkNotice(() =>
+  import('./components/SelectionCard').then((module) => ({
+    default: module.SelectionCard
+  }))
+);
+// A modeling feature's History card reads out its body, as every other
+// feature's card does; the readout lives in the Inspector's chunk.
+const LazyBodyMeasurements = lazyWithStaleChunkNotice(() =>
+  import('./components/Inspector').then((module) => ({
+    default: module.BodyStats
+  }))
+);
+const LazySelectionRefusal = lazyWithStaleChunkNotice(() =>
+  import('./components/SelectionCard').then((module) => ({
+    default: module.SelectionRefusal
+  }))
+);
 // The first-model tour shows once per device; nobody else pays for it.
 const LazyWorkspaceTour = lazyWithStaleChunkNotice(() =>
   import('./components/WorkspaceTour').then((module) => ({
@@ -1222,6 +1247,12 @@ function ViewerShell(props: ComponentProps<typeof LazyViewerShell>) {
 const MeasurementDock = withSuspense(LazyMeasurementDock);
 
 const CommandCard = withSuspense(LazyCommandCard);
+
+const SelectionCard = withSuspense(LazySelectionCard);
+
+const SelectionRefusal = withSuspense(LazySelectionRefusal);
+
+const BodyMeasurements = withSuspense(LazyBodyMeasurements);
 
 const WorkspaceTour = withSuspense(LazyWorkspaceTour);
 
@@ -5359,9 +5390,21 @@ export function App() {
           // raised by the write that gets fenced rather than guessed at here.
           return;
         }
-        const remote = await api
-          .loadProject(current.projectId)
-          .catch(() => null);
+        const fetched = await loadAccountRefresh(() =>
+          api.loadProject(current.projectId)
+        );
+        if (
+          fetched.kind === 'repair' &&
+          !cancelled &&
+          managerRef.current?.document?.projectId === current.projectId
+        ) {
+          // The account moved to a version this browser cannot open: halt
+          // the controller, so no queued edit writes against that head, and
+          // enter repair through its status, exactly as a refused write does.
+          controller.haltForRepair(current.projectId, fetched.error);
+          return;
+        }
+        const remote = fetched.kind === 'document' ? fetched.document : null;
         const live = managerRef.current?.document;
         // Anything the user did while the document was in flight makes it stale.
         if (
@@ -7058,6 +7101,23 @@ export function App() {
   const focusFaces = historyFocus?.focus.faces ?? boxSelectedFaces ?? undefined;
 
   /**
+   * The imported face whose own card (resize a hole, remove a blend) the
+   * Selection card's Edit face opened. Keyed by the pick, so any other pick
+   * closes it: a direct pick otherwise gets no card at all.
+   */
+  const [editFaceKey, setEditFaceKey] = useState<string | null>(null);
+  const selectionKey = renderedSelectedTopology
+    ? `${renderedSelectedTopology.bodyId}:${renderedSelectedTopology.topologyId ?? renderedSelectedTopology.hash ?? ''}`
+    : null;
+  const editFaceOpen = selectionKey !== null && editFaceKey === selectionKey;
+  // Any other pick, or none, forgets it: coming back to the face is a new
+  // pick, and its card waits for Edit face again.
+  useEffect(() => {
+    if (editFaceKey !== null && editFaceKey !== selectionKey) {
+      setEditFaceKey(null);
+    }
+  }, [editFaceKey, selectionKey]);
+  /**
    * The selection chip anchored to the pick: name, key measurement, the
    * verbs for that kind of pick and the clear action (lib/selectionCallout).
    * Verbs run through the handlers the rail and the tool card use, read
@@ -7067,7 +7127,11 @@ export function App() {
     () => undefined
   );
   selectionCalloutVerbRef.current = (id) => {
-    if (id.startsWith('action:')) {
+    if (id === 'edit-face') {
+      setEditFaceKey((current) =>
+        current === selectionKey ? null : selectionKey
+      );
+    } else if (id.startsWith('action:')) {
       handleSelectionAction(id.slice('action:'.length) as SelectionActionId);
     } else {
       launchTool(id.slice('tool:'.length) as ToolId);
@@ -7108,10 +7172,35 @@ export function App() {
   // so the content below changes only when the verbs themselves do.
   const calloutInteractive =
     !modelingLocked && tool === null && !parameterPreview;
+  // The selection is the one a History row made: its feature pinned and
+  // nothing finer than its body picked since.
+  const historyRowSelection =
+    featureSelectionSource === 'pinned' &&
+    selectedEdges.length === 0 &&
+    (renderedSelectedTopology === null ||
+      renderedSelectedTopology.kind === 'body');
+  // An imported face's own card: what recognition found (or why it
+  // declined), and for a hole or blend its edits. Only with no operation
+  // armed on it: an armed one is edited at its handle, and the card then
+  // hides its own copy of the value. Null: no such card.
+  const calloutImportedFace = ((): 'edit' | 'details' | null => {
+    if (calloutKind !== 'face' || renderedSelectedTopology === null) {
+      return null;
+    }
+    const body = renderedRepresentations[renderedSelectedTopology.bodyId];
+    if (body?.source !== 'imported-step') return null;
+    if (commandSessionFor(interaction) !== null) return null;
+    const featureType = body.topology?.faces.find(
+      (face) => face.hash === renderedSelectedTopology.hash
+    )?.geometry?.featureType;
+    return featureType === 'through-hole' || featureType === 'blend'
+      ? 'edit'
+      : 'details';
+  })();
   const calloutVerbsKey =
     calloutKind && calloutInteractive
-      ? JSON.stringify(
-          selectionCalloutVerbs({
+      ? JSON.stringify([
+          ...selectionCalloutVerbs({
             kind: calloutKind,
             faceCapabilities: calloutFaceCapabilities,
             edgesArmed: interaction.mode === 'edges',
@@ -7120,8 +7209,13 @@ export function App() {
               Boolean(interaction.target.resizeBodyFeatureId),
             pressedAction: calloutPressedAction,
             availability
-          })
-        )
+          }),
+          ...(calloutImportedFace === 'edit'
+            ? [editFaceVerb(editFaceOpen, editDisabledReason)]
+            : calloutImportedFace === 'details'
+              ? [faceDetailsVerb(editFaceOpen)]
+              : [])
+        ])
       : '[]';
   const selectionCallout = useMemo<SelectionCalloutContent | null>(() => {
     const onVerb = (id: SelectionCalloutVerbId) =>
@@ -23154,15 +23248,42 @@ export function App() {
     !modelingLocked &&
     !directMode &&
     movePreview === null &&
-    // A face or edge alone is not an edit: its name, measurement and verbs
-    // are on the selection chip beside it, and the inspector opened only to
-    // say no one feature owns the pick. An imported STEP face is the
-    // exception: its direct edits (hole resize, blend removal) live there.
+    // A pick alone opens no card (the Inspector draws nothing for it), so
+    // the shell must not hold a lane for one: an empty inspector float
+    // reads as a full-width card on a phone and hides the viewer rail. The
+    // card is a running tool, a History row's feature, or an imported
+    // face's edits that Edit face asked for.
     (tool !== null ||
-      selectedFeature !== null ||
-      (selectedTopology?.kind === 'face' &&
-        renderedRepresentations[selectedTopology.bodyId]?.source ===
-          'imported-step'));
+      (selectedFeature !== null && featureSelectionSource !== 'inferred') ||
+      editFaceOpen);
+  // The body an edited modeling feature built, read out on its History card
+  // as every other feature's body is: a pick opens no card, so History is
+  // where a body's volume is read. A feature that keeps its target's body
+  // (a hole, a shell) names it itself.
+  // Every body the feature produced: a split leaves two, and with no card
+  // for a pick, its History card is the only place either half is read.
+  const modelingEditBodies = (() => {
+    if (!modelingEditFeature) return [];
+    const bodyIds = new Set<BodyId>();
+    for (const node of Object.values(doc.nodes)) {
+      if (
+        node.kind === 'body' &&
+        node.featureId === modelingEditFeature.featureId
+      ) {
+        bodyIds.add(node.bodyId);
+      }
+    }
+    if (bodyIds.size === 0 && modelingEditFeature.bodyId) {
+      bodyIds.add(modelingEditFeature.bodyId);
+    }
+    if (modelingEditFeature.data.featureKind === 'split') {
+      bodyIds.add(modelingEditFeature.data.secondBodyId);
+    }
+    return [...bodyIds].flatMap((bodyId) => {
+      const body = renderedRepresentations[bodyId];
+      return body ? [body] : [];
+    });
+  })();
   const modelingOperation: ModelingOperationKind | null =
     tool === 'mirror' ||
     tool === 'split' ||
@@ -24162,6 +24283,19 @@ export function App() {
             header={columnHeader}
             tools={columnTools}
             footer={columnFooter}
+            selection={
+              // A History row's own card names the feature it opened, so
+              // the Selection card would only repeat it, behind that card:
+              // whether the row's result is consumed (a focus) or a live
+              // body the row selected. A face or edge picked since is a
+              // pick of its own, and its verbs show.
+              calloutWithOperation &&
+              !historyFocus &&
+              !historyRowSelection &&
+              interaction.mode !== 'sketch' ? (
+                <SelectionCard content={calloutWithOperation} />
+              ) : null
+            }
           />
         )
       }
@@ -24351,6 +24485,10 @@ export function App() {
             }
             viewMode={modelingLocked}
             selectionCallout={calloutWithOperation}
+            // The Selection card names the pick and carries its verbs; the
+            // model keeps only the handle and its value. Where there is no
+            // card (View, Tweak, a running tool) the pick keeps its name.
+            pickLabel={calloutWithOperation === null}
             focusGhostBodies={focusGhostBodies}
             {...(focusFaces ? { focusFaces } : {})}
             canUndo={!viewMode && undoAvailable}
@@ -25143,6 +25281,19 @@ export function App() {
                       }}
                     />
                   )}
+                  {modelingEditBodies.map((body) => (
+                    <Fragment key={body.bodyId}>
+                      {modelingEditBodies.length > 1 && (
+                        <h3 className="section-title">{body.name}</h3>
+                      )}
+                      <BodyMeasurements
+                        body={body}
+                        units={doc.units}
+                        document={doc}
+                        worker={geometry}
+                      />
+                    </Fragment>
+                  ))}
                 </div>
               </section>
             ) : tool === 'reference-image' && openReferenceImageEntry ? (
@@ -25262,6 +25413,7 @@ export function App() {
                 preferredSketchId={selectedSketch?.sketchId ?? null}
                 commandSession={commandSession}
                 featureSelectionSource={featureSelectionSource}
+                directPickDetails={editFaceOpen}
                 recognitionDocument={previewDoc ?? doc}
                 recognitionQuery={importedFaceRecognitionQuery}
                 recognitionCache={importedFaceRecognitionCache}
@@ -25273,7 +25425,12 @@ export function App() {
                 onPreviewBodyAppearance={previewBodyAppearance}
                 onCommitBodyAppearance={commitBodyAppearance}
                 onCancel={cancelPanel}
-                onClose={closeFeaturePanel}
+                onClose={() => {
+                  // Close keeps the pick but drops Edit face's request, or the
+                  // card it opened would stay mounted on the same pick.
+                  setEditFaceKey(null);
+                  closeFeaturePanel();
+                }}
                 onSelectAllEdges={handleSelectAllEdges}
                 onClearSelectedEdges={handleClearSelectedEdges}
                 document={doc}
@@ -25701,6 +25858,13 @@ export function App() {
       }
       readout={
         <>
+          {calloutWithOperation?.operation?.error && (
+            // The refusal joins the notice lane, over the status row, with
+            // its ways out; the handle stays live on the model.
+            <div className="selection-refusal-lane">
+              <SelectionRefusal operation={calloutWithOperation.operation} />
+            </div>
+          )}
           {/* The same lane as the status toast, and in front of it: while a
               file is moving, the pill is the one notice about it. */}
           <div className="activity-lane">

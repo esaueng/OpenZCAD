@@ -69,11 +69,24 @@ async function versionStatement(
   signedAt: number
 ): Promise<Bytes> {
   const { prefix } = projectHeaderOf(envelope);
+  return versionStatementOf(prefix, await versionHash(envelope), signedAt);
+}
+
+/**
+ * @internal The signed statement from its parts. A version log record keeps
+ * exactly these (the prefix, the version hash, and the signature carrying
+ * `signedAt`), so its signature verifies without the envelope body.
+ */
+export function versionStatementOf(
+  prefix: Uint8Array,
+  hash: Uint8Array,
+  signedAt: number
+): Bytes {
   return new ByteWriter()
     .bytes(label('v1 version signature'))
     .u32(prefix.byteLength)
     .bytes(prefix)
-    .bytes(await versionHash(envelope))
+    .bytes(hash)
     .u64(signedAt)
     .finish();
 }
@@ -126,6 +139,28 @@ export async function verifyProjectEnvelopeSignature(
   envelope: Uint8Array,
   signature: Uint8Array
 ): Promise<VerifiedVersionSignature | null> {
+  const { signedAt, rs } = parseVersionSignature(signature);
+  // Build the statement before anything is awaited: parsing and the digest
+  // call both read the envelope now, so what is verified is what was passed.
+  const statement = versionStatement(envelope, signedAt);
+  statement.catch(() => undefined);
+  return (await verifyVersionStatement(publicKey, statement, rs))
+    ? { signedAt }
+    : null;
+}
+
+/** v1 signature bytes: `u8 version | u64 signedAt | 64-byte r || s`. */
+export const VERSION_SIGNATURE_BYTES = SIGNATURE_BYTES;
+
+/**
+ * @internal Checks a signature's version and length and returns its signed
+ * timestamp with a copy of `r || s` (read after awaits, so never the
+ * caller's array). Throws for an empty, unknown or wrong-length signature.
+ */
+export function parseVersionSignature(signature: Uint8Array): {
+  signedAt: number;
+  rs: Bytes;
+} {
   if (!(signature instanceof Uint8Array) || signature.byteLength === 0) {
     throw new E2eeError('malformed', 'Signature is empty');
   }
@@ -138,16 +173,21 @@ export async function verifyProjectEnvelopeSignature(
   if (signature.byteLength !== SIGNATURE_BYTES) {
     throw new E2eeError('malformed', 'Signature has the wrong length');
   }
-  // r‖s is read after awaits below; read it from a copy.
-  signature = copyBytes(signature);
-  const reader = new ByteReader(signature, 'Signature');
+  const reader = new ByteReader(copyBytes(signature), 'Signature');
   reader.u8();
   const signedAt = reader.u64();
-  const rs = reader.bytes(64);
-  // Build the statement before anything is awaited: parsing and the digest
-  // call both read the envelope now, so what is verified is what was passed.
-  const statement = versionStatement(envelope, signedAt);
-  statement.catch(() => undefined);
+  return { signedAt, rs: copyBytes(reader.bytes(64)) };
+}
+
+/**
+ * @internal Whether `rs` is `publicKey`'s signature over the statement.
+ * Throws `invalid-argument` for a key that is not a P-256 verify key.
+ */
+export async function verifyVersionStatement(
+  publicKey: Uint8Array | CryptoKey,
+  statement: Promise<Bytes> | Bytes,
+  rs: Bytes
+): Promise<boolean> {
   const key =
     publicKey instanceof Uint8Array
       ? await importSigningPublicKey(publicKey)
@@ -161,15 +201,13 @@ export async function verifyProjectEnvelopeSignature(
     );
   }
   const message = await statement;
-  let valid: boolean;
   try {
-    valid = await subtle().verify(ECDSA_SHA256, key, asBytes(rs), message);
+    return await subtle().verify(ECDSA_SHA256, key, asBytes(rs), message);
   } catch {
     // Engines differ on out-of-range r or s: Node returns false, others may
     // throw. Either way the signature is not valid.
-    valid = false;
+    return false;
   }
-  return valid ? { signedAt } : null;
 }
 
 /**

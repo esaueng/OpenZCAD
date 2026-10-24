@@ -38,7 +38,7 @@ const HEADER: ProjectEnvelopeHeaderInit = {
   projectId: 'project-decode',
   documentVersion: 3,
   previousVersionHash: null,
-  rosterEntryHash: patternBytes(32, 0xb0),
+  epochBindingHash: patternBytes(32, 0xb0),
   schemaVersion: 1,
   keyEpoch: 1
 };

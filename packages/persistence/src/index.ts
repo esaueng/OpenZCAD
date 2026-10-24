@@ -5,6 +5,17 @@ import {
   type ImportSourceCopyRef
 } from './copy-import-sources';
 export {
+  hydratedForLoad,
+  isUnreadableStoredDocument,
+  markUnreadableStoredDocument,
+  normalizedForLoad
+} from './stored-document';
+import {
+  isUnreadableStoredDocument,
+  normalizedForLoad
+} from './stored-document';
+import { ProjectObjectStorageError } from './project-storage-snapshot';
+export {
   assertImportSourceCopyRefsComplete,
   copyImportedSources,
   copyImportSourceArtifacts,
@@ -1140,13 +1151,17 @@ export class InMemoryPersistenceService implements PersistenceService {
     if (this.organizationOf(link.projectId).status === 'deleted') {
       return null;
     }
+    if (isUnreadableStoredDocument(normalizedForLoad(document)))
+      throw new ProjectObjectStorageError(
+        'The shared project cannot be opened.'
+      );
     return {
       projectId: link.projectId,
       name: document.name,
       mode: link.mode,
       document: sharedProjectSnapshotDocument(
         reconcileCopiedImportSources(
-          normalizeDocument(document),
+          normalizedForLoad(document),
           this.copiedImportSourceArchives.get(document.projectId) ?? []
         )
       )
@@ -1671,8 +1686,8 @@ export class InMemoryPersistenceService implements PersistenceService {
     try {
       await this.requireProjectRead(userId, projectId);
       return reconcileCopiedImportSources(
-        normalizeDocument(document),
-        await this.loadCopiedImportArchives(userId, document.projectId)
+        normalizedForLoad(document),
+        await this.loadCopiedImportArchives(userId, toProjectId(projectId))
       );
     } catch (error) {
       if (error instanceof ProjectNotFoundError) {
@@ -1804,8 +1819,8 @@ export class InMemoryPersistenceService implements PersistenceService {
     );
     return stored
       ? reconcileCopiedImportSources(
-          normalizeDocument(stored.document),
-          await this.loadCopiedImportArchives(userId, stored.document.projectId)
+          normalizedForLoad(stored.document),
+          await this.loadCopiedImportArchives(userId, toProjectId(projectId))
         )
       : null;
   }

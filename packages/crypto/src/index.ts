@@ -1,5 +1,5 @@
 /**
- * End-to-end encryption primitives for ADR-024 (roadmap L11, Phases 2–3).
+ * End-to-end encryption primitives for ADR-024 (roadmap L11, Phases 2–4).
  * WebCrypto only: runs in browsers, Web Workers, the Tauri WKWebView and
  * Node 20+. The account key material of Phase 3 (device lists, unlock
  * targets, device approval) is its first application use.
@@ -147,6 +147,9 @@ export {
   contactVerificationCode,
   createApprovalNonce,
   deviceApprovalCode,
+  MAX_EPOCH_AUTHENTICATOR_BYTES,
+  MIN_EPOCH_AUTHENTICATOR_BYTES,
+  epochBinding,
   formatComparisonCode,
   formatRecoveryKey,
   generateRecoveryKey,
@@ -202,3 +205,49 @@ export {
   type UnlockTargetKind,
   type VerifiedDeviceList
 } from './devices';
+export {
+  MAX_VERSION_LOG_BYTES,
+  MAX_VERSION_LOG_RECORDS,
+  VERSION_LOG_RECORD_VERSION_1,
+  AuthorshipError,
+  VersionLogError,
+  authorCutoffKey,
+  decodeVersionLogRecord,
+  encodeVersionLogRecord,
+  verifyAuthoredEnvelope,
+  verifyAuthoredLogRecord,
+  verifyVersionLog,
+  versionLogRecord,
+  type AuthorshipFailure,
+  type AuthorshipOptions,
+  type VerifiedAuthor,
+  type VerifiedVersionLog,
+  type VerifiedVersionLogEntry,
+  type VerifyVersionLogOptions,
+  type VersionCutoff,
+  type VersionLogFailure,
+  type VersionLogRecord,
+  type VersionLogSigner
+} from './version-log';
+export {
+  BODY_VERSION_1,
+  MAX_ARCHIVED_KEYS,
+  MAX_EXPORT_CONTENT_TYPE_LENGTH,
+  MAX_EXPORT_FILE_NAME_LENGTH,
+  MAX_EXPORT_METADATA_LENGTH,
+  MAX_PROJECT_EXPORTS,
+  MAX_PROJECT_NAME_LENGTH,
+  MAX_REVISION_HASHES,
+  decodeEncryptedDocumentBody,
+  decodeKeyArchiveBody,
+  decodeProjectInfoBody,
+  encodeEncryptedDocumentBody,
+  encodeKeyArchiveBody,
+  encodeProjectInfoBody,
+  type ArchivedProjectKey,
+  type BodyEnvelopeHeader,
+  type EncryptedDocumentBody,
+  type KeyArchiveBody,
+  type ProjectExportEntry,
+  type ProjectInfoBody
+} from './bodies';

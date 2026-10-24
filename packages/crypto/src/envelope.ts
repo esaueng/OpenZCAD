@@ -922,7 +922,7 @@ export interface ProjectEnvelopeExpectation {
   readonly keyEpoch?: number;
   readonly schemaVersion?: number;
   readonly previousVersionHash?: Uint8Array | null;
-  readonly rosterEntryHash?: Uint8Array;
+  readonly epochBindingHash?: Uint8Array;
 }
 
 export interface DecryptProjectEnvelopeOptions extends ReadOptions {
@@ -943,7 +943,7 @@ function acceptProject(given: ProjectEnvelopeExpectation) {
   const expect: ProjectEnvelopeExpectation = {
     ...given,
     previousVersionHash: copyHash(given.previousVersionHash),
-    rosterEntryHash: copyHash(given.rosterEntryHash)
+    epochBindingHash: copyHash(given.epochBindingHash)
   };
   return (header: EnvelopeHeader): void => {
     if (header.class !== 'project') mismatch('class');
@@ -965,10 +965,10 @@ function acceptProject(given: ProjectEnvelopeExpectation) {
       mismatch('previousVersionHash');
     }
     if (
-      expect.rosterEntryHash !== undefined &&
-      !sameHash(expect.rosterEntryHash, header.rosterEntryHash)
+      expect.epochBindingHash !== undefined &&
+      !sameHash(expect.epochBindingHash, header.epochBindingHash)
     ) {
-      mismatch('rosterEntryHash');
+      mismatch('epochBindingHash');
     }
   };
 }
@@ -1217,12 +1217,13 @@ export async function decryptContentBlob(
  * carries references for, so neither can name a blob the other omits.
  */
 export function checkBlobReferences(
-  header: ProjectEnvelopeHeader,
+  header: Pick<ProjectEnvelopeHeader, 'blobIds'>,
   references: readonly ContentBlobReference[]
 ): void {
   const listed = new Set(header.blobIds);
   const referenced = new Set(references.map((reference) => reference.blobId));
   if (
+    listed.size !== header.blobIds.length ||
     referenced.size !== references.length ||
     listed.size !== referenced.size ||
     [...listed].some((id) => !referenced.has(id))

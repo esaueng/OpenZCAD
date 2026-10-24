@@ -22,6 +22,13 @@ export const TRANSLATOR_WASM_ASSET_PATTERN =
   /^assets\/remus_wasm_io_bg-.*\.wasm$/;
 
 /**
+ * The MLS group-key layer of ADR-024 (`packages/mls`): mls-rs compiled to
+ * WASM, fetched only by its module Worker, which `apps/web/src/lib/e2ee/mls/
+ * loader.ts` starts on the first encrypted-project operation.
+ */
+export const MLS_WASM_ASSET_PATTERN = /^assets\/openzcad_mls_bg-.*\.wasm$/;
+
+/**
  * Assets that must never be referenced by the launcher HTML.
  *
  * These are the workspace chunks and runtime assets that exist only behind a
@@ -47,7 +54,13 @@ export const LAZY_ENTRY_PATTERNS = [
   /^assets\/meshImportWorker-.*\.js$/,
   // ADR-024 decode worker: decrypts and inflates encrypted project data.
   /^assets\/e2eeDecodeWorker-.*\.js$/,
-  /^assets\/text-loader-.*\.js$/
+  /^assets\/text-loader-.*\.js$/,
+  // MLS: the wrapper chunk (`manualChunks` names it), its Worker entry
+  // (`packages/mls/src/worker.ts`, emitted under the file's own name) and
+  // the WASM. Nothing about them belongs in first paint.
+  /^assets\/mls-.*\.js$/,
+  /^assets\/worker-.*\.js$/,
+  MLS_WASM_ASSET_PATTERN
 ];
 
 /**
@@ -64,6 +77,11 @@ export const LAUNCHER_FORBIDDEN_MARKERS = [
   {
     marker: 'Unsupported OpenType signature',
     library: 'opentype.js, loaded only when a document first shows text'
+  },
+  {
+    // The Worker name `loadMls()` passes; it survives minification.
+    marker: 'openzcad-mls',
+    library: 'the MLS client, loaded only for an encrypted project'
   }
 ];
 

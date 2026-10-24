@@ -372,6 +372,19 @@ export class CloudProjectAutosave {
   }
 
   /**
+   * Halts writes for an account copy that needs repair, found outside a write
+   * (a freshness poll met a version this browser cannot open). A queued edit
+   * stays queued for the explicit retry instead of writing against that head.
+   */
+  haltForRepair(projectId: string, error?: unknown): void {
+    this.#assertUsable();
+    if (this.#project?.projectId !== projectId) return;
+    this.#clearTimer();
+    this.#halted = 'repair';
+    this.#emit('repair', error);
+  }
+
+  /**
    * Stops mirroring. Any queued edit is discarded rather than carried, because
    * the next project to open is a different document and the device copy of
    * this one is already safe.

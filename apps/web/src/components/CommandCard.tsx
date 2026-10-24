@@ -22,8 +22,8 @@ import { Tooltip } from './Tooltip';
 interface CommandCardProps {
   selection: CommandSelection;
   /**
-   * What is picked, in words. The rail does not draw it — the selection
-   * callout beside the pick names it — but the summary and the clear action
+   * What is picked, in words. The rail does not draw it — the Selection
+   * card above the rail names it — but the summary and the clear action
    * stay in the contract so the caller's wiring is unchanged.
    */
   summary: { label: readonly LabelSegment[]; detail?: string } | null;
