@@ -17,7 +17,12 @@ import {
   type ProjectDocument,
   type SketchSectionReference
 } from '@openzcad/shared';
-import { test, expect, stubApi, revealModelPanel } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  stubApi,
+  bodyCardFromHistory
+} from './openzcad-fixtures';
 
 function section(
   document: ProjectDocument,
@@ -240,12 +245,9 @@ for (const kind of ['loft', 'sweep', 'helical-sweep'] as const) {
       );
     };
     const volume = async () => {
-      await revealModelPanel(page, 'Objects');
-      await page
-        .locator('.body-row:not(.consumed) .body-row-main')
-        .last()
-        .click();
-      const readout = inspector.getByText(/mm³/).first();
+      const readout = (await bodyCardFromHistory(page))
+        .getByText(/mm³/)
+        .first();
       await expect(readout).toBeVisible();
       return readout.textContent();
     };

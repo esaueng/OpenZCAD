@@ -16,7 +16,8 @@ import {
   stubApi,
   test,
   seedUnitlessImportUnits,
-  MODEL_ONLY
+  MODEL_ONLY,
+  bodyCardFromHistory
 } from './openzcad-fixtures';
 
 test('suppresses features and rolls the timeline back as one undoable edit', async ({
@@ -264,10 +265,10 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await expect(
     page.locator('.feature-row-main', { hasText: 'Move Cylinder Base' })
   ).toBeVisible();
-  // The body's size reads from its Objects row's card.
-  await revealModelPanel(page, 'Objects');
-  await page.locator('.body-row:not(.consumed) .body-row-main').first().click();
-  await expect(page.locator('.panel-body')).toContainText('36 × 36 × 23.5 mm');
+  // The body's size reads from the History row that last built it.
+  await expect(await bodyCardFromHistory(page)).toContainText(
+    '36 × 36 × 23.5 mm'
+  );
   expect(consoleErrors).toEqual([]);
 });
 
@@ -1606,7 +1607,7 @@ test('preflights and drills a through hole into the top face', async ({
   // patches the feature instead of adding another, then closes the card.
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   const liveVolume = async () => {
-    await page.locator('.body-row:not(.consumed) .body-row-main').click();
+    await bodyCardFromHistory(page);
     const volume = await inspector.getByText(/mm³/).first().textContent();
     await page.keyboard.press('Escape');
     await expect(inspector).toHaveCount(0);
@@ -1678,7 +1679,7 @@ test('preflights and creates an exact open-top shell', async ({ page }) => {
   // its row opens directly (F19).
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   const liveVolume = async () => {
-    await page.locator('.body-row:not(.consumed) .body-row-main').click();
+    await bodyCardFromHistory(page);
     const volume = await inspector.getByText(/mm³/).first().textContent();
     await page.keyboard.press('Escape');
     await expect(inspector).toHaveCount(0);

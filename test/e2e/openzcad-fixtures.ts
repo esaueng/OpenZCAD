@@ -1170,6 +1170,29 @@ export async function revealModelPanel(
 }
 
 /**
+ * Opens the last-built body's measurements the way a user reads them: from
+ * the last live feature's History row (a pick, from the viewport or an
+ * Objects row, opens no card). Returns the Feature inspector, whose card
+ * reads out that body's volume and size.
+ */
+export async function bodyCardFromHistory(page: Page) {
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  // A second press on the row already open would close its card.
+  if (await inspector.isVisible()) {
+    await page.keyboard.press('Escape');
+    await expect(inspector).toHaveCount(0);
+  }
+  await revealModelPanel(page, 'History');
+  // Sketches build no body; the last live feature row built the body.
+  const rows = page.locator(
+    '.feature-row:not(.consumed):not(.is-sketch) .feature-row-main'
+  );
+  await rows.last().click();
+  await expect(inspector).toBeVisible();
+  return inspector;
+}
+
+/**
  * Selects a body from its row in the Objects panel, the way a user picks one
  * without aiming at it, and waits for its selection chip. A create leaves
  * nothing selected (design review G15), so a spec that reads the new body's

@@ -466,7 +466,7 @@ function TopologyMeasurements({
   );
 }
 
-function BodyStats({
+export function BodyStats({
   body,
   units,
   document,

@@ -1045,6 +1045,13 @@ const LazySelectionCard = lazyWithStaleChunkNotice(() =>
     default: module.SelectionCard
   }))
 );
+// A modeling feature's History card reads out its body, as every other
+// feature's card does; the readout lives in the Inspector's chunk.
+const LazyBodyMeasurements = lazyWithStaleChunkNotice(() =>
+  import('./components/Inspector').then((module) => ({
+    default: module.BodyStats
+  }))
+);
 const LazySelectionRefusal = lazyWithStaleChunkNotice(() =>
   import('./components/SelectionCard').then((module) => ({
     default: module.SelectionRefusal
@@ -1239,6 +1246,8 @@ const CommandCard = withSuspense(LazyCommandCard);
 const SelectionCard = withSuspense(LazySelectionCard);
 
 const SelectionRefusal = withSuspense(LazySelectionRefusal);
+
+const BodyMeasurements = withSuspense(LazyBodyMeasurements);
 
 const WorkspaceTour = withSuspense(LazyWorkspaceTour);
 
@@ -7076,19 +7085,6 @@ export function App() {
     ? `${renderedSelectedTopology.bodyId}:${renderedSelectedTopology.topologyId ?? renderedSelectedTopology.hash ?? ''}`
     : null;
   const editFaceOpen = selectionKey !== null && editFaceKey === selectionKey;
-  /**
-   * The body last picked from its Objects row. A row is a browser, like a
-   * History row: picking one asks to inspect the body (its volume, its
-   * mass), so its card opens, where a viewport pick's does not.
-   */
-  const [browserPickBodyId, setBrowserPickBodyId] = useState<BodyId | null>(
-    null
-  );
-  const browserPickOpen =
-    browserPickBodyId !== null &&
-    selectedBodyIds.length === 1 &&
-    selectedBodyIds[0] === browserPickBodyId &&
-    renderedSelectedTopology?.kind === 'body';
   /**
    * The selection chip anchored to the pick: name, key measurement, the
    * verbs for that kind of pick and the clear action (lib/selectionCallout).
@@ -14055,8 +14051,6 @@ export function App() {
     detail?: PickDetail,
     contextMenu?: { x: number; y: number }
   ): boolean {
-    // A viewport pick is never an Objects-row inspection, even of that body.
-    setBrowserPickBodyId(null);
     if (selection && currentGeometrySnapshot !== null) {
       setStatus(
         'The model is still updating. Try that selection again when it finishes.'
@@ -20345,7 +20339,6 @@ export function App() {
         : [...selectedBodyIds, bodyId]
       : [bodyId];
     setSelectedBodyIds(nextIds);
-    setBrowserPickBodyId(nextIds.length === 1 ? nextIds[0]! : null);
     if (nextIds.length === 1) {
       setSelectedTopology({ bodyId: nextIds[0]!, kind: 'body' });
       inferFeatureNodeFor(nextIds[0]!);
@@ -23220,6 +23213,24 @@ export function App() {
       (selectedTopology?.kind === 'face' &&
         renderedRepresentations[selectedTopology.bodyId]?.source ===
           'imported-step'));
+  // The body an edited modeling feature built, read out on its History card
+  // as every other feature's body is: a pick opens no card, so History is
+  // where a body's volume is read. A feature that keeps its target's body
+  // (a hole, a shell) names it itself.
+  const modelingEditBody = (() => {
+    if (!modelingEditFeature) return null;
+    let bodyId = modelingEditFeature.bodyId ?? null;
+    for (const node of Object.values(doc.nodes)) {
+      if (
+        node.kind === 'body' &&
+        node.featureId === modelingEditFeature.featureId
+      ) {
+        bodyId = node.bodyId;
+        break;
+      }
+    }
+    return bodyId ? (renderedRepresentations[bodyId] ?? null) : null;
+  })();
   const modelingOperation: ModelingOperationKind | null =
     tool === 'mirror' ||
     tool === 'split' ||
@@ -25213,6 +25224,14 @@ export function App() {
                       }}
                     />
                   )}
+                  {modelingEditBody && (
+                    <BodyMeasurements
+                      body={modelingEditBody}
+                      units={doc.units}
+                      document={doc}
+                      worker={geometry}
+                    />
+                  )}
                 </div>
               </section>
             ) : tool === 'reference-image' && openReferenceImageEntry ? (
@@ -25332,7 +25351,7 @@ export function App() {
                 preferredSketchId={selectedSketch?.sketchId ?? null}
                 commandSession={commandSession}
                 featureSelectionSource={featureSelectionSource}
-                directPickDetails={editFaceOpen || browserPickOpen}
+                directPickDetails={editFaceOpen}
                 recognitionDocument={previewDoc ?? doc}
                 recognitionQuery={importedFaceRecognitionQuery}
                 recognitionCache={importedFaceRecognitionCache}

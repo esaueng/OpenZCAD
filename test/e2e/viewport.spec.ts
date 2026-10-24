@@ -7,7 +7,8 @@ import {
   locateEdge,
   setSelectionFilter,
   stubApi,
-  WORKSPACE_SESSION_STORAGE_KEY
+  WORKSPACE_SESSION_STORAGE_KEY,
+  revealModelPanel
 } from './openzcad-fixtures';
 import type { Locator, Page } from '@playwright/test';
 
@@ -1835,12 +1836,12 @@ test('a shortcut still fires when a panel opened because you selected something'
   await expect(page.locator('.body-row')).toHaveCount(1);
   await page.keyboard.press('Escape');
 
-  // A body pick shows its definition first; opening that feature's editor
+  // A body pick opens no card. Opening its feature's editor from History
   // must preserve workspace shortcuts instead of focusing a dimension field.
   await page.getByRole('button', { name: /^Box 1/ }).click();
-  await expect(inspector.getByLabel('Width (X)')).toHaveCount(0);
-  await expect(inspector.getByText('Defined by')).toBeVisible();
-  await inspector.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(inspector).toHaveCount(0);
+  await revealModelPanel(page, 'History');
+  await page.locator('.feature-row-main', { hasText: 'Box' }).first().click();
   const width = inspector.getByLabel('Width (X)');
   await expect(width).toBeVisible();
   await expect(width).not.toBeFocused();
