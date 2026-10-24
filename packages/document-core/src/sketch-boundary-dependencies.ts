@@ -178,8 +178,8 @@ export function assertSketchBoundaryDeletion(
         (node.data.featureKind === 'extrude' ||
           node.data.featureKind === 'revolve') &&
         node.data.sketchId === sketch.sketchId &&
-        (node.data.featureKind === 'revolve' ||
-          (!node.data.profile && !node.data.profiles?.length))
+        !node.data.profile &&
+        !(node.data.featureKind === 'extrude' && node.data.profiles?.length)
     );
   if (referenced || wholeSketchConsumer)
     throw new Error(

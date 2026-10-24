@@ -65,10 +65,12 @@ export function featureProfileUsesObjects(
       if (references.length) break;
       return objectIds.has(sketch.objectIds[0] ?? '');
     case 'revolve':
-      return (
-        data.sketchId === sketch.sketchId &&
-        objectIds.has(sketch.objectIds[0] ?? '')
-      );
+      if (data.sketchId !== sketch.sketchId) return false;
+      if (data.profile) {
+        references = [data.profile];
+        break;
+      }
+      return objectIds.has(sketch.objectIds[0] ?? '');
     case 'loft':
       references = data.sections
         .filter((section) => section.sketchId === sketch.sketchId)

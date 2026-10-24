@@ -55,6 +55,7 @@ import {
   exactSectionSnapshot,
   sectionClippingPlane,
   CameraController,
+  buildAngleHandle,
   buildCylinderRadiusHandle,
   buildEdgeRadiusHandle,
   buildOffsetFaceHandle,
@@ -192,6 +193,7 @@ import {
   SKETCH_GLIDE_MS,
   sketchGlideEase,
   viewJumpEase,
+  type AngleRigParams,
   type CameraGlideStyle,
   type HandleVec3,
   type WheelDevice
@@ -330,6 +332,10 @@ type SketchMoveEvent = Extract<
 import type { PlaneBasis } from '@openzcad/geometry';
 import type { PlaneId, SketchObjectData } from '@openzcad/shared';
 import { buildPlanePickerRig } from './viewer/planePickerRig';
+import {
+  buildAxisPickerRig,
+  type AxisPickerCandidate
+} from './viewer/axisPickerRig';
 import {
   buildDatumPlaneRig,
   type DatumPlaneRig,
@@ -991,6 +997,29 @@ export interface ModelViewerProps {
   planePickerOffset: number;
   /** A ghost plane was clicked. */
   onPickPlane(plane: PlaneId): void;
+  /**
+   * U09: an in-place command waiting on (or showing) its axis: the lines
+   * that can be picked, drawn long and clickable, and the picked one.
+   */
+  axisPicker?: {
+    candidates: readonly AxisPickerCandidate[];
+    selectedId: string | null;
+  } | null;
+  /** An axis line was clicked. */
+  onPickAxis?(id: string): void;
+  /**
+   * U09: an in-place command's angle handle. `key` changes when the rig must
+   * be rebuilt (new profile or axis); the value survives within one key.
+   */
+  commandAngleHandle?: { key: string; params: AngleRigParams } | null;
+  /** The handle moved to a new value (drag frames and keypad entry). */
+  onCommandHandlePreview?(value: number): void;
+  /** The drag let go at this value. */
+  onCommandHandleRelease?(value: number): void;
+  /** The handle's chip was tapped; true when a keypad opened. */
+  onOpenCommandKeypad?(value: number): boolean;
+  /** Filled with a setter the keypad uses to move the command handle. */
+  commandSetterRef?: MutableRefObject<((value: number) => void) | null>;
   /** A datum plane was clicked where nothing in the model was under it. */
   onPickDatum?(featureId: string): void;
   /**
@@ -1973,6 +2002,13 @@ export function ModelViewer({
   loadReferenceImage,
   planePickerOffset,
   onPickPlane,
+  axisPicker = null,
+  onPickAxis,
+  commandAngleHandle = null,
+  onCommandHandlePreview,
+  onCommandHandleRelease,
+  onOpenCommandKeypad,
+  commandSetterRef: commandSetterRefProp,
   onPickDatum,
   onMeasurePreview,
   regionHandle,
@@ -2192,6 +2228,26 @@ export function ModelViewer({
   const planePickerRigRef = useRef<ReturnType<
     typeof buildPlanePickerRig
   > | null>(null);
+  const axisPickerRigRef = useRef<ReturnType<typeof buildAxisPickerRig> | null>(
+    null
+  );
+  const onPickAxisRef = useRef(onPickAxis);
+  onPickAxisRef.current = onPickAxis;
+  /** U09: the in-place command's handle, and the drag holding it. */
+  const commandRigRef = useRef<DragRig | null>(null);
+  const commandDragRef = useRef<{
+    pointerId: number;
+    startValue: number;
+  } | null>(null);
+  const onCommandHandlePreviewRef = useRef(onCommandHandlePreview);
+  onCommandHandlePreviewRef.current = onCommandHandlePreview;
+  const onCommandHandleReleaseRef = useRef(onCommandHandleRelease);
+  onCommandHandleReleaseRef.current = onCommandHandleRelease;
+  const onOpenCommandKeypadRef = useRef(onOpenCommandKeypad);
+  onOpenCommandKeypadRef.current = onOpenCommandKeypad;
+  const ownCommandSetterRef = useRef<((value: number) => void) | null>(null);
+  /** Lets the keypad drive the command handle without a React render. */
+  const commandSetterRef = commandSetterRefProp ?? ownCommandSetterRef;
   const profileSelectionModeRef = useRef(profileSelectionMode);
   profileSelectionModeRef.current = profileSelectionMode;
   const profilePickTargetsRef = useRef<ProfilePickTarget[]>([]);
@@ -3782,6 +3838,50 @@ export function ModelViewer({
     };
     offsetChip.addEventListener('click', handleChipClick);
     offsetChipRef.current = offsetChip;
+
+    // U09: the in-place command's value chip. Tapping it opens the keypad,
+    // exactly as the offset chip does for a face or region drag.
+    const commandChip = hud.create('handle-value-chip');
+    commandChip.dataset.testid = 'command-handle-value';
+    commandChip.hidden = true;
+    commandChip.addEventListener('click', () => {
+      const rig = commandRigRef.current;
+      if (rig) onOpenCommandKeypadRef.current?.(rig.value());
+    });
+    /** Places the command chip at its rig's anchor; hides it without one. */
+    function updateCommandChip() {
+      const rig = commandRigRef.current;
+      if (!rig) {
+        if (!commandChip.hidden) commandChip.hidden = true;
+        if (E2E_CANVAS_HOOKS_ENABLED)
+          delete renderer.domElement.dataset.e2eCommandHandle;
+        return;
+      }
+      if (E2E_CANVAS_HOOKS_ENABLED) {
+        // The handle's ball in page pixels, for specs that drag it the way a
+        // hand would rather than reaching into the command.
+        const ball = rig.group.position.clone().project(context.activeCamera);
+        const rect = renderer.domElement.getBoundingClientRect();
+        renderer.domElement.dataset.e2eCommandHandle = JSON.stringify({
+          x: rect.left + ((ball.x + 1) / 2) * rect.width,
+          y: rect.top + ((1 - ball.y) / 2) * rect.height,
+          value: rig.value()
+        });
+      }
+      const scale = (rig.group.userData.gizmoScale as number | undefined) ?? 1;
+      const ndc = rig.chipAnchor(scale).project(context.activeCamera);
+      if (ndc.z > 1 || ndc.z < -1) {
+        commandChip.hidden = true;
+        keypadAnchorRef.current?.(null);
+        return;
+      }
+      const x = ((ndc.x + 1) / 2) * canvasCssWidth;
+      const y = ((1 - ndc.y) / 2) * canvasCssHeight;
+      const text = `${formatNumber(Math.round(rig.value() * 10) / 10)}°`;
+      if (commandChip.textContent !== text) commandChip.textContent = text;
+      hud.showAt(commandChip, x, y);
+      keypadAnchorRef.current?.({ x, y });
+    }
 
     // Companion "Radius" label pill for the cylinder dimension line, sitting
     // just ahead of the value chip like a drawing callout's name tag. Tapping
@@ -8243,6 +8343,62 @@ export function ModelViewer({
     }
 
     const handlePointerMove = (event: PointerEvent) => {
+      const commandDrag = commandDragRef.current;
+      const commandRig = commandRigRef.current;
+      if (
+        commandDrag &&
+        commandRig &&
+        event.pointerId === commandDrag.pointerId
+      ) {
+        event.preventDefault();
+        setRayFromEvent(event);
+        const next = commandRig.valueFromRay?.(
+          context.raycaster.ray,
+          commandRig.value()
+        );
+        if (next !== null && next !== undefined) {
+          // Whole degrees unless Shift asks for the free value.
+          const value = event.shiftKey ? next : Math.round(next);
+          if (value !== commandRig.value()) {
+            commandRig.setValue(value);
+            onCommandHandlePreviewRef.current?.(commandRig.value());
+          }
+        }
+        requestRender();
+        return;
+      }
+      if (event.buttons === 0) {
+        const axisPickerRig = axisPickerRigRef.current;
+        if (axisPickerRig) {
+          setRayFromEvent(event);
+          const axisHit = context.raycaster.intersectObjects(
+            axisPickerRig.targets(),
+            false
+          )[0];
+          const axisId =
+            (axisHit?.object.userData.pickAxis as string | undefined) ?? null;
+          axisPickerRig.setHover(axisId);
+          if (axisId) {
+            renderer.domElement.style.cursor = 'pointer';
+            requestRender();
+            return;
+          }
+        }
+        if (commandRig) {
+          setRayFromEvent(event);
+          const over =
+            context.raycaster
+              .intersectObjects(commandRig.group.children, true)
+              .filter((hit) => hit.object.userData.directHandle === true)
+              .length > 0;
+          commandRig.setHot?.(over);
+          if (over) {
+            renderer.domElement.style.cursor = 'grab';
+            requestRender();
+            return;
+          }
+        }
+      }
       lastPickListPointer = event;
       // Threshold tracking sees every event on purpose: it decides whether a
       // right-drag was a click, and sampling that at frame rate can miss the
@@ -8523,6 +8679,45 @@ export function ModelViewer({
           return;
         }
       }
+      // U09: the in-place command's handle, then its axis lines. Both are
+      // armed precisely to be grabbed, so they take the press first.
+      const armedCommandRig = commandRigRef.current;
+      if (armedCommandRig && event.button === 0) {
+        // Its scale changes every frame; a press before the next render must
+        // not test against last frame's matrices.
+        armedCommandRig.group.updateMatrixWorld(true);
+        setRayFromEvent(event);
+        const commandHits = context.raycaster
+          .intersectObjects(armedCommandRig.group.children, true)
+          .filter((hit) => hit.object.userData.directHandle === true);
+        if (commandHits.length > 0) {
+          commandDragRef.current = {
+            pointerId: event.pointerId,
+            startValue: armedCommandRig.value()
+          };
+          onDirectManipulationChangeRef.current(true);
+          gestures.capture(event, 'grabbing');
+          event.preventDefault();
+          return;
+        }
+      }
+      const axisPickerRig = axisPickerRigRef.current;
+      if (axisPickerRig && event.button === 0) {
+        // A rig armed since the last render has no world matrices yet.
+        axisPickerRig.group.updateMatrixWorld(true);
+        setRayFromEvent(event);
+        const axisHit = context.raycaster.intersectObjects(
+          axisPickerRig.targets(),
+          false
+        )[0];
+        const axisId = axisHit?.object.userData.pickAxis as string | undefined;
+        if (axisId) {
+          event.preventDefault();
+          onPickAxisRef.current?.(axisId);
+          requestRender();
+          return;
+        }
+      }
       const armedRig = offsetRigRef.current;
       if (armedRig) {
         setRayFromEvent(event);
@@ -8706,6 +8901,18 @@ export function ModelViewer({
         const finalMove = pendingDragEvent;
         pendingDragEvent = null;
         applyPointerMove(finalMove);
+      }
+      const commandDrag = commandDragRef.current;
+      if (commandDrag && event.pointerId === commandDrag.pointerId) {
+        commandDragRef.current = null;
+        onDirectManipulationChangeRef.current(false);
+        gestures.release(event, 'grab');
+        const rig = commandRigRef.current;
+        if (rig && rig.value() !== commandDrag.startValue) {
+          onCommandHandleReleaseRef.current?.(rig.value());
+        }
+        requestRender();
+        return;
       }
       if (event.pointerId === shiftOrbitPointerId) {
         shiftOrbitPointerId = null;
@@ -9582,6 +9789,7 @@ export function ModelViewer({
         planePicker.setScale(worldPerPixelAt(new THREE.Vector3()));
         planePicker.setOffset(planePickerOffsetRef.current);
       }
+      axisPickerRigRef.current?.setScale(worldPerPixelAtDepth);
 
       const activeSketchMode = sketchModeRef.current;
       const activeSketchRig = sketchRigRef.current;
@@ -9717,9 +9925,19 @@ export function ModelViewer({
         edgeRig.group.scale.setScalar(rigScale);
         edgeRig.group.userData.gizmoScale = rigScale;
       }
+      const commandRig = commandRigRef.current;
+      if (commandRig) {
+        const rigScale =
+          moveGizmoWorldScale(worldPerPixelAt(commandRig.group.position)) * 0.4;
+        commandRig.group.scale.setScalar(rigScale);
+        commandRig.group.userData.gizmoScale = rigScale;
+      }
       const cylinderRadiusProxyFrame = flushCylinderRadiusProxy();
       const offsetBodyProxyFrame = flushOffsetBodyProxy();
       updateOffsetChip();
+      // After the offset chip, which clears the keypad anchor without a rig
+      // of its own: the command's anchor has to be the frame's last word.
+      updateCommandChip();
       scaleIndicatorRef.current?.(
         chooseViewportScale(
           worldPerPixelAt(
@@ -12031,6 +12249,74 @@ export function ModelViewer({
       context.requestRender();
     };
   }, [planePickerArmed]);
+
+  // U09 axis lines while an in-place command shows its axis slot. Keyed on
+  // the candidates' identity, so a hover or value change does not rebuild.
+  const axisPickerKey = axisPicker
+    ? axisPicker.candidates
+        .map(
+          (c) =>
+            `${c.id}:${c.origin.x},${c.origin.y},${c.origin.z}:${c.direction.x},${c.direction.y},${c.direction.z}`
+        )
+        .join('|')
+    : null;
+  const axisPickerCandidatesRef = useRef(axisPicker?.candidates ?? []);
+  axisPickerCandidatesRef.current = axisPicker?.candidates ?? [];
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || axisPickerKey === null) {
+      return;
+    }
+    const rig = buildAxisPickerRig(axisPickerCandidatesRef.current);
+    rig.setScale(() => 0.05);
+    context.scene.add(rig.group);
+    axisPickerRigRef.current = rig;
+    context.requestRender();
+    return () => {
+      context.scene.remove(rig.group);
+      rig.dispose();
+      if (axisPickerRigRef.current === rig) {
+        axisPickerRigRef.current = null;
+      }
+      context.requestRender();
+    };
+  }, [axisPickerKey]);
+  const selectedAxisId = axisPicker?.selectedId ?? null;
+  useEffect(() => {
+    axisPickerRigRef.current?.setSelected(selectedAxisId);
+    contextRef.current?.requestRender();
+  }, [selectedAxisId, axisPickerKey]);
+
+  // U09 command handle: built per key, disposed with it. The value the rig
+  // starts at is the command's current one, so a rebuild never jumps.
+  const commandHandleKey = commandAngleHandle?.key ?? null;
+  const commandHandleParamsRef = useRef(commandAngleHandle?.params ?? null);
+  commandHandleParamsRef.current = commandAngleHandle?.params ?? null;
+  useEffect(() => {
+    const context = contextRef.current;
+    const params = commandHandleParamsRef.current;
+    if (!context || commandHandleKey === null || !params) {
+      return;
+    }
+    const rig = buildAngleHandle(params);
+    context.scene.add(rig.group);
+    context.scene.add(rig.worldGroup);
+    commandRigRef.current = rig;
+    commandSetterRef.current = (value) => {
+      rig.setValue(value);
+      context.requestRender();
+    };
+    context.requestRender();
+    return () => {
+      rig.dispose();
+      if (commandRigRef.current === rig) {
+        commandRigRef.current = null;
+        commandSetterRef.current = null;
+      }
+      commandDragRef.current = null;
+      context.requestRender();
+    };
+  }, [commandHandleKey, commandSetterRef]);
 
   // Committed datum planes (viewer/datumPlaneRig), rebuilt when the set,
   // a frame or the selection changes; the render loop keeps their size.

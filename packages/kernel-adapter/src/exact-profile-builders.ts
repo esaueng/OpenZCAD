@@ -38,6 +38,7 @@ import {
   type SketchObjectData,
   type SketchPlaneRef,
   type SketchPathReference,
+  type SketchProfileReference,
   type SketchSectionReference,
   type UnitSystem
 } from '@openzcad/shared';
@@ -139,6 +140,15 @@ const NURBS_CURVE_TYPE = 3;
  * the way a named role does. Reversing this needs an arc-capable edge witness
  * and a piece-aware face role, not a change here.
  */
+/**
+ * A region revolve (U09) turns a face built from resolved region loops, not
+ * one authored object, so the ADR-013 profile-vertex roles have no single
+ * source to witness. Its references stay hash-only until region lineage
+ * gains a revolve carrier the way region extrudes gained side roles.
+ */
+const REGION_REVOLVE_HASH_ONLY_REASON =
+  'A revolve of a selected sketch region publishes hash-only references: region revolve lineage has no semantic carrier yet.';
+
 const PARTIAL_REVOLVE_HASH_ONLY_REASON =
   'A revolve below 360 degrees publishes hash-only references by design: its swept edges are arcs rather than the closed circles ADR-013 profile-vertex roles witness, and Remus splits its swept faces at 90 degree boundaries into pieces with duplicate analytic parameters.';
 
@@ -1053,6 +1063,68 @@ export function buildRegionExtrude(
   return {
     solids,
     lineage: mergeRemusLineageStates(lineages)
+  };
+}
+
+/**
+ * U09: turns one selected sketch region about the revolve's axis. The face
+ * is resolved exactly as a loft or sweep section is, so a region drawn as
+ * separate edges revolves like any authored closed object.
+ */
+function buildRegionRevolve(
+  kernel: RemusKernel,
+  document: ProjectDocument,
+  data: Extract<FeatureNode['data'], { featureKind: 'revolve' }>,
+  profile: SketchProfileReference,
+  scope: Record<string, number>,
+  sketchBases: ReadonlyMap<SketchId, PlaneBasis>,
+  warn: (message: string) => void,
+  revolveAxis?: DatumAxis
+): ExactShape {
+  const sketch = findSketch(document, data.sketchId);
+  if (!sketch) {
+    throw new Error('Referenced sketch no longer exists.');
+  }
+  const basis = sketchBases.get(sketch.sketchId);
+  if (!basis) {
+    throw new Error(
+      `Sketch "${sketch.name}" plane did not resolve at its history position.`
+    );
+  }
+  const face = sectionFace(
+    kernel,
+    document,
+    { sketchId: data.sketchId, profile },
+    scope,
+    sketchBases,
+    warn,
+    'Revolve profile'
+  );
+  if (data.axisRef && !revolveAxis) {
+    throw new Error('Revolve datum axis did not resolve.');
+  }
+  if (revolveAxis) requireRevolveAxisInPlane(revolveAxis, basis, sketch.name);
+  const direction = revolveAxis
+    ? revolveAxis.direction
+    : data.axis === 'vertical'
+      ? basis.v
+      : basis.u;
+  const point = revolveAxis
+    ? revolveAxis.origin
+    : pointOnPlane(basis, { x: 0, y: 0 }, 0);
+  const solid = kernel.revolve(
+    face,
+    point.x,
+    point.y,
+    point.z,
+    direction.x,
+    direction.y,
+    direction.z,
+    resolveRevolveAngleDeg(data.angleDeg, scope)
+  );
+  return {
+    solids: [solid],
+    lineage: remusHashOnlyLineage('sweep', REGION_REVOLVE_HASH_ONLY_REASON)
   };
 }
 
@@ -2092,6 +2164,18 @@ function buildStraightSweep(
       scope,
       basis,
       warn
+    );
+  }
+  if (feature.data.featureKind === 'revolve' && feature.data.profile) {
+    return buildRegionRevolve(
+      kernel,
+      document,
+      feature.data,
+      feature.data.profile,
+      scope,
+      sketchBases,
+      warn,
+      revolveAxis
     );
   }
   const sketch = findSketch(document, feature.data.sketchId);

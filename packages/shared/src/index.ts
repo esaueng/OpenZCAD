@@ -163,7 +163,9 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // v36 adds composite-named reference corners/sides with explicit topology.
 // Older clients must refuse instead of dropping or reinterpreting targets.
 // v37 adds authored boundary provenance and explicit legacy conversion ownership.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 37 as const;
+// v38 adds U09 region profiles on revolve features (`profile`). An older
+// client would revolve the sketch's first object instead, so it must refuse.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 38 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -1594,6 +1596,14 @@ export type FeatureData =
        * so clearing this restores the sketch axis the revolve had.
        */
       axisRef?: DatumAxisRef;
+      /**
+       * U09 (schema v38): the closed region the revolve turns, by the same
+       * persistent reference a region extrude stores. Absent is the v37
+       * behaviour, where the sketch's first object is the profile; that
+       * cannot revolve a rectangle drawn as four edges, which is every
+       * rectangle drawn since S04.
+       */
+      profile?: SketchProfileReference;
     }
   | {
       featureKind: 'loft';

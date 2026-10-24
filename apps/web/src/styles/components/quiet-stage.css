@@ -3229,3 +3229,112 @@ button.model-panel-grip[aria-expanded='true'] {
   white-space: nowrap;
   border: 0;
 }
+
+/* ── In-place command (U09) ──
+   An in-place command takes the guidance row: its name, the step it waits
+   on, and Cancel / Done. Fields never appear here; inputs are picked in the
+   model and numbers ride their handles. The row is taller than the hint, so
+   it claims its own lane height. */
+:where(.workspace:not(.with-assistant)) .viewer-area:has(.in-place-command) {
+  --lane-status: 48px;
+}
+
+.in-place-command {
+  /* The lane passes the pointer through to the viewport; the bar's own
+     buttons must take it back, as the search bar does. */
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(max(calc(var(--command-bar-w) + 120px), 520px), 100%);
+  padding: 4px 4px 4px 12px;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 24%);
+  font-size: var(--fs-xs);
+}
+
+.in-place-command-title {
+  flex: none;
+  font-weight: 600;
+}
+
+.in-place-command-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.in-place-command.refused .in-place-command-hint {
+  color: var(--color-warning);
+}
+
+.in-place-command-cancel,
+.in-place-command-done {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  cursor: pointer;
+}
+
+.in-place-command-done {
+  color: var(--color-bg);
+  background: var(--color-accent);
+  border-color: var(--color-accent-border);
+}
+
+.in-place-command-done:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.in-place-command kbd {
+  color: inherit;
+  opacity: 0.7;
+  font-size: var(--fs-xs);
+}
+
+.in-place-command-options {
+  position: relative;
+  flex: none;
+}
+
+.in-place-command-options > summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  min-height: 28px;
+  list-style: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.in-place-command-options > summary::-webkit-details-marker {
+  display: none;
+}
+
+.in-place-command-options-panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  min-width: 220px;
+  padding: 10px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 24%);
+}

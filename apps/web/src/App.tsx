@@ -916,6 +916,15 @@ const LazyNumericKeypad = lazyWithStaleChunkNotice(() =>
   }))
 );
 const NumericKeypad = withSuspense(LazyNumericKeypad);
+// U09: an in-place command's Cancel / Done bar. Lazy, like the keypad: only
+// a running command needs it, and the entry chunk runs at its budget.
+const InPlaceCommandBar = withSuspense(
+  lazyWithStaleChunkNotice(() =>
+    import('./components/InPlaceCommandBar').then((module) => ({
+      default: module.InPlaceCommandBar
+    }))
+  )
+);
 
 const LazyViewerShell = lazyWithStaleChunkNotice(() =>
   import('./components/ViewerShell').then((module) => ({
@@ -1404,6 +1413,11 @@ import {
 import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
 import { useThumbnailCaptureActivity } from './hooks/useThumbnailCaptureActivity';
 import { GEOMETRY_PREVIEW_SCHEDULING, LivePreview } from './lib/livePreview';
+import {
+  useInPlaceRevolve,
+  type InPlaceProfilePick,
+  type InPlaceRevolveRequest
+} from './hooks/useInPlaceRevolve';
 import { PreviewRebuilds } from './lib/previewRebuilds';
 import {
   blendPreviewSelectionKey,
@@ -7919,6 +7933,17 @@ export function App() {
   function launchTool(nextTool: ToolId, modelingFeature?: FeatureNode) {
     const current = managerRef.current?.document;
     if (modelingFeature && !current) return;
+    // U09: a new Revolve runs in place, with no card. Editing an existing
+    // one still opens its card until history edits re-arm the handles.
+    if (
+      nextTool === 'revolve' &&
+      !modelingFeature &&
+      !toolDisabledReason(nextTool, availability)
+    ) {
+      startInPlaceRevolve();
+      return;
+    }
+    if (inPlaceRevolveRef.current.active) inPlaceRevolveRef.current.cancel();
     const request = {
       tool: nextTool,
       historyFeature:
@@ -7938,6 +7963,37 @@ export function App() {
       return;
     }
     completeToolSwitch(request);
+  }
+
+  /**
+   * Starts the in-place Revolve: the selected region's sketch fills the
+   * profile slot; with nothing selected, the next region click does.
+   */
+  function startInPlaceRevolve() {
+    const selected = selectedProfiles[0];
+    const initial = selected ? inPlaceProfilePick(selected) : null;
+    cancelPanel();
+    // The command bar names each step; a status toast would say it twice,
+    // on the same row.
+    retireStatusMessage();
+    inPlaceRevolveRef.current.start(initial);
+  }
+
+  /** A picked region as the in-place command's profile slot holds it. */
+  function inPlaceProfilePick(
+    region: RegionPickData
+  ): InPlaceProfilePick | null {
+    const [reference] = profileReferencesForSelection(
+      [region],
+      entityWideProfileSource
+    );
+    return reference
+      ? {
+          sketchId: region.sketchId as SketchId,
+          reference,
+          regionFingerprint: region.regionFingerprint
+        }
+      : null;
   }
 
   /** Settles the unapplied-card question, then opens the tool it held. */
@@ -14111,6 +14167,11 @@ export function App() {
     detail?: PickDetail,
     contextMenu?: { x: number; y: number }
   ): boolean {
+    if (inPlaceRevolveRef.current.active) {
+      // The command owns the model's clicks: a profile, then an axis line.
+      // A stray face or edge pick must not open a card under it.
+      return false;
+    }
     if (selection && currentGeometrySnapshot !== null) {
       setStatus(
         'The model is still updating. Try that selection again when it finishes.'
@@ -17927,6 +17988,93 @@ export function App() {
     modelingEditFeature,
     sketchReadDocument
   ]);
+  /** U09: the Revolve command as built for preview and commit. */
+  function inPlaceRevolveCommand(request: InPlaceRevolveRequest, name: string) {
+    return commandFactories.revolveSketch({
+      name,
+      bodyName: newBodyName(name),
+      sketchId: request.sketchId,
+      profile: request.profile,
+      ...('axis' in request.axis
+        ? { axis: request.axis.axis }
+        : {
+            axis: 'vertical' as const,
+            axisRef: {
+              type: 'datum-axis' as const,
+              datumFeatureId: request.axis.datumFeatureId
+            }
+          }),
+      ...(request.angleDeg === undefined ? {} : { angleDeg: request.angleDeg })
+    });
+  }
+  const inPlaceRevolve = useInPlaceRevolve({
+    sketchViews: availableSketchViews,
+    document: doc,
+    baseDocument: () => managerRef.current?.document ?? null,
+    derive: (document) => geometry.syncOnce(document),
+    buildCommand: (request) => {
+      const command = inPlaceRevolveCommand(request, 'Revolve');
+      return {
+        validate: (document) => command.validate(document),
+        apply: (document) => command.apply(document),
+        resultBodyId: command.payload.ids?.bodyId
+      };
+    },
+    commit: (request) => {
+      const name = newFeatureName('Revolve');
+      const command = inPlaceRevolveCommand(request, name);
+      createValidatedFeature(command, name, command.payload.ids?.bodyId);
+    },
+    publishPreview: setPreviewDoc,
+    datumLabel: (featureId) =>
+      (doc && findFeature(doc, featureId)?.name) ?? 'Datum axis',
+    onStatus: setStatus
+  });
+  const inPlaceRevolveRef = useRef(inPlaceRevolve);
+  inPlaceRevolveRef.current = inPlaceRevolve;
+  const { placement: revolvePlacement, sketchId: revolveSketchId } =
+    inPlaceRevolve;
+  const revolveAxisId = inPlaceRevolve.axisId;
+  /** The angle handle, rebuilt only for a new profile or axis. */
+  const inPlaceRevolveHandle = useMemo(() => {
+    if (!revolvePlacement || !revolveSketchId || !revolveAxisId) return null;
+    const { center, axis, startDirection, radius } = revolvePlacement;
+    return {
+      key: [
+        revolveSketchId,
+        revolveAxisId,
+        center.x,
+        center.y,
+        center.z,
+        radius
+      ].join(':'),
+      params: {
+        center,
+        axis,
+        startDirection,
+        radius,
+        angleDeg: inPlaceRevolveRef.current.angle
+      }
+    };
+  }, [revolvePlacement, revolveSketchId, revolveAxisId]);
+  const inPlaceAxisPicker = useMemo(
+    () =>
+      inPlaceRevolve.active && revolveSketchId
+        ? {
+            candidates: inPlaceRevolve.axisCandidates,
+            selectedId: revolveAxisId
+          }
+        : null,
+    [
+      inPlaceRevolve.active,
+      inPlaceRevolve.axisCandidates,
+      revolveSketchId,
+      revolveAxisId
+    ]
+  );
+  /** The keypad moves the command handle through this, without a render. */
+  const commandSetterRef = useRef<((value: number) => void) | null>(null);
+
   // Editing needs hidden source profiles; visibility remains a viewport concern.
   const sketchViews = useMemo(
     () =>
@@ -18038,6 +18186,11 @@ export function App() {
     region: RegionPickData,
     modifiers: { additive: boolean; toggle: boolean }
   ) {
+    if (inPlaceRevolveRef.current.active) {
+      const pick = inPlaceProfilePick(region);
+      if (pick) inPlaceRevolveRef.current.pickProfile(pick);
+      return;
+    }
     if (interactionRef.current.mode !== 'sketch') {
       const pick: MoveSelectionPick = {
         kind: 'region',
@@ -19663,7 +19816,12 @@ export function App() {
     if (!open) {
       return false;
     }
-    if (open.kind === 'sketch-dimension') {
+    if (open.kind === 'command') {
+      // Back to the value the handle showed when the chip was tapped.
+      const baseline = open.baseline ?? inPlaceRevolveRef.current.angle;
+      commandSetterRef.current?.(baseline);
+      inPlaceRevolveRef.current.previewAngle(baseline);
+    } else if (open.kind === 'sketch-dimension') {
       setSketchDimensionDraft(null);
       setStatus('Dimension entry canceled.');
     } else if (open.kind === 'sketch-edit') {
@@ -21932,6 +22090,18 @@ export function App() {
           setStatus('Sketch canceled · no plane was chosen.');
         }
         return;
+      }
+      if (inPlaceRevolve.active) {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          if (!cancelOpenKeypad()) inPlaceRevolve.cancel();
+          return;
+        }
+        if (event.key === 'Enter' && !typing) {
+          event.preventDefault();
+          inPlaceRevolve.done();
+          return;
+        }
       }
       if (movePreview) {
         if (event.key === 'Escape') {
@@ -24770,6 +24940,23 @@ export function App() {
             onDatumOffsetEntry={() => datumOffsetEntryRef.current?.() ?? false}
             onMeasurePreview={measuring ? previewMeasurement : null}
             regionHandle={modelingLocked ? null : regionHandleTarget}
+            axisPicker={modelingLocked ? null : inPlaceAxisPicker}
+            onPickAxis={inPlaceRevolve.pickAxis}
+            commandAngleHandle={modelingLocked ? null : inPlaceRevolveHandle}
+            onCommandHandlePreview={inPlaceRevolve.previewAngle}
+            onCommandHandleRelease={inPlaceRevolve.previewAngle}
+            onOpenCommandKeypad={(value) => {
+              setKeypad({
+                kind: 'command',
+                label: 'Angle',
+                initial: String(Math.round(value * 10) / 10),
+                selectInitial: true,
+                unitKind: 'angle',
+                baseline: value
+              });
+              return true;
+            }}
+            commandSetterRef={commandSetterRef}
             facePickOnly={toFacePick !== null}
             modeOverlay={
               modelingLocked ? (
@@ -24777,6 +24964,29 @@ export function App() {
                   {viewMode && <ViewModeRail {...partsProps} />}
                   {measurementDock}
                 </>
+              ) : inPlaceRevolve.active ? (
+                keypad?.kind === 'command' ? (
+                  <NumericKeypad
+                    request={keypad}
+                    units={doc.units}
+                    scope={parameterScope.scope}
+                    anchorRef={keypadAnchorRef}
+                    onPreview={(value) => {
+                      commandSetterRef.current?.(value);
+                      inPlaceRevolve.previewAngle(value);
+                    }}
+                    onCommit={(value, raw) => {
+                      setKeypad(null);
+                      commandSetterRef.current?.(value);
+                      // Expressions stay parametric in the stored feature.
+                      inPlaceRevolve.setAngle(
+                        value,
+                        Number.isFinite(Number(raw)) ? undefined : raw
+                      );
+                    }}
+                    onCancel={cancelOpenKeypad}
+                  />
+                ) : null
               ) : contextualToolCard ? (
                 <>
                   {/* The tool card itself rides the right lane (`command` below);
@@ -25994,6 +26204,18 @@ export function App() {
             logOpen={activityLogOpen}
             onToggleLog={() => setActivityLogOpen((open) => !open)}
             prompt={workspacePrompt}
+            commandRow={
+              inPlaceRevolve.active ? (
+                <InPlaceCommandBar
+                  title="Revolve"
+                  hint={inPlaceRevolve.hint}
+                  refusal={inPlaceRevolve.refusal}
+                  canFinish={inPlaceRevolve.canFinish}
+                  onDone={() => inPlaceRevolve.done()}
+                  onCancel={() => inPlaceRevolve.cancel()}
+                />
+              ) : null
+            }
             projectName={doc.name}
             featureCount={features.length}
             bodyCount={viewerBodies.length}

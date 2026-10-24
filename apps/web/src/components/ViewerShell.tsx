@@ -307,6 +307,14 @@ interface ViewerShellProps {
   onHoverRegion(region: RegionPickData | null): void;
   planePickerArmed: boolean;
   planePickerOffset: number;
+  /** U09: in-place command axis lines, handle and keypad wiring. */
+  axisPicker?: ModelViewerProps['axisPicker'];
+  onPickAxis?: ModelViewerProps['onPickAxis'];
+  commandAngleHandle?: ModelViewerProps['commandAngleHandle'];
+  onCommandHandlePreview?: ModelViewerProps['onCommandHandlePreview'];
+  onCommandHandleRelease?: ModelViewerProps['onCommandHandleRelease'];
+  onOpenCommandKeypad?: ModelViewerProps['onOpenCommandKeypad'];
+  commandSetterRef?: ModelViewerProps['commandSetterRef'];
   /** The open Hole card's bore, drawn before it exists. */
   holeGhost?: HoleGhost | null;
   /** The open primitive card's solid, drawn before Create. */
@@ -489,6 +497,13 @@ export function ViewerShell({
   onHoverRegion,
   planePickerArmed,
   planePickerOffset,
+  axisPicker = null,
+  onPickAxis,
+  commandAngleHandle = null,
+  onCommandHandlePreview,
+  onCommandHandleRelease,
+  onOpenCommandKeypad,
+  commandSetterRef,
   holeGhost = null,
   primitiveGhost = null,
   datumDocument = null,
@@ -792,6 +807,13 @@ export function ViewerShell({
         onHoverRegion={onHoverRegion}
         planePickerArmed={planePickerArmed}
         planePickerOffset={planePickerOffset}
+        axisPicker={axisPicker}
+        onPickAxis={onPickAxis}
+        commandAngleHandle={commandAngleHandle}
+        onCommandHandlePreview={onCommandHandlePreview}
+        onCommandHandleRelease={onCommandHandleRelease}
+        onOpenCommandKeypad={onOpenCommandKeypad}
+        commandSetterRef={commandSetterRef}
         holeGhost={holeGhost}
         primitiveGhost={primitiveGhost}
         datumPlanes={

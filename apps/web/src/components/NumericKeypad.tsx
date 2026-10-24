@@ -24,7 +24,14 @@ import { formatNumber } from '../lib/model';
 
 export interface KeypadRequest {
   /** Which commit path the value feeds (routing is the opener's concern). */
-  kind: 'offset' | 'edge' | 'radius' | 'sketch-dimension' | 'sketch-edit';
+  kind:
+    | 'offset'
+    | 'edge'
+    | 'radius'
+    | 'sketch-dimension'
+    | 'sketch-edit'
+    /** U09: an in-place command's handle value. */
+    | 'command';
   /** Short label over the value field ('Offset', 'Radius', 'Height'). */
   label: string;
   /** Prefill; may be a typed digit captured mid-gesture. */
