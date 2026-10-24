@@ -365,9 +365,11 @@ import { newBlendFacePick } from './lib/blendRearm';
 import { exactEntryShortcut, isTypingTarget } from './lib/exactEntryShortcut';
 import { DeferredExactEntry } from './lib/deferredExactEntry';
 import type { SketchSolveStatus } from './components/SketchToolRail';
+import type { SharedLinkCopyDestination } from './components/SharedLinkCopyDialog';
 import {
   ApiError,
   api,
+  encryptsNewProjects,
   isEncryptedProject,
   isProjectDocumentUnavailableError,
   isProjectFormatUnsupportedError
@@ -561,7 +563,8 @@ import {
   clearPendingProjectInvitation
 } from './lib/projectInvitationLink';
 import {
-  captureProjectShareToken,
+  captureProjectShareLink,
+  isEncryptedShareLink,
   projectLinkPath,
   clearProjectShareFragment
 } from './lib/projectShareLink';
@@ -1126,6 +1129,13 @@ const LazyResumeSessionDialog = lazyWithStaleChunkNotice(() =>
     default: module.ResumeSessionDialog
   }))
 );
+// Make a copy's choice of destination for an encrypted share link's
+// signed-in visitor (ADR-024 slice 5-11).
+const LazySharedLinkCopyDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/SharedLinkCopyDialog').then((module) => ({
+    default: module.SharedLinkCopyDialog
+  }))
+);
 const LazySaveRevisionDialog = lazyWithStaleChunkNotice(() =>
   import('./components/SaveRevisionDialog').then((module) => ({
     default: module.SaveRevisionDialog
@@ -1301,6 +1311,8 @@ const SketchReferenceDimensions = withSuspense(LazySketchReferenceDimensions);
 const SketchRelationsRail = withSuspense(LazySketchRelationsRail);
 
 const ResumeSessionDialog = withSuspense(LazyResumeSessionDialog);
+
+const SharedLinkCopyDialog = withSuspense(LazySharedLinkCopyDialog);
 
 const SaveRevisionDialog = withSuspense(LazySaveRevisionDialog);
 
@@ -2125,7 +2137,7 @@ export function App() {
   );
   const [pendingInvitationToken, setPendingInvitationToken] = useState(() => {
     // An explicit public link supersedes an invitation retained for sign-in.
-    if (captureProjectShareToken()) {
+    if (captureProjectShareLink()) {
       clearPendingProjectInvitation();
       return null;
     }
@@ -2142,13 +2154,19 @@ export function App() {
    * turns this into a shared-link session: the shared document is fetched
    * anonymously, pinned to the Tweak workspace, and never written to this
    * device's storage — Make a copy is the one road out.
+   *
+   * The value is what the fragment carries: a plaintext link's token, or an
+   * end-to-end encrypted link's `<token>.<key>.<owner>` (ADR-024 slice
+   * 5-11, `isEncryptedShareLink`). An encrypted session also records its
+   * verified statement's mode: a view-only link pins the visitor to View.
    */
   const [pendingShareToken, setPendingShareToken] = useState(
-    captureProjectShareToken
+    captureProjectShareLink
   );
-  const [shareSession, setShareSession] = useState<{ token: string } | null>(
-    null
-  );
+  const [shareSession, setShareSession] = useState<{
+    token: string;
+    encryptedMode?: 'view' | 'tweak';
+  } | null>(null);
   const shareSessionRef = useRef(shareSession);
   shareSessionRef.current = shareSession;
   const shareOpenAttemptRef = useRef<string | null>(null);
@@ -2251,7 +2269,7 @@ export function App() {
       pendingInvitationAttemptRef.current = null;
       setPendingInvitationToken(null);
       setPendingInvitationError(null);
-      const token = captureProjectShareToken();
+      const token = captureProjectShareLink();
       shareOpenAttemptRef.current = null;
       setPendingShareToken(token);
       if (!token) {
@@ -4860,7 +4878,14 @@ export function App() {
   // A parameter change is still a document edit, so a read-only seat locks
   // Tweak exactly as it locks Build. A shared link is the opposite: Tweak is
   // the whole point of the visit.
-  const tweakModeDisabledReason = shareSession ? null : buildModeDisabledReason;
+  // An encrypted link's verified statement says view or tweak (slice 5-11):
+  // a view-only link locks Tweak too. A plaintext link's visitor chooses.
+  const shareLinkViewOnly = shareSession?.encryptedMode === 'view';
+  const tweakModeDisabledReason = shareSession
+    ? shareLinkViewOnly
+      ? 'This link is view only — Make a copy to change its parameters'
+      : null
+    : buildModeDisabledReason;
   // The stored preference resolves against what the project allows: a
   // read-only share pins the workspace to View whatever this device prefers,
   // and a shared link lands in Tweak unless the visitor chose View.
@@ -4871,7 +4896,7 @@ export function App() {
     ? 'Drawings are not available on a shared link'
     : null;
   const resolvedWorkspaceMode: WorkspaceMode = shareSession
-    ? panelState.workspaceMode === 'view'
+    ? panelState.workspaceMode === 'view' || shareLinkViewOnly
       ? 'view'
       : 'tweak'
     : buildModeDisabledReason !== null
@@ -12171,11 +12196,43 @@ export function App() {
     updateSettingsViewState({ open: false });
     setSettingsOpen(false);
     setSharingOpen(false);
+    // An encrypted link's failures are worded by its loader (slice 5-11).
+    let describeFailure: ((error: unknown) => string) | null = null;
     void (async () => {
       try {
-        const { loadSharedProject } = await import('./lib/sharedProjectLoader');
-        if (!isCurrent()) return;
-        const shared = await loadSharedProject(pendingShareToken, isCurrent);
+        let shared: {
+          name: string;
+          document: ProjectDocument;
+          encryptedMode?: 'view' | 'tweak';
+        } | null;
+        if (isEncryptedShareLink(pendingShareToken)) {
+          // End to end encrypted (ADR-024 slice 5-11): verified in the ADR's
+          // order and decrypted in this browser; the server sees the token.
+          const loader = await import('./lib/e2ee/sharedSnapshotLoader');
+          if (!isCurrent()) return;
+          describeFailure = (error) => loader.sharedLinkRefusalMessage(error);
+          const opened = await loader.loadEncryptedSharedProject(
+            pendingShareToken,
+            isCurrent
+          );
+          shared = opened && {
+            name: opened.name,
+            document: opened.document,
+            encryptedMode: opened.mode
+          };
+        } else {
+          const { loadSharedProject } =
+            await import('./lib/sharedProjectLoader');
+          if (!isCurrent()) return;
+          const plaintext = await loadSharedProject(
+            pendingShareToken,
+            isCurrent
+          );
+          shared = plaintext && {
+            name: plaintext.project.name,
+            document: plaintext.document
+          };
+        }
         if (!isCurrent()) return;
         if (!shared) {
           restoreActiveShare();
@@ -12198,20 +12255,28 @@ export function App() {
         // autosave controller must treat this project as not account-backed,
         // whatever this browser knew about the account before.
         setCloudAvailable(false);
-        setShareSession({ token: pendingShareToken });
-        shareSessionRef.current = { token: pendingShareToken };
+        const opened = shared.encryptedMode
+          ? { token: pendingShareToken, encryptedMode: shared.encryptedMode }
+          : { token: pendingShareToken };
+        setShareSession(opened);
+        shareSessionRef.current = opened;
         hydrateSharedDocumentRef.current(shared.document, {
           rememberProject: false
         });
         setStatus(
-          `Opened shared model ${shared.project.name} · adjust its parameters and export. Make a copy to build on it.`
+          shared.encryptedMode === 'view'
+            ? `Opened shared model ${shared.name} · view only. Make a copy to build on it.`
+            : `Opened shared model ${shared.name} · adjust its parameters and export. Make a copy to build on it.`
         );
       } catch (error) {
         if (isCurrent()) {
           restoreActiveShare();
-          setStatus(errorMessage(error, 'Could not open the share link.'), {
-            sticky: true
-          });
+          setStatus(
+            describeFailure
+              ? describeFailure(error)
+              : errorMessage(error, 'Could not open the share link.'),
+            { sticky: true }
+          );
         }
       } finally {
         finishBusy();
@@ -12236,7 +12301,9 @@ export function App() {
    * device, Build unlocked. From here every existing flow (cloud adoption,
    * sync, export) treats it like any other local project.
    */
-  async function handleMakeShareCopy() {
+  async function handleMakeShareCopy(
+    destination: SharedLinkCopyDestination = 'device'
+  ) {
     const source = managerRef.current?.document;
     if (!source || !shareSessionRef.current) {
       return;
@@ -12244,6 +12311,7 @@ export function App() {
     const activeProjectSince = snapshotActiveProject();
     const isCurrent = beginProjectNavigation(false);
     const finishBusy = startNavigationBusy();
+    let copied: ProjectSummary | null = null;
     try {
       const copy = duplicateProjectDocument(
         source,
@@ -12258,23 +12326,54 @@ export function App() {
       setShareSession(null);
       shareSessionRef.current = null;
       clearProjectShareFragment();
+      const summary = summarizeLocalDocument(
+        copy,
+        DEFAULT_PROJECT_ORGANIZATION
+      );
       setProjects((current) =>
-        [
-          ...current,
-          summarizeLocalDocument(copy, DEFAULT_PROJECT_ORGANIZATION)
-        ].sort(compareProjectSummaries)
+        [...current, summary].sort(compareProjectSummaries)
       );
       hydrateDocument(copy, { activeProjectSince });
       handleWorkspaceMode('build');
       setStatus(
         `${copy.name} is yours now — saved on this device. Build mode is open.`
       );
+      copied = summary;
     } catch (error) {
       if (isCurrent())
         setStatus(errorMessage(error, 'Could not copy the shared model.'));
     } finally {
       finishBusy();
     }
+    // Into the visitor's account (an encrypted link's choice, slice 5-11):
+    // the device copy above is saved as any device project is, encrypted
+    // under the visitor's keys when the account encrypts new projects
+    // (decision D2, slice 4-8's adoption) and as an ordinary project
+    // otherwise. A failure leaves the device copy, with the reason.
+    if (copied && destination === 'account' && isCurrent()) {
+      await handleSaveToAccount(copied);
+    }
+  }
+
+  /**
+   * Make a copy, from Tweak's rail or (for an encrypted link) View's: an
+   * encrypted link's signed-in visitor chooses between the account and this
+   * device (slice 5-11); every other visitor gets the device copy, as before.
+   */
+  const [shareCopyChoice, setShareCopyChoice] = useState<{
+    accountEncrypts: boolean | null;
+  } | null>(null);
+  function requestShareCopy() {
+    const active = shareSessionRef.current;
+    if (!active) return;
+    if (!active.encryptedMode || !session) {
+      void handleMakeShareCopy();
+      return;
+    }
+    setShareCopyChoice({ accountEncrypts: null });
+    void encryptsNewProjects().then((accountEncrypts) =>
+      setShareCopyChoice((current) => current && { accountEncrypts })
+    );
   }
 
   useEffect(() => {
@@ -26972,7 +27071,7 @@ export function App() {
             onOpenMeshExport={() => setMeshExportOpen(true)}
             share={
               shareSession
-                ? { onMakeCopy: () => void handleMakeShareCopy() }
+                ? { onMakeCopy: requestShareCopy }
                 : null
             }
             panelOpen={panelState.tweakPanelOpen}
@@ -27544,7 +27643,14 @@ export function App() {
             modeOverlay={
               modelingLocked ? (
                 <>
-                  {viewMode && <ViewModeRail {...partsProps} />}
+                  {viewMode && (
+                    <ViewModeRail
+                      {...partsProps}
+                      {...(shareSession?.encryptedMode
+                        ? { onMakeCopy: requestShareCopy }
+                        : {})}
+                    />
+                  )}
                   {measurementDock}
                 </>
               ) : inPlace.active ? (
@@ -28627,6 +28733,16 @@ export function App() {
             <div className="toast" role="status">
               Session sync is pending. It will retry while this project is open.
             </div>
+          )}
+
+          {shareCopyChoice && (
+            <SharedLinkCopyDialog
+              accountEncrypts={shareCopyChoice.accountEncrypts}
+              onChoose={(destination) => {
+                setShareCopyChoice(null);
+                if (destination) void handleMakeShareCopy(destination);
+              }}
+            />
           )}
 
           {workspaceResume.candidate && (
