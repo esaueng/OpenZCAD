@@ -36,10 +36,16 @@ try {
     error instanceof Error ? (error.stack ?? error.message) : String(error);
 }
 run.done = true;
-const failed = run.results.filter((r) => !r.ok);
+const count = (status: StepResult['status']) =>
+  run.results.filter((r) => r.status === status).length;
 out.textContent = run.error
   ? `error: ${run.error}`
-  : `${run.results.length - failed.length}/${run.results.length} steps passed\n` +
-    failed.map((r) => `FAIL ${r.suite} › ${r.step}: ${r.detail}`).join('\n');
+  : `${count('pass')} passed, ${count('warn')} warnings, ${count('fail')} failed\n` +
+    run.results
+      .filter((r) => r.status !== 'pass')
+      .map(
+        (r) => `${r.status.toUpperCase()} ${r.suite} › ${r.step}: ${r.detail}`
+      )
+      .join('\n');
 
 export {};

@@ -1,9 +1,12 @@
 // Run the @openzcad/crypto scenarios (browser/scenarios.ts) on a page in
 // Chromium, WebKit and Firefox, against each engine's own WebCrypto and web
 // streams. From the repository root:
-//   pnpm --filter @openzcad/crypto test:browser [-- --chromium-only]
+//   pnpm --filter @openzcad/crypto test:browser
+//     [-- --chromium-only | --browsers=chromium,firefox] [--verbose]
 // Needs the Playwright browsers
-// (pnpm exec playwright install chromium webkit firefox).
+// (pnpm exec playwright install chromium webkit firefox). Exits non-zero
+// only for failures; an engine-probe warning (scenarios.ts) is printed and
+// does not fail the run.
 import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
@@ -14,7 +17,22 @@ import { chromium, firefox, webkit } from '@playwright/test';
 const here = fileURLToPath(new URL('.', import.meta.url));
 const web = join(here, '../../../apps/web');
 const dist = join(here, 'dist');
-const chromiumOnly = process.argv.includes('--chromium-only');
+const engines = { chromium, webkit, firefox };
+const verbose = process.argv.includes('--verbose');
+const listed = process.argv
+  .find((arg) => arg.startsWith('--browsers='))
+  ?.slice('--browsers='.length)
+  .split(',')
+  .filter(Boolean);
+const names = process.argv.includes('--chromium-only')
+  ? ['chromium']
+  : (listed ?? Object.keys(engines));
+const unknown = names.filter((name) => !Object.hasOwn(engines, name));
+if (unknown.length > 0 || names.length === 0) {
+  throw new Error(
+    `--browsers takes a comma-separated list of ${Object.keys(engines).join(', ')}`
+  );
+}
 
 // The web app's Vite, run by Node itself so no shell or .cmd shim is involved
 // (Windows cannot spawn pnpm's shim without one).
@@ -53,14 +71,8 @@ await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
 
 let failures = 0;
-for (const [name, type] of chromiumOnly
-  ? [['chromium', chromium]]
-  : [
-      ['chromium', chromium],
-      ['webkit', webkit],
-      ['firefox', firefox]
-    ]) {
-  const browser = await type.launch();
+for (const name of names) {
+  const browser = await engines[name].launch();
   const page = await browser.newPage();
   const started = Date.now();
   await page.goto(`${origin}/`);
@@ -69,14 +81,17 @@ for (const [name, type] of chromiumOnly
   });
   const run = await page.evaluate(() => window.cryptoRun);
   await browser.close();
-  const failed = run.results.filter((r) => !r.ok);
-  failures += failed.length + (run.error ? 1 : 0);
+  const count = (status) =>
+    run.results.filter((r) => r.status === status).length;
+  failures += count('fail') + (run.error ? 1 : 0);
   console.log(
-    `${name} (${run.userAgent}): ${run.results.length - failed.length}/${run.results.length} steps passed in ${Date.now() - started} ms`
+    `${name} (${run.userAgent}): ${count('pass')} passed, ${count('warn')} warnings, ${count('fail')} failed of ${run.results.length} steps in ${Date.now() - started} ms`
   );
   if (run.error) console.log(`  error: ${run.error}`);
-  for (const r of failed)
-    console.log(`  FAIL ${r.suite} › ${r.step}: ${r.detail}`);
+  for (const r of run.results.filter((r) => verbose || r.status !== 'pass'))
+    console.log(
+      `  ${r.status.toUpperCase()} ${r.suite} › ${r.step}: ${r.detail}`
+    );
 }
 server.close();
 process.exit(failures ? 1 : 0);
