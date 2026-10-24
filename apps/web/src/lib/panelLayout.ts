@@ -1600,7 +1600,10 @@ function neighbours(
  * Where a gap's upper panel's lower edge may go: each panel keeps its
  * minimum (or its smaller drawn height) and grows no taller than its cap.
  */
-function gapRange(shown: GapShown): { lowest: number; highest: number } {
+export function gapRange(shown: GapShown): {
+  lowest: number;
+  highest: number;
+} {
   const pair = shown.above + shown.below;
   return {
     lowest: Math.max(

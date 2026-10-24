@@ -321,6 +321,37 @@ test('the gap between stacked panels resizes them, and a double-click splits the
   await expect(gap).toHaveAttribute('aria-valuenow', '50');
 });
 
+test('a divider announces where it is drawn while its panels hug their content', async ({
+  page
+}) => {
+  // Fit panels to content is on by default: an empty project's panels are
+  // drawn at their content's height, not their equal stored weights.
+  await openWorkspace(page, 'Fitted divider', {
+    right: [['history', 'revisions', 'parameters']]
+  });
+  const history = modelPanel(page, 'History');
+  const revisions = modelPanel(page, 'Revisions');
+  await expect(revisions).toBeVisible();
+  const gap = page.getByRole('separator', {
+    name: 'Resize History and Revisions'
+  });
+  await expect
+    .poll(async () => {
+      const above = (await box(history)).height;
+      const below = (await box(revisions)).height;
+      return (
+        Number(await gap.getAttribute('aria-valuenow')) -
+        Math.round((100 * above) / (above + below))
+      );
+    })
+    .toBe(0);
+  const min = Number(await gap.getAttribute('aria-valuemin'));
+  const max = Number(await gap.getAttribute('aria-valuemax'));
+  const now = Number(await gap.getAttribute('aria-valuenow'));
+  expect(min).toBeLessThanOrEqual(now);
+  expect(max).toBeGreaterThanOrEqual(now);
+});
+
 test('a double-click split leaves the rest of the stack its height when a neighbour sat at its minimum', async ({
   page
 }) => {

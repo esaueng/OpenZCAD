@@ -22,6 +22,7 @@ import {
   FLOAT_MIN_WIDTH,
   findPanel,
   finishDrag,
+  gapRange,
   hitTest,
   isDragStart,
   isPanelOpen,
@@ -1007,7 +1008,17 @@ export function PanelDock({
         );
       })}
       {docked!.gaps.filter(isGap).map((gap) => {
-        const total = shown.weights[gap.above] + shown.weights[gap.below];
+        // The divider's position as drawn: a panel hugging its content is
+        // not where its stored weight would put it. Its range is where a
+        // drag can take it (each panel's minimum, and neither past its cap).
+        const pair =
+          gap.shown !== undefined
+            ? gap.shown.above + gap.shown.below
+            : shown.weights[gap.above] + shown.weights[gap.below];
+        const above = gap.shown?.above ?? shown.weights[gap.above];
+        const range = gap.shown ? gapRange(gap.shown) : null;
+        const percent = (value: number) =>
+          pair > 0 ? Math.round((100 * value) / pair) : 50;
         // Off while the stack scrolls, and while the layout is locked.
         const enabled = gap.enabled && !layout.options.locked;
         return (
@@ -1017,9 +1028,11 @@ export function PanelDock({
             role="separator"
             aria-orientation="horizontal"
             aria-label={`Resize ${PANEL_TITLES[gap.above]} and ${PANEL_TITLES[gap.below]}`}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={Math.round((100 * shown.weights[gap.above]) / total)}
+            aria-valuemin={range ? percent(Math.min(range.lowest, above)) : 0}
+            aria-valuemax={
+              range ? percent(Math.max(range.highest, above)) : 100
+            }
+            aria-valuenow={percent(above)}
             aria-disabled={enabled ? undefined : true}
             tabIndex={enabled ? 0 : -1}
             title={
