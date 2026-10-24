@@ -102,3 +102,35 @@ describe('PanelFrame in a dock', () => {
     expect(region.queryByRole('button', { name: /Pop out/ })).toBeNull();
   });
 });
+
+describe('PanelFrame hugging its content', () => {
+  it('reports the frame and the content at its own height', () => {
+    const heights: Record<string, number> = {
+      'model-panel': 400,
+      'model-panel-body': 360,
+      'model-panel-content': 120
+    };
+    const rect = vi
+      .spyOn(Element.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: Element) {
+        const height = heights[this.classList[0] ?? ''] ?? 0;
+        return { height } as DOMRect;
+      });
+    try {
+      const onNaturalHeight = vi.fn();
+      renderFrame(frame(dockControls({ onNaturalHeight })));
+      // Drawn 400px tall with a 360px body: 40px of header and frame and
+      // the content's own 120px, however tall the panel is drawn.
+      expect(onNaturalHeight).toHaveBeenLastCalledWith(160);
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it('wraps the content without a dock to report to', () => {
+    renderFrame(frame());
+    expect(
+      document.querySelector('.model-panel-body > .model-panel-content')
+    ).not.toBeNull();
+  });
+});

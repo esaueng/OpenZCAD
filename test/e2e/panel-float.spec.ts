@@ -216,6 +216,47 @@ test('a panel dropped on a window stacks in it, the window grows, and its frame 
     .toBeCloseTo(top.height + 56, 0);
 });
 
+test('a window may stand over the top bar and takes the pointer there', async ({
+  page
+}) => {
+  // Over the mode switch, at the stage's very top: the viewer area is no
+  // stacking context of its own, so the window out-ranks the top islands.
+  await openWorkspace(page, 'Window over the bar', {
+    floats: [
+      {
+        id: 'float-1',
+        x: 560,
+        y: 0,
+        w: 320,
+        h: 300,
+        panels: ['parameters']
+      }
+    ]
+  });
+  const window = windowOf(page, 'Parameters');
+  await expect(window).toBeVisible();
+  expect((await box(window)).y).toBeCloseTo(0, 0);
+  const modeSwitch = await box(page.locator('.topbar .mode-switch'));
+  const covered = await page.evaluate(
+    ({ x, y }) => {
+      const hit = document.elementFromPoint(x, y);
+      return hit?.closest('.panel-float') !== null;
+    },
+    { x: modeSwitch.x + modeSwitch.width / 2, y: modeSwitch.y + 10 }
+  );
+  expect(covered).toBe(true);
+  // A menu the bar opens still stands over the window.
+  await page.locator('.file-menu > summary').click();
+  const menu = page.locator('.file-menu .topbar-menu-panel');
+  await expect(menu).toBeVisible();
+  const menuBox = await box(menu);
+  const menuOnTop = await page.evaluate(
+    ({ x, y }) => document.elementFromPoint(x, y)?.closest('.topbar') !== null,
+    { x: menuBox.x + 20, y: menuBox.y + 20 }
+  );
+  expect(menuOnTop).toBe(true);
+});
+
 test('a floating window moves on its grip’s arrow keys and resizes with Shift or from its corner control, stopping at the bounds', async ({
   page
 }) => {
@@ -244,11 +285,12 @@ test('a floating window moves on its grip’s arrow keys and resizes with Shift 
   // Narrowed past its minimum, it stops at 260px.
   for (let k = 0; k < 10; k++) await page.keyboard.press('Shift+ArrowLeft');
   await expect.poll(async () => (await box(window)).width).toBe(260);
-  // Moved past the stage's edge, it stops a gap inside it.
+  // Moved past the stage's edge, it stops at it: a window may go anywhere
+  // on the stage, as long as all of it stays on screen.
   for (let k = 0; k < 50; k++) await page.keyboard.press('ArrowLeft');
   await expect
     .poll(async () => (await box(window)).x - layer.x)
-    .toBeCloseTo(10, 0);
+    .toBeCloseTo(0, 0);
 
   const corner = window.getByRole('button', {
     name: 'Resize Parameters window'
@@ -260,7 +302,7 @@ test('a floating window moves on its grip’s arrow keys and resizes with Shift 
   await expect.poll(async () => (await box(window)).height).toBe(160);
   await expect(corner).toBeFocused();
   expect(await storedFloats(page)).toMatchObject([
-    { x: 10, w: 600, h: 160, panels: ['parameters'] }
+    { x: 0, w: 600, h: 160, panels: ['parameters'] }
   ]);
 });
 
@@ -269,7 +311,9 @@ test('a gap drag or a window resize the page loses is cancelled, and the next on
 }) => {
   await openWorkspace(page, 'Lost gestures', {
     ...LONE_WINDOW,
-    right: [['history', 'bodies']]
+    right: [['history', 'bodies']],
+    // Panels that fill their shares: an empty project's hug their content.
+    options: { fit: false }
   });
   const stored = () =>
     page.evaluate(() => {
@@ -354,7 +398,8 @@ function zOrder(page: Page) {
   return page.locator('.panel-float').evaluateAll((windows) =>
     windows
       .map((element) => ({
-        z: Number((element as HTMLElement).style.zIndex),
+        // Computed: the inline value is the stage's base plus the z-order.
+        z: Number(getComputedStyle(element).zIndex),
         panel: element.querySelector('.model-panel')?.getAttribute('aria-label')
       }))
       .sort((a, b) => a.z - b.z)

@@ -102,6 +102,7 @@ describe('column and panel sizes', () => {
   it('stops the right lane above the bottom-right corner', () => {
     const css = sheet('quiet-stage.css');
     expect(rule(css, '.stage-right').bottom).toContain('var(--stage-corner-h)');
+    // The 88px cube 4px off the edge; the ruler stands at the left now.
     expect(px(rule(css, '.workspace.column-layout')['--stage-corner-h'])).toBe(
       96
     );

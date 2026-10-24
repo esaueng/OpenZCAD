@@ -379,46 +379,23 @@ describe('WorkspaceReadout message lifetime', () => {
 });
 
 describe('ViewportDockExtras', () => {
-  it('cycles the selection filter and reads the snap', async () => {
-    const user = userEvent.setup();
-    const onSelectionFilter = vi.fn();
+  it('reads the snap and offers no selection filter', () => {
     render(
-      <ViewportDockExtras
-        selectionFilter="any"
-        selectionFilterIsAutomatic
-        onSelectionFilter={onSelectionFilter}
-        snap={{ spacing: 1, units: 'mm', enabled: true }}
-      />
+      <ViewportDockExtras snap={{ spacing: 1, units: 'mm', enabled: true }} />
     );
-    await user.click(
-      screen.getByRole('button', { name: /Selection filter: Any/ })
-    );
-    expect(onSelectionFilter).toHaveBeenCalledTimes(1);
-    expect(onSelectionFilter.mock.calls[0]?.[0]).not.toBe('any');
     // The word and the value are separate nodes, so the compact readout can
     // swap the word for a glyph; together they still read "Snap 1 mm".
     expect(screen.getByTitle('Sketch snap: 1 mm')).toHaveTextContent(
       'Snap 1 mm'
     );
-    // The log's button left the readout for the instrument rail.
-    expect(screen.queryByRole('button', { name: /activity log/ })).toBeNull();
+    // Q is the filter's only control now; the log's button lives on the
+    // instrument rail.
+    expect(screen.queryByRole('button')).toBeNull();
   });
 
-  it('hands the filter back to the tool at the end of the cycle', async () => {
-    const user = userEvent.setup();
-    const onSelectionFilter = vi.fn();
-    render(
-      <ViewportDockExtras
-        selectionFilter="sketch"
-        selectionFilterIsAutomatic={false}
-        onSelectionFilter={onSelectionFilter}
-        snap={null}
-      />
-    );
-    await user.click(
-      screen.getByRole('button', { name: /Selection filter: Sketch/ })
-    );
-    expect(onSelectionFilter).toHaveBeenCalledWith(null);
+  it('says nothing with no sketch open', () => {
+    const { container } = render(<ViewportDockExtras snap={null} />);
+    expect(container.textContent).toBe('');
   });
 });
 

@@ -2,6 +2,7 @@ import {
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -21,6 +22,7 @@ import {
   FLOAT_MIN_WIDTH,
   findPanel,
   finishDrag,
+  gapRange,
   hitTest,
   isDragStart,
   isPanelOpen,
@@ -92,7 +94,10 @@ function sameStage(a: PanelStage | null, b: PanelStage): boolean {
     a !== null &&
     a.width === b.width &&
     a.height === b.height &&
+    a.insets?.top === b.insets?.top &&
+    a.insets?.bottom === b.insets?.bottom &&
     a.insets?.gap === b.insets?.gap &&
+    a.insets?.between === b.insets?.between &&
     a.insets?.rail === b.insets?.rail
   );
 }
@@ -203,11 +208,13 @@ function titlesOf(entries: readonly PanelEntry[]): string {
 
 /**
  * Both docks: their columns against the screen edges, the panels stacked in
- * them and the gaps between, the floating windows over the model, and the
- * unpinned panel beside the right rail's inner edge. The layer it draws in
- * spans the band between the top islands and the bottom corners (CSS), and
- * that band is the stage the layout is projected onto, so the cube and the
- * scale bar never sit under a panel.
+ * them and the gaps between, the floating windows, and the unpinned panel
+ * beside the right rail's inner edge. The layer it draws in spans the whole
+ * viewer area, which is the stage the layout is projected onto: a window
+ * may stand anywhere on it, over the top islands too, while the docks keep
+ * to the band its padding leaves (under the top islands, down to the
+ * window's foot). The cube, the ruler and the readout sit at the docks'
+ * inner edges (CSS), so none is ever under a docked panel.
  *
  * Every gesture runs here on local state and commits once — a drop, the end
  * of a gap or window resize — so neither the App nor the viewer re-renders
@@ -234,7 +241,22 @@ export function PanelDock({
   handleRef
 }: PanelDockProps) {
   const layerRef = useRef<HTMLDivElement | null>(null);
-  const [stage, setStage] = useState<PanelStage | null>(null);
+  const [measured, setStage] = useState<PanelStage | null>(null);
+  /** Each docked panel's natural height, which it hugs (PanelFrame). */
+  const [naturals, setNaturals] = useState<Partial<Record<PanelId, number>>>(
+    {}
+  );
+  const reportNatural = useRef((id: PanelId, height: number) => {
+    setNaturals((current) =>
+      current[id] === height ? current : { ...current, [id]: height }
+    );
+  }).current;
+  // The stage every projection here reads; the App gets the measured one,
+  // which a panel's content changing never touches.
+  const stage = useMemo(
+    () => (measured ? { ...measured, naturals } : null),
+    [measured, naturals]
+  );
   const [localLayout, setLocalLayout] = useState<PanelLayout | null>(null);
   const [dragView, setDragView] = useState<DragView | null>(null);
   /** The lane's card width (`--context-w`) the unpinned slot must leave. */
@@ -259,10 +281,13 @@ export function PanelDock({
       const next: PanelStage = {
         width: Math.round(rect.width),
         height: Math.round(rect.height),
+        // The layer spans the viewer area, where a window may go anywhere;
+        // its padding is the band the docks stand in.
         insets: {
-          top: 0,
-          bottom: 0,
+          top: pixels(style.paddingTop, 0),
+          bottom: pixels(style.paddingBottom, 0),
           gap: pixels(style.getPropertyValue('--island-gap'), 10),
+          between: pixels(style.getPropertyValue('--dock-gap'), 4),
           rail: pixels(style.getPropertyValue('--rail-w'), 40)
         }
       };
@@ -277,11 +302,24 @@ export function PanelDock({
   }, []);
 
   useEffect(() => {
-    if (stage) onStageRef.current(stage);
-  }, [stage]);
+    if (measured) onStageRef.current(measured);
+  }, [measured]);
 
   const shown: PanelLayoutPreview = dragView?.shown ?? localLayout ?? layout;
-  const geometry = stage && !hidden ? computePanelGeometry(shown, stage) : null;
+  // A drag's landing slot hugs what the dragged panel will: the preview is
+  // drawn as the drop will be, not taller.
+  const shownStage =
+    stage && dragView && stage.naturals?.[dragView.id] !== undefined
+      ? {
+          ...stage,
+          naturals: {
+            ...stage.naturals,
+            [PANEL_SLOT]: stage.naturals[dragView.id]
+          }
+        }
+      : stage;
+  const geometry =
+    shownStage && !hidden ? computePanelGeometry(shown, shownStage) : null;
   const docked = geometry && !geometry.phone ? geometry : null;
   // The unpinned panel's width stays what it was while a panel is dragged:
   // lifting the unpinned panel out must not slide the right lane over.
@@ -456,10 +494,17 @@ export function PanelDock({
         gap.above,
         gap.below,
         event.key === 'ArrowUp' ? -KEY_STEP : KEY_STEP,
-        gap.pxPerWeight
+        gap.pxPerWeight,
+        gap.shown
       );
     } else if (event.key === 'Home') {
-      next = splitGapEvenly(layout, gap.above, gap.below, gap.pxPerWeight);
+      next = splitGapEvenly(
+        layout,
+        gap.above,
+        gap.below,
+        gap.pxPerWeight,
+        gap.shown
+      );
     }
     if (next === null) return;
     event.preventDefault();
@@ -936,7 +981,10 @@ export function PanelDock({
       moveItems: () => moveItems(id),
       onMove: (itemId) => move(id, itemId),
       onGripKey: (event) => gripKey(id, event),
-      ...(alone ? {} : { onPopOut: () => popOut(id) })
+      ...(alone ? {} : { onPopOut: () => popOut(id) }),
+      ...(placement === 'docked'
+        ? { onNaturalHeight: (height: number) => reportNatural(id, height) }
+        : {})
     };
     const node = renderPanel(id, placement, dock);
     elementsRef.current.set(key, { render: renderPanel, node });
@@ -973,7 +1021,17 @@ export function PanelDock({
         );
       })}
       {docked!.gaps.filter(isGap).map((gap) => {
-        const total = shown.weights[gap.above] + shown.weights[gap.below];
+        // The divider's position as drawn: a panel hugging its content is
+        // not where its stored weight would put it. Its range is where a
+        // drag can take it (each panel's minimum, and neither past its cap).
+        const pair =
+          gap.shown !== undefined
+            ? gap.shown.above + gap.shown.below
+            : shown.weights[gap.above] + shown.weights[gap.below];
+        const above = gap.shown?.above ?? shown.weights[gap.above];
+        const range = gap.shown ? gapRange(gap.shown) : null;
+        const percent = (value: number) =>
+          pair > 0 ? Math.round((100 * value) / pair) : 50;
         // Off while the stack scrolls, and while the layout is locked.
         const enabled = gap.enabled && !layout.options.locked;
         return (
@@ -983,9 +1041,11 @@ export function PanelDock({
             role="separator"
             aria-orientation="horizontal"
             aria-label={`Resize ${PANEL_TITLES[gap.above]} and ${PANEL_TITLES[gap.below]}`}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={Math.round((100 * shown.weights[gap.above]) / total)}
+            aria-valuemin={range ? percent(Math.min(range.lowest, above)) : 0}
+            aria-valuemax={
+              range ? percent(Math.max(range.highest, above)) : 100
+            }
+            aria-valuenow={percent(above)}
             aria-disabled={enabled ? undefined : true}
             tabIndex={enabled ? 0 : -1}
             title={
@@ -997,7 +1057,14 @@ export function PanelDock({
             onPointerDown={(event) => {
               if (!enabled) return;
               startLocal(event, (base, _dx, dy) =>
-                resizeGap(base, gap.above, gap.below, dy, gap.pxPerWeight)
+                resizeGap(
+                  base,
+                  gap.above,
+                  gap.below,
+                  dy,
+                  gap.pxPerWeight,
+                  gap.shown
+                )
               );
             }}
             {...localHandlers}
@@ -1011,7 +1078,8 @@ export function PanelDock({
                 layout,
                 gap.above,
                 gap.below,
-                gap.pxPerWeight
+                gap.pxPerWeight,
+                gap.shown
               );
               if (next !== layout) onLayout(next);
             }}
@@ -1091,7 +1159,7 @@ export function PanelDock({
               top: group.y,
               width: group.w,
               height: group.h,
-              zIndex: z + 1
+              zIndex: `calc(var(--z-panel-float) + ${z})`
             }}
           >
             {group.panels.length > 1 && (

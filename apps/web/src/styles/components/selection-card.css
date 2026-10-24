@@ -33,6 +33,14 @@
   z-index: calc(var(--z-inspector-float) + 1);
 }
 
+/* Over a floating model panel too, while one is open: a window may stand
+   anywhere, the top bar included (--z-panel-float), but never over the
+   pick's only verbs. Only then: raised for good, the column's flyouts (More
+   tools) stood over the assistant's stream and took its presses. */
+.viewer-area:has(.panel-float) .workspace-column-float:has(> .selection-card) {
+  z-index: calc(var(--z-panel-float) + 8);
+}
+
 .selection-card-header {
   display: flex;
   align-items: center;

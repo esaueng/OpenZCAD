@@ -1,4 +1,6 @@
 import {
+  useLayoutEffect,
+  useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
@@ -40,6 +42,11 @@ export interface PanelDockControls {
   onGripKey(event: ReactKeyboardEvent<HTMLElement>): boolean;
   /** Absent where Pop out would not move the panel (alone in a window). */
   onPopOut?: () => void;
+  /**
+   * Where the panel hugs its content (a docked column): its natural height
+   * whenever that changes, header, content and frame together.
+   */
+  onNaturalHeight?: (height: number) => void;
 }
 
 /** What a panel's frame needs from the layout, and what it can ask of it. */
@@ -86,8 +93,43 @@ export function PanelFrame({
   const pinned = controls.status === 'docked' && controls.placement !== 'phone';
   const dock = controls.dock;
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
+  const sectionRef = useRef<HTMLElement | null>(null);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const onNaturalHeight = dock?.onNaturalHeight;
+  useLayoutEffect(() => {
+    const section = sectionRef.current;
+    const body = bodyRef.current;
+    const content = contentRef.current;
+    if (!onNaturalHeight || !section || !body || !content) return;
+    const measure = () => {
+      // The frame as drawn, less the body's box, plus the body's padding and
+      // its content at its own height: what the panel takes with room to
+      // spare, whatever height it is drawn at now.
+      const style = getComputedStyle(body);
+      const padding =
+        (parseFloat(style.paddingTop) || 0) +
+        (parseFloat(style.paddingBottom) || 0);
+      const natural =
+        section.getBoundingClientRect().height -
+        body.getBoundingClientRect().height +
+        padding +
+        content.getBoundingClientRect().height;
+      if (natural > 0) onNaturalHeight(Math.ceil(natural));
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(content);
+    // The header and the footer change the frame without the content.
+    for (const child of Array.from(section.children)) {
+      if (child !== body) observer.observe(child);
+    }
+    return () => observer.disconnect();
+  }, [onNaturalHeight]);
   return (
     <section
+      ref={sectionRef}
       className={`model-panel model-panel-${id} is-${controls.placement}${controls.compact ? ' is-compact' : ''}`}
       aria-label={title}
       data-panel={id}
@@ -179,7 +221,12 @@ export function PanelFrame({
           <X size={14} aria-hidden="true" />
         </button>
       </header>
-      <div className="model-panel-body">{children}</div>
+      <div className="model-panel-body" ref={bodyRef}>
+        {/* Its own height, never the body's: what the panel hugs. */}
+        <div className="model-panel-content" ref={contentRef}>
+          {children}
+        </div>
+      </div>
       {controls.status === 'unpinned' && (
         <footer className="model-panel-footer">
           <span>Unpinned — the next panel you open replaces it</span>

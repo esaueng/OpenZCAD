@@ -476,20 +476,35 @@ export async function setSelectionFilter(
   page: Page,
   label: 'Any' | 'Body' | 'Face' | 'Edge' | 'Vertex' | 'Sketch'
 ) {
-  const chip = page.getByRole('button', { name: /^Selection filter:/ });
-  const wanted = new RegExp(`: ${label}\\.`);
-  await expect(chip).toBeVisible();
+  // Q is the filter's only control: nothing on screen names it, so the
+  // viewer carries the filter in force as data.
+  const viewer = page.locator('.viewer-shell');
+  const wanted = label.toLowerCase();
+  await expect(viewer).toHaveAttribute('data-selection-filter', /.+/);
   for (let attempt = 0; attempt < 8; attempt += 1) {
-    const current = (await chip.getAttribute('aria-label')) ?? '';
-    if (wanted.test(current)) {
+    const current = (await viewer.getAttribute('data-selection-filter')) ?? '';
+    if (current === wanted) {
       return;
     }
-    await chip.click();
-    // The label is React state: wait for the step to land before reading it
-    // again, or a fast second click skips past the wanted kind.
-    await expect(chip).not.toHaveAttribute('aria-label', current);
+    const source = await viewer.getAttribute('data-selection-filter-source');
+    // A focused field keeps its keys; the workspace takes them from the page.
+    await page.evaluate(() =>
+      (document.activeElement as HTMLElement | null)?.blur?.()
+    );
+    await page.keyboard.press('q');
+    // React state: wait for the step to land before reading it again, or a
+    // fast second press skips past the wanted kind. Handing the filter back
+    // to the tool can keep the kind and change only its source.
+    await expect
+      .poll(async () =>
+        [
+          await viewer.getAttribute('data-selection-filter'),
+          await viewer.getAttribute('data-selection-filter-source')
+        ].join(':')
+      )
+      .not.toBe(`${current}:${source}`);
   }
-  await expect(chip).toHaveAttribute('aria-label', wanted);
+  await expect(viewer).toHaveAttribute('data-selection-filter', wanted);
 }
 
 /**
@@ -1072,11 +1087,15 @@ export interface SeedPanelLayout {
   unpinned?: SeedPanelId | null;
   recent?: SeedPanelId[];
   weights?: Partial<Record<SeedPanelId, number>>;
-  /** View options: Hide all, Lock, Compact rows and the column width. */
+  /**
+   * View options: Hide all, Lock, Compact rows, Fit panels to content and
+   * the column width.
+   */
   options?: {
     hidden?: boolean;
     locked?: boolean;
     compact?: boolean;
+    fit?: boolean;
     width?: 'narrow' | 'regular' | 'wide';
   };
 }

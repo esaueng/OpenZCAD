@@ -5,7 +5,7 @@ import {
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 import type { Page } from '@playwright/test';
-import { expect, stubApi, test } from './openzcad-fixtures';
+import { expect, setSelectionFilter, stubApi, test } from './openzcad-fixtures';
 
 /**
  * A sketch an extrude consumed is hidden, and the Move of it used to look the
@@ -195,15 +195,7 @@ test('Move applies to a hidden sketch from the unapplied-Move dialog', async ({
 
 /** Pick the temporarily shown source through the real manual Sketch filter. */
 async function pickMovingProfile(page: Page) {
-  const filter = page.getByRole('button', { name: /^Selection filter:/ });
-  await filter.focus();
-  for (let step = 0; step < 8; step += 1) {
-    const label = (await filter.getAttribute('aria-label'))!;
-    if (label.includes(': Sketch.')) break;
-    await page.keyboard.press('q');
-    await expect(filter).not.toHaveAttribute('aria-label', label);
-  }
-  await expect(filter).toHaveAttribute('aria-label', /: Sketch\./);
+  await setSelectionFilter(page, 'Sketch');
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toHaveAttribute('data-e2e-move-gizmo-x', /\d/);
   await expect(canvas).toHaveAttribute('data-e2e-move-gizmo-y', /\d/);

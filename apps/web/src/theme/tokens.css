@@ -215,6 +215,9 @@
      and from its neighbours, and the stage's usable top starts under the
      top islands. */
   --island-gap: 10px;
+  /* Inside a dock: between stacked panels, between its columns, and
+     between it and its rail. A dock reads as one surface. */
+  --dock-gap: 4px;
   --stage-top: calc(var(--topbar-h) + var(--island-gap) * 2);
   /* Width of the instrument rail on the right edge. */
   --rail-w: 40px;
@@ -246,6 +249,11 @@
   /* Above the floating assistant dock, so the seam between the panels stays
      grabbable whichever way they are laid out. */
   --z-panel-resizer: 7;
+  /* A model panel's floating window: over every island, the top bar's
+     (z-panel-resizer + 1) included, so a window can be put anywhere, but
+     under tooltips and anything a control opens. Each window adds its place
+     in the stored z-order (at most one per panel). */
+  --z-panel-float: 10;
   /* Control help: over every stage surface and island, but under anything
      a control opens (popovers, dialogs, context menus), so a trigger's own
      tooltip never paints over the first rows of the menu it just opened. */

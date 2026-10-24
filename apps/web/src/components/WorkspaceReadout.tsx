@@ -1,10 +1,5 @@
 import { useEffect, useState, type ReactNode, type RefObject } from 'react';
-import { Magnet, MousePointer2, ScrollText } from 'lucide-react';
-import {
-  SELECTION_FILTERS,
-  SELECTION_FILTER_LABELS,
-  type SelectionFilter
-} from '@openzcad/viewport/types';
+import { Magnet, ScrollText } from 'lucide-react';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { usePacedStatus } from '../hooks/usePacedStatus';
 import {
@@ -15,8 +10,6 @@ import {
 } from '../lib/statusLifetime';
 import { WORKSPACE_SAVE_STATE_PRESENTATION } from '../lib/workspaceSaveStatePresentation';
 import type { StatusTone } from './StatusActivityLog';
-import { useKeymap } from '../lib/keymap';
-import { platformShortcutLabel } from '../lib/platformShortcut';
 
 /**
  * A message worth going back to the log for: a warning, or a refusal worded
@@ -275,55 +268,19 @@ export function ActivityLogButton({
 }
 
 interface ViewportDockExtrasProps {
-  selectionFilter: SelectionFilter;
-  selectionFilterIsAutomatic: boolean;
-  onSelectionFilter(filter: SelectionFilter | null): void;
   /** Sketch snap spacing while a sketch is open; null hides it. */
   snap: { spacing: number; units: string; enabled: boolean } | null;
 }
 
 /**
- * The readout's segments: the selection filter (click or Q cycles it) and
- * the sketch snap. The island hugs them, so it is as wide as what it says.
+ * The readout's segments: the sketch snap, beside the grid spacing. The
+ * island hugs them, so it is as wide as what it says, and with no sketch
+ * open it says nothing and does not draw. (The selection filter it used to
+ * lead with is Q's alone now; the status line names each choice.)
  */
-export function ViewportDockExtras({
-  selectionFilter,
-  selectionFilterIsAutomatic,
-  onSelectionFilter,
-  snap
-}: ViewportDockExtrasProps) {
-  const filterIndex = SELECTION_FILTERS.indexOf(selectionFilter);
-  const nextFilter =
-    SELECTION_FILTERS[(filterIndex + 1) % SELECTION_FILTERS.length]!;
-  // The cycle ends by handing the filter back to the tool (null), as the
-  // status bar's chips did when their active one was clicked again.
-  const handsBack = filterIndex === SELECTION_FILTERS.length - 1;
-  const filterChord = useKeymap().label('selection-filter');
-  const filterKey = filterChord ? platformShortcutLabel(filterChord) : null;
+export function ViewportDockExtras({ snap }: ViewportDockExtrasProps) {
   return (
     <>
-      <span className="viewport-dock-divider" aria-hidden="true" />
-      <button
-        type="button"
-        className={`viewport-dock-filter mono${selectionFilterIsAutomatic ? ' automatic' : ''}`}
-        title={
-          selectionFilterIsAutomatic
-            ? `Selecting ${SELECTION_FILTER_LABELS[selectionFilter].toLowerCase()} — chosen by the active tool${filterKey ? ` · ${filterKey} cycles` : ''}`
-            : handsBack
-              ? `Selecting ${SELECTION_FILTER_LABELS[selectionFilter].toLowerCase()} · click to hand the filter back to the tool`
-              : `Selecting ${SELECTION_FILTER_LABELS[selectionFilter].toLowerCase()} · click${filterKey ? ` or ${filterKey}` : ''} for ${SELECTION_FILTER_LABELS[nextFilter].toLowerCase()}`
-        }
-        aria-label={`Selection filter: ${SELECTION_FILTER_LABELS[selectionFilter]}. Cycle.`}
-        onClick={() => onSelectionFilter(handsBack ? null : nextFilter)}
-      >
-        <MousePointer2
-          className="viewport-readout-icon"
-          size={12}
-          aria-hidden="true"
-        />
-        <span className="viewport-dock-filter-label">select</span>
-        {SELECTION_FILTER_LABELS[selectionFilter]}
-      </button>
       {snap && (
         <span
           className="viewport-dock-snap mono"

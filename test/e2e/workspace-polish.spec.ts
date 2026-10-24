@@ -640,9 +640,9 @@ test('places, retypes, solves, and undoes a driving angle dimension', async ({
 
   await page.reload();
   // The panels come back docked as the device left them.
-  await expect(
-    page.getByRole('toolbar', { name: 'Model panels' })
-  ).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole('toolbar', { name: 'Model panels' })).toBeVisible(
+    { timeout: 30_000 }
+  );
   await revealModelPanel(page, 'History');
   // Objects lists the sketch as well; the row to open is History's.
   await expect(
@@ -665,16 +665,21 @@ test('places, retypes, solves, and undoes a driving angle dimension', async ({
   });
   await expect(reopenedDimension).toBeVisible({ timeout: 30_000 });
   await expect(reopenedDimension).toContainText('angle_target = 60°');
-  const reopenedBounds = await reopenedDimension.boundingBox();
-  const reopenedRailBounds = await railStack.boundingBox();
-  expect(reopenedBounds).not.toBeNull();
-  expect(reopenedRailBounds).not.toBeNull();
-  expect(
-    reopenedBounds!.x + reopenedBounds!.width <= reopenedRailBounds!.x ||
-      reopenedBounds!.x >= reopenedRailBounds!.x + reopenedRailBounds!.width ||
-      reopenedBounds!.y + reopenedBounds!.height <= reopenedRailBounds!.y ||
-      reopenedBounds!.y >= reopenedRailBounds!.y + reopenedRailBounds!.height
-  ).toBe(true);
+  // The clamp runs on the render loop: poll until a frame has applied it to
+  // the reopened label, rather than reading the first frame it is visible.
+  await expect
+    .poll(async () => {
+      const reopenedBounds = await reopenedDimension.boundingBox();
+      const reopenedRailBounds = await railStack.boundingBox();
+      if (!reopenedBounds || !reopenedRailBounds) return false;
+      return (
+        reopenedBounds.x + reopenedBounds.width <= reopenedRailBounds.x ||
+        reopenedBounds.x >= reopenedRailBounds.x + reopenedRailBounds.width ||
+        reopenedBounds.y + reopenedBounds.height <= reopenedRailBounds.y ||
+        reopenedBounds.y >= reopenedRailBounds.y + reopenedRailBounds.height
+      );
+    })
+    .toBe(true);
   await reopenedDimension.click();
   await expect(page.getByRole('dialog', { name: 'Angle value' })).toBeVisible();
 

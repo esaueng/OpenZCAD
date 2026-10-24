@@ -13,6 +13,52 @@ describe('ViewportScaleIndicator', () => {
     vi.restoreAllMocks();
   });
 
+  for (const upright of [true, false]) {
+    it(`draws the rule ${upright ? 'upright beside the rail' : 'lying along the foot on a phone'}`, () => {
+      vi.spyOn(window, 'matchMedia').mockImplementation(
+        (query: string) =>
+          ({
+            matches: upright,
+            media: query,
+            addEventListener() {},
+            removeEventListener() {}
+          }) as unknown as MediaQueryList
+      );
+      const transforms: number[][] = [];
+      vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+        setTransform: (...args: number[]) => transforms.push(args),
+        clearRect() {},
+        beginPath() {},
+        moveTo() {},
+        lineTo() {},
+        stroke() {}
+      } as unknown as CanvasRenderingContext2D);
+      const sinkRef: MutableRefObject<ViewportScaleSink | null> = {
+        current: null
+      };
+      render(<ViewportScaleIndicator scaleSinkRef={sinkRef} units="mm" />);
+      act(() => sinkRef.current?.({ value: 10, widthPx: 120 }));
+
+      const root = screen.getByTestId('viewport-scale-indicator');
+      const canvas = screen.getByTestId<HTMLCanvasElement>(
+        'viewport-scale-rule'
+      );
+      expect(root.classList.contains('is-upright')).toBe(upright);
+      // 120px along the rule, 18px across it, whichever way it stands.
+      const ratio = Math.min(window.devicePixelRatio || 1, 2);
+      expect([canvas.width, canvas.height]).toEqual(
+        upright
+          ? [Math.round(18 * ratio), Math.round(120 * ratio)]
+          : [Math.round(120 * ratio), Math.round(18 * ratio)]
+      );
+      expect(canvas.style.getPropertyValue('--viewport-scale-length')).toBe(
+        '120px'
+      );
+      // Upright, the lying drawing is turned a quarter: its start at the foot.
+      expect(transforms.at(-1)?.[0]).toBe(upright ? 0 : ratio);
+    });
+  }
+
   it('strokes the rule in the stage ink, not the chrome text colours', () => {
     // The rule sits straight on the stage, so it follows the stage's ink
     // rather than the chrome's, which can differ from it.

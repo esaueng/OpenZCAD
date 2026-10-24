@@ -94,7 +94,7 @@ test('numeric value has a name and light-theme text meets contrast at the render
       '.keypad-label',
       '.keypad-commit',
       '.keypad-units button:not(.active)',
-      '.viewport-dock-filter-label'
+      '.viewport-dock-snap'
     ].map((selector) => {
       const element = document.querySelector(selector)!;
       const foreground = getComputedStyle(element).color;

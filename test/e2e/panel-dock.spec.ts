@@ -212,9 +212,9 @@ test('Pin docks, two pinned panels stack, and a closed panel reopens at home', a
     modelPanel(page, 'History').getByRole('button', { name: 'Pin History' })
   ).toHaveAttribute('aria-pressed', 'true');
   expect(await dockedTitles(page)).toEqual([['History']]);
-  // The rail moved to the dock's inner edge: a gap from the column, which
-  // stands a gap from the screen's edge.
-  expect(await dockWidth()).toBe('306px');
+  // The rail moved to the dock's inner edge: a dock gap from the column,
+  // which stands an island gap from the screen's edge.
+  expect(await dockWidth()).toBe('300px');
   const column = await box(page.locator('.panel-column'));
   expect(viewport.width - (column.x + column.width)).toBeCloseTo(10, 0);
   await expect
@@ -222,7 +222,7 @@ test('Pin docks, two pinned panels stack, and a closed panel reopens at home', a
       const rail = await box(page.locator('.instrument-rail'));
       return column.x - (rail.x + rail.width);
     })
-    .toBeCloseTo(10, 0);
+    .toBeCloseTo(4, 0);
 
   // A second pin stacks under it in the same column, from the footer's Pin.
   await railPanelButton(page, 'Parameters').click();
@@ -268,8 +268,10 @@ test('Pin docks, two pinned panels stack, and a closed panel reopens at home', a
 test('the gap between stacked panels resizes them, and a double-click splits them evenly', async ({
   page
 }) => {
+  // Panels that fill their shares: an empty project's all hug their content.
   await openWorkspace(page, 'Gap check', {
-    right: [['history', 'parameters']]
+    right: [['history', 'parameters']],
+    options: { fit: false }
   });
   const history = modelPanel(page, 'History');
   const parameters = modelPanel(page, 'Parameters');
@@ -319,11 +321,43 @@ test('the gap between stacked panels resizes them, and a double-click splits the
   await expect(gap).toHaveAttribute('aria-valuenow', '50');
 });
 
+test('a divider announces where it is drawn while its panels hug their content', async ({
+  page
+}) => {
+  // Fit panels to content is on by default: an empty project's panels are
+  // drawn at their content's height, not their equal stored weights.
+  await openWorkspace(page, 'Fitted divider', {
+    right: [['history', 'revisions', 'parameters']]
+  });
+  const history = modelPanel(page, 'History');
+  const revisions = modelPanel(page, 'Revisions');
+  await expect(revisions).toBeVisible();
+  const gap = page.getByRole('separator', {
+    name: 'Resize History and Revisions'
+  });
+  await expect
+    .poll(async () => {
+      const above = (await box(history)).height;
+      const below = (await box(revisions)).height;
+      return (
+        Number(await gap.getAttribute('aria-valuenow')) -
+        Math.round((100 * above) / (above + below))
+      );
+    })
+    .toBe(0);
+  const min = Number(await gap.getAttribute('aria-valuemin'));
+  const max = Number(await gap.getAttribute('aria-valuemax'));
+  const now = Number(await gap.getAttribute('aria-valuenow'));
+  expect(min).toBeLessThanOrEqual(now);
+  expect(max).toBeGreaterThanOrEqual(now);
+});
+
 test('a double-click split leaves the rest of the stack its height when a neighbour sat at its minimum', async ({
   page
 }) => {
   await openWorkspace(page, 'Split check', {
-    right: [['history', 'parameters', 'revisions']]
+    right: [['history', 'parameters', 'revisions']],
+    options: { fit: false }
   });
   const history = modelPanel(page, 'History');
   const parameters = modelPanel(page, 'Parameters');
@@ -474,7 +508,12 @@ test('a sketch hides the dock and an open unpinned panel and restores both', asy
   const unpinned = modelPanel(page, 'History');
   await expect(docked).toHaveClass(/is-docked/);
   await expect(unpinned).toHaveClass(/is-unpinned/);
-  const railDocked = await box(page.locator('.instrument-rail'));
+  const rail = page.locator('.instrument-rail');
+  const stageWidth = page.viewportSize()!.width;
+  // At the dock's inner edge: the column and its dock gap in from the edge.
+  await expect
+    .poll(async () => (await box(rail)).x)
+    .toBeLessThan(stageWidth - 10 - 40 - 299);
 
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
@@ -485,8 +524,10 @@ test('a sketch hides the dock and an open unpinned panel and restores both', asy
   await expect(
     page.locator('.panel-column, .panel-unpinned, .panel-lane-float')
   ).toHaveCount(0);
-  const railSketch = await box(page.locator('.instrument-rail'));
-  expect(railSketch.x).toBeGreaterThan(railDocked.x + 300);
+  // The rail slides back to the screen's edge once its transition lands.
+  await expect
+    .poll(async () => (await box(rail)).x)
+    .toBeCloseTo(stageWidth - 10 - 40, 0);
   // Suspension is not a preference: the stored layout keeps both.
   expect(await storedLayout(page)).toMatchObject({
     right: [['parameters']],
@@ -667,10 +708,13 @@ for (const [label, layout] of [
 test('a five-panel column at a 390px window scrolls and keeps every header control reachable', async ({
   page
 }) => {
-  await openWorkspace(page, 'Short check', ALL_PANELS_DOCKED, {
-    width: 1280,
-    height: 390
-  });
+  // Each at its 90px minimum: none hugs a shorter content.
+  await openWorkspace(
+    page,
+    'Short check',
+    { ...ALL_PANELS_DOCKED, options: { fit: false } },
+    { width: 1280, height: 390 }
+  );
   const column = page.locator('.panel-column');
   await expect(column).toHaveClass(/is-scrolling/);
   const stage = await box(column);
@@ -1101,6 +1145,17 @@ for (const theme of ['dark', 'light'] as const) {
       await expect(header).toBeVisible();
       const controls = header.locator('button');
       await expect.poll(() => controls.count()).toBeGreaterThanOrEqual(2);
+      // The phone lane slides in: hit-test where the panel comes to rest,
+      // not a frame of its arrival.
+      await header.evaluate(
+        (element, selector) =>
+          Promise.all(
+            (element.closest(selector) as HTMLElement)
+              .getAnimations({ subtree: true })
+              .map((animation) => animation.finished)
+          ),
+        host
+      );
       for (const control of await controls.all()) {
         const target = await control.evaluate((button) => {
           const bounds = button.getBoundingClientRect();

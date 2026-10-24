@@ -60,8 +60,11 @@ export const PANEL_MAX_COLUMNS: Readonly<Record<DockSide, number>> = {
 export const PANEL_COLUMN_GAP = 10;
 /** A rail's width (`--rail-w`). */
 export const PANEL_RAIL_WIDTH = 40;
-/** Between panels stacked in one column or window. */
-export const PANEL_STACK_GAP = 8;
+/**
+ * The dock gap (`--dock-gap`): between panels stacked in one column or
+ * window, between a dock's columns, and between a dock and its rail.
+ */
+export const PANEL_STACK_GAP = 4;
 export const PANEL_MIN_HEIGHT = 90;
 export const FLOAT_MIN_WIDTH = 260;
 export const FLOAT_MAX_WIDTH = 600;
@@ -142,6 +145,12 @@ export interface PanelLayoutOptions {
    */
   locked: boolean;
   compact: boolean;
+  /**
+   * Docked panels hug their content: one drawn shorter than its share
+   * leaves the rest to the panels beside it, or to the model. Off, every
+   * docked panel fills its share, as a window's panels always do.
+   */
+  fit: boolean;
   width: PanelWidth;
 }
 
@@ -216,15 +225,20 @@ export const ESSENTIALS_RIGHT_PRESET = 'essentials-right';
 export type PanelPreset = PanelPresetId | typeof ESSENTIALS_RIGHT_PRESET;
 
 export interface PanelInsets {
-  /** The docks' top: under the top bar (`--stage-top`). */
+  /** The docks' top: under the top bar (`--stage-top`). Windows ignore it. */
   top: number;
-  /** The docks' bottom margin (`--island-gap`). */
+  /** The docks' bottom margin (`--island-gap`). Windows ignore it. */
   bottom: number;
   /**
    * The island gap (`--island-gap`): from each side edge to its outermost
-   * column, between columns, and on both sides of each rail.
+   * column, and from a rail with no dock to the edge.
    */
   gap: number;
+  /**
+   * The dock gap (`--dock-gap`): between a dock's columns, and between a
+   * dock and its rail. Tighter than the island gap: a dock is one surface.
+   */
+  between: number;
   /** A rail's width (`--rail-w`). */
   rail: number;
 }
@@ -234,6 +248,7 @@ export const DEFAULT_PANEL_INSETS: Readonly<PanelInsets> = {
   top: 60,
   bottom: 10,
   gap: PANEL_COLUMN_GAP,
+  between: PANEL_STACK_GAP,
   rail: PANEL_RAIL_WIDTH
 };
 
@@ -242,12 +257,20 @@ export interface PanelStage {
   width: number;
   height: number;
   insets?: Partial<PanelInsets>;
+  /**
+   * Each drawn panel's natural height: its header, its content and its
+   * frame, as tall as it would be with room to spare. A docked panel is
+   * never drawn taller (it hugs its content and its column's other panels
+   * take the rest); a panel without one fills its share.
+   */
+  naturals?: Partial<Record<PanelEntry, number>>;
 }
 
 const DEFAULT_OPTIONS: PanelLayoutOptions = {
   hidden: false,
   locked: false,
   compact: false,
+  fit: true,
   width: 'regular'
 };
 
@@ -314,25 +337,45 @@ export function columnWidthOf(options: PanelLayoutOptions): number {
   return PANEL_COLUMN_WIDTHS[options.width];
 }
 
-/** The area floating windows are kept inside. */
-function floatBounds(stage: PanelStage): {
+/**
+ * The area floating windows are kept inside: the whole stage. A window may
+ * go anywhere on screen, over the top islands and the rails too, as long as
+ * all of it stays on screen; only the docks keep to the insets. A stacked
+ * window (`stacked`) keeps its grip bar, which stands above its frame, on
+ * screen too: the grip is the only handle that moves the whole stack.
+ */
+function floatBounds(
+  stage: PanelStage,
+  stacked = false
+): {
   left: number;
   top: number;
   right: number;
   bottom: number;
 } {
-  const insets = insetsOf(stage);
+  const top = stacked ? FLOAT_FRAME_GRIP : 0;
   return {
-    left: insets.gap,
-    top: insets.top,
-    right: Math.max(insets.gap, stage.width - insets.gap),
-    bottom: Math.max(insets.top, stage.height - insets.bottom)
+    left: 0,
+    top,
+    right: Math.max(0, stage.width),
+    bottom: Math.max(top, stage.height)
   };
 }
 
-/** A rectangle moved and, if it must be, shrunk to lie inside the stage. */
-export function clampFloatRect(rect: Rect, stage: PanelStage): Rect {
-  const bounds = floatBounds(stage);
+/** Whether a window stacks panels, and so draws the grip above its frame. */
+function isStacked(rect: Rect | FloatGroup<PanelEntry>): boolean {
+  return 'panels' in rect && rect.panels.length > 1;
+}
+
+/**
+ * A rectangle moved and, if it must be, shrunk to lie inside the stage.
+ * Pass a window's group to keep a stack's grip on screen as well.
+ */
+export function clampFloatRect(
+  rect: Rect | FloatGroup<PanelEntry>,
+  stage: PanelStage
+): Rect {
+  const bounds = floatBounds(stage, isStacked(rect));
   const w = Math.min(rect.w, bounds.right - bounds.left);
   const h = Math.min(rect.h, bounds.bottom - bounds.top);
   return {
@@ -348,12 +391,13 @@ export function grownFloatRect(rect: Rect, stage?: PanelStage): Rect {
   if (!stage) {
     return { ...rect, h: rect.h + FLOAT_GROWTH };
   }
-  const bounds = floatBounds(stage);
+  // Grown, it is a stack: its grip stays on screen.
+  const bounds = floatBounds(stage, true);
   const h = Math.min(rect.h + FLOAT_GROWTH, bounds.bottom - bounds.top);
   const y =
     rect.y + h > bounds.bottom
       ? Math.max(bounds.top, bounds.bottom - h)
-      : rect.y;
+      : Math.max(bounds.top, rect.y);
   return { ...rect, y, h };
 }
 
@@ -370,11 +414,16 @@ function nextFloatId(layout: PanelLayout<PanelEntry>): string {
  * The heights a stack of panels gets in `height`, split by weight. Below
  * their minimum, panels are held at 90px and the rest share what is left;
  * when even that cannot fit, every panel holds its minimum and the stack
- * overflows (the column scrolls as one). Weights are never changed.
+ * overflows (the column scrolls as one). A panel with a cap (its natural
+ * height) is never drawn taller: it is held there and the others share what
+ * it leaves, and a stack whose panels all hug their content ends short of
+ * `height` (`contentHeight` is then what it takes). A cap under 90px is that
+ * panel's minimum too. Weights are never changed.
  */
 function stackHeights(
   weights: readonly number[],
-  height: number
+  height: number,
+  caps?: readonly number[]
 ): {
   heights: number[];
   pxPerWeight: number;
@@ -390,44 +439,72 @@ function stackHeights(
       contentHeight: height
     };
   }
+  const cap = (k: number): number => caps?.[k] ?? Number.POSITIVE_INFINITY;
+  const minimum = (k: number): number => Math.min(PANEL_MIN_HEIGHT, cap(k));
   const gaps = PANEL_STACK_GAP * (n - 1);
-  const needed = PANEL_MIN_HEIGHT * n + gaps;
+  let needed = gaps;
+  for (let k = 0; k < n; k++) needed += minimum(k);
   if (needed > height) {
     return {
-      heights: weights.map(() => PANEL_MIN_HEIGHT),
+      heights: weights.map((_, k) => minimum(k)),
       pxPerWeight: 0,
       overflowing: true,
       contentHeight: needed
     };
   }
-  const held = new Array<boolean>(n).fill(false);
-  let pxPerWeight = 0;
-  for (;;) {
-    let free = height - gaps;
-    let freeWeight = 0;
-    weights.forEach((weight, k) => {
-      if (held[k]) {
-        free -= PANEL_MIN_HEIGHT;
-      } else {
-        freeWeight += weight;
-      }
-    });
-    pxPerWeight = freeWeight > 0 ? free / freeWeight : 0;
-    let changed = false;
-    weights.forEach((weight, k) => {
-      if (!held[k] && weight * pxPerWeight < PANEL_MIN_HEIGHT) {
-        held[k] = true;
-        changed = true;
-      }
-    });
-    if (!changed) {
-      break;
+  // Each panel is its weight times one scale, held between its minimum and
+  // its cap: the scale is the one at which the stack fills `height`. The
+  // total only grows with the scale, so a bisection finds it; the panels it
+  // leaves free then fix it exactly. Holding a panel at its minimum before a
+  // neighbour's cap freed room for it kept the column short.
+  const lowest = (k: number): number => minimum(k);
+  const shown = (k: number, scale: number): number =>
+    Math.min(cap(k), Math.max(lowest(k), weights[k]! * scale));
+  const total = (scale: number): number => {
+    let sum = gaps;
+    for (let k = 0; k < n; k++) sum += shown(k, scale);
+    return sum;
+  };
+  const allCapped = weights.every((_, k) => Number.isFinite(cap(k)));
+  if (allCapped && total(Number.MAX_VALUE) <= height) {
+    // Every panel hugs its content and they all fit: the column ends short.
+    const heights = weights.map((_, k) => cap(k));
+    return {
+      heights,
+      pxPerWeight: 0,
+      overflowing: false,
+      contentHeight: heights.reduce((sum, h) => sum + h, gaps)
+    };
+  }
+  let low = 0;
+  let high = 1;
+  while (total(high) < height && high < Number.MAX_VALUE / 4) high *= 2;
+  for (let round = 0; round < 80; round++) {
+    const middle = (low + high) / 2;
+    if (total(middle) < height) {
+      low = middle;
+    } else {
+      high = middle;
     }
   }
+  // The panels the scale leaves between their bounds share what the held
+  // ones leave, exactly.
+  let free = height - gaps;
+  let freeWeight = 0;
+  const held = weights.map((weight, k) => {
+    const at = shown(k, high);
+    const isHeld = at === cap(k) || at === lowest(k);
+    if (isHeld && weight * high !== at) {
+      free -= at;
+      return at;
+    }
+    freeWeight += weight;
+    return null;
+  });
+  const pxPerWeight = freeWeight > 0 ? free / freeWeight : 0;
+  const heights = weights.map((weight, k) => held[k] ?? weight * pxPerWeight);
   return {
-    heights: weights.map((weight, k) =>
-      held[k] ? PANEL_MIN_HEIGHT : weight * pxPerWeight
-    ),
+    heights,
     pxPerWeight,
     overflowing: false,
     contentHeight: height
@@ -746,10 +823,12 @@ export function beginDrag(layout: PanelLayout, id: PanelId): PanelLayout {
 export function dockFootprint(
   columns: Record<DockSide, number>,
   columnWidth: number,
-  insets: Pick<PanelInsets, 'gap' | 'rail'> = DEFAULT_PANEL_INSETS
+  insets: Pick<PanelInsets, 'gap' | 'between' | 'rail'> = DEFAULT_PANEL_INSETS
 ): number {
   const side = insets.gap + insets.rail + insets.gap;
-  return side * 2 + (columns.left + columns.right) * (columnWidth + insets.gap);
+  return (
+    side * 2 + (columns.left + columns.right) * (columnWidth + insets.between)
+  );
 }
 
 /**
@@ -1518,17 +1597,42 @@ function neighbours(
 }
 
 /**
+ * Where a gap's upper panel's lower edge may go: each panel keeps its
+ * minimum (or its smaller drawn height) and grows no taller than its cap.
+ */
+export function gapRange(shown: GapShown): {
+  lowest: number;
+  highest: number;
+} {
+  const pair = shown.above + shown.below;
+  return {
+    lowest: Math.max(
+      Math.min(PANEL_MIN_HEIGHT, shown.above),
+      pair - shown.belowMax
+    ),
+    highest: Math.min(
+      pair - Math.min(PANEL_MIN_HEIGHT, shown.below),
+      shown.aboveMax
+    )
+  };
+}
+
+/**
  * Drags the gap between two neighbouring panels by `deltaPx` (down is
  * positive), given the stack's pixels per weight, keeping both at least 90px.
  * Measure the delta from the drag's start and pass the layout from then, so
  * a long drag does not accumulate rounding. Other panels keep their share.
+ * Pass the gap's `shown` heights where the stack holds a panel at its
+ * natural height: the drag starts from what is drawn, and neither panel
+ * grows past its content.
  */
 export function resizeGap(
   layout: PanelLayout,
   above: PanelId,
   below: PanelId,
   deltaPx: number,
-  pxPerWeight: number
+  pxPerWeight: number,
+  shown?: GapShown
 ): PanelLayout {
   if (
     layout.options.locked ||
@@ -1547,20 +1651,21 @@ export function resizeGap(
   // move its edge. Setting both weights to their new heights over
   // pxPerWeight leaves the stack's pxPerWeight unchanged, so the gap tracks
   // the pointer exactly.
-  const shownAbove = Math.max(
-    PANEL_MIN_HEIGHT,
-    layout.weights[above] * pxPerWeight
-  );
-  const shownBelow = Math.max(
-    PANEL_MIN_HEIGHT,
-    layout.weights[below] * pxPerWeight
-  );
+  const shownAbove =
+    shown?.above ??
+    Math.max(PANEL_MIN_HEIGHT, layout.weights[above] * pxPerWeight);
+  const shownBelow =
+    shown?.below ??
+    Math.max(PANEL_MIN_HEIGHT, layout.weights[below] * pxPerWeight);
   const pair = shownAbove + shownBelow;
-  const heightAbove = clamp(
-    shownAbove + deltaPx,
-    PANEL_MIN_HEIGHT,
-    pair - PANEL_MIN_HEIGHT
-  );
+  const { lowest, highest } = gapRange({
+    above: shownAbove,
+    below: shownBelow,
+    aboveMax: shown?.aboveMax ?? Number.POSITIVE_INFINITY,
+    belowMax: shown?.belowMax ?? Number.POSITIVE_INFINITY
+  });
+  if (lowest > highest) return layout;
+  const heightAbove = clamp(shownAbove + deltaPx, lowest, highest);
   if (heightAbove === shownAbove) return layout;
   const next = copyLayout(layout);
   next.weights[above] = heightAbove / pxPerWeight;
@@ -1577,26 +1682,26 @@ export function splitGapEvenly(
   layout: PanelLayout,
   above: PanelId,
   below: PanelId,
-  pxPerWeight?: number
+  pxPerWeight?: number,
+  shown?: GapShown
 ): PanelLayout {
   if (layout.options.locked || !neighbours(layout, above, below)) {
     return layout;
   }
   if (pxPerWeight !== undefined) {
-    const shownAbove = Math.max(
-      PANEL_MIN_HEIGHT,
-      layout.weights[above] * pxPerWeight
-    );
-    const shownBelow = Math.max(
-      PANEL_MIN_HEIGHT,
-      layout.weights[below] * pxPerWeight
-    );
+    const shownAbove =
+      shown?.above ??
+      Math.max(PANEL_MIN_HEIGHT, layout.weights[above] * pxPerWeight);
+    const shownBelow =
+      shown?.below ??
+      Math.max(PANEL_MIN_HEIGHT, layout.weights[below] * pxPerWeight);
     return resizeGap(
       layout,
       above,
       below,
       (shownBelow - shownAbove) / 2,
-      pxPerWeight
+      pxPerWeight,
+      shown
     );
   }
   const next = copyLayout(layout);
@@ -1644,7 +1749,7 @@ export function moveFloat(
   stage: PanelStage
 ): PanelLayout {
   return updateFloat(layout, groupId, (group) => {
-    const bounds = floatBounds(stage);
+    const bounds = floatBounds(stage, isStacked(group));
     const shown = clampFloatRect(group, stage);
     return {
       x: clamp(position.x, bounds.left, bounds.right - shown.w),
@@ -1667,7 +1772,7 @@ export function resizeFloat(
   stage: PanelStage
 ): PanelLayout {
   return updateFloat(layout, groupId, (group) => {
-    const bounds = floatBounds(stage);
+    const bounds = floatBounds(stage, isStacked(group));
     // From where the window shows: a stored position a smaller stage clamps
     // would otherwise pin the width to its minimum and make the window jump.
     const shown = clampFloatRect(group, stage);
@@ -1728,10 +1833,20 @@ export interface FloatGeometry extends Rect {
   contentHeight: number;
 }
 
+/** A gap's two panels as drawn, and the most each may be drawn. */
+export interface GapShown {
+  above: number;
+  below: number;
+  aboveMax: number;
+  belowMax: number;
+}
+
 export interface GapGeometry extends Rect {
   above: PanelId;
   below: PanelId;
   pxPerWeight: number;
+  /** The two panels as drawn, and the most each may be drawn (its cap). */
+  shown?: GapShown;
   /** Off while the stack overflows: the column scrolls instead. */
   enabled: boolean;
   container:
@@ -1906,7 +2021,10 @@ export function computePanelGeometry(
     bottom: Math.max(insets.top, stage.height - insets.bottom)
   };
   const dockHeight = dock.bottom - dock.top;
-  const step = columnWidth + insets.gap;
+  // Column by column: the column and the dock gap inside it, so the rail
+  // stands a dock gap from the dock's inner edge (and the island gap from
+  // the screen's edge with no dock).
+  const step = columnWidth + insets.between;
   const dockWidth = { left: docked.left * step, right: docked.right * step };
   const rails: Record<DockSide, RailGeometry> = {
     right: {
@@ -1943,15 +2061,24 @@ export function computePanelGeometry(
     gaps: []
   };
 
+  // A docked panel hugs its content (Fit panels to content); a window keeps
+  // the height it was given, so its panels fill it.
+  // A drop preview's slot carries the dragged panel's natural height
+  // (`naturals[PANEL_SLOT]`), so the preview is drawn as the drop will be.
+  const capOf = (entry: PanelEntry): number =>
+    (layout.options.fit ? stage.naturals?.[entry] : undefined) ??
+    Number.POSITIVE_INFINITY;
   const stack = (
     entries: PanelEntry[],
     rect: Rect,
     mode: PanelRect['mode'],
     container: GapGeometry['container']
   ): { overflowing: boolean; contentHeight: number } => {
+    const caps = mode === 'docked' ? entries.map(capOf) : undefined;
     const result = stackHeights(
       entries.map((entry) => weightOf(layout, entry)),
-      rect.h
+      rect.h,
+      caps
     );
     let y = rect.y;
     entries.forEach((entry, k) => {
@@ -1959,6 +2086,13 @@ export function computePanelGeometry(
       geometry.panels[entry] = { id: entry, mode, x: rect.x, y, w: rect.w, h };
       const below = entries[k + 1];
       if (below && entry !== PANEL_SLOT && below !== PANEL_SLOT) {
+        const shown: GapShown = {
+          above: h,
+          below: result.heights[k + 1]!,
+          aboveMax: caps?.[k] ?? Number.POSITIVE_INFINITY,
+          belowMax: caps?.[k + 1] ?? Number.POSITIVE_INFINITY
+        };
+        const range = gapRange(shown);
         geometry.gaps.push({
           above: entry,
           below,
@@ -1967,7 +2101,14 @@ export function computePanelGeometry(
           w: rect.w,
           h: PANEL_STACK_GAP,
           pxPerWeight: result.pxPerWeight,
-          enabled: !result.overflowing,
+          shown,
+          // Nothing to trade while the stack scrolls, or where neither
+          // panel can move: both already hug their content, or both sit at
+          // their minimum.
+          enabled:
+            !result.overflowing &&
+            result.pxPerWeight > 0 &&
+            range.highest - range.lowest >= 1,
           container
         });
       }
@@ -1984,7 +2125,7 @@ export function computePanelGeometry(
       ? stage.width -
         insets.gap -
         (column + 1) * columnWidth -
-        column * insets.gap
+        column * insets.between
       : insets.gap + column * step;
 
   if (hidden) {
@@ -2380,7 +2521,7 @@ export function normalizePanelLayout(
   const options = root.options;
   if (options && typeof options === 'object' && !Array.isArray(options)) {
     const raw = options as Record<string, unknown>;
-    for (const key of ['hidden', 'locked', 'compact'] as const) {
+    for (const key of ['hidden', 'locked', 'compact', 'fit'] as const) {
       if (typeof raw[key] === 'boolean') {
         layout.options[key] = raw[key];
       }
