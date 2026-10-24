@@ -21,9 +21,20 @@
 }
 
 /* The right viewer rail overlaps this lane on compact screens. Keep the
-   pattern's cancel label and hit target entirely clear of it. */
+   pattern's cancel label and hit target entirely clear of it, and of the
+   right dock, which runs the window's full height: past the notice lane's
+   end and the lanes' end beyond the rail, the docked columns and an
+   unpinned panel (quiet-stage.css), whichever reaches further in. Where
+   the band between them is too narrow for the card (768px with More tools
+   open), it stands over the column's tools and the rails rather than
+   under them, so Cancel is always pressable; floating windows stay above. */
 .activity-lane:has(.pattern-progress) {
-  right: max(calc(var(--column-w) + 12px), 72px);
+  z-index: calc(var(--z-inspector-float) + 2);
+  right: max(
+    var(--notice-end, 0px),
+    var(--lane-end, calc(var(--column-w) + 12px)),
+    72px
+  );
 }
 
 /* The lane and the status toast are the same slot. While a pill is up the
