@@ -136,6 +136,9 @@ function makeProps(
       error: null
     },
     featureSelectionSource: 'inferred',
+    // These suites read the card a direct pick gets once it is asked for;
+    // 'direct pick details' below pins that it stays closed until then.
+    directPickDetails: true,
     onLaunchTool: vi.fn(),
     onSelectBodies: vi.fn(),
     onCancel: vi.fn(),
@@ -171,6 +174,63 @@ function makeProps(
     ...overrides
   };
 }
+
+describe('direct pick details', () => {
+  it('draws no card for an inferred face, edge or body until asked', () => {
+    const picks: Array<Partial<ComponentProps<typeof Inspector>>> = [
+      { selectedTopology: frontFace },
+      {
+        selectedTopology: {
+          bodyId,
+          kind: 'edge',
+          topologyId: 'edge:front-top',
+          hash: 22
+        }
+      },
+      { selectedTopology: null }
+    ];
+    for (const pick of picks) {
+      const { container, unmount } = render(
+        <Inspector
+          {...makeProps({
+            ...pick,
+            commandSession: null,
+            directPickDetails: false
+          })}
+        />
+      );
+      expect(container).toBeEmptyDOMElement();
+      unmount();
+    }
+  });
+
+  it('draws no card for a face no feature claims until asked', () => {
+    const { container } = render(
+      <Inspector
+        {...makeProps({
+          selectedFeature: null,
+          commandSession: null,
+          directPickDetails: false
+        })}
+      />
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('still opens the card for a feature pinned from History', () => {
+    render(
+      <Inspector
+        {...makeProps({
+          featureSelectionSource: 'pinned',
+          directPickDetails: false
+        })}
+      />
+    );
+    expect(
+      screen.getByRole('region', { name: 'Feature inspector' })
+    ).toBeInTheDocument();
+  });
+});
 
 describe('Inspector feature provenance', () => {
   it('keeps unresolved geometry inspectable without offering feature edits or deletion', () => {

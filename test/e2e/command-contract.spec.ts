@@ -472,10 +472,13 @@ test('one Escape clears a refused offset: card, preview, handle and selection', 
   await page.mouse.move(at(-40).x, at(-40).y, { steps: 1 });
   await expect(chip).toHaveAttribute('data-state', 'warning', READ_TIMEOUT);
   await page.mouse.up();
-  // The refusal is on the selection chip, which carries the operation (F11).
+  // The Selection card carries the operation and marks it Failed; the
+  // refusal itself stands in the notice lane.
   const operationChip = page.locator('.selection-callout-chip[role="region"]');
   await expect(operationChip).toContainText('Failed');
-  await expect(operationChip.getByRole('alert')).toBeVisible();
+  await expect(
+    page.locator('.selection-refusal-lane').getByRole('alert')
+  ).toBeVisible();
 
   // One press: the chip's operation, its refusal, the kept preview, the handle and its
   // change band and the selection all go. Nothing re-arms at the refused

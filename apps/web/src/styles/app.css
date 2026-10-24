@@ -39,5 +39,7 @@
 /* Last: the quiet stage re-anchors every floating region, in every mode, as
    islands over the viewport; it only positions and frames, never hides. */
 @import './components/quiet-stage.css';
+/* The Selection card hangs off the column the quiet stage just placed. */
+@import './components/selection-card.css';
 /* After every sizing rule: it only adds hit area, never moves a control. */
 @import './components/target-size.css';

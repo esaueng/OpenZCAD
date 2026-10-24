@@ -300,6 +300,14 @@ interface InspectorProps extends InspectorCallbacks {
    */
   featureSelectionSource: FeatureSelectionSource | null;
   /**
+   * Whether a direct viewport pick (a face, an edge or a body, with no tool
+   * and no History row behind it) gets a card. Off by default: the pick is
+   * answered on the model and in the Selection card, and the details open
+   * from History. An imported face's Edit face verb turns it on, because
+   * its hole and blend edits have no History step to open them from.
+   */
+  directPickDetails?: boolean;
+  /**
    * A new primitive's card, as the ghost the viewport draws before Create;
    * null when its values do not build and when the card closes.
    */
@@ -2408,7 +2416,9 @@ export function Inspector(props: InspectorProps) {
     }
   }
 
+  let directPick = objectReadout;
   if (!body && selectedTopology && selectedBody) {
+    directPick = true;
     eyebrow = selectedBody.name;
     title =
       selectedTopology.kind === 'face'
@@ -2467,7 +2477,7 @@ export function Inspector(props: InspectorProps) {
       </>
     );
   }
-  if (!body) {
+  if (!body || (directPick && !tool && !props.directPickDetails)) {
     return null;
   }
 

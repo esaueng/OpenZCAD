@@ -544,7 +544,10 @@ export async function shiftSelectTwoVisibleBoxEdges(page: Page) {
   const status = page.getByRole('contentinfo');
   await expect(status).toContainText('1 edge selected');
 
-  await page.getByRole('button', { name: 'Close panel' }).click();
+  // A direct pick opens no card, so nothing covers the second edge.
+  await expect(
+    page.getByRole('region', { name: 'Feature inspector' })
+  ).toHaveCount(0);
   const second = await locateEdge(page, { exclude: [first.topologyId] });
   await page.keyboard.down('Shift');
   try {

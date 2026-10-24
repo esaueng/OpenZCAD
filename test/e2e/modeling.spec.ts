@@ -119,7 +119,8 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
     'Ø 28 mm'
   );
-  await expect(page.getByRole('region', { name: '3D viewport' })).toContainText(
+  // The Selection card names the pick, live diameter included.
+  await expect(page.locator('.selection-card')).toContainText(
     'Cylindrical face Ø28'
   );
   await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
@@ -161,7 +162,8 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
     'Ø 36 mm'
   );
-  await expect(page.getByRole('region', { name: '3D viewport' })).toContainText(
+  // The Selection card names the pick, live diameter included.
+  await expect(page.locator('.selection-card')).toContainText(
     'Cylindrical face Ø36'
   );
   await expect(canvas).toHaveAttribute('data-e2e-cylinder-proxy-radius', '18');
@@ -172,8 +174,13 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   );
   await expect(page.getByRole('button', { name: 'Undo' })).toBeEnabled();
   await expect(page.getByRole('heading', { name: 'History 1' })).toBeVisible();
-  await expect(page.locator('.panel-body')).toContainText('Defined by');
-  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  // A direct pick opens no card; the cylinder's form opens from History.
+  await expect(
+    page.getByRole('region', { name: 'Feature inspector' })
+  ).toHaveCount(0);
+  await page
+    .locator('.feature-row-main', { hasText: 'Cylinder' })
+    .evaluate((element) => (element as HTMLButtonElement).click());
   await expect(page.getByLabel('Radius', { exact: true })).toHaveValue('18');
   await expect(page.getByLabel('Height', { exact: true })).toHaveValue('28');
   await expect(page.locator('.panel-body')).toContainText('36 × 36 × 28 mm');
@@ -234,8 +241,10 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
     /.+/
   );
   await page.mouse.up();
-  await expect(inspector.getByLabel('Radius', { exact: true })).toHaveCount(0);
-  await inspector.getByRole('button', { name: 'Edit' }).click();
+  await expect(inspector).toHaveCount(0);
+  await page
+    .locator('.feature-row-main', { hasText: 'Cylinder' })
+    .evaluate((element) => (element as HTMLButtonElement).click());
   await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
     '18'
   );
@@ -255,6 +264,9 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await expect(
     page.locator('.feature-row-main', { hasText: 'Move Cylinder Base' })
   ).toBeVisible();
+  // The body's size reads from its Objects row's card.
+  await revealModelPanel(page, 'Objects');
+  await page.locator('.body-row:not(.consumed) .body-row-main').first().click();
   await expect(page.locator('.panel-body')).toContainText('36 × 36 × 23.5 mm');
   expect(consoleErrors).toEqual([]);
 });
@@ -300,9 +312,11 @@ test('resizes a literal box by dragging an exact face', async ({ page }) => {
   await page.mouse.up();
 
   await expect(page.getByRole('contentinfo')).toContainText('Resize Box');
+  // A direct pick opens no card; the box's dimensions open from History.
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await expect(inspector.getByLabel('Width (X)')).toHaveCount(0);
-  await inspector.getByRole('button', { name: 'Edit' }).click();
+  await expect(inspector).toHaveCount(0);
+  await revealModelPanel(page);
+  await page.locator('.feature-row-main', { hasText: 'Box' }).first().click();
   const dimensions = await Promise.all([
     inspector.getByLabel('Width (X)').inputValue(),
     inspector.getByLabel('Depth (Y)').inputValue(),

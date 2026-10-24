@@ -126,8 +126,12 @@ test('resizes a rounded box from its minimum side with exact entry, drag, cancel
   ).toBeVisible();
   // The exact projection stays at the committed dimension while the disposable
   // body, edge and highlight buffers follow the hand. No worker result may
-  // replace it with an older pointer value during this gesture.
-  await expect(page.locator('.panel-body')).toContainText('40 × 28 × 10 mm');
+  // replace it with an older pointer value during this gesture: the edit
+  // sync count below proves it. (A direct pick opens no readout card to read
+  // the committed size from mid-drag; checkShape reads it from History.)
+  await expect(
+    page.getByRole('region', { name: 'Feature inspector' })
+  ).toHaveCount(0);
   await page.screenshot({
     path: testInfo.outputPath('rounded-box-resize-preview.png')
   });

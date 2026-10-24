@@ -54,21 +54,12 @@ for (const directManipulation of [true, false]) {
           })
         );
       });
+    // A viewport pick opens no card: the Selection card names the face.
     await selectWall();
-    await expect(inspector).toHaveClass(/object-readout/);
-    await expect(inspector.getByRole('heading', { level: 2 })).toContainText(
-      /wall|face/i
-    );
+    await expect(inspector).toHaveCount(0);
     await expect(
-      inspector.getByText('Measurements', { exact: true })
-    ).toBeVisible();
-    await expect(
-      inspector.getByText('Defined by', { exact: true })
-    ).toBeVisible();
-    await expect(inspector.getByLabel('Radius', { exact: true })).toHaveCount(
-      0
-    );
-    await expect(inspector.getByLabel('More actions')).toHaveCount(0);
+      page.locator('.selection-card .selection-callout-name')
+    ).toContainText(/wall|face/i);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     const operation = page.getByRole('region', {
       name: 'Resize Cylinder operation'
@@ -78,7 +69,15 @@ for (const directManipulation of [true, false]) {
     await page.keyboard.press('Delete');
     await page.keyboard.press('Backspace');
     await expect(page.locator('.feature-row')).toHaveCount(1);
+    // The body's Objects row asks to inspect it, so its readout opens.
+    await page.locator('.body-row-main').first().click();
     await expect(inspector).toHaveClass(/object-readout/);
+    await expect(
+      inspector.getByText('Measurements', { exact: true })
+    ).toBeVisible();
+    await expect(
+      inspector.getByText('Defined by', { exact: true })
+    ).toBeVisible();
     await page.setViewportSize({ width: 1024, height: 800 });
     const definitionRow = inspector.locator('.object-definition-row');
     const rowBounds = await definitionRow.boundingBox();
@@ -111,12 +110,12 @@ for (const directManipulation of [true, false]) {
       path: `/tmp/inspector-pinned-${directManipulation}.png`
     });
 
-    // A new viewport pick demotes even the same feature again. Edit must
-    // reopen it rather than toggling off the already selected history row.
+    // A new viewport pick closes even the same feature's form. Its Objects
+    // row's Edit must reopen it rather than toggling off the already selected
+    // history row.
     await selectWall();
-    await expect(inspector.getByLabel('Radius', { exact: true })).toHaveCount(
-      0
-    );
+    await expect(inspector).toHaveCount(0);
+    await page.locator('.body-row-main').first().click();
     await inspector.getByRole('button', { name: 'Edit', exact: true }).click();
     await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
       '14'

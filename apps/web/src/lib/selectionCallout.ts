@@ -31,9 +31,24 @@ import { activeKeymap, toolCommandId } from './keymap';
  * testable without a WebGL context and stays out of the entry chunk.
  */
 
-/** A verb is either a selection action the tool card also offers, or a tool. */
+/**
+ * A verb is a selection action the tool card also offers, a tool, or
+ * `edit-face`: an imported face's own edits (resize a hole, remove a
+ * blend), which have no History step to open them from.
+ */
 export type SelectionCalloutVerbId =
-  `action:${SelectionActionId}` | `tool:${ToolId}`;
+  `action:${SelectionActionId}` | `tool:${ToolId}` | 'edit-face';
+
+/** The imported face's edit verb, drawn pressed while its card is open. */
+export function editFaceVerb(open: boolean): SelectionCalloutVerb {
+  return {
+    id: 'edit-face',
+    label: 'Edit face',
+    title: 'Resize a hole or remove a fillet on this imported face',
+    disabled: false,
+    pressed: open
+  };
+}
 
 export interface SelectionCalloutVerb {
   id: SelectionCalloutVerbId;
