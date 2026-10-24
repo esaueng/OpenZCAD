@@ -5,6 +5,16 @@ import {
   type ImportSourceCopyRef
 } from './copy-import-sources';
 export {
+  isUnreadableStoredDocument,
+  markUnreadableStoredDocument,
+  normalizedForLoad
+} from './stored-document';
+import {
+  isUnreadableStoredDocument,
+  normalizedForLoad
+} from './stored-document';
+import { ProjectObjectStorageError } from './project-storage-snapshot';
+export {
   assertImportSourceCopyRefsComplete,
   copyImportedSources,
   copyImportSourceArtifacts,
@@ -416,20 +426,6 @@ export class DocumentTooLargeError extends Error {
 }
 
 /** @throws DocumentTooLargeError when the serialized document exceeds the cap. */
-/**
- * A stored document as loads return it: normalized when this build can, and
- * otherwise exactly as stored (ADR-024 Phase 1). The browser checks every
- * document it loads and refuses one it cannot open, keeping its own copy,
- * so one bad version must not fail the whole request with a server error.
- */
-export function normalizedForLoad(document: ProjectDocument): ProjectDocument {
-  try {
-    return normalizeDocument(document);
-  } catch {
-    return document;
-  }
-}
-
 /**
  * The checks a browser-built new project gets before the account stores it
  * (ADR-024 Phase 1): the creator owns it, it carries the requested name and an
@@ -1154,6 +1150,10 @@ export class InMemoryPersistenceService implements PersistenceService {
     if (this.organizationOf(link.projectId).status === 'deleted') {
       return null;
     }
+    if (isUnreadableStoredDocument(normalizedForLoad(document)))
+      throw new ProjectObjectStorageError(
+        'The shared project cannot be opened.'
+      );
     return {
       projectId: link.projectId,
       name: document.name,

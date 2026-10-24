@@ -160,6 +160,8 @@ import {
 import {
   decodeProjectStorageBody,
   hydrateProjectStorageSnapshot,
+  isUnreadableStoredDocument,
+  markUnreadableStoredDocument,
   normalizedForLoad,
   prepareClientProjectStorageSnapshot,
   prepareProjectStorageSnapshot,
@@ -1140,6 +1142,12 @@ export class D1R2PersistenceService implements PersistenceService {
     const document = row.document_object_id
       ? await this.loadProjectObject(row.project_id, row.document_object_id)
       : normalizedForLoad(JSON.parse(row.document_json) as ProjectDocument);
+    // A share serves only the shared projection, never a stored document it
+    // could not read and project.
+    if (isUnreadableStoredDocument(document))
+      throw new ProjectObjectStorageError(
+        'The shared project cannot be opened.'
+      );
     return {
       projectId: row.project_id,
       name: row.name,
@@ -1923,6 +1931,7 @@ export class D1R2PersistenceService implements PersistenceService {
   private async hydrateCopiedSourceAliases(
     document: ProjectDocument
   ): Promise<ProjectDocument> {
+    if (isUnreadableStoredDocument(document)) return document;
     return reconcileCopiedImportSources(
       document,
       await this.storedCopiedImportArchives(document.projectId)
@@ -4739,23 +4748,33 @@ export class D1R2PersistenceService implements PersistenceService {
     const snapshot = JSON.parse(
       new TextDecoder().decode(logicalBody)
     ) as ProjectStorageSnapshot;
-    const hydrated = await hydrateProjectStorageSnapshot(
-      snapshot,
-      projectId,
-      async (reference: ProjectStorageAssetReference) => {
-        const asset = await bucket.get(reference.objectKey);
-        if (!asset) {
-          throw new ProjectObjectStorageError(
-            `Project asset ${reference.objectKey} is missing from storage.`
+    let hydrated: ProjectDocument;
+    try {
+      hydrated = await hydrateProjectStorageSnapshot(
+        snapshot,
+        projectId,
+        async (reference: ProjectStorageAssetReference) => {
+          const asset = await bucket.get(reference.objectKey);
+          if (!asset) {
+            throw new ProjectObjectStorageError(
+              `Project asset ${reference.objectKey} is missing from storage.`
+            );
+          }
+          return decodeProjectStorageBody(
+            await asset.arrayBuffer(),
+            reference.contentEncoding,
+            reference.logicalBytes
           );
         }
-        return decodeProjectStorageBody(
-          await asset.arrayBuffer(),
-          reference.contentEncoding,
-          reference.logicalBytes
-        );
-      }
-    );
+      );
+    } catch (error) {
+      // A storage fault is the account's to report. Contents this build
+      // cannot walk are the browser's to refuse (ADR-024 Phase 1).
+      if (error instanceof ProjectObjectStorageError) throw error;
+      return markUnreadableStoredDocument(
+        snapshot as unknown as ProjectDocument
+      );
+    }
     return normalizedForLoad(hydrated);
   }
 
