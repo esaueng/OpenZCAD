@@ -12733,21 +12733,9 @@ export function ModelViewer({
       line.renderOrder = sketch.selected
         ? VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY
         : VIEWPORT_RENDER_ORDER.SKETCH_CURVE;
+      // A selected sketch is named by its feature card, not by a chip over
+      // the model.
       context.sketchGroup.add(line);
-
-      if (sketch.selected) {
-        const centroid = new THREE.Vector3();
-        for (const point of sketch.points) {
-          centroid.add(new THREE.Vector3(point.x, point.y, point.z));
-        }
-        centroid.divideScalar(sketch.points.length);
-        const label = makeLabel(
-          'selection-callout sketch-callout',
-          sketch.name
-        );
-        label.position.copy(centroid);
-        context.sketchGroup.add(label);
-      }
     }
 
     if (
