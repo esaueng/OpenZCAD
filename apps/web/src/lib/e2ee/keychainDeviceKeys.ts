@@ -9,12 +9,14 @@ import {
   deleteNativeDeviceKeys,
   deriveWithNativeDeviceKey,
   isDesktopApp,
+  NativeDeviceKeysError,
   signWithNativeDeviceKey,
   type NativeDeviceKeys
 } from '../desktopBridge';
 import type { DeviceKeyPairs } from './accountKeys';
 import {
   indexedDbDeviceStore,
+  type DeviceCandidateKeys,
   type DeviceKeyStore,
   type StoredDevice
 } from './deviceStore';
@@ -96,12 +98,45 @@ async function keyPairs(
   };
 }
 
+/**
+ * Key ids a failed native creation stored but could not remove again
+ * (`NativeDeviceKeysError.keyId`). No record names them, so this page keeps
+ * them and retries the removal before each later creation.
+ */
+const leftoverKeys = new WeakMap<KeychainHost, Set<string>>();
+
+async function removeLeftoverKeys(host: KeychainHost): Promise<void> {
+  const keyIds = leftoverKeys.get(host);
+  for (const keyId of keyIds ?? []) {
+    try {
+      await host.remove(keyId);
+      keyIds!.delete(keyId);
+    } catch (error) {
+      console.error(
+        'OpenZCAD could not remove a partly created device key.',
+        error
+      );
+    }
+  }
+}
+
 /** The `createDeviceKeys` the desktop app uses in place of WebCrypto. */
 export function createKeychainDeviceKeys(
   host: KeychainHost = tauriKeychainHost
 ): () => Promise<DeviceKeyPairs> {
   return async () => {
-    const created = await host.create();
+    await removeLeftoverKeys(host);
+    let created: NativeDeviceKeys;
+    try {
+      created = await host.create();
+    } catch (error) {
+      if (error instanceof NativeDeviceKeysError && error.keyId !== null) {
+        const keyIds = leftoverKeys.get(host) ?? new Set<string>();
+        leftoverKeys.set(host, keyIds.add(error.keyId));
+        await removeLeftoverKeys(host);
+      }
+      throw error;
+    }
     try {
       return await keyPairs(
         host,
@@ -116,7 +151,7 @@ export function createKeychainDeviceKeys(
   };
 }
 
-function deviceKeyId(device: StoredDevice | null): string | null {
+function deviceKeyId(device: DeviceCandidateKeys | null): string | null {
   return device ? keychainKeyId(device.signing.privateKey) : null;
 }
 
@@ -160,46 +195,70 @@ async function forget(host: KeychainHost, keyId: string | null) {
 
 /**
  * A device store whose private keys live in the Keychain. Every write keeps
- * the record and its key id together; keys a write leaves unreferenced (a
- * replaced device, a losing setup race) are removed from the Keychain
- * afterwards, best effort. Deleting a device removes its keys first and fails,
- * keeping the record, if the Keychain refuses.
+ * the record and its key id together. A Keychain key is reachable only
+ * through a record or a key id held in memory, so whatever a write's outcome
+ * (kept, refused by compare-and-swap, a losing setup race, or a rejected
+ * IndexedDB transaction), the keys of the device it was handed survive only
+ * if the stored record holds them afterwards, and keys the write replaced are
+ * removed. Removing unused keys is best effort. Deleting a device removes its
+ * keys first and fails, keeping the record, if the Keychain refuses.
  */
 export function keychainDeviceStore(
   inner: DeviceKeyStore,
   host: KeychainHost = tauriKeychainHost
 ): DeviceKeyStore {
+  /** Removes the candidate's keys unless the stored record holds them. */
+  const discardCandidate = async (candidate: DeviceCandidateKeys) => {
+    const keyId = deviceKeyId(candidate);
+    if (keyId === null) return;
+    let stored: string | null;
+    try {
+      stored = deviceKeyId(await inner.loadDevice(candidate.userId));
+    } catch (error) {
+      // Unknown: keeping a stray key is safer than deleting a used one.
+      console.error(
+        'OpenZCAD could not check whether a device key is in use.',
+        error
+      );
+      return;
+    }
+    if (stored !== keyId) await forget(host, keyId);
+  };
+  const settle = async <T>(
+    candidate: StoredDevice,
+    write: () => Promise<T>
+  ) => {
+    try {
+      return await write();
+    } finally {
+      await discardCandidate(candidate);
+    }
+  };
   return {
     loadDevice: async (userId) => revived(host, await inner.loadDevice(userId)),
     saveDevice: async (device) => {
       const previous = deviceKeyId(await inner.loadDevice(device.userId));
-      await inner.saveDevice(storable(device));
+      await settle(device, () => inner.saveDevice(storable(device)));
       if (previous !== deviceKeyId(device)) await forget(host, previous);
     },
-    getOrCreateDevice: async (candidate) => {
-      const kept = await inner.getOrCreateDevice(storable(candidate));
-      const keptKey = deviceKeyId(kept);
-      const candidateKey = deviceKeyId(candidate);
-      if (keptKey !== candidateKey) await forget(host, candidateKey);
-      return revived(host, kept)!;
-    },
+    getOrCreateDevice: async (candidate) =>
+      revived(
+        host,
+        await settle(candidate, () =>
+          inner.getOrCreateDevice(storable(candidate))
+        )
+      )!,
     withDeviceLock: (userId, run) => inner.withDeviceLock(userId, run),
     replaceDeviceIfCurrent: async (expected, candidate) => {
-      const replaced = await inner.replaceDeviceIfCurrent(
-        expected && storable(expected),
-        storable(candidate)
+      const replaced = await settle(candidate, () =>
+        inner.replaceDeviceIfCurrent(
+          expected && storable(expected),
+          storable(candidate)
+        )
       );
       const previous = deviceKeyId(expected);
-      const proposed = deviceKeyId(candidate);
-      if (replaced) {
-        if (previous !== proposed) await forget(host, previous);
-      } else if (proposed !== previous) {
-        // Another context changed the device first. The candidate's fresh
-        // keys are referenced nowhere, and callers discard it, so remove
-        // them unless the stored record happens to hold the same keys.
-        const stored = deviceKeyId(await inner.loadDevice(candidate.userId));
-        if (stored !== proposed) await forget(host, proposed);
-      }
+      if (replaced && previous !== deviceKeyId(candidate))
+        await forget(host, previous);
       return replaced;
     },
     deleteDevice: async (userId) => {
@@ -210,6 +269,7 @@ export function keychainDeviceStore(
       if (previous !== null) await host.remove(previous);
       await inner.deleteDevice(userId);
     },
+    discardCandidate,
     clearApprovalIfCurrent: (userId, approvalId) =>
       inner.clearApprovalIfCurrent(userId, approvalId),
     loadPin: (userId) => inner.loadPin(userId),

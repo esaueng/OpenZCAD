@@ -51,6 +51,12 @@ export interface StoredDevice {
   } | null;
 }
 
+/** The parts of a device record that hold its private keys. */
+export type DeviceCandidateKeys = Pick<
+  StoredDevice,
+  'userId' | 'signing' | 'unlock'
+>;
+
 export interface DeviceKeyStore {
   loadDevice(userId: string): Promise<StoredDevice | null>;
   saveDevice(device: StoredDevice): Promise<void>;
@@ -64,6 +70,13 @@ export interface DeviceKeyStore {
     candidate: StoredDevice
   ): Promise<boolean>;
   deleteDevice(userId: string): Promise<void>;
+  /**
+   * Discard the keys of a device candidate the store was never handed (a
+   * setup, enrollment or approval abandoned before it saved the device).
+   * Non-extractable WebCrypto keys need nothing; native keys are removed
+   * unless the stored record holds them. Never fails the flow.
+   */
+  discardCandidate(candidate: DeviceCandidateKeys): Promise<void>;
   /** Clear only the canceled request, preserving a newer request or device. */
   clearApprovalIfCurrent(userId: string, approvalId: string): Promise<void>;
   /** The newest device-list entry this browser accepted for the account. */
@@ -263,6 +276,7 @@ export function memoryDeviceStore(): DeviceKeyStore {
     deleteDevice: async (userId) => {
       devices.delete(userId);
     },
+    discardCandidate: async () => {},
     clearApprovalIfCurrent: async (userId, approvalId) => {
       const device = devices.get(userId);
       if (device?.approval?.id === approvalId)
@@ -406,6 +420,7 @@ export function indexedDbDeviceStore(): DeviceKeyStore {
     deleteDevice: async (userId) => {
       await inStore(DEVICES, 'readwrite', (s) => s.delete(userId));
     },
+    discardCandidate: async () => {},
     clearApprovalIfCurrent: async (userId, approvalId) => {
       const db = await openDatabase();
       await new Promise<void>((resolve, reject) => {

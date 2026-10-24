@@ -5066,4 +5066,158 @@ describe('desktop Keychain device keys', () => {
     expect(keychain.keys.size).toBe(0);
     lockAccount(USER);
   });
+
+  /**
+   * A Keychain whose key creation waits for `release`, so a test can end the
+   * session while native creation is still in flight.
+   */
+  function gatedCreation(keychain: ReturnType<typeof fakeKeychainHost>) {
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const creating = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const host: KeychainHost = {
+      ...keychain.host,
+      create: async () => {
+        const created = await keychain.host.create();
+        started();
+        await gate;
+        return created;
+      }
+    };
+    return { host, release, creating };
+  }
+
+  function macContext(
+    srv: Server,
+    keychain: ReturnType<typeof fakeKeychainHost>,
+    host: KeychainHost = keychain.host
+  ) {
+    const session = { current: true };
+    const mac: E2eeContext = {
+      ...device(srv),
+      store: keychainDeviceStore(memoryDeviceStore(), keychain.host),
+      createDeviceKeys: createKeychainDeviceKeys(host),
+      isCurrent: () => session.current
+    };
+    return { mac, session };
+  }
+
+  it.each(['setup', 'enrollment', 'approval'] as const)(
+    'removes native keys when the session ends while %s is creating them',
+    async (flow) => {
+      allowKeySession(getKeySessionRevision());
+      const srv = server();
+      const keychain = fakeKeychainHost();
+      const gated = gatedCreation(keychain);
+      const { mac, session } = macContext(srv, keychain, gated.host);
+      let running: Promise<unknown>;
+      if (flow === 'setup') {
+        running = setUpEncryption(mac, {
+          recoverySecret: (await generateRecoveryKey()).secret,
+          label: 'Mac'
+        });
+      } else {
+        const { recovery } = await setUp(srv);
+        lockAccount(USER);
+        const fresh = ready(await loadEncryption(mac));
+        running =
+          flow === 'enrollment'
+            ? enrollWithRecoveryKey(mac, fresh, recovery.secret, 'Mac')
+            : requestApproval(mac, fresh, 'Mac');
+      }
+      // The settings close while the Keychain is still creating the keys.
+      await gated.creating;
+      expect(keychain.keys.size).toBe(1);
+      session.current = false;
+      gated.release();
+      await flowRefusal(running, 'invalid-request');
+      // No record took the candidate, so its keys are gone too.
+      expect(keychain.keys.size).toBe(0);
+      expect(await mac.store.loadDevice(USER)).toBeNull();
+      lockAccount(USER);
+    }
+  );
+
+  it('removes native keys when IndexedDB rejects the new device during setup', async () => {
+    allowKeySession(getKeySessionRevision());
+    const srv = server();
+    const keychain = fakeKeychainHost();
+    const inner = memoryDeviceStore();
+    const mac: E2eeContext = {
+      ...device(srv),
+      store: keychainDeviceStore(
+        {
+          ...inner,
+          getOrCreateDevice: async () => {
+            throw new Error('IndexedDB transaction aborted');
+          }
+        },
+        keychain.host
+      ),
+      createDeviceKeys: createKeychainDeviceKeys(keychain.host)
+    };
+    await expect(
+      setUpEncryption(mac, {
+        recoverySecret: (await generateRecoveryKey()).secret,
+        label: 'Mac'
+      })
+    ).rejects.toThrow('IndexedDB transaction aborted');
+    expect(keychain.keys.size).toBe(0);
+    expect(count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_identities')).toBe(0);
+  });
+
+  it('removes the device and its native keys with a confirmed erasure, and retries a refused removal', async () => {
+    allowKeySession(getKeySessionRevision());
+    const srv = server();
+    const keychain = fakeKeychainHost();
+    const { mac } = macContext(srv, keychain);
+    ready(
+      await setUpEncryption(mac, {
+        recoverySecret: (await generateRecoveryKey()).secret,
+        label: 'Mac'
+      })
+    );
+    expect(keychain.keys.size).toBe(1);
+    const mls = mlsStores.memoryMlsSessionStore();
+    await mls.getOrCreateStateKey(
+      USER,
+      await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+        'encrypt'
+      ])
+    );
+    const mlsStore = vi
+      .spyOn(mlsStores, 'indexedDbMlsSessionStore')
+      .mockReturnValue(mls);
+    const erase = () =>
+      eraseAccountWithKeyCleanup({
+        userId: USER,
+        store: mac.store,
+        isCurrentSession: () => true,
+        erase: async () => ({ signedOut: true }),
+        onSignedOut: () => {}
+      });
+    // The Keychain refuses: erasure reports it, the record keeps the key id,
+    // and the pin and MLS cleanups still finish.
+    const remove = keychain.host.remove;
+    keychain.host.remove = async () => {
+      throw new Error('Keychain locked');
+    };
+    await expect(erase()).rejects.toThrow('Keychain locked');
+    expect(keychain.keys.size).toBe(1);
+    expect(await mac.store.loadDevice(USER)).not.toBeNull();
+    expect(await mac.store.loadPin(USER)).toBeNull();
+    expect(await mls.loadStateKey(USER)).toBeNull();
+    // The next removal for the account (here, another erasure) finishes it.
+    keychain.host.remove = remove;
+    await erase();
+    expect(keychain.keys.size).toBe(0);
+    expect(await mac.store.loadDevice(USER)).toBeNull();
+    mlsStore.mockRestore();
+    lockAccount(USER);
+  });
 });
