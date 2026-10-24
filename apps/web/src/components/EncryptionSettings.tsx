@@ -73,6 +73,7 @@ import {
 import { Group, Notice, SettingRow, Status } from './settingsControls';
 import { ProjectEncryptionPreference } from './ProjectEncryptionPreference';
 import { EncryptedProjectRecovery } from './EncryptedProjectRecovery';
+import { EncryptionContacts } from './EncryptionContacts';
 import '../styles/components/encryption.css';
 
 /**
@@ -235,12 +236,21 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
           </Group>
         )
       ) : (
-        <AccountPanel
-          {...shared}
-          account={state.account}
-          identityChanged={state.kind === 'identity-changed'}
-          onReload={reload}
-        />
+        <>
+          <AccountPanel
+            {...shared}
+            account={state.account}
+            identityChanged={state.kind === 'identity-changed'}
+            onReload={reload}
+          />
+          {state.kind === 'ready' ? (
+            <EncryptionContacts
+              keys={ctx}
+              account={state.account}
+              Scanner={QrScanner}
+            />
+          ) : null}
+        </>
       )}
       <ProjectEncryptionPreference
         userId={userId}
