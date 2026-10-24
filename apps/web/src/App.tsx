@@ -23220,15 +23220,14 @@ export function App() {
     !modelingLocked &&
     !directMode &&
     movePreview === null &&
-    // A face or edge alone is not an edit: its name, measurement and verbs
-    // are on the selection chip beside it, and the inspector opened only to
-    // say no one feature owns the pick. An imported STEP face is the
-    // exception: its direct edits (hole resize, blend removal) live there.
+    // A pick alone opens no card (the Inspector draws nothing for it), so
+    // the shell must not hold a lane for one: an empty inspector float
+    // reads as a full-width card on a phone and hides the viewer rail. The
+    // card is a running tool, a History row's feature, or an imported
+    // face's edits that Edit face asked for.
     (tool !== null ||
-      selectedFeature !== null ||
-      (selectedTopology?.kind === 'face' &&
-        renderedRepresentations[selectedTopology.bodyId]?.source ===
-          'imported-step'));
+      (selectedFeature !== null && featureSelectionSource !== 'inferred') ||
+      editFaceOpen);
   // The body an edited modeling feature built, read out on its History card
   // as every other feature's body is: a pick opens no card, so History is
   // where a body's volume is read. A feature that keeps its target's body

@@ -39,6 +39,9 @@ for (const directManipulation of [true, false]) {
     // An Objects row pick opens no card: the Selection card names the body.
     await page.locator('.body-row-main').first().click();
     await expect(inspector).toHaveCount(0);
+    // Nor does the shell hold an empty lane for one: on a phone that lane
+    // reads as a full-width card and hides the viewer rail.
+    await expect(page.locator('.viewer-area')).not.toHaveClass(/has-inspector/);
     await expect(
       page.locator('.selection-card .selection-callout-name')
     ).toContainText(`${featureName} 1`);
@@ -54,6 +57,7 @@ for (const directManipulation of [true, false]) {
     // Nor does a viewport pick: the Selection card names the face.
     await selectWall();
     await expect(inspector).toHaveCount(0);
+    await expect(page.locator('.viewer-area')).not.toHaveClass(/has-inspector/);
     await expect(
       page.locator('.selection-card .selection-callout-name')
     ).toContainText(/wall|face/i);
