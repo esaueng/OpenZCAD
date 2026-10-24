@@ -1,6 +1,8 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ViewerToolbar } from './ViewerToolbar';
+import { TOOLTIP_OPEN_DELAY_MS } from './Tooltip';
+import { UNDO_FLOOR_TRIMMED_REASON } from '../lib/toasts';
 import { saveView } from '../lib/savedViews';
 import type { SectionOutlineState } from '../lib/sectionOutline';
 import type { ViewerSettings } from '@openzcad/viewport';
@@ -201,6 +203,60 @@ describe('Measure on the viewer bar', () => {
   it('draws no ruler without a handler', () => {
     renderWithMeasure(false);
     expect(screen.queryByRole('button', { name: 'Measure' })).toBeNull();
+  });
+});
+
+describe('Undo at the oldest kept step', () => {
+  // The history drops its oldest steps past its limits. That used to be a
+  // toast that never left the screen; now the spent Undo button says it, and
+  // only when someone reaches for it.
+  function undoHelp(canUndo: boolean, undoFloorTrimmed: boolean) {
+    vi.useFakeTimers();
+    const noop = () => undefined;
+    try {
+      const view = render(
+        <ViewerToolbar
+          settings={{ ...settings, sectionView: undefined }}
+          projection="perspective"
+          canUndo={canUndo}
+          undoFloorTrimmed={undoFloorTrimmed}
+          canRedo={false}
+          sectionRange={null}
+          onUndo={noop}
+          onRedo={noop}
+          onToggleGrid={noop}
+          onFit={noop}
+          onView={noop}
+          onCycleDisplayMode={noop}
+          onToggleProjection={noop}
+          onToggleSection={noop}
+          onSectionPlane={noop}
+          onSectionOffset={noop}
+          onSectionCommit={noop}
+          onExportSectionDxf={noop}
+          sectionOutline={{ kind: 'clipping' }}
+          units="mm"
+        />
+      );
+      fireEvent.pointerEnter(screen.getByRole('button', { name: 'Undo' }));
+      act(() => {
+        vi.advanceTimersByTime(TOOLTIP_OPEN_DELAY_MS);
+      });
+      const help = screen.getByRole('tooltip').textContent ?? '';
+      view.unmount();
+      return help;
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it('says older steps were not kept once undo reaches a trimmed floor', () => {
+    expect(undoHelp(false, true)).toContain(UNDO_FLOOR_TRIMMED_REASON);
+  });
+
+  it('keeps the plain label while undo is live or nothing was ever dropped', () => {
+    expect(undoHelp(true, true)).not.toContain(UNDO_FLOOR_TRIMMED_REASON);
+    expect(undoHelp(false, false)).not.toContain(UNDO_FLOOR_TRIMMED_REASON);
   });
 });
 

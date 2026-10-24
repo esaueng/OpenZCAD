@@ -189,6 +189,8 @@ interface ViewerShellProps {
   /** The surviving faces a History row brings into focus, lit as selected. */
   focusFaces?: readonly TopologySelection[];
   canUndo: boolean;
+  /** Undo is spent because older steps were dropped, not because none exist. */
+  undoFloorTrimmed?: boolean;
   canRedo: boolean;
   onUndo(): void;
   onRedo(): void;
@@ -411,6 +413,7 @@ export function ViewerShell({
   focusGhostBodies,
   focusFaces,
   canUndo,
+  undoFloorTrimmed = false,
   canRedo,
   onUndo,
   onRedo,
@@ -608,6 +611,7 @@ export function ViewerShell({
       settings={settings}
       projection={projection}
       canUndo={canUndo}
+      undoFloorTrimmed={undoFloorTrimmed}
       canRedo={canRedo}
       onUndo={onUndo}
       onRedo={onRedo}

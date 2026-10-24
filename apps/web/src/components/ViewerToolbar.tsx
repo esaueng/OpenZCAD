@@ -26,6 +26,7 @@ import {
   type SectionOutlineState
 } from '../lib/sectionOutline';
 import { DISPLAY_MODE_LABELS } from '../lib/displayMode';
+import { UNDO_FLOOR_TRIMMED_REASON } from '../lib/toasts';
 import { Tooltip } from './Tooltip';
 import { labelWithKey, useKeymap, type Keymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
@@ -59,6 +60,11 @@ interface ViewerToolbarProps {
   settings: ViewerSettings;
   projection: ProjectionMode;
   canUndo: boolean;
+  /**
+   * Undo is spent because older steps were dropped to keep the history within
+   * its limits: the button's help says so instead of leaving a bare "Undo".
+   */
+  undoFloorTrimmed?: boolean;
   canRedo: boolean;
   /** Slider bounds for the active section plane's axis; null with no bodies. */
   sectionRange: { min: number; max: number } | null;
@@ -130,6 +136,7 @@ export function ViewerToolbar({
   settings,
   projection,
   canUndo,
+  undoFloorTrimmed = false,
   canRedo,
   sectionRange,
   onUndo,
@@ -294,7 +301,13 @@ export function ViewerToolbar({
     // The viewer bar: undo/redo and the viewport toggles. Still `.viewer-rail`
     // in the stylesheets; the name is what people call it.
     <div className="viewer-rail" role="toolbar" aria-label="Viewer bar">
-      <Tooltip label="Undo" shortcut={keymap.label('edit-undo')}>
+      <Tooltip
+        label="Undo"
+        shortcut={keymap.label('edit-undo')}
+        {...(!canUndo && undoFloorTrimmed
+          ? { description: UNDO_FLOOR_TRIMMED_REASON }
+          : {})}
+      >
         <button
           type="button"
           className="rail-button"

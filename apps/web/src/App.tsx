@@ -1439,6 +1439,8 @@ import {
 import {
   countLabel,
   deleteFeatureToastMessage,
+  UNDO_FLOOR_TRIMMED_NOTICE,
+  UNDO_FLOOR_TRIMMED_REASON,
   type ToastAction,
   type ToastModel
 } from './lib/toasts';
@@ -4621,6 +4623,11 @@ export function App() {
   const redoAvailable = drawingMode
     ? (managerRef.current?.redoIsDrawingOnly ?? false)
     : (managerRef.current?.canRedoIn(tweakMode) ?? false);
+  // Undo is spent, but only because older steps were dropped to keep the
+  // history within its limits: the toolbar and palette say so rather than
+  // "Nothing to undo". Dropping a step is not news while modeling — it only
+  // matters to someone reaching for it.
+  const undoFloorTrimmed = managerRef.current?.undoFloorTrimmed ?? false;
   // Both reading workspaces disarm every modeling surface — tools, handles,
   // sketches, the inspector. Tweak differs from View in one thing only: the
   // parameter guard below lets `parameter.set` commands through.
@@ -11317,7 +11324,14 @@ export function App() {
     setMoveCommitHold(null);
     setTool(null);
     clearSelection();
-    setToast(null);
+    if (managerRef.current.undoFloorTrimmed) {
+      announce(UNDO_FLOOR_TRIMMED_NOTICE, {
+        label: 'Revisions',
+        run: () => showModelPanel('revisions')
+      });
+    } else {
+      setToast(null);
+    }
     setStatus(label ? `Undo ${label}` : 'Undo');
   }
 
@@ -22524,12 +22538,13 @@ export function App() {
     if (suspended) panels.release('panels');
   };
   /**
-   * Brings History or Parameters into view by name, as the palette's feature
-   * and parameter results do: unpinned if it was closed, forward if it was
-   * open. Asking for it by name mid-sketch or mid-drag releases the
-   * suspension for the rest of that mode, like a rail press.
+   * Brings History, Parameters or Revisions into view by name, as the
+   * palette's feature and parameter results and the undo-floor notice do:
+   * unpinned if it was closed, forward if it was open. Asking for it by name
+   * mid-sketch or mid-drag releases the suspension for the rest of that
+   * mode, like a rail press.
    */
-  const showModelPanel = (id: 'history' | 'parameters') => {
+  const showModelPanel = (id: 'history' | 'parameters' | 'revisions') => {
     const suspended = panels.panelsHidden;
     setPanelLayout((current) =>
       presentPanel(current, id, panelStageOrUndefined)
@@ -22763,7 +22778,11 @@ export function App() {
       group: 'Edit',
       shortcut: keymap.label('edit-undo'),
       icon: <Undo2 size={16} aria-hidden="true" />,
-      disabledReason: undoAvailable ? null : 'Nothing to undo',
+      disabledReason: undoAvailable
+        ? null
+        : undoFloorTrimmed
+          ? UNDO_FLOOR_TRIMMED_REASON
+          : 'Nothing to undo',
       run: handleUndo
     },
     {
@@ -24312,6 +24331,7 @@ export function App() {
             focusGhostBodies={focusGhostBodies}
             {...(focusFaces ? { focusFaces } : {})}
             canUndo={!viewMode && undoAvailable}
+            undoFloorTrimmed={undoFloorTrimmed}
             canRedo={!viewMode && redoAvailable}
             onUndo={handleUndo}
             onRedo={handleRedo}
@@ -25749,12 +25769,6 @@ export function App() {
       }
       overlays={
         <>
-          {doc.editHistory && doc.editHistory.trimmed > 0 && (
-            <div className="toast" role="status">
-              Older undo steps were removed to keep history within its storage
-              limit.
-            </div>
-          )}
           {workspaceResume.status === 'offline' && (
             <div className="toast" role="status">
               Session sync is pending. It will retry while this project is open.
