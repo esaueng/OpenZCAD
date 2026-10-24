@@ -1,9 +1,10 @@
 /**
- * Shared harness for encrypted document tests (ADR-024 Phase 4, slice 4-5):
- * accounts with real device lists, the real Worker over SQLite with an
- * in-memory object bucket, and Node devices that run the real client
- * modules (`projectGroups.ts`, `encryptedProjectStore.ts`) with the
- * in-process MLS engine.
+ * Shared harness for encrypted document tests (ADR-024 Phase 4, slices 4-5
+ * and 4-6): accounts with real device lists, the real Worker over SQLite
+ * with an in-memory object bucket (multipart uploads and ranged reads
+ * included), and Node devices that run the real client modules
+ * (`projectGroups.ts`, `encryptedProjectStore.ts`,
+ * `encryptedContentBlobs.ts`) with the in-process MLS engine.
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
@@ -57,6 +58,16 @@ import {
   memoryVersionPins,
   type VersionPinStore
 } from '../../apps/web/src/lib/e2ee/versionPins';
+import {
+  createBlobReferenceRegistry,
+  type BlobReferenceRegistry
+} from '../../apps/web/src/lib/e2ee/blobReferences';
+import {
+  createContentBlobsApi,
+  createEncryptedContentBlobs,
+  uploadTransport,
+  type EncryptedContentBlobs
+} from '../../apps/web/src/lib/e2ee/encryptedContentBlobs';
 import { migratedDatabase, sqliteD1 } from './sqlite-d1';
 
 export const OWNER = 'user_owner';
@@ -197,25 +208,91 @@ export async function makeAccount(
 
 export interface Bucket {
   objects: Map<string, ArrayBuffer>;
+  /** Open multipart uploads, by upload id. */
+  multipart: Map<string, { key: string; parts: Map<number, Uint8Array> }>;
   put: ReturnType<typeof vi.fn>;
   get: ReturnType<typeof vi.fn>;
   head: ReturnType<typeof vi.fn>;
   delete: ReturnType<typeof vi.fn>;
+  createMultipartUpload: ReturnType<typeof vi.fn>;
+  resumeMultipartUpload: ReturnType<typeof vi.fn>;
 }
 
 export function objectBucket(): Bucket {
   const objects = new Map<string, ArrayBuffer>();
+  const multipart: Bucket['multipart'] = new Map();
+  let nextUpload = 0;
+  const resumed = (key: string, uploadId: string) => ({
+    key,
+    uploadId,
+    uploadPart: async (partNumber: number, body: ArrayBuffer | Uint8Array) => {
+      const upload = multipart.get(uploadId);
+      if (!upload || upload.key !== key) throw new Error('NoSuchUpload');
+      upload.parts.set(partNumber, new Uint8Array(body).slice());
+      return { partNumber, etag: `etag-${uploadId}-${partNumber}` };
+    },
+    complete: async (parts: { partNumber: number; etag: string }[]) => {
+      const upload = multipart.get(uploadId);
+      if (!upload || upload.key !== key) throw new Error('NoSuchUpload');
+      const chunks = parts.map((part) => {
+        const bytes = upload.parts.get(part.partNumber);
+        if (!bytes || part.etag !== `etag-${uploadId}-${part.partNumber}`) {
+          throw new Error('R2 multipart part mismatch');
+        }
+        return bytes;
+      });
+      const size = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
+      const assembled = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) {
+        assembled.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      objects.set(key, assembled.buffer);
+      multipart.delete(uploadId);
+      return { key, size };
+    },
+    abort: async () => {
+      multipart.delete(uploadId);
+    }
+  });
   return {
     objects,
+    multipart,
     put: vi.fn(async (key: string, body: ArrayBuffer | Uint8Array) => {
       objects.set(key, new Uint8Array(body).slice().buffer);
     }),
-    get: vi.fn(async (key: string) => {
-      const body = objects.get(key);
-      return body
-        ? { arrayBuffer: async () => body.slice(0), size: body.byteLength }
-        : null;
+    get: vi.fn(
+      async (
+        key: string,
+        options?: { range?: { offset?: number; length?: number } }
+      ) => {
+        const stored = objects.get(key);
+        if (!stored) return null;
+        const offset = options?.range?.offset ?? 0;
+        const body = stored.slice(
+          offset,
+          options?.range?.length === undefined
+            ? undefined
+            : offset + options.range.length
+        );
+        return {
+          arrayBuffer: async () => body.slice(0),
+          size: stored.byteLength,
+          get body() {
+            return new Blob([body.slice(0)]).stream();
+          }
+        };
+      }
+    ),
+    createMultipartUpload: vi.fn(async (key: string) => {
+      const uploadId = `multipart-${++nextUpload}`;
+      multipart.set(uploadId, { key, parts: new Map() });
+      return resumed(key, uploadId);
     }),
+    resumeMultipartUpload: vi.fn((key: string, uploadId: string) =>
+      resumed(key, uploadId)
+    ),
     head: vi.fn(async (key: string) => {
       const body = objects.get(key);
       return body ? { size: body.byteLength } : null;
@@ -327,6 +404,9 @@ export interface Device {
   mls: MlsSessionStore;
   pins: VersionPinStore;
   warnings: EncryptedProjectWarning[];
+  /** This page's content blob references (a fresh page holds none). */
+  references: BlobReferenceRegistry;
+  blobs: EncryptedContentBlobs;
   fetcher(path: string, init?: RequestInit): Promise<Response>;
   /** Runs before a request reaches the Worker. */
   before?: Hook;
@@ -343,6 +423,9 @@ export interface DeviceOptions {
   pins?: VersionPinStore;
   cutoffs?: Map<string, VersionCutoff>;
   now?: () => number;
+  /** Upload part and envelope chunk sizes for content blobs. */
+  partBytes?: number;
+  chunkSize?: number;
 }
 
 /** One device: its own engine, MLS store and pins over the shared server. */
@@ -402,9 +485,19 @@ export function device(
     device: deviceId ? account.devices.get(deviceId)! : null
   };
   result.documents = createEncryptedDocumentsApi(fetcher);
+  result.references = createBlobReferenceRegistry();
+  result.blobs = createEncryptedContentBlobs({
+    groups: result.groups,
+    references: result.references,
+    api: createContentBlobsApi(fetcher),
+    transport: uploadTransport(fetcher),
+    ...(options.partBytes ? { partBytes: options.partBytes } : {}),
+    ...(options.chunkSize ? { chunkSize: options.chunkSize } : {})
+  });
   result.store = createEncryptedProjectStore({
     groups: result.groups,
     api: result.documents,
+    blobReferences: result.references,
     pins,
     ...(options.cutoffs ? { cutoffs: async () => options.cutoffs! } : {}),
     ...(options.now ? { now: options.now } : {}),

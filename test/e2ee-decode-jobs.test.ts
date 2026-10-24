@@ -13,6 +13,7 @@ import {
   versionHash,
   type ContentBlobReference,
   type E2eeErrorCode,
+  type EncryptedDocumentBody,
   type ProjectEnvelopeHeader,
   type ProjectEnvelopeHeaderInit
 } from '@openzcad/crypto';
@@ -33,6 +34,7 @@ import {
   handleDecodeRequest,
   parseGuardedJson,
   runDecodeJob,
+  sealDocumentJob,
   type ContentBlobDecodeResult,
   type ProjectEnvelopeDecodeResult,
   type SealDocumentResult
@@ -582,6 +584,31 @@ describe('seal jobs', () => {
       blobs: [],
       revisionVersionHashes
     });
+  });
+
+  it('derives the header blob ids from the body references (slice 4-6)', async () => {
+    const { reference } = await encryptContentBlob(
+      EnvelopeKey.generate(),
+      'import-source',
+      patternBytes(100, 3)
+    );
+    const sealed = await sealDocumentJob({
+      type: 'seal-document',
+      // A header that lists another blob is overridden, never trusted.
+      header: { ...HEADER, blobIds: ['f'.repeat(32)] } as typeof HEADER,
+      document: { projectId: 'project-decode' },
+      blobs: [reference],
+      revisionVersionHashes: new Map()
+    });
+    const { header } = parseEnvelope(sealed.envelope);
+    expect(header).toMatchObject({ blobIds: [reference.blobId] });
+    const opened = (await runDecodeJob({
+      type: 'project-envelope',
+      kind: 'document',
+      versionKey: sealed.versionKey,
+      envelope: sealed.envelope
+    })) as ProjectEnvelopeDecodeResult;
+    expect((opened.value as EncryptedDocumentBody).blobs).toEqual([reference]);
   });
 
   it('seals documents only', async () => {

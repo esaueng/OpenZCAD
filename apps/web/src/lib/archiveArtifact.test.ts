@@ -221,3 +221,30 @@ describe('archiving an artifact for an import that is cancelled', () => {
     expect(seenAfterSwitch).toEqual([]);
   });
 });
+
+/**
+ * ADR-024 Phase 4, content blobs: an end-to-end encrypted project's file
+ * never reaches the plaintext upload routes. It becomes an encrypted blob
+ * whose id is the artifact id, and no File-menu record follows.
+ */
+describe('archiving into an encrypted project', () => {
+  it('hands the file to the encrypting transport and opens no plaintext session', async () => {
+    const archiveEncrypted = vi.fn(() => Promise.resolve('a'.repeat(32)));
+    const { api, uploadArtifact } = transport({ archiveEncrypted });
+    const stored = vi.fn();
+    const input = {
+      fileName: 'bracket.step',
+      contentType: 'model/step',
+      kind: 'step-import' as const,
+      body: new Blob(['ISO-10303-21;'])
+    };
+    await expect(archiveArtifact(api, PROJECT, input, stored)).resolves.toBe(
+      'a'.repeat(32)
+    );
+    expect(archiveEncrypted).toHaveBeenCalledWith(PROJECT, input);
+    expect(api.createUploadSession).not.toHaveBeenCalled();
+    expect(uploadArtifact).not.toHaveBeenCalled();
+    expect(api.finalizeArtifact).not.toHaveBeenCalled();
+    expect(stored).not.toHaveBeenCalled();
+  });
+});

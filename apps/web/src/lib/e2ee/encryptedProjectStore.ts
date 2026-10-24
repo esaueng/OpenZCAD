@@ -25,15 +25,23 @@
  *   the pin.
  * - A fresh browser (no pin) warns when the head it is offered was signed
  *   well before the account's last recorded activity.
+ * - **Content blobs** (slice 4-6). Imported sources, mesh payloads and
+ *   reference images are encrypted blobs (`encryptedContentBlobs.ts`): a
+ *   write's body carries the reference of every blob its document names and
+ *   the header's `blobIds` are derived from that list; a verified read
+ *   hands its body's references to this page's registry, so the source
+ *   resolver and the next write can use them.
  *
- * Not yet: content blobs (imported files, meshes and reference images,
- * slice 4-6), measurements, view state and thumbnails (4-7), copies,
- * branches and adoption (4-8), the live room (4-9).
+ * Not yet: files embedded in the document itself (the legacy `stepText`
+ * and embedded-mesh forms), measurements, view state, thumbnails and
+ * archived exports (4-7), copies, branches and adoption (4-8), the live
+ * room (4-9).
  */
 import {
   AuthorshipError,
   EnvelopeKey,
   VersionLogError,
+  checkBlobReferences,
   encodeProjectInfoBody,
   encryptProjectEnvelope,
   epochBinding,
@@ -61,9 +69,6 @@ import {
 } from '@openzcad/crypto';
 import {
   PROJECT_STORAGE_FORMAT_E2EE_V1,
-  documentAssetsWithHistory,
-  documentNodesWithHistory,
-  referenceImagesWithHistory,
   type CreateProjectRequest,
   type CreateProjectResponse,
   type E2eeProjectEnvelopeRecord,
@@ -99,6 +104,14 @@ import {
   type SealDocumentResult
 } from './decodeJobs';
 import { E2eeApiError } from './e2eeApi';
+import {
+  pageBlobReferences,
+  type BlobReferenceRegistry
+} from './blobReferences';
+import {
+  documentBlobReferences,
+  rememberDocumentBlobs
+} from './encryptedContentBlobs';
 import {
   createEncryptedDocumentsApi,
   type EncryptedDocumentsApi
@@ -158,6 +171,18 @@ export interface EncryptedProjectContext {
   ) => Promise<ReadonlyMap<string, VersionCutoff>>;
   readonly now?: () => number;
   readonly onWarning?: (warning: EncryptedProjectWarning) => void;
+  /** Content blob references; defaults to this page's registry. */
+  readonly blobReferences?: BlobReferenceRegistry;
+  /**
+   * Runs on every verified document a load or a historical read returns,
+   * after its blob references are registered: a page fetches the sources
+   * its geometry workers will ask for. Best-effort: a source that cannot be
+   * fetched now is reported where it is needed, as for any other source.
+   */
+  readonly onDocument?: (
+    projectId: string,
+    document: ProjectDocument
+  ) => Promise<void>;
 }
 
 /** How far a fresh browser lets a head's signature trail account activity. */
@@ -203,9 +228,13 @@ export class EncryptedProjectIntegrityError extends ApiError {
 /** This device holds no key session, or only reads (decision D4). */
 export const E2EE_KEYS_LOCKED_CODE = 'E2EE_KEYS_LOCKED';
 export const E2EE_READ_ONLY_DEVICE_CODE = 'E2EE_READ_ONLY_DEVICE';
-/** Slice 4-6 brings imported files, meshes and reference images. */
+/**
+ * Imports whose file is embedded in the document (the legacy `stepText`
+ * and embedded-mesh forms the plaintext path splits into storage assets)
+ * have no encrypted form yet; reference-form imports are content blobs.
+ */
 export const E2EE_CONTENT_UNAVAILABLE_MESSAGE =
-  'Encrypted projects cannot hold imported files, meshes or reference images yet. Remove them, or keep this project on this device.';
+  'Encrypted projects cannot hold files embedded in the document yet. Import the file again, or keep this project on this device.';
 
 /** What this page remembers of a project's accepted head. */
 interface HeadState {
@@ -259,22 +288,6 @@ function asApiError(error: unknown): unknown {
   return new ApiError(error.status, error.message, error.code, {
     ...((error as { body?: Record<string, unknown> }).body ?? {})
   });
-}
-
-/** Slice 4-6: refused clearly, before anything is encrypted. */
-function assertWithoutContentBlobs(document: ProjectDocument): void {
-  for (const node of documentNodesWithHistory(document)) {
-    const kind = (node as { featureKind?: unknown }).featureKind;
-    if (kind === 'imported-step' || kind === 'imported-mesh') {
-      throw new UnstorableDocumentError(E2EE_CONTENT_UNAVAILABLE_MESSAGE);
-    }
-  }
-  if (!referenceImagesWithHistory(document).next().done) {
-    throw new UnstorableDocumentError(E2EE_CONTENT_UNAVAILABLE_MESSAGE);
-  }
-  if (!documentAssetsWithHistory(document).next().done) {
-    throw new UnstorableDocumentError(E2EE_CONTENT_UNAVAILABLE_MESSAGE);
-  }
 }
 
 const integrity = (reason: EncryptedIntegrityReason, message: string) =>
@@ -335,6 +348,20 @@ export function createEncryptedProjectStore(
   const now = ctx.now ?? Date.now;
   const heads = new Map<string, HeadState>();
   const authenticators = new Map<string, Uint8Array>();
+  const blobReferences = ctx.blobReferences ?? pageBlobReferences;
+
+  /** The page's sources for a verified document, never failing its read. */
+  async function opened(
+    projectId: string,
+    document: ProjectDocument
+  ): Promise<ProjectDocument> {
+    try {
+      await ctx.onDocument?.(projectId, document);
+    } catch {
+      // A source that cannot be fetched now is reported where it is needed.
+    }
+    return document;
+  }
 
   const list = () => groups.account.list;
   const cutoffsFor = async (projectId: string) =>
@@ -660,6 +687,8 @@ export function createEncryptedProjectStore(
         'The decrypted document names another version than its envelope.'
       );
     }
+    // The verified body is what authenticates each blob the document names.
+    rememberDocumentBlobs(blobReferences, projectId, body.blobs, document);
     return { body, document };
   }
 
@@ -941,7 +970,6 @@ export function createEncryptedProjectStore(
     previousHash: string | null,
     revisionHashes: ReadonlyMap<string, Uint8Array>
   ): Promise<Sealed> {
-    assertWithoutContentBlobs(document);
     // The checks every account write gets (ADR-024 Phase 1).
     const split = await splitProjectStorageUpload(document);
     if (split.storageAssets.length) {
@@ -952,6 +980,9 @@ export function createEncryptedProjectStore(
       ...split.document,
       version: documentVersion
     } as unknown as ProjectDocument;
+    // Every blob the document names, with the key and hash that let a
+    // reader authenticate it; the header's ids are derived from this list.
+    const blobs = documentBlobReferences(blobReferences, projectId, stored);
     const init: ProjectEnvelopeHeaderInit = {
       kind: 'document',
       projectId,
@@ -969,8 +1000,16 @@ export function createEncryptedProjectStore(
     const sealedBody = await seal({
       header: init,
       document: stored as unknown as Record<string, unknown>,
+      blobs,
       revisionVersionHashes: retainedHashes(revisionHashes, stored)
     });
+    // On every write, whoever sealed it: the header lists exactly the
+    // references the body carries.
+    const sealedHeader = parseEnvelope(sealedBody.envelope).header;
+    if (sealedHeader.class !== 'project') {
+      throw new Error('The sealed version is not a project envelope.');
+    }
+    checkBlobReferences(sealedHeader, blobs);
     const sealed = await signSealed(
       device,
       material,
@@ -1371,8 +1410,8 @@ export function createEncryptedProjectStore(
       ).document;
     }),
 
-    loadProject: guarded(
-      async (projectId) => (await readHead(projectId)).document
+    loadProject: guarded(async (projectId) =>
+      opened(projectId, (await readHead(projectId)).document)
     ),
 
     loadRevision: guarded(async (projectId, revisionId) => {
@@ -1411,7 +1450,7 @@ export function createEncryptedProjectStore(
         envelope
       );
       // A historical read never moves the pin.
-      return document;
+      return opened(projectId, document);
     }),
 
     listRevisions: guarded(async (projectId) => {

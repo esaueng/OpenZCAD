@@ -17,7 +17,11 @@ import {
   type ArtifactRecord,
   type ReferenceImageId
 } from '@openzcad/shared';
-import { api } from './api';
+import { api, rememberProjectFormats } from './api';
+import {
+  pageBlobReferences,
+  setEncryptedBlobReader
+} from './e2ee/blobReferences';
 import {
   createProjectBackup,
   readBackupResponse
@@ -353,4 +357,59 @@ it('carries reference-image pictures as sources and refuses a backup without the
   await expect(parseProjectBackup(JSON.stringify(stripped))).rejects.toThrow(
     'Missing image: Plan'
   );
+});
+
+/**
+ * ADR-024 Phase 4, content blobs: an encrypted project lists no stored
+ * files, and its sources are blobs this page decrypts with the keys from
+ * the verified document, never plaintext downloads.
+ */
+it('backs up an encrypted project’s sources through its blob reader', async () => {
+  const bytes = new TextEncoder().encode('ISO-10303-21;\nEND-ISO-10303-21;');
+  const blobId = 'c'.repeat(32);
+  let document = createProjectDocument('Encrypted', toUserId('owner'));
+  document = importStepBody(document, {
+    name: 'Imported STEP',
+    sourceName: 'part.step',
+    artifactId: blobId,
+    stepSourceRef: {
+      marker: 'openzcad-source-ref',
+      version: 1,
+      hashAlgorithm: 'sha256',
+      checksumSha256: await checksum(bytes),
+      logicalBytes: bytes.byteLength
+    }
+  }).document;
+  rememberProjectFormats([
+    { projectId: document.projectId, storageFormat: 2 }
+  ]);
+  pageBlobReferences.remember(document.projectId, {
+    blobId,
+    kind: 'import-source',
+    key: new Uint8Array(32),
+    ciphertextHash: new Uint8Array(32),
+    plaintextLength: bytes.byteLength
+  });
+  const reader = vi.fn(async () => new Uint8Array(bytes));
+  setEncryptedBlobReader(reader);
+  const listArtifacts = vi.spyOn(api, 'listArtifacts');
+  // Save states come through the encrypted store; none are kept here.
+  vi.spyOn(api, 'loadRevision').mockResolvedValue(null);
+  const fetch = vi.fn();
+  vi.stubGlobal('fetch', fetch);
+  try {
+    const backup = await parseProjectBackup(
+      await createProjectBackup(document, true)
+    );
+    expect(backup.sources!.map((source) => source.sha256)).toEqual([
+      await checksum(bytes)
+    ]);
+    expect(reader).toHaveBeenCalledOnce();
+    expect(listArtifacts).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  } finally {
+    setEncryptedBlobReader(null);
+    pageBlobReferences.clear();
+    rememberProjectFormats([{ projectId: document.projectId }]);
+  }
 });

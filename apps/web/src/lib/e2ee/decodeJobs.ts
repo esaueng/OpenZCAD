@@ -81,8 +81,11 @@ export interface ContentBlobDecodeJob {
  */
 export interface SealDocumentJob {
   readonly type: 'seal-document';
-  readonly header: ProjectEnvelopeHeaderInit;
+  /** The header; its `blobIds` are always derived from `blobs`. */
+  readonly header: Omit<ProjectEnvelopeHeaderInit, 'blobIds'>;
   readonly document: Readonly<Record<string, unknown>>;
+  /** The content blobs the document names (ADR-024 content blobs). */
+  readonly blobs?: readonly ContentBlobReference[];
   readonly revisionVersionHashes: ReadonlyMap<string, Uint8Array>;
 }
 
@@ -355,16 +358,24 @@ export async function sealDocumentJob(
   if (job?.header?.kind !== 'document') {
     throw new E2eeError('invalid-argument', 'Only documents are sealed here');
   }
+  // The header names exactly the blobs the body references: derived here,
+  // never assembled separately, and checked again by the body encoder
+  // (`checkBlobReferences`).
+  const blobs = [...(job.blobs ?? [])];
+  const header: ProjectEnvelopeHeaderInit = {
+    ...job.header,
+    blobIds: blobs.map((reference) => reference.blobId)
+  };
   const plaintext = encodeEncryptedDocumentBody(
     {
       document: job.document,
-      blobs: [],
+      blobs,
       revisionVersionHashes: job.revisionVersionHashes
     },
-    job.header
+    header
   );
   const key = EnvelopeKey.generate();
-  const envelope = await encryptProjectEnvelope(key, job.header, plaintext);
+  const envelope = await encryptProjectEnvelope(key, header, plaintext);
   return {
     type: 'seal-document',
     envelope,
