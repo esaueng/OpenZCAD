@@ -61,7 +61,11 @@
  *   device by its signed cutoffs (directory, archives, authorship and
  *   `revokedCommitter`). In a shared project a revoked device no signed
  *   statement names the project for gets `UNSIGNED_SHARED_CUTOFF` in the
- *   directory, the same in every member's browser.
+ *   directory, the same in every member's browser. A processed Commit
+ *   that removes a co-member's own leaves (the Remove its removal's
+ *   rotation carries) tells `ProjectGroupContext.onMemberDevicesRemoved`,
+ *   so the owner's page can state its share links' authors again (slice
+ *   5-10).
  *
  * Everything the server returns is checked before use: leaf certifications
  * against the device list (`buildDeviceDirectory`), archives against their
@@ -364,6 +368,23 @@ export interface ProjectGroupContext {
    * links made before the removal. Best effort; a throw is ignored.
    */
   readonly onMembersRemoved?: (removal: MembersRemoved) => void;
+  /**
+   * Told when a Commit this device sent or processed removed leaves of
+   * other members who keep at least one leaf (slice 5-7: a co-member's
+   * device removal rotates the project by a Remove of its own revoked
+   * leaves), so the owner's page can issue share-authority statements
+   * that no longer name the removed devices (slice 5-10). Best effort; a
+   * throw is ignored.
+   */
+  readonly onMemberDevicesRemoved?: (removal: MemberDevicesRemoved) => void;
+}
+
+/** Other members' devices whose leaves one Commit removed (slice 5-7). */
+export interface MemberDevicesRemoved {
+  readonly projectId: string;
+  /** The key epoch the Commit started. */
+  readonly keyEpoch: number;
+  readonly devices: readonly { userId: string; deviceId: string }[];
 }
 
 /** Other members who lost their last leaf in one Commit (slice 5-5). */
@@ -2211,7 +2232,10 @@ async function departedIdentities(
 
 /**
  * Tells `onMembersRemoved` which other members a processed or confirmed
- * Commit took the last leaf of (slice 5-5, for share-link reissue).
+ * Commit took the last leaf of (slice 5-5, for share-link reissue), and
+ * `onMemberDevicesRemoved` which leaves it removed of other members who
+ * stay (slice 5-7's rotation of a co-member's device removal, for new
+ * share-authority statements).
  */
 async function reportRemovals(
   ctx: ProjectGroupContext,
@@ -2220,24 +2244,38 @@ async function reportRemovals(
   keyEpochBase: number,
   change: EpochChange
 ): Promise<void> {
-  if (!ctx.onMembersRemoved || change.removed.length === 0) return;
+  if (
+    (!ctx.onMembersRemoved && !ctx.onMemberDevicesRemoved) ||
+    change.removed.length === 0
+  ) {
+    return;
+  }
   const status = await ctx.sessions.status(ref);
-  const userIds = [
-    ...new Set(change.removed.map((leaf) => leaf.userId))
-  ].filter(
-    (userId) =>
-      userId !== ctx.account.userId &&
-      !status.members.some((member) => member.userId === userId)
+  const keyEpoch = keyEpochBase + change.epoch;
+  const others = change.removed.filter(
+    (leaf) => leaf.userId !== ctx.account.userId
   );
-  if (userIds.length === 0) return;
+  const stays = (userId: string) =>
+    status.members.some((member) => member.userId === userId);
+  const userIds = [...new Set(others.map((leaf) => leaf.userId))].filter(
+    (userId) => !stays(userId)
+  );
+  const devices = others
+    .filter((leaf) => stays(leaf.userId))
+    .map(({ userId, deviceId }) => ({ userId, deviceId }));
   try {
-    ctx.onMembersRemoved({
-      projectId,
-      keyEpoch: keyEpochBase + change.epoch,
-      userIds
-    });
+    if (userIds.length > 0) {
+      ctx.onMembersRemoved?.({ projectId, keyEpoch, userIds });
+    }
   } catch {
     // Best effort: the Commit stands either way.
+  }
+  try {
+    if (devices.length > 0) {
+      ctx.onMemberDevicesRemoved?.({ projectId, keyEpoch, devices });
+    }
+  } catch {
+    // Best effort, as above.
   }
 }
 

@@ -43,7 +43,10 @@ import { sealDocumentJob } from '../apps/web/src/lib/e2ee/decodeJobs';
 import { EncryptedProjectIntegrityError } from '../apps/web/src/lib/e2ee/encryptedProjectStore';
 import {
   catchUpProjectGroup,
+  ensureProjectRotated,
+  joinProjectGroup,
   removeMember,
+  type MemberDevicesRemoved,
   type MembersRemoved
 } from '../apps/web/src/lib/e2ee/projectGroups';
 import { forgetAllProjectKeys } from '../apps/web/src/lib/e2ee/unlockedProjectKeys';
@@ -63,6 +66,7 @@ import {
   renewShareDelegation,
   revokeShareLink,
   shareDelegationState,
+  shareLinksAfterDeviceRemoval,
   shareLinksAfterRemoval,
   type CreatedShareLink
 } from '../apps/web/src/lib/e2ee/shareLinks';
@@ -658,6 +662,78 @@ describe(
         // Nothing changed since: the statement stays.
         const again = await maintainShareLinks(laptop.shareLinks, projectId);
         expect(again.authorities.current).toEqual([created.shareId]);
+      } finally {
+        other = await makeAccount(OTHER, ['other_laptop', 'other_desktop']);
+      }
+    });
+
+    it('an editor’s device removal rotating the project issues a statement at once (5-7 with 5-10)', async () => {
+      const { srv, laptop, member, projectId } = await linkedProject();
+      // The editor's second device holds a leaf of its own.
+      const desktop = device(srv, other, 'other_desktop', {
+        members: othersOf(other)
+      });
+      await joinProjectGroup(desktop.groups, projectId);
+      // Both pages process its join while the device is still listed.
+      await catchUpProjectGroup(member.groups, projectId);
+      await catchUpProjectGroup(laptop.groups, projectId);
+      await delegate(laptop);
+      const created = await createShareLink(
+        laptop.shareLinks,
+        projectId,
+        'view'
+      );
+      const revoked = other.list.devices.find(
+        (d) => d.deviceId === 'other_desktop'
+      )!;
+      expect(statedAuthors(srv, projectId, created.shareId)).toContain(
+        toBase64Url(revoked.signingKeyHash)
+      );
+      const sequence = linkRow(
+        srv,
+        projectId,
+        created.shareId
+      )!.authority_sequence!;
+      // The hook, as the page wires it.
+      const heard: MemberDevicesRemoved[] = [];
+      const work: Promise<unknown>[] = [];
+      (
+        laptop.groups as {
+          onMemberDevicesRemoved?: (r: MemberDevicesRemoved) => void;
+        }
+      ).onMemberDevicesRemoved = (removal) => {
+        heard.push(removal);
+        work.push(shareLinksAfterDeviceRemoval(laptop.shareLinks, removal));
+      };
+      await other.revoke(srv.db, 'other_desktop');
+      try {
+        // The editor's other device rotates: a Remove of its revoked leaf.
+        await ensureProjectRotated(member.groups, projectId);
+        // The owner's page processes that Commit, with no save of its own.
+        await catchUpProjectGroup(laptop.groups, projectId);
+        await Promise.all(work);
+        expect(heard).toEqual([
+          {
+            projectId,
+            keyEpoch: serverKeyEpoch(srv, projectId),
+            devices: [{ userId: OTHER, deviceId: 'other_desktop' }]
+          }
+        ]);
+        expect(
+          linkRow(srv, projectId, created.shareId)!.authority_sequence
+        ).toBe(sequence + 1);
+        const authors = statedAuthors(srv, projectId, created.shareId);
+        expect(authors).not.toContain(toBase64Url(revoked.signingKeyHash));
+        expect(authors).toContain(
+          toBase64Url(
+            other.list.devices.find((d) => d.deviceId === 'other_laptop')!
+              .signingKeyHash
+          )
+        );
+        // The editor's own page hears nothing to state: only the owner signs.
+        expect(
+          await shareLinksAfterDeviceRemoval(member.shareLinks, heard[0]!)
+        ).toBeNull();
       } finally {
         other = await makeAccount(OTHER, ['other_laptop', 'other_desktop']);
       }

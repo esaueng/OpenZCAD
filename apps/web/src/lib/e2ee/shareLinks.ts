@@ -20,8 +20,9 @@
  *   their device lists. The owner's browser issues a new one when a
  *   statement is missing, has two days or less left, names another author
  *   set (an editor removed, a device revoked or added) or was signed by a
- *   device the delegation no longer names, and at once after a removal
- *   (`onMembersRemoved`).
+ *   device the delegation no longer names, at once after a removal
+ *   (`onMembersRemoved`), and when a co-member's device removal rotates
+ *   the project (`onMemberDevicesRemoved`, slice 5-7).
  * - **Delegation** ("OZS", the identity key): at most 30 days, naming the
  *   owner's certified devices. Renewing it needs the identity key, so a
  *   passkey touch or the recovery key: the sharing dialog asks when sharing
@@ -86,6 +87,7 @@ import {
   joinProjectGroup,
   projectDeviceLists,
   projectKeyForEpoch,
+  type MemberDevicesRemoved,
   type MembersRemoved,
   type ProjectGroupContext
 } from './projectGroups';
@@ -1073,4 +1075,28 @@ export async function shareLinksAfterRemoval(
   );
   if (owner !== ctx.groups.account.userId) return null;
   return issueShareAuthorities(ctx, removal.projectId, { head, force: true });
+}
+
+/**
+ * A co-member removed one of its devices and the project rotated (slice
+ * 5-7's Remove of its own revoked leaves, `onMemberDevicesRemoved`): the
+ * owner's browser states the project's links again, so a revoked editor
+ * device drops out of the authors visitors accept without waiting for the
+ * owner's next save. The member's new device list is what shows the
+ * device revoked; a statement whose authors already match stays.
+ */
+export async function shareLinksAfterDeviceRemoval(
+  ctx: ShareLinksContext,
+  removal: MemberDevicesRemoved
+): Promise<AuthorityOutcome | null> {
+  if (!ctx.groups.device) return null;
+  const head = await ctx.store.shareHead(removal.projectId);
+  if (!head.shareLinks?.links.length) return null;
+  const owner = await projectOwnerOf(
+    ctx.groups,
+    removal.projectId,
+    head.keyEpoch
+  );
+  if (owner !== ctx.groups.account.userId) return null;
+  return issueShareAuthorities(ctx, removal.projectId, { head });
 }

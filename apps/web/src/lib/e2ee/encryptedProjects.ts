@@ -56,6 +56,7 @@ import { mlsProjectSessions } from './mls/projectSessions';
 import {
   createProjectGroupsApi,
   projectGroupAccount,
+  type MemberDevicesRemoved,
   type MembersRemoved
 } from './projectGroups';
 import {
@@ -262,6 +263,15 @@ async function openStore(
           // Every listener still hears it.
         }
       }
+    },
+    // A co-member's device removal rotated a project (slice 5-7): the
+    // owner's page states its share links again without that device.
+    onMemberDevicesRemoved: (removal: MemberDevicesRemoved) => {
+      void import('./shareLinks')
+        .then(({ shareLinksAfterDeviceRemoval }) =>
+          shareCtx ? shareLinksAfterDeviceRemoval(shareCtx, removal) : null
+        )
+        .catch(() => undefined);
     }
   };
   const blobs = createEncryptedContentBlobs({
