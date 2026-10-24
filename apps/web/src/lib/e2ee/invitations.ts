@@ -323,8 +323,14 @@ async function describe(
   const at = now(ctx);
   const out: OwnerInvitation[] = [];
   for (const record of records) {
-    const person = record.acceptedByUserId
-      ? await ctx.people.inspect(record.acceptedByUserId).catch(() => null)
+    // Only an open, accepted invitation needs the invitee's standing.
+    const open =
+      record.acceptedByUserId !== null &&
+      !record.completedAt &&
+      !record.revokedAt &&
+      record.expiresAt > at;
+    const person = open
+      ? await ctx.people.inspect(record.acceptedByUserId!).catch(() => null)
       : null;
     const claimed = await ctx.store
       .claim(userId, record.invitationId)
@@ -481,10 +487,24 @@ export async function addInvitedMember(
   }
   const { group } = await ctx.groups.api.group(invitation.projectId);
   const keyPackages: InviteeKeyPackage[] = [];
-  for (const record of claimed.keyPackages) {
-    keyPackages.push(
-      await checkedKeyPackage(ctx, record, invitation, person.list, group.epoch)
-    );
+  try {
+    for (const record of claimed.keyPackages) {
+      keyPackages.push(
+        await checkedKeyPackage(
+          ctx,
+          record,
+          invitation,
+          person.list,
+          group.epoch
+        )
+      );
+    }
+  } catch (error) {
+    // Refused KeyPackages are never added: the invitee publishes new ones.
+    await ctx.store
+      .dropClaim(userId, invitation.invitationId)
+      .catch(() => undefined);
+    throw error;
   }
   let state: ProjectGroupState;
   try {

@@ -627,6 +627,13 @@ describe('the invitation flow in the browser (slice 5-3b)', () => {
     expect(groupEpoch(w.srv, projectId)).toBe(1);
     expect(memberRole(w.srv, projectId, OTHER)).toBeNull();
     expect(invitation.invitationId).toBe(pending!.record.invitationId);
+    // The refused claim is not kept: the invitee publishes anew.
+    expect(
+      await ownerCtx.store.claim(OWNER, invitation.invitationId)
+    ).toBeNull();
+    expect(await projectInvitations(ownerCtx, projectId)).toMatchObject([
+      { state: 'waiting-for-keys' }
+    ]);
     expect(invitee.deviceId).toBe('other_laptop');
   });
 
