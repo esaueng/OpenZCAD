@@ -21,10 +21,15 @@
  */
 import type {
   CommitRequest,
+  DeviceDirectory,
   EpochChange,
   Mls,
   MlsSession,
   PendingCommit,
+  Processed,
+  RejoinPsk,
+  RejoinRequest,
+  RejoinResult,
   SessionStatus
 } from '@openzcad/mls';
 import {
@@ -61,6 +66,12 @@ export class MlsSessionMissing extends Error {
 interface Entry {
   readonly session: MlsSession;
   revision: number;
+  /**
+   * The stored session's leaf. Revisions restart at 1 after a session is
+   * discarded, so a new session (always a new leaf) at the revision this
+   * page cached is told apart by its leaf.
+   */
+  readonly leafKey: Uint8Array;
 }
 
 interface LeafCreation {
@@ -78,7 +89,10 @@ interface Operation<T> {
   readonly mutate: boolean;
   run(
     session: MlsSession,
-    stored: StoredMlsSession | null
+    stored: StoredMlsSession | null,
+    mls: Mls,
+    /** The verified directory installed for this operation, if any. */
+    directory: DeviceDirectory | null
   ): Promise<{
     value: T;
     /** Replaces the stored pending Commit; undefined keeps it. */
@@ -108,6 +122,43 @@ const copyPending = (pending: StoredPendingCommit): PendingCommit => ({
   commit: new Uint8Array(pending.commit),
   welcome: pending.welcome ? new Uint8Array(pending.welcome) : null
 });
+
+/** One epoch's exports, read from a session that is in the group. */
+export interface EpochMaterial {
+  readonly epoch: number;
+  /** `MLS-Exporter("openzcad project key", project id, 32)`. */
+  readonly projectKey: Uint8Array;
+  readonly rejoinPsk: RejoinPsk;
+  readonly epochAuthenticator: Uint8Array;
+  readonly groupInfo: Uint8Array;
+}
+
+/** The new epoch a pending Commit or rejoin would start. */
+export interface PendingEpoch extends EpochMaterial {
+  /** True for a provisional rejoin (external Commit). */
+  readonly external: boolean;
+  /**
+   * The new epoch's archive record. Null for a rejoin: the rejoin's own
+   * `RejoinResult.change` carries it.
+   */
+  readonly epochRecord: Uint8Array | null;
+}
+
+const sameBytes = (a: Uint8Array, b: Uint8Array) =>
+  a.length === b.length && a.every((value, index) => value === b[index]);
+
+async function materialOf(session: MlsSession): Promise<EpochMaterial> {
+  const status = await session.status();
+  if (!status.inGroup || status.epoch === null)
+    throw new Error('This device is not in the project’s group.');
+  return {
+    epoch: status.epoch,
+    projectKey: await session.projectKey(),
+    rejoinPsk: await session.rejoinPsk(),
+    epochAuthenticator: await session.epochAuthenticator(),
+    groupInfo: await session.groupInfo()
+  };
+}
 
 const live = new Set<MlsProjectSessions>();
 
@@ -225,6 +276,206 @@ export class MlsProjectSessions {
     return stored?.pendingCommit ? copyPending(stored.pendingCommit) : null;
   }
 
+  /** Process a proposal or Commit the sequencer delivered, in order. */
+  process(
+    ref: MlsProjectRef,
+    directory: DirectoryInput,
+    message: Uint8Array
+  ): Promise<Processed> {
+    return this.operate(ref, {
+      directory,
+      mutate: true,
+      run: async (session) => ({ value: await session.process(message) })
+    });
+  }
+
+  /**
+   * The current epoch's exports, for wrapping and archiving: the project
+   * key, the rejoin PSK, the epoch authenticator and a GroupInfo.
+   */
+  epochMaterial(ref: MlsProjectRef): Promise<EpochMaterial> {
+    return this.operate(ref, {
+      mutate: false,
+      run: async (session) => ({ value: await materialOf(session) })
+    });
+  }
+
+  /**
+   * What the new epoch of the stored pending Commit (or provisional
+   * rejoin) holds, before the room rules on it, so its wraps and archive
+   * can travel with it. A sealed copy of the session is opened beside it,
+   * confirmed and freed; the session itself stays pending, so a refusal
+   * can still discard it. The secrets of the new epoch are fixed when the
+   * Commit is built, so the copy's exports are the ones the confirmed
+   * session will have. Nothing is written.
+   */
+  previewPending(
+    ref: MlsProjectRef,
+    directory: DirectoryInput
+  ): Promise<PendingEpoch> {
+    return this.operate(ref, {
+      directory,
+      mutate: false,
+      run: async (session, _stored, mls, verified) => {
+        const status = await session.status();
+        if (!status.pendingCommit && !status.pendingRejoin)
+          throw new Error('No Commit is pending for this project.');
+        const key = await this.stateKey(ref.userId, false);
+        const copy = await mls.open(
+          await session.seal(key),
+          key,
+          ref.projectId
+        );
+        try {
+          await copy.setDirectory(verified!);
+          let epochRecord: Uint8Array | null = null;
+          if (status.pendingRejoin) await copy.confirmRejoin();
+          else epochRecord = (await copy.confirmCommit()).epochRecord;
+          return {
+            value: {
+              ...(await materialOf(copy)),
+              external: status.pendingRejoin,
+              epochRecord
+            }
+          };
+        } finally {
+          void copy.free().catch(() => undefined);
+        }
+      }
+    });
+  }
+
+  /**
+   * Rejoin by external Commit (ADR-024 amendment: an owner's device joins
+   * its solo group with the account-wrapped rejoin PSK; decision D3). A new
+   * leaf is generated and certified from `certifiedEpoch`, the group's
+   * current epoch, unless this device already holds a groupless session
+   * (an earlier attempt that lost its epoch), whose leaf is reused: an
+   * older certified epoch can only refuse more. A leaf of this same device
+   * left in the group by state it lost is replaced in the same Commit. The
+   * provisional state and its Commit are stored before the Commit is
+   * returned.
+   */
+  rejoin(
+    ref: MlsProjectRef,
+    device: CertifyingDevice,
+    directory: DirectoryInput,
+    certifiedEpoch: number,
+    groupInfo: Uint8Array,
+    request: Omit<RejoinRequest, 'replaceLeaf'>
+  ): Promise<RejoinResult> {
+    if (device.userId !== ref.userId || device.deviceId !== ref.deviceId) {
+      return Promise.reject(
+        new Error('The certifying device is not the one named.')
+      );
+    }
+    return this.operate(ref, {
+      directory,
+      create: { device, certifiedEpoch },
+      mutate: true,
+      run: async (session) => {
+        const status = await session.status();
+        if (status.inGroup || status.pendingRejoin || status.pendingJoin)
+          throw new Error('This device already holds the project’s group.');
+        // Unverified until the external Commit checks the GroupInfo; it only
+        // names a leaf to drop, and the policy lets a rejoin drop only a leaf
+        // of the joiner's own identity.
+        const own = await session.signatureKey();
+        const stale = (await session.inspectGroupInfo(groupInfo)).members.find(
+          (member) =>
+            member.userId === ref.userId &&
+            member.deviceId === ref.deviceId &&
+            !sameBytes(member.signatureKey, own)
+        );
+        const result = await session.rejoin(
+          groupInfo,
+          stale ? { ...request, replaceLeaf: stale.index } : request
+        );
+        return {
+          value: result,
+          pendingCommit: {
+            commit: new Uint8Array(result.commit),
+            welcome: null
+          }
+        };
+      }
+    });
+  }
+
+  /** The room accepted the external Commit. */
+  confirmRejoin(ref: MlsProjectRef, directory: DirectoryInput): Promise<void> {
+    return this.operate(ref, {
+      directory,
+      mutate: true,
+      run: async (session) => {
+        await session.confirmRejoin();
+        return { value: undefined, pendingCommit: null };
+      }
+    });
+  }
+
+  /** Another Commit won the epoch: restore the session as it was. */
+  discardRejoin(ref: MlsProjectRef): Promise<void> {
+    return this.operate(ref, {
+      mutate: true,
+      run: async (session) => {
+        await session.discardRejoin();
+        return { value: undefined, pendingCommit: null };
+      }
+    });
+  }
+
+  /**
+   * Delete this device's MLS state for one project, so the project can be
+   * created or joined afresh: a group whose creation never reached the
+   * server, or state the server's group never accepted. With `leafKey`,
+   * only the session holding that leaf is deleted, so state another tab
+   * replaced it with meanwhile survives. Runs under the same account and
+   * project locks as every other operation. Returns whether anything was
+   * deleted.
+   */
+  discardSession(ref: MlsProjectRef, leafKey?: Uint8Array): Promise<boolean> {
+    const { current, guard } = this.sessionGuard();
+    guard();
+    const id = JSON.stringify([ref.userId, ref.projectId]);
+    return this.store.withAccountLock(ref.userId, 'shared', () =>
+      this.store.withProjectLock(ref.userId, ref.projectId, async () => {
+        guard();
+        const stored = await this.store.loadSession(ref.userId, ref.projectId);
+        guard();
+        if (!stored) return false;
+        if (stored.deviceId !== ref.deviceId)
+          throw new Error(
+            'This project’s encryption state belongs to another device.'
+          );
+        if (leafKey && !sameBytes(stored.leaf.signatureKey, leafKey))
+          return false;
+        this.drop(id);
+        const deleted = await this.store.deleteSessionIfCurrent(
+          ref.userId,
+          ref.projectId,
+          stored.revision,
+          current
+        );
+        guard();
+        return deleted;
+      })
+    );
+  }
+
+  /** This device's stored leaf for the project, or null without a session. */
+  async leaf(ref: MlsProjectRef): Promise<StoredLeaf | null> {
+    const { guard } = this.sessionGuard();
+    guard();
+    const stored = await this.store.loadSession(ref.userId, ref.projectId);
+    guard();
+    if (!stored || stored.deviceId !== ref.deviceId) return null;
+    return {
+      signatureKey: new Uint8Array(stored.leaf.signatureKey),
+      certification: new Uint8Array(stored.leaf.certification)
+    };
+  }
+
   /** Sessions held in this page's memory (tests and diagnostics). */
   get cachedSessions(): number {
     return this.sessions.size;
@@ -306,8 +557,14 @@ export class MlsProjectSessions {
             'This project’s encryption state belongs to another device.'
           );
         let entry = this.sessions.get(id);
-        if (entry && entry.revision !== (stored?.revision ?? 0)) {
-          // Another tab moved the state on: reopen from storage.
+        if (
+          entry &&
+          (entry.revision !== (stored?.revision ?? 0) ||
+            (stored !== null &&
+              !sameBytes(entry.leafKey, stored.leaf.signatureKey)))
+        ) {
+          // Another tab moved the state on, or replaced it: reopen from
+          // storage.
           this.drop(id);
           entry = undefined;
         }
@@ -316,11 +573,16 @@ export class MlsProjectSessions {
           const opened = await this.openOrCreate(mls, ref, stored, op.create);
           guard();
           leaf = opened.leaf;
-          entry = { session: opened.session, revision: stored?.revision ?? 0 };
+          entry = {
+            session: opened.session,
+            revision: stored?.revision ?? 0,
+            leafKey: new Uint8Array(opened.leaf.signatureKey)
+          };
           this.sessions.set(id, entry);
         }
+        let directory: DeviceDirectory | null = null;
         if (op.directory) {
-          const directory = await buildDeviceDirectory(
+          directory = await buildDeviceDirectory(
             mls,
             ref.projectId,
             withOwnLeaf(op.directory, ref, leaf!)
@@ -328,7 +590,7 @@ export class MlsProjectSessions {
           guard();
           await entry.session.setDirectory(directory);
         }
-        const result = await op.run(entry.session, stored);
+        const result = await op.run(entry.session, stored, mls, directory);
         guard();
         if (op.mutate) {
           const key = await this.stateKey(ref.userId, true);

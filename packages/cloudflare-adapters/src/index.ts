@@ -463,6 +463,28 @@ export const isProjectStorageFormatReady = cachedSchemaProbe(
   (row) => row?.ready === 1
 );
 
+/** The tables migration 0032 adds, children before their group row. */
+export const E2EE_PROJECT_GROUP_TABLES = Object.freeze([
+  'e2ee_key_archives',
+  'e2ee_project_keys',
+  'e2ee_project_leaves',
+  'e2ee_mls_commits',
+  'e2ee_project_groups'
+] as const);
+
+/**
+ * Whether migration 0032's MLS group tables exist (ADR-024 Phase 4, solo
+ * groups). Only the encrypted-project routes, project purge and account
+ * erasure name them, and each asks this first, so a database without the
+ * migration keeps serving ordinary traffic.
+ */
+export const isE2eeProjectGroupStorageReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM sqlite_master WHERE type = 'table' AND name IN
+   ('e2ee_project_groups', 'e2ee_mls_commits', 'e2ee_project_leaves',
+    'e2ee_project_keys', 'e2ee_key_archives')`,
+  (row) => row?.ready === E2EE_PROJECT_GROUP_TABLES.length
+);
+
 type UploadReservationState =
   'legacy' | 'open' | 'uploading' | 'completing' | 'completed' | 'aborting';
 
@@ -5288,11 +5310,19 @@ export class D1R2PersistenceService implements PersistenceService {
         )
       );
     }
+    // Encrypted projects' MLS group rows (migration 0032), only once the
+    // tables exist: no statement may name a table the database lacks.
+    const groupTables = (await isE2eeProjectGroupStorageReady(this.env.DB))
+      ? E2EE_PROJECT_GROUP_TABLES.map(
+          (table) => `DELETE FROM ${table} WHERE project_id IN`
+        )
+      : [];
     // The child rows declare ON DELETE CASCADE, but foreign-key enforcement is
     // a per-connection pragma; deleting them explicitly means a purge cannot
     // leave orphaned revisions behind if it is ever off.
     await this.env.DB!.batch(
       [
+        ...groupTables,
         'DELETE FROM project_access_events WHERE project_id IN',
         'DELETE FROM project_share_links WHERE project_id IN',
         'DELETE FROM project_invitations WHERE project_id IN',

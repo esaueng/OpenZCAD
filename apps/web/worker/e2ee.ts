@@ -59,6 +59,8 @@ import {
   handleProjectPreferenceRequest,
   isE2eeProjectPreferenceStorageReady
 } from './e2eeProjectPreferences';
+import { handleE2eeProjectRequest, isE2eeProjectPath } from './e2eeProjects';
+import { isE2eeProjectGroupStorageReady } from '@openzcad/cloudflare-adapters';
 
 interface WriteDatabase extends D1Database {
   authorization: E2eeWriteAuthorization;
@@ -1679,7 +1681,9 @@ export async function handleE2eeRequest(
         projectsEnabled:
           keysReady &&
           projectsEnabled &&
-          (await isE2eeProjectPreferenceStorageReady(env.DB))
+          (await isE2eeProjectPreferenceStorageReady(env.DB)) &&
+          // Encrypted projects need their MLS group tables (migration 0032).
+          (await isE2eeProjectGroupStorageReady(env.DB))
       });
     }
     if (!enabled) {
@@ -1741,6 +1745,16 @@ export async function handleE2eeRequest(
         userId,
         db.authorization,
         () => readBody(request)
+      );
+    }
+    if (isE2eeProjectPath(pathname)) {
+      // Encrypted projects' MLS groups and key store (e2eeProjects.ts).
+      return await handleE2eeProjectRequest(
+        request,
+        rawDb,
+        userId,
+        projectsEnabled,
+        db.authorization
       );
     }
     if (pathname === '/api/e2ee/account' && method === 'GET') {

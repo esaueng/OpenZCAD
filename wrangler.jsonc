@@ -54,7 +54,7 @@
     // answer 503; E2EE_CANARY_EMAILS (a secret) opens them for named accounts.
     "E2EE_KEYS_ENABLED": "false",
     // Encrypted projects (ADR-024 Phase 4) stay closed too. They need the key
-    // routes for the account and D1 migration 0031 applied first.
+    // routes for the account and D1 migrations 0031 and 0032 applied first.
     "E2EE_PROJECTS_ENABLED": "false",
     // Assistant rollout flags live here, not in the dashboard: a deploy
     // replaces dashboard variables with this block. Each one exposes its

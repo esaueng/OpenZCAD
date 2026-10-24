@@ -959,7 +959,8 @@ describe('cloudflare adapters', () => {
     const batch = vi.fn(async () => []);
     const prepare = vi.fn((query: string) => {
       statements.push(query);
-      return { bind: () => ({ all, query }) };
+      // first() answers the schema probes for later tables: not installed.
+      return { bind: () => ({ all, query, first: async () => null }) };
     });
     const roomFetch = vi.fn(
       async (_request: Request) => new Response(null, { status: 204 })

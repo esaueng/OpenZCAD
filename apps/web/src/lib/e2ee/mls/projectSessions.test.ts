@@ -147,6 +147,48 @@ describe('MLS project sessions', () => {
     expect((await a.status(project)).epoch).toBe(1);
   });
 
+  it('discard one project’s state, and never mistake a new group at the cached revision for the old one', async () => {
+    const store = memoryMlsSessionStore();
+    const project = ref();
+    const other = ref();
+    const a = tab(store).sessions;
+    const b = tab(store).sessions;
+    const laptop = device(alice, 'alice_laptop');
+    await a.createGroup(project, laptop, directory);
+    await a.createGroup(other, laptop, directory);
+    const old = await a.projectKey(project);
+    const oldLeaf = (await a.leaf(project))!;
+
+    // Another device's state is never this device's to discard, and a leaf
+    // other than the stored one discards nothing.
+    await expect(
+      b.discardSession({ ...project, deviceId: 'alice_other' })
+    ).rejects.toThrow('another device');
+    expect(await b.discardSession(project, new Uint8Array(65))).toBe(false);
+    expect(await b.discardSession(project, oldLeaf.signatureKey)).toBe(true);
+    expect(
+      await store.loadSession(project.userId, project.projectId)
+    ).toBeNull();
+    expect(await b.discardSession(project)).toBe(false);
+    await expect(b.projectKey(project)).rejects.toBeInstanceOf(
+      MlsSessionMissing
+    );
+    // The account's other projects keep their state.
+    expect(await a.projectKey(other)).toHaveLength(32);
+
+    // Tab B makes a new group: revision 1 again, as tab A cached.
+    await b.createGroup(project, laptop, directory);
+    expect(
+      (await store.loadSession(project.userId, project.projectId))?.revision
+    ).toBe(1);
+    const fresh = await b.projectKey(project);
+    expect(hex(fresh)).not.toBe(hex(old));
+    expect(hex(await a.projectKey(project))).toBe(hex(fresh));
+    expect(hex((await a.leaf(project))!.signatureKey)).not.toBe(
+      hex(oldLeaf.signatureKey)
+    );
+  });
+
   it('refuse a stale revision when two tabs race without a lock, and the loser re-reads', async () => {
     const shared = memoryMlsSessionStore();
     // As if Web Locks did not coordinate the two: only compare-and-swap.

@@ -63,6 +63,18 @@ export interface MlsSessionStore {
     isCurrent?: () => boolean
   ): Promise<StoredMlsSession | null>;
   /**
+   * Delete one project's session, only if its stored revision is still
+   * `expectedRevision`. Returns false (and deletes nothing) when the
+   * revision moved or no session is stored; rejects without deleting when
+   * `isCurrent` returns false. Callers hold the project lock.
+   */
+  deleteSessionIfCurrent(
+    userId: string,
+    projectId: string,
+    expectedRevision: number,
+    isCurrent?: () => boolean
+  ): Promise<boolean>;
+  /**
    * Forget one account's MLS state on this device: its state key and every
    * sealed session, so nothing here can reopen its projects. Holds the
    * account lock exclusively, so it waits for project operations already
@@ -197,6 +209,18 @@ export function memoryMlsSessionStore(): MlsSessionStore {
       if (!record) return null;
       sessions.set(key, record);
       return copyRecord(record);
+    },
+    deleteSessionIfCurrent: async (
+      userId,
+      projectId,
+      expectedRevision,
+      isCurrent
+    ) => {
+      if (isCurrent && !isCurrent()) throw keySessionEnded();
+      const key = id(userId, projectId);
+      if (sessions.get(key)?.revision !== expectedRevision) return false;
+      sessions.delete(key);
+      return true;
     },
     deleteAccount: (userId) =>
       withAccountLock(userId, 'exclusive', async () => {
@@ -336,6 +360,20 @@ export function indexedDbMlsSessionStore(): MlsSessionStore {
         }
       );
     },
+    deleteSessionIfCurrent: (userId, projectId, expectedRevision, isCurrent) =>
+      transact<boolean>(SESSIONS, 'readwrite', (objects, done) => {
+        const read = objects.get([userId, projectId]);
+        read.onsuccess = () => {
+          if (isCurrent && !isCurrent()) {
+            objects.transaction.abort();
+            return;
+          }
+          const record = read.result as StoredMlsSession | undefined;
+          const matches = record?.revision === expectedRevision;
+          if (matches) objects.delete([userId, projectId]);
+          done(matches);
+        };
+      }),
     deleteAccount: async (userId) => {
       // Without IndexedDB this store never held anything to forget.
       if (typeof indexedDB === 'undefined') return;
