@@ -253,9 +253,9 @@ measurements name the previous envelope's hash as their previous-version
 hash (none for the first), so each forms its own chain; view state names
 none.
 
-Device lists live here (below). The contacts list, the custom roster and
-its revocation cutoffs are parked on the `claude/e2ee-chains` branch: MLS
-(RFC 9420) replaces the roster and epochs, and contacts arrive with sharing.
+Device lists and contacts lists live here (below). The custom roster is
+parked on the `claude/e2ee-chains` branch: MLS (RFC 9420) replaces the
+roster and epochs.
 
 ## Key wrapping
 
@@ -418,7 +418,7 @@ hash) it refuses another identity (`context-mismatch`) and a list that does
 not contain the pinned entry (`chain-broken`). `nextDeviceListEntry` builds
 the next entry from a verified head.
 
-Three statements travel beside lists. An identity transition (`"OZT"`) names
+Four statements travel beside lists. An identity transition (`"OZT"`) names
 the old identity hash, the new identity key and its first entry's hash, and
 is signed by the old identity or a device it certified; it proves nothing to
 contacts. A device approval grant (`"OZG"`) is signed by the approving
@@ -431,7 +431,13 @@ revocation cutoffs signature`) are signed by the identity key at a device
 removal and name, per project, the first epoch the revoked device must not
 know. `verifyRevocationCutoffs` requires the identity signature, the list's
 user and generation, and an entry of that list, by sequence and hash, that
-revokes a device. Phase 4 stores and enforces them.
+revokes a device. Phase 4 stores and enforces them. A solo group reset
+(`"OZX" | u8 1 | u8 length + user id | u32 generation | u32 entry sequence
+| 32-byte entry hash | u8 length + project id | u32 prior group generation
+| u64 prior key epoch | u64 issuedAt`, signed with `v1 group reset
+signature`; decision D9) is signed by the identity key and names the
+replaced group's generation and newest key epoch, so the new group's key
+epochs continue after it (decision D10).
 
 ## Contacts lists
 
@@ -479,7 +485,7 @@ encoding; lists sorted and without duplicates), with a signature
 | `"OZS"` share delegation (`share delegation`)   | the owner's identity key             | 32-byte owner identity key hash \| u32 sequence \| u64 issuedAt \| u64 expiresAt \| u8 count (1–64) + 65-byte device signing keys, bytewise sorted                                                                                                                      |
 | `"OZA"` share-authority (`share authority`)     | an owner device the delegation names | u8 len + project id \| u8 len + link id \| 32-byte share key hash \| u8 mode (1 view, 2 tweak) \| 32-byte owner identity key hash \| u32 sequence \| u64 issuedAt \| u64 expiresAt \| 32-byte signer key hash \| u16 count (1–2048) + 32-byte author key hashes, sorted |
 | `"OZL"` link grant (`share link grant`)         | an owner device                      | u8 len + project id \| u8 len + link id \| 32-byte share key hash \| u8 mode \| u32 key epoch \| u64 issuedAt \| 32-byte signer key hash                                                                                                                                |
-| `"OZX"` link tombstone (`share link tombstone`) | an owner device                      | u8 len + project id \| u8 len + link id \| u32 key epoch \| u64 issuedAt \| 32-byte signer key hash                                                                                                                                                                     |
+| `"OZY"` link tombstone (`share link tombstone`) | an owner device                      | u8 len + project id \| u8 len + link id \| u32 key epoch \| u64 issuedAt \| 32-byte signer key hash                                                                                                                                                                     |
 
 Key hashes are `publicKeyHash` of a device signing key, as
 `DeviceRecord.signingKeyHash` names it. Statements a visitor sees name no

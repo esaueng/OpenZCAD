@@ -826,7 +826,7 @@ const SHARE_AUTHORITY_SIGNATURE =
 const SHARE_GRANT_SIGNATURE =
   '01cf05e0dd7c94295359ef80cd88cc0fe070c14c5c33491cb0dbd1f02f4c184e43d91550cb3f59dff3f4d4cb84715d9851b292ce0bed5c7a948d1f9d0ad97832cc';
 const SHARE_TOMBSTONE_SIGNATURE =
-  '018fb4fca9267674cc245e799d348482a6a44f2d196fc61d748f835d548b40cfc074977b6b26958154da951f4f939608ebef665332c481a5a23c8e520e76a22adb';
+  '012aaff8f7367e986fbbbfae00cab7fb4df8b4795faa9145a946b099009d9c3381acb4136ed2d2844853d01f13c401e5a2454318a84e059527a804edad6430a654';
 
 describe('share-link v1 vectors', () => {
   const T = 1_760_000_000_000;
@@ -975,10 +975,10 @@ describe('share-link v1 vectors', () => {
       issuedAt: T,
       signerKeyHash: f.deviceHash
     });
-    // "OZX" | 1 | u8 5 "prj_1" | u8 5 "shr_0" | u32 1 | u64 issuedAt |
+    // "OZY" | 1 | u8 5 "prj_1" | u8 5 "shr_0" | u32 1 | u64 issuedAt |
     // signer key hash
     expect(toHex(tombstone)).toMatchInlineSnapshot(
-      `"4f5a58010570726a5f31057368725f300000000100000199c82cc0007c48bdb0d12667c8d36fb0be229cbe23adfe9cc429f0b4820d16b8a5f84c700b"`
+      `"4f5a59010570726a5f31057368725f300000000100000199c82cc0007c48bdb0d12667c8d36fb0be229cbe23adfe9cc429f0b4820d16b8a5f84c700b"`
     );
     expect(decodeShareLinkGrant(grant).keyEpoch).toBe(1);
     expect(decodeShareLinkTombstone(tombstone).shareId).toBe('shr_0');
@@ -1016,7 +1016,7 @@ describe('share-link v1 vectors', () => {
       header
     );
     expect(new TextDecoder().decode(body)).toMatchInlineSnapshot(
-      `"{"version":2,"document":{"name":"n"},"blobs":[],"revisionVersionHashes":{},"shareLinks":{"grants":[{"grant":"T1pMAQVwcmpfMQVzaHJfMcGLg9V8lB61xEHjLQ0y7nWtnuWUSHhk9wdwinAodDqVAQAAAAEAAAGZyCzAAHxIvbDRJmfI02-wviKcviOt_pzEKfC0gg0WuKX4THAL","signature":"Ac8F4N18lClTWe-AzYjMD-BwwUxcM0kcsNvR8C9MGE5D2RVQyz9Z3_P01MuEcV2YUbKSzgvtXHqUjR-dCtl4Msw"}],"tombstones":[{"tombstone":"T1pYAQVwcmpfMQVzaHJfMAAAAAEAAAGZyCzAAHxIvbDRJmfI02-wviKcviOt_pzEKfC0gg0WuKX4THAL","signature":"AY-0_KkmdnTMJF55nTSEgqakTy0Zb8YddI-DXVSLQM_AdJd7ayaVgVTalR9Pk5YI6-9mUzLEgaWiPI5SDnaiKts"}]}}"`
+      `"{"version":2,"document":{"name":"n"},"blobs":[],"revisionVersionHashes":{},"shareLinks":{"grants":[{"grant":"T1pMAQVwcmpfMQVzaHJfMcGLg9V8lB61xEHjLQ0y7nWtnuWUSHhk9wdwinAodDqVAQAAAAEAAAGZyCzAAHxIvbDRJmfI02-wviKcviOt_pzEKfC0gg0WuKX4THAL","signature":"Ac8F4N18lClTWe-AzYjMD-BwwUxcM0kcsNvR8C9MGE5D2RVQyz9Z3_P01MuEcV2YUbKSzgvtXHqUjR-dCtl4Msw"}],"tombstones":[{"tombstone":"T1pZAQVwcmpfMQVzaHJfMAAAAAEAAAGZyCzAAHxIvbDRJmfI02-wviKcviOt_pzEKfC0gg0WuKX4THAL","signature":"ASqv-Pc2fphvu7-uAMq3-034tHlfqpFFqUawmQCdnDOBrLQTbtLShEhT0B8TxAHlokVDGKhOBZUnqATtrWQwplQ"}]}}"`
     );
     const verified = await verifyShareLinkSet(
       decodeEncryptedDocumentBody(body, header).shareLinks!,

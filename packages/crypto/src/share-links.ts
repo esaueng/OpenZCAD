@@ -61,7 +61,7 @@ export const SHARE_LINK_TOMBSTONE_VERSION_1 = 1;
 const DELEGATION_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x53); // "OZS"
 const AUTHORITY_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x41); // "OZA"
 const GRANT_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x4c); // "OZL"
-const TOMBSTONE_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x58); // "OZX"
+const TOMBSTONE_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x59); // "OZY"
 
 const MAX_U32 = 0xffffffff;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -1036,7 +1036,7 @@ export function decodeShareLinkGrant(bytes: Uint8Array): ShareLinkGrant {
 }
 
 /**
- * Canonical bytes: `"OZX" | u8 1 | u8 length + project id | u8 length +
+ * Canonical bytes: `"OZY" | u8 1 | u8 length + project id | u8 length +
  * link id | u32 key epoch | u64 issuedAt | 32-byte signer key hash`.
  */
 export function encodeShareLinkTombstone(value: ShareLinkTombstone): Bytes {

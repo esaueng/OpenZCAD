@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { concatBytes, type Bytes } from './bytes';
 import { publicKeyHash } from './codes';
-import type { SignedStatement } from './devices';
+import {
+  decodeGroupReset,
+  encodeGroupReset,
+  type SignedStatement
+} from './devices';
 import {
   decodeEncryptedDocumentBody,
   encodeEncryptedDocumentBody
@@ -702,6 +706,23 @@ describe('link grants and tombstones', () => {
       () => decodeShareLinkTombstone(encodeShareLinkGrant(g)),
       'malformed'
     );
+    // Nor is a solo group reset (4-10), which once shared the "OZX" magic.
+    const reset = encodeGroupReset({
+      userId: 'user_1',
+      generation: 1,
+      entrySequence: 0,
+      entryHash: patternBytes(32, 7),
+      projectId: t.projectId,
+      priorGroupGeneration: 0,
+      priorKeyEpoch: 1,
+      issuedAt: t.issuedAt
+    });
+    const tombstoneBytes = encodeShareLinkTombstone(t);
+    expect([...tombstoneBytes.subarray(0, 3)]).not.toEqual([
+      ...reset.subarray(0, 3)
+    ]);
+    throwsCode(() => decodeShareLinkTombstone(reset), 'malformed');
+    throwsCode(() => decodeGroupReset(tombstoneBytes), 'malformed');
   });
 
   it('accept an owner-signed set and return its active links', async () => {
