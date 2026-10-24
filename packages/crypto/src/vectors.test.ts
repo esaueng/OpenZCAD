@@ -46,7 +46,25 @@ import {
 } from './devices';
 import { exportPublicKey } from './keys';
 import { verifyProjectEnvelopeSignature, versionHash } from './signing';
-import { encodeKeyArchiveBody } from './bodies';
+import {
+  decodeEncryptedDocumentBody,
+  encodeEncryptedDocumentBody,
+  encodeKeyArchiveBody
+} from './bodies';
+import {
+  decodeShareAuthority,
+  decodeShareDelegation,
+  decodeShareLinkGrant,
+  decodeShareLinkTombstone,
+  encodeShareAuthority,
+  encodeShareDelegation,
+  encodeShareLinkGrant,
+  encodeShareLinkTombstone,
+  shareKeyHash,
+  verifyShareAuthority,
+  verifyShareDelegation,
+  verifyShareLinkSet
+} from './share-links';
 import { epochBinding } from './codes';
 import {
   decodeVersionLogRecord,
@@ -795,5 +813,257 @@ describe('contacts entry v1 vector', () => {
     await expect(
       verifyContactsList(identity.publicKey, [{ entry, signature }])
     ).rejects.toMatchObject({ code: 'chain-broken' });
+  });
+});
+
+// Recorded signatures over the share-link vectors below: the delegation by
+// the fixed identity key, the others by the fixed device key as the owner's
+// device.
+const SHARE_DELEGATION_SIGNATURE =
+  '0167b5d38a6ac7c7520ff66b07ee2b0d205054be8f5880885c288fa1f4c51b2a4eb19e9e514e9b5918d06131261ccca06b16a48bca29b47286772846cb28fef224';
+const SHARE_AUTHORITY_SIGNATURE =
+  '01a615b3f4eb7a1c9068cfadb0dea7b1e42ed9917badb5f04d3a6aff1d227e4db1e72f47440e297b566ef1c710b88e68e68d824897eaf68c3a1935fd573c2025b1';
+const SHARE_GRANT_SIGNATURE =
+  '01cf05e0dd7c94295359ef80cd88cc0fe070c14c5c33491cb0dbd1f02f4c184e43d91550cb3f59dff3f4d4cb84715d9851b292ce0bed5c7a948d1f9d0ad97832cc';
+const SHARE_TOMBSTONE_SIGNATURE =
+  '018fb4fca9267674cc245e799d348482a6a44f2d196fc61d748f835d548b40cfc074977b6b26958154da951f4f939608ebef665332c481a5a23c8e520e76a22adb';
+
+describe('share-link v1 vectors', () => {
+  const T = 1_760_000_000_000;
+  const DAY = 86_400_000;
+  const SHARE_KEY = patternBytes(32, 0x50);
+
+  async function fixed() {
+    const identity = await importFixedPair(TEST_IDENTITY_JWK, 'ECDSA');
+    const device = await importFixedPair(TEST_SIGNER_JWK, 'ECDSA');
+    const identityRaw = await exportPublicKey(identity.publicKey);
+    const deviceRaw = await exportPublicKey(device.publicKey);
+    return {
+      identity,
+      device,
+      identityRaw,
+      deviceRaw,
+      identityHash: await publicKeyHash(identityRaw),
+      deviceHash: await publicKeyHash(deviceRaw),
+      keyHash: await shareKeyHash(SHARE_KEY)
+    };
+  }
+
+  const ecdsaValid = (
+    key: CryptoKey,
+    signature: string,
+    kind: string,
+    statement: Uint8Array
+  ) =>
+    subtle.verify(
+      { name: 'ECDSA', hash: 'SHA-256' },
+      key,
+      fromHex(signature).subarray(1),
+      concatBytes(utf8(`OpenZCAD E2EE v1 ${kind} signature`), statement)
+    );
+
+  it('hashes a share key, re-derived with raw WebCrypto', async () => {
+    const hash = await shareKeyHash(SHARE_KEY);
+    expect(toHex(hash)).toMatchInlineSnapshot(
+      `"c18b83d57c941eb5c441e32d0d32ee75ad9ee594487864f707708a7028743a95"`
+    );
+    const raw = new Uint8Array(
+      await subtle.digest(
+        'SHA-256',
+        concatBytes(utf8('OpenZCAD E2EE v1 share key hash'), SHARE_KEY)
+      )
+    );
+    expect(raw).toEqual(hash);
+  });
+
+  it('encodes a fixed delegation and checks a recorded identity signature with raw WebCrypto', async () => {
+    const f = await fixed();
+    const statement = encodeShareDelegation({
+      identityKeyHash: f.identityHash,
+      sequence: 1,
+      issuedAt: T,
+      expiresAt: T + 30 * DAY,
+      deviceKeys: [f.deviceRaw]
+    });
+    // "OZS" | 1 | identity key hash | u32 1 | u64 issuedAt | u64 expiresAt |
+    // u8 1 + 65-byte device key
+    expect(toHex(statement)).toMatchInlineSnapshot(
+      `"4f5a5301c5c2ef3d0437209cec6e3da899699f29b09f738851aea7379f589b443c62cba00000000100000199c82cc0000000019a62ab88000104e351addbbadcbfe457247313321051979c2d07fe131aa0ba08dcfcbb62301dfcd384557ec129c023cbd4be64d2bfc3ee9c44989c47f13691b9a32832bf8625b4"`
+    );
+    expect(decodeShareDelegation(statement).deviceKeys).toEqual([f.deviceRaw]);
+    expect(
+      await ecdsaValid(
+        f.identity.publicKey,
+        SHARE_DELEGATION_SIGNATURE,
+        'share delegation',
+        statement
+      )
+    ).toBe(true);
+    await verifyShareDelegation(
+      { statement, signature: fromHex(SHARE_DELEGATION_SIGNATURE) },
+      f.identityRaw,
+      { now: T + DAY, ownerIdentityKeyHash: f.identityHash }
+    );
+  });
+
+  it('encodes a fixed share-authority statement and checks a recorded signature with raw WebCrypto', async () => {
+    const f = await fixed();
+    const statement = encodeShareAuthority({
+      projectId: 'prj_1',
+      shareId: 'shr_1',
+      shareKeyHash: f.keyHash,
+      mode: 'view',
+      ownerIdentityKeyHash: f.identityHash,
+      sequence: 2,
+      issuedAt: T,
+      expiresAt: T + 7 * DAY,
+      signerKeyHash: f.deviceHash,
+      authorKeyHashes: [f.deviceHash, patternBytes(32, 0xc0)]
+    });
+    // "OZA" | 1 | u8 5 "prj_1" | u8 5 "shr_1" | share key hash | u8 1 view |
+    // owner identity key hash | u32 2 | u64 issuedAt | u64 expiresAt |
+    // signer key hash | u16 2 + sorted author key hashes
+    expect(toHex(statement)).toMatchInlineSnapshot(
+      `"4f5a41010570726a5f31057368725f31c18b83d57c941eb5c441e32d0d32ee75ad9ee594487864f707708a7028743a9501c5c2ef3d0437209cec6e3da899699f29b09f738851aea7379f589b443c62cba00000000200000199c82cc00000000199ec3944007c48bdb0d12667c8d36fb0be229cbe23adfe9cc429f0b4820d16b8a5f84c700b00027c48bdb0d12667c8d36fb0be229cbe23adfe9cc429f0b4820d16b8a5f84c700bc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf"`
+    );
+    expect(decodeShareAuthority(statement).mode).toBe('view');
+    expect(
+      await ecdsaValid(
+        f.device.publicKey,
+        SHARE_AUTHORITY_SIGNATURE,
+        'share authority',
+        statement
+      )
+    ).toBe(true);
+    const delegation = decodeShareDelegation(
+      encodeShareDelegation({
+        identityKeyHash: f.identityHash,
+        sequence: 1,
+        issuedAt: T,
+        expiresAt: T + 30 * DAY,
+        deviceKeys: [f.deviceRaw]
+      })
+    );
+    const verified = await verifyShareAuthority(
+      { statement, signature: fromHex(SHARE_AUTHORITY_SIGNATURE) },
+      delegation,
+      { now: T + DAY, expected: { shareKeyHash: f.keyHash } }
+    );
+    expect(verified.shareId).toBe('shr_1');
+  });
+
+  it('encodes a fixed grant and tombstone and checks recorded signatures with raw WebCrypto', async () => {
+    const f = await fixed();
+    const grant = encodeShareLinkGrant({
+      projectId: 'prj_1',
+      shareId: 'shr_1',
+      shareKeyHash: f.keyHash,
+      mode: 'view',
+      keyEpoch: 1,
+      issuedAt: T,
+      signerKeyHash: f.deviceHash
+    });
+    // "OZL" | 1 | u8 5 "prj_1" | u8 5 "shr_1" | share key hash | u8 1 view |
+    // u32 1 | u64 issuedAt | signer key hash
+    expect(toHex(grant)).toMatchInlineSnapshot(
+      `"4f5a4c010570726a5f31057368725f31c18b83d57c941eb5c441e32d0d32ee75ad9ee594487864f707708a7028743a95010000000100000199c82cc0007c48bdb0d12667c8d36fb0be229cbe23adfe9cc429f0b4820d16b8a5f84c700b"`
+    );
+    const tombstone = encodeShareLinkTombstone({
+      projectId: 'prj_1',
+      shareId: 'shr_0',
+      keyEpoch: 1,
+      issuedAt: T,
+      signerKeyHash: f.deviceHash
+    });
+    // "OZX" | 1 | u8 5 "prj_1" | u8 5 "shr_0" | u32 1 | u64 issuedAt |
+    // signer key hash
+    expect(toHex(tombstone)).toMatchInlineSnapshot(
+      `"4f5a58010570726a5f31057368725f300000000100000199c82cc0007c48bdb0d12667c8d36fb0be229cbe23adfe9cc429f0b4820d16b8a5f84c700b"`
+    );
+    expect(decodeShareLinkGrant(grant).keyEpoch).toBe(1);
+    expect(decodeShareLinkTombstone(tombstone).shareId).toBe('shr_0');
+    expect(
+      await ecdsaValid(
+        f.device.publicKey,
+        SHARE_GRANT_SIGNATURE,
+        'share link grant',
+        grant
+      )
+    ).toBe(true);
+    expect(
+      await ecdsaValid(
+        f.device.publicKey,
+        SHARE_TOMBSTONE_SIGNATURE,
+        'share link tombstone',
+        tombstone
+      )
+    ).toBe(true);
+    // The same set in a fixed version 2 document body.
+    const set = {
+      grants: [{ statement: grant, signature: fromHex(SHARE_GRANT_SIGNATURE) }],
+      tombstones: [
+        { statement: tombstone, signature: fromHex(SHARE_TOMBSTONE_SIGNATURE) }
+      ]
+    };
+    const header = { kind: 'document' as const, keyEpoch: 1, blobIds: [] };
+    const body = encodeEncryptedDocumentBody(
+      {
+        document: { name: 'n' },
+        blobs: [],
+        revisionVersionHashes: new Map(),
+        shareLinks: set
+      },
+      header
+    );
+    expect(new TextDecoder().decode(body)).toMatchInlineSnapshot(
+      `"{"version":2,"document":{"name":"n"},"blobs":[],"revisionVersionHashes":{},"shareLinks":{"grants":[{"grant":"T1pMAQVwcmpfMQVzaHJfMcGLg9V8lB61xEHjLQ0y7nWtnuWUSHhk9wdwinAodDqVAQAAAAEAAAGZyCzAAHxIvbDRJmfI02-wviKcviOt_pzEKfC0gg0WuKX4THAL","signature":"Ac8F4N18lClTWe-AzYjMD-BwwUxcM0kcsNvR8C9MGE5D2RVQyz9Z3_P01MuEcV2YUbKSzgvtXHqUjR-dCtl4Msw"}],"tombstones":[{"tombstone":"T1pYAQVwcmpfMQVzaHJfMAAAAAEAAAGZyCzAAHxIvbDRJmfI02-wviKcviOt_pzEKfC0gg0WuKX4THAL","signature":"AY-0_KkmdnTMJF55nTSEgqakTy0Zb8YddI-DXVSLQM_AdJd7ayaVgVTalR9Pk5YI6-9mUzLEgaWiPI5SDnaiKts"}]}}"`
+    );
+    const verified = await verifyShareLinkSet(
+      decodeEncryptedDocumentBody(body, header).shareLinks!,
+      {
+        projectId: 'prj_1',
+        keyEpoch: 1,
+        resolveOwnerKey: () => f.deviceRaw
+      }
+    );
+    expect(verified.links[0]!.shareKeyHash).toEqual(f.keyHash);
+  });
+
+  it('produces the fixed share-key and share-version-key wraps', async () => {
+    const vector = async (context: WrapContext) => {
+      const wrapped = await wrapKey(KEK, WRAPPED_SECRET, context);
+      expect(await unwrapKey(KEK, wrapped, context)).toEqual(WRAPPED_SECRET);
+      return {
+        context: toHex(encodeWrapContext(context)),
+        wrap: toHex(wrapped)
+      };
+    };
+    expect(
+      await vector({
+        purpose: 'share-key',
+        projectId: 'prj_1',
+        keyEpoch: 1,
+        shareId: 'shr_1'
+      })
+    ).toMatchInlineSnapshot(`
+      {
+        "context": "086b657945706f63680200000000000000010970726f6a656374496401000570726a5f3107707572706f736501000973686172652d6b657907736861726549640100057368725f31",
+        "wrap": "0210e19205f8c6fd633d02ad5d8d23bf9e3b99446135e145730c019ae834211b167d4797fc18f72920",
+      }
+    `);
+    expect(
+      await vector({
+        purpose: 'share-version-key',
+        projectId: 'prj_1',
+        keyEpoch: 1,
+        shareId: 'shr_1',
+        versionId: '9'
+      })
+    ).toMatchInlineSnapshot(`
+      {
+        "context": "086b657945706f63680200000000000000010970726f6a656374496401000570726a5f3107707572706f736501001173686172652d76657273696f6e2d6b657907736861726549640100057368725f310976657273696f6e496401000139",
+        "wrap": "02ea30abedd7dd2e8bf1d9ceebd445f89013fc23cb2ee70759b4a9f99006c267ce18e57e37d41c5fcd",
+      }
+    `);
   });
 });

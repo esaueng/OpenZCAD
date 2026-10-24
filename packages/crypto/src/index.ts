@@ -1,5 +1,5 @@
 /**
- * End-to-end encryption primitives for ADR-024 (roadmap L11, Phases 2–4).
+ * End-to-end encryption primitives for ADR-024 (roadmap L11, Phases 2–5).
  * WebCrypto only: runs in browsers, Web Workers, the Tauri WKWebView and
  * Node 20+. The account key material of Phase 3 (device lists, unlock
  * targets, device approval) is its first application use.
@@ -276,6 +276,7 @@ export {
 } from './version-log';
 export {
   BODY_VERSION_1,
+  BODY_VERSION_2,
   MAX_ARCHIVED_KEYS,
   MAX_EXPORT_CONTENT_TYPE_LENGTH,
   MAX_EXPORT_FILE_NAME_LENGTH,
@@ -313,3 +314,54 @@ export {
   openProjectPreferences,
   type ProjectPreferences
 } from './account-records';
+export {
+  MAX_DELEGATED_DEVICES,
+  MAX_SHARE_AUTHORITY_BYTES,
+  MAX_SHARE_AUTHORITY_LIFETIME_MS,
+  MAX_SHARE_AUTHORS,
+  MAX_SHARE_DELEGATION_BYTES,
+  MAX_SHARE_DELEGATION_LIFETIME_MS,
+  MAX_SHARE_LINK_GRANT_BYTES,
+  MAX_SHARE_LINK_TOMBSTONE_BYTES,
+  MAX_SHARE_LINKS,
+  MAX_SHARE_TOMBSTONES,
+  SHARE_AUTHORITY_VERSION_1,
+  SHARE_CLOCK_SKEW_MS,
+  SHARE_DELEGATION_VERSION_1,
+  SHARE_LINK_GRANT_VERSION_1,
+  SHARE_LINK_MODES,
+  SHARE_LINK_TOMBSTONE_VERSION_1,
+  ShareLinkError,
+  decodeShareAuthority,
+  decodeShareDelegation,
+  decodeShareLinkGrant,
+  decodeShareLinkTombstone,
+  encodeShareAuthority,
+  encodeShareDelegation,
+  encodeShareLinkGrant,
+  encodeShareLinkTombstone,
+  openShareKey,
+  sameShareLinkSet,
+  shareKeyHash,
+  signShareAuthority,
+  signShareDelegation,
+  signShareLinkGrant,
+  signShareLinkTombstone,
+  verifyShareAuthority,
+  verifyShareDelegation,
+  verifyShareLinkSet,
+  verifySharedSnapshot,
+  type ActiveShareLink,
+  type ShareAuthorityStatement,
+  type ShareDelegation,
+  type SharedSnapshotInput,
+  type ShareLinkFailure,
+  type ShareLinkGrant,
+  type ShareLinkMode,
+  type ShareLinkSet,
+  type ShareLinkSigner,
+  type ShareLinkTombstone,
+  type VerifiedSharedSnapshot,
+  type VerifiedShareLinkSet,
+  type VerifyShareLinkSetOptions
+} from './share-links';
