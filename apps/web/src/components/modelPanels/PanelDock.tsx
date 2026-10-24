@@ -558,7 +558,10 @@ export function PanelDock({
     event.preventDefault();
     event.stopPropagation();
     // A step is exact: no snap, so a step up from a full column shortens it.
-    const next = resizeColumn(layout, panels, height, dockHeight, 0);
+    const next = resizeColumn(layout, panels, height, dockHeight, {
+      snap: 0,
+      drawn
+    });
     if (next !== layout) onLayout(next);
   };
 
@@ -1207,7 +1210,7 @@ export function PanelDock({
         onPointerDown={(event) => {
           if (!enabled) return;
           startLocal(event, (base, _dx, dy) =>
-            resizeColumn(base, panels, drawn + dy, dockHeight)
+            resizeColumn(base, panels, drawn + dy, dockHeight, { drawn })
           );
         }}
         {...localHandlers}

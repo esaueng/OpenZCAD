@@ -1784,11 +1784,13 @@ describe('column heights', () => {
     expect(
       resizeColumn(single(), ['bodies'], dock - 10, dock).columnHeights
     ).toEqual({});
-    const stepped = resizeColumn(single(), ['bodies'], dock - 10, dock, 0);
+    const stepped = resizeColumn(single(), ['bodies'], dock - 10, dock, {
+      snap: 0
+    });
     expect(stepped.columnHeights).toEqual({ bodies: dock - 10 });
     // Stepping back down to the foot fills the dock again.
     expect(
-      resizeColumn(stepped, ['bodies'], dock, dock, 0).columnHeights
+      resizeColumn(stepped, ['bodies'], dock, dock, { snap: 0 }).columnHeights
     ).toEqual({});
   });
 
@@ -1843,6 +1845,24 @@ describe('column heights', () => {
     // Lifting never touches the layout itself.
     expect(layout.columnHeights).toEqual({ 'bodies+history': 300 });
     expect(full.columnHeights).toEqual({ bodies: 300 });
+  });
+
+  it('stores no height a hugging column under its minimum cannot show', () => {
+    // Fit panels to content, Objects hugging 60px: under the 90px minimum,
+    // a step up would store 90px, taller than the column is drawn.
+    const layout = setOption(single(), 'hug', true);
+    const stage: PanelStage = { ...STAGE, naturals: { bodies: 60 } };
+    const geometry = computePanelGeometry(layout, stage);
+    expect(geometry.panels.bodies!.h).toBe(60);
+    const dock = dockOf(layout, stage);
+    expect(
+      resizeColumn(layout, ['bodies'], 50, dock, { snap: 0, drawn: 60 })
+    ).toBe(layout);
+    // From a taller drawn height the same step shortens it to the minimum.
+    expect(
+      resizeColumn(layout, ['bodies'], 50, dock, { snap: 0, drawn: 200 })
+        .columnHeights
+    ).toEqual({ bodies: PANEL_MIN_HEIGHT });
   });
 
   it('refuses to shorten a column whose minimums overflow the dock', () => {

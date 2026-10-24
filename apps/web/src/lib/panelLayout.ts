@@ -387,15 +387,18 @@ export function columnMinimum(count: number): number {
  * height. Within `snap` of the dock's foot (or past it) the column fills
  * the dock again; it never goes under its panels' minimums. A drag snaps
  * by `COLUMN_FILL_SNAP`; a keyboard step passes 0, or a step up from a
- * full column would land inside the snap and never shorten it. Locked,
- * nothing changes.
+ * full column would land inside the snap and never shorten it. Pass the
+ * height the column is `drawn` at: a shortening the minimums hold at or
+ * above it (a column hugging content under 90px) changes nothing, rather
+ * than storing a height taller than the column shows. Locked, nothing
+ * changes.
  */
 export function resizeColumn(
   layout: PanelLayout,
   panels: readonly PanelId[],
   height: number,
   dockHeight: number,
-  snap = COLUMN_FILL_SNAP
+  { snap = COLUMN_FILL_SNAP, drawn }: { snap?: number; drawn?: number } = {}
 ): PanelLayout {
   const key = columnKey(panels);
   if (
@@ -413,6 +416,9 @@ export function resizeColumn(
   const next = fills
     ? null
     : Math.round(clamp(height, columnMinimum(panels.length), dockHeight));
+  if (drawn !== undefined && height < drawn && next !== null && next >= drawn) {
+    return layout;
+  }
   const current = layout.columnHeights[key] ?? null;
   if (next === current) return layout;
   const copy = copyLayout(layout);
