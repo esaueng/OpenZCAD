@@ -5,7 +5,7 @@
  * against the real Worker routes over SQLite with every migration applied.
  */
 import { readFileSync, readdirSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import worker from '../apps/web/worker/index';
 import {
@@ -260,7 +260,12 @@ function seedProject(
   return id;
 }
 
-type Hook = (path: string, init: RequestInit) => Promise<void>;
+type Hook = (
+  path: string,
+  init: RequestInit,
+  /** A copy of the Worker's answer (after hooks only). */
+  response?: Response
+) => Promise<void>;
 
 interface Device {
   ctx: ProjectGroupContext;
@@ -296,7 +301,7 @@ function device(
       }),
       srv.env
     );
-    await result.after?.(path, init);
+    await result.after?.(path, init, response.clone());
     return response;
   };
   result.ctx = {
@@ -354,6 +359,55 @@ function groupEpoch(srv: Server, projectId: string): number {
       .prepare('SELECT epoch FROM e2ee_project_groups WHERE project_id = ?')
       .get(projectId) as { epoch: number }
   ).epoch;
+}
+
+/**
+ * Two Commit submissions race: both read the group before either batch
+ * runs, then the batches run one after the other. In 'fence' mode the
+ * second batch finds the epoch fence moved, as SQLite reports it; in
+ * 'constraint' mode it fails on the Commit log's (project_id, epoch)
+ * primary key instead, with the error SQLite raises for that row, as a
+ * store that checks the key first would answer.
+ */
+function raceCommitBatches(srv: Server, mode: 'fence' | 'constraint') {
+  const db = srv.env.DB as D1Database;
+  const held: (() => void)[] = [];
+  let arrivals = 0;
+  srv.env.DB = {
+    prepare: (sql: string) => db.prepare(sql),
+    batch: async (statements: D1PreparedStatement[]) => {
+      const first = statements[0] as unknown as {
+        sql: string;
+        bindings: SQLInputValue[];
+      };
+      if (arrivals >= 2 || !/INSERT INTO e2ee_mls_commits/.test(first.sql)) {
+        return db.batch(statements);
+      }
+      const order = arrivals++;
+      await new Promise<void>((resolve) => {
+        held.push(resolve);
+        if (held.length === 2) for (const release of held) release();
+      });
+      if (order === 1 && mode === 'constraint') {
+        const [projectId, epoch] = first.bindings;
+        try {
+          srv.db
+            .prepare(
+              `INSERT INTO e2ee_mls_commits (project_id, epoch, kind, message, created_at)
+               VALUES (?, ?, 'commit', 'AAAA', ?)`
+            )
+            .run(projectId!, epoch!, NOW);
+        } catch (error) {
+          throw new Error(
+            `D1_ERROR: ${(error as Error).message}: SQLITE_CONSTRAINT`,
+            { cause: error }
+          );
+        }
+        throw new Error('The first Commit did not land before the second.');
+      }
+      return db.batch(statements);
+    }
+  };
 }
 
 // --- Scenarios -------------------------------------------------------------
@@ -543,6 +597,79 @@ describe('solo MLS groups', () => {
     // Nothing moved.
     expect(groupEpoch(srv, projectId)).toBe(3);
   });
+
+  it.each(['fence', 'constraint'] as const)(
+    'answers the loser of two concurrent Commits for one epoch with EPOCH_TAKEN and the winner, and it rebases (%s)',
+    async (mode) => {
+      const srv = newServer();
+      const projectId = seedProject(srv);
+      const laptop = device(srv, owner, 'owner_laptop');
+      const desktop = device(srv, owner, 'owner_desktop');
+      await createProjectGroup(laptop.ctx, projectId);
+      await joinProjectGroup(desktop.ctx, projectId);
+      await catchUpProjectGroup(laptop.ctx, projectId);
+
+      raceCommitBatches(srv, mode);
+      const answers = new Map<string, { status: number; body: unknown }[]>();
+      for (const [name, d] of [
+        ['owner_laptop', laptop],
+        ['owner_desktop', desktop]
+      ] as const) {
+        answers.set(name, []);
+        d.after = async (path, init, response) => {
+          if (isCommitPost(path, init))
+            answers.get(name)!.push({
+              status: response!.status,
+              body: await response!.json()
+            });
+        };
+      }
+      const [fromLaptop, fromDesktop] = await Promise.all([
+        commitProjectGroup(laptop.ctx, projectId),
+        commitProjectGroup(desktop.ctx, projectId)
+      ]);
+      expect([fromLaptop.epoch, fromDesktop.epoch].sort()).toEqual([2, 3]);
+      const [winner, loser] =
+        fromLaptop.epoch === 2
+          ? ['owner_laptop', 'owner_desktop']
+          : ['owner_desktop', 'owner_laptop'];
+      const stored = srv.db
+        .prepare(
+          'SELECT message FROM e2ee_mls_commits WHERE project_id = ? AND epoch = 1'
+        )
+        .get(projectId) as { message: string };
+      expect(answers.get(winner)!.map((a) => a.status)).toEqual([200]);
+      // The loser's first Commit (for epoch 1) is told who won, then its
+      // rebuilt Commit for epoch 2 lands.
+      const lost = answers.get(loser)!;
+      expect(lost.map((a) => a.status)).toEqual([409, 200]);
+      expect(lost[0]!.body).toMatchObject({
+        code: 'EPOCH_TAKEN',
+        winner: {
+          epoch: 1,
+          message: stored.message,
+          senderDeviceId: winner
+        }
+      });
+      expect(
+        srv.db
+          .prepare(
+            'SELECT epoch, sender_device_id FROM e2ee_mls_commits WHERE project_id = ? ORDER BY epoch'
+          )
+          .all(projectId)
+      ).toEqual([
+        { epoch: 0, sender_device_id: 'owner_desktop' },
+        { epoch: 1, sender_device_id: winner },
+        { epoch: 2, sender_device_id: loser }
+      ]);
+      expect(groupEpoch(srv, projectId)).toBe(3);
+      const late = winner === 'owner_laptop' ? laptop : desktop;
+      await catchUpProjectGroup(late.ctx, projectId);
+      expect(await currentKey(laptop, owner, 'owner_laptop', projectId)).toBe(
+        await currentKey(desktop, owner, 'owner_desktop', projectId)
+      );
+    }
+  );
 
   it('confirms a Commit the server accepted before a crash, after reload', async () => {
     const srv = newServer();

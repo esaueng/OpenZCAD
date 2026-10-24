@@ -494,6 +494,22 @@ async function epochTaken(
   );
 }
 
+/**
+ * A Commit that lost its epoch to one that landed after this request read
+ * the group: answers 409 EPOCH_TAKEN with the stored winner, so the sender
+ * can discard its Commit and rebase, exactly as when the read already saw
+ * the winner. Returns when no Commit holds the epoch.
+ */
+async function refuseIfEpochTaken(
+  db: D1Database,
+  projectId: string,
+  epoch: number
+): Promise<void> {
+  if (await commitRow(db, projectId, epoch)) {
+    await epochTaken(db, projectId, epoch);
+  }
+}
+
 // --- Writes ----------------------------------------------------------------
 
 interface Authorization {
@@ -575,10 +591,15 @@ function insertArchive(
 
 type BatchResult = Awaited<ReturnType<D1Database['batch']>>[number];
 
-/** Runs a write batch; a fence or key conflict becomes a 409. */
+/**
+ * Runs a write batch; a fence or key conflict becomes a 409. `onConflict`
+ * may answer a key conflict more precisely first (it returns to fall back
+ * to the generic one).
+ */
 async function runBatch(
   db: D1Database,
-  statements: D1PreparedStatement[]
+  statements: D1PreparedStatement[],
+  onConflict?: () => Promise<void>
 ): Promise<BatchResult[]> {
   try {
     return await db.batch(statements);
@@ -592,6 +613,7 @@ async function runBatch(
       );
     }
     if (/UNIQUE constraint|PRIMARY KEY|E2EE_GROUP_EPOCH/i.test(message)) {
+      await onConflict?.();
       refuse(
         409,
         'E2EE_CONFLICT',
@@ -746,8 +768,15 @@ async function submitCommit(
     ...insertWraps(db, projectId, userId, wraps, now),
     insertArchive(db, projectId, archive, now)
   ];
-  const results = await runBatch(db, statements);
+  // Two submissions for one epoch can both pass the read above. Whichever
+  // batch runs second either finds the epoch fence moved (no rows change)
+  // or, on a store that checks the Commit log's primary key first, fails
+  // on (project_id, epoch): both mean the epoch is taken.
+  const results = await runBatch(db, statements, () =>
+    refuseIfEpochTaken(db, projectId, epoch)
+  );
   if (!allChanged(results, statements.length)) {
+    await refuseIfEpochTaken(db, projectId, epoch);
     const current = await groupRow(db, projectId);
     if (current && current.epoch > epoch)
       await epochTaken(db, projectId, epoch);
