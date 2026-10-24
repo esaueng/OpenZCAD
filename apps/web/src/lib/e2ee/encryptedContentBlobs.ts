@@ -21,6 +21,14 @@
  * - **Read.** `read` downloads the ciphertext and decrypts it in the decode
  *   worker against the reference, so a swapped, truncated or resized blob
  *   fails there.
+ * - **Thumbnails and exports** (slice 4-7) are archived the same way; the
+ *   project-info envelope, not a document, names them.
+ * - **Restore.** When the account lost or collected a blob a document still
+ *   names, `restore` stores it again from this device's source store: the
+ *   bytes must match the checksum and length the page holds for that blob,
+ *   and are encrypted under a fresh key with the same blob id
+ *   (`ContentBlobOptions.blobId`), so one key still encrypts one envelope
+ *   and the next version carries the new reference.
  */
 import {
   E2eeError,
@@ -305,6 +313,10 @@ export function rememberDocumentBlobs(
   }
 }
 
+/** A lost blob this device holds no matching copy of. */
+export const E2EE_BLOB_RESTORE_MESSAGE =
+  'The account no longer holds a file this project names, and this device has no copy of it. Import the file again.';
+
 /** Every write: the body's blob table names files this page holds keys for. */
 export const E2EE_BLOB_KEY_MISSING_MESSAGE =
   'This project names a file this browser has no key for. Reopen the project, or remove and import the file again.';
@@ -346,9 +358,19 @@ export function contentBlobKindFor(kind: ArtifactKind): {
       // PNG and JPEG are compressed already; stored as is, a cut-short
       // picture is also visible to the Worker by its length.
       return { kind: 'import-source', compression: 'none' };
+    case 'thumbnail':
+      // WebP is compressed already.
+      return { kind: 'thumbnail', compression: 'none' };
+    case 'step-export':
+    case 'stl-export':
+    case '3mf-export':
+    case 'obj-export':
+    case 'gltf-export':
+    case 'ply-export':
+      return { kind: 'export', compression: 'gzip' };
     default:
-      // Original mesh files, thumbnails and exports: nothing an encrypted
-      // document names yet (thumbnails and exports arrive with 4-7).
+      // Original mesh files and snapshots: nothing an encrypted project
+      // names.
       throw encryptedLocalOnly('Stored files');
   }
 }
@@ -371,11 +393,19 @@ export interface EncryptedContentBlobContext {
   readonly partBytes?: number;
   /** Envelope chunk size; tests make it small. */
   readonly chunkSize?: number;
+  /** This device's copy of a source, by plaintext SHA-256 (for `restore`). */
+  readonly loadLocal?: (checksumSha256: string) => Promise<Uint8Array | null>;
 }
 
 export interface EncryptedContentBlobs {
   /** Encrypts and stores one file; resolves to its blob id. */
   archive(projectId: string, input: ArchiveArtifactInput): Promise<string>;
+  /**
+   * Stores again blobs the account lost or collected, from this device's
+   * copies, under their ids and fresh keys; the page then holds the new
+   * references. Refuses a blob it has no matching copy of.
+   */
+  restore(projectId: string, blobIds: readonly string[]): Promise<void>;
   /** Downloads and decrypts a blob this page holds the reference for. */
   read(
     projectId: string,
@@ -397,7 +427,8 @@ async function encryptBlob(
   kind: ContentBlobKind,
   plaintext: Uint8Array,
   compression: Compression,
-  chunkSize: number | undefined
+  chunkSize: number | undefined,
+  blobId?: string
 ): Promise<{ envelope: Blob; reference: ContentBlobReference }> {
   const source = new Blob([plaintext as Uint8Array<ArrayBuffer>]).stream();
   const stream = encryptContentBlobStream(
@@ -407,7 +438,8 @@ async function encryptBlob(
     {
       plaintextLength: plaintext.byteLength,
       compression,
-      ...(chunkSize ? { chunkSize } : {})
+      ...(chunkSize ? { chunkSize } : {}),
+      ...(blobId ? { blobId } : {})
     }
   );
   const parts: Uint8Array<ArrayBuffer>[] = [];
@@ -519,6 +551,56 @@ export function createEncryptedContentBlobs(
       }
       ctx.references.remember(projectId, reference, checksum);
       return reference.blobId;
+    },
+
+    async restore(projectId, blobIds) {
+      function missing(): never {
+        throw new UnstorableDocumentError(E2EE_BLOB_RESTORE_MESSAGE);
+      }
+      const loadLocal = ctx.loadLocal ?? missing;
+      for (const blobId of new Set(blobIds)) {
+        const held = ctx.references.get(projectId, blobId);
+        const checksumSha256 = held?.checksumSha256;
+        if (!held || !checksumSha256) missing();
+        const { reference } = held;
+        const plaintext = await loadLocal(checksumSha256).catch(() => null);
+        if (
+          !plaintext ||
+          plaintext.byteLength !== reference.plaintextLength ||
+          (await sha256Hex(plaintext)) !== checksumSha256
+        ) {
+          missing();
+        }
+        const compression: Compression =
+          reference.kind === 'thumbnail' ? 'none' : 'gzip';
+        const { envelope, reference: restored } = await encryptBlob(
+          reference.kind,
+          plaintext,
+          compression,
+          ctx.chunkSize,
+          blobId
+        );
+        const started = await api.startUpload(projectId, {
+          blobId,
+          kind: reference.kind
+        });
+        // Committed meanwhile by someone else, under a key this page does
+        // not hold: never name it with this reference.
+        if (started.committed) missing();
+        await uploadArtifactBody(transport, started.session, envelope, {
+          ...(ctx.partBytes ? { partBytes: ctx.partBytes } : {})
+        });
+        const tag = await assetDedupeHash(
+          await dedupeKeyOf(projectId),
+          plaintext
+        );
+        const finalized = await api.finalize(projectId, blobId, {
+          uploadSessionId: started.session.uploadSessionId,
+          dedupeTag: tag
+        });
+        if (finalized.blobId !== blobId) missing();
+        ctx.references.remember(projectId, restored, checksumSha256);
+      }
     },
 
     async read(projectId, blobId, signal, onProgress) {

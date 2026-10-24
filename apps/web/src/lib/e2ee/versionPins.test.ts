@@ -67,7 +67,9 @@ describe('version pins', () => {
       ).toBe(false);
       expect(await pins.read('u', 'p'), name).toEqual({
         ...two,
-        infoSequence: 0
+        infoSequence: 0,
+        infoHash: null,
+        envelopes: {}
       });
       // Pins are per account and project.
       expect(await pins.read('u', 'other'), name).toBeNull();
@@ -82,7 +84,9 @@ describe('version pins', () => {
         headHash: null,
         documentVersion: 0,
         keyEpoch: 0,
-        infoSequence: 3
+        infoSequence: 3,
+        infoHash: null,
+        envelopes: {}
       });
       expect(await pins.advanceInfo('u', 'shelf', 2), name).toBe(false);
       // A head pinned later keeps the info sequence.
@@ -101,6 +105,96 @@ describe('version pins', () => {
         infoSequence: 4
       });
     }
+  });
+
+  it('refuses a project info or envelope at its pinned sequence with another hash', async () => {
+    for (const [name, pins] of await stores()) {
+      expect(await pins.advanceInfo('u', 'p', 2, H('a')), name).toBe(true);
+      // The same info again is fine; another one at the same sequence is a fork.
+      expect(await pins.advanceInfo('u', 'p', 2, H('a')), name).toBe(true);
+      expect(await pins.advanceInfo('u', 'p', 2, H('b')), name).toBe(false);
+      expect(await pins.advanceInfo('u', 'p', 1, H('c')), name).toBe(false);
+      expect(await pins.advanceInfo('u', 'p', 3, H('c')), name).toBe(true);
+      expect(await pins.read('u', 'p'), name).toMatchObject({
+        infoSequence: 3,
+        infoHash: H('c')
+      });
+      const one = { sequence: 4, hash: H('d') };
+      expect(
+        await pins.advanceEnvelope('u', 'p', 'measurements', one),
+        name
+      ).toBe(true);
+      expect(
+        await pins.advanceEnvelope('u', 'p', 'measurements', {
+          ...one,
+          hash: H('e')
+        }),
+        name
+      ).toBe(false);
+      expect(
+        await pins.advanceEnvelope('u', 'p', 'measurements', {
+          sequence: 3,
+          hash: H('e')
+        }),
+        name
+      ).toBe(false);
+      // Each key has its own pin.
+      expect(
+        await pins.advanceEnvelope('u', 'p', 'view-state:s', {
+          sequence: 1,
+          hash: H('f')
+        }),
+        name
+      ).toBe(true);
+      expect((await pins.read('u', 'p'))?.envelopes, name).toEqual({
+        measurements: one,
+        'view-state:s': { sequence: 1, hash: H('f') }
+      });
+      // A head pinned later keeps them.
+      expect(
+        await pins.advance('u', 'p', null, {
+          headHash: H('1'),
+          documentVersion: 1,
+          keyEpoch: 0
+        }),
+        name
+      ).toBe(true);
+      expect(await pins.read('u', 'p'), name).toMatchObject({
+        infoHash: H('c'),
+        envelopes: { measurements: one }
+      });
+    }
+  });
+
+  it('reads a pin written before project-info hashes as having none', async () => {
+    const pins = await import('./versionPins');
+    const store = pins.indexedDbVersionPins();
+    await store.advanceInfo('u', 'old', 1);
+    await new Promise<void>((resolve, reject) => {
+      const open = indexedDB.open(pins.VERSION_PIN_DATABASE, 1);
+      open.onsuccess = () => {
+        const tx = open.result.transaction('pins', 'readwrite');
+        tx.objectStore('pins').put(
+          { headHash: null, documentVersion: 0, keyEpoch: 0, infoSequence: 5 },
+          ['u', 'old']
+        );
+        tx.oncomplete = () => {
+          open.result.close();
+          resolve();
+        };
+        tx.onerror = () => reject(tx.error ?? new Error('put failed'));
+      };
+      open.onerror = () => reject(open.error ?? new Error('open failed'));
+    });
+    expect(await store.read('u', 'old')).toEqual({
+      headHash: null,
+      documentVersion: 0,
+      keyEpoch: 0,
+      infoSequence: 5,
+      infoHash: null,
+      envelopes: {}
+    });
+    expect(await store.advanceInfo('u', 'old', 5, H('a'))).toBe(true);
   });
 
   it('lets one of two racing tabs win in IndexedDB', async () => {

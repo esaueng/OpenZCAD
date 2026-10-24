@@ -32,18 +32,22 @@ import {
   decryptContentBlobStream,
   decodeEncryptedDocumentBody,
   decodeKeyArchiveBody,
+  decodeMeasurementsBody,
   decodeProjectInfoBody,
+  decodeViewStateBody,
   decryptProjectEnvelope,
   type ContentBlobKind,
   type ContentBlobReference,
   type E2eeErrorCode,
   type EncryptedDocumentBody,
   type KeyArchiveBody,
+  type MeasurementsBody,
   type ProjectEnvelopeExpectation,
   type ProjectEnvelopeHeader,
   type ProjectEnvelopeHeaderInit,
   type ProjectEnvelopeKind,
-  type ProjectInfoBody
+  type ProjectInfoBody,
+  type ViewStateBody
 } from '@openzcad/crypto';
 import {
   JsonComplexityGuard,
@@ -97,6 +101,14 @@ export interface SealDocumentResult {
   readonly versionKey: Uint8Array;
 }
 
+/** Every body a project envelope's codec reads. */
+export type ProjectEnvelopeBody =
+  | EncryptedDocumentBody
+  | ProjectInfoBody
+  | KeyArchiveBody
+  | MeasurementsBody
+  | ViewStateBody;
+
 export type DecodeJob =
   ProjectEnvelopeDecodeJob | ContentBlobDecodeJob | SealDocumentJob;
 
@@ -104,7 +116,7 @@ export interface ProjectEnvelopeDecodeResult {
   readonly type: 'project-envelope';
   readonly header: ProjectEnvelopeHeader;
   /** The body as its kind's codec read it (`decodeProjectBody`). */
-  readonly value: EncryptedDocumentBody | ProjectInfoBody | KeyArchiveBody;
+  readonly value: ProjectEnvelopeBody;
 }
 
 export type ContentBlobDecodeResult =
@@ -207,14 +219,14 @@ export function parseGuardedJson(bytes: Uint8Array): unknown {
  * refused, so `{}`, a non-canonical project info or key archive, or a body
  * whose blob references disagree with the header never reaches the caller.
  * Documents and share snapshots then get the shared structural check.
- * Measurements and view state have no body codec yet (slice 4-7), so they
- * are refused rather than handed out as unchecked JSON.
+ * Measurements and view state carry an app record each (slice 4-7); the
+ * page checks the record after this, as it checks a document.
  */
 export function decodeProjectBody(
   kind: ProjectEnvelopeKind,
   header: ProjectEnvelopeHeader,
   plaintext: Uint8Array
-): EncryptedDocumentBody | ProjectInfoBody | KeyArchiveBody {
+): ProjectEnvelopeBody {
   switch (kind) {
     case 'document':
     case 'share-snapshot': {
@@ -227,10 +239,14 @@ export function decodeProjectBody(
       return decodeProjectInfoBody(plaintext, header);
     case 'key-archive':
       return decodeKeyArchiveBody(plaintext, header);
+    case 'measurements':
+      return decodeMeasurementsBody(plaintext, header);
+    case 'view-state':
+      return decodeViewStateBody(plaintext, header);
     default:
       throw new E2eeError(
         'invalid-argument',
-        `${kind} envelopes have no body codec yet`
+        `${String(kind)} envelopes have no body codec`
       );
   }
 }

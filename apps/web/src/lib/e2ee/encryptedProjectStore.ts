@@ -30,11 +30,20 @@
  *   write's body carries the reference of every blob its document names and
  *   the header's `blobIds` are derived from that list; a verified read
  *   hands its body's references to this page's registry, so the source
- *   resolver and the next write can use them.
+ *   resolver and the next write can use them. A write the account refuses
+ *   because it lost a blob the document names (409 `E2EE_BLOB_UNKNOWN`)
+ *   stores the blob again from this device's copy (`restoreBlobs`) and is
+ *   retried once.
+ * - **Replaced envelopes** (slice 4-7). The project info (name, thumbnail,
+ *   archived exports; `encryptedProjectInfo.ts`), measurements and view
+ *   state (`replacedEnvelopes.ts`) are sealed and opened through this
+ *   store's kit (`replaced`): under the current key epoch, bound to it and
+ *   signed by this device; on the way back the signer must be a listed
+ *   device of this account and the binding, kind, project and sequence must
+ *   hold before the body is decoded.
  *
  * Not yet: files embedded in the document itself (the legacy `stepText`
- * and embedded-mesh forms), measurements, view state, thumbnails and
- * archived exports (4-7), copies, branches and adoption (4-8), the live
+ * and embedded-mesh forms), copies, branches and adoption (4-8), the live
  * room (4-9).
  */
 import {
@@ -58,6 +67,7 @@ import {
   verifyVersionLog,
   versionHash,
   wrapKey,
+  type BodyEnvelopeHeader,
   type EncryptedDocumentBody,
   type ProjectEnvelopeHeader,
   type ProjectEnvelopeHeaderInit,
@@ -74,6 +84,7 @@ import {
   type E2eeProjectEnvelopeRecord,
   type E2eeProjectEnvelopeUpload,
   type E2eeProjectState,
+  type E2eeReplacedEnvelopeKind,
   type E2eeRevisionsResponse,
   type E2eeVersionLogEntry,
   type ListRevisionsResponse,
@@ -130,6 +141,15 @@ import {
   type ProjectVersionPin,
   type VersionPinStore
 } from './versionPins';
+import {
+  createProjectInfoAccess,
+  type ProjectInfoAccess
+} from './encryptedProjectInfo';
+import type {
+  OpenedReplaced,
+  ReplacedEnvelopeKit,
+  SealedReplaced
+} from './replacedEnvelopes';
 
 // --- Context ---------------------------------------------------------------
 
@@ -182,6 +202,15 @@ export interface EncryptedProjectContext {
   readonly onDocument?: (
     projectId: string,
     document: ProjectDocument
+  ) => Promise<void>;
+  /**
+   * Stores again, from this device's copy, blobs a document names that the
+   * account lost or collected (409 `E2EE_BLOB_UNKNOWN`); the write is then
+   * retried once with the new references.
+   */
+  readonly restoreBlobs?: (
+    projectId: string,
+    blobIds: readonly string[]
   ) => Promise<void>;
 }
 
@@ -261,6 +290,10 @@ export interface EncryptedProjectStore {
   listRevisions(projectId: string): Promise<ListRevisionsResponse>;
   /** The decrypted name of a project-info envelope, or null if it fails. */
   projectName(record: E2eeProjectEnvelopeRecord): Promise<string | null>;
+  /** The project info: name, thumbnail and archived exports (4-7). */
+  readonly info: ProjectInfoAccess;
+  /** Seals and opens replaced envelopes: project info, measurements, view state. */
+  readonly replaced: ReplacedEnvelopeKit;
 }
 
 const b64 = toBase64Url;
@@ -326,6 +359,23 @@ function recordOf(entry: E2eeVersionLogEntry): VersionLogRecord {
     versionHash: fromHex(entry.versionHash),
     signature: bytes(entry.signature)
   };
+}
+
+/** The blob ids a refused write names, or every one the version named. */
+function unknownBlobsOf(
+  error: ApiError,
+  sealed: { envelope: Uint8Array }
+): readonly string[] {
+  const listed = error.details?.blobIds;
+  if (
+    Array.isArray(listed) &&
+    listed.length > 0 &&
+    listed.every((id) => typeof id === 'string')
+  ) {
+    return listed;
+  }
+  const { header } = parseEnvelope(sealed.envelope);
+  return header.class === 'project' ? header.blobIds : [];
 }
 
 function inlineOpener(): EnvelopeOpener {
@@ -1062,33 +1112,24 @@ export function createEncryptedProjectStore(
     };
   }
 
-  /** Keeps the project-info envelope's name in step with the document's. */
-  async function syncInfo(
-    device: CertifyingDevice,
-    material: Material,
-    projectId: string,
-    state: HeadState
-  ): Promise<void> {
+  /**
+   * Keeps the project-info envelope's name in step with the document's,
+   * keeping its thumbnail and archived exports (slice 4-7).
+   */
+  async function syncInfo(projectId: string, state: HeadState): Promise<void> {
     const name = state.document.name;
     if (state.infoName === name) return;
     try {
-      if (state.infoName === null) {
-        const { info } = await api.info(projectId);
-        if (info) {
-          state.infoSequence = Math.max(state.infoSequence, info.sequence);
-          const current = await projectName(info);
-          state.infoName = current;
-          if (current === name) return;
-        }
-      }
-      const sequence = state.infoSequence + 1;
-      const { info } = await api.saveInfo(
-        projectId,
-        await sealInfo(device, material, projectId, name, sequence)
+      const body = await info.update(projectId, (current) =>
+        current?.name === name
+          ? null
+          : {
+              name,
+              ...(current?.thumbnail ? { thumbnail: current.thumbnail } : {}),
+              exports: current?.exports ?? []
+            }
       );
-      state.infoName = name;
-      state.infoSequence = info?.sequence ?? sequence;
-      await pins.advanceInfo(userId, projectId, state.infoSequence);
+      state.infoName = body?.name ?? name;
     } catch {
       // The name follows on the next save; the document is what matters.
     }
@@ -1106,6 +1147,7 @@ export function createEncryptedProjectStore(
       throw new ApiError(404, 'Project not found.', 'PROJECT_NOT_FOUND');
     }
     const head = await headFor(projectId, expectedVersion);
+    let restored = false;
     for (let attempt = 0; ; attempt++) {
       const material = await currentMaterial(device, projectId);
       const sealed = await sealDocument(
@@ -1142,6 +1184,18 @@ export function createEncryptedProjectStore(
         ) {
           continue;
         }
+        // The account lost or collected a blob this document names: store
+        // it again from this device's copy and retry, once.
+        if (
+          error instanceof ApiError &&
+          error.code === 'E2EE_BLOB_UNKNOWN' &&
+          ctx.restoreBlobs &&
+          !restored
+        ) {
+          restored = true;
+          await ctx.restoreBlobs(projectId, unknownBlobsOf(error, sealed));
+          continue;
+        }
         throw error;
       }
       if (response.versionHash !== sealed.hash) {
@@ -1172,54 +1226,154 @@ export function createEncryptedProjectStore(
         infoSequence: head.infoSequence
       };
       heads.set(projectId, state);
-      await syncInfo(device, material, projectId, state);
+      await syncInfo(projectId, state);
       return { response, document: sealed.document };
     }
   }
+
+  /**
+   * Opens a replaced envelope (project info, measurements, view state):
+   * signed by a device this account lists, bound to its key epoch, of the
+   * kind, project, sequence and epoch the account named, then decoded by
+   * its body codec.
+   */
+  async function openReplaced(
+    record: E2eeProjectEnvelopeRecord,
+    kind: E2eeReplacedEnvelopeKind
+  ): Promise<OpenedReplaced> {
+    const envelope = bytes(record.envelope);
+    const signer = list().devices.find(
+      (d) => d.deviceId === record.signerDeviceId
+    );
+    if (!signer) {
+      throw integrity(
+        'author',
+        'This envelope is not signed by a device this account lists.'
+      );
+    }
+    const signed = await verifyProjectEnvelopeSignature(
+      signer.signingKey,
+      envelope,
+      bytes(record.signature)
+    ).catch(() => null);
+    if (!signed) {
+      throw integrity('author', 'This envelope’s signature does not verify.');
+    }
+    let header: ProjectEnvelopeHeader;
+    try {
+      const parsed = parseEnvelope(envelope).header;
+      if (parsed.class !== 'project') throw new Error('not a project envelope');
+      header = parsed;
+    } catch {
+      throw integrity('content', 'This envelope does not parse.');
+    }
+    if (
+      header.kind !== kind ||
+      header.projectId !== record.projectId ||
+      header.keyEpoch !== record.keyEpoch ||
+      header.documentVersion !== record.sequence
+    ) {
+      throw integrity(
+        'content',
+        'This envelope is not the one the account named.'
+      );
+    }
+    await requireBinding(header);
+    const hash = toHex(await versionHash(envelope));
+    const versionKey = await versionKeyOf(
+      record.projectId,
+      header,
+      hash,
+      record.wrappedVersionKey
+    );
+    let result: ProjectEnvelopeDecodeResult;
+    try {
+      result = await open({
+        kind,
+        versionKey,
+        envelope,
+        expect: {
+          projectId: record.projectId,
+          keyEpoch: record.keyEpoch,
+          documentVersion: record.sequence
+        }
+      });
+    } catch (error) {
+      throw integrity(
+        'content',
+        `This ${kind} envelope does not decrypt (${error instanceof Error ? error.message : String(error)}).`
+      );
+    } finally {
+      versionKey.fill(0);
+    }
+    return {
+      header: result.header,
+      value: result.value,
+      hash,
+      signedAt: signed.signedAt
+    };
+  }
+
+  /** Seals a replaced envelope under the project's current key epoch. */
+  async function sealReplaced(
+    projectId: string,
+    init: {
+      readonly kind: E2eeReplacedEnvelopeKind;
+      readonly sequence: number;
+      readonly previousHash: string | null;
+      readonly blobIds: readonly string[];
+    },
+    encode: (header: BodyEnvelopeHeader) => Uint8Array
+  ): Promise<SealedReplaced> {
+    const device = writableDevice();
+    const material = await currentMaterial(device, projectId);
+    const header: ProjectEnvelopeHeaderInit = {
+      kind: init.kind,
+      projectId,
+      documentVersion: init.sequence,
+      previousVersionHash:
+        init.previousHash === null ? null : fromHex(init.previousHash),
+      epochBindingHash: await epochBinding(
+        projectId,
+        material.keyEpoch,
+        material.epochAuthenticator
+      ),
+      schemaVersion: SCHEMA_VERSION,
+      keyEpoch: material.keyEpoch,
+      blobIds: init.blobIds
+    };
+    const sealed = await sealEnvelope(device, material, header, encode(header));
+    return {
+      envelope: b64(sealed.envelope),
+      wrappedVersionKey: sealed.wrappedVersionKey,
+      signature: sealed.signature,
+      signerDeviceId: device.deviceId,
+      hash: sealed.hash,
+      keyEpoch: material.keyEpoch
+    };
+  }
+
+  const replaced: ReplacedEnvelopeKit = {
+    seal: (projectId, init, encode) =>
+      sealReplaced(projectId, init, encode).catch((error: unknown) => {
+        throw asApiError(error);
+      }),
+    open: openReplaced
+  };
+
+  const info = createProjectInfoAccess({
+    userId,
+    kit: replaced,
+    pins,
+    references: blobReferences,
+    api
+  });
 
   async function projectName(
     record: E2eeProjectEnvelopeRecord
   ): Promise<string | null> {
     try {
-      const envelope = bytes(record.envelope);
-      const signing = signingKeyOf(list(), record.signerDeviceId);
-      if (!signing) return null;
-      const signed = await verifyProjectEnvelopeSignature(
-        signing,
-        envelope,
-        bytes(record.signature)
-      ).catch(() => null);
-      if (!signed) return null;
-      const { header } = parseEnvelope(envelope);
-      if (
-        header.class !== 'project' ||
-        header.kind !== 'project-info' ||
-        header.projectId !== record.projectId ||
-        header.keyEpoch !== record.keyEpoch ||
-        header.documentVersion !== record.sequence
-      ) {
-        return null;
-      }
-      // Never accept an older project info than this browser has seen.
-      const pin = await pins.read(userId, record.projectId);
-      if (pin && record.sequence < pin.infoSequence) return null;
-      await requireBinding(header);
-      const hash = toHex(await versionHash(envelope));
-      const versionKey = await versionKeyOf(
-        record.projectId,
-        header,
-        hash,
-        record.wrappedVersionKey
-      );
-      const result = await open({
-        kind: 'project-info',
-        versionKey,
-        envelope,
-        expect: { projectId: record.projectId, keyEpoch: record.keyEpoch }
-      });
-      versionKey.fill(0);
-      await pins.advanceInfo(userId, record.projectId, record.sequence);
-      return (result.value as ProjectInfoBody).name;
+      return (await info.verify(record)).name;
     } catch {
       return null;
     }
@@ -1280,6 +1434,7 @@ export function createEncryptedProjectStore(
         | {
             sealed: Sealed;
             state: E2eeProjectState;
+            infoHash: string;
           }
         | undefined;
       const creating: ProjectGroupContext = {
@@ -1329,6 +1484,13 @@ export function createEncryptedProjectStore(
               null,
               new Map()
             );
+            const firstInfo = await sealInfo(
+              device,
+              epoch0,
+              id,
+              document.name,
+              1
+            );
             const response = await api.create(
               {
                 projectId: id,
@@ -1339,7 +1501,7 @@ export function createEncryptedProjectStore(
                   wrappedVersionKey: sealed.wrappedVersionKey,
                   signerDeviceId: device.deviceId
                 },
-                info: await sealInfo(device, epoch0, id, document.name, 1)
+                info: firstInfo
               },
               sealed.envelope
             );
@@ -1349,20 +1511,24 @@ export function createEncryptedProjectStore(
                 'The account stored another version than this browser sent.'
               );
             }
-            created = { sealed, state: response.project };
+            created = {
+              sealed,
+              state: response.project,
+              infoHash: toHex(await versionHash(bytes(firstInfo.envelope)))
+            };
             return groups.api.group(id);
           }
         }
       };
       await createProjectGroup(creating, projectId);
       if (!created) throw new Error('The encrypted project was not created.');
-      const { sealed, state } = created;
+      const { sealed, state, infoHash } = created;
       await pins.advance(userId, projectId, null, {
         headHash: sealed.hash,
         documentVersion: sealed.document.version,
         keyEpoch: 0
       });
-      await pins.advanceInfo(userId, projectId, 1);
+      await pins.advanceInfo(userId, projectId, 1, infoHash);
       heads.set(projectId, {
         version: sealed.document.version,
         hash: sealed.hash,
@@ -1478,7 +1644,9 @@ export function createEncryptedProjectStore(
       };
     }),
 
-    projectName
+    projectName,
+    info,
+    replaced
   };
 }
 

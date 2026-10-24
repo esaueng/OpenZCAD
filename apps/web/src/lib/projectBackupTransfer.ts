@@ -239,6 +239,11 @@ export function downloadBackupFile(name: string, contents: Blob): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/**
+ * Saves a stored file. An encrypted project's archived export is decrypted
+ * in the decode worker and saved from a blob URL (ADR-024 Phase 4, slice
+ * 4-7); anything else is this device's backup or the plaintext download.
+ */
 export async function downloadProjectArtifact(
   artifact: ArtifactRecord
 ): Promise<void> {
@@ -247,11 +252,7 @@ export async function downloadProjectArtifact(
   );
   const bytes = local
     ? backupFileBytes(local)
-    : await readBackupResponse(
-        await fetch(
-          `/api/artifacts/${encodeURIComponent(artifact.artifactId)}/download`
-        )
-      );
+    : await archivedBytes(artifact.artifactId);
   downloadBackupFile(
     artifact.name,
     new Blob([bytes], { type: artifact.contentType })

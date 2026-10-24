@@ -4,6 +4,8 @@ import {
   type ArtifactId,
   type ProjectId
 } from '@openzcad/shared';
+import { isEncryptedProject } from './api';
+import { encryptedBlobSource } from './e2ee/blobReferences';
 
 export interface ThumbnailCloudTransport {
   createUploadSession(input: {
@@ -75,11 +77,23 @@ export function thumbnailBlobSource(blob: Blob): Promise<string> {
   });
 }
 
+/**
+ * The account's thumbnail. An encrypted project's thumbnail is a content
+ * blob whose reference this page holds from the project's verified project
+ * info (ADR-024 Phase 4, slice 4-7): it is downloaded and decrypted in the
+ * decode worker, never fetched from the plaintext artifact route.
+ */
 export async function downloadCloudThumbnail(
   artifactId: string,
   download: (artifactId: string) => Promise<Blob> = async (
     currentArtifactId
   ) => {
+    const encrypted = encryptedBlobSource(currentArtifactId);
+    if (encrypted) {
+      return new Blob([await encrypted.read()], {
+        type: THUMBNAIL_CONTENT_TYPE
+      });
+    }
     const { desktopFetch } = await import('./desktopBridge');
     return desktopFetch(`/api/artifacts/${currentArtifactId}/download`).then(
       (response) => response.blob()
@@ -100,6 +114,16 @@ export async function uploadCloudThumbnail(
   }
 ): Promise<ArtifactId> {
   const body = await thumbnailSourceBlob(input.source);
+  if (isEncryptedProject(input.projectId)) {
+    // Never an artifact: an encrypted thumbnail blob, named by the
+    // project's next project info (ADR-024 Phase 4, slice 4-7).
+    const { publishEncryptedThumbnail } =
+      await import('./e2ee/encryptedProjects');
+    return (await publishEncryptedThumbnail(
+      input.projectId,
+      new Blob([body], { type: THUMBNAIL_CONTENT_TYPE })
+    )) as ArtifactId;
+  }
   const { session } = await transport.createUploadSession({
     projectId: input.projectId,
     fileName: `${input.projectId}-thumbnail.webp`,
