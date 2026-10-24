@@ -10,6 +10,7 @@ import {
   encryptProjectEnvelope,
   gzipBytes,
   parseEnvelope,
+  versionHash,
   type ContentBlobReference,
   type E2eeErrorCode,
   type ProjectEnvelopeHeader,
@@ -33,7 +34,8 @@ import {
   parseGuardedJson,
   runDecodeJob,
   type ContentBlobDecodeResult,
-  type ProjectEnvelopeDecodeResult
+  type ProjectEnvelopeDecodeResult,
+  type SealDocumentResult
 } from '../apps/web/src/lib/e2ee/decodeJobs';
 
 const HEADER: ProjectEnvelopeHeaderInit = {
@@ -546,5 +548,51 @@ describe('worker requests', () => {
       ok: false,
       error: { code: 'invalid-argument' }
     });
+  });
+});
+describe('seal jobs', () => {
+  it('encrypts a document body the decode job reads back', async () => {
+    const document = { projectId: 'project-decode', name: 'Sealed' };
+    const revisionVersionHashes = new Map([['rev_1', patternBytes(32, 9)]]);
+    const sealed = await handleDecodeRequest({
+      id: 1,
+      job: {
+        type: 'seal-document',
+        header: HEADER,
+        document,
+        revisionVersionHashes
+      }
+    });
+    expect(sealed.response.ok).toBe(true);
+    const result = (sealed.response as { result: SealDocumentResult }).result;
+    expect(sealed.transfer).toEqual([result.envelope.buffer]);
+    expect(result.versionKey).toHaveLength(32);
+    expect([...result.versionHash]).toEqual([
+      ...(await versionHash(result.envelope))
+    ]);
+    const opened = (await runDecodeJob({
+      type: 'project-envelope',
+      kind: 'document',
+      versionKey: result.versionKey,
+      envelope: result.envelope,
+      expect: { documentVersion: HEADER.documentVersion }
+    })) as ProjectEnvelopeDecodeResult;
+    expect(opened.value).toEqual({
+      document,
+      blobs: [],
+      revisionVersionHashes
+    });
+  });
+
+  it('seals documents only', async () => {
+    await rejectsWith(
+      runDecodeJob({
+        type: 'seal-document',
+        header: { ...HEADER, kind: 'project-info' },
+        document: {},
+        revisionVersionHashes: new Map()
+      }),
+      'invalid-argument'
+    );
   });
 });

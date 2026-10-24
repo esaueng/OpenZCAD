@@ -34,7 +34,6 @@ import {
   AuthorshipError,
   EnvelopeKey,
   VersionLogError,
-  encodeEncryptedDocumentBody,
   encodeProjectInfoBody,
   encryptProjectEnvelope,
   epochBinding,
@@ -92,8 +91,11 @@ import {
 import { ApiError, PROJECT_DOCUMENT_UNAVAILABLE_CODE } from '../api';
 import {
   decodeProjectEnvelopeJob,
+  sealDocumentJob,
   type ProjectEnvelopeDecodeJob,
-  type ProjectEnvelopeDecodeResult
+  type ProjectEnvelopeDecodeResult,
+  type SealDocumentJob,
+  type SealDocumentResult
 } from './decodeJobs';
 import { E2eeApiError } from './e2eeApi';
 import {
@@ -122,6 +124,11 @@ export type EnvelopeOpener = (
   job: Omit<ProjectEnvelopeDecodeJob, 'type'>
 ) => Promise<ProjectEnvelopeDecodeResult>;
 
+/** Encodes and encrypts a document version (the decode worker in a page). */
+export type DocumentSealer = (
+  job: Omit<SealDocumentJob, 'type'>
+) => Promise<SealDocumentResult>;
+
 export type EncryptedProjectWarning = {
   readonly kind: 'stale-head';
   readonly projectId: string;
@@ -138,6 +145,8 @@ export interface EncryptedProjectContext {
   readonly pins?: VersionPinStore;
   /** Defaults to decoding in-line; pages pass the decode worker. */
   readonly open?: EnvelopeOpener;
+  /** Defaults to encrypting in-line; pages pass the decode worker. */
+  readonly seal?: DocumentSealer;
   /**
    * This project's cutoffs for revoked devices, keyed by
    * `authorCutoffKey`. None are recorded yet, so a revoked device's
@@ -320,6 +329,8 @@ export function createEncryptedProjectStore(
   const api = ctx.api ?? createEncryptedDocumentsApi();
   const pins = ctx.pins ?? versionPins();
   const open = ctx.open ?? inlineOpener();
+  const seal: DocumentSealer =
+    ctx.seal ?? ((job) => sealDocumentJob({ type: 'seal-document', ...job }));
   const now = ctx.now ?? Date.now;
   const heads = new Map<string, HeadState>();
   const authenticators = new Map<string, Uint8Array>();
@@ -827,6 +838,34 @@ export function createEncryptedProjectStore(
     signerDeviceId: string;
   }
 
+  /** Wraps the version key and signs an envelope sealed elsewhere. */
+  async function signSealed(
+    device: CertifyingDevice,
+    material: Material,
+    init: ProjectEnvelopeHeaderInit,
+    envelope: Uint8Array,
+    hash: string,
+    versionKey: Uint8Array
+  ) {
+    try {
+      const wrappedVersionKey = b64(
+        await wrapKey(material.projectKey, versionKey, {
+          purpose: 'version-key',
+          projectId: init.projectId,
+          keyEpoch: init.keyEpoch,
+          kind: init.kind,
+          versionId: hash
+        })
+      );
+      const signature = b64(
+        await signProjectEnvelope(device.signing.privateKey, envelope, now())
+      );
+      return { envelope, hash, wrappedVersionKey, signature };
+    } finally {
+      versionKey.fill(0);
+    }
+  }
+
   async function sealEnvelope(
     device: CertifyingDevice,
     material: Material,
@@ -884,15 +923,20 @@ export function createEncryptedProjectStore(
       schemaVersion: SCHEMA_VERSION,
       keyEpoch: material.keyEpoch
     };
-    const plaintext = encodeEncryptedDocumentBody(
-      {
-        document: stored as unknown as Record<string, unknown>,
-        blobs: [],
-        revisionVersionHashes: retainedHashes(revisionHashes, stored)
-      },
-      init
+    // Encoded and encrypted off the main thread in a page.
+    const sealedBody = await seal({
+      header: init,
+      document: stored as unknown as Record<string, unknown>,
+      revisionVersionHashes: retainedHashes(revisionHashes, stored)
+    });
+    const sealed = await signSealed(
+      device,
+      material,
+      init,
+      sealedBody.envelope,
+      toHex(sealedBody.versionHash),
+      sealedBody.versionKey
     );
-    const sealed = await sealEnvelope(device, material, init, plaintext);
     return {
       ...sealed,
       keyEpoch: material.keyEpoch,

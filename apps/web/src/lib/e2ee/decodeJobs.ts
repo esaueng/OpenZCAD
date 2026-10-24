@@ -23,6 +23,10 @@
 import {
   CONTENT_BLOB_KINDS,
   E2eeError,
+  EnvelopeKey,
+  encodeEncryptedDocumentBody,
+  encryptProjectEnvelope,
+  versionHash,
   PLAINTEXT_CEILINGS,
   PROJECT_ENVELOPE_KINDS,
   decryptContentBlobStream,
@@ -37,6 +41,7 @@ import {
   type KeyArchiveBody,
   type ProjectEnvelopeExpectation,
   type ProjectEnvelopeHeader,
+  type ProjectEnvelopeHeaderInit,
   type ProjectEnvelopeKind,
   type ProjectInfoBody
 } from '@openzcad/crypto';
@@ -67,7 +72,30 @@ export interface ContentBlobDecodeJob {
   readonly output: 'chunks' | 'blob';
 }
 
-export type DecodeJob = ProjectEnvelopeDecodeJob | ContentBlobDecodeJob;
+/**
+ * Encode and encrypt a document version off the main thread: the body
+ * codec, gzip and AES-GCM over a document of up to 24 MiB would otherwise
+ * stall the page. The worker draws the fresh version key and returns it
+ * with the envelope and its version hash; wrapping the key and signing the
+ * envelope stay on the page, where the project and device keys are.
+ */
+export interface SealDocumentJob {
+  readonly type: 'seal-document';
+  readonly header: ProjectEnvelopeHeaderInit;
+  readonly document: Readonly<Record<string, unknown>>;
+  readonly revisionVersionHashes: ReadonlyMap<string, Uint8Array>;
+}
+
+export interface SealDocumentResult {
+  readonly type: 'seal-document';
+  readonly envelope: Uint8Array;
+  readonly versionHash: Uint8Array;
+  /** The raw 32-byte version key, to wrap under the project key. */
+  readonly versionKey: Uint8Array;
+}
+
+export type DecodeJob =
+  ProjectEnvelopeDecodeJob | ContentBlobDecodeJob | SealDocumentJob;
 
 export interface ProjectEnvelopeDecodeResult {
   readonly type: 'project-envelope';
@@ -89,7 +117,7 @@ export type ContentBlobDecodeResult =
     };
 
 export type DecodeResult =
-  ProjectEnvelopeDecodeResult | ContentBlobDecodeResult;
+  ProjectEnvelopeDecodeResult | ContentBlobDecodeResult | SealDocumentResult;
 
 /** A refusal as it crosses the worker boundary. */
 export interface DecodeFailure {
@@ -321,8 +349,34 @@ export async function decodeContentBlobJob(
     : { type: 'content-blob', byteLength, chunks: collector.pieces };
 }
 
+export async function sealDocumentJob(
+  job: SealDocumentJob
+): Promise<SealDocumentResult> {
+  if (job?.header?.kind !== 'document') {
+    throw new E2eeError('invalid-argument', 'Only documents are sealed here');
+  }
+  const plaintext = encodeEncryptedDocumentBody(
+    {
+      document: job.document,
+      blobs: [],
+      revisionVersionHashes: job.revisionVersionHashes
+    },
+    job.header
+  );
+  const key = EnvelopeKey.generate();
+  const envelope = await encryptProjectEnvelope(key, job.header, plaintext);
+  return {
+    type: 'seal-document',
+    envelope,
+    versionHash: await versionHash(envelope),
+    versionKey: key.bytes
+  };
+}
+
 export function runDecodeJob(job: DecodeJob): Promise<DecodeResult> {
   switch (job?.type) {
+    case 'seal-document':
+      return sealDocumentJob(job);
     case 'project-envelope':
       return decodeProjectEnvelopeJob(job);
     case 'content-blob':
@@ -336,6 +390,9 @@ export function runDecodeJob(job: DecodeJob): Promise<DecodeResult> {
 
 /** The buffers a result can hand over without copying. */
 export function decodeResultTransfer(result: DecodeResult): ArrayBuffer[] {
+  if (result.type === 'seal-document') {
+    return [result.envelope.buffer as ArrayBuffer];
+  }
   if (result.type !== 'content-blob' || !('chunks' in result)) return [];
   return result.chunks.map((chunk) => chunk.buffer as ArrayBuffer);
 }

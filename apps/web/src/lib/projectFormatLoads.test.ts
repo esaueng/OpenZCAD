@@ -66,8 +66,9 @@ function sentPlaintextTo(path: string): boolean {
     .mocked(desktopFetch)
     .mock.calls.some(
       ([input, init]) =>
-        String(input).startsWith(path) &&
-        !['GET', undefined].includes((init as RequestInit | undefined)?.method)
+        typeof input === 'string' &&
+        input.startsWith(path) &&
+        !['GET', undefined].includes(init?.method)
     );
 }
 

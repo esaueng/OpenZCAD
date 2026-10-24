@@ -37,12 +37,15 @@ import type {
   DecodeWorkerRequest,
   DecodeWorkerResponse,
   ProjectEnvelopeDecodeJob,
-  ProjectEnvelopeDecodeResult
+  ProjectEnvelopeDecodeResult,
+  SealDocumentJob,
+  SealDocumentResult
 } from './decodeJobs';
 
 export type {
   ContentBlobDecodeResult,
-  ProjectEnvelopeDecodeResult
+  ProjectEnvelopeDecodeResult,
+  SealDocumentResult
 } from './decodeJobs';
 
 /**
@@ -53,7 +56,8 @@ export type {
  */
 export const DEFAULT_DECODE_BUDGETS_MS = Object.freeze({
   'project-envelope': 20_000,
-  'content-blob': 90_000
+  'content-blob': 90_000,
+  'seal-document': 60_000
 });
 
 export type DecodeWorkerErrorCode =
@@ -105,6 +109,11 @@ export interface E2eeDecoder {
     job: Omit<ContentBlobDecodeJob, 'type'>,
     options?: JobOptions
   ): Promise<ContentBlobDecodeResult>;
+  /** Encodes and encrypts a document version (`sealDocumentJob`). */
+  sealDocument(
+    job: Omit<SealDocumentJob, 'type'>,
+    options?: JobOptions
+  ): Promise<SealDocumentResult>;
   /** Terminates the worker and rejects every pending job (`disposed`). */
   dispose(): void;
 }
@@ -306,6 +315,8 @@ export function createE2eeDecoder(
       submit({ ...job, type: 'project-envelope' }, jobOptions),
     decodeContentBlob: (job, jobOptions) =>
       submit({ ...job, type: 'content-blob' }, jobOptions),
+    sealDocument: (job, jobOptions) =>
+      submit({ ...job, type: 'seal-document' }, jobOptions),
     dispose() {
       if (disposed) return;
       disposed = true;

@@ -106,6 +106,7 @@ async function openStore(userId: string): Promise<EncryptedProjectStore> {
       device
     },
     open: (job) => pageDecoder.decodeProjectEnvelope(job),
+    seal: (job) => pageDecoder.sealDocument(job),
     onWarning: (warning) => {
       for (const listener of warningListeners) {
         try {
