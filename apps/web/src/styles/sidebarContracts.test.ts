@@ -142,4 +142,22 @@ describe('model panels', () => {
       'var(--left-dock-w, 0px)'
     );
   });
+
+  // The rail arrives in a lazy chunk, and a :has() asked of the workspace
+  // about it was missed on insertion: the rail stood in a 232px island
+  // until a reload. The class AppShell sets is what sizes the column.
+  it('sizes the column as a rail from the class AppShell sets, not a :has() on the workspace', () => {
+    expect(rule(stage, '\n.workspace.column-layout.has-column')).toMatch(
+      /--column-w:\s*var\(--rail-w\);/
+    );
+    expect(
+      rule(
+        stage,
+        '\n.workspace.has-column .viewer-area .workspace-column-float'
+      )
+    ).toMatch(/top:\s*var\(--stage-middle\);/);
+    expect(stage).not.toMatch(
+      /:has\(\s*\.workspace-column-float :is\(\.command-rail/
+    );
+  });
 });

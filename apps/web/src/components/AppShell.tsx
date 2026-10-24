@@ -179,6 +179,11 @@ export function AppShell({
   const inspectorExit = useDelayedUnmount(inspector || null, OVERLAY_EXIT_MS);
   // Changing mode slides the column and the strip off toward their edges
   // (view-mode.css) before they unmount.
+  // While it is mounted, exit included, the workspace carries `has-column`,
+  // which sizes the column as a rail (quiet-stage.css). Not the rail inside
+  // it: that is a lazy chunk, and asking `:has(.command-rail)` of the whole
+  // workspace drew a column-wide island until — or, missed, long after — it
+  // arrived.
   const columnExit = useDelayedUnmount(sidebar || null, OVERLAY_EXIT_MS);
   const stripExit = useDelayedUnmount(toolBar || null, OVERLAY_EXIT_MS);
   const assistantDocked = Boolean(
@@ -199,7 +204,7 @@ export function AppShell({
           ref={workspaceRef}
           className={`workspace no-sidebar column-layout${
             assistantDocked ? ' with-assistant' : ''
-          }`}
+          }${columnExit.rendered ? ' has-column' : ''}`}
           style={widths}
         >
           <div
