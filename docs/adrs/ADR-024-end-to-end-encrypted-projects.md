@@ -791,6 +791,22 @@ per project, stating exactly what leaves the device (the compact model digest,
 the active selection, and any attached drawings or images) before the first
 request.
 
+Phase 6 (slice 6-1) found the request carries more than that list: the
+prompt, up to 12 earlier conversation turns, the digest (the project id,
+name, units and version, every parameter, every feature's full definition
+including sketch text, each body's name, volume, bounding box and measured
+faces and edges, the editable dimensions the app measured, warnings and the
+selection), attached images with their file names, the list of operations the
+client can apply and a retry flag. The Worker adds its own instructions, any
+custom instructions from the user's settings and an identifier derived from
+the account. The consent copy lists all of it, names the provider route (the
+user's own key, or the deployment's provider and model) and says that what
+was sent cannot be recalled. Consent is per user and per project, in a record
+MAC'd under the account key and pinned by sequence in each browser, so a
+server-forged consent never makes a browser send; the Worker keeps a live row
+as defence in depth. It is asked again when the copy version or the provider
+route changes.
+
 ### Settled product decisions
 
 | Question                           | Decision                                                                                                                                                               |
