@@ -29,6 +29,7 @@ export * from './reference-images';
 export * from './e2ee-project-groups';
 export * from './e2ee-project-documents';
 export * from './e2ee-content-blobs';
+export * from './e2ee-collaboration';
 import type { ReferenceImageSet } from './reference-images';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
@@ -4472,7 +4473,14 @@ export type CollaborationErrorCode =
   /** Lease enforcement is enabled and no matching live lease was supplied. */
   | 'lease-required'
   /** The room failed while handling an otherwise well-formed message. */
-  | 'internal';
+  | 'internal'
+  /**
+   * A plaintext frame to an end-to-end encrypted room, or an envelope to a
+   * plaintext one (ADR-024 slice 4-9).
+   */
+  | 'format-mismatch'
+  /** An encrypted version written under an older key epoch than the group's. */
+  | 'epoch-stale';
 
 /**
  * Longest accepted project name, measured after trimming. Shared so the client

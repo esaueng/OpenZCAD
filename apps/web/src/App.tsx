@@ -4582,6 +4582,10 @@ export function App() {
     doc?.ownerUserId !== session.userId
   );
 
+  // An end-to-end encrypted project's room relays ciphertext (ADR-024
+  // slice 4-9): only its owner's own devices until sharing arrives, and every
+  // version the room accepts is already the account's.
+  const encryptedRoomProject = isEncryptedProject(doc?.projectId);
   const collaboration = useCollaboration({
     enabled: cloudFunctionsEnabled,
     document: doc,
@@ -4589,15 +4593,23 @@ export function App() {
     // account credentials to a collaboration room after this exact project has
     // been resolved as a cloud-backed document. Desktop exchanges its native
     // bearer credential for a short-lived, one-use WebSocket ticket.
-    // The live room comes to encrypted projects with ADR-024 slice 4-9;
-    // until then the browser does not connect for format 2.
     session:
       activeProjectIsCloud &&
       cloudAvailable &&
       liveCollaborationEnabled &&
-      !isEncryptedProject(doc?.projectId)
+      (!encryptedRoomProject || doc?.ownerUserId === session?.userId)
         ? session
         : null,
+    encrypted: encryptedRoomProject,
+    onAccountVersion(projectId, version) {
+      // The room wrote this browser's version to the account: that is the
+      // fence the next account write (should the room drop) builds on.
+      remoteVersionsRef.current.set(projectId, version);
+      cloudProjectAutosaveRef.current?.adoptAccountVersion(projectId, version);
+      if (managerRef.current?.document.version === version) {
+        setSaveState('synced');
+      }
+    },
     onRemoteDocument(incomingDocument, context) {
       const current = managerRef.current?.document;
       // An unsolicited broadcast at or behind the local version is this
@@ -4641,10 +4653,19 @@ export function App() {
         }
       })();
       const controller = cloudProjectAutosaveRef.current;
-      const accountVersion =
-        controller?.syncedVersion ??
-        remoteVersionsRef.current.get(remoteDocument.projectId) ??
-        null;
+      // An encrypted room's version is the account's: the room wrote it
+      // there before relaying it (ADR-024 slice 4-9).
+      if (encryptedRoomProject) {
+        remoteVersionsRef.current.set(
+          remoteDocument.projectId,
+          remoteDocument.version
+        );
+      }
+      const accountVersion = encryptedRoomProject
+        ? remoteDocument.version
+        : (controller?.syncedVersion ??
+          remoteVersionsRef.current.get(remoteDocument.projectId) ??
+          null);
       if (
         controller &&
         accountVersion !== null &&
@@ -5246,6 +5267,45 @@ export function App() {
     session,
     shareSession,
     sharedAccountProject
+  ]);
+
+  // An encrypted room that stops relaying (offline, refused, too large, no
+  // lease) after it carried this project's edits leaves the account to
+  // autosave, which picks up the open version the room did not store
+  // (ADR-024 slice 4-9). A room that never went live changes nothing.
+  const encryptedRoomCarriedRef = useRef<string | null>(null);
+  useEffect(() => {
+    const projectId = doc?.projectId ?? null;
+    if (!encryptedRoomProject || sharedAccountProject || !projectId) {
+      encryptedRoomCarriedRef.current = null;
+      return;
+    }
+    if (collaboration.status === 'live') {
+      encryptedRoomCarriedRef.current = projectId;
+      return;
+    }
+    if (
+      encryptedRoomCarriedRef.current !== projectId ||
+      ['connecting', 'conflict', 'read-only'].includes(collaboration.status)
+    ) {
+      return;
+    }
+    encryptedRoomCarriedRef.current = null;
+    const controller = cloudProjectAutosaveRef.current;
+    const current = managerRef.current?.document;
+    if (
+      controller &&
+      controller.syncedVersion !== null &&
+      current?.projectId === projectId &&
+      !controller.holdsDocument(current)
+    ) {
+      controller.schedule(current);
+    }
+  }, [
+    doc?.projectId,
+    encryptedRoomProject,
+    sharedAccountProject,
+    collaboration.status
   ]);
 
   useEffect(() => {
@@ -7604,6 +7664,11 @@ export function App() {
       if (!newerQueued) setSaveState(cloudAvailable ? 'synced' : 'local');
     } else if (controller.holdsDocument(pending)) {
       if (!newerQueued) setSaveState('synced');
+    } else if (encryptedRoomProject && collaboration.status === 'live') {
+      // The encrypted room writes this version to the account itself
+      // (ADR-024 slice 4-9); a second, separately sealed copy would only
+      // race it. Should the room drop, the effect below hands it to autosave.
+      if (!newerQueued) setSaveState('syncing');
     } else {
       controller.schedule(pending);
     }

@@ -97,3 +97,24 @@ function writeAuthorization(
     dispose
   };
 }
+
+/**
+ * The same predicate for a write the collaboration room makes for a socket
+ * (ADR-024 slice 4-9): bound to the session the socket was admitted under,
+ * by its token hash, so signing out, session expiry, desktop revocation and
+ * erasure stop the room's writes as they stop the routes'.
+ */
+export function sessionHashWriteAuthorization(
+  credential: {
+    table: 'auth_sessions' | 'desktop_access_tokens';
+    tokenHash: string;
+  },
+  userId: string
+): E2eeWriteAuthorization {
+  return writeAuthorization(
+    credential.table,
+    credential.tokenHash,
+    userId,
+    async () => {}
+  );
+}

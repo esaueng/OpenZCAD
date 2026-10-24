@@ -50,6 +50,7 @@ import {
   rejectionStatus
 } from './collaborationProtocol';
 export { parseServerMessage } from './collaborationProtocol';
+import type { EncryptedRoomCodec } from './e2ee/encryptedRoomCodec';
 
 export type CollaborationStatus =
   | 'connecting'
@@ -77,6 +78,14 @@ interface CollaborationOptions {
     context?: { adopted?: boolean }
   ): void;
   onConflict(document: ProjectDocument): void;
+  /**
+   * The project is end-to-end encrypted (ADR-024 slice 4-9): the room
+   * relays envelopes, sealed and opened by `e2ee/encryptedRoomCodec.ts`,
+   * and every version it accepts is the account's version too.
+   */
+  encrypted?: boolean;
+  /** An encrypted room stored this browser's version in the account. */
+  onAccountVersion?(projectId: string, version: number): void;
 }
 
 export interface CollaborationClientState {
@@ -103,6 +112,8 @@ const MAX_MESSAGE_BYTES = 900_000;
  * on the manual reconciliation it had before the room stopped merging.
  */
 const MAX_CONFLICT_MERGES = 3;
+/** Resubmissions after the group moved to a newer key epoch, per edit. */
+const MAX_EPOCH_RETRIES = 2;
 const ROOM_CHANGED_MESSAGE = 'The room changed.';
 
 export function useCollaboration({
@@ -110,7 +121,9 @@ export function useCollaboration({
   document,
   session,
   onRemoteDocument,
-  onConflict
+  onConflict,
+  encrypted = false,
+  onAccountVersion
 }: CollaborationOptions): CollaborationClientState {
   // The status is stamped with the project it describes. The connect effect
   // runs after the workspace has painted, so a bare status would show the
@@ -176,9 +189,13 @@ export function useCollaboration({
   const drainDocumentRef = useRef<
     ((signal: AbortSignal) => Promise<ProjectDocument | null>) | null
   >(null);
+  const accountVersionRef = useRef(onAccountVersion);
+  /** The encrypted room's codec while one is connected (slice 4-9). */
+  const codecRef = useRef<Promise<EncryptedRoomCodec> | null>(null);
   documentRef.current = document;
   remoteHandlerRef.current = onRemoteDocument;
   conflictHandlerRef.current = onConflict;
+  accountVersionRef.current = onAccountVersion;
 
   const projectId = document?.projectId ?? null;
   const userId = session?.userId ?? null;
@@ -193,7 +210,7 @@ export function useCollaboration({
       roomEpochRef.current += 1;
       checkpointRef.current?.abort(new Error(ROOM_CHANGED_MESSAGE));
     };
-  }, [displayName, enabled, projectId, userId]);
+  }, [displayName, enabled, encrypted, projectId, userId]);
   const roomWanted = Boolean(enabled && projectId && userId && displayName);
   const stampRef = useRef({ projectId, wanted: roomWanted });
   stampRef.current = { projectId, wanted: roomWanted };
@@ -289,6 +306,24 @@ export function useCollaboration({
     let pendingDocument: ProjectDocument | null = null;
     let acknowledgedDocument: ProjectDocument | null = null;
     let conflictMerges = 0;
+    let epochRetries = 0;
+    // An encrypted project's room speaks envelopes: frames go through the
+    // codec, in order, and nothing is decrypted on the main thread.
+    const codecLoad: Promise<EncryptedRoomCodec> | null = encrypted
+      ? import('./e2ee/encryptedRoomCodec').then(({ loadEncryptedRoomCodec }) =>
+          loadEncryptedRoomCodec(projectId)
+        )
+      : null;
+    codecLoad?.catch((error: unknown) => {
+      // Locked keys or a device that only reads: the room stays unused and
+      // the account's own paths report why.
+      console.error(
+        `Encrypted collaboration unavailable: ${error instanceof Error ? error.message : String(error)}`
+      );
+      if (isCurrentRoom()) setStatus('offline');
+    });
+    codecRef.current = codecLoad;
+    let inbound: Promise<void> = Promise.resolve();
     drainDocumentRef.current = (signal) => {
       signal.throwIfAborted();
       if (!pendingDocument) return Promise.resolve(acknowledgedDocument);
@@ -399,6 +434,10 @@ export function useCollaboration({
       lastSentVersionRef.current = message.version;
       baseVersionRef.current = message.version;
       if (message.document) acknowledgedDocument = message.document;
+      epochRetries = 0;
+      // An encrypted room wrote this version to the account before it
+      // acknowledged it (ADR-024 slice 4-9).
+      if (codecLoad) accountVersionRef.current?.(projectId, message.version);
       settleCheckpointDrain();
       if (keepMinePendingRef.current) {
         settleKeepMine();
@@ -477,6 +516,12 @@ export function useCollaboration({
         setStatus('rejected');
         return false;
       }
+      if (codecLoad) {
+        pendingDocument = current;
+        lastSentVersionRef.current = current.version;
+        void sendEncrypted(socket, normalized, current, baseVersionRef.current);
+        return true;
+      }
       const payload = frame(normalized);
       pendingDocument = current;
       lastSentVersionRef.current = current.version;
@@ -502,48 +547,7 @@ export function useCollaboration({
               projectId
             );
             if (!isCurrentRoom() || socketRef.current !== socket) return;
-            if (!message) {
-              pendingDocument = null;
-              settleCheckpointDrain(
-                new Error(
-                  'The room returned an unreadable response for the pending edit.'
-                )
-              );
-              console.error('Collaboration returned an unreadable response.');
-              return;
-            }
-            if (message.type === 'ack' && response.ok) {
-              acknowledge(message);
-              return;
-            }
-            if (
-              message.type === 'conflict' &&
-              (message.document.schemaVersion ?? 0) <=
-                PROJECT_DOCUMENT_SCHEMA_VERSION &&
-              mergeRoomConflict(socket, message)
-            ) {
-              return;
-            }
-            pendingDocument = null;
-            settleCheckpointDrain(
-              new Error(
-                message.type === 'error'
-                  ? message.message
-                  : message.type === 'conflict'
-                    ? 'The pending edit conflicts with a newer room document.'
-                    : 'The room did not confirm the pending edit.'
-              )
-            );
-            const rejected = rejectionStatus(message);
-            if (rejected) {
-              setStatus(rejected);
-              return;
-            }
-            if (message.type === 'conflict') {
-              serverVersionRef.current = message.document.version;
-              setRoomVersion(message.document.version);
-              retainConflict(message.document, true);
-            }
+            settleHttpReply(socket, message, response.ok);
           })
           .catch((error: unknown) => {
             if (!isCurrentRoom() || socketRef.current !== socket) return;
@@ -560,6 +564,118 @@ export function useCollaboration({
       socket.send(payload);
       lastSentVersionRef.current = current.version;
       return true;
+    };
+
+    /** The room's answer to a submission sent over HTTP. */
+    const settleHttpReply = (
+      socket: WebSocket,
+      message: CollaborationServerMessage | null,
+      ok: boolean
+    ) => {
+      if (!message) {
+        pendingDocument = null;
+        settleCheckpointDrain(
+          new Error(
+            'The room returned an unreadable response for the pending edit.'
+          )
+        );
+        console.error('Collaboration returned an unreadable response.');
+        return;
+      }
+      if (message.type === 'ack' && ok) {
+        acknowledge(message);
+        return;
+      }
+      if (
+        message.type === 'conflict' &&
+        (message.document.schemaVersion ?? 0) <=
+          PROJECT_DOCUMENT_SCHEMA_VERSION &&
+        mergeRoomConflict(socket, message)
+      ) {
+        return;
+      }
+      pendingDocument = null;
+      settleCheckpointDrain(
+        new Error(
+          message.type === 'error'
+            ? message.message
+            : message.type === 'conflict'
+              ? 'The pending edit conflicts with a newer room document.'
+              : 'The room did not confirm the pending edit.'
+        )
+      );
+      const rejected = rejectionStatus(message);
+      if (rejected) {
+        setStatus(rejected);
+        return;
+      }
+      if (message.type === 'conflict') {
+        serverVersionRef.current = message.document.version;
+        setRoomVersion(message.document.version);
+        retainConflict(message.document, true);
+      }
+    };
+
+    /**
+     * Seals and sends `normalized` to an encrypted room (ADR-024 slice 4-9),
+     * on the room version `baseVersion` it descends from. The hook's own
+     * bookkeeping (`pendingDocument`) was set before sealing began.
+     */
+    const sendEncrypted = async (
+      socket: WebSocket,
+      normalized: ProjectDocument,
+      submitted: ProjectDocument,
+      baseVersion: number | null
+    ) => {
+      const leaseId = leaseIdRef.current;
+      const stillPending = () =>
+        isCurrentRoom() &&
+        socketRef.current === socket &&
+        pendingDocument === submitted;
+      try {
+        const codec = await codecLoad!;
+        const encoded = await codec.encode(normalized, baseVersion);
+        if (!stillPending()) return;
+        if (encoded.kind === 'same') {
+          acknowledge({ type: 'ack', version: encoded.version });
+          return;
+        }
+        const body = {
+          clientId: id,
+          version: encoded.submission,
+          ...(leaseId ? { leaseId } : {})
+        };
+        const payload = JSON.stringify({ type: 'e2ee-document', ...body });
+        if (new TextEncoder().encode(payload).byteLength <= MAX_MESSAGE_BYTES) {
+          if (socket.readyState === WebSocket.OPEN) socket.send(payload);
+          return;
+        }
+        // Too large for a frame: the same submission over HTTP. A refusal
+        // there (too large for the room too) reports `oversize`, and the
+        // account's autosave takes the version instead.
+        const response = await desktopFetch(
+          `/api/projects/${encodeURIComponent(projectId)}/collaboration`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body)
+          }
+        );
+        const decoded = await codec.decode(await response.text());
+        if (!stillPending()) return;
+        settleHttpReply(socket, decoded.message, response.ok);
+      } catch (error) {
+        if (!stillPending()) return;
+        console.error(
+          `Encrypted collaboration edit not sent: ${error instanceof Error ? error.message : String(error)}`
+        );
+        pendingDocument = null;
+        lastSentVersionRef.current = null;
+        settleCheckpointDrain(
+          new Error('This version cannot be shared with the room.')
+        );
+        setStatus('rejected');
+      }
     };
 
     /**
@@ -661,10 +777,29 @@ export function useCollaboration({
         ) {
           return;
         }
+        if (codecLoad) {
+          const raw = event.data;
+          // Opening a version takes a moment; frames still apply in order.
+          inbound = inbound
+            .then(async () => {
+              const { message } = await (await codecLoad).decode(raw);
+              if (isCurrentRoom() && socketRef.current === socket && message)
+                handleMessage(message);
+            })
+            .catch((error: unknown) => {
+              console.error(
+                `Encrypted collaboration frame not handled: ${error instanceof Error ? error.message : String(error)}`
+              );
+            });
+          return;
+        }
         const message = parseServerMessage(event.data, projectId);
         if (!message) {
           return;
         }
+        handleMessage(message);
+      });
+      const handleMessage = (message: CollaborationServerMessage) => {
         if (message.type === 'presence') {
           setMembers(message.members);
           return;
@@ -879,6 +1014,27 @@ export function useCollaboration({
           }
           return;
         }
+        if (
+          codecLoad &&
+          message.type === 'error' &&
+          message.code === 'epoch-stale' &&
+          !keepMinePendingRef.current &&
+          epochRetries < MAX_EPOCH_RETRIES
+        ) {
+          // The group moved to a newer key epoch while this edit was sealed:
+          // catch up, then seal it again under the new epoch.
+          epochRetries += 1;
+          pendingDocument = null;
+          lastSentVersionRef.current = null;
+          void codecLoad
+            .then((codec) => codec.catchUp())
+            .catch(() => undefined)
+            .then(() => {
+              if (isCurrentRoom() && socketRef.current === socket)
+                sendDocument(socket, 'document', undefined, true);
+            });
+          return;
+        }
         const rejected = rejectionStatus(message);
         if (rejected) {
           settleCheckpointDrain(
@@ -898,7 +1054,7 @@ export function useCollaboration({
           pendingDocument = null;
           setStatus(rejected);
         }
-      });
+      };
       socket.addEventListener('close', () => {
         if (!isCurrentRoom()) return;
         if (socketRef.current === socket) {
@@ -959,6 +1115,7 @@ export function useCollaboration({
       settleKeepMine(new Error(ROOM_CHANGED_MESSAGE));
       settleCheckpointDrain(new Error(ROOM_CHANGED_MESSAGE));
       drainDocumentRef.current = null;
+      if (codecRef.current === codecLoad) codecRef.current = null;
       sendCurrentDocumentRef.current = null;
       if (reconnectTimer !== undefined) {
         window.clearTimeout(reconnectTimer);
@@ -992,6 +1149,7 @@ export function useCollaboration({
   }, [
     displayName,
     enabled,
+    encrypted,
     projectId,
     userId,
     reconcileMatchingRoomDocument,
@@ -1078,7 +1236,10 @@ export function useCollaboration({
           setStatus,
           settleKeepMine,
           reconcileMatchingRoomDocument,
-          clientId
+          clientId,
+          ...(codecRef.current
+            ? { sealKept: sealKeptFrame(codecRef.current, clientId) }
+            : {})
         })
       );
     },
@@ -1093,6 +1254,12 @@ export function useCollaboration({
     ): Promise<ProjectDocument> => {
       if (checkpointRef.current || keepMinePendingRef.current)
         return Promise.reject(new Error('Another room save is still pending.'));
+      // An encrypted project is its owner's; named saves go to the account
+      // (`encryptedProjectStore.saveRevision`), which the room then follows.
+      if (codecRef.current)
+        return Promise.reject(
+          new Error('Encrypted projects save named versions to the account.')
+        );
       if (roleRef.current === 'viewer' || conflictRef.current)
         return Promise.reject(
           new Error('This project cannot save a room revision.')
@@ -1198,5 +1365,33 @@ export function useCollaboration({
     useRemoteVersion,
     keepLocalVersion,
     saveCheckpoint
+  };
+}
+
+/**
+ * "Keep my version" in an encrypted room: the kept document, sealed on the
+ * room version the user chose to replace, as an ordinary envelope submission.
+ * The room orders it like any other; the acknowledgement echoes it back.
+ */
+function sealKeptFrame(
+  codecLoad: Promise<EncryptedRoomCodec>,
+  clientId: () => string
+) {
+  return async (
+    kept: ProjectDocument,
+    baseVersion: number,
+    leaseId: string
+  ): Promise<string> => {
+    const codec = await codecLoad;
+    const encoded = await codec.encode(kept, baseVersion, { echo: true });
+    if (encoded.kind === 'same') {
+      throw new Error('The room already holds this version.');
+    }
+    return JSON.stringify({
+      type: 'e2ee-document',
+      clientId: clientId(),
+      version: encoded.submission,
+      leaseId
+    });
   };
 }
