@@ -1,6 +1,9 @@
 import { e2eeErasureTables } from './e2ee';
 import { projectGroupErasureStatements } from './e2eeProjects';
-import { projectVersionErasureStatements } from './e2eeProjectDocuments';
+import {
+  encryptedProjectUsage,
+  projectVersionErasureStatements
+} from './e2eeProjectDocuments';
 import {
   isE2eeProjectPreferenceStorageReady,
   projectPreferenceErasureStatement
@@ -140,12 +143,15 @@ export async function accountDeletionPreview(
     )
     .bind(session.userId)
     .first<{ collaborator_count: number }>();
+  // Encrypted projects' heads and named saves (ADR-024 Phase 4) are erased
+  // with the rest, so the preview counts them too.
+  const encrypted = await encryptedProjectUsage(env.DB, session.userId);
   return {
     ...confirmationFor(session, scope),
     projectCount: usage.projectCount,
-    documentBytes: usage.documentBytes,
-    revisionBytes: usage.revisionBytes,
-    revisionCount: usage.revisionCount,
+    documentBytes: usage.documentBytes + encrypted.documentBytes,
+    revisionBytes: usage.revisionBytes + encrypted.revisionBytes,
+    revisionCount: usage.revisionCount + encrypted.revisionCount,
     collaboratorCount: collaborators?.collaborator_count ?? 0
   };
 }

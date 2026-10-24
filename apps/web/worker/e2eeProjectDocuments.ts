@@ -80,7 +80,6 @@ import {
   CHAINED,
   PROJECT_FENCE,
   RouteError,
-  allChanged,
   archiveField,
   bytesField,
   deviceListMoved,
@@ -103,6 +102,18 @@ import {
   wrapsField,
   type Authorization
 } from './e2eeProjects';
+import {
+  adoptionField,
+  copyBlobObjects,
+  copyBucket,
+  copyFromField,
+  discardCopiedObjects,
+  insertAdoption,
+  insertCopiedBlobs,
+  prepareCopy,
+  requireNotAdopted,
+  sourceFence
+} from './e2eeProjectCopies';
 
 const CREATE_ROUTE = '/api/e2ee/projects';
 const PROJECT_ROUTE =
@@ -262,7 +273,9 @@ async function checkedDocumentEnvelope(
   ctx: Context,
   projectId: string,
   envelope: Uint8Array,
-  input: VersionInput
+  input: VersionInput,
+  /** A copy's first version: its blobs arrive with it (slice 4-8). */
+  copying = false
 ): Promise<CheckedVersion> {
   let shape: ReturnType<typeof parseEnvelope>;
   try {
@@ -289,7 +302,10 @@ async function checkedDocumentEnvelope(
     if (header.blobIds.some((id) => !E2EE_BLOB_ID_PATTERN.test(id))) {
       invalid('Every blob id must be 32 lowercase hex characters');
     }
-    const unknown = await unknownBlobIds(ctx.db, projectId, header.blobIds);
+    // A copy's blobs are checked against its source (e2eeProjectCopies.ts).
+    const unknown = copying
+      ? []
+      : await unknownBlobIds(ctx.db, projectId, header.blobIds);
     if (unknown.length) {
       refuse(
         409,
@@ -723,6 +739,21 @@ async function quotaRefusal(ctx: Context, error: unknown): Promise<never> {
       409,
       'E2EE_BLOB_UNKNOWN',
       'This version names files the account does not hold for this project. Upload them again.'
+    );
+  }
+  // A copy's blobs count against the owner's artifact storage (0034).
+  if (message.includes('artifact_account_quota')) {
+    const row = await ctx.db
+      .prepare('SELECT artifact_limit_bytes FROM users WHERE id = ?')
+      .bind(ctx.userId)
+      .first<{ artifact_limit_bytes: number | null }>();
+    refuse(
+      413,
+      'ARTIFACT_QUOTA_EXCEEDED',
+      'Account artifact storage limit reached.',
+      {
+        limitBytes: row?.artifact_limit_bytes ?? 2147483648
+      }
     );
   }
   throw error;
@@ -1162,9 +1193,46 @@ async function saveRevision(
 }
 
 /**
+ * The response to a create the account already stored: its first version
+ * is this one, by envelope hash (slice 4-8). A retried create whose
+ * acknowledgement was lost is answered as created, never refused.
+ */
+async function storedCreate(
+  ctx: Context,
+  projectId: string,
+  version: CheckedVersion
+): Promise<Response | null> {
+  const row = await ctx.db
+    .prepare(
+      `SELECT v.created_at FROM projects p
+       JOIN e2ee_project_versions v
+         ON v.project_id = p.id AND v.document_version = ?
+       WHERE p.id = ? AND p.user_id = ? AND p.storage_format = 2
+         AND v.version_hash = ?`
+    )
+    .bind(version.header.documentVersion, projectId, ctx.userId, version.hash)
+    .first<{ created_at: string }>();
+  if (!row) return null;
+  return json(
+    {
+      projectId,
+      version: version.header.documentVersion,
+      versionHash: version.hash,
+      updatedAt: row.created_at,
+      project: projectState(await projectRow(ctx.db, projectId))
+    } satisfies E2eeCreateProjectResponse,
+    201
+  );
+}
+
+/**
  * `POST /api/e2ee/projects`: the format-2 project row, its MLS group at
  * epoch 0 (as `…/mls/group-info` takes it), its first version and its
- * project-info envelope land in one D1 batch or not at all.
+ * project-info envelope land in one D1 batch or not at all. With
+ * `copyFrom` (slice 4-8) it is a copy or branch of another encrypted
+ * project: the listed blobs' objects are copied byte for byte first and
+ * their rows land in the same batch; with `adoption`, a device project
+ * saved to the account (`e2eeProjectCopies.ts`).
  */
 async function createProject(
   ctx: Context,
@@ -1178,6 +1246,11 @@ async function createProject(
   if (!/^proj_[A-Za-z0-9_-]+$/.test(projectId)) {
     invalid('projectId must be a proj_ id');
   }
+  const copyFrom =
+    metadata.copyFrom === undefined ? null : copyFromField(metadata.copyFrom);
+  const adoption =
+    metadata.adoption === undefined ? null : adoptionField(metadata.adoption);
+  if (copyFrom && adoption) invalid('A project is a copy or an adoption');
   const group = record(metadata.group, 'group');
   const groupId = idField(group.groupId, 'group.groupId');
   const deviceId = idField(group.deviceId, 'group.deviceId');
@@ -1193,7 +1266,13 @@ async function createProject(
   if (input.signerDeviceId !== deviceId) {
     invalid('The first version must be signed by the creating device');
   }
-  const version = await checkedDocumentEnvelope(ctx, projectId, payload, input);
+  const version = await checkedDocumentEnvelope(
+    ctx,
+    projectId,
+    payload,
+    input,
+    copyFrom !== null
+  );
   if (version.header.keyEpoch !== 0) {
     invalid('The first version is written under key epoch 0');
   }
@@ -1203,19 +1282,80 @@ async function createProject(
       'The project info is written under key epoch 0 by the creating device'
     );
   }
-  // The first link of the project info's own chain, naming no files yet.
+  // The first link of the project info's own chain; only a copy's names
+  // files (the thumbnail and exports it carries over).
   if (
     info.sequence !== 1 ||
     info.previousHash !== null ||
-    info.blobIds.length > 0
+    (info.blobIds.length > 0 && !copyFrom)
   ) {
     invalid('The first project info is sequence 1, with no previous one');
   }
+  const stored = await storedCreate(ctx, projectId, version);
+  if (stored) return stored;
+  const copy = copyFrom
+    ? await prepareCopy(
+        ctx.db,
+        ctx.userId,
+        projectId,
+        copyFrom,
+        version.header.blobIds,
+        info.blobIds,
+        ctx.blobs.ready
+      )
+    : null;
+  if (adoption) {
+    await requireNotAdopted(ctx.db, ctx.userId, adoption.localProjectId);
+  }
+  const objects = copy?.rows.length ? copyBucket(ctx.blobs.bucket) : null;
+  if (copy?.rows.length && !objects) {
+    refuse(
+      501,
+      'FEATURE_DISABLED',
+      'Artifact storage is disabled for this deployment.'
+    );
+  }
   const body = await storeBody(ctx, projectId, version);
+  const copied: string[] = [];
+  try {
+    if (copy && objects) {
+      await copyBlobObjects(objects, projectId, copy.rows, copied);
+    }
+  } catch (error) {
+    await discardBody(ctx, body);
+    await discardCopiedObjects(ctx.db, objects, copied);
+    throw error;
+  }
+  // A copy lands next to its source on the shelf, as a plaintext one does.
+  const sortOrder = copy
+    ? ((
+        await ctx.db
+          .prepare('SELECT sort_order FROM projects WHERE id = ?')
+          .bind(copy.sourceProjectId)
+          .first<{ sort_order: number | null }>()
+      )?.sort_order ?? 0)
+    : 0;
   const now = new Date().toISOString();
   const db = ctx.db;
   // The version and the info were checked against this same list.
   const createFence = deviceListUnchanged(ctx.userId, account);
+  const source = copy
+    ? sourceFence(copy, ctx.userId)
+    : { sql: '1', binds: [] as readonly unknown[] };
+  const adopting = adoption
+    ? {
+        sql: `NOT EXISTS (SELECT 1 FROM project_adoptions
+                          WHERE user_id = ? AND local_project_id = ?)`,
+        binds: [ctx.userId, adoption.localProjectId] as readonly unknown[]
+      }
+    : { sql: '1', binds: [] as readonly unknown[] };
+  // Everything after the version lands only beside it.
+  const created = {
+    sql: `EXISTS (SELECT 1 FROM e2ee_project_versions
+                  WHERE project_id = ? AND document_version = ?
+                    AND version_hash = ?)`,
+    binds: [projectId, version.header.documentVersion, version.hash] as const
+  };
   const statements = [
     db
       .prepare(
@@ -1223,10 +1363,11 @@ async function createProject(
            (id, user_id, name, document_json, document_version, document_bytes,
             updated_at, status, pinned, sort_order, last_revision_id,
             revision_count, storage_format)
-         SELECT ?, ?, '', ?, ?, 0, ?, 'active', 0, 0, NULL, 0, 2
+         SELECT ?, ?, '', ?, ?, 0, ?, 'active', 0, ?, NULL, 0, 2
          WHERE ${ctx.authorization.sql}
            AND NOT EXISTS (SELECT 1 FROM projects WHERE id = ?)
            AND NOT EXISTS (SELECT 1 FROM project_adoptions WHERE cloud_project_id = ?)
+           AND ${source.sql} AND ${adopting.sql}
            AND ${createFence.sql}`
       )
       .bind(
@@ -1235,9 +1376,12 @@ async function createProject(
         ENCRYPTED_DOCUMENT_MARKER,
         version.header.documentVersion,
         now,
+        sortOrder,
         ...ctx.authorization.binds,
         projectId,
         projectId,
+        ...source.binds,
+        ...adopting.binds,
         ...createFence.binds
       ),
     db
@@ -1282,22 +1426,63 @@ async function createProject(
         now
       )
   ];
+  // Rows that may change other than one row each, by statement index.
+  const counts = new Map<number, number>();
+  if (copy && copy.blobIds.length > 0) {
+    counts.set(statements.length, copy.blobIds.length);
+    statements.push(insertCopiedBlobs(db, projectId, copy, now, CHAINED));
+  }
+  if (version.header.blobIds.length > 0) {
+    // A blob that is not committed here fails the whole batch (0034).
+    statements.push(
+      insertVersionBlobs(
+        db,
+        projectId,
+        version.hash,
+        version.header.blobIds,
+        created
+      )
+    );
+    counts.set(statements.length - 1, version.header.blobIds.length);
+  }
+  if (adoption) {
+    statements.push(
+      insertAdoption(db, ctx.userId, adoption, projectId, created)
+    );
+  }
+  const rollBack = async () => {
+    await discardBody(ctx, body);
+    await discardCopiedObjects(db, objects, copied);
+  };
   let results: Awaited<ReturnType<typeof runVersionBatch>>;
   try {
     results = await runVersionBatch(ctx, statements);
   } catch (error) {
-    await discardBody(ctx, body);
+    await rollBack();
     if (
       error instanceof RouteError &&
       error.status === 409 &&
       error.code === 'E2EE_CONFLICT'
     ) {
+      const winner = await storedCreate(ctx, projectId, version);
+      if (winner) return winner;
+      if (adoption) {
+        await requireNotAdopted(ctx.db, ctx.userId, adoption.localProjectId);
+      }
       refuse(409, 'PROJECT_ID_TAKEN', 'That project id is already in use.');
     }
     throw error;
   }
-  if (!allChanged(results, statements.length)) {
-    await discardBody(ctx, body);
+  const accepted =
+    results.length === statements.length &&
+    results.every(
+      (result, index) =>
+        (result.meta?.changes ?? 0) === (counts.get(index) ?? 1)
+    );
+  if (!accepted) {
+    await rollBack();
+    const winner = await storedCreate(ctx, projectId, version);
+    if (winner) return winner;
     if (await deviceListMoved(db, ctx.userId, account)) {
       refuseDeviceListMoved();
     }
@@ -1311,6 +1496,21 @@ async function createProject(
       .first<{ taken: number }>();
     if (taken) {
       refuse(409, 'PROJECT_ID_TAKEN', 'That project id is already in use.');
+    }
+    if (adoption) {
+      await requireNotAdopted(ctx.db, ctx.userId, adoption.localProjectId);
+    }
+    if (copy) {
+      // The source changed between the checks and the write.
+      await prepareCopy(
+        ctx.db,
+        ctx.userId,
+        projectId,
+        copyFrom!,
+        version.header.blobIds,
+        info.blobIds,
+        ctx.blobs.ready
+      );
     }
     refuse(
       401,
@@ -1728,7 +1928,10 @@ export async function handleE2eeProjectDocumentRequest(
       (method === 'PUT' && ['document', 'info'].includes(route)) ||
       (method === 'POST' && route === 'revisions');
     if (!known) refuse(404, 'NOT_FOUND', 'Not found.');
-    await requireOwnedEncryptedProject(db, userId, projectId);
+    // The owner reads a project in the recycle bin, as in plaintext (4-8).
+    await requireOwnedEncryptedProject(db, userId, projectId, {
+      allowDeleted: method === 'GET'
+    });
     switch (`${method} ${route}`) {
       case 'PUT document':
         return await saveDocument(ctx, projectId, request);
@@ -1833,4 +2036,56 @@ export async function projectVersionErasureStatements(
       )
       .bind(userId)
   ];
+}
+
+/**
+ * What the account stores of the caller's encrypted projects, for the
+ * erasure preview (slice 4-8): each head's envelope as document bytes, and
+ * the named saves with their retained envelopes as revisions. Zero before
+ * migration 0033, so the preview of a plaintext account is unchanged.
+ */
+export async function encryptedProjectUsage(
+  db: D1Database | undefined,
+  userId: string
+): Promise<{
+  documentBytes: number;
+  revisionBytes: number;
+  revisionCount: number;
+}> {
+  const none = { documentBytes: 0, revisionBytes: 0, revisionCount: 0 };
+  if (!db || !(await isE2eeProjectVersionStorageReady(db))) return none;
+  const row = await db
+    .prepare(
+      `SELECT
+         COALESCE((SELECT SUM(v.envelope_bytes)
+                   FROM e2ee_project_versions v
+                   JOIN projects p ON p.id = v.project_id
+                   WHERE p.user_id = ? AND p.storage_format = 2
+                     AND v.document_version = p.document_version), 0)
+           AS document_bytes,
+         COALESCE((SELECT SUM(v.envelope_bytes)
+                   FROM e2ee_project_revisions r
+                   JOIN e2ee_project_versions v
+                     ON v.project_id = r.project_id
+                    AND v.document_version = r.document_version
+                   JOIN projects p ON p.id = r.project_id
+                   WHERE p.user_id = ? AND p.storage_format = 2), 0)
+           AS revision_bytes,
+         (SELECT COUNT(*) FROM e2ee_project_revisions r
+          JOIN projects p ON p.id = r.project_id
+          WHERE p.user_id = ? AND p.storage_format = 2) AS revision_count`
+    )
+    .bind(userId, userId, userId)
+    .first<{
+      document_bytes: number;
+      revision_bytes: number;
+      revision_count: number;
+    }>();
+  return row
+    ? {
+        documentBytes: row.document_bytes,
+        revisionBytes: row.revision_bytes,
+        revisionCount: row.revision_count
+      }
+    : none;
 }
