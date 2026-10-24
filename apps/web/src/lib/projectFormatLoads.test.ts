@@ -3,6 +3,7 @@ import {
   ENCRYPTED_PROJECTS_REQUIRED_CODE,
   PROJECT_FORMAT_UNSUPPORTED_CODE,
   toProjectId,
+  type CreateProjectRequest,
   type ProjectDocument
 } from '@openzcad/shared';
 import {
@@ -54,6 +55,7 @@ const { store, encryptedModule, measurementsClient, viewStatesClient } =
       encryptedModule: {
         encryptedProjectStore: vi.fn(async () => store),
         createEncryptedProject: vi.fn(),
+        copyEncryptedProject: vi.fn(),
         encryptedProjectShelf: vi.fn(
           async () =>
             new Map<string, { name: string; thumbnailBlobId?: string }>()
@@ -256,24 +258,71 @@ describe('dispatch on the storage format', () => {
     expect(listing.projects[0]).toMatchObject({ name: 'Encrypted project' });
   });
 
-  it('keeps an encrypted project’s copies on the device and its files off the plaintext routes', async () => {
+  it('keeps an encrypted project’s files off the plaintext routes', async () => {
     const projectId = 'proj_local_only';
     await listEncrypted(projectId);
     vi.mocked(desktopFetch).mockClear();
-    const refusals: Promise<unknown>[] = [
+    await expect(
       api.createUploadSession({
         projectId: toProjectId(projectId),
         fileName: 'thumb.webp',
         contentType: 'image/webp',
         kind: 'thumbnail'
-      }),
-      api.duplicateProject(projectId, { document: documentOf(projectId) })
-    ];
-    for (const refusal of refusals) {
-      await expect(refusal).rejects.toMatchObject({
-        code: E2EE_LOCAL_ONLY_CODE
-      });
-    }
+      })
+    ).rejects.toMatchObject({ code: E2EE_LOCAL_ONLY_CODE });
+    expect(desktopFetch).not.toHaveBeenCalled();
+  });
+
+  it('copies and branches an encrypted project through the encrypted store (4-8)', async () => {
+    const projectId = 'proj_copied';
+    await listEncrypted(projectId);
+    vi.mocked(desktopFetch).mockClear();
+    const copy = {
+      ...createProjectDocument('Encrypted project (copy)', 'user_1' as never),
+      projectId: toProjectId('proj_the_copy')
+    };
+    const created = {
+      project: {
+        projectId: 'proj_the_copy',
+        name: 'Encrypted project (copy)',
+        revisionCount: 0,
+        updatedAt: 'now',
+        storageFormat: 2
+      },
+      document: copy
+    };
+    encryptedModule.copyEncryptedProject.mockResolvedValue(created);
+    await expect(
+      api.duplicateProject(projectId, { document: copy })
+    ).resolves.toBe(created);
+    await api.duplicateProject(projectId, {
+      document: copy,
+      revisionId: 'rev_1' as never
+    });
+    const copies = encryptedModule.copyEncryptedProject.mock
+      .calls as unknown as [
+      {
+        sourceProjectId: string;
+        document: ProjectDocument;
+        revisionId?: string;
+      }
+    ][];
+    expect(
+      copies.map(([request]) => [
+        request.sourceProjectId,
+        request.document.projectId,
+        request.revisionId
+      ])
+    ).toEqual([
+      [projectId, 'proj_the_copy', undefined],
+      [projectId, 'proj_the_copy', 'rev_1']
+    ]);
+    expect(isEncryptedProject('proj_the_copy')).toBe(true);
+    // The account cannot build an encrypted copy itself.
+    await expect(api.duplicateProject(projectId)).rejects.toMatchObject({
+      status: 400
+    });
+    // Nothing went to a plaintext route.
     expect(desktopFetch).not.toHaveBeenCalled();
   });
 
@@ -343,15 +392,40 @@ describe('dispatch on the storage format', () => {
     expect(encryptedModule.createEncryptedProject).toHaveBeenCalledTimes(2);
   });
 
-  it('never sends a device project to an account that encrypts new projects', async () => {
+  it('saves a device project encrypted to an account that encrypts new projects (D2, 4-8)', async () => {
+    const device = createProjectDocument('Device', 'user_1' as never);
+    encryptedModule.createEncryptedProject.mockImplementation(
+      async (request: { document: ProjectDocument }) => ({
+        project: {
+          projectId: request.document.projectId,
+          name: 'Device',
+          revisionCount: 0,
+          updatedAt: 'now',
+          storageFormat: 2
+        },
+        document: request.document
+      })
+    );
     optIn(true);
-    await expect(
-      api.adoptProject(
-        createProjectDocument('Device', 'user_1' as never),
-        'user_1' as never
-      )
-    ).rejects.toMatchObject({ code: 'E2EE_ADOPTION_UNAVAILABLE' });
+    const adopted = await api.adoptProject(device, 'user_1' as never);
     expect(sentPlaintextTo('/api/projects')).toBe(false);
+    const [[request]] = encryptedModule.createEncryptedProject.mock
+      .calls as unknown as [[CreateProjectRequest]];
+    expect(request).toMatchObject({
+      name: 'Device',
+      adoptionProtocolVersion: 2,
+      localProjectId: device.projectId
+    });
+    expect(request.document?.ownerUserId).toBe('user_1');
+    expect(adopted.document.projectId).not.toBe(device.projectId);
+    expect(isEncryptedProject(adopted.document.projectId)).toBe(true);
+
+    // A Worker that refuses a plaintext adoption for that reason moves it.
+    optIn(false, () =>
+      json({ error: 'Required', code: ENCRYPTED_PROJECTS_REQUIRED_CODE }, 409)
+    );
+    await api.adoptProject(device, 'user_1' as never);
+    expect(encryptedModule.createEncryptedProject).toHaveBeenCalledTimes(2);
   });
 });
 
