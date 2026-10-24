@@ -162,6 +162,56 @@ describe('useModalFocus', () => {
     expect(screen.getByLabelText('Top dialog first field')).toHaveFocus();
   });
 
+  it('follows its dialog when the owner renders it in another branch', () => {
+    // Settings is owned by App and rendered over the start screen or over the
+    // workspace; opening a restored project moves it under the same ref.
+    function OwnerHarness({
+      workspace,
+      conflictOpen
+    }: {
+      workspace: boolean;
+      conflictOpen: boolean;
+    }) {
+      const dialogRef = useRef<HTMLDivElement | null>(null);
+      useModalFocus(dialogRef, { autoFocus: true });
+      const settings = (
+        <div ref={dialogRef} role="dialog" aria-label="Settings" tabIndex={-1}>
+          <button type="button">Back</button>
+        </div>
+      );
+      return workspace ? (
+        <main>
+          <button type="button">Workspace action</button>
+          {conflictOpen && (
+            <Modal label="Conflict dialog" onClose={() => undefined} />
+          )}
+          {settings}
+        </main>
+      ) : (
+        <section>{settings}</section>
+      );
+    }
+
+    const { rerender } = render(
+      <OwnerHarness workspace={false} conflictOpen={false} />
+    );
+    rerender(<OwnerHarness workspace conflictOpen={false} />);
+    const settings = screen.getByRole('dialog', { name: 'Settings' });
+    expect(settings).not.toHaveAttribute('inert');
+    // The workspace the overlay now sits over is out of reach behind it.
+    expect(screen.getByText('Workspace action')).toHaveAttribute('inert');
+
+    // A conflict raised under Settings must not take the keyboard from it.
+    rerender(<OwnerHarness workspace conflictOpen />);
+    expect(
+      screen.getByRole('dialog', { name: 'Settings' })
+    ).not.toHaveAttribute('inert');
+    expect(
+      screen.getByRole('dialog', { name: 'Conflict dialog', hidden: true })
+        .parentElement
+    ).toHaveAttribute('inert');
+  });
+
   it('focuses the first control of a dialog whose body arrives later', async () => {
     // A code-split dialog mounts with an empty frame while its chunk loads.
     // Focus has to end up inside it anyway, or the keyboard is left on the

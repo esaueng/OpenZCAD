@@ -252,11 +252,13 @@ export function defaultPanelState(): PanelState {
 }
 
 /**
- * A mode that wants the stage to itself — a sketch, or a direct-manipulation
- * drag — suspends every open model panel (docked, unpinned or in the phone
- * lane) and the command card's "More tools" fold, and gives them back when
- * it ends. Suspension is not a preference: the stored panel layout and
- * `commandFoldOpen` keep what the user chose. A rail press, or a search that
+ * A sketch wants the stage to itself: it suspends every open model panel
+ * (docked, unpinned or in the phone lane) and the command card's "More
+ * tools" fold, and gives them back when it ends. A direct-manipulation drag
+ * does not: the docks sit beside the model rather than over it, so hiding
+ * them mid-gesture only made the panels vanish and the rail jump while the
+ * pointer was down. Suspension is not a preference: the stored panel layout
+ * and `commandFoldOpen` keep what the user chose. A rail press, or a search that
  * asks for a panel, while suspended releases the panels for the rest of that
  * mode, and toggling the fold releases the fold: their intent wins.
  */
@@ -279,24 +281,4 @@ export function effectivePanels(
       state.commandFoldOpen &&
       (!suspension.suspended || suspension.foldReleased)
   };
-}
-
-/**
- * Whether a drag still holds the stage. It takes it when a gesture engages
- * and keeps it while the pointer stays down — a value the kernel refuses
- * mid-gesture is not the end of the drag — and while that gesture's release
- * is validated, so the panels do not flash back between letting go and
- * the result landing. A commit, a cancel, a refusal at release or a cleared
- * selection ends it. Validation no drag started (a typed value, the Extrude
- * form's Create) never takes it.
- */
-export function nextDragSuspension(
-  held: boolean,
-  phase: string | null,
-  pointerDown = false
-): boolean {
-  if (pointerDown || phase === 'dragging') {
-    return true;
-  }
-  return held && phase === 'validating';
 }

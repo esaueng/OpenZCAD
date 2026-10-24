@@ -3145,21 +3145,11 @@ export function App() {
     }
     sketchPickingRef.current = sketchPicking;
   }, [sketchPicking, retireStatusMessage]);
-  // A sketch or a drag takes the stage: the drawer and the "More tools" fold
-  // step aside for it and return when it ends, the preference untouched.
-  // The viewer reports the gesture's pointer, which outlasts a refused
-  // mid-drag value; it only counts while an operation is armed.
-  const [directDragPointer, setDirectDragPointer] = useState(false);
-  const [moveDragPointer, setMoveDragPointer] = useState(false);
-  if (directDragPointer && !isOperationState(interaction)) {
-    // A cleared operation ends its gesture, whatever the viewer said last.
-    setDirectDragPointer(false);
-  }
+  // A sketch takes the stage: the panels and the "More tools" fold step
+  // aside for it and return when it ends, the preference untouched. A drag
+  // on the model leaves them in place (see `effectivePanels`).
   const panels = usePanelSuspension(panelState, {
-    sketching: interaction.mode === 'sketch',
-    phase: isOperationState(interaction) ? interaction.phase : null,
-    pointerDown:
-      moveDragPointer || (directDragPointer && isOperationState(interaction))
+    sketching: interaction.mode === 'sketch'
   });
   const toolRef = useRef(tool);
   toolRef.current = tool;
@@ -18014,6 +18004,11 @@ export function App() {
       setRevertPill(null);
     }
   }, [interaction.mode]);
+  // The offer is for the extrude just made, in the mode it was made in: it
+  // used to ride along through View, Tweak and Draw until a tool cleared it.
+  useEffect(() => {
+    setRevertPill(null);
+  }, [resolvedWorkspaceMode]);
 
   /** A detected bounded cell was clicked: update persistent profile selection. */
   function handleSelectRegion(
@@ -24627,10 +24622,8 @@ export function App() {
             onOpenEdgeKeypad={handleOpenEdgeKeypad}
             onDirectManipulationChange={(dragging, source) => {
               if (source === 'move') {
-                setMoveDragPointer(dragging);
                 return;
               }
-              setDirectDragPointer(dragging);
               dispatchInteraction({
                 type: dragging ? 'drag-engage' : 'drag-release'
               });

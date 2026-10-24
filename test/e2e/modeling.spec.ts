@@ -1088,6 +1088,57 @@ test('infers and stores an additive extrude from exact overlap', async ({
   expect(consoleErrors).toEqual([]);
 });
 
+test('the Edit Sketch offer does not outlive the mode it was made in', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Edit Sketch offer');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+
+  const canvas = page.locator('.viewer-host canvas');
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  await sketchTools.getByRole('button', { name: /^Circle/ }).click();
+  const bounds = (await canvas.boundingBox())!;
+  const center = {
+    x: bounds.x + bounds.width * 0.5,
+    y: bounds.y + bounds.height * 0.5
+  };
+  await page.mouse.move(center.x, center.y);
+  await page.mouse.down();
+  await page.mouse.move(center.x + 50, center.y, { steps: 6 });
+  await page.mouse.up();
+  await sketchTools.getByRole('button', { name: 'Extrude' }).click();
+  await page.getByTestId('direct-manipulation-value').click();
+  const heightKeypad = page.getByRole('dialog', { name: 'Height value' });
+  await heightKeypad.getByRole('textbox').fill('24');
+  await heightKeypad.getByRole('button', { name: 'Apply height' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Extruded region by 24 mm',
+    { timeout: 20_000 }
+  );
+  await page.keyboard.press('Escape');
+  const offer = page.getByRole('button', { name: 'Edit Sketch', exact: true });
+  await expect(offer).toBeVisible();
+
+  // It used to ride along through View, Tweak and Draw until a tool cleared
+  // it; leaving Build withdraws it, and coming back does not restore it.
+  await page.getByRole('button', { name: 'Tweak', exact: true }).click();
+  await expect(offer).toHaveCount(0);
+  await page.getByRole('button', { name: 'Build', exact: true }).click();
+  await expect(offer).toHaveCount(0);
+});
+
 test('fillets all twelve edges of a box in one exact feature', async ({
   page
 }) => {
@@ -1356,7 +1407,9 @@ for (const modifier of [
     });
     await expect(blend).toBeVisible();
     await expect(blend.getByTitle('Feature failed to build')).toHaveCount(0);
-    await expect(page.getByRole('heading', { name: 'Objects 1' })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: 'Objects 1' })
+    ).toBeVisible();
     await expectConsumedBodyCount(page, 1);
     await expect(page.locator('.diagnostic-row')).toHaveCount(0);
     await expect(page.locator('.feature-row')).toHaveCount(2);
@@ -1429,7 +1482,9 @@ for (const modifier of [
     );
     await expect(page.locator('.feature-row')).toHaveCount(2);
     await expect(blend.getByTitle('Feature failed to build')).toHaveCount(0);
-    await expect(page.getByRole('heading', { name: 'Objects 1' })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: 'Objects 1' })
+    ).toBeVisible();
     await expectConsumedBodyCount(page, 1);
     await expect(page.locator('.diagnostic-row')).toHaveCount(0);
     await cylinder.locator('.feature-row-main').click();

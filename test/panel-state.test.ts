@@ -4,7 +4,6 @@ import {
   defaultPanelState,
   effectivePanels,
   loadPanelState,
-  nextDragSuspension,
   normalizePanelState,
   PANEL_STATE_STORAGE_KEY,
   savePanelState,
@@ -270,24 +269,5 @@ describe('panel suspension while a mode has the stage', () => {
         { ...suspended, foldReleased: true }
       )
     ).toEqual({ panelsSuspended: true, commandFoldOpen: true });
-  });
-
-  it('holds a drag from engage through its validation, and no longer', () => {
-    expect(nextDragSuspension(false, null)).toBe(false);
-    expect(nextDragSuspension(false, 'armed')).toBe(false);
-    expect(nextDragSuspension(false, 'dragging')).toBe(true);
-    // Released and validating: the panels must not flash back mid-commit.
-    expect(nextDragSuspension(true, 'validating')).toBe(true);
-    // Committed (idle), refused, cancelled back to armed, or typed exactly.
-    expect(nextDragSuspension(true, null)).toBe(false);
-    expect(nextDragSuspension(true, 'failed')).toBe(false);
-    expect(nextDragSuspension(true, 'armed')).toBe(false);
-    expect(nextDragSuspension(true, 'exact-entry')).toBe(false);
-    // Validation no drag started never takes the stage.
-    expect(nextDragSuspension(false, 'validating')).toBe(false);
-    // A value refused mid-gesture fails the phase, but the pointer is still
-    // down: the drag has not ended, so the panels must not flicker back.
-    expect(nextDragSuspension(true, 'failed', true)).toBe(true);
-    expect(nextDragSuspension(true, 'failed', false)).toBe(false);
   });
 });

@@ -511,8 +511,8 @@ for (const { name, build, sense } of [
         );
       }
       expect(await syncs()).toBe(count);
-      // The drag has the stage: every panel steps aside until it ends.
-      await expect(page.locator('.model-panel')).toHaveCount(0);
+      // The panels stay put through the drag.
+      await expect(page.locator('.feature-row').first()).toBeVisible();
       await expect(
         page.getByText('Preview · exact on release', { exact: true })
       ).toBeVisible();
@@ -525,7 +525,7 @@ for (const { name, build, sense } of [
         );
         expect(await rendered(canvas)).toEqual(before);
         expect(await syncs()).toBe(count);
-        // Nothing was committed, and the panels are back to say so.
+        // Nothing was committed, and History says so.
         await expect(page.locator('.feature-row')).toHaveCount(1);
       } else {
         const held = await rendered(canvas);
