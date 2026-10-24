@@ -8,8 +8,9 @@
  * It still checks what it can, as defense in depth:
  *
  * - the envelope's shape and size (`parseEnvelope`): a project envelope of
- *   kind document for this project, with no content blobs (refused until
- *   slice 4-6);
+ *   kind document for this project, whose header names only committed
+ *   content blobs of this project (migration 0034, `e2eeContentBlobs.ts`;
+ *   refused without it), recorded with the version for garbage collection;
  * - the document version moves forward from the head the write names, and
  *   the header's previous-version hash is the stored head's, which the
  *   Worker computed itself when it accepted that head;
@@ -35,6 +36,7 @@ import {
   type ProjectEnvelopeHeader
 } from '@openzcad/crypto';
 import {
+  E2EE_BLOB_ID_PATTERN,
   E2EE_FRAME_CONTENT_TYPE,
   E2EE_VERSION_LOG_PAGE,
   E2EE_VERSION_LOG_RETAINED_HEADS,
@@ -59,10 +61,17 @@ import {
   type ProjectStatus
 } from '@openzcad/shared';
 import {
+  isE2eeContentBlobStorageReady,
   isE2eeProjectGroupStorageReady,
   isE2eeProjectVersionStorageReady,
   isProjectStorageFormatReady
 } from '@openzcad/cloudflare-adapters';
+import {
+  collectContentBlobs,
+  insertVersionBlobs,
+  unknownBlobIds,
+  type E2eeBlobBucket
+} from './e2eeContentBlobs';
 import {
   CHAINED,
   PROJECT_FENCE,
@@ -134,6 +143,8 @@ interface Context {
   bucket: E2eeObjectBucket | null;
   userId: string;
   authorization: Authorization;
+  /** Content blobs (migration 0034) and the bucket they live in. */
+  blobs: { ready: boolean; bucket: E2eeBlobBucket | null };
 }
 
 // --- Input -----------------------------------------------------------------
@@ -264,11 +275,25 @@ async function checkedDocumentEnvelope(
     invalid('The body must be a document envelope for this project');
   }
   if (header.blobIds.length > 0) {
-    refuse(
-      409,
-      'E2EE_CONTENT_BLOBS_UNAVAILABLE',
-      'Encrypted projects cannot store imported files, meshes or reference images yet.'
-    );
+    if (!ctx.blobs.ready) {
+      refuse(
+        409,
+        'E2EE_CONTENT_BLOBS_UNAVAILABLE',
+        'Encrypted projects cannot store imported files, meshes or reference images yet.'
+      );
+    }
+    if (header.blobIds.some((id) => !E2EE_BLOB_ID_PATTERN.test(id))) {
+      invalid('Every blob id must be 32 lowercase hex characters');
+    }
+    const unknown = await unknownBlobIds(ctx.db, projectId, header.blobIds);
+    if (unknown.length) {
+      refuse(
+        409,
+        'E2EE_BLOB_UNKNOWN',
+        'This version names files the account does not hold for this project. Upload them again.',
+        { blobIds: unknown.slice(0, 64) }
+      );
+    }
   }
   if (
     header.documentVersion <= input.expectedVersion ||
@@ -662,6 +687,13 @@ async function quotaRefusal(ctx: Context, error: unknown): Promise<never> {
       { limitBytes: row?.project_storage_limit_bytes ?? 2147483648 }
     );
   }
+  if (message.includes('E2EE_BLOB_UNKNOWN')) {
+    refuse(
+      409,
+      'E2EE_BLOB_UNKNOWN',
+      'This version names files the account does not hold for this project. Upload them again.'
+    );
+  }
   throw error;
 }
 
@@ -829,6 +861,10 @@ async function retain(ctx: Context, projectId: string): Promise<void> {
   } catch {
     // Retention is housekeeping. It does not get to fail a save.
   }
+  // Blobs only versions with retained bodies keep alive (migration 0034).
+  if (ctx.blobs.ready) {
+    await collectContentBlobs(ctx.db, ctx.blobs.bucket, projectId);
+  }
 }
 
 interface SavedVersion {
@@ -986,7 +1022,21 @@ async function writeVersion(
               ctx.userId,
               now
             )
-        ])
+        ]),
+    // The blobs the header names, for garbage collection: last, so every
+    // index above stays put. A blob that is no longer committed fails the
+    // whole batch (migration 0034).
+    ...(version.header.blobIds.length
+      ? [
+          insertVersionBlobs(
+            ctx.db,
+            projectId,
+            version.hash,
+            version.header.blobIds,
+            moved
+          )
+        ]
+      : [])
   ];
   let results: Awaited<ReturnType<typeof runVersionBatch>>;
   try {
@@ -1505,7 +1555,8 @@ export async function handleE2eeProjectDocumentRequest(
   bucket: E2eeObjectBucket | null,
   userId: string,
   projectsEnabled: boolean,
-  authorization: Authorization
+  authorization: Authorization,
+  blobBucket: E2eeBlobBucket | null = null
 ): Promise<Response> {
   try {
     if (!projectsEnabled) {
@@ -1526,7 +1577,17 @@ export async function handleE2eeProjectDocumentRequest(
         'Encrypted projects are unavailable until the database is updated.'
       );
     }
-    const ctx: Context = { db, bucket, userId, authorization };
+    const ctx: Context = {
+      db,
+      bucket,
+      userId,
+      authorization,
+      // Without migration 0034, versions keep refusing content blobs.
+      blobs: {
+        ready: await isE2eeContentBlobStorageReady(db),
+        bucket: blobBucket
+      }
+    };
     const url = new URL(request.url);
     const method = request.method;
     if (url.pathname === CREATE_ROUTE) {

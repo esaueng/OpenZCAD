@@ -829,16 +829,27 @@ describe('writes', () => {
       ),
       400
     );
+    // Slice 4-6: a version may name only committed blobs of its project.
     await attempt(
-      'content blobs',
+      'an unknown content blob',
+      handVersion(
+        laptop,
+        projectId,
+        { ...good, blobIds: ['a'.repeat(32)] },
+        { ...next, plaintext: new TextEncoder().encode('{}') }
+      ),
+      409,
+      'E2EE_BLOB_UNKNOWN'
+    );
+    await attempt(
+      'a malformed blob id',
       handVersion(
         laptop,
         projectId,
         { ...good, blobIds: ['blob_1'] },
         { ...next, plaintext: new TextEncoder().encode('{}') }
       ),
-      409,
-      'E2EE_CONTENT_BLOBS_UNAVAILABLE'
+      400
     );
     await attempt(
       'no previous version',
