@@ -21,6 +21,7 @@ import {
   type E2eeAssistantConsentListResponse,
   type E2eeAssistantConsentRecord,
   type E2eeAssistantConsentResponse,
+  type E2eeConfigResponse,
   type E2eeProjectAssistantConsentsResponse,
   type E2eeSaveAssistantConsentRequest
 } from '@openzcad/shared';
@@ -38,6 +39,11 @@ export interface AssistantConsentApi {
     request: E2eeSaveAssistantConsentRequest
   ): Promise<E2eeAssistantConsentResponse>;
   members(projectId: string): Promise<E2eeProjectAssistantConsentsResponse>;
+  /**
+   * The account's key config: the consent routes answer only while
+   * encrypted projects are open to it, so Settings asks first.
+   */
+  config?(): Promise<E2eeConfigResponse>;
 }
 
 async function call<T>(
@@ -83,7 +89,8 @@ export function createAssistantConsentApi(
     list: () => call(fetcher, ROUTE),
     load: (projectId) => call(fetcher, one(projectId)),
     save: (projectId, request) => call(fetcher, one(projectId), 'PUT', request),
-    members: (projectId) => call(fetcher, `${one(projectId)}/members`)
+    members: (projectId) => call(fetcher, `${one(projectId)}/members`),
+    config: () => call(fetcher, '/api/e2ee/config')
   };
 }
 

@@ -108,6 +108,27 @@ const listProjects = async () => ({
 });
 
 describe('Settings › Encryption › Assistant access (ADR-024 6-1)', () => {
+  it('asks nothing of the consent routes while encrypted projects are closed', async () => {
+    unlock();
+    const { api } = fakeApi([await row('proj_a', 3)]);
+    const config = vi.fn(async () => ({
+      enabled: true,
+      projectsEnabled: false
+    }));
+    const { container } = render(
+      <AssistantAccessSettings
+        userId={USER}
+        unlocked
+        api={{ ...api, config }}
+        pins={memoryConsentPins()}
+        listProjects={listProjects}
+      />
+    );
+    await waitFor(() => expect(config).toHaveBeenCalled());
+    expect(api.list).not.toHaveBeenCalled();
+    expect(container.textContent).toBe('');
+  });
+
   it('lists verified consents by name and revokes with the next sequence', async () => {
     unlock();
     const user = userEvent.setup();

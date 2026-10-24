@@ -76,6 +76,15 @@ export function AssistantAccessSettings({
     if (!ctx) return;
     setError(null);
     try {
+      // Closed to this account, the consent routes only answer 501: ask
+      // the config first, as the encryption preference does.
+      if (api.config) {
+        const config = await api.config();
+        if (!config.enabled || config.projectsEnabled !== true) {
+          setAvailable(false);
+          return;
+        }
+      }
       const { consents } = await api.list();
       setAvailable(true);
       setListed(
