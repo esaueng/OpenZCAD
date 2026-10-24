@@ -1,7 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
-import { applyAccountProjectRefresh } from '../apps/web/src/lib/accountProjectRefresh';
+import {
+  applyAccountProjectRefresh,
+  loadAccountRefresh
+} from '../apps/web/src/lib/accountProjectRefresh';
+import {
+  ApiError,
+  PROJECT_DOCUMENT_UNAVAILABLE_CODE
+} from '../apps/web/src/lib/api';
 import { CloudProjectAutosave } from '../apps/web/src/lib/cloudProjectAutosave';
 
 function gate() {
@@ -139,5 +146,36 @@ describe('account freshness pull', () => {
     expect(h.options.saveBaseline).not.toHaveBeenCalled();
     expect(h.options.apply).not.toHaveBeenCalled();
     h.controller.dispose();
+  });
+});
+
+describe('loadAccountRefresh', () => {
+  it('turns an account copy this browser cannot open into a repair verdict', async () => {
+    // ADR-024 Phase 1: a poll that meets a version the browser refuses must
+    // stop sync the way opening the project does, not report nothing new.
+    const refused = new ApiError(
+      503,
+      'The account copy of this project cannot be opened here: objectFolders',
+      PROJECT_DOCUMENT_UNAVAILABLE_CODE
+    );
+    await expect(
+      loadAccountRefresh(() => Promise.reject(refused))
+    ).resolves.toEqual({ kind: 'repair', error: refused });
+    const document = createProjectDocument('Fresh', toUserId('owner'));
+    await expect(loadAccountRefresh(async () => document)).resolves.toEqual({
+      kind: 'document',
+      document
+    });
+    // An outage or a missing copy is left to the next poll or write.
+    for (const error of [
+      new ApiError(500, 'Internal error'),
+      new TypeError('offline')
+    ])
+      await expect(
+        loadAccountRefresh(() => Promise.reject(error))
+      ).resolves.toEqual({ kind: 'skip' });
+    await expect(loadAccountRefresh(async () => null)).resolves.toEqual({
+      kind: 'skip'
+    });
   });
 });

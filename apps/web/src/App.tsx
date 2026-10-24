@@ -413,7 +413,10 @@ import {
   PROJECT_TOO_LARGE_FOR_ACCOUNT,
   type WorkspaceSaveState
 } from './lib/cloudProjectAutosave';
-import { applyAccountProjectRefresh } from './lib/accountProjectRefresh';
+import {
+  applyAccountProjectRefresh,
+  loadAccountRefresh
+} from './lib/accountProjectRefresh';
 import {
   decideProjectSync,
   shouldPollForFreshness
@@ -5359,9 +5362,25 @@ export function App() {
           // raised by the write that gets fenced rather than guessed at here.
           return;
         }
-        const remote = await api
-          .loadProject(current.projectId)
-          .catch(() => null);
+        const fetched = await loadAccountRefresh(() =>
+          api.loadProject(current.projectId)
+        );
+        if (
+          fetched.kind === 'repair' &&
+          !cancelled &&
+          managerRef.current?.document?.projectId === current.projectId
+        ) {
+          // The account moved to a version this browser cannot open: stop
+          // syncing this project exactly as opening it would.
+          accountDocumentUnavailableProjectIdRef.current = current.projectId;
+          setCloudAvailable(false);
+          setSaveState('repair');
+          setStatus(
+            'The account copy needs repair. Your work remains saved on this device; click Repair needed to retry.'
+          );
+          return;
+        }
+        const remote = fetched.kind === 'document' ? fetched.document : null;
         const live = managerRef.current?.document;
         // Anything the user did while the document was in flight makes it stale.
         if (
