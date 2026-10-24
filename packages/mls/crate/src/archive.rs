@@ -71,12 +71,20 @@ fn invalid(detail: &str) -> Error {
     Error::input(format!("removal archive: {detail}"))
 }
 
-pub fn verify(
+fn message(bytes: &[u8]) -> Res<MlsMessage> {
+    let mut input = bytes;
+    let message = MlsMessage::mls_decode(&mut input).map_err(Error::codec)?;
+    if !input.is_empty() {
+        return Err(invalid("trailing bytes after an archived MLS message"));
+    }
+    Ok(message)
+}
+
+pub fn replay(
     initial_group_info: &[u8],
     records: &[Vec<u8>],
     target: &GroupContext,
     target_tree: &[u8],
-    extensions: &ExtensionList,
 ) -> Res<LeafRemovals> {
     let client = ExternalClient::builder()
         .crypto_provider(RustCryptoProvider::with_enabled_cipher_suites(vec![SUITE]))
@@ -84,7 +92,7 @@ pub fn verify(
         .extension_type(ROLES_EXT)
         .custom_proposal_types([mls_rs_core::group::ProposalType::SELF_REMOVE])
         .build();
-    let mut group = client.observe_group(MlsMessage::from_bytes(initial_group_info)?, None, None)?;
+    let mut group = client.observe_group(message(initial_group_info)?, None, None)?;
     let initial = group.group_context();
     let roles = ProjectRoles::from_extensions(&initial.extensions).map_err(|r| Error::policy(vec![r]))?;
     let members = group.roster().members();
@@ -115,13 +123,13 @@ pub fn verify(
         let prior = group.roster().members();
         for proposal in record.proposals {
             if !matches!(
-                group.process_incoming_message(MlsMessage::from_bytes(&proposal)?)?,
+                group.process_incoming_message(message(&proposal)?)?,
                 ExternalReceivedMessage::Proposal(_)
             ) {
                 return Err(invalid("expected a public proposal"));
             }
         }
-        let description = match group.process_incoming_message(MlsMessage::from_bytes(&record.commit)?)? {
+        let description = match group.process_incoming_message(message(&record.commit)?)? {
             ExternalReceivedMessage::Commit(description) => description,
             _ => return Err(invalid("expected a public Commit")),
         };
@@ -164,6 +172,17 @@ pub fn verify(
     if group.group_context() != target || group.export_tree()? != target_tree {
         return Err(invalid("history does not reach the authenticated joining state"));
     }
+    Ok(removals)
+}
+
+pub fn verify(
+    initial_group_info: &[u8],
+    records: &[Vec<u8>],
+    target: &GroupContext,
+    target_tree: &[u8],
+    extensions: &ExtensionList,
+) -> Res<LeafRemovals> {
+    let removals = replay(initial_group_info, records, target, target_tree)?;
     let carried = extensions
         .get_as::<LeafRemovals>()
         .map_err(|_| invalid("malformed removal extension"))?

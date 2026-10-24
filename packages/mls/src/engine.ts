@@ -9,6 +9,7 @@ import { fromHex, toHex } from './hex';
 import { openState, sealState } from './sealed';
 import type {
   BuildInfo,
+  BeginRejoinRequest,
   CommitRequest,
   DeviceDirectory,
   EpochChange,
@@ -53,6 +54,10 @@ export interface EngineApi {
   keyPackage(id: number): Uint8Array;
   inspectWelcome(id: number, welcome: Uint8Array): GroupInfoSummary;
   join(id: number, welcome: Uint8Array, archive: JoinArchive): EpochChange;
+  beginJoin(id: number, welcome: Uint8Array): void;
+  completeJoin(id: number, archive: JoinArchive): EpochChange;
+  discardJoin(id: number): void;
+  archiveKey(id: number): Uint8Array;
   commit(id: number, request: CommitRequest): PendingCommit;
   confirmCommit(id: number): EpochChange;
   discardCommit(id: number): void;
@@ -68,6 +73,12 @@ export interface EngineApi {
     request: RejoinRequest
   ): RejoinResult;
   confirmRejoin(id: number): void;
+  beginRejoin(
+    id: number,
+    groupInfo: Uint8Array,
+    request: BeginRejoinRequest
+  ): RejoinResult;
+  completeRejoin(id: number, archive: JoinArchive): void;
   discardRejoin(id: number): void;
   status(id: number): SessionStatus;
   projectKey(id: number): Uint8Array;
@@ -342,6 +353,33 @@ export class MlsEngine implements EngineApi {
     );
   }
 
+  beginJoin(id: number, welcome: Uint8Array): void {
+    this.run(() => this.session(id).beginJoin(welcome));
+  }
+
+  completeJoin(id: number, archive: JoinArchive): EpochChange {
+    if (!archive)
+      throw new MlsError('input', 'a join requires the epoch archive');
+    return change(
+      parse(
+        this.run(() =>
+          this.session(id).completeJoin(
+            archive.initialGroupInfo,
+            archive.epochRecords
+          )
+        )
+      )
+    );
+  }
+
+  discardJoin(id: number): void {
+    this.run(() => this.session(id).discardJoin());
+  }
+
+  archiveKey(id: number): Uint8Array {
+    return this.run(() => this.session(id).archiveKey());
+  }
+
   commit(id: number, request: CommitRequest): PendingCommit {
     const spec = JSON.stringify({
       remove: request.remove ?? [],
@@ -429,6 +467,35 @@ export class MlsEngine implements EngineApi {
 
   confirmRejoin(id: number): void {
     this.run(() => this.session(id).confirmRejoin());
+  }
+
+  beginRejoin(
+    id: number,
+    groupInfo: Uint8Array,
+    request: BeginRejoinRequest
+  ): RejoinResult {
+    const out = parse<{ commit: string; change: ChangeJson }>(
+      this.run(() =>
+        this.session(id).beginRejoin(
+          groupInfo,
+          checkEpoch(request.psk.epoch),
+          request.psk.secret,
+          request.replaceLeaf
+        )
+      )
+    );
+    return { commit: fromHex(out.commit), change: change(out.change) };
+  }
+
+  completeRejoin(id: number, archive: JoinArchive): void {
+    if (!archive)
+      throw new MlsError('input', 'a rejoin requires the epoch archive');
+    this.run(() =>
+      this.session(id).completeRejoin(
+        archive.initialGroupInfo,
+        archive.epochRecords
+      )
+    );
   }
 
   discardRejoin(id: number): void {

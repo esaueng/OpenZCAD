@@ -47,6 +47,27 @@ const sealed = await session.seal(stateKey); // non-extractable AES-256-GCM
 Seal and store the session after every operation that changes it, before
 sending its output to the room. A reopened session needs `setDirectory` again.
 
+For an encrypted archive, `beginJoin(welcome)` opens a provisional group and
+`archiveKey()` yields its exporter for decrypting the key archive and epoch
+records in the browser. Supply the resulting `JoinArchive` to
+`completeJoin(archive)`, or call `discardJoin()` to restore the prior session.
+Normal group operations remain blocked until verification succeeds; the
+provisional key and decrypted content are untrusted for document use.
+
+If a rejoin cannot decrypt the old epoch's archive, use
+`beginRejoin(groupInfo, { psk, replaceLeaf? })`, seal the provisional state,
+and submit its external Commit. Established members independently validate
+that Commit before supplying the archive under the **new** epoch's exporter.
+Decrypt it with `archiveKey()`, call `completeRejoin(archive)` with the chain
+through the new epoch, then `confirmRejoin()` after room acceptance.
+Completion rechecks the original request against its authenticated pre-Commit
+removal cutoffs; this Commit's replacement is not its own prior removal.
+Normal operations and unverified confirmation remain blocked across `seal`/`open`.
+A malformed archive preserves an accepted provisional rejoin for retry;
+verified policy rejection or explicit discard restores the prior state. A
+solo recovery uses the account-key-wrapped historical project keys with
+`rejoin(..., { archive })`, or the ADR's recovery Add/reset path.
+
 ## Policy
 
 The rules run in `MlsRules::filter_proposals` (when sending and when
@@ -99,7 +120,7 @@ Both `join(welcome, archive)` and `rejoin(groupInfo, { psk, archive, ... })`
 therefore require a `JoinArchive`: retain the signed epoch-zero `groupInfo()`
 at group creation, then append every accepted `EpochChange.epochRecord` for
 epochs 1 through the joining epoch, including the Commit producing the Welcome.
-The app decrypts these records before calling the package. The verifier uses
+The app decrypts these records before completing admission. The verifier uses
 mls-rs's public observer to authenticate proposals and Commits, checks each
 record's context and tree and the final joining context/tree, and derives
 removals from the applied proposals and prior roster. Carried removals must
@@ -115,8 +136,12 @@ checkpoint-based replay remains future work. A malicious inviter can still
 present an entirely different group fork to a new device without a prior pin;
 this is the existing fork-consistency limit, not proof of the same history.
 The archive argument is a required API change in this private package, which
-has no application callers yet. EpochRecordV1 and sealed-state formats stay
-unchanged; no migration is needed.
+has no application callers yet. `EpochRecordV1` and `JoinArchive` stay unchanged.
+Sealed session contents now use version 2: version 1 sessions are refused
+because their stored removal records may have trusted an inviter's omissions.
+The sealed envelope format is unchanged; no automatic session migration is
+provided. Rust rejects revoked devices without an explicit revocation cutoff,
+matching the TypeScript directory guard; cutoff zero remains valid.
 
 ## Build and test
 

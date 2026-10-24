@@ -154,6 +154,8 @@ export interface RejoinResult {
   change: EpochChange;
 }
 
+export type BeginRejoinRequest = Omit<RejoinRequest, 'archive'>;
+
 /** A GroupInfo or Welcome read before acting on it. Unverified hints. */
 export interface GroupInfoSummary {
   epoch: number;
@@ -174,6 +176,8 @@ export interface SessionStatus {
   pendingCommit: boolean;
   /** An external rejoin the room has not accepted yet. */
   pendingRejoin: boolean;
+  pendingJoin: boolean;
+  pendingArchive: boolean;
   members: LeafInfo[];
   roles: ProjectRoles | null;
 }
