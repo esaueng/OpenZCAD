@@ -4,6 +4,7 @@ import {
   asBytes,
   concatBytes,
   copyBytes,
+  equalBytes,
   isUint,
   label,
   snapshotBytes,
@@ -164,6 +165,41 @@ export type WrapContext =
       readonly projectId: string;
       readonly shareId: string;
       readonly versionId: string;
+    }
+  | {
+      /**
+       * An MLS epoch's rejoin PSK, `MLS-Exporter("openzcad rejoin psk",
+       * project id, 32)`, under the user's current account key, so a device
+       * that lost its MLS state can rejoin by external Commit.
+       */
+      readonly purpose: 'rejoin-psk';
+      readonly userId: string;
+      readonly projectId: string;
+      /** The MLS group epoch the PSK was exported in. */
+      readonly epoch: number;
+    }
+  | {
+      /**
+       * An earlier epoch's project key, under a later epoch's project key:
+       * the previous keys a key archive carries.
+       */
+      readonly purpose: 'archived-project-key';
+      readonly projectId: string;
+      /** The key epoch of the archived key. */
+      readonly archivedEpoch: number;
+      /** The key epoch of the project key it is wrapped under. */
+      readonly underEpoch: number;
+    }
+  | {
+      /**
+       * A replaced account key under its successor, so project keys and
+       * rejoin PSKs wrapped under the old account key stay reachable after
+       * a rotation.
+       */
+      readonly purpose: 'previous-account-key';
+      readonly userId: string;
+      /** Which account key this is, counting from 0 for the first. */
+      readonly keySequence: number;
     };
 
 export type WrapPurpose = WrapContext['purpose'];
@@ -230,7 +266,14 @@ const CONTEXT_FIELDS: Record<WrapPurpose, Record<string, FieldRule>> = {
     projectId: 'string',
     shareId: 'string',
     versionId: 'string'
-  }
+  },
+  'rejoin-psk': { userId: 'string', projectId: 'string', epoch: 'uint' },
+  'archived-project-key': {
+    projectId: 'string',
+    archivedEpoch: 'uint',
+    underEpoch: 'uint'
+  },
+  'previous-account-key': { userId: 'string', keySequence: 'uint' }
 };
 
 const MAX_CONTEXT_STRING = 256;
@@ -284,6 +327,16 @@ export function encodeWrapContext(context: WrapContext): Bytes {
       );
     }
     writer.u8(1).u16(text.byteLength).bytes(text);
+  }
+  // An archive only ever carries older keys forward under a newer one.
+  if (
+    context.purpose === 'archived-project-key' &&
+    context.archivedEpoch >= context.underEpoch
+  ) {
+    throw new E2eeError(
+      'invalid-argument',
+      'An archived project key is wrapped under a later epoch'
+    );
   }
   return writer.finish();
 }
@@ -434,7 +487,9 @@ export async function wrapKeyWith(
  * under the project key, a share snapshot's version key under the share
  * key, a project key or the encryption private key under the account key,
  * the account key under an unlock secret, or the identity key under the
- * recovery key or a passkey.
+ * recovery key or a passkey. Project data adds a rejoin PSK and a replaced
+ * account key under the account key, and an earlier epoch's project key
+ * under a later one.
  *
  * Symmetric keys use AES-KW (`u8 2 | 40 bytes`), which takes no nonce; the
  * context is bound by deriving the KEK from it. Private keys use AES-GCM
@@ -512,6 +567,28 @@ export async function unwrapKey(
         'authentication-failed',
         'Wrapped key failed authentication: wrong key, wrong context or altered bytes',
         { cause }
+      );
+    }
+    // Not every engine enforces RFC 3394's integrity check: Playwright's
+    // Windows WebKit build returns a zeroed key for a wrong KEK or a
+    // tampered wrap instead of throwing. AES-KW is deterministic, so wrap
+    // the result again under the same KEK and require the exact input.
+    let rewrapped: Bytes;
+    try {
+      rewrapped = new Uint8Array(
+        await subtle().wrapKey('raw', key, kwKey, 'AES-KW')
+      );
+    } catch (cause) {
+      throw new E2eeError(
+        'authentication-failed',
+        'Wrapped key failed authentication: wrong key, wrong context or altered bytes',
+        { cause }
+      );
+    }
+    if (!equalBytes(rewrapped, wrapped.subarray(1))) {
+      throw new E2eeError(
+        'authentication-failed',
+        'Wrapped key failed authentication: wrong key, wrong context or altered bytes'
       );
     }
     return new Uint8Array(await subtle().exportKey('raw', key));

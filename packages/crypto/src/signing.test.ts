@@ -62,7 +62,7 @@ const header = (
   projectId: 'project-a',
   documentVersion,
   previousVersionHash: previous,
-  rosterEntryHash: patternBytes(32, 0xb0),
+  epochBindingHash: patternBytes(32, 0xb0),
   schemaVersion: 23,
   keyEpoch: 1,
   chunkSize: 64,

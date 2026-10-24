@@ -12,7 +12,7 @@ import {
   type Bytes
 } from './bytes';
 import { E2eeError } from './errors';
-import { HASH_BYTES } from './header';
+import { HASH_BYTES, isEnvelopeId } from './header';
 import { P256_PUBLIC_KEY_BYTES } from './keys';
 import {
   KEY_BYTES,
@@ -243,6 +243,55 @@ export async function projectStateCode(
       .finish()
   );
   return { hash, code: formatComparisonCode(hash) };
+}
+
+/** RFC 9420 §8.7: the KDF's output size, 32 bytes on SHA-256 suites. */
+export const MIN_EPOCH_AUTHENTICATOR_BYTES = 32;
+export const MAX_EPOCH_AUTHENTICATOR_BYTES = 64;
+
+/**
+ * What a project envelope's header carries as `epochBindingHash`:
+ * `SHA-256(label "v1 epoch binding" | u8 length + project id | u32 key epoch
+ * | u8 length + epoch authenticator)`. The authenticator is the MLS
+ * `epoch_authenticator` of the epoch whose exported project key the version
+ * is written under, so a version names one epoch of one group, and a reader
+ * holding that epoch's record recomputes the binding.
+ */
+export async function epochBinding(
+  projectId: string,
+  keyEpoch: number,
+  epochAuthenticator: Uint8Array
+): Promise<Bytes> {
+  if (!isEnvelopeId(projectId)) {
+    throw new E2eeError(
+      'invalid-argument',
+      'projectId must be a printable ASCII id'
+    );
+  }
+  if (!isUint(keyEpoch, 0xffffffff)) {
+    throw new E2eeError('invalid-argument', 'keyEpoch must be a u32');
+  }
+  if (
+    !(epochAuthenticator instanceof Uint8Array) ||
+    epochAuthenticator.byteLength < MIN_EPOCH_AUTHENTICATOR_BYTES ||
+    epochAuthenticator.byteLength > MAX_EPOCH_AUTHENTICATOR_BYTES
+  ) {
+    throw new E2eeError(
+      'invalid-argument',
+      `An epoch authenticator is ${MIN_EPOCH_AUTHENTICATOR_BYTES}..${MAX_EPOCH_AUTHENTICATOR_BYTES} bytes`
+    );
+  }
+  const id = new TextEncoder().encode(projectId);
+  return sha256(
+    new ByteWriter()
+      .bytes(label('v1 epoch binding'))
+      .u8(id.byteLength)
+      .bytes(id)
+      .u32(keyEpoch)
+      .u8(epochAuthenticator.byteLength)
+      .bytes(copyBytes(epochAuthenticator))
+      .finish()
+  );
 }
 
 // --- Device approval ------------------------------------------------------

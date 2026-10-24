@@ -56,7 +56,7 @@ const HEADER: ProjectEnvelopeHeaderInit = {
   projectId: 'project-a',
   documentVersion: 7,
   previousVersionHash: patternBytes(32, 0xa0),
-  rosterEntryHash: patternBytes(32, 0xb0),
+  epochBindingHash: patternBytes(32, 0xb0),
   schemaVersion: 23,
   keyEpoch: 2,
   blobIds: ['blob-1', 'blob-2'],
@@ -137,7 +137,7 @@ describe('project envelopes', () => {
           kind: 'document',
           keyEpoch: 2,
           documentVersion: 7,
-          rosterEntryHash: patternBytes(32, 0xb0)
+          epochBindingHash: patternBytes(32, 0xb0)
         }
       });
       expect(opened.plaintext).toEqual(plaintext);
@@ -159,7 +159,7 @@ describe('project envelopes', () => {
         projectId: 'p',
         documentVersion: 0,
         previousVersionHash: null,
-        rosterEntryHash: patternBytes(32),
+        epochBindingHash: patternBytes(32),
         schemaVersion: 1,
         keyEpoch: 0
       },
@@ -294,7 +294,7 @@ describe('project envelopes', () => {
       { documentVersion: 8 },
       { previousVersionHash: patternBytes(32, 0xa1) },
       { previousVersionHash: null },
-      { rosterEntryHash: patternBytes(32, 0xb1) },
+      { epochBindingHash: patternBytes(32, 0xb1) },
       { schemaVersion: 24 },
       { keyEpoch: 3 },
       { blobIds: ['blob-1'] },
@@ -358,7 +358,7 @@ describe('project envelopes', () => {
       { schemaVersion: 22 },
       { previousVersionHash: null },
       { previousVersionHash: patternBytes(32, 0xa1) },
-      { rosterEntryHash: patternBytes(32, 0xb1) }
+      { epochBindingHash: patternBytes(32, 0xb1) }
     ]) {
       await rejectsWith(
         decryptProjectEnvelope(KEY, envelope, { expect: expectation }),
@@ -458,7 +458,7 @@ describe('project envelopes', () => {
       { documentVersion: 1.5 },
       { keyEpoch: 2 ** 32 },
       { previousVersionHash: patternBytes(31) },
-      { rosterEntryHash: patternBytes(31) },
+      { epochBindingHash: patternBytes(31) },
       { chunkSize: 63 },
       { chunkSize: 16 * 1024 * 1024 + 1 },
       { blobIds: ['a', 'a'] },
@@ -598,6 +598,62 @@ describe('decompression limits', () => {
       expect(() => (table as unknown[]).reverse()).toThrow(TypeError);
     }
     expect(PROJECT_ENVELOPE_KINDS[0]).toBe('document');
+  });
+
+  it('appends project-info and key-archive without renumbering', async () => {
+    // Wire codes are positions plus one; the first four never move.
+    expect(PROJECT_ENVELOPE_KINDS).toEqual([
+      'document',
+      'measurements',
+      'view-state',
+      'share-snapshot',
+      'project-info',
+      'key-archive'
+    ]);
+    for (const [kind, code] of [
+      ['document', 1],
+      ['share-snapshot', 4],
+      ['project-info', 5],
+      ['key-archive', 6]
+    ] as const) {
+      const key = EnvelopeKey.generate();
+      const keyBytes = key.bytes;
+      const envelope = await encryptProjectEnvelope(
+        key,
+        { ...HEADER, kind, blobIds: [] },
+        text('{}')
+      );
+      // "OZE" | version | u32 length | class | kind
+      expect(envelope[9]).toBe(code);
+      expect(parseEnvelope(envelope).header.kind).toBe(kind);
+      const opened = await decryptProjectEnvelope(keyBytes, envelope, {
+        expect: { kind }
+      });
+      expect(opened.plaintext).toEqual(text('{}'));
+    }
+    expect(PLAINTEXT_CEILINGS['project-info']).toBe(1024 * 1024);
+    expect(PLAINTEXT_CEILINGS['key-archive']).toBe(1024 * 1024);
+    for (const kind of ['project-info', 'key-archive'] as const) {
+      await rejectsWith(
+        encryptProjectEnvelope(
+          EnvelopeKey.generate(),
+          { ...HEADER, kind, blobIds: [] },
+          new Uint8Array(PLAINTEXT_CEILINGS[kind] + 1)
+        ),
+        'limit-exceeded'
+      );
+    }
+    // A seventh kind code is still unknown.
+    const envelope = await encryptProjectEnvelope(
+      EnvelopeKey.generate(),
+      { ...HEADER, blobIds: [] },
+      text('{}')
+    );
+    const unknown = new Uint8Array(envelope);
+    unknown[9] = 7;
+    expect(() => parseEnvelope(unknown)).toThrow(
+      expect.objectContaining({ code: 'malformed' }) as unknown
+    );
   });
 
   it('stops at the kind ceiling even when the header claims more', async () => {
@@ -1077,8 +1133,8 @@ describe('content blobs', () => {
 
   it('checks the expectation as passed, even if it changes mid-call', async () => {
     const envelope = await sealProject(text('x'));
-    const roster = new Uint8Array(HEADER.rosterEntryHash);
-    const expectation = { projectId: 'project-a', rosterEntryHash: roster };
+    const roster = new Uint8Array(HEADER.epochBindingHash);
+    const expectation = { projectId: 'project-a', epochBindingHash: roster };
     const decrypting = decryptProjectEnvelope(KEY, envelope, {
       expect: expectation
     });
@@ -1162,14 +1218,14 @@ describe('content blobs', () => {
   it('decoded header hashes cannot be rewritten through the header', async () => {
     const envelope = await sealProject(text('x'));
     const header = parseEnvelope(envelope).header as ProjectEnvelopeHeader;
-    header.rosterEntryHash.fill(0);
+    header.epochBindingHash.fill(0);
     header.previousVersionHash!.fill(0);
-    expect(header.rosterEntryHash).toEqual(HEADER.rosterEntryHash);
+    expect(header.epochBindingHash).toEqual(HEADER.epochBindingHash);
     expect(header.previousVersionHash).toEqual(HEADER.previousVersionHash);
     // The authenticated header a decrypt returns behaves the same way.
     const { header: opened } = await decryptProjectEnvelope(KEY, envelope);
-    opened.rosterEntryHash.fill(0);
-    expect(opened.rosterEntryHash).toEqual(HEADER.rosterEntryHash);
+    opened.epochBindingHash.fill(0);
+    expect(opened.epochBindingHash).toEqual(HEADER.epochBindingHash);
   });
 
   it('leaves the source unlocked when gzip is unavailable', () => {
