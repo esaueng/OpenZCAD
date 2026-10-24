@@ -169,5 +169,7 @@ exact pins. `BUILD.json` also records the hash of every crate source, so a
 Rust change committed without rebuilding `pkg/` fails `pnpm test` in CI,
 which has no Rust toolchain to rebuild it. The scenario suite (`src/scenarios.ts`) runs in Node in-process
 and through the Worker protocol (`src/mls.test.ts`, part of `pnpm test`),
-and `test:browser` runs it in a real module Worker in Chromium and WebKit
-(Playwright browsers required; `-- --chromium-only` skips WebKit).
+and `test:browser` runs it in a real module Worker in Chromium, WebKit and
+Firefox (Playwright browsers required:
+`pnpm exec playwright install chromium webkit firefox`; `-- --chromium-only`
+runs Chromium alone).

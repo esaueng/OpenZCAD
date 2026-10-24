@@ -397,3 +397,34 @@ change to a vector is a format change and needs a new version byte.
 and requires every parser to fail only with `E2eeError`. Functions that inject keys or randomness (`…With`,
 `envelopeKeyFromBytes`) are test-only and are not exported from the package
 entry.
+
+### Real browsers
+
+The Vitest suites run on Node's WebCrypto. `browser/scenarios.ts` runs the
+package on each browser engine's own WebCrypto and web streams instead:
+project envelopes and content blobs over many chunks (one-shot, incremental
+writer and reader, and streams, with and without gzip), tampering, truncation
+and a gzip bomb; AES-KW and AES-GCM wraps, including a PKCS #8 private key
+and a non-extractable unlock key; sealing and opening; project-envelope,
+version-chain, device-list, approval-grant and identity-transition
+signatures; the external-key seam (`ecdsaSign`, `ecdhDeriveBits` through a
+host stand-in); and the fixed vectors from `vectors.test.ts`, which must come
+out byte-identical in every engine.
+
+```bash
+pnpm exec playwright install chromium webkit firefox   # once
+pnpm --filter @openzcad/crypto test:browser            # Chromium, WebKit, Firefox
+pnpm --filter @openzcad/crypto test:browser -- --chromium-only
+```
+
+It builds the page with the web app's Vite, serves it on `127.0.0.1` (a
+secure context, so `crypto.subtle` exists) and prints a pass count per
+browser. It needs downloaded browsers, so it is not part of `pnpm test`;
+`test/crypto-browser-scenarios.test.ts` runs the same steps in Node there so
+they cannot go stale.
+
+The first `wrap` step checks the engine itself, with raw WebCrypto: an AES-KW
+unwrap under a wrong key or of altered bytes must fail. Playwright's Windows
+WebKit build fails it (it returns a zeroed key instead), so on Windows the
+package's own AES-KW context check fails in WebKit too. AES-KW wraps rely on
+the engine's RFC 3394 integrity check to bind their context.
