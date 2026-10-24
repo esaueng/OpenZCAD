@@ -10,10 +10,10 @@
  *   and the kind's ceiling (`limit-exceeded`), refuses a declared size above
  *   that ceiling before inflating anything, and fails unless the result is
  *   exactly the declared size (`malformed`).
- * - A project envelope's plaintext is decoded as UTF-8 a slice at a time
- *   through `JsonComplexityGuard` (depth and value count) before
- *   `JSON.parse` allocates anything, then checked with
- *   `documentStructureError`.
+ * - A project envelope's plaintext is read by its kind's body codec
+ *   (`decodeProjectBody`), which checks lexical depth and size before
+ *   `JSON.parse` allocates anything and refuses any field it does not
+ *   expect; a document is then checked with `documentStructureError`.
  * - A content blob is buffered until its stream closes cleanly: only the
  *   final chunk and the ciphertext hash prove that nothing was cut off or
  *   swapped, so no part of it is handed out before that.
@@ -26,13 +26,19 @@ import {
   PLAINTEXT_CEILINGS,
   PROJECT_ENVELOPE_KINDS,
   decryptContentBlobStream,
+  decodeEncryptedDocumentBody,
+  decodeKeyArchiveBody,
+  decodeProjectInfoBody,
   decryptProjectEnvelope,
   type ContentBlobKind,
   type ContentBlobReference,
   type E2eeErrorCode,
+  type EncryptedDocumentBody,
+  type KeyArchiveBody,
   type ProjectEnvelopeExpectation,
   type ProjectEnvelopeHeader,
-  type ProjectEnvelopeKind
+  type ProjectEnvelopeKind,
+  type ProjectInfoBody
 } from '@openzcad/crypto';
 import {
   JsonComplexityGuard,
@@ -66,7 +72,8 @@ export type DecodeJob = ProjectEnvelopeDecodeJob | ContentBlobDecodeJob;
 export interface ProjectEnvelopeDecodeResult {
   readonly type: 'project-envelope';
   readonly header: ProjectEnvelopeHeader;
-  readonly value: unknown;
+  /** The body as its kind's codec read it (`decodeProjectBody`). */
+  readonly value: EncryptedDocumentBody | ProjectInfoBody | KeyArchiveBody;
 }
 
 export type ContentBlobDecodeResult =
@@ -163,6 +170,40 @@ export function parseGuardedJson(bytes: Uint8Array): unknown {
   return value;
 }
 
+/**
+ * The body of a decrypted project envelope, read by its kind's codec
+ * (`@openzcad/crypto` bodies): every field is checked and anything else is
+ * refused, so `{}`, a non-canonical project info or key archive, or a body
+ * whose blob references disagree with the header never reaches the caller.
+ * Documents and share snapshots then get the shared structural check.
+ * Measurements and view state have no body codec yet (slice 4-7), so they
+ * are refused rather than handed out as unchecked JSON.
+ */
+export function decodeProjectBody(
+  kind: ProjectEnvelopeKind,
+  header: ProjectEnvelopeHeader,
+  plaintext: Uint8Array
+): EncryptedDocumentBody | ProjectInfoBody | KeyArchiveBody {
+  switch (kind) {
+    case 'document':
+    case 'share-snapshot': {
+      const body = decodeEncryptedDocumentBody(plaintext, header);
+      const structure = documentStructureError(body.document);
+      if (structure) throw new E2eeError('limit-exceeded', structure);
+      return body;
+    }
+    case 'project-info':
+      return decodeProjectInfoBody(plaintext, header);
+    case 'key-archive':
+      return decodeKeyArchiveBody(plaintext, header);
+    default:
+      throw new E2eeError(
+        'invalid-argument',
+        `${kind} envelopes have no body codec yet`
+      );
+  }
+}
+
 export async function decodeProjectEnvelopeJob(
   job: ProjectEnvelopeDecodeJob
 ): Promise<ProjectEnvelopeDecodeResult> {
@@ -180,7 +221,7 @@ export async function decodeProjectEnvelopeJob(
   return {
     type: 'project-envelope',
     header,
-    value: parseGuardedJson(plaintext)
+    value: decodeProjectBody(job.kind, header, plaintext)
   };
 }
 
