@@ -1,4 +1,5 @@
 import { indexedDbDeviceStore, type DeviceKeyStore } from './deviceStore';
+import * as mlsStores from './mls/sessionStore';
 import { lockAccount } from './unlockedKeys';
 import { confirmKeySessionEnded } from './keySession';
 
@@ -26,11 +27,19 @@ export async function eraseAccountWithKeyCleanup<
     // may leave the erased account's raw key in this page.
     if (input.userId) lockAccount(input.userId);
     confirmKeySessionEnded();
+    let cleanup: PromiseSettledResult<void>[] = [];
     try {
       if (input.isCurrentSession()) input.onSignedOut();
     } finally {
-      if (input.userId) await store.forgetErasedIdentity(input.userId, pin);
+      // Separate databases: one failing cleanup must not skip the other.
+      if (input.userId)
+        cleanup = await Promise.allSettled([
+          store.forgetErasedIdentity(input.userId, pin),
+          mlsStores.indexedDbMlsSessionStore().deleteAccount(input.userId)
+        ]);
     }
+    for (const outcome of cleanup)
+      if (outcome.status === 'rejected') throw outcome.reason;
   }
   return result;
 }

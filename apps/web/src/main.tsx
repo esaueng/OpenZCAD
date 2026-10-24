@@ -3,6 +3,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import type * as E2eSmoke from './lib/e2ee/mls/e2eSmoke';
 import type * as LocalProjectStore from './lib/localProjectStore';
 // Self-hosted rather than fetched from Google Fonts: as a stylesheet in
 // <head> that request was render-blocking on every cold visit. Bundled here,
@@ -31,6 +32,8 @@ declare global {
       | 'releaseSourceBlobClaim'
       | 'saveLocalProject'
     >;
+    /** The MLS client smoke hooks, loaded on demand in `VITE_E2E=1` builds. */
+    __openzcadE2EMls?: () => Promise<typeof E2eSmoke>;
   }
 }
 
@@ -45,6 +48,8 @@ if (import.meta.env.VITE_E2E === '1') {
       saveLocalProject: store.saveLocalProject
     };
   });
+  // Nothing loads until a spec calls it, so other specs keep their chunks.
+  window.__openzcadE2EMls = () => import('./lib/e2ee/mls/e2eSmoke');
 }
 
 mark('bundle.evaluated');

@@ -48,7 +48,8 @@ const WORKSPACE_PACKAGES = [
   'jobs',
   'cloudflare-adapters',
   'persistence',
-  'crypto'
+  'crypto',
+  'mls'
 ] as const;
 
 const workspaceAliases = {
@@ -478,6 +479,12 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
               )
             ) {
               return 'exact-analysis';
+            }
+            // The MLS client wrapper (ADR-024) is imported only dynamically,
+            // with its Worker and WASM; a name keeps it from passing as an
+            // anonymous chunk and lets the bundle gate refuse it at launch.
+            if (id.includes('/packages/mls/')) {
+              return 'mls';
             }
             if (id.includes('/node_modules/three/examples/')) {
               return 'three-addons';

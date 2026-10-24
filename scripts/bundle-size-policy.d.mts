@@ -27,6 +27,8 @@ export const KERNEL_WASM_ASSET_PATTERN: RegExp;
 
 export const TRANSLATOR_WASM_ASSET_PATTERN: RegExp;
 
+export const MLS_WASM_ASSET_PATTERN: RegExp;
+
 export const LAZY_ENTRY_PATTERNS: RegExp[];
 
 export const LAUNCHER_FORBIDDEN_MARKERS: { marker: string; library: string }[];

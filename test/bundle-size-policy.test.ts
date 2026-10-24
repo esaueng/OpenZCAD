@@ -10,7 +10,8 @@ import {
   KERNEL_WASM_POLICY,
   LAZY_ENTRY_PATTERNS,
   launcherMarkerLeaks,
-  measureKernelWasm
+  measureKernelWasm,
+  MLS_WASM_ASSET_PATTERN
 } from '../scripts/bundle-size-policy.mjs';
 
 function metrics(
@@ -192,6 +193,20 @@ describe('lazy entry patterns', () => {
     ).toBe(true);
   });
 
+  it.each([
+    'assets/openzcad_mls_bg-Bq9nuvWA.wasm',
+    'assets/worker-C23u5s2I.js',
+    'assets/mls-PLH47mgZ.js'
+  ])(
+    'keeps the MLS client, Worker and WASM out of the launcher: %s',
+    (file) => {
+      expect(LAZY_ENTRY_PATTERNS.some((pattern) => pattern.test(file))).toBe(
+        true
+      );
+      expect(MLS_WASM_ASSET_PATTERN.test(file)).toBe(file.endsWith('.wasm'));
+    }
+  );
+
   it('leaves the launcher entry and its named shared chunks alone', () => {
     for (const file of [
       'assets/index-CIzyUy_T.js',
@@ -219,6 +234,23 @@ describe('launcher chunk contents', () => {
     ]);
     expect(leaks.map(({ file }) => file)).toEqual(['assets/geometry-b.js']);
     expect(leaks[0]?.library).toContain('opentype.js');
+  });
+
+  it('reports a launcher chunk that carries the MLS client', () => {
+    // `loadMls()` names its Worker; only the wrapper chunk carries that.
+    const leaks = launcherMarkerLeaks([
+      {
+        file: 'assets/model-a.js',
+        contents:
+          'new Worker(new URL("worker-x.js",import.meta.url),{type:"module",name:"openzcad-mls"})'
+      },
+      {
+        file: 'assets/index-b.js',
+        contents: 'navigator.locks.request(`openzcad-e2ee-mls:${n}`)'
+      }
+    ]);
+    expect(leaks.map(({ file }) => file)).toEqual(['assets/model-a.js']);
+    expect(leaks[0]?.library).toContain('MLS');
   });
 
   it('passes launcher chunks that only reference the lazy loader', () => {

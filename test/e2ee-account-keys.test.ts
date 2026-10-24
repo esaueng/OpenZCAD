@@ -75,6 +75,7 @@ import { d1Database, migratedDatabase } from './d1-sqlite';
 import { eraseAccountWithKeyCleanup } from '../apps/web/src/lib/e2ee/accountErasure';
 import { signOutAfterSaving } from '../apps/web/src/lib/e2ee/signOut';
 import * as deviceStores from '../apps/web/src/lib/e2ee/deviceStore';
+import * as mlsStores from '../apps/web/src/lib/e2ee/mls/sessionStore';
 import {
   allowKeySession,
   confirmKeySessionEnded,
@@ -2290,6 +2291,17 @@ describe('profile deletion', () => {
   it('does not tear down a replacement session after an older erasure response', async () => {
     const srv = server();
     const { laptop } = await setUp(srv);
+    // The erased account's MLS state on this device goes with its keys.
+    const mls = mlsStores.memoryMlsSessionStore();
+    await mls.getOrCreateStateKey(
+      USER,
+      await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+        'encrypt'
+      ])
+    );
+    const forget = vi
+      .spyOn(mlsStores, 'indexedDbMlsSessionStore')
+      .mockReturnValue(mls);
     let current = true;
     let ended = false;
     await eraseAccountWithKeyCleanup({
@@ -2307,6 +2319,40 @@ describe('profile deletion', () => {
     expect(ended).toBe(false);
     expect(unlockedEncryptionKey(USER)).toBeNull();
     expect(await laptop.store.loadPin(USER)).toBeNull();
+    expect(await mls.loadStateKey(USER)).toBeNull();
+    forget.mockRestore();
+  });
+
+  it('still forgets the MLS state when device-key cleanup fails after erasure', async () => {
+    const srv = server();
+    const { laptop } = await setUp(srv);
+    const mls = mlsStores.memoryMlsSessionStore();
+    await mls.getOrCreateStateKey(
+      USER,
+      await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+        'encrypt'
+      ])
+    );
+    const forget = vi
+      .spyOn(mlsStores, 'indexedDbMlsSessionStore')
+      .mockReturnValue(mls);
+    await expect(
+      eraseAccountWithKeyCleanup({
+        userId: USER,
+        store: {
+          ...laptop.store,
+          forgetErasedIdentity: async () => {
+            throw new Error('Device database unavailable');
+          }
+        },
+        isCurrentSession: () => true,
+        erase: async () => ({ signedOut: true }),
+        onSignedOut: () => {}
+      })
+    ).rejects.toThrow('Device database unavailable');
+    // The separate MLS database was still cleared.
+    expect(await mls.loadStateKey(USER)).toBeNull();
+    forget.mockRestore();
   });
 
   it.each(['profile', 'all'] as const)(

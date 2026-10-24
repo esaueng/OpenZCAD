@@ -1,5 +1,6 @@
 import { lockAccount } from './unlockedKeys';
 import { indexedDbDeviceStore, type DeviceKeyStore } from './deviceStore';
+import * as mlsStores from './mls/sessionStore';
 import { createE2eeApi } from './e2eeApi';
 import { confirmApprovalCancellation } from './approvalCancellation';
 import {
@@ -15,7 +16,8 @@ export interface DeviceKeySignOutChoice {
 /**
  * Ends this page's hold on the account's keys at sign-out. Keeping the
  * device unlocked leaves its device key in this browser for the next
- * sign-in; declining deletes it with the session (ADR-024, Key lifecycle).
+ * sign-in; declining deletes it with the session (ADR-024, Key lifecycle),
+ * together with the account's MLS state key and sealed project sessions.
  * The device stays listed until another device removes it.
  */
 export async function endKeySession(
@@ -49,6 +51,11 @@ async function clearDeviceUnderLock(
         requireCurrentSession
       );
     }
+    requireCurrentSession();
+    // The MLS state first: if it cannot be removed, the device record stays
+    // and signing out can be retried, rather than leaving sessions that a
+    // later sign-in could reopen without unlocking.
+    await mlsStores.indexedDbMlsSessionStore().deleteAccount(userId);
     requireCurrentSession();
     await store.deleteDevice(userId);
   }
