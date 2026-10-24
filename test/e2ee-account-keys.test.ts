@@ -1484,7 +1484,10 @@ describe('account-key history', () => {
       await setUp(srv);
       srv.db.exec('DROP TABLE e2ee_account_key_history');
       const api = createE2eeApi(fetcherFor(srv, USER));
-      expect(await api.config()).toEqual({ enabled: false });
+      expect(await api.config()).toEqual({
+        enabled: false,
+        projectsEnabled: false
+      });
       const closed = await refusal(api.account());
       expect([closed.status, closed.code]).toEqual([503, 'E2EE_UNAVAILABLE']);
       const { deleteAccountData } =
