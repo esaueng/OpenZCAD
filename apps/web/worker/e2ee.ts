@@ -60,7 +60,15 @@ import {
   isE2eeProjectPreferenceStorageReady
 } from './e2eeProjectPreferences';
 import { handleE2eeProjectRequest, isE2eeProjectPath } from './e2eeProjects';
-import { isE2eeProjectGroupStorageReady } from '@openzcad/cloudflare-adapters';
+import {
+  handleE2eeProjectDocumentRequest,
+  isE2eeProjectDocumentPath,
+  type E2eeObjectBucket
+} from './e2eeProjectDocuments';
+import {
+  isE2eeProjectGroupStorageReady,
+  isE2eeProjectVersionStorageReady
+} from '@openzcad/cloudflare-adapters';
 
 interface WriteDatabase extends D1Database {
   authorization: E2eeWriteAuthorization;
@@ -85,6 +93,21 @@ export interface E2eeRouteEnv {
   DB?: D1Database;
   AUTH_MODE?: string;
   ENVIRONMENT?: string;
+  /** Where encrypted document bodies above the inline size live. */
+  PROJECT_STORAGE?: unknown;
+  ARTIFACTS?: unknown;
+}
+
+/** The project-storage bucket, as the persistence layer picks it. */
+function projectBucket(env: E2eeRouteEnv): E2eeObjectBucket | null {
+  const bucket = (env.PROJECT_STORAGE ?? env.ARTIFACTS) as
+    Partial<E2eeObjectBucket> | undefined;
+  return bucket &&
+    typeof bucket.put === 'function' &&
+    typeof bucket.get === 'function' &&
+    typeof bucket.delete === 'function'
+    ? (bucket as E2eeObjectBucket)
+    : null;
 }
 
 const MAX_BODY_BYTES = 512 * 1024;
@@ -1682,8 +1705,10 @@ export async function handleE2eeRequest(
           keysReady &&
           projectsEnabled &&
           (await isE2eeProjectPreferenceStorageReady(env.DB)) &&
-          // Encrypted projects need their MLS group tables (migration 0032).
-          (await isE2eeProjectGroupStorageReady(env.DB))
+          // Encrypted projects need their MLS group tables (migration 0032)
+          // and their version tables (migration 0033).
+          (await isE2eeProjectGroupStorageReady(env.DB)) &&
+          (await isE2eeProjectVersionStorageReady(env.DB))
       });
     }
     if (!enabled) {
@@ -1745,6 +1770,17 @@ export async function handleE2eeRequest(
         userId,
         db.authorization,
         () => readBody(request)
+      );
+    }
+    if (isE2eeProjectDocumentPath(pathname)) {
+      // Encrypted document versions (e2eeProjectDocuments.ts).
+      return await handleE2eeProjectDocumentRequest(
+        request,
+        rawDb,
+        projectBucket(env),
+        userId,
+        projectsEnabled,
+        db.authorization
       );
     }
     if (isE2eeProjectPath(pathname)) {

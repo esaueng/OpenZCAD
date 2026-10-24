@@ -2,6 +2,7 @@ import { releaseDevelopmentE2eeWrite } from './e2eeWriteAuthorization';
 import { accountConsent, publishCensus } from './glimpseCensus';
 import { handleGlimpseUsage, countApi, type GlimpseEnv } from './glimpse';
 import { handleE2eeRequest } from './e2ee';
+import { withEncryptedProjectInfo } from './e2eeProjectDocuments';
 import { accountRequiresEncryptedProjects } from './e2eeProjectPreferences';
 import {
   assertPlaintextRoomAccess,
@@ -641,15 +642,16 @@ async function assertAssistantProjectAllowed(
 ): Promise<void> {
   // Before migration 0031 every project is plaintext.
   if (!(await isProjectStorageFormatReady(env.DB))) return;
-  const row = await env.DB!.prepare(
-    `SELECT p.storage_format FROM projects p
+  const row = await env
+    .DB!.prepare(
+      `SELECT p.storage_format FROM projects p
      WHERE p.id = ? AND (
        p.user_id = ? OR EXISTS (
          SELECT 1 FROM project_members pm
          WHERE pm.project_id = p.id AND pm.user_id = ?
        )
      )`
-  )
+    )
     .bind(projectId, userId, userId)
     .first<{ storage_format: number | null }>();
   if (row && row.storage_format !== null && row.storage_format !== 1) {
@@ -1426,7 +1428,13 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         })
       );
     }
-    return json(await persistence.listProjects(userId));
+    const listing = await persistence.listProjects(userId);
+    // Encrypted projects' names travel as project-info envelopes (0033).
+    return json(
+      isE2eeProjectsEnabled(env, session.email)
+        ? await withEncryptedProjectInfo(env.DB, userId, listing)
+        : listing
+    );
   }
 
   if (request.method === 'POST' && pathname === '/api/projects') {
@@ -1807,7 +1815,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const expectedRevision = parseDeleteProjectMeasurementsRequest(
       await readJsonBody(request, 1024)
     );
-    await deleteProjectMeasurements(env.DB!, projectId, userId, expectedRevision);
+    await deleteProjectMeasurements(
+      env.DB!,
+      projectId,
+      userId,
+      expectedRevision
+    );
     return new Response(null, { status: 204 });
   }
 

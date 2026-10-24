@@ -485,6 +485,26 @@ export const isE2eeProjectGroupStorageReady = cachedSchemaProbe(
   (row) => row?.ready === E2EE_PROJECT_GROUP_TABLES.length
 );
 
+/** The tables migration 0033 adds (encrypted document versions). */
+export const E2EE_PROJECT_VERSION_TABLES = Object.freeze([
+  'e2ee_project_envelopes',
+  'e2ee_project_revisions',
+  'e2ee_project_versions'
+] as const);
+
+/**
+ * Whether migration 0033's encrypted-version tables exist (ADR-024 Phase 4,
+ * encrypted documents). Only the encrypted-project routes, the listing's
+ * project-info attachment, project purge and account erasure name them,
+ * each after asking this, so a database without the migration keeps
+ * serving ordinary traffic.
+ */
+export const isE2eeProjectVersionStorageReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM sqlite_master WHERE type = 'table' AND name IN
+   ('e2ee_project_versions', 'e2ee_project_revisions', 'e2ee_project_envelopes')`,
+  (row) => row?.ready === E2EE_PROJECT_VERSION_TABLES.length
+);
+
 type UploadReservationState =
   'legacy' | 'open' | 'uploading' | 'completing' | 'completed' | 'aborting';
 
@@ -5317,6 +5337,31 @@ export class D1R2PersistenceService implements PersistenceService {
           (table) => `DELETE FROM ${table} WHERE project_id IN`
         )
       : [];
+    // Encrypted document versions (migration 0033): their R2 bodies first,
+    // kept like every other object above so a failed delete stays retryable.
+    if (await isE2eeProjectVersionStorageReady(this.env.DB)) {
+      const bodies = await this.env
+        .DB!.prepare(
+          `SELECT envelope_key FROM e2ee_project_versions
+           WHERE project_id IN (${placeholders}) AND envelope_key IS NOT NULL`
+        )
+        .bind(...projectIds)
+        .all<{ envelope_key: string }>();
+      const bucket = this.projectStorageBucket();
+      if ((bodies.results ?? []).length && !bucket) {
+        throw new ProjectObjectStorageError(
+          'Encrypted project storage is unavailable.'
+        );
+      }
+      await Promise.all(
+        (bodies.results ?? []).map((row) => bucket!.delete(row.envelope_key))
+      );
+      groupTables.unshift(
+        ...E2EE_PROJECT_VERSION_TABLES.map(
+          (table) => `DELETE FROM ${table} WHERE project_id IN`
+        )
+      );
+    }
     // The child rows declare ON DELETE CASCADE, but foreign-key enforcement is
     // a per-connection pragma; deleting them explicitly means a purge cannot
     // leave orphaned revisions behind if it is ever off.

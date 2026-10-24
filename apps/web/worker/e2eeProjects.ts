@@ -71,7 +71,7 @@ const WRAPS_PAGE = 500;
 const ARCHIVES_PAGE = 32;
 const MAX_LEAVES = 1000;
 
-class RouteError extends Error {
+export class RouteError extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
@@ -82,7 +82,7 @@ class RouteError extends Error {
   }
 }
 
-function refuse(
+export function refuse(
   status: number,
   code: string,
   message: string,
@@ -91,11 +91,11 @@ function refuse(
   throw new RouteError(status, code, message, extra);
 }
 
-function invalid(message: string): never {
+export function invalid(message: string): never {
   refuse(400, 'E2EE_REQUEST_INVALID', message);
 }
 
-function json(data: unknown, status = 200): Response {
+export function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: { 'content-type': 'application/json', 'cache-control': 'no-store' }
@@ -121,7 +121,7 @@ async function readBody(request: Request): Promise<Record<string, unknown>> {
   return record(value, 'Body');
 }
 
-function record(value: unknown, what: string): Record<string, unknown> {
+export function record(value: unknown, what: string): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     invalid(`${what} must be an object`);
   }
@@ -129,7 +129,7 @@ function record(value: unknown, what: string): Record<string, unknown> {
 }
 
 /** Base64url text whose bytes have an exact or maximum length. */
-function bytesField(
+export function bytesField(
   value: unknown,
   what: string,
   length: { exact?: number; max?: number }
@@ -152,7 +152,7 @@ function bytesField(
   return { text: value, bytes };
 }
 
-function idField(value: unknown, what: string): string {
+export function idField(value: unknown, what: string): string {
   if (
     typeof value !== 'string' ||
     value.length === 0 ||
@@ -166,7 +166,7 @@ function idField(value: unknown, what: string): string {
   return value;
 }
 
-function uintField(
+export function uintField(
   value: unknown,
   what: string,
   max = Number.MAX_SAFE_INTEGER
@@ -181,7 +181,7 @@ function uintField(
   return value as number;
 }
 
-function queryUint(url: URL, name: string): number | null {
+export function queryUint(url: URL, name: string): number | null {
   const raw = url.searchParams.get(name);
   if (raw === null) return null;
   if (!/^\d{1,15}$/.test(raw))
@@ -189,7 +189,7 @@ function queryUint(url: URL, name: string): number | null {
   return Number(raw);
 }
 
-function leafField(value: unknown): E2eeProjectLeafInput {
+export function leafField(value: unknown): E2eeProjectLeafInput {
   const leaf = record(value, 'leaf');
   const key = bytesField(leaf.leafKey, 'leaf.leafKey', {
     exact: LEAF_KEY_BYTES
@@ -205,16 +205,18 @@ function leafField(value: unknown): E2eeProjectLeafInput {
   return { leafKey: key.text, certification: certification.text };
 }
 
-interface CurrentAccountKey {
+export interface CurrentAccountKey {
   generation: number;
   headSequence: number;
+  /** The device's certified signing key (65-byte P-256 point). */
+  signingKey: Uint8Array;
 }
 
 /**
  * Exactly one project-key and one rejoin-psk wrap for `keyEpoch`, under the
  * caller's current identity generation.
  */
-function wrapsField(
+export function wrapsField(
   value: unknown,
   keyEpoch: number,
   account: CurrentAccountKey
@@ -259,7 +261,7 @@ function wrapsField(
 }
 
 /** The key archive for `keyEpoch`, signed by the sending device. */
-function archiveField(
+export function archiveField(
   value: unknown,
   projectId: string,
   keyEpoch: number,
@@ -316,7 +318,7 @@ interface ProjectRow {
 }
 
 /** Owner of a live format-2 project; anything else is refused. */
-async function requireOwnedEncryptedProject(
+export async function requireOwnedEncryptedProject(
   db: D1Database,
   userId: string,
   projectId: string
@@ -354,7 +356,7 @@ async function requireOwnedEncryptedProject(
 }
 
 /** The same ownership and format, inside every write statement. */
-const PROJECT_FENCE = `EXISTS (SELECT 1 FROM projects
+export const PROJECT_FENCE = `EXISTS (SELECT 1 FROM projects
   WHERE id = ? AND user_id = ? AND storage_format = 2 AND status <> 'deleted')`;
 
 /**
@@ -363,7 +365,7 @@ const PROJECT_FENCE = `EXISTS (SELECT 1 FROM projects
  * those read project keys through account-key wraps and hold no leaves).
  * Returns the current account-key position for checking wraps.
  */
-async function requireCertifiedDevice(
+export async function requireCertifiedDevice(
   db: D1Database,
   userId: string,
   deviceId: string
@@ -378,14 +380,15 @@ async function requireCertifiedDevice(
     )
     .bind(userId, userId)
     .first<{ generation: number; sequence: number; entry: string }>();
-  let listed = false;
+  let listed: Uint8Array | null = null;
   if (head) {
     try {
-      listed = decodeDeviceListEntry(fromBase64Url(head.entry)).devices.some(
-        (device) => device.deviceId === deviceId
-      );
+      listed =
+        decodeDeviceListEntry(fromBase64Url(head.entry)).devices.find(
+          (device) => device.deviceId === deviceId
+        )?.signingKey ?? null;
     } catch {
-      listed = false;
+      listed = null;
     }
   }
   if (!head || !listed) {
@@ -395,7 +398,11 @@ async function requireCertifiedDevice(
       'Only a device certified in your device list can hold a leaf in an encrypted project.'
     );
   }
-  return { generation: head.generation, headSequence: head.sequence };
+  return {
+    generation: head.generation,
+    headSequence: head.sequence,
+    signingKey: listed
+  };
 }
 
 // --- Rows ------------------------------------------------------------------
@@ -512,15 +519,15 @@ async function refuseIfEpochTaken(
 
 // --- Writes ----------------------------------------------------------------
 
-interface Authorization {
+export interface Authorization {
   sql: string;
   binds: readonly unknown[];
 }
 
 /** Each later statement lands only if the one before it changed one row. */
-const CHAINED = 'changes() = 1';
+export const CHAINED = 'changes() = 1';
 
-function insertLeaf(
+export function insertLeaf(
   db: D1Database,
   projectId: string,
   userId: string,
@@ -537,7 +544,7 @@ function insertLeaf(
     .bind(projectId, userId, deviceId, leaf.leafKey, leaf.certification, now);
 }
 
-function insertWraps(
+export function insertWraps(
   db: D1Database,
   projectId: string,
   userId: string,
@@ -565,7 +572,7 @@ function insertWraps(
   );
 }
 
-function insertArchive(
+export function insertArchive(
   db: D1Database,
   projectId: string,
   archive: E2eeKeyArchiveRecord,
@@ -589,14 +596,14 @@ function insertArchive(
     );
 }
 
-type BatchResult = Awaited<ReturnType<D1Database['batch']>>[number];
+export type BatchResult = Awaited<ReturnType<D1Database['batch']>>[number];
 
 /**
  * Runs a write batch; a fence or key conflict becomes a 409. `onConflict`
  * may answer a key conflict more precisely first (it returns to fall back
  * to the generic one).
  */
-async function runBatch(
+export async function runBatch(
   db: D1Database,
   statements: D1PreparedStatement[],
   onConflict?: () => Promise<void>
@@ -624,7 +631,7 @@ async function runBatch(
   }
 }
 
-const allChanged = (results: readonly BatchResult[], count: number) =>
+export const allChanged = (results: readonly BatchResult[], count: number) =>
   results.length === count &&
   results.every((result) => (result.meta?.changes ?? 0) === 1);
 

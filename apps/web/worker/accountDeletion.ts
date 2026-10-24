@@ -1,5 +1,6 @@
 import { e2eeErasureTables } from './e2ee';
 import { projectGroupErasureStatements } from './e2eeProjects';
+import { projectVersionErasureStatements } from './e2eeProjectDocuments';
 import {
   isE2eeProjectPreferenceStorageReady,
   projectPreferenceErasureStatement
@@ -452,8 +453,20 @@ export async function deleteAccountData(
         await e2eeErasureTables(db),
         // Before migration 0031 there is no opt-in table.
         await isE2eeProjectPreferenceStorageReady(db),
-        // Before migration 0032 there are no MLS group tables.
-        await projectGroupErasureStatements(db, session.userId, input.scope)
+        // Before migration 0032 there are no MLS group tables, and before
+        // 0033 no version tables.
+        [
+          ...(await projectGroupErasureStatements(
+            db,
+            session.userId,
+            input.scope
+          )),
+          ...(await projectVersionErasureStatements(
+            db,
+            session.userId,
+            input.scope
+          ))
+        ]
       )
     );
   }
