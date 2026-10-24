@@ -360,6 +360,38 @@ async function tellRoom(
   return response.ok;
 }
 
+/**
+ * Locks the project's room and answers the plaintext version it holds:
+ * null when there is no room, it holds none, or it could not be told.
+ */
+async function lockRoom(
+  env: MigrationEnv,
+  projectId: string
+): Promise<number | null> {
+  const rooms = env.PROJECT_ROOM as RoomNamespace | undefined;
+  if (!rooms || typeof rooms.getByName !== 'function') return null;
+  const url = new URL('https://project-room.internal/_internal/migration');
+  url.searchParams.set('projectId', projectId);
+  const response = await rooms.getByName(projectId).fetch(
+    new Request(url, {
+      method: 'POST',
+      headers: {
+        'x-openzcad-internal-migration': 'v1',
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({ action: 'lock' })
+    })
+  );
+  if (response.status !== 200) return null;
+  const answer = (await response.json().catch(() => null)) as {
+    latestVersion?: unknown;
+  } | null;
+  return typeof answer?.latestVersion === 'number' &&
+    Number.isSafeInteger(answer.latestVersion)
+    ? answer.latestVersion
+    : null;
+}
+
 const leaseLost = (): never =>
   refuse(
     409,
@@ -545,10 +577,38 @@ async function start(
   // Nothing the room holds may move on while the browser stages. A room
   // that cannot be told still meets the cutover's check that the
   // plaintext did not move.
+  let roomVersion: number | null = null;
   try {
-    await tellRoom(ctx.env, projectId, 'lock');
+    roomVersion = await lockRoom(ctx.env, projectId);
   } catch {
     // Best effort; see above.
+  }
+  // Slice 7-2: a room holding edits no checkpoint saved yet (its version
+  // is ahead of the account's head) would lose them to the purge. A fresh
+  // start stages nothing then: it is undone at once, and the owner saves
+  // the project first. A resumed staging locked the room when it began.
+  if (
+    existing?.state !== 'staging' &&
+    roomVersion !== null &&
+    roomVersion > project.document_version
+  ) {
+    await runBatch(ctx.db, [
+      ctx.db
+        .prepare(
+          `UPDATE e2ee_project_migrations
+           SET state = 'abandoned', device_id = NULL, lease_id = NULL,
+               lease_expires_at = NULL, updated_at = ?, finished_at = ?
+           WHERE project_id = ? AND state = 'staging' AND lease_id = ?
+             AND staged_version = 0`
+        )
+        .bind(nowIso, nowIso, projectId, leaseId)
+    ]);
+    refuse(
+      409,
+      E2EE_MIGRATION_CODES.roomAhead,
+      'This project has edits from a live session that your account has not saved yet. Open it and save it, then try again.',
+      { roomVersion, accountVersion: project.document_version }
+    );
   }
   return json(
     {

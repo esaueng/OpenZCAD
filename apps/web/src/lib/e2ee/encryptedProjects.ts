@@ -23,14 +23,19 @@ import type {
 import { ApiError } from '../api';
 import type { ArchiveArtifactInput } from '../archiveArtifact';
 import {
+  createBlobReferenceRegistry,
   pageBlobReferences,
   sessionBoundReferences,
   setEncryptedBlobReader
 } from './blobReferences';
 import {
+  createContentBlobsApi,
   createEncryptedContentBlobs,
+  uploadTransport,
   type EncryptedContentBlobs
 } from './encryptedContentBlobs';
+import { createEncryptedDocumentsApi } from './encryptedDocumentsApi';
+import type { MigrationStagingClients } from './projectMigrationEngine';
 import { desktopFetch } from '../desktopBridge';
 import { loadEncryption, type E2eeContext } from './accountKeys';
 import { createE2eeDecoder, type E2eeDecoder } from './decodeWorker';
@@ -53,6 +58,7 @@ import {
 import {
   createEncryptedMeasurements,
   createEncryptedViewStates,
+  createReplacedEnvelopesApi,
   type EncryptedMeasurements,
   type EncryptedViewStates
 } from './replacedEnvelopes';
@@ -309,6 +315,97 @@ async function openStore(
       people: contactInvitationPeople(contacts, account),
       store: invitationStore(),
       email
+    }
+  };
+}
+
+type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
+
+/**
+ * The encrypted-project clients a migration stages through (ADR-024 Phase
+ * 7, slice 7-2): this device's keys, MLS sessions, pins and decode worker,
+ * as the page's own store has them, but every request through the
+ * fetcher `open` is given, which names the migration lease. Their blob keys stay in a registry of
+ * their own until the project's verified documents hand them to the page.
+ */
+export async function openMigrationStaging(): Promise<{
+  deviceId: string;
+  open: (fetcher: Fetch) => MigrationStagingClients;
+}> {
+  const userId = await sessionUserId();
+  const e2ee: E2eeContext = {
+    userId,
+    api: createE2eeApi(),
+    store: deviceKeyStore()
+  };
+  const state = await loadEncryption(e2ee);
+  if (state.kind !== 'ready' || !state.account.unlocked) throw locked();
+  const account = state.account;
+  if (account.deviceStatus !== 'certified' || !account.device) {
+    throw new ApiError(
+      403,
+      'Encrypt existing projects from a device listed in Settings › Encryption.',
+      'E2EE_READ_ONLY_DEVICE'
+    );
+  }
+  const device = {
+    userId,
+    deviceId: account.device.deviceId,
+    signing: account.device.signing
+  };
+  decoder ??= createE2eeDecoder();
+  const pageDecoder = decoder;
+  return {
+    deviceId: device.deviceId,
+    open(fetcher) {
+      const groups = {
+        api: createProjectGroupsApi(fetcher),
+        sessions: mlsProjectSessions(),
+        account: projectGroupAccount(e2ee, account),
+        device,
+        revocations: revocationStatements(createRevocationCutoffsApi(fetcher), {
+          list: account.list,
+          generation: account.generation
+        })
+      };
+      const references = createBlobReferenceRegistry();
+      const blobs = createEncryptedContentBlobs({
+        groups,
+        references,
+        api: createContentBlobsApi(fetcher),
+        transport: uploadTransport(fetcher),
+        decode: (job) => pageDecoder.decodeContentBlob(job)
+      });
+      const documents = createEncryptedDocumentsApi(fetcher);
+      const pins = versionPins();
+      const store = createEncryptedProjectStore({
+        groups,
+        api: documents,
+        pins,
+        blobReferences: references,
+        open: (job) => pageDecoder.decodeProjectEnvelope(job),
+        seal: (job) => pageDecoder.sealDocument(job)
+      });
+      const replacedApi = createReplacedEnvelopesApi(fetcher);
+      return {
+        store,
+        blobs,
+        references,
+        groups,
+        documents,
+        measurements: createEncryptedMeasurements({
+          userId,
+          kit: store.replaced,
+          pins,
+          api: replacedApi
+        }),
+        viewStates: createEncryptedViewStates({
+          userId,
+          kit: store.replaced,
+          pins,
+          api: replacedApi
+        })
+      };
     }
   };
 }

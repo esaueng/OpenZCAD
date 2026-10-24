@@ -92,6 +92,8 @@ import {
   type CreateProjectResponse,
   type E2eeAdoption,
   type E2eeCopyFrom,
+  type E2eeCreateProjectResponse,
+  type E2eeVersionUpload,
   type E2eeProjectEnvelopeRecord,
   type E2eeProjectEnvelopeUpload,
   type E2eeProjectState,
@@ -111,9 +113,11 @@ import {
   UnstorableDocumentError,
   assertStorableDocument,
   createProjectDocument,
-  createSavedRevision
+  createSavedRevision,
+  withoutDerivedProjection
 } from '@openzcad/document-core';
 import {
+  assertPersistableDocument,
   importArtifactIds,
   prepareInitialProjectDocument,
   splitProjectStorageUpload
@@ -147,6 +151,7 @@ import {
   createProjectGroup,
   epochAuthenticatorForEpoch,
   epochRoles,
+  forgetEpochRoles,
   groupBaseForKeyEpoch,
   joinProjectGroup,
   memberRevocationCutoffs,
@@ -158,6 +163,7 @@ import {
   type ProjectCutoff,
   type ProjectGroupContext
 } from './projectGroups';
+import { forgetProjectKeys } from './unlockedProjectKeys';
 import {
   versionPins,
   type ProjectVersionPin,
@@ -331,6 +337,38 @@ export interface EncryptedProjectStore {
   readonly replaced: ReplacedEnvelopeKit;
   /** What the live room's codec uses (slice 4-9, `encryptedRoomCodec.ts`). */
   roomAccess(): EncryptedRoomAccess;
+  /**
+   * Stages a plaintext project's first encrypted version beside its
+   * plaintext (ADR-024 Phase 7, slice 7-2): the MLS group, the version and
+   * the project info, each through its own route, as the migration lease
+   * requires. The fetcher this store was built with carries the lease.
+   */
+  stageMigratedProject(
+    request: StageMigratedProjectRequest
+  ): Promise<CreateProjectResponse>;
+  /**
+   * The verified head's signed map of retained save states: revision id to
+   * lowercase hex version hash. A staged migration's journal (slice 7-2).
+   */
+  revisionMap(projectId: string): Promise<ReadonlyMap<string, string>>;
+  /**
+   * Forgets what this browser accepted of a staged migration the account
+   * dropped (slice 7-2): its head, pins and cached project keys. The
+   * project is still plaintext; the next staging starts from nothing.
+   */
+  forgetStagedProject(projectId: string): Promise<void>;
+}
+
+/** The first staged version of a migrated project and its project info. */
+export interface StageMigratedProjectRequest {
+  readonly document: ProjectDocument;
+  readonly info: ProjectInfoBody;
+  /**
+   * Runs once the staged group exists, before the first version is
+   * sealed: the files the document names become content blobs, which need
+   * the group's dedupe secret, and the document names their blob ids.
+   */
+  readonly prepare?: (document: ProjectDocument) => Promise<ProjectDocument>;
 }
 
 /** A head this page accepted: what a room version is sealed on. */
@@ -957,8 +995,9 @@ export function createEncryptedProjectStore(
    * the head's document names that revision last, and the account lists
    * it at the head's version and hash. Without it the next version, built
    * on a head read back after a reload, would drop that save state from
-   * the signed history. It adds no trust: a historical read already
-   * accepts a revision the account places at the verified head.
+   * the signed history (found by slice 7-2, whose resumed staging builds
+   * on such a head). It adds no trust: a historical read already accepts
+   * a revision the account places at the verified head.
    */
   async function withOwnNamedSave(
     projectId: string,
@@ -1987,6 +2026,13 @@ export function createEncryptedProjectStore(
       readonly info: ProjectInfoBody;
       readonly copyFrom?: E2eeCopyFrom;
       readonly adoption?: E2eeAdoption;
+      /**
+       * A plaintext project's staging (slice 7-2): the group, the first
+       * version and the project info go through their own routes, which
+       * take ciphertext for a format-1 project from the lease holder.
+       */
+      readonly staged?: boolean;
+      readonly prepare?: StageMigratedProjectRequest['prepare'];
     }
   ): Promise<CreateProjectResponse> {
     const device = writableDevice();
@@ -2036,11 +2082,18 @@ export function createEncryptedProjectStore(
             projectKey: material.projectKey,
             epochAuthenticator: material.epochAuthenticator
           };
+          // A staged project's group goes first, on its own route: its
+          // files are stored under it before the first version names them.
+          let first = document;
+          if (extra.staged) {
+            await groups.api.createGroup(id, groupRequest);
+            if (extra.prepare) first = await extra.prepare(document);
+          }
           const sealed = await sealDocument(
             device,
             epoch0,
             id,
-            document,
+            first,
             0,
             null,
             new Map()
@@ -2060,13 +2113,20 @@ export function createEncryptedProjectStore(
             ...(extra.adoption ? { adoption: extra.adoption } : {})
           };
           let response;
-          try {
-            response = await api.create(metadata, sealed.envelope);
-          } catch (error) {
-            // The request may have landed and its answer been lost: the
-            // same bytes again are answered as created (slice 4-8).
-            if (error instanceof ApiError) throw error;
-            response = await api.create(metadata, sealed.envelope);
+          if (extra.staged) {
+            response = await stagedCreate(id, metadata.version, {
+              envelope: sealed.envelope,
+              info: firstInfo
+            });
+          } else {
+            try {
+              response = await api.create(metadata, sealed.envelope);
+            } catch (error) {
+              // The request may have landed and its answer been lost: the
+              // same bytes again are answered as created (slice 4-8).
+              if (error instanceof ApiError) throw error;
+              response = await api.create(metadata, sealed.envelope);
+            }
           }
           if (response.versionHash !== sealed.hash) {
             throw integrity(
@@ -2083,7 +2143,11 @@ export function createEncryptedProjectStore(
         }
       }
     };
-    await createProjectGroup(creating, projectId);
+    await createProjectGroup(
+      creating,
+      projectId,
+      extra.staged ? { replace: true } : {}
+    );
     if (!created) throw new Error('The encrypted project was not created.');
     const { sealed, state, infoHash } = created;
     await pins.advance(userId, projectId, null, {
@@ -2104,6 +2168,32 @@ export function createEncryptedProjectStore(
     return {
       project: summaryOf(state, sealed.document.name),
       document: sealed.document
+    };
+  }
+
+  /**
+   * The rest of a staged project's epoch 0 (slice 7-2), once its group is
+   * stored: the first version on nothing, then the project info, through
+   * the routes the migration lease opens for a format-1 project. Answered
+   * as a create.
+   */
+  async function stagedCreate(
+    projectId: string,
+    version: E2eeVersionUpload,
+    sealed: { envelope: Uint8Array; info: E2eeProjectEnvelopeUpload }
+  ): Promise<E2eeCreateProjectResponse> {
+    const saved = await api.saveDocument(projectId, version, sealed.envelope);
+    await api.saveInfo(projectId, sealed.info);
+    return {
+      ...saved,
+      project: {
+        projectId,
+        documentVersion: saved.version,
+        revisionCount: 0,
+        lastRevisionId: null,
+        updatedAt: saved.updatedAt,
+        organization: { status: 'active', pinned: false, sortOrder: 0 }
+      }
     };
   }
 
@@ -2305,7 +2395,50 @@ export function createEncryptedProjectStore(
     projectName,
     info,
     replaced,
-    roomAccess: () => roomAccess
+
+    roomAccess: () => roomAccess,
+
+    stageMigratedProject: guarded(
+      async ({ document: source, info: body, prepare }) => {
+        writableDevice();
+        if (source.ownerUserId !== userId) {
+          throw new ApiError(400, 'Only the owner can encrypt this project.');
+        }
+        // A migrated project keeps its id, which an older build minted on the
+        // server: the account checks, not `prepareInitialProjectDocument`.
+        const document = withoutDerivedProjection(source);
+        try {
+          assertPersistableDocument(document);
+        } catch (error) {
+          throw new ApiError(
+            413,
+            error instanceof Error ? error.message : String(error)
+          );
+        }
+        return createFrom(document, {
+          info: body,
+          staged: true,
+          ...(prepare ? { prepare } : {})
+        });
+      }
+    ),
+
+    forgetStagedProject: async (projectId) => {
+      heads.delete(projectId);
+      for (const id of [...authenticators.keys()]) {
+        if (id.startsWith(`${projectId} `)) authenticators.delete(id);
+      }
+      forgetEpochRoles(userId, projectId);
+      forgetProjectKeys(userId, projectId);
+      await pins.forget?.(userId, projectId);
+    },
+
+    revisionMap: guarded(async (projectId) => {
+      const head = await readHead(projectId);
+      return new Map(
+        [...head.revisionHashes].map(([id, hash]) => [id, toHex(hash)])
+      );
+    })
   };
 }
 
