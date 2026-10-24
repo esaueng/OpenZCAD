@@ -216,6 +216,47 @@ test('a panel dropped on a window stacks in it, the window grows, and its frame 
     .toBeCloseTo(top.height + 56, 0);
 });
 
+test('a window may stand over the top bar and takes the pointer there', async ({
+  page
+}) => {
+  // Over the mode switch, at the stage's very top: the viewer area is no
+  // stacking context of its own, so the window out-ranks the top islands.
+  await openWorkspace(page, 'Window over the bar', {
+    floats: [
+      {
+        id: 'float-1',
+        x: 560,
+        y: 0,
+        w: 320,
+        h: 300,
+        panels: ['parameters']
+      }
+    ]
+  });
+  const window = windowOf(page, 'Parameters');
+  await expect(window).toBeVisible();
+  expect((await box(window)).y).toBeCloseTo(0, 0);
+  const modeSwitch = await box(page.locator('.topbar .mode-switch'));
+  const covered = await page.evaluate(
+    ({ x, y }) => {
+      const hit = document.elementFromPoint(x, y);
+      return hit?.closest('.panel-float') !== null;
+    },
+    { x: modeSwitch.x + modeSwitch.width / 2, y: modeSwitch.y + 10 }
+  );
+  expect(covered).toBe(true);
+  // A menu the bar opens still stands over the window.
+  await page.locator('.file-menu > summary').click();
+  const menu = page.locator('.file-menu .topbar-menu-panel');
+  await expect(menu).toBeVisible();
+  const menuBox = await box(menu);
+  const menuOnTop = await page.evaluate(
+    ({ x, y }) => document.elementFromPoint(x, y)?.closest('.topbar') !== null,
+    { x: menuBox.x + 20, y: menuBox.y + 20 }
+  );
+  expect(menuOnTop).toBe(true);
+});
+
 test('a floating window moves on its grip’s arrow keys and resizes with Shift or from its corner control, stopping at the bounds', async ({
   page
 }) => {

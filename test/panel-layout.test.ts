@@ -1534,6 +1534,25 @@ describe('docked panels hugging their content', () => {
     ).toBe(false);
   });
 
+  it('gives a light panel the room a heavy neighbour’s cap frees', () => {
+    // Weighted 1:100, History's share is under 90px; Parameters hugs 100px
+    // of content, so History takes the rest of the column, not 90px.
+    const layout = layoutWith({
+      right: [['history', 'parameters']],
+      weights: { ...modelOnly().weights, history: 1, parameters: 100 }
+    });
+    const stage: PanelStage = { ...STAGE, naturals: { parameters: 100 } };
+    const geometry = computePanelGeometry(layout, stage);
+    const dock = geometry.dock.bottom - geometry.dock.top;
+    expect(geometry.panels.parameters!.h).toBe(100);
+    expect(geometry.panels.history!.h).toBeCloseTo(
+      dock - 100 - PANEL_STACK_GAP,
+      6
+    );
+    expect(geometry.columns[0]!.contentHeight).toBe(dock);
+    expect(geometry.gaps[0]!.enabled).toBe(true);
+  });
+
   it('turns off a gap whose two panels both hug while a third fills', () => {
     const stage: PanelStage = {
       ...STAGE,

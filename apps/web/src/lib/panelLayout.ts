@@ -452,50 +452,62 @@ function stackHeights(
       contentHeight: needed
     };
   }
-  // A panel is held at its minimum or its cap once its share passes either;
-  // a hold is never released, so this settles within n rounds.
-  const held = new Array<number | null>(n).fill(null);
-  let pxPerWeight = 0;
-  for (;;) {
-    let free = height - gaps;
-    let freeWeight = 0;
-    weights.forEach((weight, k) => {
-      const at = held[k] ?? null;
-      if (at !== null) {
-        free -= at;
-      } else {
-        freeWeight += weight;
-      }
-    });
-    pxPerWeight = freeWeight > 0 ? free / freeWeight : 0;
-    let changed = false;
-    weights.forEach((weight, k) => {
-      if (held[k] !== null) return;
-      const share = weight * pxPerWeight;
-      if (share > cap(k)) {
-        held[k] = cap(k);
-        changed = true;
-      } else if (share < minimum(k)) {
-        held[k] = minimum(k);
-        changed = true;
-      }
-    });
-    if (!changed) {
-      break;
+  // Each panel is its weight times one scale, held between its minimum and
+  // its cap: the scale is the one at which the stack fills `height`. The
+  // total only grows with the scale, so a bisection finds it; the panels it
+  // leaves free then fix it exactly. Holding a panel at its minimum before a
+  // neighbour's cap freed room for it kept the column short.
+  const lowest = (k: number): number => minimum(k);
+  const shown = (k: number, scale: number): number =>
+    Math.min(cap(k), Math.max(lowest(k), weights[k]! * scale));
+  const total = (scale: number): number => {
+    let sum = gaps;
+    for (let k = 0; k < n; k++) sum += shown(k, scale);
+    return sum;
+  };
+  const allCapped = weights.every((_, k) => Number.isFinite(cap(k)));
+  if (allCapped && total(Number.MAX_VALUE) <= height) {
+    // Every panel hugs its content and they all fit: the column ends short.
+    const heights = weights.map((_, k) => cap(k));
+    return {
+      heights,
+      pxPerWeight: 0,
+      overflowing: false,
+      contentHeight: heights.reduce((sum, h) => sum + h, gaps)
+    };
+  }
+  let low = 0;
+  let high = 1;
+  while (total(high) < height && high < Number.MAX_VALUE / 4) high *= 2;
+  for (let round = 0; round < 80; round++) {
+    const middle = (low + high) / 2;
+    if (total(middle) < height) {
+      low = middle;
+    } else {
+      high = middle;
     }
   }
+  // The panels the scale leaves between their bounds share what the held
+  // ones leave, exactly.
+  let free = height - gaps;
+  let freeWeight = 0;
+  const held = weights.map((weight, k) => {
+    const at = shown(k, high);
+    const isHeld = at === cap(k) || at === lowest(k);
+    if (isHeld && weight * high !== at) {
+      free -= at;
+      return at;
+    }
+    freeWeight += weight;
+    return null;
+  });
+  const pxPerWeight = freeWeight > 0 ? free / freeWeight : 0;
   const heights = weights.map((weight, k) => held[k] ?? weight * pxPerWeight);
-  const allHeld = held.every((at) => at !== null);
   return {
     heights,
-    pxPerWeight: allHeld ? 0 : pxPerWeight,
+    pxPerWeight,
     overflowing: false,
-    contentHeight: allHeld
-      ? Math.min(
-          height,
-          heights.reduce((sum, h) => sum + h, gaps)
-        )
-      : height
+    contentHeight: height
   };
 }
 
