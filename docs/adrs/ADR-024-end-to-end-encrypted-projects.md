@@ -18,7 +18,8 @@ Layer Security (RFC 9420) through `mls-rs`; see
 [MLS assessment](#mls-assessment). The custom sections that MLS replaces,
 [Signed roster](#signed-roster) and [Epoch rotation](#epoch-rotation), are
 marked superseded. They stay as the record of the review findings that shaped
-the MLS policy rules. Everything else in this record stands.
+the MLS policy rules. Everything else in this record stands, as refined by the
+[amendment of 2026-10-24](#amendment-2026-10-24-project-data).
 
 ## Context
 
@@ -1123,3 +1124,46 @@ Total: 18–23 PRs.
   passkeys and device keys gives the same coverage without either.
 - **Server-held escrow** of account keys for recovery. It would make support
   recovery possible and defeat the purpose of end-to-end encryption.
+
+## Amendment 2026-10-24: project data
+
+Phase 4 settles how project data is stored. These points refine the record
+above; the settled product decisions are unchanged.
+
+- **Two more project envelope kinds.** `project-info` holds the name, the
+  thumbnail reference and the archived exports, so the shelf opens without
+  the document. `key-archive` holds an epoch's previous project keys, the
+  dedupe secret and the epoch record (see
+  [What MLS does not give](#what-mls-does-not-give-and-what-it-adds)). Their
+  wire codes follow the existing four, which do not change.
+- **A version log instead of chain walks.** An autosave overwrites the
+  previous envelope, so no browser can walk the hash chain through versions
+  the server no longer keeps. The server keeps a log of every signed header
+  it accepted: the envelope prefix, the version hash, the signed timestamp
+  and the signature. The signature covers exactly those, so browsers check
+  the chain, every signature, rising versions and key epochs, and the pinned
+  head across overwritten autosaves without the bodies, and refuse rollback
+  and forks as [Version integrity](#version-integrity) requires.
+- **Signed revision inclusion.** Each document body maps its retained
+  revisions to their version hashes. A historical read proves a retained
+  revision belongs to the history through the signed current head, not by
+  walking the chain back.
+- **The epoch binding replaces the roster entry hash.** The 32 bytes each
+  project envelope header reserved for the roster entry hash now carry a
+  hash of the project id, the key epoch and the MLS `epoch_authenticator` of
+  the epoch the version was written in. The byte layout is unchanged.
+- **The key epoch is a project-key generation.** It increases monotonically
+  and keeps increasing across identity-authorized group resets, so it is not
+  the epoch number of any one MLS group.
+- **Project keys are also wrapped under the account key.** Each epoch's
+  project key is wrapped under each member's account key, which is the copy a
+  group reset carries forward.
+- **Per-project leaf keys.** Where [How it would map](#how-it-would-map)
+  says a leaf's credential is the device signing key, each device instead
+  generates a leaf signing key per project, and the device signing key, which
+  the identity key certifies, certifies it for that project. Credential
+  checks follow that two-step chain back to the device list.
+- **Owners rejoin their own solo groups.** An owner device that lost its MLS
+  state rejoins a group by External Commit, using the rejoin PSK wrapped
+  under the account key. KeyPackages are deferred to Phase 5, where
+  invitations need them.

@@ -37,12 +37,20 @@ const MAX_U32 = 0xffffffff;
 // position. They are exported, so they are frozen: a consumer that sorted
 // or spliced one would silently re-number every envelope it wrote or read.
 
-/** Project envelopes: bound to one project, one fresh key per version. */
+/**
+ * Project envelopes: bound to one project, one fresh key per version. The
+ * list is append-only, since a kind's wire code is its position plus one:
+ * `project-info` (5: name, thumbnail and archived exports) and
+ * `key-archive` (6: an epoch's previous project keys and epoch record)
+ * came after the first four.
+ */
 export const PROJECT_ENVELOPE_KINDS = Object.freeze([
   'document',
   'measurements',
   'view-state',
-  'share-snapshot'
+  'share-snapshot',
+  'project-info',
+  'key-archive'
 ] as const);
 export type ProjectEnvelopeKind = (typeof PROJECT_ENVELOPE_KINDS)[number];
 
@@ -64,7 +72,9 @@ export type ContentBlobKind = (typeof CONTENT_BLOB_KINDS)[number];
  * (512 KiB) for thumbnails and measurements. View state gets 1 MiB
  * (judgment: camera and saved views only). `MAX_ARTIFACT_UPLOAD_BYTES`
  * (1 GiB) is a storage reservation, never a decompression limit. A test
- * pins these to the constants they mirror.
+ * pins these to the constants they mirror. Project info (name, thumbnail
+ * and export references) and key archives (previous keys, the dedupe
+ * secret and one MLS epoch record) get 1 MiB each (judgment).
  */
 export const PLAINTEXT_CEILINGS: Readonly<
   Record<ProjectEnvelopeKind | ContentBlobKind, number>
@@ -73,6 +83,8 @@ export const PLAINTEXT_CEILINGS: Readonly<
   'share-snapshot': 24 * 1024 * 1024,
   measurements: 512 * 1024,
   'view-state': 1024 * 1024,
+  'project-info': 1024 * 1024,
+  'key-archive': 1024 * 1024,
   'import-source': 128 * 1024 * 1024,
   'mesh-payload': 128 * 1024 * 1024,
   export: 128 * 1024 * 1024,
@@ -102,9 +114,20 @@ export interface ProjectEnvelopeHeader extends EnvelopeFormat {
   readonly documentVersion: number;
   /** `versionHash` of the previous version; null for the first. */
   readonly previousVersionHash: Bytes | null;
-  /** `rosterEntryHash` of the signed roster entry this version was written under. */
-  readonly rosterEntryHash: Bytes;
+  /**
+   * `epochBinding(projectId, keyEpoch, epochAuthenticator)`: ties the
+   * version to the MLS epoch whose exported project key it is written
+   * under. These 32 bytes occupy the slot Phase 2 named the roster entry
+   * hash; the wire layout is unchanged.
+   */
+  readonly epochBindingHash: Bytes;
   readonly schemaVersion: number;
+  /**
+   * Monotonic project-key generation. It names the project key the version
+   * key is wrapped under and keeps increasing across identity-authorized
+   * group resets, so it is not the epoch number of any one MLS group. A
+   * version's key epoch never falls below its parent's (`verifyVersionLog`).
+   */
   readonly keyEpoch: number;
   /** Ids of the content blobs this version references. */
   readonly blobIds: readonly string[];
@@ -124,13 +147,13 @@ export interface ProjectEnvelopeHeaderInit extends Omit<
   | 'class'
   | 'plaintextLength'
   | 'previousVersionHash'
-  | 'rosterEntryHash'
+  | 'epochBindingHash'
   | 'blobIds'
   | 'compression'
   | 'chunkSize'
 > {
   readonly previousVersionHash: Uint8Array | null;
-  readonly rosterEntryHash: Uint8Array;
+  readonly epochBindingHash: Uint8Array;
   readonly blobIds?: readonly string[];
   /** Defaults to `gzip`. */
   readonly compression?: Compression;
@@ -205,8 +228,8 @@ export function checkHeader(header: EnvelopeHeader, code: E2eeErrorCode): void {
   ) {
     fail(code, 'previousVersionHash must be 32 bytes or null');
   }
-  if (!isHash(header.rosterEntryHash)) {
-    fail(code, 'rosterEntryHash must be 32 bytes');
+  if (!isHash(header.epochBindingHash)) {
+    fail(code, 'epochBindingHash must be 32 bytes');
   }
   if (!isUint(header.schemaVersion, MAX_U32)) {
     fail(code, 'schemaVersion must be a u32');
@@ -240,9 +263,9 @@ export function normalizeProjectHeader(
     previousVersionHash: isHash(init.previousVersionHash)
       ? copyBytes(init.previousVersionHash)
       : init.previousVersionHash,
-    rosterEntryHash: isHash(init.rosterEntryHash)
-      ? copyBytes(init.rosterEntryHash)
-      : init.rosterEntryHash,
+    epochBindingHash: isHash(init.epochBindingHash)
+      ? copyBytes(init.epochBindingHash)
+      : init.epochBindingHash,
     schemaVersion: init.schemaVersion,
     keyEpoch: init.keyEpoch,
     blobIds: Array.isArray(init.blobIds)
@@ -290,7 +313,7 @@ export function encodeEnvelopePrefix(header: EnvelopeHeader): Bytes {
       .u64(header.documentVersion)
       .u8(header.previousVersionHash?.byteLength ?? 0)
       .bytes(header.previousVersionHash ?? new Uint8Array())
-      .bytes(header.rosterEntryHash);
+      .bytes(header.epochBindingHash);
     writeId(body, header.projectId);
     body.u16(header.blobIds.length);
     for (const id of header.blobIds) writeId(body, id);
@@ -395,7 +418,7 @@ export function decodeEnvelopePrefix(prefix: Uint8Array): EnvelopePrefix {
     const hashLength = reader.u8();
     const previousVersionHash =
       hashLength === 0 ? null : copyBytes(reader.bytes(hashLength));
-    const rosterEntryHash = copyBytes(reader.bytes(HASH_BYTES));
+    const epochBindingHash = copyBytes(reader.bytes(HASH_BYTES));
     const projectId = readId(reader);
     const blobIds: string[] = [];
     for (let count = reader.u16(); count > 0; count -= 1) {
@@ -408,7 +431,7 @@ export function decodeEnvelopePrefix(prefix: Uint8Array): EnvelopePrefix {
       documentVersion,
       plaintextLength,
       previousVersionHash,
-      rosterEntryHash,
+      epochBindingHash,
       schemaVersion,
       keyEpoch,
       blobIds: Object.freeze(blobIds),
@@ -422,9 +445,9 @@ export function decodeEnvelopePrefix(prefix: Uint8Array): EnvelopePrefix {
         enumerable: true,
         get: () => previousVersionHash && copyBytes(previousVersionHash)
       },
-      rosterEntryHash: {
+      epochBindingHash: {
         enumerable: true,
-        get: () => copyBytes(rosterEntryHash)
+        get: () => copyBytes(epochBindingHash)
       }
     });
   } else {

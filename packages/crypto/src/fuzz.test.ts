@@ -1,7 +1,8 @@
 /**
  * Seeded fuzzing of every parser that reads bytes the server hands back:
  * both envelope classes (structure and decryption, one-shot and
- * incremental), wrapped and sealed keys and version signatures. Whatever
+ * incremental), wrapped and sealed keys, version signatures, version log
+ * records and the document, project-info and key-archive bodies. Whatever
  * the input, each call either succeeds or throws an `E2eeError`; never a
  * TypeError, RangeError or a DOMException leaking out of WebCrypto.
  */
@@ -20,6 +21,20 @@ import { E2eeError } from './errors';
 import { generateEncryptionKeyPair, generateSigningKeyPair } from './keys';
 import { signProjectEnvelope, verifyProjectEnvelopeSignature } from './signing';
 import { patternBytes, seededRandom } from './test-support';
+import {
+  decodeEncryptedDocumentBody,
+  decodeKeyArchiveBody,
+  decodeProjectInfoBody,
+  encodeEncryptedDocumentBody,
+  encodeKeyArchiveBody,
+  encodeProjectInfoBody
+} from './bodies';
+import {
+  decodeVersionLogRecord,
+  encodeVersionLogRecord,
+  verifyVersionLog,
+  versionLogRecord
+} from './version-log';
 import {
   openSealedKey,
   sealKey,
@@ -142,7 +157,7 @@ describe('parser fuzzing', () => {
         projectId: 'p',
         documentVersion: 1,
         previousVersionHash: patternBytes(32),
-        rosterEntryHash: patternBytes(32, 1),
+        epochBindingHash: patternBytes(32, 1),
         schemaVersion: 1,
         keyEpoch: 0,
         blobIds: ['a', 'b'],
@@ -192,6 +207,111 @@ describe('parser fuzzing', () => {
     }
   });
 
+  it('version log records and bodies only throw E2eeError', async () => {
+    const author = await generateSigningKeyPair();
+    const envelope = await encryptProjectEnvelope(
+      EnvelopeKey.generate(),
+      {
+        kind: 'document',
+        projectId: 'p',
+        documentVersion: 2,
+        previousVersionHash: patternBytes(32),
+        epochBindingHash: patternBytes(32, 1),
+        schemaVersion: 1,
+        keyEpoch: 1,
+        blobIds: ['b1']
+      },
+      patternBytes(30)
+    );
+    const record = encodeVersionLogRecord(
+      await versionLogRecord(
+        envelope,
+        await signProjectEnvelope(author.privateKey, envelope)
+      )
+    );
+    const reference = (
+      await encryptContentBlob(
+        EnvelopeKey.generate(),
+        'import-source',
+        patternBytes(10)
+      )
+    ).reference;
+    const blobHeader = {
+      kind: 'document' as const,
+      keyEpoch: 1,
+      blobIds: [reference.blobId]
+    };
+    const documentBody = encodeEncryptedDocumentBody(
+      {
+        document: { nodes: { a: { x: [1, 2, { y: 'z' }] } } },
+        blobs: [reference],
+        revisionVersionHashes: new Map([['r1', patternBytes(32)]])
+      },
+      blobHeader
+    );
+    const thumbnail = (
+      await encryptContentBlob(
+        EnvelopeKey.generate(),
+        'thumbnail',
+        patternBytes(5)
+      )
+    ).reference;
+    const infoHeader = {
+      kind: 'project-info' as const,
+      keyEpoch: 1,
+      blobIds: [thumbnail.blobId]
+    };
+    const infoBody = encodeProjectInfoBody(
+      { name: 'Part', thumbnail, exports: [] },
+      infoHeader
+    );
+    const archiveHeader = {
+      kind: 'key-archive' as const,
+      keyEpoch: 2,
+      blobIds: []
+    };
+    const archiveBody = encodeKeyArchiveBody(
+      {
+        previousKeys: [{ keyEpoch: 0, key: patternBytes(32) }],
+        dedupeSecret: patternBytes(32, 1),
+        epochRecord: patternBytes(40, 2),
+        epochAuthenticator: patternBytes(32, 3)
+      },
+      archiveHeader
+    );
+    const outcomes = new Map<string, number>();
+    const count = (outcome: string) =>
+      outcomes.set(outcome, (outcomes.get(outcome) ?? 0) + 1);
+    for (let seed = 1; seed <= 600; seed += 1) {
+      count(
+        await onlyTypedErrors(async () => {
+          const decoded = decodeVersionLogRecord(mutate(seed, record));
+          await verifyVersionLog([decoded], {
+            resolveSigningKey: () => author.publicKey
+          });
+        })
+      );
+      count(
+        await onlyTypedErrors(() =>
+          decodeEncryptedDocumentBody(mutate(seed, documentBody), blobHeader)
+        )
+      );
+      count(
+        await onlyTypedErrors(() =>
+          decodeProjectInfoBody(mutate(seed, infoBody), infoHeader)
+        )
+      );
+      count(
+        await onlyTypedErrors(() =>
+          decodeKeyArchiveBody(mutate(seed, archiveBody), archiveHeader)
+        )
+      );
+    }
+    for (const code of ['malformed', 'authentication-failed']) {
+      expect(outcomes.get(code) ?? 0).toBeGreaterThan(0);
+    }
+  });
+
   it('key and signature parsing only throw E2eeError', async () => {
     const kek = patternBytes(32, 0x01);
     const recipient = await generateEncryptionKeyPair();
@@ -214,7 +334,7 @@ describe('parser fuzzing', () => {
         projectId: 'p',
         documentVersion: 1,
         previousVersionHash: null,
-        rosterEntryHash: patternBytes(32),
+        epochBindingHash: patternBytes(32),
         schemaVersion: 1,
         keyEpoch: 0
       },

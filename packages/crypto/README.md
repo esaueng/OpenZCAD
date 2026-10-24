@@ -6,7 +6,9 @@ End-to-end encryption primitives for ADR-024, end-to-end encrypted projects
 reference becomes a link to `docs/adrs/` once that lands. WebCrypto and web streams only, with no
 dependencies, so the same code runs in browsers, Web Workers, the Tauri
 WKWebView and Node 20+. Phase 3's account keys (device lists, unlock targets,
-device approval) are its first application use; Phases 4–5 add projects.
+device approval) are its first application use; Phase 4 adds the project
+data formats below (new envelope kinds, the version log, epoch bindings and
+bodies), and Phase 5 sharing.
 
 All integers are big-endian. Every label below is UTF-8 and prefixed with
 `OpenZCAD E2EE `, so `v1 wrap version-key` means the bytes of
@@ -26,20 +28,29 @@ Both classes share one layout:
 
 Every header starts with `u8 class | u8 kind | u8 compression | u32 chunk size | u64 plaintext length`:
 
-| Field            | Encoding                                                                                                                             |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| class            | 1 project envelope, 2 content blob                                                                                                   |
-| kind             | project: 1 document, 2 measurements, 3 view-state, 4 share-snapshot; content: 1 import-source, 2 mesh-payload, 3 thumbnail, 4 export |
-| compression      | 0 none, 1 gzip (applied before encryption; the default)                                                                              |
-| chunk size       | 64 B to 16 MiB (default 1 MiB); at least the prefix length when the prefix exceeds 1 KiB; at most 65,536 chunks of plaintext         |
-| plaintext length | the exact size after decompression; part of the header, so every chunk's AAD binds it                                                |
+| Field            | Encoding                                                                                                                                                            |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| class            | 1 project envelope, 2 content blob                                                                                                                                  |
+| kind             | project: 1 document, 2 measurements, 3 view-state, 4 share-snapshot, 5 project-info, 6 key-archive; content: 1 import-source, 2 mesh-payload, 3 thumbnail, 4 export |
+| compression      | 0 none, 1 gzip (applied before encryption; the default)                                                                                                             |
+| chunk size       | 64 B to 16 MiB (default 1 MiB); at least the prefix length when the prefix exceeds 1 KiB; at most 65,536 chunks of plaintext                                        |
+| plaintext length | the exact size after decompression; part of the header, so every chunk's AAD binds it                                                                               |
 
 A **project envelope** header continues with `u32 schema version | u32 key
 epoch | u64 document version | u8 previous-version
-hash length (0 or 32) + hash | 32-byte roster entry hash | u8 length +
+hash length (0 or 32) + hash | 32-byte epoch binding hash | u8 length +
 project id | u16 count + blob ids (u8 length + id each)`. Ids are 1–128 bytes
 of printable ASCII. A project lists at most 4096 blob ids, without
-duplicates, in the order given.
+duplicates, in the order given. Kind codes are append-only: `project-info`
+(5) and `key-archive` (6) came after the first four, whose codes never move.
+
+The epoch binding hash (`epochBindingHash`) occupies the 32 bytes Phase 2
+called the roster entry hash; only the name changed, not a byte of the
+layout or of any vector. It holds `epochBinding(projectId, keyEpoch,
+epochAuthenticator)` (Codes, below). The key epoch is a monotonic
+project-key generation: it names the project key the version key is wrapped
+under and keeps increasing across identity-authorized group resets, so it is
+not the epoch number of any one MLS group.
 
 A **content blob** header continues with only `u8 length + blob id`. It names
 no project, so the server can copy it byte for byte into another project.
@@ -82,6 +93,7 @@ which every decrypt path uses, prevents that:
 | document, share snapshot            | 24 MiB  | `MAX_CLOUD_PROJECT_DOCUMENT_BYTES`                       |
 | measurements                        | 512 KiB | `MAX_PROJECT_MEASUREMENT_BYTES`                          |
 | view state                          | 1 MiB   | judgment: camera and saved views only                    |
+| project info, key archive           | 1 MiB   | judgment: names and references; keys and an epoch record |
 | thumbnail                           | 512 KiB | `MAX_THUMBNAIL_BYTES`                                    |
 | import source, mesh payload, export | 128 MiB | `MAX_SOURCE_IMPORT_BYTES`, `MAX_ARTIFACT_DOWNLOAD_BYTES` |
 
@@ -97,7 +109,7 @@ to the constants they mirror.
 
 - **Project envelopes** are decrypted with `decryptProjectEnvelope` and an
   `expect` object (project, kind, version, epoch, schema, previous-version
-  hash, roster entry hash); an authentic envelope that differs is refused
+  hash, epoch binding hash); an authentic envelope that differs is refused
   with `context-mismatch`. Their version keys are wrapped under the project
   key (`version-key` below).
 - **Content blobs** are authenticated by the project envelope that references
@@ -124,8 +136,7 @@ settles: it resolves when the envelope finishes, and it rejects with
 ## Versions and signatures
 
 - `versionHash(envelope)` is SHA-256 of a whole project envelope. The next
-  version stores it as its previous-version hash, and the header's roster
-  entry hash is carried as an opaque 32-byte value.
+  version stores it as its previous-version hash.
 - `verifyVersionChain` checks that envelopes link by hash with rising
   versions in one project, and that they contain the newest version this
   browser has pinned. That refuses rollback and forks. One call takes at
@@ -142,6 +153,72 @@ settles: it resolves when the envelope finishes, and it rejects with
   be enough: any member holding the symmetric key can re-encrypt altered
   content under the same header with valid tags, and a test shows such a
   forgery fails verification.
+
+### Version log
+
+An autosave overwrites the previous envelope, so a browser cannot walk the
+hash chain through versions the server no longer keeps. The server instead
+keeps a version log: one record per signed envelope it ever accepted.
+
+```
+"OZV" (4f 5a 56) | u8 version = 1 | u32 prefix length | prefix | 32-byte versionHash | u8 signature length | signature
+```
+
+`versionLogRecord(envelope, signature)` builds a record and
+`encodeVersionLogRecord`/`decodeVersionLogRecord` serialize it. The v1
+signature covers exactly `label | prefix | versionHash | signedAt`, so a
+record verifies without the envelope body. `verifyVersionLog(records,
+{ pinnedVersionHash, projectId, resolveSigningKey })` checks, oldest first:
+one project and one kind; strictly increasing document versions; each
+record naming the previous record's version hash (a missing record breaks
+this); key epochs that never decrease; the pinned version present (rollback
+or fork otherwise); and each signature under the key the resolver returns
+for that record's header. The v1 signature names no signer, so the caller
+pairs each record with its author. Each refusal is a `VersionLogError` with a
+`reason` (`empty`, `project-mismatch`, `kind-mismatch`,
+`version-not-increasing`, `previous-hash-mismatch`, `epoch-decreased`,
+`signer-unknown`, `signature-invalid`, `pinned-missing`) and the record
+index; its `code` is `authentication-failed` for the two signature reasons
+and `chain-broken` otherwise. One call takes at most 4,096 records and
+64 MiB.
+
+`verifyAuthoredEnvelope(envelope, signature, { deviceLists, cutoffs })` (and
+`verifyAuthoredLogRecord` for a record) finds the device signing key, among
+the live and revoked devices of the given verified device lists, that signed
+the version. A revoked device is accepted only at or before its cutoff for
+this project, which the caller passes in a map keyed by
+`authorCutoffKey(userId, deviceId)`: below the cutoff's document version, or
+the cutoff version itself by hash. Refusals are `AuthorshipError`s
+(`unknown-signer`, `ambiguous-signer` when two lists certify the same key,
+`revoked-without-cutoff`, `outside-cutoff`), all `authentication-failed`. A
+stolen device picks its own version numbers, so a version below a cutoff is
+trusted only once the caller also shows it is an ancestor of the cutoff
+head, for example with a version log that contains both.
+
+### Bodies
+
+Project envelope bodies are UTF-8 JSON with `version: 1`, written by the
+encoders and read strictly by the decoders: unknown or missing fields, wrong
+types and sizes are `malformed`, a newer `version` is `unsupported-version`,
+and a body over its kind's ceiling, or nested past a lexical depth and
+separator limit checked before `JSON.parse`, is `limit-exceeded`. Bytes are
+unpadded canonical base64url. Every encoder and decoder runs
+`checkBlobReferences` against the envelope header, so a body referencing a
+blob the header omits, or the reverse, is refused (`context-mismatch`).
+
+| Body                    | Kinds                    | Fields                                                                                                |
+| ----------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------- |
+| `EncryptedDocumentBody` | document, share-snapshot | `document` (object), `blobs` (references), `revisionVersionHashes` (revision id → lowercase hex)      |
+| `ProjectInfoBody`       | project-info             | `name`, optional `thumbnail` reference, `exports` (`ref`, `fileName`, `contentType`, flat `metadata`) |
+| `KeyArchiveBody`        | key-archive              | `previousKeys` (`keyEpoch`, `key`), `dedupeSecret`, `epochRecord`, `epochAuthenticator`; no blob refs |
+
+`revisionVersionHashes` lets a historical read prove that a retained
+revision belongs to this history through the signed head, instead of a chain
+walk through overwritten autosaves. A key archive's previous keys are
+strictly ascending and older than its own key epoch (`context-mismatch` on
+read). Project info and key archives also accept only their canonical
+encoding; the document is checked by the shared document validators after
+decoding.
 
 Device lists live here (below). The contacts list, the custom roster and
 its revocation cutoffs are parked on the `claude/e2ee-chains` branch: MLS
@@ -176,6 +253,12 @@ UTF-8 string and type 2 a u64.
 | `dedupe-secret`          | KW     | projectId, keyEpoch                       | project key: the dedupe secret, carried across epochs                                                                    |
 | `share-key`              | KW     | projectId, keyEpoch, shareId              | project key; it never encrypts content                                                                                   |
 | `share-version-key`      | KW     | projectId, shareId, versionId             | share key: a share snapshot's version key, for link visitors                                                             |
+| `rejoin-psk`             | KW     | userId, projectId, epoch                  | account key: an MLS epoch's rejoin PSK, for an External Commit after losing MLS state                                    |
+| `archived-project-key`   | KW     | projectId, archivedEpoch, underEpoch      | a later epoch's project key: an earlier project key; `archivedEpoch` must be below `underEpoch`                          |
+| `previous-account-key`   | KW     | userId, keySequence                       | the new account key: the account key it replaced, so older account-key wraps stay reachable                              |
+
+`version-key` accepts every project envelope kind, `project-info` and
+`key-archive` included. Integer fields are u32 values encoded as u64.
 
 Every unlock method is a public-key target (ADR-024, Unlock and devices), so
 a rotation can re-seal a new account key to every target without knowing any
@@ -195,6 +278,19 @@ inside the project envelope. Unlock secrets are imported as non-extractable
 HKDF keys, so a device key in IndexedDB never exposes its bytes. The passkey
 PRF input is `passkeyPrfInput()`, a fresh copy on each call.
 
+### Security notes
+
+- **AES-KW integrity does not rely on the engine.** Playwright's Windows
+  WebKit build skips RFC 3394's integrity check: an AES-KW unwrap under the
+  wrong KEK, or of a tampered wrap, returns a zeroed key instead of
+  throwing. Since the KEK carries the context, such an engine could detect
+  neither a wrong context nor tampering. AES-KW is deterministic, so
+  `unwrapKey` wraps the unwrapped key again under the same KEK and compares
+  the result with the input in constant time, refusing any difference with
+  `authentication-failed`. This covers every KW purpose. The wire format and
+  the KW vectors are unchanged, and a test stubs a non-verifying engine to
+  prove the refusal.
+
 ## Codes
 
 - **Asset de-duplication:** lowercase hex HMAC-SHA256 keyed by a random
@@ -213,6 +309,11 @@ PRF input is `passkeyPrfInput()`, a fresh copy on each call.
 - **Project state code:**
   `SHA-256(label "v1 project state" | newest versionHash | u64 version | signer identity key hash)`,
   shown with `formatComparisonCode`.
+- **Epoch binding:** `epochBinding(projectId, keyEpoch, epochAuthenticator)`
+  is `SHA-256(label "v1 epoch binding" | u8 length + project id | u32 key epoch | u8 length + epoch authenticator)`,
+  where the authenticator is the MLS `epoch_authenticator` (RFC 9420 §8.7,
+  32–64 bytes) of the epoch whose exported key the version is written
+  under. Every project envelope header carries it as `epochBindingHash`.
 - **Device approval, scan form:** the new device shows `pk_new =
 deviceKeysHash(signing, unlock)`, the `publicKeyHash` of both its public
   keys, as a QR code, and the approver checks the pair the server delivered
@@ -268,11 +369,13 @@ device-list head the new device should pin, and whether it was certified.
 ## Tests
 
 `vectors.test.ts` holds fixed vectors built from injected keys, blob ids, IVs,
-ephemeral keys and timestamps, including a device-list entry and a paired
-approval commitment. It also re-derives the nonce layout, both
-envelope classes, the content blob hash and the wrap with raw WebCrypto. A
+ephemeral keys and timestamps, including a device-list entry, a paired
+approval commitment, the project-info and key-archive kinds, the three
+project-data wraps, an epoch binding, a version log record and a key archive
+body. It also re-derives the nonce layout, both envelope classes, the content
+blob hash, the wrap and the epoch binding with raw WebCrypto. A
 change to a vector is a format change and needs a new version byte.
-`fuzz.test.ts` mutates valid inputs and requires every parser to fail only
-with `E2eeError`. Functions that inject keys or randomness (`…With`,
+`fuzz.test.ts` mutates valid inputs, version log records and bodies included,
+and requires every parser to fail only with `E2eeError`. Functions that inject keys or randomness (`…With`,
 `envelopeKeyFromBytes`) are test-only and are not exported from the package
 entry.

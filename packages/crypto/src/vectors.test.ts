@@ -39,6 +39,14 @@ import {
 } from './devices';
 import { exportPublicKey } from './keys';
 import { verifyProjectEnvelopeSignature, versionHash } from './signing';
+import { encodeKeyArchiveBody } from './bodies';
+import { epochBinding } from './codes';
+import {
+  decodeVersionLogRecord,
+  encodeVersionLogRecord,
+  verifyVersionLog,
+  versionLogRecord
+} from './version-log';
 import {
   TEST_EPHEMERAL_JWK,
   TEST_IDENTITY_JWK,
@@ -70,7 +78,7 @@ const HEADER: ProjectEnvelopeHeaderInit = {
   projectId: 'prj_1',
   documentVersion: 5,
   previousVersionHash: patternBytes(32, 0xa0),
-  rosterEntryHash: patternBytes(32, 0xc0),
+  epochBindingHash: patternBytes(32, 0xc0),
   schemaVersion: 23,
   keyEpoch: 1,
   blobIds: ['707172737475767778797a7b7c7d7e7f'],
@@ -332,12 +340,12 @@ describe('seal v1 vector', () => {
   });
 });
 
-describe('version signature vector', () => {
-  // ECDSA signatures are randomized, so this is a recorded signature over
-  // the project envelope vector that must keep verifying.
-  const VERSION_SIGNATURE =
-    '0100000199c82cc000490ad620f6a014d8a29e34a5fa46571999c909682e86ee4331409a368d23954ad4448a3983dcc657f7fcb29d6b74602bd37919179b2ed6f9206b243c54fe9464';
+// ECDSA signatures are randomized, so this is a recorded signature over the
+// project envelope vector that must keep verifying.
+const VERSION_SIGNATURE =
+  '0100000199c82cc000490ad620f6a014d8a29e34a5fa46571999c909682e86ee4331409a368d23954ad4448a3983dcc657f7fcb29d6b74602bd37919179b2ed6f9206b243c54fe9464';
 
+describe('version signature vector', () => {
   it('verifies the recorded signature and its timestamp', async () => {
     const signer = await importFixedPair(TEST_SIGNER_JWK, 'ECDSA');
     expect(
@@ -488,6 +496,150 @@ describe('device list v1 vector', () => {
     );
     expect(toHex(commitment)).toMatchInlineSnapshot(
       `"44b678e45f8953d389ae09934a82073cd891376a15c0c6e4a0ddd1548b184466"`
+    );
+  });
+});
+
+describe('project data vectors', () => {
+  const kindVector = (kind: 'project-info' | 'key-archive') =>
+    encryptProjectEnvelope(
+      envelopeKeyFromBytes(VERSION_KEY),
+      { ...HEADER, kind, blobIds: [] },
+      PLAINTEXT
+    );
+
+  it('codes a project-info envelope as kind 5', async () => {
+    const envelope = await kindVector('project-info');
+    // Byte 9 is the kind; the rest follows the document layout.
+    expect(envelope[9]).toBe(5);
+    expect(toHex(parseEnvelope(envelope).prefix)).toMatchInlineSnapshot(
+      `"4f5a45010000006801050000000040000000000000005d0000001700000001000000000000000520a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf0570726a5f310000"`
+    );
+    expect(toHex(envelope)).toMatchInlineSnapshot(
+      `"4f5a45010000006801050000000040000000000000005d0000001700000001000000000000000520a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf0570726a5f31000041ccd0b0ef6fc2f928cdc7437d40fee9b76322365bf54059e5fdc7ecb7d17d193e3a88e669b3fc2656ad0790ada1192b897324950d5130c033c2505464400194776bcad4256c4db45b779b3c3dac06030d63da358bfe9a8b630caa878e8d6b0ab4fd9d1bf92e807fc5adbfdc17420a162bf7d0bd70235a77252ccec385"`
+    );
+  });
+
+  it('codes a key-archive envelope as kind 6', async () => {
+    const envelope = await kindVector('key-archive');
+    expect(envelope[9]).toBe(6);
+    expect(toHex(parseEnvelope(envelope).prefix)).toMatchInlineSnapshot(
+      `"4f5a45010000006801060000000040000000000000005d0000001700000001000000000000000520a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf0570726a5f310000"`
+    );
+    expect(toHex(envelope)).toMatchInlineSnapshot(
+      `"4f5a45010000006801060000000040000000000000005d0000001700000001000000000000000520a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf0570726a5f31000041ccd0b0ef6fc2f928cdc7437d40fee9b76322365bf54059e5fdc7ecb7d17d193e3a88e669b3fc2656ad0790ada1192b897324950d5130c033c2505464400194155cbc930acb3d774f4c0ec70fe121ee0d63da358bfe9a8b630caa878e8d6b0ab4fd9d1bf92e807fc5adbfdc1718c6fb69b64616260745e55619cbc461"`
+    );
+  });
+
+  it('derives the fixed epoch binding, re-derived with raw WebCrypto', async () => {
+    const authenticator = patternBytes(32, 0xb0);
+    const binding = await epochBinding('prj_1', 1, authenticator);
+    expect(toHex(binding)).toMatchInlineSnapshot(
+      `"66840854760abafa110678ea0ee957f609007ea80cff13b4e56a05940881a2b6"`
+    );
+    // SHA-256(label | u8 len + project id | u32 key epoch | u8 len + authenticator)
+    const raw = new Uint8Array(
+      await subtle.digest(
+        'SHA-256',
+        concatBytes(
+          utf8('OpenZCAD E2EE v1 epoch binding'),
+          Uint8Array.of(5),
+          utf8('prj_1'),
+          Uint8Array.of(0, 0, 0, 1),
+          Uint8Array.of(32),
+          authenticator
+        )
+      )
+    );
+    expect(raw).toEqual(binding);
+  });
+
+  const wrapVector = async (context: WrapContext) => {
+    const wrapped = await wrapKey(KEK, WRAPPED_SECRET, context);
+    expect(await unwrapKey(KEK, wrapped, context)).toEqual(WRAPPED_SECRET);
+    return { context: toHex(encodeWrapContext(context)), wrap: toHex(wrapped) };
+  };
+
+  it('produces the fixed rejoin-psk wrap', async () => {
+    expect(
+      await wrapVector({
+        purpose: 'rejoin-psk',
+        userId: 'usr_1',
+        projectId: 'prj_1',
+        epoch: 7
+      })
+    ).toMatchInlineSnapshot(`
+      {
+        "context": "0565706f63680200000000000000070970726f6a656374496401000570726a5f3107707572706f736501000a72656a6f696e2d70736b067573657249640100057573725f31",
+        "wrap": "02d39acfeeeae0451c37713f2a90e521342404ab5260529e315d0c2453add4f6320986a9ed061cfbb6",
+      }
+    `);
+  });
+
+  it('produces the fixed archived-project-key wrap', async () => {
+    expect(
+      await wrapVector({
+        purpose: 'archived-project-key',
+        projectId: 'prj_1',
+        archivedEpoch: 0,
+        underEpoch: 1
+      })
+    ).toMatchInlineSnapshot(`
+      {
+        "context": "0d617263686976656445706f63680200000000000000000970726f6a656374496401000570726a5f3107707572706f736501001461726368697665642d70726f6a6563742d6b65790a756e64657245706f6368020000000000000001",
+        "wrap": "028b0f51b06b7da52ce55e781f3fb455343965288158275e8a68894be1afd1ce7c592502faf85c499c",
+      }
+    `);
+  });
+
+  it('produces the fixed previous-account-key wrap', async () => {
+    expect(
+      await wrapVector({
+        purpose: 'previous-account-key',
+        userId: 'usr_1',
+        keySequence: 2
+      })
+    ).toMatchInlineSnapshot(`
+      {
+        "context": "0b6b657953657175656e636502000000000000000207707572706f736501001470726576696f75732d6163636f756e742d6b6579067573657249640100057573725f31",
+        "wrap": "027f4251784af3dc15f1f93023ca8856d804c42523c9d3c6cff4ad293e0fdd8eb18d102aa9a073ed08",
+      }
+    `);
+  });
+
+  it('encodes the fixed version log record of the envelope vector', async () => {
+    const record = await versionLogRecord(
+      await projectVector(),
+      fromHex(VERSION_SIGNATURE)
+    );
+    const encoded = encodeVersionLogRecord(record);
+    // "OZV" | 1 | u32 prefix length | prefix | version hash | u8 73 | signature
+    expect(toHex(encoded)).toMatchInlineSnapshot(
+      `"4f5a5601000000914f5a45010000008901010000000040000000000000005d0000001700000001000000000000000520a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf0570726a5f310001203730373137323733373437353736373737383739376137623763376437653766319935295d2b281ed58c71760f5936274f3bb923762e0e9c6c4f8cb7cc2e1426490100000199c82cc000490ad620f6a014d8a29e34a5fa46571999c909682e86ee4331409a368d23954ad4448a3983dcc657f7fcb29d6b74602bd37919179b2ed6f9206b243c54fe9464"`
+    );
+    expect(toHex(record.versionHash)).toBe(
+      '319935295d2b281ed58c71760f5936274f3bb923762e0e9c6c4f8cb7cc2e1426'
+    );
+    const signer = await importFixedPair(TEST_SIGNER_JWK, 'ECDSA');
+    const log = await verifyVersionLog([decodeVersionLogRecord(encoded)], {
+      pinnedVersionHash: record.versionHash,
+      resolveSigningKey: () => signer.publicKey
+    });
+    expect(log.head.signedAt).toBe(1_760_000_000_000);
+  });
+
+  it('encodes a fixed key archive body', () => {
+    const body = encodeKeyArchiveBody(
+      {
+        previousKeys: [{ keyEpoch: 0, key: patternBytes(32, 0x00) }],
+        dedupeSecret: patternBytes(32, 0x20),
+        epochRecord: patternBytes(8, 0x40),
+        epochAuthenticator: patternBytes(32, 0x60)
+      },
+      { kind: 'key-archive', keyEpoch: 1, blobIds: [] }
+    );
+    expect(new TextDecoder().decode(body)).toMatchInlineSnapshot(
+      `"{"version":1,"previousKeys":[{"keyEpoch":0,"key":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"}],"dedupeSecret":"ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8","epochRecord":"QEFCQ0RFRkc","epochAuthenticator":"YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8"}"`
     );
   });
 });
