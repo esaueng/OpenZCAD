@@ -1686,7 +1686,7 @@ export class InMemoryPersistenceService implements PersistenceService {
       await this.requireProjectRead(userId, projectId);
       return reconcileCopiedImportSources(
         normalizedForLoad(document),
-        await this.loadCopiedImportArchives(userId, projectId)
+        await this.loadCopiedImportArchives(userId, toProjectId(projectId))
       );
     } catch (error) {
       if (error instanceof ProjectNotFoundError) {
@@ -1819,7 +1819,7 @@ export class InMemoryPersistenceService implements PersistenceService {
     return stored
       ? reconcileCopiedImportSources(
           normalizedForLoad(stored.document),
-          await this.loadCopiedImportArchives(userId, projectId)
+          await this.loadCopiedImportArchives(userId, toProjectId(projectId))
         )
       : null;
   }
