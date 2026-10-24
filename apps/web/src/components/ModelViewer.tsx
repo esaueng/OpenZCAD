@@ -3212,7 +3212,11 @@ export function ModelViewer({
         );
       offsetGhost = createBodyGhost(object as THREE.Mesh, {
         ...(face ? { faceRange: face } : {}),
-        resolution: context.fatLineResolution()
+        resolution: context.fatLineResolution(),
+        // The ghost stands outside the body group the section clips.
+        clippingPlane: sectionViewRef.current
+          ? sectionClippingPlane(sectionViewRef.current)
+          : null
       });
       context.scene.add(offsetGhost.object);
       offsetRigRef.current?.setChangeShownByBody?.(true);

@@ -28,8 +28,11 @@ export function createBodyGhost(
   options: {
     faceRange?: { triangleStart: number; triangleCount: number };
     resolution?: FatLineResolution;
+    /** The active section's cut, so the ghost is cut like the body. */
+    clippingPlane?: THREE.Plane | null;
   } = {}
 ): BodyGhost {
+  const clippingPlanes = options.clippingPlane ? [options.clippingPlane] : null;
   const object = new THREE.Group();
   object.name = 'offset-body-ghost';
   object.matrixAutoUpdate = false;
@@ -46,7 +49,8 @@ export function createBodyGhost(
     side: THREE.FrontSide,
     polygonOffset: true,
     polygonOffsetFactor: 2,
-    polygonOffsetUnits: 8
+    polygonOffsetUnits: 8,
+    clippingPlanes
   });
   const shell = new THREE.Mesh(geometry, material);
   shell.name = 'offset-body-ghost-shell';
@@ -74,7 +78,8 @@ export function createBodyGhost(
         side: THREE.DoubleSide,
         polygonOffset: true,
         polygonOffsetFactor: 1,
-        polygonOffsetUnits: 4
+        polygonOffsetUnits: 4,
+        clippingPlanes
       })
     );
     face.name = 'offset-body-ghost-face';
@@ -107,6 +112,14 @@ export function createBodyGhost(
       opacity: GHOST_EDGE_OPACITY,
       ...(options.resolution ? { resolution: options.resolution } : {})
     });
+    // Fat lines are triangles too: the same bias as the shell keeps an old
+    // edge that coincides with the new solid behind it, so a pull covers
+    // the ghost's outline as well as its surface.
+    edges.material.depthWrite = false;
+    edges.material.polygonOffset = true;
+    edges.material.polygonOffsetFactor = 2;
+    edges.material.polygonOffsetUnits = 8;
+    edges.material.clippingPlanes = clippingPlanes;
     edges.name = 'offset-body-ghost-edges';
     edges.renderOrder = 27;
     object.add(edges);
