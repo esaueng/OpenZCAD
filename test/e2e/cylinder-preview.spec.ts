@@ -162,7 +162,10 @@ test('rounded cylinder rapid bottom, top, and radius edits survive reload', asyn
       'data-e2e-chip-anchor-rig',
       surface === 'wall' ? 'cylinder-radius' : 'offset-face'
     );
-    await expect(page.locator('.inspector-float')).toContainText(
+    // The Selection card names the pick; a pick opens no inspector.
+    await expect(
+      page.locator('.selection-card .selection-callout-name')
+    ).toContainText(
       surface === 'bottom-cap'
         ? 'Bottom face'
         : surface === 'top-cap'
