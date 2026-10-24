@@ -1817,6 +1817,52 @@ describe('column heights', () => {
     });
   });
 
+  it('keeps a lifted panel’s column at its drawn height until the drop', () => {
+    const layout = layoutWith({
+      right: [['bodies', 'history']],
+      columnHeights: { 'bodies+history': 300 }
+    });
+    const lifted = beginDrag(layout, 'history');
+    const geometry = computePanelGeometry(lifted, STAGE);
+    const column = geometry.columns[0]!;
+    expect(column.h).toBe(300);
+    // So a drop on the model below its foot floats, not docks back.
+    expect(
+      hitTest(geometry, { x: column.x + column.w / 2, y: column.y + 400 })
+    ).toBeNull();
+    // A full column stays full even when the set left behind remembers a
+    // height of its own.
+    const full = layoutWith({
+      right: [['bodies', 'history']],
+      columnHeights: { bodies: 300 }
+    });
+    const dock = dockOf(full);
+    expect(
+      computePanelGeometry(beginDrag(full, 'history'), STAGE).columns[0]!.h
+    ).toBe(dock);
+    // Lifting never touches the layout itself.
+    expect(layout.columnHeights).toEqual({ 'bodies+history': 300 });
+    expect(full.columnHeights).toEqual({ bodies: 300 });
+  });
+
+  it('refuses to shorten a column whose minimums overflow the dock', () => {
+    const layout = layoutWith({
+      right: [['parameters', 'bodies', 'history', 'revisions', 'diagnostics']]
+    });
+    const stage: PanelStage = { width: 1280, height: 390 };
+    const geometry = computePanelGeometry(layout, stage);
+    expect(geometry.columns[0]!.overflowing).toBe(true);
+    const dock = dockOf(layout, stage);
+    expect(
+      resizeColumn(
+        layout,
+        ['parameters', 'bodies', 'history', 'revisions', 'diagnostics'],
+        dock - 100,
+        dock
+      )
+    ).toBe(layout);
+  });
+
   it('is a rearrangement no preset matches, and a preset fills every column', () => {
     const layout = applyPreset(defaultPanelLayout(), 'review');
     expect(matchingPreset(layout)).toBe('review');

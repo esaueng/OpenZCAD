@@ -530,8 +530,11 @@ export function PanelDock({
     const panels = column.panels.filter(
       (entry): entry is PanelId => entry !== PANEL_SLOT
     );
+    // Off while the stack scrolls: its minimums overflow the dock, so
+    // there is nothing to shorten.
     const enabled =
       !layout.options.locked &&
+      !column.overflowing &&
       panels.length > 0 &&
       panels.length === column.panels.length;
     return { dockHeight, drawn, panels, enabled };

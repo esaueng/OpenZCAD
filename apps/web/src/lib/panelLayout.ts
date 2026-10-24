@@ -402,7 +402,10 @@ export function resizeColumn(
     layout.options.locked ||
     key === null ||
     !Number.isFinite(height) ||
-    !Number.isFinite(dockHeight)
+    !Number.isFinite(dockHeight) ||
+    // Its panels' minimums already overflow the dock: there is nothing to
+    // shorten, and a stored height would only show once the window grew.
+    columnMinimum(panels.length) >= dockHeight
   ) {
     return layout;
   }
@@ -912,10 +915,34 @@ export function finishDrag<T extends PanelEntry>(
 
 /**
  * The layout while `id` is being dragged: the panel lifted out, an emptied
- * column kept in its place. Geometry and hit-testing run on this.
+ * column kept in its place. Geometry and hit-testing run on this. The
+ * column it leaves keeps the height it was drawn at: its set of panels
+ * changes, which would otherwise fill the dock (or take that set's
+ * remembered height) under the cursor, so a drop on the model below a
+ * shortened column's foot docked back into it. Transient: the drop is
+ * placed on the layout itself, never on this one.
  */
 export function beginDrag(layout: PanelLayout, id: PanelId): PanelLayout {
-  return layout.options.locked ? layout : detach(layout, id, true);
+  if (layout.options.locked) return layout;
+  const lifted = detach(layout, id, true);
+  const location = findPanel(layout, id);
+  if (location?.kind === 'column') {
+    const height = storedColumnHeight(
+      layout,
+      sideColumns(layout, location.side)[location.column]!
+    );
+    const key = columnKey(
+      sideColumns(lifted, location.side)[location.column] ?? []
+    );
+    if (key !== null) {
+      if (height === null) {
+        delete lifted.columnHeights[key];
+      } else {
+        lifted.columnHeights[key] = height;
+      }
+    }
+  }
+  return lifted;
 }
 
 /**
