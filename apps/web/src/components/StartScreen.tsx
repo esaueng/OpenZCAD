@@ -605,6 +605,9 @@ export function StartScreen({
     // Stored in a format this build cannot open (end-to-end encrypted, ADR-024
     // Phase 4): shown locked, never loaded, and offered only shelf actions.
     const locked = projectNeedsUpdate(project);
+    // An encrypted project this build opens (ADR-024 Phase 4) has no copies
+    // yet (slice 4-8).
+    const encrypted = project.storageFormat === 2;
 
     const preview = (
       <>
@@ -715,12 +718,16 @@ export function StartScreen({
               </span>
             )
           )}
-          {locked && (
+          {(locked || encrypted) && (
             <span
               className="start-tile-badge is-locked"
               role="img"
               aria-label="End-to-end encrypted"
-              title="End-to-end encrypted. Update OpenZCAD to open this project."
+              title={
+                locked
+                  ? 'End-to-end encrypted. Update OpenZCAD to open this project.'
+                  : 'End-to-end encrypted.'
+              }
             >
               <Lock size={12} aria-hidden="true" />
             </span>
@@ -984,7 +991,7 @@ export function StartScreen({
                     Save to my account
                   </button>
                 )}
-                {!locked && (
+                {!locked && !encrypted && (
                   <button
                     type="button"
                     role="menuitem"

@@ -4,6 +4,7 @@ import {
 } from './measurementRecord';
 export { measurementRecordContentKey } from './measurementRecord';
 import { desktopFetch } from './desktopBridge';
+import { encryptedLocalOnly, isEncryptedProject } from './api';
 
 export interface ProjectMeasurementSnapshot {
   revision: number;
@@ -74,17 +75,21 @@ async function requestProjectMeasurements<T>(
 /** Kept in the lazy workspace path so cloud measurement code stays off startup. */
 export const projectMeasurementCloudApi: ProjectMeasurementCloudApi = {
   loadProjectMeasurements: (projectId) =>
-    requestProjectMeasurements<ProjectMeasurementSnapshot>(
-      `/api/projects/${encodeURIComponent(projectId)}/measurements`
-    ),
+    isEncryptedProject(projectId)
+      ? Promise.reject(encryptedLocalOnly('Measurements'))
+      : requestProjectMeasurements<ProjectMeasurementSnapshot>(
+          `/api/projects/${encodeURIComponent(projectId)}/measurements`
+        ),
   saveProjectMeasurements: ({ projectId, expectedRevision, record }) =>
-    requestProjectMeasurements<ProjectMeasurementSnapshot>(
-      `/api/projects/${encodeURIComponent(projectId)}/measurements`,
-      {
-        method: 'PUT',
-        body: JSON.stringify({ expectedRevision, record })
-      }
-    )
+    isEncryptedProject(projectId)
+      ? Promise.reject(encryptedLocalOnly('Measurements'))
+      : requestProjectMeasurements<ProjectMeasurementSnapshot>(
+          `/api/projects/${encodeURIComponent(projectId)}/measurements`,
+          {
+            method: 'PUT',
+            body: JSON.stringify({ expectedRevision, record })
+          }
+        )
 };
 
 /**

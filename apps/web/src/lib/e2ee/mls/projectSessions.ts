@@ -37,7 +37,13 @@ import {
   isCurrentKeySession,
   subscribeKeySession
 } from '../keySession';
-import { certifyLeaf, type CertifyingDevice } from './certify';
+import {
+  certifyLeaf,
+  verifyLeafCertification,
+  type CertifyingDevice,
+  type LeafCertificationClaim,
+  type VerifiedLeafCertification
+} from './certify';
 import { buildDeviceDirectory, type DirectoryInput } from './directory';
 import { mlsLoader, type MlsLoader } from './loader';
 import {
@@ -474,6 +480,23 @@ export class MlsProjectSessions {
       signatureKey: new Uint8Array(stored.leaf.signatureKey),
       certification: new Uint8Array(stored.leaf.certification)
     };
+  }
+
+  /**
+   * Checks one leaf certification against the certifying device's signing
+   * key, for a project (encrypted documents' authorship check: did the
+   * author's device hold a leaf it certified in the version's epoch?).
+   * Needs no session; null when it does not verify.
+   */
+  async verifyLeafCertification(
+    claim: LeafCertificationClaim,
+    deviceSigningKey: Uint8Array
+  ): Promise<VerifiedLeafCertification | null> {
+    return verifyLeafCertification(
+      await this.loader.get(),
+      claim,
+      deviceSigningKey
+    );
   }
 
   /** Sessions held in this page's memory (tests and diagnostics). */

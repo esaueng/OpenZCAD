@@ -55,12 +55,18 @@ import {
 } from '@openzcad/document-core';
 import {
   createId,
+  ENCRYPTED_PROJECTS_REQUIRED_CODE,
   PROJECT_FORMAT_UNSUPPORTED_CODE,
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
-  toProjectId
+  PROJECT_STORAGE_FORMAT_E2EE_V1,
+  toProjectId,
+  type E2eeListProjectsExtension,
+  type ProjectSummary
 } from '@openzcad/shared';
 import { splitProjectStorageUpload } from '@openzcad/persistence';
 import { desktopFetch, isDesktopApp } from './desktopBridge';
+import type * as EncryptedProjectsModule from './e2ee/encryptedProjects';
+import type { EncryptedProjectStore } from './e2ee/encryptedProjectStore';
 
 /**
  * An API call that reached the server and came back refused. Callers need the
@@ -252,6 +258,81 @@ async function requestJson<T>(
   return (await response.json()) as T;
 }
 
+// --- Encrypted projects (ADR-024 Phase 4) ---------------------------------
+
+/** Projects the account stores end-to-end encrypted (format 2), by id. */
+const encryptedProjectIds = new Set<string>();
+
+/**
+ * The encrypted-project module, loaded the first time a format-2 project is
+ * listed, created, opened or saved, so no crypto reaches the entry chunk.
+ */
+let encryptedModule: Promise<typeof EncryptedProjectsModule> | null = null;
+const encryptedProjects = () =>
+  (encryptedModule ??= import('./e2ee/encryptedProjects'));
+
+/** Records which listed projects are encrypted, for the dispatch below. */
+export function rememberProjectFormats(
+  projects: readonly Pick<ProjectSummary, 'projectId' | 'storageFormat'>[]
+): void {
+  for (const project of projects) {
+    if (project.storageFormat === PROJECT_STORAGE_FORMAT_E2EE_V1) {
+      encryptedProjectIds.add(project.projectId);
+    } else {
+      encryptedProjectIds.delete(project.projectId);
+    }
+  }
+}
+
+/**
+ * Encrypted projects keep these on this device until later slices of
+ * ADR-024 Phase 4 encrypt them: files (imports, exports, thumbnails: 4-6 and
+ * 4-7), measurements and view state (4-7), copies and adoption (4-8). The
+ * refusal happens here, before anything is sent: the plaintext routes would
+ * refuse a format-2 project too, but only after receiving its data.
+ */
+export const E2EE_LOCAL_ONLY_CODE = 'E2EE_LOCAL_ONLY';
+
+export function encryptedLocalOnly(what: string): ApiError {
+  return new ApiError(
+    409,
+    `${what} of end-to-end encrypted projects stay on this device for now.`,
+    E2EE_LOCAL_ONLY_CODE
+  );
+}
+
+/** Whether this page knows the project is stored encrypted (format 2). */
+export function isEncryptedProject(projectId: string | null | undefined) {
+  return projectId ? encryptedProjectIds.has(projectId) : false;
+}
+
+/**
+ * Runs `plaintext` unless the project is known to be encrypted; a
+ * plaintext route that answers PROJECT_FORMAT_UNSUPPORTED marks it and the
+ * call moves to the encrypted store. Writes never fall back: a write sends
+ * the document, so it goes to the encrypted store only when the project is
+ * already known to be encrypted.
+ */
+async function byFormat<T>(
+  projectId: string,
+  plaintext: () => Promise<T>,
+  encrypted: (store: EncryptedProjectStore) => Promise<T>,
+  options: { fallback: boolean }
+): Promise<T> {
+  const viaStore = async () =>
+    encrypted(await (await encryptedProjects()).encryptedProjectStore());
+  if (encryptedProjectIds.has(projectId)) return viaStore();
+  try {
+    return await plaintext();
+  } catch (error) {
+    if (options.fallback && isProjectFormatUnsupportedError(error)) {
+      encryptedProjectIds.add(projectId);
+      return viaStore();
+    }
+    throw error;
+  }
+}
+
 /**
  * The request with `field`'s embedded import payloads split out into
  * `storageAssets` (ADR-024 Phase 1): the account stores the payloads under
@@ -272,6 +353,27 @@ async function withSplitStorage<T extends object, K extends keyof T & string>(
     [field]: split.document,
     storageAssets: split.storageAssets
   };
+}
+
+/** One save state's document from the plaintext route; null once pruned. */
+async function loadPlaintextRevision(
+  projectId: string,
+  revisionId: string
+): Promise<ProjectDocument | null> {
+  let document: ProjectDocument;
+  try {
+    document = await requestJson<ProjectDocument>(
+      `/api/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}`,
+      undefined,
+      { documentDownload: true, expectedMissing: true }
+    );
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return null;
+    }
+    throw withProjectFormatMessage(error);
+  }
+  return openableAccountDocument(document, projectId);
 }
 
 export const api = {
@@ -332,16 +434,72 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ scope, confirmation })
     }),
-  listProjects: () => requestJson<ListProjectsResponse>('/api/projects'),
-  createProject: async (payload: CreateProjectRequest) =>
-    requestJson<CreateProjectResponse>('/api/projects', {
-      method: 'POST',
-      body: JSON.stringify(
-        payload.initialDocument
-          ? await withSplitStorage(payload, 'initialDocument')
-          : payload
-      )
-    }),
+  /**
+   * The shelf. Encrypted projects arrive with a placeholder name and their
+   * project-info envelope; their names are decrypted here when this device
+   * holds the account's keys, and stay the placeholder otherwise.
+   */
+  listProjects: async (): Promise<ListProjectsResponse> => {
+    const { encryptedProjectInfo, ...listing } = await requestJson<
+      ListProjectsResponse & E2eeListProjectsExtension
+    >('/api/projects');
+    if (Array.isArray(listing.projects))
+      rememberProjectFormats(listing.projects);
+    if (!encryptedProjectInfo?.length) return listing;
+    try {
+      const names = await (
+        await encryptedProjects()
+      ).encryptedProjectNames(encryptedProjectInfo);
+      return {
+        ...listing,
+        projects: listing.projects.map((project) => {
+          const name = names.get(project.projectId);
+          return name === undefined ? project : { ...project, name };
+        })
+      };
+    } catch {
+      return listing;
+    }
+  },
+  /**
+   * A new project. An account that encrypts new projects (decision D2)
+   * creates it through the encrypted route, which never sees the document;
+   * a plaintext create the Worker refuses for that reason moves there too.
+   */
+  createProject: async (payload: CreateProjectRequest) => {
+    const encrypted = async () => {
+      const created = await (
+        await encryptedProjects()
+      ).createEncryptedProject(payload);
+      rememberProjectFormats([created.project]);
+      return created;
+    };
+    if (
+      !payload.document &&
+      (await (await encryptedProjects()).encryptsNewProjects())
+    ) {
+      return encrypted();
+    }
+    try {
+      return await requestJson<CreateProjectResponse>('/api/projects', {
+        method: 'POST',
+        body: JSON.stringify(
+          payload.initialDocument
+            ? await withSplitStorage(payload, 'initialDocument')
+            : payload
+        )
+      });
+    } catch (error) {
+      if (
+        !payload.document &&
+        error instanceof ApiError &&
+        error.code === ENCRYPTED_PROJECTS_REQUIRED_CODE
+      ) {
+        return encrypted();
+      }
+      throw error;
+    }
+  },
   /**
    * Gives an existing device-local project an account record and its cloud identity.
    * The derived projection is dropped on the way out: it is rebuilt from
@@ -391,24 +549,43 @@ export const api = {
       });
     };
     // A minted id that already names a project is a one-in-2^122 collision:
-    // mint another once rather than failing the save.
-    return send().catch((error: unknown) => {
-      if (error instanceof ApiError && error.code === 'PROJECT_ID_TAKEN')
+    // mint another once rather than failing the save. An account that
+    // encrypts new projects (D2) is never sent the plaintext document.
+    return encryptedProjects()
+      .then((module) => module.encryptsNewProjects())
+      .then((encrypts) => {
+        if (encrypts) {
+          throw new ApiError(
+            409,
+            'Saving a device project to an account that encrypts new projects is not available yet. It stays saved on this device.',
+            'E2EE_ADOPTION_UNAVAILABLE'
+          );
+        }
         return send();
-      throw error;
-    });
+      })
+      .catch((error: unknown) => {
+        if (error instanceof ApiError && error.code === 'PROJECT_ID_TAKEN')
+          return send();
+        throw error;
+      });
   },
-  loadProject: async (projectId: string) =>
-    openableAccountDocument(
-      await requestJson<ProjectDocument>(
-        `/api/projects/${encodeURIComponent(projectId)}`,
-        undefined,
-        { documentDownload: true }
-      ).catch((error: unknown) => {
-        throw withProjectFormatMessage(error);
-      }),
-      projectId
-    ),
+  loadProject: (projectId: string) =>
+    byFormat(
+      projectId,
+      async () =>
+        openableAccountDocument(
+          await requestJson<ProjectDocument>(
+            `/api/projects/${encodeURIComponent(projectId)}`,
+            undefined,
+            { documentDownload: true }
+          ),
+          projectId
+        ),
+      (store) => store.loadProject(projectId),
+      { fallback: true }
+    ).catch((error: unknown) => {
+      throw withProjectFormatMessage(error);
+    }),
   /**
    * Stores a copy of a project. With `revisionId`, the copy starts from that
    * stored save state and records where it came from; the source project is
@@ -420,6 +597,7 @@ export const api = {
     projectId: string,
     options: Omit<DuplicateProjectRequest, 'projectId'> = {}
   ) => {
+    if (isEncryptedProject(projectId)) throw encryptedLocalOnly('Copies');
     const request = {
       ...(options.name === undefined ? {} : { name: options.name }),
       ...(options.revisionId === undefined
@@ -447,29 +625,26 @@ export const api = {
   },
   /** The project's retained save states, newest first, without documents. */
   listRevisions: (projectId: string) =>
-    requestJson<ListRevisionsResponse>(
-      `/api/projects/${encodeURIComponent(projectId)}/revisions`
+    byFormat(
+      projectId,
+      () =>
+        requestJson<ListRevisionsResponse>(
+          `/api/projects/${encodeURIComponent(projectId)}/revisions`
+        ),
+      (store) => store.listRevisions(projectId),
+      { fallback: true }
     ),
   /**
    * One save state's document. Resolves to null when the account no longer
    * stores it, which retention makes an ordinary outcome rather than a fault.
    */
-  loadRevision: async (projectId: string, revisionId: string) => {
-    let document: ProjectDocument;
-    try {
-      document = await requestJson<ProjectDocument>(
-        `/api/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}`,
-        undefined,
-        { documentDownload: true, expectedMissing: true }
-      );
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 404) {
-        return null;
-      }
-      throw withProjectFormatMessage(error);
-    }
-    return openableAccountDocument(document, projectId);
-  },
+  loadRevision: (projectId: string, revisionId: string) =>
+    byFormat(
+      projectId,
+      () => loadPlaintextRevision(projectId, revisionId),
+      (store) => store.loadRevision(projectId, revisionId),
+      { fallback: true }
+    ),
   updateProject: (payload: UpdateProjectRequest, signal?: AbortSignal) =>
     requestJson<UpdateProjectResponse>(
       `/api/projects/${encodeURIComponent(payload.projectId)}`,
@@ -513,6 +688,11 @@ export const api = {
    * the minted records with the trimmed reason it receives.
    */
   saveRevision: async (payload: SaveRevisionRequest) => {
+    if (encryptedProjectIds.has(payload.projectId)) {
+      return (
+        await (await encryptedProjects()).encryptedProjectStore()
+      ).saveRevision(payload);
+    }
     const reason = payload.reason.trim();
     const document =
       payload.savedRevisionId === undefined
@@ -550,6 +730,11 @@ export const api = {
     payload: SaveProjectDocumentRequest,
     options?: { keepalive?: boolean }
   ) => {
+    if (encryptedProjectIds.has(payload.projectId)) {
+      return (
+        await (await encryptedProjects()).encryptedProjectStore()
+      ).saveProjectDocument(payload);
+    }
     const body = JSON.stringify(await withSplitStorage(payload, 'document'));
     return requestJson<SaveProjectDocumentResponse>(
       `/api/projects/${encodeURIComponent(payload.projectId)}/document`,
@@ -561,11 +746,15 @@ export const api = {
       }
     );
   },
-  createUploadSession: (payload: CreateUploadSessionRequest) =>
-    requestJson<CreateUploadSessionResponse>('/api/uploads', {
+  createUploadSession: async (payload: CreateUploadSessionRequest) => {
+    if (isEncryptedProject(payload.projectId)) {
+      throw encryptedLocalOnly('Files');
+    }
+    return requestJson<CreateUploadSessionResponse>('/api/uploads', {
       method: 'POST',
       body: JSON.stringify(payload)
-    }),
+    });
+  },
   uploadArtifact: async (uploadUrl: string, body: Blob) => {
     if (
       !isDesktopApp() &&
