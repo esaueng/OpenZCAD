@@ -484,7 +484,7 @@ test('drains a pending account edit before opening a public share', async ({
   );
   await page.route('**/api/share/*', (route) =>
     route.fulfill({
-      json: { document: shared, project: { name: shared.name }, mode: 'tweak' }
+      json: { document: shared, project: { projectId: shared.projectId, name: shared.name }, mode: 'tweak' }
     })
   );
   await page.goto('/');
@@ -566,7 +566,7 @@ for (const action of ['edit', 'leave', 'switch', 'share'] as const) {
       route.fulfill({
         json: {
           document: shared,
-          project: { name: shared.name },
+          project: { projectId: shared.projectId, name: shared.name },
           mode: 'tweak'
         }
       })

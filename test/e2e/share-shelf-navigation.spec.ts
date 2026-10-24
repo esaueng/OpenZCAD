@@ -54,7 +54,7 @@ for (const action of ['create', 'demo', 'import'] as const) {
       requested = true;
       await gate;
       await route.fulfill({
-        json: { document: old, project: { name: old.name }, mode: 'tweak' }
+        json: { document: old, project: { projectId: old.projectId, name: old.name }, mode: 'tweak' }
       });
     });
     await page.goto('/');
@@ -140,7 +140,7 @@ test('a refused backup import keeps the active share model and URL', async ({
   );
   await page.route('**/api/share/*', (route) =>
     route.fulfill({
-      json: { document, project: { name: document.name }, mode: 'tweak' }
+      json: { document, project: { projectId: document.projectId, name: document.name }, mode: 'tweak' }
     })
   );
   const token = 'a'.repeat(43);
@@ -185,7 +185,7 @@ test('a newer share wins over a held restore that saves locally without opening'
     await route.fulfill({
       json: {
         document: latest,
-        project: { name: latest.name },
+        project: { projectId: latest.projectId, name: latest.name },
         mode: 'tweak'
       }
     });
