@@ -1,5 +1,7 @@
 import {
   accountKeyCommitment,
+  accountKeySequence,
+  accountKeySequences,
   commitDeviceApproval,
   createApprovalNonce,
   decodeDeviceApprovalGrant,
@@ -45,6 +47,8 @@ import {
   type VerifiedDeviceList
 } from '@openzcad/crypto';
 import type {
+  E2eeAccountKeyHistoryInput,
+  E2eeAccountKeyHistoryRecord,
   E2eeAccountResponse,
   E2eeApprovedDeviceRecord,
   E2eeApprovalRecord,
@@ -378,12 +382,49 @@ async function accountWraps(
   return wraps;
 }
 
+/** Names an account key: its identity generation and `accountKeySequence`. */
+interface AccountKeyId {
+  readonly generation: number;
+  readonly keySequence: number;
+}
+
+const compareKeyIds = (a: AccountKeyId, b: AccountKeyId) =>
+  a.generation - b.generation || a.keySequence - b.keySequence;
+
+/**
+ * The account-key history a rotation writes: the replaced key, named by
+ * `replaced`, wrapped under its successor (ADR-024 Key lifecycle; the
+ * `previous-account-key` purpose), so whatever was wrapped under it stays
+ * reachable from the new key and never the other way round.
+ */
+async function historyWrap(
+  userId: string,
+  replaced: AccountKeyId,
+  replacedKey: Uint8Array,
+  successorKey: Uint8Array
+): Promise<E2eeAccountKeyHistoryInput> {
+  return {
+    generation: replaced.generation,
+    keySequence: replaced.keySequence,
+    wrapped: b64(
+      await wrapKey(successorKey, replacedKey, {
+        purpose: 'previous-account-key',
+        userId,
+        generation: replaced.generation,
+        keySequence: replaced.keySequence
+      })
+    )
+  };
+}
+
 /** A fresh identity with its recovery target, account key and encryption key. */
 async function newIdentity(
   ctx: E2eeContext,
   recoverySecret: Uint8Array,
   devices: readonly ListedDevice[],
-  previousIdentityKeyHash: Uint8Array | null
+  previousIdentityKeyHash: Uint8Array | null,
+  /** For a replacement: the replaced identity's current account key. */
+  replaced: { readonly id: AccountKeyId; readonly key: Uint8Array } | null
 ) {
   const identity = await generateSigningKeyPair(true);
   const identityKey = await exportPublicKey(identity.publicKey);
@@ -444,10 +485,13 @@ async function newIdentity(
     },
     ...(await accountWraps(ctx.userId, accountKey, encryption, entry))
   ];
+  const history = replaced
+    ? await historyWrap(ctx.userId, replaced.id, replaced.key, accountKey)
+    : null;
   targetPkcs8.fill(0);
   identityPkcs8.fill(0);
   accountKey.fill(0);
-  return { identityKey, signed, wraps };
+  return { identityKey, signed, wraps, history };
 }
 
 // --- Loading and unlocking ------------------------------------------------
@@ -1040,6 +1084,7 @@ async function setUpEncryptionLocked(
     ctx,
     options.recoverySecret,
     [listed(device, now(ctx))],
+    null,
     null
   );
   // Keys first: a setup that reaches the server without them still opens
@@ -1316,7 +1361,9 @@ async function enrollWithUnlockMethodLocked(
  * new account key to every surviving device and unlock target taken from
  * that verified list, never to a key the server offers. The removed device
  * keeps no wrap. A recovery key or passkey opens the identity key to sign
- * the entry.
+ * the entry. The replaced account key is wrapped under the new one (the
+ * account-key history), and when this device is certified the revocation
+ * names it as the removed device's replacement.
  *
  * Project-key epochs follow in Phases 4 and 5; no project is encrypted yet.
  */
@@ -1396,25 +1443,37 @@ async function rotateAccountKeysLocked(
     account,
     authorization
   );
-  oldAccountKey.fill(0);
-  if (
-    kind === 'passkey' &&
-    !account.list.unlockTargets.some(
-      (t) => t.kind === 'passkey' && t.targetId === id
-    )
-  ) {
-    throw new EncryptionFlowError(
-      'invalid-request',
-      'That passkey is not certified.'
-    );
-  }
   const accountKey = generateSymmetricKey();
   try {
+    if (
+      kind === 'passkey' &&
+      !account.list.unlockTargets.some(
+        (t) => t.kind === 'passkey' && t.targetId === id
+      )
+    ) {
+      throw new EncryptionFlowError(
+        'invalid-request',
+        'That passkey is not certified.'
+      );
+    }
+    // This certified device stays in the list and takes over from the
+    // removed one: where that device was a project's only leaf of this
+    // user, the replacement may rejoin (the MLS last-leaf exception).
+    const replacement =
+      kind === 'device' &&
+      account.deviceStatus === 'certified' &&
+      account.device &&
+      account.list.devices.some((d) => d.deviceId === account.device!.deviceId)
+        ? account.device.deviceId
+        : undefined;
     const encryption = await generateEncryptionKeyPair(true);
     const entry = nextDeviceListEntry(account.list, {
       issuedAt: now(ctx),
       ...(kind === 'device'
-        ? { removeDeviceIds: [id] }
+        ? {
+            removeDeviceIds: [id],
+            ...(replacement ? { replacedBy: replacement } : {})
+          }
         : kind === 'passkey'
           ? { removeUnlockTargetIds: [id] }
           : {}),
@@ -1423,13 +1482,24 @@ async function rotateAccountKeysLocked(
     });
     const signed = await signDeviceListEntry(identityPrivateKey, entry);
     const wraps = await accountWraps(ctx.userId, accountKey, encryption, entry);
+    const history = await historyWrap(
+      ctx.userId,
+      {
+        generation: account.generation,
+        keySequence: accountKeySequence(account.list)
+      },
+      oldAccountKey,
+      accountKey
+    );
+    oldAccountKey.fill(0);
     accountKey.fill(0);
     requireActiveKeyContext(ctx);
     const response = await ctx.api.appendDeviceList({
       generation: account.generation,
       entry: b64(signed.entry),
       signature: b64(signed.signature),
-      wraps
+      wraps,
+      history
     });
     await acceptWrite(ctx, response, {
       identityKey: account.list.identityKey,
@@ -1438,8 +1508,47 @@ async function rotateAccountKeysLocked(
     });
     return loadEncryption(ctx);
   } finally {
+    oldAccountKey.fill(0);
     accountKey.fill(0);
   }
+}
+
+/**
+ * This certified device's current account key, from the page's unlocked
+ * copy or its own account-key wrap, checked against the commitment the
+ * identity certified. The caller zeroes it.
+ */
+async function openDeviceAccountKey(
+  ctx: E2eeContext,
+  account: AccountView,
+  device: StoredDevice
+): Promise<Bytes> {
+  const commitment = toHex(account.list.head.accountKeyCommitment);
+  const cached = unlockedAccount(ctx.userId);
+  if (
+    cached?.generation === account.generation &&
+    cached.commitment === commitment
+  ) {
+    return new Uint8Array(cached.accountKey);
+  }
+  const accountKey = await openSealedKey(
+    { privateKey: device.unlock.privateKey, publicKey: device.unlockPublicKey },
+    wrapOf(account, 'account-key', device.deviceId),
+    {
+      purpose: 'account-key',
+      userId: ctx.userId,
+      method: 'device',
+      unlockId: device.deviceId
+    }
+  );
+  if (toHex(await accountKeyCommitment(accountKey)) !== commitment) {
+    accountKey.fill(0);
+    throw new EncryptionFlowError(
+      'key-mismatch',
+      'The account key does not match the one your device list certifies.'
+    );
+  }
+  return accountKey;
 }
 
 /**
@@ -1448,9 +1557,31 @@ async function rotateAccountKeysLocked(
  * recovery key, a new account key and encryption key, and a transition
  * statement signed by the old identity (when the old recovery key is given)
  * or by this device's certified key. Every other device must be approved
- * again, and contacts must verify the new fingerprint.
+ * again, and contacts must verify the new fingerprint. The replaced
+ * identity's account key is wrapped under the new one (the account-key
+ * history), so keys wrapped under it stay reachable.
+ *
+ * Holds the same device lock as the other rotations, so it never races a
+ * removal or another replacement from this browser.
  */
 export async function replaceRecoveryKey(
+  ctx: E2eeContext,
+  account: AccountView,
+  newRecoverySecret: Uint8Array,
+  oldRecoverySecret: Uint8Array | null
+): Promise<EncryptionState> {
+  return ctx.store.withDeviceLock(ctx.userId, async () => {
+    requireActiveKeyContext(ctx);
+    return replaceRecoveryKeyLocked(
+      ctx,
+      account,
+      newRecoverySecret,
+      oldRecoverySecret
+    );
+  });
+}
+
+async function replaceRecoveryKeyLocked(
   ctx: E2eeContext,
   account: AccountView,
   newRecoverySecret: Uint8Array,
@@ -1468,27 +1599,41 @@ export async function replaceRecoveryKey(
     raw: Uint8Array;
     kind: 'identity' | 'device';
   };
+  let oldAccountKey: Bytes;
   if (oldRecoverySecret) {
     const opened = await openIdentity(ctx, account, oldRecoverySecret);
-    opened.accountKey.fill(0);
+    oldAccountKey = opened.accountKey;
     signer = {
       key: opened.identityPrivateKey,
       raw: account.list.identityKey,
       kind: 'identity'
     };
   } else {
+    oldAccountKey = await openDeviceAccountKey(ctx, account, device);
     signer = {
       key: device.signing.privateKey,
       raw: device.signingPublicKey,
       kind: 'device'
     };
   }
-  const created = await newIdentity(
-    ctx,
-    newRecoverySecret,
-    [listed(device, now(ctx))],
-    account.list.identityKeyHash
-  );
+  let created: Awaited<ReturnType<typeof newIdentity>>;
+  try {
+    created = await newIdentity(
+      ctx,
+      newRecoverySecret,
+      [listed(device, now(ctx))],
+      account.list.identityKeyHash,
+      {
+        id: {
+          generation: account.generation,
+          keySequence: accountKeySequence(account.list)
+        },
+        key: oldAccountKey
+      }
+    );
+  } finally {
+    oldAccountKey.fill(0);
+  }
   const transition = await signIdentityTransition(signer.key, {
     userId: ctx.userId,
     oldIdentityKeyHash: account.list.identityKeyHash,
@@ -1498,6 +1643,7 @@ export async function replaceRecoveryKey(
     signerKeyHash: await publicKeyHash(signer.raw),
     signedAt: now(ctx)
   });
+  requireActiveKeyContext(ctx);
   const response = await ctx.api.replaceIdentity({
     generation: account.generation + 1,
     identityKey: b64(created.identityKey),
@@ -1507,7 +1653,8 @@ export async function replaceRecoveryKey(
     transition: {
       statement: b64(transition.statement),
       signature: b64(transition.signature)
-    }
+    },
+    history: created.history!
   });
   await acceptWrite(ctx, response, {
     identityKey: created.identityKey,
@@ -1515,6 +1662,133 @@ export async function replaceRecoveryKey(
     written: created.signed.entry
   });
   return loadEncryption(ctx);
+}
+
+// --- Account-key history ----------------------------------------------------
+
+/**
+ * Opens an older account key of this account from the unlocked current one
+ * by walking back through the account-key history: each replaced key is
+ * wrapped under its successor, so the walk only ever goes from newer to
+ * older. `keySequence` and `generation` name the key (`accountKeySequence`
+ * within that identity's device list; the current generation by default).
+ *
+ * Keys of the current identity are checked against the commitments its
+ * verified device list certifies. Keys of replaced identities are
+ * authenticated by the wraps themselves: only a holder of the newer key
+ * could have made them. Returns a copy the caller must zero.
+ */
+export async function openAccountKeyChain(
+  ctx: E2eeContext,
+  account: AccountView,
+  keySequence: number,
+  generation: number = account.generation
+): Promise<Bytes> {
+  if (account.userId !== ctx.userId) {
+    throw new EncryptionFlowError(
+      'invalid-request',
+      'These keys belong to another account.'
+    );
+  }
+  requireActiveKeyContext(ctx);
+  const unlocked = unlockedAccount(ctx.userId);
+  if (
+    unlocked?.generation !== account.generation ||
+    unlocked.commitment !== toHex(account.list.head.accountKeyCommitment)
+  ) {
+    throw new EncryptionFlowError(
+      'not-unlocked',
+      'Unlock this device before opening older account keys.'
+    );
+  }
+  const target: AccountKeyId = { generation, keySequence };
+  const sequences = accountKeySequences(account.list);
+  const current: AccountKeyId = {
+    generation: account.generation,
+    keySequence: sequences.at(-1)!
+  };
+  if (
+    !Number.isSafeInteger(generation) ||
+    !Number.isSafeInteger(keySequence) ||
+    compareKeyIds(target, current) > 0 ||
+    (generation === account.generation && !sequences.includes(keySequence))
+  ) {
+    throw new EncryptionFlowError(
+      'invalid-request',
+      'That is not an account key of this account.'
+    );
+  }
+  // Copy before any await: a lock or rotation meanwhile zeroes the cache.
+  let key: Bytes = new Uint8Array(unlocked.accountKey);
+  if (compareKeyIds(target, current) === 0) return key;
+  try {
+    const { history } = await ctx.api.accountKeyHistory();
+    requireActiveKeyContext(ctx);
+    const rows = new Map<string, E2eeAccountKeyHistoryRecord>();
+    for (const row of history) {
+      if (compareKeyIds(row, current) < 0) {
+        rows.set(`${row.generation}:${row.keySequence}`, row);
+      }
+    }
+    // Older identities' keys follow from the rows' order alone.
+    const ordered = [...rows.values()].sort(compareKeyIds);
+    let step = current;
+    for (;;) {
+      const index =
+        step.generation === account.generation
+          ? sequences.indexOf(step.keySequence)
+          : -1;
+      const previous: AccountKeyId | undefined =
+        index > 0
+          ? { generation: step.generation, keySequence: sequences[index - 1]! }
+          : ordered.filter((row) => compareKeyIds(row, step) < 0).at(-1);
+      const row =
+        previous && rows.get(`${previous.generation}:${previous.keySequence}`);
+      if (!previous || !row || compareKeyIds(previous, target) < 0) {
+        throw new EncryptionFlowError(
+          'missing-wrap',
+          'The server has no account-key history for that key.'
+        );
+      }
+      let opened: Bytes;
+      try {
+        opened = await unwrapKey(key, fromBase64Url(row.wrapped), {
+          purpose: 'previous-account-key',
+          userId: ctx.userId,
+          generation: previous.generation,
+          keySequence: previous.keySequence
+        });
+      } catch (error) {
+        if (!isE2eeError(error)) throw error;
+        throw new EncryptionFlowError(
+          'key-mismatch',
+          'The account-key history does not open with the newer key.'
+        );
+      }
+      key.fill(0);
+      key = opened;
+      if (previous.generation === account.generation) {
+        const certified =
+          account.list.entries[previous.keySequence]?.entry
+            .accountKeyCommitment;
+        if (
+          !certified ||
+          !sameBytes(await accountKeyCommitment(key), certified)
+        ) {
+          throw new EncryptionFlowError(
+            'key-mismatch',
+            'An older account key does not match the one your device list certified.'
+          );
+        }
+      }
+      requireActiveKeyContext(ctx);
+      if (compareKeyIds(previous, target) === 0) return key;
+      step = previous;
+    }
+  } catch (error) {
+    key.fill(0);
+    throw error;
+  }
 }
 
 /** Sign-out without keeping this device unlocked: its keys are deleted. */

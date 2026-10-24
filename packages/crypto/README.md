@@ -255,7 +255,7 @@ UTF-8 string and type 2 a u64.
 | `share-version-key`      | KW     | projectId, shareId, versionId             | share key: a share snapshot's version key, for link visitors                                                             |
 | `rejoin-psk`             | KW     | userId, projectId, epoch                  | account key: an MLS epoch's rejoin PSK, for an External Commit after losing MLS state                                    |
 | `archived-project-key`   | KW     | projectId, archivedEpoch, underEpoch      | a later epoch's project key: an earlier project key; `archivedEpoch` must be below `underEpoch`                          |
-| `previous-account-key`   | KW     | userId, keySequence                       | the new account key: the account key it replaced, so older account-key wraps stay reachable                              |
+| `previous-account-key`   | KW     | userId, generation, keySequence           | the new account key: the account key it replaced, so older account-key wraps stay reachable                              |
 
 `version-key` accepts every project envelope kind, `project-info` and
 `key-archive` included. Integer fields are u32 values encoded as u64.
@@ -346,6 +346,15 @@ A user's device list is a hash chain of entries signed by their identity key
 | u16 count + revocations by kind, then id (u8 kind 1 device / 2 unlock target, u8 length + id)
 ```
 
+Version 2 adds `u8 length + replacement device id` (0 for none) after each
+revocation id. A device revocation may name the device that replaces it
+(`replacedBy`, which must be live in the same entry); an entry uses version
+2 exactly when one does, so each entry has one encoding and version 1 lists
+verify unchanged. `verifyDeviceList` reports the replacement on the revoked
+record. `accountKeySequence` names an account key by the entry that first
+committed to it, which is the `keySequence` of its `previous-account-key`
+wrap.
+
 `deviceListEntryHash` is `SHA-256(label "v1 device list entry hash" | entry)`.
 `accountKeyCommitment` is `SHA-256(label "v1 account key commitment" | key)`;
 every unlock checks the opened account key against it. `verifyDeviceList`
@@ -359,17 +368,26 @@ hash) it refuses another identity (`context-mismatch`) and a list that does
 not contain the pinned entry (`chain-broken`). `nextDeviceListEntry` builds
 the next entry from a verified head.
 
-Two statements travel beside lists. An identity transition (`"OZT"`) names
+Three statements travel beside lists. An identity transition (`"OZT"`) names
 the old identity hash, the new identity key and its first entry's hash, and
 is signed by the old identity or a device it certified; it proves nothing to
 contacts. A device approval grant (`"OZG"`) is signed by the approving
 device's key and names the approved device's `pk_new`, the identity and the
 device-list head the new device should pin, and whether it was certified.
+Revocation cutoffs (`"OZR" | u8 1 | u8 length + user id | u32 generation |
+u32 entry sequence | 32-byte entry hash | u64 issuedAt | u16 count + (u8
+length + project id, u64 cutoff epoch) by project id`, signed with `v1
+revocation cutoffs signature`) are signed by the identity key at a device
+removal and name, per project, the first epoch the revoked device must not
+know. `verifyRevocationCutoffs` requires the identity signature, the list's
+user and generation, and an entry of that list, by sequence and hash, that
+revokes a device. Phase 4 stores and enforces them.
 
 ## Tests
 
 `vectors.test.ts` holds fixed vectors built from injected keys, blob ids, IVs,
-ephemeral keys and timestamps, including a device-list entry, a paired
+ephemeral keys and timestamps, including version 1 and 2 device-list
+entries, a recorded revocation-cutoffs signature, a paired
 approval commitment, the project-info and key-archive kinds, the three
 project-data wraps, an epoch binding, a version log record and a key archive
 body. It also re-derives the nonce layout, both envelope classes, the content
