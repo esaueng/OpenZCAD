@@ -211,6 +211,9 @@
      and from its neighbours, and the stage's usable top starts under the
      top islands. */
   --island-gap: 10px;
+  /* Inside a dock: between stacked panels, between its columns, and
+     between it and its rail. A dock reads as one surface. */
+  --dock-gap: 4px;
   --stage-top: calc(var(--topbar-h) + var(--island-gap) * 2);
   /* Width of the instrument rail on the right edge. */
   --rail-w: 40px;

@@ -96,6 +96,7 @@ function sameStage(a: PanelStage | null, b: PanelStage): boolean {
     a.insets?.top === b.insets?.top &&
     a.insets?.bottom === b.insets?.bottom &&
     a.insets?.gap === b.insets?.gap &&
+    a.insets?.between === b.insets?.between &&
     a.insets?.rail === b.insets?.rail
   );
 }
@@ -285,6 +286,7 @@ export function PanelDock({
           top: pixels(style.paddingTop, 0),
           bottom: pixels(style.paddingBottom, 0),
           gap: pixels(style.getPropertyValue('--island-gap'), 10),
+          between: pixels(style.getPropertyValue('--dock-gap'), 4),
           rail: pixels(style.getPropertyValue('--rail-w'), 40)
         }
       };

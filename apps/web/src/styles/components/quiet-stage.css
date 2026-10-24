@@ -2031,9 +2031,17 @@ button.command-rail:disabled {
   pointer-events: auto;
 }
 
+/* The gap is the 4px dock gap; its grab area reaches 4px into each panel's
+   frame edge, so the divider stays as easy to take as the 8px one was. */
+.panel-gap::before {
+  content: '';
+  position: absolute;
+  inset: -4px 0;
+}
+
 .panel-gap-grip {
   width: 36px;
-  height: 3px;
+  height: 2px;
   border-radius: 2px;
   background: var(--color-border-strong);
   transition: background var(--dur-fast) var(--ease-out);

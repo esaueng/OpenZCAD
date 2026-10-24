@@ -77,12 +77,14 @@ import {
 const STAGE: PanelStage = { width: 1440, height: 900 };
 const CW = PANEL_COLUMN_WIDTHS.regular;
 const GAP = PANEL_COLUMN_GAP;
+/** The dock gap: between a dock's columns, and between a dock and its rail. */
+const BETWEEN = PANEL_STACK_GAP;
 const RAIL = PANEL_RAIL_WIDTH;
 /** Each side's `gap + rail + gap`, columns or not. */
 const SIDE_COST = GAP + RAIL + GAP;
 /** The narrowest stage whose footprint cap fits `columns` columns. */
 function stageFitting(columns: number): number {
-  return (SIDE_COST * 2 + columns * (CW + GAP)) / PANEL_DOCK_CAP;
+  return (SIDE_COST * 2 + columns * (CW + BETWEEN)) / PANEL_DOCK_CAP;
 }
 
 function essentials(): PanelLayout {
@@ -1038,10 +1040,10 @@ describe('floating windows', () => {
     const low = grownFloatRect({ x: 100, y: 500, w: 300, h: 200 }, stage);
     expect(low.h).toBe(200 + FLOAT_GROWTH);
     expect(low.y + low.h).toBe(stage.height);
-    // Never taller than the stage.
+    // Never taller than the stage, less the stack's grip above its frame.
     const tall = grownFloatRect({ x: 100, y: 100, w: 300, h: 900 }, stage);
-    expect(tall.h).toBe(stage.height);
-    expect(tall.y).toBe(0);
+    expect(tall.h).toBe(stage.height - 20);
+    expect(tall.y).toBe(20);
   });
 
   it('is clamped to the stage when shown, the stored window untouched', () => {
@@ -1065,6 +1067,26 @@ describe('floating windows', () => {
       w: 300,
       h: small.height
     });
+  });
+
+  it('keeps a stacked window’s grip bar on screen at the top edge', () => {
+    let layout = popOutPanel(modelOnly(), 'history', {
+      x: 100,
+      y: 0,
+      w: 300,
+      h: 300
+    });
+    // One panel draws no grip: the window may stand at the very top.
+    expect(computePanelGeometry(layout, stage).floats[0]!.y).toBe(0);
+    const groupId = layout.floats[0]!.id;
+    layout = placePanel(layout, 'revisions', { kind: 'group', groupId }, stage);
+    // A stack's grip stands 20px above its frame and is the only handle
+    // that moves it, so the frame stops 20px down.
+    expect(computePanelGeometry(layout, stage).floats[0]!.y).toBe(20);
+    expect(
+      moveFloat(layout, groupId, { x: 100, y: -50 }, stage).floats.at(-1)!.y
+    ).toBe(20);
+    expect(grownFloatRect({ x: 0, y: 0, w: 300, h: 200 }, stage).y).toBe(20);
   });
 
   it('may stand anywhere on the stage, over the top islands too', () => {
@@ -1512,6 +1534,21 @@ describe('docked panels hugging their content', () => {
     ).toBe(false);
   });
 
+  it('turns off a gap whose two panels both hug while a third fills', () => {
+    const stage: PanelStage = {
+      ...STAGE,
+      naturals: { parameters: 120, bodies: 100 }
+    };
+    const geometry = computePanelGeometry(column(), stage);
+    const capped = geometry.gaps.find((gap) => gap.above === 'parameters')!;
+    const flexible = geometry.gaps.find((gap) => gap.above === 'bodies')!;
+    // The stack still has a flexible panel, so its scale is not zero, but
+    // neither hugging neighbour can move: every drag would be a no-op.
+    expect(capped.pxPerWeight).toBeGreaterThan(0);
+    expect(capped.enabled).toBe(false);
+    expect(flexible.enabled).toBe(true);
+  });
+
   it('never hugs a window: its panels fill the height it was given', () => {
     const layout = popOutPanel(modelOnly(), 'history', {
       x: 100,
@@ -1721,19 +1758,23 @@ describe('gaps between panels', () => {
 
 describe('the dock footprint cap', () => {
   it('counts both rails and every gap', () => {
-    // The plan's numbers: 60px a side, 306px a column, Essentials 732px.
+    // 60px a side, a column and the 4px dock gap 300px, Essentials 720px.
     expect(SIDE_COST).toBe(60);
-    expect(CW + GAP).toBe(306);
-    expect(dockFootprint({ left: 1, right: 1 }, CW)).toBe(732);
-    expect(dockFootprint({ left: 0, right: 1 }, CW)).toBe(426);
-    expect(stageFitting(2)).toBeCloseTo(1220);
-    // Rail and gap are parameters, not built into the boundary.
+    expect(CW + BETWEEN).toBe(300);
+    expect(dockFootprint({ left: 1, right: 1 }, CW)).toBe(720);
+    expect(dockFootprint({ left: 0, right: 1 }, CW)).toBe(420);
+    expect(stageFitting(2)).toBeCloseTo(1200);
+    // Rail and gaps are parameters, not built into the boundary.
     expect(
-      dockFootprint({ left: 1, right: 1 }, CW, { gap: 12, rail: 44 })
-    ).toBe((12 + 44 + 12) * 2 + 2 * (CW + 12));
+      dockFootprint({ left: 1, right: 1 }, CW, {
+        gap: 12,
+        between: 6,
+        rail: 44
+      })
+    ).toBe((12 + 44 + 12) * 2 + 2 * (CW + 6));
   });
 
-  it('docks Essentials fully from 1220px and parks Objects at 1219px', () => {
+  it('docks Essentials fully from 1200px and parks Objects at 1199px', () => {
     const layout = essentials();
     const fits = Math.ceil(stageFitting(2));
     const wide = computePanelGeometry(layout, { width: fits, height: 900 });
@@ -1759,7 +1800,7 @@ describe('the dock footprint cap', () => {
     expect(narrow.floats).toEqual([]);
     // A projection only: the stored layout is unchanged.
     expect(layout).toEqual(before);
-    expect(narrow.dockWidth).toEqual({ left: 0, right: CW + GAP });
+    expect(narrow.dockWidth).toEqual({ left: 0, right: CW + BETWEEN });
   });
 
   it('re-runs the cap for the panel width: Large parks Essentials’ left column at 1280px', () => {
@@ -1773,8 +1814,8 @@ describe('the dock footprint cap', () => {
       expect(geometry.columnWidth).toBe(PANEL_COLUMN_WIDTHS[width]);
     }
     const wide = setOption(essentials(), 'width', 'wide');
-    // 60px a side and 370px a column: 860px, past 60% of 1280px (768px).
-    expect(dockFootprint({ left: 1, right: 1 }, 360)).toBe(860);
+    // 60px a side and 364px a column: 848px, past 60% of 1280px (768px).
+    expect(dockFootprint({ left: 1, right: 1 }, 360)).toBe(848);
     const geometry = computePanelGeometry(wide, stage);
     expect(geometry.parkedColumns).toEqual([{ side: 'left', column: 0 }]);
     expect(geometry.parked.bodies).toBe(true);
@@ -2473,8 +2514,10 @@ describe('rails and hit-testing', () => {
   const y = 400;
 
   it('puts each rail on its dock’s inner edge', () => {
-    expect(right.x + right.w).toBe(STAGE.width - GAP - (CW + GAP));
-    expect(left.x).toBe(GAP + CW + GAP);
+    // The island gap from the screen's edge to the dock, the dock gap from
+    // the dock to its rail.
+    expect(right.x + right.w).toBe(STAGE.width - GAP - (CW + BETWEEN));
+    expect(left.x).toBe(GAP + CW + BETWEEN);
     const bare = computePanelGeometry(modelOnly(), STAGE);
     expect(bare.rails.right.x + bare.rails.right.w).toBe(STAGE.width - GAP);
     expect(bare.rails.left.x).toBe(GAP);
