@@ -537,14 +537,14 @@ export function PanelDock({
       !column.overflowing &&
       panels.length > 0 &&
       panels.length === column.panels.length;
-    return { dockHeight, drawn, panels, enabled };
+    return { dockHeight, drawn, reach: column.reach, panels, enabled };
   };
 
   const footKey = (
     event: ReactKeyboardEvent<HTMLElement>,
     column: ColumnGeometry
   ) => {
-    const { dockHeight, drawn, panels, enabled } = columnFoot(column);
+    const { dockHeight, drawn, reach, panels, enabled } = columnFoot(column);
     if (!enabled) return;
     const height =
       event.key === 'ArrowUp'
@@ -560,7 +560,8 @@ export function PanelDock({
     // A step is exact: no snap, so a step up from a full column shortens it.
     const next = resizeColumn(layout, panels, height, dockHeight, {
       snap: 0,
-      drawn
+      drawn,
+      reach
     });
     if (next !== layout) onLayout(next);
   };
@@ -1177,7 +1178,7 @@ export function PanelDock({
    * down to the dock's foot (or double-click it) to fill the dock again.
    */
   const renderColumnFoot = (column: ColumnGeometry) => {
-    const { dockHeight, drawn, panels, enabled } = columnFoot(column);
+    const { dockHeight, drawn, reach, panels, enabled } = columnFoot(column);
     if (panels.length === 0) return null;
     const percent = (value: number) =>
       dockHeight > 0 ? Math.round((100 * value) / dockHeight) : 100;
@@ -1210,7 +1211,7 @@ export function PanelDock({
         onPointerDown={(event) => {
           if (!enabled) return;
           startLocal(event, (base, _dx, dy) =>
-            resizeColumn(base, panels, drawn + dy, dockHeight, { drawn })
+            resizeColumn(base, panels, drawn + dy, dockHeight, { drawn, reach })
           );
         }}
         {...localHandlers}

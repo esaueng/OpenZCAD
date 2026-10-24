@@ -350,12 +350,16 @@ function weightOf(layout: PanelLayout<PanelEntry>, id: PanelEntry): number {
 
 /**
  * The key a column's stored height goes under: its panels in panel order,
- * so reordering a column keeps its height. Null for a column holding a drop
- * preview's slot, or nothing.
+ * so reordering a column keeps its height. A drop preview's column with the
+ * slot in it ends `+__slot`, a transient key `previewLayout` gives the
+ * height the drop will (never stored: no stored key holds the slot). Null
+ * for a column with nothing in it.
  */
 export function columnKey(entries: readonly PanelEntry[]): string | null {
-  if (entries.length === 0 || entries.includes(PANEL_SLOT)) return null;
-  return PANEL_IDS.filter((id) => entries.includes(id)).join('+');
+  if (entries.length === 0) return null;
+  const key = PANEL_IDS.filter((id) => entries.includes(id)).join('+');
+  if (!entries.includes(PANEL_SLOT)) return key;
+  return key ? `${key}+${PANEL_SLOT}` : PANEL_SLOT;
 }
 
 function isColumnKey(key: string): boolean {
@@ -387,18 +391,26 @@ export function columnMinimum(count: number): number {
  * height. Within `snap` of the dock's foot (or past it) the column fills
  * the dock again; it never goes under its panels' minimums. A drag snaps
  * by `COLUMN_FILL_SNAP`; a keyboard step passes 0, or a step up from a
- * full column would land inside the snap and never shorten it. Pass the
- * height the column is `drawn` at: a shortening the minimums hold at or
- * above it (a column hugging content under 90px) changes nothing, rather
- * than storing a height taller than the column shows. Locked, nothing
- * changes.
+ * full column would land inside the snap and never shorten it.
+ *
+ * Pass the height the column is `drawn` at and the most it can be drawn
+ * (`reach`, `ColumnGeometry.reach`: its content's height when every panel
+ * hugs it). No height is stored past the reach, and a resize that would
+ * not move the drawn foot changes nothing — a shortening the minimums hold
+ * at or above it, or a lengthening of a column already at its reach —
+ * rather than storing a height the column does not show, which would
+ * appear once its content changed. Locked, nothing changes.
  */
 export function resizeColumn(
   layout: PanelLayout,
   panels: readonly PanelId[],
   height: number,
   dockHeight: number,
-  { snap = COLUMN_FILL_SNAP, drawn }: { snap?: number; drawn?: number } = {}
+  {
+    snap = COLUMN_FILL_SNAP,
+    drawn,
+    reach = Number.POSITIVE_INFINITY
+  }: { snap?: number; drawn?: number; reach?: number } = {}
 ): PanelLayout {
   const key = columnKey(panels);
   if (
@@ -415,8 +427,18 @@ export function resizeColumn(
   const fills = height >= dockHeight - Math.max(0, snap);
   const next = fills
     ? null
-    : Math.round(clamp(height, columnMinimum(panels.length), dockHeight));
-  if (drawn !== undefined && height < drawn && next !== null && next >= drawn) {
+    : Math.round(
+        Math.min(
+          clamp(height, columnMinimum(panels.length), dockHeight),
+          // Never past what the column can show: a hugging stack's content.
+          Math.max(reach, columnMinimum(panels.length))
+        )
+      );
+  if (
+    drawn !== undefined &&
+    next !== null &&
+    (height < drawn ? next >= drawn : next <= drawn)
+  ) {
     return layout;
   }
   const current = layout.columnHeights[key] ?? null;
@@ -1206,7 +1228,21 @@ export function previewLayout(
   ) {
     return null;
   }
-  return placeEntry(layout, id, PANEL_SLOT, target, stage);
+  const preview = placeEntry(layout, id, PANEL_SLOT, target, stage);
+  // The slot's column is drawn as the drop will draw it: at the height its
+  // set of panels has, so reordering a shortened column keeps it short.
+  for (const column of [...preview.left, ...preview.right]) {
+    if (!column.includes(PANEL_SLOT)) continue;
+    const landed = columnKey(
+      column.map((entry) => (entry === PANEL_SLOT ? id : entry))
+    );
+    const height = landed === null ? undefined : layout.columnHeights[landed];
+    const key = columnKey(column);
+    if (height !== undefined && key !== null) {
+      preview.columnHeights[key] = height;
+    }
+  }
+  return preview;
 }
 
 /** The preview's slot filled with the dragged panel, and the drag cleaned up. */
@@ -1226,6 +1262,9 @@ export function commitPreview(
     }))
   };
   delete next.weights[PANEL_SLOT];
+  for (const key of Object.keys(next.columnHeights)) {
+    if (key.split('+').includes(PANEL_SLOT)) delete next.columnHeights[key];
+  }
   return finishDrag(next);
 }
 
@@ -1960,6 +1999,11 @@ export interface ColumnGeometry extends Rect {
   contentHeight: number;
   /** The column ends where the user put its foot, short of the dock's. */
   shortened: boolean;
+  /**
+   * The most the column can be drawn: its panels' natural heights when
+   * every one hugs its content (Fit panels to content), else unbounded.
+   */
+  reach: number;
 }
 
 export interface FloatGeometry extends Rect {
@@ -2302,13 +2346,20 @@ export function computePanelGeometry(
         side,
         column
       });
+      const caps = entries.map(capOf);
       geometry.columns.push({
         ...rect,
         side,
         column,
         panels: entries.slice(),
         ...fit,
-        shortened: h < dockHeight
+        shortened: h < dockHeight,
+        reach: caps.every(Number.isFinite)
+          ? caps.reduce(
+              (sum, cap) => sum + cap,
+              PANEL_STACK_GAP * (entries.length - 1)
+            )
+          : Number.POSITIVE_INFINITY
       });
     });
   }

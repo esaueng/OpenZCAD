@@ -1736,7 +1736,15 @@ describe('column heights', () => {
     expect(columnKey(['history', 'bodies'])).toBe(
       columnKey(['bodies', 'history'])
     );
-    expect(columnKey([PANEL_SLOT, 'bodies'])).toBeNull();
+    // A preview's slot column has a transient key no stored height uses.
+    expect(columnKey([PANEL_SLOT, 'bodies'])).toBe(`bodies+${PANEL_SLOT}`);
+    expect(columnKey([])).toBeNull();
+    expect(
+      normalizePanelLayout({
+        right: [['bodies']],
+        columnHeights: { [`bodies+${PANEL_SLOT}`]: 300 }
+      }).columnHeights
+    ).toEqual({});
     const layout = layoutWith({
       right: [['history', 'bodies']],
       columnHeights: { 'bodies+history': 360 }
@@ -1863,6 +1871,77 @@ describe('column heights', () => {
       resizeColumn(layout, ['bodies'], 50, dock, { snap: 0, drawn: 200 })
         .columnHeights
     ).toEqual({ bodies: PANEL_MIN_HEIGHT });
+  });
+
+  it('stores no height past what a hugging column can show', () => {
+    // Every panel hugs 200px of content: the column ends there, and a
+    // lengthening would store a height the foot never reaches.
+    const layout = setOption(
+      layoutWith({ right: [['bodies']], columnHeights: { bodies: 150 } }),
+      'hug',
+      true
+    );
+    const stage: PanelStage = { ...STAGE, naturals: { bodies: 200 } };
+    const column = computePanelGeometry(layout, stage).columns[0]!;
+    expect(column.reach).toBe(200);
+    const dock = dockOf(layout, stage);
+    // Up to its content, then no further.
+    expect(
+      resizeColumn(layout, ['bodies'], 400, dock, { drawn: 150, reach: 200 })
+        .columnHeights
+    ).toEqual({ bodies: 200 });
+    const atReach = resizeColumn(layout, ['bodies'], 200, dock, {
+      drawn: 150,
+      reach: 200
+    });
+    expect(
+      resizeColumn(atReach, ['bodies'], 260, dock, { drawn: 200, reach: 200 })
+    ).toBe(atReach);
+    // Filling is still allowed: it stores nothing.
+    expect(
+      resizeColumn(atReach, ['bodies'], dock, dock, { drawn: 200, reach: 200 })
+        .columnHeights
+    ).toEqual({});
+    // A filling panel has no reach.
+    expect(computePanelGeometry(single(), STAGE).columns[0]!.reach).toBe(
+      Number.POSITIVE_INFINITY
+    );
+  });
+
+  it('previews a reorder inside a shortened column at its height', () => {
+    const layout = layoutWith({
+      right: [['bodies', 'history']],
+      columnHeights: { 'bodies+history': 300 }
+    });
+    const target: PanelTarget = {
+      kind: 'column',
+      side: 'right',
+      column: 0,
+      index: 0
+    };
+    const preview = previewLayout(layout, 'history', target, STAGE)!;
+    expect(preview.right).toEqual([[PANEL_SLOT, 'bodies']]);
+    expect(computePanelGeometry(preview, STAGE).columns[0]!.h).toBe(300);
+    // The drop keeps it, with no transient key left behind.
+    const dropped = commitPreview(preview, 'history');
+    expect(dropped.right).toEqual([['history', 'bodies']]);
+    expect(dropped.columnHeights).toEqual({ 'bodies+history': 300 });
+    // Joining another set previews as that set draws: full here.
+    const other = layoutWith({
+      right: [['bodies']],
+      left: [['history']],
+      columnHeights: { bodies: 300 }
+    });
+    const joined = previewLayout(
+      other,
+      'history',
+      { kind: 'column', side: 'right', column: 0, index: 1 },
+      STAGE
+    )!;
+    const geometry = computePanelGeometry(joined, STAGE);
+    expect(geometry.columns.find((c) => c.side === 'right')!.h).toBe(
+      dockOf(other)
+    );
   });
 
   it('refuses to shorten a column whose minimums overflow the dock', () => {
