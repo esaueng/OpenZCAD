@@ -5,6 +5,7 @@ import { inProcessMls } from '../../../../../../packages/mls/src/test-support';
 import {
   EpochRecordError,
   parseEpochContext,
+  parseGroupInfoContext,
   projectGroupId,
   ROLES_EXTENSION_TYPE
 } from './epochRoles';
@@ -99,6 +100,26 @@ describe('epoch roles from archived records (slice 5-2)', () => {
     renamed[at] = 0xf1;
     expect(() => parseEpochContext(renamed)).toThrow(
       /no roles extension|roles/
+    );
+  });
+  it('reads the roles of a Commit’s GroupInfo (slice 5-4)', async () => {
+    const { mls, status } = await records();
+    const ref = {
+      userId: alice.userId,
+      deviceId: 'alice_laptop',
+      projectId: 'proj_roles'
+    };
+    const groupInfo = (await mls.epochMaterial(ref)).groupInfo;
+    const context = parseGroupInfoContext(groupInfo);
+    expect(context.epoch).toBe(2);
+    expect(context.groupId).toEqual(projectGroupId('proj_roles'));
+    expect(context.roles).toEqual(status.roles);
+    // A GroupContext alone, or another wire format, is not a GroupInfo.
+    const wrongFormat = new Uint8Array(groupInfo);
+    wrongFormat[3] = 1;
+    expect(() => parseGroupInfoContext(wrongFormat)).toThrow(EpochRecordError);
+    expect(() => parseGroupInfoContext(groupInfo.subarray(0, 30))).toThrow(
+      EpochRecordError
     );
   });
 });

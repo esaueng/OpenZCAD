@@ -621,19 +621,13 @@ function encryptedInvitationHost(
     inviterLabel: session.email ?? session.displayName ?? 'Someone',
     sharingEnabled: projectCollaborationRollout(env, session.email ?? undefined)
       .sharingEnabled,
-    // The plaintext invitation route's recipient rules, unchanged.
-    recipientRefusal: (email, role) => {
-      if (
-        role === 'editor' &&
-        !projectCollaborationRollout(env, email).editLeasesEnforced
-      ) {
-        return {
-          status: 409,
-          code: 'EDIT_LEASE_REQUIRED',
-          message:
-            'Editor invitations require project edit lease enforcement for the invited account.'
-        };
-      }
+    // The plaintext invitation route's canary rule. Its edit-lease rule
+    // does not apply (slice 5-4): it exists so a plaintext editor's writes
+    // go through the lease-checked room instead of the account route, but an
+    // encrypted project's editors write versions the account accepts only
+    // on top of the head they read (compare-and-swap), and its room serves
+    // only the owner until slice 5-6, which decides the room's leases.
+    recipientRefusal: (email) => {
       if (
         projectCollaborationRollout(env, session.email ?? undefined).canary &&
         !isCloudflareFeatureEnabled(env, 'PROJECT_SHARING_ENABLED') &&

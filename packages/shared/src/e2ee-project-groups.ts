@@ -92,7 +92,8 @@ export type E2eeMlsCommitKind = 'commit' | 'external';
  * the sender's account key, its key archive, and for an external Commit the
  * joining device's certified leaf. Accepted all together or not at all.
  * An owner's Add of an invitee (slice 5-3a, migration 0038) also states the
- * invitation, exactly the KeyPackages it claimed and the Welcome.
+ * invitation, exactly the KeyPackages it claimed and the Welcome. An
+ * owner’s role change (slice 5-4) states it in `roles`.
  */
 export interface E2eeMlsCommitRequest {
   epoch: number;
@@ -104,7 +105,36 @@ export interface E2eeMlsCommitRequest {
   wraps: E2eeProjectKeyWrap[];
   archive: E2eeKeyArchiveRecord;
   add?: E2eeMlsAddRequest;
+  /**
+   * The role changes of current members this Commit’s `setRoles` makes
+   * (slice 5-4; owner only). The Worker mirrors them into
+   * `project_members` in the Commit’s own batch, and refuses any Commit
+   * whose new GroupInfo lists other roles than the current epoch’s with
+   * exactly the stated changes (and an Add’s invitee) applied
+   * (409 `E2EE_ROLES_MISMATCH`). Ownership never moves on an encrypted
+   * project (409 `E2EE_OWNERSHIP_TRANSFER_UNAVAILABLE`).
+   */
+  roles?: E2eeMlsRoleChange[];
+  /**
+   * The identities this Commit's `dropUsers` removes from the roles, with
+   * all of their leaves (owner only). The Worker deletes their
+   * `project_members` rows in the same batch; the new roles must no longer
+   * list them (checked as for `roles`).
+   */
+  dropUsers?: string[];
 }
+
+/** One member’s new role in an owner’s `setRoles` Commit (slice 5-4). */
+export interface E2eeMlsRoleChange {
+  userId: string;
+  role: 'editor' | 'viewer';
+}
+
+/** 409 when a Commit’s new roles are not the change it states. */
+export const E2EE_ROLES_MISMATCH_CODE = 'E2EE_ROLES_MISMATCH';
+/** 409: an encrypted project’s owner never changes (slice 5-4). */
+export const E2EE_OWNERSHIP_TRANSFER_CODE =
+  'E2EE_OWNERSHIP_TRANSFER_UNAVAILABLE';
 
 export interface E2eeMlsCommitRecord {
   /** The epoch the Commit was sent in; applying it yields `epoch + 1`. */

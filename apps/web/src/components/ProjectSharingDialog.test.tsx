@@ -814,7 +814,8 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
     return {
       list: vi.fn(async () => invitations),
       invite: vi.fn(async () => undefined),
-      revoke: vi.fn(async () => undefined)
+      revoke: vi.fn(async () => undefined),
+      changeRole: vi.fn(async () => undefined)
     };
   }
 
@@ -857,6 +858,7 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
         shareLinkClient={links}
         encrypted
         encryptedClient={encrypted}
+        editorInvitationsEnabled={false}
         onVerifyContact={onVerifyContact}
         onClose={vi.fn()}
       />
@@ -870,17 +872,33 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
     ).toBeVisible();
     // Completed ones are members now, not pending rows.
     expect(screen.queryByText(/^Added/)).not.toBeInTheDocument();
-    // No share links and no role changes yet (slices 5-10, 5-4); what the
-    // metadata route lists is still shown.
+    // No share links yet (slice 5-10); what the metadata route lists is
+    // still shown.
     expect(
       screen.queryByRole('button', { name: 'Create link' })
     ).not.toBeInTheDocument();
     expect(screen.queryByText('pending@example.com')).toBeVisible();
-    expect(
-      screen.queryByRole('combobox', { name: /Role for/ })
-    ).not.toBeInTheDocument();
     expect(sharingClient.getProjectSharing).toHaveBeenCalled();
     expect(links.listProjectShareLinks).not.toHaveBeenCalled();
+
+    // Roles change by the owner's MLS Commit (slice 5-4), never through the
+    // plaintext route, and editors need no edit-lease rollout.
+    const roleSelect = screen.getByRole('combobox', {
+      name: 'Role for member@example.com'
+    });
+    expect(roleSelect).toHaveValue('viewer');
+    await user.selectOptions(roleSelect, 'editor');
+    await waitFor(() =>
+      expect(encrypted.changeRole).toHaveBeenCalledWith(
+        'proj_encrypted',
+        member,
+        'editor'
+      )
+    );
+    expect(sharingClient.updateMemberRole).not.toHaveBeenCalled();
+    for (const option of screen.getAllByRole('option', { name: 'Editor' })) {
+      expect(option).not.toBeDisabled();
+    }
 
     await user.click(
       screen.getByRole('button', { name: 'Verify verify@example.com' })
