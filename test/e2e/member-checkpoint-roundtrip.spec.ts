@@ -737,7 +737,7 @@ test('a late member checkpoint leaves the newer share navigation and status unch
     shareRequested = true;
     await shareGate;
     return route.fulfill({
-      json: { document: shared, project: { name: shared.name }, mode: 'tweak' }
+      json: { document: shared, project: { projectId: shared.projectId, name: shared.name }, mode: 'tweak' }
     });
   });
   await page.evaluate(() => {

@@ -413,7 +413,10 @@ import {
   PROJECT_TOO_LARGE_FOR_ACCOUNT,
   type WorkspaceSaveState
 } from './lib/cloudProjectAutosave';
-import { applyAccountProjectRefresh } from './lib/accountProjectRefresh';
+import {
+  applyAccountProjectRefresh,
+  loadAccountRefresh
+} from './lib/accountProjectRefresh';
 import {
   decideProjectSync,
   shouldPollForFreshness
@@ -5359,9 +5362,21 @@ export function App() {
           // raised by the write that gets fenced rather than guessed at here.
           return;
         }
-        const remote = await api
-          .loadProject(current.projectId)
-          .catch(() => null);
+        const fetched = await loadAccountRefresh(() =>
+          api.loadProject(current.projectId)
+        );
+        if (
+          fetched.kind === 'repair' &&
+          !cancelled &&
+          managerRef.current?.document?.projectId === current.projectId
+        ) {
+          // The account moved to a version this browser cannot open: halt
+          // the controller, so no queued edit writes against that head, and
+          // enter repair through its status, exactly as a refused write does.
+          controller.haltForRepair(current.projectId, fetched.error);
+          return;
+        }
+        const remote = fetched.kind === 'document' ? fetched.document : null;
         const live = managerRef.current?.document;
         // Anything the user did while the document was in flight makes it stale.
         if (

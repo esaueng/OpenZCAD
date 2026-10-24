@@ -159,7 +159,9 @@ import {
 } from '@openzcad/document-core';
 import {
   decodeProjectStorageBody,
-  hydrateProjectStorageSnapshot,
+  hydratedForLoad,
+  isUnreadableStoredDocument,
+  normalizedForLoad,
   prepareClientProjectStorageSnapshot,
   prepareProjectStorageSnapshot,
   PROJECT_OBJECT_STORAGE_PREFIX,
@@ -168,8 +170,7 @@ import {
   type ClientProjectStorage,
   type PreparedProjectStorageSnapshot,
   type ProjectStorageAssetObject,
-  type ProjectStorageAssetReference,
-  type ProjectStorageSnapshot
+  type ProjectStorageAssetReference
 } from '@openzcad/persistence';
 
 export {
@@ -1138,13 +1139,19 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     const document = row.document_object_id
       ? await this.loadProjectObject(row.project_id, row.document_object_id)
-      : normalizeDocument(JSON.parse(row.document_json) as ProjectDocument);
+      : normalizedForLoad(JSON.parse(row.document_json) as ProjectDocument);
+    // A share serves only the shared projection, never a stored document it
+    // could not read and project.
+    if (isUnreadableStoredDocument(document))
+      throw new ProjectObjectStorageError(
+        'The shared project cannot be opened.'
+      );
     return {
       projectId: row.project_id,
       name: row.name,
       mode: row.mode,
       document: sharedProjectSnapshotDocument(
-        await this.hydrateCopiedSourceAliases(document)
+        await this.hydrateCopiedSourceAliases(document, row.project_id)
       )
     };
   }
@@ -1919,12 +1926,19 @@ export class D1R2PersistenceService implements PersistenceService {
     }));
   }
 
+  /**
+   * Resolves copied-source aliases for a loaded document. The archives are
+   * looked up by the project the request named, never by the id the stored
+   * document carries, which loads do not trust (ADR-024 Phase 1).
+   */
   private async hydrateCopiedSourceAliases(
-    document: ProjectDocument
+    document: ProjectDocument,
+    projectId: string
   ): Promise<ProjectDocument> {
+    if (isUnreadableStoredDocument(document)) return document;
     return reconcileCopiedImportSources(
       document,
-      await this.storedCopiedImportArchives(document.projectId)
+      await this.storedCopiedImportArchives(toProjectId(projectId))
     );
   }
 
@@ -1941,12 +1955,12 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!row) throw new ProjectNotFoundError(projectId);
     const rawDocument = row.document_object_id
       ? await this.loadProjectObject(projectId, row.document_object_id)
-      : normalizeDocument(JSON.parse(row.document_json) as ProjectDocument);
+      : normalizedForLoad(JSON.parse(row.document_json) as ProjectDocument);
     const project = summaryFromRow(row);
     if (!project) throw new ProjectNotFoundError(projectId);
     return {
       project,
-      document: await this.hydrateCopiedSourceAliases(rawDocument),
+      document: await this.hydrateCopiedSourceAliases(rawDocument, projectId),
       identity: {
         documentDigest: await projectCopyDocumentDigest(rawDocument),
         documentJsonDigest: await sha256Hex(
@@ -2091,9 +2105,9 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     const document = row.document_object_id
       ? await this.loadProjectObject(projectId, row.document_object_id)
-      : normalizeDocument(JSON.parse(row.document_json) as ProjectDocument);
+      : normalizedForLoad(JSON.parse(row.document_json) as ProjectDocument);
     return {
-      document: await this.hydrateCopiedSourceAliases(document),
+      document: await this.hydrateCopiedSourceAliases(document, projectId),
       origin: projectBranchPoint(head, {
         revisionId: toRevisionId(revisionId),
         reason: row.reason
@@ -2227,8 +2241,8 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     const document = row.document_object_id
       ? await this.loadProjectObject(projectId, row.document_object_id)
-      : normalizeDocument(JSON.parse(row.document_json) as ProjectDocument);
-    return this.hydrateCopiedSourceAliases(document);
+      : normalizedForLoad(JSON.parse(row.document_json) as ProjectDocument);
+    return this.hydrateCopiedSourceAliases(document, projectId);
   }
 
   async listRevisions(
@@ -2293,8 +2307,8 @@ export class D1R2PersistenceService implements PersistenceService {
     // `loadProject`.
     const document = row.document_object_id
       ? await this.loadProjectObject(projectId, row.document_object_id)
-      : normalizeDocument(JSON.parse(row.document_json) as ProjectDocument);
-    return this.hydrateCopiedSourceAliases(document);
+      : normalizedForLoad(JSON.parse(row.document_json) as ProjectDocument);
+    return this.hydrateCopiedSourceAliases(document, projectId);
   }
 
   async saveRevision(
@@ -4735,11 +4749,8 @@ export class D1R2PersistenceService implements PersistenceService {
         'Project document object failed its integrity check.'
       );
     }
-    const snapshot = JSON.parse(
-      new TextDecoder().decode(logicalBody)
-    ) as ProjectStorageSnapshot;
-    const hydrated = await hydrateProjectStorageSnapshot(
-      snapshot,
+    return hydratedForLoad(
+      JSON.parse(new TextDecoder().decode(logicalBody)) as unknown,
       projectId,
       async (reference: ProjectStorageAssetReference) => {
         const asset = await bucket.get(reference.objectKey);
@@ -4755,7 +4766,6 @@ export class D1R2PersistenceService implements PersistenceService {
         );
       }
     );
-    return normalizeDocument(hydrated);
   }
 
   /**
