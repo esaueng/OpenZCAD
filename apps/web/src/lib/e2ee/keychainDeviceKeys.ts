@@ -189,8 +189,16 @@ export function keychainDeviceStore(
         storable(candidate)
       );
       const previous = deviceKeyId(expected);
-      if (replaced && previous !== deviceKeyId(candidate))
-        await forget(host, previous);
+      const proposed = deviceKeyId(candidate);
+      if (replaced) {
+        if (previous !== proposed) await forget(host, previous);
+      } else if (proposed !== previous) {
+        // Another context changed the device first. The candidate's fresh
+        // keys are referenced nowhere, and callers discard it, so remove
+        // them unless the stored record happens to hold the same keys.
+        const stored = deviceKeyId(await inner.loadDevice(candidate.userId));
+        if (stored !== proposed) await forget(host, proposed);
+      }
       return replaced;
     },
     deleteDevice: async (userId) => {

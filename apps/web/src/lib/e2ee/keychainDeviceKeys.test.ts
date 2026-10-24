@@ -124,6 +124,22 @@ describe('Keychain device store', () => {
     expect(await store.loadDevice(USER)).toBeNull();
   });
 
+  it('removes the keys of a losing replacement candidate', async () => {
+    const { host: keychain, live } = host();
+    const store = keychainDeviceStore(cloningStore(), keychain);
+    const first = await device(keychain, 'dev_first');
+    await store.saveDevice(first);
+    // Another tab replaced the device after this one read it.
+    const stale = await store.loadDevice(USER);
+    const winner = await device(keychain, 'dev_winner');
+    expect(await store.replaceDeviceIfCurrent(stale, winner)).toBe(true);
+    const loser = await device(keychain, 'dev_loser');
+    expect(await store.replaceDeviceIfCurrent(stale, loser)).toBe(false);
+    // Only the winner's keys remain in the Keychain.
+    expect(live.size).toBe(1);
+    expect((await store.loadDevice(USER))?.deviceId).toBe('dev_winner');
+  });
+
   it('keeps the flow going when the Keychain cannot remove an unused key', async () => {
     const { host: keychain } = host();
     keychain.remove = vi.fn(async () => {
