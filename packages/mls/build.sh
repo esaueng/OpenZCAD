@@ -36,7 +36,13 @@ actual_bindgen="$(wasm-bindgen --version | awk '{print $2}')"
 cargo_home="${CARGO_HOME:-$HOME/.cargo}"
 target="$(mktemp -d)"
 trap 'rm -rf "$target"' EXIT
-export RUSTFLAGS="--cfg getrandom_backend=\"wasm_js\" --remap-path-prefix=$crate=/openzcad-mls --remap-path-prefix=$cargo_home=/cargo --remap-path-prefix=$(dirname "$toolchain_bin")=/rust"
+# rustc sees native paths, so under Git Bash, MSYS2 or Cygwin the remaps need
+# the Windows form or local paths end up in the WASM. (A Windows build still
+# differs from a macOS or Linux one: the embedded paths keep `\` separators.)
+native_path() {
+  if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi
+}
+export RUSTFLAGS="--cfg getrandom_backend=\"wasm_js\" --remap-path-prefix=$(native_path "$crate")=/openzcad-mls --remap-path-prefix=$(native_path "$cargo_home")=/cargo --remap-path-prefix=$(dirname "$toolchain_bin")=/rust"
 export SOURCE_DATE_EPOCH=0
 # --check always builds from scratch; a normal build reuses crate/target.
 cargo_target="$crate/target"
