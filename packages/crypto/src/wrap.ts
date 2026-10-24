@@ -194,11 +194,17 @@ export type WrapContext =
       /**
        * A replaced account key under its successor, so project keys and
        * rejoin PSKs wrapped under the old account key stay reachable after
-       * a rotation.
+       * a rotation. Each rotation writes one, so the newest account key
+       * opens every older one by walking back; an older key opens none of
+       * the newer ones.
        */
       readonly purpose: 'previous-account-key';
       readonly userId: string;
-      /** Which account key this is, counting from 0 for the first. */
+      /**
+       * Which account key is wrapped: the device-list sequence, within its
+       * identity's list, of the entry that first committed to it (0 for an
+       * identity's first key; see `accountKeySequence`).
+       */
       readonly keySequence: number;
     };
 

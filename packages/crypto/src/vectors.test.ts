@@ -35,7 +35,8 @@ import type { ProjectEnvelopeHeaderInit } from './header';
 import {
   accountKeyCommitment,
   deviceListEntryHash,
-  encodeDeviceListEntry
+  encodeDeviceListEntry,
+  encodeRevocationCutoffs
 } from './devices';
 import { exportPublicKey } from './keys';
 import { verifyProjectEnvelopeSignature, versionHash } from './signing';
@@ -497,6 +498,95 @@ describe('device list v1 vector', () => {
     expect(toHex(commitment)).toMatchInlineSnapshot(
       `"44b678e45f8953d389ae09934a82073cd891376a15c0c6e4a0ddd1548b184466"`
     );
+  });
+});
+
+describe('device list v2 vector', () => {
+  it('encodes a fixed removal that names its replacement', async () => {
+    const raw = async (
+      jwk: typeof TEST_SIGNER_JWK,
+      algorithm: 'ECDH' | 'ECDSA'
+    ) => exportPublicKey((await importFixedPair(jwk, algorithm)).publicKey);
+    const entry = encodeDeviceListEntry({
+      userId: 'user_vector',
+      sequence: 1,
+      // The hash of the device list v1 vector above.
+      previousEntryHash: fromHex(
+        '204a3f11c0f7482a9b193bf696dbec5190b6c5820766dbd7ec21955df10b14e8'
+      ),
+      issuedAt: 1_760_000_000_001,
+      previousIdentityKeyHash: null,
+      encryptionKey: await raw(TEST_IDENTITY_JWK, 'ECDH'),
+      accountKeyCommitment: await accountKeyCommitment(patternBytes(32, 0xb0)),
+      devices: [
+        {
+          deviceId: 'dev_vector',
+          label: 'Vector device',
+          signingKey: await raw(TEST_SIGNER_JWK, 'ECDSA'),
+          unlockKey: await raw(TEST_RECIPIENT_JWK, 'ECDH'),
+          addedAt: 1_760_000_000_000
+        }
+      ],
+      unlockTargets: [
+        {
+          kind: 'recovery-key',
+          targetId: 'rk_vector',
+          publicKey: await raw(TEST_EPHEMERAL_JWK, 'ECDH'),
+          addedAt: 1_760_000_000_000
+        }
+      ],
+      revoked: [{ kind: 'device', id: 'dev_stolen', replacedBy: 'dev_vector' }]
+    });
+    expect(entry[3]).toBe(2);
+    expect(entry.byteLength).toMatchInlineSnapshot(`435`);
+    // u16 1 | u8 1 device | u8 10 "dev_stolen" | u8 10 "dev_vector"
+    expect(toHex(entry.subarray(entry.byteLength - 25))).toMatchInlineSnapshot(
+      `"0001010a6465765f73746f6c656e0a6465765f766563746f72"`
+    );
+    expect(toHex(await deviceListEntryHash(entry))).toMatchInlineSnapshot(
+      `"3da3ad170d4d7c138cf3a0d8de935523f2679126eac150a449bce9cea298a442"`
+    );
+  });
+});
+
+// A recorded signature by the fixed signer key, standing in for an
+// identity key, over the revocation cutoffs vector.
+const CUTOFFS_SIGNATURE =
+  '01b1d731b20a337b19caa34dad68fb1cdbc293f2132be6b3a7b79747543785f1ae09b4989e4d412d20456e391afa567d516b6356a6df16d5f1057bc8a55d632984';
+
+describe('revocation cutoffs v1 vector', () => {
+  const value = {
+    userId: 'user_vector',
+    generation: 1,
+    entrySequence: 1,
+    entryHash: patternBytes(32, 0xe0),
+    issuedAt: 1_760_000_000_001,
+    cutoffs: [
+      { projectId: 'prj_2', cutoffEpoch: 9 },
+      { projectId: 'prj_1', cutoffEpoch: 4 }
+    ]
+  };
+
+  it('encodes fixed cutoffs and verifies a recorded signature with raw WebCrypto', async () => {
+    const statement = encodeRevocationCutoffs(value);
+    expect(toHex(statement)).toMatchInlineSnapshot(
+      `"4f5a52010b757365725f766563746f720000000100000001e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff00000199c82cc00100020570726a5f3100000000000000040570726a5f320000000000000009"`
+    );
+    const signer = await importFixedPair(TEST_SIGNER_JWK, 'ECDSA');
+    const signature = fromHex(CUTOFFS_SIGNATURE);
+    expect(signature[0]).toBe(1);
+    // ECDSA P-256 SHA-256 over label "v1 revocation cutoffs signature" | statement.
+    expect(
+      await subtle.verify(
+        { name: 'ECDSA', hash: 'SHA-256' },
+        signer.publicKey,
+        signature.subarray(1),
+        concatBytes(
+          utf8('OpenZCAD E2EE v1 revocation cutoffs signature'),
+          statement
+        )
+      )
+    ).toBe(true);
   });
 });
 

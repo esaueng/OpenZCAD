@@ -2,7 +2,8 @@
  * Seeded fuzzing of every parser that reads bytes the server hands back:
  * both envelope classes (structure and decryption, one-shot and
  * incremental), wrapped and sealed keys, version signatures, version log
- * records and the document, project-info and key-archive bodies. Whatever
+ * records, device-list entries, revocation cutoffs and the document,
+ * project-info and key-archive bodies. Whatever
  * the input, each call either succeeds or throws an `E2eeError`; never a
  * TypeError, RangeError or a DOMException leaking out of WebCrypto.
  */
@@ -17,8 +18,19 @@ import {
   encryptProjectEnvelope,
   parseEnvelope
 } from './envelope';
+import {
+  nextDeviceListEntry,
+  signDeviceListEntry,
+  signRevocationCutoffs,
+  verifyDeviceList,
+  verifyRevocationCutoffs
+} from './devices';
 import { E2eeError } from './errors';
-import { generateEncryptionKeyPair, generateSigningKeyPair } from './keys';
+import {
+  exportPublicKey,
+  generateEncryptionKeyPair,
+  generateSigningKeyPair
+} from './keys';
 import { signProjectEnvelope, verifyProjectEnvelopeSignature } from './signing';
 import { patternBytes, seededRandom } from './test-support';
 import {
@@ -304,6 +316,99 @@ describe('parser fuzzing', () => {
       count(
         await onlyTypedErrors(() =>
           decodeKeyArchiveBody(mutate(seed, archiveBody), archiveHeader)
+        )
+      );
+    }
+    for (const code of ['malformed', 'authentication-failed']) {
+      expect(outcomes.get(code) ?? 0).toBeGreaterThan(0);
+    }
+  });
+
+  it('device list entries and revocation cutoffs only throw E2eeError', async () => {
+    const identity = await generateSigningKeyPair(false);
+    const identityRaw = await exportPublicKey(identity.publicKey);
+    const raw = async (algorithm: 'ECDH' | 'ECDSA') =>
+      exportPublicKey(
+        (algorithm === 'ECDH'
+          ? await generateEncryptionKeyPair()
+          : await generateSigningKeyPair()
+        ).publicKey
+      );
+    const listed = async (deviceId: string) => ({
+      deviceId,
+      label: deviceId,
+      signingKey: await raw('ECDSA'),
+      unlockKey: await raw('ECDH'),
+      addedAt: 1
+    });
+    const genesis = await signDeviceListEntry(identity.privateKey, {
+      userId: 'u1',
+      sequence: 0,
+      previousEntryHash: null,
+      issuedAt: 1,
+      previousIdentityKeyHash: null,
+      encryptionKey: await raw('ECDH'),
+      accountKeyCommitment: patternBytes(32),
+      devices: [await listed('d1'), await listed('d2')],
+      unlockTargets: [
+        {
+          kind: 'recovery-key',
+          targetId: 'rk',
+          publicKey: await raw('ECDH'),
+          addedAt: 1
+        }
+      ],
+      revoked: []
+    });
+    const list = await verifyDeviceList(identityRaw, [genesis]);
+    const removal = await signDeviceListEntry(
+      identity.privateKey,
+      nextDeviceListEntry(list, {
+        issuedAt: 2,
+        removeDeviceIds: ['d2'],
+        replacedBy: 'd1',
+        encryptionKey: await raw('ECDH'),
+        accountKeyCommitment: patternBytes(32, 1)
+      })
+    );
+    expect(removal.entry[3]).toBe(2);
+    const revoked = await verifyDeviceList(identityRaw, [genesis, removal]);
+    const cutoffs = await signRevocationCutoffs(identity.privateKey, {
+      userId: 'u1',
+      generation: 1,
+      entrySequence: 1,
+      entryHash: revoked.headHash,
+      issuedAt: 3,
+      cutoffs: [
+        { projectId: 'p1', cutoffEpoch: 2 },
+        { projectId: 'p2', cutoffEpoch: 5 }
+      ]
+    });
+    const outcomes = new Map<string, number>();
+    const count = (outcome: string) =>
+      outcomes.set(outcome, (outcomes.get(outcome) ?? 0) + 1);
+    for (let seed = 1; seed <= 400; seed += 1) {
+      count(
+        await onlyTypedErrors(() =>
+          verifyDeviceList(identityRaw, [
+            genesis,
+            {
+              entry: mutate(seed, new Uint8Array(removal.entry)),
+              signature: removal.signature
+            }
+          ])
+        )
+      );
+      count(
+        await onlyTypedErrors(() =>
+          verifyRevocationCutoffs(
+            {
+              statement: mutate(seed, new Uint8Array(cutoffs.statement)),
+              signature: cutoffs.signature
+            },
+            revoked,
+            { generation: 1 }
+          )
         )
       );
     }

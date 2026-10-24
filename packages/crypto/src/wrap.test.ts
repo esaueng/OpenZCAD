@@ -984,6 +984,55 @@ describe('project data wraps', () => {
     }
   });
 
+  it('chains account keys backwards only', async () => {
+    // Four account keys at device-list sequences 0, 2, 5 and 6: each
+    // rotation wraps the replaced key under its successor.
+    const sequences = [0, 2, 5, 6];
+    const keys = sequences.map(() => generateSymmetricKey());
+    const history = new Map<number, Uint8Array>();
+    for (let i = 0; i + 1 < keys.length; i += 1) {
+      history.set(
+        sequences[i]!,
+        await wrapKey(keys[i + 1]!, keys[i]!, {
+          purpose: 'previous-account-key',
+          userId: 'u1',
+          keySequence: sequences[i]!
+        })
+      );
+    }
+    // The newest key walks back to every older one.
+    let current = keys.at(-1)!;
+    for (let i = keys.length - 2; i >= 0; i -= 1) {
+      current = await unwrapKey(current, history.get(sequences[i]!)!, {
+        purpose: 'previous-account-key',
+        userId: 'u1',
+        keySequence: sequences[i]!
+      });
+      expect(current).toEqual(keys[i]);
+    }
+    // The oldest key opens none of the wraps, so none of the newer keys.
+    for (const [keySequence, wrapped] of history) {
+      if (keySequence === sequences[0]) continue;
+      await rejectsWith(
+        unwrapKey(keys[0]!, wrapped, {
+          purpose: 'previous-account-key',
+          userId: 'u1',
+          keySequence
+        }),
+        'authentication-failed'
+      );
+    }
+    // A wrap relabelled with another key's sequence does not open.
+    await rejectsWith(
+      unwrapKey(keys[2]!, history.get(2)!, {
+        purpose: 'previous-account-key',
+        userId: 'u1',
+        keySequence: 5
+      }),
+      'authentication-failed'
+    );
+  });
+
   it('version keys of the new envelope kinds wrap under the project key', async () => {
     for (const kind of ['project-info', 'key-archive'] as const) {
       const context: WrapContext = { ...BLOB_CONTEXT, kind };

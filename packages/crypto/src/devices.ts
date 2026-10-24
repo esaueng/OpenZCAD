@@ -14,7 +14,7 @@ import {
 } from './bytes';
 import { publicKeyHash } from './codes';
 import { E2eeError, type E2eeErrorCode } from './errors';
-import { HASH_BYTES, isEnvelopeId } from './header';
+import { HASH_BYTES, MAX_ID_BYTES, isEnvelopeId } from './header';
 import {
   P256_PUBLIC_KEY_BYTES,
   exportPublicKey,
@@ -39,12 +39,20 @@ import { ecdsaSign, type SigningPrivateKey } from './external-keys';
  * same entry. A revoked id or key never returns. The recovery-key target is
  * fixed for the life of an identity: replacing the recovery key replaces
  * the identity and starts a fresh list.
+ *
+ * A device revocation may name the device that replaces it (`replacedBy`),
+ * which must be live in the same entry. Entries that name one use format
+ * version 2; every other entry keeps version 1, byte for byte, so lists
+ * signed before version 2 existed verify unchanged.
  */
 
 export const DEVICE_LIST_VERSION_1 = 1;
+/** Version 1 plus a replacement device id on each revocation. */
+export const DEVICE_LIST_VERSION_2 = 2;
 const DEVICE_LIST_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x44); // "OZD"
 const TRANSITION_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x54); // "OZT"
 const GRANT_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x47); // "OZG"
+const CUTOFFS_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x52); // "OZR"
 const STATEMENT_VERSION_1 = 1;
 const SIGNATURE_BYTES = 1 + 64;
 const MAX_U32 = 0xffffffff;
@@ -89,6 +97,12 @@ export interface UnlockTarget {
 export interface Revocation {
   readonly kind: RevocationKind;
   readonly id: string;
+  /**
+   * For a device: the device that replaces it, live in the same entry. It
+   * is the device the MLS last-leaf exception lets rejoin a project whose
+   * only leaf of this user was the revoked device. Absent otherwise.
+   */
+  readonly replacedBy?: string;
 }
 
 export interface DeviceListEntry {
@@ -262,6 +276,7 @@ function checkEntry(entry: DeviceListEntry, code: E2eeErrorCode): void {
     fail('A first entry revokes nothing');
   }
   const revoked = new Set<string>();
+  const liveDevices = new Set(entry.devices.map((device) => device.deviceId));
   for (const revocation of entry.revoked) {
     if (!Object.hasOwn(REVOCATION_CODES, revocation?.kind)) {
       fail('Unknown revocation kind');
@@ -271,7 +286,25 @@ function checkEntry(entry: DeviceListEntry, code: E2eeErrorCode): void {
       fail('A revoked id is listed once and is not live in the same entry');
     }
     revoked.add(revocation.id);
+    if (revocation.replacedBy !== undefined) {
+      if (revocation.kind !== 'device') {
+        fail('Only a device revocation names a replacement');
+      }
+      if (!isEnvelopeId(revocation.replacedBy)) {
+        fail('Replacement device id is not an id');
+      }
+      if (!liveDevices.has(revocation.replacedBy)) {
+        fail('A replacement device is live in the same entry');
+      }
+    }
   }
+}
+
+/** Version 2 exactly when some revocation names a replacement. */
+function entryVersion(entry: DeviceListEntry): number {
+  return entry.revoked.some((r) => r.replacedBy !== undefined)
+    ? DEVICE_LIST_VERSION_2
+    : DEVICE_LIST_VERSION_1;
 }
 
 function writeId(writer: ByteWriter, id: string): void {
@@ -300,12 +333,17 @@ function readOptionalHash(reader: ByteReader): Bytes | null {
  * label, 65-byte signing key, 65-byte unlock key, u64 addedAt) | u16 count +
  * unlock targets by id (u8 kind, u8 length + id, 65-byte key, u64 addedAt) |
  * u16 count + revocations by kind then id (u8 kind, u8 length + id)`.
+ *
+ * Version 2 is the same with `u8 length + replacement device id` (0 for
+ * none) after each revocation's id, and is used exactly when at least one
+ * revocation names a replacement, so every entry has one encoding.
  */
 export function encodeDeviceListEntry(entry: DeviceListEntry): Bytes {
   checkEntry(entry, 'invalid-argument');
+  const version = entryVersion(entry);
   const writer = new ByteWriter()
     .bytes(DEVICE_LIST_MAGIC)
-    .u8(DEVICE_LIST_VERSION_1)
+    .u8(version)
     .u32(entry.sequence);
   writeOptionalHash(writer, entry.previousEntryHash);
   writeId(writer, entry.userId);
@@ -342,6 +380,10 @@ export function encodeDeviceListEntry(entry: DeviceListEntry): Bytes {
   )) {
     writer.u8(REVOCATION_CODES[revocation.kind]);
     writeId(writer, revocation.id);
+    if (version === DEVICE_LIST_VERSION_2) {
+      if (revocation.replacedBy === undefined) writer.u8(0);
+      else writeId(writer, revocation.replacedBy);
+    }
   }
   return writer.finish();
 }
@@ -369,7 +411,7 @@ export function decodeDeviceListEntry(bytes: Uint8Array): DeviceListEntry {
     throw new E2eeError('malformed', 'Not a device list entry');
   }
   const version = reader.u8();
-  if (version !== DEVICE_LIST_VERSION_1) {
+  if (version !== DEVICE_LIST_VERSION_1 && version !== DEVICE_LIST_VERSION_2) {
     throw new E2eeError(
       'unsupported-version',
       `Device list version ${version} is not supported`
@@ -413,7 +455,9 @@ export function decodeDeviceListEntry(bytes: Uint8Array): DeviceListEntry {
   const revoked: Revocation[] = [];
   for (let count = reader.u16(); count > 0; count -= 1) {
     const kind = kindFor(REVOCATION_CODES, reader.u8(), 'revocation');
-    revoked.push({ kind, id: readId(reader) });
+    const id = readId(reader);
+    const replacedBy = version === DEVICE_LIST_VERSION_2 ? readId(reader) : '';
+    revoked.push(replacedBy ? { kind, id, replacedBy } : { kind, id });
   }
   reader.end();
   const entry: DeviceListEntry = {
@@ -463,7 +507,10 @@ export async function accountKeyCommitment(
 // --- Statements signed by the identity key or a device key ----------------
 
 type StatementKind =
-  'device list' | 'identity transition' | 'device approval grant';
+  | 'device list'
+  | 'identity transition'
+  | 'device approval grant'
+  | 'revocation cutoffs';
 
 async function signStatement(
   privateKey: SigningPrivateKey,
@@ -555,6 +602,8 @@ export interface RevokedRecord {
   /** Set for a device: what it was, so its signatures can be refused. */
   readonly device?: DeviceRecord;
   readonly target?: UnlockTarget;
+  /** For a device: the device its revocation named as replacement. */
+  readonly replacedBy?: string;
 }
 
 export interface VerifiedDeviceList {
@@ -831,7 +880,10 @@ export async function verifyDeviceList(
                 }
               }
             : {}),
-          ...(target ? { target } : {})
+          ...(target ? { target } : {}),
+          ...(revocation.replacedBy === undefined
+            ? {}
+            : { replacedBy: revocation.replacedBy })
         });
       }
     }
@@ -902,10 +954,54 @@ export function recoveryTarget(list: VerifiedDeviceList): UnlockTarget {
   return list.unlockTargets.find((target) => target.kind === 'recovery-key')!;
 }
 
+/**
+ * Names an account key within one identity's list: the sequence of the
+ * entry that first committed to it (0 for the identity's first key). A
+ * replaced commitment never returns, so each key covers one run of entries.
+ * This is the `keySequence` of the key's `previous-account-key` wrap.
+ *
+ * Returns the key current at entry `at` (the head by default), or every
+ * key the list has committed to, oldest first, with `accountKeySequences`.
+ */
+export function accountKeySequence(
+  list: Pick<VerifiedDeviceList, 'entries'>,
+  at: number = list.entries.length - 1
+): number {
+  if (!Number.isSafeInteger(at) || at < 0 || at >= list.entries.length) {
+    throw new E2eeError('invalid-argument', `Entry ${at} is not in the list`);
+  }
+  let first = at;
+  const commitment = list.entries[at]!.entry.accountKeyCommitment;
+  while (
+    first > 0 &&
+    equalBytes(list.entries[first - 1]!.entry.accountKeyCommitment, commitment)
+  ) {
+    first -= 1;
+  }
+  return list.entries[first]!.entry.sequence;
+}
+
+export function accountKeySequences(
+  list: Pick<VerifiedDeviceList, 'entries'>
+): number[] {
+  return list.entries
+    .filter(
+      ({ entry }, index) =>
+        index === 0 ||
+        !equalBytes(
+          list.entries[index - 1]!.entry.accountKeyCommitment,
+          entry.accountKeyCommitment
+        )
+    )
+    .map(({ entry }) => entry.sequence);
+}
+
 export interface DeviceListChange {
   readonly issuedAt: number;
   readonly addDevices?: readonly ListedDevice[];
   readonly removeDeviceIds?: readonly string[];
+  /** A device live in the new entry that replaces every removed device. */
+  readonly replacedBy?: string;
   readonly addUnlockTargets?: readonly UnlockTarget[];
   readonly removeUnlockTargetIds?: readonly string[];
   /** A new encryption key; required whenever anything is removed. */
@@ -958,6 +1054,25 @@ export function nextDeviceListEntry(
       'The account and encryption keys rotate together'
     );
   }
+  const replacedBy = change.replacedBy;
+  if (replacedBy !== undefined) {
+    if (removeDevices.size === 0) {
+      throw new E2eeError(
+        'invalid-argument',
+        'A replacement names the device that replaces a removed one'
+      );
+    }
+    const live =
+      (list.head.devices.some((d) => d.deviceId === replacedBy) &&
+        !removeDevices.has(replacedBy)) ||
+      (change.addDevices ?? []).some((d) => d.deviceId === replacedBy);
+    if (!live) {
+      throw new E2eeError(
+        'invalid-argument',
+        `Replacement device ${replacedBy} is not live in the new entry`
+      );
+    }
+  }
   return {
     userId: list.userId,
     sequence: list.head.sequence + 1,
@@ -976,7 +1091,11 @@ export function nextDeviceListEntry(
       ...(change.addUnlockTargets ?? [])
     ],
     revoked: [
-      ...[...removeDevices].map((id) => ({ kind: 'device' as const, id })),
+      ...[...removeDevices].map((id) => ({
+        kind: 'device' as const,
+        id,
+        ...(replacedBy === undefined ? {} : { replacedBy })
+      })),
       ...[...removeTargets].map((id) => ({
         kind: 'unlock-target' as const,
         id
@@ -1266,6 +1385,227 @@ export async function verifyDeviceApprovalGrant(
     throw new E2eeError(
       'authentication-failed',
       'Device approval grant signature is not valid'
+    );
+  }
+  return value;
+}
+
+// --- Per-project revocation cutoffs ---------------------------------------
+
+export const REVOCATION_CUTOFFS_VERSION_1 = 1;
+/** Most projects one cutoff statement names. */
+export const MAX_REVOCATION_CUTOFFS = 4096;
+/** Largest canonical statement: every project id at its longest. */
+export const MAX_REVOCATION_CUTOFFS_BYTES =
+  3 +
+  1 +
+  1 +
+  MAX_ID_BYTES +
+  4 +
+  4 +
+  HASH_BYTES +
+  8 +
+  2 +
+  MAX_REVOCATION_CUTOFFS * (1 + MAX_ID_BYTES + 8);
+
+/** The first epoch of a project's group that a revoked device must not know. */
+export interface ProjectRevocationCutoff {
+  readonly projectId: string;
+  /** Unsigned, at most `Number.MAX_SAFE_INTEGER`. */
+  readonly cutoffEpoch: number;
+}
+
+/**
+ * What the identity key signs when it removes a device (ADR-024, Key
+ * lifecycle): a cutoff for each project the user belongs to, bound to the
+ * device-list entry that revokes the device. Once a browser has seen the
+ * statement it accepts the revoked device's work in a project only before
+ * that project's cutoff. Phase 4 stores and enforces it; this is the format.
+ */
+export interface RevocationCutoffs {
+  readonly userId: string;
+  /** The identity generation of the revoking entry; 1 for the first. */
+  readonly generation: number;
+  /** Sequence of the device-list entry that revokes the device(s). */
+  readonly entrySequence: number;
+  /** `deviceListEntryHash` of that entry. */
+  readonly entryHash: Uint8Array;
+  /** Unix milliseconds; the signer's claim, not proof of time. */
+  readonly issuedAt: number;
+  /** Sorted by project id on encoding; each project at most once. */
+  readonly cutoffs: readonly ProjectRevocationCutoff[];
+}
+
+function checkCutoffs(value: RevocationCutoffs, code: E2eeErrorCode): void {
+  const fail = (message: string): never => {
+    throw new E2eeError(code, message);
+  };
+  if (value === null || typeof value !== 'object') {
+    fail('Expected revocation cutoffs');
+  }
+  if (!isEnvelopeId(value.userId)) fail('Cutoff userId is not an id');
+  if (!isUint(value.generation, MAX_U32) || value.generation < 1) {
+    fail('generation must be a u32 of at least 1');
+  }
+  if (!isUint(value.entrySequence, MAX_U32) || value.entrySequence < 1) {
+    fail('A revoking entry follows the first one');
+  }
+  if (!isHash(value.entryHash)) fail('entryHash must be 32 bytes');
+  if (!isUint(value.issuedAt, Number.MAX_SAFE_INTEGER)) {
+    fail('issuedAt must be Unix milliseconds');
+  }
+  if (
+    !Array.isArray(value.cutoffs) ||
+    value.cutoffs.length > MAX_REVOCATION_CUTOFFS
+  ) {
+    fail(`A statement names at most ${MAX_REVOCATION_CUTOFFS} projects`);
+  }
+  const projects = new Set<string>();
+  for (const cutoff of value.cutoffs) {
+    if (!isEnvelopeId(cutoff?.projectId)) fail('Cutoff projectId is not an id');
+    if (projects.has(cutoff.projectId)) {
+      fail('Each project has one cutoff');
+    }
+    projects.add(cutoff.projectId);
+    if (!isUint(cutoff.cutoffEpoch, Number.MAX_SAFE_INTEGER)) {
+      fail('cutoffEpoch must be an unsigned safe integer');
+    }
+  }
+}
+
+/**
+ * Canonical bytes: `"OZR" | u8 1 | u8 length + user id | u32 generation |
+ * u32 entry sequence | 32-byte entry hash | u64 issuedAt | u16 count +
+ * cutoffs by project id (u8 length + project id, u64 cutoff epoch)`.
+ */
+export function encodeRevocationCutoffs(value: RevocationCutoffs): Bytes {
+  checkCutoffs(value, 'invalid-argument');
+  const writer = new ByteWriter()
+    .bytes(CUTOFFS_MAGIC)
+    .u8(REVOCATION_CUTOFFS_VERSION_1);
+  writeId(writer, value.userId);
+  writer
+    .u32(value.generation)
+    .u32(value.entrySequence)
+    .bytes(value.entryHash)
+    .u64(value.issuedAt)
+    .u16(value.cutoffs.length);
+  for (const cutoff of [...value.cutoffs].sort((a, b) =>
+    byId(a.projectId, b.projectId)
+  )) {
+    writeId(writer, cutoff.projectId);
+    writer.u64(cutoff.cutoffEpoch);
+  }
+  return writer.finish();
+}
+
+/** Decodes canonical statement bytes; anything else is `malformed`. */
+export function decodeRevocationCutoffs(bytes: Uint8Array): RevocationCutoffs {
+  if (!(bytes instanceof Uint8Array)) {
+    throw new E2eeError('invalid-argument', 'Statement must be a Uint8Array');
+  }
+  if (bytes.byteLength > MAX_REVOCATION_CUTOFFS_BYTES) {
+    throw new E2eeError('limit-exceeded', 'Revocation cutoffs are too large');
+  }
+  const reader = new ByteReader(bytes, 'Revocation cutoffs');
+  if (!equalBytes(reader.bytes(3), CUTOFFS_MAGIC)) {
+    throw new E2eeError('malformed', 'Not a revocation cutoff statement');
+  }
+  const version = reader.u8();
+  if (version !== REVOCATION_CUTOFFS_VERSION_1) {
+    throw new E2eeError(
+      'unsupported-version',
+      `Revocation cutoffs version ${version} is not supported`
+    );
+  }
+  const userId = readId(reader);
+  const generation = reader.u32();
+  const entrySequence = reader.u32();
+  const entryHash = copyBytes(reader.bytes(HASH_BYTES));
+  const issuedAt = reader.u64();
+  const cutoffs: ProjectRevocationCutoff[] = [];
+  for (let count = reader.u16(); count > 0; count -= 1) {
+    cutoffs.push({ projectId: readId(reader), cutoffEpoch: reader.u64() });
+  }
+  reader.end();
+  const value: RevocationCutoffs = {
+    userId,
+    generation,
+    entrySequence,
+    entryHash,
+    issuedAt,
+    cutoffs
+  };
+  checkCutoffs(value, 'malformed');
+  if (!equalBytes(encodeRevocationCutoffs(value), bytes)) {
+    throw new E2eeError(
+      'malformed',
+      'Revocation cutoffs are not in canonical form'
+    );
+  }
+  return value;
+}
+
+/** The identity key signs the cutoffs of a removal. */
+export async function signRevocationCutoffs(
+  identityPrivateKey: CryptoKey,
+  value: RevocationCutoffs
+): Promise<SignedStatement> {
+  const statement = encodeRevocationCutoffs(value);
+  return {
+    statement,
+    signature: await signStatement(
+      identityPrivateKey,
+      'revocation cutoffs',
+      statement
+    )
+  };
+}
+
+/**
+ * Decodes cutoffs and checks them against a verified device list of
+ * `generation`: signed by that list's identity key (`authentication-failed`
+ * otherwise), for its user and generation, and naming an entry the list
+ * holds, by sequence and hash, that revokes at least one device
+ * (`context-mismatch` otherwise).
+ */
+export async function verifyRevocationCutoffs(
+  signed: SignedStatement,
+  list: VerifiedDeviceList,
+  expected: { readonly generation: number }
+): Promise<RevocationCutoffs> {
+  const statement = copyBytes(signed.statement);
+  const signature = copyBytes(signed.signature);
+  const value = decodeRevocationCutoffs(statement);
+  const { key } = await verifyingKey(list.identityKey);
+  if (
+    !(await statementValid(key, 'revocation cutoffs', statement, signature))
+  ) {
+    throw new E2eeError(
+      'authentication-failed',
+      'Revocation cutoffs are not signed by the identity key'
+    );
+  }
+  if (value.userId !== list.userId) {
+    throw new E2eeError('context-mismatch', 'The cutoffs are for another user');
+  }
+  if (value.generation !== expected.generation) {
+    throw new E2eeError(
+      'context-mismatch',
+      'The cutoffs are for another identity generation'
+    );
+  }
+  const revoking = list.entries[value.entrySequence];
+  if (!revoking || !equalBytes(revoking.hash, value.entryHash)) {
+    throw new E2eeError(
+      'context-mismatch',
+      'The cutoffs name an entry this device list does not hold'
+    );
+  }
+  if (!revoking.entry.revoked.some((r) => r.kind === 'device')) {
+    throw new E2eeError(
+      'context-mismatch',
+      'The cutoffs name an entry that revokes no device'
     );
   }
   return value;

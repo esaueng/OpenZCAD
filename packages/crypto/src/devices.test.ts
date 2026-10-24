@@ -2,21 +2,30 @@ import { describe, expect, it } from 'vitest';
 import { deviceKeysHash, publicKeyHash } from './codes';
 import {
   accountKeyCommitment,
+  accountKeySequence,
+  accountKeySequences,
   decodeDeviceApprovalGrant,
   decodeDeviceListEntry,
+  decodeRevocationCutoffs,
   deviceListEntryHash,
   encodeDeviceListEntry,
+  encodeRevocationCutoffs,
+  MAX_REVOCATION_CUTOFFS,
+  MAX_REVOCATION_CUTOFFS_BYTES,
   nextDeviceListEntry,
   publicKeyOfPrivateKey,
   recoveryTarget,
   signDeviceApprovalGrant,
   signDeviceListEntry,
   signIdentityTransition,
+  signRevocationCutoffs,
   verifyDeviceApprovalGrant,
   verifyDeviceList,
   verifyIdentityTransition,
+  verifyRevocationCutoffs,
   type DeviceListEntry,
   type ListedDevice,
+  type RevocationCutoffs,
   type SignedDeviceListEntry
 } from './devices';
 import { E2eeError, type E2eeErrorCode } from './errors';
@@ -145,8 +154,12 @@ describe('device list entries', () => {
     trailing.set(bytes);
     throwsWith(() => decodeDeviceListEntry(trailing), 'malformed');
     const future = new Uint8Array(bytes);
-    future[3] = 2;
+    future[3] = 3;
     throwsWith(() => decodeDeviceListEntry(future), 'unsupported-version');
+    // Version 2 is reserved for entries that name a replacement.
+    const relabelled = new Uint8Array(bytes);
+    relabelled[3] = 2;
+    throwsWith(() => decodeDeviceListEntry(relabelled), 'malformed');
     const magic = new Uint8Array(bytes);
     magic[0] = 0;
     throwsWith(() => decodeDeviceListEntry(magic), 'malformed');
@@ -559,6 +572,425 @@ describe('account key commitments and key pairs', () => {
     await rejectsWith(
       publicKeyOfPrivateKey(new Uint8Array(40), 'ECDH'),
       'malformed'
+    );
+  });
+});
+
+describe('replacement devices (entry version 2)', () => {
+  async function removal(f: Fixture, replacedBy?: string) {
+    const keys = await rotated();
+    return append(f, (list) =>
+      nextDeviceListEntry(list, {
+        issuedAt: 2,
+        removeDeviceIds: ['dev_1'],
+        ...(replacedBy === undefined ? {} : { replacedBy }),
+        ...keys
+      })
+    );
+  }
+
+  it('encodes a named replacement as version 2 and nothing else changes', async () => {
+    const f = await fixture(3);
+    const plain = await removal(f);
+    const replaced = await removal(f, 'dev_0');
+    // Without a replacement the entry keeps version 1.
+    expect(plain[1]!.entry[3]).toBe(1);
+    expect(replaced[1]!.entry[3]).toBe(2);
+    const decoded = decodeDeviceListEntry(replaced[1]!.entry);
+    expect(decoded.revoked).toEqual([
+      { kind: 'device', id: 'dev_1', replacedBy: 'dev_0' }
+    ]);
+    expect(encodeDeviceListEntry(decoded)).toEqual(replaced[1]!.entry);
+    // A version 1 revocation decodes without the key at all.
+    expect(
+      Object.hasOwn(
+        decodeDeviceListEntry(plain[1]!.entry).revoked[0]!,
+        'replacedBy'
+      )
+    ).toBe(false);
+  });
+
+  it('exposes the replacement on the revoked record across mixed versions', async () => {
+    const f = await fixture(3);
+    f.chain = await removal(f, 'dev_2');
+    // A later version 1 entry follows the version 2 one.
+    const added = await device('dev_9');
+    f.chain = await append(f, (list) =>
+      nextDeviceListEntry(list, { issuedAt: 3, addDevices: [added] })
+    );
+    expect(f.chain.map((signed) => signed.entry[3])).toEqual([1, 2, 1]);
+    const list = await verifyDeviceList(f.identityRaw, f.chain);
+    expect(list.revoked).toEqual([
+      expect.objectContaining({
+        kind: 'device',
+        id: 'dev_1',
+        revokedAt: 1,
+        replacedBy: 'dev_2'
+      })
+    ]);
+    // The signature covers the replacement: stripping it is caught.
+    const stripped = encodeDeviceListEntry({
+      ...decodeDeviceListEntry(f.chain[1]!.entry),
+      revoked: [{ kind: 'device', id: 'dev_1' }]
+    });
+    await rejectsWith(
+      verifyDeviceList(f.identityRaw, [
+        f.chain[0]!,
+        { entry: stripped, signature: f.chain[1]!.signature }
+      ]),
+      'authentication-failed'
+    );
+  });
+
+  it('names a replacement added in the same entry', async () => {
+    const f = await fixture(2);
+    const fresh = await device('dev_new');
+    const keys = await rotated();
+    f.chain = await append(f, (list) =>
+      nextDeviceListEntry(list, {
+        issuedAt: 2,
+        addDevices: [fresh],
+        removeDeviceIds: ['dev_1'],
+        replacedBy: 'dev_new',
+        ...keys
+      })
+    );
+    const list = await verifyDeviceList(f.identityRaw, f.chain);
+    expect(list.revoked[0]!.replacedBy).toBe('dev_new');
+  });
+
+  it('refuses a replacement that is not a live device of the entry', async () => {
+    const f = await fixture(3);
+    const list = await verifyDeviceList(f.identityRaw, f.chain);
+    const keys = await rotated();
+    // nextDeviceListEntry checks first.
+    for (const replacedBy of ['dev_1', 'dev_9', 'rk_1']) {
+      expect(() =>
+        nextDeviceListEntry(list, {
+          issuedAt: 2,
+          removeDeviceIds: ['dev_1'],
+          replacedBy,
+          ...keys
+        })
+      ).toThrow(E2eeError);
+    }
+    expect(() =>
+      nextDeviceListEntry(list, { issuedAt: 2, replacedBy: 'dev_0' })
+    ).toThrow(E2eeError);
+    // The encoder refuses hand-built entries the same way.
+    const base = nextDeviceListEntry(list, {
+      issuedAt: 2,
+      removeDeviceIds: ['dev_1'],
+      ...keys
+    });
+    const bad: DeviceListEntry['revoked'][] = [
+      [{ kind: 'device', id: 'dev_1', replacedBy: 'dev_1' }],
+      [{ kind: 'device', id: 'dev_1', replacedBy: 'dev_9' }],
+      [{ kind: 'device', id: 'dev_1', replacedBy: 'rk_1' }],
+      [{ kind: 'device', id: 'dev_1', replacedBy: '' }],
+      [{ kind: 'device', id: 'dev_1', replacedBy: 'has space' }]
+    ];
+    for (const revoked of bad) {
+      throwsWith(
+        () => encodeDeviceListEntry({ ...base, revoked }),
+        'invalid-argument'
+      );
+    }
+  });
+
+  it('refuses a replacement on an unlock-target revocation', async () => {
+    const f = await fixture(2);
+    const passkey = {
+      kind: 'passkey' as const,
+      targetId: 'pk_1',
+      publicKey: await rawKey('ECDH'),
+      addedAt: 1
+    };
+    f.chain = await append(f, (list) =>
+      nextDeviceListEntry(list, { issuedAt: 2, addUnlockTargets: [passkey] })
+    );
+    const list = await verifyDeviceList(f.identityRaw, f.chain);
+    const entry = nextDeviceListEntry(list, {
+      issuedAt: 3,
+      removeUnlockTargetIds: ['pk_1'],
+      ...(await rotated())
+    });
+    throwsWith(
+      () =>
+        encodeDeviceListEntry({
+          ...entry,
+          revoked: [{ kind: 'unlock-target', id: 'pk_1', replacedBy: 'dev_0' }]
+        }),
+      'invalid-argument'
+    );
+  });
+
+  it('refuses version 2 bytes that name no replacement or a bad one', async () => {
+    const f = await fixture(3);
+    const replaced = (await removal(f, 'dev_0'))[1]!.entry;
+    // The replacement id is the last field: "dev_0" behind its length byte.
+    const tail = replaced.byteLength - 6;
+    expect(replaced[tail]).toBe(5);
+    // A version 2 entry whose only revocation names none is not canonical.
+    const none = new Uint8Array(replaced.subarray(0, tail + 1));
+    none[tail] = 0;
+    throwsWith(() => decodeDeviceListEntry(none), 'malformed');
+    // Naming a device that is not live in the entry.
+    const unknown = new Uint8Array(replaced);
+    unknown.set(new TextEncoder().encode('dev_7'), tail + 1);
+    throwsWith(() => decodeDeviceListEntry(unknown), 'malformed');
+  });
+});
+
+describe('account key sequences', () => {
+  it('names each account key by the entry that first committed to it', async () => {
+    const f = await fixture(3);
+    const rotate = async (issuedAt: number, removed: string) => {
+      const keys = await rotated();
+      f.chain = await append(f, (list) =>
+        nextDeviceListEntry(list, {
+          issuedAt,
+          removeDeviceIds: [removed],
+          ...keys
+        })
+      );
+    };
+    const add = async (issuedAt: number, id: string) => {
+      const added = await device(id);
+      f.chain = await append(f, (list) =>
+        nextDeviceListEntry(list, { issuedAt, addDevices: [added] })
+      );
+    };
+    // 0: first key; 1: add (same key); 2: rotation; 3: add; 4: rotation.
+    await add(1, 'dev_9');
+    await rotate(2, 'dev_1');
+    await add(3, 'dev_10');
+    await rotate(4, 'dev_2');
+    const list = await verifyDeviceList(f.identityRaw, f.chain);
+    expect(accountKeySequences(list)).toEqual([0, 2, 4]);
+    expect([0, 1, 2, 3, 4].map((at) => accountKeySequence(list, at))).toEqual([
+      0, 0, 2, 2, 4
+    ]);
+    expect(accountKeySequence(list)).toBe(4);
+    expect(() => accountKeySequence(list, 5)).toThrow(E2eeError);
+    expect(() => accountKeySequence(list, -1)).toThrow(E2eeError);
+  });
+});
+
+describe('revocation cutoffs', () => {
+  async function revoked() {
+    const f = await fixture(3);
+    const keys = await rotated();
+    f.chain = await append(f, (list) =>
+      nextDeviceListEntry(list, {
+        issuedAt: 2,
+        removeDeviceIds: ['dev_1'],
+        replacedBy: 'dev_0',
+        ...keys
+      })
+    );
+    const list = await verifyDeviceList(f.identityRaw, f.chain);
+    const value: RevocationCutoffs = {
+      userId: USER,
+      generation: 1,
+      entrySequence: 1,
+      entryHash: list.headHash,
+      issuedAt: 1_700_000_000_002,
+      cutoffs: [
+        { projectId: 'prj_b', cutoffEpoch: 7 },
+        { projectId: 'prj_a', cutoffEpoch: 0 },
+        { projectId: 'prj_c', cutoffEpoch: Number.MAX_SAFE_INTEGER }
+      ]
+    };
+    return { f, list, value };
+  }
+
+  it('signs and verifies cutoffs bound to the revoking entry', async () => {
+    const { f, list, value } = await revoked();
+    const signed = await signRevocationCutoffs(f.identity.privateKey, value);
+    expect([...signed.statement.subarray(0, 4)]).toEqual([0x4f, 0x5a, 0x52, 1]);
+    const verified = await verifyRevocationCutoffs(signed, list, {
+      generation: 1
+    });
+    // Sorted by project id, whatever the input order.
+    expect(verified.cutoffs.map((c) => c.projectId)).toEqual([
+      'prj_a',
+      'prj_b',
+      'prj_c'
+    ]);
+    expect(verified.cutoffs[2]!.cutoffEpoch).toBe(Number.MAX_SAFE_INTEGER);
+    expect(encodeRevocationCutoffs(verified)).toEqual(signed.statement);
+    // An empty statement is valid: a user with no projects yet.
+    const none = await signRevocationCutoffs(f.identity.privateKey, {
+      ...value,
+      cutoffs: []
+    });
+    expect(
+      (await verifyRevocationCutoffs(none, list, { generation: 1 })).cutoffs
+    ).toEqual([]);
+  });
+
+  it('refuses another signer, user, generation or entry', async () => {
+    const { f, list, value } = await revoked();
+    const other = await generateSigningKeyPair(false);
+    await rejectsWith(
+      verifyRevocationCutoffs(
+        await signRevocationCutoffs(other.privateKey, value),
+        list,
+        { generation: 1 }
+      ),
+      'authentication-failed'
+    );
+    const signed = await signRevocationCutoffs(f.identity.privateKey, value);
+    const tampered = new Uint8Array(signed.statement);
+    tampered[tampered.byteLength - 1]! ^= 1;
+    await rejectsWith(
+      verifyRevocationCutoffs(
+        { statement: tampered, signature: signed.signature },
+        list,
+        { generation: 1 }
+      ),
+      'authentication-failed'
+    );
+    await rejectsWith(
+      verifyRevocationCutoffs(signed, list, { generation: 2 }),
+      'context-mismatch'
+    );
+    const cases: Partial<RevocationCutoffs>[] = [
+      { userId: 'user_2' },
+      { entrySequence: 2 },
+      { entryHash: new Uint8Array(32) }
+    ];
+    for (const change of cases) {
+      await rejectsWith(
+        verifyRevocationCutoffs(
+          await signRevocationCutoffs(f.identity.privateKey, {
+            ...value,
+            ...change
+          }),
+          list,
+          { generation: 1 }
+        ),
+        'context-mismatch'
+      );
+    }
+  });
+
+  it('refuses an entry that revokes no device', async () => {
+    const f = await fixture(2);
+    const passkey = {
+      kind: 'passkey' as const,
+      targetId: 'pk_1',
+      publicKey: await rawKey('ECDH'),
+      addedAt: 1
+    };
+    f.chain = await append(f, (list) =>
+      nextDeviceListEntry(list, { issuedAt: 2, addUnlockTargets: [passkey] })
+    );
+    const keys = await rotated();
+    f.chain = await append(f, (list) =>
+      nextDeviceListEntry(list, {
+        issuedAt: 3,
+        removeUnlockTargetIds: ['pk_1'],
+        ...keys
+      })
+    );
+    const list = await verifyDeviceList(f.identityRaw, f.chain);
+    for (const entrySequence of [1, 2]) {
+      await rejectsWith(
+        verifyRevocationCutoffs(
+          await signRevocationCutoffs(f.identity.privateKey, {
+            userId: USER,
+            generation: 1,
+            entrySequence,
+            entryHash: list.entries[entrySequence]!.hash,
+            issuedAt: 3,
+            cutoffs: [{ projectId: 'prj_a', cutoffEpoch: 1 }]
+          }),
+          list,
+          { generation: 1 }
+        ),
+        'context-mismatch'
+      );
+    }
+  });
+
+  it('refuses malformed values and non-canonical bytes', async () => {
+    const { value } = await revoked();
+    const bad: Partial<RevocationCutoffs>[] = [
+      { userId: '' },
+      { generation: 0 },
+      { generation: 2 ** 32 },
+      { entrySequence: 0 },
+      { entryHash: new Uint8Array(31) },
+      { issuedAt: -1 },
+      {
+        cutoffs: [
+          { projectId: 'prj_a', cutoffEpoch: 1 },
+          { projectId: 'prj_a', cutoffEpoch: 2 }
+        ]
+      },
+      { cutoffs: [{ projectId: 'prj a', cutoffEpoch: 1 }] },
+      { cutoffs: [{ projectId: 'prj_a', cutoffEpoch: -1 }] },
+      { cutoffs: [{ projectId: 'prj_a', cutoffEpoch: 1.5 }] },
+      {
+        cutoffs: [
+          { projectId: 'prj_a', cutoffEpoch: Number.MAX_SAFE_INTEGER + 1 }
+        ]
+      },
+      {
+        cutoffs: Array.from({ length: MAX_REVOCATION_CUTOFFS + 1 }, (_, i) => ({
+          projectId: `p${i}`,
+          cutoffEpoch: 1
+        }))
+      }
+    ];
+    for (const change of bad) {
+      throwsWith(
+        () => encodeRevocationCutoffs({ ...value, ...change }),
+        'invalid-argument'
+      );
+    }
+    const bytes = encodeRevocationCutoffs(value);
+    expect(decodeRevocationCutoffs(bytes).cutoffs).toHaveLength(3);
+    throwsWith(
+      () => decodeRevocationCutoffs(bytes.subarray(0, 50)),
+      'malformed'
+    );
+    const trailing = new Uint8Array(bytes.byteLength + 1);
+    trailing.set(bytes);
+    throwsWith(() => decodeRevocationCutoffs(trailing), 'malformed');
+    const future = new Uint8Array(bytes);
+    future[3] = 2;
+    throwsWith(() => decodeRevocationCutoffs(future), 'unsupported-version');
+    const magic = new Uint8Array(bytes);
+    magic[2] = 0x44;
+    throwsWith(() => decodeRevocationCutoffs(magic), 'malformed');
+    // Swap the first two cutoffs (each is 1 + 5 + 8 bytes): out of order.
+    const first = bytes.byteLength - 3 * 14;
+    const swapped = new Uint8Array(bytes);
+    swapped.set(bytes.subarray(first + 14, first + 28), first);
+    swapped.set(bytes.subarray(first, first + 14), first + 14);
+    throwsWith(() => decodeRevocationCutoffs(swapped), 'malformed');
+    throwsWith(
+      () =>
+        decodeRevocationCutoffs(
+          new Uint8Array(MAX_REVOCATION_CUTOFFS_BYTES + 1)
+        ),
+      'limit-exceeded'
+    );
+    // The largest statement the format allows still decodes.
+    const largest = encodeRevocationCutoffs({
+      ...value,
+      userId: 'u'.repeat(128),
+      cutoffs: Array.from({ length: MAX_REVOCATION_CUTOFFS }, (_, i) => ({
+        projectId: `${String(i).padStart(4, '0')}${'p'.repeat(124)}`,
+        cutoffEpoch: Number.MAX_SAFE_INTEGER
+      }))
+    });
+    expect(largest.byteLength).toBe(MAX_REVOCATION_CUTOFFS_BYTES);
+    expect(decodeRevocationCutoffs(largest).cutoffs).toHaveLength(
+      MAX_REVOCATION_CUTOFFS
     );
   });
 });
