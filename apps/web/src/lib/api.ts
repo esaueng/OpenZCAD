@@ -1,4 +1,9 @@
-import { isAnalyticsEnabled, trackDetail, trackSize, durationBucket } from './analytics';
+import {
+  isAnalyticsEnabled,
+  trackDetail,
+  trackSize,
+  durationBucket
+} from './analytics';
 import type {
   AccountStorageUsage,
   AccountDeletionPreview,
@@ -104,9 +109,17 @@ export function isProjectDocumentUnavailableError(
  * copy: the device copy stays open, and autosave waits for an explicit retry
  * rather than overwriting either copy.
  */
-function openableAccountDocument(document: ProjectDocument): ProjectDocument {
+function openableAccountDocument(
+  document: ProjectDocument,
+  projectId: string
+): ProjectDocument {
   try {
-    return assertStorableDocument(document);
+    const opened = assertStorableDocument(document);
+    // The account names the copy by its route; a stored document that claims
+    // another project is not this project's copy.
+    if (opened.projectId !== projectId)
+      throw new Error('It belongs to a different project.');
+    return opened;
   } catch (error) {
     throw new ApiError(
       503,
@@ -126,16 +139,21 @@ async function requestJson<T>(
   const collect = isAnalyticsEnabled();
   const started = performance.now();
   // Use only a fixed operation class; never send the URL or embedded IDs.
-  const projectCall = typeof input === 'string' && input.startsWith('/api/projects');
-  const writing = !['GET','HEAD','OPTIONS'].includes(init?.method ?? 'GET');
+  const projectCall =
+    typeof input === 'string' && input.startsWith('/api/projects');
+  const writing = !['GET', 'HEAD', 'OPTIONS'].includes(init?.method ?? 'GET');
   let response: Response;
   try {
     response = await desktopFetch(input, {
-      ...init, credentials: 'same-origin',
+      ...init,
+      credentials: 'same-origin',
       headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) }
     });
   } catch (error) {
-    if (collect && projectCall) { trackDetail(writing ? 'error_cloud_save' : 'error_cloud_load'); trackDetail('cloud_status','network'); }
+    if (collect && projectCall) {
+      trackDetail(writing ? 'error_cloud_save' : 'error_cloud_load');
+      trackDetail('cloud_status', 'network');
+    }
     throw error;
   }
   if (collect && projectCall) {
@@ -143,11 +161,27 @@ async function requestJson<T>(
       // Revision retention's documented null result is not a load failure.
       if (!(observations.expectedMissing && response.status === 404)) {
         trackDetail(writing ? 'error_cloud_save' : 'error_cloud_load');
-        trackDetail('cloud_status', response.status === 401 ? 'unauthorized' : response.status === 403 ? 'forbidden' : response.status === 409 ? 'conflict' : response.status === 413 ? 'too_large' : response.status === 429 ? 'rate_limited' : response.status >= 500 ? 'server' : 'other');
+        trackDetail(
+          'cloud_status',
+          response.status === 401
+            ? 'unauthorized'
+            : response.status === 403
+              ? 'forbidden'
+              : response.status === 409
+                ? 'conflict'
+                : response.status === 413
+                  ? 'too_large'
+                  : response.status === 429
+                    ? 'rate_limited'
+                    : response.status >= 500
+                      ? 'server'
+                      : 'other'
+        );
       }
     } else if (writing && typeof init?.body === 'string') {
-      trackSize('transfer_upload',new Blob([init.body]).size);
-      const bucket=durationBucket(performance.now()-started); if(bucket)trackDetail('save_latency',bucket);
+      trackSize('transfer_upload', new Blob([init.body]).size);
+      const bucket = durationBucket(performance.now() - started);
+      if (bucket) trackDetail('save_latency', bucket);
     }
   }
 
@@ -339,7 +373,8 @@ export const api = {
         `/api/projects/${encodeURIComponent(projectId)}`,
         undefined,
         { documentDownload: true }
-      )
+      ),
+      projectId
     ),
   /**
    * Stores a copy of a project. With `revisionId`, the copy starts from that
@@ -400,7 +435,7 @@ export const api = {
       }
       throw error;
     }
-    return openableAccountDocument(document);
+    return openableAccountDocument(document, projectId);
   },
   updateProject: (payload: UpdateProjectRequest, signal?: AbortSignal) =>
     requestJson<UpdateProjectResponse>(

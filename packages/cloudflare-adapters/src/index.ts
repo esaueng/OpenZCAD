@@ -1151,7 +1151,7 @@ export class D1R2PersistenceService implements PersistenceService {
       name: row.name,
       mode: row.mode,
       document: sharedProjectSnapshotDocument(
-        await this.hydrateCopiedSourceAliases(document)
+        await this.hydrateCopiedSourceAliases(document, row.project_id)
       )
     };
   }
@@ -1926,13 +1926,19 @@ export class D1R2PersistenceService implements PersistenceService {
     }));
   }
 
+  /**
+   * Resolves copied-source aliases for a loaded document. The archives are
+   * looked up by the project the request named, never by the id the stored
+   * document carries, which loads do not trust (ADR-024 Phase 1).
+   */
   private async hydrateCopiedSourceAliases(
-    document: ProjectDocument
+    document: ProjectDocument,
+    projectId: string
   ): Promise<ProjectDocument> {
     if (isUnreadableStoredDocument(document)) return document;
     return reconcileCopiedImportSources(
       document,
-      await this.storedCopiedImportArchives(document.projectId)
+      await this.storedCopiedImportArchives(toProjectId(projectId))
     );
   }
 
@@ -1954,7 +1960,7 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!project) throw new ProjectNotFoundError(projectId);
     return {
       project,
-      document: await this.hydrateCopiedSourceAliases(rawDocument),
+      document: await this.hydrateCopiedSourceAliases(rawDocument, projectId),
       identity: {
         documentDigest: await projectCopyDocumentDigest(rawDocument),
         documentJsonDigest: await sha256Hex(
@@ -2101,7 +2107,7 @@ export class D1R2PersistenceService implements PersistenceService {
       ? await this.loadProjectObject(projectId, row.document_object_id)
       : normalizedForLoad(JSON.parse(row.document_json) as ProjectDocument);
     return {
-      document: await this.hydrateCopiedSourceAliases(document),
+      document: await this.hydrateCopiedSourceAliases(document, projectId),
       origin: projectBranchPoint(head, {
         revisionId: toRevisionId(revisionId),
         reason: row.reason
@@ -2236,7 +2242,7 @@ export class D1R2PersistenceService implements PersistenceService {
     const document = row.document_object_id
       ? await this.loadProjectObject(projectId, row.document_object_id)
       : normalizedForLoad(JSON.parse(row.document_json) as ProjectDocument);
-    return this.hydrateCopiedSourceAliases(document);
+    return this.hydrateCopiedSourceAliases(document, projectId);
   }
 
   async listRevisions(
@@ -2302,7 +2308,7 @@ export class D1R2PersistenceService implements PersistenceService {
     const document = row.document_object_id
       ? await this.loadProjectObject(projectId, row.document_object_id)
       : normalizedForLoad(JSON.parse(row.document_json) as ProjectDocument);
-    return this.hydrateCopiedSourceAliases(document);
+    return this.hydrateCopiedSourceAliases(document, projectId);
   }
 
   async saveRevision(

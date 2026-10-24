@@ -53,6 +53,16 @@ describe('account document loads', () => {
     }
   );
 
+  it('refuses an account document that claims another project', async () => {
+    serve({ ...valid, projectId: 'proj_someone_else' });
+    const error = await api.loadProject(valid.projectId).then(
+      () => null,
+      (caught: unknown) => caught
+    );
+    expect(isProjectDocumentUnavailableError(error)).toBe(true);
+    expect((error as Error).message).toMatch(/different project/);
+  });
+
   it('opens a valid or older account document the way loads always have', async () => {
     serve(valid);
     expect(await api.loadProject(valid.projectId)).toMatchObject({

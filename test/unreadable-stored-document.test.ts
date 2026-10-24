@@ -68,6 +68,16 @@ describe('unreadable stored documents', () => {
       nodes: null
     });
     expect(isUnreadableStoredDocument(loaded)).toBe(true);
+    // A stored document without its own id is still loaded by the route
+    // id; the archive lookup never reads the untrusted stored id.
+    const { projectId: _id, ...anonymous } = document;
+    db.prepare('UPDATE projects SET document_json = ? WHERE id = ?').run(
+      JSON.stringify(anonymous),
+      document.projectId
+    );
+    await expect(
+      service.loadProject(owner, document.projectId)
+    ).resolves.not.toHaveProperty('projectId');
   });
 
   it('load from memory as stored, and are never served through a share link', async () => {
