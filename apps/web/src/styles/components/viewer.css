@@ -653,11 +653,6 @@
   line-height: 1;
 }
 
-.selection-callout.sketch-callout {
-  color: var(--color-select);
-  border-color: rgba(103, 152, 255, 0.3);
-}
-
 .selection-callout.direct-edit-callout {
   color: rgba(232, 239, 255, 0.9);
   background: rgba(19, 23, 27, 0.56);

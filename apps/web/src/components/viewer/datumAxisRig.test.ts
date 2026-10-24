@@ -15,7 +15,6 @@ describe('buildDatumAxisRig', () => {
     const rig = buildDatumAxisRig([
       {
         featureId: 'post',
-        name: 'Axis 1',
         axis: { origin: { x: 5, y: 5, z: 0 }, direction: { x: 0, y: 0, z: 1 } },
         selected: false
       }
@@ -36,7 +35,6 @@ describe('buildDatumAxisRig', () => {
     const rig = buildDatumAxisRig([
       {
         featureId: 'x',
-        name: 'Axis 1',
         axis: { origin: { x: 0, y: 0, z: 0 }, direction: { x: 1, y: 0, z: 0 } },
         selected: true
       }
@@ -55,7 +53,6 @@ describe('buildDatumAxisRig', () => {
     const rig = buildDatumAxisRig([
       {
         featureId: 'x',
-        name: 'Axis 1',
         axis: { origin: { x: 0, y: 0, z: 0 }, direction: { x: 1, y: 0, z: 0 } },
         selected: false
       }
@@ -74,7 +71,6 @@ describe('buildDatumAxisRig', () => {
       [
         {
           featureId: 'idle',
-          name: 'Axis 1',
           axis: {
             origin: { x: 0, y: 0, z: 0 },
             direction: { x: 1, y: 0, z: 0 }
@@ -83,7 +79,6 @@ describe('buildDatumAxisRig', () => {
         },
         {
           featureId: 'sel',
-          name: 'Axis 2',
           axis: {
             origin: { x: 0, y: 0, z: 0 },
             direction: { x: 0, y: 1, z: 0 }
@@ -101,11 +96,27 @@ describe('buildDatumAxisRig', () => {
     for (const material of materialsOf(sel!)) {
       expect(material.color.getHexString()).toBe(DATUM_SELECTED_COLOR.slice(1));
     }
-    const label = sel!.children.find(
-      (child): child is CSS2DObject => child instanceof CSS2DObject
-    )!;
-    expect(label.element.textContent).toBe('Axis 2');
-    expect(label.element.dataset.selected).toBe('true');
+    rig.dispose();
+  });
+
+  it('pins no name label to the axis, selected or not', () => {
+    const rig = buildDatumAxisRig([
+      {
+        featureId: 'idle',
+        axis: { origin: { x: 0, y: 0, z: 0 }, direction: { x: 1, y: 0, z: 0 } },
+        selected: false
+      },
+      {
+        featureId: 'sel',
+        axis: { origin: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: 1, z: 0 } },
+        selected: true
+      }
+    ]);
+    const labels: CSS2DObject[] = [];
+    rig.group.traverse((node) => {
+      if (node instanceof CSS2DObject) labels.push(node);
+    });
+    expect(labels).toEqual([]);
     rig.dispose();
   });
 });
