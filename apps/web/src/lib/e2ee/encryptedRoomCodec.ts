@@ -16,6 +16,13 @@
  *   (#831, #841): the last good version is kept.
  * - A conflict's base is a version this browser accepted or sealed itself,
  *   so it never needs a historical read.
+ * - **Members** (slice 5-6). Sealing checks this account's own role in the
+ *   epoch it seals under, from the MLS roles (`requireOwnEditingRole`): a
+ *   viewer's browser seals nothing, and the refusal (`readOnly`) turns the
+ *   hook read-only, as the room's own role notice does. A write the account
+ *   refused because it lost a blob the version names (`blob-unknown`) is
+ *   repaired from this device's copy (`restoreBlobs`) before the hook
+ *   seals it again, as an account save does.
  */
 import {
   type CollaborationServerMessage,
@@ -25,7 +32,7 @@ import {
   type E2eeStoredVersion,
   type ProjectDocument
 } from '@openzcad/shared';
-import { fromBase64Url, toBase64Url } from '@openzcad/crypto';
+import { fromBase64Url, parseEnvelope, toBase64Url } from '@openzcad/crypto';
 import { parseServerMessage } from '../collaborationProtocol';
 import { projectsHaveSameCanonicalContent } from '../localProjectStore';
 import type {
@@ -65,11 +72,28 @@ export interface EncryptedRoomCodec {
   ): Promise<EncryptedRoomEncoding>;
   decode(raw: string): Promise<EncryptedRoomDecoding>;
   catchUp(): Promise<void>;
+  /**
+   * Stores again, from this device's copy, blobs the account no longer
+   * holds (`blob-unknown`); with none named, those the last sealed version
+   * names.
+   */
+  restoreBlobs(blobIds: readonly string[]): Promise<void>;
 }
 
 export class EncryptedRoomCodecError extends Error {
   override readonly name = 'EncryptedRoomCodecError';
+  constructor(
+    message: string,
+    /** This account may not write in the current epoch (its MLS role). */
+    readonly readOnly = false
+  ) {
+    super(message);
+  }
 }
+
+const isReadOnlyRefusal = (error: unknown) =>
+  error instanceof Error &&
+  (error as { code?: unknown }).code === 'E2EE_PROJECT_READ_ONLY';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -119,6 +143,8 @@ export function createEncryptedRoomCodec(
       requested: number;
     }
   >();
+
+  let lastSealed: EncryptedRoomSealed | null = null;
 
   const remember = (state: EncryptedRoomHeadState) => {
     known.delete(state.version);
@@ -280,7 +306,16 @@ export function createEncryptedRoomCodec(
       ) {
         return { kind: 'same', version: base.version };
       }
-      const sealed = await access.seal(projectId, document, base);
+      let sealed: EncryptedRoomSealed;
+      try {
+        sealed = await access.seal(projectId, document, base);
+      } catch (error) {
+        if (isReadOnlyRefusal(error)) {
+          throw new EncryptedRoomCodecError((error as Error).message, true);
+        }
+        throw error;
+      }
+      lastSealed = sealed;
       pending.set(sealed.hash, {
         sealed,
         base,
@@ -345,7 +380,16 @@ export function createEncryptedRoomCodec(
       }
     },
 
-    catchUp: () => access.catchUp(projectId)
+    catchUp: () => access.catchUp(projectId),
+
+    async restoreBlobs(blobIds) {
+      let ids = blobIds;
+      if (ids.length === 0 && lastSealed) {
+        const { header } = parseEnvelope(lastSealed.envelope);
+        ids = header.class === 'project' ? header.blobIds : [];
+      }
+      if (ids.length) await access.restoreBlobs(projectId, ids);
+    }
   };
 }
 

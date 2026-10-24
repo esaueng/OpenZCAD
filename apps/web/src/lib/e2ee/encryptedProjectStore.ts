@@ -381,6 +381,12 @@ export interface EncryptedRoomAccess {
   ): Promise<EncryptedRoomHeadState>;
   /** Processes the group's newer Commits (or rejoins). */
   catchUp(projectId: string): Promise<void>;
+  /**
+   * Stores again, from this device's copy, blobs the account lost or
+   * collected (the room's `blob-unknown`, slice 5-6), as an account save
+   * does on 409 `E2EE_BLOB_UNKNOWN`. Rejects when this page cannot.
+   */
+  restoreBlobs(projectId: string, blobIds: readonly string[]): Promise<void>;
 }
 
 const b64 = toBase64Url;
@@ -1932,6 +1938,17 @@ export function createEncryptedProjectStore(
 
     async catchUp(projectId) {
       if (groups.device) await joinProjectGroup(groups, projectId);
+    },
+
+    async restoreBlobs(projectId, blobIds) {
+      if (!ctx.restoreBlobs) {
+        throw new ApiError(
+          409,
+          'This version names files the account does not hold, and this browser has no copy to store again.',
+          'E2EE_BLOB_UNKNOWN'
+        );
+      }
+      await ctx.restoreBlobs(projectId, blobIds);
     }
   };
 

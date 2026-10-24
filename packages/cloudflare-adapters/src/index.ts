@@ -7055,7 +7055,8 @@ export class ProjectCollaborationRoom extends DurableObject {
         const active = [first, ...additionalLeases].filter(
           (lease) =>
             lease.projectId === this.projectId &&
-            lease.userId === first.userId &&
+            // An encrypted room's authors each hold a lease (slice 5-6).
+            (this.roomFormat === 2 || lease.userId === first.userId) &&
             lease.expiresAt > Date.now()
         );
         // A hibernating room wakes for each heartbeat. Avoid rewriting an
@@ -7868,9 +7869,9 @@ export class ProjectCollaborationRoom extends DurableObject {
         ? { ...claim, role: 'owner' }
         : null;
     }
-    // An encrypted project's room is its owner's own devices until sharing
-    // arrives (ADR-024 Phase 5).
-    if (claim.format === 2) return null;
+    // An encrypted project's members reach its room as a plaintext project's
+    // do (ADR-024 slice 5-6): under the sharing rollout, in the role the
+    // Worker's mirror of the MLS roles holds.
     if (!rollout.sharingEnabled) {
       return null;
     }
@@ -8303,9 +8304,18 @@ export class ProjectCollaborationRoom extends DurableObject {
       return;
     }
     await this.expireEditLease();
-    const competing = this.editLeases.filter(
-      (lease) => lease.userId !== connection.userId
-    );
+    // An encrypted room's leases do not exclude each other (ADR-024 slice
+    // 5-6): the room orders envelopes by the version each builds on and
+    // never merges, a stale one comes back as a conflict its browser merges,
+    // and the account's write is fenced on the version it names. So the
+    // owner and its editors each hold a lease and edit live together. The
+    // lease still gates who submits: the role is read again when it is
+    // granted, renewed and used, and enforcement (`leaseEnforced`) is as for
+    // a plaintext room. A plaintext room keeps one author at a time.
+    const competing =
+      this.roomFormat === 2
+        ? []
+        : this.editLeases.filter((lease) => lease.userId !== connection.userId);
     if (competing.length) {
       this.send(socket, {
         type: 'lease-denied',
@@ -9044,30 +9054,107 @@ export class ProjectCollaborationRoom extends DurableObject {
     userId: UserId,
     role: SharedProjectAccessRole
   ): Promise<void> {
-    await this.enqueueLeaseOperation(async () => {
-      const sequencer =
-        role === 'owner'
-          ? await this.encryptedSequencer(this.sockets.get(socket)?.email)
-          : null;
-      const current = await sequencer?.sync();
-      const head = sequencer?.head;
-      if (!current || !head) {
-        socket.close(1008, 'This encrypted project cannot use the room.');
-        this.removeSocket(socket);
-        return;
-      }
-      this.send(socket, {
-        type: 'e2ee-state',
-        members: this.members(),
-        role,
-        lease:
-          this.editLeases.find(
-            (lease) => lease.userId === userId && lease.clientId === clientId
-          ) ?? null,
-        head,
-        keyEpoch: current.keyEpoch
-      });
+    await this.enqueueLeaseOperation(() =>
+      this.writeEncryptedState(socket, clientId, userId, role)
+    );
+  }
+
+  /** `sendEncryptedState` for a caller that already holds the room queue. */
+  private async writeEncryptedState(
+    socket: WebSocket,
+    clientId: string,
+    userId: UserId,
+    role: SharedProjectAccessRole
+  ): Promise<void> {
+    // Every member reads the room (slice 5-6); who may write is checked on
+    // each submission.
+    const sequencer = await this.encryptedSequencer(
+      this.sockets.get(socket)?.email
+    );
+    const current = await sequencer?.sync();
+    const head = sequencer?.head;
+    if (!current || !head) {
+      socket.close(1008, 'This encrypted project cannot use the room.');
+      this.removeSocket(socket);
+      return;
+    }
+    this.send(socket, {
+      type: 'e2ee-state',
+      members: this.members(),
+      role,
+      lease:
+        this.editLeases.find(
+          (lease) => lease.userId === userId && lease.clientId === clientId
+        ) ?? null,
+      head,
+      keyEpoch: current.keyEpoch
     });
+  }
+
+  /**
+   * Role notices (ADR-024 slice 5-6). A Commit, or a member's departure,
+   * may have moved the Worker's mirror of the MLS roles, which the Commit
+   * route updates in the Commit's own batch. Each member socket's role is
+   * read again: a member no longer listed (removed, or gone by its own
+   * SelfRemove) hears `lease-lost` and is closed; a demoted editor loses
+   * its lease and hears `lease-lost` (`role-changed`), on which its browser
+   * stops submitting and shows the read-only UI; a promoted viewer gets a
+   * fresh `e2ee-state` and may take a lease. Submissions re-check the role
+   * anyway (`canAuthor`); this is how a browser hears of it at once. The
+   * owner never changes on an encrypted project. The caller holds the room
+   * queue.
+   */
+  private async refreshEncryptedRoles(): Promise<void> {
+    const roles = new Map<UserId, SharedProjectAccessRole | null>();
+    const changed: Array<{
+      socket: WebSocket;
+      connection: CollaborationSocketConnection;
+      previous: SharedProjectAccessRole;
+    }> = [];
+    for (const [socket, connection] of Array.from(this.sockets.entries())) {
+      if (connection.role === 'owner') continue;
+      let role = roles.get(connection.userId);
+      if (role === undefined) {
+        role = await this.currentConnectionRole(connection);
+        roles.set(connection.userId, role);
+      }
+      if (role === connection.role) continue;
+      changed.push({ socket, connection, previous: connection.role });
+      if (role) {
+        connection.role = role;
+        this.rememberSocket(socket, connection);
+      }
+    }
+    if (changed.length === 0) return;
+    const cannotWrite = new Set(
+      [...roles].filter(([, role]) => role !== 'editor').map(([id]) => id)
+    );
+    const kept = this.editLeases.filter(
+      (lease) => !cannotWrite.has(lease.userId)
+    );
+    if (kept.length !== this.editLeases.length) {
+      await this.persistEditLeases(kept);
+    }
+    let removed = false;
+    for (const { socket, connection, previous } of changed) {
+      const role = roles.get(connection.userId) ?? null;
+      if (!role) {
+        this.send(socket, { type: 'lease-lost', reason: 'role-changed' });
+        socket.close(1008, 'Project access was removed.');
+        this.removeSocket(socket, false);
+        removed = true;
+      } else if (role === 'viewer') {
+        this.send(socket, { type: 'lease-lost', reason: 'role-changed' });
+      } else if (previous === 'viewer') {
+        await this.writeEncryptedState(
+          socket,
+          connection.clientId,
+          connection.userId,
+          role
+        );
+      }
+    }
+    if (removed) await this.broadcastPresence();
   }
 
   private async submitEncrypted(
@@ -9132,11 +9219,10 @@ export class ProjectCollaborationRoom extends DurableObject {
     writer: E2eeRoomWriter & { userId: UserId; email?: string },
     projectId: string
   ): Promise<Response> {
-    if (writer.role !== 'owner') {
+    if (writer.role === 'viewer') {
       return rejectionResponse({
         code: 'permission-denied',
-        message:
-          'Only the owner can edit this encrypted project until sharing arrives.'
+        message: 'Viewers cannot change the collaboration document.'
       });
     }
     const body = await readSnapshotBody(request);
@@ -9224,8 +9310,10 @@ export class ProjectCollaborationRoom extends DurableObject {
 
   /**
    * Internal: the Worker tells the room that a Commit moved the project's
-   * group to a new epoch (`epoch`), or that the account's head moved outside
-   * the room (`head`). Connected browsers hear about it at once.
+   * group to a new epoch (`epoch`), that the account's head moved outside
+   * the room (`head`), or that a member left (`members`, slice 5-6).
+   * Connected browsers hear about it at once; after a Commit or a departure
+   * each member socket's role is read again (`refreshEncryptedRoles`).
    */
   private async acceptInternalE2eeNotice(request: Request): Promise<Response> {
     const projectId = new URL(request.url).searchParams.get('projectId');
@@ -9246,7 +9334,9 @@ export class ProjectCollaborationRoom extends DurableObject {
     }
     if (
       !isRecord(notice) ||
-      (notice.kind !== 'epoch' && notice.kind !== 'head') ||
+      (notice.kind !== 'epoch' &&
+        notice.kind !== 'head' &&
+        notice.kind !== 'members') ||
       (notice.kind === 'epoch' &&
         (!Number.isSafeInteger(notice.keyEpoch) ||
           (notice.keyEpoch as number) < 0))
@@ -9258,7 +9348,13 @@ export class ProjectCollaborationRoom extends DurableObject {
       if (this.roomFormat !== 2 || this.sockets.size === 0) {
         return new Response(null, { status: 204 });
       }
+      if (notice.kind === 'members') {
+        await this.refreshEncryptedRoles();
+        return new Response(null, { status: 204 });
+      }
       if (notice.kind === 'epoch') {
+        // A Commit may change roles or drop members (slices 5-4, 5-5).
+        await this.refreshEncryptedRoles();
         await this.broadcast({
           type: 'e2ee-epoch',
           keyEpoch: notice.keyEpoch as number
@@ -9477,6 +9573,7 @@ function formatMismatch(plaintext: boolean): CollaborationRejection & {
 interface CollaborationRejection {
   code: CollaborationErrorCode;
   message: string;
+  blobIds?: string[];
 }
 
 /** Carries a refusal on the HTTP path in the same shape sockets receive. */
@@ -9489,7 +9586,8 @@ function rejectionResponse(rejection: CollaborationRejection): Response {
           ? 403
           : rejection.code === 'lease-required' ||
               rejection.code === 'format-mismatch' ||
-              rejection.code === 'epoch-stale'
+              rejection.code === 'epoch-stale' ||
+              rejection.code === 'blob-unknown'
             ? 409
             : rejection.code === 'document-invalid'
               ? 400

@@ -1,7 +1,8 @@
 /**
- * The encrypted collaboration room (ADR-024 Phase 4, slice 4-9): two Node
- * devices of one owner run the real client modules (`encryptedProjectStore`,
- * `encryptedRoomCodec`, `projectGroups`) with the in-process MLS engine,
+ * The encrypted collaboration room (ADR-024 Phase 4, slice 4-9; members,
+ * slice 5-6): Node devices of the owner and of its members run the real
+ * client modules (`encryptedProjectStore`, `encryptedRoomCodec`,
+ * `projectGroups`) with the in-process MLS engine,
  * against the real Worker routes over SQLite and the Worker's own room class
  * (`apps/web/worker/e2eeRoom.ts`) on fake Durable Object storage.
  */
@@ -21,6 +22,13 @@ import type {
 import worker from '../apps/web/worker/index';
 import { ProjectCollaborationRoom } from '../apps/web/worker/e2eeRoom';
 import { forgetAllProjectKeys } from '../apps/web/src/lib/e2ee/unlockedProjectKeys';
+import {
+  changeMemberRole,
+  leaveProject,
+  removeMember
+} from '../apps/web/src/lib/e2ee/projectGroups';
+import { toHex } from '@openzcad/crypto';
+import { addMember } from './support/e2ee-members';
 import type { StoredMeasurementRecord } from '../apps/web/src/lib/measurementRecord';
 import {
   createEncryptedRoomCodec,
@@ -70,7 +78,7 @@ interface RoomServer extends Server {
 }
 
 /** The real Worker with the Worker's room class behind PROJECT_ROOM. */
-function roomServer(): RoomServer {
+function roomServer(accounts: readonly Account[] = [owner, other]): RoomServer {
   const rooms = new Map<string, ProjectCollaborationRoom>();
   const storage = new Map<string, Map<string, unknown>>();
   let env: Record<string, unknown> = {};
@@ -87,7 +95,7 @@ function roomServer(): RoomServer {
       return room;
     }
   };
-  const srv = newServer([owner, other], undefined, {
+  const srv = newServer(accounts, undefined, {
     PROJECT_ROOM: namespace
   });
   env = srv.env;
@@ -135,9 +143,10 @@ async function live(
   srv: RoomServer,
   d: Device,
   projectId: string,
-  clientId: string
+  clientId: string,
+  user = OWNER
 ): Promise<Live> {
-  const response = await connect(projectId, srv.env);
+  const response = await connect(projectId, srv.env, user);
   expect(response.status).toBe(101);
   const socket = globals.serverSockets.at(-1)!;
   const codec = createEncryptedRoomCodec(d.store.roomAccess(), projectId);
@@ -420,7 +429,7 @@ describe('encrypted collaboration room (ADR-024 slice 4-9)', () => {
     ).not.toContain('Before the holes');
   });
 
-  it('opens only for the owner, and only while encrypted projects are on', async () => {
+  it('opens for the owner and its members, and only while encrypted projects are on', async () => {
     const srv = roomServer();
     const laptop = device(srv, owner, 'owner_laptop');
     const created = await createEncrypted(laptop);
@@ -443,16 +452,21 @@ describe('encrypted collaboration room (ADR-024 slice 4-9)', () => {
         }),
         env
       );
-    const member = await connect(projectId, srv.env, OTHER);
+    // With E2EE_PROJECTS_ENABLED off, a member meets the sharing refusal
+    // and the owner the 4-1 refusal.
+    const off = { ...srv.env, E2EE_PROJECTS_ENABLED: 'false' };
+    const member = await connect(projectId, off, OTHER);
     expect(member.status).toBe(409);
     expect(((await member.json()) as { code: string }).code).toBe(
       'ENCRYPTED_PROJECT_SHARING_UNAVAILABLE'
     );
-    expect((await ticket(OTHER)).status).toBe(409);
+    expect((await ticket(OTHER, off)).status).toBe(409);
     expect(srv.rooms.has(projectId)).toBe(false);
-
-    // With E2EE_PROJECTS_ENABLED off, the owner meets the 4-1 refusal.
-    const off = { ...srv.env, E2EE_PROJECTS_ENABLED: 'false' };
+    // An outsider learns nothing.
+    expect((await connect(projectId, srv.env, 'user_outsider')).status).toBe(
+      404
+    );
+    expect(srv.rooms.has(projectId)).toBe(false);
     const closed = await connect(projectId, off);
     expect(closed.status).toBe(409);
     expect(((await closed.json()) as { code: string }).code).toBe(
@@ -461,11 +475,13 @@ describe('encrypted collaboration room (ADR-024 slice 4-9)', () => {
     expect((await ticket(OWNER, off)).status).toBe(409);
     expect(srv.rooms.has(projectId)).toBe(false);
 
-    // The owner's ticket opens the encrypted room.
+    // The owner's ticket opens the encrypted room, and so does a member's
+    // (slice 5-6).
     expect((await ticket(OWNER)).status).toBe(200);
     expect(srv.storage.get(projectId)!.get('room:meta')).toMatchObject({
       format: 2
     });
+    expect((await ticket(OTHER)).status).toBe(200);
   });
 
   it('keeps the last good version when the room relays one this browser cannot open', async () => {
@@ -620,8 +636,294 @@ describe('the room beside content blobs and replaced envelopes', () => {
       )
       .run(blobId);
     await a.send(withImport(created, blobId, step), created.version);
-    expect(await a.next('error')).toMatchObject({ code: 'document-invalid' });
+    // This device holds no copy to store again (slice 5-6's repair).
+    expect(await a.next('error')).toMatchObject({ code: 'blob-unknown' });
     expect(count(srv, 'e2ee_project_versions', projectId)).toBe(1);
     expect(count(srv, 'e2ee_version_blobs', projectId)).toBe(0);
   });
 });
+
+// --- Members (slice 5-6) -------------------------------------------------------
+
+const THIRD = 'user_third';
+let third: Account | undefined;
+
+/**
+ * The owner's project with OTHER as an editor and THIRD as a viewer (seeded
+ * through MLS as in the slice 5-2 tests), each live in the room.
+ */
+async function membersRoom() {
+  third ??= await makeAccount(THIRD, ['third_laptop']);
+  const srv = roomServer([owner, other, third]);
+  const laptop = device(srv, owner, 'owner_laptop', {
+    members: [other, third]
+  });
+  const created = await createEncrypted(laptop);
+  const projectId = created.document.projectId;
+  const editor = await addMember(
+    srv,
+    laptop,
+    projectId,
+    other,
+    'editor',
+    'other_laptop',
+    [owner, third]
+  );
+  const viewer = await addMember(
+    srv,
+    laptop,
+    projectId,
+    third,
+    'viewer',
+    'third_laptop',
+    [owner, other]
+  );
+  for (const d of [laptop, editor, viewer]) {
+    await d.store.loadProject(projectId);
+  }
+  const o = await live(srv, laptop, projectId, 'client_owner', OWNER);
+  const e = await live(srv, editor, projectId, 'client_editor', OTHER);
+  const v = await live(srv, viewer, projectId, 'client_viewer', THIRD);
+  const head = (await o.next('state')).document!;
+  return { srv, laptop, editor, viewer, projectId, head, o, e, v };
+}
+
+const signers = (srv: Server, projectId: string) =>
+  rows<{ signer_user_id: string }>(
+    srv,
+    `SELECT signer_user_id FROM e2ee_project_versions WHERE project_id = ?
+     ORDER BY document_version`,
+    projectId
+  ).map((row) => row.signer_user_id);
+
+/** Waits until the room closes `socket`. */
+async function closedBy(socket: FakeWebSocket) {
+  const deadline = Date.now() + 15_000;
+  while (!socket.closed) {
+    if (Date.now() > deadline) throw new Error('The room kept the socket.');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  return socket.closed;
+}
+
+describe(
+  'members in the encrypted room (slice 5-6)',
+  { timeout: 60_000 },
+  () => {
+    it('relays a member editor’s version through the account to the owner and a viewer', async () => {
+      const { srv, projectId, head, o, e, v } = await membersRoom();
+      expect(await e.next('state')).toMatchObject({
+        role: 'editor',
+        document: { version: head.version }
+      });
+      expect((await v.next('state')).role).toBe('viewer');
+      // Leases do not exclude each other in an encrypted room: the owner and
+      // the editor both hold one; the viewer is refused one.
+      await rawFrame(o.socket, (frame) => frame.type === 'lease-granted');
+      await rawFrame(e.socket, (frame) => frame.type === 'lease-granted');
+      await rawFrame(
+        v.socket,
+        (frame) => frame.type === 'lease-denied' && frame.reason === 'read-only'
+      );
+
+      const next = withBox(head, 'Editor box');
+      await e.send(next, head.version);
+      expect(await e.next('ack')).toEqual({
+        type: 'ack',
+        version: next.version
+      });
+      // The editor's own device signed what the room wrote to the account.
+      expect(signers(srv, projectId)).toEqual([OWNER, OTHER]);
+      for (const peer of [o, v]) {
+        const relayed = await peer.next('document');
+        expect(relayed.clientId).toBe('client_editor');
+        expect(featureNames(relayed.document)).toContain('Editor box');
+      }
+
+      // And the owner's next edit, built on it, reaches both members.
+      const owners = withBox(next, 'Owner box');
+      await o.send(owners, next.version);
+      expect(await o.next('ack')).toEqual({
+        type: 'ack',
+        version: owners.version
+      });
+      for (const peer of [e, v]) {
+        expect(featureNames((await peer.next('document')).document)).toContain(
+          'Owner box'
+        );
+      }
+    });
+
+    it('refuses a viewer’s submission, in its browser and in the room', async () => {
+      const { srv, projectId, head, e, v } = await membersRoom();
+      await e.next('state');
+      await v.next('state');
+      // The viewer's browser seals nothing: its MLS role says viewer.
+      await expect(
+        v.codec.encode(withBox(head, 'Viewer box'), head.version)
+      ).rejects.toMatchObject({ readOnly: true });
+      // A submission forged past it (here, one the editor sealed) is refused
+      // by the room from the Worker's mirror before the account sees it.
+      const sealed = await e.codec.encode(
+        withBox(head, 'Smuggled'),
+        head.version
+      );
+      if (sealed.kind !== 'sealed') throw new Error('nothing sealed');
+      await v.sendSealed(sealed.submission);
+      expect(await v.next('error')).toMatchObject({
+        code: 'permission-denied'
+      });
+      expect(count(srv, 'e2ee_project_versions', projectId)).toBe(1);
+
+      // The room reads the mirror on every submission: an editor whose row
+      // says viewer is refused, and writes again once it says editor.
+      const setRole = (role: string) =>
+        srv.db
+          .prepare(
+            'UPDATE project_members SET role = ? WHERE project_id = ? AND user_id = ?'
+          )
+          .run(role, projectId, OTHER);
+      setRole('viewer');
+      await e.sendSealed(sealed.submission);
+      expect(await e.next('error')).toMatchObject({
+        code: 'permission-denied'
+      });
+      setRole('editor');
+      await e.sendSealed(sealed.submission);
+      expect((await e.next('ack')).version).toBe(sealed.version);
+      expect(signers(srv, projectId)).toEqual([OWNER, OTHER]);
+    });
+
+    it('stops a demoted editor’s submissions and lets a promoted viewer write', async () => {
+      const { srv, laptop, projectId, head, o, e, v } = await membersRoom();
+      await e.next('state');
+      await v.next('state');
+      const early = await e.codec.encode(
+        withBox(head, 'Before the demotion'),
+        head.version
+      );
+      if (early.kind !== 'sealed') throw new Error('nothing sealed');
+
+      // The owner's Commit demotes the editor; the Commit route tells the
+      // room, which tells the editor's socket at once.
+      await changeMemberRole(laptop.groups, projectId, OTHER, 'viewer');
+      await rawFrame(
+        e.socket,
+        (frame) =>
+          frame.type === 'lease-lost' && frame.reason === 'role-changed'
+      );
+      await rawFrame(o.socket, (frame) => frame.type === 'e2ee-epoch');
+      expect(e.socket.closed).toBeFalsy();
+      // What it sealed before is refused by the room ...
+      await e.sendSealed(early.submission);
+      expect(await e.next('error')).toMatchObject({
+        code: 'permission-denied'
+      });
+      // ... and, caught up, its own browser seals nothing more.
+      await e.codec.catchUp();
+      await expect(
+        e.codec.encode(withBox(head, 'After the demotion'), head.version)
+      ).rejects.toMatchObject({ readOnly: true });
+      expect(count(srv, 'e2ee_project_versions', projectId)).toBe(1);
+
+      // A promoted viewer hears a fresh state with its new role, and writes.
+      await changeMemberRole(laptop.groups, projectId, THIRD, 'editor');
+      await rawFrame(
+        v.socket,
+        (frame) => frame.type === 'e2ee-state' && frame.role === 'editor'
+      );
+      await v.codec.catchUp();
+      const promoted = withBox(head, 'Promoted box');
+      await v.send(promoted, head.version);
+      expect(await v.next('ack')).toEqual({
+        type: 'ack',
+        version: promoted.version
+      });
+      expect(signers(srv, projectId)).toEqual([OWNER, THIRD]);
+    });
+
+    it('closes a removed member’s socket, and a leaving member’s', async () => {
+      const { srv, laptop, viewer, projectId, o, e, v } = await membersRoom();
+      await e.next('state');
+      await v.next('state');
+      await removeMember(laptop.groups, projectId, OTHER);
+      expect(await closedBy(e.socket)).toMatchObject({ code: 1008 });
+      await rawFrame(
+        e.socket,
+        (frame) =>
+          frame.type === 'lease-lost' && frame.reason === 'role-changed'
+      );
+      expect(v.socket.closed).toBeFalsy();
+      expect(o.socket.closed).toBeFalsy();
+
+      // Leaving is a SelfRemove proposal; the Worker drops access at once
+      // (decision M4), and the room closes the leaver's socket.
+      await leaveProject(viewer.groups, projectId);
+      expect(await closedBy(v.socket)).toMatchObject({ code: 1008 });
+      expect(o.socket.closed).toBeFalsy();
+      // Neither reaches the room again.
+      for (const user of [OTHER, THIRD]) {
+        expect((await connect(projectId, srv.env, user)).status).toBe(404);
+      }
+    });
+
+    it('stores a lost blob again from this device and resubmits (4-9’s gap)', async () => {
+      const srv = roomServer();
+      const localSources = new Map<string, Uint8Array>();
+      const laptop = device(srv, owner, 'owner_laptop', { localSources });
+      const created = await createEncrypted(laptop);
+      const projectId = created.document.projectId;
+      const a = await live(srv, laptop, projectId, 'client_laptop');
+      await a.next('state');
+      const step = stepBytes('lost');
+      const blobId = await archiveStep(laptop, projectId, step);
+      localSources.set(sha256(step), step);
+      const before = laptop.references.get(projectId, blobId)!.reference;
+      // Garbage collection took it before any version named it.
+      srv.db
+        .prepare(
+          "UPDATE e2ee_content_blobs SET state = 'deleting' WHERE project_id = ? AND blob_id = ?"
+        )
+        .run(projectId, blobId);
+      srv.bucket.objects.delete(`e2ee/${projectId}/${blobId}`);
+      srv.db
+        .prepare(
+          'DELETE FROM e2ee_content_blobs WHERE project_id = ? AND blob_id = ?'
+        )
+        .run(projectId, blobId);
+
+      const next = withImport(created.document, blobId, step);
+      await a.send(next, created.document.version);
+      const refused = await a.next('error');
+      expect(refused).toMatchObject({
+        code: 'blob-unknown',
+        blobIds: [blobId]
+      });
+      expect(count(srv, 'e2ee_project_versions', projectId)).toBe(1);
+
+      // The codec stores it again under a fresh key; the version is sealed
+      // and sent once more.
+      await a.codec.restoreBlobs(refused.blobIds ?? []);
+      const after = laptop.references.get(projectId, blobId)!.reference;
+      expect(after.blobId).toBe(blobId);
+      expect(toHex(after.key)).not.toBe(toHex(before.key));
+      await a.send(next, created.document.version);
+      expect(await a.next('ack')).toEqual({
+        type: 'ack',
+        version: next.version
+      });
+      expect(
+        rows<{ blob_id: string }>(
+          srv,
+          'SELECT blob_id FROM e2ee_version_blobs WHERE project_id = ?',
+          projectId
+        )
+      ).toEqual([{ blob_id: blobId }]);
+      const desktop = device(srv, owner, 'owner_desktop');
+      expect((await desktop.store.loadProject(projectId)).version).toBe(
+        next.version
+      );
+      expect(await desktop.blobs.read(projectId, blobId)).toEqual(step);
+    });
+  }
+);

@@ -1429,7 +1429,7 @@ describe('encrypted collaboration room (ADR-024 slice 4-9)', () => {
     expect((await room.fetch(encryptedUpgrade())).status).toBe(409);
   });
 
-  it('serves the owner only, and only while encrypted projects are open', async () => {
+  it('serves the owner and members, only while encrypted projects are open (slice 5-6)', async () => {
     const account = fakeE2eeAccount(PROJECT);
     const closed = createEncryptedRoom(createRoomContext().context, account, {
       ENVIRONMENT: 'development',
@@ -1438,16 +1438,73 @@ describe('encrypted collaboration room (ADR-024 slice 4-9)', () => {
     expect((await closed.fetch(encryptedUpgrade())).status).toBe(403);
 
     const room = createEncryptedRoom(createRoomContext().context, account);
-    const editor = await room.fetch(
-      encryptedUpgrade(PROJECT, { ...ownerIdentity, role: 'editor' })
+    const laptop = await openEncrypted(room, 'client_laptop');
+    const editor = await openEncrypted(room, 'client_editor', {
+      userId: 'user_editor',
+      displayName: 'Editor',
+      role: 'editor'
+    });
+    const viewer = await openEncrypted(room, 'client_viewer', {
+      userId: 'user_viewer',
+      displayName: 'Viewer',
+      role: 'viewer'
+    });
+    // Every member reads the encrypted head, in its own role.
+    for (const [socket, role] of [
+      [editor, 'editor'],
+      [viewer, 'viewer']
+    ] as const) {
+      expect(socket.closed).toBeFalsy();
+      const state = e2eeFrames(socket).find(
+        (frame) => frame.type === 'e2ee-state'
+      );
+      expect(state).toMatchObject({
+        role,
+        head: { record: account.headRecord }
+      });
+    }
+    // The owner's and the editor's leases do not exclude each other; the
+    // viewer gets none.
+    expect(e2eeFrames(laptop)).toContainEqual(
+      expect.objectContaining({ type: 'lease-granted' })
     );
-    expect(editor.status).toBe(101);
-    const socket = globals.serverSockets.at(-1)!;
-    await socket.receive(hello(null, 'client_editor'));
-    expect(socket.closed).toMatchObject({ code: 1008 });
-    expect(socket.sent.some((frame) => frame.includes('e2ee-state'))).toBe(
-      false
+    expect(e2eeFrames(editor)).toContainEqual(
+      expect.objectContaining({ type: 'lease-granted' })
     );
+    expect(e2eeFrames(viewer)).toContainEqual({
+      type: 'lease-denied',
+      reason: 'read-only'
+    });
+
+    // The editor writes through the account, as the user it is.
+    const first = account.headRecord;
+    editor.sent.length = 0;
+    await editor.receive(
+      e2eeFrame('client_editor', {
+        documentVersion: 2,
+        keyEpoch: 0,
+        previousVersionHash: first.versionHash,
+        body: 'editor'
+      })
+    );
+    expect(e2eeFrames(editor)[0]).toMatchObject({ type: 'e2ee-ack' });
+    expect(account.writes.map((write) => write.userId)).toEqual([
+      'user_editor'
+    ]);
+    // A viewer's submission never reaches the account.
+    viewer.sent.length = 0;
+    await viewer.receive(
+      e2eeFrame('client_viewer', {
+        documentVersion: 3,
+        keyEpoch: 0,
+        previousVersionHash: account.headRecord.versionHash,
+        body: 'viewer'
+      })
+    );
+    expect(e2eeFrames(viewer)).toContainEqual(
+      expect.objectContaining({ type: 'error', code: 'permission-denied' })
+    );
+    expect(account.writes).toHaveLength(1);
   });
 
   it('broadcasts a new key epoch after a Commit lands', async () => {

@@ -4736,8 +4736,10 @@ export function App() {
   );
 
   // An end-to-end encrypted project's room relays ciphertext (ADR-024
-  // slice 4-9): only its owner's own devices until sharing arrives, and every
-  // version the room accepts is already the account's.
+  // slice 4-9), and every version the room accepts is already the account's.
+  // Its owner's devices join under personal sync or sharing; its members
+  // (slice 5-6) under sharing, as a plaintext project's members do: editors
+  // submit, viewers receive.
   const encryptedRoomProject = isEncryptedProject(doc?.projectId);
   // The top bar's encryption indicator (ADR-024 Phase 4): the page's own
   // marker, or the listed summary, since a project opened directly may
@@ -4771,7 +4773,7 @@ export function App() {
       activeProjectIsCloud &&
       cloudAvailable &&
       liveCollaborationEnabled &&
-      (!encryptedRoomProject || doc?.ownerUserId === session?.userId)
+      (!encryptedMemberProject || projectSharingEnabled)
         ? session
         : null,
     encrypted: encryptedRoomProject,
@@ -4847,7 +4849,10 @@ export function App() {
       if (
         controller &&
         accountVersion !== null &&
-        remoteDocument.ownerUserId === sessionRef.current?.userId
+        // An encrypted member's autosave writes the account too (slice
+        // 5-4), so it follows the account's version the room relays.
+        (encryptedRoomProject ||
+          remoteDocument.ownerUserId === sessionRef.current?.userId)
       ) {
         controller.adoptAccountVersion(
           remoteDocument.projectId,
@@ -4870,6 +4875,20 @@ export function App() {
       );
     }
   });
+
+  // The room's role notice (slice 5-6) or this browser's own refusal to
+  // seal moved an encrypted member's role: the page guard reads the MLS
+  // roles again rather than wait for its next poll (a removal closes the
+  // socket, which clears the room's role).
+  const encryptedRoomRole = encryptedMemberProject ? collaboration.role : null;
+  const encryptedRoomRoleProjectId = encryptedMemberProject
+    ? (doc?.projectId ?? null)
+    : null;
+  useEffect(() => {
+    if (encryptedRoomRoleProjectId) {
+      refreshEncryptedMemberRole(encryptedRoomRoleProjectId);
+    }
+  }, [encryptedRoomRole, encryptedRoomRoleProjectId]);
 
   const activeCollaborationLease = Boolean(
     collaboration.lease &&

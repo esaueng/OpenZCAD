@@ -52,6 +52,11 @@ export interface E2eeServer {
    * each recipient and the token its `#encrypted-invite=` link carries.
    */
   readonly mailbox: { to: string; token: string }[];
+  /**
+   * After each route answers, as the Worker then tells the project's room
+   * (`notifyEncryptedRoom`): the room specs wire their room here.
+   */
+  afterResponse?: (request: Request, response: Response) => Promise<void>;
 }
 
 /**
@@ -201,14 +206,17 @@ async function call(
     !['GET', 'HEAD', 'OPTIONS'].includes(init.method ?? 'GET')
   )
     await admitDevelopmentE2eeWrite(env.DB, session);
-  return handleE2eeRequest(
-    new Request(`https://zcad.test${path}`, init),
+  const request = new Request(`https://zcad.test${path}`, init);
+  const response = await handleE2eeRequest(
+    request,
     env,
     session,
     server.enabled,
     server.projectsEnabled,
     invitationHost(server, userId)
   );
+  await server.afterResponse?.(request, response);
+  return response;
 }
 
 /**
