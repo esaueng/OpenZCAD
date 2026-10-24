@@ -3443,23 +3443,41 @@ describe('worker api routes', () => {
     });
   });
 
-  it('refuses a document without its derived state instead of failing', async () => {
-    const created = await createProject('No derived');
-    const projectId = created.document.projectId;
-    const { derived: _derived, ...withoutDerived } = created.document;
-    const response = await worker.fetch(
-      put(`/api/projects/${projectId}/document`, {
-        projectId,
-        expectedVersion: created.document.version,
-        document: withoutDerived
-      }),
-      env
-    );
-    expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({
-      error: 'Project document is missing its derived state.'
-    });
-  });
+  // The account no longer normalizes what it stores; the fields it reads
+  // itself are refused with a validation error rather than failing on them.
+  it.each([
+    ['derived', undefined, 'Project document is missing its derived state.'],
+    ['assets', undefined, 'Project document has invalid assets.'],
+    [
+      'assets',
+      { a: { artifactId: 7 } },
+      'Project document has invalid assets.'
+    ],
+    [
+      'referenceImages',
+      { images: 5 },
+      'Project document has invalid reference images.'
+    ]
+  ] as const)(
+    'refuses a document whose %s it cannot read, instead of failing',
+    async (field, value, error) => {
+      const created = await createProject(`Unreadable ${field}`);
+      const projectId = created.document.projectId;
+      const document: Record<string, unknown> = { ...created.document };
+      if (value === undefined) delete document[field];
+      else document[field] = value;
+      const response = await worker.fetch(
+        put(`/api/projects/${projectId}/document`, {
+          projectId,
+          expectedVersion: created.document.version,
+          document
+        }),
+        env
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error });
+    }
+  );
 
   it('fences a document save against the version the account holds', async () => {
     const created = await createProject('Fenced');

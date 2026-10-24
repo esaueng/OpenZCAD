@@ -233,7 +233,10 @@ export function* documentNodesWithHistory(
 export function* referenceImagesWithHistory(
   document: ProjectDocument
 ): Generator<ReferenceImage> {
-  yield* document.referenceImages?.images ?? [];
+  const images: unknown = document.referenceImages?.images;
+  if (Array.isArray(images))
+    for (const image of images)
+      if (record(image)) yield image as unknown as ReferenceImage;
   for (const entry of document.editHistory?.entries ?? []) {
     for (const change of entry.changes) {
       if (change.kind !== 'value' || change.field !== 'referenceImages')
@@ -251,7 +254,9 @@ export function* referenceImagesWithHistory(
 export function* documentAssetsWithHistory(
   document: ProjectDocument
 ): Generator<ProjectDocument['assets'][keyof ProjectDocument['assets']]> {
-  yield* Object.values(document.assets);
+  if (record(document.assets))
+    for (const asset of Object.values(document.assets))
+      if (record(asset)) yield asset;
   for (const entry of document.editHistory?.entries ?? []) {
     for (const change of entry.changes) {
       if (change.kind !== 'value' || change.field !== 'assets') continue;

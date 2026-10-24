@@ -2,7 +2,7 @@ import {
   assertDocumentHistory,
   documentStructureError,
   documentEnvelopeError,
-  derivedEnvelopeError,
+  accountReadFieldsError,
   hasValidImportedMeshSources,
   hasValidImportedStepSources
 } from '@openzcad/shared';
@@ -426,7 +426,7 @@ function parseProjectDocument(
   const invalid =
     documentStructureError(value) ??
     documentEnvelopeError(value) ??
-    derivedEnvelopeError(value);
+    accountReadFieldsError(value);
   if (invalid) throw badRequest(invalid);
   const record = asRecord(value, '"document"');
   if (projectIdFromPath === undefined) {

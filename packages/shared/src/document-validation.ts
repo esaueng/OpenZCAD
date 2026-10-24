@@ -109,13 +109,18 @@ export function documentEnvelopeError(value: unknown): string | null {
 }
 
 /**
- * The derived block the account keeps when it strips derived geometry
- * (`withoutDerivedProjection`): its warnings and update time. Browsers always
- * send it; the account refuses a document without it rather than failing on
- * it (ADR-024 Phase 1: the account no longer normalizes what it stores).
+ * The parts beyond the envelope that the account itself reads from a stored
+ * document (ADR-024 Phase 1: it no longer normalizes what it stores):
+ * - `derived`: its warnings and update time survive
+ *   `withoutDerivedProjection`;
+ * - `assets` and `referenceImages`: artifact cleanup and copies walk them
+ *   for the sources they name.
+ * Browsers always send well-formed values; the account refuses others with a
+ * validation error rather than failing on them.
  */
-export function derivedEnvelopeError(value: unknown): string | null {
-  const derived = isDocumentRecord(value) ? value.derived : undefined;
+export function accountReadFieldsError(value: unknown): string | null {
+  if (!isDocumentRecord(value)) return 'Project document must be an object.';
+  const derived = value.derived;
   if (
     !isDocumentRecord(derived) ||
     !Array.isArray(derived.warnings) ||
@@ -123,6 +128,25 @@ export function derivedEnvelopeError(value: unknown): string | null {
     typeof derived.updatedAt !== 'string'
   ) {
     return 'Project document is missing its derived state.';
+  }
+  if (
+    !isDocumentRecord(value.assets) ||
+    !Object.values(value.assets).every(
+      (asset) =>
+        isDocumentRecord(asset) &&
+        (asset.artifactId === undefined || typeof asset.artifactId === 'string')
+    )
+  ) {
+    return 'Project document has invalid assets.';
+  }
+  const images = value.referenceImages;
+  if (
+    images !== undefined &&
+    (!isDocumentRecord(images) ||
+      !Array.isArray(images.images) ||
+      !images.images.every(isDocumentRecord))
+  ) {
+    return 'Project document has invalid reference images.';
   }
   return null;
 }
