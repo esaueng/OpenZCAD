@@ -3,6 +3,7 @@ import { selectionCapabilities } from './interaction/capabilities';
 import { LIVE_DIAMETER_ATTRIBUTE } from './liveLabels';
 import {
   editFaceVerb,
+  faceDetailsVerb,
   MAX_SELECTION_VERBS,
   selectionCalloutVerbs,
   type SelectionCalloutContent,
@@ -153,6 +154,18 @@ describe('selectionCalloutVerbs', () => {
         }).length
       ).toBeLessThanOrEqual(3);
     }
+  });
+});
+
+describe('faceDetailsVerb', () => {
+  it('reads an imported face without an edit, even while editing is locked', () => {
+    expect(faceDetailsVerb(false)).toMatchObject({
+      id: 'edit-face',
+      label: 'Face details',
+      disabled: false,
+      pressed: false
+    });
+    expect(faceDetailsVerb(true).pressed).toBe(true);
   });
 });
 

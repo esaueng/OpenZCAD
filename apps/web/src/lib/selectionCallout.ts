@@ -40,6 +40,21 @@ export type SelectionCalloutVerbId =
   `action:${SelectionActionId}` | `tool:${ToolId}` | 'edit-face';
 
 /**
+ * An imported face with no edit of its own (a blind hole, a boss, a pocket):
+ * its card still says what recognition found, or why it declined. Reading
+ * needs no edit access, so it is never disabled.
+ */
+export function faceDetailsVerb(open: boolean): SelectionCalloutVerb {
+  return {
+    id: 'edit-face',
+    label: 'Face details',
+    title: 'What this imported face was recognized as, with its dimensions',
+    disabled: false,
+    pressed: open
+  };
+}
+
+/**
  * The imported face's edit verb, drawn pressed while its card is open, and
  * disabled with the reason while the project cannot be edited here.
  */

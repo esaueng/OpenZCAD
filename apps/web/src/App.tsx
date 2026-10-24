@@ -702,6 +702,7 @@ import {
 } from './lib/interaction/capabilities';
 import {
   editFaceVerb,
+  faceDetailsVerb,
   selectionCalloutVerbs,
   type SelectionCalloutContent,
   type SelectionCalloutKind,
@@ -7148,9 +7149,6 @@ export function App() {
   // so the content below changes only when the verbs themselves do.
   const calloutInteractive =
     !modelingLocked && tool === null && !parameterPreview;
-  // Exactly when the card has an edit to offer: an imported hole or blend
-  // with no operation armed on it (an armed one is edited at its handle,
-  // and the card then hides its own copy of the value).
   // The selection is the one a History row made: its feature pinned and
   // nothing finer than its body picked since.
   const historyRowSelection =
@@ -7158,19 +7156,23 @@ export function App() {
     selectedEdges.length === 0 &&
     (renderedSelectedTopology === null ||
       renderedSelectedTopology.kind === 'body');
-  const calloutImportedFace = (() => {
+  // An imported face's own card: what recognition found (or why it
+  // declined), and for a hole or blend its edits. Only with no operation
+  // armed on it: an armed one is edited at its handle, and the card then
+  // hides its own copy of the value. Null: no such card.
+  const calloutImportedFace = ((): 'edit' | 'details' | null => {
     if (calloutKind !== 'face' || renderedSelectedTopology === null) {
-      return false;
+      return null;
     }
     const body = renderedRepresentations[renderedSelectedTopology.bodyId];
-    if (body?.source !== 'imported-step') return false;
+    if (body?.source !== 'imported-step') return null;
+    if (commandSessionFor(interaction) !== null) return null;
     const featureType = body.topology?.faces.find(
       (face) => face.hash === renderedSelectedTopology.hash
     )?.geometry?.featureType;
-    return (
-      (featureType === 'through-hole' || featureType === 'blend') &&
-      commandSessionFor(interaction) === null
-    );
+    return featureType === 'through-hole' || featureType === 'blend'
+      ? 'edit'
+      : 'details';
   })();
   const calloutVerbsKey =
     calloutKind && calloutInteractive
@@ -7185,9 +7187,11 @@ export function App() {
             pressedAction: calloutPressedAction,
             availability
           }),
-          ...(calloutImportedFace
+          ...(calloutImportedFace === 'edit'
             ? [editFaceVerb(editFaceOpen, editDisabledReason)]
-            : [])
+            : calloutImportedFace === 'details'
+              ? [faceDetailsVerb(editFaceOpen)]
+              : [])
         ])
       : '[]';
   const selectionCallout = useMemo<SelectionCalloutContent | null>(() => {
