@@ -25382,7 +25382,12 @@ export function App() {
                 onPreviewBodyAppearance={previewBodyAppearance}
                 onCommitBodyAppearance={commitBodyAppearance}
                 onCancel={cancelPanel}
-                onClose={closeFeaturePanel}
+                onClose={() => {
+                  // Close keeps the pick but drops Edit face's request, or the
+                  // card it opened would stay mounted on the same pick.
+                  setEditFaceKey(null);
+                  closeFeaturePanel();
+                }}
                 onSelectAllEdges={handleSelectAllEdges}
                 onClearSelectedEdges={handleClearSelectedEdges}
                 document={doc}
