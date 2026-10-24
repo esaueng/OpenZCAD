@@ -8,6 +8,7 @@ import {
   InMemoryPersistenceService,
   isUnreadableStoredDocument,
   markUnreadableStoredDocument,
+  normalizedForLoad,
   ProjectObjectStorageError,
   reconcileCopiedImportSources
 } from '@openzcad/persistence';
@@ -23,6 +24,15 @@ const owner = toUserId('unreadable_owner');
  * than failing the load in a step that walks its contents.
  */
 describe('unreadable stored documents', () => {
+  it.each([null, 'document', 7])(
+    'report a stored %s as an unreadable account copy',
+    (value) => {
+      expect(() =>
+        normalizedForLoad(value as unknown as ProjectDocument)
+      ).toThrow(ProjectObjectStorageError);
+    }
+  );
+
   it('pass through source-alias reconciliation untouched', () => {
     const malformed = markUnreadableStoredDocument({
       ...createProjectDocument('Malformed', owner),

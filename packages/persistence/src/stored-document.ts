@@ -1,5 +1,6 @@
 import { normalizeDocument } from '@openzcad/document-core';
 import type { ProjectDocument } from '@openzcad/shared';
+import { ProjectObjectStorageError } from './project-storage-snapshot';
 
 /** Stored documents this build could not normalize, served as stored. */
 const unreadable = new WeakSet<object>();
@@ -13,6 +14,13 @@ const unreadable = new WeakSet<object>();
  * (source aliases, storage hydration) pass it through untouched.
  */
 export function normalizedForLoad(document: ProjectDocument): ProjectDocument {
+  // A stored value that is not even an object cannot be served as an opaque
+  // document (a null would read as "not found"), so it is reported as an
+  // unreadable account copy, which the browser handles the same way.
+  if (typeof document !== 'object' || document === null)
+    throw new ProjectObjectStorageError(
+      'The stored project document is unreadable.'
+    );
   try {
     return normalizeDocument(document);
   } catch {
