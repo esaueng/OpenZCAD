@@ -22,7 +22,6 @@ import { UnstorableDocumentError } from '@openzcad/document-core';
 import {
   E2EE_UNREFERENCED_BLOB_GRACE_MS,
   MAX_ACCOUNT_ARTIFACT_BYTES,
-  type ArtifactId,
   type ProjectDocument
 } from '@openzcad/shared';
 import { ApiError } from '../apps/web/src/lib/api';
@@ -109,7 +108,7 @@ function withImport(
     commandFactories.importStep({
       name,
       sourceName: 'secret-bracket.step',
-      artifactId: artifactId as ArtifactId,
+      artifactId: artifactId,
       stepSourceRef: {
         marker: 'openzcad-source-ref',
         version: 1,
