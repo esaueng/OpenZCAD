@@ -69,6 +69,7 @@ import {
   type E2eeProjectEnvelopeRecord,
   type E2eeProjectEnvelopeUpload,
   type E2eeProjectState,
+  type E2eeRevisionsResponse,
   type E2eeVersionLogEntry,
   type ListRevisionsResponse,
   type ProjectDocument,
@@ -662,6 +663,42 @@ export function createEncryptedProjectStore(
     return { body, document };
   }
 
+  /**
+   * A named save's own body cannot map its revision (its hash is not known
+   * while it is sealed), so a head that is one is added to the map here:
+   * the head's document names that revision last, and the account lists
+   * it at the head's version and hash. Without it the next version, built
+   * on a head read back after a reload, would drop that save state from
+   * the signed history. It adds no trust: a historical read already
+   * accepts a revision the account places at the verified head.
+   */
+  async function withOwnNamedSave(
+    projectId: string,
+    revisionHashes: Map<string, Uint8Array>,
+    document: ProjectDocument,
+    head: { documentVersion: number; hash: string }
+  ): Promise<void> {
+    const own = document.revisions.at(-1)?.revisionId as string | undefined;
+    if (!own || revisionHashes.has(own)) return;
+    let listed: E2eeRevisionsResponse['revisions'];
+    try {
+      listed = (await api.revisions(projectId)).revisions;
+    } catch {
+      // The map stays as signed; the next read tries again.
+      return;
+    }
+    if (
+      listed.some(
+        (revision) =>
+          revision.revisionId === own &&
+          revision.versionHash === head.hash &&
+          revision.documentVersion === head.documentVersion
+      )
+    ) {
+      revisionHashes.set(own, fromHex(head.hash));
+    }
+  }
+
   /** Reads, verifies and pins the current head (ADR-024, current head). */
   async function readHead(projectId: string): Promise<HeadState> {
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -749,11 +786,16 @@ export function createEncryptedProjectStore(
         const current = await pins.read(userId, projectId);
         if (current?.headHash !== hash) continue;
       }
+      const revisionHashes = new Map(body.revisionVersionHashes);
+      await withOwnNamedSave(projectId, revisionHashes, document, {
+        documentVersion: header.documentVersion,
+        hash
+      });
       const state: HeadState = {
         version: header.documentVersion,
         hash,
         keyEpoch: header.keyEpoch,
-        revisionHashes: new Map(body.revisionVersionHashes),
+        revisionHashes,
         document,
         infoName: heads.get(projectId)?.infoName ?? null,
         infoSequence: Math.max(

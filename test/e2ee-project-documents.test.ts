@@ -513,6 +513,36 @@ describe('version integrity', () => {
     expect(await page.pins.read(OWNER, projectId)).toEqual(pin);
   });
 
+  it('keeps a named save loadable after a reload and the next autosave', async () => {
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document: v1 } = await createEncrypted(laptop);
+    const projectId = v1.projectId;
+    const named = await laptop.store.saveRevision({
+      projectId,
+      reason: 'Before the change',
+      expectedVersion: v1.version,
+      document: v1
+    });
+    const revisionId = named.revisions.at(-1)!.revisionId;
+    // Reloaded: the head is the named save, whose own body cannot name its
+    // own hash in the signed revision map.
+    const page = reload(srv, laptop);
+    const head = await page.store.loadProject(projectId);
+    expect(head.version).toBe(named.version);
+    await save(page, edited(head, 'After the change'), head.version);
+    // The autosave built on that head still names the save state.
+    expect(
+      (await page.store.loadRevision(projectId, revisionId))?.version
+    ).toBe(named.version);
+    // So does a browser that never saw the named save as the head.
+    const desktop = device(srv, owner, 'owner_desktop');
+    await desktop.store.loadProject(projectId);
+    expect(
+      (await desktop.store.loadRevision(projectId, revisionId))?.version
+    ).toBe(named.version);
+  });
+
   it('refuses a revoked author outside its cutoff', async () => {
     const account = await makeAccount('user_revoking', ['dev_a', 'dev_b']);
     const srv = newServer([account]);
