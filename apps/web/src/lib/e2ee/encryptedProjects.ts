@@ -60,6 +60,10 @@ import {
   type ProjectFilesDeps
 } from './encryptedProjectInfo';
 import { versionPins } from './versionPins';
+import {
+  createRevocationCutoffsApi,
+  revocationStatements
+} from './deviceRemoval';
 
 export { E2EE_KEYS_LOCKED_CODE };
 
@@ -147,7 +151,13 @@ async function openStore(userId: string): Promise<{
     api: createProjectGroupsApi(),
     sessions: mlsProjectSessions(),
     account: projectGroupAccount(e2ee, account),
-    device
+    device,
+    // Verified revocation cutoffs (slice 4-10): the MLS directory and
+    // version authorship need one for every removed device.
+    revocations: revocationStatements(createRevocationCutoffsApi(), {
+      list: account.list,
+      generation: account.generation
+    })
   };
   const blobs = createEncryptedContentBlobs({
     groups,

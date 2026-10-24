@@ -54,6 +54,7 @@
  */
 import {
   AuthorshipError,
+  authorCutoffKey,
   EnvelopeKey,
   VersionLogError,
   checkBlobReferences,
@@ -143,7 +144,9 @@ import type { MlsProjectRef } from './mls/projectSessions';
 import {
   createProjectGroup,
   epochAuthenticatorForEpoch,
+  groupBaseForKeyEpoch,
   joinProjectGroup,
+  projectRevocationCutoffs,
   projectKeyForEpoch,
   type ProjectGroupContext
 } from './projectGroups';
@@ -195,8 +198,9 @@ export interface EncryptedProjectContext {
   readonly seal?: DocumentSealer;
   /**
    * This project's cutoffs for revoked devices, keyed by
-   * `authorCutoffKey`. None are recorded yet, so a revoked device's
-   * versions are refused (`revoked-without-cutoff`) unless one is given.
+   * `authorCutoffKey`. By default they come from the identity-signed
+   * revocation cutoffs the groups context verifies (slice 4-10); a revoked
+   * device without one has its versions refused (`revoked-without-cutoff`).
    */
   readonly cutoffs?: (
     projectId: string
@@ -388,6 +392,32 @@ function signingKeyOf(
   return revoked?.device?.signingKey ?? null;
 }
 
+/**
+ * Version cutoffs from the verified revocation cutoffs: a revoked device's
+ * versions are accepted only below its cutoff key epoch and, when the
+ * revoking browser named one, up to its cutoff head.
+ */
+async function groupCutoffs(
+  groups: ProjectGroupContext,
+  projectId: string
+): Promise<ReadonlyMap<string, VersionCutoff>> {
+  const out = new Map<string, VersionCutoff>();
+  if (!groups.account.list.revoked.some((r) => r.kind === 'device')) return out;
+  const cutoffs = await projectRevocationCutoffs(groups, projectId);
+  for (const [deviceId, cutoff] of cutoffs) {
+    out.set(authorCutoffKey(groups.account.userId, deviceId), {
+      keyEpoch: cutoff.keyEpoch,
+      ...(cutoff.head
+        ? {
+            documentVersion: cutoff.head.documentVersion,
+            versionHash: cutoff.head.versionHash
+          }
+        : {})
+    });
+  }
+  return out;
+}
+
 /** Group and key-store refusals become ApiErrors the sync paths understand. */
 function asApiError(error: unknown): unknown {
   if (error instanceof ApiError || !(error instanceof E2eeApiError)) {
@@ -490,7 +520,9 @@ export function createEncryptedProjectStore(
 
   const list = () => groups.account.list;
   const cutoffsFor = async (projectId: string) =>
-    (await ctx.cutoffs?.(projectId)) ?? new Map<string, VersionCutoff>();
+    ctx.cutoffs
+      ? await ctx.cutoffs(projectId)
+      : await groupCutoffs(groups, projectId);
 
   function writableDevice(): CertifyingDevice {
     const device = groups.device;
@@ -569,8 +601,14 @@ export function createEncryptedProjectStore(
       );
     };
     if (author.userId !== userId) refuse();
-    const { group } = await groups.api.group(projectId);
-    const epoch = author.header.keyEpoch - group.keyEpochBase;
+    // Before a group reset (decision D9) the version names an epoch of an
+    // earlier group generation.
+    const { keyEpochBase, current } = await groupBaseForKeyEpoch(
+      groups,
+      projectId,
+      author.header.keyEpoch
+    );
+    const epoch = author.header.keyEpoch - keyEpochBase;
     if (epoch < 0) refuse();
     const signingKey = signingKeyOf(list(), author.deviceId);
     if (!signingKey) refuse();
@@ -578,7 +616,9 @@ export function createEncryptedProjectStore(
       const status = await groups.sessions
         .status(refOf(groups.device, projectId))
         .catch(() => null);
-      const role = status?.roles?.users.find((r) => r.userId === author.userId);
+      const role = current
+        ? status?.roles?.users.find((r) => r.userId === author.userId)
+        : undefined;
       if (
         role &&
         (!['owner', 'editor'].includes(role.role) || role.since > epoch)

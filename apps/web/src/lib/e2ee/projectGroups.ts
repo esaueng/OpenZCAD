@@ -33,6 +33,13 @@
  *   history when an older account key made them, or from a later epoch's
  *   key archive. Key epochs are a monotonic project-key generation
  *   (decision D10): key epoch = the group's key-epoch base + MLS epoch.
+ * - **Device removal** (slice 4-10). Revoked devices get their per-project
+ *   cutoffs (identity-signed statements, `projectRevocationCutoffs`) and
+ *   named replacements in the directory; writers rotate a group past a
+ *   removal before anything else (`ensureProjectRotated`), with a new
+ *   dedupe secret (D8); the named replacement may rejoin a group whose last
+ *   leaf of the user was revoked. An owner alone in a project may replace
+ *   its group under an identity-signed reset (`resetProjectGroup`, D9).
  *
  * Everything the server returns is checked before use: leaf certifications
  * against the device list (`buildDeviceDirectory`), archives against their
@@ -52,16 +59,28 @@ import {
   signProjectEnvelope,
   toBase64Url,
   unwrapKey,
+  verifyGroupReset,
   verifyProjectEnvelopeSignature,
   wrapKey,
   type ArchivedProjectKey,
+  type GroupReset,
   type KeyArchiveBody,
   type ProjectEnvelopeHeaderInit,
+  type RevocationCutoffHead,
+  type RevocationCutoffs,
+  type SignedStatement,
   type VerifiedDeviceList,
   type WrapContext
 } from '@openzcad/crypto';
-import type { CommitRequest, RejoinPsk } from '@openzcad/mls';
 import type {
+  CommitRequest,
+  ProjectRoles,
+  RejoinPsk,
+  SessionStatus
+} from '@openzcad/mls';
+import type {
+  E2eeGroupResetRequest,
+  E2eeGroupResetsResponse,
   E2eeCreateProjectGroupRequest,
   E2eeKeyArchiveRecord,
   E2eeKeyArchivesResponse,
@@ -129,6 +148,13 @@ export interface ProjectGroupsApi {
     projectId: string,
     query?: Omit<KeyQuery, 'purpose'>
   ): Promise<E2eeKeyArchivesResponse>;
+  /** The project's identity-authorized group resets (migration 0036). */
+  resets?(projectId: string): Promise<E2eeGroupResetsResponse>;
+  /** Replace a solo project's group (decision D9; migration 0036). */
+  resetGroup?(
+    projectId: string,
+    request: E2eeGroupResetRequest
+  ): Promise<E2eeProjectGroupResponse>;
 }
 
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -199,7 +225,10 @@ export function createProjectGroupsApi(
           keyEpoch: q.keyEpoch,
           after: q.after
         })}`
-      )
+      ),
+    resets: (projectId) => call(`${base(projectId)}/mls/resets`),
+    resetGroup: (projectId, request) =>
+      call(`${base(projectId)}/mls/reset`, 'POST', request)
   };
 }
 
@@ -217,6 +246,8 @@ export interface ProjectGroupAccount {
   readonly userId: string;
   /** This account's verified, pinned device list. */
   readonly list: VerifiedDeviceList;
+  /** The identity generation of `list`; 1 when absent. */
+  readonly generation?: number;
   /** The current account key and which one it is. */
   currentAccountKey(): Promise<AccountKeyRef>;
   /** An older account key, through the account-key history (a copy). */
@@ -234,6 +265,21 @@ export interface ProjectGroupContext {
   readonly device: CertifyingDevice | null;
   /** Bound on rebuilding a Commit or rejoin that lost its epoch. */
   readonly attempts?: number;
+  /**
+   * This account's identity-signed revocation cutoff statements (slice
+   * 4-10). Without them a revoked device has a cutoff only in groups made
+   * after its revocation, and the directory refuses the rest.
+   */
+  readonly revocations?: RevocationStatements;
+}
+
+/** Where verified revocation cutoff statements come from. */
+export interface RevocationStatements {
+  /**
+   * Every statement of the account's current identity generation, each
+   * verified against `ProjectGroupContext.account.list`.
+   */
+  verified(): Promise<readonly RevocationCutoffs[]>;
 }
 
 /** The account view's keys: the current one, and older ones by history. */
@@ -244,6 +290,7 @@ export function projectGroupAccount(
   return {
     userId: account.userId,
     list: account.list,
+    generation: account.generation,
     async currentAccountKey() {
       const keySequence = accountKeySequences(account.list).at(-1)!;
       return {
@@ -264,7 +311,11 @@ export type ProjectGroupErrorCode =
   | 'server-mismatch'
   | 'archive-invalid'
   | 'key-missing'
-  | 'epoch-lost';
+  | 'epoch-lost'
+  /** A Commit signed by a removed device, after its removal (slice 4-10). */
+  | 'removed-device'
+  /** A reset refused: someone else is in the group, or no confirmation. */
+  | 'reset-refused';
 
 export class ProjectGroupError extends Error {
   override readonly name = 'ProjectGroupError';
@@ -384,8 +435,10 @@ async function foreignLocalState(
  */
 async function directoryFor(
   ctx: ProjectGroupContext,
-  projectId: string
+  projectId: string,
+  known?: E2eeProjectGroupRecord
 ): Promise<DirectoryInput> {
+  const revocationCutoffs = await directoryCutoffs(ctx, projectId, known);
   const { leaves } = await ctx.api.leaves(projectId);
   const certifications: LeafCertification[] = leaves.map((leaf) => {
     if (leaf.userId !== ctx.account.userId) {
@@ -401,7 +454,162 @@ async function directoryFor(
       certification: bytes(leaf.certification)
     };
   });
-  return { lists: [ctx.account.list], certifications };
+  return { lists: [ctx.account.list], certifications, revocationCutoffs };
+}
+
+// --- Revocation cutoffs (slice 4-10) ---------------------------------------
+
+/**
+ * A revoked device's cutoff in one project: the first key epoch it must not
+ * know, and the newest head the revoking browser had accepted (its versions
+ * are accepted only up to that head and below that key epoch).
+ */
+export interface ProjectCutoff {
+  readonly keyEpoch: number;
+  readonly head: RevocationCutoffHead | null;
+  /** True when it comes from a signed statement naming this project. */
+  readonly signed: boolean;
+}
+
+const revokedDevices = (list: VerifiedDeviceList) =>
+  list.revoked.filter((r) => r.kind === 'device');
+
+/** The account key (generation, sequence) that made a group's epoch-0 wrap. */
+const baseWrapKeys = new Map<
+  string,
+  { generation: number; keySequence: number }
+>();
+
+async function baseWrapKey(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  group: E2eeProjectGroupRecord
+): Promise<{ generation: number; keySequence: number } | null> {
+  const id = JSON.stringify([ctx.account.userId, projectId, group.groupId]);
+  const known = baseWrapKeys.get(id);
+  if (known) return known;
+  const found = await openedBaseWrapKey(ctx, projectId, group);
+  if (found) baseWrapKeys.set(id, found);
+  return found;
+}
+
+async function openedBaseWrapKey(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  group: E2eeProjectGroupRecord
+): Promise<{ generation: number; keySequence: number } | null> {
+  const keyEpoch = group.keyEpochBase;
+  const { wraps } = await ctx.api.keys(projectId, {
+    keyEpoch,
+    purpose: 'project-key'
+  });
+  const wrap = wraps.find(
+    (w) => w.keyEpoch === keyEpoch && w.purpose === 'project-key'
+  );
+  if (!wrap) return null;
+  // It must open under the key it names: only a holder of that key made it.
+  const key = await openWrap(
+    ctx,
+    wrap,
+    projectKeyContext(ctx.account.userId, projectId, keyEpoch)
+  ).catch(() => null);
+  if (!key) return null;
+  key.fill(0);
+  return {
+    generation: wrap.accountKeyGeneration,
+    keySequence: wrap.accountKeySequence
+  };
+}
+
+/**
+ * Every revoked device's cutoff in this project, by device id:
+ *
+ * 1. the identity-signed statement of the entry that revoked it, when that
+ *    statement names the project; otherwise
+ * 2. the start of the current group, when that group's epoch-0 project key
+ *    was wrapped under an account key from the revoking entry or later:
+ *    the revoked device never held that key (the removal rotated it), so it
+ *    knows nothing of this group.
+ *
+ * A revoked device with neither has no entry, and the directory (and
+ * version authorship) refuse it rather than guess.
+ */
+export async function projectRevocationCutoffs(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  known?: E2eeProjectGroupRecord
+): Promise<Map<string, ProjectCutoff>> {
+  const out = new Map<string, ProjectCutoff>();
+  const revoked = revokedDevices(ctx.account.list);
+  if (revoked.length === 0) return out;
+  const statements = ctx.revocations ? await ctx.revocations.verified() : [];
+  let group = known;
+  let base: { generation: number; keySequence: number } | null | undefined;
+  const generation = currentGeneration(ctx);
+  for (const device of revoked) {
+    const named = statements
+      .filter((s) => s.entrySequence === device.revokedAt)
+      .flatMap((s) => s.cutoffs.filter((c) => c.projectId === projectId))
+      .sort((a, b) => b.cutoffEpoch - a.cutoffEpoch)[0];
+    if (named) {
+      out.set(device.id, {
+        keyEpoch: named.cutoffEpoch,
+        head: named.head ?? null,
+        signed: true
+      });
+      continue;
+    }
+    group ??= await fetchGroup(ctx, projectId).catch(() => undefined);
+    if (!group) continue;
+    if (base === undefined) base = await baseWrapKey(ctx, projectId, group);
+    if (
+      base &&
+      base.generation === generation &&
+      base.keySequence >= device.revokedAt
+    ) {
+      out.set(device.id, {
+        keyEpoch: group.keyEpochBase,
+        head: null,
+        signed: false
+      });
+    }
+  }
+  return out;
+}
+
+/** The account's identity generation, as the account key names it. */
+function currentGeneration(ctx: ProjectGroupContext): number {
+  return ctx.account.generation ?? 1;
+}
+
+/** The directory's cutoffs: MLS epochs of the current group (never below 0). */
+async function directoryCutoffs(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  known?: E2eeProjectGroupRecord
+): Promise<Map<string, Map<string, number>>> {
+  const revoked = revokedDevices(ctx.account.list);
+  const devices = new Map<string, number>();
+  if (revoked.length) {
+    const group = known ?? (await fetchGroup(ctx, projectId));
+    const cutoffs = await projectRevocationCutoffs(ctx, projectId, group);
+    for (const [deviceId, cutoff] of cutoffs) {
+      devices.set(deviceId, Math.max(0, cutoff.keyEpoch - group.keyEpochBase));
+    }
+  }
+  return new Map([[ctx.account.userId, devices]]);
+}
+
+/** A new group is made after every revocation its creator's list holds. */
+function newGroupCutoffs(
+  ctx: ProjectGroupContext
+): Map<string, Map<string, number>> {
+  return new Map([
+    [
+      ctx.account.userId,
+      new Map(revokedDevices(ctx.account.list).map((r) => [r.id, 0]))
+    ]
+  ]);
 }
 
 // --- Keys and wraps --------------------------------------------------------
@@ -653,6 +861,20 @@ async function openArchive(
   const envelope = bytes(archive.envelope);
   const signing = signerKey(ctx.account.list, archive.signerDeviceId);
   if (!signing) refuse('is signed by a device this account never certified');
+  if (
+    !ctx.account.list.devices.some((d) => d.deviceId === archive.signerDeviceId)
+  ) {
+    // A removed device's archive counts only for epochs it could know.
+    // Without a known cutoff it is left to the key: such a device holds no
+    // project key of an epoch after its removal's rotation, so it cannot
+    // have encrypted that epoch's archive.
+    const cutoff = (await projectRevocationCutoffs(ctx, projectId)).get(
+      archive.signerDeviceId
+    );
+    if (cutoff && keyEpoch >= cutoff.keyEpoch) {
+      refuse('is signed by a removed device after its removal');
+    }
+  }
   const signed = await verifyProjectEnvelopeSignature(
     signing!,
     envelope,
@@ -847,7 +1069,8 @@ export async function createProjectGroup(
   if (stale) await ctx.sessions.discardSession(ref, stale.signatureKey);
   const change = await ctx.sessions.createGroup(ref, device, {
     lists: [ctx.account.list],
-    certifications: []
+    certifications: [],
+    revocationCutoffs: newGroupCutoffs(ctx)
   });
   const leaf = (await ctx.sessions.leaf(ref))!;
   let groupInfo: string | null = null;
@@ -951,6 +1174,11 @@ async function submitPending(
     /** A rejoin's epoch record, from its `RejoinResult`. */
     readonly rejoinRecord?: Uint8Array | null;
     readonly history?: History;
+    /**
+     * A new dedupe secret for the new epoch (decision D8): someone lost
+     * access, so blob tags under the old one must not continue.
+     */
+    readonly replaceDedupeSecret?: boolean;
   }
 ): Promise<Submitted> {
   const ref = refOf(ctx, device, projectId);
@@ -989,7 +1217,9 @@ async function submitPending(
     next.projectKey,
     {
       previousKeys: previousKeysOf(keys, keyEpoch),
-      dedupeSecret,
+      dedupeSecret: pending.replaceDedupeSecret
+        ? generateAssetDedupeSecret()
+        : dedupeSecret,
       epochRecord,
       epochAuthenticator: next.epochAuthenticator
     }
@@ -1046,11 +1276,31 @@ async function submitPending(
 
 // --- Join ------------------------------------------------------------------
 
+/** Devices whose identity-signed revocation named this device as replacement. */
+function replacedDevices(
+  ctx: ProjectGroupContext,
+  device: CertifyingDevice
+): string[] {
+  return revokedDevices(ctx.account.list)
+    .filter((r) => r.replacedBy === device.deviceId)
+    .map((r) => r.id);
+}
+
 /**
  * Join this owner's device to the project's group by external Commit with
- * the newest account-wrapped rejoin PSK (decision D3). Works while every
- * other device is offline. A rejoin that loses its epoch is discarded and
- * rebuilt on the newer GroupInfo.
+ * the newest account-wrapped rejoin PSK (decision D3), then make sure the
+ * group has rotated past every removal (writers enforce rotation). Works
+ * while every other device is offline. A rejoin that loses its epoch is
+ * discarded and rebuilt on the newer GroupInfo.
+ *
+ * - **Last-leaf exception.** When every leaf of this account left in the
+ *   group belongs to a revoked device whose revocation named this device
+ *   as its replacement, the external Commit removes one of those leaves,
+ *   and the policy lets it use the newest PSK from before the revocation.
+ * - **State that cannot follow.** Local state of a group the project no
+ *   longer uses (an identity-authorized reset), or that cannot process a
+ *   Commit a since-removed device sent before its removal, is replaced by
+ *   a fresh leaf that rejoins from the key archives.
  */
 export async function joinProjectGroup(
   ctx: ProjectGroupContext,
@@ -1058,6 +1308,7 @@ export async function joinProjectGroup(
 ): Promise<ProjectGroupState> {
   const device = requireDevice(ctx);
   const ref = refOf(ctx, device, projectId);
+  let fresh = false;
   const foreign = await foreignLocalState(ctx, ref, projectId);
   if (foreign) {
     // A group of this device's own that the server never accepted: drop it
@@ -1067,7 +1318,23 @@ export async function joinProjectGroup(
     // Resolve a rejoin a crash left pending before deciding anything.
     await recoverProjectGroup(ctx, projectId);
     const status = await ctx.sessions.status(ref);
-    if (status.inGroup) return catchUpProjectGroup(ctx, projectId);
+    if (status.inGroup) {
+      try {
+        return await ensureProjectRotated(
+          ctx,
+          projectId,
+          await catchUpProjectGroup(ctx, projectId)
+        );
+      } catch (error) {
+        if (!(
+          error instanceof ProjectGroupError && error.code === 'no-session'
+        ))
+          throw error;
+        fresh = true;
+      }
+    } else if (status.removed) {
+      fresh = true;
+    }
   }
   const attempts = ctx.attempts ?? DEFAULT_ATTEMPTS;
   for (let attempt = 0; attempt < attempts; attempt++) {
@@ -1080,7 +1347,7 @@ export async function joinProjectGroup(
     }
     const history = await loadHistory(ctx, projectId, group);
     const psk = await newestRejoinPsk(ctx, projectId, group);
-    const directory = await directoryFor(ctx, projectId);
+    const directory = await directoryFor(ctx, projectId, group);
     const result = await ctx.sessions.rejoin(
       ref,
       device,
@@ -1094,8 +1361,11 @@ export async function joinProjectGroup(
           epochRecords: history.records
         },
         psk
-      }
+      },
+      { replaceDevices: replacedDevices(ctx, device), fresh }
     );
+    // Written: later attempts restore this state, not the stale one.
+    fresh = false;
     if (result.change.epoch !== group.epoch + 1) {
       await ctx.sessions.discardRejoin(ref);
       throw new ProjectGroupError(
@@ -1103,6 +1373,7 @@ export async function joinProjectGroup(
         `The server's GroupInfo is not from epoch ${group.epoch}.`
       );
     }
+    const revoked = new Set(revokedDevices(ctx.account.list).map((r) => r.id));
     const submitted = await submitPending(
       ctx,
       device,
@@ -1112,12 +1383,15 @@ export async function joinProjectGroup(
       {
         commit: result.commit,
         rejoinRecord: result.change.epochRecord,
-        history
+        history,
+        replaceDedupeSecret:
+          result.change.removed.some((leaf) => revoked.has(leaf.deviceId)) ||
+          (await wrapIsStale(ctx, projectId, group.keyEpochBase + group.epoch))
       }
     );
     if (submitted.accepted) {
       await ctx.sessions.confirmRejoin(ref, directory);
-      return stateOf(submitted.group);
+      return await ensureProjectRotated(ctx, projectId);
     }
     // Another Commit took the epoch: start over from the newer GroupInfo.
     await ctx.sessions.discardRejoin(ref);
@@ -1172,34 +1446,151 @@ async function newestRejoinPsk(
   };
 }
 
-// --- Commit, catch up, recover --------------------------------------------
+// --- Rotation after a removal (slice 4-10) ---------------------------------
+
+/** Wraps already proven to be under the current account key. */
+const currentWraps = new Set<string>();
 
 /**
- * Commit a change (by default an empty Commit, which refreshes this leaf's
- * path secrets) after catching up. If another Commit takes the epoch first,
- * this one is discarded, the winner processed, and the change rebuilt on
- * the new epoch.
+ * Whether `keyEpoch`'s project key is still wrapped only under an account
+ * key older than the current one. Account keys rotate when a device, a
+ * passkey or the read-only devices are removed, and whatever held the old
+ * key can open every wrap made under it, so such an epoch must be left.
+ * A claim of the current key counts only once the wrap opens under it.
  */
-export async function commitProjectGroup(
+async function wrapIsStale(
   ctx: ProjectGroupContext,
   projectId: string,
-  request: CommitRequest = {}
+  keyEpoch: number
+): Promise<boolean> {
+  const current = await ctx.account.currentAccountKey();
+  current.key.fill(0);
+  const id = JSON.stringify([
+    ctx.account.userId,
+    projectId,
+    keyEpoch,
+    current.generation,
+    current.keySequence
+  ]);
+  if (currentWraps.has(id)) return false;
+  const { wraps } = await ctx.api.keys(projectId, {
+    keyEpoch,
+    purpose: 'project-key'
+  });
+  const wrap = wraps.find(
+    (w) => w.keyEpoch === keyEpoch && w.purpose === 'project-key'
+  );
+  if (
+    !wrap ||
+    wrap.accountKeyGeneration !== current.generation ||
+    wrap.accountKeySequence !== current.keySequence
+  ) {
+    return true;
+  }
+  const opened = await openWrap(
+    ctx,
+    wrap,
+    projectKeyContext(ctx.account.userId, projectId, keyEpoch)
+  ).catch(() => null);
+  if (!opened) return true;
+  opened.fill(0);
+  currentWraps.add(id);
+  return false;
+}
+
+/**
+ * What a Commit must carry before anything else is written (ADR-024,
+ * "Writers enforce the rotation"): a Remove of every leaf of a device the
+ * newest device list revokes, or, when there is none but the current
+ * epoch's key is wrapped only under a replaced account key, an empty
+ * Commit for a new epoch. Null when no rotation is due.
+ */
+async function rotationRequest(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  status: SessionStatus,
+  group: E2eeProjectGroupRecord
+): Promise<CommitRequest | null> {
+  const revoked = new Set(revokedDevices(ctx.account.list).map((r) => r.id));
+  const remove = status.members
+    .filter((m) => m.userId === ctx.account.userId && revoked.has(m.deviceId))
+    .map((m) => m.index);
+  if (remove.length) return { remove };
+  if (status.epoch === null) return null;
+  return (await wrapIsStale(ctx, projectId, group.keyEpochBase + status.epoch))
+    ? {}
+    : null;
+}
+
+/**
+ * Finish any rotation a removal left due in this project: Remove the
+ * revoked devices' leaves (or start a new epoch), with the new epoch's
+ * keys under the current account key and a new dedupe secret (decision
+ * D8). This is how another device finishes a removal that went offline
+ * part-way. A no-op once the project has rotated.
+ */
+export async function ensureProjectRotated(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  /** The state a catch-up just reached: skips a second one when nothing is due. */
+  caught?: ProjectGroupState
+): Promise<ProjectGroupState> {
+  if (caught) {
+    const device = requireDevice(ctx);
+    const status = await ctx.sessions.status(refOf(ctx, device, projectId));
+    const group = await fetchGroup(ctx, projectId);
+    if (
+      status.epoch === caught.epoch &&
+      group.epoch === caught.epoch &&
+      !(await rotationRequest(ctx, projectId, status, group))
+    ) {
+      return caught;
+    }
+  }
+  return commitLoop(ctx, projectId, async (status, group) => {
+    const rotation = await rotationRequest(ctx, projectId, status, group);
+    return rotation ? { request: rotation, rotation: true } : null;
+  });
+}
+
+// --- Commit, catch up, recover --------------------------------------------
+
+interface BuiltCommit {
+  readonly request: CommitRequest;
+  /** The Commit carries a due rotation: replace the dedupe secret. */
+  readonly rotation: boolean;
+}
+
+/**
+ * Catch up, build the Commit for the current epoch, submit it with its new
+ * epoch's material, and rebase onto a winner up to `attempts` times. A null
+ * build means nothing needs committing.
+ */
+async function commitLoop(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  build: (
+    status: SessionStatus,
+    group: E2eeProjectGroupRecord
+  ) => Promise<BuiltCommit | null>
 ): Promise<ProjectGroupState> {
   const device = requireDevice(ctx);
   const ref = refOf(ctx, device, projectId);
   const attempts = ctx.attempts ?? DEFAULT_ATTEMPTS;
   for (let attempt = 0; attempt < attempts; attempt++) {
-    await catchUpProjectGroup(ctx, projectId);
+    const caught = await catchUpProjectGroup(ctx, projectId);
     const group = await fetchGroup(ctx, projectId);
-    const directory = await directoryFor(ctx, projectId);
-    const pending = await ctx.sessions.commit(ref, directory, request);
+    const built = await build(await ctx.sessions.status(ref), group);
+    if (!built) return caught;
+    const directory = await directoryFor(ctx, projectId, group);
+    const pending = await ctx.sessions.commit(ref, directory, built.request);
     const submitted = await submitPending(
       ctx,
       device,
       projectId,
       group.keyEpochBase,
       directory,
-      { commit: pending.commit }
+      { commit: pending.commit, replaceDedupeSecret: built.rotation }
     );
     if (submitted.accepted) {
       await ctx.sessions.confirmCommit(ref, directory);
@@ -1212,6 +1603,110 @@ export async function commitProjectGroup(
   throw new ProjectGroupError(
     'epoch-lost',
     'The project kept changing while this device committed. Try again.'
+  );
+}
+
+/**
+ * Commit a change (by default an empty Commit, which refreshes this leaf's
+ * path secrets) after catching up. A rotation a removal left due rides
+ * along in the same Commit. If another Commit takes the epoch first, this
+ * one is discarded, the winner processed, and the change rebuilt on the
+ * new epoch.
+ */
+export function commitProjectGroup(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  request: CommitRequest = {}
+): Promise<ProjectGroupState> {
+  return commitLoop(ctx, projectId, async (status, group) => {
+    const rotation = await rotationRequest(ctx, projectId, status, group);
+    if (!rotation) return { request, rotation: false };
+    const remove = [
+      ...new Set([...(request.remove ?? []), ...(rotation.remove ?? [])])
+    ];
+    return {
+      request: { ...request, ...(remove.length ? { remove } : {}) },
+      rotation: true
+    };
+  });
+}
+
+const isPolicyRefusal = (error: unknown, code: string) =>
+  error instanceof Error &&
+  error.name === 'MlsError' &&
+  (error as { kind?: unknown }).kind === 'policy' &&
+  ((error as { reasons?: { code?: unknown }[] }).reasons ?? []).some(
+    (reason) => reason.code === code
+  );
+
+/** Sessions proven to belong to the server's current group generation. */
+const currentGenerations = new Set<string>();
+
+/**
+ * After a reset (generation > 0) a session from an earlier group would read
+ * the new group's epochs as its own: its epoch authenticator must match the
+ * one the key archive of its key epoch records.
+ */
+async function requireCurrentGeneration(
+  ctx: ProjectGroupContext,
+  ref: MlsProjectRef,
+  group: E2eeProjectGroupRecord,
+  epoch: number
+): Promise<void> {
+  if (group.generation === 0) return;
+  const stale = () =>
+    new ProjectGroupError(
+      'no-session',
+      'This device’s encryption state is from before the project’s group was reset.'
+    );
+  if (epoch > group.epoch) throw stale();
+  const keyEpoch = group.keyEpochBase + epoch;
+  const id = JSON.stringify([
+    ref.userId,
+    ref.projectId,
+    group.groupId,
+    keyEpoch
+  ]);
+  if (currentGenerations.has(id)) return;
+  const own = (await ctx.sessions.epochMaterial(ref)).epochAuthenticator;
+  const recorded = await epochAuthenticatorForEpoch(
+    ctx,
+    ref.projectId,
+    keyEpoch
+  ).catch(() => null);
+  if (!recorded || !sameBytes(own, recorded)) throw stale();
+  currentGenerations.add(id);
+}
+
+/**
+ * A Commit the policy refused because a revoked device signed it. One sent
+ * before the epoch the removal's rotation was made in is history this state
+ * can no longer process: the device rejoins from the key archives
+ * (`no-session`). One sent in or after that epoch is a removed device's
+ * later Commit, and is refused (`removed-device`).
+ */
+async function revokedCommitter(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  group: E2eeProjectGroupRecord,
+  commit: E2eeMlsCommitRecord
+): Promise<ProjectGroupError> {
+  const cutoffs = await projectRevocationCutoffs(ctx, projectId, group);
+  const cutoff = commit.senderDeviceId
+    ? cutoffs.get(commit.senderDeviceId)
+    : undefined;
+  if (
+    cutoff?.signed &&
+    group.keyEpochBase + commit.epoch < cutoff.keyEpoch - 1
+  ) {
+    return new ProjectGroupError(
+      'no-session',
+      'This device must rejoin the project: it missed Commits from a device that has since been removed.'
+    );
+  }
+  return new ProjectGroupError(
+    'removed-device',
+    `The server delivered a Commit for epoch ${commit.epoch} signed by a removed device. It was refused.`
   );
 }
 
@@ -1250,6 +1745,7 @@ export async function catchUpProjectGroup(
       );
     }
     let epoch = status.epoch;
+    await requireCurrentGeneration(ctx, ref, group, epoch);
     const page = await ctx.api.commits(projectId, epoch);
     if (page.commits.length === 0) {
       if (group.epoch > epoch) {
@@ -1262,7 +1758,7 @@ export async function catchUpProjectGroup(
     }
     // Leaves are stored with the Commit that adds them, so reading them
     // after the Commits covers every leaf those Commits name.
-    const directory = await directoryFor(ctx, projectId);
+    const directory = await directoryFor(ctx, projectId, group);
     for (const commit of page.commits) {
       if (commit.epoch !== epoch) {
         throw new ProjectGroupError(
@@ -1270,11 +1766,19 @@ export async function catchUpProjectGroup(
           `The server skipped from epoch ${epoch} to ${commit.epoch}.`
         );
       }
-      const processed = await ctx.sessions.process(
-        ref,
-        directory,
-        bytes(commit.message)
-      );
+      let processed;
+      try {
+        processed = await ctx.sessions.process(
+          ref,
+          directory,
+          bytes(commit.message)
+        );
+      } catch (error) {
+        if (isPolicyRefusal(error, 'credential-revoked')) {
+          throw await revokedCommitter(ctx, projectId, group, commit);
+        }
+        throw error;
+      }
       if (processed.kind !== 'commit') {
         throw new ProjectGroupError(
           'server-mismatch',
@@ -1299,9 +1803,11 @@ export type Recovery = 'none' | 'confirmed' | 'discarded' | 'resent';
  * Resolve a Commit (or rejoin) that a crash, a reload or a lost response
  * left pending: confirm it when the server's winner for its epoch is this
  * very Commit; otherwise discard it (the next catch-up processes the
- * winner). A member's Commit nobody ruled on is sent again; a rejoin nobody
- * ruled on is discarded, since its epoch record lived only in memory, and
- * the next join builds a fresh one.
+ * winner). A member's Commit nobody ruled on is sent again, unless a
+ * removal has made a rotation due since it was built: then it is dropped,
+ * so the next Commit carries the rotation. A rejoin nobody ruled on is
+ * discarded, since its epoch record lived only in memory, and the next
+ * join builds a fresh one.
  */
 export async function recoverProjectGroup(
   ctx: ProjectGroupContext,
@@ -1344,7 +1850,11 @@ export async function recoverProjectGroup(
       `The server's group is at epoch ${group.epoch} with no Commit for epoch ${epoch}.`
     );
   }
-  const directory = await directoryFor(ctx, projectId);
+  if (await rotationRequest(ctx, projectId, status, group)) {
+    await ctx.sessions.discardCommit(ref);
+    return 'discarded';
+  }
+  const directory = await directoryFor(ctx, projectId, group);
   const submitted = await submitPending(
     ctx,
     device,
@@ -1359,4 +1869,232 @@ export async function recoverProjectGroup(
   }
   await ctx.sessions.discardCommit(ref);
   return 'discarded';
+}
+
+// --- Solo group reset (decision D9) ----------------------------------------
+
+/**
+ * The plain words the owner confirms before a reset (ADR-024: the user must
+ * confirm, in plain words, that the project has no collaborators).
+ */
+export const GROUP_RESET_CONFIRMATION =
+  'Nobody else has access to this project. Reset its encryption group.';
+
+export interface GroupResetAuthority {
+  /** The identity generation of the account's device list. */
+  readonly generation: number;
+  /** Signs the reset with the identity key (`signGroupReset`). */
+  sign(reset: GroupReset): Promise<SignedStatement>;
+}
+
+/** The roles the newest group state this device can find lists. */
+async function newestRoles(
+  ctx: ProjectGroupContext,
+  ref: MlsProjectRef,
+  group: E2eeProjectGroupRecord
+): Promise<{ roles: ProjectRoles | null; others: boolean }> {
+  const ownUser = ctx.account.userId;
+  const summary = await ctx.sessions.inspectGroupInfo(
+    ref,
+    bytes(group.groupInfo)
+  );
+  let roles = summary.roles;
+  let others = summary.members.some((member) => member.userId !== ownUser);
+  // This device's own verified state, when it still holds the group.
+  if (await ctx.sessions.leaf(ref)) {
+    const status = await ctx.sessions.status(ref).catch(() => null);
+    if (status?.roles) roles = status.roles;
+    if (status?.members.some((member) => member.userId !== ownUser)) {
+      others = true;
+    }
+  }
+  return { roles, others };
+}
+
+/** Every project key up to `keyEpoch`, from the account wraps and archives. */
+async function carriedKeys(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  keyEpoch: number
+): Promise<Map<number, Uint8Array>> {
+  const keys = new Map<number, Uint8Array>();
+  const newest = await projectKeyForEpoch(ctx, projectId, keyEpoch);
+  keys.set(keyEpoch, newest);
+  try {
+    const body = await openArchive(
+      ctx,
+      projectId,
+      keyEpoch,
+      newest,
+      await fetchArchive(ctx, projectId, keyEpoch)
+    );
+    for (const k of body.previousKeys) keys.set(k.keyEpoch, k.key);
+  } catch {
+    // Fall back to each epoch's own wrap below.
+  }
+  for (let epoch = 0; epoch < keyEpoch; epoch++) {
+    if (keys.has(epoch)) continue;
+    keys.set(epoch, await projectKeyForEpoch(ctx, projectId, epoch));
+  }
+  return keys;
+}
+
+/**
+ * Replace a solo project's MLS group (ADR-024, "The user is the only
+ * member"; decision D9). Only the owner, only while the roles extension
+ * and the group list nobody else, and only after the owner confirmed the
+ * plain-words statement. The identity key signs the reset; the server
+ * moves the group to the next generation with a key-epoch base right after
+ * the old group's newest key epoch (decision D10), and this device creates
+ * the new epoch 0. Every earlier project key, opened from the account-key
+ * wraps, is carried into the new epoch's key archive, so old versions stay
+ * readable; the version chain continues under the new group's epochs.
+ *
+ * A reset is a recovery tool: a compromised server could show an epoch
+ * from before collaborators joined, and the reset would fork the project
+ * away from them. It claims nothing stronger.
+ */
+export async function resetProjectGroup(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  authority: GroupResetAuthority,
+  confirmation: string
+): Promise<ProjectGroupState> {
+  const refuse = (message: string): never => {
+    throw new ProjectGroupError('reset-refused', message);
+  };
+  if (confirmation !== GROUP_RESET_CONFIRMATION) {
+    refuse('Confirm that nobody else has access to this project first.');
+  }
+  const resetGroup = ctx.api.resetGroup;
+  if (!resetGroup) refuse('This build cannot reset encryption groups.');
+  const device = requireDevice(ctx);
+  const ref = refOf(ctx, device, projectId);
+  const group = await fetchGroup(ctx, projectId);
+  const { leaves } = await ctx.api.leaves(projectId);
+  if (leaves.some((leaf) => leaf.userId !== ctx.account.userId)) {
+    refuse('Another account holds a key in this project.');
+  }
+  const { roles, others } = await newestRoles(ctx, ref, group);
+  if (
+    others ||
+    !roles ||
+    roles.users.length !== 1 ||
+    roles.users[0]!.userId !== ctx.account.userId ||
+    roles.users[0]!.role !== 'owner'
+  ) {
+    refuse('Only a project whose only member is you can be reset.');
+  }
+  const priorKeyEpoch = group.keyEpochBase + group.epoch;
+  const keys = await carriedKeys(ctx, projectId, priorKeyEpoch);
+  const head = ctx.account.list.entries.at(-1)!;
+  const signed = await authority.sign({
+    userId: ctx.account.userId,
+    generation: authority.generation,
+    entrySequence: head.entry.sequence,
+    entryHash: head.hash,
+    projectId,
+    priorGroupGeneration: group.generation,
+    priorKeyEpoch,
+    issuedAt: Date.now()
+  });
+  const change = await ctx.sessions.createGroup(
+    ref,
+    device,
+    {
+      lists: [ctx.account.list],
+      certifications: [],
+      revocationCutoffs: newGroupCutoffs(ctx)
+    },
+    { replace: true }
+  );
+  if (!change.epochRecord) {
+    throw new Error('A new MLS group produced no epoch record.');
+  }
+  const material = await ctx.sessions.epochMaterial(ref);
+  const leaf = (await ctx.sessions.leaf(ref))!;
+  const keyEpoch = priorKeyEpoch + 1;
+  const archive = await sealArchive(
+    device,
+    projectId,
+    keyEpoch,
+    material.projectKey,
+    {
+      previousKeys: previousKeysOf(keys, keyEpoch),
+      // Whoever lost access may know the old one (decision D8).
+      dedupeSecret: generateAssetDedupeSecret(),
+      epochRecord: change.epochRecord,
+      epochAuthenticator: material.epochAuthenticator
+    }
+  );
+  const { group: next } = await resetGroup!(projectId, {
+    statement: b64(signed.statement),
+    signature: b64(signed.signature),
+    groupId: `grp_${toHexId()}`,
+    deviceId: device.deviceId,
+    groupInfo: b64(material.groupInfo),
+    leaf: {
+      leafKey: b64(leaf.signatureKey),
+      certification: b64(leaf.certification)
+    },
+    wraps: await wrapEpochKeys(
+      ctx,
+      projectId,
+      keyEpoch,
+      material.projectKey,
+      material.rejoinPsk
+    ),
+    archive
+  });
+  rememberProjectKey(
+    ctx.account.userId,
+    projectId,
+    keyEpoch,
+    material.projectKey
+  );
+  return stateOf(next);
+}
+
+/**
+ * The key-epoch base of the group generation that wrote `keyEpoch`, and
+ * whether that is the current group: versions written before a reset name
+ * epochs of an earlier group. Earlier bases come from the recorded resets,
+ * each checked against its signed statement (verified by the identity key
+ * when it is of the current identity generation).
+ */
+export async function groupBaseForKeyEpoch(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  keyEpoch: number
+): Promise<{ keyEpochBase: number; current: boolean }> {
+  const group = await fetchGroup(ctx, projectId);
+  if (keyEpoch >= group.keyEpochBase) {
+    return { keyEpochBase: group.keyEpochBase, current: true };
+  }
+  const bases = [0];
+  const { resets } = ctx.api.resets
+    ? await ctx.api.resets(projectId)
+    : { resets: [] };
+  for (const reset of resets) {
+    const signed = {
+      statement: bytes(reset.statement),
+      signature: bytes(reset.signature)
+    };
+    const value =
+      reset.identityGeneration === currentGeneration(ctx)
+        ? await verifyGroupReset(signed, ctx.account.list, {
+            generation: reset.identityGeneration
+          }).catch(() => null)
+        : null;
+    if (
+      value &&
+      value.projectId === projectId &&
+      value.priorKeyEpoch + 1 === reset.keyEpochBase &&
+      value.priorGroupGeneration + 1 === reset.generation
+    ) {
+      bases.push(reset.keyEpochBase);
+    }
+  }
+  const keyEpochBase = Math.max(...bases.filter((base) => base <= keyEpoch));
+  return { keyEpochBase, current: false };
 }

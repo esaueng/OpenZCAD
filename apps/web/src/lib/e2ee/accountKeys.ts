@@ -28,6 +28,7 @@ import {
   sealKey,
   signDeviceApprovalGrant,
   signDeviceListEntry,
+  signGroupReset,
   signIdentityTransition,
   toBase32,
   toBase64Url,
@@ -43,6 +44,8 @@ import {
   type DeviceListPin,
   type ListedDevice,
   type SigningPrivateKey,
+  type GroupReset,
+  type SignedStatement,
   type UnlockTarget,
   type VerifiedDeviceList
 } from '@openzcad/crypto';
@@ -1398,20 +1401,25 @@ async function enrollWithUnlockMethodLocked(
  * account-key history), and when this device is certified the revocation
  * names it as the removed device's replacement.
  *
- * Project-key epochs follow in Phases 4 and 5; no project is encrypted yet.
+ * Encrypted projects (ADR-024 Phase 4, slice 4-10): a `participant`
+ * (`deviceRemoval.ts`) first refuses a removal it could not finish, then,
+ * with the identity key this removal opened, signs each project's
+ * revocation cutoff and rotates every project past the removal.
  */
 export function removeDevice(
   ctx: E2eeContext,
   account: AccountView,
   deviceId: string,
-  authorization: UnlockAuthorization
+  authorization: UnlockAuthorization,
+  participant?: RemovalParticipantStep
 ): Promise<EncryptionState> {
   return rotateAccountKeys(
     authorization === 'passkey' ? passkeyContext(ctx) : ctx,
     account,
     deviceId,
     'device',
-    authorization
+    authorization,
+    participant
   );
 }
 
@@ -1419,14 +1427,16 @@ export function removePasskey(
   ctx: E2eeContext,
   account: AccountView,
   targetId: string,
-  authorization: UnlockAuthorization
+  authorization: UnlockAuthorization,
+  participant?: RemovalParticipantStep
 ): Promise<EncryptionState> {
   return rotateAccountKeys(
     authorization === 'passkey' ? passkeyContext(ctx) : ctx,
     account,
     targetId,
     'passkey',
-    authorization
+    authorization,
+    participant
   );
 }
 
@@ -1434,15 +1444,33 @@ export function removePasskey(
 export function revokeReadOnlyDevices(
   ctx: E2eeContext,
   account: AccountView,
-  authorization: UnlockAuthorization
+  authorization: UnlockAuthorization,
+  participant?: RemovalParticipantStep
 ): Promise<EncryptionState> {
   return rotateAccountKeys(
     authorization === 'passkey' ? passkeyContext(ctx) : ctx,
     account,
     '', // Aggregate rotation does not remove a certified id.
     'read-only',
-    authorization
+    authorization,
+    participant
   );
+}
+
+/**
+ * What a removal asks of encrypted projects (`removalParticipant` in
+ * `deviceRemoval.ts`, loaded lazily by the caller): `prepare` runs before
+ * the identity key is opened and may refuse; `complete` runs once the new
+ * device list is accepted, with the identity key still open, and reports
+ * rather than throws.
+ */
+export interface RemovalParticipantStep {
+  prepare(account: AccountView): Promise<void>;
+  complete(step: {
+    readonly kind: 'device' | 'passkey' | 'read-only';
+    readonly identityPrivateKey: CryptoKey;
+    readonly account: AccountView;
+  }): Promise<unknown>;
 }
 
 async function rotateAccountKeys(
@@ -1450,11 +1478,19 @@ async function rotateAccountKeys(
   account: AccountView,
   id: string,
   kind: 'device' | 'passkey' | 'read-only',
-  authorization: UnlockAuthorization
+  authorization: UnlockAuthorization,
+  participant?: RemovalParticipantStep
 ): Promise<EncryptionState> {
   return ctx.store.withDeviceLock(ctx.userId, async () => {
     requireActiveKeyContext(ctx);
-    return rotateAccountKeysLocked(ctx, account, id, kind, authorization);
+    return rotateAccountKeysLocked(
+      ctx,
+      account,
+      id,
+      kind,
+      authorization,
+      participant
+    );
   });
 }
 
@@ -1463,7 +1499,8 @@ async function rotateAccountKeysLocked(
   account: AccountView,
   id: string,
   kind: 'device' | 'passkey' | 'read-only',
-  authorization: UnlockAuthorization
+  authorization: UnlockAuthorization,
+  participant?: RemovalParticipantStep
 ): Promise<EncryptionState> {
   if (kind === 'device' && id === account.device?.deviceId) {
     throw new EncryptionFlowError(
@@ -1471,6 +1508,8 @@ async function rotateAccountKeysLocked(
       'Remove this device by signing out and removing its keys.'
     );
   }
+  await participant?.prepare(account);
+  requireActiveKeyContext(ctx);
   const { identityPrivateKey, accountKey: oldAccountKey } = await openIdentity(
     ctx,
     account,
@@ -1539,7 +1578,15 @@ async function rotateAccountKeysLocked(
       pin: account.list.pin,
       written: signed.entry
     });
-    return loadEncryption(ctx);
+    const state = await loadEncryption(ctx);
+    if (participant && state.kind === 'ready' && state.account.unlocked) {
+      await participant.complete({
+        kind,
+        identityPrivateKey,
+        account: state.account
+      });
+    }
+    return state;
   } finally {
     oldAccountKey.fill(0);
     accountKey.fill(0);
@@ -1582,6 +1629,36 @@ async function openDeviceAccountKey(
     );
   }
   return accountKey;
+}
+
+/**
+ * Signs one solo group reset (decision D9) with the identity key, opened by
+ * the recovery key or a passkey for this signature alone and then dropped.
+ * The caller (`resetProjectGroup`) has checked the group and the owner's
+ * plain-words confirmation; this only binds the reset to the current
+ * device-list head the account view verified.
+ */
+export async function signGroupResetWithIdentity(
+  ctx: E2eeContext,
+  account: AccountView,
+  authorization: UnlockAuthorization,
+  reset: GroupReset
+): Promise<SignedStatement> {
+  const opContext = authorization === 'passkey' ? passkeyContext(ctx) : ctx;
+  return opContext.store.withDeviceLock(ctx.userId, async () => {
+    requireActiveKeyContext(opContext);
+    const { identityPrivateKey, accountKey } = await openIdentity(
+      opContext,
+      account,
+      authorization
+    );
+    accountKey.fill(0);
+    requireActiveKeyContext(opContext);
+    return signGroupReset(identityPrivateKey, {
+      ...reset,
+      generation: account.generation
+    });
+  });
 }
 
 /**
