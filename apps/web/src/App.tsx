@@ -8747,7 +8747,9 @@ export function App() {
         sweepCurveExists(current, sketchId, entityId),
       body: (bodyId) => inPlaceBodyPick(bodyId),
       laterTransforms: laterInPlaceSteps(current, feature),
-      datumAxis: (featureId) => current.derived.datumAxes?.[featureId] ?? null
+      datumAxis: (featureId) => current.derived.datumAxes?.[featureId] ?? null,
+      bodyVertices: (bodyId) =>
+        representations[bodyId]?.mesh.vertices ?? null
     });
     if (!armed) return false;
     // A running command (another edit, a create) gives way quietly.
@@ -20088,9 +20090,12 @@ export function App() {
         {
           evaluate: (value) =>
             evalParamValue(value, parameterScope.scope, doc.units),
-          datumAxis: (featureId) => doc.derived.datumAxes?.[featureId] ?? null
+          datumAxis: (featureId) => doc.derived.datumAxes?.[featureId] ?? null,
+          bodyVertices: (bodyId) =>
+        representations[bodyId]?.mesh.vertices ?? null
         },
-        live ? laterInPlaceSteps(doc, live) : []
+        live ? laterInPlaceSteps(doc, live) : [],
+        !(live && isFeatureSuppressed(live))
       );
       const same =
         JSON.stringify([box.min, box.max]) ===
