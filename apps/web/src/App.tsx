@@ -4392,10 +4392,11 @@ export function App() {
     feature: FeatureNode,
     value: ExtrudeFormValue | null
   ) {
-    edgeFormPreview.clear();
     setFeatureFormError(null);
-    if (!value || geometryBusy || !feature.bodyId || !managerRef.current)
+    if (!value || geometryBusy || !feature.bodyId || !managerRef.current) {
+      edgeFormPreview.clear();
       return;
+    }
     try {
       const command = extrudeEditCommand(feature, value);
       command.validate(managerRef.current.document);
@@ -4404,10 +4405,13 @@ export function App() {
         bodyId: feature.bodyId,
         extrude: feature.featureId
       };
-      edgeFormPreview.request(
+      // The last preview stays up until this value's arrives: clearing it
+      // first showed the unextruded part for a rebuild on every keystroke.
+      edgeFormPreview.replace(
         extrudePreviewMagnitude(value, resolveDocumentValue)
       );
     } catch (error) {
+      edgeFormPreview.clear();
       setFeatureFormError(
         errorMessage(error, 'Unable to preview this extrusion.')
       );
@@ -4417,7 +4421,9 @@ export function App() {
   function applyExtrudeForm(feature: FeatureNode, value: ExtrudeFormValue) {
     if (geometryBusy || !feature.bodyId || !doc) return;
     const editSession = editCardSessionRef.current;
-    edgeFormPreview.clear();
+    // Validation rebuilds what the preview already shows: keep it up until
+    // the commit replaces it, or the edit is refused.
+    edgeFormPreview.stop();
     const request = ++extrudeEditRequest.current;
     void executeValidatedFeature(extrudeEditCommand(feature, value), {
       featureName: value.name,
@@ -4428,10 +4434,15 @@ export function App() {
           index === 0 ? { ...target, featureName: value.name } : target
       ),
       successMessage: `Edit ${value.name}`,
-      onSuccess: () => finishFeatureEdit(feature, editSession),
+      onSuccess: () => {
+        edgeFormPreview.clear();
+        finishFeatureEdit(feature, editSession);
+      },
       cancelled: () =>
         request !== extrudeEditRequest.current ||
         !editSessionIsCurrent(feature, editSession)
+    }).then((outcome) => {
+      if (outcome !== 'committed') edgeFormPreview.clear();
     });
   }
 
@@ -4468,7 +4479,8 @@ export function App() {
       feature?.bodyId ??
       ('ids' in command.payload ? command.payload.ids?.bodyId : undefined);
     if (!bodyId || !doc) return;
-    edgeFormPreview.clear();
+    // As for Extrude: the preview stays until the commit or a refusal.
+    edgeFormPreview.stop();
     setEdgeFormSize(null);
     void executeValidatedFeature(command, {
       featureName: refreshedValue.name,
@@ -4482,12 +4494,16 @@ export function App() {
           }
         : {}),
       successMessage: `${refreshedValue.name} applied.`,
-      onSuccess: feature
-        ? () => finishFeatureEdit(feature, editSession)
-        : finishFeatureCreation,
+      onSuccess: () => {
+        edgeFormPreview.clear();
+        if (feature) finishFeatureEdit(feature, editSession);
+        else finishFeatureCreation();
+      },
       ...(feature
         ? { cancelled: () => !editSessionIsCurrent(feature, editSession) }
         : {})
+    }).then((outcome) => {
+      if (outcome !== 'committed') edgeFormPreview.clear();
     });
   }
 
@@ -15218,28 +15234,30 @@ export function App() {
       ? `${interaction.target.sketchId}:${interaction.targets.map((target) => target.regionFingerprint).join(',')}:${JSON.stringify(interaction.extrudeChoice)}`
       : null;
   useEffect(() => {
-    regionExtrudePreview.clear();
     setPreviewDeferred(false);
     setLastValidPreview(null);
     const current = interactionRef.current;
-    if (current.mode === 'region') {
-      const distance =
-        regionExtrudeSettings.current?.distance ?? current.lastValue;
-      if (distance) {
-        try {
-          regionExtrudePreview.request(
-            resolveParamValue(
-              distance,
-              parameterScopeRef.current.scope,
-              'distance',
-              managerRef.current?.document.units
-            )
-          );
-        } catch {
-          // Incomplete expressions keep the form open without a preview.
-        }
+    const distance =
+      current.mode === 'region'
+        ? (regionExtrudeSettings.current?.distance ?? current.lastValue)
+        : null;
+    let resolved: number | null = null;
+    if (distance) {
+      try {
+        resolved = resolveParamValue(
+          distance,
+          parameterScopeRef.current.scope,
+          'distance',
+          managerRef.current?.document.units
+        );
+      } catch {
+        // Incomplete expressions keep the form open without a preview.
       }
     }
+    // A new choice or region set replaces the preview on screen when it
+    // lands, rather than blanking it for the rebuild.
+    if (resolved === null) regionExtrudePreview.clear();
+    else regionExtrudePreview.replace(resolved);
   }, [regionInteractionKey, regionExtrudePreview]);
 
   /**
@@ -18545,10 +18563,13 @@ export function App() {
       exact = 1;
     }
     const preview = reusableRegionExtrudePreview.current;
-    // Read before clear(): the frame keeps running either way, and a commit
+    // Read before stop(): the frame keeps running either way, and a commit
     // for the same extrusion awaits it rather than queuing a second rebuild.
     const running = regionExtrudePreview.running;
-    regionExtrudePreview.clear();
+    // The preview on screen stays while the extrusion is checked; the commit
+    // or the refusal takes it down. Clearing it here showed the bare sketch
+    // for the whole validation.
+    regionExtrudePreview.stop();
     setPreviewDeferred(false);
     const input = regionExtrudeInputFor(target, exact ?? rounded);
     const choice = regionExtrudeSettings.current?.choice ??
@@ -18560,7 +18581,10 @@ export function App() {
     const request = ++regionExtrudeCommitRequest.current;
     void (async () => {
       const manager = managerRef.current;
-      if (!manager) return;
+      if (!manager) {
+        regionExtrudePreview.clear();
+        return;
+      }
       const base = manager.document;
       const isCurrent = () =>
         request === regionExtrudeCommitRequest.current &&
@@ -18626,7 +18650,10 @@ export function App() {
             : null;
           throw mixed ? new Error(mixed) : error;
         }
-        if (!resolved || !isCurrent()) return;
+        if (!resolved || !isCurrent()) {
+          if (isCurrent()) regionExtrudePreview.clear();
+          return;
+        }
         // One drag is one operation: selected profiles that would not each
         // extrude the same way are refused, not silently merged into one.
         const mixed = await regionInferenceRefusal(
@@ -18640,7 +18667,7 @@ export function App() {
         const resultBodyId = command.payload.ids?.bodyId;
         if (!resultBodyId)
           throw new Error('Extrude could not reserve a result body.');
-        await executeValidatedDirectEdit(
+        const committed = await executeValidatedDirectEdit(
           command,
           resultBodyId,
           regionExtrudeOutcome(resolved, rounded, doc?.units),
@@ -18660,8 +18687,12 @@ export function App() {
             derived: resolved.derived
           }
         );
+        // A commit or refusal already took the preview down; a run turned
+        // away while another was in flight did not.
+        if (!committed && isCurrent()) regionExtrudePreview.clear();
       } catch (error) {
         if (isCurrent()) {
+          regionExtrudePreview.clear();
           reportPreviewFailure(
             errorMessage(error, 'The selected extrusion could not be created.'),
             rounded
@@ -19403,15 +19434,19 @@ export function App() {
         : null;
     const command =
       reuse?.candidate.command ?? buildEdgeModifierCommand(exact ?? rounded);
-    edgePreview.clear();
     if (
       !command ||
       rounded <= 0 ||
       !('targetBodyId' in command.payload) ||
       !('edgeHashes' in command.payload)
     ) {
+      edgePreview.clear();
       return;
     }
+    // The blend on screen stays while it is checked; the commit or the
+    // refusal takes it down. Clearing it here showed the sharp edges for the
+    // whole validation whenever the release outran its preview.
+    edgePreview.stop();
     const op = interaction.op;
     const resultBodyId =
       command.payload.ids?.bodyId ?? command.payload.targetBodyId;
@@ -19422,14 +19457,15 @@ export function App() {
       resultBodyId,
       `${op === 'fillet' ? 'Filleted' : 'Chamfered'} ${command.payload.edgeHashes.length} edge${command.payload.edgeHashes.length === 1 ? '' : 's'} at ${rounded} ${doc?.units ?? ''}.`,
       rounded,
-      op === 'fillet'
-        ? () => {
-            pendingBlendRearmRef.current = {
-              bodyId: resultBodyId,
-              before: facesBefore
-            };
-          }
-        : undefined,
+      () => {
+        edgePreview.clear();
+        if (op === 'fillet') {
+          pendingBlendRearmRef.current = {
+            bodyId: resultBodyId,
+            before: facesBefore
+          };
+        }
+      },
       undefined,
       reuse
         ? {
@@ -19438,7 +19474,9 @@ export function App() {
             derived: reuse.derived
           }
         : undefined
-    );
+    ).then((committed) => {
+      if (!committed) edgePreview.clear();
+    });
   }
 
   /** Edge chip tapped: exact entry for the blend radius/distance. */
@@ -19539,7 +19577,8 @@ export function App() {
     if (!command) {
       return;
     }
-    edgePreview.clear();
+    // As for a new blend: the preview stays until the commit or a refusal.
+    edgePreview.stop();
     const removing = size <= 1e-9;
     const sourceFace = base.derived.bodyRepresentations[
       current.target.bodyId as BodyId
@@ -19574,8 +19613,9 @@ export function App() {
         : `Set ${feature?.name ?? 'imported blend'} radius to R ${formatNumber(size)} ${base.units}.`,
       size,
       removing
-        ? undefined
+        ? () => edgePreview.clear()
         : () => {
+            edgePreview.clear();
             const committed = managerRef.current?.document;
             const faces =
               committed?.derived.bodyRepresentations[
@@ -19692,7 +19732,9 @@ export function App() {
             derived: reuse.derived
           }
         : undefined
-    );
+    ).then((committed) => {
+      if (!committed) edgePreview.clear();
+    });
   }
 
   /** Chip tapped: open the anchored keypad prefilled with the drag value. */
@@ -25391,16 +25433,21 @@ export function App() {
                       });
                     }}
                     onPreview={(value) => {
-                      regionExtrudePreview.clear();
                       setLastValidPreview(null);
-                      if (!value) return;
+                      if (!value) {
+                        regionExtrudePreview.clear();
+                        return;
+                      }
                       const distance = resolveDocumentValue(value.distance);
                       offsetSetterRef.current?.(distance);
                       dispatchInteraction({
                         type: 'set-extrude-choice',
                         choice: value.choice
                       });
-                      regionExtrudePreview.request(distance);
+                      // The last preview stays up until this one lands:
+                      // clearing first showed the bare sketch for a whole
+                      // rebuild on every keystroke.
+                      regionExtrudePreview.replace(distance);
                     }}
                     onSubmit={(value) => {
                       regionExtrudeSettings.current = value;

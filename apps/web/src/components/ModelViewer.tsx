@@ -5169,6 +5169,7 @@ export function ModelViewer({
             bodyFaces: {
               visible: boolean;
               opacity: number;
+              triangles: number;
               depthTest: boolean;
               depthWrite: boolean;
               polygonOffset: boolean;
@@ -5201,6 +5202,7 @@ export function ModelViewer({
       const bodyFaces: {
         visible: boolean;
         opacity: number;
+        triangles: number;
         bounds?: { min: number[]; max: number[] };
         worldBounds?: { min: number[]; max: number[] };
         depthTest: boolean;
@@ -5218,6 +5220,11 @@ export function ModelViewer({
         bodyFaces.push({
           visible: mesh.visible && mesh.material.visible,
           opacity: mesh.material.opacity,
+          triangles: Math.floor(
+            (mesh.geometry.index?.count ??
+              mesh.geometry.getAttribute('position')?.count ??
+              0) / 3
+          ),
           depthTest: mesh.material.depthTest,
           depthWrite: mesh.material.depthWrite,
           polygonOffset: mesh.material.polygonOffset,
