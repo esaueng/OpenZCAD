@@ -10,6 +10,7 @@ import {
 import { toUserId } from '@openzcad/shared';
 import type {
   BodyId,
+  FaceTopologyReferenceV5,
   FeatureData,
   FeatureId,
   FeatureNode,
@@ -476,6 +477,34 @@ describe('an untouched edit writes the feature back as stored', () => {
     })!;
     expect(armed.seed.slots.bodies.map((body) => body.bodyId)).toEqual([BODY]);
     expect(armed.seed.notice).toMatch(/saved body no longer resolves/);
+  });
+
+  it('finds a stored face by its lineage reference, as the rebuild does', () => {
+    const reference = {
+      kind: 'face',
+      producingFeatureId: 'feat_box',
+      lineageName: 'top'
+    } as unknown as FaceTopologyReferenceV5;
+    const asked: unknown[] = [];
+    const ctx: InPlaceEditContext = {
+      ...EDIT_CTX,
+      // An upstream edit changed the hash; the lineage still names the face.
+      face: (bodyId, hash, ref) => {
+        asked.push([hash, ref]);
+        return ref === reference ? { ...TOP, bodyId } : null;
+      }
+    };
+    const data: FeatureData = {
+      featureKind: 'shell',
+      targetBodyId: BODY,
+      openingFaceHashes: [99],
+      openingFaceReferences: [reference],
+      thickness: 1
+    };
+    const armed = inPlaceEditSeed(feature(data), ctx)!;
+    expect(asked).toEqual([[99, reference]]);
+    expect(armed.seed.slots.faces).toHaveLength(1);
+    expect(armed.seed.notice).toBeNull();
   });
 
   it('names what no longer resolves, and leaves that slot to pick again', () => {

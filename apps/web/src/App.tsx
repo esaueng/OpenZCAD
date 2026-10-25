@@ -8385,8 +8385,19 @@ export function App() {
       firstRegion: (sketchId) =>
         availableSketchViews.find((view) => view.sketchId === sketchId)
           ?.regions[0]?.regionFingerprint ?? null,
-      face: (bodyId, hash) =>
-        inPlaceFacePick(bodyId, undefined, hash, undefined, true),
+      face: (bodyId, hash, reference) => {
+        // As the feature rebuilds it: by lineage first, then the hash.
+        const found = resolveFace(representations[bodyId], { hash, reference });
+        return found.ok
+          ? inPlaceFacePick(
+              bodyId,
+              found.entry.topologyId,
+              found.entry.hash,
+              undefined,
+              true
+            )
+          : null;
+      },
       anyFace: (bodyId) => {
         // A flat face carries the handle best; a body with none (a sphere)
         // still names itself by any face it has.
