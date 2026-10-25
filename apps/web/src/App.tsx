@@ -2777,10 +2777,13 @@ export function App() {
   useEffect(() => {
     // Save-Data asks for nothing speculative, as the chunk prefetch honours.
     if (prefersSavingData()) return;
-    const warm = () => {
-      for (const surface of FIRST_USE_SURFACES)
-        surface.preload().catch(() => undefined);
-    };
+    // Offline, a failed module download can stay cached until navigation,
+    // so wait for the connection rather than poison the surfaces' own loads.
+    const warm = () =>
+      void loadWhenOnline(async () => {
+        for (const surface of FIRST_USE_SURFACES)
+          surface.preload().catch(() => undefined);
+      });
     if (typeof window.requestIdleCallback === 'function') {
       const idle = window.requestIdleCallback(warm, { timeout: 5_000 });
       return () => window.cancelIdleCallback(idle);

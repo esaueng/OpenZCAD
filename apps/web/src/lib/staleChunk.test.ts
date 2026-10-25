@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   isChunkLoadError,
+  loadWhenOnline,
   lazyWithStaleChunkNotice,
   onStaleChunk,
   watchPreloadErrors
@@ -183,5 +184,23 @@ describe('warm-up failures', () => {
     expect(listener).toHaveBeenCalledTimes(1);
     stopWatch();
     stopNotice();
+  });
+});
+
+describe('loadWhenOnline', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('starts no download while offline, then loads once the link is back', async () => {
+    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    const load = vi.fn(() => Promise.resolve('chunk'));
+    const result = loadWhenOnline(load);
+    await nextTask();
+    expect(load).not.toHaveBeenCalled();
+    onLine.mockReturnValue(true);
+    window.dispatchEvent(new Event('online'));
+    await expect(result).resolves.toBe('chunk');
+    expect(load).toHaveBeenCalledOnce();
   });
 });
