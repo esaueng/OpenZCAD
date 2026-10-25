@@ -26,6 +26,11 @@ import {
 } from '@openzcad/shared';
 import { ApiError } from '../apps/web/src/lib/api';
 import type { ArchiveArtifactInput } from '../apps/web/src/lib/archiveArtifact';
+import {
+  KeySessionEndedError,
+  createBlobReferenceRegistry,
+  sessionBoundReferences
+} from '../apps/web/src/lib/e2ee/blobReferences';
 import { forgetAllProjectKeys } from '../apps/web/src/lib/e2ee/unlockedProjectKeys';
 import {
   OTHER,
@@ -191,7 +196,7 @@ function everythingStored(srv: Server): string {
 
 /** An owner's encrypted project and the laptop that created it. */
 async function encryptedProject(
-  options: { partBytes?: number; chunkSize?: number } = {}
+  options: Parameters<typeof device>[3] = {}
 ) {
   const srv = server();
   const laptop = device(srv, owner, 'owner_laptop', options);
@@ -364,6 +369,29 @@ describe('content blobs', () => {
 // --- Dedupe -------------------------------------------------------------------
 
 describe('dedupe', () => {
+  it('keeps no key of an upload that finishes after the key session ended', async () => {
+    const page = createBlobReferenceRegistry();
+    let revision = 1;
+    const references = sessionBoundReferences(page, {
+      revision: () => revision,
+      isCurrent: (seen) => seen === revision
+    });
+    const { srv, laptop, projectId } = await encryptedProject({ references });
+    // Sign-out lands while the blob is being finalized.
+    laptop.before = async (path) => {
+      if (path.includes('/finalize')) revision += 1;
+    };
+    await expect(
+      laptop.blobs.archive(projectId, stepInput(stepBytes('late')))
+    ).rejects.toBeInstanceOf(KeySessionEndedError);
+    const [row] = blobRows(srv, projectId);
+    expect(row).toBeDefined();
+    // The page registry the next session reads holds nothing of it.
+    expect(page.projectOf(row!.blob_id)).toBeNull();
+    expect(page.get(projectId, row!.blob_id)).toBeNull();
+    expect(references.get(projectId, row!.blob_id)).toBeNull();
+  });
+
   it('reuses a blob this page holds the key for, and uploads a new file', async () => {
     const { srv, laptop, projectId } = await encryptedProject();
     const step = stepBytes('same');

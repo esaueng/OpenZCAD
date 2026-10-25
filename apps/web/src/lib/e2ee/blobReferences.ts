@@ -12,6 +12,7 @@
  * decode worker) decrypts it.
  */
 import type { ContentBlobReference } from '@openzcad/crypto';
+import { getKeySessionRevision, isCurrentKeySession } from './keySession';
 
 export interface HeldBlobReference {
   readonly reference: ContentBlobReference;
@@ -63,6 +64,55 @@ export function createBlobReferenceRegistry(): BlobReferenceRegistry {
 
 /** This page's references, dropped with the key session. */
 export const pageBlobReferences = createBlobReferenceRegistry();
+
+/** The key session a view is bound to (`keySession.ts`; tests pass their own). */
+export interface KeySessionFence {
+  revision(): number;
+  isCurrent(revision: number): boolean;
+}
+
+const pageKeySession: KeySessionFence = {
+  revision: getKeySessionRevision,
+  isCurrent: isCurrentKeySession
+};
+
+/** A late result's reference outlived the key session it was made in. */
+export class KeySessionEndedError extends Error {
+  constructor() {
+    super(
+      'Encryption was locked before this finished. Unlock it and try again.'
+    );
+    this.name = 'KeySessionEndedError';
+  }
+}
+
+/**
+ * `registry` as the key session current now sees it. Once that session
+ * ends (sign-out, lock, another account) the view keeps nothing: an upload
+ * or a read finishing late has its reference's key wiped and refused rather
+ * than stored in the page registry the next session reads, and lookups
+ * find nothing.
+ */
+export function sessionBoundReferences(
+  registry: BlobReferenceRegistry,
+  fence: KeySessionFence = pageKeySession
+): BlobReferenceRegistry {
+  const revision = fence.revision();
+  const live = () => fence.isCurrent(revision);
+  return {
+    remember(projectId, reference, checksumSha256) {
+      if (!live()) {
+        reference.key.fill(0);
+        throw new KeySessionEndedError();
+      }
+      registry.remember(projectId, reference, checksumSha256);
+    },
+    get: (projectId, blobId) =>
+      live() ? registry.get(projectId, blobId) : null,
+    projectOf: (blobId) => (live() ? registry.projectOf(blobId) : null),
+    clear: () => registry.clear()
+  };
+}
 
 /** Downloads and decrypts one blob (the decode worker in a page). */
 export type EncryptedBlobReader = (

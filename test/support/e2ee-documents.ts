@@ -426,6 +426,8 @@ export interface DeviceOptions {
   /** Upload part and envelope chunk sizes for content blobs. */
   partBytes?: number;
   chunkSize?: number;
+  /** This page's blob references; a fresh registry by default. */
+  references?: BlobReferenceRegistry;
 }
 
 /** One device: its own engine, MLS store and pins over the shared server. */
@@ -485,7 +487,7 @@ export function device(
     device: deviceId ? account.devices.get(deviceId)! : null
   };
   result.documents = createEncryptedDocumentsApi(fetcher);
-  result.references = createBlobReferenceRegistry();
+  result.references = options.references ?? createBlobReferenceRegistry();
   result.blobs = createEncryptedContentBlobs({
     groups: result.groups,
     references: result.references,

@@ -18,7 +18,11 @@ import type {
 } from '@openzcad/shared';
 import { ApiError } from '../api';
 import type { ArchiveArtifactInput } from '../archiveArtifact';
-import { pageBlobReferences, setEncryptedBlobReader } from './blobReferences';
+import {
+  pageBlobReferences,
+  sessionBoundReferences,
+  setEncryptedBlobReader
+} from './blobReferences';
 import {
   createEncryptedContentBlobs,
   type EncryptedContentBlobs
@@ -114,6 +118,8 @@ async function openStore(userId: string): Promise<{
       : null;
   decoder ??= createE2eeDecoder();
   const pageDecoder = decoder;
+  // Results finishing after this key session ends keep no keys.
+  const references = sessionBoundReferences(pageBlobReferences);
   const groups = {
     api: createProjectGroupsApi(),
     sessions: mlsProjectSessions(),
@@ -122,7 +128,7 @@ async function openStore(userId: string): Promise<{
   };
   const blobs = createEncryptedContentBlobs({
     groups,
-    references: pageBlobReferences,
+    references,
     // Decrypted in the decode worker, within its content-blob budget.
     decode: (job) => pageDecoder.decodeContentBlob(job)
   });
@@ -131,7 +137,7 @@ async function openStore(userId: string): Promise<{
   );
   const store = createEncryptedProjectStore({
     groups,
-    blobReferences: pageBlobReferences,
+    blobReferences: references,
     open: (job) => pageDecoder.decodeProjectEnvelope(job),
     seal: (job) => pageDecoder.sealDocument(job),
     // Geometry workers resolve sources from this device's blob store: put
