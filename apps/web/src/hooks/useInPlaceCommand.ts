@@ -218,15 +218,28 @@ export interface InPlaceCommand {
     bodies?: BodyPick[]
   ): void;
   pickProfile(pick: ProfilePick, additive?: boolean): void;
-  /** Replaces the profiles (an edit's that no longer resolve, dropped). */
-  setProfiles(profiles: readonly ProfilePick[]): void;
-  /** Replaces the path, guide or face picks, as a re-check leaves them. */
-  setPicks(picks: {
-    path?: readonly CurvePick[];
-    guide?: readonly CurvePick[];
-    faces?: readonly FacePick[];
-    bodies?: readonly BodyPick[];
-  }): void;
+  /**
+   * Replaces the profiles (an edit's that no longer resolve, dropped). With
+   * `from`, only while the slot still holds those picks: one the live reseed
+   * replaced meanwhile is newer than what the re-check read.
+   */
+  setProfiles(
+    profiles: readonly ProfilePick[],
+    from?: readonly ProfilePick[]
+  ): void;
+  /**
+   * Replaces the path, guide or face picks, as a re-check leaves them; with
+   * `from`, each only while its slot still holds what the re-check read.
+   */
+  setPicks(
+    picks: {
+      path?: readonly CurvePick[];
+      guide?: readonly CurvePick[];
+      faces?: readonly FacePick[];
+      bodies?: readonly BodyPick[];
+    },
+    from?: Pick<InPlaceSlots, 'path' | 'guide' | 'faces' | 'bodies'>
+  ): void;
   pickAxis(axisId: string): void;
   pickCurve(curve: CurvePick, additive?: boolean): void;
   /** A face click: refused (false) when the tool takes no such face. */
@@ -998,35 +1011,50 @@ export function useInPlaceCommand(
     });
   }, []);
 
-  const setProfiles = useCallback((profiles: readonly ProfilePick[]) => {
-    setSession((current) =>
-      current
-        ? { ...current, slots: { ...current.slots, profiles: [...profiles] } }
-        : current
-    );
-  }, []);
-
-  const setPicks = useCallback(
-    (picks: {
-      path?: readonly CurvePick[];
-      guide?: readonly CurvePick[];
-      faces?: readonly FacePick[];
-      bodies?: readonly BodyPick[];
-    }) => {
+  const setProfiles = useCallback(
+    (profiles: readonly ProfilePick[], from?: readonly ProfilePick[]) => {
       setSession((current) =>
-        current
+        current && (!from || current.slots.profiles === from)
           ? {
               ...current,
-              slots: {
-                ...current.slots,
-                ...(picks.path ? { path: [...picks.path] } : {}),
-                ...(picks.guide ? { guide: [...picks.guide] } : {}),
-                ...(picks.faces ? { faces: [...picks.faces] } : {}),
-                ...(picks.bodies ? { bodies: [...picks.bodies] } : {})
-              }
+              slots: { ...current.slots, profiles: [...profiles] }
             }
           : current
       );
+    },
+    []
+  );
+
+  const setPicks = useCallback(
+    (
+      picks: {
+        path?: readonly CurvePick[];
+        guide?: readonly CurvePick[];
+        faces?: readonly FacePick[];
+        bodies?: readonly BodyPick[];
+      },
+      from?: Pick<InPlaceSlots, 'path' | 'guide' | 'faces' | 'bodies'>
+    ) => {
+      setSession((current) => {
+        if (!current) return current;
+        // A slot the live reseed replaced since the re-check read it keeps
+        // the newer picks; the next re-check reads those.
+        const take = <K extends 'path' | 'guide' | 'faces' | 'bodies'>(
+          key: K
+        ) =>
+          picks[key] !== undefined &&
+          (!from || current.slots[key] === from[key]);
+        return {
+          ...current,
+          slots: {
+            ...current.slots,
+            ...(take('path') ? { path: [...picks.path!] } : {}),
+            ...(take('guide') ? { guide: [...picks.guide!] } : {}),
+            ...(take('faces') ? { faces: [...picks.faces!] } : {}),
+            ...(take('bodies') ? { bodies: [...picks.bodies!] } : {})
+          }
+        };
+      });
     },
     []
   );

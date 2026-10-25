@@ -1449,6 +1449,44 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     expect(hook.result.current.slots.faces[0]?.savedPosition).toBeUndefined();
   });
 
+  it('a re-check read before the live reseed does not undo it', () => {
+    const curve = (entityId: string) => ({ sketchId: SKETCH, entityId });
+    let path = [curve('a')];
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      baseVersion: 1,
+      reseed: (edit) => ({
+        tool: 'sweep',
+        seed: { ...edit, slots: { ...edit.slots, path } }
+      })
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('sweep', {
+        ...SEED,
+        options: {},
+        slots: { ...SEED.slots, bodies: [], profiles: [PICK], path }
+      })
+    );
+    const read = hook.result.current.slots;
+    // One update re-points the path to b and deletes a: the reseed takes b,
+    // then the re-check, which read a, reports a gone.
+    path = [curve('b')];
+    hook.rerender({ ...options, baseVersion: 2 });
+    act(() => hook.result.current.setPicks({ path: [] }, read));
+    expect(hook.result.current.slots.path.map((c) => c.entityId)).toEqual([
+      'b'
+    ]);
+    // Read from the slots as they are now, it applies.
+    act(() =>
+      hook.result.current.setPicks({ path: [] }, hook.result.current.slots)
+    );
+    expect(hook.result.current.slots.path).toEqual([]);
+  });
+
   it('previews a re-armed edit that builds the same thing', async () => {
     const { hook } = setup();
     act(() => hook.result.current.edit('subtract', SEED));
