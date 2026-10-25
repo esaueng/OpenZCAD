@@ -263,6 +263,7 @@ import type {
   ProjectCollaborationCapabilitiesResponse
 } from '@openzcad/shared';
 import {
+  PROJECT_STORAGE_FORMAT_E2EE_V1,
   toShaprImportId,
   toSketchConstraintId,
   toUserId
@@ -366,6 +367,10 @@ import {
   isProjectFormatUnsupportedError
 } from './lib/api';
 import { assistantDisabledReason } from './lib/assistant/encryptedProject';
+import {
+  retainEncryptionStatus,
+  useEncryptionStatus
+} from './lib/e2ee/encryptionStatus';
 import {
   loadAccountProjectResult,
   type AccountProjectLoadResult
@@ -4669,6 +4674,27 @@ export function App() {
   // slice 4-9): only its owner's own devices until sharing arrives, and every
   // version the room accepts is already the account's.
   const encryptedRoomProject = isEncryptedProject(doc?.projectId);
+  // The top bar's encryption indicator (ADR-024 Phase 4): the page's own
+  // marker, or the listed summary, since a project opened directly may
+  // have no summary and one listed may not have been loaded through the
+  // encrypted store yet.
+  const encryptedProjectOpen = Boolean(
+    doc &&
+    (encryptedRoomProject ||
+      projects.some(
+        (project) =>
+          project.projectId === doc.projectId &&
+          project.storageFormat === PROJECT_STORAGE_FORMAT_E2EE_V1
+      ))
+  );
+  const encryptionStatus = useEncryptionStatus(
+    encryptedProjectOpen ? (doc?.projectId ?? null) : null
+  );
+  const openProjectId = doc?.projectId ?? null;
+  // Another project's outcome is forgotten once it is no longer open.
+  useEffect(() => {
+    retainEncryptionStatus(openProjectId);
+  }, [openProjectId]);
   const collaboration = useCollaboration({
     enabled: cloudFunctionsEnabled,
     document: doc,
@@ -25320,6 +25346,15 @@ export function App() {
           onOpenSharing={() => setSharingOpen(true)}
           onSignIn={() => openSettingsAt('account')}
           onOpenSettings={openSettings}
+          encryption={
+            encryptedProjectOpen
+              ? {
+                  status: encryptionStatus,
+                  needsRepair: presentedSaveState === 'repair',
+                  onOpenEncryptionSettings: () => openSettingsAt('encryption')
+                }
+              : null
+          }
         />
       }
       toolBar={

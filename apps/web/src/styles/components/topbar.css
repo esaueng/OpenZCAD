@@ -162,6 +162,81 @@
   color: var(--color-text-subtle);
 }
 
+/* The encryption indicator beside the project name (ADR-024 Phase 4): a
+   lock that opens a short explanation. Muted like the shelf's lock badge
+   while all is well; amber when something needs attention, red when a
+   version failed verification. */
+.encryption-menu {
+  flex: 0 0 auto;
+}
+
+.encryption-indicator {
+  width: 24px;
+  height: 24px;
+  justify-content: center;
+  color: var(--color-text-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.encryption-indicator:hover,
+.encryption-menu[open] > .encryption-indicator {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.encryption-menu.is-unverified > .encryption-indicator {
+  color: var(--color-text-subtle);
+}
+
+.encryption-menu.is-warning > .encryption-indicator,
+.encryption-menu.is-locked > .encryption-indicator {
+  color: var(--color-warning);
+}
+
+.encryption-menu.is-problem > .encryption-indicator {
+  color: var(--color-error);
+}
+
+/* Drops from the left-hand island, so it opens rightwards. */
+.encryption-menu-panel {
+  left: 0;
+  right: auto;
+  width: min(320px, 80vw);
+}
+
+.encryption-menu-heading {
+  margin: 0 8px 4px;
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.encryption-menu-text {
+  margin: 0 8px 6px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-mini);
+  line-height: 1.4;
+}
+
+/* Shown at full length: people compare it by eye (ADR-024). */
+.encryption-menu-code {
+  display: grid;
+  gap: 2px;
+  margin: 4px 0 6px;
+}
+
+.encryption-menu-code code {
+  margin: 0 8px;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  overflow-wrap: anywhere;
+}
+
 /* Auto-flowing columns: the account chip comes and goes with account state,
    so the row cannot assume a fixed slot count. */
 .topbar-actions {
