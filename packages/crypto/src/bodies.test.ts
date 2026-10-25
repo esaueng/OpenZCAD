@@ -8,10 +8,14 @@ import {
   MAX_PROJECT_NAME_LENGTH,
   decodeEncryptedDocumentBody,
   decodeKeyArchiveBody,
+  decodeMeasurementsBody,
   decodeProjectInfoBody,
+  decodeViewStateBody,
   encodeEncryptedDocumentBody,
   encodeKeyArchiveBody,
+  encodeMeasurementsBody,
   encodeProjectInfoBody,
+  encodeViewStateBody,
   type BodyEnvelopeHeader,
   type EncryptedDocumentBody,
   type KeyArchiveBody,
@@ -538,5 +542,121 @@ describe('key archive bodies', () => {
     expect(() =>
       decodeKeyArchiveBody(bytesOf('{}'), header('key-archive'))
     ).toThrow(E2eeError);
+  });
+});
+
+describe('measurement and view-state bodies', () => {
+  const codecs = [
+    {
+      kind: 'measurements' as const,
+      field: 'record',
+      encode: (value: Record<string, unknown>, h: BodyEnvelopeHeader) =>
+        encodeMeasurementsBody({ record: value }, h),
+      decode: (bytes: Uint8Array, h: BodyEnvelopeHeader) =>
+        decodeMeasurementsBody(bytes, h).record
+    },
+    {
+      kind: 'view-state' as const,
+      field: 'session',
+      encode: (value: Record<string, unknown>, h: BodyEnvelopeHeader) =>
+        encodeViewStateBody({ session: value }, h),
+      decode: (bytes: Uint8Array, h: BodyEnvelopeHeader) =>
+        decodeViewStateBody(bytes, h).session
+    }
+  ];
+
+  it('round-trips the app record through its envelope', async () => {
+    for (const codec of codecs) {
+      const value = { projectId: 'p', items: [{ a: 1 }], nested: { b: true } };
+      const init = {
+        kind: codec.kind,
+        projectId: 'p',
+        documentVersion: 3,
+        previousVersionHash: null,
+        epochBindingHash: new Uint8Array(32),
+        schemaVersion: 1,
+        keyEpoch: 2
+      };
+      const key = EnvelopeKey.generate();
+      const raw = key.bytes;
+      const envelope = await encryptProjectEnvelope(
+        key,
+        init,
+        codec.encode(value, header(codec.kind, [], 2))
+      );
+      const opened = await decryptProjectEnvelope(raw, envelope, {
+        expect: { kind: codec.kind, projectId: 'p', documentVersion: 3 }
+      });
+      expect(codec.decode(opened.plaintext, opened.header)).toEqual(value);
+      expect(JSON.parse(text(codec.encode(value, header(codec.kind))))).toEqual(
+        { version: 1, [codec.field]: value }
+      );
+    }
+  });
+
+  it('refuses other kinds, blob references and stray fields', async () => {
+    const blob = await reference('thumbnail');
+    for (const codec of codecs) {
+      const other =
+        codec.kind === 'measurements' ? 'view-state' : 'measurements';
+      throwsWith(() => codec.encode({}, header(other)), 'invalid-argument');
+      throwsWith(
+        () => codec.decode(bytesOf('{"version":1}'), header(other)),
+        'context-mismatch'
+      );
+      // Neither kind carries content blobs.
+      throwsWith(
+        () => codec.encode({}, header(codec.kind, [blob.blobId])),
+        'context-mismatch'
+      );
+      const good = codec.encode({ a: 1 }, header(codec.kind));
+      throwsWith(
+        () => codec.decode(good, header(codec.kind, [blob.blobId])),
+        'context-mismatch'
+      );
+      for (const variant of [
+        {},
+        { version: 1 },
+        { version: 1, [codec.field]: [] },
+        { version: 1, [codec.field]: 'x' },
+        { version: 1, [codec.field]: {}, extra: 1 }
+      ]) {
+        throwsWith(
+          () =>
+            codec.decode(bytesOf(JSON.stringify(variant)), header(codec.kind)),
+          'malformed'
+        );
+      }
+      throwsWith(
+        () =>
+          codec.decode(
+            bytesOf(JSON.stringify({ version: 2, [codec.field]: {} })),
+            header(codec.kind)
+          ),
+        'unsupported-version'
+      );
+      throwsWith(
+        () => codec.encode([] as never, header(codec.kind)),
+        'invalid-argument'
+      );
+    }
+  });
+
+  it('refuses oversized and over-nested bodies before parsing', () => {
+    for (const codec of codecs) {
+      throwsWith(
+        () =>
+          codec.decode(
+            new Uint8Array(PLAINTEXT_CEILINGS[codec.kind] + 1),
+            header(codec.kind)
+          ),
+        'limit-exceeded'
+      );
+      const deep = `{"version":1,"${codec.field}":${'{"a":'.repeat(40)}1${'}'.repeat(40)}}`;
+      throwsWith(
+        () => codec.decode(bytesOf(deep), header(codec.kind)),
+        'limit-exceeded'
+      );
+    }
   });
 });

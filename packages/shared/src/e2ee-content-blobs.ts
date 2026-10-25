@@ -16,12 +16,15 @@ export const E2EE_BLOB_ID_PATTERN = /^[0-9a-f]{32}$/;
 export const E2EE_DEDUPE_TAG_PATTERN = /^[0-9a-f]{64}$/;
 
 /**
- * The content blob kinds this slice uploads. Thumbnails and archived exports
- * stay on the device until a later slice brings their project-info entries.
+ * The content blob kinds browsers upload: imported sources and mesh
+ * payloads, which documents name (slice 4-6), and thumbnails and archived
+ * exports, which the project-info envelope names (slice 4-7).
  */
 export const E2EE_UPLOADABLE_BLOB_KINDS = Object.freeze([
   'import-source',
-  'mesh-payload'
+  'mesh-payload',
+  'thumbnail',
+  'export'
 ] as const);
 export type E2eeUploadableBlobKind =
   (typeof E2EE_UPLOADABLE_BLOB_KINDS)[number];

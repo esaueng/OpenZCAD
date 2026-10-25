@@ -22,25 +22,48 @@ vi.mock('./desktopBridge', () => ({
   isDesktopApp: () => false
 }));
 
-const { store, encryptedModule } = vi.hoisted(() => {
-  const store = {
-    createProject: vi.fn(),
-    saveProjectDocument: vi.fn(),
-    saveRevision: vi.fn(),
-    loadProject: vi.fn(),
-    loadRevision: vi.fn(),
-    listRevisions: vi.fn(),
-    projectName: vi.fn()
-  };
-  return {
-    store,
-    encryptedModule: {
-      encryptedProjectStore: vi.fn(async () => store),
-      createEncryptedProject: vi.fn(),
-      encryptedProjectNames: vi.fn(async () => new Map<string, string>())
-    }
-  };
-});
+const { store, encryptedModule, measurementsClient, viewStatesClient } =
+  vi.hoisted(() => {
+    const store = {
+      createProject: vi.fn(),
+      saveProjectDocument: vi.fn(),
+      saveRevision: vi.fn(),
+      loadProject: vi.fn(),
+      loadRevision: vi.fn(),
+      listRevisions: vi.fn(),
+      projectName: vi.fn()
+    };
+    const measurementsClient = {
+      loadProjectMeasurements: vi.fn(async () => ({
+        revision: 0,
+        record: null
+      })),
+      saveProjectMeasurements: vi.fn(async () => ({
+        revision: 1,
+        record: null
+      }))
+    };
+    const viewStatesClient = {
+      load: vi.fn(async () => []),
+      save: vi.fn(async () => undefined)
+    };
+    return {
+      store,
+      measurementsClient,
+      viewStatesClient,
+      encryptedModule: {
+        encryptedProjectStore: vi.fn(async () => store),
+        createEncryptedProject: vi.fn(),
+        encryptedProjectShelf: vi.fn(
+          async () =>
+            new Map<string, { name: string; thumbnailBlobId?: string }>()
+        ),
+        encryptedMeasurements: vi.fn(async () => measurementsClient),
+        encryptedViewStates: vi.fn(async () => viewStatesClient),
+        listEncryptedArtifacts: vi.fn(async () => [])
+      }
+    };
+  });
 vi.mock('./e2ee/encryptedProjects', () => encryptedModule);
 
 // This device's pinned opt-in and this page's account key (D2 decisions).
@@ -183,16 +206,20 @@ describe('dispatch on the storage format', () => {
     expect(encryptedModule.encryptedProjectStore).not.toHaveBeenCalled();
   });
 
-  it('lists encrypted projects with their decrypted names and saves them through the store', async () => {
+  it('lists encrypted projects with their decrypted names and thumbnails and saves them through the store', async () => {
     const projectId = 'proj_listed';
     const record = { projectId, sequence: 1 };
-    encryptedModule.encryptedProjectNames.mockResolvedValue(
-      new Map([[projectId, 'Gearbox']])
+    const thumbnailBlobId = 'b'.repeat(32);
+    encryptedModule.encryptedProjectShelf.mockResolvedValue(
+      new Map([[projectId, { name: 'Gearbox', thumbnailBlobId }]])
     );
     const listing = await listEncrypted(projectId, record);
-    expect(listing.projects[0]).toMatchObject({ name: 'Gearbox' });
+    expect(listing.projects[0]).toMatchObject({
+      name: 'Gearbox',
+      thumbnailArtifactId: thumbnailBlobId
+    });
     expect(listing).not.toHaveProperty('encryptedProjectInfo');
-    expect(encryptedModule.encryptedProjectNames).toHaveBeenCalledWith([
+    expect(encryptedModule.encryptedProjectShelf).toHaveBeenCalledWith([
       record
     ]);
 
@@ -220,7 +247,7 @@ describe('dispatch on the storage format', () => {
   });
 
   it('keeps the placeholder name when the names cannot be decrypted', async () => {
-    encryptedModule.encryptedProjectNames.mockRejectedValue(
+    encryptedModule.encryptedProjectShelf.mockRejectedValue(
       new ApiError(403, 'locked', 'E2EE_KEYS_LOCKED')
     );
     const listing = await listEncrypted('proj_locked', {
@@ -229,7 +256,7 @@ describe('dispatch on the storage format', () => {
     expect(listing.projects[0]).toMatchObject({ name: 'Encrypted project' });
   });
 
-  it('keeps an encrypted project’s files, measurements, view state and copies on the device', async () => {
+  it('keeps an encrypted project’s copies on the device and its files off the plaintext routes', async () => {
     const projectId = 'proj_local_only';
     await listEncrypted(projectId);
     vi.mocked(desktopFetch).mockClear();
@@ -240,21 +267,44 @@ describe('dispatch on the storage format', () => {
         contentType: 'image/webp',
         kind: 'thumbnail'
       }),
-      api.duplicateProject(projectId, { document: documentOf(projectId) }),
-      projectMeasurementCloudApi.loadProjectMeasurements(projectId),
-      projectMeasurementCloudApi.saveProjectMeasurements({
-        projectId,
-        expectedRevision: 0,
-        record: {} as never
-      }),
-      workspaceSessionApi.load(projectId),
-      workspaceSessionApi.save({ projectId } as never)
+      api.duplicateProject(projectId, { document: documentOf(projectId) })
     ];
     for (const refusal of refusals) {
       await expect(refusal).rejects.toMatchObject({
         code: E2EE_LOCAL_ONLY_CODE
       });
     }
+    expect(desktopFetch).not.toHaveBeenCalled();
+  });
+
+  it('sends an encrypted project’s measurements, view state and stored files through the encrypted clients (4-7)', async () => {
+    const projectId = 'proj_envelopes';
+    await listEncrypted(projectId);
+    vi.mocked(desktopFetch).mockClear();
+    const record = { projectId } as never;
+    await projectMeasurementCloudApi.loadProjectMeasurements(projectId);
+    await projectMeasurementCloudApi.saveProjectMeasurements({
+      projectId,
+      expectedRevision: 0,
+      record
+    });
+    await workspaceSessionApi.load(projectId);
+    await workspaceSessionApi.save({ projectId } as never);
+    await api.listArtifacts(projectId);
+    expect(measurementsClient.loadProjectMeasurements).toHaveBeenCalledWith(
+      projectId
+    );
+    expect(measurementsClient.saveProjectMeasurements).toHaveBeenCalledWith({
+      projectId,
+      expectedRevision: 0,
+      record
+    });
+    expect(viewStatesClient.load).toHaveBeenCalledWith(projectId);
+    expect(viewStatesClient.save).toHaveBeenCalledWith({ projectId });
+    expect(encryptedModule.listEncryptedArtifacts).toHaveBeenCalledWith(
+      projectId
+    );
+    // Nothing went to a plaintext route.
     expect(desktopFetch).not.toHaveBeenCalled();
   });
 

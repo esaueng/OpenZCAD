@@ -1049,6 +1049,13 @@ export interface ContentBlobOptions {
   readonly compression?: Compression;
   /** Defaults to 1 MiB. */
   readonly chunkSize?: number;
+  /**
+   * Defaults to a fresh random id. Given only to store again, under a
+   * fresh key, a blob the account lost or collected while a document still
+   * names it by this id: the key is new, so one key still encrypts exactly
+   * one envelope, and the new reference replaces the old one.
+   */
+  readonly blobId?: string;
 }
 
 /**
@@ -1070,7 +1077,7 @@ export async function createContentBlobWriterWith(
   const header: ContentBlobHeader = {
     class: 'content',
     kind,
-    blobId: toHex(random(BLOB_ID_BYTES)),
+    blobId: options.blobId ?? toHex(random(BLOB_ID_BYTES)),
     compression: options.compression ?? 'gzip',
     chunkSize: options.chunkSize ?? DEFAULT_CHUNK_SIZE,
     plaintextLength: options.plaintextLength

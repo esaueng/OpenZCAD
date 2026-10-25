@@ -900,6 +900,36 @@ describe('content blobs', () => {
     expect(other.reference.blobId).not.toBe(reference.blobId);
   });
 
+  it('stores a lost blob again under its id with a fresh key', async () => {
+    const first = await blob();
+    const again = await encryptContentBlob(
+      EnvelopeKey.generate(),
+      'import-source',
+      STEP,
+      { compression: 'none', chunkSize: CHUNK, blobId: first.reference.blobId }
+    );
+    expect(again.reference.blobId).toBe(first.reference.blobId);
+    expect(parseEnvelope(again.envelope).header).toMatchObject({
+      blobId: first.reference.blobId
+    });
+    // A new key and so new ciphertext: the old reference does not open it.
+    expect(again.reference.key).not.toEqual(first.reference.key);
+    expect(again.reference.ciphertextHash).not.toEqual(
+      first.reference.ciphertextHash
+    );
+    expect(await decryptContentBlob(again.reference, again.envelope)).toEqual(
+      STEP
+    );
+    await expect(
+      decryptContentBlob(first.reference, again.envelope)
+    ).rejects.toThrow(E2eeError);
+    await expect(
+      encryptContentBlob(EnvelopeKey.generate(), 'import-source', STEP, {
+        blobId: ''
+      })
+    ).rejects.toMatchObject({ code: 'invalid-argument' });
+  });
+
   it('checks a stored blob from its prefix and total length alone', async () => {
     const { envelope } = await blob(STEP, 64);
     const whole = parseEnvelope(envelope);

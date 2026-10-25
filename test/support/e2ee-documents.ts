@@ -1,10 +1,11 @@
 /**
- * Shared harness for encrypted document tests (ADR-024 Phase 4, slices 4-5
- * and 4-6): accounts with real device lists, the real Worker over SQLite
+ * Shared harness for encrypted document tests (ADR-024 Phase 4, slices
+ * 4-5 to 4-7): accounts with real device lists, the real Worker over SQLite
  * with an in-memory object bucket (multipart uploads and ranged reads
  * included), and Node devices that run the real client modules
  * (`projectGroups.ts`, `encryptedProjectStore.ts`,
- * `encryptedContentBlobs.ts`) with the in-process MLS engine.
+ * `encryptedContentBlobs.ts`, `encryptedProjectInfo.ts`,
+ * `replacedEnvelopes.ts`) with the in-process MLS engine.
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
@@ -68,6 +69,14 @@ import {
   uploadTransport,
   type EncryptedContentBlobs
 } from '../../apps/web/src/lib/e2ee/encryptedContentBlobs';
+import type { ProjectFilesDeps } from '../../apps/web/src/lib/e2ee/encryptedProjectInfo';
+import {
+  createEncryptedMeasurements,
+  createEncryptedViewStates,
+  createReplacedEnvelopesApi,
+  type EncryptedMeasurements,
+  type EncryptedViewStates
+} from '../../apps/web/src/lib/e2ee/replacedEnvelopes';
 import { migratedDatabase, sqliteD1 } from './sqlite-d1';
 
 export const OWNER = 'user_owner';
@@ -407,6 +416,10 @@ export interface Device {
   /** This page's content blob references (a fresh page holds none). */
   references: BlobReferenceRegistry;
   blobs: EncryptedContentBlobs;
+  /** Thumbnails and archived exports through the project info (4-7). */
+  files: ProjectFilesDeps;
+  measurements: EncryptedMeasurements;
+  viewStates: EncryptedViewStates;
   fetcher(path: string, init?: RequestInit): Promise<Response>;
   /** Runs before a request reaches the Worker. */
   before?: Hook;
@@ -428,6 +441,12 @@ export interface DeviceOptions {
   chunkSize?: number;
   /** This page's blob references; a fresh registry by default. */
   references?: BlobReferenceRegistry;
+  /**
+   * This device's source store, by plaintext SHA-256: lost blobs are
+   * stored again from it (409 `E2EE_BLOB_UNKNOWN`). Without it, a write
+   * naming a lost blob fails as before.
+   */
+  localSources?: Map<string, Uint8Array>;
 }
 
 /** One device: its own engine, MLS store and pins over the shared server. */
@@ -494,16 +513,46 @@ export function device(
     api: createContentBlobsApi(fetcher),
     transport: uploadTransport(fetcher),
     ...(options.partBytes ? { partBytes: options.partBytes } : {}),
-    ...(options.chunkSize ? { chunkSize: options.chunkSize } : {})
+    ...(options.chunkSize ? { chunkSize: options.chunkSize } : {}),
+    ...(options.localSources
+      ? {
+          loadLocal: async (checksum: string) =>
+            options.localSources!.get(checksum) ?? null
+        }
+      : {})
   });
   result.store = createEncryptedProjectStore({
     groups: result.groups,
     api: result.documents,
     blobReferences: result.references,
     pins,
+    ...(options.localSources
+      ? {
+          restoreBlobs: (projectId: string, blobIds: readonly string[]) =>
+            result.blobs.restore(projectId, blobIds)
+        }
+      : {}),
     ...(options.cutoffs ? { cutoffs: async () => options.cutoffs! } : {}),
     ...(options.now ? { now: options.now } : {}),
     onWarning: (warning) => result.warnings.push(warning)
+  });
+  result.files = {
+    info: result.store.info,
+    references: result.references,
+    archive: (projectId, input) => result.blobs.archive(projectId, input)
+  };
+  const replacedApi = createReplacedEnvelopesApi(fetcher);
+  result.measurements = createEncryptedMeasurements({
+    userId: account.userId,
+    kit: result.store.replaced,
+    pins,
+    api: replacedApi
+  });
+  result.viewStates = createEncryptedViewStates({
+    userId: account.userId,
+    kit: result.store.replaced,
+    pins,
+    api: replacedApi
   });
   return result;
 }

@@ -4,7 +4,7 @@ import {
 } from './measurementRecord';
 export { measurementRecordContentKey } from './measurementRecord';
 import { desktopFetch } from './desktopBridge';
-import { encryptedLocalOnly, isEncryptedProject } from './api';
+import { isEncryptedProject } from './api';
 
 export interface ProjectMeasurementSnapshot {
   revision: number;
@@ -72,17 +72,29 @@ async function requestProjectMeasurements<T>(
   return (await response.json()) as T;
 }
 
+/**
+ * An encrypted project's measurements travel as signed, encrypted envelopes
+ * (ADR-024 Phase 4, slice 4-7), through the page's encrypted store, which
+ * loads with the first encrypted project.
+ */
+const encryptedMeasurements = async () =>
+  (await import('./e2ee/encryptedProjects')).encryptedMeasurements();
+
 /** Kept in the lazy workspace path so cloud measurement code stays off startup. */
 export const projectMeasurementCloudApi: ProjectMeasurementCloudApi = {
-  loadProjectMeasurements: (projectId) =>
+  loadProjectMeasurements: async (projectId) =>
     isEncryptedProject(projectId)
-      ? Promise.reject(encryptedLocalOnly('Measurements'))
+      ? (await encryptedMeasurements()).loadProjectMeasurements(projectId)
       : requestProjectMeasurements<ProjectMeasurementSnapshot>(
           `/api/projects/${encodeURIComponent(projectId)}/measurements`
         ),
-  saveProjectMeasurements: ({ projectId, expectedRevision, record }) =>
+  saveProjectMeasurements: async ({ projectId, expectedRevision, record }) =>
     isEncryptedProject(projectId)
-      ? Promise.reject(encryptedLocalOnly('Measurements'))
+      ? (await encryptedMeasurements()).saveProjectMeasurements({
+          projectId,
+          expectedRevision,
+          record
+        })
       : requestProjectMeasurements<ProjectMeasurementSnapshot>(
           `/api/projects/${encodeURIComponent(projectId)}/measurements`,
           {

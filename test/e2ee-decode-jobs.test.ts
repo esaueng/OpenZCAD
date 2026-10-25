@@ -248,11 +248,23 @@ describe('project envelope jobs', () => {
     );
   });
 
-  it('refuses kinds that have no body codec yet', async () => {
-    for (const kind of ['measurements', 'view-state'] as const) {
+  it('reads measurements and view state with their body codecs', async () => {
+    for (const [kind, field] of [
+      ['measurements', 'record'],
+      ['view-state', 'session']
+    ] as const) {
+      const value = { projectId: 'proj_1', items: [1, 2] };
+      const result = await decodeDocument(
+        await sealed(encode(JSON.stringify({ version: 1, [field]: value })), {
+          kind
+        }),
+        kind
+      );
+      expect(result.value).toEqual({ [field]: value });
+      // Anything but the codec's frame is refused, not handed out as JSON.
       await rejectsWith(
         decodeDocument(await sealed(encode('{}'), { kind }), kind),
-        'invalid-argument'
+        'malformed'
       );
     }
   });

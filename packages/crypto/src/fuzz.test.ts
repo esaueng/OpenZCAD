@@ -36,10 +36,14 @@ import { patternBytes, seededRandom } from './test-support';
 import {
   decodeEncryptedDocumentBody,
   decodeKeyArchiveBody,
+  decodeMeasurementsBody,
   decodeProjectInfoBody,
+  decodeViewStateBody,
   encodeEncryptedDocumentBody,
   encodeKeyArchiveBody,
-  encodeProjectInfoBody
+  encodeMeasurementsBody,
+  encodeProjectInfoBody,
+  encodeViewStateBody
 } from './bodies';
 import {
   decodeVersionLogRecord,
@@ -291,6 +295,21 @@ describe('parser fuzzing', () => {
       },
       archiveHeader
     );
+    const recordHeader = (kind: 'measurements' | 'view-state') => ({
+      kind,
+      keyEpoch: 0,
+      blobIds: []
+    });
+    const measurementsBody = encodeMeasurementsBody(
+      { record: { projectId: 'p', measurements: [{ id: 'm', value: 1.5 }] } },
+      recordHeader('measurements')
+    );
+    const viewStateBody = encodeViewStateBody(
+      {
+        session: { projectId: 'p', state: { camera: { position: [1, 2, 3] } } }
+      },
+      recordHeader('view-state')
+    );
     const outcomes = new Map<string, number>();
     const count = (outcome: string) =>
       outcomes.set(outcome, (outcomes.get(outcome) ?? 0) + 1);
@@ -316,6 +335,22 @@ describe('parser fuzzing', () => {
       count(
         await onlyTypedErrors(() =>
           decodeKeyArchiveBody(mutate(seed, archiveBody), archiveHeader)
+        )
+      );
+      count(
+        await onlyTypedErrors(() =>
+          decodeMeasurementsBody(
+            mutate(seed, measurementsBody),
+            recordHeader('measurements')
+          )
+        )
+      );
+      count(
+        await onlyTypedErrors(() =>
+          decodeViewStateBody(
+            mutate(seed, viewStateBody),
+            recordHeader('view-state')
+          )
         )
       );
     }
