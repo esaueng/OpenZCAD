@@ -29,6 +29,7 @@ import {
   parseEnvelope
 } from '@openzcad/crypto';
 import type {
+  E2eeDeviceListHead,
   E2eeKeyArchiveRecord,
   E2eeKeyArchivesResponse,
   E2eeMlsCommitKind,
@@ -199,6 +200,15 @@ export function queryUint(url: URL, name: string): number | null {
   if (!/^\d{1,15}$/.test(raw))
     invalid(`${name} must be a non-negative integer`);
   return Number(raw);
+}
+
+/** A device-list head a request states (`E2eeDeviceListHead`). */
+function deviceListField(value: unknown): E2eeDeviceListHead {
+  const head = record(value, 'deviceList');
+  return {
+    generation: uintField(head.generation, 'deviceList.generation'),
+    headSequence: uintField(head.headSequence, 'deviceList.headSequence')
+  };
 }
 
 export function leafField(value: unknown): E2eeProjectLeafInput {
@@ -883,7 +893,29 @@ async function submitCommit(
     invalid('An external Commit carries the joining device’s leaf');
   }
   const leaf = body.leaf === undefined ? null : leafField(body.leaf);
+  const stated =
+    body.deviceList === undefined ? null : deviceListField(body.deviceList);
   const account = await requireCertifiedDevice(db, userId, deviceId);
+  // The device list the browser built the Commit from must still be the
+  // account's (#908 review). A member Commit removes the leaves of every
+  // device that list revokes, and `rotationsLanded` counts it as the
+  // rotation of a removal: one built before a removal on another device
+  // leaves the removed leaf in the group, which then learns the new key,
+  // yet would release the rotation fence. The batch below is fenced on
+  // `account`, so once equal it lands only while this head holds. A member
+  // Commit must state it: one from a page older than the field would be
+  // fenced on the head read here instead, and could stand in for a
+  // removal's rotation it never carried (#913 review), so it is refused
+  // and the page reloads. An External Commit never counts as a rotation
+  // and needs none.
+  if (
+    (kind === 'commit' && !stated) ||
+    (stated &&
+      (stated.generation !== account.generation ||
+        stated.headSequence !== account.headSequence))
+  ) {
+    refuseDeviceListMoved();
+  }
   const group = await requireGroup(db, projectId);
   if (epoch < group.epoch) await epochTaken(db, projectId, epoch);
   if (epoch > group.epoch) {

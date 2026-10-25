@@ -364,6 +364,16 @@ export interface ProjectGroupContext {
    * links made before the removal. Best effort; a throw is ignored.
    */
   readonly onMembersRemoved?: (removal: MembersRemoved) => void;
+  /**
+   * Told when the Worker refused a member Commit because this account's
+   * device list moved past `account.list` (409 `E2EE_DEVICE_LIST_CHANGED`:
+   * a removal or approval on another device). Every Commit built from this
+   * view is refused the same way, and one built from a view that misses a
+   * removal would leave the removed leaf in the group (#908 review), so
+   * the page reloads its account view before committing again. Best
+   * effort; a throw is ignored.
+   */
+  readonly onDeviceListChanged?: () => void;
 }
 
 /** Other members who lost their last leaf in one Commit (slice 5-5). */
@@ -1631,7 +1641,19 @@ async function submitPending(
         : {}),
       ...(pending.departures?.rejected.length
         ? { rejectedProposals: [...pending.departures.rejected] }
-        : {})
+        : {}),
+      // A member Commit names the device list it was built from: the
+      // Worker counts it as a removal's rotation, so it must not land
+      // after a removal this list misses (#908 review). A rejoin never
+      // counts, and states none.
+      ...(next.external
+        ? {}
+        : {
+            deviceList: {
+              generation: currentGeneration(ctx),
+              headSequence: ctx.account.list.head.sequence
+            }
+          })
     });
     if (!sameBytes(bytes(response.commit.message), pending.commit)) {
       throw new ProjectGroupError(
@@ -1653,6 +1675,18 @@ async function submitPending(
         accepted: false,
         winner: (winner as E2eeMlsCommitRecord | undefined) ?? null
       };
+    }
+    if (!next.external && isApiError(error, 'E2EE_DEVICE_LIST_CHANGED')) {
+      // Built from a device list the account moved past, it did not land
+      // and must not be sent again: a removal it misses stays undone. The
+      // page reloads its account view, and the Commit built from that
+      // carries any rotation the removal made due.
+      await ctx.sessions.discardCommit(ref).catch(() => undefined);
+      try {
+        ctx.onDeviceListChanged?.();
+      } catch {
+        // The refusal is still thrown.
+      }
     }
     throw error;
   }
@@ -3263,9 +3297,10 @@ export type Recovery = 'none' | 'confirmed' | 'discarded' | 'resent';
  * very Commit; otherwise discard it (the next catch-up processes the
  * winner). A member's Commit nobody ruled on is sent again, unless a
  * removal has made a rotation due since it was built: then it is dropped,
- * so the next Commit carries the rotation. A rejoin nobody ruled on is
- * discarded, since its epoch record lived only in memory, and the next
- * join builds a fresh one.
+ * so the next Commit carries the rotation, and so it is when the Worker
+ * refuses it for a device list the account has moved past. A rejoin nobody
+ * ruled on is discarded, since its epoch record lived only in memory, and
+ * the next join builds a fresh one.
  */
 export async function recoverProjectGroup(
   ctx: ProjectGroupContext,
@@ -3323,14 +3358,23 @@ export async function recoverProjectGroup(
     await ctx.sessions.discardCommit(ref);
     return 'discarded';
   }
-  const submitted = await submitPending(
-    ctx,
-    device,
-    projectId,
-    group.keyEpochBase,
-    directory,
-    { commit: pending.commit }
-  );
+  let submitted: Submitted;
+  try {
+    submitted = await submitPending(
+      ctx,
+      device,
+      projectId,
+      group.keyEpochBase,
+      directory,
+      { commit: pending.commit }
+    );
+  } catch (error) {
+    // Built from a device list the account has since moved past (#908
+    // review): `submitPending` dropped it, so catching up goes on and the
+    // next Commit is built afresh.
+    if (isApiError(error, 'E2EE_DEVICE_LIST_CHANGED')) return 'discarded';
+    throw error;
+  }
   if (submitted.accepted) {
     await ctx.sessions.confirmCommit(ref, directory);
     return 'resent';
