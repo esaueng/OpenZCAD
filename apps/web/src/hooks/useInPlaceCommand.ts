@@ -119,8 +119,21 @@ const PLACEMENT_KEYS = new Set([
  * read again (a re-measured box, a renumbered region).
  */
 function slotIdentity(slot: unknown): string {
-  return JSON.stringify(slot ?? null, (key, value: unknown) =>
-    PLACEMENT_KEYS.has(key) ? undefined : value
+  return JSON.stringify(
+    slot ?? null,
+    function (this: unknown, key: string, value: unknown) {
+      if (PLACEMENT_KEYS.has(key)) return undefined;
+      // A face or edge named by its lineage is that lineage: the hash it
+      // resolves to now changes with every upstream rebuild.
+      const holder = this as { reference?: unknown } | null;
+      if (
+        (key === 'hash' || key === 'topologyId') &&
+        holder?.reference !== undefined
+      ) {
+        return undefined;
+      }
+      return value;
+    }
   );
 }
 
