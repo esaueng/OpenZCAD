@@ -32,6 +32,7 @@ import {
 import type { CollaborationStatus } from '../lib/useCollaboration';
 import { useModalFocus } from '../lib/useModalFocus';
 import { StableLabel } from './StableLabel';
+import type { OwnerInvitation } from '../lib/e2ee/invitations';
 import {
   PrivateEmailInput,
   usePersonalInfoVisible
@@ -39,6 +40,78 @@ import {
 
 const defaultClient = createProjectSharingClient();
 const defaultShareLinkClient = createProjectShareLinkClient();
+
+/**
+ * Invitations to an end-to-end encrypted project (ADR-024 slice 5-3b): the
+ * owner's browser signs each one, adds a verified invitee by an MLS Commit
+ * and keeps the invitee's address locally, so the dialog asks this client
+ * instead of the plaintext routes, which refuse encrypted projects.
+ */
+export interface EncryptedSharingClient {
+  /** The project's open invitations, after adding every ready invitee. */
+  list(projectId: string): Promise<OwnerInvitation[]>;
+  invite(
+    projectId: string,
+    email: string,
+    role: ProjectMemberRole
+  ): Promise<void>;
+  revoke(projectId: string, invitationId: string): Promise<void>;
+}
+
+/** The page's client: crypto loads with the first encrypted dialog. */
+export const pageEncryptedSharingClient: EncryptedSharingClient = {
+  async list(projectId) {
+    const [{ encryptedInvitations }, invitations] = await Promise.all([
+      import('../lib/e2ee/encryptedProjects'),
+      import('../lib/e2ee/invitations')
+    ]);
+    const ctx = await encryptedInvitations();
+    const listed = await invitations.projectInvitations(ctx, projectId);
+    const { added, failed } = await invitations.completeReadyInvitations(
+      ctx,
+      listed
+    );
+    if (failed.length) throw failed[0]!.error;
+    return added.length
+      ? invitations.projectInvitations(ctx, projectId)
+      : listed;
+  },
+  async invite(projectId, email, role) {
+    const [{ encryptedInvitations }, { inviteToEncryptedProject }] =
+      await Promise.all([
+        import('../lib/e2ee/encryptedProjects'),
+        import('../lib/e2ee/invitations')
+      ]);
+    await inviteToEncryptedProject(
+      await encryptedInvitations(),
+      projectId,
+      email,
+      role
+    );
+  },
+  async revoke(projectId, invitationId) {
+    const { encryptedInvitations } =
+      await import('../lib/e2ee/encryptedProjects');
+    await (await encryptedInvitations()).api.revoke(projectId, invitationId);
+  }
+};
+
+const ENCRYPTED_STATE_LABELS: Record<OwnerInvitation['state'], string> = {
+  invited: 'Invited',
+  'waiting-for-keys': 'Waiting for keys',
+  'waiting-for-verification': 'Waiting for you to verify',
+  ready: 'Adding',
+  completed: 'Added',
+  revoked: 'Revoked',
+  expired: 'Expired'
+};
+
+const OPEN_ENCRYPTED_STATES = new Set<OwnerInvitation['state']>([
+  'invited',
+  'waiting-for-keys',
+  'waiting-for-verification',
+  'ready'
+]);
 
 export interface ProjectSharingDialogProps {
   projectId: string;
@@ -57,6 +130,15 @@ export interface ProjectSharingDialogProps {
   client?: ProjectSharingClient;
   shareLinkClient?: ProjectShareLinkClient;
   editorInvitationsEnabled?: boolean;
+  /**
+   * The project is end-to-end encrypted (slice 5-3b): invitations are
+   * signed and members added through MLS, share links and role changes are
+   * not offered yet, and plaintext sharing is untouched.
+   */
+  encrypted?: boolean;
+  encryptedClient?: EncryptedSharingClient;
+  /** Opens Settings › Encryption at this person's code comparison. */
+  onVerifyContact?(userId: string): void;
   onClose(): void;
 }
 
@@ -193,12 +275,18 @@ export function ProjectSharingDialog({
   client = defaultClient,
   shareLinkClient = defaultShareLinkClient,
   editorInvitationsEnabled = true,
+  encrypted = false,
+  encryptedClient = pageEncryptedSharingClient,
+  onVerifyContact,
   onClose
 }: ProjectSharingDialogProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const shareLinkUrlRef = useRef<HTMLInputElement | null>(null);
   const [sharing, setSharing] = useState<ProjectSharingResponse | null>(null);
   const [shareLinks, setShareLinks] = useState<ProjectShareLinkSummary[]>([]);
+  const [encryptedInvitations, setEncryptedInvitations] = useState<
+    OwnerInvitation[]
+  >([]);
   const [createdShareLinkUrl, setCreatedShareLinkUrl] = useState<string | null>(
     null
   );
@@ -237,6 +325,27 @@ export function ProjectSharingDialog({
       }
       setError(null);
       try {
+        if (encrypted) {
+          // Encrypted: members from the metadata route, invitations (and
+          // the Adds of verified invitees) through MLS; no share links.
+          const nextSharing = await client.getProjectSharing(projectId);
+          setSharing(nextSharing);
+          setShareLinks([]);
+          const nextInvitations = await encryptedClient.list(projectId);
+          setEncryptedInvitations(nextInvitations);
+          // An Add during the listing made a member: show it.
+          const newMember = nextInvitations.some(
+            (invitation) =>
+              invitation.state === 'completed' &&
+              !nextSharing.members.some(
+                (member) => member.userId === invitation.record.acceptedByUserId
+              )
+          );
+          if (newMember) {
+            setSharing(await client.getProjectSharing(projectId));
+          }
+          return;
+        }
         const [nextSharing, nextShareLinks] = await Promise.all([
           client.getProjectSharing(projectId),
           shareLinkClient.listProjectShareLinks(projectId)
@@ -251,7 +360,15 @@ export function ProjectSharingDialog({
         }
       }
     },
-    [client, shareLinkClient, projectId, role, localProject]
+    [
+      client,
+      shareLinkClient,
+      projectId,
+      role,
+      localProject,
+      encrypted,
+      encryptedClient
+    ]
   );
 
   const copyShareLink = async (url: string) => {
@@ -489,7 +606,7 @@ export function ProjectSharingDialog({
             </section>
           ) : null}
 
-          {isOwner ? (
+          {isOwner && !encrypted ? (
             <section className="sharing-section sharing-link" aria-label="Link">
               <div className="sharing-link-head">
                 <Link2 size={16} aria-hidden="true" />
@@ -652,7 +769,12 @@ export function ProjectSharingDialog({
                           {PRESENCE_LABELS[person.presence ?? 'idle']}
                         </span>
                       ) : null}
-                      {member ? (
+                      {member && encrypted ? (
+                        <span className="sharing-kind">
+                          {ROLE_LABELS[member.role]}
+                        </span>
+                      ) : null}
+                      {member && !encrypted ? (
                         <>
                           <select
                             className="sharing-role-select"
@@ -745,6 +867,75 @@ export function ProjectSharingDialog({
                     </button>
                   </li>
                 ))}
+                {encrypted
+                  ? encryptedInvitations
+                      .filter((invitation) =>
+                        OPEN_ENCRYPTED_STATES.has(invitation.state)
+                      )
+                      .map((invitation, index) => {
+                        const label =
+                          personalInfoVisible && invitation.email
+                            ? invitation.email
+                            : `Invitation ${index + 1}`;
+                        const invitee = invitation.record.acceptedByUserId;
+                        return (
+                          <li
+                            key={invitation.record.invitationId}
+                            className="sharing-pending"
+                          >
+                            <span
+                              className="sharing-avatar sharing-avatar-pending"
+                              aria-hidden="true"
+                            >
+                              {personalInfoVisible && invitation.email
+                                ? initialOf(invitation.email)
+                                : '?'}
+                            </span>
+                            <span className="sharing-member-id">{label}</span>
+                            <span className="sharing-kind">
+                              {ENCRYPTED_STATE_LABELS[invitation.state]} ·{' '}
+                              {ROLE_LABELS[invitation.record.role]} ·{' '}
+                              {expiryLabel(
+                                Math.floor(invitation.record.expiresAt / 1000)
+                              )}
+                            </span>
+                            {invitation.state === 'waiting-for-verification' &&
+                            invitee &&
+                            onVerifyContact ? (
+                              <button
+                                type="button"
+                                className="sharing-row-action"
+                                aria-label={`Verify ${label}`}
+                                disabled={interactionBusy}
+                                onClick={() => onVerifyContact(invitee)}
+                              >
+                                Verify
+                              </button>
+                            ) : null}
+                            <button
+                              type="button"
+                              className="sharing-row-action"
+                              aria-label={`Revoke invitation for ${label}`}
+                              disabled={interactionBusy}
+                              onClick={() =>
+                                void mutate(
+                                  `revoke:${invitation.record.invitationId}`,
+                                  async () => {
+                                    await encryptedClient.revoke(
+                                      projectId,
+                                      invitation.record.invitationId
+                                    );
+                                    await refresh();
+                                  }
+                                )
+                              }
+                            >
+                              Revoke
+                            </button>
+                          </li>
+                        );
+                      })
+                  : null}
               </ul>
               {isOwner ? (
                 <form
@@ -754,12 +945,21 @@ export function ProjectSharingDialog({
                     event.preventDefault();
                     void mutate('invite', async () => {
                       setInvitationSentTo(null);
-                      const created = await client.createInvitation(
-                        projectId,
-                        email,
-                        inviteRole
-                      );
-                      setInvitationSentTo(created.invitation.email);
+                      if (encrypted) {
+                        await encryptedClient.invite(
+                          projectId,
+                          email,
+                          inviteRole
+                        );
+                        setInvitationSentTo(email.trim().toLowerCase());
+                      } else {
+                        const created = await client.createInvitation(
+                          projectId,
+                          email,
+                          inviteRole
+                        );
+                        setInvitationSentTo(created.invitation.email);
+                      }
                       setEmail('');
                       await refresh();
                     });

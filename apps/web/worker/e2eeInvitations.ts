@@ -11,7 +11,8 @@
  * - `POST /api/e2ee/invitations/accept`: binds the signed-in account whose
  *   email hashes to the statement's. It does not make a member: the owner's
  *   Add Commit does. `GET /api/e2ee/invitations` lists this account's
- *   accepted, unfinished invitations.
+ *   accepted, unfinished invitations; `GET …/invitations/sent` the
+ *   owner's (slice 5-3b).
  * - `POST /api/e2ee/projects/:id/key-packages` (the accepted invitee): one
  *   KeyPackage per project and certified device, with its certified leaf.
  *   Republishing replaces one that no Add consumed (and resets its claim).
@@ -91,12 +92,14 @@ const PROJECT_ROUTE =
   /^\/api\/e2ee\/projects\/([^/]+)\/(invitations|invitations\/[^/]+|key-packages|key-packages\/claim|welcome)$/;
 export const E2EE_INVITATIONS_ROUTE = '/api/e2ee/invitations';
 export const E2EE_INVITATION_ACCEPT_ROUTE = '/api/e2ee/invitations/accept';
+export const E2EE_SENT_INVITATIONS_ROUTE = '/api/e2ee/invitations/sent';
 
 /** The encrypted invitation, KeyPackage and Welcome routes. */
 export function isE2eeInvitationPath(pathname: string): boolean {
   return (
     pathname === E2EE_INVITATIONS_ROUTE ||
     pathname === E2EE_INVITATION_ACCEPT_ROUTE ||
+    pathname === E2EE_SENT_INVITATIONS_ROUTE ||
     PROJECT_ROUTE.test(pathname)
   );
 }
@@ -164,6 +167,11 @@ interface InvitationRow {
   completed_at: string | null;
   completed_epoch: number | null;
   revoked_at: string | null;
+  /** The owner's lists only (slice 5-3b). */
+  key_packages?: number;
+  claimed_key_packages?: number;
+  /** The invitee's answers only (slice 5-3b). */
+  group_epoch?: number | null;
 }
 
 const INVITATION_COLUMNS = `invitation_id, project_id, invited_by_user_id,
@@ -186,8 +194,38 @@ const invitationRecord = (row: InvitationRow): E2eeInvitationRecord => ({
   acceptedAt: row.accepted_at,
   completedAt: row.completed_at,
   completedEpoch: row.completed_epoch,
-  revokedAt: row.revoked_at
+  revokedAt: row.revoked_at,
+  ...(row.key_packages === undefined
+    ? {}
+    : {
+        keyPackages: row.key_packages,
+        claimedKeyPackages: row.claimed_key_packages ?? 0
+      }),
+  ...(row.group_epoch === undefined ? {} : { groupEpoch: row.group_epoch })
 });
+
+/**
+ * The owner's view of an invitation's KeyPackages (slice 5-3b): published
+ * and unclaimed, and claimed but not consumed. Counts only, never the
+ * KeyPackages: those go out once, through a claim.
+ */
+const KEY_PACKAGE_COUNTS = `,
+  (SELECT COUNT(*) FROM e2ee_key_packages k
+    WHERE k.invitation_id = e2ee_invitations.invitation_id
+      AND k.claimed_at IS NULL AND k.consumed_at IS NULL) AS key_packages,
+  (SELECT COUNT(*) FROM e2ee_key_packages k
+    WHERE k.invitation_id = e2ee_invitations.invitation_id
+      AND k.claimed_at IS NOT NULL AND k.consumed_at IS NULL)
+    AS claimed_key_packages`;
+
+/**
+ * The invitee's hint (slice 5-3b): the project's group epoch now, which a
+ * KeyPackage's leaf is certified from. The invitee cannot read the group
+ * before the Add, and a wrong value only narrows what its leaf may do.
+ */
+const GROUP_EPOCH = `,
+  (SELECT g.epoch FROM e2ee_project_groups g
+    WHERE g.project_id = e2ee_invitations.project_id) AS group_epoch`;
 
 interface KeyPackageRow {
   invitation_id: string;
@@ -496,7 +534,7 @@ async function listProjectInvitations(
   await requireOwnedEncryptedProject(db, userId, projectId);
   const { results } = await db
     .prepare(
-      `SELECT ${INVITATION_COLUMNS} FROM e2ee_invitations
+      `SELECT ${INVITATION_COLUMNS}${KEY_PACKAGE_COUNTS} FROM e2ee_invitations
        WHERE project_id = ? ORDER BY created_at DESC, invitation_id LIMIT ?`
     )
     .bind(projectId, LIST_LIMIT)
@@ -605,7 +643,7 @@ async function acceptInvitation(
   ]);
   const row = await db
     .prepare(
-      `SELECT ${INVITATION_COLUMNS} FROM e2ee_invitations
+      `SELECT ${INVITATION_COLUMNS}${GROUP_EPOCH} FROM e2ee_invitations
        WHERE token_hash = ? AND email_hash = ?`
     )
     .bind(tokenHash, emailHex)
@@ -633,11 +671,37 @@ async function listAcceptedInvitations(
 ): Promise<Response> {
   const { results } = await db
     .prepare(
-      `SELECT ${INVITATION_COLUMNS} FROM e2ee_invitations
+      `SELECT ${INVITATION_COLUMNS}${GROUP_EPOCH} FROM e2ee_invitations
        WHERE accepted_by_user_id = ? AND ${OPEN_ACCEPTED}
        ORDER BY accepted_at, invitation_id LIMIT ?`
     )
     .bind(userId, Date.now(), LIST_LIMIT)
+    .all<InvitationRow>();
+  return json({
+    invitations: (results ?? []).map(invitationRecord)
+  } satisfies E2eeInvitationsResponse);
+}
+
+/**
+ * `GET /api/e2ee/invitations/sent` (slice 5-3b): the invitations this
+ * account sent, across its encrypted projects, that their invitee accepted
+ * and no Add completed, with their KeyPackage counts: what the owner's next
+ * session verifies and completes.
+ */
+async function listSentInvitations(
+  db: D1Database,
+  userId: string
+): Promise<Response> {
+  const { results } = await db
+    .prepare(
+      `SELECT ${INVITATION_COLUMNS}${KEY_PACKAGE_COUNTS} FROM e2ee_invitations
+       WHERE invited_by_user_id = ? AND ${OPEN_ACCEPTED}
+         AND EXISTS (SELECT 1 FROM projects p
+           WHERE p.id = e2ee_invitations.project_id AND p.user_id = ?
+             AND p.storage_format = 2 AND p.status <> 'deleted')
+       ORDER BY accepted_at, invitation_id LIMIT ?`
+    )
+    .bind(userId, Date.now(), userId, LIST_LIMIT)
     .all<InvitationRow>();
   return json({
     invitations: (results ?? []).map(invitationRecord)
@@ -1207,6 +1271,9 @@ export async function handleE2eeInvitationRequest(
     }
     if (url.pathname === E2EE_INVITATIONS_ROUTE && method === 'GET') {
       return await listAcceptedInvitations(db, userId);
+    }
+    if (url.pathname === E2EE_SENT_INVITATIONS_ROUTE && method === 'GET') {
+      return await listSentInvitations(db, userId);
     }
     const match = PROJECT_ROUTE.exec(url.pathname);
     if (!match) refuse(404, 'NOT_FOUND', 'Not found.');

@@ -153,6 +153,7 @@ import {
   projectDeviceLists,
   projectRevocationCutoffs,
   projectKeyForEpoch,
+  ProjectGroupError,
   type ProjectCutoff,
   type ProjectGroupContext
 } from './projectGroups';
@@ -671,7 +672,10 @@ export function createEncryptedProjectStore(
 
   /**
    * Whether `authorId` held the owner or editor role in `keyEpoch` (MLS
-   * epoch `epoch` of its group), by the roles of that epoch.
+   * epoch `epoch` of its group), by the roles of that epoch. An epoch whose
+   * key this account does not hold yet (no device of it has processed that
+   * epoch, slice 5-3b) is that error, not a missing role: the roles are in
+   * the epoch's key archive.
    */
   async function heldEditingRole(
     projectId: string,
@@ -680,7 +684,11 @@ export function createEncryptedProjectStore(
     epoch: number
   ): Promise<boolean> {
     const roles = await epochRoles(groups, projectId, keyEpoch).catch(
-      () => null
+      (error: unknown) => {
+        if (error instanceof ProjectGroupError && error.code === 'key-missing')
+          throw error;
+        return null;
+      }
     );
     const role = roles?.users.find((r) => r.userId === authorId);
     return (
@@ -766,6 +774,7 @@ export function createEncryptedProjectStore(
     const lists = await projectDeviceLists(groups, projectId);
     let pinned = pinHash;
     let unauthorized: number | null = null;
+    let missingKey: ProjectGroupError | null = null;
     for (let start = 0; ; start += LOG_WINDOW - 1) {
       const window = entries.slice(start, start + LOG_WINDOW);
       let authorship: AuthorshipError | null = null;
@@ -818,6 +827,7 @@ export function createEncryptedProjectStore(
                 : null;
             } catch (error) {
               if (error instanceof AuthorshipError) authorship = error;
+              if (error instanceof ProjectGroupError) missingKey = error;
               return null;
             }
           }
@@ -833,6 +843,8 @@ export function createEncryptedProjectStore(
               : `A version is not signed by a member’s device (${refused.reason}).`
           );
         }
+        const missing = missingKey as ProjectGroupError | null;
+        if (missing) throw missing;
         const unlisted = unauthorized as number | null;
         if (unlisted !== null) {
           throw integrity(

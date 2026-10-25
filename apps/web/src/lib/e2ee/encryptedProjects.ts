@@ -74,6 +74,9 @@ import {
 } from './deviceRemoval';
 import { contactsContext } from './contacts';
 import { contactMemberLists } from './memberLists';
+import { createE2eeInvitationsApi } from '@openzcad/shared';
+import { contactInvitationPeople, type InvitationContext } from './invitations';
+import { invitationStore } from './invitationStore';
 
 export { E2EE_KEYS_LOCKED_CODE };
 
@@ -84,6 +87,7 @@ interface Opened {
   readonly blobs: Promise<EncryptedContentBlobs>;
   readonly measurements: Promise<EncryptedMeasurements>;
   readonly viewStates: Promise<EncryptedViewStates>;
+  readonly invitations: Promise<InvitationContext>;
 }
 
 let opened: Opened | null = null;
@@ -107,7 +111,10 @@ export function subscribeEncryptedProjectWarnings(
   return () => warningListeners.delete(listener);
 }
 
-async function sessionUserId(): Promise<string> {
+async function pageSession(): Promise<{
+  userId: string;
+  email: string | null;
+}> {
   const response = await desktopFetch('/api/session', {
     credentials: 'same-origin'
   });
@@ -117,11 +124,17 @@ async function sessionUserId(): Promise<string> {
       'Sign in again to open encrypted projects.'
     );
   }
-  const session = (await response.json()) as { userId?: unknown };
+  const session = (await response.json()) as {
+    userId?: unknown;
+    email?: unknown;
+  };
   if (typeof session.userId !== 'string') {
     throw new ApiError(401, 'Sign in again to open encrypted projects.');
   }
-  return session.userId;
+  return {
+    userId: session.userId,
+    email: typeof session.email === 'string' ? session.email : null
+  };
 }
 
 const locked = () =>
@@ -133,12 +146,14 @@ const locked = () =>
 
 async function openStore(
   userId: string,
-  revision: number
+  revision: number,
+  email: string | null
 ): Promise<{
   store: EncryptedProjectStore;
   blobs: EncryptedContentBlobs;
   measurements: EncryptedMeasurements;
   viewStates: EncryptedViewStates;
+  invitations: InvitationContext;
 }> {
   const e2ee: E2eeContext = {
     userId,
@@ -167,6 +182,7 @@ async function openStore(
     () => 0
   );
   const groupsApi = createProjectGroupsApi();
+  const contacts = contactsContext(e2ee);
   const groups = {
     api: groupsApi,
     sessions: mlsProjectSessions(),
@@ -182,7 +198,7 @@ async function openStore(
     // contacts module (slice 5-1) against this browser's verified and seen
     // pins. A solo project looks nothing up.
     members: contactMemberLists({
-      contacts: contactsContext(e2ee),
+      contacts,
       account,
       leaves: (projectId) => groupsApi.leaves(projectId)
     })
@@ -242,22 +258,36 @@ async function openStore(
       kit: store.replaced,
       pins
     }),
-    viewStates: createEncryptedViewStates({ userId, kit: store.replaced, pins })
+    viewStates: createEncryptedViewStates({
+      userId,
+      kit: store.replaced,
+      pins
+    }),
+    // Invitations (slice 5-3b): verified-contact checks through the same
+    // contacts module the co-members' lists come from.
+    invitations: {
+      groups,
+      api: createE2eeInvitationsApi(desktopFetch),
+      people: contactInvitationPeople(contacts, account),
+      store: invitationStore(),
+      email
+    }
   };
 }
 
 async function openedForSession(): Promise<Opened> {
-  const userId = await sessionUserId();
+  const { userId, email } = await pageSession();
   const revision = getKeySessionRevision();
   if (opened?.userId !== userId || opened.revision !== revision) {
-    const both = openStore(userId, revision);
+    const both = openStore(userId, revision, email);
     const current: Opened = {
       userId,
       revision,
       store: both.then(({ store }) => store),
       blobs: both.then(({ blobs }) => blobs),
       measurements: both.then(({ measurements }) => measurements),
-      viewStates: both.then(({ viewStates }) => viewStates)
+      viewStates: both.then(({ viewStates }) => viewStates),
+      invitations: both.then(({ invitations }) => invitations)
     };
     opened = current;
     both.then(
@@ -275,6 +305,7 @@ async function openedForSession(): Promise<Opened> {
     current.blobs.catch(() => undefined);
     current.measurements.catch(() => undefined);
     current.viewStates.catch(() => undefined);
+    current.invitations.catch(() => undefined);
   }
   return opened;
 }
@@ -331,6 +362,14 @@ export async function publishEncryptedThumbnail(
   image: Blob
 ): Promise<string> {
   return publishThumbnail(await projectFiles(), projectId, image);
+}
+
+/**
+ * The page's invitations to encrypted projects (slice 5-3b): the sharing
+ * dialog's encrypted branch and Settings › Encryption › Invitations.
+ */
+export async function encryptedInvitations(): Promise<InvitationContext> {
+  return (await openedForSession()).invitations;
 }
 
 /** The page's encrypted measurements client (`measurementCloudSync.ts`). */

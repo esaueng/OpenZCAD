@@ -9,6 +9,7 @@ import {
   type DeviceListPin
 } from '@openzcad/crypto';
 import { handleE2eeRequest } from '../../apps/web/worker/e2ee';
+import type { E2eeInvitationHost } from '../../apps/web/worker/e2eeInvitations';
 import { D1R2PersistenceService } from '@openzcad/cloudflare-adapters';
 import { toUserId } from '@openzcad/shared';
 import {
@@ -46,6 +47,11 @@ export interface E2eeServer {
   /** The artifact bucket encrypted content blobs are uploaded to. */
   readonly objects: Map<string, Uint8Array>;
   readonly bucket: unknown;
+  /**
+   * Invitation emails to encrypted projects the routes sent (slice 5-3b):
+   * each recipient and the token its `#encrypted-invite=` link carries.
+   */
+  readonly mailbox: { to: string; token: string }[];
 }
 
 /**
@@ -145,6 +151,7 @@ export function createE2eeServer({
     enabled,
     projectsEnabled,
     objects,
+    mailbox: [],
     bucket: memoryBucket(objects),
     nodeDevice: (userId = E2E_USER_ID) => ({
       userId,
@@ -199,8 +206,36 @@ async function call(
     env,
     session,
     server.enabled,
-    server.projectsEnabled
+    server.projectsEnabled,
+    invitationHost(server, userId)
   );
+}
+
+/**
+ * The invitation routes' view of the session (slice 5-3b): the account's
+ * email from the users table (`addE2eeUser`), project sharing open, and
+ * invitation emails captured in `server.mailbox`.
+ */
+function invitationHost(
+  server: E2eeServer,
+  userId: string
+): E2eeInvitationHost {
+  const row = server.db
+    .prepare('SELECT email FROM users WHERE id = ?')
+    .get(userId) as { email: string | null } | undefined;
+  const email = row?.email ?? null;
+  return {
+    email,
+    inviterLabel: email ?? userId,
+    sharingEnabled: true,
+    emailConfigured: true,
+    sendInvitationEmail: async (details) => {
+      server.mailbox.push({
+        to: details.recipientEmail,
+        token: details.token
+      });
+    }
+  };
 }
 
 /**

@@ -29,6 +29,12 @@ import {
   type ContactsBook
 } from '../lib/e2ee/contacts';
 import { E2eeApiError } from '../lib/e2ee/e2eeApi';
+import {
+  notifyContactsChanged,
+  subscribeContactVerification,
+  subscribeContactsChanged,
+  takeContactVerificationRequest
+} from '../lib/e2ee/contactFocus';
 import { PasskeyError, passkeysAvailable } from '../lib/e2ee/passkeys';
 import { encodeQr, qrSvgPath } from '../lib/e2ee/qrCode';
 import { Group, Notice, SettingRow, Status } from './settingsControls';
@@ -92,6 +98,34 @@ export function EncryptionContacts({
     void ownVerificationCode(account).then(setOwn);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reload]);
+
+  // A Verify action elsewhere (the sharing dialog, an invitation) opens
+  // that person's comparison here once the contacts have loaded. The book
+  // is read again first: an invitation accepted since it loaded relates
+  // someone it does not list yet (decision M2).
+  const loaded = book !== null;
+  useEffect(() => {
+    if (!loaded) return;
+    const open = () => {
+      const userId = takeContactVerificationRequest();
+      if (!userId) return;
+      void run(async () => {
+        const fresh = await loadContacts(ctx, account);
+        setBook(fresh);
+        setView(await inspectContact(ctx, fresh, userId));
+      });
+    };
+    open();
+    const stopRequests = subscribeContactVerification(open);
+    // Someone accepted or verified elsewhere on this page: read it again.
+    const stopChanges = subscribeContactsChanged(() => void reload());
+    return () => {
+      stopRequests();
+      stopChanges();
+    };
+    // The account view changes with every device-list head.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, ctx, run, reload]);
 
   const canUsePasskey =
     passkeysAvailable() &&
@@ -195,6 +229,7 @@ export function EncryptionContacts({
                       );
               setBook(next);
               setView(await inspectContact(ctx, next, view.userId));
+              notifyContactsChanged();
             })
           }
         />

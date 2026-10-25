@@ -348,6 +348,12 @@ import {
   type KeySessionEvent
 } from './lib/e2ee/keySession';
 import type { DeviceKeySignOutChoice } from './lib/e2ee/signOut';
+import {
+  captureEncryptedInvitationLink,
+  isEncryptedInvitationHash,
+  pendingEncryptedInvitation
+} from './lib/e2ee/encryptedInvitationLink';
+import { requestContactVerification } from './lib/e2ee/contactFocus';
 import { watchBuildVersion } from './lib/buildVersionWatch';
 import { commandOutcomeMessage } from './lib/commandOutcome';
 import { tintPreviewResultBodies } from './lib/previewBodyTint';
@@ -2132,6 +2138,13 @@ export function App() {
   }, []);
   useEffect(() => {
     const openFragment = () => {
+      if (isEncryptedInvitationHash(window.location.hash)) {
+        if (captureEncryptedInvitationLink()) {
+          updateSettingsViewState({ open: true, activeSection: 'encryption' });
+          setSettingsOpen(true);
+        }
+        return;
+      }
       const repeatedInvitation = projectInvitationTokenFromHash(
         window.location.hash
       );
@@ -2340,6 +2353,10 @@ export function App() {
     },
     []
   );
+  // An invitation to an encrypted project (slice 5-3b) is taken off the
+  // address bar at once; Settings › Encryption opens on it once the session
+  // is known (below), where it is accepted after encryption is set up.
+  useState(captureEncryptedInvitationLink);
   const [settingsOpen, setSettingsOpen] = useState(
     () =>
       pendingInvitationToken !== null ||
@@ -3003,6 +3020,16 @@ export function App() {
     DISABLED_COLLABORATION_ROLLOUT
   );
   const [session, setSession] = useState<AuthSession | null>(null);
+  const encryptedInvitationSessionRef = useRef<string | null>(null);
+  useEffect(() => {
+    const userId = session?.userId ?? null;
+    if (!userId || encryptedInvitationSessionRef.current === userId) return;
+    encryptedInvitationSessionRef.current = userId;
+    if (pendingEncryptedInvitation()) {
+      updateSettingsViewState({ open: true, activeSection: 'encryption' });
+      setSettingsOpen(true);
+    }
+  }, [session?.userId]);
   const [resumeViewGeneration, setResumeViewGeneration] = useState(0);
   const workspaceResume = useWorkspaceResume({
     projectId: doc?.projectId ?? null,
@@ -27548,7 +27575,17 @@ export function App() {
                     );
                   }
                 }}
-                role={collaboration.role}
+                role={
+                  collaboration.role ??
+                  // An encrypted project's sharing goes through its MLS
+                  // group, not the room (slice 5-3b): its owner manages it
+                  // even while no room confirms the role.
+                  (isEncryptedProject(doc.projectId) &&
+                  session &&
+                  doc.ownerUserId === session.userId
+                    ? 'owner'
+                    : null)
+                }
                 collaborationStatus={collaboration.status}
                 lease={collaboration.lease}
                 liveMembers={collaboration.members}
@@ -27557,6 +27594,16 @@ export function App() {
                 editorInvitationsEnabled={
                   collaborationRollout.editLeasesEnforced
                 }
+                encrypted={isEncryptedProject(doc.projectId)}
+                onVerifyContact={(userId) => {
+                  requestContactVerification(userId);
+                  setSharingOpen(false);
+                  updateSettingsViewState({
+                    open: true,
+                    activeSection: 'encryption'
+                  });
+                  setSettingsOpen(true);
+                }}
                 onClose={() => setSharingOpen(false)}
               />
             )}
