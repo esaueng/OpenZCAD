@@ -277,6 +277,34 @@ describe('useInPlaceCommand: revolve', () => {
     expect(hook.result.current.values.angle).toBe(360);
   });
 
+  it('does not finish on a frame built before the model moved', async () => {
+    const releases: (() => void)[] = [];
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      baseVersion: 1,
+      derive: (document) =>
+        new Promise((resolve) => {
+          releases.push(() => resolve(document.derived));
+        })
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() => hook.result.current.start('revolve', [PICK]));
+    act(() => hook.result.current.pickAxis('sketch-vertical'));
+    await waitFor(() => expect(releases).toHaveLength(1));
+    // A collaborator's edit lands while the first frame is still building.
+    hook.rerender({ ...options, baseVersion: 2 });
+    act(() => releases[0]!());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(hook.result.current.canFinish).toBe(false);
+    // The frame on the new base is the one Done may finish on.
+    await waitFor(() => expect(releases.length).toBeGreaterThan(1));
+    act(() => releases.at(-1)!());
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+  });
+
   it('finishes on the frame of a value dragged back to', async () => {
     const releases: (() => void)[] = [];
     // Each build adds a body under a new id, as the real command does: the
