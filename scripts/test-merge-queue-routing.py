@@ -22,11 +22,13 @@ spec.loader.exec_module(POLICY)
 REMUS = POLICY.REPOSITORY == "esaueng/remus"
 JANE_LABEL = "ci-server-jane" if REMUS else "ci-server-jane-5gb"
 STAGED = ROOT / (".github/workflows/fleet-ci-v5.yml" if REMUS
-                 else ".github/workflows/fleet-ci-v4.yml")
+                 else ".github/workflows/fleet-ci-v5.yml")
 TEXT = STAGED.read_text()
 # fleet-ci-v4 (#836, #878): every shard installs browser binaries only, and
 # merge-queue candidates run no e2e shards, which the e2e gate then accepts.
-# These exact edits are the whole approved difference in application jobs.
+# fleet-ci-v5 (#882): pull-request shards start beside `quality` instead of
+# after it. These exact edits are the whole approved difference in
+# application jobs.
 APPROVED_STEP_CHANGES = [] if REMUS else [
     ("  # Queue candidates, main pushes and manual dispatches start the shards at\n"
      "  # once, beside the other checks. Pull requests use `e2e-tests-pr` below.\n",
@@ -34,9 +36,20 @@ APPROVED_STEP_CHANGES = [] if REMUS else [
      "  # other checks. Pull requests use `e2e-tests-pr` below. Merge-queue\n"
      "  # candidates run no shards: auto-merge enqueues a PR only once `checks / e2e`\n"
      "  # passed on its head, and running the ~55 runner-minute suite again per\n"
-     "  # candidate held six of the org's 20 hosted runners while PRs and the next\n"
-     "  # candidate queued behind them. Lint, typecheck, both Vitest projects,\n"
-     "  # parity and the build still run on every candidate.\n"),
+     "  # candidate held six hosted runners while PRs and the next candidate queued\n"
+     "  # behind them. Lint, typecheck, both Vitest projects, parity and the build\n"
+     "  # still run on every candidate.\n"),
+    ("  # On a pull request the shards wait for lint and typecheck. Hosted runners\n"
+     "  # are a shared pool of concurrent jobs, and starting six browser shards on\n"
+     "  # every push let superseded and lint-red pushes hold them while queue\n"
+     "  # candidates waited 15-20 minutes for a runner. A push that `quality`\n"
+     "  # rejects, or that a newer push cancels within those minutes, now never\n"
+     "  # starts a shard. Queue candidates keep the parallel `e2e-tests` above.\n",
+     "  # On a pull request the shards start at once, beside lint and typecheck.\n"
+     "  # They used to wait for `quality` so lint-red and superseded pushes would not\n"
+     "  # hold six runners of the Free plan's 20; on the Team plan's 60 that wait\n"
+     "  # (2-4 minutes per push) cost more than the runners it saved, and a newer\n"
+     "  # push still cancels a superseded run's shards. Queue candidates run none.\n"),
     ("      # the new build. `--with-deps` still runs so OS packages stay covered.\n",
      "      # the new build.\n"),
     ("      - run: |\n"
@@ -70,7 +83,12 @@ APPROVED_STEP_CHANGES = [] if REMUS else [
      "            merge_group/skipped/skipped)\n"
      "              echo 'Queue candidate: e2e passed on the pull request head' ;;\n"
      "            */skipped/skipped)\n"),
+    ("              echo 'No shard ran; pull-request shards start only after quality passes.' >&2\n",
+     "              echo 'No shard ran.' >&2\n"),
 ]
+# Dependencies an approved change removed: v5's PR shards no longer wait for
+# `quality`, which still gates `validate` and every queue candidate.
+APPROVED_DROPPED_NEEDS = {} if REMUS else {"e2e-tests-pr": {"quality"}}
 
 
 def approved(text):
@@ -355,6 +373,9 @@ class QueueWorkflowTests(unittest.TestCase):
                     self.assertIn(old_condition, new)
                 old_needs = re.search(r'^    needs: (.+)$', old, re.M)
                 for dependency in re.findall(r'[\w-]+', old_needs[1] if old_needs else ''):
+                    if dependency in APPROVED_DROPPED_NEEDS.get(name, ()):
+                        self.assertNotIn(f"needs.{dependency}.", new)
+                        continue
                     self.assertIn(f"needs.{dependency}.result == 'success'", new)
 
     def test_required_gate_still_rejects_application_failure_when_probe_skips_or_fails(self):

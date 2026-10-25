@@ -79,8 +79,8 @@ function props(
 /**
  * ADR-024 Phase 4: this build opens storage formats 1 and 2 (slice 4-5). A
  * project in a format it does not know is locked and says to update; a
- * format-2 (end-to-end encrypted) project opens, marked encrypted, without
- * copies until slice 4-8.
+ * format-2 (end-to-end encrypted) project opens, marked encrypted, and is
+ * duplicated like any other (slice 4-8).
  */
 describe('storage formats on the shelf', () => {
   it('this build opens plaintext and encrypted projects', () => {
@@ -93,7 +93,7 @@ describe('storage formats on the shelf', () => {
     expect(projectNeedsUpdate(encrypted, [1])).toBe(true);
   });
 
-  it('opens an encrypted card, marked encrypted and without copies', () => {
+  it('opens an encrypted card, marked encrypted and with copies (4-8)', () => {
     const shelf = props();
     render(<StartScreen {...shelf} />);
     const card = screen
@@ -112,9 +112,8 @@ describe('storage formats on the shelf', () => {
     const menu = screen.getByRole('menu', {
       name: 'Actions for Encrypted project'
     });
-    expect(
-      within(menu).queryByRole('menuitem', { name: 'Duplicate' })
-    ).toBeNull();
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Duplicate' }));
+    expect(shelf.onDuplicate).toHaveBeenCalledWith(encrypted);
   });
 
   it('shows a locked card that says to update and opens nothing', () => {
@@ -172,9 +171,7 @@ describe('storage formats on the shelf', () => {
       }),
       download: vi.fn().mockResolvedValue('blob:x')
     };
-    await expect(resolveShelfThumbnail(future, host)).resolves.toBe(
-      undefined
-    );
+    await expect(resolveShelfThumbnail(future, host)).resolves.toBe(undefined);
     expect(host.loadCached).not.toHaveBeenCalled();
     expect(host.download).not.toHaveBeenCalled();
   });

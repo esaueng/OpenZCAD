@@ -831,6 +831,10 @@ export function buildCylinderRadiusHandle(
       orderByDepth(pin.solids, camera);
       dimension.orient(camera);
     },
+    appear() {
+      presence.showNow();
+      paintParts();
+    },
     beginExit() {
       presence.beginExit();
     },
@@ -938,6 +942,10 @@ export function buildEdgeRadiusHandle(params: {
     },
     setHot(hot: boolean) {
       presence.setHot(hot);
+    },
+    appear() {
+      presence.showNow();
+      paintParts();
     },
     beginExit() {
       presence.beginExit();

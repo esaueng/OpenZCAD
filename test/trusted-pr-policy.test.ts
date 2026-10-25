@@ -105,7 +105,7 @@ describe('required validation gate', () => {
     }
   );
 
-  it('starts pull-request shards after quality and runs none for queue candidates', () => {
+  it('starts pull-request shards beside quality and runs none for queue candidates', () => {
     const job = (name: string) => {
       const start = ci.indexOf(`\n  ${name}:\n`);
       expect(start).toBeGreaterThan(-1);
@@ -120,10 +120,13 @@ describe('required validation gate', () => {
       "if: ${{ !cancelled() && github.event_name != 'pull_request' && github.event_name != 'merge_group' }}\n"
     );
     expect(direct).toContain('needs: queue-trust\n');
+    // Pull-request shards no longer wait for lint and typecheck: on the Team
+    // plan's 60 runners the wait cost more than the runners it saved.
     expect(pr).toContain(
-      "if: ${{ !cancelled() && needs.quality.result == 'success' && (github.event_name == 'pull_request') }}\n"
+      "if: ${{ !cancelled() && (github.event_name == 'pull_request') }}\n"
     );
-    expect(pr).toContain('needs: [queue-trust, quality]\n');
+    expect(pr).toContain('needs: queue-trust\n');
+    expect(pr).not.toContain('quality');
     // Both shard sets run the same matrix and steps, not drifting copies.
     expect(direct).toContain('strategy: &e2e-strategy\n');
     expect(direct).toContain('steps: &e2e-steps\n');
