@@ -296,3 +296,94 @@ describe('patterns', () => {
     ).toMatchObject({ axis: 'x', axis2: 'z', spacing2: 15, count2: 3 });
   });
 });
+
+describe('review: values the cards accepted stay expressible', () => {
+  it('patterns keep a signed spacing and total, and the kernel count range', () => {
+    const linear = IN_PLACE_TOOL_SPECS['linear-pattern'];
+    const spacing = linear.values.find((value) => value.id === 'spacing')!;
+    const count = linear.values.find((value) => value.id === 'count')!;
+    expect(clampValue(spacing, -20)).toBe(-20);
+    expect(clampValue(count, 500)).toBe(100);
+    const circular = IN_PLACE_TOOL_SPECS['circular-pattern'];
+    expect(
+      clampValue(
+        circular.values.find((value) => value.id === 'angle')!,
+        -90
+      )
+    ).toBe(-90);
+    const grid = IN_PLACE_TOOL_SPECS['grid-pattern'];
+    for (const id of ['count', 'count2']) {
+      expect(
+        clampValue(
+          grid.values.find((value) => value.id === id)!,
+          1
+        )
+      ).toBe(2);
+    }
+  });
+
+  it('a typed mirror offset stays an expression in the coordinate it moves', () => {
+    const request = IN_PLACE_TOOL_SPECS.mirror.request(
+      {
+        ...EMPTY,
+        bodies: [BODY],
+        plane: {
+          kind: 'principal',
+          plane: 'YZ',
+          origin: { x: 0, y: 0, z: 0 },
+          normal: { x: 1, y: 0, z: 0 }
+        }
+      },
+      { offset: 'width / 2' },
+      {},
+      CTX,
+      { offset: 10 }
+    );
+    expect(request).toMatchObject({
+      state: { value: { origin: { x: '(width / 2)', y: '0', z: '0' } } }
+    });
+  });
+
+  it("a parametric hole diameter sizes the counterbore from the bore's value", () => {
+    const request = IN_PLACE_TOOL_SPECS.hole.request(
+      { ...EMPTY, faces: [TOP] },
+      { diameter: 'bore', depth: 8 },
+      { style: 'counterbore' },
+      CTX,
+      { diameter: 4, depth: 8 }
+    );
+    expect(request).toMatchObject({
+      state: {
+        value: {
+          diameter: 'bore',
+          counterboreDiameter: '7.2',
+          counterboreDepth: '2'
+        }
+      }
+    });
+  });
+
+  it('draft hinges on the body base by default, or the top, the click, the origin', () => {
+    const ctx: InPlaceContext = {
+      ...CTX,
+      bodyBounds: () => ({
+        min: { x: 5, y: 5, z: 2 },
+        max: { x: 25, y: 15, z: 6 }
+      })
+    };
+    const neutral = (hinge: string, pull = '+Z') =>
+      (
+        IN_PLACE_TOOL_SPECS.draft.request(
+          { ...EMPTY, faces: [TOP] },
+          { angle: 3 },
+          { pull, neutral: hinge },
+          ctx
+        ) as { state: { value: { neutralPoint: unknown } } }
+      ).state.value.neutralPoint;
+    expect(neutral('base')).toEqual({ x: '15', y: '10', z: '2' });
+    expect(neutral('top')).toEqual({ x: '15', y: '10', z: '6' });
+    expect(neutral('base', '-Z')).toEqual({ x: '15', y: '10', z: '6' });
+    expect(neutral('point')).toEqual({ x: '12', y: '6', z: '4' });
+    expect(neutral('origin')).toEqual({ x: '0', y: '0', z: '0' });
+  });
+});

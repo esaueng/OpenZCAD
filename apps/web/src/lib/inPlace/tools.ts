@@ -168,6 +168,8 @@ export interface InPlaceContext {
   datumLabel(featureId: FeatureId): string;
   /** The linear snap a clicked position rounds to; null when snapping is off. */
   linearSnap?: number | null;
+  /** A body's bounding box, for references measured on it (a draft's base). */
+  bodyBounds?(bodyId: BodyId): { min: Vector3; max: Vector3 } | null;
 }
 
 /** What to build, without names or ids; App turns it into the command. */
@@ -294,11 +296,17 @@ export interface InPlaceToolSpec {
   defaults?(slots: InPlaceSlots, ctx: InPlaceContext): Record<string, number>;
   hint(slots: InPlaceSlots): string;
   ready(slots: InPlaceSlots): boolean;
+  /**
+   * `values` holds what is stored: a typed expression as typed, else the
+   * number. `numbers` holds every value as a number, for whatever the
+   * request derives from one (a hole's step sizes).
+   */
   request(
     slots: InPlaceSlots,
     values: Record<string, ParamValue>,
     options: Record<string, string>,
-    ctx: InPlaceContext
+    ctx: InPlaceContext,
+    numbers?: Record<string, number>
   ): InPlaceRequest | null;
   handles(
     slots: InPlaceSlots,
@@ -712,7 +720,7 @@ const hole: InPlaceToolSpec = {
     return `Click again to move it · drag the diameter · ${FINISH}`;
   },
   ready: (slots) => slots.faces.length > 0,
-  request(slots, values, options, ctx) {
+  request(slots, values, options, ctx, numbers) {
     const face = slots.faces[0];
     if (!face || !face.normal) return null;
     const anchor = face.centroid ? 'centroid' : 'center';
@@ -720,7 +728,10 @@ const hole: InPlaceToolSpec = {
     const position = face.point
       ? holePositionFromPick(face, anchor, face.point, ctx.linearSnap ?? null)
       : null;
-    const diameter = Number(values.diameter ?? 6);
+    // The step sizes derive from the bore's value, a typed expression's too.
+    const diameter =
+      numbers?.diameter ??
+      (typeof values.diameter === 'number' ? values.diameter : 6);
     return {
       tool: 'modeling',
       state: {
@@ -881,6 +892,35 @@ const PULL_DIRECTIONS: Record<string, Vector3> = {
   '-Y': { x: 0, y: -1, z: 0 }
 };
 
+/**
+ * Where a draft hinges: a point on its neutral plane, which stands square to
+ * the pull. `base` is the body's far side against the pull (the parting line
+ * of a part pulled from a mould), `top` its near side, `point` where the
+ * first face was clicked, `origin` the world origin (the card's default).
+ */
+function draftNeutralPoint(
+  choice: string | undefined,
+  pull: Vector3,
+  face: FacePick,
+  ctx: InPlaceContext
+): Vector3 {
+  if (choice === 'origin') return { x: 0, y: 0, z: 0 };
+  if (choice === 'point' && face.point) return face.point;
+  const bounds = ctx.bodyBounds?.(face.bodyId);
+  if (!bounds) return face.point ?? { x: 0, y: 0, z: 0 };
+  const top = choice === 'top';
+  // Pulls are along one axis, so one bounding-box side is the extreme.
+  const side = (axis: 'x' | 'y' | 'z') => {
+    const toward = pull[axis] > 0 !== top;
+    return pull[axis] === 0
+      ? (bounds.min[axis] + bounds.max[axis]) / 2
+      : toward
+        ? bounds.min[axis]
+        : bounds.max[axis];
+  };
+  return { x: side('x'), y: side('y'), z: side('z') };
+}
+
 const draft: InPlaceToolSpec = {
   id: 'draft',
   title: 'Draft',
@@ -907,6 +947,17 @@ const draft: InPlaceToolSpec = {
         label: value
       })),
       initial: '+Z'
+    },
+    {
+      id: 'neutral',
+      label: 'Hinge',
+      choices: [
+        { value: 'base', label: 'Base' },
+        { value: 'top', label: 'Top' },
+        { value: 'point', label: 'Clicked point' },
+        { value: 'origin', label: 'Origin' }
+      ],
+      initial: 'base'
     }
   ],
   hint(slots) {
@@ -915,11 +966,12 @@ const draft: InPlaceToolSpec = {
     return `${count} ${count === 1 ? 'face' : 'faces'} · tap the angle to type · ${FINISH}`;
   },
   ready: (slots) => slots.faces.length > 0,
-  request(slots, values, options) {
+  request(slots, values, options, ctx) {
     const first = slots.faces[0];
     if (!first) return null;
     const pull =
       PULL_DIRECTIONS[options.pull ?? '+Z'] ?? PULL_DIRECTIONS['+Z']!;
+    const neutral = draftNeutralPoint(options.neutral, pull, first, ctx);
     return {
       tool: 'modeling',
       state: {
@@ -933,8 +985,11 @@ const draft: InPlaceToolSpec = {
             y: String(pull.y),
             z: String(pull.z)
           },
-          // The card's default neutral point: the world origin.
-          neutralPoint: { x: '0', y: '0', z: '0' },
+          neutralPoint: {
+            x: String(neutral.x),
+            y: String(neutral.y),
+            z: String(neutral.z)
+          },
           angleDeg: text(values.angle, 3)
         }
       }
@@ -1025,6 +1080,39 @@ function offsetPlane(plane: PlanePick, offset: number): PlanePick {
   };
 }
 
+/**
+ * A picked plane slid `offset` along its normal, as the card's plane fields.
+ * A typed expression stays an expression in each coordinate it moves.
+ */
+function offsetPlaneFields(
+  plane: PlanePick,
+  offset: ParamValue | undefined
+): ReturnType<typeof planeFields> {
+  if (offset === undefined || typeof offset === 'number') {
+    return planeFields(offsetPlane(plane, offset ?? 0));
+  }
+  if (plane.kind === 'datum') return planeFields(plane);
+  const normal = unit(plane.normal);
+  const along = (origin: number, n: number): string => {
+    if (Math.abs(n) < 1e-12) return String(origin);
+    const term =
+      Math.abs(n - 1) < 1e-12
+        ? `(${offset})`
+        : Math.abs(n + 1) < 1e-12
+          ? `-(${offset})`
+          : `(${offset}) * ${n}`;
+    return origin === 0 ? term : `${origin} + ${term}`;
+  };
+  return {
+    ...planeFields(plane),
+    origin: {
+      x: along(plane.origin.x, normal.x),
+      y: along(plane.origin.y, normal.y),
+      z: along(plane.origin.z, normal.z)
+    }
+  };
+}
+
 const PLANE_OFFSET: ValueSpec = {
   id: 'offset',
   label: 'Offset',
@@ -1077,7 +1165,7 @@ const mirror: InPlaceToolSpec = {
   request(slots, values) {
     const body = slots.bodies[0];
     if (!body || !slots.plane) return null;
-    const plane = offsetPlane(slots.plane, Number(values.offset ?? 0));
+    const fields = offsetPlaneFields(slots.plane, values.offset);
     return {
       tool: 'modeling',
       state: {
@@ -1085,7 +1173,7 @@ const mirror: InPlaceToolSpec = {
         value: {
           name: 'Mirror',
           targetBodyId: body.bodyId,
-          ...planeFields(plane)
+          ...fields
         }
       }
     };
@@ -1119,7 +1207,7 @@ const split: InPlaceToolSpec = {
   request(slots, values, options) {
     const body = slots.bodies[0];
     if (!body || !slots.plane) return null;
-    const plane = offsetPlane(slots.plane, Number(values.offset ?? 0));
+    const fields = offsetPlaneFields(slots.plane, values.offset);
     return {
       tool: 'modeling',
       state: {
@@ -1127,7 +1215,7 @@ const split: InPlaceToolSpec = {
         value: {
           name: 'Split',
           targetBodyId: body.bodyId,
-          ...planeFields(plane),
+          ...fields,
           ...(options.keepOriginal === 'yes' ? { keepOriginal: true } : {})
         }
       }
@@ -1352,8 +1440,10 @@ const linearPattern: InPlaceToolSpec = {
   wantsAxis: false,
   wantsPath: false,
   values: [
-    { id: 'spacing', label: 'Spacing', unit: 'length', initial: 20, min: 0.01 },
-    { id: 'count', label: 'Count', unit: 'count', initial: 3, min: 2, max: 500 }
+    // Signed: a negative spacing repeats the other way, as the card allowed.
+    // Zero is the kernel's to refuse, in the bar.
+    { id: 'spacing', label: 'Spacing', unit: 'length', initial: 20 },
+    { id: 'count', label: 'Count', unit: 'count', initial: 3, min: 2, max: 100 }
   ],
   options: [AXIS_OPTION('x')],
   hint: (slots) =>
@@ -1409,10 +1499,11 @@ const circularPattern: InPlaceToolSpec = {
       label: 'Total',
       unit: 'angle',
       initial: 360,
-      min: 1,
+      // Signed: a negative total turns the copies the other way.
+      min: -360,
       max: 360
     },
-    { id: 'count', label: 'Count', unit: 'count', initial: 6, min: 2, max: 500 }
+    { id: 'count', label: 'Count', unit: 'count', initial: 6, min: 2, max: 100 }
   ],
   hint(slots) {
     if (slots.bodies.length === 0) return 'Click the body to repeat';
@@ -1476,28 +1567,27 @@ const gridPattern: InPlaceToolSpec = {
   wantsAxis: false,
   wantsPath: false,
   values: [
-    { id: 'spacing', label: 'Spacing', unit: 'length', initial: 20, min: 0.01 },
+    { id: 'spacing', label: 'Spacing', unit: 'length', initial: 20 },
     {
       id: 'count',
       label: 'Count',
       unit: 'count',
       initial: 3,
-      min: 1,
+      min: 2,
       max: 100
     },
     {
       id: 'spacing2',
       label: 'Spacing 2',
       unit: 'length',
-      initial: 20,
-      min: 0.01
+      initial: 20
     },
     {
       id: 'count2',
       label: 'Count 2',
       unit: 'count',
       initial: 3,
-      min: 1,
+      min: 2,
       max: 100
     }
   ],

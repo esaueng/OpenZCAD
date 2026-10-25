@@ -148,7 +148,8 @@ export function useInPlaceCommand(
       sketchViews: options.sketchViews,
       datumAxes: options.datumAxes,
       datumLabel: (featureId) => optionsRef.current.datumLabel(featureId),
-      linearSnap: options.linearSnap ?? null
+      linearSnap: options.linearSnap ?? null,
+      bodyBounds: (bodyId) => optionsRef.current.bodyBounds?.(bodyId) ?? null
     }),
     [options.sketchViews, options.datumAxes, options.linearSnap]
   );
@@ -212,12 +213,20 @@ export function useInPlaceCommand(
     return out;
   }, [values, session?.raws]);
   const chosen = useMemo(() => session?.options ?? {}, [session?.options]);
+  /** Every value as a number, its initial one where none is set. */
+  const numbers = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const valueSpec of spec?.values ?? []) {
+      out[valueSpec.id] = values[valueSpec.id] ?? valueSpec.initial;
+    }
+    return out;
+  }, [spec, values]);
   const request = useMemo(
     () =>
       spec && spec.ready(slots)
-        ? spec.request(slots, paramValues, chosen, ctx)
+        ? spec.request(slots, paramValues, chosen, ctx, numbers)
         : null,
-    [spec, slots, paramValues, chosen, ctx]
+    [spec, slots, paramValues, chosen, ctx, numbers]
   );
   const requestRef = useRef(request);
   requestRef.current = request;

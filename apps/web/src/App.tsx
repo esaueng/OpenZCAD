@@ -18342,6 +18342,7 @@ export function App() {
       : null,
     datumLabel: (featureId) =>
       (doc && findFeature(doc, featureId)?.name) ?? 'Datum axis',
+    bodyBounds: (bodyId) => inPlaceBodyPick(bodyId),
     baseDocument: () => managerRef.current?.document ?? null,
     baseVersion: doc?.version ?? null,
     derive: (document) => geometry.syncOnce(document),
