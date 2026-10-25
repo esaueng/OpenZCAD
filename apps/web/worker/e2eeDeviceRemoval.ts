@@ -57,6 +57,8 @@ import {
   allChanged,
   archiveField,
   bytesField,
+  deviceListMoved,
+  deviceListUnchanged,
   idField,
   insertArchive,
   insertLeaf,
@@ -66,6 +68,7 @@ import {
   leafField,
   record,
   refuse,
+  refuseDeviceListMoved,
   requireCertifiedDevice,
   requireOwnedEncryptedProject,
   runBatch,
@@ -471,6 +474,8 @@ async function resetGroup(
   const wraps = wrapsField(body.wraps, keyEpochBase, account);
   const archive = archiveField(body.archive, projectId, keyEpochBase, deviceId);
   const now = new Date().toISOString();
+  // A device removed meanwhile cannot hold the new group's first leaf.
+  const signerList = deviceListUnchanged(userId, account);
   const statements = [
     db
       .prepare(
@@ -481,7 +486,8 @@ async function resetGroup(
          WHERE ${authorization.sql} AND ${PROJECT_FENCE}
            AND EXISTS (SELECT 1 FROM e2ee_project_groups
                        WHERE project_id = ? AND group_id = ? AND generation = ?
-                         AND key_epoch_base = ? AND epoch = ?)`
+                         AND key_epoch_base = ? AND epoch = ?)
+           AND ${signerList.sql}`
       )
       .bind(
         projectId,
@@ -500,7 +506,8 @@ async function resetGroup(
         group.group_id,
         group.generation,
         group.key_epoch_base,
-        group.epoch
+        group.epoch,
+        ...signerList.binds
       ),
     // The trigger of migration 0036 allows exactly this move.
     db
@@ -539,6 +546,7 @@ async function resetGroup(
   ];
   const results = await runBatch(db, statements);
   if (!allChanged(results.slice(0, -1), statements.length - 1)) {
+    if (await deviceListMoved(db, userId, account)) refuseDeviceListMoved();
     const now = await groupRow(db, projectId);
     if (now && now.generation !== group.generation) {
       refuse(
