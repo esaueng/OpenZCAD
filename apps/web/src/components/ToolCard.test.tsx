@@ -6,6 +6,47 @@ import { ExtrudeForm } from './forms/ExtrudeForm';
 import { ToolCard } from './ToolCard';
 
 describe('ToolCard', () => {
+  it("offers a region's other tools, open while its check runs", async () => {
+    const onVerb = vi.fn();
+    render(
+      <ToolCard
+        model={{
+          icon: 'extrude',
+          title: 'Extrude',
+          eyebrow: 'create',
+          hint: 'Drag the region to pull it into a solid.',
+          phase: 'validating'
+        }}
+        cancelableWhileValidating
+        verbs={[
+          {
+            id: 'tool:revolve',
+            label: 'Revolve',
+            title: 'Revolve',
+            disabled: false,
+            pressed: false
+          },
+          {
+            id: 'tool:sweep',
+            label: 'Sweep',
+            title: 'Needs a path',
+            disabled: true,
+            pressed: false
+          }
+        ]}
+        onVerb={onVerb}
+        onClose={vi.fn()}
+      />
+    );
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Selection: Revolve' })
+    );
+    expect(onVerb).toHaveBeenCalledWith('tool:revolve');
+    expect(
+      screen.getByRole('button', { name: 'Selection: Sweep' })
+    ).toBeDisabled();
+  });
+
   it('offers all-edge selection beside the active fillet and locks it during validation', async () => {
     const select = vi.fn();
     const model = {
