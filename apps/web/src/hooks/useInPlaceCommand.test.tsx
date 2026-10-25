@@ -938,6 +938,66 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     });
   });
 
+  it('takes an edited plane retyped by someone else as the feature stores it now', () => {
+    const mirror = (x: number) => ({
+      featureKind: 'mirror',
+      targetBodyId: 'body_a' as BodyId,
+      plane: { origin: { x, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } }
+    });
+    let stored = mirror(5);
+    const base = () =>
+      ({
+        nodes: {
+          node_1: {
+            id: 'node_1',
+            kind: 'feature',
+            featureId: SEED.featureId,
+            name: 'Mirror',
+            data: stored
+          }
+        },
+        derived: { bodyRepresentations: { [BODY]: {} }, warnings: [] }
+      }) as unknown as ProjectDocument;
+    let document = base();
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      baseDocument: () => document,
+      evaluate: (value) => Number(value),
+      baseVersion: 1
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('mirror', {
+        ...SEED,
+        data: stored as never,
+        slots: {
+          ...SEED.slots,
+          bodies: [],
+          plane: {
+            kind: 'saved',
+            origin: { x: 5, y: 0, z: 0 },
+            normal: { x: 1, y: 0, z: 0 },
+            fields: {
+              origin: { x: '5', y: '0', z: '0' },
+              normal: { x: '1', y: '0', z: '0' }
+            }
+          }
+        }
+      })
+    );
+    stored = mirror(12);
+    document = base();
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.slots.plane).toMatchObject({
+      kind: 'saved',
+      origin: { x: 12, y: 0, z: 0 },
+      fields: { origin: { x: '12' } }
+    });
+  });
+
   it("reads a helix's saved axis again when the model changes", () => {
     let rise = 10;
     const options: UseInPlaceCommandOptions = {
