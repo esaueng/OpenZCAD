@@ -27,8 +27,8 @@ import { isProjectStorageFormatReady } from '@openzcad/cloudflare-adapters';
  *   revoking or listing access) and works on any format.
  * - `share`: creates or changes access (inviting, share links, a member's
  *   role or removal); refused on an encrypted project as sharing.
- * - `room`: the collaboration room; members refused as sharing, the owner
- *   as unreadable.
+ * - `room`: the collaboration room; while encrypted projects are closed,
+ *   members refused as sharing, the owner as unreadable.
  * - `document`: everything else, refused as unreadable.
  */
 export type ProjectRouteFormatRule = 'metadata' | 'share' | 'room' | 'document';
@@ -111,7 +111,7 @@ export async function assertProjectRouteFormat(
   /**
    * Encrypted projects are open to the caller (E2EE_PROJECTS_ENABLED): the
    * owner of an encrypted project reaches its room, which relays ciphertext
-   * (ADR-024 slice 4-9). Members stay refused until sharing (Phase 5).
+   * (ADR-024 slice 4-9), and so do its members (slice 5-6).
    */
   encryptedRoom = false
 ): Promise<void> {
@@ -135,8 +135,6 @@ export async function assertProjectRouteFormat(
   }
   if (route.rule === 'share') assertShareableProject(access);
   else if (route.rule === 'room') {
-    if (!(encryptedRoom && access.role === 'owner')) {
-      assertPlaintextRoomAccess(access);
-    }
+    if (!encryptedRoom) assertPlaintextRoomAccess(access);
   } else assertPlaintextProject(access);
 }

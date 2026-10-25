@@ -95,14 +95,42 @@ function sharing(server: E2eeServer, projectId: string) {
   };
 }
 
+/**
+ * Connects a signed-in context to the encrypted room (slice 5-6,
+ * `encrypted-room-fixtures.ts`): called after `stubApi`, with the page's
+ * real WebSocket back in place.
+ */
+export type LiveRoom = (
+  context: BrowserContext,
+  page: Page,
+  userId: string
+) => Promise<void>;
+
 export async function signIn(
   context: BrowserContext,
   server: E2eeServer,
   userId: string,
-  email: string
+  email: string,
+  room?: LiveRoom
 ): Promise<Page> {
   const page = await context.newPage();
+  if (room) {
+    // stubApi replaces the page's WebSocket with a static stand-in; a page
+    // that talks to the room keeps the real one.
+    await page.addInitScript(() => {
+      (window as unknown as { __nativeSocket: unknown }).__nativeSocket =
+        window.WebSocket;
+    });
+  }
   await stubApi(page);
+  if (room) {
+    await page.addInitScript(() => {
+      window.WebSocket = (
+        window as unknown as { __nativeSocket: typeof WebSocket }
+      ).__nativeSocket;
+    });
+    await room(context, page, userId);
+  }
   // Routes registered later win: this page is signed in as `userId`.
   await page.route('**/api/session', (route) =>
     route.fulfill({
@@ -180,6 +208,17 @@ export interface SharedWorld {
   bobContext: BrowserContext;
   projectId: string;
   errors: string[];
+  /** Alice's recovery key, which signs her contacts entries. */
+  aliceRecoveryKey: string;
+  /** Connects each signed-in context to the encrypted room (slice 5-6). */
+  room?: LiveRoom;
+}
+
+export interface SharedWorldOptions {
+  /** The server, when the caller wires something to it first. */
+  server?: E2eeServer;
+  /** Connects every signed-in context to the encrypted room (slice 5-6). */
+  room?: LiveRoom;
 }
 
 /**
@@ -189,21 +228,23 @@ export interface SharedWorld {
  */
 export async function shareWithBob(
   browser: Browser,
-  role: 'editor' | 'viewer'
+  role: 'editor' | 'viewer',
+  options: SharedWorldOptions = {}
 ): Promise<SharedWorld> {
-  const server = createE2eeServer({ projectsEnabled: true });
+  const server = options.server ?? createE2eeServer({ projectsEnabled: true });
   server.db
     .prepare('UPDATE users SET email = ? WHERE id = ?')
     .run(ALICE_EMAIL, E2E_USER_ID);
-  addE2eeUser(server, BOB_ID, BOB_EMAIL);
   const aliceContext = await browser.newContext();
-  const bobContext = await browser.newContext();
   const errors: string[] = [];
-  const alice = await signIn(aliceContext, server, E2E_USER_ID, ALICE_EMAIL);
-  const bob = await signIn(bobContext, server, BOB_ID, BOB_EMAIL);
-  for (const page of [alice, bob]) {
-    page.on('pageerror', (error) => errors.push(error.message));
-  }
+  const alice = await signIn(
+    aliceContext,
+    server,
+    E2E_USER_ID,
+    ALICE_EMAIL,
+    options.room
+  );
+  alice.on('pageerror', (error) => errors.push(error.message));
 
   // Alice encrypts new projects and makes one.
   await alice.goto('/');
@@ -229,60 +270,107 @@ export async function shareWithBob(
   await expect(
     alice.getByRole('status', { name: 'Saved', exact: true })
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  const projectId = (
+    server.db.prepare('SELECT id FROM projects').get() as { id: string }
+  ).id;
 
-  // She invites Bob in `role`; an encrypted project's editors need no
-  // edit-lease rollout (slice 5-4).
+  const world = {
+    server,
+    alice,
+    aliceContext,
+    projectId,
+    errors,
+    aliceRecoveryKey: aliceSeed.recoveryKey,
+    ...(options.room ? { room: options.room } : {})
+  };
+  const bob = await addSharedMember(browser, world, {
+    userId: BOB_ID,
+    email: BOB_EMAIL,
+    label: 'Bob browser',
+    role
+  });
+  return { ...world, bob: bob.page, bobContext: bob.context };
+}
+
+/**
+ * One more member of Alice's project, in a browser context of its own:
+ * Alice invites it in `role` from the sharing dialog (an encrypted
+ * project's editors need no edit-lease rollout, slice 5-4), it accepts
+ * after setting up encryption, both verify each other by digit groups, and
+ * Alice's browser adds it by an MLS Commit. Its page then shows the
+ * project.
+ */
+export async function addSharedMember(
+  browser: Browser,
+  world: Omit<SharedWorld, 'bob' | 'bobContext'>,
+  member: {
+    userId: string;
+    email: string;
+    label: string;
+    role: 'editor' | 'viewer';
+  }
+): Promise<{ page: Page; context: BrowserContext }> {
+  const { server, alice, projectId, errors } = world;
+  const { role } = member;
+  addE2eeUser(server, member.userId, member.email);
+  const context = await browser.newContext();
+  const page = await signIn(
+    context,
+    server,
+    member.userId,
+    member.email,
+    world.room
+  );
+  page.on('pageerror', (error) => errors.push(error.message));
+  const invitations = server.mailbox.length;
+
   await alice.getByRole('button', { name: /Open project sharing/ }).click();
   const dialog = alice.getByRole('dialog', { name: 'Project sharing' });
   await expect(dialog).toBeVisible();
-  await dialog.getByLabel('Email').fill(BOB_EMAIL);
-  await dialog.getByLabel('Role').selectOption(role);
+  await dialog.getByLabel('Email').fill(member.email);
+  await dialog.getByLabel('Role', { exact: true }).selectOption(role);
   await dialog.getByRole('button', { name: 'Invite' }).click();
   await expect(dialog.getByText('Invitation sent.')).toBeVisible({
     timeout: SYNC_BUDGET_MS
   });
-  const projectId = (
-    server.db.prepare('SELECT id FROM projects').get() as { id: string }
-  ).id;
+  await expect.poll(() => server.mailbox.length).toBe(invitations + 1);
   await dialog.getByRole('button', { name: 'Close sharing' }).click();
 
-  // Bob opens the link, is sent to set up encryption, and accepts.
-  await bob.goto(`/#encrypted-invite=${server.mailbox[0]!.token}`);
+  // The member opens the link, is sent to set up encryption, and accepts.
+  await page.goto(`/#encrypted-invite=${server.mailbox.at(-1)!.token}`);
   await expect(
-    bob
+    page
       .getByRole('dialog', { name: 'Settings' })
       .getByRole('button', { name: 'Set up encryption' })
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-  const bobSeed = await seedE2eeDevice(bob, server, {
-    label: 'Bob browser',
-    userId: BOB_ID
+  const seed = await seedE2eeDevice(page, server, {
+    label: member.label,
+    userId: member.userId
   });
-  await bob.reload();
-  const bobEncryption = await openEncryptionSettings(bob);
-  await bobEncryption
-    .getByRole('button', { name: 'Accept invitation' })
-    .click();
+  await page.reload();
+  const encryption = await openEncryptionSettings(page);
+  await encryption.getByRole('button', { name: 'Accept invitation' }).click();
   await expect(
-    bobEncryption.getByText(
+    encryption.getByText(
       `${ALICE_EMAIL} invited you as ${role === 'editor' ? 'an editor' : 'a viewer'}`
     )
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-  await bobEncryption
+  await encryption
     .getByRole('button', { name: `Verify ${ALICE_EMAIL}` })
     .first()
     .click();
-  await verifyContact(bobEncryption, ALICE_EMAIL, bobSeed.recoveryKey);
+  await verifyContact(encryption, ALICE_EMAIL, seed.recoveryKey);
   await expect(
-    bobEncryption.getByText(
+    encryption.getByText(
       'Your keys are ready. Waiting for them to verify you and add you.'
     )
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });
 
-  // Alice verifies Bob; her browser adds him by an MLS Commit.
+  // Alice verifies the member; her browser adds it by an MLS Commit.
   await alice.getByRole('button', { name: /Open project sharing/ }).click();
   await dialog.getByRole('button', { name: /^Verify / }).click();
   const aliceEncryption = alice.getByRole('dialog', { name: 'Settings' });
-  await verifyContact(aliceEncryption, BOB_EMAIL, aliceSeed.recoveryKey);
+  await verifyContact(aliceEncryption, member.email, world.aliceRecoveryKey);
   await expect
     .poll(
       () =>
@@ -290,26 +378,26 @@ export async function shareWithBob(
           .prepare(
             'SELECT role FROM project_members WHERE project_id = ? AND user_id = ?'
           )
-          .get(projectId, BOB_ID),
+          .get(projectId, member.userId),
       { timeout: COMMIT_BUDGET_MS }
     )
     .toEqual({ role });
   await closeSettings(alice);
 
-  // Bob opens the project from his shelf.
-  await bob.reload();
+  // The member opens the project from its shelf.
+  await page.reload();
   await expect(
-    bob
+    page
       .getByRole('dialog', { name: 'Settings' })
-      .or(bob.getByRole('button', { name: 'Open settings' }))
+      .or(page.getByRole('button', { name: 'Open settings' }))
       .first()
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-  await closeSettings(bob);
-  await openFromShelf(bob);
-  await expect(bob.getByText('Box 1').first()).toBeVisible({
+  await closeSettings(page);
+  await openFromShelf(page);
+  await expect(page.getByText('Box 1').first()).toBeVisible({
     timeout: SYNC_BUDGET_MS
   });
-  return { server, alice, bob, aliceContext, bobContext, projectId, errors };
+  return { page, context };
 }
 
 /** Opens the shared project from the shelf. */

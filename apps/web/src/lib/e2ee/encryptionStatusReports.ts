@@ -62,7 +62,9 @@ export function reportingEncryptedProjectStore(
           projectId
         ),
       catchUp: (projectId) =>
-        checked(() => access.catchUp(projectId), projectId)
+        checked(() => access.catchUp(projectId), projectId),
+      restoreBlobs: (projectId, blobIds) =>
+        checked(() => access.restoreBlobs(projectId, blobIds), projectId)
     };
     return room;
   };
