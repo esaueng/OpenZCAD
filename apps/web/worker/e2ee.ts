@@ -1008,9 +1008,16 @@ function removedDevices(
  * before.
  * Nothing to check before migration 0033.
  *
+ * A plaintext project staged for encryption (slice 7-1, migration 0042)
+ * counts as encrypted here: its staged versions, project info and key
+ * archives become the encrypted project at the cutover, which checks no
+ * signer itself, so a replacement that drops their signer would leave the
+ * migrated project unreadable. An abandoned staging is never cut over.
+ *
  * Returns a fence for the identity write itself, so a version such a
- * device signs meanwhile makes the write refuse; encrypted writes are
- * fenced on the device list in turn (`deviceListUnchanged`).
+ * device signs meanwhile makes the write refuse; encrypted writes, staged
+ * ones included, are fenced on the device list in turn
+ * (`deviceListUnchanged`).
  */
 async function projectSignerFence(
   db: D1Database,
@@ -1024,9 +1031,14 @@ async function projectSignerFence(
     return { sql: '1 = 1', binds: [] };
   }
   const marks = removedDeviceIds.map(() => '?').join(', ');
+  const staged = (await isE2eeProjectMigrationStorageReady(db))
+    ? ` OR EXISTS (SELECT 1 FROM e2ee_project_migrations m
+                   WHERE m.project_id = p.id AND m.direction = 'encrypt'
+                     AND m.state = 'staging')`
+    : '';
   const fence = {
     sql: `NOT EXISTS (SELECT 1 FROM projects p
-       WHERE p.user_id = ? AND p.storage_format = 2
+       WHERE p.user_id = ? AND (p.storage_format = 2${staged})
          AND (EXISTS (SELECT 1 FROM e2ee_project_versions v
                       WHERE v.project_id = p.id
                         AND v.signer_device_id IN (${marks}))

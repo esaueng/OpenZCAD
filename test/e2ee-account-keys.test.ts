@@ -818,6 +818,65 @@ describe('replacing the recovery key', () => {
     ).toMatchObject({ generation: 1 });
   });
 
+  it('keeps a device that signed a project staged for encryption out of a replacement (#914 review)', async () => {
+    const srv = server();
+    const { laptop, recovery } = await setUp(srv);
+    const phone = await enrolled(srv, recovery.secret, 'Phone');
+    const phoneId = phone.account.device!.deviceId;
+    // A plaintext project staged for encryption (slice 7-1): still format
+    // 1, but the phone signed its staged project info, which the cutover
+    // turns into the encrypted project's.
+    const now = '2026-10-25T00:00:00.000Z';
+    srv.db
+      .prepare(
+        `INSERT INTO projects (id, user_id, name, document_json,
+           document_version, updated_at, storage_format)
+         VALUES ('proj_staged', ?, '', '{}', 1, ?, 1)`
+      )
+      .run(USER, now);
+    srv.db
+      .prepare(
+        `INSERT INTO e2ee_project_migrations (project_id, direction, state,
+           owner_user_id, device_id, lease_id, lease_expires_at,
+           source_version, started_at, updated_at)
+         VALUES ('proj_staged', 'encrypt', 'staging', ?, ?, ?, ?, 1, ?, ?)`
+      )
+      .run(USER, phoneId, 'l'.repeat(43), Date.now() + 60_000, now, now);
+    srv.db
+      .prepare(
+        `INSERT INTO e2ee_project_envelopes (project_id, kind, scope, sequence,
+           key_epoch, envelope, wrapped_version_key, signature,
+           signer_device_id, updated_at)
+         VALUES ('proj_staged', 'project-info', '', 1, 0, 'e', ?, ?, ?, ?)`
+      )
+      .run('w'.repeat(55), 's'.repeat(98), phoneId, now);
+    const replace = async () =>
+      replaceRecoveryKey(
+        laptop,
+        ready(await loadEncryption(laptop)),
+        (await generateRecoveryKey()).secret,
+        recovery.secret
+      );
+    const generation = () =>
+      srv.db
+        .prepare(
+          'SELECT MAX(generation) AS generation FROM e2ee_identities WHERE user_id = ?'
+        )
+        .get(USER);
+    expect((await refusal(replace())).code).toBe('E2EE_DEVICE_SIGNED_PROJECTS');
+    expect(generation()).toMatchObject({ generation: 1 });
+    // An abandoned staging is never cut over: its leftovers hold nothing up.
+    srv.db
+      .prepare(
+        `UPDATE e2ee_project_migrations
+         SET state = 'abandoned', lease_id = NULL, lease_expires_at = NULL
+         WHERE project_id = 'proj_staged'`
+      )
+      .run();
+    ready(await replace());
+    expect(generation()).toMatchObject({ generation: 2 });
+  });
+
   it('keeps a removed device that signed encrypted projects out of a replacement too (#894 review)', async () => {
     const srv = server();
     const { laptop, recovery } = await setUp(srv);
