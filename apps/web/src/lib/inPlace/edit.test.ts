@@ -462,6 +462,39 @@ describe('an untouched edit writes the feature back as stored', () => {
     });
   });
 
+  it('rotate about axis: the rig works on the body before the turn', () => {
+    const data: FeatureData = {
+      featureKind: 'transform',
+      targetBodyId: BODY,
+      transform: {
+        translation: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 }
+      },
+      axisRotation: {
+        axis: { datumFeatureId: 'axis_1' as FeatureId },
+        angleDeg: 90
+      }
+    };
+    // Shown turned a quarter about Z: the 20 × 10 × 4 box now runs 10 in x.
+    const ctx: InPlaceEditContext = {
+      ...EDIT_CTX,
+      body: (bodyId) => ({
+        bodyId,
+        min: { x: -10, y: 0, z: 0 },
+        max: { x: 0, y: 20, z: 4 }
+      }),
+      datumAxis: () => ({
+        origin: { x: 0, y: 0, z: 0 },
+        direction: { x: 0, y: 0, z: 1 }
+      })
+    };
+    const armed = inPlaceEditSeed(feature(data), ctx)!;
+    expect(armed.seed.slots.bodies[0]).toMatchObject({
+      min: { x: 0, y: 0, z: 0 },
+      max: { x: 20, y: 10, z: 4 }
+    });
+  });
+
   it("scale: a copy's handle works on its source as it stands", () => {
     const data: FeatureData = {
       featureKind: 'transform',
