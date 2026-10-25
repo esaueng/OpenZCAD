@@ -1,7 +1,13 @@
 import type { Locator } from '@playwright/test';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import { twoFilletCylinder } from '../fixtures/two-fillet-cylinder';
-import { expect, test, stubApi, setSelectionFilter } from './openzcad-fixtures';
+import {
+  expect,
+  test,
+  stubApi,
+  setSelectionFilter,
+  enterCommandValue
+} from './openzcad-fixtures';
 import { DEFAULT_APP_SETTINGS } from '@openzcad/shared';
 
 function blend(canvas: Locator, radius: number, pixel = false) {
@@ -141,6 +147,18 @@ for (const filter of ['Face', 'Any'] as const) {
       .toBe(topOwner);
     expect((await blend(canvas, 4))?.producingFeatureId).toBe(bottomOwner);
 
+    // U09 phase 7: a fillet's owner row re-arms it in place, its radius on
+    // the chip; Done patches it.
+    const editBar = page.getByRole('group', { name: /^Edit .* command$/ });
+    const radiusChip = page.getByTestId('command-handle-radius');
+    async function editRadius(value: string) {
+      await enterCommandValue(page, 'radius', value);
+      const done = editBar.getByRole('button', { name: /Done/ });
+      await expect(done).toBeEnabled({ timeout: 30_000 });
+      await done.click();
+      await expect(editBar).toHaveCount(0);
+    }
+
     async function clickBlend(
       radius: number,
       button: 'left' | 'right' = 'left'
@@ -156,15 +174,12 @@ for (const filter of ['Face', 'Any'] as const) {
     if (filter === 'Face')
       await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
     await openOwner(1);
-    await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
-      '3'
-    );
+    await expect(radiusChip).toHaveText('R 3 mm');
     await expect(page.locator('.feature-row').nth(1)).toHaveClass(/selected/);
     await page.screenshot({
       path: `/tmp/openzcad-selection-top-${filter}.png`
     });
-    await inspector.getByLabel('Radius', { exact: true }).fill('2');
-    await inspector.getByRole('button', { name: /^Apply/ }).click();
+    await editRadius('2');
     await expect
       .poll(async () => (await blend(canvas, 2))?.producingFeatureId, {
         timeout: 30_000
@@ -173,12 +188,9 @@ for (const filter of ['Face', 'Any'] as const) {
     expect((await blend(canvas, 4))?.producingFeatureId).toBe(bottomOwner);
     await clickBlend(4);
     await openOwner(2);
-    await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
-      '4'
-    );
+    await expect(radiusChip).toHaveText('R 4 mm');
     await expect(page.locator('.feature-row').nth(2)).toHaveClass(/selected/);
-    await inspector.getByLabel('Radius', { exact: true }).fill('5');
-    await inspector.getByRole('button', { name: /^Apply/ }).click();
+    await editRadius('5');
     await expect
       .poll(async () => (await blend(canvas, 5))?.producingFeatureId, {
         timeout: 30_000
@@ -195,18 +207,18 @@ for (const filter of ['Face', 'Any'] as const) {
       .toBe(bottomOwner);
     await clickBlend(2);
     await openOwner(1);
-    await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
-      '2'
-    );
+    await expect(radiusChip).toHaveText('R 2 mm');
     await page.screenshot({ path: '/tmp/openzcad-selection-top-fillet.png' });
+    // The armed edit owns the model's clicks and shows its preview: leave it
+    // before aiming at the other blend.
+    await page.keyboard.press('Escape');
+    await expect(editBar).toHaveCount(0);
     await clickBlend(5, 'right');
     await expect(page.getByRole('menuitem', { name: /^Delete/ })).toHaveCount(
       0
     );
     await page.getByRole('menuitem', { name: /Edit Fillet edges/ }).click();
-    await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
-      '5'
-    );
+    await expect(radiusChip).toHaveText('R 5 mm');
     await inspector.getByLabel('More actions').click();
     await inspector
       .getByRole('button', { name: 'Delete feature', exact: true })

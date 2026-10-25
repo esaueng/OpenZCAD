@@ -756,6 +756,7 @@ import {
   fixedPlaneRefForLegacyAttachment
 } from './lib/faceSketchAttachment';
 import {
+  edgeLabel,
   edgeLengthMeasurement,
   faceLabel,
   textLabelSegments,
@@ -771,6 +772,7 @@ import type {
 } from './lib/interaction/machine';
 import {
   refreshEdgeFormReferencesForCommit,
+  resolveEdge,
   resolveFace
 } from './lib/topologyResolution';
 import { useLineageDemand } from './lib/lineageDemand';
@@ -1465,6 +1467,7 @@ import {
   type InPlaceRequest,
   type BodyPick,
   type CurvePick,
+  type EdgePick,
   type FacePick,
   type ImageSlot,
   type InPlaceContext,
@@ -2079,6 +2082,66 @@ class ParameterCheckStale extends Error {
     super('The project or parameter changed during validation.');
     this.name = 'ParameterCheckStale';
   }
+}
+
+/**
+ * A blend command's edges read again from the model as it is now: by
+ * lineage first, and afresh where they stand (the handle's middle and way
+ * out, a variable fillet's far end), so the chips and the highlight follow
+ * an edge an update moved or renamed. An edge the model no longer has is
+ * dropped.
+ */
+function refreshedEdgePicks(
+  picks: readonly EdgePick[],
+  representations: Readonly<Record<string, BodyRepresentation>>,
+  edgePick: (
+    bodyId: string,
+    topologyId: string | undefined,
+    hash: number | undefined
+  ) => EdgePick | null
+): { edges: EdgePick[]; moved: boolean } {
+  let moved = false;
+  const placed = (pick: EdgePick) =>
+    JSON.stringify([
+      pick.hash,
+      pick.topologyId,
+      pick.middle,
+      pick.outward,
+      pick.end
+    ]);
+  const edges = picks.flatMap((pick) => {
+    const body = representations[pick.bodyId];
+    if (!body?.topology) return [pick];
+    const found = resolveEdge(body, {
+      hash: pick.hash,
+      ...(pick.reference ? { reference: pick.reference } : {})
+    });
+    if (!found.ok) return [];
+    const fresh = edgePick(
+      pick.bodyId,
+      found.entry.topologyId,
+      found.entry.hash
+    );
+    // An input that publishes no drawn edge keeps the blend face anchor
+    // its seed placed the handle on.
+    const next: EdgePick = fresh
+      ? {
+          ...pick,
+          ...(Object.fromEntries(
+            Object.entries(fresh).filter(([, part]) => part !== undefined)
+          ) as EdgePick),
+          ...(pick.reference ? { reference: pick.reference } : {})
+        }
+      : {
+          ...pick,
+          hash: found.entry.hash,
+          topologyId: found.entry.topologyId
+        };
+    if (placed(next) === placed(pick)) return [pick];
+    moved = true;
+    return [next];
+  });
+  return { edges, moved };
 }
 
 export function App() {
@@ -2734,6 +2797,10 @@ export function App() {
   const [sketchDiagnosticPoints, setSketchDiagnosticPoints] = useState<
     { x: number; y: number }[]
   >([]);
+  /** The in-place Fillet or Chamfer running, mirrored for the filter below. */
+  const [inPlaceEdgeTool, setInPlaceEdgeTool] = useState<
+    'fillet' | 'chamfer' | null
+  >(null);
   /**
    * What picking is narrowed to right now. A manual choice outranks the tool's
    * so that arming Fillet does not silently undo a filter set on purpose.
@@ -2746,7 +2813,7 @@ export function App() {
     ? 'edge'
     : tool === 'sketch'
       ? 'face'
-      : effectiveSelectionFilter(manualSelectionFilter, tool);
+      : effectiveSelectionFilter(manualSelectionFilter, tool ?? inPlaceEdgeTool);
   const [statusEntry, setStatusEntry] = useState<StatusEntry>(() => ({
     text: cloudFunctionsEnabled
       ? LIBRARY_MODE_STATUS.checking
@@ -8675,6 +8742,20 @@ export function App() {
       const body = inPlaceBodyPick(bodyId);
       return body ? [body] : [];
     });
+    // Edges selected first (the selection card's Fillet, the edge's own
+    // context menu) are a fillet's or chamfer's edges, in pick order.
+    const initialEdges = IN_PLACE_TOOL_SPECS[tool].edgeMode
+      ? (current.mode === 'edges' ? current.edges : selectedEdges).flatMap(
+          (selection) => {
+            const edge = inPlaceEdgePick(
+              selection.bodyId,
+              selection.topologyId,
+              selection.hash
+            );
+            return edge ? [edge] : [];
+          }
+        )
+      : [];
     // A solid offset takes a body, named by any of its faces: a body picked
     // first (its Selection card's Solid offset) is that body, its handle on
     // a flat face where it has one.
@@ -8700,7 +8781,8 @@ export function App() {
         : bodyFace
           ? [bodyFace]
           : sweptFaces,
-      initialBodies
+      initialBodies,
+      { edges: initialEdges }
     );
     // A datum's sources: the face or edge selected first is its first.
     const kinds = IN_PLACE_TOOL_SPECS[tool].refKinds;
@@ -8780,6 +8862,92 @@ export function App() {
     if (!resolved) throw new Error(`${name} did not resolve.`);
   }
 
+  /** Where a stored blend's handle stands: on its first lit blend face. */
+  function inPlaceBlendAnchor(
+    current: ProjectDocument,
+    feature: FeatureNode
+  ): { middle: Vector3; outward: Vector3 } | null {
+    const focus = historyFeatureFocus(current, feature, (bodyId) => {
+      const body = current.derived.bodyRepresentations[bodyId];
+      return Boolean(body && !body.consumed && !hiddenBodyIds.has(bodyId));
+    });
+    if (focus.kind !== 'focus') return null;
+    for (const selection of focus.faces) {
+      const geometry = current.derived.bodyRepresentations[
+        selection.bodyId
+      ]?.topology?.faces.find(
+        (face) =>
+          face.topologyId === selection.topologyId ||
+          face.hash === selection.hash
+      )?.geometry;
+      const middle = geometry?.centroid ?? geometry?.center;
+      if (middle && geometry?.normal) {
+        return { middle, outward: geometry.normal };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * A model edge as a fillet's or chamfer's edge slot holds it: its lineage
+   * name, and where its handles stand (the middle of its drawn polyline,
+   * pointing out of the body, and its far end).
+   */
+  function inPlaceEdgePick(
+    bodyId: string,
+    topologyId: string | undefined,
+    hash: number | undefined
+  ): EdgePick | null {
+    const body = representations[bodyId as BodyId];
+    const edge = body?.topology?.edges.find(
+      (candidate) =>
+        (topologyId !== undefined && candidate.topologyId === topologyId) ||
+        (hash !== undefined && candidate.hash === hash)
+    );
+    if (!body || !edge) return null;
+    const points = edge.points ?? [];
+    const box = inPlaceBodyPick(bodyId as BodyId);
+    const centre = box
+      ? {
+          x: (box.min.x + box.max.x) / 2,
+          y: (box.min.y + box.max.y) / 2,
+          z: (box.min.z + box.max.z) / 2
+        }
+      : { x: 0, y: 0, z: 0 };
+    // As the edge's own blend handle stands (`edgeHandlePlacement`): the
+    // polyline's middle sample, pointing away from the body's middle.
+    const at = Math.floor(points.length / 3 / 2) * 3;
+    const middle =
+      points.length >= 6
+        ? { x: points[at]!, y: points[at + 1]!, z: points[at + 2]! }
+        : null;
+    const away = middle
+      ? { x: middle.x - centre.x, y: middle.y - centre.y, z: middle.z - centre.z }
+      : null;
+    const reach = away ? Math.hypot(away.x, away.y, away.z) : 0;
+    const last = points.length >= 3 ? points.length - 3 : -1;
+    return {
+      bodyId: bodyId as BodyId,
+      hash: edge.hash,
+      topologyId: edge.topologyId,
+      ...(edge.reference ? { reference: edge.reference } : {}),
+      ...(middle && away
+        ? {
+            middle,
+            outward:
+              reach > 1e-9
+                ? { x: away.x / reach, y: away.y / reach, z: away.z / reach }
+                : { x: 0, y: 0, z: 1 }
+          }
+        : {}),
+      ...(last >= 0
+        ? {
+            end: { x: points[last]!, y: points[last + 1]!, z: points[last + 2]! }
+          }
+        : {})
+    };
+  }
+
   /** The in-place command and seed for a stored feature, from `current`. */
   function inPlaceEditSeedFor(current: ProjectDocument, feature: FeatureNode) {
     return inPlaceEditSeed(feature, {
@@ -8827,6 +8995,21 @@ export function App() {
             )
           : null;
         return pick && reference ? { ...pick, reference } : pick;
+      },
+      edge: (bodyId, hash, reference) => {
+        const found = resolveEdge(representations[bodyId], {
+          hash,
+          ...(reference ? { reference } : {})
+        });
+        const pick = found.ok
+          ? inPlaceEdgePick(bodyId, found.entry.topologyId, found.entry.hash)
+          : null;
+        if (pick?.middle) return pick;
+        // A consumed input may publish its edges without a drawn polyline:
+        // the handle then stands on the feature's own blend face, the one
+        // its History row lights, pointing into the body.
+        const blend = inPlaceBlendAnchor(current, feature);
+        return pick ? { ...pick, ...(blend ?? {}) } : null;
       },
       anyFace: (bodyId) => {
         // A flat face carries the handle best; a body with none (a sphere)
@@ -8952,11 +9135,15 @@ export function App() {
    */
   function inPlaceEditTarget(edit: InPlaceEditSeed | null): BodyId | null {
     if (!edit) return null;
-    // A body picked in this edit (a Hole moved onto another face, a Scale
-    // retargeted) is the target until Done; the feature still stores the
-    // old one meanwhile. Untouched, the slots follow the live feature.
+    // A body picked in this edit (a blend's edges, a Hole moved onto another
+    // face, a Scale retargeted) is the target until Done; the feature still
+    // stores the old one meanwhile. Untouched, the slots follow the live
+    // feature.
     const slots = inPlaceRef.current.slots;
-    const picked = slots.faces[0]?.bodyId ?? slots.bodies[0]?.bodyId;
+    const picked =
+      slots.edges[0]?.bodyId ??
+      slots.faces[0]?.bodyId ??
+      slots.bodies[0]?.bodyId;
     if (picked) return picked;
     const live = managerRef.current
       ? findFeature(managerRef.current.document, edit.featureId)
@@ -15608,6 +15795,93 @@ export function App() {
     );
   }
 
+  /**
+   * The edge a click names for an in-place Fillet or Chamfer, or null when
+   * the click is refused (and says why).
+   */
+  function inPlaceEdgeForSelection(
+    selection: TopologySelection
+  ): EdgePick | null {
+    // An edit's edges are its input body's: a click on what the blend
+    // built names the input's edge by its fingerprint, which an
+    // unblended edge keeps, and the validated commit refuses one the
+    // kernel cannot find rather than guessing.
+    const editing = inPlaceRef.current.editing;
+    // The body as the feature stores it now: it may have been retargeted.
+    const target = inPlaceEditTarget(editing);
+    const remap =
+      target !== null &&
+      selection.bodyId !== target &&
+      !inPlaceEditMayUse(
+        producingFeatureOf({ bodyId: selection.bodyId }),
+        editing
+      );
+    // An edit keeps the body it blends: its stored edges are named on that
+    // body alone, so an edge of another earlier body is refused rather than
+    // stored where it names nothing (or the wrong edge).
+    if (
+      editing &&
+      target !== null &&
+      selection.bodyId !== target &&
+      !remap
+    ) {
+      setStatus(
+        `${editing.name} rounds edges of one body: pick an edge of the body it was made on.`
+      );
+      return null;
+    }
+    // Only what the edited blend's result became stands for its input;
+    // an edge of another later body is refused.
+    const descendants =
+      remap && editing ? inPlaceEditDescendants(editing) : null;
+    if (remap && editing && !descendants?.has(selection.bodyId)) {
+      setStatus(
+        `${editing.name} can only use edges of bodies made before it in History.`
+      );
+      return null;
+    }
+    // On a body another one joined later, only an edge the input still
+    // has is surely its own.
+    const joined = descendants?.mixed.has(selection.bodyId);
+    const onInput =
+      remap && target
+        ? inPlaceEdgePick(target, undefined, selection.hash)
+        : null;
+    if (remap && joined && !onInput && editing) {
+      setStatus(
+        `That edge may come from a body joined after ${editing.name} · pick an edge of the body ${editing.name} was made on.`
+      );
+      return null;
+    }
+    if (remap && target) {
+      return (
+        onInput ??
+        (selection.hash !== undefined
+          ? { bodyId: target, hash: selection.hash, topologyId: '' }
+          : null)
+      );
+    }
+    // A new blend's preview shows the rounded body under its own new id: a
+    // click on it names the held input's edge by its fingerprint, which an
+    // unblended edge keeps, as an edit's click on its result does.
+    const held = inPlaceRef.current.slots.edges[0]?.bodyId;
+    if (
+      !editing &&
+      held !== undefined &&
+      selection.bodyId !== held &&
+      !doc?.derived.bodyRepresentations[selection.bodyId]
+    ) {
+      return selection.hash !== undefined
+        ? inPlaceEdgePick(held, undefined, selection.hash)
+        : null;
+    }
+    return inPlaceEdgePick(
+      selection.bodyId,
+      selection.topologyId,
+      selection.hash
+    );
+  }
+
   function handleSelectTopologyFromViewer(
     selection: TopologySelection | null,
     additive: boolean,
@@ -15619,6 +15893,10 @@ export function App() {
       // and the faces a face tool takes. A stray pick must not open a card
       // under it.
       const command = inPlaceRef.current;
+      if (selection?.kind === 'edge' && command.spec?.edgeMode) {
+        const edge = inPlaceEdgeForSelection(selection);
+        return edge ? command.pickEdge(edge) : true;
+      }
       // A datum's sources: a face is a plane or a cylinder's axis, an edge
       // is its nearer end or (for an Axis) the edge itself.
       const kinds = command.spec?.refKinds;
@@ -16451,6 +16729,10 @@ export function App() {
     kind: 'face' | 'edge'
   ) {
     if (selections.length === 0) {
+      // A sweep during an in-place Fillet or Chamfer only adds edges, so
+      // one that caught none leaves its edges, and their highlight, as
+      // they were rather than clearing the selection under them.
+      if (kind === 'edge' && inPlaceRef.current.spec?.edgeMode) return;
       // An empty sweep is an empty sweep, whatever the filter.
       handleBoxSelectFromViewer([]);
       return;
@@ -16471,6 +16753,35 @@ export function App() {
       setStatus(
         'Exact geometry is still rebuilding. Topology actions are temporarily unavailable.'
       );
+      return;
+    }
+    // A box sweep during an in-place Fillet or Chamfer adds to its edges,
+    // each taken as a click would take it, none toggled back out.
+    if (kind === 'edge' && inPlaceRef.current.spec?.edgeMode) {
+      const command = inPlaceRef.current;
+      const swept = selections.flatMap((selection) => {
+        const edge = inPlaceEdgeForSelection(selection);
+        return edge ? [edge] : [];
+      });
+      // The edges stay on one body: the one already held, else the body
+      // the sweep caught most of, as a plain edge sweep chooses.
+      const byBody = new Map<BodyId, EdgePick[]>();
+      for (const edge of swept) {
+        byBody.set(edge.bodyId, [...(byBody.get(edge.bodyId) ?? []), edge]);
+      }
+      const heldBody = command.slots.edges[0]?.bodyId;
+      const taken = heldBody
+        ? (byBody.get(heldBody) ?? [])
+        : ([...byBody.values()].sort(
+            (left, right) => right.length - left.length
+          )[0] ?? []);
+      const held = new Set(
+        command.slots.edges.map((edge) => `${edge.bodyId}:${edge.hash}`)
+      );
+      command.setEdges([
+        ...command.slots.edges,
+        ...taken.filter((edge) => !held.has(`${edge.bodyId}:${edge.hash}`))
+      ]);
       return;
     }
     if (kind === 'edge') {
@@ -19672,6 +19983,14 @@ export function App() {
           // A custom repeat vector, which the axis then only stands beside.
           ...(request.direction ? { direction: request.direction } : {})
         });
+      case 'edge-modifier':
+        // Through the card's own command, so a fillet or chamfer made in
+        // place is stored exactly as the card's was.
+        return edgeModifierCommand(
+          null,
+          request.kind,
+          edgeModifierValue(request, name)
+        );
       case 'primitive':
         // The card's own Create, which numbers the feature and its body
         // from the plain name and adds the placement Move when it moved.
@@ -19708,6 +20027,31 @@ export function App() {
       command.payload as { ids?: { featureId?: FeatureId } } | undefined
     )?.ids?.featureId;
     return featureId ? { featureId, kind: request.tool } : null;
+  }
+  /**
+   * A fillet or chamfer request as the value its card submitted. A pick made
+   * before its body's lineage arrived carries no name: the set is named again
+   * from the current topology at build time, or stays hash-only.
+   */
+  function edgeModifierValue(
+    request: Extract<InPlaceRequest, { tool: 'edge-modifier' }>,
+    name: string
+  ): EdgeModifierFormValue {
+    const { tool: _tool, kind: _kind, ...value } = request;
+    const body =
+      representations[request.targetBodyId] ??
+      renderedRepresentations[request.targetBodyId];
+    const edgeReferences =
+      refreshEdgeFormReferencesForCommit(
+        body,
+        request.edgeHashes,
+        request.edgeReferences
+      ) ?? request.edgeReferences;
+    return {
+      ...value,
+      name,
+      ...(edgeReferences ? { edgeReferences } : {})
+    };
   }
   /**
    * The body a request's result lands on: a new body for most, the moved
@@ -19806,6 +20150,18 @@ export function App() {
         inPlaceRef.current.touched
       );
       return commandFactories.updateFeature(update, `Edit ${edit.name}`);
+    }
+    if (request.tool === 'edge-modifier') {
+      // The card's own edit command: it names what a patch must delete (an
+      // end radius, an angle) instead of leaving a lookalike behind.
+      const current = managerRef.current?.document;
+      const feature = current ? findFeature(current, edit.featureId) : null;
+      if (!feature) throw new Error(`${edit.name} is no longer in History.`);
+      return edgeModifierCommand(
+        feature,
+        request.kind,
+        edgeModifierValue(request, edit.name)
+      );
     }
     const update = inPlaceFeatureUpdate(edit, request);
     if (!update) throw new Error(`${edit.name} cannot be edited this way.`);
@@ -20072,6 +20428,58 @@ export function App() {
     // a chip-only value's text; it never rebuilds a rig.
     [inPlace.handles, inPlace.values, inPlaceSpec, inPlaceUnits]
   );
+  // A new fillet's or chamfer's picked edges are the selection, lit as the
+  // card's list was. An edit leaves the selection alone: History already
+  // lights the feature's blend faces, through its preview as edges change.
+  // The base version: command-owned selections are re-applied after an
+  // undo or redo, which clears the selection while the command keeps them.
+  const inPlaceBaseVersion = doc?.version ?? null;
+  const inPlaceEdgeKey =
+    inPlace.active && inPlaceSpec?.edgeMode && !inPlace.editing
+      ? JSON.stringify(
+          inPlace.slots.edges.map((edge) => [edge.bodyId, edge.hash])
+        )
+      : null;
+  const selectedEdgeKey = JSON.stringify(
+    selectedEdges.map((edge) => [edge.bodyId, edge.hash])
+  );
+  const inPlaceEdgesRef = useRef(inPlace.slots.edges);
+  inPlaceEdgesRef.current = inPlace.slots.edges;
+  const litInPlaceEdges = useRef(false);
+  useEffect(() => {
+    if (inPlaceEdgeKey === null) {
+      // The command is over, done or canceled: its edges are not a
+      // selection left behind for the next gesture to act on.
+      if (litInPlaceEdges.current) {
+        litInPlaceEdges.current = false;
+        setSelectedEdges([]);
+      }
+      return;
+    }
+    litInPlaceEdges.current = true;
+    // Already the selection: nothing to put back.
+    if (selectedEdgeKey === inPlaceEdgeKey) return;
+    setSelectedEdges(
+      inPlaceEdgesRef.current.map((edge) => ({
+        bodyId: edge.bodyId,
+        kind: 'edge',
+        ...(edge.topologyId ? { topologyId: edge.topologyId } : {}),
+        hash: edge.hash,
+        ...(edge.reference ? { reference: edge.reference } : {})
+      }))
+    );
+    // Again after an undo or redo, or a selection elsewhere (the Objects
+    // tree), which clears the selection while the command keeps its edges.
+  }, [inPlaceEdgeKey, inPlaceBaseVersion, selectedEdgeKey]);
+  // Picking narrows to edges while a fillet or chamfer runs, as its tool did.
+  const inPlaceTool = inPlace.tool;
+  useEffect(() => {
+    setInPlaceEdgeTool(
+      inPlaceTool === 'fillet' || inPlaceTool === 'chamfer'
+        ? inPlaceTool
+        : null
+    );
+  }, [inPlaceTool]);
   // A body tool's picked bodies are the selection: each wears its pick
   // number in the viewport, base first, as the boolean card's list did.
   const inPlaceBodyIds =
@@ -20080,13 +20488,103 @@ export function App() {
       : null;
   // Again after an undo or redo, which clears the selection while the
   // command keeps its bodies.
-  const inPlaceBaseVersion = doc?.version ?? null;
   useEffect(() => {
     if (inPlaceBodyIds === null) return;
     setSelectedBodyIds(
       inPlaceBodyIds ? (inPlaceBodyIds.split(',') as BodyId[]) : []
     );
   }, [inPlaceBodyIds, inPlaceBaseVersion]);
+  /**
+   * What a fillet's or chamfer's card offered besides its fields: every
+   * edge of the body at once (or none), and a chamfer's two setbacks
+   * swapped between the faces.
+   */
+  // The body Select all works on: the picked edges' body, else (an edit's
+  // edges all cleared) the body the edited blend rounds, which the model
+  // no longer shows, before any one body on screen.
+  const inPlaceEditedBlendTarget = inPlaceEditTarget(inPlace.editing);
+  // A new blend's body once its edges are cleared: the one it last held,
+  // so Select all can take them all back.
+  const heldBlendBody = inPlace.slots.edges[0]?.bodyId ?? null;
+  const [lastBlendBody, setLastBlendBody] = useState<BodyId | null>(null);
+  // Only within one command: another taking over (even another blend)
+  // starts without it.
+  const blendSessionId = inPlace.sessionId;
+  useEffect(() => {
+    setLastBlendBody(null);
+  }, [blendSessionId]);
+  useEffect(() => {
+    if (heldBlendBody) setLastBlendBody(heldBlendBody);
+  }, [heldBlendBody]);
+  const inPlaceEdgeBody = inPlaceSpec?.edgeMode
+    ? (heldBlendBody ??
+      inPlaceEditedBlendTarget ??
+      (lastBlendBody && representations[lastBlendBody]
+        ? lastBlendBody
+        : null) ??
+      (viewerBodies.length === 1 ? viewerBodies[0]!.bodyId : null))
+    : null;
+  const inPlaceBodyEdges = inPlaceEdgeBody
+    ? (representations[inPlaceEdgeBody]?.topology?.edges.filter(
+        (edge) => edge.displayRole !== 'seam'
+      ) ?? [])
+    : [];
+  const inPlaceActions = [
+    ...(inPlaceBodyEdges.length > 0
+      ? [
+          inPlace.slots.edges.length === inPlaceBodyEdges.length
+            ? { id: 'clear-edges', label: 'Clear edge selection' }
+            : {
+                id: 'all-edges',
+                label: `Select all ${inPlaceBodyEdges.length} edges`
+              }
+        ]
+      : []),
+    ...(inPlace.tool === 'chamfer' && inPlace.options.shape === 'two'
+      ? [{ id: 'swap-distances', label: 'Swap the two faces' }]
+      : [])
+  ];
+  /** A blend's edges by name, as its card listed them. */
+  const inPlacePicks = inPlaceSpec?.edgeMode
+    ? {
+        label:
+          inPlace.tool === 'chamfer' ? 'Chamfered edges' : 'Filleted edges',
+        minimum: 1,
+        items: inPlace.slots.edges.map((edge) => {
+          const owner = representations[edge.bodyId];
+          return {
+            id: String(edge.hash),
+            name: edgeLabel(owner, edge.hash, edge.topologyId || undefined),
+            ...(owner ? { owner: owner.name } : {})
+          };
+        })
+      }
+    : null;
+  function runInPlaceAction(actionId: string) {
+    const command = inPlaceRef.current;
+    if (actionId === 'all-edges' && inPlaceEdgeBody) {
+      command.setEdges(
+        inPlaceBodyEdges.flatMap((edge) => {
+          const pick = inPlaceEdgePick(
+            inPlaceEdgeBody,
+            edge.topologyId,
+            edge.hash
+          );
+          return pick ? [pick] : [];
+        })
+      );
+    } else if (actionId === 'clear-edges') {
+      command.setEdges([]);
+    } else if (actionId === 'swap-distances') {
+      const first = command.values.distance;
+      const second = command.values.distance2;
+      if (first === undefined || second === undefined) return;
+      const firstRaw = command.raws.distance;
+      const secondRaw = command.raws.distance2;
+      command.setValue('distance', second, secondRaw);
+      command.setValue('distance2', first, firstRaw);
+    }
+  }
   const inPlaceAxisPicker = useMemo(
     () =>
       inPlaceSpec?.wantsAxis &&
@@ -20187,7 +20685,6 @@ export function App() {
   const regionsForReferenceRef = useRef(regionsForReference);
   regionsForReferenceRef.current = regionsForReference;
   const inPlaceProfiles = inPlace.slots.profiles;
-  const inPlaceTool = inPlace.tool;
   const inPlaceTitle = inPlace.spec?.title ?? 'This command';
   useEffect(() => {
     const editing = inPlaceEditing;
@@ -20262,6 +20759,8 @@ export function App() {
   inPlaceFacePickRef.current = inPlaceFacePick;
   const inPlaceBodyPickRef = useRef(inPlaceBodyPick);
   inPlaceBodyPickRef.current = inPlaceBodyPick;
+  const inPlaceEdgePickRef = useRef(inPlaceEdgePick);
+  inPlaceEdgePickRef.current = inPlaceEdgePick;
   useEffect(() => {
     const editing = inPlaceEditing;
     // A new command's picks follow the model too (an undo, a collaborator's
@@ -20419,17 +20918,25 @@ export function App() {
       bodiesMoved = true;
       return box;
     });
+    // A blend's edges, the same way (see `refreshedEdgePicks`).
+    const { edges, moved: edgesMoved } = refreshedEdgePicks(
+      inPlaceEditPicks.edges,
+      representations,
+      inPlaceEdgePickRef.current
+    );
     if (
       path.length === inPlaceEditPicks.path.length &&
       guide.length === inPlaceEditPicks.guide.length &&
       faces.length === inPlaceEditPicks.faces.length &&
-      bodies.length === inPlaceEditPicks.bodies.length
+      bodies.length === inPlaceEditPicks.bodies.length &&
+      edges.length === inPlaceEditPicks.edges.length
     ) {
-      if (facesMoved || bodiesMoved) {
+      if (facesMoved || bodiesMoved || edgesMoved) {
         inPlaceRef.current.setPicks(
           {
             ...(facesMoved ? { faces } : {}),
-            ...(bodiesMoved ? { bodies } : {})
+            ...(bodiesMoved ? { bodies } : {}),
+            ...(edgesMoved ? { edges } : {})
           },
           inPlaceEditPicks
         );
@@ -20437,7 +20944,7 @@ export function App() {
       return;
     }
     inPlaceRef.current.setPicks(
-      { path, guide, faces, bodies },
+      { path, guide, faces, bodies, edges },
       inPlaceEditPicks
     );
     setStatus(
@@ -20456,6 +20963,22 @@ export function App() {
     inPlaceTitle,
     setStatus
   ]);
+  // A new Fillet or Chamfer's edges follow the model too (an undo, a
+  // collaborator's rebuild), so a click on the live edge toggles the held
+  // one rather than adding a second reference to it.
+  const inPlaceCreatesBlend =
+    inPlace.active && !inPlaceEditing && Boolean(inPlaceSpec?.edgeMode);
+  useEffect(() => {
+    if (!inPlaceCreatesBlend || inPlaceEditPicks.edges.length === 0) return;
+    const { edges, moved } = refreshedEdgePicks(
+      inPlaceEditPicks.edges,
+      representations,
+      inPlaceEdgePickRef.current
+    );
+    if (moved || edges.length !== inPlaceEditPicks.edges.length) {
+      inPlaceRef.current.setPicks({ edges }, inPlaceEditPicks);
+    }
+  }, [inPlaceCreatesBlend, inPlaceEditPicks, representations]);
 
   useEffect(() => {
     setSelectedProfiles((current) => {
@@ -29006,6 +29529,15 @@ export function App() {
                     value: inPlace.options[option.id] ?? option.initial
                   }))}
                   onOption={inPlace.setOption}
+                  actions={inPlaceActions}
+                  onAction={runInPlaceAction}
+                  picks={inPlacePicks}
+                  onRemovePick={(id) => {
+                    const edge = inPlace.slots.edges.find(
+                      (candidate) => String(candidate.hash) === id
+                    );
+                    if (edge) inPlace.pickEdge(edge);
+                  }}
                   values={inPlaceSpec.values
                     .filter((value) => value.inOptions)
                     .map((value) => ({

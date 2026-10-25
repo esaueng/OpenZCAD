@@ -70,7 +70,8 @@ const SLOTS: InPlaceSlots = {
   bodies: [],
   plane: null,
   refs: [],
-  image: null
+  image: null,
+  edges: []
 };
 
 describe('datum Plane picks', () => {

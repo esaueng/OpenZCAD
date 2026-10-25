@@ -67,17 +67,23 @@ test('explains a failed downstream edit and opens the exact feature for repair',
   await expect(
     details.getByText('Edit not saved', { exact: false })
   ).toHaveCount(0);
-  const radius = inspector.getByLabel('Radius', { exact: true });
-  const originalRadius = await radius.inputValue();
-  await radius.fill('1000');
-  await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
-  await expect(details.getByRole('alert')).toContainText('Edit not saved', {
+  // U09 phase 7: the fillet's edit runs in place. A radius its edges cannot
+  // take is refused in the bar, and Done waits; its stored radius commits.
+  const edit = page.getByRole('group', {
+    name: 'Edit Base corner fillets command'
+  });
+  const chip = page.getByTestId('command-handle-radius');
+  await expect(edit).toBeVisible();
+  const originalRadius = (await chip.textContent())!.replace(/[^\d.]/g, '');
+  await enterCommandValue(page, 'radius', '1000');
+  await expect(page.locator('.in-place-command.refused')).toBeVisible({
     timeout: 30_000
   });
-  await radius.fill(originalRadius);
-  await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect(edit.getByRole('button', { name: /Done/ })).toBeDisabled();
+  await enterCommandValue(page, 'radius', originalRadius);
+  await finishInPlaceCommand(page, 'Edit Base corner fillets');
   await expect(page.getByRole('contentinfo')).toContainText(
-    'Base corner fillets applied.',
+    'Edited Base corner fillets',
     { timeout: 30_000 }
   );
   await expect(
@@ -88,7 +94,7 @@ test('explains a failed downstream edit and opens the exact feature for repair',
   await page
     .locator('.feature-row-main', { hasText: 'Base corner fillets' })
     .click();
-  await expect(radius).toHaveValue(originalRadius);
+  await expect(chip).toHaveText(`R ${originalRadius} mm`);
   expect(errors).toEqual([]);
 });
 

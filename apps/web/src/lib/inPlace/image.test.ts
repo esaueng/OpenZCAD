@@ -65,7 +65,8 @@ const SLOTS: InPlaceSlots = {
   bodies: [],
   plane: null,
   refs: [],
-  image: null
+  image: null,
+  edges: []
 };
 
 const spec = IN_PLACE_TOOL_SPECS['reference-image'];

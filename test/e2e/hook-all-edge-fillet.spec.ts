@@ -5,7 +5,9 @@ import {
   openAssistant,
   promptField,
   stubApi,
-  test
+  test,
+  enterCommandValue,
+  finishInPlaceCommand
 } from './openzcad-fixtures';
 import {
   RemusKernel,
@@ -202,14 +204,15 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
   }
   const filletRow = page.locator('.feature-row', { hasText: 'Fillet edges' });
   await expect(filletRow).toBeVisible();
+  // U09 phase 7: the row re-arms the fillet in place, its 49 edges picked
+  // and its radius on the chip.
   await filletRow.locator('.feature-row-main').click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await expect(inspector).toContainText('49 edges selected');
-  await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
-    '1'
-  );
-  await inspector.getByLabel('Radius', { exact: true }).fill('0.5');
-  await inspector.getByRole('button', { name: /^Apply/ }).click();
+  const edit = page.getByRole('group', { name: 'Edit Fillet edges command' });
+  const chip = page.getByTestId('command-handle-radius');
+  await expect(edit).toContainText('49 edges');
+  await expect(chip).toHaveText('R 1 mm');
+  await enterCommandValue(page, 'radius', '0.5');
+  await finishInPlaceCommand(page, 'Edit Fillet edges');
   await expect
     .poll(async () => (await readBlend(page))?.blendRadius ?? null, {
       timeout: 120_000
@@ -226,19 +229,13 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
     { timeout: 60_000 }
   );
 
-  // Cancel an edit: reopen, change, then Escape; the committed 0.5 mm geometry
-  // and history survive. Escape first so a still-open edit form cannot be
-  // toggled shut by the row click on slower machines.
-  await page.keyboard.press('Escape');
+  // Cancel an edit: re-arm, change, then Escape; the committed 0.5 mm
+  // geometry and history survive.
   await filletRow.locator('.feature-row-main').click();
-  await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
-    '0.5',
-    {
-      timeout: 30_000
-    }
-  );
-  await inspector.getByLabel('Radius', { exact: true }).fill('0.7');
+  await expect(chip).toHaveText('R 0.5 mm', { timeout: 30_000 });
+  await enterCommandValue(page, 'radius', '0.7');
   await page.keyboard.press('Escape');
+  await expect(edit).toHaveCount(0);
   await expect
     .poll(async () => (await readBlend(page))?.blendRadius ?? null, {
       timeout: 60_000
@@ -246,23 +243,17 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
     .toBeCloseTo(0.5, 2);
   await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
 
-  // Oversized radius: typed refusal, geometry/history unchanged. The History
-  // form keeps Apply enabled and reports the kernel refusal in place (the
-  // chip path disables Apply instead); either way nothing commits.
-  await page.keyboard.press('Escape');
+  // Oversized radius: refused in the bar, Done waits, and geometry and
+  // history are unchanged.
   await filletRow.locator('.feature-row-main').click();
-  await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
-    '0.5',
-    {
-      timeout: 30_000
-    }
-  );
-  await inspector.getByLabel('Radius', { exact: true }).fill('10');
-  await expect(inspector).toContainText(/Try a smaller radius|Failed|refus/i, {
+  await expect(chip).toHaveText('R 0.5 mm', { timeout: 30_000 });
+  await enterCommandValue(page, 'radius', '10');
+  await expect(page.locator('.in-place-command.refused')).toBeVisible({
     timeout: 120_000
   });
-  await inspector.getByRole('button', { name: /^Apply/ }).click();
-  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
+  await expect(edit.getByRole('button', { name: /Done/ })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(edit).toHaveCount(0);
   await expect(page.locator('.feature-row', { hasText: 'Fillet' })).toHaveCount(
     1
   );

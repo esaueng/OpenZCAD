@@ -1,8 +1,9 @@
 import {
-  createPrimitiveInPlace,
   test,
   expect,
-  stubApi
+  stubApi,
+  blendEdgesInPlace,
+  createPrimitiveInPlace
 } from './openzcad-fixtures';
 
 test('resizes a rounded box from its minimum side with exact entry, drag, cancel and undo', async ({
@@ -35,14 +36,14 @@ test('resizes a rounded box from its minimum side with exact entry, drag, cancel
   await expect(page).toHaveTitle('OpenZCAD');
   await page.getByLabel('Project name').fill('Rounded box resize');
   await page.getByRole('button', { name: 'Create project' }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await createPrimitiveInPlace(page, 'box', {
     sizes: { width: '40', depth: '24', height: '10' }
   });
-  await page.getByRole('button', { name: /^Fillet/ }).click();
-  await inspector.getByRole('button', { name: 'Select all 12 edges' }).click();
-  await inspector.getByLabel('Radius', { exact: true }).fill('1.5');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await blendEdgesInPlace(page, {
+    tool: 'Fillet',
+    allEdges: 12,
+    size: '1.5'
+  });
   const fillet = page.locator('.feature-row-main', { hasText: 'Fillet' });
   await expect(fillet).toBeVisible();
   const canvas = page.locator('.viewer-host canvas');
@@ -80,6 +81,12 @@ test('resizes a rounded box from its minimum side with exact entry, drag, cancel
     await expect(page.getByRole('contentinfo')).toContainText('warnings0');
     await expect(
       page.locator('.feature-row-main', { hasText: 'Offset face' })
+    ).toHaveCount(0);
+    // The row re-armed the fillet (U09 phase 7), which owns the model's
+    // clicks: leave it before picking a face.
+    await page.keyboard.press('Escape');
+    await expect(
+      page.getByRole('group', { name: 'Edit Fillet command' })
     ).toHaveCount(0);
   };
   await checkShape(24);

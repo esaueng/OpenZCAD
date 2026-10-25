@@ -13,7 +13,8 @@ import {
   setSelectionFilter,
   stubApi,
   test,
-  createPrimitiveInPlace
+  createPrimitiveInPlace,
+  finishInPlaceCommand
 } from './openzcad-fixtures';
 
 async function makePart(page: Page, name: string) {
@@ -182,9 +183,13 @@ test('a connected edge run settles the typed Move before replacing its target', 
     page,
     'Edge run Move guard'
   );
+  // U09 phase 7: in place, every edge from Options, the default radius.
   await page.getByRole('button', { name: /^Fillet/ }).click();
-  await inspector.getByRole('button', { name: 'Select all 12 edges' }).click();
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  const filletBar = page.getByRole('group', { name: 'Fillet command' });
+  await filletBar.locator('summary').click();
+  await filletBar.getByRole('button', { name: 'Select all 12 edges' }).click();
+  await filletBar.locator('summary').click();
+  await finishInPlaceCommand(page, 'Fillet');
   await expect(page.locator('.feature-row')).toHaveCount(2);
   await expect(inspector).toHaveCount(0);
   await page.keyboard.press('Escape');
@@ -371,11 +376,15 @@ test('a deferred edge menu opens Fillet after Discard without asking about the o
   await expect(menu).toBeVisible();
   await expect(moveRows).toHaveCount(0);
 
+  // The menu's Fillet runs in place on the edge it was opened from.
   await menu
     .getByRole('menuitem', { name: 'Fillet edge…', exact: true })
     .click();
-  await expect(inspector).toBeVisible();
-  await expect(inspector.getByLabel('Radius', { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('group', { name: 'Fillet command' })
+  ).toContainText('1 edge');
+  await expect(page.getByTestId('command-handle-radius')).toBeVisible();
+  await expect(inspector).toHaveCount(0);
   await expect(ask).toHaveCount(0);
   await expect(menu).toBeHidden();
   await expect(move).toHaveCount(0);
