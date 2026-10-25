@@ -88,7 +88,8 @@ const SLOT_KEYS = [
   'guide',
   'faces',
   'bodies',
-  'plane'
+  'plane',
+  'edges'
 ] as const;
 
 /** Where a pick stands or what it measures, not what it references. */
@@ -1012,6 +1013,7 @@ export function useInPlaceCommand(
   }, []);
 
   const pickEdge = useCallback((edge: EdgePick) => {
+    if (committingRef.current) return false;
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
     if (!current || !toolSpec?.edgeMode) return false;
@@ -1033,6 +1035,7 @@ export function useInPlaceCommand(
   }, []);
 
   const setEdges = useCallback((edges: readonly EdgePick[]) => {
+    if (committingRef.current) return false;
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
     if (!current || !toolSpec?.edgeMode) return false;
