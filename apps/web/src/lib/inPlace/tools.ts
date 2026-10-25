@@ -360,6 +360,15 @@ export interface InPlaceToolSpec {
     values: Readonly<Record<string, number>>,
     slots: InPlaceSlots
   ): Record<string, number> | null;
+  /**
+   * Why `value` cannot stand beside the other values, when each alone is in
+   * range (a cone's second zero radius), else null.
+   */
+  refuseValue?(
+    valueId: string,
+    value: number,
+    values: Readonly<Record<string, number>>
+  ): string | null;
   hint(slots: InPlaceSlots, options?: Record<string, string>): string;
   ready(slots: InPlaceSlots): boolean;
   /**
@@ -2037,6 +2046,16 @@ function primitiveSpec(kind: PrimitiveKind): InPlaceToolSpec {
         position: build.position,
         ...(build.rotationDeg ? { rotationDeg: build.rotationDeg } : {})
       };
+    },
+    refuseValue(valueId, value, values) {
+      // One end of a cone may come to a point, never both: the edit card's
+      // own rule.
+      if (kind !== 'cone' || value !== 0) return null;
+      const other = valueId === 'bottomRadius' ? 'topRadius' : 'bottomRadius';
+      if (valueId !== 'bottomRadius' && valueId !== 'topRadius') return null;
+      return values[other] === 0
+        ? 'At least one radius must be greater than zero.'
+        : null;
     },
     linked(valueId, value, values, slots) {
       // Under a face the box hangs from it: a new height moves its lowest

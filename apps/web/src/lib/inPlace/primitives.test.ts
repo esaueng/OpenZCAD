@@ -4,6 +4,7 @@ import {
   GROUND_FRAME,
   eulerDegrees,
   footprintPlacement,
+  meshNormal,
   framePlaneHit,
   placementFrame,
   primitiveBuild,
@@ -81,6 +82,17 @@ describe('placement frames', () => {
       },
       normal
     );
+  });
+
+  it('squares a mesh normal within noise of an axis, and keeps a tilted one', () => {
+    expect(meshNormal({ x: 3e-8, y: -2e-7, z: 0.9999999 })).toEqual({
+      x: 0,
+      y: 0,
+      z: 1
+    });
+    const tilted = meshNormal({ x: 0, y: -1, z: 1 });
+    expect(tilted.y).toBeCloseTo(-Math.SQRT1_2, 12);
+    expect(tilted.z).toBeCloseTo(Math.SQRT1_2, 12);
   });
 
   it('draws on the ground unless the view sees it edge-on', () => {

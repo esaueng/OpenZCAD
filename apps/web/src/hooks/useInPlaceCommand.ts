@@ -701,6 +701,25 @@ export function useInPlaceCommand(
         });
         return false;
       }
+      // In range alone, a value may still not stand beside the others (a
+      // cone's second zero radius): typed, it is refused; dragged, it stays.
+      const crossed =
+        current && valueSpec
+          ? (IN_PLACE_TOOL_SPECS[current.tool].refuseValue?.(
+              valueId,
+              value,
+              current.values
+            ) ?? null)
+          : null;
+      if (crossed) {
+        if (typed) {
+          setEntryRefusal({
+            valueId,
+            message: `${raw === undefined ? value : `${raw} is ${value}`}; ${crossed}`
+          });
+        }
+        return false;
+      }
       // Only the refused value, taken now, lifts its refusal: another value
       // changing leaves the refused one still not what was typed.
       setEntryRefusal((refused) =>

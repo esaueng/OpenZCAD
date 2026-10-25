@@ -13,6 +13,7 @@ import type { HoleGhost } from '../lib/holeGhost';
 import { buildHoleGhostRig } from './viewer/holeGhostRig';
 import {
   framePlaneHit,
+  meshNormal,
   placementFrame,
   principalFrameFor,
   type PlacementFrame
@@ -8950,12 +8951,21 @@ export function ModelViewer({
             (entry) => entry.topologyId === selection.topologyId
           );
         const geometry = face?.geometry;
-        const on = geometry?.centroid ?? geometry?.center;
-        if (geometry?.surfaceType === 'plane' && geometry.normal && on) {
-          frame = placementFrame(geometry.normal);
-          // On the face's own plane, not the mesh's triangle under it.
-          const hit = framePlaneHit(frame, on, ray.origin, ray.direction);
-          start = hit ? new THREE.Vector3(hit.x, hit.y, hit.z) : null;
+        if (geometry?.surfaceType === 'plane') {
+          // An imported flat face measured from its NURBS carries no exact
+          // normal: the mesh's, at the point pressed, stands in for it.
+          const meshed = candidate?.faceNormal;
+          const normal =
+            geometry.normal ?? (meshed ? meshNormal(meshed) : undefined);
+          const on =
+            (geometry.normal && (geometry.centroid ?? geometry.center)) ||
+            candidate?.hit.point;
+          if (normal && on) {
+            frame = placementFrame(normal);
+            // On the face's own plane, not the mesh's triangle under it.
+            const hit = framePlaneHit(frame, on, ray.origin, ray.direction);
+            start = hit ? new THREE.Vector3(hit.x, hit.y, hit.z) : null;
+          }
         }
       }
       if (!frame || !start) {

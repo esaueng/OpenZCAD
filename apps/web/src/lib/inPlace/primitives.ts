@@ -120,6 +120,18 @@ export function placementFrame(normal: Vector3): PlacementFrame {
 }
 
 /**
+ * A face normal read off its mesh, square to an axis when it is within
+ * tessellation noise of one, so an imported flat face looking along Z
+ * places an unturned box as an exact face does.
+ */
+export function meshNormal(normal: Vector3): Vector3 {
+  const n = unit(normal);
+  const snap = (value: number) =>
+    Math.abs(value) < 1e-6 ? 0 : Math.abs(Math.abs(value) - 1) < 1e-6 ? Math.sign(value) : value;
+  return cleaned(unit({ x: snap(n.x), y: snap(n.y), z: snap(n.z) }));
+}
+
+/**
  * The principal plane (through the origin) a press on empty space draws on,
  * for a view looking along `direction`: the ground, unless the view sees it
  * edge-on, then whichever upright plane faces the view most. Its normal

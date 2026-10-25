@@ -803,6 +803,30 @@ describe('useInPlaceCommand: primitives', () => {
     expect(hook.result.current.values.z).toBe(3);
   });
 
+  it('lets one cone end come to a point, never both', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('cone'));
+    let accepted = false;
+    act(() => {
+      accepted = hook.result.current.setValue('topRadius', 0);
+    });
+    expect(accepted).toBe(true);
+    act(() => {
+      accepted = hook.result.current.setValue('bottomRadius', 0);
+    });
+    expect(accepted).toBe(false);
+    expect(hook.result.current.refusal).toBe(
+      '0; At least one radius must be greater than zero.'
+    );
+    expect(hook.result.current.values.bottomRadius).toBe(6);
+    expect(hook.result.current.canFinish).toBe(false);
+    // A drag to zero beside it simply does not take.
+    act(() => {
+      hook.result.current.previewValue('bottomRadius', 0);
+    });
+    expect(hook.result.current.values.bottomRadius).toBe(6);
+  });
+
   it('keeps a typed position parametric', async () => {
     const { hook, built } = setup();
     act(() => hook.result.current.start('cylinder'));
