@@ -34,7 +34,11 @@ import type {
   E2eeContactsEntryRecord,
   E2eeContactsResponse
 } from '@openzcad/shared';
-import { isE2eeContactStorageReady } from '@openzcad/cloudflare-adapters';
+import {
+  isE2eeContactStorageReady,
+  isE2eeInvitationStorageReady,
+  isE2eeProjectGroupStorageReady
+} from '@openzcad/cloudflare-adapters';
 import type { E2eeWriteAuthorization } from './e2eeWriteAuthorization';
 
 export const CONTACTS_ROUTE = '/api/e2ee/contacts';
@@ -154,6 +158,11 @@ async function relatedPeople(
   userId: string
 ): Promise<E2eeContactPerson[]> {
   const now = Math.floor(Date.now() / 1000);
+  // Encrypted invitations (migration 0038), when the table exists. An
+  // accepted invitation relates its sides only until the Add completes it
+  // or it expires; from then on membership decides, so a removed member's
+  // relation (and email) goes with the membership.
+  const encryptedInvitations = await isE2eeInvitationStorageReady(db);
   const { results } = await db
     .prepare(
       `WITH related(user_id, email_known) AS (
@@ -167,16 +176,28 @@ async function relatedPeople(
            JOIN project_members b ON b.project_id = a.project_id
            WHERE a.user_id = ?1
          UNION ALL
-         SELECT COALESCE(i.accepted_by_user_id, u.id), 1
-           FROM project_invitations i
-           LEFT JOIN users u ON i.accepted_by_user_id IS NULL AND u.email = i.email
+         SELECT u.id, 1 FROM project_invitations i
+           JOIN users u ON u.email = i.email
            WHERE i.invited_by_user_id = ?1 AND i.revoked_at IS NULL
-             AND (i.accepted_by_user_id IS NOT NULL OR i.expires_at >= ?2)
+             AND i.accepted_at IS NULL AND i.expires_at >= ?2
          UNION ALL
          SELECT i.invited_by_user_id, 1 FROM project_invitations i
-           WHERE i.revoked_at IS NULL AND (i.accepted_by_user_id = ?1 OR (
-             i.accepted_at IS NULL AND i.expires_at >= ?2
-             AND i.email = (SELECT email FROM users WHERE id = ?1)))
+           WHERE i.revoked_at IS NULL AND i.accepted_at IS NULL
+             AND i.expires_at >= ?2
+             AND i.email = (SELECT email FROM users WHERE id = ?1)${
+               encryptedInvitations
+                 ? `
+         UNION ALL
+         SELECT e.accepted_by_user_id, 1 FROM e2ee_invitations e
+           WHERE e.invited_by_user_id = ?1 AND e.accepted_by_user_id IS NOT NULL
+             AND e.revoked_at IS NULL AND e.completed_at IS NULL
+             AND e.expires_at >= ?4
+         UNION ALL
+         SELECT e.invited_by_user_id, 1 FROM e2ee_invitations e
+           WHERE e.accepted_by_user_id = ?1 AND e.revoked_at IS NULL
+             AND e.completed_at IS NULL AND e.expires_at >= ?4`
+                 : ''
+             }
        )
        SELECT r.user_id AS user_id,
               CASE WHEN MAX(r.email_known) = 1 THEN u.email END AS email
@@ -184,7 +205,11 @@ async function relatedPeople(
        WHERE r.user_id <> ?1
        GROUP BY r.user_id ORDER BY r.user_id LIMIT ?3`
     )
-    .bind(userId, now, MAX_CONTACT_PEOPLE)
+    // ?4 (milliseconds, as encrypted invitations store expiry) only when used.
+    .bind(
+      ...[userId, now, MAX_CONTACT_PEOPLE],
+      ...(encryptedInvitations ? [Date.now()] : [])
+    )
     .all<{ user_id: string; email: string | null }>();
   return (results ?? []).map((row) => ({
     userId: row.user_id,
@@ -200,6 +225,30 @@ async function mayLookUp(
 ): Promise<boolean> {
   if (userId === targetId) return true;
   const now = Math.floor(Date.now() / 1000);
+  // An accepted encrypted invitation relates its two sides (migration
+  // 0038) while it is open: the invitee checks the owner's statement
+  // signature, the owner the invitee's KeyPackage leaves. Before acceptance
+  // the server knows only the email's hash, so it relates nobody; once the
+  // Add completes it, or it expires, membership decides.
+  const encrypted = (await isE2eeInvitationStorageReady(db))
+    ? `
+         OR EXISTS (SELECT 1 FROM e2ee_invitations e
+           WHERE e.revoked_at IS NULL AND e.completed_at IS NULL
+             AND e.expires_at >= ?4 AND (
+             (e.invited_by_user_id = ?1 AND e.accepted_by_user_id = ?2)
+             OR (e.invited_by_user_id = ?2 AND e.accepted_by_user_id = ?1)))`
+    : '';
+  // Someone who held a leaf in a project the caller can still open: their
+  // signatures on its history must keep verifying after they leave or are
+  // removed, while they themselves lose this relation with the membership.
+  const authors = (await isE2eeProjectGroupStorageReady(db))
+    ? `
+         OR EXISTS (SELECT 1 FROM e2ee_project_leaves l
+           JOIN projects p ON p.id = l.project_id
+           WHERE l.user_id = ?2 AND (p.user_id = ?1 OR EXISTS (
+             SELECT 1 FROM project_members m
+             WHERE m.project_id = l.project_id AND m.user_id = ?1)))`
+    : '';
   const row = await db
     .prepare(
       `SELECT
@@ -211,16 +260,15 @@ async function mayLookUp(
            JOIN project_members b ON b.project_id = a.project_id
            WHERE a.user_id = ?1 AND b.user_id = ?2)
          OR EXISTS (SELECT 1 FROM project_invitations i
-           WHERE i.revoked_at IS NULL AND (
-             (i.invited_by_user_id = ?1 AND (i.accepted_by_user_id = ?2 OR (
-               i.accepted_at IS NULL AND i.expires_at >= ?3
-               AND i.email = (SELECT email FROM users WHERE id = ?2))))
-             OR (i.invited_by_user_id = ?2 AND (i.accepted_by_user_id = ?1 OR (
-               i.accepted_at IS NULL AND i.expires_at >= ?3
-               AND i.email = (SELECT email FROM users WHERE id = ?1))))))
+           WHERE i.revoked_at IS NULL AND i.accepted_at IS NULL
+             AND i.expires_at >= ?3 AND (
+             (i.invited_by_user_id = ?1
+               AND i.email = (SELECT email FROM users WHERE id = ?2))
+             OR (i.invited_by_user_id = ?2
+               AND i.email = (SELECT email FROM users WHERE id = ?1))))${encrypted}${authors}
          AS related`
     )
-    .bind(userId, targetId, now)
+    .bind(userId, targetId, now, ...(encrypted ? [Date.now()] : []))
     .first<{ related: number }>();
   return row?.related === 1;
 }

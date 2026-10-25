@@ -1,6 +1,11 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { Info, LoaderCircle, X } from 'lucide-react';
-import { projectOrganization, type ProjectSummary } from '@openzcad/shared';
+import {
+  PROJECT_STORAGE_FORMAT_E2EE_V1,
+  projectOrganization,
+  type ProjectSummary
+} from '@openzcad/shared';
+import { AssistantConsentSummary } from './assistant/AssistantConsentSummary';
 import {
   formatProjectBytes,
   type ProjectProperties
@@ -59,7 +64,7 @@ export function ProjectPropertiesDialog({
   const shelf = { active: 'Parts', archived: 'Archive', deleted: 'Trash' }[
     organization.status
   ];
-  const rows: Array<[string, string | number]> = [
+  const rows: Array<[string, ReactNode]> = [
     ['Project name', project.name],
     ['Shelf', shelf],
     ['Pinned', organization.pinned ? 'Yes' : 'No'],
@@ -118,6 +123,13 @@ export function ProjectPropertiesDialog({
     rows.push(['Archived', dateLabel(organization.archivedAt)]);
   if (organization.deletedAt)
     rows.push(['Moved to trash', dateLabel(organization.deletedAt)]);
+  // ADR-024 Phase 6: whether the assistant may read this encrypted project.
+  if (project.storageFormat === PROJECT_STORAGE_FORMAT_E2EE_V1) {
+    rows.push([
+      'Assistant',
+      <AssistantConsentSummary key="assistant" projectId={project.projectId} />
+    ]);
+  }
   rows.push(['Project ID', project.projectId]);
 
   return (

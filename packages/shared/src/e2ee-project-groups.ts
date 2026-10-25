@@ -4,6 +4,7 @@
  * string is unpadded base64url. The Worker orders and stores; browsers
  * verify everything that comes back.
  */
+import type { E2eeMlsAddRequest } from './e2ee-invitations';
 
 /** What an account-key wrap in the project key store holds. */
 export type E2eeProjectKeyPurpose = 'project-key' | 'rejoin-psk';
@@ -64,6 +65,12 @@ export interface E2eeProjectGroupRecord {
   /** The signed epoch-zero GroupInfo every join archive starts from. */
   initialGroupInfo: string;
   updatedAt: string;
+  /**
+   * Proposals stored for the current epoch that no Commit settled yet
+   * (slice 5-5, migration 0039: a departing member's SelfRemove). Absent
+   * without the migration.
+   */
+  pendingProposals?: number;
 }
 
 export interface E2eeProjectGroupResponse {
@@ -90,6 +97,9 @@ export type E2eeMlsCommitKind = 'commit' | 'external';
  * (`epoch + 1`) needs: its GroupInfo, the project key and rejoin PSK under
  * the sender's account key, its key archive, and for an external Commit the
  * joining device's certified leaf. Accepted all together or not at all.
+ * An owner's Add of an invitee (slice 5-3a, migration 0038) also states the
+ * invitation, exactly the KeyPackages it claimed and the Welcome. An
+ * owner’s role change (slice 5-4) states it in `roles`.
  */
 export interface E2eeMlsCommitRequest {
   epoch: number;
@@ -100,7 +110,97 @@ export interface E2eeMlsCommitRequest {
   leaf?: E2eeProjectLeafInput;
   wraps: E2eeProjectKeyWrap[];
   archive: E2eeKeyArchiveRecord;
+  add?: E2eeMlsAddRequest;
+  /**
+   * The role changes of current members this Commit’s `setRoles` makes
+   * (slice 5-4; owner only). The Worker mirrors them into
+   * `project_members` in the Commit’s own batch, and refuses any Commit
+   * whose new GroupInfo lists other roles than the current epoch’s with
+   * exactly the stated changes (and an Add’s invitee) applied
+   * (409 `E2EE_ROLES_MISMATCH`). Ownership never moves on an encrypted
+   * project (409 `E2EE_OWNERSHIP_TRANSFER_UNAVAILABLE`).
+   */
+  roles?: E2eeMlsRoleChange[];
+  /**
+   * The identities this Commit's `dropUsers` removes from the roles, with
+   * all of their leaves (owner only). The Worker deletes their
+   * `project_members` rows in the same batch; the new roles must no longer
+   * list them (checked as for `roles`).
+   */
+  dropUsers?: string[];
+  /**
+   * The hashes (SHA-256 hex of the message) of the stored proposals of this
+   * epoch the Commit applies by reference (slice 5-5, migration 0039), and
+   * of those the committer's MLS engine refused. Together they must name
+   * every proposal still pending in the epoch, or the Commit is refused
+   * (409 `E2EE_PROPOSALS_PENDING`).
+   */
+  proposals?: string[];
+  rejectedProposals?: string[];
 }
+
+/** What a stored proposal asks for (slice 5-5): so far only leaving. */
+export type E2eeMlsProposalKind = 'self-remove';
+
+/** A proposal stored for another member to commit (migration 0039). */
+export interface E2eeMlsProposalRecord {
+  /** The key epoch it was sent in (key-epoch base + MLS epoch). */
+  keyEpoch: number;
+  /** SHA-256 hex of the message bytes. */
+  proposalHash: string;
+  kind: E2eeMlsProposalKind;
+  /** Null once the sender's account was erased. */
+  senderUserId: string | null;
+  senderDeviceId: string | null;
+  /** The MLS PublicMessage proposal. */
+  message: string;
+  createdAt: string;
+}
+
+/**
+ * `GET /api/e2ee/projects/:id/mls/proposals[?keyEpoch=]` (a member): the
+ * proposals still pending in that key epoch (the current one by default),
+ * those its Commit applied by reference (which every member must process
+ * before that Commit), and the members who left by one and hold no
+ * membership any more, for the owner to drop from the roles. Empty, with
+ * `available: false`, until migration 0039 is applied.
+ */
+export interface E2eeMlsProposalsResponse {
+  available: boolean;
+  keyEpoch: number;
+  proposals: E2eeMlsProposalRecord[];
+  committed: E2eeMlsProposalRecord[];
+  departed: string[];
+}
+
+/**
+ * `POST …/mls/proposals` (a member other than the owner): leave by a
+ * SelfRemove proposal sent in the group's current MLS `epoch`. The Worker
+ * drops the sender's access in the same batch (decision M4).
+ */
+export interface E2eeMlsProposalRequest {
+  epoch: number;
+  /** The sending device, certified in the caller's newest device list. */
+  deviceId: string;
+  kind: E2eeMlsProposalKind;
+  message: string;
+}
+
+export interface E2eeMlsProposalResponse {
+  proposal: E2eeMlsProposalRecord;
+}
+
+/** One member’s new role in an owner’s `setRoles` Commit (slice 5-4). */
+export interface E2eeMlsRoleChange {
+  userId: string;
+  role: 'editor' | 'viewer';
+}
+
+/** 409 when a Commit’s new roles are not the change it states. */
+export const E2EE_ROLES_MISMATCH_CODE = 'E2EE_ROLES_MISMATCH';
+/** 409: an encrypted project’s owner never changes (slice 5-4). */
+export const E2EE_OWNERSHIP_TRANSFER_CODE =
+  'E2EE_OWNERSHIP_TRANSFER_UNAVAILABLE';
 
 export interface E2eeMlsCommitRecord {
   /** The epoch the Commit was sent in; applying it yields `epoch + 1`. */
@@ -132,6 +232,26 @@ export interface E2eeProjectKeysResponse {
   /** The caller's own wraps only, ascending by key epoch then purpose. */
   wraps: E2eeProjectKeyWrap[];
   more: boolean;
+}
+
+/**
+ * `POST /api/e2ee/projects/:id/keys` (slice 5-2): a member's browser posts
+ * its own account-wrapped project key and rejoin PSK for an epoch it
+ * reached by processing someone else's Commit (decision D1), so its other
+ * devices can read and rejoin. Only ever the caller's own wraps; a wrap
+ * already stored is kept, never replaced.
+ */
+export interface E2eeProjectKeyUploadRequest {
+  /** The posting device, certified in the caller's newest device list. */
+  deviceId: string;
+  keyEpoch: number;
+  /** One project-key and one rejoin-psk wrap for `keyEpoch`. */
+  wraps: E2eeProjectKeyWrap[];
+}
+
+export interface E2eeProjectKeyUploadResponse {
+  /** The caller's wraps for that key epoch, as stored. */
+  wraps: E2eeProjectKeyWrap[];
 }
 
 export interface E2eeKeyArchivesResponse {

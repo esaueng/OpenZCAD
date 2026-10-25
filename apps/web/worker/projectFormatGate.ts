@@ -25,9 +25,10 @@ import { isProjectStorageFormatReady } from '@openzcad/cloudflare-adapters';
 /**
  * - `metadata`: never touches document content (shelf state, deletion, and
  *   revoking or listing access) and works on any format.
- * - `share`: creates new access; refused on an encrypted project as sharing.
- * - `room`: the collaboration room; members refused as sharing, the owner
- *   as unreadable.
+ * - `share`: creates or changes access (inviting, share links, a member's
+ *   role or removal); refused on an encrypted project as sharing.
+ * - `room`: the collaboration room; while encrypted projects are closed,
+ *   members refused as sharing, the owner as unreadable.
  * - `document`: everything else, refused as unreadable.
  */
 export type ProjectRouteFormatRule = 'metadata' | 'share' | 'room' | 'document';
@@ -44,15 +45,18 @@ const METADATA_ROUTES: ReadonlyArray<{ method: string; rest: RegExp }> = [
   { method: 'GET', rest: /^\/sharing$/ },
   { method: 'GET', rest: /^\/share-links$/ },
   { method: 'DELETE', rest: /^\/share-links\/[^/]+$/ },
-  { method: 'DELETE', rest: /^\/invitations\/[^/]+$/ },
-  { method: 'DELETE', rest: /^\/members\/[^/]+$/ }
+  { method: 'DELETE', rest: /^\/invitations\/[^/]+$/ }
 ];
 
 const SHARE_ROUTES: ReadonlyArray<{ method: string; rest: RegExp }> = [
   { method: 'POST', rest: /^\/invitations$/ },
   { method: 'POST', rest: /^\/share-links$/ },
-  // A role change can grant stronger access, so it is sharing too.
-  { method: 'PATCH', rest: /^\/members\/[^/]+$/ }
+  // A role change can grant stronger access, so it is sharing too. Slice
+  // 5-2: on an encrypted project a role is what the MLS group's roles say,
+  // so it changes only by a Commit (slices 5-4 and 5-5), never by the
+  // server's row alone.
+  { method: 'PATCH', rest: /^\/members\/[^/]+$/ },
+  { method: 'DELETE', rest: /^\/members\/[^/]+$/ }
 ];
 
 const ROOM_ROUTE = /^\/collaboration(?:\/ticket)?$/;
@@ -107,7 +111,7 @@ export async function assertProjectRouteFormat(
   /**
    * Encrypted projects are open to the caller (E2EE_PROJECTS_ENABLED): the
    * owner of an encrypted project reaches its room, which relays ciphertext
-   * (ADR-024 slice 4-9). Members stay refused until sharing (Phase 5).
+   * (ADR-024 slice 4-9), and so do its members (slice 5-6).
    */
   encryptedRoom = false
 ): Promise<void> {
@@ -131,8 +135,6 @@ export async function assertProjectRouteFormat(
   }
   if (route.rule === 'share') assertShareableProject(access);
   else if (route.rule === 'room') {
-    if (!(encryptedRoom && access.role === 'owner')) {
-      assertPlaintextRoomAccess(access);
-    }
+    if (!encryptedRoom) assertPlaintextRoomAccess(access);
   } else assertPlaintextProject(access);
 }

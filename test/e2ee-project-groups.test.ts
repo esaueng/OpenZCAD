@@ -969,7 +969,7 @@ describe('solo MLS groups', () => {
       const text = await outsider.text();
       for (const wrapped of ownWrapped) expect(text).not.toContain(wrapped);
     }
-    // A member learns only that it is owner-only, and still gets no wraps.
+    // A member (slice 5-2) reads the group, but gets only its own wraps.
     srv.db
       .prepare(
         `INSERT INTO project_members (project_id, user_id, role, added_by_user_id, created_at, updated_at)
@@ -983,10 +983,11 @@ describe('solo MLS groups', () => {
         user: OTHER
       }
     );
-    expect(member.status).toBe(403);
-    expect(await member.json()).toMatchObject({
-      code: 'E2EE_PROJECT_OWNER_ONLY'
-    });
+    expect(member.status).toBe(200);
+    const memberWraps = (await member.json()) as {
+      wraps: { wrapped: string }[];
+    };
+    expect(memberWraps.wraps.map((w) => w.wrapped)).toEqual(['B'.repeat(55)]);
     // The other user's own project lists only their own wraps.
     const theirs = seedProject(srv, OTHER);
     const otherLaptop = device(srv, other, 'other_laptop');

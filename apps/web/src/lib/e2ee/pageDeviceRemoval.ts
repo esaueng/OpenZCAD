@@ -28,6 +28,8 @@ import {
   type ProjectGroupState
 } from './projectGroups';
 import { versionPins } from './versionPins';
+import { contactsContext } from './contacts';
+import { contactMemberLists } from './memberLists';
 
 export { GROUP_RESET_CONFIRMATION };
 
@@ -36,8 +38,9 @@ function pageGroups(
   account: AccountView
 ): ProjectGroupContext {
   const cutoffs = createRevocationCutoffsApi();
+  const api = createProjectGroupsApi();
   return {
-    api: createProjectGroupsApi(),
+    api,
     sessions: mlsProjectSessions(),
     account: projectGroupAccount(e2ee, account),
     device:
@@ -51,6 +54,12 @@ function pageGroups(
     revocations: revocationStatements(cutoffs, {
       list: account.list,
       generation: account.generation
+    }),
+    // Shared projects' co-members (slice 5-2), from contacts (slice 5-1).
+    members: contactMemberLists({
+      contacts: contactsContext(e2ee),
+      account,
+      leaves: (projectId) => api.leaves(projectId)
     })
   };
 }

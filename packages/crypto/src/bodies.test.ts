@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { toHex } from './bytes';
+import { toBase64Url, toHex } from './bytes';
 import {
   MAX_EXPORT_CONTENT_TYPE_LENGTH,
   MAX_EXPORT_FILE_NAME_LENGTH,
@@ -31,6 +31,13 @@ import {
 import { E2eeError, type E2eeErrorCode } from './errors';
 import { PLAINTEXT_CEILINGS, type ContentBlobKind } from './header';
 import { patternBytes } from './test-support';
+import { exportPublicKey, generateSigningKeyPair } from './keys';
+import { publicKeyHash } from './codes';
+import {
+  signShareLinkGrant,
+  signShareLinkTombstone,
+  type ShareLinkSet
+} from './share-links';
 
 function throwsWith(run: () => unknown, code: E2eeErrorCode): void {
   expect(run).toThrow(
@@ -200,10 +207,32 @@ describe('document bodies', () => {
     throwsWith(
       () =>
         decodeEncryptedDocumentBody(
-          bytesOf(JSON.stringify({ ...base, version: 2 })),
+          bytesOf(JSON.stringify({ ...base, version: 3 })),
           header('document')
         ),
       'unsupported-version'
+    );
+    // Version 2 exists now, and needs its link set; version 1 has none.
+    throwsWith(
+      () =>
+        decodeEncryptedDocumentBody(
+          bytesOf(JSON.stringify({ ...base, version: 2 })),
+          header('document')
+        ),
+      'malformed'
+    );
+    throwsWith(
+      () =>
+        decodeEncryptedDocumentBody(
+          bytesOf(
+            JSON.stringify({
+              ...base,
+              shareLinks: { grants: [], tombstones: [] }
+            })
+          ),
+          header('document')
+        ),
+      'malformed'
     );
     for (const raw of [
       Uint8Array.of(0xff, 0xfe),
@@ -273,6 +302,245 @@ describe('document bodies', () => {
         'invalid-argument'
       );
     }
+  });
+});
+
+describe('document bodies v2 (share links)', () => {
+  async function linkSet(grantEpoch = 2): Promise<ShareLinkSet> {
+    const owner = await generateSigningKeyPair(false);
+    const signerKeyHash = await publicKeyHash(
+      await exportPublicKey(owner.publicKey)
+    );
+    const grant = (shareId: string) =>
+      signShareLinkGrant(owner.privateKey, {
+        projectId: 'p',
+        shareId,
+        shareKeyHash: patternBytes(32, 0x10),
+        mode: 'view',
+        keyEpoch: grantEpoch,
+        issuedAt: 1,
+        signerKeyHash
+      });
+    return {
+      grants: [await grant('share_b'), await grant('share_a')],
+      tombstones: [
+        await signShareLinkTombstone(owner.privateKey, {
+          projectId: 'p',
+          shareId: 'share_0',
+          keyEpoch: 1,
+          issuedAt: 1,
+          signerKeyHash
+        })
+      ]
+    };
+  }
+
+  const value = (shareLinks?: ShareLinkSet): EncryptedDocumentBody => ({
+    document: { name: 'n' },
+    blobs: [],
+    revisionVersionHashes: new Map(),
+    ...(shareLinks ? { shareLinks } : {})
+  });
+
+  it('writes version 2 only with a link set, sorted by link id', async () => {
+    const set = await linkSet();
+    const encoded = encodeEncryptedDocumentBody(value(set), header('document'));
+    const json = JSON.parse(text(encoded)) as Record<string, unknown>;
+    expect(json.version).toBe(2);
+    expect(Object.keys(json)).toEqual([
+      'version',
+      'document',
+      'blobs',
+      'revisionVersionHashes',
+      'shareLinks'
+    ]);
+    const decoded = decodeEncryptedDocumentBody(encoded, header('document'));
+    // Sorted: share_a first, though it was given second.
+    expect(decoded.shareLinks!.grants[0]).toEqual(set.grants[1]);
+    expect(decoded.shareLinks!.tombstones).toEqual(set.tombstones);
+    // An empty set is still version 2: its tombstones were all dropped.
+    const empty = encodeEncryptedDocumentBody(
+      value({ grants: [], tombstones: [] }),
+      header('document')
+    );
+    expect(JSON.parse(text(empty))).toMatchObject({
+      version: 2,
+      shareLinks: { grants: [], tombstones: [] }
+    });
+    // Without one the body is version 1, exactly as before.
+    const v1 = encodeEncryptedDocumentBody(value(), header('document'));
+    expect(text(v1)).toBe(
+      '{"version":1,"document":{"name":"n"},"blobs":[],"revisionVersionHashes":{}}'
+    );
+    expect(
+      'shareLinks' in decodeEncryptedDocumentBody(v1, header('document'))
+    ).toBe(false);
+  });
+
+  it('never puts a link set in a share snapshot', async () => {
+    const set = await linkSet();
+    throwsWith(
+      () => encodeEncryptedDocumentBody(value(set), header('share-snapshot')),
+      'invalid-argument'
+    );
+    const encoded = encodeEncryptedDocumentBody(value(set), header('document'));
+    throwsWith(
+      () => decodeEncryptedDocumentBody(encoded, header('share-snapshot')),
+      'context-mismatch'
+    );
+  });
+
+  it('refuses a grant from a later key epoch than its version', async () => {
+    const set = await linkSet(4);
+    throwsWith(
+      () => encodeEncryptedDocumentBody(value(set), header('document')),
+      'context-mismatch'
+    );
+    const encoded = encodeEncryptedDocumentBody(
+      value(set),
+      header('document', [], 4)
+    );
+    throwsWith(
+      () => decodeEncryptedDocumentBody(encoded, header('document', [], 3)),
+      'context-mismatch'
+    );
+  });
+
+  it('refuses a non-canonical or inconsistent link set', async () => {
+    const set = await linkSet();
+    const encoded = encodeEncryptedDocumentBody(value(set), header('document'));
+    const json = JSON.parse(text(encoded)) as {
+      shareLinks: {
+        grants: { grant: string; signature: string }[];
+        tombstones: { tombstone: string; signature: string }[];
+      };
+    };
+    const variants: unknown[] = [
+      // Unsorted grants.
+      {
+        ...json,
+        shareLinks: {
+          ...json.shareLinks,
+          grants: [...json.shareLinks.grants].reverse()
+        }
+      },
+      // A duplicated grant.
+      {
+        ...json,
+        shareLinks: {
+          ...json.shareLinks,
+          grants: [json.shareLinks.grants[0], json.shareLinks.grants[0]]
+        }
+      },
+      // Padded base64url.
+      {
+        ...json,
+        shareLinks: {
+          ...json.shareLinks,
+          grants: [
+            {
+              ...json.shareLinks.grants[0]!,
+              signature: `${json.shareLinks.grants[0]!.signature}=`
+            }
+          ]
+        }
+      },
+      // A tombstone in the grants list.
+      {
+        ...json,
+        shareLinks: {
+          ...json.shareLinks,
+          grants: [
+            {
+              grant: json.shareLinks.tombstones[0]!.tombstone,
+              signature: json.shareLinks.tombstones[0]!.signature
+            }
+          ]
+        }
+      },
+      // Unknown fields.
+      { ...json, shareLinks: { ...json.shareLinks, extra: [] } },
+      {
+        ...json,
+        shareLinks: {
+          ...json.shareLinks,
+          tombstones: [{ ...json.shareLinks.tombstones[0], extra: 1 }]
+        }
+      },
+      { ...json, shareLinks: [] }
+    ];
+    for (const variant of variants) {
+      throwsWith(
+        () =>
+          decodeEncryptedDocumentBody(
+            bytesOf(JSON.stringify(variant)),
+            header('document')
+          ),
+        'malformed'
+      );
+    }
+    // A link that is also tombstoned, on either side.
+    const owner = await generateSigningKeyPair(false);
+    const signerKeyHash = await publicKeyHash(
+      await exportPublicKey(owner.publicKey)
+    );
+    const both: ShareLinkSet = {
+      grants: [
+        await signShareLinkGrant(owner.privateKey, {
+          projectId: 'p',
+          shareId: 'share_a',
+          shareKeyHash: patternBytes(32),
+          mode: 'tweak',
+          keyEpoch: 1,
+          issuedAt: 1,
+          signerKeyHash
+        })
+      ],
+      tombstones: [
+        await signShareLinkTombstone(owner.privateKey, {
+          projectId: 'p',
+          shareId: 'share_a',
+          keyEpoch: 2,
+          issuedAt: 2,
+          signerKeyHash
+        })
+      ]
+    };
+    throwsWith(
+      () => encodeEncryptedDocumentBody(value(both), header('document')),
+      'context-mismatch'
+    );
+    const spliced = encodeEncryptedDocumentBody(
+      value({ grants: both.grants, tombstones: [] }),
+      header('document')
+    );
+    const tombstoned = JSON.parse(text(spliced)) as typeof json;
+    tombstoned.shareLinks.tombstones = [
+      {
+        tombstone: toBase64Url(both.tombstones[0]!.statement),
+        signature: toBase64Url(both.tombstones[0]!.signature)
+      }
+    ];
+    throwsWith(
+      () =>
+        decodeEncryptedDocumentBody(
+          bytesOf(JSON.stringify(tombstoned)),
+          header('document')
+        ),
+      'context-mismatch'
+    );
+    const sameId = await linkSet();
+    throwsWith(
+      () =>
+        encodeEncryptedDocumentBody(
+          value({
+            grants: sameId.grants,
+            tombstones: [...sameId.tombstones, ...sameId.tombstones]
+          }),
+          header('document')
+        ),
+      'invalid-argument'
+    );
   });
 });
 

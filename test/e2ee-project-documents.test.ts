@@ -1046,7 +1046,7 @@ describe('writes', () => {
 // --- Access, retention, cleanup ---------------------------------------------
 
 describe('access', () => {
-  it('serves only the owner of a format-2 project with the flag on', async () => {
+  it('serves only the owner and members of a format-2 project with the flag on', async () => {
     const srv = server();
     const laptop = device(srv, owner, 'owner_laptop');
     const { document } = await createEncrypted(laptop);
@@ -1069,17 +1069,30 @@ describe('access', () => {
         code: 'PROJECT_NOT_FOUND'
       });
     }
-    // A member learns only that it is owner-only.
+    // A member reads (slice 5-2); a viewer's write is refused.
     srv.db
       .prepare(
         `INSERT INTO project_members
            (project_id, user_id, role, added_by_user_id, created_at, updated_at)
-         VALUES (?, ?, 'editor', ?, 1, 1)`
+         VALUES (?, ?, 'viewer', ?, 1, 1)`
       )
       .run(projectId, OTHER, OWNER);
     expect((await srv.call('GET', paths[0][1], { user: OTHER })).status).toBe(
-      403
+      200
     );
+    const viewerWrite = await srv.call(
+      'PUT',
+      `/api/e2ee/projects/${projectId}/document`,
+      {
+        user: OTHER,
+        raw: new Uint8Array(8),
+        contentType: 'application/octet-stream'
+      }
+    );
+    expect(viewerWrite.status).toBe(403);
+    expect(await viewerWrite.json()).toMatchObject({
+      code: 'E2EE_PROJECT_READ_ONLY'
+    });
     // Plaintext projects are not served here, and plaintext routes keep
     // refusing this one.
     const created = await srv.call('POST', '/api/projects', {

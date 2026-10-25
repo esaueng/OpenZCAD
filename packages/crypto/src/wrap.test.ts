@@ -516,6 +516,7 @@ describe('share snapshot keys', () => {
     const visitorContext: WrapContext = {
       purpose: 'share-version-key',
       projectId: 'project-a',
+      keyEpoch: 2,
       shareId: 'share-1',
       versionId: '9'
     };
@@ -537,6 +538,14 @@ describe('share snapshot keys', () => {
       unwrapKey(shareKey, wraps.forLinkVisitors, {
         ...visitorContext,
         shareId: 'share-2'
+      }),
+      'authentication-failed'
+    );
+    // The visitor wrap binds the snapshot's key epoch too.
+    await rejectsWith(
+      unwrapKey(shareKey, wraps.forLinkVisitors, {
+        ...visitorContext,
+        keyEpoch: 3
       }),
       'authentication-failed'
     );

@@ -28,6 +28,15 @@ import {
   type ProjectEnvelopeKind
 } from './header';
 import { KEY_BYTES } from './primitives';
+import {
+  MAX_SHARE_LINKS,
+  MAX_SHARE_LINK_GRANT_BYTES,
+  MAX_SHARE_LINK_TOMBSTONE_BYTES,
+  MAX_SHARE_TOMBSTONES,
+  checkShareLinkSet,
+  type ShareLinkSet
+} from './share-links';
+import type { SignedStatement } from './devices';
 
 /**
  * The encrypted bodies of project envelopes: UTF-8 JSON, written by the
@@ -40,6 +49,12 @@ import { KEY_BYTES } from './primitives';
  * (`context-mismatch`) on both sides.
  */
 export const BODY_VERSION_1 = 1;
+/**
+ * Document bodies only: version 1 plus `shareLinks`, the project's active
+ * link set. A document body without a link set is still written as
+ * version 1, byte for byte.
+ */
+export const BODY_VERSION_2 = 2;
 
 /** Most revisions one document body names (judgment; the ledger keeps fewer). */
 export const MAX_REVISION_HASHES = 4096;
@@ -133,8 +148,11 @@ function checkKind(
   }
 }
 
-function checkBodyVersion(value: unknown): void {
-  if (value === BODY_VERSION_1) return;
+function checkBodyVersion(
+  value: unknown,
+  known: readonly number[] = [BODY_VERSION_1]
+): void {
+  if (known.includes(value as number)) return;
   if (isUint(value, Number.MAX_SAFE_INTEGER)) {
     fail('unsupported-version', `Body version ${value} is not supported`);
   }
@@ -312,6 +330,86 @@ export interface EncryptedDocumentBody {
   readonly document: Readonly<Record<string, unknown>>;
   readonly blobs: readonly ContentBlobReference[];
   readonly revisionVersionHashes: ReadonlyMap<string, Uint8Array>;
+  /**
+   * `document` kind only: the active share-link set (ADR-024, share-link
+   * revocation is project state). Present, even empty, makes the body
+   * version 2; absent keeps version 1. A share snapshot never carries it,
+   * since link visitors must not learn the other links.
+   */
+  readonly shareLinks?: ShareLinkSet;
+}
+
+/** A device statement signature: `u8 1 | r || s`. */
+const LINK_SIGNATURE_BYTES = 65;
+
+function linkSetJson(set: ShareLinkSet, header: BodyEnvelopeHeader) {
+  const { grants, tombstones } = checkShareLinkSet(
+    set,
+    'invalid-argument',
+    header.keyEpoch,
+    true
+  );
+  return {
+    grants: grants.map(({ signed }) => ({
+      grant: toBase64Url(signed.statement),
+      signature: toBase64Url(signed.signature)
+    })),
+    tombstones: tombstones.map(({ signed }) => ({
+      tombstone: toBase64Url(signed.statement),
+      signature: toBase64Url(signed.signature)
+    }))
+  };
+}
+
+function readLinkSet(value: unknown, header: BodyEnvelopeHeader): ShareLinkSet {
+  const record = exactKeys(
+    value,
+    ['grants', 'tombstones'],
+    [],
+    'shareLinks',
+    'malformed'
+  );
+  const read = (
+    list: unknown,
+    field: 'grant' | 'tombstone'
+  ): SignedStatement[] => {
+    if (!Array.isArray(list)) fail('malformed', `${field}s must be a list`);
+    const max = field === 'grant' ? MAX_SHARE_LINKS : MAX_SHARE_TOMBSTONES;
+    if (list.length > max) {
+      fail('limit-exceeded', `A link set holds at most ${max} ${field}s`);
+    }
+    return list.map((item: unknown) => {
+      const entry = exactKeys(
+        item,
+        [field, 'signature'],
+        [],
+        `A link ${field}`,
+        'malformed'
+      );
+      return {
+        statement: readBase64(
+          entry[field],
+          `A link ${field}`,
+          1,
+          field === 'grant'
+            ? MAX_SHARE_LINK_GRANT_BYTES
+            : MAX_SHARE_LINK_TOMBSTONE_BYTES
+        ),
+        signature: readBase64(
+          entry.signature,
+          `A link ${field} signature`,
+          LINK_SIGNATURE_BYTES,
+          LINK_SIGNATURE_BYTES
+        )
+      };
+    });
+  };
+  const set: ShareLinkSet = {
+    grants: read(record.grants, 'grant'),
+    tombstones: read(record.tombstones, 'tombstone')
+  };
+  checkShareLinkSet(set, 'malformed', header.keyEpoch);
+  return set;
 }
 
 const DOCUMENT_KINDS: readonly ProjectEnvelopeKind[] = [
@@ -352,12 +450,20 @@ export function encodeEncryptedDocumentBody(
     entries.push([id, toHex(checkBytes(hash, 'A revision hash', 32, 32))]);
   }
   entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  let shareLinks: ReturnType<typeof linkSetJson> | undefined;
+  if (body.shareLinks !== undefined) {
+    if (header.kind !== 'document') {
+      fail('invalid-argument', 'Only a document body carries share links');
+    }
+    shareLinks = linkSetJson(body.shareLinks, header);
+  }
   return serialize(
     {
-      version: BODY_VERSION_1,
+      version: shareLinks ? BODY_VERSION_2 : BODY_VERSION_1,
       document: body.document,
       blobs,
-      revisionVersionHashes: Object.fromEntries(entries)
+      revisionVersionHashes: Object.fromEntries(entries),
+      ...(shareLinks ? { shareLinks } : {})
     },
     PLAINTEXT_CEILINGS[header.kind],
     DOCUMENT_JSON_LIMITS,
@@ -370,19 +476,33 @@ export function decodeEncryptedDocumentBody(
   header: BodyEnvelopeHeader
 ): EncryptedDocumentBody {
   checkKind(header, DOCUMENT_KINDS, 'malformed');
+  const parsed = parseBody(
+    bytes,
+    PLAINTEXT_CEILINGS[header.kind],
+    DOCUMENT_JSON_LIMITS,
+    'Document body'
+  );
+  if (!isPlainRecord(parsed))
+    fail('malformed', 'Document body must be an object');
+  // The version decides the fields, so read it first.
+  checkBodyVersion(parsed.version, [BODY_VERSION_1, BODY_VERSION_2]);
+  const v2 = parsed.version === BODY_VERSION_2;
+  if (v2 && header.kind !== 'document') {
+    fail('context-mismatch', 'A share snapshot never carries share links');
+  }
   const record = exactKeys(
-    parseBody(
-      bytes,
-      PLAINTEXT_CEILINGS[header.kind],
-      DOCUMENT_JSON_LIMITS,
-      'Document body'
-    ),
-    ['version', 'document', 'blobs', 'revisionVersionHashes'],
+    parsed,
+    [
+      'version',
+      'document',
+      'blobs',
+      'revisionVersionHashes',
+      ...(v2 ? ['shareLinks'] : [])
+    ],
     [],
     'Document body',
     'malformed'
   );
-  checkBodyVersion(record.version);
   if (!isPlainRecord(record.document)) {
     fail('malformed', 'document must be an object');
   }
@@ -420,7 +540,8 @@ export function decodeEncryptedDocumentBody(
   return {
     document: record.document,
     blobs,
-    revisionVersionHashes
+    revisionVersionHashes,
+    ...(v2 ? { shareLinks: readLinkSet(record.shareLinks, header) } : {})
   };
 }
 

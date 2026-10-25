@@ -1,5 +1,5 @@
 /**
- * End-to-end encryption primitives for ADR-024 (roadmap L11, Phases 2–4).
+ * End-to-end encryption primitives for ADR-024 (roadmap L11, Phases 2–5).
  * WebCrypto only: runs in browsers, Web Workers, the Tauri WKWebView and
  * Node 20+. The account key material of Phase 3 (device lists, unlock
  * targets, device approval) is its first application use.
@@ -251,6 +251,18 @@ export {
   type VerifyContactsListOptions
 } from './contacts';
 export {
+  ASSISTANT_CONSENT_MAC_BYTES,
+  ASSISTANT_CONSENT_MAC_INFO,
+  ASSISTANT_CONSENT_VERSION_1,
+  MAX_ASSISTANT_CONSENT_BYTES,
+  MAX_ASSISTANT_CONSENT_ROUTE_LENGTH,
+  decodeAssistantConsent,
+  encodeAssistantConsent,
+  macAssistantConsent,
+  openAssistantConsent,
+  type AssistantConsent
+} from './assistant-consent';
+export {
   MAX_VERSION_LOG_BYTES,
   MAX_VERSION_LOG_RECORDS,
   VERSION_LOG_RECORD_VERSION_1,
@@ -276,6 +288,7 @@ export {
 } from './version-log';
 export {
   BODY_VERSION_1,
+  BODY_VERSION_2,
   MAX_ARCHIVED_KEYS,
   MAX_EXPORT_CONTENT_TYPE_LENGTH,
   MAX_EXPORT_FILE_NAME_LENGTH,
@@ -313,3 +326,71 @@ export {
   openProjectPreferences,
   type ProjectPreferences
 } from './account-records';
+export {
+  MAX_DELEGATED_DEVICES,
+  MAX_SHARE_AUTHORITY_BYTES,
+  MAX_SHARE_AUTHORITY_LIFETIME_MS,
+  MAX_SHARE_AUTHORS,
+  MAX_SHARE_DELEGATION_BYTES,
+  MAX_SHARE_DELEGATION_LIFETIME_MS,
+  MAX_SHARE_LINK_GRANT_BYTES,
+  MAX_SHARE_LINK_TOMBSTONE_BYTES,
+  MAX_SHARE_LINKS,
+  MAX_SHARE_TOMBSTONES,
+  SHARE_AUTHORITY_VERSION_1,
+  SHARE_CLOCK_SKEW_MS,
+  SHARE_DELEGATION_VERSION_1,
+  SHARE_LINK_GRANT_VERSION_1,
+  SHARE_LINK_MODES,
+  SHARE_LINK_TOMBSTONE_VERSION_1,
+  ShareLinkError,
+  decodeShareAuthority,
+  decodeShareDelegation,
+  decodeShareLinkGrant,
+  decodeShareLinkTombstone,
+  encodeShareAuthority,
+  encodeShareDelegation,
+  encodeShareLinkGrant,
+  encodeShareLinkTombstone,
+  openShareKey,
+  sameShareLinkSet,
+  shareKeyHash,
+  signShareAuthority,
+  signShareDelegation,
+  signShareLinkGrant,
+  signShareLinkTombstone,
+  verifyShareAuthority,
+  verifyShareDelegation,
+  verifyShareLinkSet,
+  verifySharedSnapshot,
+  type ActiveShareLink,
+  type ShareAuthorityStatement,
+  type ShareDelegation,
+  type SharedSnapshotInput,
+  type ShareLinkFailure,
+  type ShareLinkGrant,
+  type ShareLinkMode,
+  type ShareLinkSet,
+  type ShareLinkSigner,
+  type ShareLinkTombstone,
+  type VerifiedSharedSnapshot,
+  type VerifiedShareLinkSet,
+  type VerifyShareLinkSetOptions
+} from './share-links';
+export {
+  INVITATION_CLOCK_SKEW_MS,
+  INVITATION_ROLES,
+  MAX_PROJECT_INVITATION_BYTES,
+  MAX_PROJECT_INVITATION_LIFETIME_MS,
+  PROJECT_INVITATION_VERSION_1,
+  ProjectInvitationError,
+  decodeProjectInvitation,
+  encodeProjectInvitation,
+  invitationEmailHash,
+  signProjectInvitation,
+  verifyProjectInvitation,
+  type InvitationExpectations,
+  type InvitationFailure,
+  type InvitationRole,
+  type ProjectInvitation
+} from './invitations';

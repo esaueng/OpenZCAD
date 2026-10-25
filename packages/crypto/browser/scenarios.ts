@@ -696,6 +696,7 @@ const KW_CONTEXTS: readonly WrapContext[] = [
   {
     purpose: 'share-version-key',
     projectId: 'project-a',
+    keyEpoch: 2,
     shareId: 'share-1',
     versionId: '7'
   },
@@ -1190,6 +1191,7 @@ const wrapSteps: CryptoScenario[] = [
         await unwrapKey(shareKey, wraps.forLinkVisitors, {
           purpose: 'share-version-key',
           projectId: 'project-a',
+          keyEpoch: 2,
           shareId: 'share-1',
           versionId: '7'
         }),
