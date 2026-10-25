@@ -6851,12 +6851,15 @@ export function App() {
     }
     if (renderedSelectedTopology?.kind === 'face') {
       // While a face offset's preview is on screen the pick resolves to the
-      // preview's face, whose names and quantities are not computed: the card
-      // read "Face" with no area for the whole of a typed value's preview. It
-      // keeps naming the committed face the pick came from, whose name and
-      // area an offset does not change. Other edits (a cylinder's radius, a
-      // fillet's) label from the preview: their figure is the dragged value,
-      // which the viewer writes into the label live.
+      // preview's face, which carries no lineage name: the card read "Face"
+      // for the whole of a typed value's preview. It keeps naming the
+      // committed face the pick came from. Its quantity still comes from the
+      // face on screen, since an offset can change a face's boundary (a
+      // tapered or imported part); while the preview has none to give, the
+      // line holds a placeholder rather than leaving and shifting the card.
+      // Other edits (a cylinder's radius, a fillet's) name and measure from
+      // the preview: their figure is the dragged value, which the viewer
+      // writes into the label live.
       const sourceBody =
         currentFaceGeometryPreview &&
         offsettingFace &&
@@ -6868,17 +6871,22 @@ export function App() {
         sourceBody !== undefined &&
         selectedTopology !== null &&
         resolveFace(sourceBody, selectedTopology).ok;
-      const shownTopology =
+      const namingTopology =
         fromSource && selectedTopology
           ? selectedTopology
           : renderedSelectedTopology;
-      const body = fromSource
+      const namingBody = fromSource
         ? sourceBody
         : renderedRepresentations[renderedSelectedTopology.bodyId];
+      const measuredBody = fromSource
+        ? currentFaceGeometryPreview?.geometry.bodyRepresentations[
+            renderedSelectedTopology.bodyId
+          ]
+        : namingBody;
       // Through the shared fail-closed resolver rather than a local `find`, so
       // the chip cannot print a confident figure for a pick the measurement
       // tape is simultaneously refusing as ambiguous.
-      const resolved = resolveFace(body, shownTopology);
+      const resolved = resolveFace(measuredBody, renderedSelectedTopology);
       const geometry = resolved.ok ? resolved.entry.geometry : undefined;
       if (
         geometry?.featureType === 'through-hole' &&
@@ -6890,7 +6898,7 @@ export function App() {
           detail: value
         };
       }
-      const label = topologySelectionLabelSegments(body, shownTopology);
+      const label = topologySelectionLabelSegments(namingBody, namingTopology);
       // A cylinder is the other pick that carries a number of its own; every
       // other face kind has a name but nothing to measure yet.
       const cylinderDiameter =
@@ -6902,7 +6910,9 @@ export function App() {
             ? `Ø ${round(cylinderDiameter)} ${units}`
             : geometry?.area !== undefined
               ? `${formatMeasuredQuantity(geometry.area)} ${units}²`
-              : undefined
+              : fromSource
+                ? `— ${units}²`
+                : undefined
       };
     }
     if (selectedBodyIds.length > 1) {
