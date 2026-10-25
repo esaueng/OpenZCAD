@@ -19277,11 +19277,15 @@ export function App() {
     request: InPlaceRequest,
     edit: InPlaceEditSeed
   ): BodyId | undefined {
-    return request.tool === 'transform' &&
-      edit.data.featureKind === 'transform' &&
-      !edit.data.copy
-      ? request.targetBodyId
-      : edit.resultBodyId;
+    if (request.tool !== 'transform') return edit.resultBodyId;
+    // Whether it copies is the request's, as the reseed left it (an update
+    // may have turned an in-place Scale into a copy, or back): a copy's
+    // result is the feature's own body, as the document has it now.
+    if (!request.copy) return request.targetBodyId;
+    const live = managerRef.current
+      ? findFeature(managerRef.current.document, edit.featureId)
+      : null;
+    return live?.bodyId ?? edit.resultBodyId;
   }
   /** A body as an in-place command's body slot holds it, with its box. */
   function inPlaceBodyPick(bodyId: BodyId): BodyPick | null {

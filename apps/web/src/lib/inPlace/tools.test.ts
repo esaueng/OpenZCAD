@@ -642,6 +642,29 @@ describe('review: values the cards accepted stay expressible', () => {
     }
   });
 
+  it("a slid stored plane keeps each coordinate's text, adding to the one it moves", () => {
+    const plane = {
+      kind: 'saved' as const,
+      origin: { x: 20, y: 0, z: 3 },
+      normal: { x: 0, y: 0, z: 1 },
+      fields: {
+        origin: { x: 'width', y: '0', z: 'h' },
+        normal: { x: '0', y: '0', z: '1' }
+      }
+    };
+    const slots = { ...EMPTY, bodies: [BODY], plane };
+    const origin = (offset: number | string) =>
+      (
+        IN_PLACE_TOOL_SPECS.mirror.request(slots, { offset }, {}, CTX, {
+          offset: typeof offset === 'number' ? offset : 5
+        }) as { state: { value: { origin: unknown } } }
+      ).state.value.origin;
+    expect(origin(5)).toEqual({ x: 'width', y: '0', z: 'h + 5' });
+    expect(origin('gap')).toEqual({ x: 'width', y: '0', z: 'h + (gap)' });
+    // Untouched, it is as stored.
+    expect(origin(0)).toEqual({ x: 'width', y: '0', z: 'h' });
+  });
+
   it('a typed mirror offset stays an expression in the coordinate it moves', () => {
     const request = IN_PLACE_TOOL_SPECS.mirror.request(
       {

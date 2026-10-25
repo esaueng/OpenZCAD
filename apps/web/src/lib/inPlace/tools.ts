@@ -1893,34 +1893,51 @@ function offsetPlane(plane: PlanePick, offset: number): PlanePick {
 
 /**
  * A picked plane slid `offset` along its normal, as the card's plane fields.
- * A typed expression stays an expression in each coordinate it moves.
+ * A typed offset stays an expression in each coordinate it moves; a plane
+ * stored by its fields keeps them as written, each coordinate the slide
+ * does not move untouched and each it moves composed from its own text.
  */
 function offsetPlaneFields(
   plane: PlanePick,
   offset: ParamValue | undefined
 ): ReturnType<typeof planeFields> {
-  if (offset === undefined || typeof offset === 'number') {
-    return planeFields(offsetPlane(plane, offset ?? 0));
-  }
   if (plane.kind === 'datum') return planeFields(plane);
+  const amount = offset ?? 0;
+  if (amount === 0) return planeFields(plane);
+  if (plane.kind !== 'saved' && typeof amount === 'number') {
+    return planeFields(offsetPlane(plane, amount));
+  }
   const normal = unit(plane.normal);
-  const along = (origin: number, n: number): string => {
-    if (Math.abs(n) < 1e-12) return String(origin);
-    const term =
-      Math.abs(n - 1) < 1e-12
-        ? `(${offset})`
-        : Math.abs(n + 1) < 1e-12
-          ? `-(${offset})`
-          : `(${offset}) * ${n}`;
-    return origin === 0 ? term : `${origin} + ${term}`;
+  const base = (axis: 'x' | 'y' | 'z') =>
+    plane.kind === 'saved'
+      ? plane.fields.origin[axis]
+      : String(plane.origin[axis]);
+  const term = (n: number): string => {
+    if (typeof amount === 'number') return String(amount * n);
+    return Math.abs(n - 1) < 1e-12
+      ? `(${amount})`
+      : Math.abs(n + 1) < 1e-12
+        ? `-(${amount})`
+        : `(${amount}) * ${n}`;
+  };
+  const along = (axis: 'x' | 'y' | 'z'): string => {
+    const n = normal[axis];
+    const from = base(axis);
+    if (Math.abs(n) < 1e-12) return from;
+    // Plain numbers on both sides add up; text is kept and added to.
+    const literal = Number(from);
+    if (
+      typeof amount === 'number' &&
+      from.trim() !== '' &&
+      Number.isFinite(literal)
+    ) {
+      return String(literal + amount * n);
+    }
+    return from.trim() === '0' ? term(n) : `${from} + ${term(n)}`;
   };
   return {
     ...planeFields(plane),
-    origin: {
-      x: along(plane.origin.x, normal.x),
-      y: along(plane.origin.y, normal.y),
-      z: along(plane.origin.z, normal.z)
-    }
+    origin: { x: along('x'), y: along('y'), z: along('z') }
   };
 }
 
