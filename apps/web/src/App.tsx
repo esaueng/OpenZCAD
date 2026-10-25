@@ -23444,7 +23444,15 @@ export function App() {
       />
     </div>
   ) : settingsOpen ? (
-    <div className="settings-pending" aria-busy="true" />
+    // Settings is already the open dialog — a tab restoring it, or a test,
+    // finds it at once — just not drawn until its page can be.
+    <div
+      className="settings-pending"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Settings"
+      aria-busy="true"
+    />
   ) : null;
 
   if (!doc) {

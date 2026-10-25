@@ -38,7 +38,7 @@ test('Settings and Move open complete the first time', async ({ page }) => {
     const sample = () => {
       const tally = window.__firstUse!;
       const settings = document.querySelector(
-        '[role="dialog"][aria-label*="Settings"], .settings-page'
+        '[role="dialog"][aria-label*="Settings"]:not([aria-busy="true"]), .settings-page'
       );
       if (settings && !/Settings/.test((settings as HTMLElement).innerText))
         tally.settingsBlank += 1;
@@ -91,7 +91,7 @@ test('Settings opened before the warm-up never shows an empty overlay', async ({
     window.__firstUse = { settingsBlank: 0, moveGap: 0, moving: false };
     const sample = () => {
       const settings = document.querySelector(
-        '[role="dialog"][aria-label*="Settings"]'
+        '[role="dialog"][aria-label*="Settings"]:not([aria-busy="true"])'
       );
       if (settings && !/Settings/.test((settings as HTMLElement).innerText))
         window.__firstUse!.settingsBlank += 1;
