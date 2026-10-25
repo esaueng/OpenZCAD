@@ -134,6 +134,26 @@ export interface E2eeProjectKeysResponse {
   more: boolean;
 }
 
+/**
+ * `POST /api/e2ee/projects/:id/keys` (slice 5-2): a member's browser posts
+ * its own account-wrapped project key and rejoin PSK for an epoch it
+ * reached by processing someone else's Commit (decision D1), so its other
+ * devices can read and rejoin. Only ever the caller's own wraps; a wrap
+ * already stored is kept, never replaced.
+ */
+export interface E2eeProjectKeyUploadRequest {
+  /** The posting device, certified in the caller's newest device list. */
+  deviceId: string;
+  keyEpoch: number;
+  /** One project-key and one rejoin-psk wrap for `keyEpoch`. */
+  wraps: E2eeProjectKeyWrap[];
+}
+
+export interface E2eeProjectKeyUploadResponse {
+  /** The caller's wraps for that key epoch, as stored. */
+  wraps: E2eeProjectKeyWrap[];
+}
+
 export interface E2eeKeyArchivesResponse {
   archives: E2eeKeyArchiveRecord[];
   more: boolean;

@@ -28,7 +28,7 @@ import {
 import { parseEnvelope, toHex, versionHash } from '@openzcad/crypto';
 import { projectBucket } from './e2ee';
 import { blobBucket } from './e2eeContentBlobs';
-import { RouteError, requireOwnedEncryptedProject } from './e2eeProjects';
+import { RouteError, requireEncryptedProjectAccess } from './e2eeProjects';
 import { roomVersionStore } from './e2eeProjectDocuments';
 import { sessionHashWriteAuthorization } from './e2eeWriteAuthorization';
 import { assertPlaintextRoomAccess } from './projectFormatGate';
@@ -179,7 +179,15 @@ export function e2eeRoomAccount(env: CloudflareEnv): E2eeRoomAccount | null {
         };
       }
       try {
-        await requireOwnedEncryptedProject(db, input.userId, input.projectId);
+        // The same storage access as the document route (slice 5-2): the
+        // owner or an editor. Who reaches the room is still the owner only
+        // (`encryptedRoomHeaders`); members arrive with slice 5-6.
+        await requireEncryptedProjectAccess(
+          db,
+          input.userId,
+          input.projectId,
+          'write'
+        );
         const saved = await roomVersionStore.writeVersion(
           {
             db,

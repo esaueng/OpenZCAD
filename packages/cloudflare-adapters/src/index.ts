@@ -4260,8 +4260,8 @@ export class D1R2PersistenceService implements PersistenceService {
 
   // --- Encrypted content blobs (ADR-024 Phase 4, migration 0034) ----------
 
-  /** The owner's access to an encrypted project, or the refusal. */
-  private async requireEncryptedBlobOwner(
+  /** The owner's or an editor's access to an encrypted project, or the refusal. */
+  private async requireEncryptedBlobWriter(
     userId: UserId,
     projectId: string
   ): Promise<ProjectAccess> {
@@ -4272,8 +4272,8 @@ export class D1R2PersistenceService implements PersistenceService {
         'Encrypted files are unavailable until the database is updated.'
       );
     }
+    // The owner or an editor (slice 5-2; viewers are refused as not found).
     const access = await this.requireProjectEdit(userId, projectId);
-    if (access.role !== 'owner') throw new ProjectNotFoundError(projectId);
     if (isPlaintextStorageFormat(access.storageFormat)) {
       throw new EncryptedBlobError(
         409,
@@ -4337,7 +4337,7 @@ export class D1R2PersistenceService implements PersistenceService {
     request: { projectId: string; blobId: string; kind: string },
     authorization: { sql: string; binds: readonly unknown[] }
   ): Promise<EncryptedBlobUploadResult> {
-    const access = await this.requireEncryptedBlobOwner(
+    const access = await this.requireEncryptedBlobWriter(
       userId,
       request.projectId
     );
@@ -4412,6 +4412,10 @@ export class D1R2PersistenceService implements PersistenceService {
              WHERE id = ? AND user_id = ? AND storage_format = 2
                AND status <> 'deleted'
                AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id)
+               AND (user_id = ? OR EXISTS (
+                 SELECT 1 FROM project_members m
+                 WHERE m.project_id = projects.id AND m.user_id = ?
+                   AND m.role = 'editor'))
            )`
         )
         .bind(
@@ -4426,7 +4430,9 @@ export class D1R2PersistenceService implements PersistenceService {
           request.kind,
           ...authorization.binds,
           request.projectId,
-          access.ownerUserId
+          access.ownerUserId,
+          userId,
+          userId
         )
         .run();
       if (inserted.meta?.changes !== 1) {
@@ -4478,7 +4484,7 @@ export class D1R2PersistenceService implements PersistenceService {
     authorization: { sql: string; binds: readonly unknown[] },
     inspect: (head: Uint8Array, size: number, kind: string) => void
   ): Promise<EncryptedBlobRecord> {
-    const access = await this.requireEncryptedBlobOwner(
+    const access = await this.requireEncryptedBlobWriter(
       userId,
       request.projectId
     );
@@ -4554,6 +4560,10 @@ export class D1R2PersistenceService implements PersistenceService {
       WHERE id = ? AND user_id = ? AND storage_format = 2
         AND status <> 'deleted'
         AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id)
+        AND (user_id = ? OR EXISTS (
+          SELECT 1 FROM project_members m
+          WHERE m.project_id = projects.id AND m.user_id = ?
+            AND m.role = 'editor'))
     ) AND ${authorization.sql}`;
     const fenceBinds = [
       request.uploadSessionId,
@@ -4564,6 +4574,8 @@ export class D1R2PersistenceService implements PersistenceService {
       stored.size,
       request.projectId,
       access.ownerUserId,
+      userId,
+      userId,
       ...authorization.binds
     ];
     const createdAt = nowIso();

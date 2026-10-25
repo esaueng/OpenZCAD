@@ -8,7 +8,11 @@
  * - `PUT /api/e2ee/revocation-cutoffs`: store the statement of one revoking
  *   device-list entry. A later statement for the same entry may replace it
  *   only if every project keeps a cutoff no lower.
- * - `GET /api/e2ee/projects/:id/mls/resets`: the project's recorded resets.
+ * - `GET /api/e2ee/projects/:id/mls/resets`: the project's recorded resets,
+ *   for any member (slice 5-2).
+ * - `GET /api/e2ee/projects/:id/revocation-cutoffs` (slice 5-2): the other
+ *   members' statements, the owner's included, for a member's browser to
+ *   give their revoked devices cutoffs.
  * - `POST /api/e2ee/projects/:id/mls/reset`: replace a solo project's MLS
  *   group under an identity-signed reset. The group's generation and
  *   key-epoch base move on (decision D10: key epochs keep rising), the old
@@ -38,6 +42,7 @@ import {
 import type {
   E2eeGroupResetRecord,
   E2eeGroupResetsResponse,
+  E2eeMemberRevocationCutoffsResponse,
   E2eeProjectGroupResponse,
   E2eeRemovalProjectRecord,
   E2eeRevocationCutoffRecord,
@@ -70,6 +75,7 @@ import {
   refuse,
   refuseDeviceListMoved,
   requireCertifiedDevice,
+  requireEncryptedProjectAccess,
   requireOwnedEncryptedProject,
   runBatch,
   uintField,
@@ -80,9 +86,16 @@ import {
 export const REVOCATION_CUTOFFS_ROUTE = '/api/e2ee/revocation-cutoffs';
 const RESET_ROUTE = /^\/api\/e2ee\/projects\/([^/]+)\/mls\/(reset|resets)$/;
 
+const MEMBER_CUTOFFS_ROUTE =
+  /^\/api\/e2ee\/projects\/([^/]+)\/revocation-cutoffs$/;
+
 /** The routes this module serves. */
 export function isE2eeDeviceRemovalPath(pathname: string): boolean {
-  return pathname === REVOCATION_CUTOFFS_ROUTE || RESET_ROUTE.test(pathname);
+  return (
+    pathname === REVOCATION_CUTOFFS_ROUTE ||
+    RESET_ROUTE.test(pathname) ||
+    MEMBER_CUTOFFS_ROUTE.test(pathname)
+  );
 }
 
 /** A statement naming every project at its longest, in base64url. */
@@ -627,22 +640,34 @@ export async function handleE2eeDeviceRemovalRequest(
       }
       refuse(404, 'NOT_FOUND', 'Not found.');
     }
-    const match = RESET_ROUTE.exec(url.pathname)!;
+    const match =
+      RESET_ROUTE.exec(url.pathname) ??
+      MEMBER_CUTOFFS_ROUTE.exec(url.pathname)!;
     let projectId: string;
     try {
       projectId = decodeURIComponent(match[1]!);
     } catch {
       refuse(404, 'PROJECT_NOT_FOUND', 'Project not found.');
     }
-    const route = match[2];
+    const route = match[2] ?? 'revocation-cutoffs';
     if (
       !(route === 'resets' && method === 'GET') &&
-      !(route === 'reset' && method === 'POST')
+      !(route === 'reset' && method === 'POST') &&
+      !(route === 'revocation-cutoffs' && method === 'GET')
     ) {
       refuse(404, 'NOT_FOUND', 'Not found.');
     }
+    if (method === 'GET') {
+      // Any member reads the recorded resets and the other members'
+      // cutoff statements (slice 5-2); browsers verify every statement.
+      await requireEncryptedProjectAccess(db, userId, projectId, 'read', {
+        allowDeleted: true
+      });
+      return route === 'resets'
+        ? await listResets(db, projectId)
+        : await listMemberCutoffs(db, userId, projectId);
+    }
     await requireOwnedEncryptedProject(db, userId, projectId);
-    if (route === 'resets') return await listResets(db, projectId);
     return await resetGroup(
       db,
       userId,
@@ -659,6 +684,38 @@ export async function handleE2eeDeviceRemovalRequest(
     }
     throw error;
   }
+}
+
+/**
+ * `GET /api/e2ee/projects/:id/revocation-cutoffs` (slice 5-2): every
+ * statement of the project's other members, its owner included, so a
+ * member's browser can give their revoked devices cutoffs. The caller's
+ * own come from `GET /api/e2ee/revocation-cutoffs`.
+ */
+async function listMemberCutoffs(
+  db: D1Database,
+  userId: string,
+  projectId: string
+): Promise<Response> {
+  const { results } = await db
+    .prepare(
+      `SELECT c.user_id, c.generation, c.entry_sequence, c.entry_hash,
+              c.statement, c.signature, c.updated_at
+       FROM e2ee_revocation_cutoffs c
+       WHERE c.user_id <> ?
+         AND (c.user_id = (SELECT user_id FROM projects WHERE id = ?)
+              OR c.user_id IN (SELECT user_id FROM project_members
+                               WHERE project_id = ?))
+       ORDER BY c.user_id, c.generation, c.entry_sequence`
+    )
+    .bind(userId, projectId, projectId)
+    .all<CutoffRow & { user_id: string }>();
+  return json({
+    statements: (results ?? []).map((row) => ({
+      userId: row.user_id,
+      ...cutoffRecord(row)
+    }))
+  } satisfies E2eeMemberRevocationCutoffsResponse);
 }
 
 /**
