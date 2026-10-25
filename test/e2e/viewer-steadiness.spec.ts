@@ -108,11 +108,20 @@ test('a normal-to-face glide does not replay when the bodies change later', asyn
       )
     )
     .not.toBeNull();
+  const viewDirection = (pose: CameraState) => {
+    const direction = pose.position.map(
+      (value, axis) => value - pose.target[axis]!
+    );
+    const length = Math.hypot(...direction);
+    return direction.map((value) => value / length);
+  };
+  const faceOn = (pose: CameraState) => Math.abs(viewDirection(pose)[2]!);
   await page.keyboard.press('Space');
-  await expect(page.getByRole('contentinfo')).toContainText(
-    'viewing normal to face'
-  );
-  await page.waitForTimeout(900);
+  // The glide ends looking straight down the face normal.
+  await expect
+    .poll(async () => faceOn(await camera(canvas)), { timeout: 15_000 })
+    .toBeGreaterThan(0.999);
+  await page.waitForTimeout(300);
 
   // Turn away from the face, pressing on empty canvas (the armed face would
   // take the press as a push/pull).
@@ -137,12 +146,6 @@ test('a normal-to-face glide does not replay when the bodies change later', asyn
       return moved;
     })
     .toBeLessThan(1e-6);
-  const faceOn = (pose: CameraState) => {
-    const direction = pose.position.map(
-      (value, axis) => value - pose.target[axis]!
-    );
-    return Math.abs(direction[2]!) / Math.hypot(...direction);
-  };
   // Turned well away from looking straight down the face normal.
   expect(faceOn(turned)).toBeLessThan(0.99);
 
@@ -153,11 +156,15 @@ test('a normal-to-face glide does not replay when the bodies change later', asyn
   await expectBodyCount(page, 1);
   await page.waitForTimeout(1000);
   const after = await camera(canvas);
+  // Not glided back to the face: still looking the way it was turned (a
+  // re-frame may nudge the distance, not the direction).
   expect(faceOn(after)).toBeLessThan(0.99);
-  for (const field of ['position', 'target'] as const)
-    after[field].forEach((value, axis) =>
-      expect(value).toBeCloseTo(turned[field][axis]!, 3)
-    );
+  const before = viewDirection(turned);
+  const alignment = viewDirection(after).reduce(
+    (sum, value, axis) => sum + value * before[axis]!,
+    0
+  );
+  expect(alignment).toBeGreaterThan(0.9999);
 });
 
 test('the edge radius handle is not rebuilt when its keypad opens or a preview lands', async ({
@@ -207,6 +214,43 @@ test('the edge radius handle is not rebuilt when its keypad opens or a preview l
     .toBeGreaterThan(0);
   await page.waitForTimeout(300);
   expect(await builds()).toBe(armed);
+});
+
+test('hiding a body takes its armed edge handle with it', async ({ page }) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  await newProject(page, 'Edge handle hidden body');
+  await addBox(page);
+  const canvas = page.locator('.viewer-host canvas');
+  await expect
+    .poll(
+      () =>
+        canvas.evaluate(
+          (element) =>
+            new Promise<boolean>((resolve) => {
+              setTimeout(() => resolve(false), 1500);
+              element.dispatchEvent(
+                new CustomEvent('openzcad:e2e-select-edge', {
+                  detail: {
+                    resolve: (selection: unknown) => resolve(selection !== null)
+                  }
+                })
+              );
+            })
+        ),
+      { timeout: 30_000 }
+    )
+    .toBe(true);
+  await expect(canvas).toHaveAttribute(
+    'data-e2e-chip-anchor-rig',
+    'edge-radius'
+  );
+  await expect(page.getByTestId('direct-manipulation-value')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Hide body Box 1' }).click();
+  await expectBodyCount(page, 0);
+  // No handle left floating where the hidden body was, to edit it unseen.
+  await expect(page.getByTestId('direct-manipulation-value')).toBeHidden();
+  await expect(canvas).not.toHaveAttribute('data-e2e-handle-x', /.+/);
 });
 
 test('the cylinder radius handle stays on screen while its release validates', async ({

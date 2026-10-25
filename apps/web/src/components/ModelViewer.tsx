@@ -12008,11 +12008,12 @@ export function ModelViewer({
       context.requestRender();
       return;
     }
+    // A hidden, consumed or deleted body takes its handle with it.
+    const body = bodies.find(
+      (candidate) => candidate.bodyId === edgeHandle.bodyId
+    );
     let placement = edgeHandle.placement ?? null;
     if (!placement) {
-      const body = bodies.find(
-        (candidate) => candidate.bodyId === edgeHandle.bodyId
-      );
       const edge = body?.topology?.edges.find(
         (candidate) => candidate.topologyId === edgeHandle.topologyId
       );
@@ -12033,8 +12034,11 @@ export function ModelViewer({
       previous !== null &&
       built !== null &&
       sameEdgeHandleTarget(built.handle, edgeHandle);
+    // A missing edge on a body still shown is a preview's topology: keep the
+    // frame. A missing body is not.
     if (
       sameTarget &&
+      body !== undefined &&
       (!placement || sameEdgeRigPlacement(built.placement, placement))
     ) {
       built.handle = edgeHandle;
@@ -12050,12 +12054,12 @@ export function ModelViewer({
     if (previous) {
       // A new frame for the same edge takes over at once; another edge or
       // tool fades the old handle out as before.
-      if (sameTarget) previous.dispose();
+      if (sameTarget && body) previous.dispose();
       else retireRig(previous, retiringRigsRef.current);
     }
     edgeRigRef.current = null;
     edgeRigBuiltRef.current = null;
-    if (!placement) {
+    if (!placement || !body) {
       context.requestRender();
       return;
     }
