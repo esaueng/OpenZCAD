@@ -8248,9 +8248,12 @@ export function App() {
       face: (bodyId, hash) =>
         inPlaceFacePick(bodyId, undefined, hash, undefined),
       anyFace: (bodyId) => {
-        const face = representations[bodyId]?.topology?.faces.find(
-          (candidate) => candidate.geometry?.surfaceType === 'plane'
-        );
+        // A flat face carries the handle best; a body with none (a sphere)
+        // still names itself by any face it has.
+        const faces = representations[bodyId]?.topology?.faces ?? [];
+        const face =
+          faces.find((candidate) => candidate.geometry?.surfaceType === 'plane') ??
+          faces[0];
         return face
           ? inPlaceFacePick(bodyId, face.topologyId, face.hash, undefined)
           : null;
@@ -18917,11 +18920,18 @@ export function App() {
     if (!doc || !inPlaceSpec?.wantsPath) return null;
     const resolve = sketchValueResolver(parameterScope.scope, doc.units);
     // Every sketch's curves, the profile's own included: one sketch may hold
-    // both a closed profile and the open spine it sweeps along.
-    return sketchCurveCandidates(doc, availableSketchViews, (value) =>
-      resolve(value)
-    );
-  }, [doc, inPlaceSpec, availableSketchViews, parameterScope]);
+    // both a closed profile and the open spine it sweeps along. An edit
+    // offers only sketches made before its feature, as it takes profiles.
+    const views = inPlaceEditing
+      ? availableSketchViews.filter((view) =>
+          featurePrecedes(
+            producingFeatureOf({ sketchId: view.sketchId }),
+            inPlaceEditing.featureId
+          )
+        )
+      : availableSketchViews;
+    return sketchCurveCandidates(doc, views, (value) => resolve(value));
+  }, [doc, inPlaceSpec, availableSketchViews, parameterScope, inPlaceEditing]);
   const inPlaceCurvePicker = useMemo(
     () =>
       inPlaceCurveCandidates
