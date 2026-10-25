@@ -312,6 +312,27 @@ describe('useInPlaceCommand: revolve', () => {
     expect(commit).not.toHaveBeenCalled();
   });
 
+  it('takes the last good frame down when a later value is refused', async () => {
+    let builds = true;
+    const { hook, publishPreview } = setup({
+      buildCommand: () => ({
+        validate: () => undefined,
+        apply: () => fakeDocument(builds),
+        resultBodyId: BODY
+      })
+    });
+    act(() => hook.result.current.start('revolve', [PICK]));
+    act(() => hook.result.current.pickAxis('sketch-vertical'));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(publishPreview).toHaveBeenLastCalledWith(expect.anything());
+    builds = false;
+    act(() => hook.result.current.setValue('angle', 90));
+    await waitFor(() =>
+      expect(hook.result.current.refusal).toMatch(/not a closed profile/)
+    );
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+  });
+
   it('keeps the axis for another region of the same sketch', () => {
     const { hook } = setup();
     act(() => hook.result.current.start('revolve', [PICK]));

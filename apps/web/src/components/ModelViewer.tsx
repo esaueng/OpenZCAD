@@ -212,6 +212,7 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
+import { isBehindCamera } from '../lib/cameraDepth';
 import {
   chipPanelDodge,
   edgeChipCenterX,
@@ -4064,10 +4065,10 @@ export function ModelViewer({
         // and its chip is kept on the canvas so it can be tapped to fix it.
         // A handle drawn out past the camera (a large value along a direction
         // that faces the viewer) puts its chip at the handle's base instead.
+        // Behind is nearer than the near plane, in either projection: an
+        // orthographic view draws nothing there either, whatever it projects.
         const camera = context.activeCamera;
-        const behind = (point: THREE.Vector3) =>
-          (camera as THREE.PerspectiveCamera).isPerspectiveCamera === true &&
-          point.clone().applyMatrix4(camera.matrixWorldInverse).z > 0;
+        const behind = (point: THREE.Vector3) => isBehindCamera(point, camera);
         const placed =
           behind(anchor) && entry.rig ? entry.rig.group.position : anchor;
         if (behind(placed)) {

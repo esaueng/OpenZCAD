@@ -364,6 +364,9 @@ export function useInPlaceCommand(
             derived: result.derived
           });
         } else {
+          // The last frame that built is not this request: left on screen
+          // under the refusal, it reads as the value that was refused.
+          optionsRef.current.publishPreview(null);
           setRefusal(
             fresh ??
               result.derived.warnings.at(-1) ??
@@ -373,6 +376,7 @@ export function useInPlaceCommand(
       },
       onFailure: ({ error }) => {
         setPreviewValid(false);
+        optionsRef.current.publishPreview(null);
         setRefusal(
           error instanceof Error ? error.message : 'Unable to preview this.'
         );
