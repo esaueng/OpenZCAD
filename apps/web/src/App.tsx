@@ -6756,6 +6756,9 @@ export function App() {
     }
     return findSketch(doc, selectedFeature.data.sketchId) ?? null;
   }, [doc, selectedFeature]);
+  /** What a Move launched now would target, read live by a held launch. */
+  const moveSourceRef = useRef('');
+  moveSourceRef.current = `${selectedBodyIds.join(',')}|${selectedSketch?.sketchId ?? ''}`;
 
   const selectedSketchObject = useMemo<SketchObjectData | null>(() => {
     if (!doc || !selectedSketch) {
@@ -8212,8 +8215,12 @@ export function App() {
       !panelLoadSettled &&
       !LazyMoveOverlay.isLoaded()
     ) {
+      // The launch belongs to the selection it was made from: one cleared or
+      // replaced while the panel loaded abandons it.
+      const source = moveSourceRef.current;
       const relaunch = () => {
         if (toolLaunchRef.current !== launch) return;
+        if (moveSourceRef.current !== source) return;
         viewportMenuHandlersRef.current.launchTool(
           nextTool,
           modelingFeature,

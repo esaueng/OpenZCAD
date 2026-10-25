@@ -153,3 +153,34 @@ test('Move launched before its panel loads keeps the selection card up', async (
   await page.waitForTimeout(300);
   expect(await page.evaluate(() => window.__firstUse?.moveGap)).toBe(0);
 });
+
+test('a Move held for its panel is dropped when its selection is cleared', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  await page.route(/MoveOverlay[^/]*\.(js|tsx)(\?|$)/, async (route) => {
+    await released;
+    await route.continue();
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Abandoned move');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await selectBodyFromObjects(page);
+  await page
+    .getByRole('button', { name: 'Selection: Move', exact: true })
+    .click();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.selection-card')).toHaveCount(0);
+  release();
+  await page.waitForTimeout(1_000);
+  await expect(page.locator('form[aria-label="Move controls"]')).toHaveCount(0);
+});
