@@ -1,7 +1,7 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { formatMeasurement, type Measurement } from '../lib/measurements';
-import { MeasurementDock } from './MeasurementDock';
+import { MEASUREMENT_UPDATING_MS, MeasurementDock } from './MeasurementDock';
 
 function measurement(): Measurement {
   return {
@@ -63,7 +63,16 @@ function renderDock(
 
 describe('MeasurementDock', () => {
   it('marks saved rows updating and disables copies and CSV while analysis is pending', () => {
+    vi.useFakeTimers();
     const { props, container } = renderDock({ geometryPending: true });
+    // Held from the first frame, so no stale value can be copied out...
+    expect(screen.getByRole('button', { name: 'Copy all' })).toBeDisabled();
+    // ...but only marked once the update has taken visible time.
+    expect(screen.queryByText('updating')).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(MEASUREMENT_UPDATING_MS);
+    });
+    vi.useRealTimers();
     expect(screen.getByText('updating')).toBeVisible();
     expect(screen.getByText('Updating…')).toBeVisible();
     expect(container.querySelector('.measurement-row')).toHaveClass('stale');
@@ -76,6 +85,27 @@ describe('MeasurementDock', () => {
     expect(props.onCopy).not.toHaveBeenCalled();
     expect(props.onExport).not.toHaveBeenCalled();
     expect(props.measurements[0]!.status).toBe('current');
+  });
+
+  it('never flashes "Updating…" for an update that finishes at once', () => {
+    vi.useFakeTimers();
+    const { rerender, props, container } = renderDock();
+    rerender(<MeasurementDock {...props} geometryPending />);
+    act(() => {
+      vi.advanceTimersByTime(MEASUREMENT_UPDATING_MS - 1);
+    });
+    expect(screen.queryByText('Updating…')).toBeNull();
+    expect(container.querySelector('.measurement-dock')).toHaveAttribute(
+      'data-busy',
+      'quiet'
+    );
+    rerender(<MeasurementDock {...props} geometryPending={false} />);
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    vi.useRealTimers();
+    expect(screen.queryByText('Updating…')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Copy all' })).toBeEnabled();
   });
 
   it('exposes explicit Smart, Distance, and Angle workflows', () => {

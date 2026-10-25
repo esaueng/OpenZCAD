@@ -881,6 +881,12 @@
   background: var(--color-surface-hover);
 }
 
+/* Held, not dimmed, through an update that has not yet taken visible time:
+   most finish within a frame or two (see MeasurementDock). */
+.measurement-dock[data-busy='quiet'] button:disabled {
+  opacity: 1;
+}
+
 @media (max-width: 620px) {
   /* Icons alone carry the modes when the bar has no room for labels; the
      title tooltip still names each one. */

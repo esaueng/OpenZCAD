@@ -2,6 +2,7 @@ import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import { OVERLAY_EXIT_MS } from '../hooks/useDelayedUnmount';
 import { STATUS_MIN_DWELL_MS } from '../hooks/usePacedStatus';
 import {
   STATUS_CLOCK_STEP_MS,
@@ -287,6 +288,56 @@ describe('WorkspaceReadout message lifetime', () => {
         vi.advanceTimersByTime(2 * STATUS_CLOCK_STEP_MS);
       });
       expect(toast).toHaveClass('hidden');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the message in the pill while it fades out', () => {
+    vi.useFakeTimers();
+    try {
+      render(readout('Deleted Boss bore.', Date.now()));
+      const toast = screen.getByRole('contentinfo');
+      act(() => {
+        vi.advanceTimersByTime(STATUS_LIFETIME_MS + STATUS_CLOCK_STEP_MS);
+      });
+      // The fade has started; the words have not left before it ran.
+      expect(toast).toHaveClass('hidden');
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Deleted Boss bore.'
+      );
+      act(() => {
+        vi.advanceTimersByTime(OVERLAY_EXIT_MS);
+      });
+      expect(screen.getByRole('status')).toHaveTextContent('');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not bring back a settled message an action toast already said', () => {
+    vi.useFakeTimers();
+    try {
+      const at = Date.now();
+      const view = (actionToastOpen: boolean) => (
+        <WorkspaceReadout
+          status="Deleted Boss bore."
+          statusAt={at}
+          tone="ready"
+          logOpen={false}
+          onToggleLog={vi.fn()}
+          actionToastOpen={actionToastOpen}
+          {...SUMMARY}
+        />
+      );
+      const { rerender } = render(view(true));
+      act(() => {
+        vi.advanceTimersByTime(STATUS_LIFETIME_MS - 1000);
+      });
+      // The Undo toast leaves before the message's own lifetime is up: the
+      // message used to return for that last second, and the lane with it.
+      rerender(view(false));
+      expect(screen.getByRole('contentinfo')).toHaveClass('hidden');
     } finally {
       vi.useRealTimers();
     }

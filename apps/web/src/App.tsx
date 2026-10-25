@@ -6837,11 +6837,31 @@ export function App() {
       };
     }
     if (renderedSelectedTopology?.kind === 'face') {
-      const body = renderedRepresentations[renderedSelectedTopology.bodyId];
+      // While a face preview is on screen the pick resolves to the preview's
+      // face, whose names and quantities are not computed: the card read
+      // "Face" with no area for the whole of a typed value's preview. It
+      // keeps naming the committed face the pick came from.
+      const sourceBody =
+        currentFaceGeometryPreview &&
+        selectedTopology?.kind === 'face' &&
+        selectedTopology.bodyId === renderedSelectedTopology.bodyId
+          ? representations[selectedTopology.bodyId]
+          : undefined;
+      const fromSource =
+        sourceBody !== undefined &&
+        selectedTopology !== null &&
+        resolveFace(sourceBody, selectedTopology).ok;
+      const shownTopology =
+        fromSource && selectedTopology
+          ? selectedTopology
+          : renderedSelectedTopology;
+      const body = fromSource
+        ? sourceBody
+        : renderedRepresentations[renderedSelectedTopology.bodyId];
       // Through the shared fail-closed resolver rather than a local `find`, so
       // the chip cannot print a confident figure for a pick the measurement
       // tape is simultaneously refusing as ambiguous.
-      const resolved = resolveFace(body, renderedSelectedTopology);
+      const resolved = resolveFace(body, shownTopology);
       const geometry = resolved.ok ? resolved.entry.geometry : undefined;
       if (
         geometry?.featureType === 'through-hole' &&
@@ -6853,10 +6873,7 @@ export function App() {
           detail: value
         };
       }
-      const label = topologySelectionLabelSegments(
-        body,
-        renderedSelectedTopology
-      );
+      const label = topologySelectionLabelSegments(body, shownTopology);
       // A cylinder is the other pick that carries a number of its own; every
       // other face kind has a name but nothing to measure yet.
       const cylinderDiameter =
@@ -6899,7 +6916,10 @@ export function App() {
     renderedSelectedTopology,
     selectedBodyIds,
     renderedRepresentations,
-    currentGeometrySnapshot
+    currentGeometrySnapshot,
+    currentFaceGeometryPreview,
+    selectedTopology,
+    representations
   ]);
 
   const {
@@ -26322,6 +26342,7 @@ export function App() {
             warningCount={diagnostics.length}
             documentVersion={doc.version}
             saveState={presentedSaveState}
+            actionToastOpen={toast !== null}
             searchBar={
               <CommandBar
                 commands={paletteCommands}

@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode, type RefObject } from 'react';
 import { Magnet, ScrollText } from 'lucide-react';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
+import { OVERLAY_EXIT_MS, useDelayedUnmount } from '../hooks/useDelayedUnmount';
 import { usePacedStatus } from '../hooks/usePacedStatus';
 import {
   advanceStatusClock,
@@ -65,6 +66,11 @@ interface WorkspaceReadoutProps {
    * commands or ask the assistant, under the guidance line.
    */
   searchBar: ReactNode;
+  /**
+   * An action toast (Undo) is up. A settled status it already repeats steps
+   * aside for good, rather than returning for a moment as the toast leaves.
+   */
+  actionToastOpen?: boolean;
 }
 
 /**
@@ -89,7 +95,8 @@ export function WorkspaceReadout({
   warningCount,
   documentVersion,
   saveState,
-  searchBar
+  searchBar,
+  actionToastOpen = false
 }: WorkspaceReadoutProps) {
   const sticky = statusSticky ?? false;
   // A message already past its lifetime when the readout mounts — entering
@@ -134,10 +141,22 @@ export function WorkspaceReadout({
     }, STATUS_CLOCK_STEP_MS);
     return () => window.clearInterval(timer);
   }, [statusAt, sticky, expiredAtMount]);
+  // A settled message an action toast already said ("Deleted Boss bore."
+  // under "Deleted Boss bore · Undo") is spent: it used to come back for a
+  // beat as the toast faded, and the toast jumped up its row and down again.
+  const [spentAt, setSpentAt] = useState<number | null>(null);
+  useEffect(() => {
+    if (actionToastOpen && tone === 'ready' && statusAt !== undefined) {
+      setSpentAt(statusAt);
+    }
+  }, [actionToastOpen, tone, statusAt]);
   const expired =
     statusAt !== undefined &&
     !sticky &&
-    (statusAt === 0 || statusAt === expiredAtMount || statusAt === expiredAt);
+    (statusAt === 0 ||
+      statusAt === expiredAtMount ||
+      statusAt === expiredAt ||
+      (statusAt === spentAt && !actionToastOpen));
   const messageLive = !expired && status !== '';
   // The geometry line is the floor under the message: it carries the live
   // message ahead of the phase, and the projection note once it has gone.
@@ -157,8 +176,14 @@ export function WorkspaceReadout({
     paced.skipped > 0
       ? `${paced.skipped} ${paced.skipped === 1 ? 'warning' : 'warnings'}`
       : null;
-  // A retired or expired message leaves the bar reading as nothing happening.
-  const shownStatus = quiet ? '' : paced.status;
+  // A retired or expired message leaves the bar reading as nothing happening,
+  // but only once its fade has run: emptied at the fade's first frame, the
+  // pill snapped to a bare dot and then faded.
+  const fading = useDelayedUnmount(
+    quiet ? null : paced.status,
+    OVERLAY_EXIT_MS
+  );
+  const shownStatus = quiet ? (fading.rendered ?? '') : paced.status;
   const featureLabel = `${featureCount} ${featureCount === 1 ? 'feature' : 'features'}`;
   const bodyLabel = `${bodyCount} ${bodyCount === 1 ? 'body' : 'bodies'}`;
   const workspaceSummary = `${projectName ?? 'Project'} · ${featureLabel} · ${bodyLabel}`;
