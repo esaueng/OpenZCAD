@@ -1191,12 +1191,16 @@ test('a command card heads the right lane, and a tool card keeps its actions in 
       cardRight: card.right,
       columnLeft: column.left,
       cubeTop: cube.top,
+      bodyTop: body.top,
+      bodyBottom: body.bottom,
+      actionsTop: actions.top,
+      actionsBottom: actions.bottom,
       actionsInside: actions.top >= body.top && actions.bottom <= body.bottom
     };
   });
   // The card has the lane to itself; the dock is never in it.
   expect(layout.cardHeight).toBeGreaterThan(layout.laneHeight - 40);
-  expect(layout.actionsInside).toBe(true);
+  expect(layout.actionsInside, JSON.stringify(layout)).toBe(true);
   expect(layout.cardBottom).toBeLessThanOrEqual(layout.cubeTop);
   expect(layout.cardRight).toBeLessThanOrEqual(layout.columnLeft);
   await expect(submit).toBeInViewport();
@@ -1270,6 +1274,7 @@ for (const theme of ['dark', 'light'] as const) {
       for (const control of await controls.all()) {
         const target = await control.evaluate((button) => {
           const bounds = button.getBoundingClientRect();
+          const misses: { x: number; y: number; hit: string }[] = [];
           const points = [0.5, bounds.width / 2, bounds.width - 0.5].flatMap(
             (x) =>
               [0.5, bounds.height / 2, bounds.height - 0.5].map((y) => {
@@ -1277,19 +1282,27 @@ for (const theme of ['dark', 'light'] as const) {
                   bounds.left + x,
                   bounds.top + y
                 );
-                return hit !== null && button.contains(hit);
+                const owns = hit !== null && button.contains(hit);
+                if (!owns)
+                  misses.push({
+                    x,
+                    y,
+                    hit: hit?.tagName + '.' + hit?.getAttribute('class')
+                  });
+                return owns;
               })
           );
           return {
             name: button.getAttribute('aria-label') ?? '',
             width: bounds.width,
             height: bounds.height,
-            ownsEveryPoint: points.every(Boolean)
+            ownsEveryPoint: points.every(Boolean),
+            misses
           };
         });
         expect(target.width, target.name).toBeGreaterThanOrEqual(24);
         expect(target.height, target.name).toBeGreaterThanOrEqual(24);
-        expect(target.ownsEveryPoint, target.name).toBe(true);
+        expect(target.ownsEveryPoint, JSON.stringify(target)).toBe(true);
       }
     }
   });

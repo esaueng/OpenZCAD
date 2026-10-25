@@ -2466,6 +2466,18 @@ button.model-panel-grip[aria-expanded='true'] {
   background: var(--color-surface-hover);
 }
 
+/* Rounded paint must not cut corners off a header control's 24px target. */
+.model-panel-header > button {
+  position: relative;
+}
+
+.model-panel-header > button::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 0;
+}
+
 .model-panel-pin.is-pinned {
   color: var(--color-accent-hi);
   background: var(--color-accent-dim);
