@@ -213,6 +213,7 @@ import {
   edgeChipCenterX,
   faceOffsetChipState,
   offsetChipText,
+  rearmedChipMode,
   regionChipState,
   type OffsetChipMode
 } from '../lib/offsetChip';
@@ -3896,6 +3897,10 @@ export function ModelViewer({
         if (span !== null && span !== undefined) {
           offsetChipModeRef.current =
             offsetChipModeRef.current === 'total' ? 'offset' : 'total';
+          // Open exact entry edits what the chip shows, so it switches with
+          // it: left alone it kept the other mode's label and prefill, and
+          // its Apply read the number in that mode.
+          if (keypadAnchorRef.current) openExactEntry();
           requestRender();
         }
         return;
@@ -11561,7 +11566,15 @@ export function ModelViewer({
       extentBehind
     );
     offsetExtentRef.current = chipState.extent;
-    offsetChipModeRef.current = chipState.mode;
+    offsetChipModeRef.current = rearmedChipMode(
+      chipState,
+      offsetChipModeRef.current,
+      previous !== null &&
+        previous !== regionRigRef.current &&
+        built !== null &&
+        built.handle.bodyId === offsetHandle.bodyId &&
+        built.handle.topologyId === offsetHandle.topologyId
+    );
     // The band starts at the face's old level. A rig re-armed after a preview
     // landed reads the moved face from the rendered body, so the loops go
     // back onto the plane the gesture started from (the pick point stays on

@@ -19486,7 +19486,10 @@ export function App() {
     ) {
       return false;
     }
-    dispatchInteraction({ type: 'keypad-open' });
+    // Reopened in place by the chip's Total/Offset switch: a refused preview
+    // stays refused (`keypad-open` would clear the failure and re-enable
+    // Apply for the value the kernel just turned down).
+    if (!keypadRef.current) dispatchInteraction({ type: 'keypad-open' });
     setKeypad({
       kind: 'offset',
       label:
@@ -24809,6 +24812,10 @@ export function App() {
                       the keypad stays anchored to its value on the viewport. */}
                   {keypad && (
                     <NumericKeypad
+                      // The chip's Total/Offset switch reopens entry under
+                      // the other label; the typed value starts over from
+                      // its prefill rather than being read in the new mode.
+                      key={`${keypad.kind}:${keypad.label}`}
                       request={keypad}
                       units={doc.units}
                       scope={parameterScope.scope}

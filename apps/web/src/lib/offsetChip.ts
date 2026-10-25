@@ -15,18 +15,36 @@ export interface OffsetChipState {
 }
 
 /**
- * A face offset: resizing a primitive reads its own dimension (the total) by
- * default, since that is the number the gesture sets; moving any other face
- * reads the change, with the body's reach behind it one click away.
+ * A face offset reads the whole span by default — a primitive's own
+ * dimension, or the body's reach behind any other face — since that is the
+ * size the gesture leaves; the change alone is one click away. Only a face
+ * with no span to read starts on the change.
  */
 export function faceOffsetChipState(
   totalBaseline: number | undefined,
   extentBehind: number | null
 ): OffsetChipState {
   return {
-    mode: totalBaseline === undefined ? 'offset' : 'total',
+    mode:
+      totalBaseline === undefined && extentBehind === null ? 'offset' : 'total',
     extent: extentBehind
   };
+}
+
+/**
+ * The mode a re-armed face rig's chip reads. The workspace re-derives the
+ * handle whenever the interaction changes — opening exact entry, a preview
+ * landing — so the same face re-arms many times while it stays selected, and
+ * resetting each time undid the user's Total/Offset switch under an open
+ * keypad. The same face keeps the reading chosen for it; a different face,
+ * or one left with no span, starts from its own default.
+ */
+export function rearmedChipMode(
+  fresh: OffsetChipState,
+  current: OffsetChipMode,
+  sameFace: boolean
+): OffsetChipMode {
+  return sameFace && fresh.mode === 'total' ? current : fresh.mode;
 }
 
 /**

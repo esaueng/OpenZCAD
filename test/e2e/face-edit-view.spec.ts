@@ -187,6 +187,11 @@ for (const projection of ['perspective', 'orthographic'] as const) {
       }),
       contentType: 'image/png'
     });
+    // The chip reads the whole span by default; this types the change.
+    await page.getByTestId('direct-manipulation-mode').click();
+    await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
+      /^Offset/
+    );
     await page.getByTestId('direct-manipulation-value').click();
     const keypad = page.getByRole('dialog', { name: 'Offset value' });
     // Extend far beyond the current framing using the actual numeric editor.

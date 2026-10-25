@@ -173,6 +173,11 @@ test('a typed offset previews over the ghost too, until it is applied', async ({
       return canvas.getAttribute('data-e2e-handle-x');
     })
     .not.toBeNull();
+  // The chip reads the whole span by default; this types the change.
+  await page.getByTestId('direct-manipulation-mode').click();
+  await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
+    /^Offset/
+  );
   await page.getByTestId('direct-manipulation-value').click();
   const keypad = page.getByRole('dialog', { name: 'Offset value' });
   await keypad.getByRole('textbox').fill('-3');
