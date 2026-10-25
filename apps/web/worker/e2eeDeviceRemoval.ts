@@ -9,6 +9,9 @@
  * - `PUT /api/e2ee/revocation-cutoffs`: store the statement of one revoking
  *   device-list entry. A later statement for the same entry may replace it
  *   only if every project keeps a cutoff no lower.
+ * - `appendedRevocationCutoffs`, for `POST /api/e2ee/device-list`
+ *   (`e2ee.ts`): an entry that revokes a device of an account with
+ *   encrypted projects lands only with its statement, in the same batch.
  * - `GET /api/e2ee/projects/:id/mls/resets`: the project's recorded resets,
  *   for any member (slice 5-2).
  * - `GET /api/e2ee/projects/:id/revocation-cutoffs` (slice 5-2): the other
@@ -374,16 +377,26 @@ const cutoffRecord = (row: CutoffRow): E2eeRevocationCutoffRecord => ({
   updatedAt: row.updated_at
 });
 
-async function listCutoffs(db: D1Database, userId: string) {
+interface RemovalProjectRow {
+  project_id: string;
+  generation: number;
+  key_epoch_base: number;
+  epoch: number;
+  head_version: number | null;
+  head_hash: string | null;
+  trashed: number;
+  member: number;
+}
+
+/**
+ * The encrypted projects a removal names cutoffs for: each one the account
+ * owns or is a member of, with its group state and newest head.
+ */
+async function removalProjects(
+  db: D1Database,
+  userId: string
+): Promise<RemovalProjectRow[]> {
   const { results } = await db
-    .prepare(
-      `SELECT generation, entry_sequence, entry_hash, statement, signature, updated_at
-       FROM e2ee_revocation_cutoffs WHERE user_id = ?
-       ORDER BY generation, entry_sequence`
-    )
-    .bind(userId)
-    .all<CutoffRow>();
-  const { results: projects } = await db
     .prepare(
       `SELECT g.project_id, g.generation, g.key_epoch_base, g.epoch,
               (SELECT v.document_version FROM e2ee_project_versions v
@@ -406,19 +419,23 @@ async function listCutoffs(db: D1Database, userId: string) {
        ORDER BY g.project_id LIMIT ?`
     )
     .bind(userId, userId, userId, MAX_PROJECTS)
-    .all<{
-      project_id: string;
-      generation: number;
-      key_epoch_base: number;
-      epoch: number;
-      head_version: number | null;
-      head_hash: string | null;
-      trashed: number;
-      member: number;
-    }>();
+    .all<RemovalProjectRow>();
+  return results ?? [];
+}
+
+async function listCutoffs(db: D1Database, userId: string) {
+  const { results } = await db
+    .prepare(
+      `SELECT generation, entry_sequence, entry_hash, statement, signature, updated_at
+       FROM e2ee_revocation_cutoffs WHERE user_id = ?
+       ORDER BY generation, entry_sequence`
+    )
+    .bind(userId)
+    .all<CutoffRow>();
+  const projects = await removalProjects(db, userId);
   return json({
     statements: (results ?? []).map(cutoffRecord),
-    projects: (projects ?? []).map((row): E2eeRemovalProjectRecord => ({
+    projects: projects.map((row): E2eeRemovalProjectRecord => ({
       projectId: row.project_id,
       groupGeneration: row.generation,
       keyEpochBase: row.key_epoch_base,
@@ -539,6 +556,125 @@ async function storeCutoffs(
   return json({
     statement: cutoffRecord(row!)
   } satisfies E2eeRevocationCutoffResponse);
+}
+
+// --- Cutoffs with the revoking entry -----------------------------------------
+
+/** The `cutoffs` field of a device-list append at its longest, in base64url. */
+export const MAX_APPEND_CUTOFFS_CHARS = MAX_STATEMENT_CHARS + 256;
+
+/**
+ * The cutoff statement a device-list append (`POST /api/e2ee/device-list`)
+ * carries, checked, as the insert for the append's own batch; null when
+ * there is none to store.
+ *
+ * Revoking a device and storing its cutoff statement used to be two
+ * requests. A browser that went offline in between left a revoked device
+ * without a statement, which co-members cannot tell from a device revoked
+ * before the account joined their project, so they kept writing under a
+ * key the removed device may still derive. So an entry that revokes a
+ * device of an account with encrypted projects (owned or shared, the
+ * recycle bin included: what `GET /api/e2ee/revocation-cutoffs` lists)
+ * lands only with its statement, inserted under the batch's guard so it
+ * lands exactly when the entry does. The statement names the entry being
+ * appended, verifies against the list that includes it, and names every
+ * one of those projects at its next key epoch, the one the removal's
+ * rotation lands in. One named at an earlier epoch was signed before a
+ * Commit that landed meanwhile; a missing one was created or shared
+ * meanwhile. Both are refused as E2EE_CUTOFFS_INCOMPLETE, for the browser
+ * to sign again; `PUT /api/e2ee/revocation-cutoffs` may later raise the
+ * cutoffs once the rotation landed.
+ *
+ * Nothing is required while encrypted projects are off for the account
+ * (`projectsEnabled`: the browser cannot list them to sign) or before
+ * migration 0036 (browsers refuse such a removal themselves).
+ */
+export async function appendedRevocationCutoffs(
+  db: D1Database,
+  userId: string,
+  generation: number,
+  list: VerifiedDeviceList,
+  value: unknown,
+  projectsEnabled: boolean
+): Promise<
+  | ((
+      guard: { sql: string; binds: readonly unknown[] },
+      now: string
+    ) => D1PreparedStatement)
+  | null
+> {
+  if (!list.head.revoked.some((revocation) => revocation.kind === 'device')) {
+    if (value !== undefined) {
+      invalid('Only an entry that revokes a device carries cutoffs');
+    }
+    return null;
+  }
+  if (!(await isE2eeDeviceRemovalStorageReady(db))) return null;
+  const projects = projectsEnabled ? await removalProjects(db, userId) : [];
+  if (value === undefined) {
+    if (projects.length > 0) {
+      refuse(
+        409,
+        'E2EE_CUTOFFS_REQUIRED',
+        'Removing a device from an account with encrypted projects needs its signed revocation cutoffs. Nothing was changed. Reload and try again.'
+      );
+    }
+    return null;
+  }
+  const field = record(value, 'cutoffs');
+  const statement = bytesField(field.statement, 'cutoffs.statement', {
+    max: Math.floor((MAX_STATEMENT_CHARS * 3) / 4)
+  });
+  const signature = bytesField(field.signature, 'cutoffs.signature', {
+    exact: STATEMENT_SIGNATURE_BYTES
+  });
+  const cutoffs = await verifyRevocationCutoffs(
+    { statement: statement.bytes, signature: signature.bytes },
+    list,
+    { generation }
+  ).catch(statementError);
+  if (
+    cutoffs.entrySequence !== list.head.sequence ||
+    toHex(cutoffs.entryHash) !== toHex(list.headHash)
+  ) {
+    invalid('The cutoffs must name the entry they are sent with');
+  }
+  await requirePlausibleCutoffs(db, cutoffs.cutoffs);
+  const named = new Map(
+    cutoffs.cutoffs.map((cutoff) => [cutoff.projectId, cutoff.cutoffEpoch])
+  );
+  for (const project of projects) {
+    const next = project.key_epoch_base + project.epoch + 1;
+    if ((named.get(project.project_id) ?? -1) < next) {
+      refuse(
+        409,
+        'E2EE_CUTOFFS_INCOMPLETE',
+        'Your encrypted projects changed while this device was being removed. Nothing was changed. Try again.',
+        { projectId: project.project_id }
+      );
+    }
+  }
+  // No ON CONFLICT: the entry is new, so is its statement; a stray row
+  // aborts the whole batch rather than land the entry without its own.
+  return (guard, now) =>
+    db
+      .prepare(
+        `INSERT INTO e2ee_revocation_cutoffs
+           (user_id, generation, entry_sequence, entry_hash, statement, signature,
+            created_at, updated_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE ${guard.sql}`
+      )
+      .bind(
+        userId,
+        generation,
+        cutoffs.entrySequence,
+        toHex(cutoffs.entryHash),
+        statement.text,
+        signature.text,
+        now,
+        now,
+        ...guard.binds
+      );
 }
 
 // --- Group resets ------------------------------------------------------------

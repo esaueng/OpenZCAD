@@ -13,6 +13,7 @@ import worker from '../apps/web/worker/index';
 import {
   EnvelopeKey,
   accountKeySequences,
+  decodeRevocationCutoffs,
   encodeEncryptedDocumentBody,
   encryptProjectEnvelope,
   epochBinding,
@@ -43,9 +44,11 @@ import {
 } from '@openzcad/shared';
 import { inProcessMls } from '../packages/mls/src/test-support';
 import {
+  addPasskey,
   enrollWithRecoveryKey,
   loadEncryption,
   removeDevice,
+  removePasskey,
   revokeReadOnlyDevices,
   setUpEncryption,
   signGroupResetWithIdentity,
@@ -55,6 +58,7 @@ import {
 } from '../apps/web/src/lib/e2ee/accountKeys';
 import { createE2eeApi } from '../apps/web/src/lib/e2ee/e2eeApi';
 import { memoryDeviceStore } from '../apps/web/src/lib/e2ee/deviceStore';
+import type { PasskeySecret } from '../apps/web/src/lib/e2ee/passkeys';
 import { unlockedAccount } from '../apps/web/src/lib/e2ee/unlockedKeys';
 import {
   GROUP_RESET_CONFIRMATION,
@@ -80,7 +84,8 @@ import {
   storePendingCutoffs,
   type PendingCutoffStore,
   type RemovalOutcome,
-  type RemovalParticipant
+  type RemovalParticipant,
+  type WrittenRemovalStep
 } from '../apps/web/src/lib/e2ee/deviceRemoval';
 import { MlsProjectSessions } from '../apps/web/src/lib/e2ee/mls/projectSessions';
 import { createMlsLoader } from '../apps/web/src/lib/e2ee/mls/loader';
@@ -405,6 +410,7 @@ function participantFor(d: Device, pending?: PendingCutoffStore) {
   });
   const participant: RemovalParticipant = {
     prepare: (account) => inner.prepare(account),
+    cutoffsFor: (step) => inner.cutoffsFor!(step),
     written: (step) => inner.written!(step),
     complete: (step) => {
       seen.identity = step.identityPrivateKey;
@@ -688,7 +694,8 @@ describe('device removal across encrypted projects', () => {
           desktop.e2ee,
           ready(await loadEncryption(desktop.e2ee)),
           tabletId,
-          recovery.secret
+          recovery.secret,
+          participantFor(desktop).participant
         );
       }
       return response;
@@ -708,8 +715,9 @@ describe('device removal across encrypted projects', () => {
     );
     expect(raced).toBe(true);
     expect(seen.outcome?.cutoffsStored).toBe(true);
+    // One statement per revoking entry, in entry order: the laptop's first.
     const { statements } = await statementsOf(srv);
-    expect(statements).toHaveLength(1);
+    expect(statements).toHaveLength(2);
     const statement = await verifyRevocationCutoffs(
       {
         statement: fromBase64Url(statements[0]!.statement),
@@ -826,10 +834,18 @@ describe('device removal across encrypted projects', () => {
     ).rejects.toBeDefined();
     expect(dropped).toBe(true);
     expect(seen.outcome).toBeNull();
-    expect((await statementsOf(srv)).statements).toEqual([]);
+    // The statement landed with the entry; the phone's head opens already.
+    const stored = (await statementsOf(srv)).statements;
+    expect(stored).toHaveLength(1);
+    expect(stored[0]!.entrySequence).toBe(
+      laptop.account.list.head.sequence + 1
+    );
+    await expect(
+      (await refresh(desktop)).store.loadProject(projectId)
+    ).resolves.toMatchObject({ name: 'Phone edit' });
     expect(pending.read(USER)).toHaveLength(1);
 
-    // The next removal or page open stores it; the phone's head opens.
+    // The next removal or page open stores the kept one over it.
     expect(
       await storePendingCutoffs(
         createRevocationCutoffsApi((path, init) => laptop.fetcher(path, init)),
@@ -878,13 +894,14 @@ describe('device removal across encrypted projects', () => {
       )
     );
     expect(seen.outcome?.cutoffsStored).toBe(false);
-    expect((await statementsOf(srv)).statements).toEqual([]);
     expect(pending.read(USER)).toHaveLength(1);
-    // Without the statement the phone's head reads as revoked.
-    await integrityRefusal(
-      (await refresh(desktop)).store.loadProject(projectId),
-      'author'
-    );
+    // The statement the append carried is stored all the same, so the
+    // phone's head still opens.
+    const stored = (await statementsOf(srv)).statements;
+    expect(stored).toHaveLength(1);
+    await expect(
+      (await refresh(desktop)).store.loadProject(projectId)
+    ).resolves.toMatchObject({ name: 'Phone edit' });
 
     // Sent again later (the next removal or page open does this).
     expect(
@@ -1560,6 +1577,418 @@ function newDeviceLike(d: Device): Device {
 
 function fromHexString(hex: string): Uint8Array {
   return Uint8Array.from(hex.match(/../g)!.map((b) => Number.parseInt(b, 16)));
+}
+
+// --- The revocation and its cutoffs in one write ------------------------------
+
+/** What a refused append must leave as it was. */
+function keyState(srv: Server) {
+  return {
+    entries: srv.db
+      .prepare(
+        `SELECT generation, sequence, entry_hash FROM e2ee_device_list_entries
+         WHERE user_id = ? ORDER BY generation, sequence`
+      )
+      .all(USER),
+    wraps: srv.db
+      .prepare(
+        `SELECT purpose, target_id, key_sequence, wrapped FROM e2ee_key_wraps
+         WHERE user_id = ? ORDER BY purpose, target_id, key_sequence`
+      )
+      .all(USER),
+    history: srv.db
+      .prepare(
+        `SELECT generation, key_sequence FROM e2ee_account_key_history
+         WHERE user_id = ? ORDER BY generation, key_sequence`
+      )
+      .all(USER),
+    cutoffs: srv.db
+      .prepare(
+        `SELECT entry_sequence, statement FROM e2ee_revocation_cutoffs
+         WHERE user_id = ? ORDER BY entry_sequence`
+      )
+      .all(USER)
+  };
+}
+
+function cutoffRows(srv: Server) {
+  return srv.db
+    .prepare(
+      `SELECT entry_sequence, entry_hash, statement, signature
+       FROM e2ee_revocation_cutoffs WHERE user_id = ? ORDER BY entry_sequence`
+    )
+    .all(USER) as {
+    entry_sequence: number;
+    entry_hash: string;
+    statement: string;
+    signature: string;
+  }[];
+}
+
+const isDeviceListPost = (path: string, init: RequestInit) =>
+  path === '/api/e2ee/device-list' && init.method === 'POST';
+
+describe('a device revocation and its cutoffs in one write', () => {
+  it('refuses a device revocation without its cutoffs and changes nothing', async () => {
+    const { srv, recovery, laptop, phone, projects } = await threeDevices(2);
+    await saveEdit(phone, projects[0]!, 'Phone edit');
+    const before = keyState(srv);
+    // A participant that signs no cutoffs for the append...
+    const { participant } = participantFor(laptop);
+    await expect(
+      removeDevice(
+        laptop.e2ee,
+        laptop.account,
+        deviceIdOf(phone),
+        recovery.secret,
+        {
+          ...participant,
+          cutoffsFor: async () => undefined
+        }
+      )
+    ).rejects.toMatchObject({ status: 409, code: 'E2EE_CUTOFFS_REQUIRED' });
+    expect(keyState(srv)).toEqual(before);
+    // ...and a removal with no participant at all.
+    await expect(
+      removeDevice(
+        laptop.e2ee,
+        laptop.account,
+        deviceIdOf(phone),
+        recovery.secret
+      )
+    ).rejects.toMatchObject({ status: 409, code: 'E2EE_CUTOFFS_REQUIRED' });
+    expect(keyState(srv)).toEqual(before);
+    // The phone is still listed, and still writes.
+    expect(
+      ready(await loadEncryption(laptop.e2ee)).list.devices.map(
+        (d) => d.deviceId
+      )
+    ).toContain(deviceIdOf(phone));
+    await saveEdit(phone, projects[0]!, 'Phone again');
+  });
+
+  it('refuses cutoffs that miss a project, lag or lead an epoch, name another entry or do not verify', async () => {
+    const { srv, recovery, laptop, phone, projects } = await threeDevices(2);
+    // An earlier removal, whose entry a statement could name instead.
+    const tablet = await enroll(srv, recovery.secret, 'Tablet');
+    await refresh(laptop);
+    use(
+      laptop,
+      ready(
+        await removeDevice(
+          laptop.e2ee,
+          laptop.account,
+          deviceIdOf(tablet),
+          recovery.secret,
+          participantFor(laptop).participant
+        )
+      )
+    );
+    const earlier = laptop.account.list.entries.at(-1)!;
+    expect(earlier.entry.revoked.map((r) => r.id)).toEqual([
+      deviceIdOf(tablet)
+    ]);
+
+    let step: WrittenRemovalStep | null = null;
+    const { participant } = participantFor(laptop);
+    const capturing: RemovalParticipant = {
+      ...participant,
+      cutoffsFor: async (s) => {
+        step = s;
+        return participant.cutoffsFor!(s);
+      }
+    };
+    const refusals: Record<string, { status: number; code: string }> = {};
+    const real = laptop.fetcher;
+    let tried = false;
+    laptop.fetcher = async (path, init = {}) => {
+      if (!tried && isDeviceListPost(path, init)) {
+        tried = true;
+        const body = JSON.parse(init.body as string) as {
+          cutoffs: { statement: string; signature: string };
+        };
+        const identity = step!.identityPrivateKey;
+        const good = decodeRevocationCutoffs(
+          fromBase64Url(body.cutoffs.statement)
+        );
+        const sign = (value: RevocationCutoffs) =>
+          signRevocationCutoffs(identity, value);
+        const shift = (by: number) => ({
+          ...good,
+          cutoffs: good.cutoffs.map((c) => ({
+            ...c,
+            cutoffEpoch: c.cutoffEpoch + by
+          }))
+        });
+        const missing = await sign({ ...good, cutoffs: good.cutoffs.slice(1) });
+        const variants = {
+          missing,
+          lagging: await sign(shift(-1)),
+          leading: await sign(shift(1)),
+          otherEntry: await sign({
+            ...good,
+            entrySequence: earlier.entry.sequence,
+            entryHash: earlier.hash
+          }),
+          badSignature: {
+            statement: fromBase64Url(body.cutoffs.statement),
+            signature: missing.signature
+          }
+        };
+        const before = keyState(srv);
+        for (const [name, signed] of Object.entries(variants)) {
+          const response = await real(path, {
+            ...init,
+            body: JSON.stringify({
+              ...body,
+              cutoffs: {
+                statement: toBase64Url(signed.statement),
+                signature: toBase64Url(signed.signature)
+              }
+            })
+          });
+          refusals[name] = {
+            status: response.status,
+            code: ((await response.json()) as { code: string }).code
+          };
+          expect(keyState(srv)).toEqual(before);
+        }
+      }
+      return real(path, init);
+    };
+    use(
+      laptop,
+      ready(
+        await removeDevice(
+          laptop.e2ee,
+          laptop.account,
+          deviceIdOf(phone),
+          recovery.secret,
+          capturing
+        )
+      )
+    );
+    expect(refusals).toEqual({
+      missing: { status: 409, code: 'E2EE_CUTOFFS_INCOMPLETE' },
+      lagging: { status: 409, code: 'E2EE_CUTOFFS_INCOMPLETE' },
+      leading: { status: 400, code: 'E2EE_REQUEST_INVALID' },
+      otherEntry: { status: 400, code: 'E2EE_REQUEST_INVALID' },
+      badSignature: { status: 400, code: 'E2EE_REQUEST_INVALID' }
+    });
+    // The one it carried, naming both projects, landed with it.
+    expect(
+      laptop.account.list.revoked.find((r) => r.id === deviceIdOf(phone))
+    ).toBeDefined();
+    const rows = cutoffRows(srv);
+    expect(rows.map((row) => row.entry_sequence)).toEqual([
+      earlier.entry.sequence,
+      laptop.account.list.head.sequence
+    ]);
+    expect(
+      decodeRevocationCutoffs(fromBase64Url(rows[1]!.statement)).cutoffs.map(
+        (c) => c.projectId
+      )
+    ).toEqual(projects);
+  });
+
+  it('stores the statement with the entry, so a removal cut off right after the append still leaves it', async () => {
+    const { srv, recovery, laptop, desktop, phone, projects } =
+      await threeDevices(2);
+    // Each device joins; the phone's version is the head.
+    for (const projectId of projects) {
+      await saveEdit(phone, projectId, 'Phone joins');
+      await saveEdit(desktop, projectId, 'Desktop edit');
+      await saveEdit(phone, projectId, 'Phone edit');
+    }
+    const predicted = new Map(
+      projects.map((id) => [id, keyEpochOf(srv, id) + 1])
+    );
+    // The laptop goes offline the moment its device-list entry lands:
+    // neither `written` nor `complete` reaches the server.
+    let atAppend: ReturnType<typeof cutoffRows> | null = null;
+    let puts = 0;
+    laptop.after = (path, init) => {
+      if (path === '/api/e2ee/revocation-cutoffs' && init.method === 'PUT') {
+        puts += 1;
+      }
+      if (isDeviceListPost(path, init)) {
+        atAppend = cutoffRows(srv);
+        laptop.offline = true;
+      }
+    };
+    const { participant, seen } = participantFor(laptop);
+    await expect(
+      removeDevice(
+        laptop.e2ee,
+        laptop.account,
+        deviceIdOf(phone),
+        recovery.secret,
+        participant
+      )
+    ).rejects.toBeDefined();
+    expect(seen.outcome).toBeNull();
+    expect(puts).toBe(0);
+    laptop.offline = false;
+    laptop.after = undefined;
+
+    // The statement was there as soon as the entry was, naming the entry
+    // and every project at the epoch its rotation lands in.
+    const list = ready(await loadEncryption(laptop.e2ee)).list;
+    expect(list.revoked.map((r) => r.id)).toContain(deviceIdOf(phone));
+    expect(atAppend).toHaveLength(1);
+    const row = atAppend![0]!;
+    expect(row.entry_sequence).toBe(list.head.sequence);
+    expect(row.entry_hash).toBe(toHex(list.headHash));
+    const statement = await verifyRevocationCutoffs(
+      {
+        statement: fromBase64Url(row.statement),
+        signature: fromBase64Url(row.signature)
+      },
+      list,
+      { generation: 1 }
+    );
+    expect(statement.cutoffs.map((c) => [c.projectId, c.cutoffEpoch])).toEqual(
+      projects.map((id) => [id, predicted.get(id)])
+    );
+
+    // So the desktop reads the phone's earlier versions rather than
+    // refusing a revoked device without a cutoff, and rotates each project
+    // before its next write.
+    await refresh(desktop);
+    for (const projectId of projects) {
+      expect((await desktop.store.loadProject(projectId)).name).toBe(
+        'Phone edit'
+      );
+      await saveEdit(desktop, projectId, 'Desktop after removal');
+      expect(headRow(srv, projectId).key_epoch).toBe(predicted.get(projectId));
+    }
+  });
+
+  it('signs again when a project is created between its listing and the append', async () => {
+    const { srv, recovery, laptop, desktop, phone, projects } =
+      await threeDevices(1);
+    const answers: { status: number; code?: string }[] = [];
+    let created: string | null = null;
+    const real = laptop.fetcher;
+    laptop.fetcher = async (path, init = {}) => {
+      if (created === null && isDeviceListPost(path, init)) {
+        created = await createEncrypted(desktop, 'Meanwhile');
+      }
+      const response = await real(path, init);
+      if (isDeviceListPost(path, init)) {
+        const copy = response.clone();
+        answers.push({
+          status: copy.status,
+          code: ((await copy.json()) as { code?: string }).code
+        });
+      }
+      return response;
+    };
+    use(
+      laptop,
+      ready(
+        await removeDevice(
+          laptop.e2ee,
+          laptop.account,
+          deviceIdOf(phone),
+          recovery.secret,
+          participantFor(laptop).participant
+        )
+      )
+    );
+    expect(answers).toEqual([
+      { status: 409, code: 'E2EE_CUTOFFS_INCOMPLETE' },
+      { status: 200, code: undefined }
+    ]);
+    const { statements } = await statementsOf(srv);
+    expect(statements).toHaveLength(1);
+    const statement = await verifyRevocationCutoffs(
+      {
+        statement: fromBase64Url(statements[0]!.statement),
+        signature: fromBase64Url(statements[0]!.signature)
+      },
+      laptop.account.list,
+      { generation: 1 }
+    );
+    expect(statement.cutoffs.map((c) => c.projectId).sort()).toEqual(
+      [...projects, created!].sort()
+    );
+  });
+
+  it('leaves passkey removals and accounts without encrypted projects as they were', async () => {
+    // A passkey removal needs no statement, encrypted projects or not.
+    const { srv, recovery, laptop } = await threeDevices(1);
+    laptop.e2ee = { ...laptop.e2ee, passkeys: fakePasskey() };
+    use(
+      laptop,
+      ready(await addPasskey(laptop.e2ee, laptop.account, recovery.secret))
+    );
+    const removed = ready(
+      await removePasskey(
+        laptop.e2ee,
+        laptop.account,
+        'pk_test',
+        recovery.secret
+      )
+    );
+    expect(removed.list.unlockTargets.map((t) => t.kind)).toEqual([
+      'recovery-key'
+    ]);
+    expect(cutoffRows(srv)).toEqual([]);
+
+    // A device removal from an account without encrypted projects carries
+    // none, with or without a participant.
+    const plain = newServer();
+    const alone = await setUp(plain);
+    const tablet = await enroll(plain, alone.recovery.secret, 'Tablet');
+    const phone = await enroll(plain, alone.recovery.secret, 'Phone');
+    await refresh(alone.laptop);
+    use(
+      alone.laptop,
+      ready(
+        await removeDevice(
+          alone.laptop.e2ee,
+          alone.laptop.account,
+          deviceIdOf(tablet),
+          alone.recovery.secret
+        )
+      )
+    );
+    expect(cutoffRows(plain)).toEqual([]);
+    const sent: unknown[] = [];
+    const real = alone.laptop.fetcher;
+    alone.laptop.fetcher = async (path, init = {}) => {
+      if (isDeviceListPost(path, init)) {
+        sent.push(
+          (JSON.parse(init.body as string) as { cutoffs?: unknown }).cutoffs
+        );
+      }
+      return real(path, init);
+    };
+    const state = ready(
+      await removeDevice(
+        alone.laptop.e2ee,
+        alone.laptop.account,
+        deviceIdOf(phone),
+        alone.recovery.secret,
+        participantFor(alone.laptop).participant
+      )
+    );
+    expect(state.list.devices.map((d) => d.deviceId)).toEqual([
+      deviceIdOf(alone.laptop)
+    ]);
+    // (`complete` still stores its statement naming no project, as before.)
+    expect(sent).toEqual([undefined]);
+  });
+});
+
+function fakePasskey(id = 'pk_test', byte = 0x71) {
+  const select = async (): Promise<PasskeySecret> => ({
+    targetId: id,
+    secret: new Uint8Array(32).fill(byte),
+    enrollmentLabel: `OpenZCAD encryption ${id}`
+  });
+  return { create: vi.fn(select), get: vi.fn(select) };
 }
 
 // --- Solo group reset (D9) ----------------------------------------------------
