@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { BodyId, FeatureId, SketchId } from '@openzcad/shared';
+import type {
+  BodyId,
+  FeatureData,
+  FeatureId,
+  SketchId
+} from '@openzcad/shared';
 import {
   IN_PLACE_TOOL_SPECS,
   axisCandidatesFor,
@@ -231,6 +236,46 @@ describe('body tools', () => {
     expect(handle).toMatchObject({
       kind: 'linear',
       params: { scale: Math.hypot(10, 5, 2) }
+    });
+  });
+
+  it('scale: an edited scale measures its handle from the pivot it stores', () => {
+    const spec = IN_PLACE_TOOL_SPECS.scale;
+    const slots = { ...EMPTY, bodies: [BODY] };
+    const saved = (pivot?: { x: number | string; y: number; z: number }) =>
+      ({
+        featureKind: 'transform',
+        targetBodyId: 'body_a',
+        transform: {
+          translation: { x: 0, y: 0, z: 0 },
+          rotationDeg: { x: 0, y: 0, z: 0 },
+          scale: 2,
+          ...(pivot ? { pivot } : {})
+        }
+      }) as FeatureData;
+    // An old scale with no pivot scaled about the origin: the handle runs
+    // from there to the corner that factor carries.
+    const [fromOrigin] = spec.handles(
+      slots,
+      {},
+      { ...CTX, saved: saved() },
+      {}
+    );
+    expect(fromOrigin).toMatchObject({
+      params: { origin: { x: 0, y: 0, z: 0 }, scale: Math.hypot(20, 10, 4) }
+    });
+    const [fromPivot] = spec.handles(
+      slots,
+      {},
+      {
+        ...CTX,
+        saved: saved({ x: 'px', y: 10, z: 4 }),
+        evaluate: (value) => (value === 'px' ? 20 : null)
+      },
+      {}
+    );
+    expect(fromPivot).toMatchObject({
+      params: { origin: { x: 20, y: 10, z: 4 }, scale: Math.hypot(20, 10, 4) }
     });
   });
 
