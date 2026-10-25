@@ -728,6 +728,13 @@ test('typing an offset keeps the ghost and handle while exact previews land', as
   expect(await removals(page, 'data-e2e-offset-ghost', typing)).toBe(0);
   expect(await removals(page, 'data-e2e-handle-x', typing)).toBe(0);
 
+  // Back at the baseline there is no change to show, so no ghost; the next
+  // change takes it again.
+  await field.fill('18');
+  await expect(canvas).not.toHaveAttribute('data-e2e-offset-ghost', /.+/);
+  await field.fill('22');
+  await expect(canvas).toHaveAttribute('data-e2e-offset-ghost', '1');
+
   // Escape abandons the typed value: no ghost survives it, nothing is added.
   await page.evaluate(() => {
     window.__holdPreviews!.hold = false;

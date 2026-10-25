@@ -4255,7 +4255,11 @@ export function ModelViewer({
       } else if (offsetRigRef.current) {
         // A typed value previews like a drag: solid over the old part's
         // ghost, taken before the proxy deforms the body.
+        // Back at zero there is no change to show: drop the ghost (typed
+        // entry keeps it across exact frames, so nothing else would), and
+        // take it again for the next nonzero value.
         if (Math.abs(value) > 1e-9) beginOffsetGhost();
+        else clearOffsetGhost();
         offsetRigRef.current.setValue(value);
         queueOffsetBodyProxy(value);
       } else {
