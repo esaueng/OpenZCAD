@@ -3,7 +3,7 @@ import { openSharedSnapshot } from '../../apps/web/src/lib/e2ee/sharedSnapshot';
 import { parseShareFragment } from '../../apps/web/src/lib/e2ee/shareLinkFragment';
 import { decodeE2eeFrame } from '@openzcad/shared';
 import { d1Database } from '../d1-sqlite';
-import { expect, test } from './openzcad-fixtures';
+import { createPrimitiveInPlace, expect, test } from './openzcad-fixtures';
 import {
   ALICE_EMAIL,
   COMMIT_BUDGET_MS,
@@ -64,11 +64,7 @@ test('the owner creates and revokes an encrypted share link from the dialog', as
   await expect(settings).toHaveCount(0);
   await alice.getByLabel('Project name').fill(PROJECT_NAME);
   await alice.getByRole('button', { name: 'Create project' }).click();
-  await alice.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await alice
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(alice, 'box');
   await expect(
     alice.getByRole('status', { name: 'Saved', exact: true })
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });
@@ -133,11 +129,7 @@ test('the owner creates and revokes an encrypted share link from the dialog', as
 
   // Autosave keeps working on top of the share-link versions.
   await dialog.getByRole('button', { name: 'Close sharing' }).click();
-  await alice.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await alice
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(alice, 'box');
   await expect(
     alice.getByRole('status', { name: 'Saved', exact: true })
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });
