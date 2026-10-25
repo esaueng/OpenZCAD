@@ -8,7 +8,7 @@ dependencies, so the same code runs in browsers, Web Workers, the Tauri
 WKWebView and Node 20+. Phase 3's account keys (device lists, unlock targets,
 device approval) are its first application use; Phase 4 adds the project
 data formats below (new envelope kinds, the version log, epoch bindings and
-bodies), and Phase 5 sharing.
+bodies), and Phase 5 sharing (contacts lists and share links).
 
 All integers are big-endian. Every label below is UTF-8 and prefixed with
 `OpenZCAD E2EE `, so `v1 wrap version-key` means the bytes of
@@ -207,7 +207,8 @@ head, for example with a version log that contains both.
 
 ### Bodies
 
-Project envelope bodies are UTF-8 JSON with `version: 1`, written by the
+Project envelope bodies are UTF-8 JSON with `version: 1` (2 for a document
+body that carries share links, below), written by the
 encoders and read strictly by the decoders: unknown or missing fields, wrong
 types and sizes are `malformed`, a newer `version` is `unsupported-version`,
 and a body over its kind's ceiling, or nested past a lexical depth and
@@ -216,13 +217,26 @@ unpadded canonical base64url. Every encoder and decoder runs
 `checkBlobReferences` against the envelope header, so a body referencing a
 blob the header omits, or the reverse, is refused (`context-mismatch`).
 
-| Body                    | Kinds                    | Fields                                                                                                |
-| ----------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------- |
-| `EncryptedDocumentBody` | document, share-snapshot | `document` (object), `blobs` (references), `revisionVersionHashes` (revision id → lowercase hex)      |
-| `ProjectInfoBody`       | project-info             | `name`, optional `thumbnail` reference, `exports` (`ref`, `fileName`, `contentType`, flat `metadata`) |
-| `KeyArchiveBody`        | key-archive              | `previousKeys` (`keyEpoch`, `key`), `dedupeSecret`, `epochRecord`, `epochAuthenticator`; no blob refs |
-| `MeasurementsBody`      | measurements             | `record` (object: the app's stored measurement record); no blob refs                                  |
-| `ViewStateBody`         | view-state               | `session` (object: one workspace session); no blob refs                                               |
+| Body                    | Kinds                    | Fields                                                                                                                                             |
+| ----------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EncryptedDocumentBody` | document, share-snapshot | `document` (object), `blobs` (references), `revisionVersionHashes` (revision id → lowercase hex); version 2 adds `shareLinks` (document kind only) |
+| `ProjectInfoBody`       | project-info             | `name`, optional `thumbnail` reference, `exports` (`ref`, `fileName`, `contentType`, flat `metadata`)                                              |
+| `KeyArchiveBody`        | key-archive              | `previousKeys` (`keyEpoch`, `key`), `dedupeSecret`, `epochRecord`, `epochAuthenticator`; no blob refs                                              |
+| `MeasurementsBody`      | measurements             | `record` (object: the app's stored measurement record); no blob refs                                                                               |
+| `ViewStateBody`         | view-state               | `session` (object: one workspace session); no blob refs                                                                                            |
+
+A document body is version 2 exactly when it carries the project's active
+share-link set, `shareLinks: { grants: [{ grant, signature }], tombstones:
+[{ tombstone, signature }] }` (base64url statement and signature bytes, see
+[Share links](#share-links)), even an empty one; without it the encoder
+writes version 1, byte for byte as before, and the version 1 decoder is
+unchanged. Each list is sorted by link id with each id at most once, no id
+is both granted and tombstoned (`context-mismatch`), and no entry names a
+key epoch after the envelope's (`context-mismatch`). A share snapshot never
+carries a link set: the encoder refuses one (`invalid-argument`) and the
+decoder refuses a version 2 body under a share-snapshot header
+(`context-mismatch`), so link visitors never see the other links. The body
+codec checks structure only; `verifyShareLinkSet` checks the signatures.
 
 `revisionVersionHashes` lets a historical read prove that a retained
 revision belongs to this history through the signed head, instead of a chain
@@ -239,9 +253,9 @@ measurements name the previous envelope's hash as their previous-version
 hash (none for the first), so each forms its own chain; view state names
 none.
 
-Device lists live here (below). The contacts list, the custom roster and
-its revocation cutoffs are parked on the `claude/e2ee-chains` branch: MLS
-(RFC 9420) replaces the roster and epochs, and contacts arrive with sharing.
+Device lists and contacts lists live here (below). The custom roster is
+parked on the `claude/e2ee-chains` branch: MLS (RFC 9420) replaces the
+roster and epochs.
 
 ## Key wrapping
 
@@ -271,7 +285,7 @@ UTF-8 string and type 2 a u64.
 | `version-key`            | KW     | projectId, keyEpoch, kind, versionId      | project key                                                                                                              |
 | `dedupe-secret`          | KW     | projectId, keyEpoch                       | project key: the dedupe secret, carried across epochs                                                                    |
 | `share-key`              | KW     | projectId, keyEpoch, shareId              | project key; it never encrypts content                                                                                   |
-| `share-version-key`      | KW     | projectId, shareId, versionId             | share key: a share snapshot's version key, for link visitors                                                             |
+| `share-version-key`      | KW     | projectId, keyEpoch, shareId, versionId   | share key: a share snapshot's version key, for link visitors                                                             |
 | `rejoin-psk`             | KW     | userId, projectId, keyEpoch               | account key: an MLS epoch's rejoin PSK, for an External Commit after losing MLS state                                    |
 | `archived-project-key`   | KW     | projectId, archivedEpoch, underEpoch      | a later epoch's project key: an earlier project key; `archivedEpoch` must be below `underEpoch`                          |
 | `previous-account-key`   | KW     | userId, generation, keySequence           | the new account key: the account key it replaced, so older account-key wraps stay reachable                              |
@@ -301,7 +315,15 @@ target with an identity of its own.
 
 `wrapShareSnapshotKey` wraps a share snapshot's fresh version key twice:
 under the project key for members (`version-key`, kind `share-snapshot`) and
-under the share key for link visitors. Blob keys are not wrapped; they travel
+under the share key for link visitors. Both wraps bind the snapshot's key
+epoch and `versionId`, so neither can be replayed onto another snapshot.
+`share-version-key` gained `keyEpoch` in Phase 5, before any code wrote
+one. A link's share key is wrapped under each key epoch's project key
+(`share-key`, one wrap per epoch, since the epoch is bound); `openShareKey`
+unwraps it and checks it against the `shareKeyHash` the owner's grant
+names (`context-mismatch` otherwise). No share context uses a counter that
+restarts: key epochs rise across group resets, and a link id is never
+reused (a tombstone is permanent). Blob keys are not wrapped; they travel
 inside the project envelope. Unlock secrets are imported as non-extractable
 HKDF keys, so a device key in IndexedDB never exposes its bytes. The passkey
 PRF input is `passkeyPrfInput()`, a fresh copy on each call.
@@ -396,7 +418,7 @@ hash) it refuses another identity (`context-mismatch`) and a list that does
 not contain the pinned entry (`chain-broken`). `nextDeviceListEntry` builds
 the next entry from a verified head.
 
-Three statements travel beside lists. An identity transition (`"OZT"`) names
+Four statements travel beside lists. An identity transition (`"OZT"`) names
 the old identity hash, the new identity key and its first entry's hash, and
 is signed by the old identity or a device it certified; it proves nothing to
 contacts. A device approval grant (`"OZG"`) is signed by the approving
@@ -409,7 +431,13 @@ revocation cutoffs signature`) are signed by the identity key at a device
 removal and name, per project, the first epoch the revoked device must not
 know. `verifyRevocationCutoffs` requires the identity signature, the list's
 user and generation, and an entry of that list, by sequence and hash, that
-revokes a device. Phase 4 stores and enforces them.
+revokes a device. Phase 4 stores and enforces them. A solo group reset
+(`"OZX" | u8 1 | u8 length + user id | u32 generation | u32 entry sequence
+| 32-byte entry hash | u8 length + project id | u32 prior group generation
+| u64 prior key epoch | u64 issuedAt`, signed with `v1 group reset
+signature`; decision D9) is signed by the identity key and names the
+replaced group's generation and newest key epoch, so the new group's key
+epochs continue after it (decision D10).
 
 ## Contacts lists
 
@@ -439,18 +467,84 @@ the identity key and, with a pin, refuses a rolled-back or forked list
 `contactDeviceListPin` turns a verified contact into the `DeviceListPin`
 their device list must extend.
 
+## Share links
+
+ADR-024, Sharing and collaboration. A link is
+`#share=<token>.<key>.<owner>`: `<key>` is the 32-byte share key and
+`<owner>` the owner's `identityFingerprint` (`publicKeyHash` of the
+identity key). The share key never encrypts content; it wraps each share
+snapshot's version key (`share-version-key`). Its hash is
+`shareKeyHash(key) = SHA-256(label "v1 share key hash" | key)`.
+
+Four signed statements, each `magic | u8 version = 1 | …`, canonical (one
+encoding; lists sorted and without duplicates), with a signature
+`u8 1 | r || s` over `label "v1 <kind> signature" | statement`:
+
+| Statement (kind)                                | Signed by                            | Bytes after `magic \| u8 1`                                                                                                                                                                                                                                             |
+| ----------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"OZS"` share delegation (`share delegation`)   | the owner's identity key             | 32-byte owner identity key hash \| u32 sequence \| u64 issuedAt \| u64 expiresAt \| u8 count (1–64) + 65-byte device signing keys, bytewise sorted                                                                                                                      |
+| `"OZA"` share-authority (`share authority`)     | an owner device the delegation names | u8 len + project id \| u8 len + link id \| 32-byte share key hash \| u8 mode (1 view, 2 tweak) \| 32-byte owner identity key hash \| u32 sequence \| u64 issuedAt \| u64 expiresAt \| 32-byte signer key hash \| u16 count (1–2048) + 32-byte author key hashes, sorted |
+| `"OZL"` link grant (`share link grant`)         | an owner device                      | u8 len + project id \| u8 len + link id \| 32-byte share key hash \| u8 mode \| u32 key epoch \| u64 issuedAt \| 32-byte signer key hash                                                                                                                                |
+| `"OZY"` link tombstone (`share link tombstone`) | an owner device                      | u8 len + project id \| u8 len + link id \| u32 key epoch \| u64 issuedAt \| 32-byte signer key hash                                                                                                                                                                     |
+
+Key hashes are `publicKeyHash` of a device signing key, as
+`DeviceRecord.signingKeyHash` names it. Statements a visitor sees name no
+user id. Times are Unix milliseconds:
+
+- A **delegation** lasts at most 30 days (`expiresAt - issuedAt`), a
+  **share-authority statement** at most 7. Encoding refuses longer
+  (`invalid-argument`), decoding too (`malformed`). A verifier refuses one
+  at or past `expiresAt`, or issued more than `SHARE_CLOCK_SKEW_MS` (10
+  minutes) after its `now`.
+- The delegation carries the device keys whole, so a visitor needs no
+  device list; the statement names its signer and the authors by hash.
+- A **grant**'s key epoch is the project key epoch it was made in; a set
+  never holds an entry from a later epoch than its version, and a resolver
+  can judge a revoked owner device's entries against its revocation cutoff.
+
+`verifySharedSnapshot` is the visitor's check, in the ADR's order: the
+served identity key hashes to `<owner>`; the delegation is identity-signed
+and valid now; the statement's signer is a delegated key; the statement's
+signature, validity now, owner, and share key hash (it must be the link's
+key); the snapshot's signing key is one the statement names; the snapshot
+signature; and the envelope is a `share-snapshot` of the statement's
+project. Only then does the visitor unwrap the version key with the share
+key and call `decryptProjectEnvelope`. The snapshot comes with its author's
+public key, since the statement names authors only by hash.
+
+`verifyShareLinkSet(set, { projectId, keyEpoch, resolveOwnerKey,
+seenTombstones, previous, authorIsOwner })` checks a document's link set:
+each grant and tombstone is for this project, from no later epoch than the
+version, and signed by the owner key `resolveOwnerKey` returns for its
+signer hash; no granted id is tombstoned, in the set or among
+`seenTombstones`; with `previous` (the parent's verified set), no
+tombstone is dropped and, unless `authorIsOwner`, the set is unchanged
+(`sameShareLinkSet`). Refusals are `ShareLinkError`s with a `reason`
+(`owner-mismatch`, `delegation-signature`, `delegation-expired`,
+`delegation-not-yet-valid`, `signer-not-delegated`, `authority-signature`,
+`authority-expired`, `authority-not-yet-valid`, `link-mismatch`,
+`author-not-named`, `snapshot-signature`, `snapshot-mismatch`,
+`unknown-signer`, `grant-signature`, `tombstone-signature`,
+`grant-mismatch`, `tombstoned`, `tombstone-dropped`, `changed-by-editor`).
+Their `code` is `authentication-failed` for a bad signature or an
+unauthorized signer, `chain-broken` for a dropped tombstone, and
+`context-mismatch` otherwise, expiry included.
+
 ## Tests
 
 `vectors.test.ts` holds fixed vectors built from injected keys, blob ids, IVs,
 ephemeral keys and timestamps, including version 1 and 2 device-list
 entries, a recorded revocation-cutoffs signature, a contacts entry with a
 recorded identity signature, a paired approval commitment, the project-info and key-archive kinds, the three
-project-data wraps, an epoch binding, a version log record and a key archive
-body. It also re-derives the nonce layout, both envelope classes, the content
+project-data wraps, an epoch binding, a version log record, a key archive
+body, and the share-link formats: a share key hash, a delegation, a
+share-authority statement, a grant and a tombstone with recorded signatures
+checked by raw WebCrypto, a version 2 document body, and the `share-key` and
+`share-version-key` wraps. It also re-derives the nonce layout, both envelope classes, the content
 blob hash, the wrap and the epoch binding with raw WebCrypto. A
 change to a vector is a format change and needs a new version byte.
-`fuzz.test.ts` mutates valid inputs, version log records, contacts entries and
-bodies included, and requires every parser to fail only with `E2eeError`. Functions that inject keys or randomness (`…With`,
+`fuzz.test.ts` mutates valid inputs, version log records, contacts entries,
+share-link statements and bodies (version 2 included), and requires every parser to fail only with `E2eeError`. Functions that inject keys or randomness (`…With`,
 `envelopeKeyFromBytes`) are test-only and are not exported from the package
 entry.
 

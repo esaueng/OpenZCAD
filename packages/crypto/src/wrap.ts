@@ -163,6 +163,8 @@ export type WrapContext =
        */
       readonly purpose: 'share-version-key';
       readonly projectId: string;
+      /** The snapshot header's key epoch, as its member wrap binds it. */
+      readonly keyEpoch: number;
       readonly shareId: string;
       readonly versionId: string;
     }
@@ -282,6 +284,7 @@ const CONTEXT_FIELDS: Record<WrapPurpose, Record<string, FieldRule>> = {
   'dedupe-secret': { projectId: 'string', keyEpoch: 'uint' },
   'share-version-key': {
     projectId: 'string',
+    keyEpoch: 'uint',
     shareId: 'string',
     versionId: 'string'
   },
@@ -672,6 +675,7 @@ export async function wrapShareSnapshotKey(
   const forLinkVisitors = await wrapKey(shareKey, versionKey, {
     purpose: 'share-version-key',
     projectId: context.projectId,
+    keyEpoch: context.keyEpoch,
     shareId: context.shareId,
     versionId: context.versionId
   });
