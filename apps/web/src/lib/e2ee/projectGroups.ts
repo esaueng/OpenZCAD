@@ -2001,6 +2001,10 @@ async function rotationRequest(
     .map((m) => m.index);
   if (remove.length) return { remove };
   if (status.epoch === null) return null;
+  // The Worker still waits for this account's member Commit after a
+  // removal (slice 5-7): a rejoin's External Commit does not count, nor
+  // does a follow-up a crash lost (#908 review). An empty Commit is one.
+  if (group.rotationDue) return {};
   return (await wrapIsStale(ctx, projectId, group.keyEpochBase + status.epoch))
     ? {}
     : null;

@@ -320,6 +320,34 @@ async function requirePlausibleCutoffs(
   }
 }
 
+/**
+ * Whether this account still owes the project a rotation the Worker counts:
+ * a cutoff of its own names the project and no member Commit of its own
+ * reached it (`rotationsLanded`). Told to the account's browsers with the
+ * group, so a device that rejoined (whose External Commit does not count)
+ * or crashed before its follow-up Commit sends one on its next open,
+ * instead of every writer staying fenced off (#908 review).
+ */
+export async function ownRotationDue(
+  db: D1Database,
+  projectId: string,
+  userId: string
+): Promise<boolean> {
+  if (!(await isE2eeDeviceRemovalStorageReady(db))) return false;
+  const { results } = await db
+    .prepare('SELECT statement FROM e2ee_revocation_cutoffs WHERE user_id = ?')
+    .bind(userId)
+    .all<{ statement: string }>();
+  const named = (results ?? []).flatMap((row) =>
+    decodeRevocationCutoffs(fromBase64Url(row.statement)).cutoffs.filter(
+      (cutoff) => cutoff.projectId === projectId
+    )
+  );
+  if (named.length === 0) return false;
+  const landed = await rotationsLanded(db, projectId);
+  return named.some((cutoff) => !landed.reached(userId, cutoff.cutoffEpoch));
+}
+
 export function refuseMemberRotationPending(): never {
   refuse(
     409,

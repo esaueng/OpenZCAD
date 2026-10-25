@@ -71,6 +71,13 @@ export interface E2eeProjectGroupRecord {
    * without the migration.
    */
   pendingProposals?: number;
+  /**
+   * Set for the reader when a device removal of its own account named this
+   * project and the Worker has not yet seen that account's member Commit
+   * reaching the cutoff (slice 5-7). Its browsers then commit one; until
+   * they do, every writer is fenced off.
+   */
+  rotationDue?: true;
 }
 
 export interface E2eeProjectGroupResponse {
