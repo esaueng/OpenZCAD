@@ -114,3 +114,35 @@ test('a fillet takes another edge after creation from its History row', async ({
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   await expect(page.getByTitle('Feature failed to build')).toHaveCount(0);
 });
+
+test('a box sweep during Fillet adds the edges it catches', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Fillet sweep');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByLabel('Radius', { exact: true }).fill('14');
+  await inspector.getByLabel('Height', { exact: true }).fill('28');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(page.locator('.feature-row')).toHaveCount(1);
+  await page.getByRole('button', { name: /^Fillet/ }).click();
+  const bar = page.getByRole('group', { name: 'Fillet command' });
+  await expect(bar).toContainText('Click the edges to fillet');
+  // Both rims, swept from empty space around the part.
+  const canvas = page.locator('.viewer-host canvas');
+  const box = (await canvas.boundingBox())!;
+  await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.12);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.8, box.y + box.height * 0.88, {
+    steps: 12
+  });
+  await page.mouse.up();
+  await expect(bar).toContainText('2 edges');
+  await enterCommandValue(page, 'radius', '1');
+  await finishInPlaceCommand(page, 'Fillet');
+  await expect(
+    page.locator('.feature-row', { hasText: /^Fillet/ })
+  ).toBeVisible();
+  await expect(page.getByTitle('Feature failed to build')).toHaveCount(0);
+});

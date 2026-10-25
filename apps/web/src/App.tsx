@@ -15048,6 +15048,67 @@ export function App() {
     );
   }
 
+  /**
+   * The edge a click names for an in-place Fillet or Chamfer, or null when
+   * the click is refused (and says why).
+   */
+  function inPlaceEdgeForSelection(
+    selection: TopologySelection
+  ): EdgePick | null {
+    // An edit's edges are its input body's: a click on what the blend
+    // built names the input's edge by its fingerprint, which an
+    // unblended edge keeps, and the validated commit refuses one the
+    // kernel cannot find rather than guessing.
+    const editing = inPlaceRef.current.editing;
+    const target =
+      editing && 'targetBodyId' in editing.data
+        ? (editing.data.targetBodyId ?? null)
+        : null;
+    const remap =
+      target !== null &&
+      selection.bodyId !== target &&
+      !inPlaceEditMayUse(
+        producingFeatureOf({ bodyId: selection.bodyId }),
+        editing
+      );
+    // Only what the edited blend's result became stands for its input;
+    // an edge of another later body is refused.
+    const descendants =
+      remap && editing ? inPlaceEditDescendants(editing) : null;
+    if (remap && editing && !descendants?.has(selection.bodyId)) {
+      setStatus(
+        `${editing.name} can only use edges of bodies made before it in History.`
+      );
+      return null;
+    }
+    // On a body another one joined later, only an edge the input still
+    // has is surely its own.
+    const joined = descendants?.mixed.has(selection.bodyId);
+    const onInput =
+      remap && target
+        ? inPlaceEdgePick(target, undefined, selection.hash)
+        : null;
+    if (remap && joined && !onInput && editing) {
+      setStatus(
+        `That edge may come from a body joined after ${editing.name} · pick an edge of the body ${editing.name} was made on.`
+      );
+      return null;
+    }
+    if (remap && target) {
+      return (
+        onInput ??
+        (selection.hash !== undefined
+          ? { bodyId: target, hash: selection.hash, topologyId: '' }
+          : null)
+      );
+    }
+    return inPlaceEdgePick(
+      selection.bodyId,
+      selection.topologyId,
+      selection.hash
+    );
+  }
+
   function handleSelectTopologyFromViewer(
     selection: TopologySelection | null,
     additive: boolean,
@@ -15060,56 +15121,7 @@ export function App() {
       // under it.
       const command = inPlaceRef.current;
       if (selection?.kind === 'edge' && command.spec?.edgeMode) {
-        // An edit's edges are its input body's: a click on what the blend
-        // built names the input's edge by its fingerprint, which an
-        // unblended edge keeps, and the validated commit refuses one the
-        // kernel cannot find rather than guessing.
-        const editing = command.editing;
-        const target =
-          editing && 'targetBodyId' in editing.data
-            ? (editing.data.targetBodyId ?? null)
-            : null;
-        const remap =
-          target !== null &&
-          selection.bodyId !== target &&
-          !inPlaceEditMayUse(
-            producingFeatureOf({ bodyId: selection.bodyId }),
-            editing
-          );
-        // Only what the edited blend's result became stands for its input;
-        // an edge of another later body is refused.
-        const descendants =
-          remap && editing ? inPlaceEditDescendants(editing) : null;
-        if (remap && editing && !descendants?.has(selection.bodyId)) {
-          setStatus(
-            `${editing.name} can only use edges of bodies made before it in History.`
-          );
-          return true;
-        }
-        // On a body another one joined later, only an edge the input still
-        // has is surely its own.
-        const joined = descendants?.mixed.has(selection.bodyId);
-        const onInput =
-          remap && target
-            ? inPlaceEdgePick(target, undefined, selection.hash)
-            : null;
-        if (remap && joined && !onInput && editing) {
-          setStatus(
-            `That edge may come from a body joined after ${editing.name} · pick an edge of the body ${editing.name} was made on.`
-          );
-          return true;
-        }
-        const edge =
-          remap && target
-            ? (onInput ??
-            (selection.hash !== undefined
-              ? { bodyId: target, hash: selection.hash, topologyId: '' }
-              : null))
-          : inPlaceEdgePick(
-              selection.bodyId,
-              selection.topologyId,
-              selection.hash
-            );
+        const edge = inPlaceEdgeForSelection(selection);
         return edge ? command.pickEdge(edge) : true;
       }
       if (selection?.kind === 'face' && command.spec?.faceMode) {
@@ -15923,6 +15935,23 @@ export function App() {
       setStatus(
         'Exact geometry is still rebuilding. Topology actions are temporarily unavailable.'
       );
+      return;
+    }
+    // A box sweep during an in-place Fillet or Chamfer adds to its edges,
+    // each taken as a click would take it, none toggled back out.
+    if (kind === 'edge' && inPlaceRef.current.spec?.edgeMode) {
+      const command = inPlaceRef.current;
+      const swept = selections.flatMap((selection) => {
+        const edge = inPlaceEdgeForSelection(selection);
+        return edge ? [edge] : [];
+      });
+      const held = new Set(
+        command.slots.edges.map((edge) => `${edge.bodyId}:${edge.hash}`)
+      );
+      command.setEdges([
+        ...command.slots.edges,
+        ...swept.filter((edge) => !held.has(`${edge.bodyId}:${edge.hash}`))
+      ]);
       return;
     }
     if (kind === 'edge') {
