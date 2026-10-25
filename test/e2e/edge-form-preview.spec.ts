@@ -142,6 +142,10 @@ test('a new fillet takes a second edge clicked on its preview', async ({
   await page.mouse.click(second.x, second.y);
   // The hint's count, not Select all's ("Select all 2 edges").
   await expect(bar).toContainText('2 edges · click more');
+  // A right-click on a held edge neither drops it nor opens a menu.
+  await page.mouse.click(second.x, second.y, { button: 'right' });
+  await expect(bar).toContainText('2 edges · click more');
+  await expect(page.getByRole('menu')).toHaveCount(0);
   await finishInPlaceCommand(page, 'Fillet');
   await expect(
     page.locator('.feature-row', { hasText: /^Fillet/ })
