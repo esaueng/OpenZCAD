@@ -194,6 +194,44 @@ test('Linear pattern re-arms its count and spacing on chips', async ({
   });
 });
 
+test('Linear pattern edits its stored vector part by part', async ({ page }) => {
+  test.setTimeout(120_000);
+  let document = createProjectDocument('Diagonal row', toUserId('user_e2e'));
+  document = addPrimitiveFeature(document, {
+    name: 'Block',
+    primitiveKind: 'box',
+    dimensions: { width: 10, height: 10, depth: 10 }
+  });
+  const [target] = listFeaturesInOrder(document).flatMap((feature) =>
+    feature.bodyId ? [feature.bodyId] : []
+  );
+  ({ document } = patternBody(document, {
+    name: 'Row',
+    targetBodyId: target!,
+    patternKind: 'linear',
+    count: 3,
+    axis: 'x',
+    spacing: 20,
+    direction: { x: 1, y: 1, z: 0 }
+  }));
+  await openDocument(page, document, '1');
+  const bar = await editFromHistory(page, 'Row');
+  // The stored vector is a custom one, each part on its own chip.
+  await bar.locator('summary').click();
+  await expect(bar.getByRole('radio', { name: 'Custom vector' })).toBeChecked();
+  await bar.locator('summary').click();
+  await expect(page.getByTestId('command-handle-dirY')).toBeVisible();
+  await enterCommandValue(page, 'dirY', '2');
+  await finishInPlaceCommand(page, 'Edit Row');
+  await expect(page.getByRole('contentinfo')).toContainText('Edited Row', {
+    timeout: 30_000
+  });
+  const [pattern] = (await exportedFeatures(page)).filter(
+    (data) => data.featureKind === 'pattern'
+  );
+  expect(pattern).toMatchObject({ direction: { x: 1, y: 2, z: 0 } });
+});
+
 test('Shell: an untouched Done stores it unchanged, and Escape leaves it', async ({
   page
 }) => {

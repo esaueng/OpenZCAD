@@ -386,6 +386,60 @@ describe('an untouched edit writes the feature back as stored', () => {
     });
   });
 
+  it('linear pattern: a stored vector opens as a custom one, each part editable', () => {
+    const data: FeatureData = {
+      featureKind: 'pattern',
+      targetBodyId: BODY,
+      patternKind: 'linear',
+      count: 3,
+      axis: 'x',
+      spacing: 12,
+      angleDeg: 0,
+      direction: { x: 1, y: 'tilt', z: 0 }
+    };
+    const node = feature(data, 'body_p' as BodyId);
+    const armed = inPlaceEditSeed(node, EDIT_CTX)!;
+    expect(armed.seed.options.axis).toBe('custom');
+    expect(armed.seed.raws.dirY).toBe('tilt');
+    // A new Y part is stored as the vector's, the rest as stored.
+    const request = untouched(node, { dirY: 2 }) as Extract<
+      InPlaceRequest,
+      { tool: 'pattern' }
+    >;
+    expect(
+      inPlaceFeatureUpdate(
+        { featureId: node.featureId, name: node.name, data },
+        request
+      )?.data
+    ).toMatchObject({ direction: { x: 1, y: 2, z: 0 } });
+  });
+
+  it('loft: a stored apex opens as a point, each coordinate editable', () => {
+    const data: FeatureData = {
+      featureKind: 'loft',
+      sections: [
+        { sketchId: SKETCH, profile: { regionFingerprint: 7 } as never },
+        { sketchId: SKETCH, profile: { regionFingerprint: 7 } as never }
+      ],
+      mode: 'ruled',
+      endPoint: { x: 3, y: 'off', z: 40 }
+    };
+    const node = feature(data, 'body_l' as BodyId);
+    const armed = inPlaceEditSeed(node, EDIT_CTX)!;
+    expect(armed.seed.options.end).toBe('point');
+    expect(armed.seed.raws.apexY).toBe('off');
+    const untouchedRequest = untouched(node) as Extract<
+      InPlaceRequest,
+      { tool: 'loft' }
+    >;
+    expect(untouchedRequest.endPoint).toEqual({ x: 3, y: 'off', z: 40 });
+    const moved = untouched(node, { apexX: 9 }) as Extract<
+      InPlaceRequest,
+      { tool: 'loft' }
+    >;
+    expect(moved.endPoint).toEqual({ x: 9, y: 'off', z: 40 });
+  });
+
   it('grid pattern: an absent second direction stays absent while it follows', () => {
     const data: FeatureData = {
       featureKind: 'pattern',

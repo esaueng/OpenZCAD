@@ -599,7 +599,11 @@ const loft: InPlaceToolSpec = {
   wantsPath: false,
   values: [
     // How far the apex stands off the last section, along its normal.
-    { id: 'apex', label: 'Apex', unit: 'length', initial: 10 }
+    { id: 'apex', label: 'Apex', unit: 'length', initial: 10 },
+    // Or the apex anywhere, as the card's X, Y and Z fields placed it.
+    { id: 'apexX', label: 'X', unit: 'length', initial: 0 },
+    { id: 'apexY', label: 'Y', unit: 'length', initial: 0 },
+    { id: 'apexZ', label: 'Z', unit: 'length', initial: 0 }
   ],
   options: [
     {
@@ -607,7 +611,8 @@ const loft: InPlaceToolSpec = {
       label: 'Ends',
       choices: [
         { value: 'section', label: 'On the last section' },
-        { value: 'apex', label: 'At an apex point' }
+        { value: 'apex', label: 'At an apex point' },
+        { value: 'point', label: 'At a point (X, Y, Z)' }
       ],
       initial: 'section'
     },
@@ -627,22 +632,34 @@ const loft: InPlaceToolSpec = {
     if (slots.profiles.length === 1) return 'Pick the next section profile';
     return `${slots.profiles.length} sections · pick another, or ${FINISH}`;
   },
+  // A point apex not yet set starts where the apex off the last section
+  // stands.
+  defaults(slots, ctx, numbers): Record<string, number> {
+    const apex = loftApex(slots, ctx, numbers.apex ?? 10);
+    return apex
+      ? { apexX: apex.point.x, apexY: apex.point.y, apexZ: apex.point.z }
+      : {};
+  },
   ready: (slots) => slots.profiles.length >= 2,
-  request(slots, _values, options, ctx, numbers) {
+  request(slots, values, options, ctx, numbers) {
     if (slots.profiles.length < 2) return null;
     const apex =
       options.end === 'apex' ? loftApex(slots, ctx, numbers?.apex ?? 10) : null;
-    // An edited loft's own apex point, kept as stored while chosen.
-    const saved =
-      options.end === 'saved' && ctx.saved?.featureKind === 'loft'
-        ? ctx.saved.endPoint
+    // A point apex is stored as given, expressions and all.
+    const point =
+      options.end === 'point'
+        ? {
+            x: values.apexX ?? 0,
+            y: values.apexY ?? 0,
+            z: values.apexZ ?? 0
+          }
         : undefined;
     return {
       tool: 'loft',
       sections: slots.profiles.map(section),
       mode: options.shape === 'smooth' ? 'smooth' : 'ruled',
-      ...(saved
-        ? { endPoint: { ...saved } }
+      ...(point
+        ? { endPoint: point }
         : apex
           ? {
               endPoint: {
@@ -654,11 +671,33 @@ const loft: InPlaceToolSpec = {
           : {})
     };
   },
-  handles(slots, _values, ctx, options) {
+  handles(slots, values, ctx, options) {
+    const last = slots.profiles.at(-1);
+    if (options.end === 'point' && last) {
+      // Typed, each on its chip by the point (spread so none hides
+      // another), as the card's three fields were.
+      const point = {
+        x: values.apexX ?? 0,
+        y: values.apexY ?? 0,
+        z: values.apexZ ?? 0
+      };
+      const spread = Math.max(profileSpan(ctx, last) / 4, 1e-3);
+      return (['apexX', 'apexY', 'apexZ'] as const).map((valueId, index) => ({
+        valueId,
+        kind: 'chip' as const,
+        key: `${last.sketchId}:${last.regionFingerprint}:${valueId}`,
+        params: {
+          anchor: {
+            x: point.x + (index - 1) * spread,
+            y: point.y,
+            z: point.z + spread
+          }
+        }
+      }));
+    }
     if (options.end !== 'apex') return [];
     const apex = loftApex(slots, ctx, 0);
-    if (!apex) return [];
-    const last = slots.profiles.at(-1)!;
+    if (!apex || !last) return [];
     return [
       {
         valueId: 'apex',
@@ -669,6 +708,16 @@ const loft: InPlaceToolSpec = {
     ];
   }
 };
+
+/** The widest extent of a picked section's outline. */
+function profileSpan(ctx: InPlaceContext, pick: ProfilePick): number {
+  const outline = profileOutline(ctx, pick);
+  if (outline.length === 0) return 0;
+  const extent = (axis: 'x' | 'y' | 'z') =>
+    Math.max(...outline.map((point) => point[axis])) -
+    Math.min(...outline.map((point) => point[axis]));
+  return Math.max(extent('x'), extent('y'), extent('z'));
+}
 
 /**
  * The apex `distance` off the last section: from the middle of its outline,
@@ -2004,9 +2053,21 @@ const linearPattern: InPlaceToolSpec = {
       min: 2,
       max: 100,
       integer: true
+    },
+    // A custom repeat direction, as the card's X, Y and Z fields gave it.
+    { id: 'dirX', label: 'X', unit: 'count', initial: 1 },
+    { id: 'dirY', label: 'Y', unit: 'count', initial: 0 },
+    { id: 'dirZ', label: 'Z', unit: 'count', initial: 0 }
+  ],
+  options: [
+    {
+      ...AXIS_OPTION('x'),
+      choices: [
+        ...AXIS_OPTION('x').choices,
+        { value: 'custom', label: 'Custom vector' }
+      ]
     }
   ],
-  options: [AXIS_OPTION('x')],
   hint: (slots) =>
     slots.bodies.length === 0
       ? 'Click the body to repeat'
@@ -2015,12 +2076,14 @@ const linearPattern: InPlaceToolSpec = {
   request(slots, values, options, ctx) {
     const body = slots.bodies[0];
     if (!body) return null;
-    // An edited pattern's own repeat vector, kept as stored while chosen.
+    // A custom vector is stored as given, expressions and all.
     const direction =
-      options.axis === 'saved' &&
-      ctx.saved?.featureKind === 'pattern' &&
-      ctx.saved.direction
-        ? { ...ctx.saved.direction }
+      options.axis === 'custom'
+        ? {
+            x: values.dirX ?? 1,
+            y: values.dirY ?? 0,
+            z: values.dirZ ?? 0
+          }
         : null;
     return {
       tool: 'pattern',
@@ -2035,22 +2098,26 @@ const linearPattern: InPlaceToolSpec = {
       ...(direction ? { direction } : {})
     };
   },
-  handles(slots, _values, ctx, options) {
+  handles(slots, values, _ctx, options) {
     const body = slots.bodies[0];
     if (!body) return [];
-    const axis = axisOf(options.axis);
+    const custom = options.axis === 'custom';
+    const typed = {
+      x: values.dirX ?? 1,
+      y: values.dirY ?? 0,
+      z: values.dirZ ?? 0
+    };
     const vector =
-      options.axis === 'saved' &&
-      ctx.saved?.featureKind === 'pattern' &&
-      ctx.saved.direction
-        ? unit(evaluatedVector(ctx.saved.direction, ctx))
-        : AXIS_VECTORS[axis]!;
+      custom && Math.hypot(typed.x, typed.y, typed.z) > 0
+        ? unit(typed)
+        : AXIS_VECTORS[axisOf(options.axis)]!;
     const origin = centre(body);
+    const width = Math.max(body.max.x - body.min.x, 1e-3);
     return [
       {
         valueId: 'spacing',
         kind: 'linear',
-        key: `${bodyKey(body)}:spacing:${options.axis === 'saved' ? 'saved' : axis}`,
+        key: `${bodyKey(body)}:spacing:${custom ? 'custom' : axisOf(options.axis)}`,
         params: { origin, direction: vector }
       },
       {
@@ -2058,7 +2125,22 @@ const linearPattern: InPlaceToolSpec = {
         kind: 'chip',
         key: `${bodyKey(body)}:count`,
         params: { anchor: { x: origin.x, y: origin.y, z: body.max.z } }
-      }
+      },
+      // The vector's parts under the body, side by side.
+      ...(custom
+        ? (['dirX', 'dirY', 'dirZ'] as const).map((valueId, index) => ({
+            valueId,
+            kind: 'chip' as const,
+            key: `${bodyKey(body)}:${valueId}`,
+            params: {
+              anchor: {
+                x: origin.x + (index - 1) * (width / 3),
+                y: origin.y,
+                z: body.min.z
+              }
+            }
+          }))
+        : [])
     ];
   }
 };
