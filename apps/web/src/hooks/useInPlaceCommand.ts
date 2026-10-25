@@ -472,6 +472,7 @@ export function useInPlaceCommand(
       preview.clear();
       optionsRef.current.publishPreview(null);
       setRefusal(null);
+      setEntryRefusal(null);
       setPreviewValid(false);
       setSession({
         tool,
