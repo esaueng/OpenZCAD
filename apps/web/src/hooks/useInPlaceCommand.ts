@@ -720,22 +720,11 @@ export function useInPlaceCommand(
         const next = valueInRange(valueSpec, value)
           ? value
           : clampValue(valueSpec, value);
-        // Values that move with this one, unless typed as expressions.
-        const linked = Object.fromEntries(
-          Object.entries(
-            IN_PLACE_TOOL_SPECS[current.tool].linked?.(
-              valueId,
-              next,
-              current.values,
-              { ...EMPTY_SLOTS, placement: current.slots.placement }
-            ) ?? {}
-          ).filter(([id]) => current.raws[id] === undefined)
-        );
         return {
           ...current,
           values: {
             ...current.values,
-            ...linked,
+            ...linkedValues(current, valueId, next),
             [valueId]: next
           },
           raws,
@@ -780,7 +769,13 @@ export function useInPlaceCommand(
         const others = current.touched.filter((id) => id !== valueId);
         return {
           ...current,
-          values: { ...current.values, [valueId]: restored },
+          // What moved with the entry's previews goes back with it (a hung
+          // box's corner, with its height).
+          values: {
+            ...current.values,
+            ...linkedValues(current, valueId, restored),
+            [valueId]: restored
+          },
           raws,
           touched: wasTouched ? [...others, valueId] : others
         };
@@ -856,6 +851,27 @@ export function useInPlaceCommand(
     done,
     cancel
   };
+}
+
+/**
+ * The values that move with `valueId` becoming `value` (a spec's `linked`),
+ * leaving any held as a typed expression alone.
+ */
+function linkedValues(
+  session: Session,
+  valueId: string,
+  value: number
+): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(
+      IN_PLACE_TOOL_SPECS[session.tool].linked?.(
+        valueId,
+        value,
+        session.values,
+        { ...EMPTY_SLOTS, placement: session.slots.placement }
+      ) ?? {}
+    ).filter(([id]) => session.raws[id] === undefined)
+  );
 }
 
 /**

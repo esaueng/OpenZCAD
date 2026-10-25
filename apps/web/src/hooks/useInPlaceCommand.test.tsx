@@ -784,6 +784,14 @@ describe('useInPlaceCommand: primitives', () => {
         position: { z: 10 }
       })
     );
+    // A canceled entry puts the corner back with the height.
+    act(() => {
+      hook.result.current.restoreValue('height', 24, undefined, true);
+    });
+    expect(hook.result.current.values.z).toBe(-4);
+    act(() => {
+      hook.result.current.previewValue('height', 10);
+    });
     // A typed Corner Z is the user's: a height change leaves it.
     act(() => {
       hook.result.current.setValue('z', 3, 'floor');
