@@ -510,6 +510,25 @@ describe('body tools', () => {
     ).toEqual([expect.objectContaining({ valueId: 'angle', kind: 'chip' })]);
   });
 
+  it('circular pattern: an axis through the body middle keeps its angle rig and count', () => {
+    const spec = IN_PLACE_TOOL_SPECS['circular-pattern'];
+    const axis = {
+      id: 'world-z',
+      label: 'Z axis',
+      origin: { x: 10, y: 5, z: 0 },
+      direction: { x: 0, y: 0, z: 1 },
+      choice: { world: 'z' as const }
+    };
+    expect(
+      spec
+        .handles({ ...EMPTY, bodies: [BODY], axis }, {}, CTX, {})
+        .map((handle) => [handle.valueId, handle.kind])
+    ).toEqual([
+      ['angle', 'angle'],
+      ['count', 'chip']
+    ]);
+  });
+
   it('booleans: picks in order, the first the base; keep from Options', () => {
     const spec = IN_PLACE_TOOL_SPECS.subtract;
     expect(spec.ready({ ...EMPTY, bodies: [BODY] })).toBe(false);
