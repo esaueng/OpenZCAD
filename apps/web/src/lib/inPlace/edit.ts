@@ -656,11 +656,23 @@ export function inPlaceFeatureUpdate(
             ? { angleDeg: request.angleDeg }
             : {}),
           ...(direction ? { direction } : {}),
-          ...(request.axis2 !== undefined ? { axis2: request.axis2 } : {}),
-          ...(request.spacing2 !== undefined
+          // A grid's second direction left absent reads as Y, its spacing
+          // and count as the first's: while the edit still says so, it stays
+          // absent, so an untouched Done writes the pattern back as stored.
+          ...(request.axis2 !== undefined &&
+          !(saved.axis2 === undefined && request.axis2 === 'y')
+            ? { axis2: request.axis2 }
+            : {}),
+          ...(request.spacing2 !== undefined &&
+          !(
+            saved.spacing2 === undefined && request.spacing2 === request.spacing
+          )
             ? { spacing2: request.spacing2 }
             : {}),
-          ...(request.count2 !== undefined ? { count2: request.count2 } : {}),
+          ...(request.count2 !== undefined &&
+          !(saved.count2 === undefined && request.count2 === request.count)
+            ? { count2: request.count2 }
+            : {}),
           ...(request.axisRef ? { axisRef: request.axisRef } : {})
         },
         // R01: the world axis is the absent datum axis.

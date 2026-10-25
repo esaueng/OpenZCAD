@@ -66,7 +66,9 @@ function untouched(node: FeatureNode): InPlaceRequest | null {
   const armed = inPlaceEditSeed(node, EDIT_CTX)!;
   const spec = IN_PLACE_TOOL_SPECS[armed.tool];
   const axis =
-    armed.seed.axes.find((candidate) => candidate.id === armed.seed.slots.axisId) ??
+    armed.seed.axes.find(
+      (candidate) => candidate.id === armed.seed.slots.axisId
+    ) ??
     (armed.seed.slots.axisId === 'datum:axis_1'
       ? {
           id: 'datum:axis_1',
@@ -102,7 +104,13 @@ function untouched(node: FeatureNode): InPlaceRequest | null {
     saved: node.data,
     evaluate: EDIT_CTX.evaluate
   };
-  return spec.request(slots, values, armed.seed.options, ctx, armed.seed.values);
+  return spec.request(
+    slots,
+    values,
+    armed.seed.options,
+    ctx,
+    armed.seed.values
+  );
 }
 
 describe('which in-place command edits a stored feature', () => {
@@ -332,6 +340,37 @@ describe('an untouched edit writes the feature back as stored', () => {
       axis: 'y',
       direction: { x: 0, y: 1, z: 0 }
     });
+  });
+
+  it('grid pattern: an absent second direction stays absent while it follows', () => {
+    const data: FeatureData = {
+      featureKind: 'pattern',
+      targetBodyId: BODY,
+      patternKind: 'grid',
+      count: 3,
+      axis: 'x',
+      spacing: 12,
+      angleDeg: 0
+    };
+    const node = feature(data, 'body_p' as BodyId);
+    const request = untouched(node) as Extract<
+      InPlaceRequest,
+      { tool: 'pattern' }
+    >;
+    const update = inPlaceFeatureUpdate(
+      { featureId: node.featureId, name: node.name, data },
+      request
+    );
+    expect(update?.data).not.toHaveProperty('axis2');
+    expect(update?.data).not.toHaveProperty('spacing2');
+    expect(update?.data).not.toHaveProperty('count2');
+    // Set apart from the first, it is written.
+    expect(
+      inPlaceFeatureUpdate(
+        { featureId: node.featureId, name: node.name, data },
+        { ...request, spacing2: 30 }
+      )?.data
+    ).toMatchObject({ spacing2: 30 });
   });
 
   it('scale: the pivot and the rest of the transform stay as stored', () => {
