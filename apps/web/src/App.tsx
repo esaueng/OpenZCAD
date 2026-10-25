@@ -2022,6 +2022,66 @@ class ParameterCheckStale extends Error {
   }
 }
 
+/**
+ * A blend command's edges read again from the model as it is now: by
+ * lineage first, and afresh where they stand (the handle's middle and way
+ * out, a variable fillet's far end), so the chips and the highlight follow
+ * an edge an update moved or renamed. An edge the model no longer has is
+ * dropped.
+ */
+function refreshedEdgePicks(
+  picks: readonly EdgePick[],
+  representations: Readonly<Record<string, BodyRepresentation>>,
+  edgePick: (
+    bodyId: string,
+    topologyId: string | undefined,
+    hash: number | undefined
+  ) => EdgePick | null
+): { edges: EdgePick[]; moved: boolean } {
+  let moved = false;
+  const placed = (pick: EdgePick) =>
+    JSON.stringify([
+      pick.hash,
+      pick.topologyId,
+      pick.middle,
+      pick.outward,
+      pick.end
+    ]);
+  const edges = picks.flatMap((pick) => {
+    const body = representations[pick.bodyId];
+    if (!body?.topology) return [pick];
+    const found = resolveEdge(body, {
+      hash: pick.hash,
+      ...(pick.reference ? { reference: pick.reference } : {})
+    });
+    if (!found.ok) return [];
+    const fresh = edgePick(
+      pick.bodyId,
+      found.entry.topologyId,
+      found.entry.hash
+    );
+    // An input that publishes no drawn edge keeps the blend face anchor
+    // its seed placed the handle on.
+    const next: EdgePick = fresh
+      ? {
+          ...pick,
+          ...(Object.fromEntries(
+            Object.entries(fresh).filter(([, part]) => part !== undefined)
+          ) as EdgePick),
+          ...(pick.reference ? { reference: pick.reference } : {})
+        }
+      : {
+          ...pick,
+          hash: found.entry.hash,
+          topologyId: found.entry.topologyId
+        };
+    if (placed(next) === placed(pick)) return [pick];
+    moved = true;
+    return [next];
+  });
+  return { edges, moved };
+}
+
 export function App() {
   // Counts this component's commits for the interaction probes. Deliberately
   // dependency-free so it runs after every commit, and deliberately inside
@@ -19748,50 +19808,12 @@ export function App() {
       bodiesMoved = true;
       return box;
     });
-    // A blend's edges, the same way: by lineage first, and read afresh where
-    // they stand now (the handle's middle and way out, a variable fillet's
-    // far end), so the chips follow an edge the update moved.
-    let edgesMoved = false;
-    const placedEdge = (pick: EdgePick) =>
-      JSON.stringify([
-        pick.hash,
-        pick.topologyId,
-        pick.middle,
-        pick.outward,
-        pick.end
-      ]);
-    const edges = inPlaceEditPicks.edges.flatMap((pick) => {
-      const body = representations[pick.bodyId];
-      if (!body?.topology) return [pick];
-      const found = resolveEdge(body, {
-        hash: pick.hash,
-        ...(pick.reference ? { reference: pick.reference } : {})
-      });
-      if (!found.ok) return [];
-      const fresh = inPlaceEdgePickRef.current(
-        pick.bodyId,
-        found.entry.topologyId,
-        found.entry.hash
-      );
-      // An input that publishes no drawn edge keeps the blend face anchor
-      // its seed placed the handle on.
-      const next: EdgePick = fresh
-        ? {
-            ...pick,
-            ...(Object.fromEntries(
-              Object.entries(fresh).filter(([, part]) => part !== undefined)
-            ) as EdgePick),
-            ...(pick.reference ? { reference: pick.reference } : {})
-          }
-        : {
-            ...pick,
-            hash: found.entry.hash,
-            topologyId: found.entry.topologyId
-          };
-      if (placedEdge(next) === placedEdge(pick)) return [pick];
-      edgesMoved = true;
-      return [next];
-    });
+    // A blend's edges, the same way (see `refreshedEdgePicks`).
+    const { edges, moved: edgesMoved } = refreshedEdgePicks(
+      inPlaceEditPicks.edges,
+      representations,
+      inPlaceEdgePickRef.current
+    );
     if (
       path.length === inPlaceEditPicks.path.length &&
       guide.length === inPlaceEditPicks.guide.length &&
@@ -19830,6 +19852,22 @@ export function App() {
     parameterScope.scope,
     setStatus
   ]);
+  // A new Fillet or Chamfer's edges follow the model too (an undo, a
+  // collaborator's rebuild), so a click on the live edge toggles the held
+  // one rather than adding a second reference to it.
+  const inPlaceCreatesBlend =
+    inPlace.active && !inPlaceEditing && Boolean(inPlaceSpec?.edgeMode);
+  useEffect(() => {
+    if (!inPlaceCreatesBlend || inPlaceEditPicks.edges.length === 0) return;
+    const { edges, moved } = refreshedEdgePicks(
+      inPlaceEditPicks.edges,
+      representations,
+      inPlaceEdgePickRef.current
+    );
+    if (moved || edges.length !== inPlaceEditPicks.edges.length) {
+      inPlaceRef.current.setPicks({ edges }, inPlaceEditPicks);
+    }
+  }, [inPlaceCreatesBlend, inPlaceEditPicks, representations]);
 
   useEffect(() => {
     setSelectedProfiles((current) => {
