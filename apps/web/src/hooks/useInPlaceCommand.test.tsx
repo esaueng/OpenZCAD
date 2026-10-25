@@ -1038,6 +1038,38 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     expect(hook.result.current.values.planeOY).toBe(3);
   });
 
+  it('follows whether the feature stores a value at all', () => {
+    let live = { values: { depth: 8 }, touched: ['depth'] };
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      baseVersion: 1,
+      reseed: (edit) => ({
+        tool: 'subtract',
+        seed: { ...edit, values: live.values, raws: {}, touched: live.touched }
+      })
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('subtract', {
+        ...SEED,
+        values: { depth: 8 },
+        touched: ['depth']
+      })
+    );
+    // A collaborator stores a size that was absent: it is the feature's own.
+    live = { values: { depth: 8, step: 3 }, touched: ['depth', 'step'] };
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.touched).toContain('step');
+    // And drops it again: absent once more, for its default to follow.
+    live = { values: { depth: 8 }, touched: ['depth'] };
+    hook.rerender({ ...options, baseVersion: 3 });
+    expect(hook.result.current.touched).not.toContain('step');
+    expect(hook.result.current.values).not.toHaveProperty('step');
+  });
+
   it('takes an option changed by someone else unless the user changed it', () => {
     let live: Record<string, string> = {
       planeMode: 'typed',
