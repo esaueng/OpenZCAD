@@ -1040,6 +1040,25 @@ export function inPlaceEditLineage(
 }
 
 /**
+ * A transform written to change nothing (a Scale of 1, a Move of zero, a
+ * turn of 0°): its body stands where it was. A stored expression may say
+ * otherwise, so only plain zeros and ones count.
+ */
+function isIdentityTransform(data: FeatureData): boolean {
+  if (data.featureKind !== 'transform') return false;
+  const zero = (part: ParamValue) => part === 0 || part === '0';
+  const still = (vector: ParametricVector3) =>
+    zero(vector.x) && zero(vector.y) && zero(vector.z);
+  const { translation, rotationDeg, scale } = data.transform;
+  return (
+    still(translation) &&
+    still(rotationDeg) &&
+    (scale === undefined || scale === 1 || scale === '1') &&
+    (!data.axisRotation || zero(data.axisRotation.angleDeg))
+  );
+}
+
+/**
  * The bodies a later feature moved from where `featureId` made them: a
  * transform (in place or a copy), a mirror, a pattern, and anything built
  * on one of those. A click on one of them does not land where the edited
@@ -1057,7 +1076,7 @@ export function inPlaceEditMovedBodies(
     if (isFeatureSuppressed(later)) continue;
     const kind = later.data.featureKind;
     if (
-      kind === 'transform' ||
+      (kind === 'transform' && !isIdentityTransform(later.data)) ||
       kind === 'mirror' ||
       kind === 'pattern' ||
       [...(history.parents.get(later.featureId) ?? [])].some((parent) =>
