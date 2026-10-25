@@ -63,7 +63,11 @@ import { prepareSaveStateRestore } from './lib/saveStateRestore';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import { toggleBodyIsolation, type BodyIsolation } from './lib/bodyIsolation';
 import { failedFeatureIds } from './lib/featureRepair';
-import { featureHistory, relatedFeatureIds } from './lib/featureHistory';
+import {
+  featureHistory,
+  featureResultBodyIds,
+  relatedFeatureIds
+} from './lib/featureHistory';
 import {
   exportScope,
   exportScopeLabel,
@@ -8247,7 +8251,7 @@ export function App() {
         availableSketchViews.find((view) => view.sketchId === sketchId)
           ?.regions[0]?.regionFingerprint ?? null,
       face: (bodyId, hash) =>
-        inPlaceFacePick(bodyId, undefined, hash, undefined),
+        inPlaceFacePick(bodyId, undefined, hash, undefined, true),
       anyFace: (bodyId) => {
         // A flat face carries the handle best; a body with none (a sphere)
         // still names itself by any face it has.
@@ -8256,7 +8260,7 @@ export function App() {
           faces.find((candidate) => candidate.geometry?.surfaceType === 'plane') ??
           faces[0];
         return face
-          ? inPlaceFacePick(bodyId, face.topologyId, face.hash, undefined)
+          ? inPlaceFacePick(bodyId, face.topologyId, face.hash, undefined, true)
           : null;
       },
       curve: (sketchId, entityId) => {
@@ -8398,7 +8402,9 @@ export function App() {
     bodyId: string,
     topologyId: string | undefined,
     hash: number | undefined,
-    point: { x: number; y: number; z: number } | undefined
+    point: { x: number; y: number; z: number } | undefined,
+    /** A stored face being resolved, not a click: no edit maps it. */
+    stored = false
   ): FacePick | null {
     const matches = (candidate: { topologyId: string; hash: number }) =>
       (topologyId !== undefined && candidate.topologyId === topologyId) ||
@@ -8406,13 +8412,14 @@ export function App() {
     let resolvedBodyId = bodyId as BodyId;
     let face = representations[resolvedBodyId]?.topology?.faces.find(matches);
     // An edit's faces belong to the body it took: a click on what the
-    // feature (or a later one) built from that body means the input's face.
-    const editing = inPlaceRef.current.editing;
+    // feature (or a later one built from it) made of that body means the
+    // input's face. A later body of another lineage is refused outright.
+    const editing = stored ? null : inPlaceRef.current.editing;
     const editTarget =
       editing && 'targetBodyId' in editing.data
         ? editing.data.targetBodyId
         : null;
-    const remap =
+    const later =
       face !== undefined &&
       editTarget !== null &&
       resolvedBodyId !== editTarget &&
@@ -8420,6 +8427,13 @@ export function App() {
         producingFeatureOf({ bodyId: resolvedBodyId }),
         editing
       );
+    if (later && editing && !inPlaceEditDescendants(editing).has(resolvedBodyId)) {
+      setStatus(
+        `${editing.name} can only use faces of bodies made before it in History.`
+      );
+      return null;
+    }
+    const remap = later;
     if (remap && editTarget) {
       const clicked = face?.geometry;
       face =
@@ -8462,6 +8476,23 @@ export function App() {
       ...(geometry?.center ? { center: geometry.center } : {}),
       ...(point ? { point } : {})
     };
+  }
+
+  /**
+   * The bodies an edited feature's result became: its own, and every body a
+   * feature after it built from them. Only a click on one of these stands
+   * for the edit's input.
+   */
+  function inPlaceEditDescendants(edit: InPlaceEditSeed): Set<BodyId> {
+    const current = managerRef.current?.document;
+    const feature = current ? findFeature(current, edit.featureId) : null;
+    const bodies = new Set<BodyId>(edit.ownBodyIds);
+    if (!current || !feature) return bodies;
+    for (const bodyId of featureResultBodyIds(feature)) bodies.add(bodyId);
+    for (const later of featureHistory(current).downstream(edit.featureId)) {
+      for (const bodyId of featureResultBodyIds(later)) bodies.add(bodyId);
+    }
+    return bodies;
   }
 
   /** A body's face in the plane through `on` facing `normal`, if it has one. */
@@ -18983,6 +19014,41 @@ export function App() {
     inPlaceRef.current.cancel(true);
     setStatus('This history feature is no longer available to edit.');
   }, [inPlaceEditGone, setStatus]);
+  // A seeded profile in a consumed (hidden) sketch could not be checked when
+  // the edit armed: the sketch is drawn only once the edit shows it. Checked
+  // then, once, a profile its sketch no longer has is dropped and said, so
+  // the slot asks for a new pick rather than holding one nothing can build.
+  const checkedEditProfiles = useRef<InPlaceEditSeed | null>(null);
+  const inPlaceProfiles = inPlace.slots.profiles;
+  useEffect(() => {
+    const editing = inPlaceEditing;
+    if (!editing || checkedEditProfiles.current === editing) return;
+    const views = inPlaceProfiles.map((pick) =>
+      availableSketchViews.find((view) => view.sketchId === pick.sketchId)
+    );
+    if (views.some((view) => !view)) return;
+    checkedEditProfiles.current = editing;
+    const kept = inPlaceProfiles.flatMap((pick, index) => {
+      if (pick.implicit) return [pick];
+      const [region] = regionsForReference(views[index], pick.reference);
+      return region
+        ? [{ ...pick, regionFingerprint: region.regionFingerprint }]
+        : [];
+    });
+    if (kept.length < inPlaceProfiles.length) {
+      inPlaceRef.current.setProfiles(kept);
+      setStatus(
+        `${editing.name}: its saved profile no longer resolves · pick it again.`
+      );
+    } else if (
+      kept.some(
+        (pick, index) =>
+          pick.regionFingerprint !== inPlaceProfiles[index]?.regionFingerprint
+      )
+    ) {
+      inPlaceRef.current.setProfiles(kept);
+    }
+  }, [inPlaceEditing, inPlaceProfiles, availableSketchViews, setStatus]);
 
   useEffect(() => {
     setSelectedProfiles((current) => {

@@ -116,6 +116,8 @@ export interface InPlaceCommand {
     bodies?: BodyPick[]
   ): void;
   pickProfile(pick: ProfilePick, additive?: boolean): void;
+  /** Replaces the profiles (an edit's that no longer resolve, dropped). */
+  setProfiles(profiles: readonly ProfilePick[]): void;
   pickAxis(axisId: string): void;
   pickCurve(curve: CurvePick, additive?: boolean): void;
   /** A face click: refused (false) when the tool takes no such face. */
@@ -501,6 +503,14 @@ export function useInPlaceCommand(
     });
   }, []);
 
+  const setProfiles = useCallback((profiles: readonly ProfilePick[]) => {
+    setSession((current) =>
+      current
+        ? { ...current, slots: { ...current.slots, profiles: [...profiles] } }
+        : current
+    );
+  }, []);
+
   const pickAxis = useCallback((axisId: string) => {
     setSession((current) =>
       current ? { ...current, slots: { ...current.slots, axisId } } : current
@@ -850,6 +860,7 @@ export function useInPlaceCommand(
     edit,
     start,
     pickProfile,
+    setProfiles,
     pickAxis,
     pickCurve,
     pickFace,

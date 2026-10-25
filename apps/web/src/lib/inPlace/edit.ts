@@ -197,16 +197,24 @@ export function inPlaceEditSeed(
       else missing.push('face');
     }
   };
-  const body = (bodyId: BodyId) => {
-    // A body the edit only names (a consumed boolean input) still counts:
-    // dropping it would quietly change what Done writes back.
-    seed.slots.bodies.push(
-      ctx.body(bodyId) ?? {
-        bodyId,
-        min: { x: 0, y: 0, z: 0 },
-        max: { x: 0, y: 0, z: 0 }
-      }
-    );
+  const body = (bodyId: BodyId, many = false) => {
+    const picked = ctx.body(bodyId);
+    if (picked) {
+      seed.slots.bodies.push(picked);
+      return;
+    }
+    // A body with no shape to measure: one a single-body command takes is
+    // still named (any pick replaces it), but in a list (a boolean's inputs)
+    // nothing could click it back out, so it is left for a new pick.
+    if (many) {
+      missing.push('body');
+      return;
+    }
+    seed.slots.bodies.push({
+      bodyId,
+      min: { x: 0, y: 0, z: 0 },
+      max: { x: 0, y: 0, z: 0 }
+    });
   };
 
   switch (data.featureKind) {
@@ -359,7 +367,7 @@ export function inPlaceEditSeed(
       break;
     }
     case 'boolean': {
-      for (const bodyId of data.targetBodyIds) body(bodyId);
+      for (const bodyId of data.targetBodyIds) body(bodyId, true);
       seed.options.operation = data.operation;
       seed.options.keepOriginals = data.keepOriginals ?? 'none';
       break;
