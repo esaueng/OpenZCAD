@@ -944,6 +944,16 @@ describe('inPlaceEditMovedBodies', () => {
     expect(inPlaceEditMovedBodies(suppressed, hole).has(copy.bodyId)).toBe(
       false
     );
+    // Nor did a copy written to change nothing.
+    const still = transformBody(drilled.document, {
+      name: 'Still copy',
+      targetBodyId: drilled.bodyId,
+      translation: { x: 0, y: 0, z: 0 },
+      copy: true
+    });
+    expect(inPlaceEditMovedBodies(still.document, hole).has(still.bodyId)).toBe(
+      false
+    );
   });
 });
 
