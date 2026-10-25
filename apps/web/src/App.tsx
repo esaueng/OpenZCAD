@@ -9794,19 +9794,23 @@ export function App() {
               {}
             )
           : unplaced;
-        // A picture still being placed gives way to this one.
-        // (Not when it is the same file: the new one reads those bytes.)
+        // A picture still being placed gives way to this one, its stored
+        // bytes released in the background (nothing below waits on it, so
+        // the project checked above is still the one this starts in). The
+        // same file again reads those bytes, so it inherits the duty to
+        // release them on Cancel instead.
         const previous = pendingReferenceImageRef.current;
-        if (
-          previous &&
-          previous.image.source.checksumSha256 !==
-            image.source.checksumSha256
-        ) {
-          await discardReferenceImageBytes(previous, [
+        const sameFile =
+          previous?.image.source.checksumSha256 === image.source.checksumSha256;
+        if (previous && !sameFile) {
+          void discardReferenceImageBytes(previous, [
             managerRef.current?.document
           ]);
         }
-        pendingReferenceImageRef.current = prepared;
+        pendingReferenceImageRef.current =
+          previous && sameFile && previous.bytesCreated
+            ? { ...prepared, bytesCreated: true }
+            : prepared;
         inPlaceRef.current.cancel(true);
         cancelPanel();
         retireStatusMessage();
