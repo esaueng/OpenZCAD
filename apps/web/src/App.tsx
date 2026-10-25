@@ -1484,6 +1484,7 @@ import {
   inPlaceEditBodyBox,
   keptInOrder,
   laterDirectEdit,
+  laterDirectEditOnBody,
   laterInPlaceSteps,
   laterStepsOnBody,
   keepAbsentHoleSteps,
@@ -20320,13 +20321,19 @@ export function App() {
         liveData.targetBodyId !== pick.bodyId;
       const box = retargeted
         ? live
-          ? inPlaceEditBodyBox(
-              fresh,
-              { ...liveData, targetBodyId: pick.bodyId },
-              boxContext,
-              laterStepsOnBody(doc, live, pick.bodyId),
-              false
-            )
+          ? {
+              ...inPlaceEditBodyBox(
+                fresh,
+                { ...liveData, targetBodyId: pick.bodyId },
+                boxContext,
+                laterStepsOnBody(doc, live, pick.bodyId),
+                false
+              ),
+              // A later direct edit of it: the factor is typed, not dragged.
+              ...(laterDirectEditOnBody(doc, live, pick.bodyId)
+                ? { reshapedLater: true as const }
+                : {})
+            }
           : fresh
         : inPlaceEditBodyBox(
             fresh,
@@ -20336,8 +20343,8 @@ export function App() {
             !(live && isFeatureSuppressed(live))
           );
       const same =
-        JSON.stringify([box.min, box.max]) ===
-        JSON.stringify([pick.min, pick.max]);
+        JSON.stringify([box.min, box.max, box.reshapedLater]) ===
+        JSON.stringify([pick.min, pick.max, pick.reshapedLater]);
       if (same) return pick;
       bodiesMoved = true;
       return box;

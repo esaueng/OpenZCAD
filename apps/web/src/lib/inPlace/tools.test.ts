@@ -480,6 +480,15 @@ describe('body tools', () => {
     expect(
       spec.handles(slots, {}, { ...CTX, reshapedLater: true }, {})
     ).toEqual([expect.objectContaining({ valueId: 'factor', kind: 'chip' })]);
+    // A body retargeted to that a later edit reshapes, likewise.
+    expect(
+      spec.handles(
+        { ...EMPTY, bodies: [{ ...BODY, reshapedLater: true }] },
+        {},
+        CTX,
+        {}
+      )
+    ).toEqual([expect.objectContaining({ valueId: 'factor', kind: 'chip' })]);
   });
 
   it('solid offset: a curved-only body still gets its offset handle', () => {
