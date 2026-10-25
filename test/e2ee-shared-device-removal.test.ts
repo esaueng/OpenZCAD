@@ -854,6 +854,18 @@ describe('device removal across shared encrypted projects (slice 5-7)', () => {
     blindCutoffs.mockRestore();
     expect(headRow(srv, pendingId).version_hash).toBe(headBefore);
 
+    // Reaching the cutoff's epoch is not the rotation (#906 review): if an
+    // unrelated Commit by someone else takes that epoch, the phone's leaf
+    // is still in the group and learns its key, so the Worker refuses a
+    // write there until a Commit of Bob's lands.
+    await expect(
+      memberRotationFence(
+        srv.env.DB as D1Database,
+        pendingId,
+        predicted.get(pendingId)!
+      )
+    ).rejects.toMatchObject({ code: 'E2EE_MEMBER_ROTATION_PENDING' });
+
     // The fence the Worker puts in the write's batch holds only while the
     // cutoffs it read are the ones stored: one stored between its read and
     // the batch makes the batch change nothing.
