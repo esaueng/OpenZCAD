@@ -16222,12 +16222,24 @@ export function App() {
         const edge = inPlaceEdgeForSelection(selection);
         return edge ? [edge] : [];
       });
+      // The edges stay on one body: the one already held, else the body
+      // the sweep caught most of, as a plain edge sweep chooses.
+      const byBody = new Map<BodyId, EdgePick[]>();
+      for (const edge of swept) {
+        byBody.set(edge.bodyId, [...(byBody.get(edge.bodyId) ?? []), edge]);
+      }
+      const heldBody = command.slots.edges[0]?.bodyId;
+      const taken = heldBody
+        ? (byBody.get(heldBody) ?? [])
+        : ([...byBody.values()].sort(
+            (left, right) => right.length - left.length
+          )[0] ?? []);
       const held = new Set(
         command.slots.edges.map((edge) => `${edge.bodyId}:${edge.hash}`)
       );
       command.setEdges([
         ...command.slots.edges,
-        ...swept.filter((edge) => !held.has(`${edge.bodyId}:${edge.hash}`))
+        ...taken.filter((edge) => !held.has(`${edge.bodyId}:${edge.hash}`))
       ]);
       return;
     }
