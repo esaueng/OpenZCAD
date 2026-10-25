@@ -3,6 +3,7 @@ import {
   isDatumPlaneRef,
   type EdgeTopologyReferenceV5,
   type BodyId,
+  type ProjectDocument,
   type FeatureData,
   type FeatureId,
   type FeatureNode,
@@ -13,6 +14,7 @@ import {
   type SketchSectionReference,
   type Vector3
 } from '@openzcad/shared';
+import { featureHistory, featureResultBodyIds } from '../featureHistory';
 import { holePositionAxes } from '../holePositionAxes';
 import type { RevolveAxisCandidate } from './revolve';
 import {
@@ -755,4 +757,34 @@ export function inPlaceFeatureUpdate(
       };
     }
   }
+}
+
+/**
+ * The bodies a later feature moved from where `featureId` made them: a
+ * transform (in place or a copy), a mirror, a pattern, and anything built
+ * on one of those. A click on one of them does not land where the edited
+ * feature's own face stands, so a hole edit cannot take its point.
+ */
+export function inPlaceEditMovedBodies(
+  document: ProjectDocument,
+  featureId: FeatureId
+): Set<BodyId> {
+  const history = featureHistory(document);
+  const moving = new Set<FeatureId>();
+  const moved = new Set<BodyId>();
+  for (const later of history.downstream(featureId)) {
+    const kind = later.data.featureKind;
+    if (
+      kind === 'transform' ||
+      kind === 'mirror' ||
+      kind === 'pattern' ||
+      [...(history.parents.get(later.featureId) ?? [])].some((parent) =>
+        moving.has(parent)
+      )
+    ) {
+      moving.add(later.featureId);
+      for (const bodyId of featureResultBodyIds(later)) moved.add(bodyId);
+    }
+  }
+  return moved;
 }

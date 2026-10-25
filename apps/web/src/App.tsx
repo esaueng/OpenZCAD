@@ -1448,6 +1448,7 @@ import {
 } from './lib/inPlace/curves';
 import { datumAxisChoices } from './lib/datumAxisChoices';
 import {
+  inPlaceEditMovedBodies,
   inPlaceEditSeed,
   inPlaceFeatureUpdate,
   inPlaceToolForFeature,
@@ -8491,6 +8492,21 @@ export function App() {
     return false;
   }
 
+  /**
+   * A datum plane for the in-place Mirror or Split: an edit takes only one
+   * made before the feature, as it does a sketch or a body.
+   */
+  function pickInPlaceDatumPlane(featureId: FeatureId) {
+    const editing = inPlaceRef.current.editing;
+    if (!inPlaceEditMayUse(featureId, editing)) {
+      setStatus(
+        `${editing!.name} can only use datum planes made before it in History.`
+      );
+      return;
+    }
+    inPlaceRef.current.pickPlane({ kind: 'datum', featureId });
+  }
+
   /** The feature that made a body, or a sketch, for {@link inPlaceEditMayUse}. */
   function producingFeatureOf(
     target: { bodyId: BodyId } | { sketchId: SketchId }
@@ -8557,6 +8573,23 @@ export function App() {
     if (later && editing && !inPlaceEditDescendants(editing).has(resolvedBodyId)) {
       setStatus(
         `${editing.name} can only use faces of bodies made before it in History.`
+      );
+      return null;
+    }
+    // A hole goes where the click lands, and on a body a later feature moved
+    // (a copy, a mirror, a pattern) that is not where the hole's own face is.
+    if (
+      later &&
+      editing &&
+      inPlaceRef.current.tool === 'hole' &&
+      managerRef.current &&
+      inPlaceEditMovedBodies(
+        managerRef.current.document,
+        editing.featureId
+      ).has(resolvedBodyId)
+    ) {
+      setStatus(
+        `A later feature moved this body: click ${editing.name}'s face where it was made, or drag its position.`
       );
       return null;
     }
@@ -19345,6 +19378,8 @@ export function App() {
   // then, once, a profile its sketch no longer has is dropped and said, so
   // the slot asks for a new pick rather than holding one nothing can build.
   const checkedEditProfiles = useRef<InPlaceEditSeed | null>(null);
+  const regionsForReferenceRef = useRef(regionsForReference);
+  regionsForReferenceRef.current = regionsForReference;
   const inPlaceProfiles = inPlace.slots.profiles;
   useEffect(() => {
     const editing = inPlaceEditing;
@@ -19356,7 +19391,10 @@ export function App() {
     checkedEditProfiles.current = editing;
     const kept = inPlaceProfiles.flatMap((pick, index) => {
       if (pick.implicit) return [pick];
-      const [region] = regionsForReference(views[index], pick.reference);
+      const [region] = regionsForReferenceRef.current(
+        views[index],
+        pick.reference
+      );
       return region
         ? [{ ...pick, regionFingerprint: region.regionFingerprint }]
         : [];
@@ -21750,10 +21788,7 @@ export function App() {
       clicked?.kind === 'feature' &&
       clicked.data.featureKind === 'datum-plane'
     ) {
-      inPlaceRef.current.pickPlane({
-        kind: 'datum',
-        featureId: clicked.featureId
-      });
+      pickInPlaceDatumPlane(clicked.featureId);
       return;
     }
     const next =
@@ -26357,10 +26392,7 @@ export function App() {
             onPickDatum={
               inPlace.active && inPlaceSpec?.wantsPlane
                 ? (featureId) =>
-                    inPlace.pickPlane({
-                      kind: 'datum',
-                      featureId: featureId as FeatureId
-                    })
+                    pickInPlaceDatumPlane(featureId as FeatureId)
                 : faceRepair ||
               datumRepair ||
               toFacePick ||
