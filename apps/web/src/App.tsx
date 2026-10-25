@@ -6779,6 +6779,10 @@ export function App() {
    * explicit pick events below rather than coupling its history to selection
    * state effects.
    */
+  // A boolean, not the interaction: the summary must not be rebuilt (and
+  // the card's label rewritten) on every interaction step of a drag.
+  const offsettingFace =
+    interaction.mode === 'face' && interaction.op === 'offset-face';
   const selectionSummary = useMemo<{
     label: readonly LabelSegment[];
     detail?: string;
@@ -6837,12 +6841,16 @@ export function App() {
       };
     }
     if (renderedSelectedTopology?.kind === 'face') {
-      // While a face preview is on screen the pick resolves to the preview's
-      // face, whose names and quantities are not computed: the card read
-      // "Face" with no area for the whole of a typed value's preview. It
-      // keeps naming the committed face the pick came from.
+      // While a face offset's preview is on screen the pick resolves to the
+      // preview's face, whose names and quantities are not computed: the card
+      // read "Face" with no area for the whole of a typed value's preview. It
+      // keeps naming the committed face the pick came from, whose name and
+      // area an offset does not change. Other edits (a cylinder's radius, a
+      // fillet's) label from the preview: their figure is the dragged value,
+      // which the viewer writes into the label live.
       const sourceBody =
         currentFaceGeometryPreview &&
+        offsettingFace &&
         selectedTopology?.kind === 'face' &&
         selectedTopology.bodyId === renderedSelectedTopology.bodyId
           ? representations[selectedTopology.bodyId]
@@ -6919,7 +6927,8 @@ export function App() {
     currentGeometrySnapshot,
     currentFaceGeometryPreview,
     selectedTopology,
-    representations
+    representations,
+    offsettingFace
   ]);
 
   const {
