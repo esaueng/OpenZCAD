@@ -45,6 +45,11 @@ interface WorkspaceReadoutProps {
    */
   prompt: string | null;
   /**
+   * U09: an in-place command's bar. It takes the guidance row while a
+   * command runs, so its step is read where every hint is.
+   */
+  commandRow?: ReactNode;
+  /**
    * The workspace summary the status bar carried for assistive tech: project,
    * feature and body counts, warnings and sync state. Kept as an
    * off-screen group so screen readers (and the specs) still have it.
@@ -77,6 +82,7 @@ export function WorkspaceReadout({
   logOpen,
   onToggleLog,
   prompt,
+  commandRow = null,
   projectName,
   featureCount,
   bodyCount,
@@ -167,11 +173,12 @@ export function WorkspaceReadout({
           assistive tech, so it is drawn here but hidden from the tree; a live
           status message takes its place while the toast is up. */}
       <div className="command-bar-lane">
-        {prompt && !shown ? (
-          <p className="workspace-hint" aria-hidden="true">
-            {prompt}
-          </p>
-        ) : null}
+        {commandRow ??
+          (prompt && !shown ? (
+            <p className="workspace-hint" aria-hidden="true">
+              {prompt}
+            </p>
+          ) : null)}
         {searchBar}
       </div>
       <footer

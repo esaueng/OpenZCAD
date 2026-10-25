@@ -641,6 +641,8 @@ export function convertLegacySketchObject(
     if (f.featureKind === 'extrude' && f.sketchId === input.sketchId) {
       if (f.profile) f.profile = rebind(f.profile);
       if (f.profiles) f.profiles = f.profiles.map(rebind);
+    } else if (f.featureKind === 'revolve' && f.sketchId === input.sketchId) {
+      if (f.profile) f.profile = rebind(f.profile);
     } else if (f.featureKind === 'loft') {
       f.sections = f.sections.map((s) =>
         s.sketchId === input.sketchId ? { ...s, profile: rebind(s.profile) } : s

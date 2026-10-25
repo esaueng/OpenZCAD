@@ -32,6 +32,7 @@ import {
   assertFeatureProfileProvenance
 } from './sketch-provenance-validation';
 export {
+  assertFeatureProfileProvenance,
   assertSketchProvenance,
   assertLegacySketchConversionQualification,
   type LegacySketchConversionQualification,
@@ -400,6 +401,8 @@ export interface RevolveInput {
   angleDeg?: ParamValue;
   /** R01 (schema v28): turn about this earlier datum axis instead of `axis`. */
   axisRef?: DatumAxisRef;
+  /** U09 (schema v38): the region to turn instead of the first object. */
+  profile?: SketchProfileReference;
   ids?: BodyFeatureIds;
 }
 
@@ -2526,6 +2529,7 @@ export function revolveSketch(
   document: ProjectDocument,
   input: RevolveInput
 ): { document: ProjectDocument; bodyId: BodyId } {
+  assertFeatureProfileProvenance(input, document);
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
     input.ids ?? createBodyFeatureIds();
@@ -2547,7 +2551,8 @@ export function revolveSketch(
       // full revolve stays byte-identical to one authored before partial
       // revolve existed — including its ADR-013 semantic lineage.
       ...(input.angleDeg === undefined ? {} : { angleDeg: input.angleDeg }),
-      ...(input.axisRef ? { axisRef: datumAxisRefOnly(input.axisRef) } : {})
+      ...(input.axisRef ? { axisRef: datumAxisRefOnly(input.axisRef) } : {}),
+      ...(input.profile ? { profile: deepClone(input.profile) } : {})
     }
   };
 
@@ -4475,7 +4480,7 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'toFace',
     'draftAngleDeg'
   ],
-  revolve: ['sketchId', 'axis', 'angleDeg', 'axisRef'],
+  revolve: ['sketchId', 'axis', 'angleDeg', 'axisRef', 'profile'],
   loft: ['sections', 'mode', 'endPoint'],
   sweep: ['profile', 'path', 'mode', 'guide'],
   'helical-sweep': [
@@ -4591,7 +4596,8 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   fillet: ['endRadius', 'radiusLaw'],
   chamfer: ['angleDeg', 'distance2'],
   // R01: clearing a datum axis returns to the sketch or world axis.
-  revolve: ['axisRef'],
+  // U09: clearing a revolve's region returns it to the first-object profile.
+  revolve: ['axisRef', 'profile'],
   pattern: ['axisRef'],
   transform: ['axisRotation']
 };

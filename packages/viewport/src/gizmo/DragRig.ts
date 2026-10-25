@@ -44,6 +44,14 @@ export interface DragRig {
    */
   chipLine?(): { start: THREE.Vector3; end: THREE.Vector3 } | null;
   /**
+   * The value a pointer ray names, for rigs whose value is not a distance
+   * along `direction` (an angle swept about an axis). `previous` is the
+   * value before this move, so a rig can stay continuous across a wrap.
+   * Null when the ray names nothing (parallel to the rig's plane). Linear
+   * rigs omit it and the viewport projects the pointer onto `direction`.
+   */
+  valueFromRay?(ray: THREE.Ray, previous: number): number | null;
+  /**
    * Hides the rig's own drawing of the change (a face offset's hatched band)
    * while the body itself shows it, as a deformed solid over a ghost of the
    * part as it was.

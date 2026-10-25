@@ -192,12 +192,43 @@ test('datum axes drive a revolve, a rotate about axis and a circular pattern', a
   await page
     .getByRole('button', { name: 'Finish Sketch', exact: true })
     .click();
+  // U09: Revolve runs in place. The circle is the profile; Axis 1 lies
+  // along the sketch's vertical axis, so its line stands in for that axis
+  // and a click on it picks the datum.
   await page.getByRole('button', { name: /^Revolve \(R\)/ }).click();
-  await inspector
-    .getByLabel('Revolve around')
-    .selectOption({ label: 'Axis 1' });
-  await expect(inspector.getByText(/must lie in the sketch/)).toBeVisible();
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  const revolveBar = page.getByRole('group', { name: 'Revolve command' });
+  await expect
+    .poll(async () => {
+      await canvas.evaluate((element) =>
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-select-profile', {
+            detail: { index: 0 }
+          })
+        )
+      );
+      return revolveBar.textContent();
+    })
+    .toContain('Pick the axis');
+  const [onAxis] = await canvas.evaluate(
+    (element) =>
+      new Promise<{ x: number; y: number }[]>((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-project-points', {
+            detail: {
+              points: [[0, 0, 10]],
+              resolve: (state: { points: { x: number; y: number }[] }) =>
+                resolve(state.points)
+            }
+          })
+        );
+      })
+  );
+  await page.mouse.move(onAxis!.x, onAxis!.y);
+  await page.mouse.click(onAxis!.x, onAxis!.y);
+  await expect(revolveBar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  await revolveBar.getByRole('button', { name: /Done/ }).click();
   await expectBodyCount(page, 1);
   await expect(page.locator('.save-state')).toHaveClass(/is-synced/);
   let stored = await storedProject(page, projectName);
