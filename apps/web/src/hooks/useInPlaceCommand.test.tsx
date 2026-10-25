@@ -342,7 +342,7 @@ describe('useInPlaceCommand: loft', () => {
         { sketchId: SKETCH, profile: PICK.reference },
         { sketchId: OTHER, profile: SECOND.reference }
       ],
-      mode: 'smooth'
+      mode: 'ruled'
     });
     act(() => hook.result.current.pickProfile(PICK));
     expect(hook.result.current.slots.profiles).toEqual([SECOND]);
@@ -477,5 +477,26 @@ describe('review: option and plane resets', () => {
       axis: 'y',
       axis2: 'x'
     });
+  });
+});
+
+describe('review: a sweep guide rail', () => {
+  it('curve clicks build the rail while Options say so', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('sweep', [PICK]));
+    act(() =>
+      hook.result.current.pickCurve({ sketchId: OTHER, entityId: 'p1' })
+    );
+    act(() => hook.result.current.setOption('curves', 'guide'));
+    act(() =>
+      hook.result.current.pickCurve({ sketchId: OTHER, entityId: 'g1' })
+    );
+    expect(hook.result.current.slots.path.map((c) => c.entityId)).toEqual([
+      'p1'
+    ]);
+    expect(hook.result.current.slots.guide.map((c) => c.entityId)).toEqual([
+      'g1'
+    ]);
+    expect(hook.result.current.hint).toMatch(/Guide rail of 1/);
   });
 });

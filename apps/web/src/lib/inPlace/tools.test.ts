@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { BodyId, FeatureId } from '@openzcad/shared';
+import type { BodyId, FeatureId, SketchId } from '@openzcad/shared';
 import {
   IN_PLACE_TOOL_SPECS,
   axisCandidatesFor,
@@ -27,6 +27,7 @@ const EMPTY: InPlaceSlots = {
   profiles: [],
   axis: null,
   path: [],
+  guide: [],
   faces: [],
   bodies: [],
   plane: null
@@ -392,5 +393,55 @@ describe('review: rotate about axis', () => {
   it('keeps a signed angle', () => {
     const angle = IN_PLACE_TOOL_SPECS['axis-rotate'].values[0]!;
     expect(clampValue(angle, -90)).toBe(-90);
+  });
+});
+
+describe('review: loft, sweep and counts', () => {
+  const section = (sketchId: string, fingerprint: number) => ({
+    sketchId: sketchId as SketchId,
+    reference: { all: true as const, sourceEntityIds: ['a'] },
+    regionFingerprint: fingerprint
+  });
+
+  it('a new loft is ruled unless Options say smooth', () => {
+    const slots = {
+      ...EMPTY,
+      profiles: [section('s1', 1), section('s2', 2)]
+    };
+    const loft = IN_PLACE_TOOL_SPECS.loft;
+    expect(loft.request(slots, {}, {}, CTX)).toMatchObject({ mode: 'ruled' });
+    expect(loft.request(slots, {}, { shape: 'smooth' }, CTX)).toMatchObject({
+      mode: 'smooth'
+    });
+  });
+
+  it('a sweep carries its mode and guide rail', () => {
+    const curve = (entityId: string) => ({
+      sketchId: 's2' as SketchId,
+      entityId
+    });
+    const request = IN_PLACE_TOOL_SPECS.sweep.request(
+      {
+        ...EMPTY,
+        profiles: [section('s1', 1)],
+        path: [curve('p1')],
+        guide: [curve('g1'), curve('g2')]
+      },
+      {},
+      { mode: 'smooth' },
+      CTX
+    );
+    expect(request).toMatchObject({
+      mode: 'smooth',
+      guide: { sketchId: 's2', entityIds: ['g1', 'g2'] }
+    });
+  });
+
+  it('pattern counts are whole numbers', () => {
+    const count = IN_PLACE_TOOL_SPECS['linear-pattern'].values.find(
+      (value) => value.id === 'count'
+    )!;
+    expect(clampValue(count, 4.5)).toBe(5);
+    expect(clampValue(count, 4.4)).toBe(4);
   });
 });

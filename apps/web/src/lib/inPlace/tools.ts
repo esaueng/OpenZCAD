@@ -125,6 +125,8 @@ export interface InPlaceSlots {
   profiles: ProfilePick[];
   axis: RevolveAxisCandidate | null;
   path: CurvePick[];
+  /** A sweep's guide rail, in the order its curves were clicked. */
+  guide: CurvePick[];
   faces: FacePick[];
   /** In pick order: a boolean's first is its base. */
   bodies: BodyPick[];
@@ -153,6 +155,8 @@ export interface ValueSpec {
   initial: number;
   min?: number;
   max?: number;
+  /** Whole numbers only (a pattern's counts): a fraction rounds, or is refused when typed. */
+  integer?: boolean;
 }
 
 /** A sketch as the commands read it: its plane and its region outlines. */
@@ -197,6 +201,7 @@ export type InPlaceRequest =
       profile: SketchSectionReference;
       path: { sketchId: SketchId; entityIds: string[] };
       mode: 'standard' | 'smooth';
+      guide?: { sketchId: SketchId; entityIds: string[] };
     }
   | {
       tool: 'helical-sweep';
@@ -299,7 +304,7 @@ export interface InPlaceToolSpec {
   values: readonly ValueSpec[];
   /** Values the picks suggest, applied to any the user has not set. */
   defaults?(slots: InPlaceSlots, ctx: InPlaceContext): Record<string, number>;
-  hint(slots: InPlaceSlots): string;
+  hint(slots: InPlaceSlots, options?: Record<string, string>): string;
   ready(slots: InPlaceSlots): boolean;
   /**
    * `values` holds what is stored: a typed expression as typed, else the
@@ -486,18 +491,30 @@ const loft: InPlaceToolSpec = {
   wantsAxis: false,
   wantsPath: false,
   values: [],
+  options: [
+    {
+      id: 'shape',
+      label: 'Shape',
+      // Ruled first and by default, as the card had it.
+      choices: [
+        { value: 'ruled', label: 'Ruled' },
+        { value: 'smooth', label: 'Smooth' }
+      ],
+      initial: 'ruled'
+    }
+  ],
   hint(slots) {
     if (slots.profiles.length === 0) return 'Pick the first section profile';
     if (slots.profiles.length === 1) return 'Pick the next section profile';
     return `${slots.profiles.length} sections · pick another, or ${FINISH}`;
   },
   ready: (slots) => slots.profiles.length >= 2,
-  request(slots) {
+  request(slots, _values, options) {
     if (slots.profiles.length < 2) return null;
     return {
       tool: 'loft',
       sections: slots.profiles.map(section),
-      mode: 'smooth'
+      mode: options.shape === 'smooth' ? 'smooth' : 'ruled'
     };
   },
   handles: () => []
@@ -510,17 +527,45 @@ const sweep: InPlaceToolSpec = {
   wantsAxis: false,
   wantsPath: true,
   values: [],
-  hint(slots) {
+  options: [
+    {
+      id: 'mode',
+      label: 'Mode',
+      choices: [
+        { value: 'standard', label: 'Standard' },
+        { value: 'smooth', label: 'Smooth' }
+      ],
+      initial: 'standard'
+    },
+    {
+      id: 'curves',
+      label: 'Clicks pick',
+      // A guide rail is the profile's up-vector track: curve clicks add to
+      // it instead of the path while this is chosen.
+      choices: [
+        { value: 'path', label: 'Path' },
+        { value: 'guide', label: 'Guide rail' }
+      ],
+      initial: 'path'
+    }
+  ],
+  hint(slots, options) {
     if (slots.profiles.length === 0) return 'Pick the profile to sweep';
+    if (options?.curves === 'guide') {
+      return slots.guide.length === 0
+        ? 'Pick the guide rail: click its sketch curves'
+        : `Guide rail of ${slots.guide.length} · click more curves, or ${FINISH}`;
+    }
     if (slots.path.length === 0)
       return 'Pick the path: click its sketch curves';
     return `Path of ${slots.path.length} · click more curves, or ${FINISH}`;
   },
   ready: (slots) => slots.profiles.length > 0 && slots.path.length > 0,
-  request(slots) {
+  request(slots, _values, options) {
     const pick = slots.profiles[0];
     const first = slots.path[0];
     if (!pick || !first) return null;
+    const rail = slots.guide[0];
     return {
       tool: 'sweep',
       profile: section(pick),
@@ -528,7 +573,15 @@ const sweep: InPlaceToolSpec = {
         sketchId: first.sketchId,
         entityIds: slots.path.map((curve) => curve.entityId)
       },
-      mode: 'standard'
+      mode: options.mode === 'smooth' ? 'smooth' : 'standard',
+      ...(rail
+        ? {
+            guide: {
+              sketchId: rail.sketchId,
+              entityIds: slots.guide.map((curve) => curve.entityId)
+            }
+          }
+        : {})
     };
   },
   handles: () => []
@@ -1450,7 +1503,15 @@ const linearPattern: InPlaceToolSpec = {
     // Signed: a negative spacing repeats the other way, as the card allowed.
     // Zero is the kernel's to refuse, in the bar.
     { id: 'spacing', label: 'Spacing', unit: 'length', initial: 20 },
-    { id: 'count', label: 'Count', unit: 'count', initial: 3, min: 2, max: 100 }
+    {
+      id: 'count',
+      label: 'Count',
+      unit: 'count',
+      initial: 3,
+      min: 2,
+      max: 100,
+      integer: true
+    }
   ],
   options: [AXIS_OPTION('x')],
   hint: (slots) =>
@@ -1510,7 +1571,15 @@ const circularPattern: InPlaceToolSpec = {
       min: -360,
       max: 360
     },
-    { id: 'count', label: 'Count', unit: 'count', initial: 6, min: 2, max: 100 }
+    {
+      id: 'count',
+      label: 'Count',
+      unit: 'count',
+      initial: 6,
+      min: 2,
+      max: 100,
+      integer: true
+    }
   ],
   hint(slots) {
     if (slots.bodies.length === 0) return 'Click the body to repeat';
@@ -1581,7 +1650,8 @@ const gridPattern: InPlaceToolSpec = {
       unit: 'count',
       initial: 3,
       min: 2,
-      max: 100
+      max: 100,
+      integer: true
     },
     {
       id: 'spacing2',
@@ -1595,7 +1665,8 @@ const gridPattern: InPlaceToolSpec = {
       unit: 'count',
       initial: 3,
       min: 2,
-      max: 100
+      max: 100,
+      integer: true
     }
   ],
   options: [
@@ -1682,5 +1753,6 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
 /** Values a value spec accepts: clamped to its range, finite. */
 export function clampValue(spec: ValueSpec, value: number): number {
   if (!Number.isFinite(value)) return spec.initial;
-  return Math.min(spec.max ?? Infinity, Math.max(spec.min ?? -Infinity, value));
+  const whole = spec.integer ? Math.round(value) : value;
+  return Math.min(spec.max ?? Infinity, Math.max(spec.min ?? -Infinity, whole));
 }

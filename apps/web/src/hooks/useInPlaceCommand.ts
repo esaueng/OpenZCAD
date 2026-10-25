@@ -62,6 +62,7 @@ interface Session {
     profiles: ProfilePick[];
     axisId: string | null;
     path: CurvePick[];
+    guide: CurvePick[];
     faces: FacePick[];
     bodies: BodyPick[];
     plane: PlanePick | null;
@@ -120,6 +121,7 @@ const EMPTY_SLOTS: InPlaceSlots = {
   profiles: [],
   axis: null,
   path: [],
+  guide: [],
   faces: [],
   bodies: [],
   plane: null
@@ -176,6 +178,7 @@ export function useInPlaceCommand(
                 (candidate) => candidate.id === session.slots.axisId
               ) ?? null,
             path: session.slots.path,
+            guide: session.slots.guide,
             faces: session.slots.faces,
             bodies: session.slots.bodies,
             plane: session.slots.plane
@@ -358,6 +361,7 @@ export function useInPlaceCommand(
                 : initial,
           axisId: null,
           path: [],
+          guide: [],
           faces: toolSpec.faceMode
             ? toolSpec.faceMode === 'one'
               ? initialFaces.slice(0, 1)
@@ -422,7 +426,9 @@ export function useInPlaceCommand(
   const pickCurve = useCallback((curve: CurvePick, additive = true) => {
     setSession((current) => {
       if (!current) return current;
-      const path = current.slots.path;
+      // While Options say so, clicks build a sweep's guide rail instead.
+      const slot = current.options.curves === 'guide' ? 'guide' : 'path';
+      const path = current.slots[slot];
       const picked = path.some(
         (other) =>
           other.sketchId === curve.sketchId && other.entityId === curve.entityId
@@ -434,7 +440,7 @@ export function useInPlaceCommand(
         : additive && sameSketch
           ? [...path, curve]
           : [curve];
-      return { ...current, slots: { ...current.slots, path: next } };
+      return { ...current, slots: { ...current.slots, [slot]: next } };
     });
   }, []);
 
@@ -587,10 +593,11 @@ export function useInPlaceCommand(
         raw !== undefined &&
         clampValue(valueSpec, value) !== value
       ) {
+        const whole = valueSpec.integer ? 'whole numbers ' : '';
         const range =
           valueSpec.max === undefined
-            ? `at least ${valueSpec.min ?? 0}`
-            : `${valueSpec.min ?? 0} to ${valueSpec.max}`;
+            ? `${whole ? `${whole}of ` : ''}at least ${valueSpec.min ?? 0}`
+            : `${whole}${valueSpec.min ?? 0} to ${valueSpec.max}`;
         setRefusal(
           `${raw} is ${value}; ${IN_PLACE_TOOL_SPECS[current.tool].title} ${valueSpec.label.toLowerCase()} takes ${range}.`
         );
@@ -676,7 +683,7 @@ export function useInPlaceCommand(
     handles,
     values,
     options: chosen,
-    hint: spec ? spec.hint(slots) : '',
+    hint: spec ? spec.hint(slots, chosen) : '',
     refusal,
     canFinish,
     start,

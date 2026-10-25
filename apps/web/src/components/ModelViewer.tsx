@@ -12743,6 +12743,17 @@ export function ModelViewer({
     }
     context.requestRender();
   }, [commandHandlesKey, commandSetterRef]);
+  // A value that changes from outside the rig (a default the picks suggest,
+  // an undo) moves its rig too: the rigs are rebuilt only for a new key, and
+  // a stale one would draw one value and drag from it while another builds.
+  useEffect(() => {
+    for (const handle of commandHandles) {
+      if (commandDragRef.current?.valueId === handle.valueId) continue;
+      const rig = commandRigsRef.current.get(handle.valueId)?.rig;
+      if (rig && rig.value() !== handle.value) rig.setValue(handle.value);
+    }
+    contextRef.current?.requestRender();
+  }, [commandHandles]);
   // Everything goes when the viewer does.
   useEffect(
     () => () => {

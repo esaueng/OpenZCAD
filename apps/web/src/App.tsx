@@ -18228,7 +18228,15 @@ export function App() {
             sketchId: request.path.sketchId,
             entityIds: request.path.entityIds as EntityId[]
           },
-          mode: request.mode
+          mode: request.mode,
+          ...(request.guide
+            ? {
+                guide: {
+                  sketchId: request.guide.sketchId,
+                  entityIds: request.guide.entityIds as EntityId[]
+                }
+              }
+            : {})
         });
       case 'helical-sweep':
         return commandFactories.helicalSweepProfile({
@@ -18464,12 +18472,12 @@ export function App() {
       inPlaceCurveCandidates
         ? {
             candidates: inPlaceCurveCandidates,
-            selectedIds: inPlace.slots.path.map(
+            selectedIds: [...inPlace.slots.path, ...inPlace.slots.guide].map(
               (curve) => `${curve.sketchId}|${curve.entityId}`
             )
           }
         : null,
-    [inPlaceCurveCandidates, inPlace.slots.path]
+    [inPlaceCurveCandidates, inPlace.slots.path, inPlace.slots.guide]
   );
 
   // Editing needs hidden source profiles; visibility remains a viewport concern.
