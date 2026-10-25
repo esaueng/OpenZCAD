@@ -416,9 +416,9 @@ jobs:
   # other checks. Pull requests use `e2e-tests-pr` below. Merge-queue
   # candidates run no shards: auto-merge enqueues a PR only once `checks / e2e`
   # passed on its head, and running the ~55 runner-minute suite again per
-  # candidate held six of the org's 20 hosted runners while PRs and the next
-  # candidate queued behind them. Lint, typecheck, both Vitest projects,
-  # parity and the build still run on every candidate.
+  # candidate held six hosted runners while PRs and the next candidate queued
+  # behind them. Lint, typecheck, both Vitest projects, parity and the build
+  # still run on every candidate.
   e2e-tests:
     needs: queue-trust
     if: ${{ !cancelled() && github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
@@ -486,15 +486,14 @@ jobs:
           path: ${{ runner.temp }}/e2e-report-${{ matrix.shard }}.json
           if-no-files-found: warn
 
-  # On a pull request the shards wait for lint and typecheck. Hosted runners
-  # are a shared pool of concurrent jobs, and starting six browser shards on
-  # every push let superseded and lint-red pushes hold them while queue
-  # candidates waited 15-20 minutes for a runner. A push that `quality`
-  # rejects, or that a newer push cancels within those minutes, now never
-  # starts a shard. Queue candidates keep the parallel `e2e-tests` above.
+  # On a pull request the shards start at once, beside lint and typecheck.
+  # They used to wait for `quality` so lint-red and superseded pushes would not
+  # hold six runners of the Free plan's 20; on the Team plan's 60 that wait
+  # (2-4 minutes per push) cost more than the runners it saved, and a newer
+  # push still cancels a superseded run's shards. Queue candidates run none.
   e2e-tests-pr:
-    if: ${{ !cancelled() && needs.quality.result == 'success' && (github.event_name == 'pull_request') }}
-    needs: [queue-trust, quality]
+    if: ${{ !cancelled() && (github.event_name == 'pull_request') }}
+    needs: queue-trust
     runs-on: *fleet-runner
     timeout-minutes: 45
     strategy: *e2e-strategy
@@ -524,7 +523,7 @@ jobs:
             merge_group/skipped/skipped)
               echo 'Queue candidate: e2e passed on the pull request head' ;;
             */skipped/skipped)
-              echo 'No shard ran; pull-request shards start only after quality passes.' >&2
+              echo 'No shard ran.' >&2
               exit 1 ;;
             *) exit 1 ;;
           esac

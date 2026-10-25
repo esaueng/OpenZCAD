@@ -317,11 +317,17 @@ interface ProjectRow {
   member: number;
 }
 
-/** Owner of a live format-2 project; anything else is refused. */
+/**
+ * Owner of a live format-2 project; anything else is refused. With
+ * `allowDeleted` (reads, slice 4-8) the owner also reaches a project in the
+ * recycle bin, as the plaintext routes let an owner read one; writes keep
+ * refusing it.
+ */
 export async function requireOwnedEncryptedProject(
   db: D1Database,
   userId: string,
-  projectId: string
+  projectId: string,
+  options: { allowDeleted?: boolean } = {}
 ): Promise<void> {
   const row = await db
     .prepare(
@@ -334,7 +340,13 @@ export async function requireOwnedEncryptedProject(
     .first<ProjectRow>();
   const notFound = (): never =>
     refuse(404, 'PROJECT_NOT_FOUND', 'Project not found.');
-  if (!row || row.status === 'deleted') return notFound();
+  if (
+    !row ||
+    (row.status === 'deleted' &&
+      (options.allowDeleted !== true || row.user_id !== userId))
+  ) {
+    return notFound();
+  }
   if (row.user_id !== userId) {
     // A member learns only that this is owner-only; anyone else learns nothing.
     if (row.member) {
@@ -1031,7 +1043,10 @@ export async function handleE2eeProjectRequest(
         ].includes(route)) ||
       (method === 'POST' && ['mls/commits', 'mls/group-info'].includes(route));
     if (!known) refuse(404, 'NOT_FOUND', 'Not found.');
-    await requireOwnedEncryptedProject(db, userId, projectId);
+    // The owner reads a project in the recycle bin, as in plaintext (4-8).
+    await requireOwnedEncryptedProject(db, userId, projectId, {
+      allowDeleted: method === 'GET'
+    });
     if (method === 'POST') {
       const body = await readBody(request);
       return route === 'mls/group-info'

@@ -372,7 +372,10 @@ export async function handleE2eeContentBlobRequest(
       (method === 'GET' && (route === '' || route === ':id')) ||
       (method === 'POST' && (route === 'uploads' || route === ':id/finalize'));
     if (!known) refuse(404, 'NOT_FOUND', 'Not found.');
-    await requireOwnedEncryptedProject(db, userId, projectId);
+    // The owner reads a project in the recycle bin, as in plaintext (4-8).
+    await requireOwnedEncryptedProject(db, userId, projectId, {
+      allowDeleted: method === 'GET'
+    });
     const bucket = blobBucket(env);
     if (!bucket) {
       refuse(

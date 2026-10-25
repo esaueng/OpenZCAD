@@ -605,8 +605,8 @@ export function StartScreen({
     // Stored in a format this build cannot open (end-to-end encrypted, ADR-024
     // Phase 4): shown locked, never loaded, and offered only shelf actions.
     const locked = projectNeedsUpdate(project);
-    // An encrypted project this build opens (ADR-024 Phase 4) has no copies
-    // yet (slice 4-8).
+    // An encrypted project this build opens (ADR-024 Phase 4); it is
+    // duplicated in the browser like any other (slice 4-8).
     const encrypted = project.storageFormat === 2;
 
     const preview = (
@@ -991,7 +991,7 @@ export function StartScreen({
                     Save to my account
                   </button>
                 )}
-                {!locked && !encrypted && (
+                {!locked && (
                   <button
                     type="button"
                     role="menuitem"

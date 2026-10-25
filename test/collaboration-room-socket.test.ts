@@ -1,6 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ProjectCollaborationRoom } from '@openzcad/cloudflare-adapters';
-import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import {
+  toUserId,
+  type CollaborationServerMessage,
+  type E2eeCollaborationServerMessage,
+  type ProjectDocument
+} from '@openzcad/shared';
 import {
   addPrimitiveFeature,
   createProjectDocument,
@@ -12,6 +17,13 @@ import {
   installWorkerSocketGlobals,
   type FakeWebSocket
 } from './collaboration-room-harness';
+import {
+  b64,
+  createEncryptedRoom,
+  fakeE2eeAccount,
+  submission,
+  type FakeHeader
+} from './support/e2ee-room-fakes';
 
 let globals: ReturnType<typeof installWorkerSocketGlobals>;
 
@@ -1136,5 +1148,370 @@ describe('collaboration room socket handling', () => {
     await socket.receive('x'.repeat(950_001));
 
     expect(socket.closed).toMatchObject({ code: 1009 });
+  });
+});
+
+// --- End-to-end encrypted projects (ADR-024 slice 4-9) ---------------------
+
+const PROJECT = 'proj_encrypted_room';
+const CREDENTIAL = `auth_sessions:${'a'.repeat(64)}`;
+
+function encryptedUpgrade(
+  projectId = PROJECT,
+  identity: SocketIdentity = ownerIdentity
+): Request {
+  const request = upgradeRequest(projectId, identity);
+  request.headers.set('x-openzcad-project-format', '2');
+  request.headers.set('x-openzcad-write-credential', CREDENTIAL);
+  return request;
+}
+
+async function openEncrypted(
+  room: ProjectCollaborationRoom,
+  clientId: string,
+  identity: SocketIdentity = ownerIdentity
+): Promise<FakeWebSocket> {
+  const response = await room.fetch(encryptedUpgrade(PROJECT, identity));
+  expect(response.status).toBe(101);
+  const socket = globals.serverSockets.at(-1)!;
+  await socket.receive(hello(null, clientId));
+  await socket.receive(JSON.stringify({ type: 'lease-acquire', clientId }));
+  return socket;
+}
+
+function e2eeFrame(
+  clientId: string,
+  header: Omit<FakeHeader, 'projectId'> & { projectId?: string }
+) {
+  return JSON.stringify({
+    type: 'e2ee-document',
+    clientId,
+    version: submission({ projectId: PROJECT, ...header })
+  });
+}
+
+function e2eeFrames(socket: FakeWebSocket) {
+  return socket.sent.map(
+    (frame) =>
+      JSON.parse(frame) as
+        E2eeCollaborationServerMessage | CollaborationServerMessage
+  );
+}
+
+function notice(room: ProjectCollaborationRoom, body: unknown, trusted = true) {
+  return room.fetch(
+    new Request(
+      `https://project-room.internal/_internal/e2ee-notice?projectId=${PROJECT}`,
+      {
+        method: 'POST',
+        headers: trusted ? { 'x-openzcad-internal-e2ee-notice': 'v1' } : {},
+        body: JSON.stringify(body)
+      }
+    )
+  );
+}
+
+describe('encrypted collaboration room (ADR-024 slice 4-9)', () => {
+  it('relays envelopes in order and writes each to the account first', async () => {
+    const { context, values } = createRoomContext();
+    const account = fakeE2eeAccount(PROJECT);
+    const room = createEncryptedRoom(context, account);
+    const laptop = await openEncrypted(room, 'client_laptop');
+    const desktop = await openEncrypted(room, 'client_desktop');
+    const first = account.headRecord;
+
+    // The first frame is the account's head, as ciphertext.
+    const state = e2eeFrames(laptop).find(
+      (frame) => frame.type === 'e2ee-state'
+    );
+    expect(state).toMatchObject({
+      type: 'e2ee-state',
+      role: 'owner',
+      keyEpoch: 0,
+      head: {
+        record: first,
+        envelope: b64(account.envelopeOf(first.versionHash)!)
+      }
+    });
+
+    laptop.sent.length = 0;
+    desktop.sent.length = 0;
+    const second = {
+      documentVersion: 2,
+      keyEpoch: 0,
+      previousVersionHash: first.versionHash,
+      body: 'second'
+    };
+    await laptop.receive(e2eeFrame('client_laptop', second));
+    const stored = account.headRecord;
+    expect(stored.documentVersion).toBe(2);
+    expect(account.writes).toEqual([
+      {
+        userId: 'user_room',
+        credential: { table: 'auth_sessions', tokenHash: 'a'.repeat(64) },
+        expectedVersion: 1,
+        revisionId: null,
+        versionHash: stored.versionHash
+      }
+    ]);
+    expect(e2eeFrames(laptop)).toEqual([{ type: 'e2ee-ack', record: stored }]);
+    expect(e2eeFrames(desktop)).toEqual([
+      {
+        type: 'e2ee-document',
+        clientId: 'client_laptop',
+        head: {
+          record: stored,
+          envelope: b64(account.envelopeOf(stored.versionHash)!)
+        }
+      }
+    ]);
+    // Encrypted versions live under keys of their own; no plaintext key.
+    expect(values.has('room:latest')).toBe(false);
+    expect(values.get('room:e2ee:meta')).toEqual({
+      schema: 1,
+      latest: stored.versionHash,
+      retained: [first.versionHash]
+    });
+    expect(values.get('room:meta')).toMatchObject({ format: 2 });
+
+    // The same envelope again is acknowledged, not written twice.
+    laptop.sent.length = 0;
+    await laptop.receive(e2eeFrame('client_laptop', second));
+    expect(e2eeFrames(laptop)).toEqual([{ type: 'e2ee-ack', record: stored }]);
+    expect(account.writes).toHaveLength(1);
+  });
+
+  it('answers a stale submission with its base and the latest, as ciphertext', async () => {
+    const { context } = createRoomContext();
+    const account = fakeE2eeAccount(PROJECT);
+    const room = createEncryptedRoom(context, account);
+    const laptop = await openEncrypted(room, 'client_laptop');
+    const desktop = await openEncrypted(room, 'client_desktop');
+    const first = account.headRecord;
+    await laptop.receive(
+      e2eeFrame('client_laptop', {
+        documentVersion: 2,
+        keyEpoch: 0,
+        previousVersionHash: first.versionHash,
+        body: 'laptop'
+      })
+    );
+    const latest = account.headRecord;
+
+    // The desktop's edit builds on version 1, which the room has moved past,
+    // however large its version number.
+    desktop.sent.length = 0;
+    await desktop.receive(
+      e2eeFrame('client_desktop', {
+        documentVersion: 9,
+        keyEpoch: 0,
+        previousVersionHash: first.versionHash,
+        body: 'desktop'
+      })
+    );
+    expect(e2eeFrames(desktop)).toEqual([
+      {
+        type: 'e2ee-conflict',
+        latest: {
+          record: latest,
+          envelope: b64(account.envelopeOf(latest.versionHash)!)
+        },
+        base: {
+          record: first,
+          envelope: b64(account.envelopeOf(first.versionHash)!)
+        }
+      }
+    ]);
+    expect(account.writes).toHaveLength(1);
+
+    // A base the room never held: the latest only, for the manual choice.
+    desktop.sent.length = 0;
+    await desktop.receive(
+      e2eeFrame('client_desktop', {
+        documentVersion: 3,
+        keyEpoch: 0,
+        previousVersionHash: 'f'.repeat(64),
+        body: 'unknown base'
+      })
+    );
+    const conflict = e2eeFrames(desktop)[0]!;
+    expect(conflict.type).toBe('e2ee-conflict');
+    expect(conflict).not.toHaveProperty('base');
+  });
+
+  it('refuses a head built under an older key epoch than the group’s', async () => {
+    const { context } = createRoomContext();
+    const account = fakeE2eeAccount(PROJECT);
+    const room = createEncryptedRoom(context, account);
+    const laptop = await openEncrypted(room, 'client_laptop');
+    account.keyEpoch = 1; // a Commit landed
+    const on = (keyEpoch: number, body: string) =>
+      e2eeFrame('client_laptop', {
+        documentVersion: 2,
+        keyEpoch,
+        previousVersionHash: account.headRecord.versionHash,
+        body
+      });
+    laptop.sent.length = 0;
+    await laptop.receive(on(0, 'old epoch'));
+    expect(e2eeFrames(laptop)).toEqual([
+      expect.objectContaining({ type: 'error', code: 'epoch-stale' })
+    ]);
+    expect(account.writes).toEqual([]);
+    // A key epoch the group does not have is refused as well.
+    laptop.sent.length = 0;
+    await laptop.receive(on(5, 'future epoch'));
+    expect(e2eeFrames(laptop)).toEqual([
+      expect.objectContaining({ type: 'error', code: 'document-invalid' })
+    ]);
+    expect(account.writes).toEqual([]);
+    // Under the current epoch it lands.
+    laptop.sent.length = 0;
+    await laptop.receive(on(1, 'current epoch'));
+    expect(e2eeFrames(laptop)[0]).toMatchObject({ type: 'e2ee-ack' });
+    expect(account.writes).toHaveLength(1);
+  });
+
+  it('refuses a plaintext document in an encrypted room', async () => {
+    const { context, values } = createRoomContext();
+    const account = fakeE2eeAccount(PROJECT);
+    const room = createEncryptedRoom(context, account);
+    const laptop = await openEncrypted(room, 'client_laptop');
+    const plaintext = {
+      ...createProjectDocument('Leak', toUserId('user_room')),
+      projectId: PROJECT
+    } as ProjectDocument;
+    laptop.sent.length = 0;
+    await laptop.receive(documentFrame(plaintext, null, 'client_laptop'));
+    expect(e2eeFrames(laptop)).toEqual([
+      expect.objectContaining({ type: 'error', code: 'format-mismatch' })
+    ]);
+    expect(values.has('room:latest')).toBe(false);
+    expect(JSON.stringify([...values.values()])).not.toContain('Leak');
+
+    // A plaintext socket cannot join the room once it is encrypted, across
+    // a restart too.
+    const restarted = createEncryptedRoom(context, account);
+    expect((await restarted.fetch(upgradeRequest(PROJECT))).status).toBe(409);
+  });
+
+  it('refuses an envelope in a plaintext room, which never turns encrypted', async () => {
+    const { context, values } = createRoomContext();
+    const account = fakeE2eeAccount(PROJECT);
+    const room = createEncryptedRoom(context, account);
+    const plain = await openSocket(room, PROJECT);
+    await plain.receive(hello(null, 'client_plain'));
+    plain.sent.length = 0;
+    await plain.receive(
+      e2eeFrame('client_plain', {
+        documentVersion: 2,
+        keyEpoch: 0,
+        previousVersionHash: account.headRecord.versionHash,
+        body: 'envelope'
+      })
+    );
+    expect(plain.lastFrame()).toMatchObject({
+      type: 'error',
+      code: 'format-mismatch'
+    });
+    expect(account.writes).toEqual([]);
+    expect([...values.keys()].some((key) => key.startsWith('room:e2ee:'))).toBe(
+      false
+    );
+
+    // Once the room holds a plaintext version, an encrypted request is refused.
+    const base = {
+      ...createProjectDocument('Plain', toUserId('user_room')),
+      projectId: PROJECT
+    } as ProjectDocument;
+    await plain.receive(documentFrame(base, null, 'client_plain'));
+    expect(values.has('room:latest')).toBe(true);
+    expect((await room.fetch(encryptedUpgrade())).status).toBe(409);
+  });
+
+  it('serves the owner only, and only while encrypted projects are open', async () => {
+    const account = fakeE2eeAccount(PROJECT);
+    const closed = createEncryptedRoom(createRoomContext().context, account, {
+      ENVIRONMENT: 'development',
+      AUTH_MODE: 'development'
+    });
+    expect((await closed.fetch(encryptedUpgrade())).status).toBe(403);
+
+    const room = createEncryptedRoom(createRoomContext().context, account);
+    const editor = await room.fetch(
+      encryptedUpgrade(PROJECT, { ...ownerIdentity, role: 'editor' })
+    );
+    expect(editor.status).toBe(101);
+    const socket = globals.serverSockets.at(-1)!;
+    await socket.receive(hello(null, 'client_editor'));
+    expect(socket.closed).toMatchObject({ code: 1008 });
+    expect(socket.sent.some((frame) => frame.includes('e2ee-state'))).toBe(
+      false
+    );
+  });
+
+  it('broadcasts a new key epoch after a Commit lands', async () => {
+    const { context } = createRoomContext();
+    const account = fakeE2eeAccount(PROJECT);
+    const room = createEncryptedRoom(context, account);
+    const laptop = await openEncrypted(room, 'client_laptop');
+    const desktop = await openEncrypted(room, 'client_desktop');
+    laptop.sent.length = 0;
+    desktop.sent.length = 0;
+    expect(
+      (await notice(room, { kind: 'epoch', keyEpoch: 1 }, false)).status
+    ).toBe(403);
+    expect((await notice(room, { kind: 'epoch', keyEpoch: -1 })).status).toBe(
+      400
+    );
+    expect((await notice(room, { kind: 'epoch', keyEpoch: 1 })).status).toBe(
+      204
+    );
+    expect(e2eeFrames(laptop)).toEqual([{ type: 'e2ee-epoch', keyEpoch: 1 }]);
+    expect(e2eeFrames(desktop)).toEqual([{ type: 'e2ee-epoch', keyEpoch: 1 }]);
+  });
+
+  it('follows the account when a version lands there outside the room', async () => {
+    const { context } = createRoomContext();
+    const account = fakeE2eeAccount(PROJECT);
+    const room = createEncryptedRoom(context, account);
+    const laptop = await openEncrypted(room, 'client_laptop');
+    const first = account.headRecord;
+    // A named save through the account's revision route.
+    const named = account.writeOutside({
+      projectId: PROJECT,
+      documentVersion: 2,
+      keyEpoch: 0,
+      previousVersionHash: first.versionHash,
+      body: 'named save'
+    });
+    laptop.sent.length = 0;
+    expect((await notice(room, { kind: 'head' })).status).toBe(204);
+    expect(e2eeFrames(laptop)).toEqual([
+      {
+        type: 'e2ee-document',
+        clientId: 'account',
+        head: {
+          record: named,
+          envelope: b64(account.envelopeOf(named.versionHash)!)
+        }
+      }
+    ]);
+    // An edit still on version 1 is merged with the named save.
+    laptop.sent.length = 0;
+    await laptop.receive(
+      e2eeFrame('client_laptop', {
+        documentVersion: 2,
+        keyEpoch: 0,
+        previousVersionHash: first.versionHash,
+        body: 'stale edit'
+      })
+    );
+    expect(e2eeFrames(laptop)[0]).toMatchObject({
+      type: 'e2ee-conflict',
+      latest: { record: named },
+      base: { record: first }
+    });
+    expect(account.writes).toEqual([]);
   });
 });

@@ -1,6 +1,6 @@
 # Trusted CI fleet
 
-Linux CI jobs and their completion gates live in `fleet-ci-v4.yml`, called at an
+Linux CI jobs and their completion gates live in `fleet-ci-v5.yml`, called at an
 immutable commit from `ci.yml`. GitHub evaluates the runner expression before
 scheduling each job. There is no GitHub-hosted authorization or routing job in
 front of the Linux checks, and no routing HTTP request from Actions.
@@ -32,19 +32,21 @@ Old pinned commits stay on main, so earlier runs can still be re-run.
 
 ## Trusted merge-queue overflow
 
-`ci.yml` activates `fleet-ci-v4.yml` at the landed #878 commit
-`8b8eb4f77706f4b97f18cdb227beb1541c97fd2e` and grants its `checks` job
+`ci.yml` activates `fleet-ci-v5.yml` at the landed #882 commit
+`0c3bda193536ec351b8e4d7e1ab0edb1fdbb0021` and grants its `checks` job
 `pull-requests: read`. Before this caller runs on Jane, add this exact workflow
 entry to the existing `ci-trusted-main` runner group:
 
 ```text
-esaueng/OpenZCAD/.github/workflows/fleet-ci-v4.yml@8b8eb4f77706f4b97f18cdb227beb1541c97fd2e
+esaueng/OpenZCAD/.github/workflows/fleet-ci-v5.yml@0c3bda193536ec351b8e4d7e1ab0edb1fdbb0021
 ```
 
-v4 keeps v2's queue policy and runner isolation byte for byte; it installs
-browser binaries only and runs no e2e shards on queue candidates. The v2
+v5 keeps v2's queue policy and runner isolation byte for byte; it installs
+browser binaries only, runs no e2e shards on queue candidates (v4, #878), and
+starts pull-request shards beside `quality` (#882). The v4 caller
+(`fleet-ci-v4.yml@8b8eb4f77706f4b97f18cdb227beb1541c97fd2e`, #880) and the v2
 caller (`fleet-ci-v2.yml@6cd1c223fe3b3ac49f6379e0999f1b4bbe310f04`, activated
-through #819) stays resolvable for older branches and reruns. Runner access is a separate rollout
+through #819) stay resolvable for older branches and reruns. Runner access is a separate rollout
 step; the caller pin alone does not establish that a job ran on Jane.
 
 Retain all existing entries and the selected-repository and selected-workflow
@@ -124,7 +126,7 @@ Local runs keep Playwright's automatic worker count.
 
 One rollout owner coordinates the controller, runner group and shared profile
 across both repositories. Before enabling the profile, verify the controller
-recognizes `ci-server-jane-5gb`, approve the exact v4 entry above, and validate
+recognizes `ci-server-jane-5gb`, approve the exact v5 entry above, and validate
 each slot's guard. Then add `ci-server-jane-5gb` to each verified registration:
 `ci-server-jane-1`, `ci-server-jane-2`, and `ci-server-jane-3`. Keep those runner
 names and their individual slot labels. Keep the old shared `ci-server-jane`
@@ -146,7 +148,7 @@ canonical target `ci-server-jane` under hosted queue pressure; do not set the
 target to the profile label. Preserve all required-check names, App bindings,
 review requirements and queue protections. New queue candidates use the landed
 caller;
-older PR branches must pick up its pin before their runs can use v4.
+older PR branches must pick up its pin before their runs can use v5.
 
 Run an authorized real application job on each Jane slot, verify cleanup,
 hosted-first overflow and fork-hosted execution, then enable normal routing. Code merge alone does

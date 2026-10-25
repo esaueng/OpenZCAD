@@ -2,12 +2,20 @@
  * Builds an account project's duplicate or branch in the browser (ADR-024
  * Phase 1), so the Worker stores a copy it never had to construct. Loaded on
  * demand: only Duplicate and Branch reach it.
+ *
+ * An end-to-end encrypted source (ADR-024 Phase 4, slice 4-8) is decrypted
+ * and verified by the encrypted store behind `store`, and its copy keeps
+ * the source's blob ids, so the account copies those files byte for byte
+ * and nothing is encrypted again. A branch first reads the current head, so
+ * the save state it starts from is proven part of the history this browser
+ * trusts now, and the source's pin never moves back.
  */
 import {
   duplicateProjectDocument,
   withoutDerivedProjection
 } from '@openzcad/document-core';
 import { archiveAccountImportSources } from './accountImportSources';
+import { isEncryptedProject } from './api';
 import type { ArchiveArtifactInput } from './archiveArtifact';
 import {
   listLocalOnlyImportSources,
@@ -18,8 +26,11 @@ import {
   projectCopyDocumentDigest
 } from '@openzcad/persistence';
 import {
+  documentNodesWithHistory,
   duplicateProjectName,
+  importedSourceReferenceOf,
   projectBranchPoint,
+  referenceImagesWithHistory,
   toRevisionId,
   type DuplicateProjectRequest,
   type ProjectDocument,
@@ -63,14 +74,19 @@ export async function buildCloudProjectCopy(
   cachePictures: (document: ProjectDocument) => Promise<void> = async () => {}
 ): Promise<Omit<DuplicateProjectRequest, 'projectId'> | null> {
   const { saveState } = source;
+  const encrypted = isEncryptedProject(source.projectId);
+  // An encrypted branch's save state is checked against the current head
+  // (ADR-024: a historical read never moves the pin back).
+  if (encrypted && saveState) await store.loadProject(source.projectId);
   const document = saveState
     ? await store.loadRevision(source.projectId, saveState.revisionId)
     : await store.loadProject(source.projectId);
   if (!document) return null;
-  await cachePictures(document);
+  // An encrypted copy keeps the source's pictures by blob id.
+  if (!encrypted) await cachePictures(document);
   // The copy is named after the project, not after the save state it starts
   // from: "Bracket (copy)" is what the user is looking for on the shelf.
-  const copy = duplicateProjectDocument(
+  const built = duplicateProjectDocument(
     document,
     duplicateProjectName(source.projectName, existingNames),
     ownerUserId,
@@ -84,12 +100,62 @@ export async function buildCloudProjectCopy(
         )
       : undefined
   );
+  const copy = encrypted ? withSourceBlobIds(document, built) : built;
   return {
     document: copy,
     documentDigest: await projectCopyDocumentDigest(copy),
-    importSources: importSourceCopyRefs(document, copy),
+    // The account copies an encrypted source's blobs by id instead.
+    importSources: encrypted ? [] : importSourceCopyRefs(document, copy),
     ...(saveState ? { revisionId: toRevisionId(saveState.revisionId) } : {})
   };
+}
+
+/**
+ * `copy` with the source's blob ids back where `duplicateProjectDocument`
+ * made them device-local (`artifact_local_<sha256>`): an encrypted copy
+ * names the same blobs, whose keys travel in its first version (slice 4-8).
+ * A file that was device-local in the source stays so.
+ */
+export function withSourceBlobIds(
+  source: ProjectDocument,
+  copy: ProjectDocument
+): ProjectDocument {
+  const LOCAL = 'artifact_local_';
+  const ids = new Map<string, string>();
+  const keep = (artifactId: unknown, checksum: unknown) => {
+    if (
+      typeof artifactId === 'string' &&
+      !artifactId.startsWith(LOCAL) &&
+      typeof checksum === 'string' &&
+      !ids.has(`${LOCAL}${checksum}`)
+    ) {
+      ids.set(`${LOCAL}${checksum}`, artifactId);
+    }
+  };
+  for (const node of documentNodesWithHistory(source)) {
+    if (node.kind !== 'feature') continue;
+    keep(
+      (node.data as { artifactId?: unknown }).artifactId,
+      importedSourceReferenceOf(node.data)?.checksumSha256
+    );
+  }
+  for (const image of referenceImagesWithHistory(source)) {
+    keep(image.artifactId, image.source?.checksumSha256);
+  }
+  if (!ids.size) return copy;
+  const { derived, ...content } = copy;
+  const restored = structuredClone(content);
+  const pending: unknown[] = [restored];
+  while (pending.length) {
+    const value = pending.pop();
+    if (!value || typeof value !== 'object') continue;
+    for (const [key, child] of Object.entries(value)) {
+      if (key === 'artifactId' && typeof child === 'string') {
+        (value as Record<string, unknown>)[key] = ids.get(child) ?? child;
+      } else if (child && typeof child === 'object') pending.push(child);
+    }
+  }
+  return { ...restored, derived };
 }
 
 export interface CopyPicturePublisher {
