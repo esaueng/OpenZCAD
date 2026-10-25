@@ -3,7 +3,12 @@ import {
   expect,
   stubApi,
   expectBodyCount,
-  waitForStillViewport
+  waitForStillViewport,
+  clickWorldPoint,
+  enterCommandValue,
+  finishInPlaceCommand,
+  pickObjectsBody,
+  revealModelPanel
 } from './openzcad-fixtures';
 import type { Page } from '@playwright/test';
 
@@ -128,12 +133,20 @@ for (const [width, height] of [
   test(`a long exact pattern can be terminated without changing the source or undo history at ${width}px`, async ({
     page
   }) => {
+    test.setTimeout(120_000);
     await page.setViewportSize({ width: width!, height: height! });
     await stubApi(page);
     await page.goto('/');
     await create(page, 'QA pattern cancel');
     await page.getByRole('button', { name: /^Box \(B\)/ }).click();
     const inspector = page.getByRole('region', { name: 'Feature inspector' });
+    // Off the Z axis, so three copies about it stay apart: a world axis
+    // through the corner-origin box would run along an edge they all share,
+    // which exact union refuses.
+    await inspector
+      .getByRole('group', { name: 'Position' })
+      .getByRole('textbox', { name: 'Corner X' })
+      .fill('20');
     await inspector
       .getByRole('button', { name: 'Create', exact: true })
       .click();
@@ -142,12 +155,43 @@ for (const [width, height] of [
       .getByRole('combobox', { name: 'Search commands' })
       .fill('/Circular pattern');
     await page.keyboard.press('Enter');
+    // U09: a new pattern runs in place: the box, a click on the world Z axis
+    // below it, the count from its chip's keypad. A short one previews at
+    // once; the long rebuild this spec terminates is the edit below.
+    const bar = page.getByRole('group', { name: 'Circular pattern command' });
+    await expect(bar).toContainText('Click the body to repeat');
+    await pickObjectsBody(page, 'Box 1');
+    await expect(bar).toContainText('Pick the axis');
+    // The More tools fold is seeded open, and at narrow widths it covers
+    // the stage the axis is clicked on.
+    const fold = page.getByRole('button', { name: /^More tools/ });
+    if ((await fold.getAttribute('aria-expanded')) === 'true') {
+      await fold.click();
+    }
+    await waitForStillViewport(page);
+    await clickWorldPoint(page, [0, 0, -5]);
+    await expect(bar).toContainText('Drag the total angle');
+    await enterCommandValue(page, 'count', '3');
+    await finishInPlaceCommand(page, 'Circular pattern');
+    const counts = page
+      .getByRole('group', { name: 'Workspace status' })
+      .getByLabel(/ · \d+ features? · \d+ bod(y|ies)\. Sync /);
+    const bodiesNow = async () =>
+      Number(
+        / · (\d+) bod/.exec(
+          (await counts.getAttribute('aria-label')) ?? ''
+        )?.[1]
+      );
+    const patterned = await bodiesNow();
+    // Editing it to fifty copies is the long exact rebuild.
+    await revealModelPanel(page, 'History');
+    await page
+      .locator('.feature-row-main', { hasText: 'Circular pattern' })
+      .click();
     await inspector
       .getByRole('textbox', { name: 'Count', exact: true })
       .fill('50');
-    await inspector
-      .getByRole('button', { name: 'Create', exact: true })
-      .click();
+    await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
     await expect(
       page.getByRole('region', { name: 'Pattern rebuild' })
     ).toBeVisible();
@@ -171,7 +215,7 @@ for (const [width, height] of [
     await expect(
       page.getByRole('region', { name: 'Pattern rebuild' })
     ).toHaveCount(0);
-    await expectBodyCount(page, 1);
+    expect(await bodiesNow()).toBe(patterned);
     await expect(page.getByRole('contentinfo')).toContainText(
       'Pattern canceled; no change was applied.'
     );
@@ -180,6 +224,7 @@ for (const [width, height] of [
       .getByRole('toolbar', { name: 'Viewer bar' })
       .getByRole('button', { name: 'Undo', exact: true })
       .click();
-    await expectBodyCount(page, 0);
+    // The canceled edit left no undo step: Undo takes back the pattern.
+    await expectBodyCount(page, 1);
   });
 }

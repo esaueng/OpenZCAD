@@ -7,7 +7,13 @@ import {
   transformBody
 } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
-import { test, expect, stubApi } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  stubApi,
+  finishInPlaceCommand,
+  pickObjectsBody
+} from './openzcad-fixtures';
 
 /**
  * Research-audit Stage 4 (schema v24) through the real workspace: a Boolean
@@ -61,15 +67,15 @@ test('subtracts while keeping the base body, then reopens the choice', async ({
     timeout: 30_000
   });
 
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  // U09: Subtract runs in place; keeping the base is a rare choice behind
+  // the bar's Options menu.
   await page.getByRole('button', { name: /^Subtract \(X\)/ }).click();
-  await inspector.locator('.pick-row', { hasText: 'Left' }).click();
-  await inspector.locator('.pick-row', { hasText: 'Right' }).click();
-  await inspector.getByLabel('Keep originals').selectOption('target');
-  await expect(inspector).toContainText(
-    'Body 1 is kept beside the result; the others are consumed.'
-  );
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await pickObjectsBody(page, 'Left');
+  await pickObjectsBody(page, 'Right');
+  const subtractBar = page.getByRole('group', { name: 'Subtract command' });
+  await subtractBar.locator('summary').click();
+  await subtractBar.getByRole('radio', { name: 'First' }).click();
+  await finishInPlaceCommand(page, 'Subtract');
 
   // Left stays beside the 1000 − 250 result; Right is consumed.
   await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '2', {

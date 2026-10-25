@@ -191,33 +191,31 @@ for (const operation of ['Union', 'Subtract', 'Intersect'] as const) {
       });
     await expect(command).toHaveCount(1);
     await command.click();
-    const inspector = page.getByRole('region', { name: 'Feature inspector' });
-    await expect(
-      inspector.getByRole('combobox', { name: 'Operation', exact: true })
-    ).toHaveValue(operation.toLowerCase());
-    const seededName =
-      operation === 'Subtract' ? 'Base, pick 1, base' : 'Base, pick 1';
-    await expect(
-      inspector.getByRole('button', { name: seededName, exact: true })
-    ).toHaveAttribute('aria-pressed', 'true');
-    await expect(
-      inspector.getByText(
-        'One body picked · pick at least one more to combine.'
-      )
-    ).toBeVisible();
-    await expect(
-      inspector.getByRole('button', { name: /^Create/ })
-    ).toBeDisabled();
-    await inspector.getByRole('button', { name: 'Lug', exact: true }).click();
-    await expect(
-      inspector.getByRole('button', { name: seededName, exact: true })
-    ).toHaveAttribute('aria-pressed', 'true');
-    await expect(
-      inspector.getByRole('button', { name: 'Lug, pick 2', exact: true })
-    ).toHaveAttribute('aria-pressed', 'true');
-    await expect(
-      inspector.getByRole('button', { name: /^Create/ })
-    ).toBeEnabled();
+    // U09: the boolean runs in place. The picked body is its first operand,
+    // the bar asks for the next, and Done waits for a second body.
+    const bar = page.getByRole('group', { name: `${operation} command` });
+    await expect(bar).toBeVisible();
+    await expect(page.locator('form.feature-form')).toHaveCount(0);
+    await expect(bar).toContainText(
+      operation === 'Subtract'
+        ? 'Click the bodies to cut away'
+        : 'Click the next body'
+    );
+    await expect(bar.getByRole('button', { name: /Done/ })).toBeDisabled();
+    await objectsList(page)
+      .getByRole('button', { name: 'Lug', exact: true })
+      .click();
+    if (operation === 'Subtract') {
+      // Every box sits at the origin and Lug encloses Base, so Base − Lug
+      // leaves nothing: the preview refuses it and Done stays off.
+      await expect(bar).toHaveClass(/\brefused\b/, { timeout: 30_000 });
+      await expect(bar.getByRole('button', { name: /Done/ })).toBeDisabled();
+    } else {
+      await expect(bar).toContainText('2 bodies');
+      await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+        timeout: 30_000
+      });
+    }
     expect(errors).toEqual([]);
     const screenshotPath = testInfo.outputPath(
       `seeded-${operation.toLowerCase()}.png`

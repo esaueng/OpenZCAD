@@ -22,8 +22,14 @@ export interface RevolveAxisCandidate {
   label: string;
   origin: Vector3;
   direction: Vector3;
-  /** The stored choice: an in-sketch axis, or a datum axis reference. */
-  choice: { axis: RevolveAxis } | { datumFeatureId: FeatureId };
+  /**
+   * The stored choice: an in-sketch axis, a datum axis reference, or a world
+   * axis through the origin (a circular pattern's).
+   */
+  choice:
+    | { axis: RevolveAxis }
+    | { datumFeatureId: FeatureId }
+    | { world: 'x' | 'y' | 'z' };
 }
 
 /** What the command has picked so far. */

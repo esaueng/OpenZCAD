@@ -6,7 +6,10 @@ import {
   locateEdge,
   setSelectionFilter,
   stubApi,
-  test
+  test,
+  finishInPlaceCommand,
+  pickDatumRow,
+  pickObjectsBody
 } from './openzcad-fixtures';
 
 /**
@@ -207,12 +210,11 @@ test('three-point and parallel-at-point planes: typed points, a refusal and a pi
   expect(drawn.normal).toEqual({ x: 0, y: 0, z: 1 });
 
   // Split on it: the halves meet at z = 5.
+  // U09: Split runs in place: the body, then Plane 2 from its row.
   await page.getByRole('button', { name: /^Split — / }).click();
-  await inspector
-    .getByRole('group', { name: 'Datum planes' })
-    .getByRole('button', { name: 'Plane 2' })
-    .click();
-  await inspector.getByRole('button', { name: 'Create split body' }).click();
+  await pickObjectsBody(page, /./);
+  await pickDatumRow(page, 'Plane 2');
+  await finishInPlaceCommand(page, 'Split');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Split' })
   ).toBeVisible({ timeout: 20_000 });

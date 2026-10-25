@@ -1,4 +1,10 @@
-import { test, expect, stubApi } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  stubApi,
+  finishInPlaceCommand,
+  pickObjectsBody
+} from './openzcad-fixtures';
 import type { Download, Page } from '@playwright/test';
 
 interface SectionGeometry {
@@ -266,10 +272,11 @@ test('keeps a section hole in the exact DXF and shuts export during a posed prev
   await move.getByRole('button', { name: /Apply move/ }).click();
   await expect(page.locator('.feature-row', { hasText: 'Move' })).toBeVisible();
 
+  // U09: Subtract runs in place: the base, then the tool, then Done.
   await page.getByRole('button', { name: /^Subtract \(X\)/ }).click();
-  await inspector.locator('.pick-row', { hasText: 'Plate 1' }).click();
-  await inspector.locator('.pick-row', { hasText: 'Bore tool 1' }).click();
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await pickObjectsBody(page, 'Plate 1');
+  await pickObjectsBody(page, 'Bore tool 1');
+  await finishInPlaceCommand(page, 'Subtract');
   const subtract = page.locator('.feature-row', { hasText: 'Subtract' });
   await expect(subtract).toBeVisible();
   await expect(subtract.getByTitle('Feature failed to build')).toHaveCount(0);

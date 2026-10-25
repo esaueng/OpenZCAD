@@ -23,6 +23,8 @@ import { MODEL_PANEL_OBSTACLES } from '../lib/selectionCalloutView';
 import { formatNumber } from '../lib/model';
 
 export interface KeypadRequest {
+  /** U09: which in-place command value a `command` entry edits. */
+  commandValueId?: string;
   /** Which commit path the value feeds (routing is the opener's concern). */
   kind:
     | 'offset'
@@ -50,6 +52,8 @@ export interface KeypadRequest {
    * Original absolute measurement, used to restore exact-entry cancellation.
    */
   baseline?: number;
+  /** The expression the value held when entry opened, restored on cancel. */
+  baselineRaw?: string;
   /** Client-space anchor for a click-placed editor without a live 3D rig. */
   fixedClientAnchor?: { x: number; y: number };
 }

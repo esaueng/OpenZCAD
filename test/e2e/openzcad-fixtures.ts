@@ -1288,3 +1288,152 @@ export async function askAssistant(page: Page, text: string) {
   await field.fill(text);
   await field.press('Enter');
 }
+
+/**
+ * Selects the planar face with `normal` on the first body, the way a click on
+ * it would (the e2e canvas hook), and resolves once the viewer answered.
+ */
+export async function pickPlanarFace(
+  page: Page,
+  normal: { x: number; y: number; z: number }
+): Promise<{ lineageName?: string } | null> {
+  const canvas = page.locator('.viewer-host canvas');
+  return canvas.evaluate(
+    (element, faceNormal) =>
+      new Promise<{ lineageName?: string } | null>((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-select-planar-face', {
+            detail: { normal: faceNormal, select: true, resolve }
+          })
+        );
+      }),
+    normal
+  );
+}
+
+/**
+ * Types `value` into an in-place command's value through its chip's keypad
+ * (U09): the only typing an in-place command takes.
+ */
+export async function enterCommandValue(
+  page: Page,
+  valueId: string,
+  value: string
+) {
+  await page.getByTestId(`command-handle-${valueId}`).click();
+  const keypad = page.locator('.numeric-keypad');
+  await expect(keypad).toBeVisible();
+  await keypad.locator('input').fill(value);
+  await keypad.locator('input').press('Enter');
+  await expect(keypad).toHaveCount(0);
+}
+
+/** Waits for an in-place command's preview, then presses its Done. */
+export async function finishInPlaceCommand(page: Page, title: string) {
+  const bar = page.getByRole('group', { name: `${title} command` });
+  const done = bar.getByRole('button', { name: /Done/ });
+  await expect(done).toBeEnabled({ timeout: 30_000 });
+  await done.click();
+  await expect(bar).toHaveCount(0);
+}
+
+/**
+ * Drills a hole in place (U09): the Hole tool, a click on the planar face
+ * with `normal`, the diameter on the chip's keypad, Done.
+ */
+export async function createHoleInPlace(
+  page: Page,
+  options: { normal?: { x: number; y: number; z: number }; diameter: string }
+) {
+  await page.getByRole('button', { name: /^Hole/ }).click();
+  const bar = page.getByRole('group', { name: 'Hole command' });
+  await expect(bar).toContainText('Click a flat face');
+  await expect
+    .poll(() => pickPlanarFace(page, options.normal ?? { x: 0, y: 0, z: 1 }), {
+      timeout: 60_000
+    })
+    .not.toBeNull();
+  await expect(bar).toContainText('drag the diameter');
+  await enterCommandValue(page, 'diameter', options.diameter);
+  await finishInPlaceCommand(page, 'Hole');
+}
+
+/**
+ * Shells in place (U09): the Shell tool, a click on each planar face with one
+ * of `normals`, the wall on the chip's keypad, Done.
+ */
+export async function createShellInPlace(
+  page: Page,
+  options: { normals: { x: number; y: number; z: number }[]; thickness: string }
+) {
+  await page.getByRole('button', { name: /^Shell/ }).click();
+  const bar = page.getByRole('group', { name: 'Shell command' });
+  await expect(bar).toContainText('Click the faces to open');
+  for (const [index, normal] of options.normals.entries()) {
+    await expect
+      .poll(() => pickPlanarFace(page, normal), { timeout: 60_000 })
+      .not.toBeNull();
+    await expect(bar).toContainText(`${index + 1} open`);
+  }
+  await enterCommandValue(page, 'thickness', options.thickness);
+  await finishInPlaceCommand(page, 'Shell');
+}
+
+/**
+ * Picks a body for an in-place command from its Objects row (U09). A panel
+ * this opened is closed again, so it never stands over the model a later
+ * click in the same command aims at.
+ */
+export async function pickObjectsBody(page: Page, name: string | RegExp) {
+  const button = railPanelButton(page, 'Objects');
+  const wasOpen = (await button.getAttribute('aria-pressed')) === 'true';
+  await revealModelPanel(page, 'Objects');
+  await modelPanel(page, 'Objects')
+    .locator('.body-row:not(.consumed) .body-row-main', { hasText: name })
+    .first()
+    .click();
+  if (!wasOpen) {
+    await button.click();
+    await expect(button).toHaveAttribute('aria-pressed', 'false');
+  }
+}
+
+/** Clicks the model where the world point `at` is drawn, after hovering it. */
+export async function clickWorldPoint(
+  page: Page,
+  at: [number, number, number]
+) {
+  const canvas = page.locator('.viewer-host canvas');
+  const [point] = await canvas.evaluate(
+    (element, points) =>
+      new Promise<{ x: number; y: number }[]>((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-project-points', {
+            detail: {
+              points,
+              resolve: (state: { points: { x: number; y: number }[] }) =>
+                resolve(state.points)
+            }
+          })
+        );
+      }),
+    [at]
+  );
+  await page.mouse.move(point!.x, point!.y);
+  await page.mouse.click(point!.x, point!.y);
+}
+
+/** Picks a datum plane for an in-place Mirror or Split from its Objects row. */
+export async function pickDatumRow(page: Page, name: string) {
+  const button = railPanelButton(page, 'Objects');
+  const wasOpen = (await button.getAttribute('aria-pressed')) === 'true';
+  await revealModelPanel(page, 'Objects');
+  await modelPanel(page, 'Objects')
+    .locator('.object-row .body-row-main', { hasText: name })
+    .first()
+    .click();
+  if (!wasOpen) {
+    await button.click();
+    await expect(button).toHaveAttribute('aria-pressed', 'false');
+  }
+}

@@ -3239,6 +3239,18 @@ button.model-panel-grip[aria-expanded='true'] {
   --lane-status: 48px;
 }
 
+/* The bar keeps its row while a command runs, so a status toast (or the
+   activity lane) that speaks meanwhile stands on it rather than over it,
+   and the rows above lift past both. */
+.viewer-area:has(.in-place-command) :is(.workspace-toast, .activity-lane) {
+  bottom: calc(var(--lane-base) + 48px);
+}
+
+:where(.workspace:not(.with-assistant))
+  .viewer-area:has(.in-place-command):has(.workspace-toast:not(.hidden)) {
+  --lane-status: 88px;
+}
+
 .in-place-command {
   /* The lane passes the pointer through to the viewport; the bar's own
      buttons must take it back, as the search bar does. */
@@ -3337,4 +3349,38 @@ button.model-panel-grip[aria-expanded='true'] {
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   box-shadow: 0 6px 18px rgb(0 0 0 / 24%);
+}
+
+.in-place-option {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.in-place-option + .in-place-option {
+  margin-top: 8px;
+}
+
+.in-place-option-label {
+  flex: 0 0 100%;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.in-place-option-choice {
+  min-height: 28px;
+  padding: 0 8px;
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  cursor: pointer;
+}
+
+.in-place-option-choice[aria-checked='true'] {
+  color: var(--color-bg);
+  background: var(--color-accent);
+  border-color: var(--color-accent-border);
 }

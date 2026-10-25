@@ -1163,9 +1163,11 @@ test('a command card heads the right lane, and a tool card keeps its actions in 
   });
   await expect(page.locator('.panel-column')).toBeVisible();
 
-  await page.getByRole('button', { name: /^Hole/ }).click();
+  // A tall tool card: Hole now runs in place (U09) and opens none, so the
+  // Fillet card, with its edge list and radius rows, stands in.
+  await page.getByRole('button', { name: /^Fillet/ }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  const submit = inspector.getByRole('button', { name: 'Create hole' });
+  const submit = inspector.getByRole('button', { name: /^Create/ });
   await expect(submit).toBeVisible();
   const layout = await page.evaluate(() => {
     const rect = (selector: string) =>

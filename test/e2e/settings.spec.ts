@@ -10,7 +10,9 @@ import {
   stubApi,
   stubAssistant,
   test,
-  waitForSurfacesToSettle
+  waitForSurfacesToSettle,
+  finishInPlaceCommand,
+  pickObjectsBody
 } from './openzcad-fixtures';
 
 test('discloses free built-in AI data use and lets users choose a personal model', async ({
@@ -1385,10 +1387,11 @@ test('consented diagnostics count transaction edits without sending names', asyn
   await inspector.getByRole('button', { name: 'Create', exact: true }).click();
   await expectBodyCount(page, 2);
   await expect.poll(() => observations('part_count').at(-1)?.bucket).toBe('2_10');
+  // U09: Union runs in place: two bodies, then Done.
   await page.getByRole('button', { name: /^Union \(U\)/ }).click();
-  await inspector.locator('.pick-row', { hasText: 'Box 1' }).click();
-  await inspector.locator('.pick-row', { hasText: 'Cylinder 1' }).click();
-  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await pickObjectsBody(page, 'Box 1');
+  await pickObjectsBody(page, 'Cylinder 1');
+  await finishInPlaceCommand(page, 'Union');
   await expectBodyCount(page, 1);
   await expect.poll(() => observations('feature_operation').at(-1)).toEqual({
     event: 'feature_operation', bucket: 'feature.boolean'

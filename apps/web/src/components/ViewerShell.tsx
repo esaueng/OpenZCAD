@@ -310,7 +310,9 @@ interface ViewerShellProps {
   /** U09: in-place command axis lines, handle and keypad wiring. */
   axisPicker?: ModelViewerProps['axisPicker'];
   onPickAxis?: ModelViewerProps['onPickAxis'];
-  commandAngleHandle?: ModelViewerProps['commandAngleHandle'];
+  commandHandles?: ModelViewerProps['commandHandles'];
+  curvePicker?: ModelViewerProps['curvePicker'];
+  onPickCurve?: ModelViewerProps['onPickCurve'];
   onCommandHandlePreview?: ModelViewerProps['onCommandHandlePreview'];
   onCommandHandleRelease?: ModelViewerProps['onCommandHandleRelease'];
   onOpenCommandKeypad?: ModelViewerProps['onOpenCommandKeypad'];
@@ -499,7 +501,9 @@ export function ViewerShell({
   planePickerOffset,
   axisPicker = null,
   onPickAxis,
-  commandAngleHandle = null,
+  commandHandles,
+  curvePicker = null,
+  onPickCurve,
   onCommandHandlePreview,
   onCommandHandleRelease,
   onOpenCommandKeypad,
@@ -809,7 +813,9 @@ export function ViewerShell({
         planePickerOffset={planePickerOffset}
         axisPicker={axisPicker}
         onPickAxis={onPickAxis}
-        commandAngleHandle={commandAngleHandle}
+        commandHandles={commandHandles}
+        curvePicker={curvePicker}
+        onPickCurve={onPickCurve}
         onCommandHandlePreview={onCommandHandlePreview}
         onCommandHandleRelease={onCommandHandleRelease}
         onOpenCommandKeypad={onOpenCommandKeypad}
