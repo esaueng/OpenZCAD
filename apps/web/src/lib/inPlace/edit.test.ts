@@ -17,6 +17,7 @@ import type {
   SketchId
 } from '@openzcad/shared';
 import {
+  inPlaceEditLineage,
   inPlaceEditMovedBodies,
   inPlaceEditSeed,
   inPlaceEditSourceSketchIds,
@@ -611,5 +612,56 @@ describe('inPlaceEditSourceSketchIds', () => {
         featureKind: 'shell'
       } as unknown as FeatureData)
     ).toEqual([]);
+  });
+});
+
+describe('inPlaceEditLineage', () => {
+  it("tells the result's own reshapes from bodies another one joined", () => {
+    let document = createProjectDocument('Lineage', toUserId('user_test'));
+    document = addPrimitiveFeature(document, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 40, height: 30, depth: 20 }
+    });
+    document = addPrimitiveFeature(document, {
+      name: 'Post',
+      primitiveKind: 'box',
+      dimensions: { width: 5, height: 5, depth: 40 }
+    });
+    const [block, post] = listFeaturesInOrder(document).flatMap((feature) =>
+      feature.bodyId ? [feature.bodyId] : []
+    );
+    const drilled = holeBody(document, {
+      name: 'Hole',
+      targetBodyId: block!,
+      faceHash: 1,
+      style: 'simple',
+      diameter: 4,
+      depthMode: 'through',
+      position: { u: 0, v: 0 }
+    });
+    document = drilled.document;
+    const hole = listFeaturesInOrder(document).at(-1)!.featureId;
+    const moved = transformBody(document, {
+      name: 'Nudge',
+      targetBodyId: drilled.bodyId,
+      translation: { x: 1, y: 0, z: 0 }
+    });
+    document = moved.document;
+    const joined = booleanBodies(document, {
+      name: 'Join',
+      operation: 'union',
+      targetBodyIds: [drilled.bodyId, post!]
+    });
+    document = joined.document;
+    const lineage = inPlaceEditLineage(document, hole, []);
+    // The hole's own result, moved in place, is still only its body.
+    expect(lineage.pure.has(drilled.bodyId)).toBe(true);
+    // The union carries the post's faces too.
+    expect(lineage.mixed.has(joined.bodyId)).toBe(true);
+    expect(lineage.pure.has(joined.bodyId)).toBe(false);
+    // The post itself was never the hole's.
+    expect(lineage.pure.has(post!)).toBe(false);
+    expect(lineage.mixed.has(post!)).toBe(false);
   });
 });

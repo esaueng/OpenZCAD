@@ -755,6 +755,64 @@ export function inPlaceEditSourceSketchIds(data: FeatureData): SketchId[] {
   }
 }
 
+/** Features that reshape the one body they take, adding no other's material. */
+const SINGLE_LINEAGE_KINDS = new Set<FeatureData['featureKind']>([
+  'fillet',
+  'chamfer',
+  'hole',
+  'shell',
+  'draft',
+  'thicken',
+  'solid-offset',
+  'split',
+  'transform',
+  'mirror',
+  'pattern',
+  'direct-edit'
+]);
+
+function bodyInputs(data: FeatureData): BodyId[] {
+  if ('targetBodyIds' in data) return [...data.targetBodyIds];
+  return 'targetBodyId' in data && data.targetBodyId ? [data.targetBodyId] : [];
+}
+
+/**
+ * The bodies an edited feature's result became: its own, and every body a
+ * later feature built from them. `mixed` are those another body's material
+ * joined on the way (a union, an extrude added into it), whose faces may
+ * have come from that other body; `pure` are the rest.
+ */
+export function inPlaceEditLineage(
+  document: ProjectDocument,
+  featureId: FeatureId,
+  ownBodyIds: readonly BodyId[]
+): { pure: Set<BodyId>; mixed: Set<BodyId> } {
+  const history = featureHistory(document);
+  const pure = new Set<BodyId>(ownBodyIds);
+  const mixed = new Set<BodyId>();
+  const feature = history.features.find(
+    (candidate) => candidate.featureId === featureId
+  );
+  if (!feature) return { pure, mixed };
+  for (const bodyId of featureResultBodyIds(feature)) pure.add(bodyId);
+  for (const later of history.downstream(featureId)) {
+    const inputs = bodyInputs(later.data);
+    const fromLineage = inputs.filter(
+      (bodyId) => pure.has(bodyId) || mixed.has(bodyId)
+    );
+    // Built from the result only through a sketch or a datum: not its body.
+    if (fromLineage.length === 0) continue;
+    const joined =
+      !SINGLE_LINEAGE_KINDS.has(later.data.featureKind) ||
+      fromLineage.length < inputs.length ||
+      fromLineage.some((bodyId) => mixed.has(bodyId));
+    for (const bodyId of featureResultBodyIds(later)) {
+      (joined ? mixed : pure).add(bodyId);
+    }
+  }
+  return { pure, mixed };
+}
+
 /**
  * The bodies a later feature moved from where `featureId` made them: a
  * transform (in place or a copy), a mirror, a pattern, and anything built

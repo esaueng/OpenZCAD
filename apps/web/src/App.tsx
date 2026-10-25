@@ -63,11 +63,7 @@ import { prepareSaveStateRestore } from './lib/saveStateRestore';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import { toggleBodyIsolation, type BodyIsolation } from './lib/bodyIsolation';
 import { failedFeatureIds } from './lib/featureRepair';
-import {
-  featureHistory,
-  featureResultBodyIds,
-  relatedFeatureIds
-} from './lib/featureHistory';
+import { featureHistory, relatedFeatureIds } from './lib/featureHistory';
 import {
   exportScope,
   exportScopeLabel,
@@ -1446,6 +1442,7 @@ import {
 } from './lib/inPlace/curves';
 import { datumAxisChoices } from './lib/datumAxisChoices';
 import {
+  inPlaceEditLineage,
   inPlaceEditMovedBodies,
   inPlaceEditSeed,
   inPlaceEditSourceSketchIds,
@@ -8598,12 +8595,17 @@ export function App() {
         producingFeatureOf({ bodyId: resolvedBodyId }),
         editing
       );
-    if (later && editing && !inPlaceEditDescendants(editing).has(resolvedBodyId)) {
+    const descendants =
+      later && editing ? inPlaceEditDescendants(editing) : null;
+    if (later && editing && !descendants?.has(resolvedBodyId)) {
       setStatus(
         `${editing.name} can only use faces of bodies made before it in History.`
       );
       return null;
     }
+    // Another body's material joined this one later (a union, say): only a
+    // face the edited body still has unchanged is surely one of its own.
+    const joined = descendants?.mixed.has(resolvedBodyId) ?? false;
     // A hole goes where the click lands, and on a body a later feature moved
     // (a copy, a mirror, a pattern) that is not where the hole's own face is.
     if (
@@ -8623,17 +8625,27 @@ export function App() {
     }
     const remap = later;
     if (remap && editTarget) {
-      const clicked = face?.geometry;
+      const clicked = face;
+      const clickedHash = hash ?? clicked?.hash;
       face =
         representations[editTarget]?.topology?.faces.find(
-          (candidate) => hash !== undefined && candidate.hash === hash
+          (candidate) =>
+            clickedHash !== undefined && candidate.hash === clickedHash
         ) ??
-        coplanarFace(
-          editTarget,
-          clicked?.normal,
-          clicked?.centroid ?? clicked?.center
-        );
+        (joined
+          ? undefined
+          : coplanarFace(
+              editTarget,
+              clicked?.geometry?.normal,
+              clicked?.geometry?.centroid ?? clicked?.geometry?.center
+            ));
       if (face) resolvedBodyId = editTarget;
+      else if (joined && editing) {
+        setStatus(
+          `That face may come from a body joined after ${editing.name} · pick a face of the body ${editing.name} was made on.`
+        );
+        return null;
+      }
     }
     if (!face && !remap) {
       // While a preview shows, a click lands on the preview's body, which the
@@ -8671,16 +8683,19 @@ export function App() {
    * feature after it built from them. Only a click on one of these stands
    * for the edit's input.
    */
-  function inPlaceEditDescendants(edit: InPlaceEditSeed): Set<BodyId> {
+  function inPlaceEditDescendants(edit: InPlaceEditSeed): {
+    pure: Set<BodyId>;
+    mixed: Set<BodyId>;
+    has(bodyId: BodyId): boolean;
+  } {
     const current = managerRef.current?.document;
-    const feature = current ? findFeature(current, edit.featureId) : null;
-    const bodies = new Set<BodyId>(edit.ownBodyIds);
-    if (!current || !feature) return bodies;
-    for (const bodyId of featureResultBodyIds(feature)) bodies.add(bodyId);
-    for (const later of featureHistory(current).downstream(edit.featureId)) {
-      for (const bodyId of featureResultBodyIds(later)) bodies.add(bodyId);
-    }
-    return bodies;
+    const lineage = current
+      ? inPlaceEditLineage(current, edit.featureId, edit.ownBodyIds)
+      : { pure: new Set<BodyId>(edit.ownBodyIds), mixed: new Set<BodyId>() };
+    return {
+      ...lineage,
+      has: (bodyId) => lineage.pure.has(bodyId) || lineage.mixed.has(bodyId)
+    };
   }
 
   /** A body's face in the plane through `on` facing `normal`, if it has one. */
@@ -19284,18 +19299,34 @@ export function App() {
     });
     const path = curves(inPlaceEditPicks.path);
     const guide = curves(inPlaceEditPicks.guide);
+    // A boolean's inputs are a list a missing body could not be clicked out
+    // of; a one-body slot is replaced by the next click, so it stays.
+    const listsBodies =
+      inPlace.tool !== null &&
+      IN_PLACE_TOOL_SPECS[inPlace.tool].bodyMode === 'many';
+    const bodies = listsBodies
+      ? inPlaceEditPicks.bodies.filter((pick) => representations[pick.bodyId])
+      : inPlaceEditPicks.bodies;
     if (
       path.length === inPlaceEditPicks.path.length &&
       guide.length === inPlaceEditPicks.guide.length &&
-      faces.length === inPlaceEditPicks.faces.length
+      faces.length === inPlaceEditPicks.faces.length &&
+      bodies.length === inPlaceEditPicks.bodies.length
     ) {
       return;
     }
-    inPlaceRef.current.setPicks({ path, guide, faces });
+    inPlaceRef.current.setPicks({ path, guide, faces, bodies });
     setStatus(
       `${editing.name}: a saved pick no longer exists in the model · pick it again.`
     );
-  }, [inPlaceEditing, inPlaceEditPicks, doc, representations, setStatus]);
+  }, [
+    inPlaceEditing,
+    inPlaceEditPicks,
+    inPlace.tool,
+    doc,
+    representations,
+    setStatus
+  ]);
 
   useEffect(() => {
     setSelectedProfiles((current) => {

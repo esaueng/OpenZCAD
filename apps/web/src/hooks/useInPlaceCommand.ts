@@ -123,6 +123,7 @@ export interface InPlaceCommand {
     path?: readonly CurvePick[];
     guide?: readonly CurvePick[];
     faces?: readonly FacePick[];
+    bodies?: readonly BodyPick[];
   }): void;
   pickAxis(axisId: string): void;
   pickCurve(curve: CurvePick, additive?: boolean): void;
@@ -522,6 +523,7 @@ export function useInPlaceCommand(
       path?: readonly CurvePick[];
       guide?: readonly CurvePick[];
       faces?: readonly FacePick[];
+      bodies?: readonly BodyPick[];
     }) => {
       setSession((current) =>
         current
@@ -531,7 +533,8 @@ export function useInPlaceCommand(
                 ...current.slots,
                 ...(picks.path ? { path: [...picks.path] } : {}),
                 ...(picks.guide ? { guide: [...picks.guide] } : {}),
-                ...(picks.faces ? { faces: [...picks.faces] } : {})
+                ...(picks.faces ? { faces: [...picks.faces] } : {}),
+                ...(picks.bodies ? { bodies: [...picks.bodies] } : {})
               }
             }
           : current
