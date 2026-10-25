@@ -1,4 +1,10 @@
-import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  stubApi,
+  expectBodyCount,
+  createPrimitiveInPlace
+} from './openzcad-fixtures';
 import {
   addPrimitiveFeature,
   createProjectDocument
@@ -204,11 +210,7 @@ for (const fault of ['missing', 'stalled', 'rejected'] as const) {
       )!.document;
       const checkpointId = local.checkpoints.at(-1)!.checkpointId;
       const revisionId = local.revisions.at(-1)!.revisionId;
-      await page.getByRole('button', { name: /^Cylinder/ }).click();
-      await page
-        .getByRole('region', { name: 'Feature inspector' })
-        .getByRole('button', { name: 'Create', exact: true })
-        .click();
+      await createPrimitiveInPlace(page, 'cylinder');
       await expectBodyCount(page, 2);
       await expect
         .poll(() =>

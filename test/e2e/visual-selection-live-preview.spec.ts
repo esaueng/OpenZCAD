@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import {
+  createPrimitiveInPlace,
   expect,
   test,
   stubApi,
@@ -85,11 +86,9 @@ async function armChamferedTopCapOffset(page: Page) {
   await page.goto('/');
   await page.getByLabel('Project name').fill('Planar Live Preview');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByLabel('Radius', { exact: true }).fill('14');
-  await inspector.getByLabel('Height', { exact: true }).fill('28');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '14', height: '28' }
+  });
   await blendEdgesInPlace(page, {
     tool: 'Chamfer',
     allEdges: 2,

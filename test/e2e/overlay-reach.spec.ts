@@ -1,5 +1,10 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { promptField, revealModelPanel, stubApi } from './openzcad-fixtures';
+import {
+  promptField,
+  revealModelPanel,
+  stubApi,
+  createPrimitiveInPlace
+} from './openzcad-fixtures';
 
 /**
  * Production QA, 1 October: floating chips, menus and sheets that sat under
@@ -57,15 +62,12 @@ async function createBox(
     await page.getByLabel('Units', { exact: true }).selectOption(options.units);
   }
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  if (options.size) {
-    const [width, depth, height] = options.size;
-    await inspector.getByLabel('Width (X)').fill(width);
-    await inspector.getByLabel('Depth (Y)').fill(depth);
-    await inspector.getByLabel('Height (Z)').fill(height);
-  }
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  const [width, depth, height] = options.size ?? [];
+  await createPrimitiveInPlace(
+    page,
+    'box',
+    options.size ? { sizes: { width, depth, height } } : {}
+  );
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 }
 

@@ -6,6 +6,7 @@ import {
 import { d1Database } from '../d1-sqlite';
 import {
   askAssistant,
+  createPrimitiveInPlace,
   expect,
   openAssistant,
   stubApi,
@@ -135,11 +136,7 @@ test('asks before reading an encrypted project and stops on revocation', async (
 
   await page.getByLabel('Project name').fill('Secret bracket');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(
     page.getByRole('status', { name: 'Saved', exact: true })
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });

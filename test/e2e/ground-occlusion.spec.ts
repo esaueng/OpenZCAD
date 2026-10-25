@@ -1,4 +1,10 @@
-import { test, expect, enableFullRender, stubApi } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  test,
+  expect,
+  enableFullRender,
+  stubApi
+} from './openzcad-fixtures';
 
 for (const view of ['perspective', 'orthographic', 'below'] as const) {
   test(`ground decorations do not paint over an opaque sphere crossing Z=0 (${view})`, async ({
@@ -12,11 +18,7 @@ for (const view of ['perspective', 'orthographic', 'below'] as const) {
     await page.goto('/');
     await page.getByLabel('Project name').fill('Ground occlusion');
     await page.getByRole('button', { name: 'Create project' }).click();
-    await page.getByRole('button', { name: /^Sphere/ }).click();
-    await page
-      .getByRole('region', { name: 'Feature inspector' })
-      .getByRole('button', { name: /^Create/ })
-      .click();
+    await createPrimitiveInPlace(page, 'sphere');
     const canvas = page.locator('.viewer-host canvas');
     await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1');
     // Fit once, then keep the camera and pointer fixed for both captures.

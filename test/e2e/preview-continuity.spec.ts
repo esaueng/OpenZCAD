@@ -4,7 +4,13 @@ import {
   createProjectDocument
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
-import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  test,
+  expect,
+  stubApi,
+  expectBodyCount
+} from './openzcad-fixtures';
 
 /**
  * A preview must stay on screen until whatever replaces it arrives: the next
@@ -154,11 +160,7 @@ test('applying a fillet radius never shows the unfilleted part', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Fillet continuity');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   const canvas = page.locator('.viewer-host canvas');
   await recordDrawn(page);

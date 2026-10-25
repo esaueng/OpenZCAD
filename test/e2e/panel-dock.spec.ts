@@ -1,6 +1,7 @@
 import { DEFAULT_APP_SETTINGS } from '@openzcad/shared';
 import {
   ALL_PANELS_DOCKED,
+  createPrimitiveInPlace,
   createProject,
   expect,
   expectBodyCount,
@@ -90,11 +91,7 @@ async function openWorkspace(
 }
 
 async function addBox(page: Page) {
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 }
@@ -540,7 +537,9 @@ test('the inspector and the right lane stay clear of the dock, inside the rail',
     width: 1280,
     height: 720
   });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  // A new box runs in place (U09); its History edit card takes the lane.
+  await createPrimitiveInPlace(page, 'box');
+  await page.locator('.feature-row-main', { hasText: /^Box/ }).click();
   const inspector = page.locator('.stage-right > .inspector-float');
   await expect(inspector).toBeVisible();
   const lane = await box(inspector);
@@ -568,7 +567,9 @@ test('on a stage too narrow for both, an unpinned panel covers the lane instead 
     width: 900,
     height: 720
   });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  // A new box runs in place (U09); its History edit card takes the lane.
+  await createPrimitiveInPlace(page, 'box');
+  await page.locator('.feature-row-main', { hasText: /^Box/ }).click();
   const inspector = page.locator('.stage-right > .inspector-float');
   await expect(inspector).toBeVisible();
   const full = await box(inspector);

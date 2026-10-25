@@ -9,6 +9,7 @@ import { createProjectDocument, importStepBody } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import {
+  createPrimitiveInPlace,
   expectBodyCount,
   stubApi,
   blendEdgesInPlace
@@ -351,11 +352,9 @@ test.setTimeout(Number(process.env.OZ_FACE_DRAG_TIMEOUT_MS ?? 600_000));
 
 test('traces a chamfered cylinder top-cap drag', async ({ page }) => {
   await startPage(page);
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByLabel('Radius', { exact: true }).fill('14');
-  await inspector.getByLabel('Height', { exact: true }).fill('28');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '14', height: '28' }
+  });
   await blendEdgesInPlace(page, {
     tool: 'Chamfer',
     allEdges: 2,
@@ -373,12 +372,9 @@ test('traces a chamfered cylinder top-cap drag', async ({ page }) => {
 
 test('traces a rounded box top-face drag', async ({ page }) => {
   await startPage(page);
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByLabel('Width (X)').fill('40');
-  await inspector.getByLabel('Depth (Y)').fill('24');
-  await inspector.getByLabel('Height (Z)').fill('10');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '40', depth: '24', height: '10' }
+  });
   await blendEdgesInPlace(page, {
     tool: 'Fillet',
     allEdges: 12,

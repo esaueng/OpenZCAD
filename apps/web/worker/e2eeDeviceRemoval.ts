@@ -192,16 +192,17 @@ const PROJECT_ACCOUNTS = `(SELECT user_id FROM projects WHERE id = ?
  */
 const CUTOFF_KEYS = `SELECT c.user_id || '/' || c.generation || '/' ||
                             c.entry_sequence || '/' || c.signature AS k,
-                            c.statement
+                            c.user_id, c.statement
                      FROM e2ee_revocation_cutoffs c
                      WHERE c.user_id IN ${PROJECT_ACCOUNTS}
                      ORDER BY k`;
 
 /**
  * A write under `keyEpoch` must not land while someone with access to the
- * project has stored a cutoff naming a later key epoch for it (slice 5-7):
- * that account removed a device that still holds this epoch's key, and its
- * rotation has not landed. The browsers check this before they write; this
+ * project has stored a cutoff for it whose rotation has not landed (slice
+ * 5-7): the cutoff names a later key epoch, or that account sent no Commit
+ * reaching it (`rotationsLanded`). Its removed device may still hold this
+ * epoch's key. The browsers check this before they write; this
  * is the Worker's own check, made atomic by the returned fence, which holds
  * only while those accounts' cutoff statements are the ones read here. So a
  * removal stored between the check and the batch refuses the write.
@@ -221,19 +222,68 @@ export async function memberRotationFence(
   const { results } = await db
     .prepare(CUTOFF_KEYS)
     .bind(projectId, projectId)
-    .all<{ k: string; statement: string }>();
+    .all<{ k: string; user_id: string; statement: string }>();
   const rows = results ?? [];
+  const landed = rows.length ? await rotationsLanded(db, projectId) : null;
   for (const row of rows) {
-    const named = decodeRevocationCutoffs(
-      fromBase64Url(row.statement)
-    ).cutoffs.find((cutoff) => cutoff.projectId === projectId);
-    if (named && keyEpoch < named.cutoffEpoch) {
+    const statement = decodeRevocationCutoffs(fromBase64Url(row.statement));
+    const named = statement.cutoffs.find(
+      (cutoff) => cutoff.projectId === projectId
+    );
+    if (
+      named &&
+      (keyEpoch < named.cutoffEpoch ||
+        !landed!.reached(row.user_id, named.cutoffEpoch))
+    ) {
       refuseMemberRotationPending();
     }
   }
   return {
     sql: `COALESCE((SELECT group_concat(k, ',') FROM (${CUTOFF_KEYS})), '') = ?`,
     binds: [projectId, projectId, rows.map((row) => row.k).join(',')]
+  };
+}
+
+/**
+ * Whether an account's rotation of a project reached a cutoff's key epoch.
+ * Reaching the epoch is not enough: another member's unrelated Commit can
+ * take the predicted epoch, and the revoked device, its leaf still in the
+ * group, learns that epoch's key too (#906 review). Only the account's own
+ * devices may remove its leaves, so the rotation is done once the group was
+ * started over (a reset, decision D9) at or after the cutoff, which leaves
+ * every revoked leaf behind, or once a member Commit that account sent
+ * lands in the cutoff's epoch or later: every member Commit removes its
+ * sender account's revoked leaves (`withDueRotation`). An External Commit
+ * never counts, since the Worker cannot tell which leaf it removed; a
+ * rejoin that removed a revoked leaf is followed by a member Commit
+ * (`joinProjectGroup`, #908 review).
+ */
+async function rotationsLanded(
+  db: D1Database,
+  projectId: string
+): Promise<{ reached(userId: string, cutoffEpoch: number): boolean }> {
+  const group = await db
+    .prepare(
+      'SELECT key_epoch_base FROM e2ee_project_groups WHERE project_id = ?'
+    )
+    .bind(projectId)
+    .first<{ key_epoch_base: number }>();
+  const { results } = await db
+    .prepare(
+      `SELECT sender_user_id, MAX(epoch) AS epoch FROM e2ee_mls_commits
+       WHERE project_id = ? AND sender_user_id IS NOT NULL AND kind = 'commit'
+       GROUP BY sender_user_id`
+    )
+    .bind(projectId)
+    .all<{ sender_user_id: string; epoch: number }>();
+  const base = group?.key_epoch_base ?? 0;
+  // A Commit sent in MLS epoch e makes key epoch base + e + 1.
+  const latest = new Map(
+    (results ?? []).map((row) => [row.sender_user_id, base + row.epoch + 1])
+  );
+  return {
+    reached: (userId, cutoffEpoch) =>
+      cutoffEpoch <= base || (latest.get(userId) ?? -1) >= cutoffEpoch
   };
 }
 
@@ -268,6 +318,34 @@ async function requirePlausibleCutoffs(
       );
     }
   }
+}
+
+/**
+ * Whether this account still owes the project a rotation the Worker counts:
+ * a cutoff of its own names the project and no member Commit of its own
+ * reached it (`rotationsLanded`). Told to the account's browsers with the
+ * group, so a device that rejoined (whose External Commit does not count)
+ * or crashed before its follow-up Commit sends one on its next open,
+ * instead of every writer staying fenced off (#908 review).
+ */
+export async function ownRotationDue(
+  db: D1Database,
+  projectId: string,
+  userId: string
+): Promise<boolean> {
+  if (!(await isE2eeDeviceRemovalStorageReady(db))) return false;
+  const { results } = await db
+    .prepare('SELECT statement FROM e2ee_revocation_cutoffs WHERE user_id = ?')
+    .bind(userId)
+    .all<{ statement: string }>();
+  const named = (results ?? []).flatMap((row) =>
+    decodeRevocationCutoffs(fromBase64Url(row.statement)).cutoffs.filter(
+      (cutoff) => cutoff.projectId === projectId
+    )
+  );
+  if (named.length === 0) return false;
+  const landed = await rotationsLanded(db, projectId);
+  return named.some((cutoff) => !landed.reached(userId, cutoff.cutoffEpoch));
 }
 
 export function refuseMemberRotationPending(): never {

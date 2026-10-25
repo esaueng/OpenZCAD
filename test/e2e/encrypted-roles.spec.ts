@@ -1,4 +1,4 @@
-import { expect, test } from './openzcad-fixtures';
+import { createPrimitiveInPlace, expect, test } from './openzcad-fixtures';
 import {
   BOB_ID,
   COMMIT_BUDGET_MS,
@@ -27,11 +27,7 @@ test('demotes an encrypted project’s editor to a read-only viewer', async ({
   // Bob, an editor, models and saves through the encrypted store.
   await expect(buildButton(bob)).toBeEnabled();
   await buildButton(bob).click();
-  await bob.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await bob
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(bob, 'box');
   await expect(bob.getByText('Box 2').first()).toBeVisible({
     timeout: SYNC_BUDGET_MS
   });
@@ -75,11 +71,7 @@ test('demotes an encrypted project’s editor to a read-only viewer', async ({
 
   // Bob, not yet told, edits again. His browser catches up before it
   // writes, finds he is a viewer, refuses to send it, and locks editing.
-  await bob.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await bob
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(bob, 'box');
   await expect(bob.getByText('Box 3').first()).toBeVisible();
   release();
   await expect(buildButton(bob)).toBeDisabled({ timeout: SYNC_BUDGET_MS });

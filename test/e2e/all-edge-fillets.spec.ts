@@ -1,4 +1,5 @@
 import {
+  createPrimitiveInPlace,
   expect,
   expectBodyCount,
   openAssistant,
@@ -27,11 +28,7 @@ test('selects all edges from the fillet card, previews joined corners, and survi
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   await page.getByLabel('Project name').fill('All-edge finish');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   const canvas = page.locator('.viewer-host canvas');
   // The preview counter counts highlighted edge bands; the eight spherical
   // corner surfaces are independently asserted in all-edge-fillets.test.ts.
@@ -129,11 +126,7 @@ test('plain-language all-edge fillets work without a provider and require exact 
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   await page.getByLabel('Project name').fill('Assistant all-edge finish');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   await openAssistant(page);
   await expect(

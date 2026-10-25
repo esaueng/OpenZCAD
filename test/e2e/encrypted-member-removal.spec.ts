@@ -1,4 +1,4 @@
-import { expect, test } from './openzcad-fixtures';
+import { createPrimitiveInPlace, expect, test } from './openzcad-fixtures';
 import {
   BOB_ID,
   COMMIT_BUDGET_MS,
@@ -124,11 +124,7 @@ test('a member leaves, losing access at once; the owner’s next write commits t
 
   // Alice's next write commits the departure first, with a new dedupe
   // secret, and then drops Bob from the roles.
-  await alice.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await alice
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(alice, 'box');
   await expect(alice.getByText('Box 2').first()).toBeVisible();
   await expect
     .poll(

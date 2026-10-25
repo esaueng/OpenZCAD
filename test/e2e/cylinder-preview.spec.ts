@@ -2,6 +2,7 @@ import type { Page } from '@playwright/test';
 import { steppedCylinderDocument } from '../support/stepped-cylinder';
 import { splitRimCylinderDocument } from '../support/split-rim-cylinder';
 import {
+  createPrimitiveInPlace,
   test,
   expect,
   stubApi,
@@ -263,11 +264,9 @@ async function setupRoundedCylinder(page: Page, bottomView: boolean) {
   await page.goto('/');
   await page.getByLabel('Project name').fill('Rounded cylinder preview');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByLabel('Radius', { exact: true }).fill('70');
-  await inspector.getByLabel('Height', { exact: true }).fill('22');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '70', height: '22' }
+  });
   await blendEdgesInPlace(page, {
     tool: 'Fillet',
     allEdges: 2,

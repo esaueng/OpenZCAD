@@ -1,5 +1,9 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { enableFullRender, stubAnonymousApi } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  enableFullRender,
+  stubAnonymousApi
+} from './openzcad-fixtures';
 
 interface ResizeProbeWindow extends Window {
   __openZcadResizeProbe?: {
@@ -52,11 +56,7 @@ test('keeps the rendered scene visible while a docked panel resizes', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Resize Render Part');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
   const canvas = page.locator('.viewer-host canvas');
