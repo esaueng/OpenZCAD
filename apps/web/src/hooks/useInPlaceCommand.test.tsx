@@ -1332,6 +1332,51 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     expect(hook.result.current.refusal ?? '').not.toMatch(/takes/);
   });
 
+  it('keeps a clicked draft hinge when the feature is read again', () => {
+    const face = (
+      hash: number,
+      point?: { x: number; y: number; z: number }
+    ) => ({
+      bodyId: 'body_a' as BodyId,
+      hash,
+      topologyId: `f${hash}`,
+      surfaceType: 'plane',
+      normal: { x: 1, y: 0, z: 0 },
+      centroid: { x: 0, y: 0, z: hash },
+      ...(point ? { point } : {})
+    });
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      baseVersion: 1,
+      // The model moved: the stored faces read back renamed.
+      reseed: (edit) => ({
+        tool: 'draft',
+        seed: { ...edit, slots: { ...edit.slots, faces: [face(1), face(3)] } }
+      })
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('draft', {
+        ...SEED,
+        options: { neutral: 'point' },
+        slots: { ...SEED.slots, bodies: [], faces: [face(1), face(2)] }
+      })
+    );
+    act(() => {
+      hook.result.current.pickFace(face(2, { x: 5, y: 6, z: 7 }));
+    });
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.slots.faces.map((f) => f.hash)).toEqual([1, 2]);
+    expect(hook.result.current.slots.faces[1]?.point).toEqual({
+      x: 5,
+      y: 6,
+      z: 7
+    });
+  });
+
   it('previews a re-armed edit that builds the same thing', async () => {
     const { hook } = setup();
     act(() => hook.result.current.edit('subtract', SEED));
