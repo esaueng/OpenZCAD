@@ -84,18 +84,6 @@ function insertEncryptedInvitation(srv: Server, projectId: string): void {
     );
 }
 
-/** A live encrypted share link row (slice 5-10), as stored. */
-function insertEncryptedShareLink(srv: Server, projectId: string): void {
-  srv.db
-    .prepare(
-      `INSERT INTO e2ee_share_links
-         (project_id, share_id, token_hash, mode, share_key_hash,
-          owner_identity_hash, created_by_user_id, created_at)
-       VALUES (?, 'share_1', ?, 'view', ?, ?, ?, 'now')`
-    )
-    .run(projectId, 'l'.repeat(64), 'k'.repeat(43), 'o'.repeat(43), OWNER);
-}
-
 // --- Plaintext side ------------------------------------------------------------
 
 async function plaintextProject(
@@ -579,24 +567,18 @@ describe('the migration lease', () => {
       )
     ).toMatchObject({ status: 409, code: 'E2EE_MIGRATION_SHARED' });
     srv.db.prepare('DELETE FROM project_invitations').run();
-    // So does a pending encrypted invitation (slice 5-3a) or a live
-    // encrypted share link (slice 5-10), should either name the project.
-    for (const share of [
-      () => insertEncryptedInvitation(srv, plain.projectId),
-      () => insertEncryptedShareLink(srv, plain.projectId)
-    ]) {
-      share();
-      expect(
-        await errorOf(
-          api.start(plain.projectId, {
-            direction: 'encrypt',
-            deviceId: 'owner_laptop'
-          })
-        )
-      ).toMatchObject({ status: 409, code: 'E2EE_MIGRATION_SHARED' });
-      srv.db.prepare('DELETE FROM e2ee_invitations').run();
-      srv.db.prepare('DELETE FROM e2ee_share_links').run();
-    }
+    // So does a pending encrypted invitation (slice 5-3a), should one name
+    // the project.
+    insertEncryptedInvitation(srv, plain.projectId);
+    expect(
+      await errorOf(
+        api.start(plain.projectId, {
+          direction: 'encrypt',
+          deviceId: 'owner_laptop'
+        })
+      )
+    ).toMatchObject({ status: 409, code: 'E2EE_MIGRATION_SHARED' });
+    srv.db.prepare('DELETE FROM e2ee_invitations').run();
     // Not from the recycle bin.
     srv.db
       .prepare("UPDATE projects SET status = 'deleted' WHERE id = ?")

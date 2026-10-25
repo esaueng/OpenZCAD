@@ -1020,16 +1020,25 @@ describe('who may turn encryption off', () => {
              VALUES ('link_1', ?, 'view', ?, ?, 1)`
           )
           .run(projectId, 'h'.repeat(64), OWNER),
-      // A live encrypted share link (slice 5-10).
+      // A pending encrypted invitation (slice 5-3a).
       () =>
         srv.db
           .prepare(
-            `INSERT INTO e2ee_share_links
-               (project_id, share_id, token_hash, mode, share_key_hash,
-                owner_identity_hash, created_by_user_id, created_at)
-             VALUES (?, 'share_1', ?, 'view', ?, ?, ?, 'now')`
+            `INSERT INTO e2ee_invitations
+               (invitation_id, project_id, invited_by_user_id, email_hash,
+                role, token_hash, statement, signature, signer_device_id,
+                created_at, expires_at)
+             VALUES ('einv_1', ?, ?, ?, 'viewer', ?, 'statement', ?,
+                     'owner_laptop', 'now', ?)`
           )
-          .run(projectId, 'l'.repeat(64), 'k'.repeat(43), 'o'.repeat(43), OWNER)
+          .run(
+            projectId,
+            OWNER,
+            'e'.repeat(64),
+            't'.repeat(64),
+            's'.repeat(87),
+            Date.now() + 3_600_000
+          )
     ];
     for (const share of shares) {
       share();
@@ -1044,7 +1053,7 @@ describe('who may turn encryption off', () => {
         .prepare('DELETE FROM project_share_links WHERE project_id = ?')
         .run(projectId);
       srv.db
-        .prepare('DELETE FROM e2ee_share_links WHERE project_id = ?')
+        .prepare('DELETE FROM e2ee_invitations WHERE project_id = ?')
         .run(projectId);
     }
     expect(migrationRow(srv, projectId)).toMatchObject({

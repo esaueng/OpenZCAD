@@ -5,11 +5,9 @@
  * role is a state machine and a janitor. It never transforms content:
  *
  * - `POST …/migration` starts (or resumes, once a lease lapsed) a staging:
- *   owner only, a live plaintext project with no members, no pending
- *   invitations (plaintext, or encrypted ones of slice 5-3a) and no live
- *   encrypted share link (slice 5-10) (decision M7), nothing staged left
- *   over. It hands the
- *   owner's device a lease. While staging, the plaintext routes refuse
+ *   owner only, a live plaintext project with no members and no pending
+ *   invitations (plaintext, or encrypted ones of slice 5-3a) (decision
+ *   M7), nothing staged left over. It hands the owner's device a lease. While staging, the plaintext routes refuse
  *   writes, named saves and the room with 409 PROJECT_MIGRATING
  *   (`projectFormatGate.ts`), reads keep working, and the encrypted-project
  *   routes take ciphertext for this format-1 project from the lease holder
@@ -40,8 +38,8 @@
  * Slice 7-3, the beta-only reverse path (E2EE_REVERSE_ENABLED, migration
  * 0043), runs the same machine with direction `decrypt` for an encrypted
  * project only its owner holds (no members, share links or pending
- * invitations, plaintext or encrypted, slices 5-3a and 5-10) on an account whose "Encrypt new
- * projects" opt-in is off (decision D2):
+ * invitations, plaintext or encrypted, slice 5-3a) on an account whose
+ * "Encrypt new projects" opt-in is off (decision D2):
  *
  * - The start locks the encrypted room; while staging, encrypted content
  *   writes and the room refuse with 409 PROJECT_MIGRATING (`e2ee.ts`,
@@ -90,7 +88,6 @@ import {
   isE2eeProjectMigrationStorageReady,
   isE2eeProjectVersionStorageReady,
   isE2eeReverseStorageReady,
-  isE2eeShareLinkStorageReady,
   isProjectStorageFormatReady,
   type CloudflareEnv
 } from '@openzcad/cloudflare-adapters';
@@ -322,43 +319,30 @@ async function requireOwnedProject(
 
 /**
  * Which of Phase 5's sharing tables exist: encrypted invitations (slice
- * 5-3a, migration 0038) and encrypted share links (slice 5-10, migration
- * 0040). A shared check names only the ones installed.
+ * 5-3a, migration 0038). A shared check names only the ones installed.
+ * Encrypted share links (slice 5-10, migration 0040) join this set when
+ * that slice lands.
  */
 interface SharingTables {
   readonly invitations: boolean;
-  readonly shareLinks: boolean;
 }
 
 async function sharingTables(db: D1Database): Promise<SharingTables> {
-  const [invitations, shareLinks] = await Promise.all([
-    isE2eeInvitationStorageReady(db),
-    isE2eeShareLinkStorageReady(db)
-  ]);
-  return { invitations, shareLinks };
+  return { invitations: await isE2eeInvitationStorageReady(db) };
 }
 
 /**
- * Pending encrypted invitations and live encrypted share links, as extra
- * `OR` terms of a shared check (aliases prefixed with `alias`). Binds:
- * the project id and the time in milliseconds for invitations, then the
- * project id for links.
+ * Pending encrypted invitations, as extra `OR` terms of a shared check
+ * (aliases prefixed with `alias`). Binds: the project id and the time in
+ * milliseconds for invitations.
  */
 function encryptedSharingSql(alias: string, tables: SharingTables): string {
-  return `${
-    tables.invitations
-      ? `
+  return tables.invitations
+    ? `
     OR EXISTS (SELECT 1 FROM e2ee_invitations ${alias}ei
                WHERE ${alias}ei.project_id = ? AND ${alias}ei.completed_at IS NULL
                  AND ${alias}ei.revoked_at IS NULL AND ${alias}ei.expires_at > ?)`
-      : ''
-  }${
-    tables.shareLinks
-      ? `
-    OR EXISTS (SELECT 1 FROM e2ee_share_links ${alias}el
-               WHERE ${alias}el.project_id = ? AND ${alias}el.revoked_at IS NULL)`
-      : ''
-  }`;
+    : '';
 }
 
 function encryptedSharingBinds(
@@ -366,17 +350,14 @@ function encryptedSharingBinds(
   now: number,
   tables: SharingTables
 ): unknown[] {
-  return [
-    ...(tables.invitations ? [projectId, now] : []),
-    ...(tables.shareLinks ? [projectId] : [])
-  ];
+  return tables.invitations ? [projectId, now] : [];
 }
 
 /**
  * Decision M7: members and pending invitations (plaintext, and encrypted
- * ones where installed), plus live encrypted share links, by the same SQL
- * in the checks and the fences. Live plaintext share links do not block:
- * the cutover revokes them (decision M8).
+ * ones where installed), by the same SQL in the checks and the fences.
+ * Live plaintext share links do not block: the cutover revokes them
+ * (decision M8).
  */
 function sharedSql(tables: SharingTables): string {
   return `(EXISTS (SELECT 1 FROM project_members sm
@@ -1625,8 +1606,7 @@ async function purge(ctx: Context, projectId: string): Promise<Response> {
  * Who else can open an encrypted project, by the same SQL in the checks and
  * the fences: members, pending plaintext invitations, live plaintext share
  * links and, where installed, pending encrypted invitations (migration
- * 0038) and live encrypted share links (migration 0040). Binds: the
- * project id three times and the time in seconds, then
+ * 0038). Binds: the project id three times and the time in seconds, then
  * {@link encryptedSharingBinds}.
  */
 function decryptSharedSql(tables: SharingTables): string {
