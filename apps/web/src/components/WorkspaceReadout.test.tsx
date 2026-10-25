@@ -319,25 +319,65 @@ describe('WorkspaceReadout message lifetime', () => {
     vi.useFakeTimers();
     try {
       const at = Date.now();
-      const view = (actionToastOpen: boolean) => (
+      const view = (actionToastId: number | null) => (
         <WorkspaceReadout
           status="Deleted Boss bore."
           statusAt={at}
           tone="ready"
           logOpen={false}
           onToggleLog={vi.fn()}
-          actionToastOpen={actionToastOpen}
+          actionToastId={actionToastId}
           {...SUMMARY}
         />
       );
-      const { rerender } = render(view(true));
+      const { rerender } = render(view(1));
       act(() => {
         vi.advanceTimersByTime(STATUS_LIFETIME_MS - 1000);
       });
       // The Undo toast leaves before the message's own lifetime is up: the
       // message used to return for that last second, and the lane with it.
-      rerender(view(false));
+      rerender(view(null));
       expect(screen.getByRole('contentinfo')).toHaveClass('hidden');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a message set after the toast was raised, which it does not repeat', () => {
+    vi.useFakeTimers();
+    try {
+      const deletedAt = Date.now();
+      const view = (
+        status: string,
+        statusAt: number,
+        actionToastId: number | null
+      ) => (
+        <WorkspaceReadout
+          status={status}
+          statusAt={statusAt}
+          tone="ready"
+          logOpen={false}
+          onToggleLog={vi.fn()}
+          actionToastId={actionToastId}
+          {...SUMMARY}
+        />
+      );
+      const { rerender } = render(view('Deleted Boss bore.', deletedAt, 1));
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      // A display change while Undo is still up: its own news, not the
+      // toast's, so it must still be read once the toast goes.
+      const displayAt = Date.now();
+      rerender(view('Display: Wireframe.', displayAt, 1));
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      rerender(view('Display: Wireframe.', displayAt, null));
+      expect(screen.getByRole('contentinfo')).not.toHaveClass('hidden');
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Display: Wireframe.'
+      );
     } finally {
       vi.useRealTimers();
     }

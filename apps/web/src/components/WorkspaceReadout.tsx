@@ -67,10 +67,12 @@ interface WorkspaceReadoutProps {
    */
   searchBar: ReactNode;
   /**
-   * An action toast (Undo) is up. A settled status it already repeats steps
-   * aside for good, rather than returning for a moment as the toast leaves.
+   * The id of the action toast (Undo) that is up, or null. The status that
+   * was live when that toast was raised is the one it repeats: once settled,
+   * it steps aside for good rather than returning for a moment as the toast
+   * leaves. A status set later is news of its own and keeps its lifetime.
    */
-  actionToastOpen?: boolean;
+  actionToastId?: number | null;
 }
 
 /**
@@ -96,7 +98,7 @@ export function WorkspaceReadout({
   documentVersion,
   saveState,
   searchBar,
-  actionToastOpen = false
+  actionToastId = null
 }: WorkspaceReadoutProps) {
   const sticky = statusSticky ?? false;
   // A message already past its lifetime when the readout mounts — entering
@@ -144,19 +146,35 @@ export function WorkspaceReadout({
   // A settled message an action toast already said ("Deleted Boss bore."
   // under "Deleted Boss bore · Undo") is spent: it used to come back for a
   // beat as the toast faded, and the toast jumped up its row and down again.
+  // Which status a toast repeats is fixed when the toast is raised: the
+  // action and its message are set in the same batch.
+  const [raised, setRaised] = useState<{
+    toastId: number;
+    statusAt: number | undefined;
+  } | null>(null);
+  if ((raised?.toastId ?? null) !== actionToastId) {
+    setRaised(
+      actionToastId === null ? null : { toastId: actionToastId, statusAt }
+    );
+  }
+  const repeated =
+    raised !== null &&
+    raised.toastId === actionToastId &&
+    statusAt !== undefined &&
+    raised.statusAt === statusAt;
   const [spentAt, setSpentAt] = useState<number | null>(null);
   useEffect(() => {
-    if (actionToastOpen && tone === 'ready' && statusAt !== undefined) {
+    if (repeated && tone === 'ready' && statusAt !== undefined) {
       setSpentAt(statusAt);
     }
-  }, [actionToastOpen, tone, statusAt]);
+  }, [repeated, tone, statusAt]);
   const expired =
     statusAt !== undefined &&
     !sticky &&
     (statusAt === 0 ||
       statusAt === expiredAtMount ||
       statusAt === expiredAt ||
-      (statusAt === spentAt && !actionToastOpen));
+      (statusAt === spentAt && actionToastId === null));
   const messageLive = !expired && status !== '';
   // The geometry line is the floor under the message: it carries the live
   // message ahead of the phase, and the projection note once it has gone.

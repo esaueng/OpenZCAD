@@ -26342,7 +26342,7 @@ export function App() {
             warningCount={diagnostics.length}
             documentVersion={doc.version}
             saveState={presentedSaveState}
-            actionToastOpen={toast !== null}
+            actionToastId={toast?.id ?? null}
             searchBar={
               <CommandBar
                 commands={paletteCommands}
