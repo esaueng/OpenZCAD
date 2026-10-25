@@ -8519,11 +8519,7 @@ export function App() {
         // the handle then stands on the feature's own blend face, the one
         // its History row lights, pointing into the body.
         const blend = inPlaceBlendAnchor(current, feature);
-        return pick
-          ? { ...pick, ...(blend ?? {}) }
-          : blend
-            ? { bodyId, hash, topologyId: '', ...blend }
-            : null;
+        return pick ? { ...pick, ...(blend ?? {}) } : null;
       },
       anyFace: (bodyId) => {
         // A flat face carries the handle best; a body with none (a sphere)

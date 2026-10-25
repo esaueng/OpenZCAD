@@ -456,12 +456,14 @@ export function inPlaceEditSeed(
       data.edgeHashes.forEach((hash, index) => {
         const stored = named ? data.edgeReferences![index]! : undefined;
         const edge = ctx.edge(data.targetBodyId, hash, stored);
-        if (!edge) missing.push('edge');
-        const { reference: _current, ...placed } = edge ?? {
-          bodyId: data.targetBodyId,
-          hash,
-          topologyId: ''
-        };
+        // An edge that no longer resolves is left out, as a face or a path
+        // curve is: a click then picks its replacement rather than adding
+        // to a set nothing can build.
+        if (!edge) {
+          missing.push('edge');
+          return;
+        }
+        const { reference: _current, ...placed } = edge;
         // Placed where the edge is now (found by name if its hash moved),
         // but stored back as it was stored.
         seed.slots.edges.push({

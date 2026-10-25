@@ -484,6 +484,18 @@ describe('an untouched edit writes the feature back as stored', () => {
     );
   });
 
+  it('fillet: an edge that no longer resolves is left for a new pick', () => {
+    const data: FeatureData = {
+      featureKind: 'fillet',
+      targetBodyId: BODY,
+      edgeHashes: [21, 99],
+      radius: 1
+    };
+    const armed = inPlaceEditSeed(feature(data, 'body_f' as BodyId), EDIT_CTX)!;
+    expect(armed.seed.slots.edges.map((edge) => edge.hash)).toEqual([21]);
+    expect(armed.seed.notice).toMatch(/no longer resolves/);
+  });
+
   it('chamfer: a stored second distance is its shape', () => {
     const data: FeatureData = {
       featureKind: 'chamfer',
