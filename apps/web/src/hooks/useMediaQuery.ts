@@ -19,7 +19,8 @@ export function useMediaQuery(query: string): boolean {
   return useSyncExternalStore(
     subscribe,
     () =>
-      typeof window !== 'undefined' && Boolean(window.matchMedia?.(query).matches),
+      typeof window !== 'undefined' &&
+      Boolean(window.matchMedia?.(query).matches),
     () => false
   );
 }
