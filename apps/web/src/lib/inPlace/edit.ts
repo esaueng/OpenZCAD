@@ -3,6 +3,7 @@ import {
   isDatumPlaneRef,
   type EdgeTopologyReferenceV5,
   type BodyId,
+  type FaceTopologyReferenceV5,
   type ProjectDocument,
   type FeatureData,
   type FeatureId,
@@ -51,7 +52,15 @@ export interface InPlaceEditContext {
   ): ProfilePick | null;
   /** A sketch's first region, for a revolve that stores no profile. */
   firstRegion(sketchId: SketchId): number | null;
-  face(bodyId: BodyId, hash: number): FacePick | null;
+  /**
+   * A stored face, by its lineage reference first (an upstream edit can
+   * change the hash and keep the face) and then its hash.
+   */
+  face(
+    bodyId: BodyId,
+    hash: number,
+    reference?: FaceTopologyReferenceV5
+  ): FacePick | null;
   /** Any planar face of a body, for a command any face names. */
   anyFace(bodyId: BodyId): FacePick | null;
   /**
@@ -207,9 +216,16 @@ export function inPlaceEditSeed(
     if (pick) seed.slots.profiles.push(pick);
     else missing.push('profile');
   };
-  const faces = (bodyId: BodyId, hashes: readonly number[]) => {
-    for (const hash of hashes) {
-      const face = ctx.face(bodyId, hash);
+  const faces = (
+    bodyId: BodyId,
+    hashes: readonly number[],
+    references?: readonly FaceTopologyReferenceV5[]
+  ) => {
+    for (const [index, hash] of hashes.entries()) {
+      // References run beside the hashes only when there is one per face.
+      const reference =
+        references?.length === hashes.length ? references[index] : undefined;
+      const face = ctx.face(bodyId, hash, reference);
       if (face) seed.slots.faces.push(face);
       else missing.push('face');
     }
@@ -301,7 +317,11 @@ export function inPlaceEditSeed(
       break;
     }
     case 'hole': {
-      const face = ctx.face(data.targetBodyId, data.faceHash);
+      const face = ctx.face(
+        data.targetBodyId,
+        data.faceHash,
+        data.faceReference
+      );
       if (face) {
         // Its stored position is kept even when it does not resolve now;
         // the handles then stand on the face's anchor.
@@ -326,11 +346,19 @@ export function inPlaceEditSeed(
       break;
     }
     case 'shell':
-      faces(data.targetBodyId, data.openingFaceHashes);
+      faces(
+        data.targetBodyId,
+        data.openingFaceHashes,
+        data.openingFaceReferences
+      );
       value('thickness', data.thickness);
       break;
     case 'thicken':
-      faces(data.targetBodyId, [data.faceHash]);
+      faces(
+        data.targetBodyId,
+        [data.faceHash],
+        data.faceReference ? [data.faceReference] : undefined
+      );
       value('thickness', data.thickness);
       break;
     case 'solid-offset': {
@@ -342,7 +370,7 @@ export function inPlaceEditSeed(
       break;
     }
     case 'draft': {
-      faces(data.targetBodyId, data.faceHashes);
+      faces(data.targetBodyId, data.faceHashes, data.faceReferences);
       value('angle', data.angleDeg);
       const pull = presetPull(data.pullDirection);
       seed.choices.pull = [SAVED_CHOICE];
