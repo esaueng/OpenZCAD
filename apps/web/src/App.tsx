@@ -322,9 +322,12 @@ import {
   sketchUsesProjectionGeometry
 } from './lib/sketch/releaseGeometry';
 import { textPlacementBudgetError } from './lib/sketch/textPlacement';
+import { prefersSavingData } from './lib/saveData';
+import { useSurfaceReady } from './hooks/useSurfaceReady';
 import {
   lazyWithStaleChunkNotice,
   loadWhenOnline,
+  preloadableLazy,
   onStaleChunk,
   watchPreloadErrors,
   STALE_CHUNK_MESSAGE
@@ -909,7 +912,7 @@ function withSuspense<P extends object>(Lazy: JSXElementConstructor<P>) {
   };
 }
 
-const LazyNumericKeypad = lazyWithStaleChunkNotice(() =>
+const LazyNumericKeypad = preloadableLazy(() =>
   import('./components/NumericKeypad').then((module) => ({
     default: module.NumericKeypad
   }))
@@ -944,7 +947,7 @@ const ViewModeBar = createLazyPanel<
 // off the entry chunk, which runs at its budget. Its own boundary keeps a
 // chunk that fails to load (a tab left open across a deploy) to the panel
 // slot, with the Reload notice, instead of taking the workspace down.
-const LazyMoveOverlay = lazyWithStaleChunkNotice(() =>
+const LazyMoveOverlay = preloadableLazy(() =>
   import('./components/MoveOverlay').then((module) => ({
     default: module.MoveOverlay
   }))
@@ -1159,11 +1162,21 @@ const LazyAssistantPanel = lazyWithStaleChunkNotice(() =>
  * weight in the launcher chunk — before a project is even open — for the sake
  * of a click that may never come.
  */
-const LazySettingsPage = lazyWithStaleChunkNotice(() =>
+const LazySettingsPage = preloadableLazy(() =>
   import('./components/SettingsPage').then((module) => ({
     default: module.SettingsPage
   }))
 );
+/**
+ * Surfaces a click opens, loaded while the page is idle: their first open
+ * used to show an empty frame or two while the chunk evaluated, even with
+ * the chunk already prefetched.
+ */
+const FIRST_USE_SURFACES = [
+  LazySettingsPage,
+  LazyMoveOverlay,
+  LazyNumericKeypad
+];
 const LazyProjectSharingDialog = lazyWithStaleChunkNotice(() =>
   import('./components/ProjectSharingDialog').then((module) => ({
     default: module.ProjectSharingDialog
@@ -2310,6 +2323,10 @@ export function App() {
       desktopAuthorizationAttempt !== null ||
       loadSettingsViewState().open
   );
+  // An open that beats the idle warm-up waits for the chunk instead of
+  // showing an empty overlay; the workspace still holds its keys meanwhile.
+  const settingsShown =
+    useSurfaceReady(LazySettingsPage, settingsOpen) && settingsOpen;
   const settingsDialogRef = useRef<HTMLDivElement | null>(null);
   useModalFocus(settingsDialogRef, {
     enabled: settingsOpen,
@@ -2711,6 +2728,26 @@ export function App() {
       stopPreload();
     };
   }, [announce]);
+  // Load what a click opens while the page is idle, so its first open is not
+  // an empty frame. A failure here is left to the surface's own load, which
+  // reports a stale chunk where the user is looking.
+  useEffect(() => {
+    // Save-Data asks for nothing speculative, as the chunk prefetch honours.
+    if (prefersSavingData()) return;
+    // Offline, a failed module download can stay cached until navigation,
+    // so wait for the connection rather than poison the surfaces' own loads.
+    const warm = () =>
+      void loadWhenOnline(async () => {
+        for (const surface of FIRST_USE_SURFACES)
+          surface.preload().catch(() => undefined);
+      });
+    if (typeof window.requestIdleCallback === 'function') {
+      const idle = window.requestIdleCallback(warm, { timeout: 5_000 });
+      return () => window.cancelIdleCallback(idle);
+    }
+    const timer = window.setTimeout(warm, 2_000);
+    return () => window.clearTimeout(timer);
+  }, []);
   /** A change of selection or command retires the message it interrupts. */
   const retireStatusMessage = useCallback(() => {
     setStatusEntry((current) => retireStatus(current, Date.now()));
@@ -3294,6 +3331,9 @@ export function App() {
   /** Opens exact entry for the armed handle, as tapping its chip would. */
   const openExactEntryRef = useRef<(() => boolean) | null>(null);
   const contextMenuActionsRef = useRef<Record<string, () => void>>({});
+  /** Counts tool launches, so a launch held for its panel's chunk can tell
+   * whether another has superseded it. */
+  const toolLaunchRef = useRef(0);
   const viewportMenuHandlersRef = useRef({
     launchTool,
     validateSelectionEdit,
@@ -6982,6 +7022,19 @@ export function App() {
     viewerBodies: completedViewerBodies,
     setStatus
   });
+  /** What a Move launched now would act on, read live by a held launch: the
+   * project and selection (a replaced project can share an empty one), and
+   * which command holds the lane, so Measure, a tool or a sketch taken up
+   * meanwhile drops it as surely as another launch would. */
+  const moveSourceRef = useRef('');
+  moveSourceRef.current = [
+    doc?.projectId ?? '',
+    selectedBodyIds.join(','),
+    selectedSketch?.sketchId ?? '',
+    tool ?? '',
+    measuring ? 'measuring' : '',
+    interaction.mode
+  ].join('|');
 
   // Sketch profiles lifted onto their 3D planes for the viewport overlay.
   const sketchOverlays = useMemo<SketchOverlay[]>(() => {
@@ -8045,7 +8098,36 @@ export function App() {
    * values were never applied is not left open under the new tool's card
    * (F15) — the user is asked once whether to apply or discard it.
    */
-  function launchTool(nextTool: ToolId, modelingFeature?: FeatureNode) {
+  function launchTool(
+    nextTool: ToolId,
+    modelingFeature?: FeatureNode,
+    panelLoadSettled = false
+  ) {
+    const launch = ++toolLaunchRef.current;
+    // Move's panel takes the selection card's place. Before its chunk has
+    // loaded (a launch that beats the idle warm-up, or Save-Data, which skips
+    // it) the swap left neither on screen, so the card stays up until the
+    // panel can render. A failed load launches anyway, to report it.
+    if (
+      nextTool === 'transform' &&
+      !panelLoadSettled &&
+      !LazyMoveOverlay.isLoaded()
+    ) {
+      // The launch belongs to the selection it was made from: one cleared or
+      // replaced while the panel loaded abandons it.
+      const source = moveSourceRef.current;
+      const relaunch = () => {
+        if (toolLaunchRef.current !== launch) return;
+        if (moveSourceRef.current !== source) return;
+        viewportMenuHandlersRef.current.launchTool(
+          nextTool,
+          modelingFeature,
+          true
+        );
+      };
+      LazyMoveOverlay.preload().then(relaunch, relaunch);
+      return;
+    }
     const current = managerRef.current?.document;
     if (modelingFeature && !current) return;
     const request = {
@@ -18846,6 +18928,19 @@ export function App() {
     publishPreview: setPreviewDoc,
     onStatus: setStatus
   });
+  // A value keypad opens from an armed handle, a running command or a tool
+  // card. Load it once one is up, so a keypad that beats the idle warm-up
+  // does not appear late. Save-Data still asks for nothing speculative: there
+  // the keypad loads when it is actually opened.
+  const keypadWithinReach =
+    tool !== null ||
+    inPlace.active ||
+    interaction.mode !== 'idle' ||
+    movePreview !== null;
+  useEffect(() => {
+    if (!keypadWithinReach || prefersSavingData()) return;
+    LazyNumericKeypad.preload().catch(() => undefined);
+  }, [keypadWithinReach]);
   const inPlaceRef = useRef(inPlace);
   inPlaceRef.current = inPlace;
   const narrowWindow = useMediaQuery(NARROW_WINDOW_QUERY);
@@ -23970,54 +24065,60 @@ export function App() {
   // Settings layers over whatever is behind it instead of replacing it.
   // Returning it in place of the shell unmounted the whole workspace, and with
   // it the assistant's conversation and any request still streaming.
+  // One dialog from the moment Settings is asked for: modal (focus held, the
+  // background inert) and found by anything looking for it, but drawn only
+  // once its page has loaded, so an early open shows no empty overlay.
   const settingsOverlay = settingsOpen ? (
     <div
       ref={settingsDialogRef}
-      className="settings-overlay"
+      className={settingsShown ? 'settings-overlay' : 'settings-pending'}
       role="dialog"
       aria-modal="true"
       aria-label="Settings"
+      aria-busy={settingsShown ? undefined : true}
       tabIndex={-1}
     >
-      <SettingsPage
-        settings={appSettings}
-        cloudFunctionsEnabled={cloudFunctionsEnabled}
-        accountState={accountSettings}
-        authConfig={authConfig}
-        authConfigStatus={authConfigStatus}
-        health={deploymentHealth}
-        session={session}
-        busy={settingsBusy}
-        message={settingsMessage}
-        initialSection={
-          pendingInvitationToken || desktopAuthorizationAttempt
-            ? 'account'
-            : undefined
-        }
-        projectInvitationPending={pendingInvitationToken !== null}
-        projectInvitationError={pendingInvitationError}
-        desktopAuthorizationAttempt={desktopAuthorizationAttempt}
-        desktopAuthorizationApproved={desktopAuthorizationApproved}
-        desktopAuthorizationCode={desktopAuthorizationCode}
-        workspaceOpen={doc !== null}
-        onDesktopAuthorizationCodeChange={setDesktopAuthorizationCode}
-        onChange={handleAppSettingsChange}
-        onCloudFunctionsEnabledChange={handleCloudFunctionsEnabledChange}
-        onSaveCredential={(token) => void handleSaveAssistantCredential(token)}
-        onDeleteCredential={() => void handleDeleteAssistantCredential()}
-        onTestAssistant={() => void handleTestAssistantConnection()}
-        onRequestLoginCode={handleRequestLoginCode}
-        onVerifyLoginCode={handleVerifyLoginCode}
-        onRefreshAuthConfig={handleRefreshAuthConfig}
-        onStartDesktopLogin={handleStartDesktopLogin}
-        onApproveDesktopLogin={handleApproveDesktopLogin}
-        onLogout={handleLogout}
-        onDeleteCloudData={handleDeleteCloudData}
-        onReset={handleResetAppSettings}
-        onApplyViewportDefaults={applyViewportDefaults}
-        onDismissProjectInvitation={dismissProjectInvitation}
-        onClose={closeSettings}
-      />
+      {settingsShown && (
+        <SettingsPage
+          settings={appSettings}
+          cloudFunctionsEnabled={cloudFunctionsEnabled}
+          accountState={accountSettings}
+          authConfig={authConfig}
+          authConfigStatus={authConfigStatus}
+          health={deploymentHealth}
+          session={session}
+          busy={settingsBusy}
+          message={settingsMessage}
+          initialSection={
+            pendingInvitationToken || desktopAuthorizationAttempt
+              ? 'account'
+              : undefined
+          }
+          projectInvitationPending={pendingInvitationToken !== null}
+          projectInvitationError={pendingInvitationError}
+          desktopAuthorizationAttempt={desktopAuthorizationAttempt}
+          desktopAuthorizationApproved={desktopAuthorizationApproved}
+          desktopAuthorizationCode={desktopAuthorizationCode}
+          workspaceOpen={doc !== null}
+          onDesktopAuthorizationCodeChange={setDesktopAuthorizationCode}
+          onChange={handleAppSettingsChange}
+          onCloudFunctionsEnabledChange={handleCloudFunctionsEnabledChange}
+          onSaveCredential={(token) => void handleSaveAssistantCredential(token)}
+          onDeleteCredential={() => void handleDeleteAssistantCredential()}
+          onTestAssistant={() => void handleTestAssistantConnection()}
+          onRequestLoginCode={handleRequestLoginCode}
+          onVerifyLoginCode={handleVerifyLoginCode}
+          onRefreshAuthConfig={handleRefreshAuthConfig}
+          onStartDesktopLogin={handleStartDesktopLogin}
+          onApproveDesktopLogin={handleApproveDesktopLogin}
+          onLogout={handleLogout}
+          onDeleteCloudData={handleDeleteCloudData}
+          onReset={handleResetAppSettings}
+          onApplyViewportDefaults={applyViewportDefaults}
+          onDismissProjectInvitation={dismissProjectInvitation}
+          onClose={closeSettings}
+        />
+      )}
     </div>
   ) : null;
 

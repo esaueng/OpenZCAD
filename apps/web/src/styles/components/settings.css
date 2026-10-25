@@ -16,6 +16,15 @@
   background: var(--color-bg);
 }
 
+/* Settings asked for, its chunk still loading: nothing to see yet, but the
+   page behind already belongs to Settings and takes no clicks. */
+.settings-pending {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-settings);
+  cursor: progress;
+}
+
 .settings-page {
   height: 100%;
   display: grid;
