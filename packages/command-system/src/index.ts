@@ -88,6 +88,7 @@ import {
   isFeatureRollbackSuppressed
 } from '@openzcad/shared';
 import {
+  assertFeatureProfileProvenance,
   assertDocumentContentSchema,
   assertDocumentContentCommandSchema,
   addSketchComposite,
@@ -1607,8 +1608,13 @@ export const commandFactories = {
     return { ...command, serialize: () => deepClone(command.serialize()) };
   },
   revolveSketch(payload: RevolveInput): CommandDefinition<RevolveInput> {
-    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
-    return makeCommand(
+    // Deep, like the extrude's: the region profile is a nested record a
+    // caller or a serialized payload must not be able to reach into.
+    const withIds = deepClone({
+      ...payload,
+      ids: payload.ids ?? createBodyFeatureIds()
+    });
+    const command = makeCommand(
       'feature.revolve',
       'Revolve sketch',
       withIds,
@@ -1617,10 +1623,12 @@ export const commandFactories = {
         if (!findSketch(document, payload.sketchId)) {
           throw new Error('Revolve requires an existing sketch.');
         }
+        assertFeatureProfileProvenance(withIds, document);
         if (payload.axisRef)
           validateDatumAxisRef(document, payload.axisRef, null);
       }
     );
+    return { ...command, serialize: () => deepClone(command.serialize()) };
   },
   loftSections(payload: LoftInput): CommandDefinition<LoftInput> {
     const withIds = deepClone({
@@ -3081,14 +3089,22 @@ export function commandsForCadPatch(
       regionFingerprint: region.regionFingerprint,
       samplePoint,
       sourceArea: region.area,
-      ...(region.sourceBoundaryLoops ? { sourceBoundaryLoops: deepClone(region.sourceBoundaryLoops) } : {})
+      ...(region.sourceBoundaryLoops
+        ? { sourceBoundaryLoops: deepClone(region.sourceBoundaryLoops) }
+        : {})
     };
   };
 
-  const profileAnalysisOptions = (sketch: { sketchId: SketchId; objects: SketchObjectData[]; objectIds: EntityId[] }) => ({
+  const profileAnalysisOptions = (sketch: {
+    sketchId: SketchId;
+    objects: SketchObjectData[];
+    objectIds: EntityId[];
+  }) => ({
     promotionBoundaryTokens: resolveSketchPromotionBoundaryTokens(
       findSketch(projectedDocument, sketch.sketchId)?.promotions ?? [],
-      new Map(sketch.objects.map((data, index) => [sketch.objectIds[index]!, data]))
+      new Map(
+        sketch.objects.map((data, index) => [sketch.objectIds[index]!, data])
+      )
     )
   });
 
@@ -4675,7 +4691,10 @@ export function replayCommands(
         );
         break;
       case 'sketch.promotion.release':
-        next = releaseSketchPromotionStructure(next, command.payload as SketchPromotionReleaseInput);
+        next = releaseSketchPromotionStructure(
+          next,
+          command.payload as SketchPromotionReleaseInput
+        );
         break;
       case 'reference-dimension.add':
         next = restoreSketchReferenceDimensionForReplay(

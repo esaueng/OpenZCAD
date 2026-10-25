@@ -9543,6 +9543,18 @@ export function ModelViewer({
         gestures.release(event, '');
         finishSketchMove(drag, false);
       }
+      // An abandoned command drag lets go of the handle where it was: the
+      // value it reached stays previewed, as a release would leave it.
+      const commandDrag = commandDragRef.current;
+      if (commandDrag && commandDrag.pointerId === event.pointerId) {
+        commandDragRef.current = null;
+        onDirectManipulationChangeRef.current(false);
+        gestures.release(event, 'grab');
+        const rig = commandRigRef.current;
+        if (rig && rig.value() !== commandDrag.startValue) {
+          onCommandHandleReleaseRef.current?.(rig.value());
+        }
+      }
       // A cancelled gesture discards its pending position rather than
       // applying it: the drag is being abandoned, not completed.
       if (pendingDragEvent && pendingDragEvent.pointerId === event.pointerId) {

@@ -12,6 +12,7 @@ import type {
 import { GEOMETRY_PREVIEW_SCHEDULING, LivePreview } from '../lib/livePreview';
 import {
   clampRevolveAngle,
+  revolveAngleInRange,
   revolveAxisCandidates,
   revolveHint,
   revolveRigPlacement,
@@ -90,6 +91,8 @@ interface RevolveSession {
 export interface InPlaceRevolve {
   active: boolean;
   sketchId: SketchId | null;
+  /** The picked region within that sketch. */
+  regionFingerprint: number | null;
   axisCandidates: RevolveAxisCandidate[];
   axisId: string | null;
   angle: number;
@@ -229,14 +232,17 @@ export function useInPlaceRevolve(
   // A new profile or axis previews the current angle at once: the solid is
   // on screen the frame after the axis click, as in the reference.
   const axisId = axis?.id ?? null;
+  // The document the preview builds on: an undo or redo replaces it, and a
+  // frame of the old one must not stand for what Done would now commit.
+  const baseVersion = options.document?.version ?? null;
   useEffect(() => {
     if (!profile || !axisId) return;
     // LivePreview keeps a completed frame by value alone, so the same angle
-    // on a new profile or axis would republish the old solid: drop it first.
+    // on a new profile, axis or base would republish the old solid: drop it.
     preview.clear();
     setPreviewValid(false);
     preview.request(sessionRef.current?.angle ?? 360);
-  }, [profile, axisId, preview]);
+  }, [profile, axisId, baseVersion, preview]);
 
   const end = useCallback(() => {
     preview.clear();
@@ -289,6 +295,15 @@ export function useInPlaceRevolve(
 
   const setAngle = useCallback(
     (value: number, raw?: string) => {
+      // An expression is stored as typed, so it must already be an angle a
+      // revolve accepts: clamping it for the preview would show one angle
+      // and commit another.
+      if (raw !== undefined && !revolveAngleInRange(value)) {
+        setRefusal(
+          `${raw} is ${value}°; a revolve takes more than 0° and up to 360°.`
+        );
+        return;
+      }
       const angle = clampRevolveAngle(value);
       setSession((current) =>
         current ? { ...current, angle, angleRaw: raw ?? null } : current
@@ -325,6 +340,7 @@ export function useInPlaceRevolve(
   return {
     active: session !== null,
     sketchId: profile?.sketchId ?? null,
+    regionFingerprint: profile?.regionFingerprint ?? null,
     axisCandidates,
     axisId,
     angle: session?.angle ?? 360,

@@ -8150,6 +8150,8 @@ export function App() {
       startInPlaceRevolve();
       return;
     }
+    // Any other tool takes over from a running Revolve, quietly.
+    inPlaceRevolveRef.current.cancel(true);
     if (!openTool(nextTool) || !feature || !data) return;
     // Only after Apply/Discard: Cancel must leave the Move's target and the
     // current editor untouched. The edit uses its own consumed source body.
@@ -18035,6 +18037,7 @@ export function App() {
   const { placement: revolvePlacement, sketchId: revolveSketchId } =
     inPlaceRevolve;
   const revolveAxisId = inPlaceRevolve.axisId;
+  const revolveRegion = inPlaceRevolve.regionFingerprint;
   /** The angle handle, rebuilt only for a new profile or axis. */
   const inPlaceRevolveHandle = useMemo(() => {
     if (!revolvePlacement || !revolveSketchId || !revolveAxisId) return null;
@@ -18042,10 +18045,14 @@ export function App() {
     return {
       key: [
         revolveSketchId,
+        revolveRegion,
         revolveAxisId,
         center.x,
         center.y,
         center.z,
+        startDirection.x,
+        startDirection.y,
+        startDirection.z,
         radius
       ].join(':'),
       params: {
@@ -18056,7 +18063,7 @@ export function App() {
         angleDeg: inPlaceRevolveRef.current.angle
       }
     };
-  }, [revolvePlacement, revolveSketchId, revolveAxisId]);
+  }, [revolvePlacement, revolveSketchId, revolveRegion, revolveAxisId]);
   const inPlaceAxisPicker = useMemo(
     () =>
       inPlaceRevolve.active && revolveSketchId
@@ -24875,7 +24882,12 @@ export function App() {
             }}
             sketchViews={sketchViews}
             selectedProfileIds={viewerSelectedProfileIds}
-            profileSelectionMode={tool === 'extrude'}
+            // An in-place Revolve waiting for its profile arms the regions
+            // exactly as the Extrude tool does.
+            profileSelectionMode={
+              tool === 'extrude' ||
+              (inPlaceRevolve.active && inPlaceRevolve.sketchId === null)
+            }
             onSelectRegion={handleSelectRegion}
             onHoverRegion={handleHoverRegion}
             planePickerArmed={!modelingLocked && tool === 'sketch'}
@@ -25978,8 +25990,33 @@ export function App() {
                     feature.featureId
                   )
                 }
-                onApplyRevolve={(feature, value) =>
-                  applyValidatedFeature(
+                onApplyRevolve={(feature, value) => {
+                  // R01: the sketch axis is the absent datum axis. U09: a
+                  // region picked in the old sketch names nothing in a new
+                  // one, so a retarget takes the new sketch's first detected
+                  // region (its first object alone is a lone edge in a sketch
+                  // drawn since S04), and only a sketch with no region at all
+                  // clears it.
+                  const retargeted =
+                    feature.data.featureKind === 'revolve' &&
+                    feature.data.profile !== undefined &&
+                    value.sketchId !== feature.data.sketchId;
+                  const region = retargeted
+                    ? availableSketchViews.find(
+                        (view) => view.sketchId === value.sketchId
+                      )?.regions[0]
+                    : undefined;
+                  const [profile] = region
+                    ? profileReferencesForSelection(
+                        [{ ...region, sketchId: value.sketchId }],
+                        entityWideProfileSource
+                      )
+                    : [];
+                  const cleared = [
+                    ...(value.axisRef ? [] : ['axisRef']),
+                    ...(retargeted && !profile ? ['profile'] : [])
+                  ];
+                  return applyValidatedFeature(
                     commandFactories.updateFeature(
                       {
                         featureId: feature.featureId,
@@ -25989,30 +26026,17 @@ export function App() {
                           sketchId: value.sketchId,
                           axis: value.axis,
                           angleDeg: value.angleDeg,
-                          ...(value.axisRef ? { axisRef: value.axisRef } : {})
+                          ...(value.axisRef ? { axisRef: value.axisRef } : {}),
+                          ...(profile ? { profile } : {})
                         },
-                        // R01: the sketch axis is the absent datum axis. U09:
-                        // a region picked in the old sketch names nothing in
-                        // a new one, so a retarget falls back to the new
-                        // sketch's first profile.
-                        ...(() => {
-                          const cleared = [
-                            ...(value.axisRef ? [] : ['axisRef']),
-                            ...(feature.data.featureKind === 'revolve' &&
-                            feature.data.profile &&
-                            value.sketchId !== feature.data.sketchId
-                              ? ['profile']
-                              : [])
-                          ];
-                          return cleared.length ? { clearData: cleared } : {};
-                        })()
+                        ...(cleared.length ? { clearData: cleared } : {})
                       },
                       `Edit ${value.name}`
                     ),
                     feature,
                     value.name
-                  )
-                }
+                  );
+                }}
                 onApplyBoolean={(feature, value) => {
                   const command = commandFactories.updateFeature(
                     {

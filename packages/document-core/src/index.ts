@@ -32,6 +32,7 @@ import {
   assertFeatureProfileProvenance
 } from './sketch-provenance-validation';
 export {
+  assertFeatureProfileProvenance,
   assertSketchProvenance,
   assertLegacySketchConversionQualification,
   type LegacySketchConversionQualification,
@@ -2528,6 +2529,7 @@ export function revolveSketch(
   document: ProjectDocument,
   input: RevolveInput
 ): { document: ProjectDocument; bodyId: BodyId } {
+  assertFeatureProfileProvenance(input, document);
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
     input.ids ?? createBodyFeatureIds();

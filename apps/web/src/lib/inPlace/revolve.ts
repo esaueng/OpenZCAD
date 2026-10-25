@@ -205,8 +205,16 @@ export function revolveHint(slots: RevolveSlots): string {
   return 'Drag the angle, or type a value · Enter to finish · Esc cancels';
 }
 
+/** The smallest sweep kept; the kernel accepts every angle in `(0, 360]`. */
+export const MIN_REVOLVE_ANGLE = 1e-3;
+
 /** Revolve angles the kernel accepts are `(0, 360]`. */
 export function clampRevolveAngle(value: number): number {
   if (!Number.isFinite(value)) return 360;
-  return Math.min(360, Math.max(1, value));
+  return Math.min(360, Math.max(MIN_REVOLVE_ANGLE, value));
+}
+
+/** Whether an entered angle is one a revolve can store as typed. */
+export function revolveAngleInRange(value: number): boolean {
+  return Number.isFinite(value) && value > 0 && value <= 360;
 }

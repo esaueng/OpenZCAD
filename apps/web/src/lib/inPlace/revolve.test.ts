@@ -148,7 +148,8 @@ describe('the hint names the next step', () => {
 
 describe('revolve angles', () => {
   it('stay in the kernel range', () => {
-    expect(clampRevolveAngle(0)).toBe(1);
+    expect(clampRevolveAngle(0)).toBe(1e-3);
+    expect(clampRevolveAngle(0.5)).toBe(0.5);
     expect(clampRevolveAngle(400)).toBe(360);
     expect(clampRevolveAngle(Number.NaN)).toBe(360);
     expect(clampRevolveAngle(270)).toBe(270);

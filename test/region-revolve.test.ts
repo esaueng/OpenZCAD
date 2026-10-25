@@ -8,6 +8,7 @@ import {
   revolveSketch,
   updateFeature
 } from '@openzcad/document-core';
+import { commandFactories } from '@openzcad/command-system';
 import { computeSketchRegions } from '@openzcad/geometry';
 import {
   createExactKernelAdapter,
@@ -212,6 +213,85 @@ describe('region revolve', () => {
       Math.abs(body!.volume - pappus(FULL_REVOLVE_ANGLE_DEG))
     ).toBeLessThan(1e-6);
   }, 120_000);
+
+  it('takes the new sketch region when retargeted to another four-edge sketch', async () => {
+    // App.tsx stores the new sketch's first region on a retarget: the new
+    // sketch's first object alone is one lone line.
+    const first = edgeSketch();
+    const firstSketchId = getLatestSketchId(first)!;
+    const reference = regionReference(first);
+    const second = addSketchFeature(first, {
+      name: 'Second',
+      plane: 'XZ',
+      offset: 0,
+      objects: EDGES
+    }).document;
+    const secondSketchId = getLatestSketchId(second)!;
+    const revolved = revolveSketch(second, {
+      name: 'Revolve',
+      sketchId: firstSketchId,
+      axis: 'vertical',
+      profile: reference
+    }).document;
+    const feature = Object.values(revolved.nodes).find(
+      (node) => node.kind === 'feature' && node.featureKind === 'revolve'
+    );
+    if (feature?.kind !== 'feature') throw new Error('no revolve');
+    const retargeted = updateFeature(revolved, {
+      featureId: feature.featureId,
+      data: {
+        featureKind: 'revolve',
+        sketchId: secondSketchId,
+        axis: 'vertical',
+        profile: regionReference(second)
+      }
+    });
+    const derived = await kernel.syncDocument(retargeted);
+    expect(derived.warnings).toEqual([]);
+    const body = derived.bodyRepresentations[feature.bodyId!];
+    expect(
+      Math.abs(body!.volume - pappus(FULL_REVOLVE_ANGLE_DEG))
+    ).toBeLessThan(1e-6);
+  }, 120_000);
+
+  it('refuses a profile whose boundary witness is malformed', () => {
+    // The same provenance gate the extrude and loft profiles pass, on both
+    // the document write and the command a room replays.
+    const sketched = edgeSketch();
+    const input = {
+      name: 'Revolve',
+      sketchId: getLatestSketchId(sketched)!,
+      axis: 'vertical' as const,
+      profile: {
+        ...regionReference(sketched),
+        sourceBoundaryLoops: 'malformed'
+      } as unknown as SketchProfileReference
+    };
+    expect(() => revolveSketch(sketched, input)).toThrow(/provenance/);
+    expect(() =>
+      commandFactories.revolveSketch(input).validate(sketched)
+    ).toThrow(/provenance/);
+  });
+
+  it('keeps its own copy of the profile', () => {
+    const sketched = edgeSketch();
+    const profile = regionReference(sketched);
+    const command = commandFactories.revolveSketch({
+      name: 'Revolve',
+      sketchId: getLatestSketchId(sketched)!,
+      axis: 'vertical',
+      profile
+    });
+    const payloadOf = () =>
+      JSON.stringify((command.serialize() as { payload: unknown }).payload);
+    const before = payloadOf();
+    (profile.sourceEntityIds as string[]).push('object_later');
+    const serialized = command.serialize() as {
+      payload: { profile: { sourceEntityIds: string[] } };
+    };
+    serialized.payload.profile.sourceEntityIds.push('object_outside');
+    expect(payloadOf()).toBe(before);
+  });
 
   it('still refuses the first-object path on a four-edge sketch', async () => {
     // Without a profile the revolve reads the first object, a lone line. This

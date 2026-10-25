@@ -32,11 +32,12 @@ function fakeDocument(withBody: boolean): ProjectDocument {
   } as unknown as ProjectDocument;
 }
 
-function setup(overrides: Partial<UseInPlaceRevolveOptions> = {}) {
-  const commit = vi.fn<(request: InPlaceRevolveRequest) => void>();
-  const publishPreview = vi.fn();
-  const built: InPlaceRevolveRequest[] = [];
-  const options: UseInPlaceRevolveOptions = {
+function baseOptions(
+  built: InPlaceRevolveRequest[],
+  commit: (request: InPlaceRevolveRequest) => void,
+  publishPreview: (body: unknown) => void = vi.fn()
+): UseInPlaceRevolveOptions {
+  return {
     sketchViews: [
       {
         sketchId: SKETCH,
@@ -68,7 +69,16 @@ function setup(overrides: Partial<UseInPlaceRevolveOptions> = {}) {
     commit,
     publishPreview,
     datumLabel: () => 'Axis',
-    onStatus: vi.fn(),
+    onStatus: vi.fn()
+  };
+}
+
+function setup(overrides: Partial<UseInPlaceRevolveOptions> = {}) {
+  const commit = vi.fn<(request: InPlaceRevolveRequest) => void>();
+  const publishPreview = vi.fn();
+  const built: InPlaceRevolveRequest[] = [];
+  const options: UseInPlaceRevolveOptions = {
+    ...baseOptions(built, commit, publishPreview),
     ...overrides
   };
   const hook = renderHook(() => useInPlaceRevolve(options));
@@ -149,6 +159,47 @@ describe('useInPlaceRevolve', () => {
       hook.result.current.done();
     });
     expect(commit.mock.calls[0]![0].angleDeg).toBe('sweep * 3');
+  });
+
+  it('refuses an expression outside the revolve range instead of clamping it', async () => {
+    const { hook, commit } = setup();
+    act(() => hook.result.current.start(PICK));
+    act(() => hook.result.current.pickAxis('sketch-vertical'));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => hook.result.current.setAngle(400, 'sweep * 5'));
+    expect(hook.result.current.refusal).toMatch(/sweep \* 5 is 400°/);
+    expect(hook.result.current.angle).toBe(360);
+    act(() => {
+      hook.result.current.done();
+    });
+    // The full turn it kept, never the out-of-range expression.
+    expect(commit.mock.calls[0]![0].angleDeg ?? 360).toBe(360);
+  });
+
+  it('keeps a sub-degree angle', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start(PICK));
+    act(() => hook.result.current.pickAxis('sketch-vertical'));
+    act(() => hook.result.current.setAngle(0.5));
+    expect(hook.result.current.angle).toBe(0.5);
+    await waitFor(() => expect(built.at(-1)?.angleDeg).toBe(0.5));
+  });
+
+  it('rebuilds the preview when the base document changes under it', async () => {
+    let document = { ...fakeDocument(true), version: 1 } as ProjectDocument;
+    const commit = vi.fn<(request: InPlaceRevolveRequest) => void>();
+    const built: InPlaceRevolveRequest[] = [];
+    const hook = renderHook(() =>
+      useInPlaceRevolve({ ...baseOptions(built, commit), document })
+    );
+    act(() => hook.result.current.start(PICK));
+    act(() => hook.result.current.pickAxis('sketch-vertical'));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    const before = built.length;
+    document = { ...document, version: 2 };
+    hook.rerender();
+    await waitFor(() => expect(built.length).toBeGreaterThan(before));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
   });
 
   it('cannot finish while the preview is refused, and says why', async () => {
