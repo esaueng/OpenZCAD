@@ -303,7 +303,11 @@ import {
   sketchGeometryDeleteRefusal,
   sketchSolveEvidenceKey
 } from './lib/sketch/solveEvidence';
-import type { SketchDimensionIdentity } from '@openzcad/shared';
+import type {
+  SketchDimensionIdentity,
+  SketchProfileReference,
+  Vector3
+} from '@openzcad/shared';
 import { constraintInspectionTargets } from './lib/sketch/constraintInspection';
 import {
   solveStatusLabel,
@@ -1448,6 +1452,7 @@ import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
 import { useThumbnailCaptureActivity } from './hooks/useThumbnailCaptureActivity';
 import { GEOMETRY_PREVIEW_SCHEDULING, LivePreview } from './lib/livePreview';
 import { mergeSweptFaces, useInPlaceCommand } from './hooks/useInPlaceCommand';
+import { useMediaQuery } from './hooks/useMediaQuery';
 import { createPrimitiveCommand } from './lib/primitivePlacement';
 import { footprintPlacement } from './lib/inPlace/primitives';
 import {
@@ -1459,6 +1464,7 @@ import {
   valueInRange,
   type InPlaceRequest,
   type BodyPick,
+  type CurvePick,
   type FacePick,
   type ImageSlot,
   type InPlaceContext,
@@ -1473,6 +1479,25 @@ import {
   parseCurveCandidateId,
   sketchCurveCandidates
 } from './lib/inPlace/curves';
+import { datumAxisChoices } from './lib/datumAxisChoices';
+import {
+  withFeatureBuilt,
+  holeWorldPosition,
+  inPlaceEditBodyBox,
+  keptInOrder,
+  laterDirectEdit,
+  laterDirectEditOnBody,
+  laterInPlaceSteps,
+  laterStepsOnBody,
+  keepAbsentHoleSteps,
+  inPlaceEditLineage,
+  inPlaceEditMovedBodies,
+  inPlaceEditSeed,
+  inPlaceEditSourceSketchIds,
+  inPlaceFeatureUpdate,
+  inPlaceToolForFeature,
+  type InPlaceEditSeed
+} from './lib/inPlace/edit';
 import { PreviewRebuilds } from './lib/previewRebuilds';
 import {
   blendPreviewSelectionKey,
@@ -1489,6 +1514,7 @@ import { useSteadySaveState } from './hooks/useSteadySaveState';
 import { useMeasurementWorkbench } from './hooks/useMeasurementWorkbench';
 import {
   useValidatedFeatureCommit,
+  type ValidatedFeatureOutcome,
   type ValidatedFeatureRunOptions
 } from './hooks/useValidatedFeatureCommit';
 import { PatternProgress } from './components/PatternProgress';
@@ -1736,6 +1762,11 @@ const FRESHNESS_POLL_INTERVAL_MS = 60_000;
 const PANEL_PENDING_DELAY_MS = 400;
 /** How long a rebuild runs before the tool palette reads it as waiting. */
 const TOOLS_WAITING_DELAY_MS = 400;
+/**
+ * Where the inspector floats over the stage rather than beside it (the
+ * phone and narrow-tablet lanes in quiet-stage.css).
+ */
+const NARROW_WINDOW_QUERY = '(max-width: 960px)';
 /**
  * What an unnamed save is called. Ctrl+S stays a reflex and takes this; naming
  * one is its own gesture (Ctrl+Shift+S).
@@ -3427,6 +3458,8 @@ export function App() {
   const moveSnapSetterRef = useRef<((snap: MoveSnap) => void) | null>(null);
   /** Cancels the viewport's captured pointer session on keyboard Escape. */
   const cancelDirectManipulationRef = useRef<(() => boolean) | null>(null);
+  /** Ends a running in-place command quietly (it is set once that exists). */
+  const cancelInPlaceRef = useRef<(() => void) | null>(null);
   /** Opens exact entry for the armed handle, as tapping its chip would. */
   const openExactEntryRef = useRef<(() => boolean) | null>(null);
   const contextMenuActionsRef = useRef<Record<string, () => void>>({});
@@ -3654,6 +3687,8 @@ export function App() {
     parameterCandidate.base.projectId === doc?.projectId &&
     parameterCandidate.base.version === doc?.version;
   const exactGeometryReady = !parameterDraftActive && geometry.isReadyFor(doc);
+  const exactGeometryReadyRef = useRef(exactGeometryReady);
+  exactGeometryReadyRef.current = exactGeometryReady;
   // What is drawn is complete when the worker has caught up, or when a
   // validated commit attached its own complete rebuild to this version: the
   // broadcast rebuild that follows only re-derives it for the worker's live
@@ -4406,18 +4441,18 @@ export function App() {
   function runPattern(
     command: AnyCommand,
     options: ValidatedFeatureRunOptions
-  ): void {
+  ): Promise<ValidatedFeatureOutcome> {
     const reservation = validatedFeature.reserve();
     if (!reservation) {
       setStatus(
         'Another exact operation is still finishing. Try again once it completes.'
       );
-      return;
+      return Promise.resolve('busy');
     }
     const abort = new AbortController();
     patternAbortRef.current = abort;
     setPatternProgress({ name: options.featureName });
-    void executeValidatedFeature(command, {
+    return executeValidatedFeature(command, {
       ...options,
       reservation,
       signal: abort.signal,
@@ -7917,6 +7952,9 @@ export function App() {
     // Sessions and numeric drafts refer to ids in the previous document.
     // Hydration may preserve the camera, never an armed sketch or handle.
     cancelDirectManipulationRef.current?.();
+    // So does an in-place command: a frame it built on the old document
+    // may carry the same version as the new one.
+    cancelInPlaceRef.current?.();
     patternAbortRef.current?.abort();
     setImportRun((current) => (current?.outcome ? null : current));
     exactEntryQueue.cancel();
@@ -8369,17 +8407,20 @@ export function App() {
   function createValidatedFeature(
     command: AnyCommand,
     featureName: string,
-    resultBodyId: BodyId | undefined
-  ): void {
+    resultBodyId: BodyId | undefined,
+    /** True once the caller no longer wants it (its command closed). */
+    cancelled?: () => boolean
+  ): Promise<ValidatedFeatureOutcome> | undefined {
     if (!resultBodyId) {
       createFeature(command);
-      return;
+      return undefined;
     }
-    void executeValidatedFeature(command, {
+    return executeValidatedFeature(command, {
       featureName,
       resultBodyId,
       successMessage: commandOutcomeMessage(command.label),
-      onSuccess: finishFeatureCreation
+      onSuccess: finishFeatureCreation,
+      ...(cancelled ? { cancelled } : {})
     });
   }
 
@@ -8391,11 +8432,17 @@ export function App() {
     command: AnyCommand,
     feature: FeatureNode,
     featureName: string,
-    resultBodyId: BodyId | undefined = feature.bodyId
+    resultBodyId: BodyId | undefined = feature.bodyId,
+    /** Told whether the edit landed; an in-place edit waits on it. */
+    settled?: (committed: boolean) => void,
+    /** True once the caller no longer wants it (its command closed). */
+    withdrawn?: () => boolean
   ): void {
     const editSession = editCardSessionRef.current;
     if (!doc || !resultBodyId) {
-      if (executeCommand(command)) finishFeatureEdit(feature, editSession);
+      const committed = executeCommand(command);
+      if (committed) finishFeatureEdit(feature, editSession);
+      settled?.(Boolean(committed));
       return;
     }
     const run =
@@ -8417,8 +8464,13 @@ export function App() {
       ),
       successMessage: commandOutcomeMessage(command.label),
       onSuccess: () => finishFeatureEdit(feature, editSession),
-      cancelled: () => !editSessionIsCurrent(feature, editSession)
-    });
+      cancelled: () =>
+        !editSessionIsCurrent(feature, editSession) ||
+        Boolean(withdrawn?.())
+    }).then(
+      (outcome) => settled?.(outcome === 'committed'),
+      () => settled?.(false)
+    );
   }
 
   /**
@@ -8728,6 +8780,291 @@ export function App() {
     if (!resolved) throw new Error(`${name} did not resolve.`);
   }
 
+  /** The in-place command and seed for a stored feature, from `current`. */
+  function inPlaceEditSeedFor(current: ProjectDocument, feature: FeatureNode) {
+    return inPlaceEditSeed(feature, {
+      evaluate: (value) =>
+        evalParamValue(value, parameterScope.scope, current.units),
+      profile: (sketchId, reference) => {
+        // A section in a sketch made after the feature is a forward
+        // reference: it is not restored, and the slot asks for another.
+        if (
+          !featurePrecedes(producingFeatureOf({ sketchId }), feature.featureId)
+        ) {
+          return null;
+        }
+        const view = availableSketchViews.find(
+          (candidate) => candidate.sketchId === sketchId
+        );
+        if (!view) {
+          // A consumed sketch is hidden, so not drawn yet: the edit shows it
+          // once armed, and the stored reference stands until then.
+          return {
+            sketchId,
+            reference,
+            regionFingerprint:
+              reference.all === true ? 0 : reference.regionFingerprint
+          };
+        }
+        const [region] = regionsForReference(view, reference);
+        return region
+          ? { sketchId, reference, regionFingerprint: region.regionFingerprint }
+          : null;
+      },
+      firstRegion: (sketchId) =>
+        availableSketchViews.find((view) => view.sketchId === sketchId)
+          ?.regions[0]?.regionFingerprint ?? null,
+      face: (bodyId, hash, reference) => {
+        // As the feature rebuilds it: by lineage first, then the hash.
+        const found = resolveFace(representations[bodyId], { hash, reference });
+        const pick = found.ok
+          ? inPlaceFacePick(
+              bodyId,
+              found.entry.topologyId,
+              found.entry.hash,
+              undefined,
+              true
+            )
+          : null;
+        return pick && reference ? { ...pick, reference } : pick;
+      },
+      anyFace: (bodyId) => {
+        // A flat face carries the handle best; a body with none (a sphere)
+        // still names itself by any face it has.
+        const faces = representations[bodyId]?.topology?.faces ?? [];
+        const face =
+          faces.find((candidate) => candidate.geometry?.surfaceType === 'plane') ??
+          faces[0];
+        return face
+          ? inPlaceFacePick(bodyId, face.topologyId, face.hash, undefined, true)
+          : null;
+      },
+      curve: (sketchId, entityId) =>
+        sweepCurveExists(current, sketchId, entityId),
+      body: (bodyId) => inPlaceBodyPick(bodyId),
+      laterTransforms: laterInPlaceSteps(current, feature),
+      laterReshapes: laterDirectEdit(current, feature),
+      datumPlaneUsable: (featureId) =>
+        earlierDatumPlanes(current, feature.featureId).some(
+          (datum) => datum.featureId === featureId
+        ),
+      datumAxis: (featureId) => current.derived.datumAxes?.[featureId] ?? null,
+      bodyVertices: (bodyId) =>
+        representations[bodyId]?.mesh.vertices ?? null
+    });
+  }
+
+  /**
+   * U09 phase 7: re-arms the in-place command that made a stored feature,
+   * seeded from it, instead of opening its card. The feature stays pinned,
+   * so its History row and its readout stay on screen while it is edited.
+   * False when the feature has no in-place editor or cannot be edited now.
+   */
+  function startInPlaceEdit(feature: FeatureNode): boolean {
+    const current = managerRef.current?.document;
+    const tool = inPlaceToolForFeature(feature.data);
+    if (!current || !tool) return false;
+    // What a new feature needs on screen (two live bodies for a boolean,
+    // closed profiles for a loft) the stored feature already has, consumed.
+    const reason = toolDisabledReason(tool, {
+      ...availability,
+      liveBodyCount: Number.POSITIVE_INFINITY,
+      sketchCount: Number.POSITIVE_INFINITY,
+      closedProfileSketchCount: Number.POSITIVE_INFINITY
+    });
+    if (reason) {
+      setStatus(`${TOOL_META[tool].label}: ${reason}.`);
+      return false;
+    }
+    const armed = inPlaceEditSeedFor(current, feature);
+    if (!armed) return false;
+    // A running command (another edit, a create) gives way quietly.
+    inPlaceRef.current.cancel(true);
+    retireStatusMessage();
+    // Each arming is its own edit session, even of the same row: a Done
+    // still validating from the last one must not finish this one.
+    if (editCardSessionRef.current) {
+      editCardSessionRef.current = {
+        ...editCardSessionRef.current,
+        generation: editCardSessionRef.current.generation + 1
+      };
+    }
+    inPlaceRef.current.edit(armed.tool, armed.seed);
+    if (armed.seed.notice) setStatus(armed.seed.notice);
+    return true;
+  }
+
+  /** Done on an in-place edit: the feature's update, validated as the card's was. */
+  function commitInPlaceEdit(
+    request: InPlaceRequest,
+    edit: InPlaceEditSeed,
+    withdrawn?: () => boolean
+  ) {
+    const current = managerRef.current?.document;
+    const feature = current ? findFeature(current, edit.featureId) : null;
+    if (!feature) {
+      setStatus('This history feature is no longer available to edit.');
+      // Done is settled, not left holding the edit frozen.
+      inPlaceRef.current.settleEdit(edit, false);
+      return;
+    }
+    // The feature's name as it is now: a rename since the edit armed (from
+    // another device, say) must not be written back over.
+    const named = { ...edit, name: feature.name };
+    let command: AnyCommand;
+    try {
+      command = inPlaceEditCommand(request, named);
+    } catch (error) {
+      setStatus(errorMessage(error, `${feature.name} could not be edited.`));
+      inPlaceRef.current.settleEdit(edit, false);
+      return;
+    }
+    // The edit stays open until this lands: refused, it is still there to
+    // correct and try again.
+    applyValidatedFeature(
+      command,
+      feature,
+      feature.name,
+      inPlaceEditResultBodyId(request, edit),
+      (committed) => inPlaceRef.current.settleEdit(edit, committed),
+      withdrawn
+    );
+  }
+
+  /**
+   * Esc or the bar's Cancel: an edit leaves its feature as it was and
+   * returns to nothing selected, in one press, as an edit card's did.
+   */
+  function cancelInPlaceCommand() {
+    const editing = inPlaceRef.current.editing;
+    // A Done still validating keeps the command, and its selection, open.
+    if (!inPlaceRef.current.cancel()) return;
+    if (editing) {
+      setSelectedFeatureNode(null);
+      setSelectedBodyIds([]);
+      setSelectedProfiles([]);
+    }
+  }
+
+  /**
+   * The body an edited feature works on, as the feature stores it now: an
+   * undo or a collaborator may have retargeted it since the edit armed.
+   */
+  function inPlaceEditTarget(edit: InPlaceEditSeed | null): BodyId | null {
+    if (!edit) return null;
+    // A body picked in this edit (a Hole moved onto another face, a Scale
+    // retargeted) is the target until Done; the feature still stores the
+    // old one meanwhile. Untouched, the slots follow the live feature.
+    const slots = inPlaceRef.current.slots;
+    const picked = slots.faces[0]?.bodyId ?? slots.bodies[0]?.bodyId;
+    if (picked) return picked;
+    const live = managerRef.current
+      ? findFeature(managerRef.current.document, edit.featureId)
+      : null;
+    const data =
+      live && live.data.featureKind === edit.data.featureKind
+        ? live.data
+        : edit.data;
+    return 'targetBodyId' in data ? (data.targetBodyId ?? null) : null;
+  }
+
+  /**
+   * Whether an edit may take what a feature built: only what exists before
+   * it in history. A later sketch or body would be a forward reference.
+   */
+  function inPlaceEditMayUse(
+    producer: FeatureId | undefined,
+    edit: InPlaceEditSeed | null
+  ): boolean {
+    return !edit || featurePrecedes(producer, edit.featureId);
+  }
+
+  /** Whether `producer` comes before `featureId` in history. */
+  function featurePrecedes(
+    producer: FeatureId | undefined,
+    featureId: FeatureId
+  ): boolean {
+    const current = managerRef.current?.document;
+    if (!current) return true;
+    const order = current.featureOrder;
+    const at = order.indexOf(featureId);
+    const from = producer ? order.indexOf(producer) : -1;
+    return at < 0 || (from >= 0 && from < at);
+  }
+
+  /**
+   * Whether an edit's body slot takes a clicked body. The feature's own
+   * result (what is on screen where its input was) keeps the input it has;
+   * a body made later is refused by name.
+   */
+  function inPlaceEditTakesBody(bodyId: BodyId): boolean {
+    const editing = inPlaceRef.current.editing;
+    if (!editing || inPlaceEditMayUse(producingFeatureOf({ bodyId }), editing))
+      return true;
+    if (!editing.ownBodyIds.includes(bodyId)) {
+      setStatus(
+        `${editing.name} can only use bodies made before it in History.`
+      );
+    }
+    return false;
+  }
+
+  /**
+   * A datum plane for the in-place Mirror or Split: an edit takes only one
+   * made before the feature, as it does a sketch or a body.
+   */
+  function pickInPlaceDatumPlane(featureId: FeatureId) {
+    const editing = inPlaceRef.current.editing;
+    if (!inPlaceEditMayUse(featureId, editing)) {
+      setStatus(
+        `${editing!.name} can only use datum planes made before it in History.`
+      );
+      return;
+    }
+    inPlaceRef.current.pickPlane({ kind: 'datum', featureId });
+  }
+
+  /**
+   * Whether a sketch still has a curve a path can take: a drawn line or arc
+   * of that sketch, not construction, as the card's path options were.
+   */
+  function sweepCurveExists(
+    current: ProjectDocument,
+    sketchId: SketchId,
+    entityId: string
+  ): boolean {
+    const node = current.nodes[entityId as EntityId];
+    return (
+      node?.kind === 'sketch-object' &&
+      !node.data.construction &&
+      (node.data.objectKind === 'line' || node.data.objectKind === 'arc') &&
+      (findSketch(current, sketchId)?.objectIds.includes(
+        entityId as EntityId
+      ) ??
+        false)
+    );
+  }
+
+  /** The feature that made a body, or a sketch, for {@link inPlaceEditMayUse}. */
+  function producingFeatureOf(
+    target: { bodyId: BodyId } | { sketchId: SketchId }
+  ): FeatureId | undefined {
+    const current = managerRef.current?.document;
+    if (!current) return undefined;
+    if ('bodyId' in target) {
+      const node = Object.values(current.nodes).find(
+        (candidate) =>
+          candidate.kind === 'body' && candidate.bodyId === target.bodyId
+      );
+      return node?.kind === 'body' ? node.featureId : undefined;
+    }
+    return listNodesByKind(current, 'feature').find(
+      (feature) =>
+        feature.data.featureKind === 'sketch' &&
+        feature.data.sketchId === target.sketchId
+    )?.featureId;
+  }
+
   /** A body's face for a command that takes the body: a flat one first. */
   function anyInPlaceFaceOf(bodyId: BodyId): FacePick | null {
     const faces = representations[bodyId]?.topology?.faces ?? [];
@@ -8757,36 +9094,99 @@ export function App() {
     bodyId: string,
     topologyId: string | undefined,
     hash: number | undefined,
-    point: { x: number; y: number; z: number } | undefined
+    point: { x: number; y: number; z: number } | undefined,
+    /** A stored face being resolved, not a click: no edit maps it. */
+    stored = false
   ): FacePick | null {
     const matches = (candidate: { topologyId: string; hash: number }) =>
       (topologyId !== undefined && candidate.topologyId === topologyId) ||
       (hash !== undefined && candidate.hash === hash);
     let resolvedBodyId = bodyId as BodyId;
     let face = representations[resolvedBodyId]?.topology?.faces.find(matches);
-    if (!face) {
+    // An edit's faces belong to the body it took: a click on what the
+    // feature (or a later one built from it) made of that body means the
+    // input's face. A later body of another lineage is refused outright.
+    const editing = stored ? null : inPlaceRef.current.editing;
+    const editTarget = inPlaceEditTarget(editing);
+    const later =
+      face !== undefined &&
+      editTarget !== null &&
+      resolvedBodyId !== editTarget &&
+      !inPlaceEditMayUse(
+        producingFeatureOf({ bodyId: resolvedBodyId }),
+        editing
+      );
+    const descendants =
+      later && editing ? inPlaceEditDescendants(editing) : null;
+    if (later && editing && !descendants?.has(resolvedBodyId)) {
+      setStatus(
+        `${editing.name} can only use faces of bodies made before it in History.`
+      );
+      return null;
+    }
+    // Another body's material joined this one later (a union, say): only a
+    // face the edited body still has unchanged is surely one of its own.
+    const joined = descendants?.mixed.has(resolvedBodyId) ?? false;
+    // A hole goes where the click lands, and on a body a later feature moved
+    // (a copy, a mirror, a pattern) that is not where the hole's own face is.
+    // So does a draft's clicked-point hinge, which can be chosen after the
+    // click.
+    const usesPoint =
+      inPlaceRef.current.tool === 'hole' ||
+      inPlaceRef.current.tool === 'draft';
+    if (
+      later &&
+      editing &&
+      usesPoint &&
+      managerRef.current &&
+      inPlaceEditMovedBodies(
+        managerRef.current.document,
+        editing.featureId
+      ).has(resolvedBodyId)
+    ) {
+      setStatus(
+        `A later feature moved this body: click ${editing.name}'s face where it was made, or drag its position.`
+      );
+      return null;
+    }
+    const remap = later;
+    if (remap && editTarget) {
+      const clicked = face;
+      const clickedHash = hash ?? clicked?.hash;
+      face =
+        representations[editTarget]?.topology?.faces.find(
+          (candidate) =>
+            clickedHash !== undefined && candidate.hash === clickedHash
+        ) ??
+        (joined
+          ? undefined
+          : coplanarFace(
+              editTarget,
+              clicked?.geometry?.normal,
+              clicked?.geometry?.centroid ?? clicked?.geometry?.center
+            ));
+      if (face) resolvedBodyId = editTarget;
+      else if (joined && editing) {
+        setStatus(
+          `That face may come from a body joined after ${editing.name} · pick a face of the body ${editing.name} was made on.`
+        );
+        return null;
+      }
+    }
+    if (!face && !remap) {
       // While a preview shows, a click lands on the preview's body, which the
       // document does not have. The face meant is the edited body's face in
       // the same plane: clicking the face again is how a hole moves.
       const shown = previewDoc?.derived.bodyRepresentations[
         resolvedBodyId
       ]?.topology?.faces.find(matches)?.geometry;
-      const target = inPlaceRef.current.slots.faces[0]?.bodyId;
-      const normal = shown?.normal;
-      const on = shown?.centroid ?? shown?.center;
-      if (target && normal && on) {
-        face = representations[target]?.topology?.faces.find((candidate) => {
-          const g = candidate.geometry;
-          const at = g?.centroid ?? g?.center;
-          if (!g?.normal || !at) return false;
-          const aligned =
-            g.normal.x * normal.x + g.normal.y * normal.y + g.normal.z * normal.z;
-          const apart =
-            (at.x - on.x) * normal.x +
-            (at.y - on.y) * normal.y +
-            (at.z - on.z) * normal.z;
-          return aligned > 1 - 1e-6 && Math.abs(apart) < 1e-6;
-        });
+      const target = editTarget ?? inPlaceRef.current.slots.faces[0]?.bodyId;
+      if (target) {
+        face = coplanarFace(
+          target,
+          shown?.normal,
+          shown?.centroid ?? shown?.center
+        );
         if (face) resolvedBodyId = target;
       }
     }
@@ -8796,12 +9196,55 @@ export function App() {
       bodyId: resolvedBodyId,
       hash: face.hash,
       topologyId: face.topologyId,
+      // Its lineage, so a rebuild that renames its hash still finds it.
+      ...(face.reference ? { reference: face.reference } : {}),
       ...(geometry?.surfaceType ? { surfaceType: geometry.surfaceType } : {}),
       ...(geometry?.normal ? { normal: geometry.normal } : {}),
       ...(geometry?.centroid ? { centroid: geometry.centroid } : {}),
       ...(geometry?.center ? { center: geometry.center } : {}),
       ...(point ? { point } : {})
     };
+  }
+
+  /**
+   * The bodies an edited feature's result became: its own, and every body a
+   * feature after it built from them. Only a click on one of these stands
+   * for the edit's input.
+   */
+  function inPlaceEditDescendants(edit: InPlaceEditSeed): {
+    pure: Set<BodyId>;
+    mixed: Set<BodyId>;
+    has(bodyId: BodyId): boolean;
+  } {
+    const current = managerRef.current?.document;
+    const lineage = current
+      ? inPlaceEditLineage(current, edit.featureId, edit.ownBodyIds)
+      : { pure: new Set<BodyId>(edit.ownBodyIds), mixed: new Set<BodyId>() };
+    return {
+      ...lineage,
+      has: (bodyId) => lineage.pure.has(bodyId) || lineage.mixed.has(bodyId)
+    };
+  }
+
+  /** A body's face in the plane through `on` facing `normal`, if it has one. */
+  function coplanarFace(
+    bodyId: BodyId,
+    normal: Vector3 | undefined,
+    on: Vector3 | undefined
+  ) {
+    if (!normal || !on) return undefined;
+    return representations[bodyId]?.topology?.faces.find((candidate) => {
+      const g = candidate.geometry;
+      const at = g?.centroid ?? g?.center;
+      if (!g?.normal || !at) return false;
+      const aligned =
+        g.normal.x * normal.x + g.normal.y * normal.y + g.normal.z * normal.z;
+      const apart =
+        (at.x - on.x) * normal.x +
+        (at.y - on.y) * normal.y +
+        (at.z - on.z) * normal.z;
+      return aligned > 1 - 1e-6 && Math.abs(apart) < 1e-6;
+    });
   }
 
   /** A picked region as the in-place command's profile slot holds it. */
@@ -8979,11 +9422,15 @@ export function App() {
     if (applyMove && !confirmMove()) return;
     // U09: a new feature from an in-place tool runs with no card, once any
     // unapplied Move has been applied or discarded above. Editing an
-    // existing one still opens its card until history edits re-arm handles.
+    // existing one re-arms the same command from its pinned History row.
     // The Image command waits for its picture: openTool asks for the file,
     // and the command starts once it is read.
     if (isInPlaceTool(nextTool) && nextTool !== 'reference-image' && !feature) {
       startInPlaceCommand(nextTool);
+      return;
+    }
+    if (feature && inPlaceToolForFeature(feature.data)) {
+      applyHistorySelection(feature.id, managerRef.current!.document);
       return;
     }
     // Any other tool takes over from a running in-place command, quietly.
@@ -9198,6 +9645,12 @@ export function App() {
    */
   /** Opens a history feature in the modeling form it was created with. */
   function openModelingFeatureEditor(feature: FeatureNode) {
+    // An in-place command's feature re-arms that command from its row, as a
+    // click on the row does (an unapplied Move is asked about first).
+    if (inPlaceToolForFeature(feature.data)) {
+      handleSelectFeatureFromTree(feature.id, false);
+      return;
+    }
     if (!featureOpensEditCard(feature.data.featureKind)) return;
     const data = feature.data as EditableModelingFeatureData;
     const reason = toolDisabledReason(data.featureKind, availability);
@@ -15219,23 +15672,28 @@ export function App() {
           command.slots.bodies.length > 0 &&
           selection.kind === 'face'
         ) {
-          const face = inPlaceFacePick(
-            selection.bodyId,
-            selection.topologyId,
-            selection.hash,
-            detail?.point
-          );
-          const on = face?.centroid ?? face?.center ?? face?.point;
+          // The plane is the face as clicked, where it stands on screen: a
+          // plane is stored by its numbers, so unlike a face operation's
+          // face it is not mapped back onto an edited feature's input.
+          const matches = (candidate: { topologyId: string; hash: number }) =>
+            candidate.topologyId === selection.topologyId ||
+            (selection.hash !== undefined && candidate.hash === selection.hash);
+          // The preview's body first: while one shows, it is the one on
+          // screen, under the same id as the committed body it replaces.
+          const geometry = (
+            previewDoc?.derived.bodyRepresentations[selection.bodyId] ??
+            representations[selection.bodyId]
+          )?.topology?.faces.find(matches)?.geometry;
+          const on = geometry?.centroid ?? geometry?.center ?? detail?.point;
           if (
-            face?.normal &&
+            geometry?.normal &&
             on &&
-            (face.surfaceType === undefined ||
-              face.surfaceType.toLowerCase() === 'plane')
+            geometry.surfaceType.toLowerCase() === 'plane'
           ) {
             return command.pickPlane({
               kind: 'face',
               origin: on,
-              normal: face.normal
+              normal: geometry.normal
             });
           }
           return false;
@@ -15243,6 +15701,7 @@ export function App() {
         const shown = representations[selection.bodyId]
           ? selection.bodyId
           : (command.slots.bodies[0]?.bodyId ?? null);
+        if (shown && !inPlaceEditTakesBody(shown)) return true;
         const body = shown ? inPlaceBodyPick(shown) : null;
         if (body) return command.pickBody(body);
       }
@@ -18931,6 +19390,21 @@ export function App() {
    * detected closed regions, lifted by the shared plane resolution. The
    * sketch being edited in-session is skipped (its rig renders live).
    */
+  /**
+   * The feature an in-place command is editing, mirrored from the hook so
+   * what is computed before it (the sketch views, the datum axes) can read it.
+   */
+  const [inPlaceEditFeatureId, setInPlaceEditFeatureId] =
+    useState<FeatureId | null>(null);
+  // The hidden sketches an armed edit reads: its feature's own inputs,
+  // and no others, so arming an edit does not outline every sketch.
+  const inPlaceEditInputSketchIds = useMemo(() => {
+    const feature =
+      doc && inPlaceEditFeatureId ? findFeature(doc, inPlaceEditFeatureId) : null;
+    return new Set<string>(
+      feature ? inPlaceEditSourceSketchIds(feature.data) : []
+    );
+  }, [doc, inPlaceEditFeatureId]);
   const availableSketchViews = useMemo(() => {
     if (!doc) {
       return [];
@@ -18946,7 +19420,8 @@ export function App() {
       if (
         !sketchViewShown(sketch.sketchId, hiddenSketchIds, movingSketch) &&
         !active &&
-        !modelingEditFeature
+        !modelingEditFeature &&
+        !inPlaceEditInputSketchIds.has(sketch.sketchId)
       ) {
         return [];
       }
@@ -19070,6 +19545,7 @@ export function App() {
     hiddenSketchIds,
     movingSketch,
     modelingEditFeature,
+    inPlaceEditInputSketchIds,
     sketchReadDocument
   ]);
   /** U09: an in-place request as the command its commit would run. */
@@ -19192,7 +19668,9 @@ export function App() {
             ? { spacing2: request.spacing2 }
             : {}),
           ...(request.count2 !== undefined ? { count2: request.count2 } : {}),
-          ...(request.axisRef ? { axisRef: request.axisRef } : {})
+          ...(request.axisRef ? { axisRef: request.axisRef } : {}),
+          // A custom repeat vector, which the axis then only stands beside.
+          ...(request.direction ? { direction: request.direction } : {})
         });
       case 'primitive':
         // The card's own Create, which numbers the feature and its body
@@ -19248,6 +19726,25 @@ export function App() {
     if (ids?.bodyId) return ids.bodyId;
     return request.tool === 'transform' ? request.targetBodyId : undefined;
   }
+  /**
+   * The body an edit's preview and commit must build: an in-place Scale or
+   * turn republishes the body it now targets (retargeted, a new one), a copy
+   * and every other feature its own result.
+   */
+  function inPlaceEditResultBodyId(
+    request: InPlaceRequest,
+    edit: InPlaceEditSeed
+  ): BodyId | undefined {
+    if (request.tool !== 'transform') return edit.resultBodyId;
+    // Whether it copies is the request's, as the reseed left it (an update
+    // may have turned an in-place Scale into a copy, or back): a copy's
+    // result is the feature's own body, as the document has it now.
+    if (!request.copy) return request.targetBodyId;
+    const live = managerRef.current
+      ? findFeature(managerRef.current.document, edit.featureId)
+      : null;
+    return live?.bodyId ?? edit.resultBodyId;
+  }
   /** A body as an in-place command's body slot holds it, with its box. */
   function inPlaceBodyPick(bodyId: BodyId): BodyPick | null {
     const vertices = representations[bodyId]?.mesh.vertices;
@@ -19267,20 +19764,105 @@ export function App() {
     }
     return { bodyId, min, max };
   }
+  /**
+   * U09 phase 7: an edit's request as the `updateFeature` its Done commits.
+   * A face operation goes through the card's own submission builder and
+   * `modelingFeatureUpdate`, exactly as the card's Apply did.
+   */
+  function inPlaceEditCommand(
+    request: InPlaceRequest,
+    armed: InPlaceEditSeed
+  ): AnyCommand {
+    // What the command does not show is kept from the feature as it is now,
+    // not as it was when the edit armed: a collaborator's change to a field
+    // the edit leaves alone (a scale's translation) must not be written back
+    // over.
+    const live = managerRef.current
+      ? findFeature(managerRef.current.document, armed.featureId)
+      : null;
+    // Its name too: a rename since the edit armed is not written back over.
+    const edit =
+      live && live.data.featureKind === armed.data.featureKind
+        ? { ...armed, name: live.name, data: live.data }
+        : armed;
+    if (request.tool === 'modeling') {
+      const targetBodyId =
+        'targetBodyId' in request.state.value
+          ? request.state.value.targetBodyId
+          : '';
+      const body = targetBodyId ? representations[targetBodyId] : undefined;
+      const submission = buildModelingOperationSubmission(
+        {
+          ...request.state,
+          value: { ...request.state.value, name: edit.name }
+        } as ModelingOperationFormState,
+        modelingFaceOptions(body?.topology, body)
+      );
+      const built = modelingFeatureUpdate(edit.featureId, submission);
+      if (!built) throw new Error(`${edit.name} cannot be edited this way.`);
+      const update = keepAbsentHoleSteps(
+        built,
+        edit.data,
+        inPlaceRef.current.touched
+      );
+      return commandFactories.updateFeature(update, `Edit ${edit.name}`);
+    }
+    const update = inPlaceFeatureUpdate(edit, request);
+    if (!update) throw new Error(`${edit.name} cannot be edited this way.`);
+    return commandFactories.updateFeature(update, `Edit ${edit.name}`);
+  }
+  /** Datum axes an edit may use: those built before the edited feature. */
+  const inPlaceDatumAxes = useMemo(() => {
+    const axes = doc?.derived.datumAxes;
+    if (!axes || !inPlaceEditFeatureId) return axes;
+    const allowed = new Set(
+      datumAxisChoices(doc, inPlaceEditFeatureId).map((axis) => axis.featureId)
+    );
+    return Object.fromEntries(
+      Object.entries(axes).filter(([featureId]) =>
+        allowed.has(featureId as FeatureId)
+      )
+    );
+  }, [doc, inPlaceEditFeatureId]);
   const inPlace = useInPlaceCommand({
     sketchViews: availableSketchViews,
-    datumAxes: doc?.derived.datumAxes,
+    datumAxes: inPlaceDatumAxes,
     linearSnap: appSettings.sketching.snapEnabled
       ? appSettings.sketching.linearSnap
       : null,
     datumLabel: (featureId) =>
       (doc && findFeature(doc, featureId)?.name) ?? 'Datum axis',
     bodyBounds: (bodyId) => inPlaceBodyPick(bodyId),
+    evaluate: (value) =>
+      evalParamValue(value, parameterScope.scope, doc?.units),
     imagePlaneBasis,
     baseDocument: () => managerRef.current?.document ?? null,
     baseVersion: doc?.version ?? null,
+    geometrySettled: exactGeometryReady,
+    reseed: (edit) => {
+      const current = managerRef.current?.document;
+      // Picks read against topology still rebuilding would not resolve;
+      // the reseed waits for it (and runs again once it settles).
+      if (!current || !exactGeometryReadyRef.current) return undefined;
+      // Gone, or now made by no in-place command: null ends the edit.
+      const feature = findFeature(current, edit.featureId);
+      return feature && feature.data.featureKind === edit.data.featureKind
+        ? inPlaceEditSeedFor(current, feature)
+        : null;
+    },
     derive: (document) => geometry.syncOnce(document),
-    buildCommand: (request, title) => {
+    buildCommand: (request, title, edit) => {
+      if (edit) {
+        const command = inPlaceEditCommand(request, edit);
+        return {
+          validate: (document) => command.validate(document),
+          // A suppressed feature previews built, so its edit is checked by
+          // the same rebuild that would refuse it once turned back on.
+          apply: (document) =>
+            withFeatureBuilt(command.apply(document), edit.featureId),
+          resultBodyId: inPlaceEditResultBodyId(request, edit)
+        };
+      }
       const command = inPlaceCommandFor(request, title);
       const datum = inPlaceDatum(request, command);
       const base = managerRef.current?.document;
@@ -19296,7 +19878,13 @@ export function App() {
           : {})
       };
     },
-    commit: (request, title) => {
+    commit: (request, title, edit, withdrawn) => {
+      // A command closed while its Done validates (another tool, a new
+      // selection) withdraws the candidate: nothing lands after it is gone.
+      if (edit) {
+        commitInPlaceEdit(request, edit, withdrawn);
+        return;
+      }
       if (request.tool === 'primitive') {
         // Committed as the card's Create was: the preview already built it.
         createFeature(inPlaceCommandFor(request, title));
@@ -19313,29 +19901,40 @@ export function App() {
         // A datum has no body to validate: its resolved frame or line is
         // the proof, exactly as the card's Done checked it.
         const base = managerRef.current?.document;
-        void validatedFeature.runTransaction([command], {
-          label: command.label,
-          targets: [],
-          validateDerived: (derived) =>
-            checkNewDatum(base, derived, datum.featureId, name, datum.kind),
-          successMessage: commandOutcomeMessage(command.label),
-          onSuccess: finishFeatureCreation
-        });
-        return;
+        return validatedFeature
+          .runTransaction([command], {
+            label: command.label,
+            targets: [],
+            validateDerived: (derived) =>
+              checkNewDatum(base, derived, datum.featureId, name, datum.kind),
+            successMessage: commandOutcomeMessage(command.label),
+            onSuccess: finishFeatureCreation,
+            cancelled: withdrawn
+          })
+          .then((outcome) => outcome === 'committed');
       }
       const resultBodyId = inPlaceResultBodyId(request, command);
       if (request.tool === 'pattern' && resultBodyId) {
         // Through the pattern runner, so a large pattern shows its progress
         // and can be stopped, as the card's did.
-        runPattern(command, {
+        return runPattern(command, {
           featureName: name,
           resultBodyId,
           successMessage: commandOutcomeMessage(command.label),
-          onSuccess: finishFeatureCreation
-        });
-        return;
+          onSuccess: finishFeatureCreation,
+          cancelled: withdrawn
+        }).then((outcome) => outcome === 'committed');
       }
-      createValidatedFeature(command, name, resultBodyId);
+      // The command stays open until this lands: refused or held off by
+      // another exact operation, its picks are still there to retry.
+      return createValidatedFeature(
+        command,
+        name,
+        resultBodyId,
+        withdrawn
+      )?.then(
+        (outcome) => outcome === 'committed'
+      );
     },
     publishPreview: setPreviewDoc,
     onStatus: setStatus
@@ -19355,6 +19954,20 @@ export function App() {
   }, [keypadWithinReach]);
   const inPlaceRef = useRef(inPlace);
   inPlaceRef.current = inPlace;
+  cancelInPlaceRef.current = () => inPlaceRef.current.cancel(true);
+  // A command's keypad belongs to the command it opened on: another one
+  // taking over (a History row re-arming, a new tool) closes it, or its
+  // value would be entered into the new command.
+  const inPlaceSessionTool = inPlace.tool;
+  const inPlaceSessionEdit = inPlace.editing;
+  useEffect(() => {
+    setKeypad((current) => (current?.kind === 'command' ? null : current));
+  }, [inPlaceSessionTool, inPlaceSessionEdit]);
+  const narrowWindow = useMediaQuery(NARROW_WINDOW_QUERY);
+  const inPlaceEditing = inPlace.editing;
+  useEffect(() => {
+    setInPlaceEditFeatureId(inPlaceEditing?.featureId ?? null);
+  }, [inPlaceEditing]);
   // An Image canceled (or replaced by another command) lets its stored
   // bytes go again, unless something else already uses them.
   useEffect(() => {
@@ -19465,12 +20078,15 @@ export function App() {
     inPlace.active && inPlaceSpec?.bodyMode
       ? inPlace.slots.bodies.map((body) => body.bodyId).join(',')
       : null;
+  // Again after an undo or redo, which clears the selection while the
+  // command keeps its bodies.
+  const inPlaceBaseVersion = doc?.version ?? null;
   useEffect(() => {
     if (inPlaceBodyIds === null) return;
     setSelectedBodyIds(
       inPlaceBodyIds ? (inPlaceBodyIds.split(',') as BodyId[]) : []
     );
-  }, [inPlaceBodyIds]);
+  }, [inPlaceBodyIds, inPlaceBaseVersion]);
   const inPlaceAxisPicker = useMemo(
     () =>
       inPlaceSpec?.wantsAxis &&
@@ -19486,11 +20102,18 @@ export function App() {
     if (!doc || !inPlaceSpec?.wantsPath) return null;
     const resolve = sketchValueResolver(parameterScope.scope, doc.units);
     // Every sketch's curves, the profile's own included: one sketch may hold
-    // both a closed profile and the open spine it sweeps along.
-    return sketchCurveCandidates(doc, availableSketchViews, (value) =>
-      resolve(value)
-    );
-  }, [doc, inPlaceSpec, availableSketchViews, parameterScope]);
+    // both a closed profile and the open spine it sweeps along. An edit
+    // offers only sketches made before its feature, as it takes profiles.
+    const views = inPlaceEditing
+      ? availableSketchViews.filter((view) =>
+          featurePrecedes(
+            producingFeatureOf({ sketchId: view.sketchId }),
+            inPlaceEditing.featureId
+          )
+        )
+      : availableSketchViews;
+    return sketchCurveCandidates(doc, views, (value) => resolve(value));
+  }, [doc, inPlaceSpec, availableSketchViews, parameterScope, inPlaceEditing]);
   const inPlaceCurvePicker = useMemo(
     () =>
       inPlaceCurveCandidates
@@ -19504,16 +20127,335 @@ export function App() {
     [inPlaceCurveCandidates, inPlace.slots.path, inPlace.slots.guide]
   );
 
+  // An edit shows the sketches its feature was built from, consumed and
+  // hidden as they usually are, so a profile can be clicked again: every one
+  // it stores, including one whose saved picks no longer resolve.
+  const inPlaceEditSketchIds = useMemo(() => {
+    const feature =
+      inPlaceEditing && managerRef.current
+        ? findFeature(managerRef.current.document, inPlaceEditing.featureId)
+        : null;
+    return new Set<string>(
+      inPlaceEditing
+        ? [
+            ...(feature ? inPlaceEditSourceSketchIds(feature.data) : []),
+            ...[
+              ...inPlaceEditing.slots.profiles,
+              ...inPlaceEditing.slots.path,
+              ...inPlaceEditing.slots.guide
+            ].map((pick) => pick.sketchId)
+          ]
+        : []
+    );
+    // The live feature is read again with the document: an undo or a
+    // collaborator may point it at another sketch while the edit is armed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inPlaceEditing, doc]);
   // Editing needs hidden source profiles; visibility remains a viewport concern.
   const sketchViews = useMemo(
     () =>
       availableSketchViews.filter(
         (view) =>
           view.active ||
+          inPlaceEditSketchIds.has(view.sketchId) ||
           sketchViewShown(view.sketchId, hiddenSketchIds, movingSketch)
       ),
-    [availableSketchViews, hiddenSketchIds, movingSketch]
+    [availableSketchViews, hiddenSketchIds, movingSketch, inPlaceEditSketchIds]
   );
+  // An edit whose feature an undo, a remote change or a delete removed has
+  // nothing left to edit.
+  const inPlaceEditGone =
+    inPlaceEditing !== null &&
+    doc !== null &&
+    !findFeature(doc, inPlaceEditing.featureId);
+  useEffect(() => {
+    if (!inPlaceEditGone) return;
+    inPlaceRef.current.cancel(true);
+    setStatus('This history feature is no longer available to edit.');
+  }, [inPlaceEditGone, setStatus]);
+  // A seeded profile in a consumed (hidden) sketch could not be checked when
+  // the edit armed: the sketch is drawn only once the edit shows it. Checked
+  // then, and again whenever one of its sketches changes under the edit (an
+  // undo, a collaborator), a profile its sketch no longer has is dropped and
+  // said, so the slot asks for a new pick rather than holding one nothing
+  // can build.
+  const checkedEditProfiles = useRef<{
+    /** The edit checked, or a new command's tool. */
+    editing: InPlaceEditSeed | string;
+    views: readonly ((typeof availableSketchViews)[number] | undefined)[];
+  } | null>(null);
+  const regionsForReferenceRef = useRef(regionsForReference);
+  regionsForReferenceRef.current = regionsForReference;
+  const inPlaceProfiles = inPlace.slots.profiles;
+  const inPlaceTool = inPlace.tool;
+  const inPlaceTitle = inPlace.spec?.title ?? 'This command';
+  useEffect(() => {
+    const editing = inPlaceEditing;
+    // A new command's sections follow the model too (an undo, a
+    // collaborator), so a lost one is said and can be picked again.
+    const owner = editing ?? inPlaceTool;
+    if (!owner || inPlaceProfiles.length === 0) return;
+    const name = editing?.name ?? inPlaceTitle;
+    const views = inPlaceProfiles.map((pick) =>
+      availableSketchViews.find((view) => view.sketchId === pick.sketchId)
+    );
+    // A sketch with no view yet is waiting to be shown (the edit shows its
+    // hidden sources a render after arming) or rebuilt; once the edit has
+    // shown them and the rebuild has settled, a sketch still without a view
+    // (emptied, its plane lost) has nothing a section could stand on.
+    const settled = editing
+      ? inPlaceEditFeatureId === editing.featureId && exactGeometryReady
+      : exactGeometryReady;
+    if (!settled && views.some((view) => !view)) return;
+    const checked = checkedEditProfiles.current;
+    if (
+      checked?.editing === owner &&
+      checked.views.length === views.length &&
+      checked.views.every((view, index) => view === views[index])
+    ) {
+      return;
+    }
+    checkedEditProfiles.current = { editing: owner, views };
+    // Sections are ordered: one lost before a kept one clears the list.
+    const { kept, cleared } = keptInOrder(
+      inPlaceProfiles.map((pick, index) => {
+        if (pick.implicit) return pick;
+        const view = views[index];
+        if (!view) return null;
+        const [region] = regionsForReferenceRef.current(view, pick.reference);
+        return region
+          ? { ...pick, regionFingerprint: region.regionFingerprint }
+          : null;
+      })
+    );
+    if (kept.length < inPlaceProfiles.length) {
+      inPlaceRef.current.setProfiles(kept, inPlaceProfiles);
+      setStatus(
+        cleared
+          ? `${name}: its saved profile no longer resolves · pick its sections again, in order.`
+          : `${name}: its saved profile no longer resolves · pick it again.`
+      );
+    } else if (
+      kept.some(
+        (pick, index) =>
+          pick.regionFingerprint !== inPlaceProfiles[index]?.regionFingerprint
+      )
+    ) {
+      inPlaceRef.current.setProfiles(kept, inPlaceProfiles);
+    }
+  }, [
+    inPlaceEditing,
+    inPlaceTool,
+    inPlaceTitle,
+    inPlaceProfiles,
+    availableSketchViews,
+    inPlaceEditFeatureId,
+    exactGeometryReady,
+    setStatus
+  ]);
+  // The same for its curves and faces while the document changes under the
+  // edit (an undo, a collaborator): a path entity or a face the model no
+  // longer has is dropped and said, since nothing on screen could click it
+  // back out of the list.
+  const inPlaceEditPicks = inPlace.slots;
+  const inPlaceFacePickRef = useRef(inPlaceFacePick);
+  inPlaceFacePickRef.current = inPlaceFacePick;
+  const inPlaceBodyPickRef = useRef(inPlaceBodyPick);
+  inPlaceBodyPickRef.current = inPlaceBodyPick;
+  useEffect(() => {
+    const editing = inPlaceEditing;
+    // A new command's picks follow the model too (an undo, a collaborator's
+    // rebuild): a Scale's box, a Shell's faces.
+    if (!doc || inPlace.tool === null) return;
+    // The edited feature as it is now: a saved hole's position or a scale's
+    // factor may have changed since the edit armed.
+    const liveFeature = editing ? findFeature(doc, editing.featureId) : null;
+    const liveData = editing
+      ? liveFeature && liveFeature.data.featureKind === editing.data.featureKind
+        ? liveFeature.data
+        : editing.data
+      : null;
+    // A path, a guide and a boolean's inputs are ordered: one lost before a
+    // kept one clears that list to be picked again in order.
+    let reordered = false;
+    const ordered = <T,>(entries: readonly (T | null)[]): T[] => {
+      const result = keptInOrder(entries);
+      if (result.cleared) reordered = true;
+      return result.kept;
+    };
+    const curves = (picks: readonly CurvePick[]) =>
+      ordered(
+        picks.map((pick) =>
+          sweepCurveExists(doc, pick.sketchId, pick.entityId) ? pick : null
+        )
+      );
+    // Only against a body whose topology is published: one still being
+    // analysed says nothing yet. A face is found as the feature rebuilds
+    // it, by lineage first, and is read afresh where it stands now (its
+    // hash, its plane, a saved hole's place on it), so its handles follow
+    // a face an update moved.
+    let facesMoved = false;
+    const placed = (pick: FacePick) =>
+      JSON.stringify([
+        pick.hash,
+        pick.topologyId,
+        pick.normal,
+        pick.centroid,
+        pick.center,
+        pick.point
+      ]);
+    const faces = inPlaceEditPicks.faces.flatMap((pick) => {
+      const body = representations[pick.bodyId];
+      if (!body?.topology) return [pick];
+      const found = resolveFace(body, {
+        hash: pick.hash,
+        ...(pick.reference ? { reference: pick.reference } : {})
+      });
+      if (!found.ok) return [];
+      const fresh = inPlaceFacePickRef.current(
+        pick.bodyId,
+        found.entry.topologyId,
+        found.entry.hash,
+        undefined,
+        true
+      );
+      if (!fresh) return [pick];
+      const point =
+        pick.savedPosition && liveData?.featureKind === 'hole'
+          ? (holeWorldPosition(fresh, liveData, {
+              evaluate: (value) =>
+                evalParamValue(value, parameterScope.scope, doc.units)
+            }) ?? undefined)
+          : pick.point;
+      const next: FacePick = {
+        ...fresh,
+        ...(pick.reference ? { reference: pick.reference } : {}),
+        ...(pick.savedPosition ? { savedPosition: true as const } : {}),
+        ...(point ? { point } : {})
+      };
+      if (placed(next) === placed(pick)) return [pick];
+      facesMoved = true;
+      return [next];
+    });
+    const path = curves(inPlaceEditPicks.path);
+    const guide = curves(inPlaceEditPicks.guide);
+    // A boolean's inputs are a list a missing body could not be clicked out
+    // of; a one-body slot is replaced by the next click, so it stays.
+    const listsBodies =
+      inPlace.tool !== null &&
+      IN_PLACE_TOOL_SPECS[inPlace.tool].bodyMode === 'many';
+    // Gone means gone from the document, or still without a shape once the
+    // exact rebuild has finished: a body between rebuilds keeps its place.
+    const kept = listsBodies
+      ? ordered(
+          inPlaceEditPicks.bodies.map((pick) =>
+            representations[pick.bodyId] ||
+            (!exactGeometryReady &&
+              Object.values(doc.nodes).some(
+                (node) => node.kind === 'body' && node.bodyId === pick.bodyId
+              ))
+              ? pick
+              : null
+          )
+        )
+      : inPlaceEditPicks.bodies;
+    // A body the update reshaped is read again, so the handles placed from
+    // its box (a scale's corner, a pattern's spacing) follow it.
+    let bodiesMoved = false;
+    const bodies = kept.map((pick) => {
+      const fresh = inPlaceBodyPickRef.current(pick.bodyId);
+      if (!fresh) return pick;
+      if (!editing || !liveData) {
+        // A new command works on the body as it is now.
+        const same =
+          JSON.stringify([fresh.min, fresh.max]) ===
+          JSON.stringify([pick.min, pick.max]);
+        if (same) return pick;
+        bodiesMoved = true;
+        return fresh;
+      }
+      const live = findFeature(doc, editing.featureId);
+      const boxContext = {
+        evaluate: (value: ParamValue) =>
+          evalParamValue(value, parameterScope.scope, doc.units),
+        datumAxis: (featureId: FeatureId) =>
+          doc.derived.datumAxes?.[featureId] ?? null,
+        bodyVertices: (bodyId: BodyId) =>
+          representations[bodyId]?.mesh.vertices ?? null
+      };
+      // A body clicked in place of the transform's own target never went
+      // through it, but its later in-place steps did: its box is taken back
+      // through those alone, to where the edited feature acts on it.
+      const retargeted =
+        liveData.featureKind === 'transform' &&
+        liveData.targetBodyId !== pick.bodyId;
+      const box = retargeted
+        ? live
+          ? {
+              ...inPlaceEditBodyBox(
+                fresh,
+                { ...liveData, targetBodyId: pick.bodyId },
+                boxContext,
+                laterStepsOnBody(doc, live, pick.bodyId),
+                false
+              ),
+              // A later direct edit of it: the factor is typed, not dragged.
+              ...(laterDirectEditOnBody(doc, live, pick.bodyId)
+                ? { reshapedLater: true as const }
+                : {})
+            }
+          : fresh
+        : inPlaceEditBodyBox(
+            fresh,
+            liveData,
+            boxContext,
+            live ? laterInPlaceSteps(doc, live) : [],
+            !(live && isFeatureSuppressed(live))
+          );
+      const same =
+        JSON.stringify([box.min, box.max, box.reshapedLater]) ===
+        JSON.stringify([pick.min, pick.max, pick.reshapedLater]);
+      if (same) return pick;
+      bodiesMoved = true;
+      return box;
+    });
+    if (
+      path.length === inPlaceEditPicks.path.length &&
+      guide.length === inPlaceEditPicks.guide.length &&
+      faces.length === inPlaceEditPicks.faces.length &&
+      bodies.length === inPlaceEditPicks.bodies.length
+    ) {
+      if (facesMoved || bodiesMoved) {
+        inPlaceRef.current.setPicks(
+          {
+            ...(facesMoved ? { faces } : {}),
+            ...(bodiesMoved ? { bodies } : {})
+          },
+          inPlaceEditPicks
+        );
+      }
+      return;
+    }
+    inPlaceRef.current.setPicks(
+      { path, guide, faces, bodies },
+      inPlaceEditPicks
+    );
+    setStatus(
+      reordered
+        ? `${editing?.name ?? inPlaceTitle}: a saved pick no longer exists in the model · pick that list again, in order.`
+        : `${editing?.name ?? inPlaceTitle}: a saved pick no longer exists in the model · pick it again.`
+    );
+  }, [
+    inPlaceEditing,
+    inPlaceEditPicks,
+    inPlace.tool,
+    doc,
+    representations,
+    exactGeometryReady,
+    parameterScope.scope,
+    inPlaceTitle,
+    setStatus
+  ]);
 
   useEffect(() => {
     setSelectedProfiles((current) => {
@@ -19616,6 +20558,19 @@ export function App() {
     modifiers: { additive: boolean; toggle: boolean }
   ) {
     if (inPlaceRef.current.active) {
+      const editing = inPlaceRef.current.editing;
+      if (
+        editing &&
+        !inPlaceEditMayUse(
+          producingFeatureOf({ sketchId: region.sketchId as SketchId }),
+          editing
+        )
+      ) {
+        setStatus(
+          `${editing.name} can only use sketches made before it in History.`
+        );
+        return;
+      }
       const pick = inPlaceProfilePick(region);
       if (pick) inPlaceRef.current.pickProfile(pick);
       return;
@@ -21915,10 +22870,7 @@ export function App() {
       clicked?.kind === 'feature' &&
       clicked.data.featureKind === 'datum-plane'
     ) {
-      inPlaceRef.current.pickPlane({
-        kind: 'datum',
-        featureId: clicked.featureId
-      });
+      pickInPlaceDatumPlane(clicked.featureId);
       return;
     }
     const next =
@@ -21954,11 +22906,74 @@ export function App() {
     applyHistorySelection(next, current);
   }
 
+  /**
+   * The regions of a sketch view a stored profile reference names. Mirrors
+   * resolveRegionProfiles: an `all: true` reference covers every region its
+   * entities bound, so it can legitimately name many regions — or, after a
+   * text edit, a different number than last time.
+   */
+  function regionsForReference(
+    view: (typeof availableSketchViews)[number] | undefined,
+    reference: SketchProfileReference
+  ): (typeof availableSketchViews)[number]['regions'] {
+    if (reference.all === true) {
+      const referenced = new Set(reference.sourceEntityIds);
+      return (
+        view?.regions.filter(
+          (candidate) =>
+            candidate.sourceEntityIds.length > 0 &&
+            candidate.sourceEntityIds.every((entityId) =>
+              referenced.has(entityId)
+            )
+        ) ?? []
+      );
+    }
+    if (reference.sourceBoundaryLoops !== undefined) {
+      try {
+        return view
+          ? [
+              resolveBoundaryRegionReference(
+                {
+                  ...reference,
+                  sourceBoundaryLoops: reference.sourceBoundaryLoops
+                },
+                view.regions
+              )
+            ]
+          : [];
+      } catch {
+        return [];
+      }
+    }
+    const sourceMatches = reference.sourceEntityIds
+      ? (view?.regions.filter(
+          (candidate) =>
+            candidate.sourceEntityIds.slice().sort().join('|') ===
+            reference.sourceEntityIds!.slice().sort().join('|')
+        ) ?? [])
+      : [];
+    const region =
+      view?.regions.find(
+        (candidate) =>
+          reference.profileId && candidate.profileId === reference.profileId
+      ) ??
+      view?.regions.find(
+        (candidate) =>
+          candidate.regionFingerprint === reference.regionFingerprint &&
+          Math.abs(candidate.area - reference.sourceArea) <=
+            Math.max(reference.sourceArea * 0.01, 1e-9)
+      ) ??
+      (sourceMatches.length === 1 ? sourceMatches[0] : undefined);
+    return region ? [region] : [];
+  }
+
   function applyHistorySelection(
     next: string | null,
     current: ProjectDocument
   ) {
     extrudeEditRequest.current += 1;
+    // A new selection replaces a running in-place command, edit or create.
+    inPlaceRef.current.cancel(true);
     setFeatureFormError(null);
     setSketchEditError(null);
     setMovePreview(null);
@@ -21993,60 +23008,9 @@ export function App() {
       const view = sketchViews.find(
         (candidate) => candidate.sketchId === extrudeData.sketchId
       );
-      // Mirrors resolveRegionProfiles: an `all: true` reference covers every
-      // region its entities bound, so it can legitimately light up many
-      // regions — or, after a text edit, a different number than last time.
-      const perReference = references.map((reference) => {
-        if (reference.all === true) {
-          const referenced = new Set(reference.sourceEntityIds);
-          return (
-            view?.regions.filter(
-              (candidate) =>
-                candidate.sourceEntityIds.length > 0 &&
-                candidate.sourceEntityIds.every((entityId) =>
-                  referenced.has(entityId)
-                )
-            ) ?? []
-          );
-        }
-        if (reference.sourceBoundaryLoops !== undefined) {
-          try {
-            return view
-              ? [
-                  resolveBoundaryRegionReference(
-                    {
-                      ...reference,
-                      sourceBoundaryLoops: reference.sourceBoundaryLoops
-                    },
-                    view.regions
-                  )
-                ]
-              : [];
-          } catch {
-            return [];
-          }
-        }
-        const sourceMatches = reference.sourceEntityIds
-          ? (view?.regions.filter(
-              (candidate) =>
-                candidate.sourceEntityIds.slice().sort().join('|') ===
-                reference.sourceEntityIds!.slice().sort().join('|')
-            ) ?? [])
-          : [];
-        const region =
-          view?.regions.find(
-            (candidate) =>
-              reference.profileId && candidate.profileId === reference.profileId
-          ) ??
-          view?.regions.find(
-            (candidate) =>
-              candidate.regionFingerprint === reference.regionFingerprint &&
-              Math.abs(candidate.area - reference.sourceArea) <=
-                Math.max(reference.sourceArea * 0.01, 1e-9)
-          ) ??
-          (sourceMatches.length === 1 ? sourceMatches[0] : undefined);
-        return region ? [region] : [];
-      });
+      const perReference = references.map((reference) =>
+        regionsForReference(view, reference)
+      );
       const highlighted = perReference.flat().map((region) => ({
         sketchId: extrudeData.sketchId,
         profileId: region.profileId,
@@ -22084,6 +23048,12 @@ export function App() {
         ? historyFeatureFocus(current, node, visible)
         : null;
     setSelectedBodyIds(focus?.kind === 'bodies' ? focus.bodyIds : []);
+    // U09 phase 7: a feature an in-place command made re-arms that command,
+    // seeded from it, with its handles on the model; the row stays pinned.
+    if (node?.kind === 'feature' && inPlaceToolForFeature(node.data)) {
+      startInPlaceEdit(node);
+      return;
+    }
     // F19: an edit card opens already editable. The Inspector's own forms do;
     // a modeling feature's card is its creation form, so selecting the
     // feature opens that form rather than a panel with an "Edit hole" button
@@ -22107,6 +23077,7 @@ export function App() {
   function handleSelectBodyFromTree(bodyId: BodyId, additive: boolean) {
     // An in-place command that takes bodies takes them from the list too.
     if (inPlaceRef.current.active && inPlaceRef.current.spec?.bodyMode) {
+      if (!inPlaceEditTakesBody(bodyId)) return;
       const body = inPlaceBodyPick(bodyId);
       if (body) inPlaceRef.current.pickBody(body);
       return;
@@ -22267,8 +23238,12 @@ export function App() {
       )
     ) {
       // A reopened modeling form outlives the selection (its tool is still
-      // running), so it has to be closed with the feature it was editing.
+      // running), so it has to be closed with the feature it was editing;
+      // so does an in-place edit of it.
       if (modelingEditFeature?.featureId === featureId) closeFeaturePanel();
+      if (inPlaceRef.current.editing?.featureId === featureId) {
+        inPlaceRef.current.cancel(true);
+      }
       clearSelection();
       announce(
         deleteFeatureToastMessage(name, dependentCount),
@@ -22297,7 +23272,12 @@ export function App() {
     ]);
     // A modeling card owns a draft snapshot, including its name. Close it
     // after the rename so applying that snapshot cannot restore the old name.
-    if (renamed && modelingEditFeature?.featureId === featureId) {
+    // An in-place edit holds the name it was armed with, too.
+    if (
+      renamed &&
+      (modelingEditFeature?.featureId === featureId ||
+        inPlaceRef.current.editing?.featureId === featureId)
+    ) {
       closeFeaturePanel();
     }
   }
@@ -22737,6 +23717,13 @@ export function App() {
     }
     // Actions wait for the clicked selection to land. An unapplied Move
     // owns the question first; a menu here would act on the old selection.
+    // A running in-place command owns the viewport: a right-click is
+    // consumed before it reaches the command's picks (it must neither add
+    // nor drop an edge or face), and opens no menu under the command.
+    if (inPlaceRef.current.active) {
+      setContextMenu(null);
+      return;
+    }
     if (handleSelectTopologyFromViewer(selection, false, undefined, { x, y })) {
       setContextMenu(null);
       return;
@@ -23643,10 +24630,21 @@ export function App() {
       if (inPlace.active) {
         if (event.key === 'Escape') {
           event.preventDefault();
-          if (!cancelOpenKeypad()) inPlace.cancel();
+          if (!cancelOpenKeypad()) cancelInPlaceCommand();
           return;
         }
-        if (event.key === 'Enter' && !typing) {
+        // Enter on a focused menu trigger or menu item (a History row's
+        // actions, reached by keyboard while an edit is armed from that row)
+        // opens or runs it, not Done; so does Enter on the command bar's own
+        // controls (Options, a pick's remove button, Cancel), which act for
+        // themselves. Any other focused button, such as the rail tool just
+        // clicked, still leaves Enter to the command (U01).
+        const control =
+          target instanceof Element &&
+          target.closest(
+            '[aria-haspopup], [role="menu"], .in-place-command'
+          ) !== null;
+        if (event.key === 'Enter' && !typing && !control) {
           event.preventDefault();
           inPlace.done();
           return;
@@ -25064,6 +26062,10 @@ export function App() {
     !modelingLocked &&
     !directMode &&
     movePreview === null &&
+    // A narrow window floats the inspector over the stage: while a feature
+    // it reads out is edited in place, the stage is the edit's handles and
+    // chips, and the readout returns when the edit ends.
+    !(inPlace.editing && narrowWindow) &&
     // A pick alone opens no card (the Inspector draws nothing for it), so
     // the shell must not hold a lane for one: an empty inspector float
     // reads as a full-width card on a phone and hides the viewer rail. The
@@ -26606,10 +27608,7 @@ export function App() {
                       })
                   : inPlace.active && inPlaceSpec?.wantsPlane
                 ? (featureId) =>
-                    inPlace.pickPlane({
-                      kind: 'datum',
-                      featureId: featureId as FeatureId
-                    })
+                    pickInPlaceDatumPlane(featureId as FeatureId)
                 : faceRepair ||
               datumRepair ||
               toFacePick ||
@@ -27507,7 +28506,7 @@ export function App() {
                     name,
                     bodyName: newBodyName(value.name)
                   });
-                  createValidatedFeature(
+                  void createValidatedFeature(
                     command,
                     name,
                     command.payload.ids?.bodyId
@@ -27522,7 +28521,7 @@ export function App() {
                     name,
                     bodyName: newBodyName(value.name)
                   });
-                  createValidatedFeature(
+                  void createValidatedFeature(
                     command,
                     name,
                     command.payload.ids?.bodyId
@@ -27551,7 +28550,7 @@ export function App() {
                       ? { axisRotation: value.axisRotation }
                       : {})
                   });
-                  createValidatedFeature(
+                  void createValidatedFeature(
                     command,
                     name,
                     // A copy's result is its new body; a Move's, its target.
@@ -27573,7 +28572,7 @@ export function App() {
                   });
                   const resultBodyId = command.payload.ids?.bodyId;
                   if (resultBodyId)
-                    runPattern(command, {
+                    void runPattern(command, {
                       featureName: name,
                       resultBodyId,
                       successMessage: commandOutcomeMessage(command.label),
@@ -27699,6 +28698,7 @@ export function App() {
                   );
                 }}
                 onEditModelingFeature={openModelingFeatureEditor}
+                inPlaceEditFeatureId={inPlace.editing?.featureId ?? null}
                 onEditSketchInViewport={(feature) => {
                   if (feature.data.featureKind !== 'sketch' || !doc) {
                     return;
@@ -27993,11 +28993,15 @@ export function App() {
             commandRow={
               inPlace.active && inPlaceSpec ? (
                 <InPlaceCommandBar
-                  title={inPlaceSpec.title}
+                  title={
+                    inPlace.editing
+                      ? `Edit ${inPlace.editing.name}`
+                      : inPlaceSpec.title
+                  }
                   hint={inPlace.hint}
                   refusal={inPlace.refusal}
                   canFinish={inPlace.canFinish}
-                  options={(inPlaceSpec.options ?? []).map((option) => ({
+                  options={inPlace.optionSpecs.map((option) => ({
                     ...option,
                     value: inPlace.options[option.id] ?? option.initial
                   }))}
@@ -28022,7 +29026,7 @@ export function App() {
                     );
                   }}
                   onDone={() => inPlace.done()}
-                  onCancel={() => inPlace.cancel()}
+                  onCancel={cancelInPlaceCommand}
                 />
               ) : null
             }

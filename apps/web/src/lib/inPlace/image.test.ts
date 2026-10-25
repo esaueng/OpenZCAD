@@ -82,7 +82,7 @@ describe('placing a picture', () => {
     );
     expect(placed.plane).toEqual(XY);
     expect(placed.center).toEqual({ u: 12, v: -4 });
-    expect(spec.ready({ ...SLOTS, image: placed }, CTX)).toBe(true);
+    expect(spec.ready({ ...SLOTS, image: placed }, {}, CTX)).toBe(true);
   });
 
   it('centres on the plane origin when the pick has no point', () => {
@@ -96,11 +96,11 @@ describe('placing a picture', () => {
       imagePlaneBasis: (plane) => (plane.type === 'datum' ? null : TOP)
     };
     const image = { ...UNPLACED, plane: DATUM };
-    expect(spec.ready({ ...SLOTS, image }, unresolved)).toBe(false);
+    expect(spec.ready({ ...SLOTS, image }, {}, unresolved)).toBe(false);
     expect(spec.hint({ ...SLOTS, image }, {}, unresolved)).toMatch(
       /no longer resolves/
     );
-    expect(spec.ready({ ...SLOTS, image }, CTX)).toBe(true);
+    expect(spec.ready({ ...SLOTS, image }, {}, CTX)).toBe(true);
   });
 
   it('moves on a click on its plane, and drops scale picks taken where it stood', () => {

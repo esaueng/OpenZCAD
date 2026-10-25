@@ -90,11 +90,48 @@ describe('InPlaceCommandBar', () => {
     );
     const group = screen.getByRole('radiogroup', { name: 'Depth' });
     expect(
-      screen.getByRole('radio', { name: 'Through all' }).getAttribute('aria-checked')
+      screen
+        .getByRole('radio', { name: 'Through all' })
+        .getAttribute('aria-checked')
     ).toBe('true');
     fireEvent.click(screen.getByRole('radio', { name: 'Blind' }));
     expect(onOption).toHaveBeenCalledWith('depthMode', 'blind');
     expect(group).toBeTruthy();
+  });
+  it('explains the chosen choice where the card did', () => {
+    const options = (value: string) => [
+      {
+        id: 'mode',
+        label: 'Mode',
+        value,
+        choices: [
+          { value: 'standard', label: 'Standard' },
+          { value: 'smooth', label: 'Smooth', note: 'Not exact surfaces.' }
+        ]
+      }
+    ];
+    const { rerender } = render(
+      <InPlaceCommandBar
+        title="Sweep"
+        hint="Pick the path"
+        canFinish={false}
+        options={options('standard')}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.queryByText('Not exact surfaces.')).toBeNull();
+    rerender(
+      <InPlaceCommandBar
+        title="Sweep"
+        hint="Pick the path"
+        canFinish={false}
+        options={options('smooth')}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByText('Not exact surfaces.')).toBeTruthy();
   });
 
   it('puts exact numbers behind Options, each opening entry where it sits', () => {
@@ -131,14 +168,14 @@ describe('InPlaceCommandBar', () => {
       />
     );
     expect(
-      screen.getByRole('button', { name: 'Done' }).getAttribute(
-        'aria-keyshortcuts'
-      )
+      screen
+        .getByRole('button', { name: 'Done' })
+        .getAttribute('aria-keyshortcuts')
     ).toBe('Enter');
     expect(
-      screen.getByRole('button', { name: 'Cancel' }).getAttribute(
-        'aria-keyshortcuts'
-      )
+      screen
+        .getByRole('button', { name: 'Cancel' })
+        .getAttribute('aria-keyshortcuts')
     ).toBe('Escape');
   });
 });

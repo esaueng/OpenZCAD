@@ -194,6 +194,25 @@ test('Hole in place: a countersink takes its angle from a chip', async ({
   });
 });
 
+test('Enter on a focused command-bar control acts for that control, not Done', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  await openBox(page, 'Bar keyboard');
+  await startTool(page, /^Shell/, 'Shell');
+  const bar = page.getByRole('group', { name: 'Shell command' });
+  await expect.poll(() => pickPlanarFace(page, TOP)).not.toBeNull();
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  // Cancel, reached by keyboard: Enter cancels rather than finishing.
+  await bar.getByRole('button', { name: 'Cancel' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(bar).toHaveCount(0);
+  expect(await featureData(page, 'shell')).toHaveLength(0);
+});
+
 test('Shell in place: two openings, wall from the keypad', async ({ page }) => {
   // Opposite faces: the kernel refuses two adjacent openings (a free loop
   // lies in neither plane), which the bar reports as a refusal.

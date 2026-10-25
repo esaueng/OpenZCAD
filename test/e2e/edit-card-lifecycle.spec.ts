@@ -4,7 +4,9 @@ import {
   test,
   expect,
   stubApi,
-  createHoleInPlace
+  createHoleInPlace,
+  enterCommandValue,
+  finishInPlaceCommand
 } from './openzcad-fixtures';
 
 /**
@@ -75,32 +77,27 @@ test('Box: the edit card closes after Apply, and Escape cancels without a histor
   await expect(width).toHaveValue('40');
 });
 
-test('Hole: selecting the feature opens its form, and Apply closes it', async ({
+test('Hole: selecting the feature re-arms it in place, and Done closes it', async ({
   page
 }) => {
   test.setTimeout(90_000);
   await createProject(page, 'Hole edit card');
   await createBox(page);
-  // U09: a new hole is drilled in place; editing it still opens its card.
   await createHoleInPlace(page, { diameter: '5' });
   await expect(row(page, /^Hole/)).toBeVisible({ timeout: 20_000 });
-  const entry = page.getByRole('group', { name: 'Entry face' });
   const inspector = inspectorOf(page);
   await expect(inspector).toHaveCount(0);
 
-  // One click on the row, and the card is the editable form — there is no
-  // "Edit hole" button in front of it.
+  // U09 phase 7: one click on the row re-arms the Hole command on the model,
+  // its chips holding the stored values. No form opens.
   await row(page, /^Hole/).click();
-  const diameter = page.getByRole('textbox', { name: 'Diameter', exact: true });
-  await expect(diameter).toHaveValue('5');
-  await expect(
-    inspector.getByRole('button', { name: 'Edit hole' })
-  ).toHaveCount(0);
-  await expect(
-    entry.getByRole('button', { name: /Box 1 · Top face/ })
-  ).toHaveAttribute('aria-pressed', 'true');
-  await diameter.fill('8');
-  await page.getByRole('button', { name: 'Apply hole' }).click();
+  const bar = page.getByRole('group', { name: 'Edit Hole command' });
+  await expect(bar).toBeVisible();
+  await expect(page.locator('form.feature-form')).toHaveCount(0);
+  const chip = page.getByTestId('command-handle-diameter');
+  await expect(chip).toHaveText('⌀ 5 mm');
+  await enterCommandValue(page, 'diameter', '8');
+  await finishInPlaceCommand(page, 'Edit Hole');
   await expect(page.getByRole('contentinfo')).toContainText('Edited Hole.', {
     timeout: 20_000
   });
@@ -109,24 +106,26 @@ test('Hole: selecting the feature opens its form, and Apply closes it', async ({
     1
   );
 
-  // Escape cancels the reopened form, and the stored diameter is the
-  // applied one.
+  // Escape cancels a re-armed edit, and the stored diameter is the one Done
+  // committed.
   await row(page, /^Hole/).click();
-  await expect(diameter).toHaveValue('8');
-  await diameter.fill('3');
-  await diameter.press('Escape');
+  await expect(chip).toHaveText('⌀ 8 mm');
+  await enterCommandValue(page, 'diameter', '3');
+  await page.keyboard.press('Escape');
+  await expect(bar).toHaveCount(0);
   await expect(inspector).toHaveCount(0);
   await row(page, /^Hole/).click();
-  await expect(diameter).toHaveValue('8');
+  await expect(chip).toHaveText('⌀ 8 mm');
 
-  // The card keeps the overflow every edit card has.
+  // The pinned feature keeps the overflow every edit card has.
   await inspector.getByLabel('More actions').click();
   await inspector.getByRole('button', { name: 'Delete feature' }).click();
   await expect(page.locator('.feature-row', { hasText: /^Hole/ })).toHaveCount(
     0,
     { timeout: 20_000 }
   );
-  // …and the card goes with the feature it was editing.
+  // …and the command goes with the feature it was editing.
+  await expect(bar).toHaveCount(0);
   await expect(inspector).toHaveCount(0);
 });
 

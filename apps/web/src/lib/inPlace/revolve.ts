@@ -24,12 +24,14 @@ export interface RevolveAxisCandidate {
   direction: Vector3;
   /**
    * The stored choice: an in-sketch axis, a datum axis reference, or a world
-   * axis through the origin (a circular pattern's).
+   * axis through the origin (a circular pattern's), or the axis an edited
+   * feature already stores (a helical sweep's typed one), kept as stored.
    */
   choice:
     | { axis: RevolveAxis }
     | { datumFeatureId: FeatureId }
-    | { world: 'x' | 'y' | 'z' };
+    | { world: 'x' | 'y' | 'z' }
+    | { saved: true };
 }
 
 /** What the command has picked so far. */
@@ -72,7 +74,8 @@ function length(a: Vector3): number {
 export function revolveAxisCandidates(
   basis: PlaneBasis,
   datumAxes: Record<FeatureId, DatumAxisLine> | undefined,
-  datumLabel: (featureId: FeatureId) => string
+  datumLabel: (featureId: FeatureId) => string,
+  keep?: string | null
 ): RevolveAxisCandidate[] {
   const candidates: RevolveAxisCandidate[] = [
     {
@@ -109,14 +112,20 @@ export function revolveAxisCandidates(
   }
   // A datum axis lying along a sketch axis would draw over it, and a click
   // could not say which was meant. The datum is the user's own construction
-  // (and follows its sources), so it stands in for the sketch axis.
-  return candidates.filter(
-    (candidate) =>
-      !('axis' in candidate.choice) ||
-      !candidates.some(
-        (other) =>
-          'datumFeatureId' in other.choice && collinear(candidate, other)
-      )
+  // (and follows its sources), so it stands in for the sketch axis, unless
+  // the sketch axis is the one an edited revolve stores: then it stays, and
+  // the datum along it is the one left out.
+  const kept = candidates.find(
+    (candidate) => candidate.id === keep && 'axis' in candidate.choice
+  );
+  return candidates.filter((candidate) =>
+    kept
+      ? !('datumFeatureId' in candidate.choice) || !collinear(candidate, kept)
+      : !('axis' in candidate.choice) ||
+        !candidates.some(
+          (other) =>
+            'datumFeatureId' in other.choice && collinear(candidate, other)
+        )
   );
 }
 

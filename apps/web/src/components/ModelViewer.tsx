@@ -5359,12 +5359,18 @@ export function ModelViewer({
       const detail = (
         event as CustomEvent<{
           index?: number;
+          /** Counts `index` within this sketch's regions only. */
+          sketchId?: string;
           additive?: boolean;
           toggle?: boolean;
         }>
       ).detail;
-      const profile =
-        profilePickTargetsRef.current[detail?.index ?? 0]?.pick ?? null;
+      const targets = detail?.sketchId
+        ? profilePickTargetsRef.current.filter(
+            (target) => target.pick.sketchId === detail.sketchId
+          )
+        : profilePickTargetsRef.current;
+      const profile = targets[detail?.index ?? 0]?.pick ?? null;
       if (!profile) {
         return;
       }
