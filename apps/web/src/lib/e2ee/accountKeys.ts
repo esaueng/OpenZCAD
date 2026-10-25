@@ -1470,6 +1470,8 @@ export interface RemovalParticipantStep {
     readonly kind: 'device' | 'passkey' | 'read-only';
     readonly identityPrivateKey: CryptoKey;
     readonly account: AccountView;
+    /** The device-list entry this removal signed and appended. */
+    readonly written: { readonly sequence: number; readonly hash: Bytes };
   }): Promise<unknown>;
 }
 
@@ -1583,7 +1585,12 @@ async function rotateAccountKeysLocked(
       await participant.complete({
         kind,
         identityPrivateKey,
-        account: state.account
+        account: state.account,
+        // Not the reloaded head: another device may have appended since.
+        written: {
+          sequence: entry.sequence,
+          hash: await deviceListEntryHash(signed.entry)
+        }
       });
     }
     return state;

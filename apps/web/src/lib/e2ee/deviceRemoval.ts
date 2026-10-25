@@ -28,6 +28,7 @@ import {
   fromHex,
   signRevocationCutoffs,
   toBase64Url,
+  toHex,
   verifyRevocationCutoffs,
   type ProjectRevocationCutoff,
   type RevocationCutoffs,
@@ -298,6 +299,11 @@ export interface RemovalStep {
   readonly identityPrivateKey: CryptoKey;
   /** The account after the removal: the new device list and account key. */
   readonly account: AccountView;
+  /**
+   * The device-list entry this removal appended. Its cutoffs name it, not
+   * the reloaded head, which another device may have moved on since.
+   */
+  readonly written: { readonly sequence: number; readonly hash: Uint8Array };
 }
 
 export interface RemovalOutcome {
@@ -443,7 +449,20 @@ export function removalParticipant(
         return outcome();
       }
       const list = step.account.list;
-      const revoking = list.entries.at(-1)!;
+      const revoking = list.entries.find(
+        (e) =>
+          e.entry.sequence === step.written.sequence &&
+          toHex(e.hash) === toHex(step.written.hash)
+      );
+      if (!revoking) {
+        // The list no longer holds the entry (the identity was replaced
+        // meanwhile): nothing here can name it.
+        left.push({
+          projectId: '*',
+          reason: 'The device list moved on before this removal finished.'
+        });
+        return outcome();
+      }
       const signs =
         step.kind === 'device' &&
         revoking.entry.revoked.some((r) => r.kind === 'device');

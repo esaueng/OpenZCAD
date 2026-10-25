@@ -641,6 +641,67 @@ describe('device removal across encrypted projects', () => {
     expect(await others.json()).toEqual({ statements: [], projects: [] });
   });
 
+  it('signs the cutoff for the entry this removal appended, not a later one (#894 review)', async () => {
+    const { srv, recovery, laptop, desktop, phone, projects } =
+      await threeDevices(1);
+    await saveEdit(phone, projects[0]!, 'Phone edit');
+    const tablet = await enroll(srv, recovery.secret, 'Tablet');
+    await refresh(laptop);
+    await refresh(desktop);
+    const phoneId = deviceIdOf(phone);
+    const tabletId = deviceIdOf(tablet);
+    // Right after the laptop's entry lands, the desktop appends its own
+    // removal, before the laptop reloads the list.
+    const real = laptop.fetcher;
+    let raced = false;
+    laptop.fetcher = async (path, init = {}) => {
+      const response = await real(path, init);
+      if (!raced && path === '/api/e2ee/device-list' && init.method === 'POST') {
+        raced = true;
+        await removeDevice(
+          desktop.e2ee,
+          ready(await loadEncryption(desktop.e2ee)),
+          tabletId,
+          recovery.secret
+        );
+      }
+      return response;
+    };
+    const { participant, seen } = participantFor(laptop);
+    use(
+      laptop,
+      ready(
+        await removeDevice(
+          laptop.e2ee,
+          laptop.account,
+          phoneId,
+          recovery.secret,
+          participant
+        )
+      )
+    );
+    expect(raced).toBe(true);
+    expect(seen.outcome?.cutoffsStored).toBe(true);
+    const { statements } = await statementsOf(srv);
+    expect(statements).toHaveLength(1);
+    const statement = await verifyRevocationCutoffs(
+      {
+        statement: fromBase64Url(statements[0]!.statement),
+        signature: fromBase64Url(statements[0]!.signature)
+      },
+      laptop.account.list,
+      { generation: 1 }
+    );
+    const named = laptop.account.list.entries.find(
+      (e) => e.entry.sequence === statement.entrySequence
+    )!;
+    expect(named.entry.revoked.map((r) => r.id)).toContain(phoneId);
+    expect(named.entry.revoked.map((r) => r.id)).not.toContain(tabletId);
+    expect(statement.entrySequence).toBeLessThan(
+      laptop.account.list.entries.at(-1)!.entry.sequence
+    );
+  });
+
   it('keeps a signed cutoff whose store failed and stores it later (#894 review)', async () => {
     const { srv, recovery, laptop, desktop, phone, projects } =
       await threeDevices(1);
