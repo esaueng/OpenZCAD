@@ -339,11 +339,13 @@ export const referenceImage: InPlaceToolSpec = {
       }
     }
   },
-  hint(slots, options) {
+  hint(slots, options, ctx) {
     const image = slots.image;
     const name = image?.record.name ?? 'the picture';
     if (!image?.plane || options?.clicks === 'plane')
       return `Pick a plane or a flat face for ${name}`;
+    if (!ctx?.imagePlaneBasis?.(image.plane))
+      return `Its plane no longer resolves · pick another plane for ${name}`;
     if (options?.clicks === 'scale') {
       const picked = image.calibration.length;
       if (picked === 0) return 'Click the first of two points on the picture';
@@ -352,7 +354,10 @@ export const referenceImage: InPlaceToolSpec = {
     }
     return `Click to move it · drag the corner to scale, the ring to turn · ${FINISH}`;
   },
-  ready: (slots) => Boolean(slots.image?.plane),
+  // Its plane must resolve: a picture on a broken datum would be added
+  // where nothing draws it.
+  ready: (slots, ctx) =>
+    Boolean(slots.image?.plane && ctx?.imagePlaneBasis?.(slots.image.plane)),
   request(slots, _values, options, _ctx, numbers) {
     const image = slots.image;
     if (!image?.plane) return null;

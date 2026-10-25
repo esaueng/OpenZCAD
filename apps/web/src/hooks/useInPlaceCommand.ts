@@ -264,7 +264,7 @@ export function useInPlaceCommand(
   }, [spec, heldValues, slots, numbers]);
   const request = useMemo(
     () =>
-      spec && spec.ready(slots)
+      spec && spec.ready(slots, ctx)
         ? spec.request(slots, paramValues, chosen, ctx, numbers)
         : null,
     [spec, slots, paramValues, chosen, ctx, numbers]
@@ -650,6 +650,14 @@ export function useInPlaceCommand(
     (placement: ImagePlacement) => {
       const current = sessionRef.current;
       if (!current?.slots.image) return false;
+      // A plane that has not resolved has nowhere to put the picture.
+      if (placement.plane && !ctx.imagePlaneBasis?.(placement.plane)) {
+        setRefusal(
+          'This plane has not resolved, so the picture cannot lie on it. Pick another.'
+        );
+        return true;
+      }
+      setRefusal(null);
       setSession((latest) => {
         const image = latest?.slots.image;
         if (!latest || !image) return latest;
@@ -855,7 +863,7 @@ export function useInPlaceCommand(
     raws: session?.raws ?? EMPTY_RAWS,
     options: chosen,
     request,
-    hint: spec ? spec.hint(slots, chosen) : '',
+    hint: spec ? spec.hint(slots, chosen, ctx) : '',
     refusal,
     canFinish,
     start,

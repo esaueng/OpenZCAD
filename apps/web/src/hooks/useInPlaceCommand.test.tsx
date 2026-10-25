@@ -549,6 +549,33 @@ describe('U09 phase 6: datums and a picture', () => {
     expect(hook.result.current.pickRef(PLANE_A)).toBe(false);
   });
 
+  it('refuses a plane for a picture that has not resolved', () => {
+    const { hook } = setup({
+      imagePlaneBasis: (plane) => (plane.type === 'datum' ? null : TOP)
+    });
+    const record = {
+      imageId: 'image_1',
+      name: 'Drawing',
+      pixelWidth: 200,
+      pixelHeight: 100,
+      width: 100,
+      opacity: 0.6
+    } as never;
+    act(() =>
+      hook.result.current.start('reference-image', [], [], [], {
+        image: { record, plane: null, center: { u: 0, v: 0 }, calibration: [] }
+      })
+    );
+    act(() => {
+      hook.result.current.placeImage({
+        plane: { type: 'datum', datumFeatureId: 'datum_1' as never }
+      });
+    });
+    expect(hook.result.current.slots.image?.plane).toBeNull();
+    expect(hook.result.current.refusal).toMatch(/has not resolved/);
+    expect(hook.result.current.canFinish).toBe(false);
+  });
+
   it('places a picture with no kernel build, and writes the real distance into its width', () => {
     const basis: PlaneBasis = TOP;
     const { hook, commit, built } = setup({ imagePlaneBasis: () => basis });

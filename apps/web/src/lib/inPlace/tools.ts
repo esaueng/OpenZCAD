@@ -358,8 +358,13 @@ export interface InPlaceToolSpec {
   values: readonly ValueSpec[];
   /** Values the picks suggest, applied to any the user has not set. */
   defaults?(slots: InPlaceSlots, ctx: InPlaceContext): Record<string, number>;
-  hint(slots: InPlaceSlots, options?: Record<string, string>): string;
-  ready(slots: InPlaceSlots): boolean;
+  hint(
+    slots: InPlaceSlots,
+    options?: Record<string, string>,
+    ctx?: InPlaceContext
+  ): string;
+  /** `ctx` lets a slot that names a plane require it to have resolved. */
+  ready(slots: InPlaceSlots, ctx?: InPlaceContext): boolean;
   /**
    * `values` holds what is stored: a typed expression as typed, else the
    * number. `numbers` holds every value as a number, for whatever the

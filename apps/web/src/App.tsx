@@ -9510,6 +9510,21 @@ export function App() {
     imagePlaneBasis
   };
 
+  /**
+   * Whether the picture being placed is waiting for a plane: none picked,
+   * Options asking for another, or its plane no longer resolving.
+   */
+  function imageNeedsPlane(
+    image: ImageSlot,
+    options: Record<string, string>
+  ): boolean {
+    return (
+      !image.plane ||
+      options.clicks === 'plane' ||
+      !imagePlaneBasis(image.plane)
+    );
+  }
+
   /** Adds the picture an in-place Image placed, as one undoable step. */
   function commitInPlaceImage(image: ReferenceImage) {
     const prepared = pendingReferenceImageRef.current;
@@ -14621,9 +14636,16 @@ export function App() {
             : picks.edgeRef(document, picked, at, kinds, points)
         );
       }
-      // The picture being placed: a flat face takes it, or moves it on the
-      // face it is on.
-      if (command.slots.image && selection?.kind === 'face') {
+      // The picture being placed: a flat face takes it while it still needs
+      // a plane (or Options ask for another). Once placed, a click lands on
+      // its own plane, never a face under it.
+      const image = command.slots.image;
+      if (image && !imageNeedsPlane(image, command.options)) {
+        return detail?.point
+          ? command.placeImage({ point: { ...detail.point } })
+          : true;
+      }
+      if (image && selection?.kind === 'face') {
         const plane = faceImagePlane(selection);
         if (!plane || 'reason' in plane) {
           if (plane) setStatus(plane.reason);
@@ -25786,8 +25808,7 @@ export function App() {
                 ) ||
                 Boolean(
                   inPlace.slots.image &&
-                    (!inPlace.slots.image.plane ||
-                      inPlace.options.clicks === 'plane')
+                    imageNeedsPlane(inPlace.slots.image, inPlace.options)
                 ))
             }
             // A Plane or Axis in progress shows the datum it would add.

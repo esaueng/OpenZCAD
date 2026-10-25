@@ -5851,6 +5851,33 @@ export function ModelViewer({
         onPickPlaneRef.current(ghost.plane, ghost.point);
         return;
       }
+      // A picture being placed takes every click on its own plane, even
+      // over the model: its quad is not pickable, so the face under it
+      // would otherwise take a click meant for the picture.
+      const placing = placementPlaneRef.current;
+      if (placing && onPlacementClickRef.current) {
+        picker.setRayFromEvent(event);
+        const at = new THREE.Vector3();
+        const hit = picker.raycaster.ray.intersectPlane(
+          new THREE.Plane().setFromNormalAndCoplanarPoint(
+            new THREE.Vector3(
+              placing.normal.x,
+              placing.normal.y,
+              placing.normal.z
+            ),
+            new THREE.Vector3(
+              placing.origin.x,
+              placing.origin.y,
+              placing.origin.z
+            )
+          ),
+          at
+        );
+        if (hit) {
+          onPlacementClickRef.current({ x: at.x, y: at.y, z: at.z });
+          return;
+        }
+      }
       // A datum plane is chosen only where nothing in the model is under
       // the pointer: its quad is translucent and often passes through the
       // part, so it must never steal a click meant for a face behind it.
@@ -5907,31 +5934,6 @@ export function ModelViewer({
               : undefined
           }
         : undefined;
-      // A click on nothing lands on the placement plane, when one is armed.
-      const placing = placementPlaneRef.current;
-      if (!result && placing && onPlacementClickRef.current) {
-        picker.setRayFromEvent(event);
-        const at = new THREE.Vector3();
-        const hit = picker.raycaster.ray.intersectPlane(
-          new THREE.Plane().setFromNormalAndCoplanarPoint(
-            new THREE.Vector3(
-              placing.normal.x,
-              placing.normal.y,
-              placing.normal.z
-            ),
-            new THREE.Vector3(
-              placing.origin.x,
-              placing.origin.y,
-              placing.origin.z
-            )
-          ),
-          at
-        );
-        if (hit) {
-          onPlacementClickRef.current({ x: at.x, y: at.y, z: at.z });
-          return;
-        }
-      }
       // Orbiting should turn about whatever was just clicked, not the model
       // origin — otherwise a detail you have zoomed into leaves the frame.
       if (result) {
