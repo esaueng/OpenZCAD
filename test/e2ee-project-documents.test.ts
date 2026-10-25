@@ -1016,6 +1016,62 @@ describe('writes', () => {
     expect(srv.bucket.objects.has(key)).toBe(false);
     expect(count(srv, 'e2ee_project_versions', projectId)).toBe(3);
   });
+
+  it('never prunes a head another save committed while retention ran', async () => {
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document: v1 } = await createEncrypted(laptop);
+    const projectId = v1.projectId;
+    const columns = (
+      srv.db.prepare(`PRAGMA table_info('e2ee_project_versions')`).all() as {
+        name: string;
+      }[]
+    ).map((column) => column.name);
+    const copied = columns
+      .map((name) =>
+        name === 'document_version'
+          ? 'document_version + 1'
+          : name === 'version_hash'
+            ? `substr(version_hash, 2) || '0'`
+            : name
+      )
+      .join(', ');
+    // This save's retention reads its own head; another save commits the
+    // next head before retention looks for bodies nothing retains.
+    const push = srv.statements.push.bind(srv.statements);
+    srv.statements.push = (...sql: string[]) => {
+      if (sql.some((s) => s.includes('SELECT document_version, envelope_key'))) {
+        srv.statements.push = push;
+        srv.db
+          .prepare(
+            `INSERT INTO e2ee_project_versions (${columns.join(', ')})
+             SELECT ${copied} FROM e2ee_project_versions
+             WHERE project_id = ? ORDER BY document_version DESC LIMIT 1`
+          )
+          .run(projectId);
+        srv.db
+          .prepare(
+            'UPDATE projects SET document_version = document_version + 1 WHERE id = ?'
+          )
+          .run(projectId);
+      }
+      return push(...sql);
+    };
+    const v2 = await save(laptop, edited(v1, 'Two'), v1.version);
+    const live = rows<{
+      document_version: number;
+      envelope_inline: string | null;
+      envelope_key: string | null;
+    }>(
+      srv,
+      `SELECT document_version, envelope_inline, envelope_key
+       FROM e2ee_project_versions WHERE project_id = ?
+       ORDER BY document_version DESC LIMIT 1`,
+      projectId
+    )[0]!;
+    expect(live.document_version).toBe(v2.version + 1);
+    expect(live.envelope_inline ?? live.envelope_key).not.toBeNull();
+  });
 });
 
 // --- Access, retention, cleanup ---------------------------------------------

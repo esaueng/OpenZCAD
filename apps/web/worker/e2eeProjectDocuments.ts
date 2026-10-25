@@ -770,20 +770,30 @@ async function retain(ctx: Context, projectId: string): Promise<void> {
       )
       .bind(projectId, head.document_version)
       .all<{ document_version: number; envelope_key: string | null }>();
+    // Another save may have moved the head since it was read: nothing at or
+    // past the live head is pruned, whatever this request saw.
+    const belowLiveHead = `document_version <
+      (SELECT document_version FROM projects WHERE id = ?)`;
+    const orphanRows = orphans.results ?? [];
     // The log keeps every retained revision's entry and the newest heads.
-    await ctx.db.batch([
-      ...(orphans.results ?? []).map((row) =>
+    const pruned = await ctx.db.batch([
+      ...orphanRows.map((row) =>
         ctx.db
           .prepare(
             `UPDATE e2ee_project_versions SET envelope_key = NULL, envelope_inline = NULL
-             WHERE project_id = ? AND document_version = ?`
+             WHERE project_id = ? AND document_version = ? AND ${belowLiveHead}
+               AND NOT EXISTS (
+                 SELECT 1 FROM e2ee_project_revisions r
+                 WHERE r.project_id = e2ee_project_versions.project_id
+                   AND r.document_version = e2ee_project_versions.document_version
+               )`
           )
-          .bind(projectId, row.document_version)
+          .bind(projectId, row.document_version, projectId)
       ),
       ctx.db
         .prepare(
           `DELETE FROM e2ee_project_versions
-           WHERE project_id = ? AND document_version < ?
+           WHERE project_id = ? AND document_version < ? AND ${belowLiveHead}
              AND document_version < (
                SELECT MIN(document_version) FROM (
                  SELECT document_version FROM e2ee_project_versions
@@ -802,13 +812,17 @@ async function retain(ctx: Context, projectId: string): Promise<void> {
           projectId,
           head.document_version,
           projectId,
+          projectId,
           E2EE_VERSION_LOG_RETAINED_HEADS
         )
     ]);
     if (ctx.bucket) {
+      // Only bodies whose row this request actually cleared.
       await Promise.all(
-        (orphans.results ?? []).flatMap((row) =>
-          row.envelope_key ? [ctx.bucket!.delete(row.envelope_key)] : []
+        orphanRows.flatMap((row, index) =>
+          row.envelope_key && (pruned[index]?.meta?.changes ?? 0) === 1
+            ? [ctx.bucket!.delete(row.envelope_key)]
+            : []
         )
       );
     }
