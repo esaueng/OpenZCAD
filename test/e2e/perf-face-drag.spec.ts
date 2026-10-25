@@ -506,6 +506,11 @@ test('measures the first changed exact face frame, authoritative Apply and Undo'
       Number(process.env.OZ_PERF_FACE_AREA),
       4
     );
+  // Total is the default reading; the offset typed below is the change.
+  await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
+    /^Total/
+  );
+  await page.getByTestId('direct-manipulation-mode').click();
   await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
     /^Offset/
   );

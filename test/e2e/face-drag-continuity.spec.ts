@@ -317,7 +317,8 @@ test('the face an exact preview redrew can still be grabbed after a refusal', as
   await page.mouse.move(handle.x, handle.y);
   await page.mouse.down();
   await page.mouse.move(at(6).x, at(6).y, { steps: 12 });
-  await expect(chip).toContainText('6');
+  // The chip reads the total: the 18 mm box less the 6 mm push.
+  await expect(chip).toHaveText('12 mm');
   await expect(page.locator('.selection-card')).toContainText('Box 1 · Face');
   // Through the back of the 18 mm box: refused, keeping the 6 mm preview.
   await page.mouse.move(at(24).x, at(24).y, { steps: 12 });

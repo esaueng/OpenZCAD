@@ -4,16 +4,41 @@ import {
   edgeChipCenterX,
   faceOffsetChipState,
   offsetChipText,
+  rearmedChipMode,
   regionChipState
 } from './offsetChip';
 
 describe('offset chip', () => {
-  it('reads a primitive resize as its total and any other face as the change', () => {
+  it('reads any face with a span as its total, and only a spanless one as the change', () => {
     expect(faceOffsetChipState(20, 10)).toEqual({ mode: 'total', extent: 10 });
+    // A face that is not a primitive's own still reads the body's reach
+    // behind it: Total is the default, not just a primitive resize's.
     expect(faceOffsetChipState(undefined, 10)).toEqual({
-      mode: 'offset',
+      mode: 'total',
       extent: 10
     });
+    expect(faceOffsetChipState(20, null)).toEqual({
+      mode: 'total',
+      extent: null
+    });
+    expect(faceOffsetChipState(undefined, null)).toEqual({
+      mode: 'offset',
+      extent: null
+    });
+  });
+
+  it('keeps the chosen reading while the same face re-arms', () => {
+    // The defect: opening exact entry re-derives the handle, and the re-armed
+    // rig reset a switched-to Offset back to Total under an Offset keypad.
+    const fresh = faceOffsetChipState(undefined, 17);
+    expect(rearmedChipMode(fresh, 'offset', true)).toBe('offset');
+    expect(rearmedChipMode(fresh, 'total', true)).toBe('total');
+    // Another face starts from its own default.
+    expect(rearmedChipMode(fresh, 'offset', false)).toBe('total');
+    // Nothing to read Total from: the change, whatever was chosen.
+    expect(
+      rearmedChipMode(faceOffsetChipState(undefined, null), 'total', true)
+    ).toBe('offset');
   });
 
   it('reads Total as the span plus the signed offset', () => {

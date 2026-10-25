@@ -217,8 +217,12 @@ test('previews and commits a compound STEP cap offset, then undoes, redoes and r
       return canvas.getAttribute('data-e2e-handle-x');
     })
     .not.toBeNull();
-  // Moving a face reads the change by default: the tag beside the value is
-  // the switch to the whole span, not a step on the way to the offset.
+  // Moving a face reads the whole span by default; the tag beside the value
+  // switches it to the change this spec types.
+  await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
+    /^Total/
+  );
+  await page.getByTestId('direct-manipulation-mode').click();
   await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
     /^Offset/
   );

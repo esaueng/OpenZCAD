@@ -620,13 +620,35 @@ test('keeps face sketching available after a primitive direct edit', async ({
     .getByRole('region', { name: 'Resize Body operation' })
     .getByRole('button', { name: 'Selection: Offset', exact: true })
     .click();
-  // Moving a face reads the change by default (Resize body read the total);
-  // the tag beside the value is the switch to the whole span.
-  await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
-    /^Offset/
-  );
-  await page.getByTestId('direct-manipulation-value').click();
+  // Moving a face reads the whole span by default, like Resize body; the tag
+  // beside the value is the switch to the change alone.
+  const modeTag = page.getByTestId('direct-manipulation-mode');
+  const valueChip = page.getByTestId('direct-manipulation-value');
+  await expect(modeTag).toHaveText(/^Total/);
+  const span = Number.parseFloat((await valueChip.textContent()) ?? '');
+  expect(span).toBeGreaterThan(0);
+  const totalKeypad = page.getByRole('dialog', { name: 'Total value' });
   const offsetKeypad = page.getByRole('dialog', { name: 'Offset value' });
+  // Opening exact entry re-derives the handle; the re-armed rig once reset
+  // the switch, so an Offset keypad opened under a "Total" chip.
+  await modeTag.click();
+  await expect(modeTag).toHaveText(/^Offset/);
+  await valueChip.click();
+  await expect(offsetKeypad).toBeVisible();
+  await expect(offsetKeypad.getByRole('textbox')).toHaveValue('');
+  await expect(modeTag).toHaveText(/^Offset/);
+  // Open exact entry follows the switch: it once kept the other mode's label
+  // and prefill, and applied the number in that mode.
+  await modeTag.click();
+  await expect(modeTag).toHaveText(/^Total/);
+  await expect(totalKeypad).toBeVisible();
+  await expect(offsetKeypad).toBeHidden();
+  expect(
+    Number(await totalKeypad.getByRole('textbox').inputValue())
+  ).toBeCloseTo(span, 2);
+  await modeTag.click();
+  await expect(modeTag).toHaveText(/^Offset/);
+  await expect(offsetKeypad).toBeVisible();
   await offsetKeypad.getByRole('textbox').fill('2');
   await offsetKeypad.getByRole('button', { name: 'Apply offset' }).click();
   await expect(

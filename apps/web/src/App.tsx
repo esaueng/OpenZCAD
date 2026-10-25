@@ -24809,6 +24809,10 @@ export function App() {
                       the keypad stays anchored to its value on the viewport. */}
                   {keypad && (
                     <NumericKeypad
+                      // The chip's Total/Offset switch reopens entry under
+                      // the other label; the typed value starts over from
+                      // its prefill rather than being read in the new mode.
+                      key={`${keypad.kind}:${keypad.label}`}
                       request={keypad}
                       units={doc.units}
                       scope={parameterScope.scope}
