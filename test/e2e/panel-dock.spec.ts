@@ -1164,11 +1164,12 @@ test('a command card heads the right lane, and a tool card keeps its actions in 
   });
   await expect(page.locator('.panel-column')).toBeVisible();
 
-  // A tall tool card: Hole now runs in place (U09) and opens none, so the
-  // Fillet card, with its edge list and radius rows, stands in.
-  await page.getByRole('button', { name: /^Fillet/ }).click();
+  // A tool card: every Build tool now runs in place (U09) and opens none,
+  // so a Box's edit card, opened from its History row, stands in.
+  await createPrimitiveInPlace(page, 'box');
+  await page.locator('.feature-row-main', { hasText: /^Box/ }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  const submit = inspector.getByRole('button', { name: /^Create/ });
+  const submit = inspector.getByRole('button', { name: 'Apply', exact: true });
   await expect(submit).toBeVisible();
   const layout = await page.evaluate(() => {
     const rect = (selector: string) =>
@@ -1180,6 +1181,8 @@ test('a command card heads the right lane, and a tool card keeps its actions in 
     const cube = rect('.viewer-rail-stack');
     const column = rect('.panel-column');
     return {
+      laneTop: lane.top,
+      cardTop: card.top,
       laneHeight: lane.height,
       cardHeight: card.height,
       cardBottom: card.bottom,
@@ -1189,8 +1192,9 @@ test('a command card heads the right lane, and a tool card keeps its actions in 
       actionsInside: actions.top >= body.top && actions.bottom <= body.bottom
     };
   });
-  // The card has the lane to itself; the dock is never in it.
-  expect(layout.cardHeight).toBeGreaterThan(layout.laneHeight - 40);
+  // The card heads the lane and fits in it; the dock is never in it.
+  expect(layout.cardTop - layout.laneTop).toBeLessThanOrEqual(8);
+  expect(layout.cardHeight).toBeLessThanOrEqual(layout.laneHeight);
   expect(layout.actionsInside).toBe(true);
   expect(layout.cardBottom).toBeLessThanOrEqual(layout.cubeTop);
   expect(layout.cardRight).toBeLessThanOrEqual(layout.columnLeft);

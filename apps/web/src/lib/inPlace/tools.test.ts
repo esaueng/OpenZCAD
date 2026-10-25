@@ -11,6 +11,7 @@ import {
   keypadText,
   valueInRange,
   type BodyPick,
+  type EdgePick,
   type FacePick,
   type InPlaceContext,
   type InPlaceSlots,
@@ -37,6 +38,7 @@ const EMPTY: InPlaceSlots = {
   faces: [],
   bodies: [],
   plane: null,
+  edges: [],
   refs: [],
   image: null
 };
@@ -63,7 +65,8 @@ describe('the in-place tool table', () => {
     expect(isInPlaceTool('grid-pattern')).toBe(true);
     expect(isInPlaceTool('box')).toBe(true);
     expect(isInPlaceTool('torus')).toBe(true);
-    expect(isInPlaceTool('fillet')).toBe(false);
+    expect(isInPlaceTool('fillet')).toBe(true);
+    expect(isInPlaceTool('chamfer')).toBe(true);
   });
 
   it('takes a typed value inside its range, strictly for an open one', () => {
@@ -1015,6 +1018,92 @@ describe('review: loft apex and guided sweeps', () => {
   });
 });
 
+describe('fillet and chamfer run in place', () => {
+  const EDGE: EdgePick = {
+    bodyId: 'body_a' as BodyId,
+    hash: 21,
+    topologyId: 'e21',
+    reference: { kind: 'edge', currentHash: 21 } as never,
+    middle: { x: 10, y: 0, z: 4 },
+    outward: { x: 0, y: -1, z: 0 },
+    end: { x: 20, y: 0, z: 4 }
+  };
+  const SECOND: EdgePick = { ...EDGE, hash: 22, topologyId: 'e22' };
+
+  it('a constant fillet stores its radius and the named edge set', () => {
+    const spec = IN_PLACE_TOOL_SPECS.fillet;
+    const slots = { ...EMPTY, edges: [EDGE, SECOND] };
+    expect(spec.ready(slots)).toBe(true);
+    expect(spec.hint(slots, {})).toMatch(/^2 edges/);
+    expect(
+      spec.request(
+        slots,
+        { radius: 'r', endRadius: 3 },
+        { law: 'constant' },
+        CTX
+      )
+    ).toEqual({
+      tool: 'edge-modifier',
+      kind: 'fillet',
+      targetBodyId: 'body_a',
+      edgeHashes: [21, 22],
+      edgeReferences: [EDGE.reference, SECOND.reference],
+      size: 'r'
+    });
+    // The radius arrow points into the body from the first edge.
+    const [handle] = spec.handles(slots, {}, CTX, { law: 'constant' });
+    expect(handle).toMatchObject({
+      valueId: 'radius',
+      kind: 'linear',
+      params: { origin: EDGE.middle }
+    });
+    const direction =
+      handle?.kind === 'linear' ? handle.params.direction : undefined;
+    expect(direction?.y).toBeCloseTo(1);
+  });
+
+  it('a variable fillet adds its end radius and law, with a chip', () => {
+    const spec = IN_PLACE_TOOL_SPECS.fillet;
+    const slots = { ...EMPTY, edges: [EDGE] };
+    expect(
+      spec.request(slots, { radius: 2, endRadius: 4 }, { law: 'scurve' }, CTX)
+    ).toMatchObject({ size: 2, endRadius: 4, radiusLaw: 'scurve' });
+    expect(
+      spec.handles(slots, {}, CTX, { law: 'linear' }).map((h) => h.valueId)
+    ).toEqual(['radius', 'endRadius']);
+    expect(spec.defaults?.(slots, CTX, { radius: 5 })).toEqual({
+      endRadius: 5
+    });
+  });
+
+  it('an edge set with an unnamed pick goes hash-only', () => {
+    const { reference: _named, ...unnamed } = SECOND;
+    expect(
+      IN_PLACE_TOOL_SPECS.fillet.request(
+        { ...EMPTY, edges: [EDGE, unnamed] },
+        { radius: 1 },
+        {},
+        CTX
+      )
+    ).not.toHaveProperty('edgeReferences');
+  });
+
+  it('a chamfer stores only its chosen shape: an angle or a second distance', () => {
+    const spec = IN_PLACE_TOOL_SPECS.chamfer;
+    const slots = { ...EMPTY, edges: [EDGE] };
+    const values = { distance: 2, angle: 30, distance2: 3 };
+    expect(
+      spec.request(slots, values, { shape: 'equal' }, CTX)
+    ).not.toHaveProperty('angleDeg');
+    const angled = spec.request(slots, values, { shape: 'angle' }, CTX);
+    expect(angled).toMatchObject({ angleDeg: 30 });
+    expect(angled).not.toHaveProperty('distance2');
+    const two = spec.request(slots, values, { shape: 'two' }, CTX);
+    expect(two).toMatchObject({ distance2: 3 });
+    expect(two).not.toHaveProperty('angleDeg');
+  });
+});
+
 describe('primitives run in place', () => {
   const kinds = ['box', 'cylinder', 'cone', 'sphere', 'torus'] as const;
 
@@ -1059,7 +1148,12 @@ describe('primitives run in place', () => {
 
   it('build the card default before any drag', () => {
     expect(
-      IN_PLACE_TOOL_SPECS.sphere.request(EMPTY, { radius: 6, x: 0, y: 0, z: 0 }, {}, CTX)
+      IN_PLACE_TOOL_SPECS.sphere.request(
+        EMPTY,
+        { radius: 6, x: 0, y: 0, z: 0 },
+        {},
+        CTX
+      )
     ).toEqual({
       tool: 'primitive',
       kind: 'sphere',
@@ -1127,9 +1221,12 @@ describe('primitives run in place', () => {
       CTX,
       {}
     );
-    expect(cone.find((handle) => handle.valueId === 'topRadius')?.params).toEqual(
-      { origin: { x: 0, y: 0, z: 28 }, direction: { x: 1, y: 0, z: 0 } }
-    );
+    expect(
+      cone.find((handle) => handle.valueId === 'topRadius')?.params
+    ).toEqual({
+      origin: { x: 0, y: 0, z: 28 },
+      direction: { x: 1, y: 0, z: 0 }
+    });
     const torus = IN_PLACE_TOOL_SPECS.torus.handles(
       EMPTY,
       { majorRadius: 6, minorRadius: 2, x: 0, y: 0, z: 0 },
@@ -1138,7 +1235,10 @@ describe('primitives run in place', () => {
     );
     expect(
       torus.find((handle) => handle.valueId === 'minorRadius')?.params
-    ).toEqual({ origin: { x: 6, y: 0, z: 0 }, direction: { x: 0, y: 0, z: 1 } });
+    ).toEqual({
+      origin: { x: 6, y: 0, z: 0 },
+      direction: { x: 0, y: 0, z: 1 }
+    });
   });
 
   it('keep a box hung under a face on the face when its height changes', () => {
@@ -1159,9 +1259,12 @@ describe('primitives run in place', () => {
     // Its arrows stand on the face; the height arrow points away from it,
     // and a new height rebuilds none of them.
     const handles = spec.handles(slots, values, CTX, {});
-    expect(handles.find((handle) => handle.valueId === 'height')?.params).toEqual(
-      { origin: { x: 5, y: 3, z: 20 }, direction: { x: 0, y: 0, z: -1 } }
-    );
+    expect(
+      handles.find((handle) => handle.valueId === 'height')?.params
+    ).toEqual({
+      origin: { x: 5, y: 3, z: 20 },
+      direction: { x: 0, y: 0, z: -1 }
+    });
     const shorter = spec.handles(
       slots,
       { ...values, height: 10, z: 10 },

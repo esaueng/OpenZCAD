@@ -26,7 +26,6 @@ import {
   DatumPlaneWorkspaceCard,
   type DatumPlaneCardApp
 } from './DatumPlaneForm';
-import { ModelingOperationsForm } from './ModelingOperationsForm';
 import type { DatumPlaneSubmission } from '../../lib/datumPlanes';
 
 const XY = { type: 'canonical', plane: 'XY', offset: 0 } as const;
@@ -180,45 +179,6 @@ describe('Plane card (R01-C)', () => {
     expect(
       screen.queryByRole('option', { name: 'Plane 1' })
     ).not.toBeInTheDocument();
-  });
-});
-
-describe('Split and Mirror datum picker (R01-C)', () => {
-  it('submits the datum by id and keeps it on reopen', async () => {
-    const datumFeatureId = 'feat_datum' as FeatureId;
-    const bodyId = toBodyId('body_split');
-    const onPreflight = vi.fn(async () => ({ status: 'ready' as const }));
-    const onSubmit = vi.fn();
-    render(
-      <ModelingOperationsForm
-        operation="split"
-        scope={{}}
-        bodies={[{ bodyId, name: 'Body', consumed: false }]}
-        datumOptions={[{ featureId: datumFeatureId, label: 'Plane 1' }]}
-        onPreflight={onPreflight}
-        onSubmit={onSubmit}
-      />
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Plane 1' }));
-    expect(screen.getByRole('button', { name: 'Plane 1' })).toHaveAttribute(
-      'aria-pressed',
-      'true'
-    );
-    // The numbers are not consulted for a datum, so they are not offered.
-    expect(screen.queryByText('Plane origin')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Create split body' }));
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    expect(onSubmit).toHaveBeenCalledWith({
-      operation: 'split',
-      input: {
-        name: 'Split',
-        targetBodyId: bodyId,
-        plane: { type: 'datum', datumFeatureId }
-      }
-    });
-    // A principal plane replaces the datum.
-    fireEvent.click(screen.getByRole('button', { name: 'Top (XY)' }));
-    expect(screen.getByText('Plane origin')).toBeVisible();
   });
 });
 

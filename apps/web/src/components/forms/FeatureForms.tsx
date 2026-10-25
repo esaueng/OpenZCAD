@@ -1,42 +1,28 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { X } from 'lucide-react';
+import { useRef, useState, type ReactNode } from 'react';
 import { coerceParamValue, type FieldQuantity } from '@openzcad/document-core';
 import {
-  FULL_REVOLVE_ANGLE_DEG,
   MAX_SKETCH_POLYGON_SIDES,
-  type AxisId,
   type BodyId,
-  type BooleanKeepOriginals,
-  type BooleanOperation,
   type DatumAxisRef,
-  type EdgeTopologyReferenceV5,
   type FeatureId,
   type ParamValue,
   type ParametricVector3,
-  type PatternKind,
   type PlaneId,
   type PrimitiveKind,
-  type RevolveAxis,
   type SketchId,
   type SketchObjectData,
   type SketchObjectKind,
-  type UnitSystem,
-  type VariableFilletLaw
+  type UnitSystem
 } from '@openzcad/shared';
 import { ExprInput } from '../ExprInput';
-import { edgeModifierSliderRange } from '../../lib/edgeModifierEdit';
-import { useFieldAutoFocus } from './fieldAutoFocus';
 import { isPickListRow } from './pickListRow';
 import {
   PRIMITIVE_ANCHORS,
   PRIMITIVE_FIELDS
 } from '../../lib/primitivePlacement';
-import { ownedTopologyName } from '../../lib/topologyLabels';
 import { TextObjectFields, type TextAttributes } from '../TextObjectFields';
 import {
   PLANE_LABELS,
-  REVOLVE_AXIS_LABELS,
-  evalParamValue,
   paramValueText,
   previewExpression
 } from '../../lib/model';
@@ -81,35 +67,6 @@ function datumAxisOptions(
       {axis.name}
     </option>
   ));
-}
-
-/**
- * Names a body pick list can tell apart. New bodies are numbered at creation
- * ("Box 1", "Box 2"), but a document made before that can hold two bodies
- * both called "Box Body" — the Union card showed two identical rows. Shared
- * names get "(1)", "(2)" in list order, which does not move as rows are
- * picked; the stored names are left alone.
- */
-export function distinctBodyNames(
-  bodies: readonly Pick<BodyOption, 'bodyId' | 'name'>[]
-): Map<BodyId, string> {
-  const counts = new Map<string, number>();
-  for (const body of bodies) {
-    counts.set(body.name, (counts.get(body.name) ?? 0) + 1);
-  }
-  const usedNames = new Set(bodies.map((body) => body.name));
-  const seen = new Map<string, number>();
-  return new Map(
-    bodies.map((body) => {
-      if ((counts.get(body.name) ?? 0) < 2) return [body.bodyId, body.name];
-      let ordinal = (seen.get(body.name) ?? 0) + 1;
-      while (usedNames.has(`${body.name} (${ordinal})`)) ordinal += 1;
-      seen.set(body.name, ordinal);
-      const name = `${body.name} (${ordinal})`;
-      usedNames.add(name);
-      return [body.bodyId, name];
-    })
-  );
 }
 
 export interface SketchOption {
@@ -833,415 +790,7 @@ export function SketchForm({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Extrude / Revolve
-// ---------------------------------------------------------------------------
-
-interface SketchPickerProps {
-  sketches: SketchOption[];
-  value: SketchId | '';
-  onChange(value: SketchId): void;
-  /** Focus on mount so Enter can confirm immediately. */
-  autoFocus?: boolean;
-}
-
-function SketchPicker({
-  sketches,
-  value,
-  onChange,
-  autoFocus
-}: SketchPickerProps) {
-  const mayAutoFocus = useFieldAutoFocus(autoFocus);
-  return (
-    <label className="field">
-      <span>Sketch</span>
-      <select
-        value={value}
-        autoFocus={mayAutoFocus}
-        onChange={(event) => onChange(event.target.value as SketchId)}
-      >
-        {sketches.length === 0 && <option value="">No sketches yet</option>}
-        {sketches.map((sketch) => (
-          <option key={sketch.sketchId} value={sketch.sketchId}>
-            {sketch.name}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
 export { ExtrudeForm } from './ExtrudeForm';
-
-interface RevolveFormProps {
-  scope: Record<string, number>;
-  sketches: SketchOption[];
-  initial?: {
-    name: string;
-    sketchId: SketchId;
-    axis: RevolveAxis;
-    angleDeg?: ParamValue;
-    axisRef?: DatumAxisRef;
-  };
-  /** Pre-selected sketch for new features, e.g. the one picked in the tree. */
-  initialSketchId?: SketchId;
-  /** R01: earlier datum axes the profile may turn about instead. */
-  datumAxes?: readonly DatumAxisChoice[];
-  submitLabel: string;
-  onSubmit(value: {
-    name: string;
-    sketchId: SketchId;
-    axis: RevolveAxis;
-    angleDeg: ParamValue;
-    /** Absent turns about the sketch `axis`. */
-    axisRef?: DatumAxisRef;
-  }): void;
-  onCancel?: () => void;
-}
-
-export function RevolveForm({
-  scope,
-  sketches,
-  initial,
-  initialSketchId,
-  datumAxes = [],
-  submitLabel,
-  onSubmit,
-  onCancel
-}: RevolveFormProps) {
-  const [name, setName] = useState(initial?.name ?? 'Revolve');
-  const [sketchId, setSketchId] = useState<SketchId | ''>(
-    initial?.sketchId ?? initialSketchId ?? sketches.at(-1)?.sketchId ?? ''
-  );
-  const [axis, setAxis] = useState<RevolveAxis>(initial?.axis ?? 'vertical');
-  // The select's value: a sketch axis, or a datum axis by its feature id.
-  const [axisChoice, setAxisChoice] = useState<string>(
-    initial?.axisRef
-      ? `${DATUM_AXIS_VALUE}${initial.axisRef.datumFeatureId}`
-      : (initial?.axis ?? 'vertical')
-  );
-  const axisRef = axisRefOf(axisChoice);
-  const [angleDeg, setAngleDeg] = useState(
-    paramValueText(initial?.angleDeg ?? FULL_REVOLVE_ANGLE_DEG)
-  );
-  const anglePreview = previewExpression(angleDeg, scope);
-  const angleInRange =
-    anglePreview.ok &&
-    anglePreview.value !== undefined &&
-    anglePreview.value > 0 &&
-    anglePreview.value <= FULL_REVOLVE_ANGLE_DEG;
-  const canSubmit =
-    name.trim().length > 0 &&
-    sketchId !== '' &&
-    fieldsValid(scope, [angleDeg]) &&
-    angleInRange;
-  // Kept in sync with the kernel's own gate: a partial revolve is a
-  // hash-only body and none of its edges can be filleted or chamfered.
-  const isPartial =
-    anglePreview.ok &&
-    anglePreview.value !== undefined &&
-    anglePreview.value > 0 &&
-    anglePreview.value < FULL_REVOLVE_ANGLE_DEG;
-
-  return (
-    <FormShell
-      name={name}
-      onName={setName}
-      submitLabel={submitLabel}
-      canSubmit={canSubmit}
-      onSubmit={() =>
-        onSubmit({
-          name: name.trim(),
-          sketchId: sketchId as SketchId,
-          axis,
-          angleDeg: coerceParamValue(angleDeg),
-          ...(axisRef ? { axisRef } : {})
-        })
-      }
-      onCancel={onCancel}
-    >
-      <SketchPicker
-        sketches={sketches}
-        value={sketchId}
-        onChange={setSketchId}
-        autoFocus
-      />
-      <label className="field">
-        <span>Revolve around</span>
-        <select
-          value={axisChoice}
-          onChange={(event) => {
-            setAxisChoice(event.target.value);
-            // A sketch axis is also what `axis` keeps under a datum axis, so
-            // clearing the datum later restores it.
-            if (!axisRefOf(event.target.value))
-              setAxis(event.target.value as RevolveAxis);
-          }}
-        >
-          {(Object.keys(REVOLVE_AXIS_LABELS) as RevolveAxis[]).map((id) => (
-            <option key={id} value={id}>
-              {REVOLVE_AXIS_LABELS[id]}
-            </option>
-          ))}
-          {datumAxisOptions(datumAxes, initial?.axisRef)}
-        </select>
-      </label>
-      {axisRef ? (
-        <p className="muted">
-          The datum axis must lie in the sketch&apos;s plane.
-        </p>
-      ) : null}
-      <ExprInput
-        label="Angle (°)"
-        value={angleDeg}
-        scope={scope}
-        onChange={setAngleDeg}
-        error={
-          anglePreview.ok && !angleInRange
-            ? 'Must be greater than 0° and at most 360°.'
-            : undefined
-        }
-      />
-      <p className="muted">
-        Sweeps the profile through the angle, greater than 0 and up to 360.
-        Offset the profile center so it clears the axis.
-      </p>
-      {isPartial && (
-        <p className="muted">
-          A partial revolve keeps hash-only face and edge references rather than
-          named ones, and its edges cannot be filleted or chamfered. Round the
-          full revolve first if the result needs blends.
-        </p>
-      )}
-    </FormShell>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Boolean
-// ---------------------------------------------------------------------------
-
-const OPERATION_LABELS: Record<BooleanOperation, string> = {
-  union: 'Union',
-  subtract: 'Subtract',
-  intersect: 'Intersect'
-};
-
-/** M11: '' is the absent field, which consumes every input. */
-const KEEP_ORIGINALS_LABELS: Record<BooleanKeepOriginals | '', string> = {
-  '': 'None',
-  target: 'Body 1',
-  tools: 'Bodies 2+',
-  all: 'All'
-};
-
-export interface BooleanFormValue {
-  name: string;
-  operation: BooleanOperation;
-  targetBodyIds: BodyId[];
-  /** Absent consumes every input body. */
-  keepOriginals?: BooleanKeepOriginals;
-}
-
-function keepOriginalsNote(keep: BooleanKeepOriginals | ''): string {
-  switch (keep) {
-    case 'all':
-      return 'Input bodies are kept beside the result.';
-    case 'target':
-      return 'Body 1 is kept beside the result; the others are consumed.';
-    case 'tools':
-      return 'Bodies 2+ are kept beside the result; body 1 is consumed.';
-    default:
-      return 'Input bodies are consumed; deleting the boolean restores them.';
-  }
-}
-
-interface BooleanFormProps {
-  bodies: BodyOption[];
-  initial?: BooleanFormValue;
-  presetOperation?: BooleanOperation;
-  /**
-   * The viewport's body selection, in pick order. When given, the list is a
-   * view of that selection: a row toggled here reports through
-   * `onSelectionChange`, and a body clicked in the scene shows up here.
-   */
-  selection?: BodyId[];
-  onSelectionChange?(bodyIds: BodyId[]): void;
-  submitLabel: string;
-  onSubmit(value: BooleanFormValue): void;
-  onCancel?: () => void;
-}
-
-export function BooleanForm({
-  bodies,
-  initial,
-  presetOperation,
-  selection,
-  onSelectionChange,
-  submitLabel,
-  onSubmit,
-  onCancel
-}: BooleanFormProps) {
-  const [operation, setOperation] = useState<BooleanOperation>(
-    initial?.operation ?? presetOperation ?? 'union'
-  );
-  const [name, setName] = useState(
-    initial?.name ?? OPERATION_LABELS[operation]
-  );
-  const [keepOriginals, setKeepOriginals] = useState<BooleanKeepOriginals | ''>(
-    initial?.keepOriginals ?? ''
-  );
-  // Selection order matters: the first body is the base a subtract cuts from.
-  // Editing an existing feature keeps its own list; creating one shares the
-  // viewport's, so the numbers here and the numbers on the bodies agree.
-  const [ownSelection, setOwnSelection] = useState<BodyId[]>(
-    initial?.targetBodyIds ?? selection ?? []
-  );
-  const selected = !initial && selection ? selection : ownSelection;
-
-  const selectable = useMemo(
-    () =>
-      bodies.filter((body) => !body.consumed || selected.includes(body.bodyId)),
-    [bodies, selected]
-  );
-  const bodyNames = useMemo(() => distinctBodyNames(selectable), [selectable]);
-
-  function toggle(bodyId: BodyId) {
-    const next = selected.includes(bodyId)
-      ? selected.filter((id) => id !== bodyId)
-      : [...selected, bodyId];
-    setOwnSelection(next);
-    if (!initial) {
-      onSelectionChange?.(next);
-    }
-  }
-
-  const canSubmit = name.trim().length > 0 && selected.length >= 2;
-  const operationAutoFocus = useFieldAutoFocus(true);
-
-  /**
-   * Keep an untouched name honest about what the feature does.
-   *
-   * Switching Union to Subtract left the name reading "Union", so the history
-   * row, the body and the panel heading all claimed an operation the feature
-   * did not perform. Only a name the user has not written is re-derived —
-   * comparing against the CURRENT operation's label is what distinguishes
-   * "still the default" from "deliberately called Union".
-   */
-  function changeOperation(next: BooleanOperation) {
-    setName((current) =>
-      current === OPERATION_LABELS[operation] ? OPERATION_LABELS[next] : current
-    );
-    setOperation(next);
-  }
-
-  return (
-    <FormShell
-      name={name}
-      onName={setName}
-      submitLabel={submitLabel}
-      canSubmit={canSubmit}
-      onSubmit={() =>
-        onSubmit({
-          name: name.trim(),
-          operation,
-          targetBodyIds: selected,
-          ...(keepOriginals ? { keepOriginals } : {})
-        })
-      }
-      onCancel={onCancel}
-    >
-      <label className="field">
-        <span>Operation</span>
-        <select
-          value={operation}
-          // A select is the worst field to hand the keyboard to unasked: a
-          // stray letter jumps to a matching option, so the operation changes
-          // silently rather than producing a visible bad value.
-          autoFocus={operationAutoFocus}
-          onChange={(event) =>
-            changeOperation(event.target.value as BooleanOperation)
-          }
-        >
-          {(Object.keys(OPERATION_LABELS) as BooleanOperation[]).map((id) => (
-            <option key={id} value={id}>
-              {OPERATION_LABELS[id]}
-            </option>
-          ))}
-        </select>
-      </label>
-      <div className="field">
-        <span>Bodies (numbered as you pick · the first is the base)</span>
-        <div className="pick-list">
-          {selectable.length === 0 && (
-            <p className="muted">No bodies available.</p>
-          )}
-          {selectable.map((body) => {
-            const index = selected.indexOf(body.bodyId);
-            const base = index === 0 && operation === 'subtract';
-            const bodyName = bodyNames.get(body.bodyId) ?? body.name;
-            return (
-              <button
-                key={body.bodyId}
-                type="button"
-                className={`pick-row ${index >= 0 ? 'selected' : ''}`}
-                aria-pressed={index >= 0}
-                // The body's name first, then the pick order the badge
-                // draws: the badge alone is a bare digit, or empty.
-                aria-label={
-                  index >= 0
-                    ? `${bodyName}, pick ${index + 1}${base ? ', base' : ''}`
-                    : bodyName
-                }
-                onClick={() => toggle(body.bodyId)}
-              >
-                <span className="pick-order mono">
-                  {index >= 0 ? index + 1 : ''}
-                </span>
-                <span className="body-name">{bodyName}</span>
-                {base && <small>base</small>}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-      {selected.length < 2 ? (
-        <p className="muted" aria-live="polite">
-          {selected.length === 0
-            ? 'Pick two bodies from the list, or click them in the viewport before opening the tool.'
-            : 'One body picked · pick at least one more to combine.'}
-        </p>
-      ) : null}
-      {operation === 'subtract' && (
-        <p className="muted">Bodies 2+ are subtracted from body 1.</p>
-      )}
-      {operation === 'union' && (
-        <p className="muted">
-          Union joins solids that touch or overlap. It does not fill empty gaps.
-        </p>
-      )}
-      <label className="field">
-        <span>Keep originals</span>
-        <select
-          aria-label="Keep originals"
-          value={keepOriginals}
-          onChange={(event) =>
-            setKeepOriginals(event.target.value as BooleanKeepOriginals | '')
-          }
-        >
-          {(
-            Object.keys(KEEP_ORIGINALS_LABELS) as (BooleanKeepOriginals | '')[]
-          ).map((id) => (
-            <option key={id} value={id}>
-              {KEEP_ORIGINALS_LABELS[id]}
-            </option>
-          ))}
-        </select>
-      </label>
-      <p className="muted">{keepOriginalsNote(keepOriginals)}</p>
-    </FormShell>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Transform
@@ -1274,11 +823,8 @@ export interface TransformFormValue {
 interface TransformFormProps {
   scope: Record<string, number>;
   bodies: BodyOption[];
-  initial?: TransformFormValue;
-  /** Body already picked in the viewport. */
-  initialTarget?: BodyId;
-  /** Name seeded for a new feature; edits carry `initial.name` instead. */
-  defaultName?: string;
+  /** The Move being edited: the gizmo creates one, this card edits it. */
+  initial: TransformFormValue;
   /**
    * Document length units: named in the move and pivot labels, and the unit
    * those fields are typed in (F05), so `10 mm` converts and an angle is
@@ -1287,11 +833,6 @@ interface TransformFormProps {
   units?: UnitSystem;
   /** R01: earlier datum axes the body may turn about. */
   datumAxes?: readonly DatumAxisChoice[];
-  /**
-   * The Rotate about axis card: only the body, the axis, the angle and Copy;
-   * the move, rotation, scale and pivot stay at their identity values.
-   */
-  axisOnly?: boolean;
   submitLabel: string;
   onSubmit(value: TransformFormValue): void;
   onCancel?: () => void;
@@ -1303,46 +844,39 @@ export function TransformForm({
   scope,
   bodies,
   initial,
-  initialTarget,
-  defaultName = 'Move',
   units,
   datumAxes = [],
-  axisOnly = false,
   submitLabel,
   onSubmit,
   onCancel
 }: TransformFormProps) {
   const live = bodies.filter((body) => !body.consumed);
-  const [name, setName] = useState(initial?.name ?? defaultName);
-  const [target, setTarget] = useState<BodyId | ''>(
-    initial?.targetBodyId ?? initialTarget ?? live.at(-1)?.bodyId ?? ''
-  );
+  const [name, setName] = useState(initial.name);
+  const [target, setTarget] = useState<BodyId | ''>(initial.targetBodyId);
   const [values, setValues] = useState<Record<string, string>>(() => ({
-    tx: paramValueText(initial?.translation.x ?? 0),
-    ty: paramValueText(initial?.translation.y ?? 0),
-    tz: paramValueText(initial?.translation.z ?? 0),
-    rx: paramValueText(initial?.rotationDeg.x ?? 0),
-    ry: paramValueText(initial?.rotationDeg.y ?? 0),
-    rz: paramValueText(initial?.rotationDeg.z ?? 0),
-    scale: paramValueText(initial?.scale ?? 1),
-    px: paramValueText(initial?.pivot?.x ?? 0),
-    py: paramValueText(initial?.pivot?.y ?? 0),
-    pz: paramValueText(initial?.pivot?.z ?? 0)
+    tx: paramValueText(initial.translation.x),
+    ty: paramValueText(initial.translation.y),
+    tz: paramValueText(initial.translation.z),
+    rx: paramValueText(initial.rotationDeg.x),
+    ry: paramValueText(initial.rotationDeg.y),
+    rz: paramValueText(initial.rotationDeg.z),
+    scale: paramValueText(initial.scale ?? 1),
+    px: paramValueText(initial.pivot?.x ?? 0),
+    py: paramValueText(initial.pivot?.y ?? 0),
+    pz: paramValueText(initial.pivot?.z ?? 0)
   }));
-  const [copy, setCopy] = useState(initial?.copy ?? false);
+  // M10: a copy is fixed when the Move is made — it owns a body of its own.
+  const copy = initial.copy ?? false;
   const [turnAxis, setTurnAxis] = useState<string>(
-    initial?.axisRotation
+    initial.axisRotation
       ? `${DATUM_AXIS_VALUE}${initial.axisRotation.axis.datumFeatureId}`
-      : axisOnly && datumAxes[0]
-        ? `${DATUM_AXIS_VALUE}${datumAxes[0].featureId}`
-        : ''
+      : ''
   );
   const [turnAngle, setTurnAngle] = useState(
-    paramValueText(initial?.axisRotation?.angleDeg ?? 90)
+    paramValueText(initial.axisRotation?.angleDeg ?? 90)
   );
   const turnRef = axisRefOf(turnAxis);
-  const showTurn =
-    axisOnly || datumAxes.length > 0 || initial?.axisRotation !== undefined;
+  const showTurn = datumAxes.length > 0 || initial.axisRotation !== undefined;
   const setValue = (key: string) => (value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
 
@@ -1367,7 +901,6 @@ export function TransformForm({
     fieldsValid(scope, pick('r'), angle) &&
     fieldsValid(scope, [values.scale ?? ''], number) &&
     !scaleError &&
-    (axisOnly ? turnRef !== undefined : true) &&
     (turnRef ? fieldsValid(scope, [turnAngle], angle) : true);
 
   return (
@@ -1432,19 +965,8 @@ export function TransformForm({
       </label>
       {/* M10: a copy is fixed when the Move is made — it owns a body of its
           own — so an edit names what it is instead of offering a toggle. */}
-      {initial ? (
-        initial.copy && (
-          <p className="field-hint">Copy: the source body stays in place.</p>
-        )
-      ) : (
-        <label className="field transform-copy">
-          <input
-            type="checkbox"
-            checked={copy}
-            onChange={(event) => setCopy(event.target.checked)}
-          />
-          <span>Copy (keep the original)</span>
-        </label>
+      {copy && (
+        <p className="field-hint">Copy: the source body stays in place.</p>
       )}
       {showTurn ? (
         <>
@@ -1455,11 +977,11 @@ export function TransformForm({
               aria-label="Rotate about axis"
               onChange={(event) => setTurnAxis(event.target.value)}
             >
-              {axisOnly ? null : <option value="">None</option>}
-              {datumAxes.length === 0 && !initial?.axisRotation ? (
+              <option value="">None</option>
+              {datumAxes.length === 0 && !initial.axisRotation ? (
                 <option value="">Create an axis first</option>
               ) : null}
-              {datumAxisOptions(datumAxes, initial?.axisRotation?.axis)}
+              {datumAxisOptions(datumAxes, initial.axisRotation?.axis)}
             </select>
           </label>
           {turnRef ? (
@@ -1469,818 +991,69 @@ export function TransformForm({
               value={turnAngle}
               scope={scope}
               quantity={angle}
-              autoFocus={axisOnly}
               onChange={setTurnAngle}
             />
           ) : null}
-          {turnRef && !axisOnly ? (
+          {turnRef ? (
             <p className="field-hint">
               Turns about the axis first; the move below then applies.
             </p>
           ) : null}
         </>
       ) : null}
-      {axisOnly ? null : (
-        <>
-          {/* The labels the Move gizmo's card uses (F19): a Move is created
-          there and edited here, and the two named the same fields
-          "dX" and "Move X". */}
-          <div className="field-triple">
-            {TRANSFORM_AXES.map((axis, index) => (
-              <ExprInput
-                key={`t${axis}`}
-                label={`d${axis.toUpperCase()}`}
-                ariaLabel={`Move ${axis.toUpperCase()}${units ? ` in ${units}` : ''}`}
-                value={values[`t${axis}`] ?? ''}
-                scope={scope}
-                quantity={length}
-                autoFocus={index === 0}
-                onChange={setValue(`t${axis}`)}
-              />
-            ))}
-          </div>
-          <div className="field-triple">
-            {TRANSFORM_AXES.map((axis) => (
-              <ExprInput
-                key={`r${axis}`}
-                label={`r${axis.toUpperCase()}`}
-                ariaLabel={`Rotate ${axis.toUpperCase()} in degrees`}
-                value={values[`r${axis}`] ?? ''}
-                scope={scope}
-                quantity={angle}
-                onChange={setValue(`r${axis}`)}
-              />
-            ))}
-          </div>
+      {/* The labels the Move gizmo's card uses (F19): a Move is created
+      there and edited here, and the two named the same fields
+      "dX" and "Move X". */}
+      <div className="field-triple">
+        {TRANSFORM_AXES.map((axis, index) => (
           <ExprInput
-            label="Scale ×"
-            value={values.scale ?? ''}
+            key={`t${axis}`}
+            label={`d${axis.toUpperCase()}`}
+            ariaLabel={`Move ${axis.toUpperCase()}${units ? ` in ${units}` : ''}`}
+            value={values[`t${axis}`] ?? ''}
             scope={scope}
-            quantity={number}
-            onChange={setValue('scale')}
-            error={scaleError}
+            quantity={length}
+            autoFocus={index === 0}
+            onChange={setValue(`t${axis}`)}
           />
-          {/* Rotation and scale turn about this point; the gizmo fills it with
-          the body's centre, and 0, 0, 0 is the world origin. */}
-          <div className="field-triple">
-            {TRANSFORM_AXES.map((axis) => (
-              <ExprInput
-                key={`p${axis}`}
-                label={`p${axis.toUpperCase()}`}
-                ariaLabel={`Pivot ${axis.toUpperCase()}${units ? ` in ${units}` : ''}`}
-                value={values[`p${axis}`] ?? ''}
-                scope={scope}
-                quantity={length}
-                onChange={setValue(`p${axis}`)}
-              />
-            ))}
-          </div>
-        </>
-      )}
-    </FormShell>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Exact edge modifiers and patterns
-// ---------------------------------------------------------------------------
-
-export interface EdgeModifierFormValue {
-  name: string;
-  targetBodyId: BodyId;
-  edgeHashes: number[];
-  edgeReferences?: EdgeTopologyReferenceV5[];
-  size: ParamValue;
-  /** Chamfer only: bevel angle in degrees; absent means symmetric 45°. */
-  angleDeg?: ParamValue;
-  /** Fillet only: far-end radius; absent means a constant-radius fillet. */
-  endRadius?: ParamValue;
-  /** Fillet only: read only with `endRadius`; absent means 'linear'. */
-  radiusLaw?: VariableFilletLaw;
-  /** Chamfer only: setback on the other face; absent means symmetric. */
-  distance2?: ParamValue;
-}
-
-const VARIABLE_FILLET_LAW_LABELS: Record<VariableFilletLaw, string> = {
-  linear: 'Linear',
-  scurve: 'Eased at both ends'
-};
-
-interface EdgeModifierFormProps {
-  kind: 'fillet' | 'chamfer';
-  scope: Record<string, number>;
-  targetBodyId: BodyId | null;
-  edgeHashes: number[];
-  edgeReferences?: EdgeTopologyReferenceV5[];
-  availableEdgeCount?: number;
-  onSelectAllEdges?: () => void;
-  onClearEdges?: () => void;
-  /**
-   * The edges in `edgeHashes`, named, in order. A count alone ("2 exact
-   * edges selected") left the user to guess which two. `owner` is the body
-   * the edge is on: a row reads "Box 1 · Front · Top edge", as the viewport
-   * tag does, and a long owner is what gets cut short, never the edge.
-   */
-  edgeRows?: readonly { hash: number; label: string; owner?: string }[];
-  /** Takes one edge off; absent, the rows carry no remove button. */
-  onRemoveEdge?(hash: number): void;
-  initial?: {
-    name: string;
-    size: ParamValue;
-    angleDeg?: ParamValue;
-    endRadius?: ParamValue;
-    radiusLaw?: VariableFilletLaw;
-    distance2?: ParamValue;
-  };
-  submitLabel: string;
-  onSubmit(value: EdgeModifierFormValue): void;
-  onPreview?(value: EdgeModifierFormValue | null): void;
-  /**
-   * The size the form currently proposes, reported whenever it or the
-   * picked edges change — including the initial one, which `onPreview`
-   * never sends. The viewport handle shows it so the two never disagree.
-   */
-  onSizeChange?(size: number | null): void;
-  onCancel?: () => void;
-}
-
-export function EdgeModifierForm({
-  kind,
-  scope,
-  targetBodyId,
-  edgeHashes,
-  edgeReferences,
-  availableEdgeCount,
-  onSelectAllEdges,
-  onClearEdges,
-  edgeRows,
-  onRemoveEdge,
-  initial,
-  submitLabel,
-  onSubmit,
-  onPreview,
-  onSizeChange,
-  onCancel
-}: EdgeModifierFormProps) {
-  const [name, setName] = useState(
-    initial?.name ?? (kind === 'fillet' ? 'Fillet' : 'Chamfer')
-  );
-  const [size, setSize] = useState(paramValueText(initial?.size ?? 2));
-  const [angle, setAngle] = useState(
-    initial?.angleDeg !== undefined ? paramValueText(initial.angleDeg) : ''
-  );
-  const [endRadius, setEndRadius] = useState(
-    initial?.endRadius !== undefined ? paramValueText(initial.endRadius) : ''
-  );
-  const [radiusLaw, setRadiusLaw] = useState<VariableFilletLaw>(
-    initial?.radiusLaw ?? 'linear'
-  );
-  const [distance2, setDistance2] = useState(
-    initial?.distance2 !== undefined ? paramValueText(initial.distance2) : ''
-  );
-  const numericSize = evalParamValue(coerceParamValue(size), scope);
-  const [sliderRange] = useState(() =>
-    edgeModifierSliderRange(evalParamValue(initial?.size ?? 2, scope) ?? 2)
-  );
-  const previewCallback = useRef(onPreview);
-  previewCallback.current = onPreview;
-  const edgeSelectionKey = edgeHashes.join(',');
-  const sizeCallback = useRef(onSizeChange);
-  sizeCallback.current = onSizeChange;
-  useEffect(() => {
-    sizeCallback.current?.(
-      targetBodyId && edgeHashes.length > 0 && numericSize !== null
-        ? numericSize
-        : null
-    );
-  }, [targetBodyId, edgeSelectionKey, numericSize, edgeHashes.length]);
-  useEffect(() => () => sizeCallback.current?.(null), []);
-  useEffect(
-    () => () => previewCallback.current?.(null),
-    [targetBodyId, edgeSelectionKey]
-  );
-  // A removed or re-picked edge previews the current set with the values
-  // already typed into this card, so the lit faces follow the list.
-  const previousEdgeSelection = useRef(edgeSelectionKey);
-  useEffect(() => {
-    if (previousEdgeSelection.current !== edgeSelectionKey) {
-      previousEdgeSelection.current = edgeSelectionKey;
-      previewFields(fieldsWith({}));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [edgeSelectionKey]);
-  // The second value each blend can take: a fillet's far-end radius, a
-  // chamfer's setback on the other face. Blank is not "zero" but "this blend
-  // is the constant/symmetric one", so it is only checked when it is filled.
-  const secondField = kind === 'fillet' ? endRadius : distance2;
-  const secondFieldValid =
-    secondField.trim() === '' ||
-    (fieldsValid(scope, [secondField]) &&
-      (evalParamValue(coerceParamValue(secondField), scope) ?? 0) > 0);
-  const canSubmit =
-    name.trim().length > 0 &&
-    Boolean(targetBodyId) &&
-    edgeHashes.length > 0 &&
-    fieldsValid(scope, [size]) &&
-    numericSize !== null &&
-    numericSize > 0 &&
-    secondFieldValid &&
-    (kind === 'fillet' || angle.trim() === '' || fieldsValid(scope, [angle]));
-
-  interface EdgeModifierFields {
-    size: string;
-    angle: string;
-    endRadius: string;
-    distance2: string;
-    radiusLaw: VariableFilletLaw;
-  }
-
-  function fieldsWith(
-    overrides: Partial<EdgeModifierFields>
-  ): EdgeModifierFields {
-    return { size, angle, endRadius, distance2, radiusLaw, ...overrides };
-  }
-
-  function formValue(fields: EdgeModifierFields): EdgeModifierFormValue {
-    return {
-      name: name.trim(),
-      targetBodyId: targetBodyId!,
-      edgeHashes,
-      ...(edgeReferences ? { edgeReferences } : {}),
-      size: coerceParamValue(fields.size),
-      // A blank angle emits no key at all. It used to submit an explicit 45
-      // — the geometrically identical symmetric bevel — because a patch
-      // cannot delete a key. That collided with the second distance: the
-      // two fields hide each other, so a chamfer that had stored an angle
-      // could reach `{angleDeg: 45, distance2: n}`, which both validators
-      // refuse and which no visible field can clear. The edit command names
-      // `angleDeg` in `clearData` instead, which deletes it properly.
-      ...(kind === 'chamfer' && fields.angle.trim() !== ''
-        ? { angleDeg: coerceParamValue(fields.angle) }
-        : {}),
-      // These two are cleared rather than defaulted when blank: the edit
-      // command names them in `clearData`, because an end radius equal to the
-      // start radius is a variable blend through a different kernel engine,
-      // not the constant one it looks like.
-      ...(kind === 'fillet' && fields.endRadius.trim() !== ''
-        ? {
-            endRadius: coerceParamValue(fields.endRadius),
-            radiusLaw: fields.radiusLaw
-          }
-        : {}),
-      ...(kind === 'chamfer' && fields.distance2.trim() !== ''
-        ? { distance2: coerceParamValue(fields.distance2) }
-        : {})
-    };
-  }
-
-  /**
-   * Preview whatever the form currently proposes. Every field routes through
-   * here so the viewport shows the same blend the Apply button would store —
-   * which is the only way a user can see which face a chamfer's second
-   * setback landed on.
-   */
-  function previewFields(fields: EdgeModifierFields) {
-    const numeric = evalParamValue(coerceParamValue(fields.size), scope);
-    const second = kind === 'fillet' ? fields.endRadius : fields.distance2;
-    const secondOk =
-      second.trim() === '' ||
-      (fieldsValid(scope, [second]) &&
-        (evalParamValue(coerceParamValue(second), scope) ?? 0) > 0);
-    onPreview?.(
-      targetBodyId &&
-        edgeHashes.length > 0 &&
-        numeric !== null &&
-        numeric > 0 &&
-        secondOk &&
-        (kind === 'fillet' ||
-          fields.angle.trim() === '' ||
-          fieldsValid(scope, [fields.angle]))
-        ? formValue(fields)
-        : null
-    );
-  }
-
-  function changeSize(next: string) {
-    setSize(next);
-    previewFields(fieldsWith({ size: next }));
-  }
-
-  return (
-    <FormShell
-      name={name}
-      onName={setName}
-      submitLabel={submitLabel}
-      canSubmit={canSubmit}
-      onSubmit={() => onSubmit(formValue(fieldsWith({})))}
-      onCancel={onCancel}
-    >
-      <div className="selection-summary">
-        {edgeHashes.length > 0
-          ? `${edgeHashes.length} edge${edgeHashes.length === 1 ? '' : 's'} selected`
-          : targetBodyId
-            ? 'Select edges in the viewport or select every edge below.'
-            : // Not "select a body or edge": arming this tool narrows picking
-              // to edges, so a click on a body face resolves to nothing — and
-              // a click that resolves to nothing clears the selection. Name
-              // the routes that work rather than the one the tool forbids.
-              'Click an edge in the viewport, or pick the body in the model tree.'}
+        ))}
       </div>
-      {edgeRows && edgeRows.length > 0 && (
-        <ol
-          className="edge-pick-list"
-          aria-label={kind === 'fillet' ? 'Filleted edges' : 'Chamfered edges'}
-        >
-          {edgeRows.map((row, index) => {
-            const fullName =
-              row.owner !== undefined
-                ? ownedTopologyName(row.owner, row.label)
-                : row.label;
-            return (
-              <li key={row.hash} className="edge-pick-row">
-                <span className="pick-order mono">{index + 1}</span>
-                <span className="edge-pick-name" title={fullName}>
-                  {row.owner !== undefined && (
-                    <span className="edge-pick-owner">
-                      {ownedTopologyName(row.owner, '')}
-                    </span>
-                  )}
-                  <span className="edge-pick-entity">{row.label}</span>
-                </span>
-                {onRemoveEdge && (
-                  <button
-                    type="button"
-                    className="edge-pick-remove"
-                    aria-label={`Remove ${index + 1} ${fullName}`}
-                    title={
-                      edgeRows.length === 1
-                        ? `A ${kind} needs at least one edge`
-                        : 'Remove this edge'
-                    }
-                    disabled={edgeRows.length === 1}
-                    onClick={() => {
-                      onRemoveEdge(row.hash);
-                    }}
-                  >
-                    <X size={12} aria-hidden="true" />
-                  </button>
-                )}
-              </li>
-            );
-          })}
-        </ol>
-      )}
-      {targetBodyId &&
-        availableEdgeCount &&
-        availableEdgeCount > 0 &&
-        onSelectAllEdges && (
-          <button
-            type="button"
-            className="secondary edge-selection-action"
-            onClick={
-              edgeHashes.length === availableEdgeCount && onClearEdges
-                ? onClearEdges
-                : onSelectAllEdges
-            }
-          >
-            {edgeHashes.length === availableEdgeCount
-              ? 'Clear edge selection'
-              : `Select all ${availableEdgeCount} edges`}
-          </button>
-        )}
-      <p className="muted edge-selection-hint">
-        Shift+Click adds or removes individual edges.
-      </p>
+      <div className="field-triple">
+        {TRANSFORM_AXES.map((axis) => (
+          <ExprInput
+            key={`r${axis}`}
+            label={`r${axis.toUpperCase()}`}
+            ariaLabel={`Rotate ${axis.toUpperCase()} in degrees`}
+            value={values[`r${axis}`] ?? ''}
+            scope={scope}
+            quantity={angle}
+            onChange={setValue(`r${axis}`)}
+          />
+        ))}
+      </div>
       <ExprInput
-        label={kind === 'fillet' ? 'Radius' : 'Distance'}
-        value={size}
+        label="Scale ×"
+        value={values.scale ?? ''}
         scope={scope}
-        autoFocus
-        onChange={changeSize}
-        error={positiveError(size, scope)}
+        quantity={number}
+        onChange={setValue('scale')}
+        error={scaleError}
       />
-      <input
-        className="edge-size-slider"
-        type="range"
-        aria-label={
-          kind === 'fillet' ? 'Fillet radius slider' : 'Chamfer distance slider'
-        }
-        {...sliderRange}
-        max={Math.max(sliderRange.max, numericSize ?? 0)}
-        value={numericSize ?? sliderRange.min}
-        disabled={!targetBodyId || edgeHashes.length === 0}
-        onChange={(event) => changeSize(event.currentTarget.value)}
-      />
-      <p className="muted edge-selection-hint">
-        Drag to preview. {submitLabel} saves the exact result.
-      </p>
-      {kind === 'fillet' ? (
-        <>
-          <div className="field-pair">
-            <ExprInput
-              label="End radius (blank = constant)"
-              value={endRadius}
-              scope={scope}
-              optional
-              error={
-                endRadius.trim() === ''
-                  ? undefined
-                  : positiveError(endRadius, scope)
-              }
-              onChange={(next) => {
-                setEndRadius(next);
-                previewFields(fieldsWith({ endRadius: next }));
-              }}
-            />
-            <label className="field">
-              <span>Radius change</span>
-              <select
-                value={radiusLaw}
-                disabled={endRadius.trim() === ''}
-                onChange={(event) => {
-                  const next = event.target.value as VariableFilletLaw;
-                  setRadiusLaw(next);
-                  previewFields(fieldsWith({ radiusLaw: next }));
-                }}
-              >
-                {(
-                  Object.keys(VARIABLE_FILLET_LAW_LABELS) as VariableFilletLaw[]
-                ).map((law) => (
-                  <option key={law} value={law}>
-                    {VARIABLE_FILLET_LAW_LABELS[law]}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          {endRadius.trim() !== '' ? (
-            // Said plainly rather than dressed up. Remus ships
-            // variable-radius blending as an experimental capability, and
-            // the two laws offered here are the ones whose largest and
-            // smallest ball are the two radii above — the bound it can
-            // prove. Failures on this path report the kernel's own reason.
-            <p className="muted edge-selection-hint">
-              Variable radius runs the kernel&rsquo;s experimental blend and is
-              offered only for these two laws. Radius runs from Radius at each
-              edge&rsquo;s start to End radius at its far end.
-            </p>
-          ) : null}
-        </>
-      ) : (
-        <>
-          {distance2.trim() === '' ? (
-            <ExprInput
-              label="Angle (°, blank = 45)"
-              value={angle}
-              scope={scope}
-              optional
-              onChange={(next) => {
-                setAngle(next);
-                previewFields(fieldsWith({ angle: next }));
-              }}
-            />
-          ) : null}
-          {angle.trim() === '' ? (
-            <>
-              <ExprInput
-                label="Second distance (blank = symmetric)"
-                value={distance2}
-                scope={scope}
-                optional
-                error={
-                  distance2.trim() === ''
-                    ? undefined
-                    : positiveError(distance2, scope)
-                }
-                onChange={(next) => {
-                  setDistance2(next);
-                  previewFields(fieldsWith({ distance2: next }));
-                }}
-              />
-              {distance2.trim() !== '' ? (
-                <>
-                  <button
-                    type="button"
-                    className="secondary edge-selection-action"
-                    onClick={() => {
-                      const swapped = fieldsWith({
-                        size: distance2,
-                        distance2: size
-                      });
-                      setSize(swapped.size);
-                      setDistance2(swapped.distance2);
-                      previewFields(swapped);
-                    }}
-                  >
-                    Swap the two faces
-                  </button>
-                  {/* Which face is "first" is the kernel's own edge-to-face
-                      order, which the published topology sorts away — so it
-                      cannot honestly be named here. The preview shows where
-                      each setback landed and this button exchanges them. */}
-                  <p className="muted edge-selection-hint">
-                    Distance and Second distance land on the two faces the edge
-                    separates. The preview shows which is which; swap them if it
-                    is the wrong way round.
-                  </p>
-                </>
-              ) : null}
-            </>
-          ) : null}
-        </>
-      )}
-    </FormShell>
-  );
-}
-
-export interface PatternFormValue {
-  name: string;
-  targetBodyId: BodyId;
-  patternKind: PatternKind;
-  count: ParamValue;
-  axis: AxisId;
-  spacing: ParamValue;
-  angleDeg: ParamValue;
-  /** Linear only: arbitrary repeat direction overriding `axis`. */
-  direction?: ParametricVector3;
-  /** Grid only: second repeat axis. */
-  axis2?: AxisId;
-  /** Grid only: spacing along `axis2`. */
-  spacing2?: ParamValue;
-  /** Grid only: instance count along `axis2`. */
-  count2?: ParamValue;
-  /** R01, circular only: turn about this datum axis instead of `axis`. */
-  axisRef?: DatumAxisRef;
-}
-
-interface PatternFormProps {
-  kind: PatternKind;
-  scope: Record<string, number>;
-  bodies: BodyOption[];
-  selectedBodyId?: BodyId | null;
-  initial?: PatternFormValue;
-  /** R01, circular only: earlier datum axes the copies may turn about. */
-  datumAxes?: readonly DatumAxisChoice[];
-  submitLabel: string;
-  onSubmit(value: PatternFormValue): void;
-  onCancel?: () => void;
-}
-
-export function PatternForm({
-  kind,
-  scope,
-  bodies,
-  selectedBodyId,
-  initial,
-  datumAxes = [],
-  submitLabel,
-  onSubmit,
-  onCancel
-}: PatternFormProps) {
-  const available = bodies.filter(
-    (body) => !body.consumed || body.bodyId === initial?.targetBodyId
-  );
-  const [name, setName] = useState(
-    initial?.name ??
-      (kind === 'linear'
-        ? 'Linear pattern'
-        : kind === 'grid'
-          ? 'Grid pattern'
-          : 'Circular pattern')
-  );
-  const [targetBodyId, setTargetBodyId] = useState<BodyId | ''>(
-    initial?.targetBodyId ?? selectedBodyId ?? available[0]?.bodyId ?? ''
-  );
-  const [count, setCount] = useState(paramValueText(initial?.count ?? 3));
-  const [axis, setAxis] = useState<AxisId>(initial?.axis ?? 'x');
-  // Circular only: a world axis, or a datum axis by its feature id.
-  const [axisChoice, setAxisChoice] = useState<string>(
-    initial?.axisRef
-      ? `${DATUM_AXIS_VALUE}${initial.axisRef.datumFeatureId}`
-      : (initial?.axis ?? 'x')
-  );
-  const axisRef = kind === 'circular' ? axisRefOf(axisChoice) : undefined;
-  const [spacing, setSpacing] = useState(
-    paramValueText(initial?.spacing ?? 20)
-  );
-  const [angleDeg, setAngleDeg] = useState(
-    paramValueText(initial?.angleDeg ?? 360)
-  );
-  const [axis2, setAxis2] = useState<AxisId>(initial?.axis2 ?? 'y');
-  const [count2, setCount2] = useState(paramValueText(initial?.count2 ?? 3));
-  const [spacing2, setSpacing2] = useState(
-    paramValueText(initial?.spacing2 ?? 20)
-  );
-  const [dirX, setDirX] = useState(
-    initial?.direction ? paramValueText(initial.direction.x) : ''
-  );
-  const [dirY, setDirY] = useState(
-    initial?.direction ? paramValueText(initial.direction.y) : ''
-  );
-  const [dirZ, setDirZ] = useState(
-    initial?.direction ? paramValueText(initial.direction.z) : ''
-  );
-  const directionActive =
-    kind === 'linear' &&
-    [dirX, dirY, dirZ].some((field) => field.trim() !== '');
-  const kindFieldsValid =
-    kind === 'linear'
-      ? fieldsValid(scope, [
-          spacing,
-          ...[dirX, dirY, dirZ].filter((field) => field.trim() !== '')
-        ])
-      : kind === 'grid'
-        ? fieldsValid(scope, [spacing, spacing2, count2]) && axis !== axis2
-        : fieldsValid(scope, [angleDeg]);
-  const countErrors = {
-    count: countError(count, scope, 2, 100),
-    count2: kind === 'grid' ? countError(count2, scope, 2, 100) : undefined
-  };
-  const canSubmit =
-    name.trim().length > 0 &&
-    targetBodyId !== '' &&
-    fieldsValid(scope, [count]) &&
-    !countErrors.count &&
-    !countErrors.count2 &&
-    kindFieldsValid;
-  const coerceDirectionField = (field: string) =>
-    coerceParamValue(field.trim() === '' ? '0' : field);
-
-  return (
-    <FormShell
-      name={name}
-      onName={setName}
-      submitLabel={submitLabel}
-      canSubmit={canSubmit}
-      onSubmit={() =>
-        onSubmit({
-          name: name.trim(),
-          targetBodyId: targetBodyId as BodyId,
-          patternKind: kind,
-          count: coerceParamValue(count),
-          axis,
-          spacing: coerceParamValue(spacing),
-          angleDeg: coerceParamValue(angleDeg),
-          // `updateFeature` patches keys and cannot delete one, so blanking
-          // every direction field on a pattern that stored a direction
-          // submits the axis's explicit unit vector instead of silently
-          // keeping the old direction.
-          ...(directionActive
-            ? {
-                direction: {
-                  x: coerceDirectionField(dirX),
-                  y: coerceDirectionField(dirY),
-                  z: coerceDirectionField(dirZ)
-                }
-              }
-            : kind === 'linear' && initial?.direction
-              ? {
-                  direction: {
-                    x: axis === 'x' ? 1 : 0,
-                    y: axis === 'y' ? 1 : 0,
-                    z: axis === 'z' ? 1 : 0
-                  }
-                }
-              : {}),
-          ...(kind === 'grid'
-            ? {
-                axis2,
-                spacing2: coerceParamValue(spacing2),
-                count2: coerceParamValue(count2)
-              }
-            : {}),
-          ...(axisRef ? { axisRef } : {})
-        })
-      }
-      onCancel={onCancel}
-    >
-      <label className="field">
-        <span>Body</span>
-        <select
-          value={targetBodyId}
-          onChange={(event) => setTargetBodyId(event.target.value as BodyId)}
-        >
-          {available.length === 0 && <option value="">No bodies yet</option>}
-          {available.map((body) => (
-            <option key={body.bodyId} value={body.bodyId}>
-              {body.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <div className="field-pair">
-        <ExprInput
-          label="Count"
-          value={count}
-          scope={scope}
-          autoFocus
-          onChange={setCount}
-          error={countErrors.count}
-        />
-        <label className="field">
-          <span>Axis</span>
-          <select
-            value={kind === 'circular' ? axisChoice : axis}
-            onChange={(event) => {
-              setAxisChoice(event.target.value);
-              if (!axisRefOf(event.target.value))
-                setAxis(event.target.value as AxisId);
-            }}
-          >
-            <option value="x">X</option>
-            <option value="y">Y</option>
-            <option value="z">Z</option>
-            {kind === 'circular'
-              ? datumAxisOptions(datumAxes, initial?.axisRef)
-              : null}
-          </select>
-        </label>
-      </div>
-      {kind === 'linear' || kind === 'grid' ? (
-        <ExprInput
-          label="Spacing"
-          value={spacing}
-          scope={scope}
-          onChange={setSpacing}
-        />
-      ) : (
-        <ExprInput
-          label="Total angle (°)"
-          value={angleDeg}
-          scope={scope}
-          onChange={setAngleDeg}
-        />
-      )}
-      {kind === 'linear' ? (
-        <>
-          {/* One labelled X/Y/Z row, as Position is: the fields were named
-              just "X", "Y" and "Z", under an unassociated caption. */}
-          <fieldset className="primitive-position">
-            <legend>Custom direction (blank = axis)</legend>
-            <div className="field-triple">
-              <ExprInput
-                label="X"
-                ariaLabel="Direction X"
-                value={dirX}
-                scope={scope}
-                optional
-                onChange={setDirX}
-              />
-              <ExprInput
-                label="Y"
-                ariaLabel="Direction Y"
-                value={dirY}
-                scope={scope}
-                optional
-                onChange={setDirY}
-              />
-              <ExprInput
-                label="Z"
-                ariaLabel="Direction Z"
-                value={dirZ}
-                scope={scope}
-                optional
-                onChange={setDirZ}
-              />
-            </div>
-          </fieldset>
-        </>
-      ) : null}
-      {kind === 'grid' ? (
-        <>
-          <div className="field-pair">
-            <ExprInput
-              label="Count 2"
-              value={count2}
-              scope={scope}
-              onChange={setCount2}
-              error={countErrors.count2}
-            />
-            <label className="field">
-              <span>Axis 2</span>
-              <select
-                value={axis2}
-                onChange={(event) => setAxis2(event.target.value as AxisId)}
-              >
-                <option value="x">X</option>
-                <option value="y">Y</option>
-                <option value="z">Z</option>
-              </select>
-            </label>
-          </div>
+      {/* Rotation and scale turn about this point; the gizmo fills it with
+      the body's centre, and 0, 0, 0 is the world origin. */}
+      <div className="field-triple">
+        {TRANSFORM_AXES.map((axis) => (
           <ExprInput
-            label="Spacing 2"
-            value={spacing2}
+            key={`p${axis}`}
+            label={`p${axis.toUpperCase()}`}
+            ariaLabel={`Pivot ${axis.toUpperCase()}${units ? ` in ${units}` : ''}`}
+            value={values[`p${axis}`] ?? ''}
             scope={scope}
-            onChange={setSpacing2}
+            quantity={length}
+            onChange={setValue(`p${axis}`)}
           />
-          {axis === axis2 ? (
-            <p className="muted edge-selection-hint">
-              The two axes must differ.
-            </p>
-          ) : null}
-        </>
-      ) : null}
+        ))}
+      </div>
     </FormShell>
   );
 }

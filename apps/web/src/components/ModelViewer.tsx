@@ -9,8 +9,6 @@ import {
 } from 'react';
 import { axisDimensionLabel } from '../lib/primitiveDimensionLabel';
 import * as THREE from 'three';
-import type { HoleGhost } from '../lib/holeGhost';
-import { buildHoleGhostRig } from './viewer/holeGhostRig';
 import {
   framePlaneHit,
   meshNormal,
@@ -34,7 +32,11 @@ import {
 import { buildSketchRelationGlyphs } from './viewer/sketchRelations';
 import type { SketchRelationGlyphChip } from '../lib/sketch/relationGlyphs';
 import type { SketchDimensionAnnotation } from '../lib/sketch/dimensionAnnotations';
-import type { BoundaryProvenance, SketchComposite, SketchDimensionIdentity } from '@openzcad/shared';
+import type {
+  BoundaryProvenance,
+  SketchComposite,
+  SketchDimensionIdentity
+} from '@openzcad/shared';
 import {
   disposeRetiringOverlays,
   disposeSettledOverlays,
@@ -217,6 +219,7 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
+import { isBehindCamera } from '../lib/cameraDepth';
 import {
   chipPanelDodge,
   edgeChipCenterX,
@@ -721,6 +724,8 @@ export type CommandHandleView = (
 };
 
 const EMPTY_COMMAND_HANDLES: readonly CommandHandleView[] = [];
+/** How far inside the canvas edge a command chip is kept, in CSS pixels. */
+const COMMAND_CHIP_MARGIN_PX = 12;
 
 export interface SketchViewData {
   sketchId: string;
@@ -1024,12 +1029,6 @@ export interface ModelViewerProps {
   openExactEntryRef: MutableRefObject<(() => boolean) | null>;
   /** Armed edge fillet/chamfer handle (selection-first direct manipulation). */
   edgeHandle: EdgeHandleTarget | null;
-  /**
-   * The radius/distance a form is currently proposing for the armed edges.
-   * The handle shows it so the two never disagree: the tile's form said
-   * "Radius 2" while the handle beside it read "R 0 mm".
-   */
-  edgeHandleValue?: number | null;
   /** Streamed while an edge-radius drag is in flight (throttled by App). */
   onEdgeRadiusPreview(size: number): void;
   /** Fired when the radius drag releases (or exact entry commits). */
@@ -1103,11 +1102,6 @@ export interface ModelViewerProps {
    */
   placementPlane?: { origin: Vector3; normal: Vector3 } | null;
   onPlacementClick?(point: Vector3): void;
-  /**
-   * The bore the open Hole card would drill, drawn through the body before
-   * it exists. Null while no hole can be placed.
-   */
-  holeGhost?: HoleGhost | null;
   /**
    * U09: a primitive placed by a press-drag. A press on a flat face of one of
    * `bodyIds` draws on that face's plane, anywhere else on the ground (or
@@ -2139,7 +2133,6 @@ export function ModelViewer({
   cancelDirectManipulationRef,
   openExactEntryRef,
   edgeHandle,
-  edgeHandleValue = null,
   onEdgeRadiusPreview,
   onEdgeCommit,
   onEdgeCancel,
@@ -2151,7 +2144,6 @@ export function ModelViewer({
   onSelectRegion,
   onHoverRegion,
   planePickerArmed,
-  holeGhost = null,
   footprintPicker = null,
   onFootprint,
   datumPlanes,
@@ -2351,8 +2343,6 @@ export function ModelViewer({
   onOffsetCancelRef.current = onOffsetCancel;
   const offsetPreviewInvalidRef = useRef(offsetPreviewInvalid);
   offsetPreviewInvalidRef.current = offsetPreviewInvalid;
-  const edgeHandleValueRef = useRef(edgeHandleValue);
-  edgeHandleValueRef.current = edgeHandleValue;
   const previewDeferredRef = useRef(previewDeferred);
   previewDeferredRef.current = previewDeferred;
   const onOpenOffsetKeypadRef = useRef(onOpenOffsetKeypad);
@@ -2649,9 +2639,7 @@ export function ModelViewer({
   /** Live offset-handle rig; owned by the offsetHandle effect below. */
   const offsetRigRef = useRef<DragRig | null>(null);
   /** The handle the live offset rig was built from. */
-  const offsetRigBuiltRef = useRef<{ handle: OffsetHandleTarget } | null>(
-    null
-  );
+  const offsetRigBuiltRef = useRef<{ handle: OffsetHandleTarget } | null>(null);
   const offsetDragActiveRef = useRef(false);
   /** How far the body reaches behind the armed face, for the "Total" reading. */
   const offsetExtentRef = useRef<number | null>(null);
@@ -2958,7 +2946,10 @@ export function ModelViewer({
       bodyGroup,
       filter: () => selectionFilterRef.current,
       selectThrough: () => xrayRef.current,
-      clippingPlane: () => sectionViewRef.current ? sectionClippingPlane(sectionViewRef.current) : null,
+      clippingPlane: () =>
+        sectionViewRef.current
+          ? sectionClippingPlane(sectionViewRef.current)
+          : null,
       profiles: () => profilePickTargetsRef.current,
       selectionContext: () =>
         profileSelectionModeRef.current
@@ -3029,17 +3020,21 @@ export function ModelViewer({
           const body = context.renderedBodies?.find(
             (candidate) => candidate.bodyId === preview.bodyId
           );
-          const target = moveCopyPreview.target(object, !!preview.copy && !!body, () => {
-            const resolution = context.fatLineResolution();
-            const copy = new THREE.Group();
-            const mesh = createObjectForBody(body!, resolution);
-            const edges = createBodyEdgeOverlay(body!, resolution);
-            edges.setDisplayMode(displayModeRef.current);
-            mesh.add(edges);
-            copy.add(mesh);
-            applyDisplayMode(copy, displayModeRef.current, xrayRef.current);
-            return copy;
-          });
+          const target = moveCopyPreview.target(
+            object,
+            !!preview.copy && !!body,
+            () => {
+              const resolution = context.fatLineResolution();
+              const copy = new THREE.Group();
+              const mesh = createObjectForBody(body!, resolution);
+              const edges = createBodyEdgeOverlay(body!, resolution);
+              edges.setDisplayMode(displayModeRef.current);
+              mesh.add(edges);
+              copy.add(mesh);
+              applyDisplayMode(copy, displayModeRef.current, xrayRef.current);
+              return copy;
+            }
+          );
           moveCopyPreview.refreshAppearance(
             displayModeRef.current,
             xrayRef.current
@@ -3068,7 +3063,9 @@ export function ModelViewer({
         center.z + translation.z
       );
       if (E2E_CANVAS_HOOKS_ENABLED) {
-        renderer.domElement.dataset.e2eMoveCopyPreview = String(moveCopyPreview.active);
+        renderer.domElement.dataset.e2eMoveCopyPreview = String(
+          moveCopyPreview.active
+        );
       }
     }
 
@@ -4148,14 +4145,23 @@ export function ModelViewer({
         commandDragRef.current?.valueId ??
         (rigs.size > 0 ? [...rigs.keys()][0]! : null);
       let anchored = false;
-      const e2eHandles: Record<string, { x: number; y: number; value: number }> =
-        {};
+      const e2eHandles: Record<
+        string,
+        { x: number; y: number; value: number }
+      > = {};
       // Reads before the writes below, as `updateOffsetChip` does: the chips
       // keep out from under the right lane (the docked panels, the viewer
       // bar), where a value cannot be tapped.
       const laneLeft = rigs.size > 0 ? rightLaneLeft(true) : null;
+      // And above the bottom lane (the guidance and the search bar, where
+      // the command's Done stands): a chip held on the canvas there sat
+      // under the bar and could not be tapped.
+      const footTop = rigs.size > 0 ? bottomLaneTop() : null;
       const chipWidths = new Map(
         [...rigs].map(([valueId, entry]) => [valueId, entry.chip.offsetWidth])
+      );
+      const chipHeights = new Map(
+        [...rigs].map(([valueId, entry]) => [valueId, entry.chip.offsetHeight])
       );
       for (const [valueId, entry] of rigs) {
         const view = commandHandlesRef.current.find(
@@ -4176,17 +4182,54 @@ export function ModelViewer({
                 view.params.anchor.z
               )
             : (entry.anchor ?? new THREE.Vector3());
-        const ndc = anchor.clone().project(context.activeCamera);
-        if (ndc.z > 1 || ndc.z < -1) {
+        // Hidden only behind the camera. A point past the far plane (a
+        // value typed far beyond the model) still projects where it lies,
+        // and its chip is kept on the canvas so it can be tapped to fix it.
+        // A handle drawn out past the camera (a large value along a direction
+        // that faces the viewer) puts its chip at the handle's base instead.
+        // Behind is nearer than the near plane, in either projection: an
+        // orthographic view draws nothing there either, whatever it projects.
+        const camera = context.activeCamera;
+        const behind = (point: THREE.Vector3) => isBehindCamera(point, camera);
+        const placed =
+          behind(anchor) && entry.rig ? entry.rig.group.position : anchor;
+        if (behind(placed)) {
           entry.chip.hidden = true;
           continue;
         }
-        const x = edgeChipCenterX(
-          ((ndc.x + 1) / 2) * canvasCssWidth,
-          laneLeft,
-          chipWidths.get(valueId) ?? 0
+        const ndc = placed.clone().project(camera);
+        // Kept on the canvas: a value typed far past the model (a radius
+        // the kernel then refuses) must leave its chip where it can be
+        // tapped again to fix it.
+        const halfWidth = (chipWidths.get(valueId) ?? 0) / 2;
+        const x = Math.min(
+          Math.max(
+            edgeChipCenterX(
+              ((ndc.x + 1) / 2) * canvasCssWidth,
+              laneLeft,
+              chipWidths.get(valueId) ?? 0
+            ),
+            COMMAND_CHIP_MARGIN_PX + halfWidth
+          ),
+          Math.max(
+            COMMAND_CHIP_MARGIN_PX + halfWidth,
+            canvasCssWidth - COMMAND_CHIP_MARGIN_PX - halfWidth
+          )
         );
-        const y = ((1 - ndc.y) / 2) * canvasCssHeight;
+        const halfHeight = (chipHeights.get(valueId) ?? 0) / 2;
+        const top = COMMAND_CHIP_MARGIN_PX * 2;
+        const y = Math.min(
+          Math.max(((1 - ndc.y) / 2) * canvasCssHeight, top),
+          Math.max(
+            top,
+            footTop === null
+              ? canvasCssHeight - COMMAND_CHIP_MARGIN_PX * 2
+              : Math.min(
+                  canvasCssHeight - COMMAND_CHIP_MARGIN_PX * 2,
+                  footTop - COMMAND_CHIP_MARGIN_PX - halfHeight
+                )
+          )
+        );
         const text = view.format(value);
         if (entry.chip.textContent !== text) entry.chip.textContent = text;
         hud.showAt(entry.chip, x, y);
@@ -6569,6 +6612,22 @@ export function ModelViewer({
         : null;
     }
 
+    /**
+     * The top of the stage's bottom lane (the guidance line and the search
+     * bar, or a running command's bar), from the canvas's top. Null when
+     * nothing is drawn there.
+     */
+    function bottomLaneTop(): number | null {
+      const lane = renderer.domElement
+        .closest('.workspace')
+        ?.querySelector<HTMLElement>('.command-bar-lane');
+      if (!lane) return null;
+      const rect = lane.getBoundingClientRect();
+      return rect.height > 0
+        ? rect.top - renderer.domElement.getBoundingClientRect().top
+        : null;
+    }
+
     function updateOffsetChip() {
       const chip = offsetChipRef.current;
       if (!chip) {
@@ -6601,7 +6660,8 @@ export function ModelViewer({
         pills.length > 0 && otherPanels.length > 0
           ? chipPanelDodge(
               {
-                left: Math.min(...pills.map((rect) => rect.left)) - chipDodge.dx,
+                left:
+                  Math.min(...pills.map((rect) => rect.left)) - chipDodge.dx,
                 right:
                   Math.max(...pills.map((rect) => rect.right)) - chipDodge.dx,
                 top: Math.min(...pills.map((rect) => rect.top)) - chipDodge.dy,
@@ -8804,9 +8864,7 @@ export function ModelViewer({
           // Angles in whole degrees and lengths in tenths, unless Shift asks
           // for the free value.
           const step = draggedRig.kind === ANGLE_RIG_KIND ? 1 : 0.1;
-          const value = event.shiftKey
-            ? next
-            : Math.round(next / step) * step;
+          const value = event.shiftKey ? next : Math.round(next / step) * step;
           if (value !== draggedRig.value()) {
             draggedRig.setValue(value);
             onCommandHandlePreviewRef.current?.(
@@ -8927,8 +8985,16 @@ export function ModelViewer({
       const drag = footprintDrag;
       const shape = footprintPickerRef.current?.shape;
       if (!drag || !shape) return;
-      const u = new THREE.Vector3(drag.frame.u.x, drag.frame.u.y, drag.frame.u.z);
-      const v = new THREE.Vector3(drag.frame.v.x, drag.frame.v.y, drag.frame.v.z);
+      const u = new THREE.Vector3(
+        drag.frame.u.x,
+        drag.frame.u.y,
+        drag.frame.u.z
+      );
+      const v = new THREE.Vector3(
+        drag.frame.v.x,
+        drag.frame.v.y,
+        drag.frame.v.z
+      );
       const delta = drag.end.clone().sub(drag.start);
       const along = delta.dot(u);
       const across = delta.dot(v);
@@ -8937,7 +9003,10 @@ export function ModelViewer({
         points.push(
           drag.start.clone(),
           drag.start.clone().addScaledVector(u, along),
-          drag.start.clone().addScaledVector(u, along).addScaledVector(v, across),
+          drag.start
+            .clone()
+            .addScaledVector(u, along)
+            .addScaledVector(v, across),
           drag.start.clone().addScaledVector(v, across)
         );
       } else {
@@ -8965,7 +9034,9 @@ export function ModelViewer({
         context.scene.add(footprintOutline);
       }
       footprintOutline.geometry.dispose();
-      footprintOutline.geometry = new THREE.BufferGeometry().setFromPoints(points);
+      footprintOutline.geometry = new THREE.BufferGeometry().setFromPoints(
+        points
+      );
       requestRender();
     };
     const clearFootprintOutline = () => {
@@ -9053,7 +9124,12 @@ export function ModelViewer({
       if (!drag) return;
       setRayFromEvent(event);
       const ray = context.raycaster.ray;
-      const hit = framePlaneHit(drag.frame, drag.start, ray.origin, ray.direction);
+      const hit = framePlaneHit(
+        drag.frame,
+        drag.start,
+        ray.origin,
+        ray.direction
+      );
       if (hit) drag.end.set(hit.x, hit.y, hit.z);
       if (
         !drag.moved &&
@@ -10140,8 +10216,7 @@ export function ModelViewer({
           // A refused release can keep the last value that built on screen,
           // still uncommitted, so its ghost stays too; a restored body
           // clears the ghost when it is installed.
-          if (!onOffsetCommitRef.current(finalOffset))
-            restoreOffsetBodyProxy();
+          if (!onOffsetCommitRef.current(finalOffset)) restoreOffsetBodyProxy();
         } else {
           clearOffsetGhost();
           restoreOffsetBodyProxy();
@@ -11468,7 +11543,9 @@ export function ModelViewer({
         // while X-ray displays translucent surfaces (see applyDisplayMode).
         fill.userData.ownColourFill = ownColour;
         fill.visible =
-          !ownColour || displayModeRef.current !== 'wireframe' || xrayRef.current;
+          !ownColour ||
+          displayModeRef.current !== 'wireframe' ||
+          xrayRef.current;
         fill.raycast = () => undefined;
         context.fadeIns.add(material);
         return fill;
@@ -12506,9 +12583,9 @@ export function ModelViewer({
       (!placement || sameEdgeRigPlacement(built.placement, placement))
     ) {
       built.handle = edgeHandle;
-      // The value a rebuild would have taken: the card's typed value, else
-      // the target's (restored after a refusal or a cancelled entry).
-      const value = edgeHandleValueRef.current ?? edgeHandle.initialValue ?? 0;
+      // The value a rebuild would have taken: the target's (restored after a
+      // refusal or a cancelled entry).
+      const value = edgeHandle.initialValue ?? 0;
       if (Math.abs(previous.value() - value) > 1e-9) {
         previous.setValue(value);
         context.requestRender();
@@ -12528,10 +12605,7 @@ export function ModelViewer({
       return;
     }
     const rig = buildEdgeRadiusHandle(placement);
-    // A rebuild (the preview body came or went) keeps the value the card has
-    // typed: its effect below only runs when that value changes, so a rig
-    // rebuilt after a refused preview used to read "R 0".
-    rig.setValue(edgeHandleValueRef.current ?? edgeHandle.initialValue ?? 0);
+    rig.setValue(edgeHandle.initialValue ?? 0);
     rig.setWarning?.(offsetPreviewInvalidRef.current);
     if (sameTarget) rig.appear?.();
     if (E2E_CANVAS_HOOKS_ENABLED) {
@@ -12559,16 +12633,6 @@ export function ModelViewer({
     },
     []
   );
-
-  // A typed form value moves the handle; a drag in flight owns it instead.
-  useEffect(() => {
-    const rig = edgeRigRef.current;
-    if (!rig || edgeHandleValue === null || edgeDragActiveRef.current) {
-      return;
-    }
-    rig.setValue(edgeHandleValue);
-    contextRef.current?.requestRender();
-  }, [edgeHandleValue, edgeHandle]);
 
   // Region-detected sketch rendering: curves stay readable while bounded
   // cells get cached fill, boundary, marker, and plane-local pick targets.
@@ -13175,7 +13239,8 @@ export function ModelViewer({
           (candidate) => candidate.valueId === valueId
         );
         const value = entry?.rig ? entry.rig.value() : view?.value;
-        if (value !== undefined) onOpenCommandKeypadRef.current?.(valueId, value);
+        if (value !== undefined)
+          onOpenCommandKeypadRef.current?.(valueId, value);
       });
       rigs.set(handle.valueId, {
         key: handle.key,
@@ -13198,10 +13263,7 @@ export function ModelViewer({
             context.requestRender();
           }
         : null;
-    if (
-      commandDragRef.current &&
-      !rigs.has(commandDragRef.current.valueId)
-    ) {
+    if (commandDragRef.current && !rigs.has(commandDragRef.current.valueId)) {
       // A command canceled mid-drag lets go of the pointer and the drag
       // phase, or the pointer-up that follows finds no drag to end.
       retireCommandDragRef.current?.();
@@ -13411,33 +13473,11 @@ export function ModelViewer({
     };
   }, [datumAxisKey]);
 
-  // The open Hole card's bore (viewer/holeGhostRig): an opening on the entry
-  // face and a barrel that is a faint ghost inside the body, so it reads as a
-  // cut rather than a post. Rebuilt per value change; the viewport renders on
-  // demand, so each change asks for its frame.
-  useEffect(() => {
-    const context = contextRef.current;
-    if (!context || !holeGhost) {
-      return;
-    }
-    const rig = buildHoleGhostRig(holeGhost, SKETCH_COLOR);
-    context.scene.add(rig.group);
-    context.requestRender();
-    return () => {
-      context.scene.remove(rig.group);
-      rig.dispose();
-      context.requestRender();
-    };
-  }, [holeGhost]);
-
   // A footprint drag outlives no command: one canceled under the pointer,
   // or replaced by another (even of the same tool, in the same render),
   // lets go and draws nothing more.
   const footprintSession = footprintPicker?.session ?? null;
-  useEffect(
-    () => () => retireFootprintRef.current?.(),
-    [footprintSession]
-  );
+  useEffect(() => () => retireFootprintRef.current?.(), [footprintSession]);
 
   // The viewport renders on demand, so a typed offset has to ask for the
   // frame that shows it; without this the ghosts only move on the next

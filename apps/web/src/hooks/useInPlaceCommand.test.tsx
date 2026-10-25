@@ -415,6 +415,29 @@ describe('useInPlaceCommand: revolve', () => {
     expect(commit).not.toHaveBeenCalled();
   });
 
+  it('takes the last good frame down when a later value is refused', async () => {
+    let builds = true;
+    const { hook, publishPreview } = setup({
+      buildCommand: () => ({
+        validate: () => undefined,
+        apply: () => fakeDocument(builds),
+        resultBodyId: BODY
+      })
+    });
+    act(() => hook.result.current.start('revolve', [PICK]));
+    act(() => hook.result.current.pickAxis('sketch-vertical'));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(publishPreview).toHaveBeenLastCalledWith(expect.anything());
+    builds = false;
+    act(() => {
+      hook.result.current.setValue('angle', 90);
+    });
+    await waitFor(() =>
+      expect(hook.result.current.refusal).toMatch(/not a closed profile/)
+    );
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+  });
+
   it('keeps the axis for another region of the same sketch', () => {
     const { hook } = setup();
     act(() => hook.result.current.start('revolve', [PICK]));
@@ -1238,7 +1261,8 @@ describe('useInPlaceCommand: editing a stored feature', () => {
           max: { x: 1, y: 1, z: 1 }
         }
       ],
-      plane: null
+      plane: null,
+      edges: []
     },
     values: {},
     raws: {},
@@ -2090,5 +2114,110 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     });
     expect(onStatus).toHaveBeenCalledWith('Edit canceled; Cut 2 is unchanged.');
     expect(hook.result.current.editing).toBeNull();
+  });
+});
+
+describe('useInPlaceCommand: fillet edges', () => {
+  const edge = (bodyId: string, hash: number) => ({
+    bodyId: bodyId as BodyId,
+    hash,
+    topologyId: `e${hash}`
+  });
+
+  it("collects one body's edges in pick order and toggles a repeat off", () => {
+    const { hook } = setup();
+    act(() =>
+      hook.result.current.start('fillet', [], [], [], { edges: [edge('a', 1)] })
+    );
+    act(() => {
+      hook.result.current.pickEdge(edge('a', 2));
+    });
+    expect(hook.result.current.slots.edges.map((e) => e.hash)).toEqual([1, 2]);
+    act(() => {
+      hook.result.current.pickEdge(edge('a', 1));
+    });
+    expect(hook.result.current.slots.edges.map((e) => e.hash)).toEqual([2]);
+    // Another body's edge starts the set over.
+    act(() => {
+      hook.result.current.pickEdge(edge('b', 7));
+    });
+    expect(hook.result.current.slots.edges).toEqual([edge('b', 7)]);
+    // Select all replaces the set, keeping one body.
+    act(() => {
+      hook.result.current.setEdges([edge('a', 1), edge('a', 2), edge('b', 3)]);
+    });
+    expect(hook.result.current.slots.edges.map((e) => e.hash)).toEqual([1, 2]);
+  });
+
+  it('refuses an edge while a command takes none', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('shell'));
+    let taken = true;
+    act(() => {
+      taken = hook.result.current.pickEdge(edge('a', 1));
+    });
+    expect(taken).toBe(false);
+  });
+});
+
+describe("useInPlaceCommand: editing a fillet's edge set", () => {
+  const named = (hash: number) => ({
+    bodyId: 'body_a' as BodyId,
+    hash,
+    topologyId: `e${hash}`,
+    reference: { kind: 'edge', currentHash: hash } as never
+  });
+
+  it('goes hash-only with an added edge, and names the set again once it is dropped', async () => {
+    const seed: InPlaceEditSeed = {
+      featureId: 'feat_f' as FeatureId,
+      nodeId: 'node_f',
+      name: 'Rim',
+      data: {
+        featureKind: 'fillet',
+        targetBodyId: 'body_a' as BodyId,
+        edgeHashes: [1, 2],
+        radius: 2
+      },
+      resultBodyId: BODY,
+      ownBodyIds: [BODY],
+      slots: {
+        profiles: [],
+        axisId: null,
+        path: [],
+        guide: [],
+        faces: [],
+        bodies: [],
+        plane: null,
+        edges: [named(1), named(2)]
+      },
+      values: { radius: 2 },
+      raws: {},
+      touched: ['radius'],
+      options: { law: 'constant' },
+      axes: [],
+      choices: {},
+      lockedOptions: [],
+      notice: null
+    };
+    const { hook, built } = setup();
+    act(() => hook.result.current.edit('fillet', seed));
+    const added = { bodyId: 'body_a' as BodyId, hash: 3, topologyId: 'e3' };
+    act(() => {
+      hook.result.current.pickEdge(added);
+    });
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({ edgeHashes: [1, 2, 3] })
+    );
+    expect(built.at(-1)).not.toHaveProperty('edgeReferences');
+    act(() => {
+      hook.result.current.pickEdge(added);
+    });
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        edgeHashes: [1, 2],
+        edgeReferences: [named(1).reference, named(2).reference]
+      })
+    );
   });
 });

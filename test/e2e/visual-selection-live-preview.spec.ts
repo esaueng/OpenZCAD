@@ -6,7 +6,8 @@ import {
   stubApi,
   expectConsumedBodyCount,
   revealModelPanel,
-  waitForStillViewport
+  waitForStillViewport,
+  blendEdgesInPlace
 } from './openzcad-fixtures';
 
 // Streamed preview frames arrive much later on the 2-core CI runners under
@@ -85,14 +86,14 @@ async function armChamferedTopCapOffset(page: Page) {
   await page.goto('/');
   await page.getByLabel('Project name').fill('Planar Live Preview');
   await page.getByRole('button', { name: 'Create project' }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await createPrimitiveInPlace(page, 'cylinder', {
     sizes: { radius: '14', height: '28' }
   });
-  await page.getByRole('button', { name: /^Chamfer/ }).click();
-  await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
-  await inspector.getByLabel('Distance', { exact: true }).fill('1');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await blendEdgesInPlace(page, {
+    tool: 'Chamfer',
+    allEdges: 2,
+    size: '1'
+  });
   await expectConsumedBodyCount(page, 1);
   await expect(
     page.locator('.body-row', { hasText: 'Cylinder 1' })

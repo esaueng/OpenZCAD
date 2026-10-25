@@ -248,13 +248,17 @@ for (const mode of ['new', 'reopen', 'restore'] as const)
       await page
         .locator('.feature-row-main', { hasText: 'Wall top edge break' })
         .click();
-      const inspector = page.getByRole('region', { name: 'Feature inspector' });
-      await expect(inspector.locator('.selection-summary')).toContainText(
-        '2 edges selected'
-      );
-      await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
-        'fillet_r'
-      );
+      // U09 phase 7: the row re-arms the fillet in place; its radius is
+      // still the parameter, which its chip's keypad opens on.
+      const edit = page.getByRole('group', {
+        name: 'Edit Wall top edge break command'
+      });
+      await expect(edit).toContainText('2 edges');
+      await page.getByTestId('command-handle-radius').click();
+      const keypad = page.locator('.numeric-keypad');
+      await expect(keypad.locator('input')).toHaveValue('fillet_r');
+      await keypad.locator('input').press('Escape');
+      await expect(keypad).toHaveCount(0);
       await expect(page.locator('.viewer-host canvas')).toHaveAttribute(
         'data-e2e-focus-faces',
         '2',
