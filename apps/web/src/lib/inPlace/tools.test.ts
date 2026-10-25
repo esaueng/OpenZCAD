@@ -245,6 +245,26 @@ describe('body tools', () => {
     });
   });
 
+  it('takes every value the stored feature takes, no narrower', () => {
+    const spec = (tool: keyof typeof IN_PLACE_TOOL_SPECS, id: string) =>
+      IN_PLACE_TOOL_SPECS[tool].values.find((value) => value.id === id)!;
+    // Any positive size: a small inch hole, a thin wall, a fine helix.
+    for (const [tool, id] of [
+      ['hole', 'diameter'],
+      ['hole', 'depth'],
+      ['shell', 'thickness'],
+      ['solid-offset', 'distance'],
+      ['helical-sweep', 'radius'],
+      ['helical-sweep', 'turns']
+    ] as const) {
+      expect(valueInRange(spec(tool, id), 0.05)).toBe(true);
+      expect(valueInRange(spec(tool, id), 0)).toBe(false);
+    }
+    // More than a turn, either way.
+    expect(valueInRange(spec('axis-rotate', 'angle'), 450)).toBe(true);
+    expect(valueInRange(spec('circular-pattern', 'angle'), -540)).toBe(true);
+  });
+
   it('draft: an angle either way, up to a right angle', () => {
     const angle = IN_PLACE_TOOL_SPECS.draft.values.find(
       (value) => value.id === 'angle'
