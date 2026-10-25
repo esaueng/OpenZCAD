@@ -552,11 +552,7 @@ test('applying a fillet goes straight from its preview to the blend face', async
   await page.goto('/');
   await page.getByLabel('Project name').fill('Fillet continuity');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   const canvas = page.locator('.viewer-host canvas');
   await expect
     .poll(
