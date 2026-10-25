@@ -8255,6 +8255,20 @@ export function App() {
           ? inPlaceFacePick(bodyId, face.topologyId, face.hash, undefined)
           : null;
       },
+      curve: (sketchId, entityId) => {
+        // As the card's path options were: a drawn line or arc of that
+        // sketch, not construction.
+        const node = current.nodes[entityId as EntityId];
+        return (
+          node?.kind === 'sketch-object' &&
+          !node.data.construction &&
+          (node.data.objectKind === 'line' || node.data.objectKind === 'arc') &&
+          (findSketch(current, sketchId)?.objectIds.includes(
+            entityId as EntityId
+          ) ??
+            false)
+        );
+      },
       body: (bodyId) => inPlaceBodyPick(bodyId)
     });
     if (!armed) return false;

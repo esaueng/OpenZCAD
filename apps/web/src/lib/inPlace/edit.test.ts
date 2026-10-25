@@ -43,6 +43,7 @@ const EDIT_CTX: InPlaceEditContext = {
   firstRegion: () => 7,
   face: (bodyId, hash) => (hash === 11 ? { ...TOP, bodyId } : null),
   anyFace: (bodyId) => ({ ...TOP, bodyId }),
+  curve: (_sketchId, entityId) => entityId !== 'gone',
   body: (bodyId) => ({
     bodyId,
     min: { x: 0, y: 0, z: 0 },
@@ -425,6 +426,24 @@ describe('an untouched edit writes the feature back as stored', () => {
       targetBodyIds: [BODY, 'body_b'],
       keepOriginals: 'tools'
     });
+  });
+
+  it('sweep: a path curve the sketch no longer has is left out, and said', () => {
+    const data: FeatureData = {
+      featureKind: 'sweep',
+      profile: {
+        sketchId: SKETCH,
+        profile: { all: true, sourceEntityIds: ['a'] }
+      },
+      path: { sketchId: SKETCH, entityIds: ['p1', 'gone', 'p2'] as never[] },
+      mode: 'standard'
+    };
+    const armed = inPlaceEditSeed(feature(data), EDIT_CTX)!;
+    expect(armed.seed.slots.path.map((curve) => curve.entityId)).toEqual([
+      'p1',
+      'p2'
+    ]);
+    expect(armed.seed.notice).toMatch(/saved path no longer resolves/);
   });
 
   it('names what no longer resolves, and leaves that slot to pick again', () => {

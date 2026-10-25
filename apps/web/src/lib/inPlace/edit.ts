@@ -50,6 +50,8 @@ export interface InPlaceEditContext {
   face(bodyId: BodyId, hash: number): FacePick | null;
   /** Any planar face of a body, for a command any face names. */
   anyFace(bodyId: BodyId): FacePick | null;
+  /** Whether a sketch still has this curve, as a path can take it. */
+  curve(sketchId: SketchId, entityId: string): boolean;
   body(bodyId: BodyId): BodyPick | null;
 }
 
@@ -237,14 +239,18 @@ export function inPlaceEditSeed(
     }
     case 'sweep': {
       profile(data.profile);
-      seed.slots.path = data.path.entityIds.map((entityId) => ({
-        sketchId: data.path.sketchId,
-        entityId
-      }));
-      seed.slots.guide = (data.guide?.entityIds ?? []).map((entityId) => ({
-        sketchId: data.guide!.sketchId,
-        entityId
-      }));
+      // Only curves the sketch still has: a deleted one would hold the slot
+      // with a reference nothing can build, and the edit says to pick again.
+      const curves = (sketchId: SketchId, entityIds: readonly string[]) =>
+        entityIds.flatMap((entityId) => {
+          if (ctx.curve(sketchId, entityId)) return [{ sketchId, entityId }];
+          missing.push('path');
+          return [];
+        });
+      seed.slots.path = curves(data.path.sketchId, data.path.entityIds);
+      seed.slots.guide = data.guide
+        ? curves(data.guide.sketchId, data.guide.entityIds)
+        : [];
       seed.options.mode = data.mode;
       break;
     }
