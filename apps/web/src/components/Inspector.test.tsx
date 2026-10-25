@@ -456,6 +456,45 @@ describe('Inspector feature provenance', () => {
   });
 });
 
+describe('a split readout', () => {
+  it('reads the second half from the document on screen, as the first', () => {
+    const secondBodyId = 'body-2' as BodyId;
+    const split: FeatureNode = {
+      ...feature,
+      featureKind: 'split',
+      name: 'Split 1',
+      data: {
+        featureKind: 'split',
+        targetBodyId: bodyId,
+        plane: { origin: { x: 5, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } },
+        secondBodyId
+      }
+    };
+    const half = (name: string): BodyRepresentation => ({
+      ...body,
+      bodyId: secondBodyId,
+      name
+    });
+    render(
+      <Inspector
+        {...makeProps({
+          selectedFeature: split,
+          featureSelectionSource: 'pinned',
+          commandSession: null,
+          bodyRepresentations: { [secondBodyId]: half('Half as committed') },
+          massPropertiesDocument: {
+            derived: {
+              bodyRepresentations: { [secondBodyId]: half('Half as previewed') }
+            }
+          } as unknown as ProjectDocument
+        })}
+      />
+    );
+    expect(screen.getByText('Half as previewed')).toBeInTheDocument();
+    expect(screen.queryByText('Half as committed')).toBeNull();
+  });
+});
+
 describe('primitive card position', () => {
   it.each([0, 10])(
     'numbers a body from the document when creating at X=%s',
