@@ -60,11 +60,29 @@ export function pageRemovalParticipant(
   e2ee: E2eeContext,
   onOutcome: (outcome: RemovalOutcome) => void
 ): RemovalParticipant {
-  return removalParticipant({
+  const participant = removalParticipant({
     groups: (account) => pageGroups(e2ee, account),
     pins: versionPins(),
     onOutcome
   });
+  // While encrypted projects are closed to the account there is nothing to
+  // rotate, and the cutoff routes would only answer 501. When the config
+  // cannot be read, the participant runs and handles the routes' answers.
+  let open: Promise<boolean> | null = null;
+  const projectsOpen = () =>
+    (open ??= e2ee.api.config().then(
+      (config) => config.enabled && config.projectsEnabled === true,
+      () => true
+    ));
+  return {
+    prepare: async (account) => {
+      if (await projectsOpen()) await participant.prepare(account);
+    },
+    complete: async (step) =>
+      (await projectsOpen())
+        ? participant.complete(step)
+        : { rotated: [], left: [], cutoffsStored: false }
+  };
 }
 
 export interface RecoverableProject {
