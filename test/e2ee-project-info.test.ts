@@ -627,6 +627,47 @@ describe('measurements', () => {
     ).toBe(409);
   });
 
+  it('refuses measurements whose signer’s device list changed while they were written', async () => {
+    const { srv, laptop, projectId } = await encryptedProject();
+    const push = srv.statements.push.bind(srv.statements);
+    srv.statements.push = (...sql: string[]) => {
+      if (
+        sql.some(
+          (s) =>
+            s.includes('INSERT INTO e2ee_project_envelopes') &&
+            s.includes('excluded.sequence')
+        )
+      ) {
+        srv.statements.push = push;
+        srv.db
+          .prepare(
+            `INSERT INTO e2ee_device_list_entries
+             SELECT user_id, generation, sequence + 1, entry, signature,
+                    substr(entry_hash, 2) || '0', created_at
+             FROM e2ee_device_list_entries WHERE user_id = ?
+             ORDER BY sequence DESC LIMIT 1`
+          )
+          .run(owner.userId);
+      }
+      return push(...sql);
+    };
+    await expect(
+      laptop.measurements.saveProjectMeasurements({
+        projectId,
+        expectedRevision: 0,
+        record: measurements(projectId, '2026-10-24T01:00:00.000Z', 'one')
+      })
+    ).rejects.toMatchObject({ code: 'E2EE_DEVICE_LIST_CHANGED' });
+    expect(
+      rows(
+        srv,
+        `SELECT 1 FROM e2ee_project_envelopes
+         WHERE project_id = ? AND kind = 'measurements'`,
+        projectId
+      )
+    ).toEqual([]);
+  });
+
   it('refuses measurements the account rolled back', async () => {
     const { srv, laptop, projectId } = await encryptedProject();
     for (const [revision, label] of [

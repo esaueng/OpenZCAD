@@ -52,11 +52,14 @@ import {
   PROJECT_FENCE,
   RouteError,
   bytesField,
+  deviceListMoved,
+  deviceListUnchanged,
   idField,
   invalid,
   json,
   record,
   refuse,
+  refuseDeviceListMoved,
   requireCertifiedDevice,
   requireOwnedEncryptedProject,
   runBatch,
@@ -118,6 +121,8 @@ interface EnvelopeInput {
   wrappedVersionKey: string;
   signature: string;
   signerDeviceId: string;
+  /** The device-list head the signer was certified in; the write fences on it. */
+  signerList: { generation: number; headSequence: number };
 }
 
 /**
@@ -154,7 +159,7 @@ async function envelopeInput(
     exact: VERSION_SIGNATURE_BYTES
   });
   const signerDeviceId = idField(input.signerDeviceId, 'signerDeviceId');
-  const { signingKey } = await requireCertifiedDevice(
+  const { signingKey, generation, headSequence } = await requireCertifiedDevice(
     ctx.db,
     ctx.userId,
     signerDeviceId
@@ -182,7 +187,8 @@ async function envelopeInput(
       }
     ).text,
     signature: signature.text,
-    signerDeviceId
+    signerDeviceId,
+    signerList: { generation, headSequence }
   };
 }
 
@@ -257,6 +263,7 @@ function upsert(
   guard: { sql: string; binds: readonly unknown[] },
   extra: { sql: string; binds: readonly unknown[] } = { sql: '1', binds: [] }
 ): D1PreparedStatement {
+  const signer = deviceListUnchanged(ctx.userId, input.signerList);
   return ctx.db
     .prepare(
       `INSERT INTO e2ee_project_envelopes
@@ -267,6 +274,7 @@ function upsert(
          AND EXISTS (SELECT 1 FROM e2ee_project_groups
                      WHERE project_id = ? AND key_epoch_base + epoch = ?)
          AND ${extra.sql}
+         AND ${signer.sql}
        ON CONFLICT (project_id, kind, scope) DO UPDATE SET
          sequence = excluded.sequence, key_epoch = excluded.key_epoch,
          envelope = excluded.envelope,
@@ -294,6 +302,7 @@ function upsert(
       projectId,
       input.header.keyEpoch,
       ...extra.binds,
+      ...signer.binds,
       ...guard.binds
     );
 }
@@ -367,6 +376,9 @@ async function saveMeasurements(
     })
   ]);
   if ((result?.meta?.changes ?? 0) !== 1) {
+    if (await deviceListMoved(ctx.db, ctx.userId, input.signerList)) {
+      refuseDeviceListMoved();
+    }
     const current = (await measurementsRow(ctx.db, projectId))?.sequence ?? 0;
     if (current !== expectedRevision) measurementConflict(current);
     refuse(
@@ -484,6 +496,9 @@ async function saveViewState(
       )
   ]);
   if ((result?.meta?.changes ?? 0) !== 1) {
+    if (await deviceListMoved(ctx.db, ctx.userId, input.signerList)) {
+      refuseDeviceListMoved();
+    }
     const existing = await ctx.db
       .prepare(
         `SELECT sequence, signer_device_id FROM e2ee_project_envelopes
