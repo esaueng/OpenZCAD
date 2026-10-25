@@ -701,6 +701,30 @@ export function inPlaceFeatureUpdate(
 }
 
 /**
+ * The sketches a feature was built from, as it stores them: an edit shows
+ * them even when a saved pick no longer resolves, since that is when the
+ * replacement has to be clicked.
+ */
+export function inPlaceEditSourceSketchIds(data: FeatureData): SketchId[] {
+  switch (data.featureKind) {
+    case 'revolve':
+      return [data.sketchId];
+    case 'loft':
+      return data.sections.map((section) => section.sketchId);
+    case 'sweep':
+      return [
+        data.profile.sketchId,
+        data.path.sketchId,
+        ...(data.guide ? [data.guide.sketchId] : [])
+      ];
+    case 'helical-sweep':
+      return [data.profile.sketchId];
+    default:
+      return [];
+  }
+}
+
+/**
  * The bodies a later feature moved from where `featureId` made them: a
  * transform (in place or a copy), a mirror, a pattern, and anything built
  * on one of those. A click on one of them does not land where the edited

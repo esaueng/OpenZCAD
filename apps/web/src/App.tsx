@@ -1447,6 +1447,7 @@ import { datumAxisChoices } from './lib/datumAxisChoices';
 import {
   inPlaceEditMovedBodies,
   inPlaceEditSeed,
+  inPlaceEditSourceSketchIds,
   inPlaceFeatureUpdate,
   inPlaceToolForFeature,
   type InPlaceEditSeed
@@ -19147,20 +19148,26 @@ export function App() {
   );
 
   // An edit shows the sketches its feature was built from, consumed and
-  // hidden as they usually are, so a profile can be clicked again.
-  const inPlaceEditSketchIds = useMemo(
-    () =>
-      new Set(
-        inPlaceEditing
-          ? [
+  // hidden as they usually are, so a profile can be clicked again: every one
+  // it stores, including one whose saved picks no longer resolve.
+  const inPlaceEditSketchIds = useMemo(() => {
+    const feature =
+      inPlaceEditing && managerRef.current
+        ? findFeature(managerRef.current.document, inPlaceEditing.featureId)
+        : null;
+    return new Set<string>(
+      inPlaceEditing
+        ? [
+            ...(feature ? inPlaceEditSourceSketchIds(feature.data) : []),
+            ...[
               ...inPlaceEditing.slots.profiles,
               ...inPlaceEditing.slots.path,
               ...inPlaceEditing.slots.guide
-            ].map((pick) => pick.sketchId as string)
-          : []
-      ),
-    [inPlaceEditing]
-  );
+            ].map((pick) => pick.sketchId)
+          ]
+        : []
+    );
+  }, [inPlaceEditing]);
   // Editing needs hidden source profiles; visibility remains a viewport concern.
   const sketchViews = useMemo(
     () =>

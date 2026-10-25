@@ -18,6 +18,7 @@ import type {
 import {
   inPlaceEditMovedBodies,
   inPlaceEditSeed,
+  inPlaceEditSourceSketchIds,
   inPlaceFeatureUpdate,
   inPlaceToolForFeature,
   type InPlaceEditContext
@@ -538,5 +539,25 @@ describe('inPlaceEditMovedBodies', () => {
     expect(moved.has(joined.bodyId)).toBe(true);
     // The drilled body itself stands where the hole was made.
     expect(moved.has(drilled.bodyId)).toBe(false);
+  });
+});
+
+describe('inPlaceEditSourceSketchIds', () => {
+  it("names a sweep's profile, path and guide sketches from what it stores", () => {
+    const path = 'sketch_path' as SketchId;
+    const guide = 'sketch_guide' as SketchId;
+    expect(
+      inPlaceEditSourceSketchIds({
+        featureKind: 'sweep',
+        profile: { sketchId: SKETCH },
+        path: { sketchId: path, entityIds: ['gone'] },
+        guide: { sketchId: guide, entityIds: ['gone'] }
+      } as unknown as FeatureData)
+    ).toEqual([SKETCH, path, guide]);
+    expect(
+      inPlaceEditSourceSketchIds({
+        featureKind: 'shell'
+      } as unknown as FeatureData)
+    ).toEqual([]);
   });
 });
