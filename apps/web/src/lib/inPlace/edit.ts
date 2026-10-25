@@ -81,6 +81,10 @@ export interface InPlaceEditContext {
    * the model shows the body after them too.
    */
   laterTransforms?: readonly FeatureData[];
+  /** A datum axis's line, for a turn the model shows already made. */
+  datumAxis?(
+    featureId: FeatureId
+  ): { origin: Vector3; direction: Vector3 } | null;
 }
 
 export interface InPlaceEditSeed {
@@ -447,12 +451,24 @@ export function inPlaceEditSeed(
                 max: { x: 0, y: 0, z: 0 }
               })
         );
+      } else if (data.axisRotation) {
+        seed.slots.axisId = `datum:${data.axisRotation.axis.datumFeatureId}`;
+        value('angle', data.axisRotation.angleDeg);
+        // The model shows the body turned: the angle's rig works from the
+        // body before the turn (a copy's source was never turned).
+        const line = ctx.datumAxis?.(data.axisRotation.axis.datumFeatureId);
+        const angle = seed.values.angle;
+        seed.slots.bodies.push(
+          picked && line && angle !== undefined && !data.copy
+            ? unturned(picked, line, angle)
+            : (picked ?? {
+                bodyId: data.targetBodyId,
+                min: { x: 0, y: 0, z: 0 },
+                max: { x: 0, y: 0, z: 0 }
+              })
+        );
       } else {
         body(data.targetBodyId);
-        if (data.axisRotation) {
-          seed.slots.axisId = `datum:${data.axisRotation.axis.datumFeatureId}`;
-          value('angle', data.axisRotation.angleDeg);
-        }
       }
       // A copy owns its own body: an edit cannot turn it into a Move, or
       // back, so the choice is shown as it is and not offered.
@@ -602,6 +618,77 @@ export function holeWorldPosition(
     x: anchor.x + axes.u.x * u + axes.v.x * v,
     y: anchor.y + axes.u.y * u + axes.v.y * v,
     z: anchor.z + axes.u.z * u + axes.v.z * v
+  };
+}
+
+/**
+ * A body's box before a turn of `angleDeg` about `line`: its corners turned
+ * back, boxed again (exact for quarter turns about a box's own axes, a box
+ * that holds the body otherwise).
+ */
+function unturned(
+  body: BodyPick,
+  line: { origin: Vector3; direction: Vector3 },
+  angleDeg: number
+): BodyPick {
+  const length = Math.hypot(
+    line.direction.x,
+    line.direction.y,
+    line.direction.z
+  );
+  if (!(length > 0)) return body;
+  const k = {
+    x: line.direction.x / length,
+    y: line.direction.y / length,
+    z: line.direction.z / length
+  };
+  const angle = (-angleDeg * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  // Rodrigues: v cos θ + (k × v) sin θ + k (k · v)(1 − cos θ).
+  const turn = (point: Vector3): Vector3 => {
+    const v = {
+      x: point.x - line.origin.x,
+      y: point.y - line.origin.y,
+      z: point.z - line.origin.z
+    };
+    const dot = k.x * v.x + k.y * v.y + k.z * v.z;
+    const cross = {
+      x: k.y * v.z - k.z * v.y,
+      y: k.z * v.x - k.x * v.z,
+      z: k.x * v.y - k.y * v.x
+    };
+    return {
+      x: line.origin.x + v.x * cos + cross.x * sin + k.x * dot * (1 - cos),
+      y: line.origin.y + v.y * cos + cross.y * sin + k.y * dot * (1 - cos),
+      z: line.origin.z + v.z * cos + cross.z * sin + k.z * dot * (1 - cos)
+    };
+  };
+  const corners = [0, 1, 2, 3, 4, 5, 6, 7].map((bits) =>
+    turn({
+      x: bits & 1 ? body.max.x : body.min.x,
+      y: bits & 2 ? body.max.y : body.min.y,
+      z: bits & 4 ? body.max.z : body.min.z
+    })
+  );
+  // Rounded off the turn's float noise, and never a negative zero.
+  const round = (value: number) => Math.round(value * 1e9) / 1e9 + 0;
+  const pick = (
+    axis: 'x' | 'y' | 'z',
+    pickOne: (...values: number[]) => number
+  ) => round(pickOne(...corners.map((corner) => corner[axis])));
+  return {
+    bodyId: body.bodyId,
+    min: {
+      x: pick('x', Math.min),
+      y: pick('y', Math.min),
+      z: pick('z', Math.min)
+    },
+    max: {
+      x: pick('x', Math.max),
+      y: pick('y', Math.max),
+      z: pick('z', Math.max)
+    }
   };
 }
 

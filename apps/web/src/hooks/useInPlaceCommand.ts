@@ -223,6 +223,19 @@ export function useInPlaceCommand(
   const editRef = useRef(editSeed);
   editRef.current = editSeed;
   const sessionTouched = session?.touched ?? EMPTY_TOUCHED;
+  // The edited feature's data in the model now, else as it armed: what the
+  // command passes through unchanged (a hole's position, a draft's pull)
+  // follows a change made to it since (an undo, a collaborator).
+  const baseNow = options.baseDocument();
+  const savedData = useMemo(() => {
+    if (!editSeed) return undefined;
+    const live = baseNow?.nodes
+      ? findFeature(baseNow, editSeed.featureId)
+      : undefined;
+    return live && live.data.featureKind === editSeed.data.featureKind
+      ? live.data
+      : editSeed.data;
+  }, [editSeed, baseNow]);
   const ctx: InPlaceContext = useMemo(
     () => ({
       sketchViews: options.sketchViews,
@@ -232,14 +245,14 @@ export function useInPlaceCommand(
       bodyBounds: (bodyId) => optionsRef.current.bodyBounds?.(bodyId) ?? null,
       evaluate: (value) => optionsRef.current.evaluate?.(value) ?? null,
       touched: sessionTouched,
-      ...(editSeed ? { saved: editSeed.data } : {})
+      ...(savedData ? { saved: savedData } : {})
     }),
     [
       options.sketchViews,
       options.datumAxes,
       options.linearSnap,
-      editSeed,
-      sessionTouched
+      sessionTouched,
+      savedData
     ]
   );
 
