@@ -1462,6 +1462,7 @@ import {
 } from './lib/inPlace/curves';
 import { datumAxisChoices } from './lib/datumAxisChoices';
 import {
+  withFeatureBuilt,
   holeWorldPosition,
   inPlaceEditBodyBox,
   keepAbsentHoleSteps,
@@ -19312,7 +19313,10 @@ export function App() {
         const command = inPlaceEditCommand(request, edit);
         return {
           validate: (document) => command.validate(document),
-          apply: (document) => command.apply(document),
+          // A suppressed feature previews built, so its edit is checked by
+          // the same rebuild that would refuse it once turned back on.
+          apply: (document) =>
+            withFeatureBuilt(command.apply(document), edit.featureId),
           resultBodyId: edit.resultBodyId
         };
       }
@@ -19537,7 +19541,13 @@ export function App() {
     const views = inPlaceProfiles.map((pick) =>
       availableSketchViews.find((view) => view.sketchId === pick.sketchId)
     );
-    if (views.some((view) => !view)) return;
+    // A sketch with no view yet is waiting to be shown (the edit shows its
+    // hidden sources a render after arming) or rebuilt; once the edit has
+    // shown them and the rebuild has settled, a sketch still without a view
+    // (emptied, its plane lost) has nothing a section could stand on.
+    const settled =
+      inPlaceEditFeatureId === editing.featureId && exactGeometryReady;
+    if (!settled && views.some((view) => !view)) return;
     const checked = checkedEditProfiles.current;
     if (
       checked?.editing === editing &&
@@ -19549,10 +19559,9 @@ export function App() {
     checkedEditProfiles.current = { editing, views };
     const kept = inPlaceProfiles.flatMap((pick, index) => {
       if (pick.implicit) return [pick];
-      const [region] = regionsForReferenceRef.current(
-        views[index],
-        pick.reference
-      );
+      const view = views[index];
+      if (!view) return [];
+      const [region] = regionsForReferenceRef.current(view, pick.reference);
       return region
         ? [{ ...pick, regionFingerprint: region.regionFingerprint }]
         : [];
@@ -19570,7 +19579,14 @@ export function App() {
     ) {
       inPlaceRef.current.setProfiles(kept);
     }
-  }, [inPlaceEditing, inPlaceProfiles, availableSketchViews, setStatus]);
+  }, [
+    inPlaceEditing,
+    inPlaceProfiles,
+    availableSketchViews,
+    inPlaceEditFeatureId,
+    exactGeometryReady,
+    setStatus
+  ]);
   // The same for its curves and faces while the document changes under the
   // edit (an undo, a collaborator): a path entity or a face the model no
   // longer has is dropped and said, since nothing on screen could click it
@@ -19666,7 +19682,8 @@ export function App() {
         editing.data,
         {
           evaluate: (value) =>
-            evalParamValue(value, parameterScope.scope, doc.units)
+            evalParamValue(value, parameterScope.scope, doc.units),
+          datumAxis: (featureId) => doc.derived.datumAxes?.[featureId] ?? null
         },
         live ? laterInPlaceSteps(doc, live) : []
       );

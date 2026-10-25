@@ -1,5 +1,7 @@
 import type { FeatureUpdateInput } from '@openzcad/document-core';
 import {
+  FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
+  FEATURE_SUPPRESSED_METADATA_KEY,
   isDatumPlaneRef,
   isFeatureSuppressed,
   type BodyId,
@@ -83,11 +85,6 @@ export interface InPlaceEditSeed {
   data: FeatureData;
   /** The body a valid preview must still build. */
   resultBodyId: BodyId | undefined;
-  /**
-   * The feature is suppressed (or rolled back): it builds no body while it
-   * stays so, and its edit's preview is judged without one.
-   */
-  suppressed?: true;
   /** Bodies the feature itself makes, which it can never take as input. */
   ownBodyIds: BodyId[];
   slots: {
@@ -175,7 +172,6 @@ export function inPlaceEditSeed(
     resultBodyId:
       feature.bodyId ??
       ('targetBodyId' in data ? data.targetBodyId : undefined),
-    ...(isFeatureSuppressed(feature) ? { suppressed: true as const } : {}),
     ownBodyIds: [
       ...(feature.bodyId ? [feature.bodyId] : []),
       ...(data.featureKind === 'split' ? [data.secondBodyId] : [])
@@ -570,63 +566,76 @@ function unturned(
   line: { origin: Vector3; direction: Vector3 },
   angleDeg: number
 ): BodyPick {
+  return boxOf(
+    body.bodyId,
+    boxCorners(body).map((corner) => turnPoint(corner, line, -angleDeg))
+  );
+}
+
+/** `point` turned `angleDeg` about `line` (Rodrigues). */
+function turnPoint(
+  point: Vector3,
+  line: { origin: Vector3; direction: Vector3 },
+  angleDeg: number
+): Vector3 {
   const length = Math.hypot(
     line.direction.x,
     line.direction.y,
     line.direction.z
   );
-  if (!(length > 0)) return body;
+  if (!(length > 0)) return point;
   const k = {
     x: line.direction.x / length,
     y: line.direction.y / length,
     z: line.direction.z / length
   };
-  const angle = (-angleDeg * Math.PI) / 180;
+  const angle = (angleDeg * Math.PI) / 180;
   const cos = Math.cos(angle);
   const sin = Math.sin(angle);
-  // Rodrigues: v cos θ + (k × v) sin θ + k (k · v)(1 − cos θ).
-  const turn = (point: Vector3): Vector3 => {
-    const v = {
-      x: point.x - line.origin.x,
-      y: point.y - line.origin.y,
-      z: point.z - line.origin.z
-    };
-    const dot = k.x * v.x + k.y * v.y + k.z * v.z;
-    const cross = {
-      x: k.y * v.z - k.z * v.y,
-      y: k.z * v.x - k.x * v.z,
-      z: k.x * v.y - k.y * v.x
-    };
-    return {
-      x: line.origin.x + v.x * cos + cross.x * sin + k.x * dot * (1 - cos),
-      y: line.origin.y + v.y * cos + cross.y * sin + k.y * dot * (1 - cos),
-      z: line.origin.z + v.z * cos + cross.z * sin + k.z * dot * (1 - cos)
-    };
+  const v = {
+    x: point.x - line.origin.x,
+    y: point.y - line.origin.y,
+    z: point.z - line.origin.z
   };
-  const corners = [0, 1, 2, 3, 4, 5, 6, 7].map((bits) =>
-    turn({
-      x: bits & 1 ? body.max.x : body.min.x,
-      y: bits & 2 ? body.max.y : body.min.y,
-      z: bits & 4 ? body.max.z : body.min.z
-    })
-  );
-  // Rounded off the turn's float noise, and never a negative zero.
-  const round = (value: number) => Math.round(value * 1e9) / 1e9 + 0;
-  const pick = (
-    axis: 'x' | 'y' | 'z',
-    pickOne: (...values: number[]) => number
-  ) => round(pickOne(...corners.map((corner) => corner[axis])));
+  const dot = k.x * v.x + k.y * v.y + k.z * v.z;
+  const cross = {
+    x: k.y * v.z - k.z * v.y,
+    y: k.z * v.x - k.x * v.z,
+    z: k.x * v.y - k.y * v.x
+  };
   return {
-    bodyId: body.bodyId,
+    x: line.origin.x + v.x * cos + cross.x * sin + k.x * dot * (1 - cos),
+    y: line.origin.y + v.y * cos + cross.y * sin + k.y * dot * (1 - cos),
+    z: line.origin.z + v.z * cos + cross.z * sin + k.z * dot * (1 - cos)
+  };
+}
+
+function boxCorners(body: BodyPick): Vector3[] {
+  return [0, 1, 2, 3, 4, 5, 6, 7].map((bits) => ({
+    x: bits & 1 ? body.max.x : body.min.x,
+    y: bits & 2 ? body.max.y : body.min.y,
+    z: bits & 4 ? body.max.z : body.min.z
+  }));
+}
+
+/** The box around `points`, rounded off float noise (never a −0). */
+function boxOf(bodyId: BodyId, points: readonly Vector3[]): BodyPick {
+  const round = (value: number) => Math.round(value * 1e9) / 1e9 + 0;
+  const extreme = (
+    axis: 'x' | 'y' | 'z',
+    pick: (...values: number[]) => number
+  ) => round(pick(...points.map((point) => point[axis])));
+  return {
+    bodyId,
     min: {
-      x: pick('x', Math.min),
-      y: pick('y', Math.min),
-      z: pick('z', Math.min)
+      x: extreme('x', Math.min),
+      y: extreme('y', Math.min),
+      z: extreme('z', Math.min)
     },
     max: {
-      x: pick('x', Math.max),
-      y: pick('y', Math.max),
-      z: pick('z', Math.max)
+      x: extreme('x', Math.max),
+      y: extreme('y', Math.max),
+      z: extreme('z', Math.max)
     }
   };
 }
@@ -976,14 +985,14 @@ export function keepAbsentHoleSteps(
  * The box an edit's body slot holds for `box`, the body as the model shows
  * it: as it is, except under an in-place scale, whose handle works on the
  * body before the stored scale (a copy's source is shown as it was). Later
- * in-place moves and scales of the same body (`later`, in history order)
- * are taken back first, since the model shows the body after them too; one
- * that turns the body cannot be taken back from a box and is left in.
+ * in-place transforms of the same body (`later`, in history order) are
+ * taken back first, since the model shows the body after them too; a turn
+ * taken back from a box gives a box that still holds the body.
  */
 export function inPlaceEditBodyBox(
   box: BodyPick,
   data: FeatureData,
-  ctx: Pick<InPlaceEditContext, 'evaluate'>,
+  ctx: Pick<InPlaceEditContext, 'evaluate' | 'datumAxis'>,
   later: readonly FeatureData[] = []
 ): BodyPick {
   if (
@@ -1009,35 +1018,102 @@ export function inPlaceEditBodyBox(
 }
 
 /**
- * A box before an in-place move or scale (x ↦ s(x − p) + p + t), or null
- * when the step turns the body or cannot be read.
+ * A box before a later in-place transform: each corner taken back through
+ * the authored move (x ↦ s·R(x − p) + p + t, R the ZYX turn), then through
+ * a turn about a datum axis, which the transform makes first. Null when a
+ * part cannot be read (an unresolved expression, an axis not built).
  */
 function undoLaterTransform(
   box: BodyPick,
   step: FeatureData,
-  ctx: Pick<InPlaceEditContext, 'evaluate'>
+  ctx: Pick<InPlaceEditContext, 'evaluate' | 'datumAxis'>
 ): BodyPick | null {
-  if (step.featureKind !== 'transform' || step.copy || step.axisRotation) {
-    return null;
-  }
+  if (step.featureKind !== 'transform' || step.copy) return null;
   const turn = evaluated(step.transform.rotationDeg, ctx as InPlaceEditContext);
   const move = evaluated(step.transform.translation, ctx as InPlaceEditContext);
-  if (!turn || !move || turn.x !== 0 || turn.y !== 0 || turn.z !== 0) {
-    return null;
-  }
   const factor =
     step.transform.scale === undefined ? 1 : ctx.evaluate(step.transform.scale);
-  if (factor === null || !(factor > 0)) return null;
+  if (!turn || !move || factor === null || !(factor > 0)) return null;
   const pivot = (step.transform.pivot &&
     evaluated(step.transform.pivot, ctx as InPlaceEditContext)) ?? {
     x: 0,
     y: 0,
     z: 0
   };
-  const back = (point: Vector3): Vector3 => ({
-    x: (point.x - pivot.x - move.x) / factor + pivot.x,
-    y: (point.y - pivot.y - move.y) / factor + pivot.y,
-    z: (point.z - pivot.z - move.z) / factor + pivot.z
-  });
-  return { bodyId: box.bodyId, min: back(box.min), max: back(box.max) };
+  let axisTurn: {
+    line: { origin: Vector3; direction: Vector3 };
+    angle: number;
+  } | null = null;
+  if (step.axisRotation) {
+    const line = ctx.datumAxis?.(step.axisRotation.axis.datumFeatureId);
+    const angle = ctx.evaluate(step.axisRotation.angleDeg);
+    if (!line || angle === null) return null;
+    axisTurn = { line, angle };
+  }
+  const [rx, ry, rz] = [turn.x, turn.y, turn.z].map(
+    (degrees) => (degrees * Math.PI) / 180
+  ) as [number, number, number];
+  const [ca, sa, cb, sb, cc, sc] = [
+    Math.cos(rx),
+    Math.sin(rx),
+    Math.cos(ry),
+    Math.sin(ry),
+    Math.cos(rz),
+    Math.sin(rz)
+  ];
+  // R = Rz·Ry·Rx, row by row, as the kernel's transform builds it.
+  const rotation = [
+    [cc * cb, cc * sb * sa - sc * ca, cc * sb * ca + sc * sa],
+    [sc * cb, sc * sb * sa + cc * ca, sc * sb * ca - cc * sa],
+    [-sb, cb * sa, cb * ca]
+  ];
+  const back = (point: Vector3): Vector3 => {
+    const v = [
+      (point.x - pivot.x - move.x) / factor,
+      (point.y - pivot.y - move.y) / factor,
+      (point.z - pivot.z - move.z) / factor
+    ];
+    // Rᵀ·v: a rotation's inverse is its transpose.
+    const column = (index: number) =>
+      rotation[0]![index]! * v[0]! +
+      rotation[1]![index]! * v[1]! +
+      rotation[2]![index]! * v[2]!;
+    const unmoved = {
+      x: column(0) + pivot.x,
+      y: column(1) + pivot.y,
+      z: column(2) + pivot.z
+    };
+    return axisTurn
+      ? turnPoint(unmoved, axisTurn.line, -axisTurn.angle)
+      : unmoved;
+  };
+  return boxOf(box.bodyId, boxCorners(box).map(back));
+}
+
+/**
+ * `document` with `featureId` built even if suppressed: an edit of a
+ * suppressed feature previews what it would build, so the same exact
+ * rebuild that refuses a bad value when it is turned back on refuses it
+ * now. Only the preview: the edit itself leaves the feature suppressed.
+ */
+export function withFeatureBuilt(
+  document: ProjectDocument,
+  featureId: FeatureId
+): ProjectDocument {
+  const node = Object.values(document.nodes).find(
+    (candidate) =>
+      candidate.kind === 'feature' && candidate.featureId === featureId
+  );
+  if (!node || node.kind !== 'feature' || !isFeatureSuppressed(node)) {
+    return document;
+  }
+  const {
+    [FEATURE_SUPPRESSED_METADATA_KEY]: _suppressed,
+    [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: _rolledBack,
+    ...metadata
+  } = node.metadata ?? {};
+  return {
+    ...document,
+    nodes: { ...document.nodes, [node.id]: { ...node, metadata } }
+  };
 }
