@@ -1,4 +1,5 @@
 import { Check, MoreHorizontal, X } from 'lucide-react';
+import { ownedTopologyName } from '../lib/topologyLabels';
 
 /**
  * The only chrome an in-place command has: its name, the one-line step it
@@ -29,6 +30,23 @@ export interface InPlaceCommandBarProps {
    */
   options?: readonly InPlaceOption[];
   onOption?(optionId: string, value: string): void;
+  /**
+   * One-off actions beside the choices (a fillet's Select all edges, a
+   * chamfer's Swap the two faces), under the same disclosure.
+   */
+  actions?: readonly { id: string; label: string }[];
+  onAction?(actionId: string): void;
+  /**
+   * The picks a command holds, by name, in pick order (a fillet's edges),
+   * each with a remove button, as the card's list had them. The list keeps
+   * `minimum` picks: their buttons are off.
+   */
+  picks?: {
+    label: string;
+    minimum: number;
+    items: readonly { id: string; name: string; owner?: string }[];
+  } | null;
+  onRemovePick?(id: string): void;
   onDone(): void;
   onCancel(): void;
 }
@@ -40,6 +58,10 @@ export function InPlaceCommandBar({
   refusal = null,
   options = [],
   onOption,
+  actions = [],
+  onAction,
+  picks = null,
+  onRemovePick,
   onDone,
   onCancel
 }: InPlaceCommandBarProps) {
@@ -53,12 +75,48 @@ export function InPlaceCommandBar({
       <span className="in-place-command-hint" role="status" aria-live="polite">
         {refusal ?? hint}
       </span>
-      {options.length > 0 ? (
+      {options.length > 0 || actions.length > 0 || picks ? (
         <details className="in-place-command-options">
           <summary aria-label={`${title} options`}>
             <MoreHorizontal size={14} aria-hidden="true" />
           </summary>
           <div className="in-place-command-options-panel">
+            {picks && picks.items.length > 0 ? (
+              <ol className="edge-pick-list" aria-label={picks.label}>
+                {picks.items.map((item, index) => {
+                  const fullName = item.owner
+                    ? ownedTopologyName(item.owner, item.name)
+                    : item.name;
+                  return (
+                    <li key={item.id} className="edge-pick-row">
+                      <span className="pick-order mono">{index + 1}</span>
+                      <span className="edge-pick-name" title={fullName}>
+                        {item.owner ? (
+                          <span className="edge-pick-owner">
+                            {ownedTopologyName(item.owner, '')}
+                          </span>
+                        ) : null}
+                        <span className="edge-pick-entity">{item.name}</span>
+                      </span>
+                      <button
+                        type="button"
+                        className="edge-pick-remove"
+                        aria-label={`Remove ${index + 1} ${fullName}`}
+                        title={
+                          picks.items.length <= picks.minimum
+                            ? `${title} needs at least ${picks.minimum}`
+                            : 'Remove'
+                        }
+                        disabled={picks.items.length <= picks.minimum}
+                        onClick={() => onRemovePick?.(item.id)}
+                      >
+                        <X size={12} aria-hidden="true" />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ol>
+            ) : null}
             {options.map((option) => {
               const note = option.choices.find(
                 (choice) => choice.value === option.value
@@ -87,6 +145,20 @@ export function InPlaceCommandBar({
                 </div>
               );
             })}
+            {actions.length > 0 ? (
+              <div className="in-place-option">
+                {actions.map((action) => (
+                  <button
+                    key={action.id}
+                    type="button"
+                    className="in-place-option-choice"
+                    onClick={() => onAction?.(action.id)}
+                  >
+                    {action.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
         </details>
       ) : null}

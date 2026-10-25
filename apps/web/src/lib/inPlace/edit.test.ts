@@ -43,6 +43,18 @@ const EDIT_CTX: InPlaceEditContext = {
   firstRegion: () => 7,
   face: (bodyId, hash) => (hash === 11 ? { ...TOP, bodyId } : null),
   anyFace: (bodyId) => ({ ...TOP, bodyId }),
+  edge: (bodyId, hash) =>
+    hash === 21 || hash === 22
+      ? {
+          bodyId,
+          hash,
+          topologyId: `e${hash}`,
+          // The live body's own name, which an edit must not swap in.
+          reference: { kind: 'edge', currentHash: hash } as never,
+          middle: { x: 5, y: 0, z: 4 },
+          outward: { x: 0, y: -1, z: 1 }
+        }
+      : null,
   body: (bodyId) => ({
     bodyId,
     min: { x: 0, y: 0, z: 0 },
@@ -93,7 +105,8 @@ function untouched(node: FeatureNode): InPlaceRequest | null {
     guide: armed.seed.slots.guide,
     faces: armed.seed.slots.faces,
     bodies: armed.seed.slots.bodies,
-    plane: armed.seed.slots.plane
+    plane: armed.seed.slots.plane,
+    edges: armed.seed.slots.edges
   };
   const values: Record<string, number | string> = { ...armed.seed.values };
   for (const [id, raw] of Object.entries(armed.seed.raws)) values[id] = raw;
@@ -294,7 +307,7 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(request).not.toHaveProperty('profile');
     const update = inPlaceFeatureUpdate(
       { featureId: node.featureId, name: node.name, data },
-      request as Exclude<InPlaceRequest, { tool: 'modeling' }>
+      request as Exclude<InPlaceRequest, { tool: 'modeling' | 'edge-modifier' }>
     );
     expect(update).toEqual({
       featureId: 'feat_1',
@@ -424,6 +437,52 @@ describe('an untouched edit writes the feature back as stored', () => {
       operation: 'subtract',
       targetBodyIds: [BODY, 'body_b'],
       keepOriginals: 'tools'
+    });
+  });
+
+  it('fillet: its stored edge set and names, its end radius and law', () => {
+    const references = [
+      { kind: 'edge', currentHash: 21, stored: true },
+      { kind: 'edge', currentHash: 22, stored: true }
+    ] as never[];
+    const data: FeatureData = {
+      featureKind: 'fillet',
+      targetBodyId: BODY,
+      edgeHashes: [21, 22],
+      edgeReferences: references,
+      radius: 'r',
+      endRadius: 3,
+      radiusLaw: 'scurve'
+    };
+    expect(untouched(feature(data, 'body_f' as BodyId))).toEqual({
+      tool: 'edge-modifier',
+      kind: 'fillet',
+      targetBodyId: BODY,
+      edgeHashes: [21, 22],
+      edgeReferences: references,
+      size: 'r',
+      endRadius: 3,
+      radiusLaw: 'scurve'
+    });
+    // A set stored hash-only stays hash-only, whatever the body names now.
+    const { edgeReferences: _named, ...hashOnly } = data;
+    expect(untouched(feature(hashOnly, 'body_f' as BodyId))).not.toHaveProperty(
+      'edgeReferences'
+    );
+  });
+
+  it('chamfer: a stored second distance is its shape', () => {
+    const data: FeatureData = {
+      featureKind: 'chamfer',
+      targetBodyId: BODY,
+      edgeHashes: [21],
+      distance: 1,
+      distance2: 'd2'
+    };
+    expect(untouched(feature(data, 'body_c' as BodyId))).toMatchObject({
+      kind: 'chamfer',
+      size: 1,
+      distance2: 'd2'
     });
   });
 

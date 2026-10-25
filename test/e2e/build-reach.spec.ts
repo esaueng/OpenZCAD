@@ -4,7 +4,8 @@ import {
   promptField,
   setSelectionFilter,
   stubApi,
-  MODEL_ONLY
+  MODEL_ONLY,
+  finishInPlaceCommand
 } from './openzcad-fixtures';
 
 /**
@@ -255,14 +256,18 @@ test('F30: an opened fillet lists its edges by name, lights them, and drops one'
     { timeout: 60_000 }
   );
 
-  await page
-    .locator('.feature-row-main', { hasText: 'Wall top edge break' })
-    .click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  const edges = inspector.getByRole('list', { name: 'Filleted edges' });
-  await expect(inspector.locator('.selection-summary')).toContainText(
-    '2 edges selected'
-  );
+  // U09 phase 7: the row re-arms the fillet in place; its edges are listed
+  // by name under the bar's Options, where one can be taken off.
+  const row = page.locator('.feature-row-main', {
+    hasText: 'Wall top edge break'
+  });
+  await row.click();
+  const bar = page.getByRole('group', {
+    name: 'Edit Wall top edge break command'
+  });
+  await expect(bar).toContainText('2 edges');
+  await bar.locator('summary').click();
+  const edges = bar.getByRole('list', { name: 'Filleted edges' });
   // Each row is owned as the viewport tag names it: "<body> · Back · Top edge".
   await expect(edges.getByRole('listitem')).toHaveText([
     /^1\s*\S.* · Back · Top edge/,
@@ -274,34 +279,29 @@ test('F30: an opened fillet lists its edges by name, lights them, and drops one'
   await expect(canvas).toHaveAttribute('data-e2e-focus-faces', '2');
   await expect(canvas).not.toHaveAttribute('data-e2e-preview-blend-count');
 
-  // Taking one off previews the blend without it, and the light follows.
-  await inspector
+  // Taking one off previews the blend without it.
+  await bar
     .getByRole('button', { name: /^Remove 2 \S.* · Top · Front edge$/ })
     .click();
   await expect(edges.getByRole('listitem')).toHaveCount(1);
-  await expect(inspector.locator('.selection-summary')).toContainText(
-    '1 edge selected'
-  );
-  await expect(canvas).toHaveAttribute('data-e2e-focus-faces', '1', {
-    timeout: 30_000
-  });
+  await expect(bar).toContainText('1 edge');
   await expect(canvas).not.toHaveAttribute('data-e2e-preview-blend-count');
   // The last edge cannot be removed: a fillet needs one.
   await expect(
-    inspector.getByRole('button', { name: /^Remove 1 \S.* · Back · Top edge$/ })
+    bar.getByRole('button', { name: /^Remove 1 \S.* · Back · Top edge$/ })
   ).toBeDisabled();
+  await bar.locator('summary').click();
 
-  // Apply closes the card. Reopening reads the stored one-edge set from the
-  // new document version and lights its one blend.
-  await inspector.getByRole('button', { name: /^Apply/ }).click();
+  // Done patches the feature. Re-arming reads the stored one-edge set from
+  // the new document version and lights its one blend.
+  await finishInPlaceCommand(page, 'Edit Wall top edge break');
   await expect(page.getByRole('contentinfo')).toContainText(
-    'Wall top edge break applied.',
+    'Edited Wall top edge break',
     { timeout: 60_000 }
   );
-  await expect(inspector).toHaveCount(0);
-  await page
-    .locator('.feature-row-main', { hasText: 'Wall top edge break' })
-    .click();
+  await row.click();
+  await expect(bar).toContainText('1 edge');
+  await bar.locator('summary').click();
   await expect(edges.getByRole('listitem')).toHaveText([
     /^1\s*\S.* · Back · Top edge/
   ]);

@@ -8,6 +8,7 @@ import {
   isInPlaceTool,
   valueInRange,
   type BodyPick,
+  type EdgePick,
   type FacePick,
   type InPlaceContext,
   type InPlaceSlots
@@ -32,7 +33,8 @@ const EMPTY: InPlaceSlots = {
   guide: [],
   faces: [],
   bodies: [],
-  plane: null
+  plane: null,
+  edges: []
 };
 
 const BODY: BodyPick = {
@@ -56,7 +58,8 @@ describe('the in-place tool table', () => {
     expect(isInPlaceTool('revolve')).toBe(true);
     expect(isInPlaceTool('grid-pattern')).toBe(true);
     expect(isInPlaceTool('box')).toBe(false);
-    expect(isInPlaceTool('fillet')).toBe(false);
+    expect(isInPlaceTool('fillet')).toBe(true);
+    expect(isInPlaceTool('chamfer')).toBe(true);
   });
 
   it('takes a typed value inside its range, strictly for an open one', () => {
@@ -595,5 +598,91 @@ describe('review: loft apex and guided sweeps', () => {
         ctx
       )
     ).toMatchObject({ mode: 'standard' });
+  });
+});
+
+describe('fillet and chamfer run in place', () => {
+  const EDGE: EdgePick = {
+    bodyId: 'body_a' as BodyId,
+    hash: 21,
+    topologyId: 'e21',
+    reference: { kind: 'edge', currentHash: 21 } as never,
+    middle: { x: 10, y: 0, z: 4 },
+    outward: { x: 0, y: -1, z: 0 },
+    end: { x: 20, y: 0, z: 4 }
+  };
+  const SECOND: EdgePick = { ...EDGE, hash: 22, topologyId: 'e22' };
+
+  it('a constant fillet stores its radius and the named edge set', () => {
+    const spec = IN_PLACE_TOOL_SPECS.fillet;
+    const slots = { ...EMPTY, edges: [EDGE, SECOND] };
+    expect(spec.ready(slots)).toBe(true);
+    expect(spec.hint(slots, {})).toMatch(/^2 edges/);
+    expect(
+      spec.request(
+        slots,
+        { radius: 'r', endRadius: 3 },
+        { law: 'constant' },
+        CTX
+      )
+    ).toEqual({
+      tool: 'edge-modifier',
+      kind: 'fillet',
+      targetBodyId: 'body_a',
+      edgeHashes: [21, 22],
+      edgeReferences: [EDGE.reference, SECOND.reference],
+      size: 'r'
+    });
+    // The radius arrow points into the body from the first edge.
+    const [handle] = spec.handles(slots, {}, CTX, { law: 'constant' });
+    expect(handle).toMatchObject({
+      valueId: 'radius',
+      kind: 'linear',
+      params: { origin: EDGE.middle }
+    });
+    const direction =
+      handle?.kind === 'linear' ? handle.params.direction : undefined;
+    expect(direction?.y).toBeCloseTo(1);
+  });
+
+  it('a variable fillet adds its end radius and law, with a chip', () => {
+    const spec = IN_PLACE_TOOL_SPECS.fillet;
+    const slots = { ...EMPTY, edges: [EDGE] };
+    expect(
+      spec.request(slots, { radius: 2, endRadius: 4 }, { law: 'scurve' }, CTX)
+    ).toMatchObject({ size: 2, endRadius: 4, radiusLaw: 'scurve' });
+    expect(
+      spec.handles(slots, {}, CTX, { law: 'linear' }).map((h) => h.valueId)
+    ).toEqual(['radius', 'endRadius']);
+    expect(spec.defaults?.(slots, CTX, { radius: 5 })).toEqual({
+      endRadius: 5
+    });
+  });
+
+  it('an edge set with an unnamed pick goes hash-only', () => {
+    const { reference: _named, ...unnamed } = SECOND;
+    expect(
+      IN_PLACE_TOOL_SPECS.fillet.request(
+        { ...EMPTY, edges: [EDGE, unnamed] },
+        { radius: 1 },
+        {},
+        CTX
+      )
+    ).not.toHaveProperty('edgeReferences');
+  });
+
+  it('a chamfer stores only its chosen shape: an angle or a second distance', () => {
+    const spec = IN_PLACE_TOOL_SPECS.chamfer;
+    const slots = { ...EMPTY, edges: [EDGE] };
+    const values = { distance: 2, angle: 30, distance2: 3 };
+    expect(
+      spec.request(slots, values, { shape: 'equal' }, CTX)
+    ).not.toHaveProperty('angleDeg');
+    const angled = spec.request(slots, values, { shape: 'angle' }, CTX);
+    expect(angled).toMatchObject({ angleDeg: 30 });
+    expect(angled).not.toHaveProperty('distance2');
+    const two = spec.request(slots, values, { shape: 'two' }, CTX);
+    expect(two).toMatchObject({ distance2: 3 });
+    expect(two).not.toHaveProperty('angleDeg');
   });
 });

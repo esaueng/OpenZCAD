@@ -6,7 +6,8 @@ import {
   expect,
   stubApi,
   expectConsumedBodyCount,
-  waitForStillViewport
+  waitForStillViewport,
+  blendEdgesInPlace
 } from './openzcad-fixtures';
 
 for (const dimension of ['radius', 'height', 'bottom-height'] as const) {
@@ -267,10 +268,11 @@ async function setupRoundedCylinder(page: Page, bottomView: boolean) {
   await inspector.getByLabel('Radius', { exact: true }).fill('70');
   await inspector.getByLabel('Height', { exact: true }).fill('22');
   await inspector.getByRole('button', { name: /^Create/ }).click();
-  await page.getByRole('button', { name: /^Fillet/ }).click();
-  await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
-  await inspector.getByLabel('Radius', { exact: true }).fill('2');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await blendEdgesInPlace(page, {
+    tool: 'Fillet',
+    allEdges: 2,
+    size: '2'
+  });
   await expect(page.locator('.feature-row')).toHaveCount(2);
   await expectConsumedBodyCount(page, 1);
   // The body keeps its own name through the fillet; only History says Fillet.

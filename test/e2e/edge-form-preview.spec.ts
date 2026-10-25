@@ -3,14 +3,22 @@ import {
   expect,
   stubApi,
   setSelectionFilter,
-  locateEdge
+  locateEdge,
+  enterCommandValue,
+  finishInPlaceCommand
 } from './openzcad-fixtures';
 
-for (const [tool, field] of [
-  ['Fillet', 'Radius'],
-  ['Chamfer', 'Distance']
+/**
+ * U09 phase 7: Fillet and Chamfer run in place. Edges are clicks (or every
+ * edge from Options), the size is the chip on the first edge, and Done
+ * commits the previewed result; a History row re-arms the same command.
+ */
+
+for (const [tool, valueId, chip] of [
+  ['Fillet', 'radius', 'R'],
+  ['Chamfer', 'distance', 'Distance']
 ] as const) {
-  test(`${tool} creation retains its entered size after an exact preview`, async ({
+  test(`${tool} creation keeps its entered size after an exact preview`, async ({
     page
   }) => {
     await stubApi(page);
@@ -23,35 +31,45 @@ for (const [tool, field] of [
     await inspector.getByLabel('Height', { exact: true }).fill('28');
     await inspector.getByRole('button', { name: /^Create/ }).click();
     await page.getByRole('button', { name: new RegExp(`^${tool}`) }).click();
-    await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
-    await inspector.getByLabel(field, { exact: true }).fill('1');
-    // The card's own verb: its button says Create, not Apply.
-    await expect(page.getByRole('contentinfo')).toContainText(
-      'Preview · Create to save the result.'
+    const bar = page.getByRole('group', { name: `${tool} command` });
+    await expect(bar).toContainText(`Click the edges to ${tool.toLowerCase()}`);
+    // No card: the size is a chip, and Select all is a rare choice.
+    await expect(inspector).toHaveCount(0);
+    await bar.locator('summary').click();
+    await bar.getByRole('button', { name: 'Select all 2 edges' }).click();
+    await bar.locator('summary').click();
+    await expect(bar).toContainText('2 edges');
+    await enterCommandValue(page, valueId, '1');
+    await expect(page.getByTestId(`command-handle-${valueId}`)).toHaveText(
+      `${chip} 1 mm`
     );
-    await expect(inspector.getByLabel(field, { exact: true })).toHaveValue('1');
     await expect(page.locator('.feature-row')).toHaveCount(1);
-    await inspector.getByRole('button', { name: /^Create/ }).click();
+    await finishInPlaceCommand(page, tool);
     const feature = page.locator('.feature-row', {
       hasText: new RegExp(`^${tool}`)
     });
     await expect(feature).toBeVisible();
+    // Its History row re-arms the command with the stored size.
     await feature.locator('.feature-row-main').click();
-    await expect(inspector.getByLabel(field, { exact: true })).toHaveValue('1');
-    // Reopened from History it is an edit card: its button and its preview
-    // line both say Apply.
-    await expect(
-      inspector.getByRole('button', { name: /^Apply/ })
-    ).toBeVisible();
-    await inspector.getByLabel(field, { exact: true }).fill('2');
-    await expect(page.getByRole('contentinfo')).toContainText(
-      'Preview · Apply to save the result.'
+    const edit = page.getByRole('group', { name: `Edit ${tool} command` });
+    await expect(edit).toContainText('2 edges');
+    await expect(page.getByTestId(`command-handle-${valueId}`)).toHaveText(
+      `${chip} 1 mm`
     );
+    await enterCommandValue(page, valueId, '2');
+    await finishInPlaceCommand(page, `Edit ${tool}`);
+    await expect(page.getByRole('contentinfo')).toContainText(
+      `Edited ${tool}`,
+      { timeout: 30_000 }
+    );
+    await expect(
+      page.locator('.feature-row', { hasText: new RegExp(`^${tool}`) })
+    ).toHaveCount(1);
     await expect(page.getByTitle('Feature failed to build')).toHaveCount(0);
   });
 }
 
-test('a fillet takes another edge after creation from its own form', async ({
+test('a fillet takes another edge after creation from its History row', async ({
   page
 }) => {
   await stubApi(page);
@@ -65,29 +83,31 @@ test('a fillet takes another edge after creation from its own form', async ({
   await inspector.getByRole('button', { name: /^Create/ }).click();
   await expect(page.locator('.feature-row')).toHaveCount(1);
 
-  // One rim first.
+  // One rim first: picked, then the tool takes it.
   await setSelectionFilter(page, 'Edge');
   const first = await locateEdge(page);
   await page.mouse.click(first.x, first.y);
   await page.getByRole('button', { name: /^Fillet/ }).click();
-  await expect(inspector).toContainText('1 edge selected');
-  await inspector.getByLabel('Radius', { exact: true }).fill('1');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  const bar = page.getByRole('group', { name: 'Fillet command' });
+  await expect(bar).toContainText('1 edge');
+  await enterCommandValue(page, 'radius', '1');
+  await finishInPlaceCommand(page, 'Fillet');
   const feature = page.locator('.feature-row', { hasText: /^Fillet/ });
   await expect(feature).toBeVisible();
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
-  // Reopen the fillet and add the other rim: the edit form takes the pick
-  // and Apply patches the same feature instead of creating a second one.
+  // Re-arm the fillet and add the other rim: a click on the filleted body's
+  // edge joins the stored set, and Done patches the same feature.
   await feature.locator('.feature-row-main').click();
-  await expect(inspector).toContainText('1 edge selected');
+  const edit = page.getByRole('group', { name: 'Edit Fillet command' });
+  await expect(edit).toContainText('1 edge');
   const second = await locateEdge(page, { exclude: [first.topologyId] });
-  await page.keyboard.down('Shift');
   await page.mouse.click(second.x, second.y);
-  await page.keyboard.up('Shift');
-  await expect(inspector).toContainText('2 edges selected');
-  await inspector.getByRole('button', { name: /^Apply/ }).click();
-  await expect(page.getByRole('contentinfo')).toContainText('Fillet applied.');
+  await expect(edit).toContainText('2 edges');
+  await finishInPlaceCommand(page, 'Edit Fillet');
+  await expect(page.getByRole('contentinfo')).toContainText('Edited Fillet', {
+    timeout: 30_000
+  });
   await expect(
     page.locator('.feature-row', { hasText: /^Fillet/ })
   ).toHaveCount(1);

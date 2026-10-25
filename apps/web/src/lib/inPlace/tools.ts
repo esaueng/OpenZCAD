@@ -5,6 +5,7 @@ import {
   type BooleanKeepOriginals,
   type BooleanOperation,
   type DatumAxisLine,
+  type EdgeTopologyReferenceV5,
   type FeatureData,
   type FeatureId,
   type ParamValue,
@@ -13,6 +14,7 @@ import {
   type SketchId,
   type SketchProfileReference,
   type SketchSectionReference,
+  type VariableFilletLaw,
   type Vector3
 } from '@openzcad/shared';
 import {
@@ -54,7 +56,9 @@ export type InPlaceToolId =
   | 'intersect'
   | 'linear-pattern'
   | 'circular-pattern'
-  | 'grid-pattern';
+  | 'grid-pattern'
+  | 'fillet'
+  | 'chamfer';
 
 export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'revolve',
@@ -75,7 +79,9 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'intersect',
   'linear-pattern',
   'circular-pattern',
-  'grid-pattern'
+  'grid-pattern',
+  'fillet',
+  'chamfer'
 ];
 
 export function isInPlaceTool(tool: string): tool is InPlaceToolId {
@@ -118,6 +124,20 @@ export interface FacePick {
   savedPosition?: true;
 }
 
+/** A picked model edge, with where its handles stand. */
+export interface EdgePick {
+  bodyId: BodyId;
+  hash: number;
+  topologyId: string;
+  /** Its lineage name, when the body publishes one. */
+  reference?: EdgeTopologyReferenceV5;
+  /** The middle of its drawn polyline, and the way out of the body there. */
+  middle?: Vector3;
+  outward?: Vector3;
+  /** Its far end, where a variable fillet reaches its end radius. */
+  end?: Vector3;
+}
+
 /** A picked body, with the box its handles are placed from. */
 export interface BodyPick {
   bodyId: BodyId;
@@ -155,6 +175,8 @@ export interface InPlaceSlots {
   /** In pick order: a boolean's first is its base. */
   bodies: BodyPick[];
   plane: PlanePick | null;
+  /** In pick order, all on one body: a fillet's or chamfer's. */
+  edges: EdgePick[];
 }
 
 /** A choice too rare for a handle: it lives in the bar's Options menu. */
@@ -285,6 +307,23 @@ export type InPlaceRequest =
       copy?: boolean;
     }
   | {
+      /**
+       * A fillet or chamfer, as the value its card submitted: App builds it
+       * through the card's own command (`edgeModifierCommand`).
+       */
+      tool: 'edge-modifier';
+      kind: 'fillet' | 'chamfer';
+      targetBodyId: BodyId;
+      edgeHashes: number[];
+      /** All or nothing: one for every edge, in the same order. */
+      edgeReferences?: EdgeTopologyReferenceV5[];
+      size: ParamValue;
+      endRadius?: ParamValue;
+      radiusLaw?: VariableFilletLaw;
+      angleDeg?: ParamValue;
+      distance2?: ParamValue;
+    }
+  | {
       tool: 'pattern';
       targetBodyId: BodyId;
       patternKind: 'linear' | 'circular' | 'grid';
@@ -338,6 +377,8 @@ export interface InPlaceToolSpec {
   faceMode?: 'one' | 'many';
   /** Whole bodies it takes, named by a click on any of their faces. */
   bodyMode?: 'one' | 'many';
+  /** Model edges it takes, all on one body (Shift is not needed). */
+  edgeMode?: 'many';
   /** Takes a plane: a ghost principal plane, a datum plane or a flat face. */
   wantsPlane?: boolean;
   /**
@@ -2097,6 +2138,215 @@ const gridPattern: InPlaceToolSpec = {
   }
 };
 
+/** Every picked edge's lineage name, or none: a set is named all or nothing. */
+function edgeReferences(
+  edges: readonly EdgePick[]
+): EdgeTopologyReferenceV5[] | undefined {
+  return edges.length > 0 && edges.every((edge) => edge.reference)
+    ? edges.map((edge) => edge.reference!)
+    : undefined;
+}
+
+function edgeHint(slots: InPlaceSlots, what: string, drag: string): string {
+  const count = slots.edges.length;
+  if (count === 0) return `Click the edges to ${what}`;
+  return `${count} ${count === 1 ? 'edge' : 'edges'} · click more, drag the ${drag} · ${FINISH}`;
+}
+
+/**
+ * The size handle on the first picked edge: from its middle, into the body,
+ * so the arrow is as long as the blend is wide.
+ */
+function edgeSizeHandle(valueId: string, slots: InPlaceSlots): HandleSpec[] {
+  const edge = slots.edges[0];
+  if (!edge?.middle || !edge.outward) return [];
+  return [
+    {
+      valueId,
+      kind: 'linear',
+      key: `${edge.bodyId}:${edge.hash}:${valueId}`,
+      params: { origin: edge.middle, direction: scaled(unit(edge.outward), -1) }
+    }
+  ];
+}
+
+/** A second value's chip, at the far end of the last picked edge. */
+function edgeEndChip(valueId: string, slots: InPlaceSlots): HandleSpec[] {
+  const edge = slots.edges.at(-1);
+  const anchor = edge?.end ?? edge?.middle;
+  if (!edge || !anchor) return [];
+  return [
+    {
+      valueId,
+      kind: 'chip',
+      key: `${edge.bodyId}:${edge.hash}:${valueId}`,
+      params: { anchor }
+    }
+  ];
+}
+
+const VARIABLE_RADIUS_NOTE =
+  "Variable radius runs the kernel's experimental blend and is offered only for these two laws. The radius runs from Radius at each edge's start to End radius at its far end.";
+
+const fillet: InPlaceToolSpec = {
+  id: 'fillet',
+  title: 'Fillet',
+  profileMode: 'none',
+  edgeMode: 'many',
+  wantsAxis: false,
+  wantsPath: false,
+  values: [
+    {
+      id: 'radius',
+      label: 'R',
+      unit: 'length',
+      initial: 2,
+      min: 0,
+      exclusive: true
+    },
+    {
+      id: 'endRadius',
+      label: 'End R',
+      unit: 'length',
+      initial: 2,
+      min: 0,
+      exclusive: true
+    }
+  ],
+  options: [
+    {
+      id: 'law',
+      label: 'Radius change',
+      // Constant by default, as a blank End radius was on the card.
+      choices: [
+        { value: 'constant', label: 'Constant' },
+        { value: 'linear', label: 'Linear', note: VARIABLE_RADIUS_NOTE },
+        {
+          value: 'scurve',
+          label: 'Eased at both ends',
+          note: VARIABLE_RADIUS_NOTE
+        }
+      ],
+      initial: 'constant'
+    }
+  ],
+  // A variable fillet starts with its end radius at the radius until set.
+  defaults: (_slots, _ctx, numbers) => ({ endRadius: numbers.radius ?? 2 }),
+  hint: (slots) => edgeHint(slots, 'fillet', 'radius'),
+  ready: (slots) => slots.edges.length > 0,
+  request(slots, values, options) {
+    const first = slots.edges[0];
+    if (!first) return null;
+    const law = options.law;
+    const variable = law === 'linear' || law === 'scurve';
+    const references = edgeReferences(slots.edges);
+    return {
+      tool: 'edge-modifier',
+      kind: 'fillet',
+      targetBodyId: first.bodyId,
+      edgeHashes: slots.edges.map((edge) => edge.hash),
+      ...(references ? { edgeReferences: references } : {}),
+      size: values.radius ?? 2,
+      ...(variable
+        ? {
+            endRadius: values.endRadius ?? values.radius ?? 2,
+            radiusLaw: law
+          }
+        : {})
+    };
+  },
+  handles: (slots, _values, _ctx, options) => [
+    ...edgeSizeHandle('radius', slots),
+    ...(options.law === 'linear' || options.law === 'scurve'
+      ? edgeEndChip('endRadius', slots)
+      : [])
+  ]
+};
+
+const chamfer: InPlaceToolSpec = {
+  id: 'chamfer',
+  title: 'Chamfer',
+  profileMode: 'none',
+  edgeMode: 'many',
+  wantsAxis: false,
+  wantsPath: false,
+  values: [
+    {
+      id: 'distance',
+      label: 'Distance',
+      unit: 'length',
+      initial: 2,
+      min: 0,
+      exclusive: true
+    },
+    {
+      // The bevel's angle off the first face, strictly between 0° and 90°.
+      id: 'angle',
+      label: 'Angle',
+      unit: 'angle',
+      initial: 45,
+      min: 0,
+      max: 90,
+      exclusive: true
+    },
+    {
+      id: 'distance2',
+      label: 'Second distance',
+      unit: 'length',
+      initial: 2,
+      min: 0,
+      exclusive: true
+    }
+  ],
+  options: [
+    {
+      id: 'shape',
+      label: 'Shape',
+      // Equal setbacks by default, as blank Angle and Second distance were.
+      choices: [
+        { value: 'equal', label: 'Equal' },
+        { value: 'angle', label: 'Distance and angle' },
+        {
+          value: 'two',
+          label: 'Two distances',
+          note: 'Distance and Second distance land on the two faces the edge separates. The preview shows which is which; swap them if it is the wrong way round.'
+        }
+      ],
+      initial: 'equal'
+    }
+  ],
+  // A second distance starts at the first until set.
+  defaults: (_slots, _ctx, numbers) => ({
+    distance2: numbers.distance ?? 2
+  }),
+  hint: (slots) => edgeHint(slots, 'chamfer', 'distance'),
+  ready: (slots) => slots.edges.length > 0,
+  request(slots, values, options) {
+    const first = slots.edges[0];
+    if (!first) return null;
+    const references = edgeReferences(slots.edges);
+    return {
+      tool: 'edge-modifier',
+      kind: 'chamfer',
+      targetBodyId: first.bodyId,
+      edgeHashes: slots.edges.map((edge) => edge.hash),
+      ...(references ? { edgeReferences: references } : {}),
+      size: values.distance ?? 2,
+      // An angle and a second distance are exclusive: only the chosen
+      // shape's is stored.
+      ...(options.shape === 'angle' ? { angleDeg: values.angle ?? 45 } : {}),
+      ...(options.shape === 'two'
+        ? { distance2: values.distance2 ?? values.distance ?? 2 }
+        : {})
+    };
+  },
+  handles: (slots, _values, _ctx, options) => [
+    ...edgeSizeHandle('distance', slots),
+    ...(options.shape === 'angle' ? edgeEndChip('angle', slots) : []),
+    ...(options.shape === 'two' ? edgeEndChip('distance2', slots) : [])
+  ]
+};
+
 export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   revolve,
   loft,
@@ -2116,7 +2366,9 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   intersect: booleanSpec('intersect', 'Intersect'),
   'linear-pattern': linearPattern,
   'circular-pattern': circularPattern,
-  'grid-pattern': gridPattern
+  'grid-pattern': gridPattern,
+  fillet,
+  chamfer
 };
 
 /**

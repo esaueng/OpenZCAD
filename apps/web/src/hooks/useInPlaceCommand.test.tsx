@@ -665,7 +665,8 @@ describe('useInPlaceCommand: editing a stored feature', () => {
           max: { x: 1, y: 1, z: 1 }
         }
       ],
-      plane: null
+      plane: null,
+      edges: []
     },
     values: {},
     raws: {},
@@ -726,5 +727,46 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     act(() => hook.result.current.cancel());
     expect(onStatus).toHaveBeenCalledWith('Edit canceled; Cut 2 is unchanged.');
     expect(hook.result.current.editing).toBeNull();
+  });
+});
+
+describe('useInPlaceCommand: fillet edges', () => {
+  const edge = (bodyId: string, hash: number) => ({
+    bodyId: bodyId as BodyId,
+    hash,
+    topologyId: `e${hash}`
+  });
+
+  it("collects one body's edges in pick order and toggles a repeat off", () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('fillet', [], [], [], [edge('a', 1)]));
+    act(() => {
+      hook.result.current.pickEdge(edge('a', 2));
+    });
+    expect(hook.result.current.slots.edges.map((e) => e.hash)).toEqual([1, 2]);
+    act(() => {
+      hook.result.current.pickEdge(edge('a', 1));
+    });
+    expect(hook.result.current.slots.edges.map((e) => e.hash)).toEqual([2]);
+    // Another body's edge starts the set over.
+    act(() => {
+      hook.result.current.pickEdge(edge('b', 7));
+    });
+    expect(hook.result.current.slots.edges).toEqual([edge('b', 7)]);
+    // Select all replaces the set, keeping one body.
+    act(() => {
+      hook.result.current.setEdges([edge('a', 1), edge('a', 2), edge('b', 3)]);
+    });
+    expect(hook.result.current.slots.edges.map((e) => e.hash)).toEqual([1, 2]);
+  });
+
+  it('refuses an edge while a command takes none', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('shell'));
+    let taken = true;
+    act(() => {
+      taken = hook.result.current.pickEdge(edge('a', 1));
+    });
+    expect(taken).toBe(false);
   });
 });

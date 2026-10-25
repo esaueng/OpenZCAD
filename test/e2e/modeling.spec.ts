@@ -23,7 +23,8 @@ import {
   enterCommandValue,
   finishInPlaceCommand,
   pickObjectsBody,
-  pickPlanarFace
+  pickPlanarFace,
+  blendEdgesInPlace
 } from './openzcad-fixtures';
 
 test('suppresses features and rolls the timeline back as one undoable edit', async ({
@@ -1274,10 +1275,11 @@ test('radius drag resizes a cylinder after bottom adjustment and filleting', asy
     'Cylinder height set to 32 mm.'
   );
 
-  await page.getByRole('button', { name: /^Fillet/ }).click();
-  await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
-  await inspector.getByLabel('Radius', { exact: true }).fill('1');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await blendEdgesInPlace(page, {
+    tool: 'Fillet',
+    allEdges: 2,
+    size: '1'
+  });
   const offsetRow = page.locator('.feature-row', {
     hasText: 'Move Cylinder Base'
   });
@@ -1360,10 +1362,11 @@ test('keeps a two-rim fillet while editing a cylinder from 4.6 to 6.4 mm', async
   await inspector.getByRole('button', { name: /^Create/ }).click();
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
-  await page.getByRole('button', { name: /^Fillet/ }).click();
-  await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
-  await inspector.getByLabel('Radius', { exact: true }).fill('1');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await blendEdgesInPlace(page, {
+    tool: 'Fillet',
+    allEdges: 2,
+    size: '1'
+  });
 
   const cylinder = page.locator('.feature-row', { hasText: /^Cylinder/ });
   const fillet = page.locator('.feature-row', { hasText: /^Fillet/ });

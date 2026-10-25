@@ -5,7 +5,12 @@ import {
   createProjectDocument
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
-import { expect, test, stubApi } from './openzcad-fixtures';
+import {
+  expect,
+  test,
+  stubApi,
+  blendEdgesInPlace
+} from './openzcad-fixtures';
 
 /**
  * ROADMAP U01, coherence plan phase 2 gate: one value, one commit gesture.
@@ -174,10 +179,11 @@ test('cap height under chamfers: Enter commits the chip value, Escape leaves his
   );
   // Chamfers put the cap edit on the exact-preview path: every value must
   // survive a real rebuild rather than a proxy scale.
-  await page.getByRole('button', { name: /^Chamfer/ }).click();
-  await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
-  await inspector.getByLabel('Distance', { exact: true }).fill('1');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await blendEdgesInPlace(page, {
+    tool: 'Chamfer',
+    allEdges: 2,
+    size: '1'
+  });
   await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   const { select, axisLength } = cylinderHooks(canvas);
   const arm = async () => {
@@ -418,10 +424,11 @@ test('one Escape clears a refused offset: card, preview, handle and selection', 
     page,
     'Contract refused offset'
   );
-  await page.getByRole('button', { name: /^Chamfer/ }).click();
-  await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
-  await inspector.getByLabel('Distance', { exact: true }).fill('1');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await blendEdgesInPlace(page, {
+    tool: 'Chamfer',
+    allEdges: 2,
+    size: '1'
+  });
   await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   const { select, axisLength } = cylinderHooks(canvas);
   const height = async () => {

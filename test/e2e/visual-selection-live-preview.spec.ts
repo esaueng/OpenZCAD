@@ -5,7 +5,8 @@ import {
   stubApi,
   expectConsumedBodyCount,
   revealModelPanel,
-  waitForStillViewport
+  waitForStillViewport,
+  blendEdgesInPlace
 } from './openzcad-fixtures';
 
 // Streamed preview frames arrive much later on the 2-core CI runners under
@@ -89,10 +90,11 @@ async function armChamferedTopCapOffset(page: Page) {
   await inspector.getByLabel('Radius', { exact: true }).fill('14');
   await inspector.getByLabel('Height', { exact: true }).fill('28');
   await inspector.getByRole('button', { name: /^Create/ }).click();
-  await page.getByRole('button', { name: /^Chamfer/ }).click();
-  await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
-  await inspector.getByLabel('Distance', { exact: true }).fill('1');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await blendEdgesInPlace(page, {
+    tool: 'Chamfer',
+    allEdges: 2,
+    size: '1'
+  });
   await expectConsumedBodyCount(page, 1);
   await expect(
     page.locator('.body-row', { hasText: 'Cylinder 1' })

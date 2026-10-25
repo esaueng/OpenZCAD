@@ -18,6 +18,7 @@ import {
   IN_PLACE_TOOL_SPECS,
   type BodyPick,
   type CurvePick,
+  type EdgePick,
   type FacePick,
   type InPlaceRequest,
   type InPlaceToolId,
@@ -50,6 +51,8 @@ export interface InPlaceEditContext {
   face(bodyId: BodyId, hash: number): FacePick | null;
   /** Any planar face of a body, for a command any face names. */
   anyFace(bodyId: BodyId): FacePick | null;
+  /** A body's edge by its hash, with where its handles stand. */
+  edge(bodyId: BodyId, hash: number): EdgePick | null;
   body(bodyId: BodyId): BodyPick | null;
 }
 
@@ -70,6 +73,7 @@ export interface InPlaceEditSeed {
     faces: FacePick[];
     bodies: BodyPick[];
     plane: PlanePick | null;
+    edges: EdgePick[];
   };
   values: Record<string, number>;
   raws: Record<string, string>;
@@ -103,6 +107,8 @@ export function inPlaceToolForFeature(data: FeatureData): InPlaceToolId | null {
     case 'draft':
     case 'mirror':
     case 'split':
+    case 'fillet':
+    case 'chamfer':
       return data.featureKind;
     case 'boolean':
       return data.operation;
@@ -158,7 +164,8 @@ export function inPlaceEditSeed(
       guide: [],
       faces: [],
       bodies: [],
-      plane: null
+      plane: null,
+      edges: []
     },
     values: Object.fromEntries(spec.values.map((v) => [v.id, v.initial])),
     raws: {},
@@ -389,6 +396,46 @@ export function inPlaceEditSeed(
       seed.lockedOptions.push('copy');
       break;
     }
+    case 'fillet':
+    case 'chamfer': {
+      // The stored edge set, in its order, each with the lineage name it was
+      // stored with (or none): an untouched edit writes the same set back.
+      const named = data.edgeReferences?.length === data.edgeHashes.length;
+      data.edgeHashes.forEach((hash, index) => {
+        const edge = ctx.edge(data.targetBodyId, hash);
+        if (!edge) missing.push('edge');
+        const { reference: _current, ...placed } = edge ?? {
+          bodyId: data.targetBodyId,
+          hash,
+          topologyId: ''
+        };
+        seed.slots.edges.push({
+          ...placed,
+          ...(named ? { reference: data.edgeReferences![index]! } : {})
+        });
+      });
+      if (data.featureKind === 'fillet') {
+        value('radius', data.radius);
+        if (data.endRadius !== undefined) {
+          value('endRadius', data.endRadius);
+          seed.options.law = data.radiusLaw ?? 'linear';
+        } else {
+          seed.options.law = 'constant';
+        }
+      } else {
+        value('distance', data.distance);
+        if (data.angleDeg !== undefined) {
+          value('angle', data.angleDeg);
+          seed.options.shape = 'angle';
+        } else if (data.distance2 !== undefined) {
+          value('distance2', data.distance2);
+          seed.options.shape = 'two';
+        } else {
+          seed.options.shape = 'equal';
+        }
+      }
+      break;
+    }
     case 'pattern': {
       body(data.targetBodyId);
       value('count', data.count);
@@ -502,13 +549,13 @@ const AXIS_DIRECTIONS = {
 
 /**
  * The `updateFeature` patch an edit's request writes, for every request but
- * a face operation's (App runs those through the card's own submission and
- * `modelingFeatureUpdate`). Keys the command does not show are left out, so
+ * a face operation's and a fillet's or chamfer's (App runs those through the
+ * cards' own builders, `modelingFeatureUpdate` and `edgeModifierCommand`). Keys the command does not show are left out, so
  * the patch keeps them as stored.
  */
 export function inPlaceFeatureUpdate(
   seed: Pick<InPlaceEditSeed, 'featureId' | 'name' | 'data'>,
-  request: Exclude<InPlaceRequest, { tool: 'modeling' }>
+  request: Exclude<InPlaceRequest, { tool: 'modeling' | 'edge-modifier' }>
 ): FeatureUpdateInput | null {
   const { featureId, name, data: saved } = seed;
   switch (request.tool) {

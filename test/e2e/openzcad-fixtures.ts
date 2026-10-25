@@ -1359,6 +1359,37 @@ export async function createHoleInPlace(
 }
 
 /**
+ * Fillets or chamfers in place (U09 phase 7): the tool, the edges already
+ * selected (or every edge of the body, from Options), the size on its chip's
+ * keypad, Done.
+ */
+export async function blendEdgesInPlace(
+  page: Page,
+  options: { tool: 'Fillet' | 'Chamfer'; size: string; allEdges?: number }
+) {
+  await page
+    .getByRole('button', { name: new RegExp(`^${options.tool}`) })
+    .first()
+    .click();
+  const bar = page.getByRole('group', { name: `${options.tool} command` });
+  await expect(bar).toBeVisible();
+  if (options.allEdges !== undefined) {
+    await bar.locator('summary').click();
+    await bar
+      .getByRole('button', { name: `Select all ${options.allEdges} edges` })
+      .click();
+    await bar.locator('summary').click();
+  }
+  await expect(bar).toContainText(/\d+ edges? ·/);
+  await enterCommandValue(
+    page,
+    options.tool === 'Fillet' ? 'radius' : 'distance',
+    options.size
+  );
+  await finishInPlaceCommand(page, options.tool);
+}
+
+/**
  * Shells in place (U09): the Shell tool, a click on each planar face with one
  * of `normals`, the wall on the chip's keypad, Done.
  */

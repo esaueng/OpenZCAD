@@ -8,6 +8,7 @@ import {
   valueInRange,
   type BodyPick,
   type CurvePick,
+  type EdgePick,
   type FacePick,
   type HandleSpec,
   type InPlaceContext,
@@ -78,6 +79,7 @@ interface Session {
     faces: FacePick[];
     bodies: BodyPick[];
     plane: PlanePick | null;
+    edges: EdgePick[];
   };
   options: Record<string, string>;
   values: Record<string, number>;
@@ -113,7 +115,8 @@ export interface InPlaceCommand {
     tool: InPlaceToolId,
     profiles?: ProfilePick[],
     faces?: FacePick[],
-    bodies?: BodyPick[]
+    bodies?: BodyPick[],
+    edges?: EdgePick[]
   ): void;
   pickProfile(pick: ProfilePick, additive?: boolean): void;
   pickAxis(axisId: string): void;
@@ -129,6 +132,14 @@ export interface InPlaceCommand {
   addFaces(faces: readonly FacePick[]): number | null;
   /** A body click (any of its faces): refused when the tool takes none. */
   pickBody(body: BodyPick): boolean;
+  /**
+   * An edge click: it joins the command's edges, or a picked one comes back
+   * out; an edge of another body starts the set over. Refused (false) when
+   * the tool takes no edges.
+   */
+  pickEdge(edge: EdgePick): boolean;
+  /** Replaces the command's edges (Select all, Clear); false without any. */
+  setEdges(edges: readonly EdgePick[]): boolean;
   pickPlane(plane: PlanePick): boolean;
   setOption(optionId: string, value: string): void;
   previewValue(valueId: string, value: number): void;
@@ -162,7 +173,8 @@ const EMPTY_SLOTS: InPlaceSlots = {
   guide: [],
   faces: [],
   bodies: [],
-  plane: null
+  plane: null,
+  edges: []
 };
 
 function sameProfile(a: ProfilePick, b: ProfilePick): boolean {
@@ -226,7 +238,8 @@ export function useInPlaceCommand(
             guide: session.slots.guide,
             faces: session.slots.faces,
             bodies: session.slots.bodies,
-            plane: session.slots.plane
+            plane: session.slots.plane,
+            edges: session.slots.edges
           }
         : EMPTY_SLOTS,
     [session, axisCandidates]
@@ -394,7 +407,8 @@ export function useInPlaceCommand(
       tool: InPlaceToolId,
       initial: ProfilePick[] = [],
       initialFaces: FacePick[] = [],
-      initialBodies: BodyPick[] = []
+      initialBodies: BodyPick[] = [],
+      initialEdges: EdgePick[] = []
     ) => {
       const toolSpec = IN_PLACE_TOOL_SPECS[tool];
       preview.clear();
@@ -424,7 +438,8 @@ export function useInPlaceCommand(
               ? initialBodies.slice(0, 1)
               : initialBodies
             : [],
-          plane: null
+          plane: null,
+          edges: toolSpec.edgeMode ? sameBodyEdges(initialEdges) : []
         },
         options: Object.fromEntries(
           (toolSpec.options ?? []).map((option) => [option.id, option.initial])
@@ -455,7 +470,8 @@ export function useInPlaceCommand(
           guide: seed.slots.guide,
           faces: seed.slots.faces,
           bodies: seed.slots.bodies,
-          plane: seed.slots.plane
+          plane: seed.slots.plane,
+          edges: seed.slots.edges
         },
         options: { ...seed.options },
         values: { ...seed.values },
@@ -602,6 +618,42 @@ export function useInPlaceCommand(
         }
       };
     });
+    return true;
+  }, []);
+
+  const pickEdge = useCallback((edge: EdgePick) => {
+    const current = sessionRef.current;
+    const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
+    if (!current || !toolSpec?.edgeMode) return false;
+    setSession((latest) => {
+      if (!latest) return latest;
+      const edges = latest.slots.edges;
+      const sameBody = edges[0]?.bodyId === edge.bodyId;
+      const picked = edges.some((other) => other.hash === edge.hash);
+      // Edges of one body, in pick order: an edge of another starts the set
+      // over, and a picked one clicked again comes back out.
+      const next = !sameBody
+        ? [edge]
+        : picked
+          ? edges.filter((other) => other.hash !== edge.hash)
+          : [...edges, edge];
+      return { ...latest, slots: { ...latest.slots, edges: next } };
+    });
+    return true;
+  }, []);
+
+  const setEdges = useCallback((edges: readonly EdgePick[]) => {
+    const current = sessionRef.current;
+    const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
+    if (!current || !toolSpec?.edgeMode) return false;
+    setSession((latest) =>
+      latest
+        ? {
+            ...latest,
+            slots: { ...latest.slots, edges: sameBodyEdges(edges) }
+          }
+        : latest
+    );
     return true;
   }, []);
 
@@ -843,6 +895,8 @@ export function useInPlaceCommand(
     pickFace,
     addFaces,
     pickBody,
+    pickEdge,
+    setEdges,
     pickPlane,
     setOption,
     previewValue,
@@ -852,6 +906,17 @@ export function useInPlaceCommand(
     done,
     cancel
   };
+}
+
+/** Edges as a command holds them: the first one's body only, once each. */
+function sameBodyEdges(edges: readonly EdgePick[]): EdgePick[] {
+  const body = edges[0]?.bodyId;
+  const seen = new Set<number>();
+  return edges.filter((edge) => {
+    if (edge.bodyId !== body || seen.has(edge.hash)) return false;
+    seen.add(edge.hash);
+    return true;
+  });
 }
 
 /**
