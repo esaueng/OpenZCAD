@@ -185,6 +185,35 @@ test('a new fillet among several bodies can select all again after clearing', as
   ).toBeVisible();
 });
 
+test('a new fillet keeps its edges lit across an undo', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Fillet undo');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  await inspector.getByLabel('Radius', { exact: true }).fill('14');
+  await inspector.getByLabel('Height', { exact: true }).fill('28');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  // A second feature, for the undo to take back while the fillet runs.
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(page.locator('.feature-row')).toHaveCount(2);
+  await page.getByRole('button', { name: /^Fillet/ }).click();
+  const bar = page.getByRole('group', { name: 'Fillet command' });
+  const canvas = page.locator('.viewer-host canvas');
+  const edge = await locateEdge(page);
+  await page.mouse.click(edge.x, edge.y);
+  await expect(bar).toContainText('1 edge · click more');
+  const lit = await canvas.getAttribute('data-e2e-selected-edges');
+  expect(lit).toBeTruthy();
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(page.locator('.feature-row')).toHaveCount(1);
+  // The command still holds the edge, and it is still the one lit.
+  await expect(bar).toContainText('1 edge · click more');
+  await expect(canvas).toHaveAttribute('data-e2e-selected-edges', lit!);
+});
+
 test('a box sweep during Fillet adds the edges it catches', async ({
   page
 }) => {
