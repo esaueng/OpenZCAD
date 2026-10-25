@@ -18,6 +18,7 @@ declare global {
   interface Window {
     __faceDragLog?: { t: number; name: string; value: string | null }[];
     __holdFinal?: { hold: boolean; held: number; release(): void };
+    __holdPreviews?: { hold: boolean; held: number; deliver(): void };
     __openzcadE2EExactFaceDrag?: boolean;
     __slowAnalysis?: {
       armed: boolean;
@@ -119,7 +120,11 @@ async function recordCanvas(canvas: Locator) {
       }
     }).observe(element, {
       attributes: true,
-      attributeFilter: ['data-e2e-handle-x', 'data-e2e-height-proxy-offset']
+      attributeFilter: [
+        'data-e2e-handle-x',
+        'data-e2e-height-proxy-offset',
+        'data-e2e-offset-ghost'
+      ]
     });
   });
 }
@@ -645,4 +650,110 @@ test('a tool that needs the finished model waits for a genuine rebuild', async (
   );
   await expect(page.getByRole('region', { name: /^Hole/ })).toHaveCount(0);
   await page.evaluate(() => window.__slowAnalysis!.release!());
+});
+
+/**
+ * Holds the worker's exact preview replies until the spec delivers them, so
+ * each typed value's frame lands exactly when the spec says.
+ */
+async function holdPreviews(page: Page) {
+  await page.addInitScript(() => {
+    const held: (() => void)[] = [];
+    window.__holdPreviews = {
+      hold: false,
+      held: 0,
+      deliver() {
+        for (const send of held.splice(0)) send();
+      }
+    };
+    const descriptor = Object.getOwnPropertyDescriptor(
+      Worker.prototype,
+      'onmessage'
+    )!;
+    Object.defineProperty(Worker.prototype, 'onmessage', {
+      ...descriptor,
+      set(listener: (event: MessageEvent) => void) {
+        descriptor.set!.call(this, (event: MessageEvent) => {
+          const gate = window.__holdPreviews!;
+          if (
+            gate.hold &&
+            (event.data as { type?: string }).type === 'preview-geometry'
+          ) {
+            gate.held += 1;
+            held.push(() => listener.call(this, event));
+          } else listener.call(this, event);
+        });
+      }
+    });
+  });
+}
+
+const frames = (page: Page) =>
+  page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      )
+  );
+
+test('typing an offset keeps the ghost and handle while exact previews land', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  await holdPreviews(page);
+  const { canvas } = await armedBox(page);
+  await recordCanvas(canvas);
+  await page.evaluate(() => {
+    window.__holdPreviews!.hold = true;
+  });
+  const held = () => page.evaluate(() => window.__holdPreviews!.held);
+  await page.getByTestId('direct-manipulation-value').click();
+  // A box side reads its span: 18 mm deep, so 20 is a 2 mm pull.
+  const keypad = page.getByRole('dialog', { name: 'Total value' });
+  await expect(keypad).toBeVisible();
+  const field = keypad.getByRole('textbox');
+  const typing = await now(page);
+  let landed = 0;
+  for (const value of ['20', '23', '26']) {
+    await field.fill(value);
+    await expect(canvas).toHaveAttribute('data-e2e-offset-ghost', '1');
+    // The exact frame for this value is in hand; let it land.
+    await expect.poll(held, { timeout: 30_000 }).toBeGreaterThan(landed);
+    landed = await held();
+    await page.evaluate(() => window.__holdPreviews!.deliver());
+    await frames(page);
+    await frames(page);
+  }
+  // The ghost of the part as it was, and the handle, stayed up throughout.
+  expect(await removals(page, 'data-e2e-offset-ghost', typing)).toBe(0);
+  expect(await removals(page, 'data-e2e-handle-x', typing)).toBe(0);
+
+  // Escape abandons the typed value: no ghost survives it, nothing is added.
+  await page.evaluate(() => {
+    window.__holdPreviews!.hold = false;
+    window.__holdPreviews!.deliver();
+  });
+  await field.press('Escape');
+  await expect(keypad).toBeHidden();
+  await expect(canvas).not.toHaveAttribute('data-e2e-offset-ghost', /.+/);
+  await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Offset face' })
+  ).toHaveCount(0);
+
+  // Applying a typed value commits it cleanly.
+  await page.getByTestId('direct-manipulation-value').click();
+  await expect(keypad).toBeVisible();
+  await field.fill('21');
+  await field.press('Enter');
+  await expect(page.getByText('Offset face by', { exact: false })).toBeVisible({
+    timeout: 30_000
+  });
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Offset face' })
+  ).toHaveCount(1);
+  await expect(canvas).not.toHaveAttribute('data-e2e-offset-ghost', /.+/);
+  await expect(
+    page.getByRole('region', { name: 'Offset Face operation' })
+  ).toBeVisible();
 });
