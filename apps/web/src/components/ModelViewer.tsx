@@ -29,11 +29,7 @@ import {
 import { buildSketchRelationGlyphs } from './viewer/sketchRelations';
 import type { SketchRelationGlyphChip } from '../lib/sketch/relationGlyphs';
 import type { SketchDimensionAnnotation } from '../lib/sketch/dimensionAnnotations';
-import type {
-  BoundaryProvenance,
-  SketchComposite,
-  SketchDimensionIdentity
-} from '@openzcad/shared';
+import type { BoundaryProvenance, SketchComposite, SketchDimensionIdentity } from '@openzcad/shared';
 import {
   disposeRetiringOverlays,
   disposeSettledOverlays,
@@ -2536,7 +2532,9 @@ export function ModelViewer({
   /** Live offset-handle rig; owned by the offsetHandle effect below. */
   const offsetRigRef = useRef<DragRig | null>(null);
   /** The handle the live offset rig was built from. */
-  const offsetRigBuiltRef = useRef<{ handle: OffsetHandleTarget } | null>(null);
+  const offsetRigBuiltRef = useRef<{ handle: OffsetHandleTarget } | null>(
+    null
+  );
   const offsetDragActiveRef = useRef(false);
   /** How far the body reaches behind the armed face, for the "Total" reading. */
   const offsetExtentRef = useRef<number | null>(null);
@@ -2843,10 +2841,7 @@ export function ModelViewer({
       bodyGroup,
       filter: () => selectionFilterRef.current,
       selectThrough: () => xrayRef.current,
-      clippingPlane: () =>
-        sectionViewRef.current
-          ? sectionClippingPlane(sectionViewRef.current)
-          : null,
+      clippingPlane: () => sectionViewRef.current ? sectionClippingPlane(sectionViewRef.current) : null,
       profiles: () => profilePickTargetsRef.current,
       selectionContext: () =>
         profileSelectionModeRef.current
@@ -2917,21 +2912,17 @@ export function ModelViewer({
           const body = context.renderedBodies?.find(
             (candidate) => candidate.bodyId === preview.bodyId
           );
-          const target = moveCopyPreview.target(
-            object,
-            !!preview.copy && !!body,
-            () => {
-              const resolution = context.fatLineResolution();
-              const copy = new THREE.Group();
-              const mesh = createObjectForBody(body!, resolution);
-              const edges = createBodyEdgeOverlay(body!, resolution);
-              edges.setDisplayMode(displayModeRef.current);
-              mesh.add(edges);
-              copy.add(mesh);
-              applyDisplayMode(copy, displayModeRef.current, xrayRef.current);
-              return copy;
-            }
-          );
+          const target = moveCopyPreview.target(object, !!preview.copy && !!body, () => {
+            const resolution = context.fatLineResolution();
+            const copy = new THREE.Group();
+            const mesh = createObjectForBody(body!, resolution);
+            const edges = createBodyEdgeOverlay(body!, resolution);
+            edges.setDisplayMode(displayModeRef.current);
+            mesh.add(edges);
+            copy.add(mesh);
+            applyDisplayMode(copy, displayModeRef.current, xrayRef.current);
+            return copy;
+          });
           moveCopyPreview.refreshAppearance(
             displayModeRef.current,
             xrayRef.current
@@ -2960,9 +2951,7 @@ export function ModelViewer({
         center.z + translation.z
       );
       if (E2E_CANVAS_HOOKS_ENABLED) {
-        renderer.domElement.dataset.e2eMoveCopyPreview = String(
-          moveCopyPreview.active
-        );
+        renderer.domElement.dataset.e2eMoveCopyPreview = String(moveCopyPreview.active);
       }
     }
 
@@ -4040,10 +4029,8 @@ export function ModelViewer({
         commandDragRef.current?.valueId ??
         (rigs.size > 0 ? [...rigs.keys()][0]! : null);
       let anchored = false;
-      const e2eHandles: Record<
-        string,
-        { x: number; y: number; value: number }
-      > = {};
+      const e2eHandles: Record<string, { x: number; y: number; value: number }> =
+        {};
       // Reads before the writes below, as `updateOffsetChip` does: the chips
       // keep out from under the right lane (the docked panels, the viewer
       // bar), where a value cannot be tapped.
@@ -6454,8 +6441,7 @@ export function ModelViewer({
         pills.length > 0 && otherPanels.length > 0
           ? chipPanelDodge(
               {
-                left:
-                  Math.min(...pills.map((rect) => rect.left)) - chipDodge.dx,
+                left: Math.min(...pills.map((rect) => rect.left)) - chipDodge.dx,
                 right:
                   Math.max(...pills.map((rect) => rect.right)) - chipDodge.dx,
                 top: Math.min(...pills.map((rect) => rect.top)) - chipDodge.dy,
@@ -8653,7 +8639,9 @@ export function ModelViewer({
           // Angles in whole degrees and lengths in tenths, unless Shift asks
           // for the free value.
           const step = draggedRig.kind === ANGLE_RIG_KIND ? 1 : 0.1;
-          const value = event.shiftKey ? next : Math.round(next / step) * step;
+          const value = event.shiftKey
+            ? next
+            : Math.round(next / step) * step;
           if (value !== draggedRig.value()) {
             draggedRig.setValue(value);
             onCommandHandlePreviewRef.current?.(
@@ -9799,7 +9787,8 @@ export function ModelViewer({
           // A refused release can keep the last value that built on screen,
           // still uncommitted, so its ghost stays too; a restored body
           // clears the ghost when it is installed.
-          if (!onOffsetCommitRef.current(finalOffset)) restoreOffsetBodyProxy();
+          if (!onOffsetCommitRef.current(finalOffset))
+            restoreOffsetBodyProxy();
         } else {
           clearOffsetGhost();
           restoreOffsetBodyProxy();
@@ -11120,9 +11109,7 @@ export function ModelViewer({
         // while X-ray displays translucent surfaces (see applyDisplayMode).
         fill.userData.ownColourFill = ownColour;
         fill.visible =
-          !ownColour ||
-          displayModeRef.current !== 'wireframe' ||
-          xrayRef.current;
+          !ownColour || displayModeRef.current !== 'wireframe' || xrayRef.current;
         fill.raycast = () => undefined;
         context.fadeIns.add(material);
         return fill;
@@ -12744,8 +12731,7 @@ export function ModelViewer({
           (candidate) => candidate.valueId === valueId
         );
         const value = entry?.rig ? entry.rig.value() : view?.value;
-        if (value !== undefined)
-          onOpenCommandKeypadRef.current?.(valueId, value);
+        if (value !== undefined) onOpenCommandKeypadRef.current?.(valueId, value);
       });
       rigs.set(handle.valueId, {
         key: handle.key,
@@ -12768,7 +12754,10 @@ export function ModelViewer({
             context.requestRender();
           }
         : null;
-    if (commandDragRef.current && !rigs.has(commandDragRef.current.valueId)) {
+    if (
+      commandDragRef.current &&
+      !rigs.has(commandDragRef.current.valueId)
+    ) {
       // A command canceled mid-drag lets go of the pointer and the drag
       // phase, or the pointer-up that follows finds no drag to end.
       retireCommandDragRef.current?.();

@@ -4783,9 +4783,7 @@ test('a refused boolean never lands in history and says why in the form', async 
   await expect(page.locator('.in-place-command.refused')).toBeVisible({
     timeout: 30_000
   });
-  await expect(
-    intersectBar.getByRole('button', { name: /Done/ })
-  ).toBeDisabled();
+  await expect(intersectBar.getByRole('button', { name: /Done/ })).toBeDisabled();
   await expect(featureRows).toHaveCount(before);
   await expect(
     page.locator('.feature-row', { hasText: 'Intersect' })
