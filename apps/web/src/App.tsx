@@ -8201,10 +8201,9 @@ export function App() {
       // While a preview shows, a click lands on the preview's body, which the
       // document does not have. The face meant is the edited body's face in
       // the same plane: clicking the face again is how a hole moves.
-      const shown =
-        previewDoc?.derived.bodyRepresentations[
-          resolvedBodyId
-        ]?.topology?.faces.find(matches)?.geometry;
+      const shown = previewDoc?.derived.bodyRepresentations[
+        resolvedBodyId
+      ]?.topology?.faces.find(matches)?.geometry;
       const target = inPlaceRef.current.slots.faces[0]?.bodyId;
       const normal = shown?.normal;
       const on = shown?.centroid ?? shown?.center;
@@ -8214,9 +8213,7 @@ export function App() {
           const at = g?.centroid ?? g?.center;
           if (!g?.normal || !at) return false;
           const aligned =
-            g.normal.x * normal.x +
-            g.normal.y * normal.y +
-            g.normal.z * normal.z;
+            g.normal.x * normal.x + g.normal.y * normal.y + g.normal.z * normal.z;
           const apart =
             (at.x - on.x) * normal.x +
             (at.y - on.y) * normal.y +
@@ -18315,10 +18312,7 @@ export function App() {
     sketchReadDocument
   ]);
   /** U09: an in-place request as the command its commit would run. */
-  function inPlaceCommandFor(
-    request: InPlaceRequest,
-    name: string
-  ): AnyCommand {
+  function inPlaceCommandFor(request: InPlaceRequest, name: string): AnyCommand {
     const bodyName = newBodyName(name);
     switch (request.tool) {
       case 'revolve':
@@ -18428,9 +18422,7 @@ export function App() {
           patternKind: request.patternKind,
           count: request.count,
           axis: request.axis,
-          ...(request.spacing !== undefined
-            ? { spacing: request.spacing }
-            : {}),
+          ...(request.spacing !== undefined ? { spacing: request.spacing } : {}),
           ...(request.angleDeg !== undefined
             ? { angleDeg: request.angleDeg }
             : {}),
@@ -18553,10 +18545,9 @@ export function App() {
             : valueSpec?.label === '×'
               ? (value: number) => `× ${round(value)}`
               : valueSpec?.unit === 'count'
-                ? (value: number) =>
-                    `${round(value)} ${valueSpec.label.toLowerCase()}`
-                : (value: number) =>
-                    `${valueSpec?.label ?? ''} ${round(value)} ${inPlaceUnits}`.trim();
+              ? (value: number) => `${round(value)} ${valueSpec.label.toLowerCase()}`
+              : (value: number) =>
+                  `${valueSpec?.label ?? ''} ${round(value)} ${inPlaceUnits}`.trim();
         return {
           ...handle,
           value: inPlace.values[handle.valueId] ?? valueSpec?.initial ?? 0,
@@ -25563,17 +25554,17 @@ export function App() {
                       featureId: featureId as FeatureId
                     })
                 : faceRepair ||
-                    datumRepair ||
-                    toFacePick ||
-                    measuring ||
-                    tool !== null ||
-                    interaction.mode === 'sketch'
-                  ? undefined
-                  : (featureId) => {
-                      const node =
-                        doc && findFeature(doc, featureId as FeatureId);
-                      if (node) handleSelectFeatureFromTree(node.id, false);
-                    }
+              datumRepair ||
+              toFacePick ||
+              measuring ||
+              tool !== null ||
+              interaction.mode === 'sketch'
+                ? undefined
+                : (featureId) => {
+                    const node =
+                      doc && findFeature(doc, featureId as FeatureId);
+                    if (node) handleSelectFeatureFromTree(node.id, false);
+                  }
             }
             // A selected datum opens its Plane card; the handle feeds the
             // card's Offset field, and the card's own Apply commits it. Only
