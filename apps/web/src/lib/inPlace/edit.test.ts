@@ -277,6 +277,28 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(preset.seed.options.pull).toBe('-Z');
   });
 
+  it('mirror: a datum plane it may no longer use is not restored', () => {
+    const data: FeatureData = {
+      featureKind: 'mirror',
+      targetBodyId: BODY,
+      plane: { type: 'datum', datumFeatureId: 'plane_1' as FeatureId }
+    };
+    const armed = inPlaceEditSeed(feature(data), {
+      ...EDIT_CTX,
+      datumPlaneUsable: () => false
+    })!;
+    expect(armed.seed.slots.plane).toBeNull();
+    expect(armed.seed.notice).toMatch(/saved plane no longer resolves/);
+    const usable = inPlaceEditSeed(feature(data), {
+      ...EDIT_CTX,
+      datumPlaneUsable: () => true
+    })!;
+    expect(usable.seed.slots.plane).toEqual({
+      kind: 'datum',
+      featureId: 'plane_1'
+    });
+  });
+
   it('mirror: a typed plane goes back as written', () => {
     const data: FeatureData = {
       featureKind: 'mirror',

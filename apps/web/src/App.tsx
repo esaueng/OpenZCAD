@@ -8619,6 +8619,10 @@ export function App() {
       body: (bodyId) => inPlaceBodyPick(bodyId),
       laterTransforms: laterInPlaceSteps(current, feature),
       laterReshapes: laterDirectEdit(current, feature),
+      datumPlaneUsable: (featureId) =>
+        earlierDatumPlanes(current, feature.featureId).some(
+          (datum) => datum.featureId === featureId
+        ),
       datumAxis: (featureId) => current.derived.datumAxes?.[featureId] ?? null,
       bodyVertices: (bodyId) =>
         representations[bodyId]?.mesh.vertices ?? null
