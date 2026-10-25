@@ -22,7 +22,8 @@ import {
   revolveAxisCandidates,
   revolveProfileRegions,
   revolveRigPlacement,
-  type RevolveAxisCandidate
+  type RevolveAxisCandidate,
+  type RevolveRigPlacement
 } from './revolve';
 import type { ModelingOperationFormState } from '../modelingOperations';
 import { holePositionAxes, holePositionFromPick } from '../holePositionAxes';
@@ -1126,6 +1127,29 @@ function helixRigPlacement(
       z: axis.x * reference.y - axis.y * reference.x
     })
   };
+}
+
+/**
+ * The rig a body turns on about an axis (a turn, a circular pattern). An
+ * axis through the body's middle has no side for the rig to start from: it
+ * then starts square to the axis, out to the farthest corner. Null only for
+ * a body with no extent off the axis.
+ */
+function bodyTurnRig(
+  body: BodyPick,
+  axis: RevolveAxisCandidate
+): RevolveRigPlacement | null {
+  const placement = revolveRigPlacement(
+    [body.min, body.max, centre(body)],
+    axis
+  );
+  if (placement) return placement;
+  const corners = boxCornersOf(body);
+  const centred = helixRigPlacement(corners, axis);
+  const reach = Math.max(
+    ...corners.map((corner) => radialDistance(corner, axis))
+  );
+  return centred && reach > 1e-9 ? { ...centred, radius: reach * 1.15 } : null;
 }
 
 /** A box's eight corners. */
@@ -2365,17 +2389,7 @@ const axisRotate: InPlaceToolSpec = {
     const body = slots.bodies[0];
     if (!body || !slots.axis) return [];
     const key = `${bodyKey(body)}:${slots.axis.id}`;
-    const corners = boxCornersOf(body);
-    // An axis through the body's middle (a centred turn) has no side for
-    // the rig to start from: it then starts square to the axis, out to the
-    // farthest corner.
-    const centred = helixRigPlacement(corners, slots.axis);
-    const reach = Math.max(
-      ...corners.map((corner) => radialDistance(corner, slots.axis!))
-    );
-    const placement =
-      revolveRigPlacement([body.min, body.max, centre(body)], slots.axis) ??
-      (centred && reach > 1e-9 ? { ...centred, radius: reach * 1.15 } : null);
+    const placement = bodyTurnRig(body, slots.axis);
     if (!placement) {
       // Nothing to turn a rig around (a body with no extent): the angle is
       // typed on its chip.
@@ -2650,18 +2664,18 @@ const circularPattern: InPlaceToolSpec = {
   handles(slots) {
     const body = slots.bodies[0];
     if (!body || !slots.axis) return [];
-    const placement = revolveRigPlacement(
-      [body.min, body.max, centre(body)],
-      slots.axis
-    );
-    if (!placement) return [];
+    const placement = bodyTurnRig(body, slots.axis);
+    const key = `${bodyKey(body)}:angle:${slots.axis.id}`;
     return [
-      {
-        valueId: 'angle',
-        kind: 'angle',
-        key: `${bodyKey(body)}:angle:${slots.axis.id}`,
-        params: placement
-      },
+      // A body with no extent to turn a rig around types its angle.
+      placement
+        ? { valueId: 'angle', kind: 'angle', key, params: placement }
+        : {
+            valueId: 'angle',
+            kind: 'chip',
+            key,
+            params: { anchor: body.max }
+          },
       {
         valueId: 'count',
         kind: 'chip',
