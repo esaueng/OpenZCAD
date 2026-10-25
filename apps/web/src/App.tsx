@@ -9714,6 +9714,11 @@ export function App() {
   const referenceImageInputRef = useRef<HTMLInputElement | null>(null);
   /** The plane a picture chosen in the file dialog will lie on. */
   const referenceImagePlaneRef = useRef<ReferenceImagePlane | null>(null);
+  /** Counts Image file choices, so only the newest one is placed. */
+  const referenceImageInvocationRef = useRef(0);
+  /** Image file choices still being read, and older ones set aside. */
+  const referenceImagesInFlightRef = useRef(0);
+  const staleReferenceImagesRef = useRef<PreparedReferenceImage[]>([]);
   /** The picture an in-place Image is placing, until Done or Cancel. */
   const pendingReferenceImageRef = useRef<PreparedReferenceImage | null>(
     null
@@ -9759,6 +9764,12 @@ export function App() {
   async function insertReferenceImage(file: File) {
     const current = managerRef.current?.document;
     if (!current || !ensureCanEdit('insert an image')) return;
+    // Only the newest file chosen is placed: an older one that finishes
+    // reading later is set aside, and its bytes are let go (or handed to
+    // the placed picture, when it is the same file) once every choice in
+    // flight has settled.
+    const invocation = ++referenceImageInvocationRef.current;
+    referenceImagesInFlightRef.current += 1;
     const seeded = referenceImagePlaneRef.current;
     const plane =
       seeded ?? ({ type: 'canonical', plane: 'XY', offset: 0 } as const);
@@ -9774,6 +9785,10 @@ export function App() {
         archive: archiveArtifact
       });
       const { image } = prepared;
+      if (invocation !== referenceImageInvocationRef.current) {
+        staleReferenceImagesRef.current.push(prepared);
+        return;
+      }
       if (managerRef.current?.document.projectId === current.projectId) {
         // U09: placed in place. Nothing is added until Done; Cancel lets
         // the stored bytes go again.
@@ -9824,6 +9839,36 @@ export function App() {
       }
     } catch (error) {
       setStatus(errorMessage(error, 'The image could not be placed.'));
+    } finally {
+      referenceImagesInFlightRef.current -= 1;
+      if (referenceImagesInFlightRef.current === 0) releaseStaleReferenceImages();
+    }
+  }
+
+  /**
+   * Lets go of the bytes superseded image choices stored, now that none is
+   * in flight. One that is the picture being placed hands its duty to
+   * release them to that picture instead, which reads the same bytes.
+   */
+  function releaseStaleReferenceImages() {
+    const stale = staleReferenceImagesRef.current;
+    staleReferenceImagesRef.current = [];
+    for (const prepared of stale) {
+      const pending = pendingReferenceImageRef.current;
+      if (
+        pending &&
+        pending.image.source.checksumSha256 ===
+          prepared.image.source.checksumSha256
+      ) {
+        if (prepared.bytesCreated && !pending.bytesCreated) {
+          pendingReferenceImageRef.current = { ...pending, bytesCreated: true };
+        }
+        continue;
+      }
+      void import('./lib/referenceImageInsert').then(
+        ({ discardReferenceImageBytes }) =>
+          discardReferenceImageBytes(prepared, [managerRef.current?.document])
+      );
     }
   }
 
@@ -26239,7 +26284,9 @@ export function App() {
             selectedFeatureId={
               (modelingEditFeature ?? selectedFeature)?.featureId ?? null
             }
-            planePickerOffset={sketchPlaneOffset}
+            // Only a sketch starts on its offset ghost: an in-place command
+            // stores a principal plane at zero, so it is shown at zero.
+            planePickerOffset={tool === 'sketch' ? sketchPlaneOffset : 0}
             holeGhost={holePreviewState?.ghost ?? null}
             primitiveGhost={
               tool && PRIMITIVE_TOOLS.includes(tool) ? primitiveGhost : null
