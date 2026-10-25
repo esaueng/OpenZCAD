@@ -19621,7 +19621,7 @@ export function App() {
       })
     );
     if (kept.length < inPlaceProfiles.length) {
-      inPlaceRef.current.setProfiles(kept);
+      inPlaceRef.current.setProfiles(kept, inPlaceProfiles);
       setStatus(
         cleared
           ? `${editing.name}: its saved profile no longer resolves · pick its sections again, in order.`
@@ -19633,7 +19633,7 @@ export function App() {
           pick.regionFingerprint !== inPlaceProfiles[index]?.regionFingerprint
       )
     ) {
-      inPlaceRef.current.setProfiles(kept);
+      inPlaceRef.current.setProfiles(kept, inPlaceProfiles);
     }
   }, [
     inPlaceEditing,
@@ -19840,15 +19840,21 @@ export function App() {
       edges.length === inPlaceEditPicks.edges.length
     ) {
       if (facesMoved || bodiesMoved || edgesMoved) {
-        inPlaceRef.current.setPicks({
-          ...(facesMoved ? { faces } : {}),
-          ...(bodiesMoved ? { bodies } : {}),
-          ...(edgesMoved ? { edges } : {})
-        });
+        inPlaceRef.current.setPicks(
+          {
+            ...(facesMoved ? { faces } : {}),
+            ...(bodiesMoved ? { bodies } : {}),
+            ...(edgesMoved ? { edges } : {})
+          },
+          inPlaceEditPicks
+        );
       }
       return;
     }
-    inPlaceRef.current.setPicks({ path, guide, faces, bodies, edges });
+    inPlaceRef.current.setPicks(
+      { path, guide, faces, bodies, edges },
+      inPlaceEditPicks
+    );
     setStatus(
       reordered
         ? `${editing.name}: a saved pick no longer exists in the model · pick that list again, in order.`
