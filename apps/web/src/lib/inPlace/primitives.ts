@@ -158,8 +158,13 @@ const ROUND_FOOTPRINT: Record<Exclude<PrimitiveKind, 'box'>, string> = {
   torus: 'majorRadius'
 };
 
-function snapped(value: number, step: number): number {
-  return Math.round(Math.round(value / step) * step * 1e9) / 1e9;
+/** The smallest size a primitive takes, as its value specs do. */
+const MIN_SIZE = 0.001;
+
+/** `value` on the snap grid; as it is (to 1e-9) with snapping off. */
+function snapped(value: number, step: number | null): number {
+  const on = step === null ? value : Math.round(value / step) * step;
+  return Math.round(on * 1e9) / 1e9;
 }
 
 /**
@@ -183,7 +188,7 @@ export function footprintPlacement(
   anchor: Vector3;
   values: Record<string, number>;
 } {
-  const step = snap && snap > 0 ? snap : 0.1;
+  const step = snap && snap > 0 ? snap : null;
   const { u, v, normal } = frame;
   const anchor = cleaned(
     plus(
@@ -200,7 +205,9 @@ export function footprintPlacement(
   const delta = plus(end, scaled(start, -1));
   const along = moved ? dot(delta, u) : 0;
   const across = moved ? dot(delta, v) : 0;
-  const size = (value: number) => Math.max(step, snapped(Math.abs(value), step));
+  // At least one snap step when snapping, else the smallest size there is.
+  const size = (value: number) =>
+    Math.max(step ?? MIN_SIZE, snapped(Math.abs(value), step));
   const placement: PlacementPick = {
     frame,
     signU: along < 0 ? -1 : 1,

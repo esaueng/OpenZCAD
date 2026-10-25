@@ -238,6 +238,34 @@ describe('a footprint drag', () => {
     });
   });
 
+  it('leaves a footprint unrounded with snapping off', () => {
+    expect(
+      footprintPlacement(
+        'box',
+        GROUND_FRAME,
+        { x: 1.2345, y: 0.0004, z: 0 },
+        { x: 1.2845, y: 3.4567, z: 0 },
+        true,
+        null,
+        { height: 24 }
+      )
+    ).toMatchObject({
+      anchor: { x: 1.2345, y: 0.0004, z: 0 },
+      values: { width: 0.05, depth: 3.4563 }
+    });
+    // Never below the smallest size a primitive takes.
+    expect(
+      footprintPlacement(
+        'cylinder',
+        GROUND_FRAME,
+        { x: 0, y: 0, z: 0 },
+        { x: 0.0001, y: 0, z: 0 },
+        true,
+        null
+      ).values
+    ).toEqual({ radius: 0.001 });
+  });
+
   it('never draws a size below one snap step', () => {
     expect(
       footprintPlacement(
