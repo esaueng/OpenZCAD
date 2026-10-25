@@ -92,9 +92,9 @@ They run as three parallel jobs: `quality` (lint, typecheck), `unit` (the root
 Vitest project, `pnpm exec vitest run`) and `validation` (the web Vitest
 project via `pnpm test:web`, the parity corpus, the build). Together `unit`
 and `validation` are `pnpm test`. The Playwright suite runs as six shards
-on pull requests, only after `quality` passes (`e2e-tests-pr`), so a lint-red
-or superseded push does not hold six runners; manual dispatches start them at
-once (`e2e-tests`). Merge-queue candidates run no shards: auto-merge enqueues
+on pull requests, started beside those jobs (`e2e-tests-pr`); a newer push
+cancels a superseded run's shards, and manual dispatches run the same set
+(`e2e-tests`). Merge-queue candidates run no shards: auto-merge enqueues
 a PR only after `checks / e2e` passed on its head, so a candidate runs only
 `quality`, `unit` and `validation`, and two PRs that break e2e only together
 are caught by the next PR's run rather than before merge. Each shard takes the
