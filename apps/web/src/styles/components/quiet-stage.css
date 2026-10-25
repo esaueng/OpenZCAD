@@ -372,15 +372,6 @@
   overflow: hidden;
 }
 
-/* A narrow window floats the inspector over the stage: while a feature it
-   reads out is edited in place, the stage belongs to the edit's handles and
-   chips, and the readout comes back when the edit ends. */
-@media (max-width: 960px) {
-  .viewer-area.inspector-yields .inspector-float {
-    display: none;
-  }
-}
-
 /* shell.css draws the inspector as its own overlay; in the lane it follows
    the command card, shrinking (and scrolling) before a panel does. */
 .stage-right > .inspector-float {
@@ -923,6 +914,13 @@
    lanes, whose rows sit where the list opens. */
 .command-bar-lane:has(.command-bar.open) {
   z-index: var(--z-popover);
+}
+
+/* A running command's Done and Cancel stay on top: in a short narrow window
+   with a panel docked (768 × 650 with History open) the instrument rail
+   runs down into the bottom lane and covered Done. */
+.command-bar-lane:has(.in-place-command) {
+  z-index: calc(var(--z-inspector-float) + 2);
 }
 
 /* The list takes the conversation's place rather than floating over it: a

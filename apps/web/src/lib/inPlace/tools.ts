@@ -816,10 +816,7 @@ const helicalSweep: InPlaceToolSpec = {
   handles(slots, values, ctx) {
     const pick = slots.profiles[0];
     if (!pick || !slots.axis) return [];
-    const placement = revolveRigPlacement(
-      profileOutline(ctx, pick),
-      slots.axis
-    );
+    const placement = helixRigPlacement(profileOutline(ctx, pick), slots.axis);
     if (!placement) return [];
     const { center, axis, startDirection } = placement;
     const base = keyOf(pick.sketchId, pick.regionFingerprint, slots.axis.id);
@@ -853,6 +850,52 @@ const helicalSweep: InPlaceToolSpec = {
     ];
   }
 };
+
+/**
+ * Where a helix's handles stand: as a revolve's, or — for a profile centred
+ * on its axis, which a stored helix may be (its radius then sets it off) —
+ * level with the profile, pointing any way square to the axis.
+ */
+function helixRigPlacement(
+  outline: readonly Vector3[],
+  axisLine: RevolveAxisCandidate
+): { center: Vector3; axis: Vector3; startDirection: Vector3 } | null {
+  const placement = revolveRigPlacement(outline, axisLine);
+  if (placement) return placement;
+  if (outline.length === 0) return null;
+  const axis = unit(axisLine.direction);
+  const middle = outline.reduce(
+    (sum, point) => ({
+      x: sum.x + point.x / outline.length,
+      y: sum.y + point.y / outline.length,
+      z: sum.z + point.z / outline.length
+    }),
+    { x: 0, y: 0, z: 0 }
+  );
+  const along = dot(
+    {
+      x: middle.x - axisLine.origin.x,
+      y: middle.y - axisLine.origin.y,
+      z: middle.z - axisLine.origin.z
+    },
+    axis
+  );
+  const reference =
+    Math.abs(axis.x) < 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+  return {
+    center: {
+      x: axisLine.origin.x + axis.x * along,
+      y: axisLine.origin.y + axis.y * along,
+      z: axisLine.origin.z + axis.z * along
+    },
+    axis,
+    startDirection: unit({
+      x: axis.y * reference.z - axis.z * reference.y,
+      y: axis.z * reference.x - axis.x * reference.z,
+      z: axis.x * reference.y - axis.y * reference.x
+    })
+  };
+}
 
 /** A value as the card's text field would hold it. */
 function text(value: ParamValue | undefined, fallback: number): string {

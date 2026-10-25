@@ -1421,6 +1421,7 @@ import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
 import { useThumbnailCaptureActivity } from './hooks/useThumbnailCaptureActivity';
 import { GEOMETRY_PREVIEW_SCHEDULING, LivePreview } from './lib/livePreview';
 import { mergeSweptFaces, useInPlaceCommand } from './hooks/useInPlaceCommand';
+import { useMediaQuery } from './hooks/useMediaQuery';
 import {
   IN_PLACE_TOOL_SPECS,
   clampValue,
@@ -1704,6 +1705,11 @@ const E2E_SLOW_FRAME_MS =
 const FRESHNESS_POLL_INTERVAL_MS = 60_000;
 /** How long the model panels wait before calling the model "preparing". */
 const PANEL_PENDING_DELAY_MS = 400;
+/**
+ * Where the inspector floats over the stage rather than beside it (the
+ * phone and narrow-tablet lanes in quiet-stage.css).
+ */
+const NARROW_WINDOW_QUERY = '(max-width: 960px)';
 /**
  * What an unnamed save is called. Ctrl+S stays a reflex and takes this; naming
  * one is its own gesture (Ctrl+Shift+S).
@@ -18807,6 +18813,7 @@ export function App() {
   });
   const inPlaceRef = useRef(inPlace);
   inPlaceRef.current = inPlace;
+  const narrowWindow = useMediaQuery(NARROW_WINDOW_QUERY);
   const inPlaceEditing = inPlace.editing;
   useEffect(() => {
     setInPlaceEditFeatureId(inPlaceEditing?.featureId ?? null);
@@ -24493,6 +24500,10 @@ export function App() {
     !modelingLocked &&
     !directMode &&
     movePreview === null &&
+    // A narrow window floats the inspector over the stage: while a feature
+    // it reads out is edited in place, the stage is the edit's handles and
+    // chips, and the readout returns when the edit ends.
+    !(inPlace.editing && narrowWindow) &&
     // A pick alone opens no card (the Inspector draws nothing for it), so
     // the shell must not hold a lane for one: an empty inspector float
     // reads as a full-width card on a phone and hides the viewer rail. The
@@ -26516,7 +26527,6 @@ export function App() {
         ) : null
       }
       inspectorOwnsLane={tool !== null && tool !== 'sketch'}
-      inspectorYields={inPlace.editing !== null}
       inspector={
         inspectorActive ? (
           <ErrorBoundary

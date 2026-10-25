@@ -86,12 +86,6 @@ interface AppShellProps {
    */
   inspectorOwnsLane?: boolean;
   /**
-   * A command is editing in the viewport the feature the inspector reads
-   * out (U09). Where the inspector floats over the stage (a narrow window)
-   * it gives the stage to the command's handles until the edit ends.
-   */
-  inspectorYields?: boolean;
-  /**
    * The model panels' docks (`PanelDock`): each dock's columns against its
    * screen edge, the floating windows and the unpinned panel beside the
    * instrument rail, over the viewport. The rails and the lanes step inward
@@ -164,7 +158,6 @@ export function AppShell({
   viewer,
   command = null,
   inspectorOwnsLane = false,
-  inspectorYields = false,
   inspector,
   panels = null,
   panelLane = null,
@@ -217,7 +210,7 @@ export function AppShell({
           <div
             className={`viewer-area${inspector ? ' has-inspector' : ''}${
               inspector && inspectorOwnsLane ? ' inspector-owns-lane' : ''
-            }${inspector && inspectorYields ? ' inspector-yields' : ''}${command ? ' has-command' : ''}${panelLane ? ' has-panel-lane' : ''}`}
+            }${command ? ' has-command' : ''}${panelLane ? ' has-panel-lane' : ''}`}
           >
             {viewer}
             {/* Over the viewer, under the toast lane: a takeover still
