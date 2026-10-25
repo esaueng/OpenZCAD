@@ -1,4 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import {
+  addPrimitiveFeature,
+  booleanBodies,
+  createProjectDocument,
+  holeBody,
+  listFeaturesInOrder,
+  transformBody
+} from '@openzcad/document-core';
+import { toUserId } from '@openzcad/shared';
 import type {
   BodyId,
   FeatureData,
@@ -7,6 +16,7 @@ import type {
   SketchId
 } from '@openzcad/shared';
 import {
+  inPlaceEditMovedBodies,
   inPlaceEditSeed,
   inPlaceFeatureUpdate,
   inPlaceToolForFeature,
@@ -480,5 +490,53 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(armed.seed.raws.thickness).toBe('wall');
     expect(armed.seed.values.thickness).toBe(2.5);
     expect(armed.seed.touched).toEqual(['thickness']);
+  });
+});
+
+describe('inPlaceEditMovedBodies', () => {
+  it('names the copies a later move made of the edited body, and what is built on them', () => {
+    let document = createProjectDocument('Moved', toUserId('user_test'));
+    document = addPrimitiveFeature(document, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 40, height: 30, depth: 20 }
+    });
+    document = addPrimitiveFeature(document, {
+      name: 'Post',
+      primitiveKind: 'box',
+      dimensions: { width: 5, height: 5, depth: 40 }
+    });
+    const [block, post] = listFeaturesInOrder(document).flatMap((feature) =>
+      feature.bodyId ? [feature.bodyId] : []
+    );
+    const drilled = holeBody(document, {
+      name: 'Hole',
+      targetBodyId: block!,
+      faceHash: 1,
+      style: 'simple',
+      diameter: 4,
+      depthMode: 'through',
+      position: { u: 0, v: 0 }
+    });
+    document = drilled.document;
+    const hole = listFeaturesInOrder(document).at(-1)!.featureId;
+    const copy = transformBody(document, {
+      name: 'Copy',
+      targetBodyId: drilled.bodyId,
+      translation: { x: 60, y: 0, z: 0 },
+      copy: true
+    });
+    document = copy.document;
+    const joined = booleanBodies(document, {
+      name: 'Join',
+      operation: 'union',
+      targetBodyIds: [copy.bodyId, post!]
+    });
+    document = joined.document;
+    const moved = inPlaceEditMovedBodies(document, hole);
+    expect(moved.has(copy.bodyId)).toBe(true);
+    expect(moved.has(joined.bodyId)).toBe(true);
+    // The drilled body itself stands where the hole was made.
+    expect(moved.has(drilled.bodyId)).toBe(false);
   });
 });

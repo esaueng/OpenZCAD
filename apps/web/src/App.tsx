@@ -1445,6 +1445,7 @@ import {
 } from './lib/inPlace/curves';
 import { datumAxisChoices } from './lib/datumAxisChoices';
 import {
+  inPlaceEditMovedBodies,
   inPlaceEditSeed,
   inPlaceFeatureUpdate,
   inPlaceToolForFeature,
@@ -8430,6 +8431,23 @@ export function App() {
     if (later && editing && !inPlaceEditDescendants(editing).has(resolvedBodyId)) {
       setStatus(
         `${editing.name} can only use faces of bodies made before it in History.`
+      );
+      return null;
+    }
+    // A hole goes where the click lands, and on a body a later feature moved
+    // (a copy, a mirror, a pattern) that is not where the hole's own face is.
+    if (
+      later &&
+      editing &&
+      inPlaceRef.current.tool === 'hole' &&
+      managerRef.current &&
+      inPlaceEditMovedBodies(
+        managerRef.current.document,
+        editing.featureId
+      ).has(resolvedBodyId)
+    ) {
+      setStatus(
+        `A later feature moved this body: click ${editing.name}'s face where it was made, or drag its position.`
       );
       return null;
     }
