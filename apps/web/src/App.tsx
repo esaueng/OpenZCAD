@@ -20093,15 +20093,22 @@ export function App() {
   // said, so the slot asks for a new pick rather than holding one nothing
   // can build.
   const checkedEditProfiles = useRef<{
-    editing: InPlaceEditSeed;
+    /** The edit checked, or a new command's tool. */
+    editing: InPlaceEditSeed | string;
     views: readonly ((typeof availableSketchViews)[number] | undefined)[];
   } | null>(null);
   const regionsForReferenceRef = useRef(regionsForReference);
   regionsForReferenceRef.current = regionsForReference;
   const inPlaceProfiles = inPlace.slots.profiles;
+  const inPlaceTool = inPlace.tool;
+  const inPlaceTitle = inPlace.spec?.title ?? 'This command';
   useEffect(() => {
     const editing = inPlaceEditing;
-    if (!editing) return;
+    // A new command's sections follow the model too (an undo, a
+    // collaborator), so a lost one is said and can be picked again.
+    const owner = editing ?? inPlaceTool;
+    if (!owner || inPlaceProfiles.length === 0) return;
+    const name = editing?.name ?? inPlaceTitle;
     const views = inPlaceProfiles.map((pick) =>
       availableSketchViews.find((view) => view.sketchId === pick.sketchId)
     );
@@ -20109,18 +20116,19 @@ export function App() {
     // hidden sources a render after arming) or rebuilt; once the edit has
     // shown them and the rebuild has settled, a sketch still without a view
     // (emptied, its plane lost) has nothing a section could stand on.
-    const settled =
-      inPlaceEditFeatureId === editing.featureId && exactGeometryReady;
+    const settled = editing
+      ? inPlaceEditFeatureId === editing.featureId && exactGeometryReady
+      : exactGeometryReady;
     if (!settled && views.some((view) => !view)) return;
     const checked = checkedEditProfiles.current;
     if (
-      checked?.editing === editing &&
+      checked?.editing === owner &&
       checked.views.length === views.length &&
       checked.views.every((view, index) => view === views[index])
     ) {
       return;
     }
-    checkedEditProfiles.current = { editing, views };
+    checkedEditProfiles.current = { editing: owner, views };
     // Sections are ordered: one lost before a kept one clears the list.
     const { kept, cleared } = keptInOrder(
       inPlaceProfiles.map((pick, index) => {
@@ -20137,8 +20145,8 @@ export function App() {
       inPlaceRef.current.setProfiles(kept, inPlaceProfiles);
       setStatus(
         cleared
-          ? `${editing.name}: its saved profile no longer resolves · pick its sections again, in order.`
-          : `${editing.name}: its saved profile no longer resolves · pick it again.`
+          ? `${name}: its saved profile no longer resolves · pick its sections again, in order.`
+          : `${name}: its saved profile no longer resolves · pick it again.`
       );
     } else if (
       kept.some(
@@ -20150,6 +20158,8 @@ export function App() {
     }
   }, [
     inPlaceEditing,
+    inPlaceTool,
+    inPlaceTitle,
     inPlaceProfiles,
     availableSketchViews,
     inPlaceEditFeatureId,
