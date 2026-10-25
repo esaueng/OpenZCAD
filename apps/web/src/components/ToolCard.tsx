@@ -2,6 +2,10 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import { Anchor } from 'lucide-react';
 import type { OperationPhase, ToolCardModel } from '../lib/interaction/machine';
 import type { SelectionActionId } from '../lib/interaction/capabilities';
+import type {
+  SelectionCalloutVerb,
+  SelectionCalloutVerbId
+} from '../lib/selectionCallout';
 import { CARD_EYEBROWS } from '../lib/cardEyebrows';
 import { OPERATION_PHASE_LABELS as PHASE_LABELS } from '../lib/selectionCalloutView';
 import { CardHeader } from './CardHeader';
@@ -42,6 +46,12 @@ interface ToolCardProps {
   keepLastValid?: { label: string; keep(): void };
   selectAllEdges?: { count: number; select(): void };
   /**
+   * The pick's other tools (a region's Revolve, Sweep, Loft), which leave
+   * this operation for theirs with the same pick.
+   */
+  verbs?: readonly SelectionCalloutVerb[];
+  onVerb?(id: SelectionCalloutVerbId): void;
+  /**
    * Set by the command that opened this card, never by a pick on the canvas:
    * each new value hands the card's first value field the keyboard, its
    * value selected, as a create card's first field takes it — so E then "10"
@@ -73,6 +83,8 @@ export function ToolCard({
   onViewDetails,
   keepLastValid,
   selectAllEdges,
+  verbs = [],
+  onVerb,
   focusRequest,
   focusReady = true,
   onClose
@@ -259,6 +271,28 @@ export function ToolCard({
                 All {selectAllEdges.count} edges
               </button>
             ) : null}
+          </div>
+        ) : null}
+        {verbs.length > 0 ? (
+          <div className="tool-card-verbs" role="group" aria-label="Or">
+            {verbs.map((verb) => (
+              <button
+                key={verb.id}
+                type="button"
+                className="tool-card-recovery"
+                title={verb.title}
+                // The selection card's naming, so a pick's verbs are reached
+                // the same way wherever its card stands.
+                aria-label={`Selection: ${verb.label}`}
+                disabled={
+                  verb.disabled ||
+                  (model.phase === 'validating' && !cancelableWhileValidating)
+                }
+                onClick={() => onVerb?.(verb.id)}
+              >
+                {verb.label}
+              </button>
+            ))}
           </div>
         ) : null}
         {children}

@@ -28,7 +28,7 @@ export interface TestAccount {
   readonly devices: ReadonlyMap<string, TestDevice>;
   list: VerifiedDeviceList;
   /** Append an identity-signed entry revoking `deviceId`. */
-  revoke(deviceId: string): Promise<VerifiedDeviceList>;
+  revoke(deviceId: string, replacedBy?: string): Promise<VerifiedDeviceList>;
 }
 
 const ADDED_AT = 1_700_000_000_000;
@@ -82,10 +82,11 @@ export async function testAccount(
     userId,
     devices,
     list: await verifyDeviceList(identityRaw, chain),
-    async revoke(deviceId) {
+    async revoke(deviceId, replacedBy) {
       const entry = nextDeviceListEntry(account.list, {
         issuedAt: ADDED_AT + chain.length,
         removeDeviceIds: [deviceId],
+        ...(replacedBy ? { replacedBy } : {}),
         encryptionKey: await ecdhPublic(),
         accountKeyCommitment: await accountKeyCommitment(generateSymmetricKey())
       });

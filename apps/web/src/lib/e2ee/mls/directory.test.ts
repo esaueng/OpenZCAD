@@ -428,6 +428,26 @@ describe('device directory', () => {
     ]);
   });
 
+  it('passes on the replacement a revocation names', async () => {
+    const dave = await testAccount('user_dave', ['dave_a', 'dave_b']);
+    await dave.revoke('dave_b', 'dave_a');
+    const directory = await buildDeviceDirectory(mls, PROJECT, {
+      lists: [dave.list],
+      certifications: [],
+      revocationCutoffs: new Map([['user_dave', new Map([['dave_b', 0]])]])
+    });
+    expect(directory.users[0]!.devices).toEqual([
+      { deviceId: 'dave_a', status: 'active', leafKeys: [] },
+      {
+        deviceId: 'dave_b',
+        status: 'revoked',
+        leafKeys: [],
+        replacedBy: 'dave_a',
+        revocationCutoffEpoch: 0
+      }
+    ]);
+  });
+
   describe('as the policy reads it', () => {
     async function owner() {
       const a = await leaf(alice, 'alice_laptop');

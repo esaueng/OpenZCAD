@@ -704,6 +704,8 @@ async function createGroup(
   const wraps = wrapsField(body.wraps, 0, account);
   const archive = archiveField(body.archive, projectId, 0, deviceId);
   const now = new Date().toISOString();
+  // A device removed meanwhile cannot still create the group.
+  const signerList = deviceListUnchanged(userId, account);
   const results = await runBatch(db, [
     db
       .prepare(
@@ -712,7 +714,8 @@ async function createGroup(
             initial_group_info, group_info, group_info_epoch, updated_at)
          SELECT ?, ?, 0, 0, 0, ?, ?, 0, ?
          WHERE ${authorization.sql} AND ${PROJECT_FENCE}
-           AND NOT EXISTS (SELECT 1 FROM e2ee_project_groups WHERE project_id = ?)`
+           AND NOT EXISTS (SELECT 1 FROM e2ee_project_groups WHERE project_id = ?)
+           AND ${signerList.sql}`
       )
       .bind(
         projectId,
@@ -723,13 +726,15 @@ async function createGroup(
         ...authorization.binds,
         projectId,
         userId,
-        projectId
+        projectId,
+        ...signerList.binds
       ),
     insertLeaf(db, projectId, userId, deviceId, leaf, now),
     ...insertWraps(db, projectId, userId, wraps, now),
     insertArchive(db, projectId, archive, now)
   ]);
   if (!allChanged(results, 5)) {
+    if (await deviceListMoved(db, userId, account)) refuseDeviceListMoved();
     if (await groupRow(db, projectId)) {
       refuse(
         409,
@@ -790,6 +795,10 @@ async function submitCommit(
   const wraps = wrapsField(body.wraps, keyEpoch, account);
   const archive = archiveField(body.archive, projectId, keyEpoch, deviceId);
   const now = new Date().toISOString();
+  // The device was certified in this device-list head; a removal that
+  // lands first makes the Commit refuse, so a removed device cannot move
+  // the group after its revocation.
+  const signerList = deviceListUnchanged(userId, account);
   const statements = [
     // The sequencer: one Commit per epoch, only on top of the current one.
     db
@@ -799,7 +808,8 @@ async function submitCommit(
          SELECT ?, ?, ?, ?, ?, ?, ?
          WHERE ${authorization.sql} AND ${PROJECT_FENCE}
            AND EXISTS (SELECT 1 FROM e2ee_project_groups
-                       WHERE project_id = ? AND epoch = ? AND key_epoch_base = ?)`
+                       WHERE project_id = ? AND epoch = ? AND key_epoch_base = ?)
+           AND ${signerList.sql}`
       )
       .bind(
         projectId,
@@ -814,7 +824,8 @@ async function submitCommit(
         userId,
         projectId,
         epoch,
-        group.key_epoch_base
+        group.key_epoch_base,
+        ...signerList.binds
       ),
     db
       .prepare(
@@ -836,6 +847,7 @@ async function submitCommit(
   );
   if (!allChanged(results, statements.length)) {
     await refuseIfEpochTaken(db, projectId, epoch);
+    if (await deviceListMoved(db, userId, account)) refuseDeviceListMoved();
     const current = await groupRow(db, projectId);
     if (current && current.epoch > epoch)
       await epochTaken(db, projectId, epoch);

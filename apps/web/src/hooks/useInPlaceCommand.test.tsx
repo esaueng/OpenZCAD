@@ -594,6 +594,20 @@ describe('useInPlaceCommand: hole step chips', () => {
     expect(hook.result.current.canFinish).toBe(false);
   });
 
+  it('an option that leaves the refused value shown keeps Done held', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('hole', [], [FACE]));
+    act(() => hook.result.current.setOption('style', 'countersink'));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.setValue('countersinkAngleDeg', 180);
+    });
+    // Blind depth changes the hole but still shows the refused angle.
+    act(() => hook.result.current.setOption('depthMode', 'blind'));
+    expect(hook.result.current.refusal).toMatch(/countersink angle/);
+    expect(hook.result.current.canFinish).toBe(false);
+  });
+
   it('a style that hides the refused value lets Done go', async () => {
     const { hook } = setup();
     act(() => hook.result.current.start('hole', [], [FACE]));

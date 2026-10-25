@@ -828,9 +828,6 @@ export function useInPlaceCommand(
   }, []);
 
   const setOption = useCallback((optionId: string, value: string) => {
-    // A refused entry was never applied, and a new choice (a hole's style)
-    // may not even show its value: the refusal no longer holds Done.
-    setEntryRefusal(null);
     setSession((current) => {
       if (!current) return current;
       const specs = IN_PLACE_TOOL_SPECS[current.tool].options ?? [];
@@ -1016,6 +1013,16 @@ export function useInPlaceCommand(
     () => (spec ? spec.handles(slots, values, ctx, chosen) : []),
     [spec, slots, values, ctx, chosen]
   );
+  // A refused entry holds Done until its value is taken, or until the value
+  // no longer applies: a choice (a hole's style) that hides its chip.
+  useEffect(() => {
+    if (
+      entryRefusal &&
+      !handles.some((handle) => handle.valueId === entryRefusal.valueId)
+    ) {
+      setEntryRefusal(null);
+    }
+  }, [entryRefusal, handles]);
   const optionSpecs = useMemo(
     () =>
       (spec?.options ?? [])

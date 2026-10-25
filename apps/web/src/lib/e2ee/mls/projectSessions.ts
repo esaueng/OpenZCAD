@@ -23,6 +23,7 @@ import type {
   CommitRequest,
   DeviceDirectory,
   EpochChange,
+  GroupInfoSummary,
   Mls,
   MlsSession,
   PendingCommit,
@@ -54,6 +55,17 @@ import {
   type StoredMlsSession,
   type StoredPendingCommit
 } from './sessionStore';
+
+export interface RejoinOptions {
+  /**
+   * Revoked devices whose revocation named this device as replacement: when
+   * this device has no stale leaf of its own, the external Commit removes a
+   * leaf of one of them (the MLS last-leaf exception).
+   */
+  readonly replaceDevices?: readonly string[];
+  /** Overwrite stored state that can no longer follow the group. */
+  readonly fresh?: boolean;
+}
 
 /** Which device's state for which project. */
 export interface MlsProjectRef {
@@ -91,6 +103,12 @@ interface Operation<T> {
   readonly directory?: DirectoryInput;
   /** Generate and certify a new leaf when no session is stored. */
   readonly create?: LeafCreation;
+  /**
+   * Generate and certify a new leaf even when a session is stored: the
+   * stored one belongs to a group the project no longer uses (a reset, or
+   * state that can no longer follow the group), and is overwritten.
+   */
+  readonly fresh?: LeafCreation;
   /** Seal and write the session afterwards. */
   readonly mutate: boolean;
   run(
@@ -185,21 +203,31 @@ export class MlsProjectSessions {
     ref: MlsProjectRef,
     device: CertifyingDevice,
     directory: DirectoryInput,
-    options: { rejoinWindow?: number } = {}
+    options: {
+      rejoinWindow?: number;
+      /** Replace stored state (an identity-authorized group reset, D9). */
+      replace?: boolean;
+    } = {}
   ): Promise<EpochChange> {
     if (device.userId !== ref.userId || device.deviceId !== ref.deviceId) {
       return Promise.reject(
         new Error('The certifying device is not the one named.')
       );
     }
+    // A new group starts at epoch 0: the creator's leaf counts from there.
+    const leaf = { device, certifiedEpoch: 0 };
     return this.operate(ref, {
       directory,
-      // A new group starts at epoch 0: the creator's leaf counts from there.
-      create: { device, certifiedEpoch: 0 },
+      ...(options.replace ? { fresh: leaf } : { create: leaf }),
       mutate: true,
       run: async (session, stored) => {
-        if (stored) throw new Error('This project already has MLS state.');
-        const created = await session.createGroup(options);
+        if (stored && !options.replace)
+          throw new Error('This project already has MLS state.');
+        const created = await session.createGroup(
+          options.rejoinWindow === undefined
+            ? {}
+            : { rejoinWindow: options.rejoinWindow }
+        );
         if (created.epoch !== 0)
           throw new Error('A new MLS group did not start at epoch 0.');
         return { value: created, pendingCommit: null };
@@ -368,16 +396,18 @@ export class MlsProjectSessions {
     directory: DirectoryInput,
     certifiedEpoch: number,
     groupInfo: Uint8Array,
-    request: Omit<RejoinRequest, 'replaceLeaf'>
+    request: Omit<RejoinRequest, 'replaceLeaf'>,
+    options: RejoinOptions = {}
   ): Promise<RejoinResult> {
     if (device.userId !== ref.userId || device.deviceId !== ref.deviceId) {
       return Promise.reject(
         new Error('The certifying device is not the one named.')
       );
     }
+    const leaf = { device, certifiedEpoch };
     return this.operate(ref, {
       directory,
-      create: { device, certifiedEpoch },
+      ...(options.fresh ? { fresh: leaf } : { create: leaf }),
       mutate: true,
       run: async (session) => {
         const status = await session.status();
@@ -387,12 +417,21 @@ export class MlsProjectSessions {
         // names a leaf to drop, and the policy lets a rejoin drop only a leaf
         // of the joiner's own identity.
         const own = await session.signatureKey();
-        const stale = (await session.inspectGroupInfo(groupInfo)).members.find(
-          (member) =>
-            member.userId === ref.userId &&
-            member.deviceId === ref.deviceId &&
-            !sameBytes(member.signatureKey, own)
-        );
+        const { members } = await session.inspectGroupInfo(groupInfo);
+        const stale =
+          members.find(
+            (member) =>
+              member.userId === ref.userId &&
+              member.deviceId === ref.deviceId &&
+              !sameBytes(member.signatureKey, own)
+          ) ??
+          // The last-leaf exception: a leaf of a revoked device this one
+          // replaces. The policy decides whether the exception applies.
+          members.find(
+            (member) =>
+              member.userId === ref.userId &&
+              (options.replaceDevices ?? []).includes(member.deviceId)
+          );
         const result = await session.rejoin(
           groupInfo,
           stale ? { ...request, replaceLeaf: stale.index } : request
@@ -406,6 +445,30 @@ export class MlsProjectSessions {
         };
       }
     });
+  }
+
+  /**
+   * What a GroupInfo claims (members, roles), read with a throwaway
+   * session: unverified, a hint for deciding, never authority.
+   */
+  async inspectGroupInfo(
+    ref: MlsProjectRef,
+    groupInfo: Uint8Array
+  ): Promise<GroupInfoSummary> {
+    const { guard } = this.sessionGuard();
+    guard();
+    const mls = await this.loader.get();
+    const session = await mls.generate({
+      projectId: ref.projectId,
+      userId: ref.userId,
+      deviceId: ref.deviceId
+    });
+    try {
+      guard();
+      return await session.inspectGroupInfo(groupInfo);
+    } finally {
+      void session.free().catch(() => undefined);
+    }
   }
 
   /** The room accepted the external Commit. */
@@ -580,6 +643,10 @@ export class MlsProjectSessions {
             'This project’s encryption state belongs to another device.'
           );
         let entry = this.sessions.get(id);
+        if (op.fresh && entry) {
+          this.drop(id);
+          entry = undefined;
+        }
         if (
           entry &&
           (entry.revision !== (stored?.revision ?? 0) ||
@@ -593,7 +660,9 @@ export class MlsProjectSessions {
         }
         let leaf = stored?.leaf;
         if (!entry) {
-          const opened = await this.openOrCreate(mls, ref, stored, op.create);
+          const opened = op.fresh
+            ? await this.openOrCreate(mls, ref, null, op.fresh)
+            : await this.openOrCreate(mls, ref, stored, op.create);
           guard();
           leaf = opened.leaf;
           entry = {
@@ -629,7 +698,9 @@ export class MlsProjectSessions {
               leaf: leaf!,
               pendingCommit:
                 result.pendingCommit === undefined
-                  ? (stored?.pendingCommit ?? null)
+                  ? op.fresh
+                    ? null
+                    : (stored?.pendingCommit ?? null)
                   : result.pendingCommit
             },
             current
