@@ -14961,9 +14961,11 @@ export function App() {
           const matches = (candidate: { topologyId: string; hash: number }) =>
             candidate.topologyId === selection.topologyId ||
             (selection.hash !== undefined && candidate.hash === selection.hash);
+          // The preview's body first: while one shows, it is the one on
+          // screen, under the same id as the committed body it replaces.
           const geometry = (
-            representations[selection.bodyId] ??
-            previewDoc?.derived.bodyRepresentations[selection.bodyId]
+            previewDoc?.derived.bodyRepresentations[selection.bodyId] ??
+            representations[selection.bodyId]
           )?.topology?.faces.find(matches)?.geometry;
           const on = geometry?.centroid ?? geometry?.center ?? detail?.point;
           if (
