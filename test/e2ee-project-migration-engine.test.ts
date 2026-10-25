@@ -758,6 +758,30 @@ describe('resuming', () => {
     expect(migrationRow(srv, projectId)).toMatchObject({ state: 'done' });
   });
 
+  it('pauses while the first version stores its files, after its group landed', async () => {
+    const srv = roomServer();
+    const plain = await plaintextProject(srv, { revisions: 2 });
+    const projectId = plain.head.projectId;
+    const pause = new AbortController();
+    const laptop = engineOn(srv, owner, 'owner_laptop', {
+      beforeStep: (step) => {
+        if (step === 'file' && !pause.signal.aborted) pause.abort();
+      }
+    });
+    // The pause reaches the engine as itself, not as a failed creation:
+    // the staged group is on the server, the version is not.
+    await expect(
+      laptop.engine.migrate(await laptop.summary(projectId), pause.signal)
+    ).rejects.toBeInstanceOf(MigrationPausedError);
+    expect(laptop.progress.at(-1)?.phase).toBe('paused');
+    expect(count(srv, 'e2ee_project_groups', projectId)).toBe(1);
+    expect(count(srv, 'e2ee_project_versions', projectId)).toBe(0);
+    // Resumed, the group without a version is dropped and staged again.
+    await migrateFully(laptop, projectId);
+    expect(migrationRow(srv, projectId)).toMatchObject({ state: 'done' });
+    await expectOpensWithHistory(srv, plain);
+  });
+
   it('stops when another tab took the lease, which then finishes', async () => {
     const srv = roomServer();
     const plain = await plaintextProject(srv, { revisions: 2 });

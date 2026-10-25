@@ -2143,12 +2143,36 @@ export function createEncryptedProjectStore(
         }
       }
     };
+    // A staged project's group lands on its own, before its files and first
+    // version. When one of those fails (a pause, a lost lease, a missing
+    // file), createProjectGroup finds this very group on the server and
+    // counts the creation as landed; the engine still needs the failure
+    // itself, to pause, resume or explain.
+    const stagedFailure: { error?: unknown; failed?: true } = {};
+    const createWithProject = creating.api.createGroup;
+    const staging: ProjectGroupContext = extra.staged
+      ? {
+          ...creating,
+          api: {
+            ...creating.api,
+            createGroup: (id, groupRequest) =>
+              createWithProject(id, groupRequest).catch((error: unknown) => {
+                stagedFailure.error = error;
+                stagedFailure.failed = true;
+                throw error;
+              })
+          }
+        }
+      : creating;
     await createProjectGroup(
-      creating,
+      staging,
       projectId,
       extra.staged ? { replace: true } : {}
     );
-    if (!created) throw new Error('The encrypted project was not created.');
+    if (!created) {
+      if (stagedFailure.failed) throw stagedFailure.error;
+      throw new Error('The encrypted project was not created.');
+    }
     const { sealed, state, infoHash } = created;
     await pins.advance(userId, projectId, null, {
       headHash: sealed.hash,
