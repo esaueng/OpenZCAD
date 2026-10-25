@@ -19124,7 +19124,7 @@ export function App() {
       return current &&
         feature &&
         feature.data.featureKind === edit.data.featureKind
-        ? (inPlaceEditSeedFor(current, feature)?.seed ?? null)
+        ? inPlaceEditSeedFor(current, feature)
         : null;
     },
     derive: (document) => geometry.syncOnce(document),

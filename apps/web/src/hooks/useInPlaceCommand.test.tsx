@@ -1004,7 +1004,10 @@ describe('useInPlaceCommand: editing a stored feature', () => {
       ...setupOptions([], vi.fn()),
       evaluate: (value) => Number(value),
       baseVersion: 1,
-      reseed: (edit) => ({ ...edit, values: { ...live }, raws: {} })
+      reseed: (edit) => ({
+        tool: 'mirror',
+        seed: { ...edit, values: { ...live }, raws: {} }
+      })
     };
     const hook = renderHook(
       (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
@@ -1043,7 +1046,10 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     const options: UseInPlaceCommandOptions = {
       ...setupOptions([], vi.fn()),
       baseVersion: 1,
-      reseed: (edit) => ({ ...edit, options: { ...live } })
+      reseed: (edit) => ({
+        tool: 'split',
+        seed: { ...edit, options: { ...live } }
+      })
     };
     const hook = renderHook(
       (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
@@ -1077,7 +1083,10 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     const options: UseInPlaceCommandOptions = {
       ...setupOptions([], vi.fn()),
       baseVersion: 1,
-      reseed: (edit) => ({ ...edit, slots: { ...edit.slots, bodies } })
+      reseed: (edit) => ({
+        tool: 'subtract',
+        seed: { ...edit, slots: { ...edit.slots, bodies } }
+      })
     };
     const hook = renderHook(
       (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
@@ -1109,6 +1118,38 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     expect(hook.result.current.slots.bodies.map((b) => b.bodyId)).toContain(
       'body_d'
     );
+  });
+
+  it('re-arms with the command that now makes the feature', () => {
+    let live: { tool: 'subtract' | 'union' | 'scale'; seed: InPlaceEditSeed } =
+      {
+        tool: 'subtract',
+        seed: SEED
+      };
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      baseVersion: 1,
+      reseed: () => live
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() => hook.result.current.edit('subtract', SEED));
+    // Another Boolean operation is this command's option, not a new one.
+    live = {
+      tool: 'union',
+      seed: { ...SEED, options: { ...SEED.options, operation: 'union' } }
+    };
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.tool).toBe('union');
+    expect(hook.result.current.editing).toBe(SEED);
+    // A feature another command makes now re-arms that command.
+    const scaled = { ...SEED, options: { pivot: 'origin', copy: 'no' } };
+    live = { tool: 'scale', seed: scaled };
+    hook.rerender({ ...options, baseVersion: 3 });
+    expect(hook.result.current.tool).toBe('scale');
+    expect(hook.result.current.editing).toBe(scaled);
   });
 
   it('previews a re-armed edit that builds the same thing', async () => {
