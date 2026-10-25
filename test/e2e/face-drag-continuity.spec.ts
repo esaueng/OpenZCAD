@@ -1,5 +1,6 @@
 import type { Locator, Page } from '@playwright/test';
 import {
+  createPrimitiveInPlace,
   test,
   expect,
   stubApi,
@@ -58,12 +59,9 @@ async function armedBox(page: Page, options: { hole?: boolean } = {}) {
   await page.goto('/');
   await page.getByLabel('Project name').fill('Face drag continuity');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByLabel('Width (X)').fill('30');
-  await inspector.getByLabel('Depth (Y)').fill('18');
-  await inspector.getByLabel('Height (Z)').fill('24');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '30', depth: '18', height: '24' }
+  });
   const canvas = page.locator('.viewer-host canvas');
   if (options.hole) {
     // A Ø6 through hole in the top, 9 mm behind the front face: pushing the
@@ -313,8 +311,11 @@ test('a value the drag preview cannot show holds the last one it could', async (
   // Past 6 mm the face would cut into the hole, which the drag preview cannot
   // draw. It used to snap back to the unmoved part there.
   for (let value = 7; value <= 9; value++) await to(value);
+  // Total reads the line from the arrow back to where the material ends,
+  // and the arrow stands right in front of the hole: 6 mm to its wall, so
+  // a 9 mm push reads past it.
   await expect(page.getByTestId('direct-manipulation-value')).toContainText(
-    '9'
+    '-3 mm'
   );
   await expect(canvas).toHaveAttribute('data-e2e-height-proxy-offset', '-6');
   expect(await removals(page, 'data-e2e-height-proxy-offset', pressed)).toBe(0);
@@ -559,11 +560,7 @@ test('applying a fillet goes straight from its preview to the blend face', async
   await page.goto('/');
   await page.getByLabel('Project name').fill('Fillet continuity');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   const canvas = page.locator('.viewer-host canvas');
   await expect
     .poll(

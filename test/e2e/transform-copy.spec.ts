@@ -1,4 +1,5 @@
 import {
+  createPrimitiveInPlace,
   test,
   expect,
   expectBodyCount,
@@ -19,11 +20,9 @@ test('the Move card copies a body and keeps the source', async ({ page }) => {
   await page.getByLabel('Project name').fill('Copy');
   await page.getByRole('button', { name: 'Create project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Width (X)').fill('20');
-  await inspector.getByLabel('Depth (Y)').fill('10');
-  await inspector.getByLabel('Height (Z)').fill('10');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '20', depth: '10', height: '10' }
+  });
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
   await expectBodyCount(page, 1);
   await expect(page.locator('.viewer-host canvas')).toBeVisible();
@@ -110,9 +109,7 @@ test('a coincident copy asks before a tool, history, measure or selection transi
   await page.goto('/');
   await page.getByLabel('Project name').fill('Coincident copy guard');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   // Exercise the transition guard after the viewport and command are ready.
   await expect(page.locator('.viewer-host canvas')).toHaveAttribute(
@@ -145,8 +142,13 @@ test('a coincident copy asks before a tool, history, measure or selection transi
   }
   await transitions[0]!();
   await ask.getByRole('button', { name: 'Apply', exact: true }).click();
+  // The Box runs in place (U09): its command takes over once the copy is in,
+  // and its preview is a body of its own until it is canceled.
+  const boxBar = page.getByRole('group', { name: 'Box command' });
+  await expect(boxBar).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(boxBar).toHaveCount(0);
   await expectBodyCount(page, 2);
-  await expect(inspector).toBeVisible();
 });
 
 test('keeps the applied copy visible until the exact worker publishes it', async ({
@@ -191,11 +193,7 @@ test('keeps the applied copy visible until the exact worker publishes it', async
   await page.goto('/');
   await page.getByLabel('Project name').fill('Copy publication hold');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1');
   await page.keyboard.press('m');

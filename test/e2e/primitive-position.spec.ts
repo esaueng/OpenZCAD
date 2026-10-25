@@ -1,13 +1,20 @@
-import { expect, test, stubApi } from './openzcad-fixtures';
+import {
+  expect,
+  finishInPlaceCommand,
+  setInPlaceOptionValues,
+  test,
+  stubApi
+} from './openzcad-fixtures';
 
 /**
  * F28: a box is built from its corner and a cylinder from its base center,
  * so both left at the origin put the cylinder's axis on the box's corner.
- * The stored convention stays; each card names its point and lets you place
- * it. This places a cylinder on the default box's top, reads the result back
- * through the exact center of mass, then moves it from its own card.
+ * The stored convention stays; each primitive names its point and lets you
+ * place it, from its in-place bar's Options (U09). This places a cylinder on
+ * the default box's top, reads the result back through the exact center of
+ * mass, then moves it from its own History card.
  */
-test('places a cylinder on a box from the position row its card names', async ({
+test('places a cylinder on a box from the position its Options name', async ({
   page
 }) => {
   test.setTimeout(120_000);
@@ -20,34 +27,30 @@ test('places a cylinder on a box from the position row its card names', async ({
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  const boxPosition = inspector.getByRole('group', { name: 'Position' });
-  await expect(boxPosition).toContainText('lowest X, Y and Z');
+  const boxBar = page.getByRole('group', { name: 'Box command' });
+  await boxBar.locator('summary').click();
   for (const axis of ['X', 'Y', 'Z']) {
     await expect(
-      boxPosition.getByRole('textbox', { name: `Corner ${axis}` })
-    ).toHaveValue('0');
+      boxBar.getByRole('button', { name: `Corner ${axis}`, exact: true })
+    ).toHaveText('0 mm');
   }
+  await boxBar.locator('summary').click();
   // The default box: 30 × 18 × 24 from the origin corner.
-  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await finishInPlaceCommand(page, 'Box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
   await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  const cylinderPosition = inspector.getByRole('group', { name: 'Position' });
-  await expect(cylinderPosition).toContainText('center of the bottom face');
+  const cylinderBar = page.getByRole('group', { name: 'Cylinder command' });
   await expect(
-    cylinderPosition.getByRole('textbox', { name: /^Corner/ })
+    cylinderBar.getByRole('button', { name: /^Corner/ })
   ).toHaveCount(0);
   // The center of the box's top face.
-  await cylinderPosition
-    .getByRole('textbox', { name: 'Base center X' })
-    .fill('15');
-  await cylinderPosition
-    .getByRole('textbox', { name: 'Base center Y' })
-    .fill('9');
-  await cylinderPosition
-    .getByRole('textbox', { name: 'Base center Z' })
-    .fill('24');
-  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await setInPlaceOptionValues(page, 'Cylinder', {
+    'Base center X': '15',
+    'Base center Y': '9',
+    'Base center Z': '24'
+  });
+  await finishInPlaceCommand(page, 'Cylinder');
 
   const placement = page.locator('.feature-row-main', {
     hasText: 'Place Cylinder'

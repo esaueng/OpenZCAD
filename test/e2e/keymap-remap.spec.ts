@@ -1,5 +1,11 @@
 import type { Page } from '@playwright/test';
-import { createProject, expect, stubApi, test } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  createProject,
+  expect,
+  stubApi,
+  test
+} from './openzcad-fixtures';
 
 test('a remapped shortcut works, refuses a taken key by name and survives a reload', async ({
   page
@@ -78,11 +84,9 @@ test('a remapped shortcut works, refuses a taken key by name and survives a relo
 async function selectCylinderCap(page: Page, name: string) {
   await stubApi(page);
   await createProject(page, name);
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByLabel('Radius', { exact: true }).fill('14');
-  await inspector.getByLabel('Height', { exact: true }).fill('28');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '14', height: '28' }
+  });
   const cylinder = page.locator('.feature-row-main', { hasText: 'Cylinder' });
   await expect(cylinder).toBeVisible();
   await cylinder.click();

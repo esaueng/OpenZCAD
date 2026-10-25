@@ -8,7 +8,13 @@ import {
   type ProjectDocument,
   type SketchPlaneRef
 } from '@openzcad/shared';
-import { createProject, expect, stubApi, test } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  createProject,
+  expect,
+  stubApi,
+  test
+} from './openzcad-fixtures';
 
 /**
  * A sketch on a face arrives rolled so the plane's +u reads rightward and +v
@@ -95,11 +101,7 @@ test('a top-face sketch reads +u rightward and +v upward', async ({ page }) => {
   await stubApi(page);
   await page.setViewportSize({ width: 1280, height: 720 });
   await createProject(page, 'Face Sketch Axes');
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
 
   const canvas = page.locator('.viewer-host canvas');
   await expect

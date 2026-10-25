@@ -1,5 +1,6 @@
 import { test, type Page } from '@playwright/test';
 import {
+  createPrimitiveInPlace,
   seedDismissedWorkspaceTour,
   seedOpenCommandFold
 } from './openzcad-fixtures';
@@ -77,11 +78,7 @@ test('profile first geometry operation', async ({ page }) => {
   await page.getByRole('button', { name: 'Create project' }).click();
   await page.getByRole('button', { name: /^Box \(B\)/ }).waitFor();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await page.getByRole('button', { name: /^Fillet/ }).waitFor();
 
   const { profile } = (await client.send('Profiler.stop')) as {

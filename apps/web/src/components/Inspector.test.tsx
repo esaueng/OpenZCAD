@@ -156,7 +156,6 @@ function makeProps(
     directPickDetails: true,
     onLaunchTool: vi.fn(),
     onCancel: vi.fn(),
-    onCreatePrimitive: vi.fn(),
     onApplyPrimitive: vi.fn(),
     onApplySketch: vi.fn(),
     onConvertSketchToFixedPlane: vi.fn(),
@@ -480,57 +479,6 @@ describe('a split readout', () => {
 });
 
 describe('primitive card position', () => {
-  it.each([0, 10])(
-    'numbers a body from the document when creating at X=%s',
-    (x) => {
-      const manager = new CommandManager(
-        createProjectDocument('Numbered', toUserId('user_inspector_number'))
-      );
-      manager.execute(
-        createPrimitiveCommand(
-          'box',
-          'Box',
-          { width: 30, height: 18, depth: 24 },
-          { x: 0, y: 0, z: 0 },
-          manager.document
-        )
-      );
-      const onCreatePrimitive = vi.fn<(command: AnyCommand) => void>();
-      render(
-        <Inspector
-          {...makeProps({
-            tool: 'box',
-            selectedFeature: null,
-            selectedBody: null,
-            selectedTopology: null,
-            commandSession: null,
-            document: manager.document,
-            onCreatePrimitive
-          })}
-        />
-      );
-      fireEvent.change(screen.getByRole('textbox', { name: 'Corner X' }), {
-        target: { value: String(x) }
-      });
-      fireEvent.click(screen.getByRole('button', { name: 'Create' }));
-      expect(onCreatePrimitive).toHaveBeenCalledTimes(1);
-      const command = onCreatePrimitive.mock.calls[0]![0];
-      expect(command.commands?.[0] ?? command).toMatchObject({
-        kind: 'primitive.add',
-        payload: { bodyName: 'Box 2' }
-      });
-      manager.execute(command);
-      expect(
-        Object.values(manager.document.nodes)
-          .filter((node) => node.kind === 'body')
-          .map((node) => node.name)
-      ).toEqual(['Box 1', 'Box 2']);
-      expect(listFeaturesInOrder(manager.document)).toHaveLength(
-        x === 0 ? 2 : 3
-      );
-    }
-  );
-
   it('reads a placed box from the document and applies a move with its dimensions', () => {
     const manager = new CommandManager(
       createProjectDocument('Placed', toUserId('user_inspector_place'))

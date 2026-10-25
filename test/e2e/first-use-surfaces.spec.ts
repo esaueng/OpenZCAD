@@ -1,4 +1,5 @@
 import {
+  createPrimitiveInPlace,
   test,
   expect,
   stubApi,
@@ -26,11 +27,7 @@ test('Settings and Move open complete the first time', async ({ page }) => {
   await page.goto('/');
   await page.getByLabel('Project name').fill('First use');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   // The warm-up runs when the page is first idle, at the latest 5 s in.
   await page.waitForTimeout(6_000);
   await page.evaluate(() => {
@@ -134,11 +131,7 @@ test('Move launched before its panel loads keeps the selection card up', async (
   await page.goto('/');
   await page.getByLabel('Project name').fill('Early move');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await selectBodyFromObjects(page);
   const move = page.getByRole('button', {
     name: 'Selection: Move',
@@ -180,11 +173,7 @@ test('a Move held for its panel is dropped when its selection is cleared', async
   await page.goto('/');
   await page.getByLabel('Project name').fill('Abandoned move');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await selectBodyFromObjects(page);
   await page
     .getByRole('button', { name: 'Selection: Move', exact: true })
@@ -221,13 +210,12 @@ test('Save-Data loads no surface or command card speculatively', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Saving data');
   await page.getByRole('button', { name: 'Create project' }).click();
-  // A tool card is up: within reach of the keypad, but nobody opened it.
+  // A command is up with its chips (U09): within reach of the keypad, but
+  // nobody opened it.
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await expect(
-    page
-      .getByRole('region', { name: 'Feature inspector' })
-      .getByRole('button', { name: /^Create/ })
-  ).toBeVisible();
+  await expect(page.getByTestId('command-handle-width')).toBeVisible({
+    timeout: 30_000
+  });
   await page.waitForTimeout(6_000);
   expect(fetched).toEqual([]);
 });
@@ -247,11 +235,7 @@ test('a Move held for its panel is dropped when the project is replaced', async 
   const createBoxProject = async (name: string) => {
     await page.getByLabel('Project name').fill(name);
     await page.getByRole('button', { name: 'Create project' }).click();
-    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-    await page
-      .getByRole('region', { name: 'Feature inspector' })
-      .getByRole('button', { name: /^Create/ })
-      .click();
+    await createPrimitiveInPlace(page, 'box');
     await page.keyboard.press('Escape');
     await expect(page.locator('.selection-card')).toHaveCount(0);
   };
@@ -286,11 +270,7 @@ test('a Move held for its panel is dropped when Measure takes the lane', async (
   await page.goto('/');
   await page.getByLabel('Project name').fill('Measure instead');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await page.keyboard.press('Escape');
   await expect(page.locator('.selection-card')).toHaveCount(0);
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();

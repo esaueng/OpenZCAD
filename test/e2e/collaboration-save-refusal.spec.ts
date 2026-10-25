@@ -1,4 +1,9 @@
-import { test, expect, stubApi } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  test,
+  expect,
+  stubApi
+} from './openzcad-fixtures';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 
@@ -83,11 +88,7 @@ for (const refusal of ['oversize', 'rejected', 'update-required'] as const) {
     await expect(
       page.getByRole('status', { name: 'Saved', exact: true })
     ).toBeVisible();
-    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-    await page
-      .getByRole('region', { name: 'Feature inspector' })
-      .getByRole('button', { name: 'Create', exact: true })
-      .click();
+    await createPrimitiveInPlace(page, 'box');
     await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
     await expect(
       page.getByRole('status', { name: /^Syncing\b/ })

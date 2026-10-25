@@ -1,4 +1,5 @@
 import {
+  createPrimitiveInPlace,
   test,
   expect,
   stubApi,
@@ -147,13 +148,14 @@ async function createBox(
   dimensions: { width: string; depth: string; height: string },
   name: string
 ) {
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Name').fill(name);
-  await inspector.getByLabel('Width (X)').fill(dimensions.width);
-  await inspector.getByLabel('Depth (Y)').fill(dimensions.depth);
-  await inspector.getByLabel('Height (Z)').fill(dimensions.height);
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: {
+      width: dimensions.width,
+      depth: dimensions.depth,
+      height: dimensions.height
+    },
+    name: name
+  });
   await expect(
     page.locator('.feature-row-main', { hasText: name })
   ).toBeVisible();
@@ -253,14 +255,12 @@ test('keeps a section hole in the exact DXF and shuts export during a posed prev
   test.setTimeout(90_000);
   await stubApi(page);
   await createProject(page, 'Section Hole');
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await createBox(page, { width: '40', depth: '30', height: '30' }, 'Plate');
 
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  await inspector.getByLabel('Name').fill('Bore tool');
-  await inspector.getByLabel('Radius', { exact: true }).fill('6');
-  await inspector.getByLabel('Height', { exact: true }).fill('30');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '6', height: '30' },
+    name: 'Bore tool'
+  });
   await expect(
     page.locator('.feature-row-main', { hasText: 'Bore tool' })
   ).toBeVisible();

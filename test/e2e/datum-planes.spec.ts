@@ -1,6 +1,7 @@
 import type { Locator, Page } from '@playwright/test';
 import {
   clickWorldPoint,
+  createPrimitiveInPlace,
   enterCommandValue,
   expect,
   expectBodyCount,
@@ -157,11 +158,9 @@ test('a datum plane drives a sketch, a Split and a Mirror, and an edit moves the
   const canvas = page.locator('.viewer-host canvas');
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Width (X)').fill('20');
-  await inspector.getByLabel('Depth (Y)').fill('20');
-  await inspector.getByLabel('Height (Z)').fill('20');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '20', depth: '20', height: '20' }
+  });
   await expectBodyCount(page, 1);
 
   // U09: the Plane runs in place. An offset plane 8 above Top (XY): its

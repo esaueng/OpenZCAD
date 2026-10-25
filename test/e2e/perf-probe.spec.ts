@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import {
+  createPrimitiveInPlace,
   seedDismissedWorkspaceTour,
   seedOpenCommandFold
 } from './openzcad-fixtures';
@@ -132,21 +133,13 @@ test('perf probe', async ({ page }) => {
 
   // First exact geometry operation: this is where the kernel actually boots.
   const b0 = Date.now();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
   const firstBox = Date.now() - b0;
 
   // Second operation: kernel is warm now.
   const b1 = Date.now();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await page.waitForTimeout(50);
   const secondBox = Date.now() - b1;
 

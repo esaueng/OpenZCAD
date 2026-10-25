@@ -16,6 +16,7 @@ import {
 } from '@openzcad/shared';
 import type { StoredMeasurementRecord } from '../../apps/web/src/lib/measurementRecord';
 import {
+  createPrimitiveInPlace,
   createProject,
   expectBodyCount,
   expect,
@@ -72,11 +73,7 @@ test('keeps exact geometry and undo through a save echo and reopens compatible s
   await page.goto('/');
   await page.getByLabel('Project name').fill('Save Flow');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(
     page.getByRole('status', { name: 'Saved', exact: true })
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });
@@ -1189,11 +1186,7 @@ test('syncs View measurements to a second device without changing the CAD docume
     await pageA.goto('/');
     await pageA.getByLabel('Project name').fill('Measured Across Devices');
     await pageA.getByRole('button', { name: 'Create project' }).click();
-    await pageA.getByRole('button', { name: /^Box \(B\)/ }).click();
-    await pageA
-      .getByRole('region', { name: 'Feature inspector' })
-      .getByRole('button', { name: /^Create/ })
-      .click();
+    await createPrimitiveInPlace(pageA, 'box');
     await expect(pageA.getByRole('status', { name: 'Saved' })).toBeVisible({
       timeout: SYNC_BUDGET_MS
     });
@@ -1404,11 +1397,7 @@ test('resumes a workspace on another device and carries undo and redo back acros
     await a.goto('/');
     await a.getByLabel('Project name').fill('History handoff');
     await a.getByRole('button', { name: 'Create project' }).click();
-    await a.getByRole('button', { name: /^Box \(B\)/ }).click();
-    await a
-      .getByRole('region', { name: 'Feature inspector' })
-      .getByRole('button', { name: /^Create/ })
-      .click();
+    await createPrimitiveInPlace(a, 'box');
     await expect
       .poll(() => cloud.project?.bodyOrder.length, { timeout: SYNC_BUDGET_MS })
       .toBe(1);

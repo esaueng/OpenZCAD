@@ -1,19 +1,11 @@
 import {
+  createPrimitiveInPlace,
   test,
   expect,
   createProject,
   expectBodyCount,
   stubApi
 } from './openzcad-fixtures';
-import type { Page } from '@playwright/test';
-
-async function addPrimitive(page: Page, tool: RegExp) {
-  await page.getByRole('button', { name: tool }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
-}
 
 /**
  * The journey that lost its card: the only capture used to be an idle timer
@@ -26,7 +18,7 @@ test('a part modelled and left at once lists with its card preview', async ({
 }) => {
   await stubApi(page);
   await createProject(page, 'Thumbnail Box');
-  await addPrimitive(page, /^Box \(B\)/);
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await page.getByTitle('Back to projects').click();
 
@@ -46,7 +38,7 @@ test('a part modelled and left at once lists with its card preview', async ({
   // than leaving the earlier picture standing.
   await tile.locator('.start-tile-open').click();
   await expectBodyCount(page, 1);
-  await addPrimitive(page, /^Cylinder \(C\)/);
+  await createPrimitiveInPlace(page, 'cylinder');
   await expectBodyCount(page, 2);
   await page.getByTitle('Back to projects').click();
   await expect(tile.locator('.start-tile-thumb img')).not.toHaveAttribute(

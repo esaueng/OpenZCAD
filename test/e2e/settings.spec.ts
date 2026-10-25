@@ -2,6 +2,7 @@ import type { Page } from '@playwright/test';
 import { DEFAULT_APP_SETTINGS } from '@openzcad/shared';
 import {
   askAssistant,
+  createPrimitiveInPlace,
   createProject,
   expect,
   expectBodyCount,
@@ -868,11 +869,7 @@ test('settings swallow workspace shortcuts instead of editing behind them', asyn
   await stubApi(page);
   await createProject(page, 'Shortcut Guard Part');
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   const feature = page.locator('.feature-row', { hasText: 'Box' });
   await expect(feature).toBeVisible();
 
@@ -898,6 +895,9 @@ test('settings swallow workspace shortcuts instead of editing behind them', asyn
   await expect(page.getByRole('region', { name: 'Box operation' })).toHaveCount(
     0
   );
+  await expect(page.getByRole('group', { name: 'Box command' })).toHaveCount(
+    0
+  );
 });
 
 test('a direct mode hides the assistant without ending the conversation', async ({
@@ -915,11 +915,7 @@ test('a direct mode hides the assistant without ending the conversation', async 
     'Add a 10 mm cube.'
   );
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
   // Pressing the Box tool tucked the stream away; bring it back up.
   await openAssistant(page);
@@ -984,11 +980,7 @@ test('forcing mouse navigation makes a trackpad-style scroll zoom again', async 
   await page.goto('/');
   await page.getByLabel('Project name').fill('Wheel Preference Part');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
@@ -1355,9 +1347,7 @@ test('consented diagnostics count transaction edits without sending names', asyn
     return route.fulfill({ status: 204 });
   });
   await createProject(page, 'Private diagnostic project');
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page.getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: 'Create', exact: true }).click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   const observations = (event: string) => requests.filter(row => row.event === event);
   await expect.poll(() => observations('feature_operation')).toEqual([
@@ -1382,9 +1372,7 @@ test('consented diagnostics count transaction edits without sending names', asyn
     { event: 'part_count', bucket: '1' }
   ]);
   await expect.poll(() => observations('feature_used')).toHaveLength(2);
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await createPrimitiveInPlace(page, 'cylinder');
   await expectBodyCount(page, 2);
   await expect.poll(() => observations('part_count').at(-1)?.bucket).toBe('2_10');
   // U09: Union runs in place: two bodies, then Done.

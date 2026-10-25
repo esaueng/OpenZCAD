@@ -59,6 +59,7 @@ import { unlockedAccount } from '../apps/web/src/lib/e2ee/unlockedKeys';
 import {
   GROUP_RESET_CONFIRMATION,
   ProjectGroupError,
+  catchUpProjectGroup,
   createProjectGroupsApi,
   dedupeSecretForProject,
   epochAuthenticatorForEpoch,
@@ -1073,8 +1074,10 @@ describe('device removal across encrypted projects', () => {
     // Rule 1, the directory: the phone builds a Commit in the project that
     // has not rotated yet. The Worker refuses it outright...
     forgetAllProjectKeys();
+    // Caught up, not joined: a join would also send the rotation the Worker
+    // reports due, which it refuses from the revoked phone.
     await expect(
-      joinProjectGroup(stolen, pendingId).then(() =>
+      catchUpProjectGroup(stolen, pendingId).then(() =>
         stolen.sessions.commit(
           { userId: USER, deviceId: phoneId, projectId: pendingId },
           { lists: [stolen.account.list], certifications: [] }
@@ -1283,12 +1286,38 @@ describe('device removal across encrypted projects', () => {
     expect(keyEpochOf(srv, projectId)).toBe(before);
 
     // The laptop, the replacement, rejoins and removes the phone's leaf in
-    // the same external Commit.
+    // the same external Commit; a member Commit follows, which the Worker
+    // counts as the rotation (#908 review).
     laptop.offline = false;
     laptop.after = undefined;
     use(laptop, state);
+    // It goes offline the moment its External Commit lands, before the
+    // member Commit: the Worker keeps the rotation due and says so with the
+    // group, so its next open sends it (#908 review).
+    laptop.after = (path, init) => {
+      if (init.method === 'POST' && path.endsWith('/mls/commits')) {
+        laptop.offline = true;
+      }
+    };
+    await expect(joinProjectGroup(laptop.groups, projectId)).rejects.toThrow();
+    laptop.offline = false;
+    laptop.after = undefined;
+    expect(keyEpochOf(srv, projectId)).toBe(before + 1);
+    const due = (await (
+      await srv.call('GET', `/api/e2ee/projects/${projectId}/mls/group-info`)
+    ).json()) as { group: { rotationDue?: boolean } };
+    expect(due.group.rotationDue).toBe(true);
     const joined = await joinProjectGroup(laptop.groups, projectId);
-    expect(joined.keyEpoch).toBe(before + 1);
+    expect(joined.keyEpoch).toBe(before + 2);
+    expect(
+      (
+        srv.db
+          .prepare(
+            'SELECT kind FROM e2ee_mls_commits WHERE project_id = ? ORDER BY epoch DESC LIMIT 2'
+          )
+          .all(projectId) as { kind: string }[]
+      ).map((row) => row.kind)
+    ).toEqual(['commit', 'external']);
     const status = await laptop.sessions.status({
       userId: USER,
       deviceId: deviceIdOf(laptop),
@@ -1298,7 +1327,7 @@ describe('device removal across encrypted projects', () => {
     const cutoff = (
       await projectRevocationCutoffs(laptop.groups, projectId)
     ).get(phoneId)!;
-    expect(cutoff.keyEpoch).toBe(joined.keyEpoch);
+    expect(cutoff.keyEpoch).toBe(before + 1);
     // Then the desktop rejoins with a PSK from after the removal.
     await saveEdit(desktop, projectId, 'Desktop now');
     expect((await laptop.store.loadProject(projectId)).name).toBe(

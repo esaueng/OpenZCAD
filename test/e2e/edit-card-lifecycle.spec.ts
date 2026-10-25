@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import {
+  createPrimitiveInPlace,
   test,
   expect,
   stubApi,
@@ -29,10 +30,7 @@ function inspectorOf(page: Page) {
 }
 
 async function createBox(page: Page) {
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspectorOf(page)
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
@@ -174,11 +172,10 @@ test('Fillet: Done closes the edit, a refused size keeps it armed with the reaso
 }) => {
   test.setTimeout(90_000);
   await createProject(page, 'Fillet edit card');
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
   const inspector = inspectorOf(page);
-  await inspector.getByLabel('Radius', { exact: true }).fill('14');
-  await inspector.getByLabel('Height', { exact: true }).fill('28');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '14', height: '28' }
+  });
   // U09 phase 7: no card. Every edge from Options, the radius on its chip.
   await blendEdgesInPlace(page, { tool: 'Fillet', allEdges: 2, size: '1' });
   await expect(row(page, /^Fillet/)).toBeVisible({ timeout: 20_000 });
@@ -218,11 +215,10 @@ test('Fillet: a radius typed while the edges settle is the one created', async (
   // default radius 2, overwritten while the edge selection initialised.
   test.setTimeout(90_000);
   await createProject(page, 'Fillet typed first');
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
   const inspector = inspectorOf(page);
-  await inspector.getByLabel('Radius', { exact: true }).fill('14');
-  await inspector.getByLabel('Height', { exact: true }).fill('28');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '14', height: '28' }
+  });
   // The edge pick demands lineage, and that rebuild lands while the radius
   // is typed: the typed radius must still be the one Done sends.
   await blendEdgesInPlace(page, { tool: 'Fillet', allEdges: 2, size: '1.5' });

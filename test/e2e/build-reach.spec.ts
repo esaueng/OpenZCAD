@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import {
+  createPrimitiveInPlace,
   locateEdge,
   promptField,
   setSelectionFilter,
@@ -32,19 +33,10 @@ async function addBox(
   size: { width: string; depth: string; height: string },
   corner?: { x: string }
 ) {
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByLabel('Width (X)').fill(size.width);
-  await inspector.getByLabel('Depth (Y)').fill(size.depth);
-  await inspector.getByLabel('Height (Z)').fill(size.height);
-  if (corner) {
-    await inspector
-      .getByRole('group', { name: 'Position' })
-      .getByRole('textbox', { name: 'Corner X' })
-      .fill(corner.x);
-  }
-  await inspector.getByRole('button', { name: /^Create/ }).click();
-  await expect(inspector).toHaveCount(0);
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: size,
+    ...(corner ? { at: corner } : {})
+  });
 }
 
 /**
@@ -108,15 +100,12 @@ test('F13: Measure is on Build’s instrument rail and in the palette, and yield
 
   // Starting a command ends the measure session: the two never stack.
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await expect(
-    page.getByRole('region', { name: 'Feature inspector' })
-  ).toBeVisible();
+  const boxBar = page.getByRole('group', { name: 'Box command' });
+  await expect(boxBar).toBeVisible();
   await expect(workbench).toHaveCount(0);
   await expect(measure).toHaveAttribute('aria-pressed', 'false');
   await page.keyboard.press('Escape');
-  await expect(
-    page.getByRole('region', { name: 'Feature inspector' })
-  ).toHaveCount(0);
+  await expect(boxBar).toHaveCount(0);
 
   // The palette reaches it by name, and Escape puts it away again.
   await promptField(page).fill('/measure');

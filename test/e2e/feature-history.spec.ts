@@ -1,4 +1,5 @@
 import {
+  createPrimitiveInPlace,
   test,
   expect,
   stubApi,
@@ -104,12 +105,8 @@ test('resumes rollback without resuming manually suppressed features and support
   await page.goto('/');
   await page.getByLabel('Project name').fill('History recovery');
   await page.getByRole('button', { name: 'Create project' }).click();
-  for (const tool of [/^Box \(B\)/, /^Cylinder \(C\)/, /^Sphere/]) {
-    await page.getByRole('button', { name: tool }).click();
-    await page
-      .getByRole('region', { name: 'Feature inspector' })
-      .getByRole('button', { name: /^Create/ })
-      .click();
+  for (const kind of ['box', 'cylinder', 'sphere'] as const) {
+    await createPrimitiveInPlace(page, kind);
   }
   await expectBodyCount(page, 3);
   await page
@@ -295,11 +292,7 @@ test.describe('on a touch screen', () => {
     await page.goto('/');
     await page.getByLabel('Project name').fill('Touch history');
     await page.getByRole('button', { name: 'Create project' }).click();
-    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-    await page
-      .getByRole('region', { name: 'Feature inspector' })
-      .getByRole('button', { name: /^Create/ })
-      .click();
+    await createPrimitiveInPlace(page, 'box');
     await expectBodyCount(page, 1);
     expect(
       await page.evaluate(() => window.matchMedia('(hover: none)').matches)
@@ -417,9 +410,8 @@ test('renaming a modeling feature closes its stale editor and keeps the new name
   await page.goto('/');
   await page.getByLabel('Project name').fill('Rename open shell');
   await page.getByRole('button', { name: 'Create project' }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box');
+  // U09: a new shell is made in place; editing it still opens its card.
   await createShellInPlace(page, {
     normals: [{ x: 0, y: 0, z: 1 }],
     thickness: '2'
