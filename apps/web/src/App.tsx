@@ -8278,7 +8278,9 @@ export function App() {
   function createValidatedFeature(
     command: AnyCommand,
     featureName: string,
-    resultBodyId: BodyId | undefined
+    resultBodyId: BodyId | undefined,
+    /** True once the caller no longer wants it (its command closed). */
+    cancelled?: () => boolean
   ): Promise<ValidatedFeatureOutcome> | undefined {
     if (!resultBodyId) {
       createFeature(command);
@@ -8288,7 +8290,8 @@ export function App() {
       featureName,
       resultBodyId,
       successMessage: commandOutcomeMessage(command.label),
-      onSuccess: finishFeatureCreation
+      onSuccess: finishFeatureCreation,
+      ...(cancelled ? { cancelled } : {})
     });
   }
 
@@ -8302,7 +8305,9 @@ export function App() {
     featureName: string,
     resultBodyId: BodyId | undefined = feature.bodyId,
     /** Told whether the edit landed; an in-place edit waits on it. */
-    settled?: (committed: boolean) => void
+    settled?: (committed: boolean) => void,
+    /** True once the caller no longer wants it (its command closed). */
+    withdrawn?: () => boolean
   ): void {
     const editSession = editCardSessionRef.current;
     if (!doc || !resultBodyId) {
@@ -8330,7 +8335,9 @@ export function App() {
       ),
       successMessage: commandOutcomeMessage(command.label),
       onSuccess: () => finishFeatureEdit(feature, editSession),
-      cancelled: () => !editSessionIsCurrent(feature, editSession)
+      cancelled: () =>
+        !editSessionIsCurrent(feature, editSession) ||
+        Boolean(withdrawn?.())
     }).then(
       (outcome) => settled?.(outcome === 'committed'),
       () => settled?.(false)
@@ -8793,7 +8800,11 @@ export function App() {
   }
 
   /** Done on an in-place edit: the feature's update, validated as the card's was. */
-  function commitInPlaceEdit(request: InPlaceRequest, edit: InPlaceEditSeed) {
+  function commitInPlaceEdit(
+    request: InPlaceRequest,
+    edit: InPlaceEditSeed,
+    withdrawn?: () => boolean
+  ) {
     const current = managerRef.current?.document;
     const feature = current ? findFeature(current, edit.featureId) : null;
     if (!feature) {
@@ -8820,7 +8831,8 @@ export function App() {
       feature,
       feature.name,
       inPlaceEditResultBodyId(request, edit),
-      (committed) => inPlaceRef.current.settleEdit(edit, committed)
+      (committed) => inPlaceRef.current.settleEdit(edit, committed),
+      withdrawn
     );
   }
 
@@ -19713,9 +19725,11 @@ export function App() {
         resultBodyId: inPlaceResultBodyId(request, command)
       };
     },
-    commit: (request, title, edit) => {
+    commit: (request, title, edit, withdrawn) => {
+      // A command closed while its Done validates (another tool, a new
+      // selection) withdraws the candidate: nothing lands after it is gone.
       if (edit) {
-        commitInPlaceEdit(request, edit);
+        commitInPlaceEdit(request, edit, withdrawn);
         return;
       }
       const name = newFeatureName(title);
@@ -19728,12 +19742,18 @@ export function App() {
           featureName: name,
           resultBodyId,
           successMessage: commandOutcomeMessage(command.label),
-          onSuccess: finishFeatureCreation
+          onSuccess: finishFeatureCreation,
+          cancelled: withdrawn
         }).then((outcome) => outcome === 'committed');
       }
       // The command stays open until this lands: refused or held off by
       // another exact operation, its picks are still there to retry.
-      return createValidatedFeature(command, name, resultBodyId)?.then(
+      return createValidatedFeature(
+        command,
+        name,
+        resultBodyId,
+        withdrawn
+      )?.then(
         (outcome) => outcome === 'committed'
       );
     },
