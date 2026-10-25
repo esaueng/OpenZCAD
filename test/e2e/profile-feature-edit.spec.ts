@@ -355,13 +355,15 @@ test('refuses a saved section that cannot resolve to an upstream sketch', async 
   await page
     .locator('.feature-row-main', { hasText: 'Authored feature' })
     .click();
-  // The edit arms without it, says so, and cannot finish on one section.
+  // The edit arms without it and says so. It was the first section, so a
+  // new pick would land after the one kept: the sections are picked again,
+  // in order, and it cannot finish meanwhile.
   const bar = page.getByRole('group', {
     name: 'Edit Authored feature command'
   });
-  await expect(bar).toContainText('Pick the next section profile');
+  await expect(bar).toContainText('Pick the first section profile');
   await expect(page.getByRole('contentinfo')).toContainText(
-    'its saved profile no longer resolves'
+    'its saved profile no longer resolves · pick its sections again, in order'
   );
   await expect(bar.getByRole('button', { name: /Done/ })).toBeDisabled();
   expect(findFeature(await backup(page), data.featureId)?.data).toEqual(
