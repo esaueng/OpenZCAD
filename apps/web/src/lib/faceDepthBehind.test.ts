@@ -1,10 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import {
-  faceDepthBehind,
-  faceSamples,
-  type FaceSample
-} from './faceDepthBehind';
+import { faceDepthBehind, faceLift } from './faceDepthBehind';
 
 /** What the viewer draws bodies in: section caps and overlays are not. */
 const BODY = new THREE.MeshStandardMaterial();
@@ -18,32 +14,10 @@ function block(
   return mesh;
 }
 
-/** Evenly weighted points on the rectangle `corner + s·along + t·across`. */
-function grid(
-  corner: THREE.Vector3,
-  along: THREE.Vector3,
-  across: THREE.Vector3,
-  steps = 10
-): FaceSample[] {
-  const samples: FaceSample[] = [];
-  for (let i = 0; i < steps; i += 1) {
-    for (let j = 0; j < steps; j += 1) {
-      samples.push({
-        point: corner
-          .clone()
-          .addScaledVector(along, (i + 0.5) / steps)
-          .addScaledVector(across, (j + 0.5) / steps),
-        weight: 1
-      });
-    }
-  }
-  return samples;
-}
-
 /**
  * Two 40 mm blocks 100 mm apart on a thin base plate: the holder whose right
  * block's outer face read "Total 181" — the whole body's reach — instead of
- * the block the face belongs to.
+ * the block under the arrow.
  */
 function twoLobedBody(): THREE.Group {
   const body = new THREE.Group();
@@ -51,6 +25,17 @@ function twoLobedBody(): THREE.Group {
   body.add(block([40, 40, 60], [160, 20, 30]));
   body.add(block([100, 40, 5], [90, 20, 2.5]));
   body.position.set(5, 0, 0);
+  return body;
+}
+
+/**
+ * The holder's side, as the second report drew it: one flat face over a
+ * 140 mm deep base (z 0–40) and a 10 mm upright tab above it (z 40–70).
+ */
+function baseAndTab(): THREE.Group {
+  const body = new THREE.Group();
+  body.add(block([30, 140, 40], [15, 70, 20]));
+  body.add(block([30, 10, 30], [15, 5, 55]));
   return body;
 }
 
@@ -82,84 +67,35 @@ function boxWithHole(): THREE.Group {
 }
 
 const RIGHT = new THREE.Vector3(1, 0, 0);
+const FRONT = new THREE.Vector3(0, -1, 0);
 
 describe('faceDepthBehind', () => {
-  it('reads the block the face belongs to, not the whole body behind the plane', () => {
-    const body = twoLobedBody();
-    // The right block's whole outer face, plate strip included.
-    const samples = grid(
-      new THREE.Vector3(185, 0, 0),
-      new THREE.Vector3(0, 40, 0),
-      new THREE.Vector3(0, 0, 60)
-    );
+  it('reads the block under the arrow, not the whole body behind the plane', () => {
     expect(
-      faceDepthBehind(body, new THREE.Vector3(185, 20, 30), RIGHT, samples)
+      faceDepthBehind(twoLobedBody(), new THREE.Vector3(185, 20, 40), RIGHT)
     ).toBeCloseTo(40, 6);
   });
 
-  it('is not decided by a hole behind part of the face', () => {
-    // The CI box: the arrow stands right in front of the hole, whose wall is
-    // 6 mm back; the box is 18 deep everywhere else.
-    const body = boxWithHole();
-    const front = new THREE.Vector3(0, -1, 0);
-    const samples = grid(
-      new THREE.Vector3(0, 0, 0),
-      new THREE.Vector3(30, 0, 0),
-      new THREE.Vector3(0, 0, 24)
-    );
+  it('follows where on the face the pick lands', () => {
+    const body = baseAndTab();
+    // The same flat face: picked on the tab, then on the base below it.
     expect(
-      faceDepthBehind(body, new THREE.Vector3(15, 0, 12), front, samples)
-    ).toBeCloseTo(18, 6);
-    // Only the ray through the hole's centre line reads its wall.
-    expect(
-      faceDepthBehind(body, new THREE.Vector3(15, 0, 12), front, [
-        { point: new THREE.Vector3(15, 0, 12), weight: 1 }
-      ])
-    ).toBeCloseTo(6, 3);
-  });
-
-  it('counts from the plane the gesture started on', () => {
-    // A preview moved the +X face of a 10 mm block out by 2 before the rig
-    // re-armed: the moved face is sampled, the 10 mm span still reads.
-    const moved = block([12, 10, 10], [1, 0, 0]);
-    const samples = grid(
-      new THREE.Vector3(7, -5, -5),
-      new THREE.Vector3(0, 10, 0),
-      new THREE.Vector3(0, 0, 10),
-      4
-    );
-    expect(
-      faceDepthBehind(moved, new THREE.Vector3(5, 0, 0), RIGHT, samples)
+      faceDepthBehind(body, new THREE.Vector3(15, 0, 60), FRONT)
     ).toBeCloseTo(10, 6);
+    expect(
+      faceDepthBehind(body, new THREE.Vector3(15, 0, 20), FRONT)
+    ).toBeCloseTo(140, 6);
   });
 
-  it('is null when the face has no material behind it', () => {
-    const body = twoLobedBody();
-    // Above the gap: the first surface below is the plate's top, entered.
+  it('ends the line at a hole straight behind the pick', () => {
+    const body = boxWithHole();
     expect(
-      faceDepthBehind(
-        body,
-        new THREE.Vector3(95, 20, 60),
-        new THREE.Vector3(0, 0, 1),
-        [{ point: new THREE.Vector3(95, 20, 60), weight: 1 }]
-      )
-    ).toBeNull();
-    // An inward normal on the left block's inner wall casts across the gap
-    // and enters the right block.
-    const inner = grid(
-      new THREE.Vector3(45, 0, 10),
-      new THREE.Vector3(0, 40, 0),
-      new THREE.Vector3(0, 0, 50)
-    );
+      faceDepthBehind(body, new THREE.Vector3(15, 0, 12), FRONT)
+    ).toBeCloseTo(6, 3);
+    // Beside the hole the line runs to the back face.
     expect(
-      faceDepthBehind(
-        body,
-        new THREE.Vector3(45, 20, 40),
-        new THREE.Vector3(-1, 0, 0),
-        inner
-      )
-    ).toBeNull();
-    expect(faceDepthBehind(body, new THREE.Vector3(), RIGHT, [])).toBeNull();
+      faceDepthBehind(body, new THREE.Vector3(5, 0, 12), FRONT)
+    ).toBeCloseTo(18, 6);
   });
 
   it('reads through a section cap to the body behind it', () => {
@@ -174,57 +110,60 @@ describe('faceDepthBehind', () => {
     cap.rotation.y = -Math.PI / 2;
     cap.position.set(160, 20, 30);
     body.add(cap);
-    const samples = grid(
-      new THREE.Vector3(185, 0, 10),
-      new THREE.Vector3(0, 40, 0),
-      new THREE.Vector3(0, 0, 50)
-    );
     expect(
-      faceDepthBehind(body, new THREE.Vector3(185, 20, 30), RIGHT, samples)
+      faceDepthBehind(body, new THREE.Vector3(185, 20, 40), RIGHT)
     ).toBeCloseTo(40, 6);
+  });
+
+  it('counts from the plane the gesture started on', () => {
+    // A preview moved the +X face of a 10 mm block out by 2 (or in by 3)
+    // before the rig re-armed: the 10 mm span still reads.
+    const origin = new THREE.Vector3(5, 0, 0);
+    const out = block([12, 10, 10], [1, 0, 0]);
+    expect(faceDepthBehind(out, origin, RIGHT, 2)).toBeCloseTo(10, 6);
+    const pushed = block([7, 10, 10], [-1.5, 0, 0]);
+    expect(faceDepthBehind(pushed, origin, RIGHT, -3)).toBeCloseTo(10, 6);
+  });
+
+  it('is null when the line does not start inside material', () => {
+    const body = twoLobedBody();
+    // Above the gap: the first surface below is the plate's top, entered.
+    expect(
+      faceDepthBehind(
+        body,
+        new THREE.Vector3(95, 20, 60),
+        new THREE.Vector3(0, 0, 1)
+      )
+    ).toBeNull();
+    // An inward normal on the left block's inner wall casts across the gap
+    // and enters the right block.
+    expect(
+      faceDepthBehind(
+        body,
+        new THREE.Vector3(45, 20, 40),
+        new THREE.Vector3(-1, 0, 0)
+      )
+    ).toBeNull();
   });
 
   it('decides leaving from winding when the mesh has no normals', () => {
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(10, 10, 10), BODY);
     mesh.geometry.deleteAttribute('normal');
-    const point = new THREE.Vector3(5, 1, 2);
     expect(
-      faceDepthBehind(mesh, point, RIGHT, [{ point, weight: 1 }])
+      faceDepthBehind(mesh, new THREE.Vector3(5, 1, 2), RIGHT)
     ).toBeCloseTo(10, 6);
   });
 });
 
-describe('faceSamples', () => {
-  it('spreads area-weighted points over the face from the topology table', () => {
-    const mesh = block([10, 20, 30], [5, 0, 0]);
-    // BoxGeometry's first two triangles are its +X side.
+describe('faceLift', () => {
+  it('reads how far the rendered face stands off the starting plane', () => {
+    const mesh = block([12, 10, 10], [1, 0, 0]);
+    // BoxGeometry's first two triangles are its +X side, now at x = 7.
     mesh.userData.topology = {
       faces: [{ topologyId: 'px', triangleStart: 0, triangleCount: 2 }]
     };
-    const samples = faceSamples(mesh, 'px');
-    expect(samples).toHaveLength(64);
-    for (const { point } of samples) {
-      expect(point.x).toBeCloseTo(10, 9);
-      expect(Math.abs(point.y)).toBeLessThanOrEqual(10);
-      expect(Math.abs(point.z)).toBeLessThanOrEqual(15);
-    }
-    const weight = samples.reduce((sum, sample) => sum + sample.weight, 0);
-    expect(weight).toBeCloseTo(600, 6);
-    expect(faceSamples(mesh, 'missing')).toEqual([]);
-  });
-
-  it('keeps to its ray budget on a finely tessellated face', () => {
-    // 2 × 40 × 40 triangles on one face: one ray each would be 3200.
-    const plane = new THREE.Mesh(new THREE.PlaneGeometry(10, 10, 40, 40), BODY);
-    const triangles = plane.geometry.getIndex()!.count / 3;
-    plane.userData.topology = {
-      faces: [
-        { topologyId: 'fine', triangleStart: 0, triangleCount: triangles }
-      ]
-    };
-    const samples = faceSamples(plane, 'fine');
-    expect(samples).toHaveLength(64);
-    const weight = samples.reduce((sum, sample) => sum + sample.weight, 0);
-    expect(weight).toBeCloseTo(100, 6);
+    const origin = new THREE.Vector3(5, 0, 0);
+    expect(faceLift(mesh, 'px', origin, RIGHT)).toBeCloseTo(2, 9);
+    expect(faceLift(mesh, 'missing', origin, RIGHT)).toBe(0);
   });
 });

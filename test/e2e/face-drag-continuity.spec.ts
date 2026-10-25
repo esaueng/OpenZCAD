@@ -313,8 +313,11 @@ test('a value the drag preview cannot show holds the last one it could', async (
   // Past 6 mm the face would cut into the hole, which the drag preview cannot
   // draw. It used to snap back to the unmoved part there.
   for (let value = 7; value <= 9; value++) await to(value);
+  // Total reads the line from the arrow back to where the material ends,
+  // and the arrow stands right in front of the hole: 6 mm to its wall, so
+  // a 9 mm push reads past it.
   await expect(page.getByTestId('direct-manipulation-value')).toContainText(
-    '9'
+    '-3 mm'
   );
   await expect(canvas).toHaveAttribute('data-e2e-height-proxy-offset', '-6');
   expect(await removals(page, 'data-e2e-height-proxy-offset', pressed)).toBe(0);
