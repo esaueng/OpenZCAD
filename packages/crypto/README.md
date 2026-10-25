@@ -411,18 +411,46 @@ know. `verifyRevocationCutoffs` requires the identity signature, the list's
 user and generation, and an entry of that list, by sequence and hash, that
 revokes a device. Phase 4 stores and enforces them.
 
+## Contacts lists
+
+A user's verified pins for other people's keys (ADR-024, Version integrity)
+live in an identity-signed, hash-chained contacts list, so a server cannot
+roll a verified pin back to a key that was since replaced:
+
+```
+"OZK" (4f 5a 4b) | u8 version = 1 | u32 sequence | u8 (0|32) + previous entry hash
+| u8 length + user id | u64 issuedAt | u8 action | u8 length + contact user id
+| 32-byte contact identity key hash
+| verify and advance only: u32 device-list sequence | 32-byte device-list entry hash
+```
+
+Actions are 1 `verify` (the user compared `contactVerificationCode` over the
+contact's identity key and device-list head, and pins both), 2 `advance`
+(moves a verified contact's pinned head forward), 3 `key-changed` (the
+verified identity was replaced; the contact is unverified again) and 4
+`untrust`. Only a verified contact can advance, change or be untrusted, and
+only under the identity it was verified with; a contact verified under one
+identity must have its key change recorded before another identity is
+verified. An entry's hash is `SHA-256(label "v1 contacts entry hash" |
+entry)`, and the identity key signs `label "v1 contacts list signature" |
+entry` (`u8 1 | r || s`). `verifyContactsList` checks the whole chain under
+the identity key and, with a pin, refuses a rolled-back or forked list
+(`chain-broken`) or another identity (`context-mismatch`).
+`contactDeviceListPin` turns a verified contact into the `DeviceListPin`
+their device list must extend.
+
 ## Tests
 
 `vectors.test.ts` holds fixed vectors built from injected keys, blob ids, IVs,
 ephemeral keys and timestamps, including version 1 and 2 device-list
-entries, a recorded revocation-cutoffs signature, a paired
-approval commitment, the project-info and key-archive kinds, the three
+entries, a recorded revocation-cutoffs signature, a contacts entry with a
+recorded identity signature, a paired approval commitment, the project-info and key-archive kinds, the three
 project-data wraps, an epoch binding, a version log record and a key archive
 body. It also re-derives the nonce layout, both envelope classes, the content
 blob hash, the wrap and the epoch binding with raw WebCrypto. A
 change to a vector is a format change and needs a new version byte.
-`fuzz.test.ts` mutates valid inputs, version log records and bodies included,
-and requires every parser to fail only with `E2eeError`. Functions that inject keys or randomness (`…With`,
+`fuzz.test.ts` mutates valid inputs, version log records, contacts entries and
+bodies included, and requires every parser to fail only with `E2eeError`. Functions that inject keys or randomness (`…With`,
 `envelopeKeyFromBytes`) are test-only and are not exported from the package
 entry.
 

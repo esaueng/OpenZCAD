@@ -33,6 +33,12 @@ import {
 } from './envelope';
 import type { ProjectEnvelopeHeaderInit } from './header';
 import {
+  contactsEntryHash,
+  decodeContactsEntry,
+  encodeContactsEntry,
+  verifyContactsList
+} from './contacts';
+import {
   accountKeyCommitment,
   deviceListEntryHash,
   encodeDeviceListEntry,
@@ -732,5 +738,62 @@ describe('project data vectors', () => {
     expect(new TextDecoder().decode(body)).toMatchInlineSnapshot(
       `"{"version":1,"previousKeys":[{"keyEpoch":0,"key":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"}],"dedupeSecret":"ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8","epochRecord":"QEFCQ0RFRkc","epochAuthenticator":"YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8"}"`
     );
+  });
+});
+
+// A recorded signature by the fixed identity key over the contacts entry
+// vector below.
+const CONTACTS_SIGNATURE =
+  '0117f76fc521ccfa9d3d245522ac35b0b64a6bf5034d15adfac02b6f7b87ed5dc069f69665f5a4d0ac62d75b45a23009f3f5c3f6894395c953188593e165f0278e';
+
+describe('contacts entry v1 vector', () => {
+  it('encodes a fixed verification and checks a recorded signature with raw WebCrypto', async () => {
+    const signer = await importFixedPair(TEST_SIGNER_JWK, 'ECDSA');
+    const contactIdentity = await publicKeyHash(
+      await exportPublicKey(signer.publicKey)
+    );
+    const entry = encodeContactsEntry({
+      userId: 'user_vector',
+      sequence: 1,
+      previousEntryHash: patternBytes(32, 0xa0),
+      issuedAt: 1_760_000_000_002,
+      action: 'verify',
+      contactUserId: 'user_contact',
+      identityKeyHash: contactIdentity,
+      // The hash of the device list v1 vector above.
+      deviceListHead: {
+        sequence: 0,
+        entryHash: fromHex(
+          '204a3f11c0f7482a9b193bf696dbec5190b6c5820766dbd7ec21955df10b14e8'
+        )
+      }
+    });
+    // "OZK" | 1 | u32 1 | u8 32 + previous | u8 11 "user_vector" | u64
+    // issuedAt | u8 1 verify | u8 12 "user_contact" | identity key hash |
+    // u32 0 | device-list entry hash
+    expect(toHex(entry)).toMatchInlineSnapshot(
+      `"4f5a4b010000000120a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf0b757365725f766563746f7200000199c82cc002010c757365725f636f6e746163747c48bdb0d12667c8d36fb0be229cbe23adfe9cc429f0b4820d16b8a5f84c700b00000000204a3f11c0f7482a9b193bf696dbec5190b6c5820766dbd7ec21955df10b14e8"`
+    );
+    expect(toHex(await contactsEntryHash(entry))).toMatchInlineSnapshot(
+      `"ae661f9ec22df754dfdd8cb254504a200bd1f3c626fde6f7386bbffee41d72c3"`
+    );
+    expect(decodeContactsEntry(entry).contactUserId).toBe('user_contact');
+    const identity = await importFixedPair(TEST_IDENTITY_JWK, 'ECDSA');
+    const signature = fromHex(CONTACTS_SIGNATURE);
+    expect(signature[0]).toBe(1);
+    // ECDSA P-256 SHA-256 over label "v1 contacts list signature" | entry.
+    expect(
+      await subtle.verify(
+        { name: 'ECDSA', hash: 'SHA-256' },
+        identity.publicKey,
+        signature.subarray(1),
+        concatBytes(utf8('OpenZCAD E2EE v1 contacts list signature'), entry)
+      )
+    ).toBe(true);
+    // The entry is second in its list, so the recorded signature verifies
+    // as part of a chain only after its predecessor; alone it is refused.
+    await expect(
+      verifyContactsList(identity.publicKey, [{ entry, signature }])
+    ).rejects.toMatchObject({ code: 'chain-broken' });
   });
 });

@@ -820,17 +820,16 @@ describe('inPlaceEditBodyBox', () => {
     min: { x: 0, y: 0, z: 0 },
     max: { x: 20, y: 10, z: 4 }
   };
-  const scale = (copy: boolean): FeatureData =>
-    ({
-      featureKind: 'transform',
-      targetBodyId: BODY,
-      ...(copy ? { copy: true } : {}),
-      transform: {
-        translation: { x: 0, y: 0, z: 0 },
-        rotationDeg: { x: 0, y: 0, z: 0 },
-        scale: 2
-      }
-    });
+  const scale = (copy: boolean): FeatureData => ({
+    featureKind: 'transform',
+    targetBodyId: BODY,
+    ...(copy ? { copy: true } : {}),
+    transform: {
+      translation: { x: 0, y: 0, z: 0 },
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      scale: 2
+    }
+  });
 
   it("gives an in-place scale's handle the body before the scale", () => {
     expect(inPlaceEditBodyBox(box, scale(false), EDIT_CTX).max).toEqual({
@@ -838,6 +837,26 @@ describe('inPlaceEditBodyBox', () => {
       y: 5,
       z: 2
     });
+  });
+
+  it('takes a later in-place move of the body back first', () => {
+    // Shown: the body scaled ×2 about the origin, then moved +10 in x.
+    const shown = {
+      bodyId: BODY,
+      min: { x: 10, y: 0, z: 0 },
+      max: { x: 30, y: 10, z: 4 }
+    };
+    const nudge = {
+      featureKind: 'transform',
+      targetBodyId: BODY,
+      transform: {
+        translation: { x: 10, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 }
+      }
+    } as FeatureData;
+    expect(
+      inPlaceEditBodyBox(shown, scale(false), EDIT_CTX, [nudge])
+    ).toMatchObject({ min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 5, z: 2 } });
   });
 
   it('leaves a copy source, and any other body, as the model shows it', () => {

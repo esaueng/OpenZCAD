@@ -250,6 +250,7 @@ import {
   FEATURE_SUPPRESSED_METADATA_KEY,
   isFeatureRollbackSuppressed,
   isFeatureSuppressed,
+  isInPlaceTransform,
   projectBranchPoint,
   projectOrganization,
   toProjectId,
@@ -263,6 +264,7 @@ import type {
   ProjectCollaborationCapabilitiesResponse
 } from '@openzcad/shared';
 import {
+  PROJECT_STORAGE_FORMAT_E2EE_V1,
   toShaprImportId,
   toSketchConstraintId,
   toUserId
@@ -370,6 +372,10 @@ import {
   isProjectFormatUnsupportedError
 } from './lib/api';
 import { assistantDisabledReason } from './lib/assistant/encryptedProject';
+import {
+  retainEncryptionStatus,
+  useEncryptionStatus
+} from './lib/e2ee/encryptionStatus';
 import {
   loadAccountProjectResult,
   type AccountProjectLoadResult
@@ -4704,6 +4710,27 @@ export function App() {
   // slice 4-9): only its owner's own devices until sharing arrives, and every
   // version the room accepts is already the account's.
   const encryptedRoomProject = isEncryptedProject(doc?.projectId);
+  // The top bar's encryption indicator (ADR-024 Phase 4): the page's own
+  // marker, or the listed summary, since a project opened directly may
+  // have no summary and one listed may not have been loaded through the
+  // encrypted store yet.
+  const encryptedProjectOpen = Boolean(
+    doc &&
+    (encryptedRoomProject ||
+      projects.some(
+        (project) =>
+          project.projectId === doc.projectId &&
+          project.storageFormat === PROJECT_STORAGE_FORMAT_E2EE_V1
+      ))
+  );
+  const encryptionStatus = useEncryptionStatus(
+    encryptedProjectOpen ? (doc?.projectId ?? null) : null
+  );
+  const openProjectId = doc?.projectId ?? null;
+  // Another project's outcome is forgotten once it is no longer open.
+  useEffect(() => {
+    retainEncryptionStatus(openProjectId);
+  }, [openProjectId]);
   const collaboration = useCollaboration({
     enabled: cloudFunctionsEnabled,
     document: doc,
@@ -8717,7 +8744,8 @@ export function App() {
       },
       curve: (sketchId, entityId) =>
         sweepCurveExists(current, sketchId, entityId),
-      body: (bodyId) => inPlaceBodyPick(bodyId)
+      body: (bodyId) => inPlaceBodyPick(bodyId),
+      laterTransforms: laterInPlaceSteps(current, feature)
     });
     if (!armed) return false;
     // A running command (another edit, a create) gives way quietly.
@@ -8769,6 +8797,27 @@ export function App() {
       setSelectedBodyIds([]);
       setSelectedProfiles([]);
     }
+  }
+
+  /**
+   * The in-place moves and scales after `feature` on the body it edits, in
+   * history order: the model shows that body after them.
+   */
+  function laterInPlaceSteps(
+    current: ProjectDocument,
+    feature: FeatureNode
+  ): FeatureNode['data'][] {
+    const data = feature.data;
+    if (data.featureKind !== 'transform') return [];
+    return featureHistory(current)
+      .downstream(feature.featureId)
+      .flatMap((later) =>
+        isInPlaceTransform(later.data) &&
+        later.data.targetBodyId === data.targetBodyId &&
+        !isFeatureSuppressed(later)
+          ? [later.data]
+          : []
+      );
   }
 
   /**
@@ -19444,8 +19493,18 @@ export function App() {
    */
   function inPlaceEditCommand(
     request: InPlaceRequest,
-    edit: InPlaceEditSeed
+    armed: InPlaceEditSeed
   ): AnyCommand {
+    // What the command does not show is kept from the feature as it is now,
+    // not as it was when the edit armed: a collaborator's change to a field
+    // the edit leaves alone (a scale's pivot) must not be written back over.
+    const live = managerRef.current
+      ? findFeature(managerRef.current.document, armed.featureId)
+      : null;
+    const edit =
+      live && live.data.featureKind === armed.data.featureKind
+        ? { ...armed, data: live.data }
+        : armed;
     if (request.tool === 'modeling') {
       const targetBodyId =
         'targetBodyId' in request.state.value
@@ -19986,10 +20045,16 @@ export function App() {
     const bodies = kept.map((pick) => {
       const fresh = inPlaceBodyPickRef.current(pick.bodyId);
       if (!fresh) return pick;
-      const box = inPlaceEditBodyBox(fresh, editing.data, {
-        evaluate: (value) =>
-          evalParamValue(value, parameterScope.scope, doc.units)
-      });
+      const live = findFeature(doc, editing.featureId);
+      const box = inPlaceEditBodyBox(
+        fresh,
+        editing.data,
+        {
+          evaluate: (value) =>
+            evalParamValue(value, parameterScope.scope, doc.units)
+        },
+        live ? laterInPlaceSteps(doc, live) : []
+      );
       const same =
         JSON.stringify([box.min, box.max]) ===
         JSON.stringify([pick.min, pick.max]);
@@ -26598,6 +26663,15 @@ export function App() {
           onOpenSharing={() => setSharingOpen(true)}
           onSignIn={() => openSettingsAt('account')}
           onOpenSettings={openSettings}
+          encryption={
+            encryptedProjectOpen
+              ? {
+                  status: encryptionStatus,
+                  needsRepair: presentedSaveState === 'repair',
+                  onOpenEncryptionSettings: () => openSettingsAt('encryption')
+                }
+              : null
+          }
         />
       }
       toolBar={

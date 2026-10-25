@@ -61,6 +61,12 @@ import {
 } from './encryptedProjectInfo';
 import { versionPins } from './versionPins';
 import {
+  reportEncryptedFailure,
+  reportKeysUnlocked,
+  reportVerificationWarning
+} from './encryptionStatus';
+import { reportingEncryptedProjectStore } from './encryptionStatusReports';
+import {
   createRevocationCutoffsApi,
   localPendingCutoffs,
   revocationStatements,
@@ -123,7 +129,10 @@ const locked = () =>
     E2EE_KEYS_LOCKED_CODE
   );
 
-async function openStore(userId: string): Promise<{
+async function openStore(
+  userId: string,
+  revision: number
+): Promise<{
   store: EncryptedProjectStore;
   blobs: EncryptedContentBlobs;
   measurements: EncryptedMeasurements;
@@ -180,7 +189,9 @@ async function openStore(userId: string): Promise<{
     blobs.read(projectId, blobId, signal, onProgress)
   );
   const pins = versionPins();
-  const store = createEncryptedProjectStore({
+  // The editor's encryption indicator hears what this key session verifies.
+  const sessionCurrent = () => getKeySessionRevision() === revision;
+  const verifying = createEncryptedProjectStore({
     groups,
     pins,
     blobReferences: references,
@@ -195,6 +206,13 @@ async function openStore(userId: string): Promise<{
       await preloadEncryptedImportSources(document);
     },
     onWarning: (warning) => {
+      if (sessionCurrent()) {
+        reportVerificationWarning(warning.projectId, {
+          kind: warning.kind,
+          signedAt: warning.signedAt,
+          updatedAt: warning.updatedAt
+        });
+      }
       for (const listener of warningListeners) {
         try {
           listener(warning);
@@ -204,6 +222,7 @@ async function openStore(userId: string): Promise<{
       }
     }
   });
+  const store = reportingEncryptedProjectStore(verifying, sessionCurrent);
   return {
     store,
     blobs,
@@ -220,7 +239,7 @@ async function openedForSession(): Promise<Opened> {
   const userId = await sessionUserId();
   const revision = getKeySessionRevision();
   if (opened?.userId !== userId || opened.revision !== revision) {
-    const both = openStore(userId);
+    const both = openStore(userId, revision);
     const current: Opened = {
       userId,
       revision,
@@ -230,9 +249,18 @@ async function openedForSession(): Promise<Opened> {
       viewStates: both.then(({ viewStates }) => viewStates)
     };
     opened = current;
-    both.catch(() => {
-      if (opened === current) opened = null;
-    });
+    both.then(
+      () => {
+        if (getKeySessionRevision() === revision) reportKeysUnlocked();
+      },
+      (error: unknown) => {
+        if (opened === current) opened = null;
+        // A locked key session shows on the indicator; nothing else does.
+        if (getKeySessionRevision() === revision) {
+          reportEncryptedFailure(null, error);
+        }
+      }
+    );
     current.blobs.catch(() => undefined);
     current.measurements.catch(() => undefined);
     current.viewStates.catch(() => undefined);
