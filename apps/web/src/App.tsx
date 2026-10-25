@@ -19609,9 +19609,10 @@ export function App() {
     const live = managerRef.current
       ? findFeature(managerRef.current.document, armed.featureId)
       : null;
+    // Its name too: a rename since the edit armed is not written back over.
     const edit =
       live && live.data.featureKind === armed.data.featureKind
-        ? { ...armed, data: live.data }
+        ? { ...armed, name: live.name, data: live.data }
         : armed;
     if (request.tool === 'modeling') {
       const targetBodyId =
