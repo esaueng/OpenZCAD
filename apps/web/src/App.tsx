@@ -19997,6 +19997,13 @@ export function App() {
   useEffect(() => {
     const editing = inPlaceEditing;
     if (!editing || !doc) return;
+    // The edited feature as it is now: a saved hole's position or a scale's
+    // factor may have changed since the edit armed.
+    const liveFeature = findFeature(doc, editing.featureId);
+    const liveData =
+      liveFeature && liveFeature.data.featureKind === editing.data.featureKind
+        ? liveFeature.data
+        : editing.data;
     const curves = (picks: readonly CurvePick[]) =>
       picks.filter((pick) =>
         sweepCurveExists(doc, pick.sketchId, pick.entityId)
@@ -20033,8 +20040,8 @@ export function App() {
       );
       if (!fresh) return [pick];
       const point =
-        pick.savedPosition && editing.data.featureKind === 'hole'
-          ? (holeWorldPosition(fresh, editing.data, {
+        pick.savedPosition && liveData.featureKind === 'hole'
+          ? (holeWorldPosition(fresh, liveData, {
               evaluate: (value) =>
                 evalParamValue(value, parameterScope.scope, doc.units)
             }) ?? undefined)
@@ -20077,7 +20084,7 @@ export function App() {
       const live = findFeature(doc, editing.featureId);
       const box = inPlaceEditBodyBox(
         fresh,
-        editing.data,
+        liveData,
         {
           evaluate: (value) =>
             evalParamValue(value, parameterScope.scope, doc.units),
@@ -22919,8 +22926,12 @@ export function App() {
       )
     ) {
       // A reopened modeling form outlives the selection (its tool is still
-      // running), so it has to be closed with the feature it was editing.
+      // running), so it has to be closed with the feature it was editing;
+      // so does an in-place edit of it.
       if (modelingEditFeature?.featureId === featureId) closeFeaturePanel();
+      if (inPlaceRef.current.editing?.featureId === featureId) {
+        inPlaceRef.current.cancel(true);
+      }
       clearSelection();
       announce(
         deleteFeatureToastMessage(name, dependentCount),

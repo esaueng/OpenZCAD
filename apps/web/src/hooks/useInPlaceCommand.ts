@@ -235,6 +235,8 @@ export function useInPlaceCommand(
       ? live.data
       : editSeed.data;
   }, [editSeed, baseNow]);
+  const savedDataRef = useRef(savedData);
+  savedDataRef.current = savedData;
   const ctx: InPlaceContext = useMemo(
     () => ({
       sketchViews: options.sketchViews,
@@ -513,21 +515,41 @@ export function useInPlaceCommand(
       const plane = current.slots.plane;
       let slots = current.slots;
       if (plane?.kind === 'saved') {
+        // Its fields as the feature stores them now: a collaborator may
+        // have retyped the plane itself.
+        const stored = savedDataRef.current;
+        const storedPlane =
+          stored &&
+          (stored.featureKind === 'mirror' || stored.featureKind === 'split') &&
+          'origin' in stored.plane
+            ? stored.plane
+            : null;
+        const text = (vector: ParametricVector3) => ({
+          x: String(vector.x),
+          y: String(vector.y),
+          z: String(vector.z)
+        });
+        const fields = storedPlane
+          ? {
+              origin: text(storedPlane.origin),
+              normal: text(storedPlane.normal)
+            }
+          : plane.fields;
         const read = (text: { x: string; y: string; z: string }) => {
           const [x, y, z] = [text.x, text.y, text.z].map(
             (part) => optionsRef.current.evaluate?.(part) ?? null
           );
           return x == null || y == null || z == null ? null : { x, y, z };
         };
-        const origin = read(plane.fields.origin);
-        const normal = read(plane.fields.normal);
+        const origin = read(fields.origin);
+        const normal = read(fields.normal);
         if (
           origin &&
           normal &&
-          JSON.stringify([origin, normal]) !==
-            JSON.stringify([plane.origin, plane.normal])
+          JSON.stringify([origin, normal, fields]) !==
+            JSON.stringify([plane.origin, plane.normal, plane.fields])
         ) {
-          slots = { ...slots, plane: { ...plane, origin, normal } };
+          slots = { ...slots, plane: { ...plane, origin, normal, fields } };
           changed = true;
         }
       }
