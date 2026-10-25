@@ -4,10 +4,14 @@ import {
   type BodyId,
   type BooleanKeepOriginals,
   type BooleanOperation,
+  type DatumAxisDefinition,
   type DatumAxisLine,
+  type DatumPlaneDefinition,
   type FeatureId,
   type ParamValue,
   type ParametricVector3,
+  type ReferenceImage,
+  type ReferenceImagePlane,
   type RevolveAxis,
   type SketchId,
   type SketchProfileReference,
@@ -23,6 +27,11 @@ import {
 } from './revolve';
 import type { ModelingOperationFormState } from '../modelingOperations';
 import { holePositionAxes, holePositionFromPick } from '../holePositionAxes';
+import { datumAxis, datumPlane, type RefKind, type RefPick } from './datums';
+import { referenceImage, type ImageSlot } from './image';
+
+export type { RefPick } from './datums';
+export type { ImagePlacement, ImageSlot } from './image';
 
 /**
  * The in-place commands (U09), as data.
@@ -53,7 +62,10 @@ export type InPlaceToolId =
   | 'intersect'
   | 'linear-pattern'
   | 'circular-pattern'
-  | 'grid-pattern';
+  | 'grid-pattern'
+  | 'datum-plane'
+  | 'datum-axis'
+  | 'reference-image';
 
 export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'revolve',
@@ -74,7 +86,10 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'intersect',
   'linear-pattern',
   'circular-pattern',
-  'grid-pattern'
+  'grid-pattern',
+  'datum-plane',
+  'datum-axis',
+  'reference-image'
 ];
 
 export function isInPlaceTool(tool: string): tool is InPlaceToolId {
@@ -131,6 +146,10 @@ export interface InPlaceSlots {
   /** In pick order: a boolean's first is its base. */
   bodies: BodyPick[];
   plane: PlanePick | null;
+  /** A datum's sources, in pick order: planes, edge ends, an edge, a face. */
+  refs: RefPick[];
+  /** The picture an Image command is placing. */
+  image: ImageSlot | null;
 }
 
 /** A choice too rare for a handle: it lives in the bar's Options menu. */
@@ -179,6 +198,8 @@ export interface InPlaceContext {
   linearSnap?: number | null;
   /** A body's bounding box, for references measured on it (a draft's base). */
   bodyBounds?(bodyId: BodyId): { min: Vector3; max: Vector3 } | null;
+  /** Where a reference image's plane lies now; null while it is unresolved. */
+  imagePlaneBasis?(plane: ReferenceImagePlane): PlaneBasis | null;
 }
 
 /** What to build, without names or ids; App turns it into the command. */
@@ -252,6 +273,13 @@ export type InPlaceRequest =
       spacing2?: ParamValue;
       count2?: ParamValue;
       axisRef?: { type: 'datum-axis'; datumFeatureId: FeatureId };
+    }
+  | { tool: 'datum-plane'; definition: DatumPlaneDefinition }
+  | { tool: 'datum-axis'; definition: DatumAxisDefinition }
+  | {
+      /** The picture as Done adds it: placed, scaled, turned. */
+      tool: 'reference-image';
+      image: ReferenceImage;
     };
 
 /** A handle the viewport draws for one value. */
@@ -294,6 +322,30 @@ export interface InPlaceToolSpec {
   bodyMode?: 'one' | 'many';
   /** Takes a plane: a ghost principal plane, a datum plane or a flat face. */
   wantsPlane?: boolean;
+  /** The datum sources its picks may be, and how a pick joins the others. */
+  refKinds?: readonly RefKind[];
+  takeRef?(refs: readonly RefPick[], ref: RefPick): RefPick[];
+  /**
+   * Nothing for the kernel to build (a reference image): the request is
+   * drawn as it stands, and Done adds it once it is ready.
+   */
+  instant?: boolean;
+  /**
+   * Values read from and written into others rather than held: a picture's
+   * real distance between two picks is its width, measured. `write` returns
+   * the values to set, or null to refuse the value.
+   */
+  linked?: Record<
+    string,
+    {
+      read(slots: InPlaceSlots, numbers: Record<string, number>): number | null;
+      write(
+        slots: InPlaceSlots,
+        numbers: Record<string, number>,
+        value: number
+      ): Record<string, number> | null;
+    }
+  >;
   /**
    * Where its axis lines come from: the profile's sketch, datum axes, or the
    * world axes through the origin as well as datum axes.
@@ -1820,7 +1872,10 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   intersect: booleanSpec('intersect', 'Intersect'),
   'linear-pattern': linearPattern,
   'circular-pattern': circularPattern,
-  'grid-pattern': gridPattern
+  'grid-pattern': gridPattern,
+  'datum-plane': datumPlane,
+  'datum-axis': datumAxis,
+  'reference-image': referenceImage
 };
 
 /** Values a value spec accepts: clamped to its range, finite. */

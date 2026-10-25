@@ -34,7 +34,8 @@ import {
 import type { DatumVertexRepairSession } from './lib/datumVertexRepair';
 import {
   referenceImageDisplays,
-  referenceImageInsertPlane
+  referenceImageInsertPlane,
+  referenceImagePlaneBasis
 } from './lib/referenceImageDisplay';
 import { referenceImagesWithHistory } from '@openzcad/shared';
 import type {
@@ -1424,9 +1425,15 @@ import {
   type InPlaceRequest,
   type BodyPick,
   type FacePick,
+  type ImageSlot,
+  type InPlaceContext,
   type InPlaceToolId,
-  type ProfilePick
+  type ProfilePick,
+  type RefPick
 } from './lib/inPlace/tools';
+import { imagePlacementPlane, placeImage } from './lib/inPlace/image';
+import type * as DatumPicks from './lib/inPlace/datumPicks';
+import type { PreparedReferenceImage } from './lib/referenceImageInsert';
 import {
   parseCurveCandidateId,
   sketchCurveCandidates
@@ -8170,6 +8177,82 @@ export function App() {
       selectedFace ? [selectedFace] : sweptFaces,
       initialBodies
     );
+    // A datum's sources: the face or edge selected first is its first.
+    const kinds = IN_PLACE_TOOL_SPECS[tool].refKinds;
+    if (kinds) {
+      const seed =
+        selectedTopology?.kind === 'face' || selectedTopology?.kind === 'edge'
+          ? { ...selectedTopology }
+          : null;
+      const at = lastPickDetailRef.current?.point ?? null;
+      void loadDatumPicks().then((picks) => {
+        const document = managerRef.current?.document;
+        if (!seed || !document || inPlaceRef.current.tool !== tool) return;
+        const ref =
+          seed.kind === 'face'
+            ? picks.faceRef(document, seed, kinds)
+            : picks.edgeRef(document, seed, at, kinds, 0);
+        if (!('reason' in ref)) inPlaceRef.current.pickRef(ref);
+      });
+    }
+  }
+
+  /** U09: the lazy datum pick module, loaded when a datum command starts. */
+  const datumPicksRef = useRef<typeof DatumPicks | null>(null);
+  function loadDatumPicks() {
+    return import('./lib/inPlace/datumPicks').then((module) => {
+      datumPicksRef.current = module;
+      return module;
+    });
+  }
+
+  /**
+   * Hands a datum pick to the running Plane or Axis, through the lazy pick
+   * module; a pick that cannot be a source says why in the status bar.
+   */
+  function pickDatumRef(
+    make: (
+      picks: typeof DatumPicks,
+      document: ProjectDocument
+    ) => RefPick | { reason: string }
+  ): boolean {
+    const command = inPlaceRef.current;
+    if (!command.active || !command.spec?.refKinds) return false;
+    const tool = command.tool;
+    void loadDatumPicks().then((picks) => {
+      const document = managerRef.current?.document;
+      if (!document || inPlaceRef.current.tool !== tool) return;
+      const ref = make(picks, document);
+      if ('reason' in ref) {
+        setStatus(ref.reason);
+        return;
+      }
+      inPlaceRef.current.pickRef(ref);
+    });
+    return true;
+  }
+
+  /**
+   * Proves a datum the preview or commit built resolved: through the datum
+   * library once it has loaded, else by its published frame or line alone.
+   */
+  function checkNewDatum(
+    base: ProjectDocument | null | undefined,
+    derived: ProjectDocument['derived'],
+    featureId: FeatureId,
+    name: string,
+    kind: 'datum-plane' | 'datum-axis'
+  ): void {
+    const picks = datumPicksRef.current;
+    if (picks && base) {
+      picks.requireNewDatum(base, derived, featureId, name, kind);
+      return;
+    }
+    const resolved =
+      kind === 'datum-plane'
+        ? derived.datumFrames?.[featureId]
+        : derived.datumAxes?.[featureId];
+    if (!resolved) throw new Error(`${name} did not resolve.`);
   }
 
   /** Swept faces as an in-place command's face slot holds them. */
@@ -8413,7 +8496,9 @@ export function App() {
     // U09: a new feature from an in-place tool runs with no card, once any
     // unapplied Move has been applied or discarded above. Editing an
     // existing one still opens its card until history edits re-arm handles.
-    if (isInPlaceTool(nextTool) && !feature) {
+    // The Image command waits for its picture: openTool asks for the file,
+    // and the command starts once it is read.
+    if (isInPlaceTool(nextTool) && nextTool !== 'reference-image' && !feature) {
       startInPlaceCommand(nextTool);
       return;
     }
@@ -8470,14 +8555,17 @@ export function App() {
       // on the selected flat face, or on Top (XY) with nothing picked. A
       // selected face it cannot lie on refuses, rather than quietly placing
       // the picture on Top, far from what the user picked.
-      const placement = referenceImageInsertPlane(selectedFaceImagePlane());
+      const selected = selectedFaceImagePlane();
+      const placement = referenceImageInsertPlane(selected);
       if ('refusal' in placement) {
         setStatus(
           `${TOOL_META['reference-image'].label}: ${placement.refusal}`
         );
         return false;
       }
-      referenceImagePlaneRef.current = placement.plane;
+      // U09: with no face selected, the command asks for a plane once the
+      // picture is read, rather than dropping it on Top.
+      referenceImagePlaneRef.current = selected ? placement.plane : null;
       referenceImageInputRef.current?.click();
       return true;
     }
@@ -9298,6 +9386,10 @@ export function App() {
   const referenceImageInputRef = useRef<HTMLInputElement | null>(null);
   /** The plane a picture chosen in the file dialog will lie on. */
   const referenceImagePlaneRef = useRef<ReferenceImagePlane | null>(null);
+  /** The picture an in-place Image is placing, until Done or Cancel. */
+  const pendingReferenceImageRef = useRef<PreparedReferenceImage | null>(
+    null
+  );
 
   /**
    * The plane of the selected face, when an image can lie on it: associative
@@ -9305,14 +9397,21 @@ export function App() {
    */
   function selectedFaceImagePlane():
     ReferenceImagePlane | { reason: string } | null {
+    return faceImagePlane(selectedTopology);
+  }
+
+  /** The plane of a face, when an image can lie on it, as above. */
+  function faceImagePlane(
+    selection: TopologySelection | null
+  ): ReferenceImagePlane | { reason: string } | null {
     const current = managerRef.current?.document;
-    if (!current || selectedTopology?.kind !== 'face') return null;
+    if (!current || selection?.kind !== 'face') return null;
     const attachment = faceSketchAttachment({
-      bodyId: selectedTopology.bodyId,
-      pickedHash: selectedTopology.hash,
+      bodyId: selection.bodyId,
+      pickedHash: selection.hash,
       face: current.derived.bodyRepresentations[
-        selectedTopology.bodyId
-      ]?.topology?.faces.find((face) => face.hash === selectedTopology.hash)
+        selection.bodyId
+      ]?.topology?.faces.find((face) => face.hash === selection.hash)
     });
     return attachment.ok ? attachment.planeRef : { reason: attachment.reason };
   }
@@ -9332,9 +9431,9 @@ export function App() {
   async function insertReferenceImage(file: File) {
     const current = managerRef.current?.document;
     if (!current || !ensureCanEdit('insert an image')) return;
+    const seeded = referenceImagePlaneRef.current;
     const plane =
-      referenceImagePlaneRef.current ??
-      ({ type: 'canonical', plane: 'XY', offset: 0 } as const);
+      seeded ?? ({ type: 'canonical', plane: 'XY', offset: 0 } as const);
     referenceImagePlaneRef.current = null;
     setStatus(`Placing ${file.name}…`);
     try {
@@ -9347,14 +9446,45 @@ export function App() {
         archive: archiveArtifact
       });
       const { image } = prepared;
-      if (
-        managerRef.current?.document.projectId === current.projectId &&
-        executeCommand(commandFactories.addReferenceImage({ image }))
-      ) {
-        openReferenceImage(image.imageId);
-        setStatus(
-          `${image.name} placed. Scale it from two points, or set its width.`
-        );
+      if (managerRef.current?.document.projectId === current.projectId) {
+        // U09: placed in place. Nothing is added until Done; Cancel lets
+        // the stored bytes go again.
+        const unplaced: ImageSlot = {
+          record: image,
+          plane: null,
+          center: { u: 0, v: 0 },
+          calibration: []
+        };
+        // A face selected first takes it, centred on the face as the card
+        // placed it; a click then moves it.
+        const slot = seeded
+          ? placeImage(
+              unplaced,
+              { plane: seeded },
+              'place',
+              imagePlacementContext,
+              {}
+            )
+          : unplaced;
+        // A picture still being placed gives way to this one.
+        // (Not when it is the same file: the new one reads those bytes.)
+        const previous = pendingReferenceImageRef.current;
+        if (
+          previous &&
+          previous.image.source.checksumSha256 !==
+            image.source.checksumSha256
+        ) {
+          await discardReferenceImageBytes(previous, [
+            managerRef.current?.document
+          ]);
+        }
+        pendingReferenceImageRef.current = prepared;
+        inPlaceRef.current.cancel(true);
+        cancelPanel();
+        retireStatusMessage();
+        inPlaceRef.current.start('reference-image', [], [], [], {
+          image: slot
+        });
       } else {
         await discardReferenceImageBytes(prepared, [
           managerRef.current?.document
@@ -9362,6 +9492,37 @@ export function App() {
       }
     } catch (error) {
       setStatus(errorMessage(error, 'The image could not be placed.'));
+    }
+  }
+
+  /** Where an image's plane lies in the live document, for placing one. */
+  function imagePlaneBasis(plane: ReferenceImagePlane) {
+    const current = managerRef.current?.document;
+    return current ? referenceImagePlaneBasis(current, plane, 'Image') : null;
+  }
+  const imagePlacementContext: InPlaceContext = {
+    sketchViews: [],
+    datumAxes: undefined,
+    datumLabel: () => '',
+    linearSnap: appSettings.sketching.snapEnabled
+      ? appSettings.sketching.linearSnap
+      : null,
+    imagePlaneBasis
+  };
+
+  /** Adds the picture an in-place Image placed, as one undoable step. */
+  function commitInPlaceImage(image: ReferenceImage) {
+    const prepared = pendingReferenceImageRef.current;
+    pendingReferenceImageRef.current = null;
+    if (executeCommand(commandFactories.addReferenceImage({ image }))) {
+      setStatus(`${image.name} placed.`);
+      return;
+    }
+    if (prepared) {
+      void import('./lib/referenceImageInsert').then(
+        ({ discardReferenceImageBytes }) =>
+          discardReferenceImageBytes(prepared, [managerRef.current?.document])
+      );
     }
   }
 
@@ -9397,9 +9558,12 @@ export function App() {
    */
   const loadReferenceImage = useCallback(
     async (checksumSha256: string): Promise<Blob | null> => {
-      const images = (
-        managerRef.current?.document.referenceImages?.images ?? []
-      ).filter(
+      // The picture an in-place Image is still placing is offered too.
+      const pending = pendingReferenceImageRef.current?.image;
+      const images = [
+        ...(managerRef.current?.document.referenceImages?.images ?? []),
+        ...(pending ? [pending] : [])
+      ].filter(
         (candidate) => candidate.source.checksumSha256 === checksumSha256
       );
       if (images.length === 0) return null;
@@ -14441,6 +14605,35 @@ export function App() {
       // and the faces a face tool takes. A stray pick must not open a card
       // under it.
       const command = inPlaceRef.current;
+      // A datum's sources: a face is a plane or a cylinder's axis, an edge
+      // is its nearer end or (for an Axis) the edge itself.
+      const kinds = command.spec?.refKinds;
+      if (kinds && (selection?.kind === 'face' || selection?.kind === 'edge')) {
+        const picked = { ...selection };
+        const at = detail?.point ? { ...detail.point } : null;
+        const points =
+          command.tool === 'datum-axis'
+            ? command.slots.refs.filter((ref) => ref.kind === 'point').length
+            : 0;
+        return pickDatumRef((picks, document) =>
+          picked.kind === 'face'
+            ? picks.faceRef(document, picked, kinds)
+            : picks.edgeRef(document, picked, at, kinds, points)
+        );
+      }
+      // The picture being placed: a flat face takes it, or moves it on the
+      // face it is on.
+      if (command.slots.image && selection?.kind === 'face') {
+        const plane = faceImagePlane(selection);
+        if (!plane || 'reason' in plane) {
+          if (plane) setStatus(plane.reason);
+          return true;
+        }
+        return command.placeImage({
+          plane,
+          ...(detail?.point ? { point: { ...detail.point } } : {})
+        });
+      }
       if (selection?.kind === 'face' && command.spec?.faceMode) {
         const face = inPlaceFacePick(
           selection.bodyId,
@@ -18433,7 +18626,31 @@ export function App() {
           ...(request.count2 !== undefined ? { count2: request.count2 } : {}),
           ...(request.axisRef ? { axisRef: request.axisRef } : {})
         });
+      case 'datum-plane':
+        return commandFactories.addDatumPlane({
+          name,
+          definition: request.definition
+        });
+      case 'datum-axis':
+        return commandFactories.addDatumAxis({
+          name,
+          definition: request.definition
+        });
+      case 'reference-image':
+        return commandFactories.addReferenceImage({ image: request.image });
     }
+  }
+  /** The datum a datum request adds, and which kind, or null for others. */
+  function inPlaceDatum(
+    request: InPlaceRequest,
+    command: AnyCommand
+  ): { featureId: FeatureId; kind: 'datum-plane' | 'datum-axis' } | null {
+    if (request.tool !== 'datum-plane' && request.tool !== 'datum-axis')
+      return null;
+    const featureId = (
+      command.payload as { ids?: { featureId?: FeatureId } } | undefined
+    )?.ids?.featureId;
+    return featureId ? { featureId, kind: request.tool } : null;
   }
   /**
    * The body a request's result lands on: a new body for most, the moved
@@ -18476,20 +18693,48 @@ export function App() {
     datumLabel: (featureId) =>
       (doc && findFeature(doc, featureId)?.name) ?? 'Datum axis',
     bodyBounds: (bodyId) => inPlaceBodyPick(bodyId),
+    imagePlaneBasis,
     baseDocument: () => managerRef.current?.document ?? null,
     baseVersion: doc?.version ?? null,
     derive: (document) => geometry.syncOnce(document),
     buildCommand: (request, title) => {
       const command = inPlaceCommandFor(request, title);
+      const datum = inPlaceDatum(request, command);
+      const base = managerRef.current?.document;
       return {
         validate: (document) => command.validate(document),
         apply: (document) => command.apply(document),
-        resultBodyId: inPlaceResultBodyId(request, command)
+        resultBodyId: inPlaceResultBodyId(request, command),
+        ...(datum
+          ? {
+              check: (derived: ProjectDocument['derived']) =>
+                checkNewDatum(base, derived, datum.featureId, title, datum.kind)
+            }
+          : {})
       };
     },
     commit: (request, title) => {
+      if (request.tool === 'reference-image') {
+        commitInPlaceImage(request.image);
+        return;
+      }
       const name = newFeatureName(title);
       const command = inPlaceCommandFor(request, name);
+      const datum = inPlaceDatum(request, command);
+      if (datum) {
+        // A datum has no body to validate: its resolved frame or line is
+        // the proof, exactly as the card's Done checked it.
+        const base = managerRef.current?.document;
+        void validatedFeature.runTransaction([command], {
+          label: command.label,
+          targets: [],
+          validateDerived: (derived) =>
+            checkNewDatum(base, derived, datum.featureId, name, datum.kind),
+          successMessage: commandOutcomeMessage(command.label),
+          onSuccess: finishFeatureCreation
+        });
+        return;
+      }
       const resultBodyId = inPlaceResultBodyId(request, command);
       if (request.tool === 'pattern' && resultBodyId) {
         // Through the pattern runner, so a large pattern shows its progress
@@ -18509,6 +18754,18 @@ export function App() {
   });
   const inPlaceRef = useRef(inPlace);
   inPlaceRef.current = inPlace;
+  // An Image canceled (or replaced by another command) lets its stored
+  // bytes go again, unless something else already uses them.
+  useEffect(() => {
+    if (inPlace.tool === 'reference-image') return;
+    const pending = pendingReferenceImageRef.current;
+    if (!pending) return;
+    pendingReferenceImageRef.current = null;
+    void import('./lib/referenceImageInsert').then(
+      ({ discardReferenceImageBytes }) =>
+        discardReferenceImageBytes(pending, [managerRef.current?.document])
+    );
+  }, [inPlace.tool]);
   /** The keypad moves a command handle through this, without a render. */
   const commandSetterRef = useRef<
     ((valueId: string, value: number) => void) | null
@@ -20967,6 +21224,26 @@ export function App() {
     // A datum plane's row is a plane an in-place Mirror or Split can take:
     // the way to reach one a body hides in the viewport.
     const clicked = current.nodes[nodeId];
+    // So is it a Plane's or Axis's source, or a plane for a picture.
+    if (
+      inPlaceRef.current.active &&
+      clicked?.kind === 'feature' &&
+      clicked.data.featureKind === 'datum-plane'
+    ) {
+      const featureId = clicked.featureId;
+      if (inPlaceRef.current.spec?.refKinds?.includes('plane')) {
+        pickDatumRef((picks, document) =>
+          picks.datumPlaneRef(document, featureId)
+        );
+        return;
+      }
+      if (inPlaceRef.current.slots.image) {
+        inPlaceRef.current.placeImage({
+          plane: { type: 'datum', datumFeatureId: featureId }
+        });
+        return;
+      }
+    }
     if (
       inPlaceRef.current.active &&
       inPlaceRef.current.spec?.wantsPlane &&
@@ -25500,16 +25777,61 @@ export function App() {
               (tool === 'sketch' ||
                 Boolean(
                   inPlaceSpec?.wantsPlane && inPlace.slots.bodies.length > 0
+                ) ||
+                // Not while edges are filtered for: a ghost plane in front
+                // of an edge would take the click meant for its end.
+                Boolean(
+                  inPlaceSpec?.refKinds?.includes('plane') &&
+                    selectionFilter !== 'edge'
+                ) ||
+                Boolean(
+                  inPlace.slots.image &&
+                    (!inPlace.slots.image.plane ||
+                      inPlace.options.clicks === 'plane')
                 ))
             }
-            datumDocument={doc}
+            // A Plane or Axis in progress shows the datum it would add.
+            datumDocument={
+              inPlace.active && inPlaceSpec?.refKinds && previewDoc
+                ? previewDoc
+                : doc
+            }
+            placementPlane={
+              modelingLocked
+                ? null
+                : imagePlacementPlane(
+                    inPlace.slots,
+                    inPlace.options,
+                    imagePlacementContext,
+                    inPlace.values
+                  )
+            }
+            onPlacementClick={(point) => inPlace.placeImage({ point })}
             hiddenDatumIds={hiddenDatumIds}
-            referenceImages={referenceImageDisplays(
-              doc,
-              hiddenReferenceImageIds,
-              tool === 'reference-image' ? openReferenceImageId : null,
-              tool === 'reference-image' ? referenceImageDraft : null
-            )}
+            referenceImages={
+              inPlace.request?.tool === 'reference-image'
+                ? // The picture being placed, drawn where Done would add it.
+                  referenceImageDisplays(
+                    {
+                      ...doc,
+                      referenceImages: {
+                        ...doc.referenceImages,
+                        images: [
+                          ...(doc.referenceImages?.images ?? []),
+                          inPlace.request.image
+                        ]
+                      }
+                    },
+                    hiddenReferenceImageIds,
+                    inPlace.request.image.imageId
+                  )
+                : referenceImageDisplays(
+                    doc,
+                    hiddenReferenceImageIds,
+                    tool === 'reference-image' ? openReferenceImageId : null,
+                    tool === 'reference-image' ? referenceImageDraft : null
+                  )
+            }
             loadReferenceImage={loadReferenceImage}
             selectedFeatureId={
               (modelingEditFeature ?? selectedFeature)?.featureId ?? null
@@ -25519,7 +25841,24 @@ export function App() {
             primitiveGhost={
               tool && PRIMITIVE_TOOLS.includes(tool) ? primitiveGhost : null
             }
-            onPickPlane={(plane) => {
+            onPickPlane={(plane, point) => {
+              // A Plane or Axis takes it as a source, and a picture lies on
+              // it where it was clicked.
+              if (inPlace.active && inPlaceSpec?.refKinds?.includes('plane')) {
+                const { normal } = canonicalPlaneBasis(
+                  plane,
+                  CURRENT_CANONICAL_BASIS_REVISION
+                );
+                pickDatumRef((picks) => picks.canonicalPlaneRef(plane, normal));
+                return;
+              }
+              if (inPlace.active && inPlace.slots.image) {
+                inPlace.placeImage({
+                  plane: { ...newCanonicalPlaneRef(plane, 0), offset: 0 },
+                  ...(point ? { point } : {})
+                });
+                return;
+              }
               // An in-place Mirror or Split takes the ghost plane it waits
               // for; otherwise a ghost plane starts a sketch on it.
               if (inPlace.active && inPlaceSpec?.wantsPlane) {
@@ -25543,7 +25882,22 @@ export function App() {
             // tool or card (Hole, Shell, a Plane draft…), a sketch, a
             // re-pick or Measure owns the click and keeps its draft.
             onPickDatum={
-              inPlace.active && inPlaceSpec?.wantsPlane
+              inPlace.active && inPlaceSpec?.refKinds?.includes('plane')
+                ? (featureId) => {
+                    pickDatumRef((picks, document) =>
+                      picks.datumPlaneRef(document, featureId as FeatureId)
+                    );
+                  }
+                : inPlace.active && inPlace.slots.image
+                  ? (featureId, point) =>
+                      inPlace.placeImage({
+                        plane: {
+                          type: 'datum',
+                          datumFeatureId: featureId as FeatureId
+                        },
+                        ...(point ? { point } : {})
+                      })
+                  : inPlace.active && inPlaceSpec?.wantsPlane
                 ? (featureId) =>
                     inPlace.pickPlane({
                       kind: 'datum',

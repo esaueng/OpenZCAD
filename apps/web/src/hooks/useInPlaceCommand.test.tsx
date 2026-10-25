@@ -500,3 +500,105 @@ describe('review: a sweep guide rail', () => {
     expect(hook.result.current.hint).toMatch(/Guide rail of 1/);
   });
 });
+
+describe('U09 phase 6: datums and a picture', () => {
+  const PLANE_A = {
+    kind: 'plane' as const,
+    key: 'canonical:XY',
+    source: { type: 'canonical' as const, plane: 'XY' as const, offset: 0 },
+    origin: { x: 0, y: 0, z: 0 },
+    normal: { x: 0, y: 0, z: 1 }
+  };
+
+  it('judges a datum by its check, not by a body', async () => {
+    let resolved = false;
+    const { hook, commit } = setup({
+      buildCommand: () => ({
+        validate: () => undefined,
+        apply: (document) => document,
+        resultBodyId: undefined,
+        check: () => {
+          if (!resolved) throw new Error('Plane 1 did not resolve.');
+        }
+      })
+    });
+    act(() => hook.result.current.start('datum-plane'));
+    expect(hook.result.current.pickRef(PLANE_A)).toBe(true);
+    await waitFor(() =>
+      expect(hook.result.current.refusal).toBe('Plane 1 did not resolve.')
+    );
+    expect(hook.result.current.canFinish).toBe(false);
+    resolved = true;
+    act(() => hook.result.current.previewValue('offset', 4));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.done();
+    });
+    expect(commit).toHaveBeenCalledWith(
+      {
+        tool: 'datum-plane',
+        definition: { kind: 'offset', source: PLANE_A.source, offset: 4 }
+      },
+      'Plane 1'
+    );
+  });
+
+  it('refuses a source kind the tool does not take', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('revolve'));
+    expect(hook.result.current.pickRef(PLANE_A)).toBe(false);
+  });
+
+  it('places a picture with no kernel build, and writes the real distance into its width', () => {
+    const basis: PlaneBasis = TOP;
+    const { hook, commit, built } = setup({ imagePlaneBasis: () => basis });
+    const record = {
+      imageId: 'image_1',
+      name: 'Drawing',
+      pixelWidth: 200,
+      pixelHeight: 100,
+      width: 100,
+      opacity: 0.6,
+      center: { u: 0, v: 0 },
+      rotationDeg: 0
+    } as never;
+    act(() =>
+      hook.result.current.start('reference-image', [], [], [], {
+        image: { record, plane: null, center: { u: 0, v: 0 }, calibration: [] }
+      })
+    );
+    expect(hook.result.current.canFinish).toBe(false);
+    act(() => {
+      hook.result.current.placeImage({
+        plane: { type: 'canonical', plane: 'XY', offset: 0 },
+        point: { x: 0, y: 0, z: 30 }
+      });
+    });
+    expect(hook.result.current.canFinish).toBe(true);
+    act(() => hook.result.current.setOption('clicks', 'scale'));
+    act(() => {
+      hook.result.current.placeImage({ point: { x: -50, y: 25, z: 30 } });
+    });
+    act(() => {
+      hook.result.current.placeImage({ point: { x: 0, y: 25, z: 30 } });
+    });
+    // 100 of 200 pixels at width 100: 50 apart.
+    expect(hook.result.current.values.span).toBeCloseTo(50);
+    let accepted = false;
+    act(() => {
+      accepted = hook.result.current.setValue('span', 10);
+    });
+    expect(accepted).toBe(true);
+    expect(hook.result.current.values.width).toBeCloseTo(20);
+    act(() => {
+      hook.result.current.done();
+    });
+    expect(built).toEqual([]);
+    const [request, title] = commit.mock.calls[0]!;
+    expect(title).toBe('Image');
+    expect(request).toMatchObject({
+      tool: 'reference-image',
+      image: { width: 20, opacity: 0.6 }
+    });
+  });
+});

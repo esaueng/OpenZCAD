@@ -334,7 +334,7 @@ type SketchMoveEvent = Extract<
   { type: 'sketch-move-start' | 'sketch-move-commit' | 'sketch-move-cancel' }
 >;
 import type { PlaneBasis } from '@openzcad/geometry';
-import type { PlaneId, SketchObjectData } from '@openzcad/shared';
+import type { PlaneId, SketchObjectData, Vector3 } from '@openzcad/shared';
 import { buildPlanePickerRig } from './viewer/planePickerRig';
 import {
   buildAxisPickerRig,
@@ -1031,8 +1031,8 @@ export interface ModelViewerProps {
   planePickerArmed: boolean;
   /** Distance the ghost quads sit along their normals, as typed in the prompt. */
   planePickerOffset: number;
-  /** A ghost plane was clicked. */
-  onPickPlane(plane: PlaneId): void;
+  /** A ghost plane was clicked, at `point` on it. */
+  onPickPlane(plane: PlaneId, point?: Vector3): void;
   /**
    * U09: an in-place command waiting on (or showing) its axis: the lines
    * that can be picked, drawn long and clickable, and the picked one.
@@ -1067,7 +1067,14 @@ export interface ModelViewerProps {
   /** A curve was clicked; Shift asks to add rather than start over. */
   onPickCurve?(id: string, additive: boolean): void;
   /** A datum plane was clicked where nothing in the model was under it. */
-  onPickDatum?(featureId: string): void;
+  onPickDatum?(featureId: string, point?: Vector3): void;
+  /**
+   * U09: a plane a click that hits nothing pickable lands on (a picture
+   * being placed): the click is reported at the point on it, not as an
+   * empty selection.
+   */
+  placementPlane?: { origin: Vector3; normal: Vector3 } | null;
+  onPlacementClick?(point: Vector3): void;
   /**
    * The bore the open Hole card would drill, drawn through the body before
    * it exists. Null while no hole can be placed.
@@ -2083,6 +2090,8 @@ export function ModelViewer({
   curvePicker = null,
   onPickCurve,
   onPickDatum,
+  placementPlane = null,
+  onPlacementClick,
   onMeasurePreview,
   regionHandle,
   facePickOnly = false,
@@ -2297,6 +2306,10 @@ export function ModelViewer({
   onPickPlaneRef.current = onPickPlane;
   const onPickDatumRef = useRef(onPickDatum);
   onPickDatumRef.current = onPickDatum;
+  const placementPlaneRef = useRef(placementPlane);
+  placementPlaneRef.current = placementPlane;
+  const onPlacementClickRef = useRef(onPlacementClick);
+  onPlacementClickRef.current = onPlacementClick;
   const planePickerOffsetRef = useRef(planePickerOffset);
   planePickerOffsetRef.current = planePickerOffset;
   const datumPlaneRigRef = useRef<DatumPlaneRig | null>(null);
@@ -4203,7 +4216,7 @@ export function ModelViewer({
      */
     function pickGhostPlane(
       event: PointerEvent | MouseEvent
-    ): { plane: PlaneId; distance: number } | null {
+    ): { plane: PlaneId; distance: number; point: Vector3 } | null {
       const rig = planePickerRigRef.current;
       if (!rig) {
         return null;
@@ -4211,7 +4224,13 @@ export function ModelViewer({
       picker.setRayFromEvent(event);
       const hit = picker.intersect(rig.targets(), false)[0];
       const plane = hit?.object.userData.pickPlane as PlaneId | undefined;
-      return plane ? { plane, distance: hit!.distance } : null;
+      return plane
+        ? {
+            plane,
+            distance: hit!.distance,
+            point: { x: hit!.point.x, y: hit!.point.y, z: hit!.point.z }
+          }
+        : null;
     }
 
     /**
@@ -5829,7 +5848,7 @@ export function ModelViewer({
       const ghost = facesOnly ? null : pickGhostPlane(event);
       if (ghost && (!result || ghost.distance < result.distance)) {
         planePickerRigRef.current?.setHover(null);
-        onPickPlaneRef.current(ghost.plane);
+        onPickPlaneRef.current(ghost.plane, ghost.point);
         return;
       }
       // A datum plane is chosen only where nothing in the model is under
@@ -5843,7 +5862,11 @@ export function ModelViewer({
           const featureId = hit?.object.userData.datumFeatureId as
             string | undefined;
           if (featureId) {
-            onPickDatumRef.current(featureId);
+            onPickDatumRef.current(featureId, {
+              x: hit!.point.x,
+              y: hit!.point.y,
+              z: hit!.point.z
+            });
             return;
           }
         }
@@ -5884,6 +5907,31 @@ export function ModelViewer({
               : undefined
           }
         : undefined;
+      // A click on nothing lands on the placement plane, when one is armed.
+      const placing = placementPlaneRef.current;
+      if (!result && placing && onPlacementClickRef.current) {
+        picker.setRayFromEvent(event);
+        const at = new THREE.Vector3();
+        const hit = picker.raycaster.ray.intersectPlane(
+          new THREE.Plane().setFromNormalAndCoplanarPoint(
+            new THREE.Vector3(
+              placing.normal.x,
+              placing.normal.y,
+              placing.normal.z
+            ),
+            new THREE.Vector3(
+              placing.origin.x,
+              placing.origin.y,
+              placing.origin.z
+            )
+          ),
+          at
+        );
+        if (hit) {
+          onPlacementClickRef.current({ x: at.x, y: at.y, z: at.z });
+          return;
+        }
+      }
       // Orbiting should turn about whatever was just clicked, not the model
       // origin — otherwise a detail you have zoomed into leaves the frame.
       if (result) {
