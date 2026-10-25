@@ -8812,11 +8812,11 @@ export function App() {
     const joined = descendants?.mixed.has(resolvedBodyId) ?? false;
     // A hole goes where the click lands, and on a body a later feature moved
     // (a copy, a mirror, a pattern) that is not where the hole's own face is.
-    // So does a draft's clicked-point hinge.
+    // So does a draft's clicked-point hinge, which can be chosen after the
+    // click.
     const usesPoint =
       inPlaceRef.current.tool === 'hole' ||
-      (inPlaceRef.current.tool === 'draft' &&
-        inPlaceRef.current.options.neutral === 'point');
+      inPlaceRef.current.tool === 'draft';
     if (
       later &&
       editing &&
