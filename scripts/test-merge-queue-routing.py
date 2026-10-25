@@ -22,8 +22,64 @@ spec.loader.exec_module(POLICY)
 REMUS = POLICY.REPOSITORY == "esaueng/remus"
 JANE_LABEL = "ci-server-jane" if REMUS else "ci-server-jane-5gb"
 STAGED = ROOT / (".github/workflows/fleet-ci-v5.yml" if REMUS
-                 else ".github/workflows/fleet-ci-v2.yml")
+                 else ".github/workflows/fleet-ci-v4.yml")
 TEXT = STAGED.read_text()
+# fleet-ci-v4 (#836, #878): every shard installs browser binaries only, and
+# merge-queue candidates run no e2e shards, which the e2e gate then accepts.
+# These exact edits are the whole approved difference in application jobs.
+APPROVED_STEP_CHANGES = [] if REMUS else [
+    ("  # Queue candidates, main pushes and manual dispatches start the shards at\n"
+     "  # once, beside the other checks. Pull requests use `e2e-tests-pr` below.\n",
+     "  # Main pushes and manual dispatches start the shards at once, beside the\n"
+     "  # other checks. Pull requests use `e2e-tests-pr` below. Merge-queue\n"
+     "  # candidates run no shards: auto-merge enqueues a PR only once `checks / e2e`\n"
+     "  # passed on its head, and running the ~55 runner-minute suite again per\n"
+     "  # candidate held six of the org's 20 hosted runners while PRs and the next\n"
+     "  # candidate queued behind them. Lint, typecheck, both Vitest projects,\n"
+     "  # parity and the build still run on every candidate.\n"),
+    ("      # the new build. `--with-deps` still runs so OS packages stay covered.\n",
+     "      # the new build.\n"),
+    ("      - run: |\n"
+     "          if [ '${{ runner.environment }}' = self-hosted ]; then\n"
+     "            pnpm exec playwright install chromium\n"
+     "          else\n"
+     "            pnpm exec playwright install --with-deps chromium\n"
+     "          fi\n",
+     "      # Browser binaries only, on both paths. The hosted Ubuntu image already\n"
+     "      # carries Chromium's libraries: `--with-deps` added only fonts and\n"
+     "      # package upgrades from the Ubuntu mirror, which crawled at ~35 kB/s on\n"
+     "      # 17% of shard installs (up to 12 minutes) in October 2026. Self-hosted\n"
+     "      # hosts get OS packages from their administrator. A missing library\n"
+     "      # fails Chromium's launch outright, never a test silently.\n"
+     "      - run: pnpm exec playwright install chromium\n"),
+    ("  # run and fail explicitly unless exactly one shard set ran and succeeded.\n",
+     "  # run and fail explicitly unless exactly one shard set ran and succeeded.\n"
+     "  # Only a merge-queue candidate, which runs no shards, passes with none.\n"),
+    ("        env:\n"
+     "          DIRECT_RESULT: ${{ needs.e2e-tests.result }}\n",
+     "        env:\n"
+     "          EVENT_NAME: ${{ github.event_name }}\n"
+     "          DIRECT_RESULT: ${{ needs.e2e-tests.result }}\n"),
+    ("          echo \"e2e shards: direct $DIRECT_RESULT, pull request $PR_RESULT\"\n"
+     "          case \"$DIRECT_RESULT/$PR_RESULT\" in\n"
+     "            success/skipped | skipped/success) echo 'all e2e shards green' ;;\n"
+     "            skipped/skipped)\n",
+     "          echo \"e2e shards ($EVENT_NAME): direct $DIRECT_RESULT, pull request $PR_RESULT\"\n"
+     "          case \"$EVENT_NAME/$DIRECT_RESULT/$PR_RESULT\" in\n"
+     "            */success/skipped | */skipped/success) echo 'all e2e shards green' ;;\n"
+     "            merge_group/skipped/skipped)\n"
+     "              echo 'Queue candidate: e2e passed on the pull request head' ;;\n"
+     "            */skipped/skipped)\n"),
+]
+
+
+def approved(text):
+    for old, new in APPROVED_STEP_CHANGES:
+        # A replacement that matches nothing would silently approve nothing.
+        if text.count(old) != 1:
+            raise AssertionError(f"Approved change no longer matches once: {old.splitlines()[0]}")
+        text = text.replace(old, new)
+    return text
 def previous_workflow():
     comparison = json.loads((ROOT / "scripts/fleet-test-fixtures.json").read_text())[POLICY.REPOSITORY]
     path, pin = comparison["path"], comparison["pin"]
@@ -264,7 +320,7 @@ class QueueWorkflowTests(unittest.TestCase):
                                 for old in old_expressions))
 
     def test_every_existing_command_and_security_guard_is_preserved(self):
-        old_jobs, new_jobs = jobs(OLD), jobs(TEXT)
+        old_jobs, new_jobs = jobs(approved(OLD)), jobs(TEXT)
         self.assertEqual(set(new_jobs), set(old_jobs) | {"queue-trust"})
         old_isolation = re.search(r'^      - &fleet-isolation\n.*?(?=^      - |^  [\w-]+:|\Z)', OLD, re.M | re.S)[0]
         expected_isolation = old_isolation

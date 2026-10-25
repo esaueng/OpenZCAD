@@ -25,7 +25,9 @@ checks before GitHub merges it.
 CI and Cloudflare verification handle `merge_group: checks_requested` without
 replacing pending queue verdicts. The immutable fleet workflow runs queue
 candidates on GitHub-hosted runners; its PR-only kernel announcement policy
-is checked before enqueueing. Commit privacy checks the merge-group base-to-head range. History privacy
+is checked before enqueueing. The Playwright shards likewise run on the PR
+head only: a candidate runs `quality`, `unit` and `validation`, and its
+`checks / e2e` gate passes without shards. Commit privacy checks the merge-group base-to-head range. History privacy
 audits that exact candidate through the default-branch `workflow_run` after the
 read-only requester completes; verify the dedicated App verdict on the queue SHA. Cloudflare queue runs perform dry-run verification only;
 version uploads remain limited to main pushes and manual dispatches. Merging
