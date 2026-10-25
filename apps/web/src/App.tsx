@@ -14874,6 +14874,18 @@ export function App() {
             producingFeatureOf({ bodyId: selection.bodyId }),
             editing
           );
+        // Only what the edited blend's result became stands for its input;
+        // an edge of another later body is refused.
+        if (
+          remap &&
+          editing &&
+          !inPlaceEditDescendants(editing).has(selection.bodyId)
+        ) {
+          setStatus(
+            `${editing.name} can only use edges of bodies made before it in History.`
+          );
+          return true;
+        }
         const edge =
           remap && target
             ? (inPlaceEdgePick(target, undefined, selection.hash) ??
