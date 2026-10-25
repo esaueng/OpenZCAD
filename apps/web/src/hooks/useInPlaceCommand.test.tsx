@@ -1511,6 +1511,58 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     expect(hook.result.current.slots.path).toEqual([]);
   });
 
+  it('a derived step size still takes the size the feature comes to store', () => {
+    const face = {
+      bodyId: 'body_a' as BodyId,
+      hash: 11,
+      topologyId: 'f11',
+      surfaceType: 'plane',
+      normal: { x: 0, y: 0, z: 1 },
+      centroid: { x: 10, y: 5, z: 4 },
+      point: { x: 10, y: 5, z: 4 },
+      savedPosition: true as const
+    };
+    let live: { values: Record<string, number>; touched: string[] } = {
+      values: { diameter: 10 },
+      touched: ['diameter']
+    };
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      baseVersion: 1,
+      reseed: (edit) => ({
+        tool: 'hole',
+        seed: { ...edit, values: live.values, raws: {}, touched: live.touched }
+      })
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('hole', {
+        ...SEED,
+        values: { diameter: 10 },
+        touched: ['diameter'],
+        options: {
+          place: 'clicked',
+          depthMode: 'through',
+          style: 'counterbore'
+        },
+        slots: { ...SEED.slots, bodies: [], faces: [face] }
+      })
+    );
+    // Unset, the counterbore follows the bore: 1.8 × 10.
+    expect(hook.result.current.values.counterboreDiameter).toBe(18);
+    // A collaborator stores one: it is the feature's own now.
+    live = {
+      values: { diameter: 10, counterboreDiameter: 11 },
+      touched: ['diameter', 'counterboreDiameter']
+    };
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.values.counterboreDiameter).toBe(11);
+    expect(hook.result.current.touched).toContain('counterboreDiameter');
+  });
+
   it('previews a re-armed edit that builds the same thing', async () => {
     const { hook } = setup();
     act(() => hook.result.current.edit('subtract', SEED));

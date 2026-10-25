@@ -23555,13 +23555,14 @@ export function App() {
     }
     // Actions wait for the clicked selection to land. An unapplied Move
     // owns the question first; a menu here would act on the old selection.
-    // A running in-place command owns the viewport: a right-click it does
-    // not take (a face during Fillet, a curved face for Mirror's plane) is
-    // consumed, never a menu acting on a selection under the command.
-    if (
-      handleSelectTopologyFromViewer(selection, false, undefined, { x, y }) ||
-      inPlaceRef.current.active
-    ) {
+    // A running in-place command owns the viewport: a right-click is
+    // consumed before it reaches the command's picks (it must neither add
+    // nor drop an edge or face), and opens no menu under the command.
+    if (inPlaceRef.current.active) {
+      setContextMenu(null);
+      return;
+    }
+    if (handleSelectTopologyFromViewer(selection, false, undefined, { x, y })) {
       setContextMenu(null);
       return;
     }

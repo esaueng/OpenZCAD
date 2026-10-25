@@ -526,6 +526,15 @@ export function useInPlaceCommand(
         if (!current.touched.includes(id) && next[id] !== value) {
           next[id] = value;
           changed = true;
+          // A default is not the user's: the reseed's baseline takes it, so
+          // a value the feature comes to store still lands over it.
+          const baseline = seededRef.current;
+          if (baseline && baseline.raws[id] === undefined) {
+            seededRef.current = {
+              ...baseline,
+              values: { ...baseline.values, [id]: value }
+            };
+          }
         }
       }
       return changed ? { ...current, values: next } : current;
