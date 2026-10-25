@@ -43,7 +43,32 @@ const { store, encryptedModule } = vi.hoisted(() => {
 });
 vi.mock('./e2ee/encryptedProjects', () => encryptedModule);
 
-afterEach(() => vi.clearAllMocks());
+// This device's pinned opt-in and this page's account key (D2 decisions).
+const { pinned, unlocked, preferences } = vi.hoisted(() => ({
+  pinned: { optedIn: false },
+  unlocked: { account: undefined as { accountKey: Uint8Array } | undefined },
+  preferences: {
+    loadProjectPreference: vi.fn(),
+    createProjectPreferenceApi: vi.fn(() => ({}))
+  }
+}));
+vi.mock('./e2ee/preferencePins', () => ({
+  localStoragePreferencePins: () => ({
+    read: async () => null,
+    write: async () => undefined,
+    optedIn: async () => pinned.optedIn
+  })
+}));
+vi.mock('./e2ee/unlockedKeys', () => ({
+  unlockedAccount: () => unlocked.account
+}));
+vi.mock('./e2ee/projectPreferences', () => preferences);
+
+afterEach(() => {
+  vi.clearAllMocks();
+  pinned.optedIn = false;
+  unlocked.account = undefined;
+});
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -277,5 +302,108 @@ describe('dispatch on the storage format', () => {
       )
     ).rejects.toMatchObject({ code: 'E2EE_ADOPTION_UNAVAILABLE' });
     expect(sentPlaintextTo('/api/projects')).toBe(false);
+  });
+});
+
+describe('the encrypt-new-projects decision fails closed (D2)', () => {
+  const device = () => createProjectDocument('Device', 'user_1' as never);
+  const created = {
+    project: {
+      projectId: 'proj_closed',
+      name: 'Secret',
+      revisionCount: 0,
+      updatedAt: 'now',
+      storageFormat: 2
+    },
+    document: documentOf('proj_closed')
+  };
+
+  /** The signed-in session, the Worker's config and the stored opt-in. */
+  function account({
+    open = true,
+    preference = () => json({ preference: null })
+  }: { open?: boolean; preference?: () => Response } = {}) {
+    vi.mocked(desktopFetch).mockImplementation(async (input) => {
+      if (input === '/api/session') return json({ userId: 'user_1' });
+      if (input === '/api/e2ee/config') {
+        return json({ enabled: open, projectsEnabled: open });
+      }
+      if (input === '/api/e2ee/project-preferences') return preference();
+      return json({ project: created.project }, 201);
+    });
+  }
+
+  async function sendsNothing(code: string) {
+    await expect(
+      api.createProject({ name: 'Secret', initialDocument: device() })
+    ).rejects.toMatchObject({ code });
+    await expect(
+      api.adoptProject(device(), 'user_1' as never)
+    ).rejects.toMatchObject({ code });
+    expect(sentPlaintextTo('/api/projects')).toBe(false);
+  }
+
+  it('keeps an opt-in this device verified when the account omits it', async () => {
+    pinned.optedIn = true;
+    encryptedModule.createEncryptedProject.mockResolvedValue(created);
+    account({
+      preference: () => json({ preference: { encryptNewProjects: false } })
+    });
+    await expect(
+      api.createProject({ name: 'Secret', initialDocument: device() })
+    ).resolves.toBe(created);
+    await expect(
+      api.adoptProject(device(), 'user_1' as never)
+    ).rejects.toMatchObject({ code: 'E2EE_ADOPTION_UNAVAILABLE' });
+    expect(sentPlaintextTo('/api/projects')).toBe(false);
+
+    // Reporting encrypted projects closed does not withdraw it either.
+    account({ open: false });
+    await sendsNothing('E2EE_PREFERENCE_UNVERIFIED');
+  });
+
+  it('refuses rather than sending plaintext when the opt-in cannot be read', async () => {
+    account({ preference: () => json({ error: 'down' }, 503) });
+    await sendsNothing('E2EE_PREFERENCE_UNVERIFIED');
+  });
+
+  it('trusts only the verified record on a page holding the account key', async () => {
+    unlocked.account = { accountKey: new Uint8Array(32) };
+    // The account's copy says no; the verified record says yes.
+    account({
+      preference: () => json({ preference: { encryptNewProjects: false } })
+    });
+    preferences.loadProjectPreference.mockResolvedValue({
+      kind: 'verified',
+      encryptNewProjects: true,
+      sequence: 3
+    });
+    encryptedModule.createEncryptedProject.mockResolvedValue(created);
+    await expect(
+      api.createProject({ name: 'Secret', initialDocument: device() })
+    ).resolves.toBe(created);
+    expect(sentPlaintextTo('/api/projects')).toBe(false);
+
+    // A record that does not verify, or a rollback, is not an answer.
+    preferences.loadProjectPreference.mockResolvedValue({
+      kind: 'refused',
+      reason: 'rollback',
+      message: 'older',
+      floor: 3
+    });
+    await sendsNothing('E2EE_PREFERENCE_UNVERIFIED');
+    preferences.loadProjectPreference.mockRejectedValue(new Error('offline'));
+    await sendsNothing('E2EE_PREFERENCE_UNVERIFIED');
+
+    // A verified no is a no.
+    preferences.loadProjectPreference.mockResolvedValue({
+      kind: 'verified',
+      encryptNewProjects: false,
+      sequence: 4
+    });
+    await expect(
+      api.createProject({ name: 'Plain', initialDocument: device() })
+    ).resolves.toMatchObject({ project: created.project });
+    expect(sentPlaintextTo('/api/projects')).toBe(true);
   });
 });

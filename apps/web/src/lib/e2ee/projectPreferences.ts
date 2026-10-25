@@ -75,58 +75,12 @@ export function createProjectPreferenceApi(
   };
 }
 
-/** The highest preference sequence this device has accepted, per account. */
-export interface PreferencePinStore {
-  read(userId: string): Promise<number | null>;
-  write(userId: string, sequence: number): Promise<void>;
-}
-
-const PIN_KEY = (userId: string) =>
-  `openzcad:e2ee-project-preference-pin:v1:${userId}`;
-
-/**
- * Pins in localStorage. Storage that is blocked or cleared loses the pin,
- * which only weakens rollback detection back to first use; it never makes a
- * forged record verify.
- */
-export function localStoragePreferencePins(
-  storage: Pick<Storage, 'getItem' | 'setItem'> | null = typeof window ===
-  'undefined'
-    ? null
-    : window.localStorage
-): PreferencePinStore {
-  return {
-    async read(userId) {
-      try {
-        const value = Number(storage?.getItem(PIN_KEY(userId)) ?? NaN);
-        return Number.isSafeInteger(value) && value >= 1 ? value : null;
-      } catch {
-        return null;
-      }
-    },
-    async write(userId, sequence) {
-      try {
-        const current = await this.read(userId);
-        // A pin only moves forward, whichever tab writes it.
-        if (current === null || sequence > current) {
-          storage?.setItem(PIN_KEY(userId), String(sequence));
-        }
-      } catch {
-        /* Best effort: see above. */
-      }
-    }
-  };
-}
-
-export function memoryPreferencePins(): PreferencePinStore {
-  const pins = new Map<string, number>();
-  return {
-    read: async (userId) => pins.get(userId) ?? null,
-    write: async (userId, sequence) => {
-      if (sequence > (pins.get(userId) ?? 0)) pins.set(userId, sequence);
-    }
-  };
-}
+import type { PreferencePinStore } from './preferencePins';
+export {
+  localStoragePreferencePins,
+  memoryPreferencePins,
+  type PreferencePinStore
+} from './preferencePins';
 
 export interface ProjectPreferenceContext {
   readonly userId: string;
@@ -209,7 +163,7 @@ async function verify(
       floor
     };
   }
-  await ctx.pins.write(ctx.userId, opened.sequence);
+  await ctx.pins.write(ctx.userId, opened.sequence, opened.encryptNewProjects);
   return {
     kind: 'verified',
     encryptNewProjects: opened.encryptNewProjects,

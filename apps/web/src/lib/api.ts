@@ -66,6 +66,8 @@ import {
 import { splitProjectStorageUpload } from '@openzcad/persistence';
 import { desktopFetch, isDesktopApp } from './desktopBridge';
 import type * as EncryptedProjectsModule from './e2ee/encryptedProjects';
+import { localStoragePreferencePins } from './e2ee/preferencePins';
+import { unlockedAccount } from './e2ee/unlockedKeys';
 import type { EncryptedProjectStore } from './e2ee/encryptedProjectStore';
 
 /**
@@ -306,37 +308,88 @@ export function isEncryptedProject(projectId: string | null | undefined) {
   return projectId ? encryptedProjectIds.has(projectId) : false;
 }
 
-/**
- * Whether new projects of this account are created encrypted (decision
- * D2): the Worker opens encrypted projects to it and its stored opt-in says
- * so. It reads the opt-in without its MAC (only the account key can check
- * that), which errs toward encrypting; the Worker refuses plaintext creates
- * for an opted-in account either way. Loads no crypto, and anything but a
- * clear yes, an older Worker or a static host included, reads as no.
- */
-export async function encryptsNewProjects(): Promise<boolean> {
+export const E2EE_PREFERENCE_UNVERIFIED_CODE = 'E2EE_PREFERENCE_UNVERIFIED';
+
+function preferenceUnverified(): ApiError {
+  return new ApiError(
+    409,
+    'This account’s “Encrypt new projects” setting could not be checked, so nothing was sent. Unlock encryption in Settings › Encryption, or try again.',
+    E2EE_PREFERENCE_UNVERIFIED_CODE
+  );
+}
+
+/** A route's JSON body, or undefined when it is unreachable or not JSON. */
+async function readOptionalJson(
+  path: string
+): Promise<Record<string, unknown> | undefined> {
   try {
-    const config = await desktopFetch('/api/e2ee/config', {
-      credentials: 'same-origin'
-    });
-    if (!config.ok) return false;
-    const { enabled, projectsEnabled } = (await config.json()) as {
-      enabled?: unknown;
-      projectsEnabled?: unknown;
-    };
-    if (enabled !== true || projectsEnabled !== true) return false;
-    const response = await desktopFetch('/api/e2ee/project-preferences', {
-      credentials: 'same-origin'
-    });
-    if (!response.ok) return false;
-    const { preference } = (await response.json()) as {
-      preference?: { encryptNewProjects?: unknown } | null;
-    };
-    return preference?.encryptNewProjects === true;
+    const response = await desktopFetch(path, { credentials: 'same-origin' });
+    if (!response.ok) return undefined;
+    const body: unknown = await response.json();
+    return body !== null && typeof body === 'object'
+      ? (body as Record<string, unknown>)
+      : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
+
+/**
+ * Whether new projects of this account are created encrypted (decision
+ * D2). A plaintext create or adoption sends the whole document, and the
+ * Worker's later refusal cannot take that back, so the answer fails closed
+ * against the service that stores the opt-in:
+ * - a page holding the account key trusts only the record whose MAC and
+ *   sequence pin verify, and refuses to answer when it does not;
+ * - an opt-in this device verified earlier holds even when the account
+ *   omits it, reports encrypted projects closed or cannot be reached;
+ * - otherwise the account's unverified copy can only turn encryption on,
+ *   and a copy that cannot be read while encrypted projects are open
+ *   refuses rather than reading as no.
+ * Throws `E2EE_PREFERENCE_UNVERIFIED` when it cannot tell. A device that
+ * never verified the opt-in and holds no account key still follows the
+ * account's copy; an older Worker or a static host reads as no.
+ */
+export async function encryptsNewProjects(): Promise<boolean> {
+  const session = await readOptionalJson('/api/session');
+  const userId = typeof session?.userId === 'string' ? session.userId : null;
+  const pins = localStoragePreferencePins();
+  const pinnedOptIn = userId !== null && (await pins.optedIn(userId));
+  const config = await readOptionalJson('/api/e2ee/config');
+  if (config?.enabled !== true || config.projectsEnabled !== true) {
+    if (pinnedOptIn) throw preferenceUnverified();
+    return false;
+  }
+  const account = userId === null ? undefined : unlockedAccount(userId);
+  if (userId !== null && account) {
+    let verified: boolean | null = null;
+    try {
+      const preferences = await import('./e2ee/projectPreferences');
+      const state = await preferences.loadProjectPreference({
+        userId,
+        accountKey: account.accountKey,
+        api: preferences.createProjectPreferenceApi(),
+        pins
+      });
+      if (state.kind === 'verified') verified = state.encryptNewProjects;
+      // No record anywhere, and none pinned (that would be a rollback).
+      else if (state.kind === 'unset') verified = false;
+    } catch {
+      // Unreachable or unreadable: not an answer.
+    }
+    if (verified === null) throw preferenceUnverified();
+    return verified;
+  }
+  if (pinnedOptIn) return true;
+  const stored = await readOptionalJson('/api/e2ee/project-preferences');
+  if (!stored) throw preferenceUnverified();
+  const preference = stored.preference as
+    | { encryptNewProjects?: unknown }
+    | null
+    | undefined;
+  return preference?.encryptNewProjects === true;
+}
+
 
 /**
  * Runs `plaintext` unless the project is known to be encrypted; a
@@ -506,7 +559,8 @@ export const api = {
       rememberProjectFormats([created.project]);
       return created;
     };
-    if (!payload.document && (await encryptsNewProjects())) {
+    // A device document too: the encrypted store refuses it without sending.
+    if (await encryptsNewProjects()) {
       return encrypted();
     }
     try {
