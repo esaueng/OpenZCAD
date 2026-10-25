@@ -115,6 +115,40 @@ test('a fillet takes another edge after creation from its History row', async ({
   await expect(page.getByTitle('Feature failed to build')).toHaveCount(0);
 });
 
+test('a new fillet takes a second edge clicked on its preview', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Fillet two clicks');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByLabel('Radius', { exact: true }).fill('14');
+  await inspector.getByLabel('Height', { exact: true }).fill('28');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(page.locator('.feature-row')).toHaveCount(1);
+  await page.getByRole('button', { name: /^Fillet/ }).click();
+  const bar = page.getByRole('group', { name: 'Fillet command' });
+  await expect(bar).toContainText('Click the edges to fillet');
+  const first = await locateEdge(page);
+  await page.mouse.click(first.x, first.y);
+  await expect(bar).toContainText('1 edge');
+  await enterCommandValue(page, 'radius', '1');
+  // The preview now shows the rounded body under its own new id: a click
+  // on its other rim names the input's edge.
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled();
+  const second = await locateEdge(page, { exclude: [first.topologyId] });
+  await page.mouse.click(second.x, second.y);
+  // The hint's count, not Select all's ("Select all 2 edges").
+  await expect(bar).toContainText('2 edges · click more');
+  await finishInPlaceCommand(page, 'Fillet');
+  await expect(
+    page.locator('.feature-row', { hasText: /^Fillet/ })
+  ).toBeVisible();
+  await expect(page.getByTitle('Feature failed to build')).toHaveCount(0);
+});
+
 test('a box sweep during Fillet adds the edges it catches', async ({
   page
 }) => {

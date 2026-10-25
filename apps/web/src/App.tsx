@@ -15095,6 +15095,20 @@ export function App() {
           : null)
       );
     }
+    // A new blend's preview shows the rounded body under its own new id: a
+    // click on it names the held input's edge by its fingerprint, which an
+    // unblended edge keeps, as an edit's click on its result does.
+    const held = inPlaceRef.current.slots.edges[0]?.bodyId;
+    if (
+      !editing &&
+      held !== undefined &&
+      selection.bodyId !== held &&
+      !doc?.derived.bodyRepresentations[selection.bodyId]
+    ) {
+      return selection.hash !== undefined
+        ? inPlaceEdgePick(held, undefined, selection.hash)
+        : null;
+    }
     return inPlaceEdgePick(
       selection.bodyId,
       selection.topologyId,
