@@ -18,6 +18,7 @@ import type {
   InPlaceRequest,
   ProfilePick
 } from '../lib/inPlace/tools';
+import { GROUND_FRAME, placementFrame } from '../lib/inPlace/primitives';
 
 const FRONT: PlaneBasis = {
   origin: { x: 0, y: 0, z: 0 },
@@ -279,6 +280,18 @@ describe('useInPlaceCommand: revolve', () => {
     });
     expect(accepted).toBe(true);
     expect(hook.result.current.values.count).toBe(6);
+  });
+
+  it('refuses a typed number outside the range instead of clamping it', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('box'));
+    act(() => {
+      expect(hook.result.current.setValue('width', -5)).toBe(false);
+    });
+    expect(hook.result.current.refusal).toBe(
+      '-5; Box width takes at least 0.001.'
+    );
+    expect(hook.result.current.values.width).toBe(30);
   });
 
   it('keeps a sub-degree revolve', () => {
@@ -871,6 +884,181 @@ describe('review: a sweep guide rail', () => {
       'g1'
     ]);
     expect(hook.result.current.hint).toMatch(/Guide rail of 1/);
+  });
+});
+
+describe('useInPlaceCommand: primitives', () => {
+  it('previews the card default at once, and Enter commits it', async () => {
+    const { hook, commit, built } = setup();
+    act(() => hook.result.current.start('box'));
+    expect(hook.result.current.hint).toMatch(/footprint/);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(built.at(-1)).toEqual({
+      tool: 'primitive',
+      kind: 'box',
+      dimensions: { width: 30, height: 18, depth: 24 },
+      position: { x: 0, y: 0, z: 0 }
+    });
+    act(() => {
+      hook.result.current.done();
+    });
+    expect(commit).toHaveBeenCalledWith(
+      built.at(-1),
+      'Box',
+      null,
+      expect.any(Function)
+    );
+  });
+
+  it('takes a footprint: its plane, the press and the drawn sizes', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('box'));
+    // A typed width is replaced by the drawn one.
+    act(() => {
+      hook.result.current.setValue('width', 12, 'w');
+    });
+    act(() => {
+      expect(
+        hook.result.current.placeFootprint(
+          { frame: placementFrame({ x: 0, y: 0, z: 1 }), signU: 1, signV: 1 },
+          { width: 20, depth: 15, x: -10, y: 5, z: 6 }
+        )
+      ).toBe(true);
+    });
+    expect(hook.result.current.raws).toEqual({});
+    expect(hook.result.current.hint).toMatch(/arrows/);
+    await waitFor(() =>
+      expect(built.at(-1)).toEqual({
+        tool: 'primitive',
+        kind: 'box',
+        dimensions: { width: 20, height: 15, depth: 24 },
+        position: { x: -10, y: 5, z: 6 }
+      })
+    );
+    expect(hook.result.current.handles.map((handle) => handle.valueId)).toEqual(
+      ['width', 'depth', 'height']
+    );
+  });
+
+  it('moves a hung box corner with its height, unless typed', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('box'));
+    act(() => {
+      hook.result.current.placeFootprint(
+        {
+          frame: placementFrame({ x: 0, y: 0, z: 1 }),
+          signU: 1,
+          signV: 1,
+          hangs: 'z'
+        },
+        { width: 10, depth: 6, x: 0, y: 0, z: -4 }
+      );
+    });
+    act(() => {
+      hook.result.current.previewValue('height', 10);
+    });
+    expect(hook.result.current.values.z).toBe(10);
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        dimensions: { depth: 10 },
+        position: { z: 10 }
+      })
+    );
+    // A canceled entry puts the corner back with the height.
+    act(() => {
+      hook.result.current.restoreValue('height', 24, undefined, true);
+    });
+    expect(hook.result.current.values.z).toBe(-4);
+    act(() => {
+      hook.result.current.previewValue('height', 10);
+    });
+    // A typed Corner Z is the user's: a height change leaves it.
+    act(() => {
+      hook.result.current.setValue('z', 3, 'floor');
+    });
+    act(() => {
+      hook.result.current.previewValue('height', 12);
+    });
+    expect(hook.result.current.raws.z).toBe('floor');
+    expect(hook.result.current.values.z).toBe(3);
+  });
+
+  it('lets a drawn footprint lift the refusal of the size it replaces', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('cylinder'));
+    act(() => {
+      hook.result.current.setValue('radius', -2);
+    });
+    expect(hook.result.current.refusal).toMatch(/radius takes/);
+    act(() => {
+      hook.result.current.placeFootprint(
+        { frame: GROUND_FRAME, signU: 1, signV: 1 },
+        { radius: 4, x: 0, y: 0, z: 0 }
+      );
+    });
+    expect(hook.result.current.refusal).toBeNull();
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+  });
+
+  it('lets one cone end come to a point, never both', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('cone'));
+    let accepted = false;
+    act(() => {
+      accepted = hook.result.current.setValue('topRadius', 0);
+    });
+    expect(accepted).toBe(true);
+    act(() => {
+      accepted = hook.result.current.setValue('bottomRadius', 0);
+    });
+    expect(accepted).toBe(false);
+    expect(hook.result.current.refusal).toBe(
+      '0; At least one radius must be greater than zero.'
+    );
+    expect(hook.result.current.values.bottomRadius).toBe(6);
+    expect(hook.result.current.canFinish).toBe(false);
+    // A drag to zero beside it simply does not take.
+    act(() => {
+      hook.result.current.previewValue('bottomRadius', 0);
+    });
+    expect(hook.result.current.values.bottomRadius).toBe(6);
+  });
+
+  it('keeps a typed position parametric', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('cylinder'));
+    act(() => {
+      hook.result.current.setValue('x', 15, 'gap');
+    });
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        kind: 'cylinder',
+        position: { x: 'gap', y: 0, z: 0 }
+      })
+    );
+  });
+
+  it('names each start anew, even of the same tool', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('box'));
+    const first = hook.result.current.sessionId;
+    act(() => hook.result.current.start('box'));
+    expect(hook.result.current.sessionId).not.toBe(first);
+    act(() => {
+      hook.result.current.cancel(true);
+    });
+    expect(hook.result.current.sessionId).toBeNull();
+  });
+
+  it('refuses a footprint for a command placed some other way', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('revolve'));
+    expect(
+      hook.result.current.placeFootprint(
+        { frame: GROUND_FRAME, signU: 1, signV: 1 },
+        { radius: 4 }
+      )
+    ).toBe(false);
   });
 });
 

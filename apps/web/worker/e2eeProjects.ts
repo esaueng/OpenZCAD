@@ -1361,10 +1361,15 @@ export async function handleE2eeProjectRequest(
           projectId,
           group.key_epoch_base + group.epoch
         );
+        // A removal of this account's whose rotation the Worker has not
+        // counted yet (slice 5-7). Loaded here: that module imports this one.
+        const { ownRotationDue } = await import('./e2eeDeviceRemoval');
+        const rotationDue = await ownRotationDue(db, projectId, userId);
         return json({
           group: {
             ...groupRecord(group),
-            ...(pending === null ? {} : { pendingProposals: pending })
+            ...(pending === null ? {} : { pendingProposals: pending }),
+            ...(rotationDue ? { rotationDue: true } : {})
           }
         } satisfies E2eeProjectGroupResponse);
       }

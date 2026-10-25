@@ -1,6 +1,12 @@
 import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
-import { test, expect, expectBodyCount, stubApi } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  test,
+  expect,
+  expectBodyCount,
+  stubApi
+} from './openzcad-fixtures';
 
 /**
  * Units on exchange (ZC-183/185/200/201), end to end: a unitless STL asks
@@ -88,11 +94,9 @@ test('mesh export writes the chosen unit and facet angle, as its check measured'
   await stubApi(page);
   await createProject(page, 'Pin export');
 
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByLabel('Radius', { exact: true }).fill('10');
-  await inspector.getByLabel('Height', { exact: true }).fill('20');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '10', height: '20' }
+  });
   await expectBodyCount(page, 1);
   await page.locator('.feature-row-main', { hasText: 'Cylinder' }).click();
   await expect(page.locator('.panel-body')).toContainText('volume', {

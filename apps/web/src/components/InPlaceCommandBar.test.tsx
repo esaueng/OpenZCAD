@@ -133,4 +133,49 @@ describe('InPlaceCommandBar', () => {
     );
     expect(screen.getByText('Not exact surfaces.')).toBeTruthy();
   });
+
+  it('puts exact numbers behind Options, each opening entry where it sits', () => {
+    const onValue = vi.fn();
+    render(
+      <InPlaceCommandBar
+        title="Box"
+        hint="Drag a footprint"
+        canFinish
+        values={[
+          { id: 'x', label: 'Corner X', text: '0 mm' },
+          { id: 'y', label: 'Corner Y', text: 'gap' }
+        ]}
+        onValue={onValue}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('button', { name: 'Corner Y' }).textContent).toBe(
+      'gap'
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Corner X' }));
+    expect(onValue).toHaveBeenCalledWith('x', { x: 0, y: 0 });
+  });
+
+  it('names Done and Cancel by their verbs, their keys as shortcuts', () => {
+    render(
+      <InPlaceCommandBar
+        title="Box"
+        hint="Drag a footprint"
+        canFinish
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(
+      screen
+        .getByRole('button', { name: 'Done' })
+        .getAttribute('aria-keyshortcuts')
+    ).toBe('Enter');
+    expect(
+      screen
+        .getByRole('button', { name: 'Cancel' })
+        .getAttribute('aria-keyshortcuts')
+    ).toBe('Escape');
+  });
 });

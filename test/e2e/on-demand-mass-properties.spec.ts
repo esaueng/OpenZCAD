@@ -1,4 +1,9 @@
-import { expect, test, stubApi } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  expect,
+  test,
+  stubApi
+} from './openzcad-fixtures';
 
 test('queries mass only on disclosure and refreshes it after edit, undo and export', async ({
   page
@@ -56,8 +61,7 @@ test('queries mass only on disclosure and refreshes it after edit, undo and expo
   await page.getByLabel('Project name').fill('Mass on demand');
   await page.getByRole('button', { name: 'Create project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
   const row = page
     .locator('.feature-row-main')

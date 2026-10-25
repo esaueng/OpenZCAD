@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import {
+  createPrimitiveInPlace,
   test,
   expect,
   stubApi,
@@ -28,10 +29,7 @@ function inspectorOf(page: Page) {
 }
 
 async function createBox(page: Page) {
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspectorOf(page)
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
@@ -173,11 +171,10 @@ test('Fillet: Apply closes the card, a refused Apply keeps it open with the reas
 }) => {
   test.setTimeout(90_000);
   await createProject(page, 'Fillet edit card');
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
   const inspector = inspectorOf(page);
-  await inspector.getByLabel('Radius', { exact: true }).fill('14');
-  await inspector.getByLabel('Height', { exact: true }).fill('28');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '14', height: '28' }
+  });
   await page.getByRole('button', { name: /^Fillet/ }).click();
   await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
   const radius = inspector.getByLabel('Radius', { exact: true });
@@ -229,11 +226,10 @@ test('Fillet: a radius typed before the edges are picked is the one created', as
   // default radius 2, overwritten while the edge selection initialised.
   test.setTimeout(90_000);
   await createProject(page, 'Fillet typed first');
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
   const inspector = inspectorOf(page);
-  await inspector.getByLabel('Radius', { exact: true }).fill('14');
-  await inspector.getByLabel('Height', { exact: true }).fill('28');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '14', height: '28' }
+  });
   await page.getByRole('button', { name: /^Fillet/ }).click();
   const radius = inspector.getByLabel('Radius', { exact: true });
   await radius.fill('1.5');

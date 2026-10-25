@@ -6,6 +6,7 @@ import {
 import { toUserId } from '@openzcad/shared';
 import type { Page } from '@playwright/test';
 import {
+  createPrimitiveInPlace,
   expect,
   expectBodyCount,
   locateEdge,
@@ -26,11 +27,7 @@ async function createBox(page: Page, name: string) {
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
@@ -690,11 +687,7 @@ for (const operation of ['Shell', 'Draft']) {
     page
   }) => {
     await createBox(page, 'Multi-body Face Sweep');
-    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-    await page
-      .getByRole('region', { name: 'Feature inspector' })
-      .getByRole('button', { name: /^Create/ })
-      .click();
+    await createPrimitiveInPlace(page, 'box');
     await expectBodyCount(page, 2);
     await topView(page);
     await page

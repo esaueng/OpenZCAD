@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import { installWorkerSocketGlobals } from '../collaboration-room-harness';
-import { expect, test } from './openzcad-fixtures';
+import { createPrimitiveInPlace, expect, test } from './openzcad-fixtures';
 import { createE2eeServer, E2E_USER_ID } from './e2ee-fixtures';
 import {
   BOB_ID,
@@ -18,11 +18,7 @@ const CAROL_ID = 'user_carol_e2e';
 const CAROL_EMAIL = 'carol@example.com';
 
 async function addBox(page: Page) {
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
 }
 
 /** Account writes of the encrypted document a page makes itself. */

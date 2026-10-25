@@ -3262,6 +3262,9 @@ button.model-panel-grip[aria-expanded='true'] {
   /* The lane passes the pointer through to the viewport; the bar's own
      buttons must take it back, as the search bar does. */
   pointer-events: auto;
+  /* Options open above the bar from its own left edge: grown leftward from
+     the ⋯ button they ran under the tool rail on a narrow window. */
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -3327,7 +3330,6 @@ button.model-panel-grip[aria-expanded='true'] {
 }
 
 .in-place-command-options {
-  position: relative;
   flex: none;
 }
 
@@ -3348,9 +3350,10 @@ button.model-panel-grip[aria-expanded='true'] {
 
 .in-place-command-options-panel {
   position: absolute;
-  right: 0;
+  left: 0;
   bottom: calc(100% + 8px);
   min-width: 220px;
+  max-width: 100%;
   padding: 10px;
   background: var(--color-surface);
   border: 1px solid var(--color-border-strong);
@@ -3394,6 +3397,10 @@ button.model-panel-grip[aria-expanded='true'] {
   border-radius: var(--radius-sm);
   font: inherit;
   cursor: pointer;
+}
+
+.in-place-option-value {
+  font-variant-numeric: tabular-nums;
 }
 
 .in-place-option-choice[aria-checked='true'] {

@@ -1,6 +1,7 @@
 import type { Locator, Page } from '@playwright/test';
 import {
   clickWorldPoint,
+  createPrimitiveInPlace,
   expect,
   expectBodyCount,
   expectConsumedBodyCount,
@@ -144,11 +145,9 @@ test('three-point and parallel-at-point planes: picked vertices, typed points an
   const canvas = page.locator('.viewer-host canvas');
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Width (X)').fill('20');
-  await inspector.getByLabel('Depth (Y)').fill('20');
-  await inspector.getByLabel('Height (Z)').fill('20');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '20', depth: '20', height: '20' }
+  });
   await expectBodyCount(page, 1);
 
   // U09: in place, parallel to Top (XY) through the end of an edge picked

@@ -1,5 +1,10 @@
 import type { Locator, Page } from '@playwright/test';
-import { test, expect, stubApi } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  test,
+  expect,
+  stubApi
+} from './openzcad-fixtures';
 
 /**
  * Brief states must not blink on the Selection card: a "Validating" pill for
@@ -39,12 +44,9 @@ async function armedBox(page: Page) {
   await page.goto('/');
   await page.getByLabel('Project name').fill('Settled badges');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByLabel('Width (X)').fill('30');
-  await inspector.getByLabel('Depth (Y)').fill('18');
-  await inspector.getByLabel('Height (Z)').fill('24');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '30', depth: '18', height: '24' }
+  });
   const canvas = page.locator('.viewer-host canvas');
   await selectFace(canvas, { x: 0, y: -1, z: 0 });
   await page

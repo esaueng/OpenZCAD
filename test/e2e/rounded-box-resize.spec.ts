@@ -1,4 +1,9 @@
-import { test, expect, stubApi } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  test,
+  expect,
+  stubApi
+} from './openzcad-fixtures';
 
 test('resizes a rounded box from its minimum side with exact entry, drag, cancel and undo', async ({
   page
@@ -30,12 +35,10 @@ test('resizes a rounded box from its minimum side with exact entry, drag, cancel
   await expect(page).toHaveTitle('OpenZCAD');
   await page.getByLabel('Project name').fill('Rounded box resize');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByLabel('Width (X)').fill('40');
-  await inspector.getByLabel('Depth (Y)').fill('24');
-  await inspector.getByLabel('Height (Z)').fill('10');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '40', depth: '24', height: '10' }
+  });
   await page.getByRole('button', { name: /^Fillet/ }).click();
   await inspector.getByRole('button', { name: 'Select all 12 edges' }).click();
   await inspector.getByLabel('Radius', { exact: true }).fill('1.5');

@@ -1,4 +1,5 @@
 import {
+  createPrimitiveInPlace,
   createProject,
   expect,
   expectBodyCount,
@@ -422,11 +423,7 @@ test('a covered window comes to the front on a press, on focus, from the rail an
     ]
   });
   // A feature for ⌘K to find.
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await page.keyboard.press('Escape');
   await expect.poll(() => zOrder(page)).toEqual(['History', 'Parameters']);
@@ -560,11 +557,7 @@ test('a window floated over a live handle leaves its value chip clear and reacha
   page
 }) => {
   await openWorkspace(page, 'Chip clear', { right: [] });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await page.keyboard.press('Escape');
   const face = await findFacePoint(page);
@@ -622,11 +615,7 @@ test('a window floating over the Selection card leaves its verbs pressable', asy
       { id: 'over-card', x: 80, y: 0, w: 560, h: 600, panels: ['history'] }
     ]
   });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await page.keyboard.press('Escape');
   await selectBodyFromObjects(page);

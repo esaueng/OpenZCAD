@@ -1,4 +1,10 @@
-import { test, expect, expectBodyCount, stubApi } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  test,
+  expect,
+  expectBodyCount,
+  stubApi
+} from './openzcad-fixtures';
 import type { Locator, Page } from '@playwright/test';
 
 interface CameraPose {
@@ -59,11 +65,7 @@ async function createBox(page: Page, name: string) {
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
 }
 

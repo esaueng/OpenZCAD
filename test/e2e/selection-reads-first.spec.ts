@@ -1,5 +1,11 @@
 import type { Locator, Page } from '@playwright/test';
-import { createProject, expect, stubApi, test } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  createProject,
+  expect,
+  stubApi,
+  test
+} from './openzcad-fixtures';
 
 /*
   Design review batch 6e, "the selection reads first".
@@ -18,11 +24,7 @@ async function createBox(page: Page, name: string) {
   await stubApi(page);
   await page.setViewportSize({ width: 1440, height: 900 });
   await createProject(page, name);
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
   return page.locator('.viewer-host canvas');
 }

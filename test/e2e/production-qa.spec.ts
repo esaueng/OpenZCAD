@@ -1,4 +1,11 @@
-import { test, expect, stubApi } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  finishInPlaceCommand,
+  test,
+  expect,
+  stubApi,
+  enterCommandValue
+} from './openzcad-fixtures';
 
 test('invalid primitive dimensions never enter saved history', async ({
   page
@@ -7,24 +14,25 @@ test('invalid primitive dimensions never enter saved history', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('QA dimension validation');
   await page.getByRole('button', { name: 'Create project' }).click();
+  // A box runs in place (U09): a typed size it cannot build is refused in
+  // its bar, and the chip keeps the size it had.
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  const width = inspector.getByRole('textbox', { name: 'Width (X)' });
-  await width.fill('-5');
-  await expect(width).toHaveAttribute('aria-invalid', 'true');
-  await expect(width).toHaveAccessibleDescription('Must be greater than zero.');
-  await expect(
-    inspector.getByRole('button', { name: 'Create', exact: true })
-  ).toBeDisabled();
-  await width.press('Enter');
-  await expect(inspector).toBeVisible();
+  const bar = page.getByRole('group', { name: 'Box command' });
+  const width = page.getByTestId('command-handle-width');
+  await width.click();
+  const entry = page.locator('.numeric-keypad input');
+  await entry.fill('-5');
+  await entry.press('Enter');
+  await expect(bar).toContainText('-5; Box width takes at least 0.001.');
+  await expect(width).toContainText('Width 30');
   await expect(
     page.getByText(
       'No features yet. Pick a tool from the tool rail on the left to start.'
     )
   ).toBeVisible();
-  await width.fill('30');
-  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  // Done waits until the refused size is given again.
+  await enterCommandValue(page, 'width', '30');
+  await finishInPlaceCommand(page, 'Box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
   await expect(
     page.getByRole('heading', { name: 'History 1', exact: true })
@@ -41,11 +49,7 @@ test('a missing export chunk leaves the workspace usable without reload', async 
   await page.goto('/');
   await page.getByLabel('Project name').fill('QA export recovery');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: 'Create', exact: true })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
   await page.getByText('File', { exact: true }).click();
   await page.getByRole('button', { name: /Export mesh/ }).click();

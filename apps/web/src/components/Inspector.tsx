@@ -41,7 +41,6 @@ import type {
   FeatureNode,
   MassDensitySelection,
   ParamValue,
-  PrimitiveKind,
   RevolveAxis,
   SketchId,
   SketchNode,
@@ -67,11 +66,9 @@ import {
   type SketchOption,
   type TransformFormValue
 } from './forms/FeatureForms';
-import { PRIMITIVE_TOOLS, TOOL_META, type ToolId } from '../lib/tools';
-import type { PrimitiveGhost } from '../lib/primitiveGhost';
+import { TOOL_META, type ToolId } from '../lib/tools';
 import {
   applyPrimitiveCommand,
-  createPrimitiveCommand,
   primitivePlacement
 } from '../lib/primitivePlacement';
 import type { AnyCommand } from '@openzcad/command-system';
@@ -130,8 +127,6 @@ export interface InspectorCallbacks {
   onClose?(): void;
   /** Verbatim reason the last exact rebuild refused this form's operation. */
   commitError?: string | null;
-  /** The primitive card's Create, already composed with its placement. */
-  onCreatePrimitive(command: AnyCommand): void;
   onCreateRevolve(value: {
     name: string;
     sketchId: SketchId;
@@ -312,11 +307,6 @@ interface InspectorProps extends InspectorCallbacks {
    * its hole and blend edits have no History step to open them from.
    */
   directPickDetails?: boolean;
-  /**
-   * A new primitive's card, as the ghost the viewport draws before Create;
-   * null when its values do not build and when the card closes.
-   */
-  onPrimitiveGhostChange?(ghost: PrimitiveGhost | null): void;
 }
 
 /**
@@ -1501,32 +1491,7 @@ export function Inspector(props: InspectorProps) {
   if (tool) {
     eyebrow = CARD_EYEBROWS.create;
     title = TOOL_META[tool].label;
-    if (PRIMITIVE_TOOLS.includes(tool)) {
-      const kind = tool as PrimitiveKind;
-      body = (
-        <PrimitiveForm
-          key={`create-${tool}`}
-          kind={kind}
-          scope={scope}
-          documentUnits={units}
-          initialName={TOOL_META[tool].label}
-          submitLabel="Create"
-          onSubmit={(name, dimensions, position) =>
-            props.onCreatePrimitive(
-              createPrimitiveCommand(
-                kind,
-                name,
-                dimensions,
-                position,
-                props.document
-              )
-            )
-          }
-          onCancel={props.onCancel}
-          onGhostChange={props.onPrimitiveGhostChange}
-        />
-      );
-    } else if (tool === 'revolve') {
+    if (tool === 'revolve') {
       body = (
         <RevolveForm
           key="create-revolve"
