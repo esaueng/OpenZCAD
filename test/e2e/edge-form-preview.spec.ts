@@ -153,6 +153,38 @@ test('a new fillet takes a second edge clicked on its preview', async ({
   await expect(page.getByTitle('Feature failed to build')).toHaveCount(0);
 });
 
+test('a new fillet among several bodies can select all again after clearing', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Fillet clear');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  for (const radius of ['14', '6']) {
+    await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+    await inspector.getByLabel('Radius', { exact: true }).fill(radius);
+    await inspector.getByLabel('Height', { exact: true }).fill('28');
+    await inspector.getByRole('button', { name: /^Create/ }).click();
+  }
+  await expect(page.locator('.feature-row')).toHaveCount(2);
+  await page.getByRole('button', { name: /^Fillet/ }).click();
+  const bar = page.getByRole('group', { name: 'Fillet command' });
+  const edge = await locateEdge(page);
+  await page.mouse.click(edge.x, edge.y);
+  await expect(bar).toContainText('1 edge · click more');
+  await bar.locator('summary').click();
+  await bar.getByRole('button', { name: 'Select all 2 edges' }).click();
+  await bar.locator('summary').click();
+  await expect(bar).toContainText('2 edges · click more');
+  await bar.locator('summary').click();
+  await bar.getByRole('button', { name: 'Clear edge selection' }).click();
+  // Cleared, it still knows its body: Select all takes them back.
+  await expect(
+    bar.getByRole('button', { name: 'Select all 2 edges' })
+  ).toBeVisible();
+});
+
 test('a box sweep during Fillet adds the edges it catches', async ({
   page
 }) => {
