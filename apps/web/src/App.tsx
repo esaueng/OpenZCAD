@@ -1415,6 +1415,8 @@ import { useGeometryWorker } from './hooks/useGeometryWorker';
 import { useProjectView } from './hooks/useProjectView';
 import { useAppSettingsSync } from './hooks/useAppSettingsSync';
 import { useDirectEditCommit } from './hooks/useDirectEditCommit';
+import { useSettledFlag } from './hooks/useSettledFlag';
+import { useSteadySaveState } from './hooks/useSteadySaveState';
 import { useMeasurementWorkbench } from './hooks/useMeasurementWorkbench';
 import {
   useValidatedFeatureCommit,
@@ -1660,6 +1662,8 @@ const E2E_SLOW_FRAME_MS =
  * backstop for a tab left open and in front of somebody.
  */
 const FRESHNESS_POLL_INTERVAL_MS = 60_000;
+/** How long the model panels wait before calling the model "preparing". */
+const PANEL_PENDING_DELAY_MS = 400;
 /**
  * What an unnamed save is called. Ctrl+S stays a reflex and takes this; naming
  * one is its own gesture (Ctrl+Shift+S).
@@ -5936,13 +5940,20 @@ export function App() {
     () => (doc ? listLocalOnlyImportSources(doc) : []),
     [doc]
   );
-  const presentedSaveState = presentedWorkspaceSaveState(
-    localSaveDirty ? (localSaveFailed ? 'device-failed' : 'saving') : saveState,
-    localOnlySources.length,
-    checkpointRoomRef.current?.isCurrent()
-      ? checkpointRoomRef.current.document
-      : null,
-    doc
+  const presentedSaveState = useSteadySaveState(
+    presentedWorkspaceSaveState(
+      localSaveDirty
+        ? localSaveFailed
+          ? 'device-failed'
+          : 'saving'
+        : saveState,
+      localOnlySources.length,
+      checkpointRoomRef.current?.isCurrent()
+        ? checkpointRoomRef.current.document
+        : null,
+      doc
+    ),
+    doc?.projectId ?? null
   );
   const parameterScope = useMemo(
     () => (doc ? getParameterScope(doc) : { scope: {}, errors: [] }),
@@ -6191,6 +6202,14 @@ export function App() {
     geometrySnapshot?.version === doc?.version
       ? geometrySnapshot.geometry
       : null;
+  // Meshes still waiting for their topology, or a face preview whose analysis
+  // is incomplete, leave the model panels' details unfinished. Both usually
+  // pass within a frame or two, and announcing them at once flashed
+  // "preparing" down every History row; a held one is still disclosed.
+  const panelGeometryPending = useSettledFlag(
+    currentGeometrySnapshot !== null || currentFaceGeometryPreview !== null,
+    PANEL_PENDING_DELAY_MS
+  );
   // Warnings must describe what is actually on screen. While a preview is up the
   // viewport shows previewDoc's bodies, so showing the live document's warnings
   // would hide exactly the problems the preview exists to reveal.
@@ -18479,11 +18498,10 @@ export function App() {
   }, [interaction]);
 
   const offsetHandleTarget = useMemo(() => {
-    if (
-      interaction.mode !== 'face' ||
-      interaction.op !== 'offset-face' ||
-      interaction.phase === 'validating'
-    ) {
+    // Validation keeps the handle, locked where it was let go: retiring it
+    // there and building a new one after the commit faded the arrow out and
+    // back in around every release.
+    if (interaction.mode !== 'face' || interaction.op !== 'offset-face') {
       return null;
     }
     const target = interaction.target;
@@ -18563,7 +18581,8 @@ export function App() {
         0,
       ...(total === undefined
         ? {}
-        : { totalBaseline: total.total, totalSense: total.sense })
+        : { totalBaseline: total.total, totalSense: total.sense }),
+      ...(interaction.phase === 'validating' ? { locked: true } : {})
     };
   }, [doc, interaction, renderedOffsetPreview, representations]);
 
@@ -19853,7 +19872,12 @@ export function App() {
       return true;
     }
     const current = interactionRef.current;
-    if (current.mode !== 'face' || current.op !== 'offset-face') {
+    if (
+      current.mode !== 'face' ||
+      current.op !== 'offset-face' ||
+      // One edit at a time: the held handle is locked while it validates.
+      current.phase === 'validating'
+    ) {
       return false;
     }
     if (!requireExactGeometryReady()) {
@@ -24015,9 +24039,7 @@ export function App() {
       features={features}
       representations={representations}
       failedFeatureIds={failedHistoryFeatureIds}
-      geometryPending={Boolean(
-        currentGeometrySnapshot || currentFaceGeometryPreview
-      )}
+      geometryPending={panelGeometryPending}
       relatedFeatureIds={historyRelatedFeatureIds}
       selectedFeatureNodeId={selectedFeatureNodeId}
       selectedSketchProfileId={selectedSketchProfileId}
