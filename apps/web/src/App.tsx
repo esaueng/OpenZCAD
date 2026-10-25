@@ -8861,8 +8861,16 @@ export function App() {
   ): FeatureNode['data'][] {
     const data = feature.data;
     if (data.featureKind !== 'transform') return [];
-    return featureHistory(current)
-      .downstream(feature.featureId)
+    // A copy does not republish its source, so the source's later steps are
+    // not downstream of it: they are those after it in history.
+    const after = data.copy
+      ? listFeaturesInOrder(current).slice(
+          listFeaturesInOrder(current).findIndex(
+            (candidate) => candidate.featureId === feature.featureId
+          ) + 1
+        )
+      : featureHistory(current).downstream(feature.featureId);
+    return after
       .flatMap((later) =>
         isInPlaceTransform(later.data) &&
         later.data.targetBodyId === data.targetBodyId &&
