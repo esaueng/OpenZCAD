@@ -150,6 +150,7 @@ import {
   groupBaseForKeyEpoch,
   joinProjectGroup,
   memberRevocationCutoffs,
+  pendingMemberRotation,
   projectDeviceLists,
   projectRevocationCutoffs,
   projectKeyForEpoch,
@@ -1133,6 +1134,14 @@ export function createEncryptedProjectStore(
         409,
         'The project’s keys moved meanwhile. Save again.',
         'E2EE_EPOCH_STALE'
+      );
+    }
+    // A co-member's removed device may still hold this key (slice 5-7).
+    if (await pendingMemberRotation(groups, projectId, state.keyEpoch)) {
+      throw new ApiError(
+        409,
+        'Another member of this project removed one of their devices, which may still hold its current key. Saving resumes once one of their other devices has opened the project.',
+        'E2EE_MEMBER_ROTATION_PENDING'
       );
     }
     return {

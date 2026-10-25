@@ -24,7 +24,10 @@ export interface E2eeRevocationCutoffRecord {
   updatedAt: string;
 }
 
-/** An owned encrypted project's group and newest head, to name its cutoff. */
+/**
+ * An encrypted project the caller belongs to (owned, or since slice 5-7 a
+ * member of), with its group and newest head, to name its cutoff.
+ */
 export interface E2eeRemovalProjectRecord {
   projectId: string;
   groupGeneration: number;
@@ -37,12 +40,17 @@ export interface E2eeRemovalProjectRecord {
    * cannot rotate it; the next writer does once it is restored.
    */
   trashed?: true;
+  /**
+   * The caller is a member of the project, not its owner (slice 5-7): its
+   * removal names the project and rotates it like an owned one.
+   */
+  member?: true;
 }
 
 export interface E2eeRevocationCutoffsResponse {
   /** The caller's statements, every identity generation. */
   statements: E2eeRevocationCutoffRecord[];
-  /** The caller's encrypted projects that have an MLS group. */
+  /** The caller's encrypted projects, owned or shared, with an MLS group. */
   projects: E2eeRemovalProjectRecord[];
 }
 
