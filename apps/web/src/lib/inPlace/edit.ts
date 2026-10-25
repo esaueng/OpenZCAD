@@ -939,6 +939,6 @@ export function keepAbsentHoleSteps(
           stored[key] !== undefined ||
           touched.includes(key)
       )
-    ) as FeatureUpdateInput['data']
+    )
   };
 }
