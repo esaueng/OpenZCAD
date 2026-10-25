@@ -241,9 +241,21 @@ test('relays an encrypted edit between two browsers of the owner', async ({
     });
     await expect(card).toBeVisible({ timeout: SYNC_BUDGET_MS });
     await card.locator('.start-tile-open').click();
-    await expect(
-      b.getByRole('status', { name: 'Saved', exact: true })
-    ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    // A's encrypted view state (slice 4-7) may be offered here, as a
+    // plaintext project's workspace session is on a second device, once A's
+    // view has reached the account: open with the default view either way.
+    const resume = b.getByRole('dialog', {
+      name: 'Resume where you left off?'
+    });
+    const saved = b.getByRole('status', { name: 'Saved', exact: true });
+    await expect(resume.or(saved)).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    if (await resume.isVisible()) {
+      await resume
+        .getByRole('button', { name: 'Open with default view' })
+        .click();
+      await expect(resume).toHaveCount(0);
+    }
+    await expect(saved).toBeVisible({ timeout: SYNC_BUDGET_MS });
 
     // An edit on A reaches B live, decrypted and verified there.
     const versionsBefore = (
