@@ -83,6 +83,8 @@ export interface InPlaceCommand {
   axisCandidates: RevolveAxisCandidate[];
   handles: HandleSpec[];
   values: Record<string, number>;
+  /** Values held as typed expressions, by id. */
+  raws: Record<string, string>;
   options: Record<string, string>;
   hint: string;
   refusal: string | null;
@@ -116,6 +118,8 @@ export interface InPlaceCommand {
   /** Ends the command; `quiet` when another action already says why. */
   cancel(quiet?: boolean): void;
 }
+
+const EMPTY_RAWS: Record<string, string> = {};
 
 const EMPTY_SLOTS: InPlaceSlots = {
   profiles: [],
@@ -682,6 +686,7 @@ export function useInPlaceCommand(
     axisCandidates,
     handles,
     values,
+    raws: session?.raws ?? EMPTY_RAWS,
     options: chosen,
     hint: spec ? spec.hint(slots, chosen) : '',
     refusal,

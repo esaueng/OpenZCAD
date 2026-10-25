@@ -18217,7 +18217,8 @@ export function App() {
           name,
           bodyName,
           sections: request.sections,
-          mode: request.mode
+          mode: request.mode,
+          ...(request.endPoint ? { endPoint: request.endPoint } : {})
         });
       case 'sweep':
         return commandFactories.sweepProfile({
@@ -18459,14 +18460,12 @@ export function App() {
   const inPlaceCurveCandidates = useMemo(() => {
     if (!doc || !inPlaceSpec?.wantsPath) return null;
     const resolve = sketchValueResolver(parameterScope.scope, doc.units);
-    const profileSketch = inPlace.slots.profiles[0]?.sketchId;
-    // A path is never in the profile's own plane.
-    return sketchCurveCandidates(
-      doc,
-      availableSketchViews.filter((view) => view.sketchId !== profileSketch),
-      (value) => resolve(value)
+    // Every sketch's curves, the profile's own included: one sketch may hold
+    // both a closed profile and the open spine it sweeps along.
+    return sketchCurveCandidates(doc, availableSketchViews, (value) =>
+      resolve(value)
     );
-  }, [doc, inPlaceSpec, inPlace.slots.profiles, availableSketchViews, parameterScope]);
+  }, [doc, inPlaceSpec, availableSketchViews, parameterScope]);
   const inPlaceCurvePicker = useMemo(
     () =>
       inPlaceCurveCandidates
@@ -20229,7 +20228,11 @@ export function App() {
       const valueId = open.commandValueId;
       const baseline = open.baseline ?? inPlaceRef.current.values[valueId] ?? 0;
       commandSetterRef.current?.(valueId, baseline);
-      inPlaceRef.current.previewValue(valueId, baseline);
+      if (open.baselineRaw !== undefined) {
+        inPlaceRef.current.setValue(valueId, baseline, open.baselineRaw);
+      } else {
+        inPlaceRef.current.previewValue(valueId, baseline);
+      }
     } else if (open.kind === 'sketch-dimension') {
       setSketchDimensionDraft(null);
       setStatus('Dimension entry canceled.');
@@ -25432,14 +25435,18 @@ export function App() {
                 (candidate) => candidate.id === valueId
               );
               if (!valueSpec) return false;
+              const raw = inPlace.raws[valueId];
               setKeypad({
                 kind: 'command',
                 commandValueId: valueId,
                 label: valueSpec.label,
-                initial: String(Math.round(value * 100) / 100),
+                // A parametric value opens as its expression, and comes
+                // back as one if entry is canceled.
+                initial: raw ?? String(Math.round(value * 100) / 100),
                 selectInitial: true,
                 unitKind: valueSpec.unit,
-                baseline: value
+                baseline: value,
+                ...(raw !== undefined ? { baselineRaw: raw } : {})
               });
               return true;
             }}
@@ -25495,7 +25502,11 @@ export function App() {
                         // Refused: back to the value shown when the chip was
                         // tapped, undoing any in-range keystroke previews.
                         commandSetterRef.current?.(valueId, baseline);
-                        inPlace.previewValue(valueId, baseline);
+                        if (keypad.baselineRaw !== undefined) {
+                          inPlace.setValue(valueId, baseline, keypad.baselineRaw);
+                        } else {
+                          inPlace.previewValue(valueId, baseline);
+                        }
                       }
                     }}
                     onCancel={cancelOpenKeypad}

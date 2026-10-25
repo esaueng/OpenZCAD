@@ -195,6 +195,8 @@ export type InPlaceRequest =
       tool: 'loft';
       sections: SketchSectionReference[];
       mode: 'ruled' | 'smooth';
+      /** Closes the last section to this point (a pointed loft). */
+      endPoint?: ParametricVector3;
     }
   | {
       tool: 'sweep';
@@ -490,8 +492,20 @@ const loft: InPlaceToolSpec = {
   profileMode: 'many',
   wantsAxis: false,
   wantsPath: false,
-  values: [],
+  values: [
+    // How far the apex stands off the last section, along its normal.
+    { id: 'apex', label: 'Apex', unit: 'length', initial: 10 }
+  ],
   options: [
+    {
+      id: 'end',
+      label: 'Ends',
+      choices: [
+        { value: 'section', label: 'On the last section' },
+        { value: 'apex', label: 'At an apex point' }
+      ],
+      initial: 'section'
+    },
     {
       id: 'shape',
       label: 'Shape',
@@ -509,16 +523,72 @@ const loft: InPlaceToolSpec = {
     return `${slots.profiles.length} sections · pick another, or ${FINISH}`;
   },
   ready: (slots) => slots.profiles.length >= 2,
-  request(slots, _values, options) {
+  request(slots, _values, options, ctx, numbers) {
     if (slots.profiles.length < 2) return null;
+    const apex =
+      options.end === 'apex' ? loftApex(slots, ctx, numbers?.apex ?? 10) : null;
     return {
       tool: 'loft',
       sections: slots.profiles.map(section),
-      mode: options.shape === 'smooth' ? 'smooth' : 'ruled'
+      mode: options.shape === 'smooth' ? 'smooth' : 'ruled',
+      ...(apex
+        ? {
+            endPoint: {
+              x: String(apex.point.x),
+              y: String(apex.point.y),
+              z: String(apex.point.z)
+            }
+          }
+        : {})
     };
   },
-  handles: () => []
+  handles(slots, _values, ctx, options) {
+    if (options.end !== 'apex') return [];
+    const apex = loftApex(slots, ctx, 0);
+    if (!apex) return [];
+    const last = slots.profiles.at(-1)!;
+    return [
+      {
+        valueId: 'apex',
+        kind: 'linear',
+        key: `${last.sketchId}:${last.regionFingerprint}:apex`,
+        params: { origin: apex.point, direction: apex.normal }
+      }
+    ];
+  }
 };
+
+/**
+ * The apex `distance` off the last section: from the middle of its outline,
+ * along its sketch plane's normal.
+ */
+function loftApex(
+  slots: InPlaceSlots,
+  ctx: InPlaceContext,
+  distance: number
+): { point: Vector3; normal: Vector3 } | null {
+  const last = slots.profiles.at(-1);
+  const view = last ? viewFor(ctx, last.sketchId) : null;
+  const outline = last ? profileOutline(ctx, last) : [];
+  if (!view || outline.length === 0) return null;
+  const middle = outline.reduce(
+    (sum, point) => ({
+      x: sum.x + point.x / outline.length,
+      y: sum.y + point.y / outline.length,
+      z: sum.z + point.z / outline.length
+    }),
+    { x: 0, y: 0, z: 0 }
+  );
+  const normal = unit(view.basis.normal);
+  return {
+    point: {
+      x: middle.x + normal.x * distance,
+      y: middle.y + normal.y * distance,
+      z: middle.z + normal.z * distance
+    },
+    normal
+  };
+}
 
 const sweep: InPlaceToolSpec = {
   id: 'sweep',
@@ -554,7 +624,9 @@ const sweep: InPlaceToolSpec = {
     if (options?.curves === 'guide') {
       return slots.guide.length === 0
         ? 'Pick the guide rail: click its sketch curves'
-        : `Guide rail of ${slots.guide.length} · click more curves, or ${FINISH}`;
+        : `Guide rail of ${slots.guide.length}${
+            options.mode === 'smooth' ? ' (guided sweeps are Standard)' : ''
+          } · click more curves, or ${FINISH}`;
     }
     if (slots.path.length === 0)
       return 'Pick the path: click its sketch curves';
@@ -573,7 +645,8 @@ const sweep: InPlaceToolSpec = {
         sketchId: first.sketchId,
         entityIds: slots.path.map((curve) => curve.entityId)
       },
-      mode: options.mode === 'smooth' ? 'smooth' : 'standard',
+      // A guided sweep is Standard only; the hint says so when both are set.
+      mode: options.mode === 'smooth' && !rail ? 'smooth' : 'standard',
       ...(rail
         ? {
             guide: {

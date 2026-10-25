@@ -415,24 +415,24 @@ describe('review: loft, sweep and counts', () => {
     });
   });
 
-  it('a sweep carries its mode and guide rail', () => {
+  it('a sweep carries its mode, and a guide rail', () => {
     const curve = (entityId: string) => ({
       sketchId: 's2' as SketchId,
       entityId
     });
-    const request = IN_PLACE_TOOL_SPECS.sweep.request(
-      {
-        ...EMPTY,
-        profiles: [section('s1', 1)],
-        path: [curve('p1')],
-        guide: [curve('g1'), curve('g2')]
-      },
-      {},
-      { mode: 'smooth' },
-      CTX
-    );
-    expect(request).toMatchObject({
-      mode: 'smooth',
+    const sweep = IN_PLACE_TOOL_SPECS.sweep;
+    const base = {
+      ...EMPTY,
+      profiles: [section('s1', 1)],
+      path: [curve('p1')]
+    };
+    expect(sweep.request(base, {}, { mode: 'smooth' }, CTX)).toMatchObject({
+      mode: 'smooth'
+    });
+    expect(
+      sweep.request({ ...base, guide: [curve('g1'), curve('g2')] }, {}, {}, CTX)
+    ).toMatchObject({
+      mode: 'standard',
       guide: { sketchId: 's2', entityIds: ['g1', 'g2'] }
     });
   });
@@ -443,5 +443,72 @@ describe('review: loft, sweep and counts', () => {
     )!;
     expect(clampValue(count, 4.5)).toBe(5);
     expect(clampValue(count, 4.4)).toBe(4);
+  });
+});
+
+describe('review: loft apex and guided sweeps', () => {
+  const FLAT = {
+    origin: { x: 0, y: 0, z: 0 },
+    u: { x: 1, y: 0, z: 0 },
+    v: { x: 0, y: 1, z: 0 },
+    normal: { x: 0, y: 0, z: 1 }
+  };
+  const SQUARE = [
+    { x: 0, y: 0 },
+    { x: 4, y: 0 },
+    { x: 4, y: 4 },
+    { x: 0, y: 4 }
+  ];
+  const ctx: InPlaceContext = {
+    ...CTX,
+    sketchViews: [
+      {
+        sketchId: 's1' as SketchId,
+        basis: FLAT,
+        regions: [{ regionFingerprint: 1, outer: SQUARE }]
+      },
+      {
+        sketchId: 's2' as SketchId,
+        basis: { ...FLAT, origin: { x: 0, y: 0, z: 10 } },
+        regions: [{ regionFingerprint: 2, outer: SQUARE }]
+      }
+    ]
+  };
+  const pick = (sketchId: string, regionFingerprint: number) => ({
+    sketchId: sketchId as SketchId,
+    reference: { all: true as const, sourceEntityIds: ['a'] },
+    regionFingerprint
+  });
+
+  it('a loft can end at an apex off its last section', () => {
+    const slots = { ...EMPTY, profiles: [pick('s1', 1), pick('s2', 2)] };
+    const loft = IN_PLACE_TOOL_SPECS.loft;
+    expect(
+      loft.request(slots, { apex: 5 }, { end: 'apex' }, ctx, { apex: 5 })
+    ).toMatchObject({ endPoint: { x: '2', y: '2', z: '15' } });
+    expect(loft.request(slots, {}, {}, ctx)).not.toHaveProperty('endPoint');
+    expect(
+      loft.handles(slots, {}, ctx, { end: 'apex' }).map((h) => h.valueId)
+    ).toEqual(['apex']);
+  });
+
+  it('a guided sweep is always Standard', () => {
+    const curve = (entityId: string) => ({
+      sketchId: 's2' as SketchId,
+      entityId
+    });
+    expect(
+      IN_PLACE_TOOL_SPECS.sweep.request(
+        {
+          ...EMPTY,
+          profiles: [pick('s1', 1)],
+          path: [curve('p1')],
+          guide: [curve('g1')]
+        },
+        {},
+        { mode: 'smooth' },
+        ctx
+      )
+    ).toMatchObject({ mode: 'standard' });
   });
 });

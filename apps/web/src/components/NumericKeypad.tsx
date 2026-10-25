@@ -52,6 +52,8 @@ export interface KeypadRequest {
    * Original absolute measurement, used to restore exact-entry cancellation.
    */
   baseline?: number;
+  /** The expression the value held when entry opened, restored on cancel. */
+  baselineRaw?: string;
   /** Client-space anchor for a click-placed editor without a live 3D rig. */
   fixedClientAnchor?: { x: number; y: number };
 }
