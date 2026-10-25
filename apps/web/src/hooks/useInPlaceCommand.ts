@@ -439,6 +439,29 @@ export function useInPlaceCommand(
     setSession((current) => {
       if (!current) return current;
       let changed = false;
+      // An edited feature's own plane, stored as written, likewise: the
+      // numbers a slide starts from are its fields read again.
+      const plane = current.slots.plane;
+      let slots = current.slots;
+      if (plane?.kind === 'saved') {
+        const read = (text: { x: string; y: string; z: string }) => {
+          const [x, y, z] = [text.x, text.y, text.z].map(
+            (part) => optionsRef.current.evaluate?.(part) ?? null
+          );
+          return x == null || y == null || z == null ? null : { x, y, z };
+        };
+        const origin = read(plane.fields.origin);
+        const normal = read(plane.fields.normal);
+        if (
+          origin &&
+          normal &&
+          JSON.stringify([origin, normal]) !==
+            JSON.stringify([plane.origin, plane.normal])
+        ) {
+          slots = { ...slots, plane: { ...plane, origin, normal } };
+          changed = true;
+        }
+      }
       const values = { ...current.values };
       for (const [valueId, raw] of Object.entries(current.raws)) {
         const number = optionsRef.current.evaluate?.(raw);
@@ -452,7 +475,7 @@ export function useInPlaceCommand(
           changed = true;
         }
       }
-      return changed ? { ...current, values } : current;
+      return changed ? { ...current, slots, values } : current;
     });
   }, [options.baseVersion]);
 
