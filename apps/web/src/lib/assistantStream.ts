@@ -73,6 +73,12 @@ export interface AssistantTurnRequest {
   digest: CadDocumentDigest;
   history?: readonly AssistantHistoryTurn[];
   attachments?: readonly AssistantAttachment[];
+  /**
+   * Set by the panel once this account's consent for the project verified
+   * right before sending (ADR-024 Phase 6). Never sent; without it an
+   * encrypted project's request is refused here.
+   */
+  consentedProjectId?: string;
 }
 
 export interface AssistantStatus {
@@ -303,9 +309,12 @@ async function streamAssistantReplyAttempt(
   options: AssistantStreamOptions,
   retryAttempt: 0 | 1
 ): Promise<AssistantReply> {
-  // ADR-024 D7: nothing of an encrypted project reaches the assistant,
-  // whichever entry point asked.
-  if (isEncryptedProject(request.digest.projectId)) {
+  // ADR-024 D7 and Phase 6: nothing of an encrypted project reaches the
+  // assistant, whichever entry point asked, unless its consent verified.
+  if (
+    isEncryptedProject(request.digest.projectId) &&
+    request.consentedProjectId !== request.digest.projectId
+  ) {
     throw new AssistantStreamError(
       'AI_E2EE_PROJECT',
       ENCRYPTED_PROJECT_ASSISTANT_NOTICE

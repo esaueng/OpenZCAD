@@ -31,14 +31,16 @@ const digest = (projectId: string) =>
  * page's own marker gates the assistant too.
  */
 describe('the assistant and this page’s encrypted-project marker', () => {
-  it('is disabled by the marker even without a summary', () => {
-    expect(assistantDisabledReason(undefined, true)).toBe(
+  it('is disabled for an encrypted project until a consent gate opens it', () => {
+    // App gives a directly opened project, known only by the page's
+    // marker, a format-2 summary; without a gate it stays off.
+    expect(assistantDisabledReason({ storageFormat: 2 })).toBe(
       ENCRYPTED_PROJECT_ASSISTANT_NOTICE
     );
-    expect(assistantDisabledReason({ storageFormat: 1 }, true)).toBe(
-      ENCRYPTED_PROJECT_ASSISTANT_NOTICE
-    );
-    expect(assistantDisabledReason(undefined, false)).toBeNull();
+    expect(
+      assistantDisabledReason({ storageFormat: 2 }, { status: { kind: 'ready' } })
+    ).toBeNull();
+    expect(assistantDisabledReason(undefined)).toBeNull();
   });
 
   it('sends nothing of a project the page knows is encrypted', async () => {
@@ -50,6 +52,25 @@ describe('the assistant and this page’s encrypted-project marker', () => {
     await expect(refused).rejects.toBeInstanceOf(AssistantStreamError);
     await expect(refused).rejects.toMatchObject({ code: 'AI_E2EE_PROJECT' });
     expect(desktopFetch).not.toHaveBeenCalled();
+
+    // The panel marks a request whose consent verified just before sending.
+    await expect(
+      streamAssistantReply({
+        prompt: 'Make the wall 3 mm',
+        digest: digest('proj_secret'),
+        consentedProjectId: 'proj_secret'
+      })
+    ).rejects.toBeDefined();
+    expect(desktopFetch).toHaveBeenCalledTimes(1);
+    // Consent for another project lets nothing through.
+    await expect(
+      streamAssistantReply({
+        prompt: 'Hi',
+        digest: digest('proj_secret'),
+        consentedProjectId: 'proj_other'
+      })
+    ).rejects.toMatchObject({ code: 'AI_E2EE_PROJECT' });
+    expect(desktopFetch).toHaveBeenCalledTimes(1);
 
     // A plaintext project still reaches the route.
     await expect(
