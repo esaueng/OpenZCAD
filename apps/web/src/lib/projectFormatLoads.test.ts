@@ -476,9 +476,11 @@ describe('the encrypt-new-projects decision fails closed (D2)', () => {
     await expect(
       api.createProject({ name: 'Secret', initialDocument: device() })
     ).resolves.toBe(created);
+    // A device project is saved encrypted too (4-8).
     await expect(
       api.adoptProject(device(), 'user_1' as never)
-    ).rejects.toMatchObject({ code: 'E2EE_ADOPTION_UNAVAILABLE' });
+    ).resolves.toBe(created);
+    expect(encryptedModule.createEncryptedProject).toHaveBeenCalledTimes(2);
     expect(sentPlaintextTo('/api/projects')).toBe(false);
 
     // Reporting encrypted projects closed does not withdraw it either.
