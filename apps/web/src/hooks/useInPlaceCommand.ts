@@ -206,10 +206,14 @@ export function useInPlaceCommand(
   // value, and Done waits with it, since the chip went back to the value
   // before and finishing would commit that instead of what was typed.
   const [committing, setCommitting] = useState(false);
-  /** What an edit last seeded its values from: the user's own changes differ. */
+  /**
+   * What an edit's values and options were seeded from, kept for each one
+   * the user has not changed: the user's own changes differ from it.
+   */
   const seededRef = useRef<{
     values: Record<string, number>;
     raws: Record<string, string>;
+    options: Record<string, string>;
   } | null>(null);
   const [entryRefusal, setEntryRefusal] = useState<{
     valueId: string;
@@ -492,6 +496,7 @@ export function useInPlaceCommand(
   // Every change of what would be built previews at once: the solid is on
   // screen the frame after the pick that completes it.
   const generation = useRef(0);
+  const editIdentity = session?.edit ?? null;
   useEffect(() => {
     if (!requestKey) {
       // Nothing to build (a pick taken back out): no frame, and no refusal
@@ -507,7 +512,9 @@ export function useInPlaceCommand(
     setPreviewValid(false);
     generation.current += 1;
     preview.request(generation.current);
-  }, [requestKey, options.baseVersion, preview]);
+    // A re-armed edit is a new request even when it builds the same thing
+    // (two like Scales of one body): its own frame, so Done is not held.
+  }, [requestKey, options.baseVersion, preview, editIdentity]);
 
   // A typed expression is stored as typed and evaluated against the model:
   // when the model changes under the command (an undo, a collaborator's
@@ -562,14 +569,23 @@ export function useInPlaceCommand(
       }
       const values = { ...current.values };
       let raws = current.raws;
-      // A stored value the user has not changed since it was seeded takes
-      // the feature's value as it is now.
+      let tool = current.tool;
+      let chosen = current.options;
+      // A stored value or option the user has not changed since it was
+      // seeded takes the feature's as it is now. One the user changed keeps
+      // its old baseline, so it stays theirs even if the feature later comes
+      // to match it.
       const baseline = seededRef.current;
       const live =
         current.edit && baseline
           ? optionsRef.current.reseed?.(current.edit)
           : null;
       if (live && baseline) {
+        const nextBaseline = {
+          values: { ...baseline.values },
+          raws: { ...baseline.raws },
+          options: { ...baseline.options }
+        };
         const ids = new Set([
           ...Object.keys(live.values),
           ...Object.keys(live.raws),
@@ -577,6 +593,14 @@ export function useInPlaceCommand(
           ...Object.keys(baseline.raws)
         ]);
         const nextRaws = { ...raws };
+        const take = <T>(
+          target: Record<string, T>,
+          id: string,
+          value: T | undefined
+        ) => {
+          if (value === undefined) delete target[id];
+          else target[id] = value;
+        };
         for (const id of ids) {
           // A written value is the user's own until its text changes; its
           // number moves with the model.
@@ -585,17 +609,30 @@ export function useInPlaceCommand(
               ? raws[id] === baseline.raws[id]
               : raws[id] === undefined && values[id] === baseline.values[id];
           if (!untouched) continue;
+          take(nextBaseline.values, id, live.values[id]);
+          take(nextBaseline.raws, id, live.raws[id]);
           if (live.values[id] === values[id] && live.raws[id] === raws[id]) {
             continue;
           }
-          if (live.values[id] === undefined) delete values[id];
-          else values[id] = live.values[id]!;
-          if (live.raws[id] === undefined) delete nextRaws[id];
-          else nextRaws[id] = live.raws[id]!;
+          take(values, id, live.values[id]);
+          take(nextRaws, id, live.raws[id]);
           changed = true;
         }
         raws = nextRaws;
-        seededRef.current = { values: live.values, raws: live.raws };
+        const optionSpecs = IN_PLACE_TOOL_SPECS[current.tool].options ?? [];
+        for (const [id, value] of Object.entries(live.options)) {
+          if (chosen[id] !== baseline.options[id]) continue;
+          nextBaseline.options[id] = value;
+          if (chosen[id] === value) continue;
+          chosen = { ...chosen, [id]: value };
+          // A Boolean's operation is its tool.
+          const optionSpec = optionSpecs.find((spec) => spec.id === id);
+          if (optionSpec?.switchesTool && value in IN_PLACE_TOOL_SPECS) {
+            tool = value as InPlaceToolId;
+          }
+          changed = true;
+        }
+        seededRef.current = nextBaseline;
       }
       for (const [valueId, raw] of Object.entries(raws)) {
         const number = optionsRef.current.evaluate?.(raw);
@@ -609,7 +646,9 @@ export function useInPlaceCommand(
           changed = true;
         }
       }
-      return changed ? { ...current, slots, values, raws } : current;
+      return changed
+        ? { ...current, tool, options: chosen, slots, values, raws }
+        : current;
     });
   }, [options.baseVersion]);
 
@@ -677,7 +716,11 @@ export function useInPlaceCommand(
 
   const edit = useCallback(
     (tool: InPlaceToolId, seed: InPlaceEditSeed) => {
-      seededRef.current = { values: seed.values, raws: seed.raws };
+      seededRef.current = {
+        values: seed.values,
+        raws: seed.raws,
+        options: seed.options
+      };
       preview.clear();
       optionsRef.current.publishPreview(null);
       setRefusal(null);

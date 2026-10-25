@@ -1002,6 +1002,56 @@ describe('useInPlaceCommand: editing a stored feature', () => {
       planeOX: 12,
       planeOY: 3
     });
+    // The feature coming to match the user's value does not make it the
+    // feature's again.
+    live = { planeOX: 12, planeOY: 3 };
+    hook.rerender({ ...options, baseVersion: 3 });
+    live = { planeOX: 12, planeOY: 7 };
+    hook.rerender({ ...options, baseVersion: 4 });
+    expect(hook.result.current.values.planeOY).toBe(3);
+  });
+
+  it('takes an option changed by someone else unless the user changed it', () => {
+    let live: Record<string, string> = {
+      planeMode: 'typed',
+      keepOriginal: 'no'
+    };
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      baseVersion: 1,
+      reseed: (edit) => ({ ...edit, options: { ...live } })
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('split', {
+        ...SEED,
+        values: {},
+        options: { planeMode: 'typed', keepOriginal: 'no' }
+      })
+    );
+    act(() => {
+      hook.result.current.setOption('planeMode', 'picked');
+    });
+    live = { planeMode: 'typed', keepOriginal: 'yes' };
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.options).toMatchObject({
+      planeMode: 'picked',
+      keepOriginal: 'yes'
+    });
+  });
+
+  it('previews a re-armed edit that builds the same thing', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.edit('subtract', SEED));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.cancel();
+      hook.result.current.edit('subtract', { ...SEED });
+    });
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
   });
 
   it("reads a helix's saved axis again when the model changes", () => {

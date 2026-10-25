@@ -791,6 +791,22 @@ const sweep: InPlaceToolSpec = {
   handles: () => []
 };
 
+/** Choose between a picked axis and one typed by its origin and direction. */
+const AXIS_MODE_OPTION: OptionSpec = {
+  id: 'axisMode',
+  label: 'Axis',
+  choices: [
+    { value: 'picked', label: 'A picked axis' },
+    { value: 'typed', label: 'Typed (origin and direction)' }
+  ],
+  initial: 'picked'
+};
+
+const TYPED_AXIS_VALUES: ValueSpec[] = [
+  ...vectorValues('axisO', 'length', { x: 0, y: 0, z: 0 }),
+  ...vectorValues('axisD', 'count', { x: 0, y: 0, z: 1 })
+];
+
 const helicalSweep: InPlaceToolSpec = {
   id: 'helical-sweep',
   title: 'Helical sweep',
@@ -817,8 +833,10 @@ const helicalSweep: InPlaceToolSpec = {
       min: 0,
       exclusive: true,
       max: MAX_HELICAL_SWEEP_TURNS
-    }
+    },
+    ...TYPED_AXIS_VALUES
   ],
+  options: [AXIS_MODE_OPTION],
   defaults(slots, ctx): Record<string, number> {
     const pick = slots.profiles[0];
     if (!pick || !slots.axis) return {};
@@ -857,15 +875,34 @@ const helicalSweep: InPlaceToolSpec = {
       pitch: Math.max(tall * 1.25, 0.001)
     };
   },
-  hint(slots) {
+  hint(slots, options) {
     if (slots.profiles.length === 0) return 'Pick the profile to coil';
+    if (options?.axisMode === 'typed') {
+      return `Type the axis origin and direction on their chips · ${FINISH}`;
+    }
     if (!slots.axis) return 'Pick the helix axis';
     return `Drag radius and pitch, tap turns to type · ${FINISH}`;
   },
-  ready: (slots) => slots.profiles.length > 0 && slots.axis !== null,
-  request(slots, values, _options, ctx) {
+  ready: (slots, options) =>
+    slots.profiles.length > 0 &&
+    (slots.axis !== null || options?.axisMode === 'typed'),
+  request(slots, values, options, ctx, numbers) {
     const pick = slots.profiles[0];
-    if (!pick || !slots.axis) return null;
+    if (!pick) return null;
+    if (options.axisMode === 'typed') {
+      // A typed axis goes out as typed, expressions and all.
+      if (!commandAxis(slots, numbers ?? {}, options)) return null;
+      return {
+        tool: 'helical-sweep',
+        profile: section(pick),
+        axisOrigin: typedVector(values, 'axisO', { x: 0, y: 0, z: 0 }),
+        axisDirection: typedVector(values, 'axisD', { x: 0, y: 0, z: 1 }),
+        radius: values.radius ?? 10,
+        pitch: values.pitch ?? 5,
+        turns: values.turns ?? 3
+      };
+    }
+    if (!slots.axis) return null;
     const direction = unit(slots.axis.direction);
     // An edited helix's own axis goes back as stored, expressions and all.
     const saved =
@@ -882,15 +919,27 @@ const helicalSweep: InPlaceToolSpec = {
       turns: values.turns ?? 3
     };
   },
-  handles(slots, values, ctx) {
+  handles(slots, values, ctx, options) {
     const pick = slots.profiles[0];
-    if (!pick || !slots.axis) return [];
-    const placement = helixRigPlacement(profileOutline(ctx, pick), slots.axis);
-    if (!placement) return [];
+    if (!pick) return [];
+    const outline = profileOutline(ctx, pick);
+    const chips =
+      options.axisMode === 'typed' ? typedAxisChips(pick, outline) : [];
+    const axisLine = commandAxis(slots, values, options);
+    if (!axisLine) return chips;
+    const placement = helixRigPlacement(outline, axisLine);
+    if (!placement) return chips;
     const { center, axis, startDirection } = placement;
-    const base = keyOf(pick.sketchId, pick.regionFingerprint, slots.axis.id);
+    const base = keyOf(
+      pick.sketchId,
+      pick.regionFingerprint,
+      axisLine.id === 'typed'
+        ? `typed:${[axisLine.origin, axisLine.direction].map((v) => `${v.x},${v.y},${v.z}`).join(':')}`
+        : axisLine.id
+    );
     const radius = values.radius ?? 10;
     return [
+      ...chips,
       {
         valueId: 'radius',
         kind: 'linear',
@@ -919,6 +968,52 @@ const helicalSweep: InPlaceToolSpec = {
     ];
   }
 };
+
+/** The axis a helix coils about: the picked one, or the typed one. */
+function commandAxis(
+  slots: InPlaceSlots,
+  numbers: Record<string, number>,
+  options: Record<string, string>
+): RevolveAxisCandidate | null {
+  if (options.axisMode !== 'typed') return slots.axis;
+  const direction = typedNumbers(numbers, 'axisD', { x: 0, y: 0, z: 1 });
+  if (Math.hypot(direction.x, direction.y, direction.z) === 0) return null;
+  return {
+    id: 'typed',
+    label: 'Typed axis',
+    origin: typedNumbers(numbers, 'axisO', { x: 0, y: 0, z: 0 }),
+    direction,
+    choice: { saved: true }
+  };
+}
+
+/** A typed axis's six numbers, each on its chip beside the profile. */
+function typedAxisChips(
+  pick: ProfilePick,
+  outline: readonly Vector3[]
+): HandleSpec[] {
+  if (outline.length === 0) return [];
+  const min = boxOfPoints(outline, Math.min);
+  const max = boxOfPoints(outline, Math.max);
+  const centre = { x: (min.x + max.x) / 2, y: (min.y + max.y) / 2, z: max.z };
+  const spread = Math.max((max.x - min.x) / 4, (max.y - min.y) / 4, 1);
+  const key = keyOf(pick.sketchId, pick.regionFingerprint, 'axis');
+  return [
+    ...vectorChips('axisO', key, centre, spread),
+    ...vectorChips('axisD', key, { ...centre, z: centre.z + spread }, spread)
+  ];
+}
+
+function boxOfPoints(
+  points: readonly Vector3[],
+  pick: (...values: number[]) => number
+): Vector3 {
+  return {
+    x: pick(...points.map((point) => point.x)),
+    y: pick(...points.map((point) => point.y)),
+    z: pick(...points.map((point) => point.z))
+  };
+}
 
 /**
  * Where a helix's handles stand: as a revolve's, or — for a profile centred
@@ -978,16 +1073,6 @@ function vectorText(vector: ParametricVector3): {
   z: string;
 } {
   return { x: String(vector.x), y: String(vector.y), z: String(vector.z) };
-}
-
-/** A stored vector as numbers; an unresolved part reads as zero. */
-function evaluatedVector(
-  vector: ParametricVector3,
-  ctx: InPlaceContext
-): Vector3 {
-  const number = (value: ParamValue) =>
-    typeof value === 'number' ? value : (ctx.evaluate?.(value) ?? 0);
-  return { x: number(vector.x), y: number(vector.y), z: number(vector.z) };
 }
 
 function scaled(vector: Vector3, by: number): Vector3 {
@@ -1083,9 +1168,21 @@ const hole: InPlaceToolSpec = {
       min: 0,
       max: 180,
       exclusive: true
-    }
+    },
+    // A typed position, measured on the face from its anchor.
+    { id: 'positionU', label: 'U', unit: 'length', initial: 0 },
+    { id: 'positionV', label: 'V', unit: 'length', initial: 0 }
   ],
   options: [
+    {
+      id: 'place',
+      label: 'Position',
+      choices: [
+        { value: 'clicked', label: 'Where clicked' },
+        { value: 'typed', label: 'Typed (U, V)' }
+      ],
+      initial: 'clicked'
+    },
     {
       id: 'depthMode',
       label: 'Depth',
@@ -1114,6 +1211,9 @@ const hole: InPlaceToolSpec = {
       options?.style === 'counterbore' || options?.style === 'countersink'
         ? ` · tap the ${options.style} chips to size it`
         : '';
+    if (options?.place === 'typed') {
+      return `Type its U and V on their chips · drag the diameter${step} · ${FINISH}`;
+    }
     return `Click again to move it · drag the diameter${step} · ${FINISH}`;
   },
   ready: (slots) => slots.faces.length > 0,
@@ -1130,21 +1230,24 @@ const hole: InPlaceToolSpec = {
       : face.centroid
         ? 'centroid'
         : 'center';
-    // Rounded to the sketch snap, exactly as the card placed a clicked hole.
+    // Rounded to the sketch snap, exactly as the card placed a clicked hole;
+    // a typed one as typed, expressions and all.
     const position =
-      face.savedPosition && saved
-        ? {
-            u: String(saved.position.u),
-            v: String(saved.position.v)
-          }
-        : face.point
-          ? holePositionFromPick(
-              face,
-              anchor,
-              face.point,
-              ctx.linearSnap ?? null
-            )
-          : null;
+      options.place === 'typed'
+        ? { u: text(values.positionU, 0), v: text(values.positionV, 0) }
+        : face.savedPosition && saved
+          ? {
+              u: String(saved.position.u),
+              v: String(saved.position.v)
+            }
+          : face.point
+            ? holePositionFromPick(
+                face,
+                anchor,
+                face.point,
+                ctx.linearSnap ?? null
+              )
+            : null;
     // Unset step sizes derive from the bore's value, a typed expression's
     // too; a chip's value, typed or derived, is stored as it stands.
     const derived = holeStepSizes(
@@ -1174,12 +1277,16 @@ const hole: InPlaceToolSpec = {
       }
     };
   },
-  handles(slots, values, _ctx, options) {
+  handles(slots, values, ctx, options) {
     const face = slots.faces[0];
-    const entry = face ? faceAnchor(face) : null;
-    if (!face || !entry || !face.normal) return [];
+    const clicked = face ? faceAnchor(face) : null;
+    if (!face || !clicked || !face.normal) return [];
     const axes = holePositionAxes(face.normal);
     if (!axes) return [];
+    const typed = options.place === 'typed';
+    // A typed hole's handles stand where its U and V put it.
+    const entry = typed ? typedHoleEntry(face, axes, values, ctx) : clicked;
+    if (!entry) return [];
     const key = `${faceKey(face)}:${entry.x}:${entry.y}:${entry.z}`;
     const handles: HandleSpec[] = [
       {
@@ -1227,9 +1334,54 @@ const hole: InPlaceToolSpec = {
         }
       );
     }
+    if (typed) {
+      // Its U and V across the hole, clear of the step's chips.
+      const reach = Math.max((values.diameter ?? 6) * 1.5, 1e-3);
+      for (const [valueId, side] of [
+        ['positionU', -1],
+        ['positionV', 1]
+      ] as const) {
+        handles.push({
+          valueId,
+          kind: 'chip',
+          key: `${faceKey(face)}:${valueId}`,
+          params: {
+            anchor: {
+              x: entry.x + axes.u.x * reach * side,
+              y: entry.y + axes.u.y * reach * side,
+              z: entry.z + axes.u.z * reach * side
+            }
+          }
+        });
+      }
+    }
     return handles;
   }
 };
+
+/** Where a typed U and V put a hole on its face; null with no anchor. */
+function typedHoleEntry(
+  face: FacePick,
+  axes: { u: Vector3; v: Vector3 },
+  values: Record<string, number>,
+  ctx: InPlaceContext
+): Vector3 | null {
+  const saved = ctx.saved?.featureKind === 'hole' ? ctx.saved : null;
+  // The anchor it is measured from, as the request stores it.
+  const anchor = saved
+    ? saved.positionAnchor === 'centroid'
+      ? (face.centroid ?? face.center)
+      : (face.center ?? face.centroid)
+    : (face.centroid ?? face.center);
+  if (!anchor) return null;
+  const u = values.positionU ?? 0;
+  const v = values.positionV ?? 0;
+  return {
+    x: anchor.x + axes.u.x * u + axes.v.x * v,
+    y: anchor.y + axes.u.y * u + axes.v.y * v,
+    z: anchor.z + axes.u.z * u + axes.v.z * v
+  };
+}
 
 /** The card's own step sizes for a bore, rounded as it rounded them. */
 function holeStepSizes(diameter: number): {
@@ -1421,6 +1573,11 @@ function draftNeutralPoint(
   return { x: side('x'), y: side('y'), z: side('z') };
 }
 
+/** The first picked face that was clicked this time, so has its point. */
+function clickedFace(slots: InPlaceSlots): FacePick | undefined {
+  return slots.faces.find((face) => face.point !== undefined);
+}
+
 const draft: InPlaceToolSpec = {
   id: 'draft',
   title: 'Draft',
@@ -1439,16 +1596,21 @@ const draft: InPlaceToolSpec = {
       min: -90,
       max: 90,
       exclusive: true
-    }
+    },
+    ...vectorValues('pull', 'count', { x: 0, y: 0, z: 1 }),
+    ...vectorValues('neutral', 'length', { x: 0, y: 0, z: 0 })
   ],
   options: [
     {
       id: 'pull',
       label: 'Pull',
-      choices: Object.keys(PULL_DIRECTIONS).map((value) => ({
-        value,
-        label: value
-      })),
+      choices: [
+        ...Object.keys(PULL_DIRECTIONS).map((value) => ({
+          value,
+          label: value
+        })),
+        { value: 'custom', label: 'Custom (X, Y, Z)' }
+      ],
       initial: '+Z'
     },
     {
@@ -1458,30 +1620,41 @@ const draft: InPlaceToolSpec = {
         { value: 'base', label: 'Base' },
         { value: 'top', label: 'Top' },
         { value: 'point', label: 'Clicked point' },
-        { value: 'origin', label: 'Origin' }
+        { value: 'origin', label: 'Origin' },
+        { value: 'custom', label: 'At a point (X, Y, Z)' }
       ],
       initial: 'base'
     }
   ],
-  hint(slots) {
+  hint(slots, options) {
     if (slots.faces.length === 0) return 'Click the faces to draft';
+    if (options?.neutral === 'point' && !clickedFace(slots)) {
+      return 'Click a face where the hinge goes';
+    }
     const count = slots.faces.length;
     return `${count} ${count === 1 ? 'face' : 'faces'} · tap the angle to type · ${FINISH}`;
   },
-  ready: (slots) => slots.faces.length > 0,
-  request(slots, values, options, ctx) {
+  ready: (slots, options) =>
+    slots.faces.length > 0 &&
+    // A clicked hinge needs its click: an edited draft's faces carry none.
+    (options?.neutral !== 'point' || clickedFace(slots) !== undefined),
+  request(slots, values, options, ctx, numbers) {
     const first = slots.faces[0];
     if (!first) return null;
-    // An edited draft's own pull and hinge, kept as stored while chosen.
-    const saved = ctx.saved?.featureKind === 'draft' ? ctx.saved : null;
-    const savedPull =
-      options.pull === 'saved' && saved ? saved.pullDirection : null;
-    const pull = savedPull
-      ? evaluatedVector(savedPull, ctx)
+    const clicked = clickedFace(slots);
+    if (options.neutral === 'point' && !clicked) return null;
+    // A typed pull and hinge go out as typed, expressions and all.
+    const customPull = options.pull === 'custom';
+    const pull = customPull
+      ? typedNumbers(numbers ?? {}, 'pull', { x: 0, y: 0, z: 1 })
       : (PULL_DIRECTIONS[options.pull ?? '+Z'] ?? PULL_DIRECTIONS['+Z']!);
-    const savedNeutral =
-      options.neutral === 'saved' && saved ? saved.neutralPoint : null;
-    const neutral = draftNeutralPoint(options.neutral, pull, first, ctx);
+    if (Math.hypot(pull.x, pull.y, pull.z) === 0) return null;
+    const neutral = draftNeutralPoint(
+      options.neutral,
+      pull,
+      options.neutral === 'point' && clicked ? clicked : first,
+      ctx
+    );
     return {
       tool: 'modeling',
       state: {
@@ -1490,51 +1663,49 @@ const draft: InPlaceToolSpec = {
           name: 'Draft',
           targetBodyId: first.bodyId,
           faceHashes: slots.faces.map((face) => face.hash),
-          pullDirection: savedPull
-            ? vectorText(savedPull)
-            : {
-                x: String(pull.x),
-                y: String(pull.y),
-                z: String(pull.z)
-              },
-          neutralPoint: savedNeutral
-            ? vectorText(savedNeutral)
-            : {
-                x: String(neutral.x),
-                y: String(neutral.y),
-                z: String(neutral.z)
-              },
+          pullDirection: vectorText(
+            customPull ? typedVector(values, 'pull', pull) : pull
+          ),
+          neutralPoint: vectorText(
+            options.neutral === 'custom'
+              ? typedVector(values, 'neutral', neutral)
+              : neutral
+          ),
           angleDeg: text(values.angle, 3)
         }
       }
     };
   },
-  handles(slots) {
+  handles(slots, _values, ctx, options) {
     const face = slots.faces[0];
     const anchor = face ? (face.centroid ?? face.center ?? face.point) : null;
     if (!face || !anchor) return [];
+    // A typed pull's and hinge's numbers, a row of chips each above the
+    // angle's.
+    const bounds = ctx.bodyBounds?.(face.bodyId);
+    const spread = bounds
+      ? Math.max((bounds.max.x - bounds.min.x) / 4, 1e-3)
+      : 5;
+    const row = (index: number) => ({
+      ...anchor,
+      z: anchor.z + spread * index
+    });
     return [
       {
         valueId: 'angle',
         kind: 'chip',
         key: `${faceKey(face)}:angle`,
         params: { anchor }
-      }
+      },
+      ...(options.pull === 'custom'
+        ? vectorChips('pull', faceKey(face), row(1), spread)
+        : []),
+      ...(options.neutral === 'custom'
+        ? vectorChips('neutral', faceKey(face), row(2), spread)
+        : [])
     ];
   }
 };
-
-/** Where a scale's handle measures from: see the scale tool's handles. */
-function scalePivot(body: BodyPick, ctx: InPlaceContext): Vector3 {
-  const saved = ctx.saved;
-  if (saved?.featureKind !== 'transform') return centre(body);
-  const pivot = saved.transform.pivot;
-  if (!pivot) return { x: 0, y: 0, z: 0 };
-  const value = (part: ParamValue) =>
-    typeof part === 'number' ? part : (ctx.evaluate?.(part) ?? null);
-  const [x, y, z] = [value(pivot.x), value(pivot.y), value(pivot.z)];
-  return x === null || y === null || z === null ? centre(body) : { x, y, z };
-}
 
 function centre(body: BodyPick): Vector3 {
   return {
@@ -1818,7 +1989,7 @@ function planeHint(
 ): string | null {
   if (slots.bodies.length === 0) return `Click the body to ${what}`;
   if (options?.planeMode === 'typed') {
-    return `Type the plane's origin and normal on their chips · ${FINISH}`;
+    return `Slide the plane, or type its origin and normal on their chips · ${FINISH}`;
   }
   if (!slots.plane) {
     return 'Pick the plane: a ghost plane, a datum plane or a flat face';
@@ -1937,36 +2108,75 @@ const scale: InPlaceToolSpec = {
       initial: 1,
       min: 0,
       exclusive: true
-    }
+    },
+    ...vectorValues('pivot', 'length', { x: 0, y: 0, z: 0 })
   ],
-  options: [COPY_OPTION],
-  hint: (slots) =>
+  options: [
+    {
+      id: 'pivot',
+      label: 'About',
+      choices: [
+        { value: 'centre', label: 'Body centre' },
+        { value: 'origin', label: 'Origin' },
+        { value: 'typed', label: 'A point (X, Y, Z)' }
+      ],
+      // About the body's own centre, not the world origin, so it grows in
+      // place rather than drifting away.
+      initial: 'centre'
+    },
+    COPY_OPTION
+  ],
+  hint: (slots, options) =>
     slots.bodies.length === 0
       ? 'Click the body to scale'
-      : `Drag the corner handle, or tap × to type · ${FINISH}`,
+      : options?.pivot === 'typed'
+        ? `Type the point it scales about on its chips · drag the corner handle · ${FINISH}`
+        : `Drag the corner handle, or tap × to type · ${FINISH}`,
   ready: (slots) => slots.bodies.length > 0,
   request(slots, values, options) {
     const body = slots.bodies[0];
     if (!body) return null;
-    // About the body's own centre, not the world origin, so it grows in
-    // place rather than drifting away.
-    const pivot = centre(body);
+    // The origin is the absent pivot, as a scale has always stored it; a
+    // typed one goes out as typed, expressions and all.
+    const pivot =
+      options.pivot === 'origin'
+        ? undefined
+        : options.pivot === 'typed'
+          ? typedVector(values, 'pivot', { x: 0, y: 0, z: 0 })
+          : centre(body);
     return {
       tool: 'transform',
       targetBodyId: body.bodyId,
       translation: { x: 0, y: 0, z: 0 },
       scale: values.factor ?? 1,
-      pivot,
+      ...(pivot ? { pivot } : {}),
       ...(options.copy === 'yes' ? { copy: true } : {})
     };
   },
-  handles(slots, _values, ctx) {
+  handles(slots, values, _ctx, options) {
     const body = slots.bodies[0];
     if (!body) return [];
-    // From the pivot the result scales about: the body's centre for a new
-    // scale, the stored pivot for an edited one (an old scale's absent
-    // pivot is the origin), so the handle rides a corner of the preview.
-    const origin = scalePivot(body, ctx);
+    // From the pivot the result scales about, so the handle rides a corner
+    // of the preview.
+    const origin =
+      options.pivot === 'origin'
+        ? { x: 0, y: 0, z: 0 }
+        : options.pivot === 'typed'
+          ? typedNumbers(values, 'pivot', { x: 0, y: 0, z: 0 })
+          : centre(body);
+    const chips =
+      options.pivot === 'typed'
+        ? vectorChips(
+            'pivot',
+            bodyKey(body),
+            {
+              x: (body.min.x + body.max.x) / 2,
+              y: (body.min.y + body.max.y) / 2,
+              z: body.max.z
+            },
+            Math.max((body.max.x - body.min.x) / 4, 1e-3)
+          )
+        : [];
     const toCorner = (point: Vector3) => ({
       x: point.x - origin.x,
       y: point.y - origin.y,
@@ -1978,12 +2188,13 @@ const scale: InPlaceToolSpec = {
         ? far
         : near;
     const reach = Math.hypot(corner.x, corner.y, corner.z);
-    if (reach <= 1e-9) return [];
+    if (reach <= 1e-9) return chips;
     return [
+      ...chips,
       {
         valueId: 'factor',
         kind: 'linear',
-        key: `${bodyKey(body)}:factor`,
+        key: `${bodyKey(body)}:factor:${origin.x}:${origin.y}:${origin.z}`,
         // One unit of value is the centre-to-corner reach: 1 sits on the
         // corner, 2 twice as far out.
         params: { origin, direction: unit(corner), scale: reach }

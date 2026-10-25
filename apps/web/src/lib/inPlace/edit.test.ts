@@ -252,9 +252,10 @@ describe('an untouched edit writes the feature back as stored', () => {
     };
     const armed = inPlaceEditSeed(feature(data), EDIT_CTX)!;
     expect(armed.seed.options).toMatchObject({
-      pull: 'saved',
-      neutral: 'saved'
+      pull: 'custom',
+      neutral: 'custom'
     });
+    expect(armed.seed.raws).toMatchObject({ pullY: 'tilt' });
     expect(untouched(feature(data))).toMatchObject({
       state: {
         value: {
@@ -264,7 +265,7 @@ describe('an untouched edit writes the feature back as stored', () => {
         }
       }
     });
-    // A plain world pull is its preset, still offering the stored one.
+    // A plain world pull is its preset.
     const preset = inPlaceEditSeed(
       feature({ ...data, pullDirection: { x: 0, y: 0, z: -1 } }),
       EDIT_CTX
@@ -496,17 +497,21 @@ describe('an untouched edit writes the feature back as stored', () => {
       max: { x: 10, y: 5, z: 2 }
     });
     expect(armed.seed.lockedOptions).toContain('copy');
-    const update = inPlaceFeatureUpdate(
-      { featureId: node.featureId, name: node.name, data },
-      {
-        tool: 'transform',
-        targetBodyId: BODY,
-        translation: { x: 0, y: 0, z: 0 },
-        scale: 3,
-        pivot: { x: 5, y: 2.5, z: 1 }
-      }
-    );
-    expect(update?.data).toEqual({
+    // It opens about the origin it scaled about, and stays so.
+    expect(armed.seed.options.pivot).toBe('origin');
+    expect(untouched(node)).not.toHaveProperty('pivot');
+    const update = (pivot?: { x: number; y: number; z: number }) =>
+      inPlaceFeatureUpdate(
+        { featureId: node.featureId, name: node.name, data },
+        {
+          tool: 'transform',
+          targetBodyId: BODY,
+          translation: { x: 0, y: 0, z: 0 },
+          scale: 3,
+          ...(pivot ? { pivot } : {})
+        }
+      );
+    expect(update()?.data).toEqual({
       featureKind: 'transform',
       targetBodyId: BODY,
       transform: {
@@ -514,6 +519,10 @@ describe('an untouched edit writes the feature back as stored', () => {
         rotationDeg: { x: 0, y: 0, z: 0 },
         scale: 3
       }
+    });
+    // A pivot chosen in the edit is written.
+    expect(update({ x: 5, y: 2.5, z: 1 })?.data).toMatchObject({
+      transform: { scale: 3, pivot: { x: 5, y: 2.5, z: 1 } }
     });
   });
 
@@ -632,21 +641,75 @@ describe('an untouched edit writes the feature back as stored', () => {
   });
 
   it('sweep: a path curve the sketch no longer has is left out, and said', () => {
-    const data: FeatureData = {
+    const sweep = (entityIds: string[]): FeatureData => ({
       featureKind: 'sweep',
       profile: {
         sketchId: SKETCH,
         profile: { all: true, sourceEntityIds: ['a'] }
       },
-      path: { sketchId: SKETCH, entityIds: ['p1', 'gone', 'p2'] as never[] },
+      path: { sketchId: SKETCH, entityIds: entityIds as never[] },
       mode: 'standard'
-    };
-    const armed = inPlaceEditSeed(feature(data), EDIT_CTX)!;
-    expect(armed.seed.slots.path.map((curve) => curve.entityId)).toEqual([
+    });
+    // A lost last curve: the rest stays, and a new pick takes its place.
+    const end = inPlaceEditSeed(
+      feature(sweep(['p1', 'p2', 'gone'])),
+      EDIT_CTX
+    )!;
+    expect(end.seed.slots.path.map((curve) => curve.entityId)).toEqual([
       'p1',
       'p2'
     ]);
-    expect(armed.seed.notice).toMatch(/saved path no longer resolves/);
+    expect(end.seed.notice).toMatch(
+      /saved path no longer resolves · pick it again/
+    );
+    // A lost middle one: a new pick would land last, so the whole path is
+    // picked again, in order.
+    const middle = inPlaceEditSeed(
+      feature(sweep(['p1', 'gone', 'p2'])),
+      EDIT_CTX
+    )!;
+    expect(middle.seed.slots.path).toEqual([]);
+    expect(middle.seed.notice).toMatch(/pick its path again, in order/);
+  });
+
+  it('loft and subtract: a lost first entry clears the ordered list', () => {
+    const loft = inPlaceEditSeed(
+      feature({
+        featureKind: 'loft',
+        mode: 'ruled',
+        sections: [
+          {
+            sketchId: 'gone' as SketchId,
+            profile: { all: true, sourceEntityIds: ['a'] }
+          },
+          { sketchId: SKETCH, profile: { all: true, sourceEntityIds: ['a'] } }
+        ]
+      } as FeatureData),
+      {
+        ...EDIT_CTX,
+        profile: (sketchId, reference) =>
+          sketchId === 'gone' ? null : EDIT_CTX.profile(sketchId, reference)
+      }
+    )!;
+    expect(loft.seed.slots.profiles).toEqual([]);
+    expect(loft.seed.notice).toMatch(/pick its sections again, in order/);
+    const subtract = inPlaceEditSeed(
+      feature(
+        {
+          featureKind: 'boolean',
+          operation: 'subtract',
+          targetBodyIds: ['body_gone' as BodyId, BODY]
+        },
+        'body_r' as BodyId
+      ),
+      {
+        ...EDIT_CTX,
+        body: (bodyId) =>
+          bodyId === 'body_gone' ? null : EDIT_CTX.body(bodyId)
+      }
+    )!;
+    expect(subtract.seed.slots.bodies).toEqual([]);
+    expect(subtract.seed.notice).toMatch(/pick its bodies again, in order/);
   });
 
   it('boolean: an input with no body left is left out to pick again', () => {

@@ -155,8 +155,6 @@ function zeroVector(vector: ParametricVector3): boolean {
   );
 }
 
-const SAVED_CHOICE = { value: 'saved', label: 'As saved' };
-
 /** The command and its seed for a stored feature; null when none edits it. */
 export function inPlaceEditSeed(
   feature: FeatureNode,
@@ -210,6 +208,22 @@ export function inPlaceEditSeed(
     const number = ctx.evaluate(stored);
     if (number !== null) seed.values[id] = number;
   };
+  const repick: string[] = [];
+  /**
+   * An ordered list (a loft's sections, a path, a boolean's inputs) with
+   * entries that no longer resolve. A new pick is appended, so the list is
+   * kept only while every gap is at its end; a gap before a kept entry would
+   * put its replacement out of place, so the whole list is picked again.
+   */
+  const inOrder = <T>(entries: readonly (T | null)[], what: string): T[] => {
+    const gap = entries.indexOf(null);
+    if (gap === -1) return entries as T[];
+    if (entries.slice(gap).some((entry) => entry !== null)) {
+      repick.push(what);
+      return [];
+    }
+    return entries.slice(0, gap) as T[];
+  };
   const profile = (section: SketchSectionReference) => {
     const pick = ctx.profile(section.sketchId, section.profile);
     if (pick) seed.slots.profiles.push(pick);
@@ -229,19 +243,14 @@ export function inPlaceEditSeed(
       else missing.push('face');
     }
   };
-  const body = (bodyId: BodyId, many = false) => {
+  const body = (bodyId: BodyId) => {
     const picked = ctx.body(bodyId);
     if (picked) {
       seed.slots.bodies.push(picked);
       return;
     }
     // A body with no shape to measure: one a single-body command takes is
-    // still named (any pick replaces it), but in a list (a boolean's inputs)
-    // nothing could click it back out, so it is left for a new pick.
-    if (many) {
-      missing.push('body');
-      return;
-    }
+    // still named (any pick replaces it).
     seed.slots.bodies.push({
       bodyId,
       min: { x: 0, y: 0, z: 0 },
@@ -269,7 +278,16 @@ export function inPlaceEditSeed(
       break;
     }
     case 'loft': {
-      for (const section of data.sections) profile(section);
+      seed.slots.profiles.push(
+        ...inOrder(
+          data.sections.map((section) => {
+            const pick = ctx.profile(section.sketchId, section.profile);
+            if (!pick) missing.push('profile');
+            return pick;
+          }),
+          'sections'
+        )
+      );
       seed.options.shape = data.mode;
       if (data.endPoint) {
         // Its apex as stored, each coordinate on its own chip.
@@ -284,15 +302,22 @@ export function inPlaceEditSeed(
       profile(data.profile);
       // Only curves the sketch still has: a deleted one would hold the slot
       // with a reference nothing can build, and the edit says to pick again.
-      const curves = (sketchId: SketchId, entityIds: readonly string[]) =>
-        entityIds.flatMap((entityId) => {
-          if (ctx.curve(sketchId, entityId)) return [{ sketchId, entityId }];
-          missing.push('path');
-          return [];
-        });
-      seed.slots.path = curves(data.path.sketchId, data.path.entityIds);
+      const curves = (
+        sketchId: SketchId,
+        entityIds: readonly string[],
+        what: 'path' | 'guide'
+      ) =>
+        inOrder(
+          entityIds.map((entityId) => {
+            if (ctx.curve(sketchId, entityId)) return { sketchId, entityId };
+            missing.push(what);
+            return null;
+          }),
+          what
+        );
+      seed.slots.path = curves(data.path.sketchId, data.path.entityIds, 'path');
       seed.slots.guide = data.guide
-        ? curves(data.guide.sketchId, data.guide.entityIds)
+        ? curves(data.guide.sketchId, data.guide.entityIds, 'guide')
         : [];
       seed.options.mode = data.mode;
       break;
@@ -312,6 +337,11 @@ export function inPlaceEditSeed(
         seed.slots.axisId = 'saved';
       } else {
         missing.push('axis');
+      }
+      // The stored axis on the typed chips too, for changing one part of it.
+      for (const axis of ['x', 'y', 'z'] as const) {
+        value(`axisO${axis.toUpperCase()}`, data.axisOrigin[axis]);
+        value(`axisD${axis.toUpperCase()}`, data.axisDirection[axis]);
       }
       value('radius', data.radius);
       value('pitch', data.pitch);
@@ -343,6 +373,9 @@ export function inPlaceEditSeed(
       value('counterboreDepth', data.counterboreDepth);
       value('countersinkDiameter', data.countersinkDiameter);
       value('countersinkAngleDeg', data.countersinkAngleDeg);
+      // The stored position on the typed chips too, for setting it exactly.
+      value('positionU', data.position.u);
+      value('positionV', data.position.v);
       seed.options.depthMode = data.depthMode;
       seed.options.style = data.style;
       break;
@@ -374,12 +407,15 @@ export function inPlaceEditSeed(
     case 'draft': {
       faces(data.targetBodyId, data.faceHashes, data.faceReferences);
       value('angle', data.angleDeg);
-      const pull = presetPull(data.pullDirection);
-      seed.choices.pull = [SAVED_CHOICE];
-      seed.options.pull = pull ?? 'saved';
-      // The hinge was worked out from a choice the feature does not store.
-      seed.choices.neutral = [SAVED_CHOICE];
-      seed.options.neutral = 'saved';
+      // A preset pull is its preset; any other is typed, part by part, as
+      // stored. The hinge was worked out from a choice the feature does not
+      // store, so it opens typed too.
+      seed.options.pull = presetPull(data.pullDirection) ?? 'custom';
+      seed.options.neutral = 'custom';
+      for (const axis of ['x', 'y', 'z'] as const) {
+        value(`pull${axis.toUpperCase()}`, data.pullDirection[axis]);
+        value(`neutral${axis.toUpperCase()}`, data.neutralPoint[axis]);
+      }
       break;
     }
     case 'mirror':
@@ -406,7 +442,18 @@ export function inPlaceEditSeed(
       break;
     }
     case 'boolean': {
-      for (const bodyId of data.targetBodyIds) body(bodyId, true);
+      // A body with no shape to measure is left for a new pick: in a list
+      // nothing could click it back out.
+      seed.slots.bodies.push(
+        ...inOrder(
+          data.targetBodyIds.map((bodyId) => {
+            const picked = ctx.body(bodyId);
+            if (!picked) missing.push('body');
+            return picked;
+          }),
+          'bodies'
+        )
+      );
       seed.options.operation = data.operation;
       seed.options.keepOriginals = data.keepOriginals ?? 'none';
       break;
@@ -415,6 +462,14 @@ export function inPlaceEditSeed(
       const picked = ctx.body(data.targetBodyId);
       if (tool === 'scale') {
         value('factor', data.transform.scale);
+        // The pivot as stored: typed, part by part, or (absent) the origin.
+        const pivot = data.transform.pivot;
+        seed.options.pivot = pivot ? 'typed' : 'origin';
+        if (pivot) {
+          value('pivotX', pivot.x);
+          value('pivotY', pivot.y);
+          value('pivotZ', pivot.z);
+        }
         // The box shown is the body's after the scale: the handle works on
         // the body before it, about the pivot the feature stores.
         const factor = seed.values.factor ?? 1;
@@ -500,7 +555,10 @@ export function inPlaceEditSeed(
   }
   if (missing.length > 0) {
     const what = [...new Set(missing)].join(' and ');
-    seed.notice = `${feature.name}: its saved ${what} no longer resolves · pick it again.`;
+    seed.notice =
+      repick.length > 0
+        ? `${feature.name}: its saved ${what} no longer resolves · pick its ${repick.join(' and ')} again, in order.`
+        : `${feature.name}: its saved ${what} no longer resolves · pick it again.`;
   }
   return { tool, seed };
 }
@@ -739,19 +797,23 @@ export function inPlaceFeatureUpdate(
       };
     case 'transform': {
       if (saved.featureKind !== 'transform') return null;
-      // The stored transform stands, pivot included (an old scale's absent
-      // pivot is the origin it scaled about); the edit changes its factor
-      // or its turn.
+      // The stored transform stands; the edit changes a scale's factor and
+      // pivot (the origin is the absent one) or a turn.
+      const { pivot: _pivot, ...unpivoted } = saved.transform;
       return {
         featureId,
         name,
         data: {
           featureKind: 'transform',
           targetBodyId: request.targetBodyId,
-          transform: {
-            ...saved.transform,
-            ...(request.scale !== undefined ? { scale: request.scale } : {})
-          },
+          transform:
+            request.scale !== undefined
+              ? {
+                  ...unpivoted,
+                  scale: request.scale,
+                  ...(request.pivot ? { pivot: request.pivot } : {})
+                }
+              : saved.transform,
           ...(request.axisRotation
             ? { axisRotation: request.axisRotation }
             : {})

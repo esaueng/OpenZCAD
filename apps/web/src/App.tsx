@@ -19224,7 +19224,9 @@ export function App() {
             ? { spacing2: request.spacing2 }
             : {}),
           ...(request.count2 !== undefined ? { count2: request.count2 } : {}),
-          ...(request.axisRef ? { axisRef: request.axisRef } : {})
+          ...(request.axisRef ? { axisRef: request.axisRef } : {}),
+          // A custom repeat vector, which the axis then only stands beside.
+          ...(request.direction ? { direction: request.direction } : {})
         });
     }
   }
@@ -19271,7 +19273,8 @@ export function App() {
   ): AnyCommand {
     // What the command does not show is kept from the feature as it is now,
     // not as it was when the edit armed: a collaborator's change to a field
-    // the edit leaves alone (a scale's pivot) must not be written back over.
+    // the edit leaves alone (a scale's translation) must not be written back
+    // over.
     const live = managerRef.current
       ? findFeature(managerRef.current.document, armed.featureId)
       : null;
@@ -19532,7 +19535,10 @@ export function App() {
           ]
         : []
     );
-  }, [inPlaceEditing]);
+    // The live feature is read again with the document: an undo or a
+    // collaborator may point it at another sketch while the edit is armed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inPlaceEditing, doc]);
   // Editing needs hidden source profiles; visibility remains a viewport concern.
   const sketchViews = useMemo(
     () =>
@@ -19717,6 +19723,19 @@ export function App() {
       const fresh = inPlaceBodyPickRef.current(pick.bodyId);
       if (!fresh) return pick;
       const live = findFeature(doc, editing.featureId);
+      // A body clicked in place of the transform's own target never went
+      // through it: its box is the body as it is.
+      if (
+        liveData.featureKind === 'transform' &&
+        liveData.targetBodyId !== pick.bodyId
+      ) {
+        const same =
+          JSON.stringify([fresh.min, fresh.max]) ===
+          JSON.stringify([pick.min, pick.max]);
+        if (same) return pick;
+        bodiesMoved = true;
+        return fresh;
+      }
       const box = inPlaceEditBodyBox(
         fresh,
         liveData,
