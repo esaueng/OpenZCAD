@@ -45,11 +45,11 @@ import {
   type AccountView,
   type E2eeContext,
   type EncryptionState,
-  type NewDeviceApprovalStep,
-  type RemovalParticipantStep
+  type NewDeviceApprovalStep
 } from '../lib/e2ee/accountKeys';
 import type { RemovalOutcome } from '../lib/e2ee/deviceRemoval';
 import { createE2eeApi, E2eeApiError } from '../lib/e2ee/e2eeApi';
+import { projectRemovalStep } from '../lib/e2ee/projectRemovalStep';
 import { DeviceListPinConflict } from '../lib/e2ee/deviceStore';
 import {
   deviceKeyFactory,
@@ -306,26 +306,6 @@ function formatDate(value: number | string): string {
     month: 'short',
     day: 'numeric'
   });
-}
-
-/**
- * The encrypted-project step of a removal (slice 4-10), loaded only when a
- * removal starts: it refuses a removal it could not finish, then rotates
- * every encrypted project and stores the signed revocation cutoffs.
- */
-function projectRemovalStep(
-  ctx: E2eeContext,
-  onOutcome: (outcome: RemovalOutcome) => void
-): RemovalParticipantStep {
-  const load = () =>
-    import('../lib/e2ee/pageDeviceRemoval').then((module) =>
-      module.pageRemovalParticipant(ctx, onOutcome)
-    );
-  let loaded: ReturnType<typeof load> | null = null;
-  return {
-    prepare: async (account) => (await (loaded ??= load())).prepare(account),
-    complete: async (step) => (await (loaded ??= load())).complete(step)
-  };
 }
 
 /** What a removal left for the other devices, in plain words. */
