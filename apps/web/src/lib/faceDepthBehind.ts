@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { forEachMesh } from '@openzcad/viewport';
 
 /** A point on the armed face, and the share of the face's area it stands for. */
 export interface FaceSample {
@@ -6,6 +7,7 @@ export interface FaceSample {
   weight: number;
 }
 
+/** Rays per face: each is tested against the whole body. */
 const SAMPLE_BUDGET = 64;
 
 /** Radical inverse in `base`: a low-discrepancy, deterministic sequence. */
@@ -96,26 +98,36 @@ export function faceSamples(
   if (!(total > 0)) {
     return [];
   }
+  // Exactly SAMPLE_BUDGET points however finely the face is tessellated: each
+  // picks its triangle by area, so a many-triangle face stays as cheap.
+  const cumulative: number[] = [];
+  let running = 0;
+  for (const area of areas) {
+    running += area;
+    cumulative.push(running);
+  }
   const samples: FaceSample[] = [];
-  let drawn = 0;
-  corners.forEach(([a, b, c], triangle) => {
-    const area = areas[triangle]!;
-    if (area <= 0) return;
-    const count = Math.max(1, Math.round((SAMPLE_BUDGET * area) / total));
-    for (let sample = 0; sample < count; sample += 1) {
-      drawn += 1;
-      // Uniform over the triangle: fold the unit square onto it.
-      const r = Math.sqrt(halton(drawn, 2));
-      const s = halton(drawn, 3);
-      samples.push({
-        point: new THREE.Vector3()
-          .addScaledVector(a, 1 - r)
-          .addScaledVector(b, r * (1 - s))
-          .addScaledVector(c, r * s),
-        weight: area / count
-      });
+  for (let drawn = 1; drawn <= SAMPLE_BUDGET; drawn += 1) {
+    const target = ((drawn - 0.5) / SAMPLE_BUDGET) * total;
+    let low = 0;
+    let high = cumulative.length - 1;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (cumulative[middle]! < target) low = middle + 1;
+      else high = middle;
     }
-  });
+    const [a, b, c] = corners[low]!;
+    // Uniform over the triangle: fold the unit square onto it.
+    const r = Math.sqrt(halton(drawn, 2));
+    const t = halton(drawn, 3);
+    samples.push({
+      point: new THREE.Vector3()
+        .addScaledVector(a, 1 - r)
+        .addScaledVector(b, r * (1 - t))
+        .addScaledVector(c, r * t),
+      weight: total / SAMPLE_BUDGET
+    });
+  }
   return samples;
 }
 
@@ -163,11 +175,9 @@ export function faceDepthBehind(
   const edge = new THREE.Vector3();
   const normalMatrix = new THREE.Matrix3();
   object.updateWorldMatrix(true, true);
-  object.traverse((child) => {
-    if (!(child instanceof THREE.Mesh)) {
-      return;
-    }
-    const mesh = child as THREE.Mesh<THREE.BufferGeometry, THREE.Material>;
+  // Body meshes only: a raster section cap or a selection overlay is not
+  // material, and a ray stopping on a cap read the clipped span.
+  forEachMesh(object, (mesh) => {
     const position = mesh.geometry.getAttribute('position') as
       THREE.BufferAttribute | THREE.InterleavedBufferAttribute | undefined;
     if (!position) {

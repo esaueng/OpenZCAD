@@ -6,11 +6,14 @@ import {
   type FaceSample
 } from './faceDepthBehind';
 
+/** What the viewer draws bodies in: section caps and overlays are not. */
+const BODY = new THREE.MeshStandardMaterial();
+
 function block(
   size: [number, number, number],
   center: [number, number, number]
 ): THREE.Mesh {
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(...size));
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(...size), BODY);
   mesh.position.set(...center);
   return mesh;
 }
@@ -59,7 +62,8 @@ function boxWithHole(): THREE.Group {
   const body = new THREE.Group();
   body.add(block([30, 18, 24], [15, 9, 12]));
   const wall = new THREE.Mesh(
-    new THREE.CylinderGeometry(3, 3, 24, 48, 1, true)
+    new THREE.CylinderGeometry(3, 3, 24, 48, 1, true),
+    BODY
   );
   // CylinderGeometry is Y-up; stand it along Z, then face it inward.
   wall.rotation.x = Math.PI / 2;
@@ -158,8 +162,30 @@ describe('faceDepthBehind', () => {
     expect(faceDepthBehind(body, new THREE.Vector3(), RIGHT, [])).toBeNull();
   });
 
+  it('reads through a section cap to the body behind it', () => {
+    // A section view clips the 40 mm block at x = 165 and fills the cut
+    // with a raster cap: display only, not where the material ends.
+    const body = twoLobedBody();
+    const cap = new THREE.Mesh(
+      new THREE.PlaneGeometry(40, 60),
+      new THREE.MeshBasicMaterial({ side: THREE.DoubleSide })
+    );
+    cap.userData.sectionCap = true;
+    cap.rotation.y = -Math.PI / 2;
+    cap.position.set(160, 20, 30);
+    body.add(cap);
+    const samples = grid(
+      new THREE.Vector3(185, 0, 10),
+      new THREE.Vector3(0, 40, 0),
+      new THREE.Vector3(0, 0, 50)
+    );
+    expect(
+      faceDepthBehind(body, new THREE.Vector3(185, 20, 30), RIGHT, samples)
+    ).toBeCloseTo(40, 6);
+  });
+
   it('decides leaving from winding when the mesh has no normals', () => {
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(10, 10, 10));
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(10, 10, 10), BODY);
     mesh.geometry.deleteAttribute('normal');
     const point = new THREE.Vector3(5, 1, 2);
     expect(
@@ -176,7 +202,7 @@ describe('faceSamples', () => {
       faces: [{ topologyId: 'px', triangleStart: 0, triangleCount: 2 }]
     };
     const samples = faceSamples(mesh, 'px');
-    expect(samples.length).toBeGreaterThanOrEqual(32);
+    expect(samples).toHaveLength(64);
     for (const { point } of samples) {
       expect(point.x).toBeCloseTo(10, 9);
       expect(Math.abs(point.y)).toBeLessThanOrEqual(10);
@@ -185,5 +211,20 @@ describe('faceSamples', () => {
     const weight = samples.reduce((sum, sample) => sum + sample.weight, 0);
     expect(weight).toBeCloseTo(600, 6);
     expect(faceSamples(mesh, 'missing')).toEqual([]);
+  });
+
+  it('keeps to its ray budget on a finely tessellated face', () => {
+    // 2 × 40 × 40 triangles on one face: one ray each would be 3200.
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(10, 10, 40, 40), BODY);
+    const triangles = plane.geometry.getIndex()!.count / 3;
+    plane.userData.topology = {
+      faces: [
+        { topologyId: 'fine', triangleStart: 0, triangleCount: triangles }
+      ]
+    };
+    const samples = faceSamples(plane, 'fine');
+    expect(samples).toHaveLength(64);
+    const weight = samples.reduce((sum, sample) => sum + sample.weight, 0);
+    expect(weight).toBeCloseTo(100, 6);
   });
 });

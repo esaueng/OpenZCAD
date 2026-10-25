@@ -1829,11 +1829,7 @@ function bodyExtentBehind(
   let least = Number.POSITIVE_INFINITY;
   const vertex = new THREE.Vector3();
   object.updateWorldMatrix(true, true);
-  object.traverse((child) => {
-    if (!(child instanceof THREE.Mesh)) {
-      return;
-    }
-    const mesh = child as THREE.Mesh<THREE.BufferGeometry, THREE.Material>;
+  forEachMesh(object, (mesh) => {
     const position = mesh.geometry.getAttribute('position') as
       THREE.BufferAttribute | THREE.InterleavedBufferAttribute | undefined;
     if (!position) {
@@ -1842,7 +1838,7 @@ function bodyExtentBehind(
     for (let index = 0; index < position.count; index += 1) {
       vertex
         .fromBufferAttribute(position, index)
-        .applyMatrix4(child.matrixWorld);
+        .applyMatrix4(mesh.matrixWorld);
       const along = vertex.sub(origin).dot(direction);
       if (along < least) {
         least = along;
