@@ -221,6 +221,7 @@ import {
   regionChipState,
   type OffsetChipMode
 } from '../lib/offsetChip';
+import { faceDepthBehind } from '../lib/faceDepthBehind';
 import { setLiveDiameter } from '../lib/liveLabels';
 import type { SelectionCalloutContent } from '../lib/selectionCallout';
 import {
@@ -12063,20 +12064,21 @@ export function ModelViewer({
       offsetHandle.normal
     );
     const body = context.objectsByBodyId.get(offsetHandle.bodyId);
+    const handleOrigin = new THREE.Vector3(
+      placement.origin.x,
+      placement.origin.y,
+      placement.origin.z
+    );
+    const handleDirection = new THREE.Vector3(
+      placement.direction.x,
+      placement.direction.y,
+      placement.direction.z
+    );
+    // Total reads the material under the arrow, not the whole body's reach
+    // behind the face's plane (which spanned to an unrelated lobe).
     const extentBehind = body
-      ? bodyExtentBehind(
-          body,
-          new THREE.Vector3(
-            placement.origin.x,
-            placement.origin.y,
-            placement.origin.z
-          ),
-          new THREE.Vector3(
-            placement.direction.x,
-            placement.direction.y,
-            placement.direction.z
-          )
-        )
+      ? (faceDepthBehind(body, handleOrigin, handleDirection) ??
+        bodyExtentBehind(body, handleOrigin, handleDirection))
       : null;
     const chipState = faceOffsetChipState(
       offsetHandle.totalBaseline,
