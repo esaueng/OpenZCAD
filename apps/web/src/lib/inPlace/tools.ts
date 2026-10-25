@@ -423,8 +423,17 @@ export function profileOutline(
 ): Vector3[] {
   const view = viewFor(ctx, pick.sketchId);
   if (!view) return [];
-  // Found again by its entities when an undo or redo renumbered it.
-  return revolveProfileRegions(view.regions, pick).flatMap((region) =>
+  // Found again by its entities when an undo or redo renumbered it. An
+  // implicit pick (a revolve stored before profiles) builds the sketch's
+  // first object only, so only that region places its handles.
+  const first = pick.implicit
+    ? view.regions.filter(
+        (region) => region.regionFingerprint === pick.regionFingerprint
+      )
+    : [];
+  const regions =
+    first.length > 0 ? first : revolveProfileRegions(view.regions, pick);
+  return regions.flatMap((region) =>
     region.outer.map((point) => toWorld(view.basis, point))
   );
 }

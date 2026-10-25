@@ -11,7 +11,8 @@ import {
   type BodyPick,
   type FacePick,
   type InPlaceContext,
-  type InPlaceSlots
+  type InPlaceSlots,
+  profileOutline
 } from './tools';
 
 const CTX: InPlaceContext = {
@@ -173,6 +174,45 @@ describe('face tools build the card state', () => {
         value: { pullDirection: { x: '-1', y: '0', z: '0' }, angleDeg: '5' }
       }
     });
+  });
+});
+
+describe('profileOutline', () => {
+  it("an implicit revolve profile is the sketch's first object only", () => {
+    const square = (x: number) => [
+      { x, y: 0 },
+      { x: x + 1, y: 0 },
+      { x: x + 1, y: 1 },
+      { x, y: 1 }
+    ];
+    const ctx: InPlaceContext = {
+      ...CTX,
+      sketchViews: [
+        {
+          sketchId: 's1' as SketchId,
+          basis: {
+            origin: { x: 0, y: 0, z: 0 },
+            u: { x: 1, y: 0, z: 0 },
+            v: { x: 0, y: 1, z: 0 },
+            normal: { x: 0, y: 0, z: 1 }
+          },
+          regions: [
+            { regionFingerprint: 1, outer: square(0) },
+            { regionFingerprint: 2, outer: square(50) }
+          ]
+        }
+      ]
+    };
+    const implicit = {
+      sketchId: 's1' as SketchId,
+      reference: { all: true as const, sourceEntityIds: [] },
+      regionFingerprint: 1,
+      implicit: true as const
+    };
+    expect(profileOutline(ctx, implicit).every((p) => p.x <= 1)).toBe(true);
+    // An explicit whole-sketch pick still spans every region.
+    const { implicit: _implicit, ...whole } = implicit;
+    expect(profileOutline(ctx, whole).some((p) => p.x >= 50)).toBe(true);
   });
 });
 
