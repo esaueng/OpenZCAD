@@ -3,10 +3,14 @@ import {
   E2eeError,
   EnvelopeKey,
   PLAINTEXT_CEILINGS,
+  encodeEncryptedDocumentBody,
+  encodeKeyArchiveBody,
+  encodeProjectInfoBody,
   encryptContentBlob,
   encryptProjectEnvelope,
   gzipBytes,
   parseEnvelope,
+  versionHash,
   type ContentBlobReference,
   type E2eeErrorCode,
   type ProjectEnvelopeHeader,
@@ -30,7 +34,8 @@ import {
   parseGuardedJson,
   runDecodeJob,
   type ContentBlobDecodeResult,
-  type ProjectEnvelopeDecodeResult
+  type ProjectEnvelopeDecodeResult,
+  type SealDocumentResult
 } from '../apps/web/src/lib/e2ee/decodeJobs';
 
 const HEADER: ProjectEnvelopeHeaderInit = {
@@ -134,16 +139,120 @@ describe('project envelope jobs', () => {
       name: 'Bracket',
       nodes: { a: { kind: 'sketch', depth: [1, 2, 3] } }
     };
+    const revisionVersionHashes = new Map([['rev_1', patternBytes(32, 7)]]);
     const result = await decodeDocument(
-      await sealed(encode(JSON.stringify(document)))
+      await sealed(
+        encodeEncryptedDocumentBody(
+          { document, blobs: [], revisionVersionHashes },
+          HEADER
+        )
+      )
     );
     expect(result.type).toBe('project-envelope');
-    expect(result.value).toEqual(document);
+    expect(result.value).toEqual({
+      document,
+      blobs: [],
+      revisionVersionHashes
+    });
     expect(result.header).toMatchObject({
       kind: 'document',
       projectId: 'project-decode',
       documentVersion: 3
     });
+  });
+
+  it('reads each kind with its own body codec', async () => {
+    const info = { name: 'Bracket', exports: [] };
+    const infoHeader = { kind: 'project-info', keyEpoch: 1 } as const;
+    await expect(
+      decodeDocument(
+        await sealed(encodeProjectInfoBody(info, infoHeader), infoHeader),
+        'project-info'
+      )
+    ).resolves.toMatchObject({ value: info });
+    const archive = {
+      previousKeys: [{ keyEpoch: 0, key: patternBytes(32, 1) }],
+      dedupeSecret: patternBytes(32, 2),
+      epochRecord: patternBytes(40, 3),
+      epochAuthenticator: patternBytes(32, 4)
+    };
+    const archiveHeader = { kind: 'key-archive', keyEpoch: 1 } as const;
+    await expect(
+      decodeDocument(
+        await sealed(
+          encodeKeyArchiveBody(archive, archiveHeader),
+          archiveHeader
+        ),
+        'key-archive'
+      )
+    ).resolves.toMatchObject({ value: archive });
+    // A document body is not a project info, and the reverse.
+    await rejectsWith(
+      decodeDocument(
+        await sealed(encodeProjectInfoBody(info, infoHeader), infoHeader),
+        'document'
+      ),
+      'context-mismatch'
+    );
+  });
+
+  it('refuses {} and bodies that are not in their canonical form', async () => {
+    for (const kind of ['document', 'project-info', 'key-archive'] as const) {
+      await rejectsWith(
+        decodeDocument(await sealed(encode('{}'), { kind }), kind),
+        'malformed'
+      );
+    }
+    // A plain document, as plaintext projects store it, is not a body.
+    await rejectsWith(
+      decodeDocument(
+        await sealed(encode(JSON.stringify({ projectId: 'project-decode' })))
+      ),
+      'malformed'
+    );
+    // The same project info, re-serialized with other spacing.
+    const infoHeader = { kind: 'project-info', keyEpoch: 1 } as const;
+    const canonical = new TextDecoder().decode(
+      encodeProjectInfoBody({ name: 'Bracket', exports: [] }, infoHeader)
+    );
+    await rejectsWith(
+      decodeDocument(
+        await sealed(
+          encode(JSON.stringify(JSON.parse(canonical), null, 1)),
+          infoHeader
+        ),
+        'project-info'
+      ),
+      'malformed'
+    );
+    // An unknown field in a document body.
+    const body = JSON.parse(
+      new TextDecoder().decode(
+        encodeEncryptedDocumentBody(
+          {
+            document: { projectId: 'project-decode' },
+            blobs: [],
+            revisionVersionHashes: new Map()
+          },
+          HEADER
+        )
+      )
+    ) as Record<string, unknown>;
+    await rejectsWith(
+      decodeDocument(
+        await sealed(encode(JSON.stringify({ ...body, extra: true })))
+      ),
+      'malformed'
+    );
+  });
+
+  it('refuses kinds that have no body codec yet', async () => {
+    for (const kind of ['measurements', 'view-state'] as const) {
+      await rejectsWith(
+        decodeDocument(await sealed(encode('{}'), { kind }), kind),
+        'invalid-argument'
+      );
+    }
   });
 
   it('refuses an envelope of another kind', async () => {
@@ -240,7 +349,7 @@ describe('project envelope jobs', () => {
 
   it('refuses JSON with too many values before parsing it', async () => {
     const parse = vi.spyOn(JSON, 'parse');
-    const wide = `[${'0,'.repeat(1_000_001)}0]`;
+    const wide = `[${'0,'.repeat(1_200_000)}0]`;
     await rejectsWith(
       decodeDocument(await sealed(encode(wide))),
       'limit-exceeded'
@@ -439,5 +548,51 @@ describe('worker requests', () => {
       ok: false,
       error: { code: 'invalid-argument' }
     });
+  });
+});
+describe('seal jobs', () => {
+  it('encrypts a document body the decode job reads back', async () => {
+    const document = { projectId: 'project-decode', name: 'Sealed' };
+    const revisionVersionHashes = new Map([['rev_1', patternBytes(32, 9)]]);
+    const sealed = await handleDecodeRequest({
+      id: 1,
+      job: {
+        type: 'seal-document',
+        header: HEADER,
+        document,
+        revisionVersionHashes
+      }
+    });
+    expect(sealed.response.ok).toBe(true);
+    const result = (sealed.response as { result: SealDocumentResult }).result;
+    expect(sealed.transfer).toEqual([result.envelope.buffer]);
+    expect(result.versionKey).toHaveLength(32);
+    expect([...result.versionHash]).toEqual([
+      ...(await versionHash(result.envelope))
+    ]);
+    const opened = (await runDecodeJob({
+      type: 'project-envelope',
+      kind: 'document',
+      versionKey: result.versionKey,
+      envelope: result.envelope,
+      expect: { documentVersion: HEADER.documentVersion }
+    })) as ProjectEnvelopeDecodeResult;
+    expect(opened.value).toEqual({
+      document,
+      blobs: [],
+      revisionVersionHashes
+    });
+  });
+
+  it('seals documents only', async () => {
+    await rejectsWith(
+      runDecodeJob({
+        type: 'seal-document',
+        header: { ...HEADER, kind: 'project-info' },
+        document: {},
+        revisionVersionHashes: new Map()
+      }),
+      'invalid-argument'
+    );
   });
 });

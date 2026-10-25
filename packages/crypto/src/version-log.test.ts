@@ -36,6 +36,7 @@ import {
   verifyVersionLog,
   versionLogRecord,
   type AuthorshipFailure,
+  type VersionCutoff,
   type VersionLogFailure,
   type VersionLogRecord,
   type VersionLogSigner
@@ -590,6 +591,80 @@ describe('verifyAuthoredEnvelope', () => {
         deviceLists: lists
       })
     ).resolves.toMatchObject({ deviceId: 'dev_1', revoked: false });
+  });
+
+  it('holds the cutoffs as passed, whatever the caller changes meanwhile', async () => {
+    const alice = await author('alice');
+    const chain = await signedChain(alice.signers[0]!, [{}, {}, {}]);
+    await revoke(alice, 'dev_0');
+    const lists = [await listOf(alice)];
+    const key = authorCutoffKey('alice', 'dev_0');
+    const cutoffHash = new Uint8Array(chain[1]!.record.versionHash);
+    const cutoffs = new Map([
+      [key, { documentVersion: 2, versionHash: cutoffHash }]
+    ]);
+    // Moving the cutoff forward after the call does not admit version 3.
+    for (const verify of [
+      () =>
+        verifyAuthoredEnvelope(chain[2]!.envelope, chain[2]!.signature, {
+          deviceLists: lists,
+          cutoffs
+        }),
+      () =>
+        verifyAuthoredLogRecord(chain[2]!.record, {
+          deviceLists: lists,
+          cutoffs
+        })
+    ]) {
+      const pending = verify();
+      cutoffs.set(key, {
+        documentVersion: 3,
+        versionHash: chain[2]!.record.versionHash
+      });
+      await authorRefuses(pending, 'outside-cutoff');
+      cutoffs.set(key, { documentVersion: 2, versionHash: cutoffHash });
+    }
+    // Editing the cutoff's hash buffer does not refuse the cutoff version.
+    const atCutoff = verifyAuthoredEnvelope(
+      chain[1]!.envelope,
+      chain[1]!.signature,
+      { deviceLists: lists, cutoffs }
+    );
+    cutoffHash.fill(0);
+    await expect(atCutoff).resolves.toMatchObject({
+      deviceId: 'dev_0',
+      revoked: true
+    });
+    // Nor does dropping the entry.
+    cutoffHash.set(chain[1]!.record.versionHash);
+    const early = verifyAuthoredEnvelope(
+      chain[0]!.envelope,
+      chain[0]!.signature,
+      { deviceLists: lists, cutoffs }
+    );
+    cutoffs.delete(key);
+    await expect(early).resolves.toMatchObject({ revoked: true });
+  });
+
+  it('refuses a malformed cutoff before verifying anything', async () => {
+    const alice = await author('alice', 1);
+    const [signed] = await signedChain(alice.signers[0]!, [{}]);
+    const lists = [await listOf(alice)];
+    for (const cutoff of [
+      { documentVersion: -1, versionHash: new Uint8Array(32) },
+      { documentVersion: 1, versionHash: new Uint8Array(31) },
+      { documentVersion: 1, versionHash: 'ab' }
+    ]) {
+      await rejectsWith(
+        verifyAuthoredEnvelope(signed!.envelope, signed!.signature, {
+          deviceLists: lists,
+          cutoffs: new Map([
+            ['someone else', cutoff as unknown as VersionCutoff]
+          ])
+        }),
+        'invalid-argument'
+      );
+    }
   });
 
   it('refuses a signing key two users both certify', async () => {

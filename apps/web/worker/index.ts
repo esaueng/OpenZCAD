@@ -2,6 +2,7 @@ import { releaseDevelopmentE2eeWrite } from './e2eeWriteAuthorization';
 import { accountConsent, publishCensus } from './glimpseCensus';
 import { handleGlimpseUsage, countApi, type GlimpseEnv } from './glimpse';
 import { handleE2eeRequest } from './e2ee';
+import { withEncryptedProjectInfo } from './e2eeProjectDocuments';
 import { accountRequiresEncryptedProjects } from './e2eeProjectPreferences';
 import {
   assertPlaintextRoomAccess,
@@ -1426,7 +1427,13 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         })
       );
     }
-    return json(await persistence.listProjects(userId));
+    const listing = await persistence.listProjects(userId);
+    // Encrypted projects' names travel as project-info envelopes (0033).
+    return json(
+      isE2eeProjectsEnabled(env, session.email)
+        ? await withEncryptedProjectInfo(env.DB, userId, listing)
+        : listing
+    );
   }
 
   if (request.method === 'POST' && pathname === '/api/projects') {

@@ -60,7 +60,15 @@ import {
   isE2eeProjectPreferenceStorageReady
 } from './e2eeProjectPreferences';
 import { handleE2eeProjectRequest, isE2eeProjectPath } from './e2eeProjects';
-import { isE2eeProjectGroupStorageReady } from '@openzcad/cloudflare-adapters';
+import {
+  handleE2eeProjectDocumentRequest,
+  isE2eeProjectDocumentPath,
+  type E2eeObjectBucket
+} from './e2eeProjectDocuments';
+import {
+  isE2eeProjectGroupStorageReady,
+  isE2eeProjectVersionStorageReady
+} from '@openzcad/cloudflare-adapters';
 
 interface WriteDatabase extends D1Database {
   authorization: E2eeWriteAuthorization;
@@ -85,6 +93,21 @@ export interface E2eeRouteEnv {
   DB?: D1Database;
   AUTH_MODE?: string;
   ENVIRONMENT?: string;
+  /** Where encrypted document bodies above the inline size live. */
+  PROJECT_STORAGE?: unknown;
+  ARTIFACTS?: unknown;
+}
+
+/** The project-storage bucket, as the persistence layer picks it. */
+function projectBucket(env: E2eeRouteEnv): E2eeObjectBucket | null {
+  const bucket = (env.PROJECT_STORAGE ?? env.ARTIFACTS) as
+    Partial<E2eeObjectBucket> | undefined;
+  return bucket &&
+    typeof bucket.put === 'function' &&
+    typeof bucket.get === 'function' &&
+    typeof bucket.delete === 'function'
+    ? (bucket as E2eeObjectBucket)
+    : null;
 }
 
 const MAX_BODY_BYTES = 512 * 1024;
@@ -632,6 +655,8 @@ async function writeGeneration(
     previousHead: { sequence: number; entryHash: string } | null;
     /** For a replacement: the replaced identity's account key, wrapped. */
     history: E2eeAccountKeyHistoryInput | null;
+    /** For a replacement: what must still hold when the identity lands. */
+    fence?: { sql: string; binds: string[] };
   }
 ): Promise<boolean> {
   const now = new Date().toISOString();
@@ -659,7 +684,8 @@ async function writeGeneration(
                   AND (SELECT MAX(sequence) FROM e2ee_device_list_entries
                        WHERE user_id = ? AND generation = ?) = ?`
                : '1 = 1'
-           }`
+           }
+           AND ${input.fence?.sql ?? '1 = 1'}`
       )
       .bind(
         userId,
@@ -680,7 +706,8 @@ async function writeGeneration(
               input.generation - 1,
               previousHead.sequence
             ]
-          : [])
+          : []),
+        ...(input.fence?.binds ?? [])
       ),
     db
       .prepare(
@@ -876,6 +903,11 @@ async function handleReplaceIdentity(
     }
     throw error;
   }
+  const signerFence = await projectSignerFence(
+    db,
+    userId,
+    removedDevices(oldList.devices, list.head.devices)
+  );
   const written = await writeGeneration(db, userId, {
     generation: generation,
     identityKeyText: body.identityKey as string,
@@ -891,9 +923,11 @@ async function handleReplaceIdentity(
       sequence: oldList.head.sequence,
       entryHash: toHex(oldList.headHash)
     },
-    history
+    history,
+    fence: signerFence
   });
   if (!written) {
+    await refuseIfSigned(db, signerFence);
     refuse(
       409,
       'E2EE_GENERATION_CONFLICT',
@@ -901,6 +935,83 @@ async function handleReplaceIdentity(
     );
   }
   return loadAccount(db, userId);
+}
+
+export const E2EE_DEVICE_SIGNED_PROJECTS_CODE = 'E2EE_DEVICE_SIGNED_PROJECTS';
+
+/**
+ * Devices of `before` that `after` no longer lists with the same signing
+ * key: what they signed no longer resolves to a listed device.
+ */
+function removedDevices(
+  before: readonly { deviceId: string; signingKey: Uint8Array }[],
+  after: readonly { deviceId: string; signingKey: Uint8Array }[]
+): string[] {
+  return before
+    .filter(
+      (device) =>
+        !after.some(
+          (d) =>
+            d.deviceId === device.deviceId &&
+            toHex(d.signingKey) === toHex(device.signingKey)
+        )
+    )
+    .map((device) => device.deviceId);
+}
+
+/**
+ * Until device removal records revocation cutoffs (ADR-024 slice 4-10), a
+ * device that signed a version or envelope of one of the account's
+ * encrypted projects stays: once removed, browsers would refuse what it
+ * signed, and those projects would stop opening. A device that signed
+ * nothing is removed as before. Nothing to check before migration 0033.
+ *
+ * Returns a fence for the device-list write itself, so a version a removed
+ * device signs meanwhile makes the write refuse; encrypted writes are
+ * fenced on the device list in turn (`deviceListUnchanged`).
+ */
+async function projectSignerFence(
+  db: D1Database,
+  userId: string,
+  removedDeviceIds: readonly string[]
+): Promise<{ sql: string; binds: string[] }> {
+  if (
+    removedDeviceIds.length === 0 ||
+    !(await isE2eeProjectVersionStorageReady(db))
+  ) {
+    return { sql: '1 = 1', binds: [] };
+  }
+  const marks = removedDeviceIds.map(() => '?').join(', ');
+  const fence = {
+    sql: `NOT EXISTS (SELECT 1 FROM projects p
+       WHERE p.user_id = ? AND p.storage_format = 2
+         AND (EXISTS (SELECT 1 FROM e2ee_project_versions v
+                      WHERE v.project_id = p.id
+                        AND v.signer_device_id IN (${marks}))
+           OR EXISTS (SELECT 1 FROM e2ee_project_envelopes e
+                      WHERE e.project_id = p.id
+                        AND e.signer_device_id IN (${marks}))))`,
+    binds: [userId, ...removedDeviceIds, ...removedDeviceIds]
+  };
+  await refuseIfSigned(db, fence);
+  return fence;
+}
+
+async function refuseIfSigned(
+  db: D1Database,
+  fence: { sql: string; binds: string[] }
+): Promise<void> {
+  const clear = await db
+    .prepare(`SELECT (${fence.sql}) AS clear`)
+    .bind(...fence.binds)
+    .first<{ clear: number }>();
+  if (clear?.clear !== 1) {
+    refuse(
+      409,
+      E2EE_DEVICE_SIGNED_PROJECTS_CODE,
+      'This device saved encrypted projects, and removing it is not available yet: those projects would stop opening. It will be in a coming update.'
+    );
+  }
 }
 
 async function handleAppend(
@@ -944,6 +1055,11 @@ async function handleAppend(
     signed
   ]);
   const previous = list.entries.at(-2)!.entry;
+  const signerFence = await projectSignerFence(
+    db,
+    userId,
+    removedDevices(previous.devices, list.head.devices)
+  );
   const rotation =
     toHex(previous.accountKeyCommitment) !==
     toHex(list.head.accountKeyCommitment);
@@ -1029,7 +1145,8 @@ async function handleAppend(
          SELECT ?, ?, ?, ?, ?, ?, ?
          WHERE ${auth.sql} AND (SELECT MAX(sequence) FROM e2ee_device_list_entries
                 WHERE user_id = ? AND generation = ?) = ?
-           AND (SELECT MAX(generation) FROM e2ee_identities WHERE user_id = ?) = ?`
+           AND (SELECT MAX(generation) FROM e2ee_identities WHERE user_id = ?) = ?
+           AND ${signerFence.sql}`
       )
       .bind(
         userId,
@@ -1044,7 +1161,8 @@ async function handleAppend(
         current.generation,
         before.sequence,
         userId,
-        current.generation
+        current.generation,
+        ...signerFence.binds
       ),
     ...(rotation
       ? [
@@ -1093,6 +1211,7 @@ async function handleAppend(
   ];
   const results = await db.batch(statements);
   if ((results[0]?.meta?.changes ?? 0) !== 1) {
+    await refuseIfSigned(db, signerFence);
     refuse(
       409,
       'E2EE_DEVICE_LIST_CONFLICT',
@@ -1682,8 +1801,10 @@ export async function handleE2eeRequest(
           keysReady &&
           projectsEnabled &&
           (await isE2eeProjectPreferenceStorageReady(env.DB)) &&
-          // Encrypted projects need their MLS group tables (migration 0032).
-          (await isE2eeProjectGroupStorageReady(env.DB))
+          // Encrypted projects need their MLS group tables (migration 0032)
+          // and their version tables (migration 0033).
+          (await isE2eeProjectGroupStorageReady(env.DB)) &&
+          (await isE2eeProjectVersionStorageReady(env.DB))
       });
     }
     if (!enabled) {
@@ -1745,6 +1866,17 @@ export async function handleE2eeRequest(
         userId,
         db.authorization,
         () => readBody(request)
+      );
+    }
+    if (isE2eeProjectDocumentPath(pathname)) {
+      // Encrypted document versions (e2eeProjectDocuments.ts).
+      return await handleE2eeProjectDocumentRequest(
+        request,
+        rawDb,
+        projectBucket(env),
+        userId,
+        projectsEnabled,
+        db.authorization
       );
     }
     if (isE2eeProjectPath(pathname)) {

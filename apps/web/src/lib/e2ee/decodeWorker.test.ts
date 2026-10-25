@@ -47,7 +47,11 @@ class FakeWorker implements DecodeWorkerHandle {
 const documentResult: DecodeResult = {
   type: 'project-envelope',
   header: {} as never,
-  value: { nodes: {} }
+  value: {
+    document: { nodes: {} },
+    blobs: [],
+    revisionVersionHashes: new Map()
+  }
 };
 
 const projectJob = {

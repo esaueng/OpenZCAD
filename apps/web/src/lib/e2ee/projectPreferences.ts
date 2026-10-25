@@ -75,58 +75,12 @@ export function createProjectPreferenceApi(
   };
 }
 
-/** The highest preference sequence this device has accepted, per account. */
-export interface PreferencePinStore {
-  read(userId: string): Promise<number | null>;
-  write(userId: string, sequence: number): Promise<void>;
-}
-
-const PIN_KEY = (userId: string) =>
-  `openzcad:e2ee-project-preference-pin:v1:${userId}`;
-
-/**
- * Pins in localStorage. Storage that is blocked or cleared loses the pin,
- * which only weakens rollback detection back to first use; it never makes a
- * forged record verify.
- */
-export function localStoragePreferencePins(
-  storage: Pick<Storage, 'getItem' | 'setItem'> | null = typeof window ===
-  'undefined'
-    ? null
-    : window.localStorage
-): PreferencePinStore {
-  return {
-    async read(userId) {
-      try {
-        const value = Number(storage?.getItem(PIN_KEY(userId)) ?? NaN);
-        return Number.isSafeInteger(value) && value >= 1 ? value : null;
-      } catch {
-        return null;
-      }
-    },
-    async write(userId, sequence) {
-      try {
-        const current = await this.read(userId);
-        // A pin only moves forward, whichever tab writes it.
-        if (current === null || sequence > current) {
-          storage?.setItem(PIN_KEY(userId), String(sequence));
-        }
-      } catch {
-        /* Best effort: see above. */
-      }
-    }
-  };
-}
-
-export function memoryPreferencePins(): PreferencePinStore {
-  const pins = new Map<string, number>();
-  return {
-    read: async (userId) => pins.get(userId) ?? null,
-    write: async (userId, sequence) => {
-      if (sequence > (pins.get(userId) ?? 0)) pins.set(userId, sequence);
-    }
-  };
-}
+import type { PreferencePinStore } from './preferencePins';
+export {
+  localStoragePreferencePins,
+  memoryPreferencePins,
+  type PreferencePinStore
+} from './preferencePins';
 
 export interface ProjectPreferenceContext {
   readonly userId: string;
@@ -159,6 +113,8 @@ export type ProjectPreferenceState =
 
 const UNVERIFIED_MESSAGE =
   'The account’s copy of this setting did not verify with your keys, so it is not trusted. Choose the setting again to replace it.';
+const FORK_MESSAGE =
+  'The account returned a different copy of this setting than this device has already seen at the same point, so it is not trusted. Choose the setting again to replace it.';
 const ROLLBACK_MESSAGE =
   'The account returned an older copy of this setting than this device has already seen, so it is not trusted. Choose the setting again to replace it.';
 
@@ -209,7 +165,33 @@ async function verify(
       floor
     };
   }
-  await ctx.pins.write(ctx.userId, opened.sequence);
+  await ctx.pins.write(ctx.userId, opened.sequence, opened.encryptNewProjects);
+  // Another tab may have pinned a newer record since this one was read: an
+  // older record is then a rollback, however it verified.
+  const after = await ctx.pins.read(ctx.userId);
+  if (after !== null && after > opened.sequence) {
+    return {
+      kind: 'refused',
+      reason: 'rollback',
+      message: ROLLBACK_MESSAGE,
+      floor: Math.max(floor, after)
+    };
+  }
+  // Two authentic records at one sequence (two tabs wrote at once): the
+  // one this device pinned first stands, and the other is not an update.
+  const pinnedValue = await ctx.pins.pinnedValue(ctx.userId);
+  if (
+    after === opened.sequence &&
+    pinnedValue !== null &&
+    pinnedValue !== opened.encryptNewProjects
+  ) {
+    return {
+      kind: 'refused',
+      reason: 'rollback',
+      message: FORK_MESSAGE,
+      floor: Math.max(floor, after)
+    };
+  }
   return {
     kind: 'verified',
     encryptNewProjects: opened.encryptNewProjects,

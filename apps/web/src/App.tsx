@@ -356,6 +356,7 @@ import type { SketchSolveStatus } from './components/SketchToolRail';
 import {
   ApiError,
   api,
+  isEncryptedProject,
   isProjectDocumentUnavailableError,
   isProjectFormatUnsupportedError
 } from './lib/api';
@@ -4499,8 +4500,13 @@ export function App() {
     // account credentials to a collaboration room after this exact project has
     // been resolved as a cloud-backed document. Desktop exchanges its native
     // bearer credential for a short-lived, one-use WebSocket ticket.
+    // The live room comes to encrypted projects with ADR-024 slice 4-9;
+    // until then the browser does not connect for format 2.
     session:
-      activeProjectIsCloud && cloudAvailable && liveCollaborationEnabled
+      activeProjectIsCloud &&
+      cloudAvailable &&
+      liveCollaborationEnabled &&
+      !isEncryptedProject(doc?.projectId)
         ? session
         : null,
     onRemoteDocument(incomingDocument, context) {
@@ -25957,7 +25963,8 @@ export function App() {
               onDraft={draftPrompt}
               onActivity={setAssistantActivity}
               disabledReason={assistantDisabledReason(
-                projects.find((project) => project.projectId === doc.projectId)
+                projects.find((project) => project.projectId === doc.projectId),
+                isEncryptedProject(doc.projectId)
               )}
             />
           </ErrorBoundary>

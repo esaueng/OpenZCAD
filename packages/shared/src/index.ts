@@ -27,6 +27,7 @@ export * from './drawing-annotations';
 export * from './topology-reference';
 export * from './reference-images';
 export * from './e2ee-project-groups';
+export * from './e2ee-project-documents';
 import type { ReferenceImageSet } from './reference-images';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
@@ -3267,12 +3268,14 @@ export const PROJECT_STORAGE_FORMAT_PLAINTEXT =
 export const PROJECT_STORAGE_FORMAT_E2EE_V1 = 2 satisfies ProjectStorageFormat;
 
 /**
- * The project storage formats this build can open. Format 2 joins when the
- * browser can decrypt it (ADR-024 slice 4-5); until then a build refuses an
- * encrypted project instead of mistaking its ciphertext for a document.
+ * The project storage formats this build can open. Format 2 joined with
+ * ADR-024 slice 4-5, when the browser learned to decrypt and verify it; a
+ * build without it refuses an encrypted project instead of mistaking its
+ * ciphertext for a document.
  */
 export const SUPPORTED_PROJECT_FORMATS: readonly ProjectStorageFormat[] = [
-  PROJECT_STORAGE_FORMAT_PLAINTEXT
+  PROJECT_STORAGE_FORMAT_PLAINTEXT,
+  PROJECT_STORAGE_FORMAT_E2EE_V1
 ];
 
 /** Whether this build opens a project stored in `format` (absent = 1). */

@@ -517,35 +517,169 @@ export interface VerifiedAuthor {
 
 interface Candidate {
   readonly userId: string;
-  readonly device: DeviceRecord;
+  readonly deviceId: string;
+  readonly signingKey: Bytes;
+  readonly signingKeyHash: Bytes;
   readonly revoked: boolean;
 }
 
+/**
+ * Every live and revoked device of the given lists, with copies of the keys
+ * a verification uses. Taken before any await, so a caller editing a list
+ * meanwhile cannot change which keys are tried.
+ */
 function candidatesOf(lists: readonly VerifiedDeviceList[]): Candidate[] {
   if (!isList(lists)) {
     fail('invalid-argument', 'deviceLists must be an array');
   }
   const users = new Set<string>();
   const out: Candidate[] = [];
+  const add = (userId: string, device: DeviceRecord, revoked: boolean) => {
+    if (
+      !(device?.signingKey instanceof Uint8Array) ||
+      !(device.signingKeyHash instanceof Uint8Array)
+    ) {
+      fail('invalid-argument', 'A device record lacks its signing key');
+    }
+    out.push({
+      userId,
+      deviceId: device.deviceId,
+      signingKey: copyBytes(device.signingKey),
+      signingKeyHash: copyBytes(device.signingKeyHash),
+      revoked
+    });
+  };
   for (const list of lists) {
     if (users.has(list?.userId)) {
       fail('invalid-argument', `Two device lists for ${list.userId}`);
     }
     users.add(list.userId);
-    for (const device of list.devices) {
-      out.push({ userId: list.userId, device, revoked: false });
-    }
+    for (const device of list.devices) add(list.userId, device, false);
     for (const revoked of list.revoked) {
       if (revoked.kind === 'device' && revoked.device) {
-        out.push({
-          userId: list.userId,
-          device: revoked.device,
-          revoked: true
-        });
+        add(list.userId, revoked.device, true);
       }
     }
   }
   return out;
+}
+
+/**
+ * A checked copy of the caller's cutoff map: every key a string, every
+ * cutoff a document version and a 32-byte hash, each hash copied. Taken
+ * before any await, so a caller editing the map or a hash buffer while a
+ * signature verifies cannot move a cutoff.
+ */
+function cutoffsOf(
+  given: ReadonlyMap<string, VersionCutoff> | undefined
+): ReadonlyMap<string, VersionCutoff> {
+  const out = new Map<string, VersionCutoff>();
+  if (given === undefined) return out;
+  if (!isMap(given)) {
+    fail('invalid-argument', 'cutoffs must be a Map');
+  }
+  for (const [key, cutoff] of given) {
+    if (typeof key !== 'string') {
+      fail('invalid-argument', 'cutoffs are keyed by authorCutoffKey');
+    }
+    if (
+      typeof cutoff !== 'object' ||
+      cutoff === null ||
+      !isUint(cutoff.documentVersion, Number.MAX_SAFE_INTEGER) ||
+      !(cutoff.versionHash instanceof Uint8Array) ||
+      cutoff.versionHash.byteLength !== HASH_BYTES
+    ) {
+      fail(
+        'invalid-argument',
+        'A cutoff is a document version and a 32-byte hash'
+      );
+    }
+    out.set(key, {
+      documentVersion: cutoff.documentVersion,
+      versionHash: copyBytes(cutoff.versionHash)
+    });
+  }
+  return out;
+}
+
+interface CapturedAuthorship {
+  readonly candidates: readonly Candidate[];
+  readonly cutoffs: ReadonlyMap<string, VersionCutoff>;
+}
+
+function captureAuthorship(options: AuthorshipOptions): CapturedAuthorship {
+  if (typeof options !== 'object' || options === null) {
+    fail('invalid-argument', 'Authorship options are required');
+  }
+  return {
+    candidates: candidatesOf(options.deviceLists),
+    cutoffs: cutoffsOf(options.cutoffs)
+  };
+}
+
+async function verifyCapturedAuthor(
+  captured: ReturnType<typeof captureRecord>,
+  { candidates, cutoffs }: CapturedAuthorship
+): Promise<VerifiedAuthor> {
+  const { header, signedAt } = captured;
+  const { prefix, versionHash: hash, signature } = captured.record;
+  const statement = versionStatementOf(prefix, hash, signedAt);
+  const { rs } = parseVersionSignature(signature);
+  // Verify each distinct key once; a key two candidates share is ambiguous.
+  const byKey = new Map<string, Candidate[]>();
+  for (const candidate of candidates) {
+    const id = toHex(candidate.signingKeyHash);
+    byKey.set(id, [...(byKey.get(id) ?? []), candidate]);
+  }
+  let signer: Candidate[] | null = null;
+  for (const group of byKey.values()) {
+    if (await verifyVersionStatement(group[0]!.signingKey, statement, rs)) {
+      signer = group;
+      break;
+    }
+  }
+  if (!signer) {
+    throw new AuthorshipError(
+      'unknown-signer',
+      'No certified device of these users signed this version'
+    );
+  }
+  const owners = new Set(signer.map((c) => `${c.userId} ${c.deviceId}`));
+  if (owners.size > 1) {
+    throw new AuthorshipError(
+      'ambiguous-signer',
+      'Several certified devices share the signing key'
+    );
+  }
+  const author = signer[0]!;
+  if (author.revoked) {
+    const cutoff = cutoffs.get(authorCutoffKey(author.userId, author.deviceId));
+    if (!cutoff) {
+      throw new AuthorshipError(
+        'revoked-without-cutoff',
+        `Device ${author.deviceId} is revoked and has no cutoff for this project`
+      );
+    }
+    const within =
+      header.documentVersion < cutoff.documentVersion ||
+      (header.documentVersion === cutoff.documentVersion &&
+        equalBytes(hash, cutoff.versionHash));
+    if (!within) {
+      throw new AuthorshipError(
+        'outside-cutoff',
+        `Device ${author.deviceId} was revoked before version ${header.documentVersion}`
+      );
+    }
+  }
+  return {
+    userId: author.userId,
+    deviceId: author.deviceId,
+    signingKeyHash: copyBytes(author.signingKeyHash),
+    revoked: author.revoked,
+    signedAt,
+    header,
+    versionHash: copyBytes(hash)
+  };
 }
 
 /**
@@ -557,90 +691,16 @@ function candidatesOf(lists: readonly VerifiedDeviceList[]): Candidate[] {
  * chooses its own claimed version number, so a version below the cutoff is
  * trusted only once the caller also shows it is an ancestor of the cutoff
  * head, for example with `verifyVersionLog` over a log that contains both.
- * Refusals are `AuthorshipError`s naming their `reason`.
+ * The record, the device keys and the cutoff map are copied and checked
+ * before the first await. Refusals are `AuthorshipError`s naming their
+ * `reason`.
  */
 export async function verifyAuthoredLogRecord(
   record: VersionLogRecord,
   options: AuthorshipOptions
 ): Promise<VerifiedAuthor> {
   const captured = captureRecord(record, 'invalid-argument');
-  const candidates = candidatesOf(options?.deviceLists);
-  const cutoffs = options.cutoffs ?? new Map<string, VersionCutoff>();
-  if (!isMap(cutoffs)) {
-    fail('invalid-argument', 'cutoffs must be a Map');
-  }
-  const { header, signedAt } = captured;
-  const { prefix, versionHash: hash, signature } = captured.record;
-  const statement = versionStatementOf(prefix, hash, signedAt);
-  const { rs } = parseVersionSignature(signature);
-  // Verify each distinct key once; a key two candidates share is ambiguous.
-  const byKey = new Map<string, Candidate[]>();
-  for (const candidate of candidates) {
-    const id = toHex(candidate.device.signingKeyHash);
-    byKey.set(id, [...(byKey.get(id) ?? []), candidate]);
-  }
-  let signer: Candidate[] | null = null;
-  for (const group of byKey.values()) {
-    if (
-      await verifyVersionStatement(group[0]!.device.signingKey, statement, rs)
-    ) {
-      signer = group;
-      break;
-    }
-  }
-  if (!signer) {
-    throw new AuthorshipError(
-      'unknown-signer',
-      'No certified device of these users signed this version'
-    );
-  }
-  const owners = new Set(signer.map((c) => `${c.userId} ${c.device.deviceId}`));
-  if (owners.size > 1) {
-    throw new AuthorshipError(
-      'ambiguous-signer',
-      'Several certified devices share the signing key'
-    );
-  }
-  const author = signer[0]!;
-  const key = authorCutoffKey(author.userId, author.device.deviceId);
-  if (author.revoked) {
-    const cutoff = cutoffs.get(key);
-    if (!cutoff) {
-      throw new AuthorshipError(
-        'revoked-without-cutoff',
-        `Device ${author.device.deviceId} is revoked and has no cutoff for this project`
-      );
-    }
-    if (
-      !isUint(cutoff.documentVersion, Number.MAX_SAFE_INTEGER) ||
-      !(cutoff.versionHash instanceof Uint8Array) ||
-      cutoff.versionHash.byteLength !== HASH_BYTES
-    ) {
-      fail(
-        'invalid-argument',
-        'A cutoff is a document version and a 32-byte hash'
-      );
-    }
-    const within =
-      header.documentVersion < cutoff.documentVersion ||
-      (header.documentVersion === cutoff.documentVersion &&
-        equalBytes(hash, cutoff.versionHash));
-    if (!within) {
-      throw new AuthorshipError(
-        'outside-cutoff',
-        `Device ${author.device.deviceId} was revoked before version ${header.documentVersion}`
-      );
-    }
-  }
-  return {
-    userId: author.userId,
-    deviceId: author.device.deviceId,
-    signingKeyHash: copyBytes(author.device.signingKeyHash),
-    revoked: author.revoked,
-    signedAt,
-    header,
-    versionHash: copyBytes(hash)
-  };
+  return verifyCapturedAuthor(captured, captureAuthorship(options));
 }
 
 /**
@@ -658,8 +718,11 @@ export async function verifyAuthoredEnvelope(
   signature: Uint8Array,
   options: AuthorshipOptions
 ): Promise<VerifiedAuthor> {
-  return verifyAuthoredLogRecord(
-    await versionLogRecord(envelope, signature),
-    options
+  // Hashing the envelope awaits: capture the options first.
+  const authorship = captureAuthorship(options);
+  const record = await versionLogRecord(envelope, signature);
+  return verifyCapturedAuthor(
+    captureRecord(record, 'invalid-argument'),
+    authorship
   );
 }

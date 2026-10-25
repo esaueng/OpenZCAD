@@ -693,6 +693,27 @@ async function openArchive(
   }
 }
 
+/**
+ * The MLS `epoch_authenticator` of `keyEpoch`, from that epoch's key
+ * archive, verified (signed by a device of this account, bound to its
+ * epoch). Encrypted documents check each version's epoch binding with it.
+ */
+export async function epochAuthenticatorForEpoch(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  keyEpoch: number
+): Promise<Uint8Array> {
+  const projectKey = await projectKeyForEpoch(ctx, projectId, keyEpoch);
+  const body = await openArchive(
+    ctx,
+    projectId,
+    keyEpoch,
+    projectKey,
+    await fetchArchive(ctx, projectId, keyEpoch)
+  );
+  return new Uint8Array(body.epochAuthenticator);
+}
+
 interface History {
   /** Every project key up to and including the target key epoch. */
   readonly keys: Map<number, Uint8Array>;

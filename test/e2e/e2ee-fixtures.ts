@@ -34,11 +34,16 @@ export const E2E_USER_ID = 'user_e2e';
 export interface E2eeServer {
   readonly db: DatabaseSync;
   enabled: boolean;
+  /** E2EE_PROJECTS_ENABLED for the account (encrypted projects, Phase 4). */
+  projectsEnabled: boolean;
   /** Runs the account's key flows in Node, as another device would. */
   readonly nodeDevice: () => E2eeContext;
 }
 
-export function createE2eeServer({ enabled = true } = {}): E2eeServer {
+export function createE2eeServer({
+  enabled = true,
+  projectsEnabled = false
+} = {}): E2eeServer {
   const db = migratedDatabase();
   db.prepare(
     `INSERT INTO users (id, email, created_at) VALUES (?, NULL, ?)`
@@ -46,6 +51,7 @@ export function createE2eeServer({ enabled = true } = {}): E2eeServer {
   const server: E2eeServer = {
     db,
     enabled,
+    projectsEnabled,
     nodeDevice: () => ({
       userId: E2E_USER_ID,
       api: createE2eeApi((path, init) => call(server, path, init)),
@@ -73,7 +79,8 @@ async function call(
     new Request(`https://zcad.test${path}`, init),
     env,
     session,
-    server.enabled
+    server.enabled,
+    server.projectsEnabled
   );
 }
 
@@ -85,16 +92,19 @@ export async function installE2eeServer(
   await context.route('**/api/e2ee/**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
-    const body = request.postData();
+    // Encrypted documents travel as binary frames: pass bytes both ways.
+    const body = request.postDataBuffer();
     const response = await call(server, `${url.pathname}${url.search}`, {
       method: request.method(),
-      headers: { 'content-type': 'application/json' },
-      ...(body === null ? {} : { body })
+      headers: {
+        'content-type': request.headers()['content-type'] ?? 'application/json'
+      },
+      ...(body === null ? {} : { body: new Uint8Array(body) })
     });
     await route.fulfill({
       status: response.status,
-      contentType: 'application/json',
-      body: await response.text()
+      contentType: response.headers.get('content-type') ?? 'application/json',
+      body: Buffer.from(await response.arrayBuffer())
     });
   });
 }
@@ -132,8 +142,12 @@ async function materialOf(
       ...rest,
       signingPublicKey: [...device.signingPublicKey],
       unlockPublicKey: [...device.unlockPublicKey],
-      signingPrivate: [...(await exportPrivateKey(signing.privateKey as CryptoKey))],
-      unlockPrivate: [...(await exportPrivateKey(unlock.privateKey as CryptoKey))]
+      signingPrivate: [
+        ...(await exportPrivateKey(signing.privateKey as CryptoKey))
+      ],
+      unlockPrivate: [
+        ...(await exportPrivateKey(unlock.privateKey as CryptoKey))
+      ]
     },
     pin: {
       identityKeyHash: [...pin.identityKeyHash],
@@ -148,7 +162,10 @@ async function materialOf(
  * the private halves imported non-extractable, the pin beside them. Run it
  * after the first navigation and before opening Settings › Encryption.
  */
-async function writeDevice(page: Page, material: DeviceMaterial): Promise<void> {
+async function writeDevice(
+  page: Page,
+  material: DeviceMaterial
+): Promise<void> {
   await page.evaluate(async ({ record, pin }) => {
     const subtle = crypto.subtle;
     const bytes = (values: number[]) => new Uint8Array(values);
@@ -253,6 +270,8 @@ export async function openEncryptionSettings(page: Page) {
   const open = page.getByRole('button', { name: 'Open settings' });
   await expect(settings.or(open).first()).toBeVisible();
   if (!(await settings.isVisible())) await open.click();
-  await settings.getByRole('button', { name: 'Encryption', exact: true }).click();
+  await settings
+    .getByRole('button', { name: 'Encryption', exact: true })
+    .click();
   return settings;
 }
