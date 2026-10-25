@@ -164,6 +164,11 @@ export interface BodyPick {
   bodyId: BodyId;
   min: Vector3;
   max: Vector3;
+  /**
+   * A later direct edit reshapes this body (one an edit was retargeted
+   * to): its box is only approximate, as `InPlaceContext.reshapedLater`.
+   */
+  reshapedLater?: true;
 }
 
 /** The text of a plane's stored fields, expressions as written. */
@@ -2421,7 +2426,7 @@ const scale: InPlaceToolSpec = {
         ? far
         : near;
     const reach = Math.hypot(corner.x, corner.y, corner.z);
-    if (ctx.reshapedLater) {
+    if (ctx.reshapedLater || body.reshapedLater) {
       // A box that is only approximate would mismeasure a drag.
       return [
         ...chips,

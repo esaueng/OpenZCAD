@@ -1175,6 +1175,31 @@ export function laterStepsOnBody(
     );
 }
 
+/**
+ * Whether an unsuppressed direct edit of `bodyId` comes after `feature` in
+ * history: a body an edit is retargeted to then cannot be taken back to the
+ * one the feature acts on.
+ */
+export function laterDirectEditOnBody(
+  document: ProjectDocument,
+  feature: FeatureNode,
+  bodyId: BodyId
+): boolean {
+  const order = listFeaturesInOrder(document);
+  return order
+    .slice(
+      order.findIndex(
+        (candidate) => candidate.featureId === feature.featureId
+      ) + 1
+    )
+    .some(
+      (later) =>
+        later.data.featureKind === 'direct-edit' &&
+        later.data.targetBodyId === bodyId &&
+        !isFeatureSuppressed(later)
+    );
+}
+
 /** A hole's step sizes, which an absent value derives from its bore. */
 const HOLE_STEP_KEYS: readonly string[] = [
   'counterboreDiameter',
