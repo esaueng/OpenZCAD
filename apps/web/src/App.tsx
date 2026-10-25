@@ -7566,6 +7566,18 @@ export function App() {
               : [])
         ])
       : '[]';
+  // The pick as an identity, for the card's per-pick state (its More fold).
+  const calloutPickKey = JSON.stringify([
+    renderedSelectedTopology
+      ? [
+          renderedSelectedTopology.kind,
+          renderedSelectedTopology.bodyId,
+          renderedSelectedTopology.topologyId ?? renderedSelectedTopology.hash
+        ]
+      : null,
+    selectedEdges.map((edge) => [edge.bodyId, edge.topologyId ?? edge.hash]),
+    selectedBodyIds
+  ]);
   const selectionCallout = useMemo<SelectionCalloutContent | null>(() => {
     const onVerb = (id: SelectionCalloutVerbId) =>
       selectionCalloutVerbRef.current(id);
@@ -7608,6 +7620,7 @@ export function App() {
         ? { detail: selectionSummary.detail }
         : {}),
       verbs,
+      pickKey: calloutPickKey,
       anchor: 'selection',
       onVerb,
       onClear: () => clearSelectionRef.current()
@@ -7618,6 +7631,7 @@ export function App() {
     selectionSummary,
     selectedBodyIds,
     calloutVerbsKey,
+    calloutPickKey,
     calloutInteractive
   ]);
 
@@ -8338,7 +8352,17 @@ export function App() {
               z: current.target.point[2]
             }
           )
-        : null;
+        : // A face picked with direct manipulation off never arms the
+          // machine: the selection itself names it (a hole then starts at
+          // the face's middle, there being no click point to keep).
+          selectedTopology?.kind === 'face'
+          ? inPlaceFacePick(
+              selectedTopology.bodyId,
+              selectedTopology.topologyId,
+              selectedTopology.hash,
+              undefined
+            )
+          : null;
     // Faces a box swept first are a face-list command's faces, on one body;
     // the wider sweep is dropped so its highlights promise nothing more.
     const sweptFaces =

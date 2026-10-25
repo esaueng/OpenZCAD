@@ -64,9 +64,9 @@ export function SelectionCard({
   // this pick only (a new pick starts folded). A lit verb is always
   // a button, wherever it falls in the order.
   // Keyed by what is picked as well as its verbs: two flat faces have the
-  // same verbs, and the second still opens folded.
+  // same verbs (and often the same name), and the second still opens folded.
   const verbsKey = JSON.stringify([
-    label,
+    content.pickKey ?? label,
     content.verbs.map((verb) => verb.id)
   ]);
   const [moreOpenFor, setMoreOpenFor] = useState<string | null>(null);

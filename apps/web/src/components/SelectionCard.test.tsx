@@ -137,6 +137,23 @@ describe('SelectionCard', () => {
       />
     );
     expect(names()).toHaveLength(4);
+    // And another face with the very same name (two upward faces of a
+    // stepped body are both "Top face"): its own identity folds it.
+    fireEvent.click(
+      within(card).getByRole('button', { name: 'More selection verbs' })
+    );
+    expect(names()).toHaveLength(5);
+    rerender(
+      <SelectionCard
+        content={content({
+          label: textLabelSegments('Bracket · Bottom face'),
+          pickKey: 'face:body_a:f9',
+          verbs: verbs.slice(1),
+          onVerb
+        })}
+      />
+    );
+    expect(names()).toHaveLength(4);
   });
 
   it('keeps a lit verb a button wherever it falls', () => {

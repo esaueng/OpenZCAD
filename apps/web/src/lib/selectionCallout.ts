@@ -89,6 +89,11 @@ export interface SelectionCalloutContent {
    * body, and the face or edge on it).
    */
   label: readonly LabelSegment[] | null;
+  /**
+   * What is picked, as an identity: two picks with one name (two upward
+   * faces of a stepped body are both "Top face") still differ here.
+   */
+  pickKey?: string;
   /** The key measurement: area or diameter, length, or overall size. */
   detail?: string;
   verbs: readonly SelectionCalloutVerb[];
