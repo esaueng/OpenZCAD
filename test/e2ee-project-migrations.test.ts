@@ -1587,6 +1587,63 @@ describe('erasure, deletion and the sweep', () => {
     expect(migrationRow(srv, plain.projectId)!.state).toBe('done');
     expect(count(srv, 'revisions', plain.projectId)).toBe(0);
   });
+
+  it('abandons a staging on the sweep once its owner may no longer migrate (#914 review)', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    const s = await startStaging(srv, plain.projectId);
+    await stage(s, plain);
+    // Another project of the owner's, already cut over: never abandoned.
+    const done = await namedSave(
+      srv,
+      await plaintextProject(srv, 'Cut over'),
+      'Named'
+    );
+    const c = await startStaging(srv, done.projectId);
+    await stage(c, done);
+    await c.api.cutover(done.projectId, c.lease);
+    const migrating = async () => {
+      const answer = await autosave(srv, plain);
+      expect(answer.status).toBe(409);
+      expect(await codeOf(answer)).toBe('PROJECT_MIGRATING');
+    };
+    const lapse = () =>
+      srv.db
+        .prepare(
+          "UPDATE e2ee_project_migrations SET lease_expires_at = 1 WHERE state = 'staging'"
+        )
+        .run();
+    // The account leaves the rollout (off the canary allowlist, say) while
+    // the migration flag stays on: the plaintext gate still refuses, and
+    // the migration routes no longer answer this account.
+    srv.env.E2EE_KEYS_ENABLED = 'false';
+    await migrating();
+    expect(
+      await errorOf(s.api.abandon(plain.projectId, s.lease))
+    ).toMatchObject({ status: 501, code: 'FEATURE_DISABLED' });
+    // A live lease is left alone.
+    await worker.scheduled({}, srv.env);
+    expect(migrationRow(srv, plain.projectId)!.state).toBe('staging');
+    // So is a lapsed one while the owner may still migrate: it resumes.
+    srv.env.E2EE_KEYS_ENABLED = 'true';
+    lapse();
+    await worker.scheduled({}, srv.env);
+    expect(migrationRow(srv, plain.projectId)!.state).toBe('staging');
+    // Lapsed, and the owner out: the sweep abandons it and drops what was
+    // staged, and the plaintext is the owner's again.
+    srv.env.E2EE_KEYS_ENABLED = 'false';
+    await migrating();
+    await worker.scheduled({}, srv.env);
+    expect(migrationRow(srv, plain.projectId)).toMatchObject({
+      state: 'abandoned',
+      lease_id: null,
+      purge_cursor: null
+    });
+    expect(stagedRows(srv, plain.projectId)).toEqual(nothingStaged);
+    expect((await autosave(srv, plain)).status).toBe(200);
+    expect(migrationRow(srv, done.projectId)!.state).toBe('cutover');
+    expect(formatOf(srv, done.projectId).storage_format).toBe(2);
+  });
 });
 
 // --- Flag off, migration missing ------------------------------------------------------------

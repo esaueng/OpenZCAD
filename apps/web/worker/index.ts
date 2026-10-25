@@ -2231,10 +2231,12 @@ export default {
   async scheduled(_controller: unknown, env: Env): Promise<void> {
     assertSafeRuntimeConfiguration(env);
     await createPersistenceService(env).purgeExpiredUploadSessions();
-    // Purges and abandons of project migrations a browser left behind.
+    // Purges and abandons of project migrations a browser left behind, and
+    // of stagings whose owner may no longer migrate.
     await sweepProjectMigrations(
       env,
-      isCloudflareFeatureEnabled(env, 'E2EE_MIGRATION_ENABLED')
+      isCloudflareFeatureEnabled(env, 'E2EE_MIGRATION_ENABLED'),
+      (email) => isE2eeMigrationEnabled(env, email)
     );
     await publishCensus(env);
   },

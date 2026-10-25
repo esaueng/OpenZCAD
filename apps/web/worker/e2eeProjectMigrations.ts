@@ -32,7 +32,8 @@
  *   serve a projection built from the plaintext document on each read, so
  *   with the links revoked and the document gone nothing of it remains.
  *   The owner's browser drives it; the scheduled sweep finishes purges
- *   and abandons a browser left behind.
+ *   and abandons a browser left behind, and abandons a staging whose
+ *   owner may no longer migrate (`sweepProjectMigrations`).
  *
  * Served by `handleE2eeRequest` after the key rollout gate, key-table
  * readiness and, for writes, the session/erasure write authorization.
@@ -1532,16 +1533,26 @@ export async function projectMigrationErasureStatements(
  * them for {@link MIGRATION_SWEEP_IDLE_MS}, a few bounded steps each. Only
  * while E2EE_MIGRATION_ENABLED is on and migration 0042 is installed; it
  * never fails the scheduled run.
+ *
+ * It also abandons a staging whose owner may no longer migrate
+ * (`eligible`, the account-scoped `isE2eeMigrationEnabled`: say, removed
+ * from E2EE_CANARY_EMAILS while the flag stays on), once its lease lapsed.
+ * The plaintext gate follows the global flag and keeps refusing writes to
+ * a staged project, while the migration routes no longer answer that
+ * account, so nothing else could finish or abandon it. Only a `staging`
+ * row moves; a cutover or purge is never touched.
  */
 export async function sweepProjectMigrations(
   env: MigrationEnv,
   enabled: boolean,
+  eligible: (email: string | undefined) => boolean = () => true,
   now = Date.now()
 ): Promise<void> {
   const db = env.DB;
   if (!enabled || !db) return;
   try {
     if (!(await isE2eeProjectMigrationStorageReady(db))) return;
+    const withdrawn = await abandonWithdrawnStagings(db, eligible, now);
     const { results } = await db
       .prepare(
         `SELECT project_id, state FROM e2ee_project_migrations
@@ -1556,7 +1567,7 @@ export async function sweepProjectMigrations(
       )
       .all<{ project_id: string; state: string }>();
     const always: Authorization = { sql: '1', binds: [] };
-    for (const row of results ?? []) {
+    for (const row of [...withdrawn, ...(results ?? [])]) {
       try {
         for (let step = 0; step < MIGRATION_SWEEP_STEPS; step++) {
           if (row.state === 'abandoned') {
@@ -1581,4 +1592,53 @@ export async function sweepProjectMigrations(
   } catch {
     // Housekeeping never fails the scheduled run.
   }
+}
+
+/** Staging rows with a lapsed lease one sweep weighs for eligibility. */
+const MIGRATION_SWEEP_CANDIDATES = 50;
+
+/**
+ * Abandons, a few per sweep, the stagings with a lapsed lease whose owner
+ * `eligible` no longer admits (`sweepProjectMigrations`). The abandon is
+ * the route's own move, fenced on the row still staging with its lease
+ * lapsed, so an owner admitted again who took a fresh lease meanwhile
+ * keeps it. Returns the rows it abandoned, for the sweep to clean up.
+ */
+async function abandonWithdrawnStagings(
+  db: D1Database,
+  eligible: (email: string | undefined) => boolean,
+  now: number
+): Promise<{ project_id: string; state: string }[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT m.project_id, u.email FROM e2ee_project_migrations m
+       LEFT JOIN users u ON u.id = m.owner_user_id
+       WHERE m.state = 'staging' AND COALESCE(m.lease_expires_at, 0) <= ?
+       ORDER BY m.updated_at LIMIT ?`
+    )
+    .bind(now, MIGRATION_SWEEP_CANDIDATES)
+    .all<{ project_id: string; email: string | null }>();
+  const abandoned: { project_id: string; state: string }[] = [];
+  for (const row of results ?? []) {
+    if (abandoned.length >= MIGRATION_SWEEP_ROWS) break;
+    if (eligible(row.email ?? undefined)) continue;
+    try {
+      const result = await db
+        .prepare(
+          `UPDATE e2ee_project_migrations
+           SET state = 'abandoned', lease_id = NULL, lease_expires_at = NULL,
+               purge_cursor = 'cleanup', updated_at = ?
+           WHERE project_id = ? AND state = 'staging'
+             AND COALESCE(lease_expires_at, 0) <= ?`
+        )
+        .bind(new Date(now).toISOString(), row.project_id, now)
+        .run();
+      if ((result.meta?.changes ?? 0) === 1) {
+        abandoned.push({ project_id: row.project_id, state: 'abandoned' });
+      }
+    } catch {
+      // An account being erased, say: its erasure abandons it instead.
+    }
+  }
+  return abandoned;
 }
