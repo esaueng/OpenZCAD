@@ -420,7 +420,7 @@ describe('a split readout', () => {
         targetBodyId: bodyId,
         plane: { origin: { x: 5, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } },
         secondBodyId
-      } as FeatureNode['data']
+      }
     };
     const half = (name: string): BodyRepresentation => ({
       ...body,
