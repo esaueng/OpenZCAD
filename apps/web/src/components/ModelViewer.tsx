@@ -432,6 +432,12 @@ export interface OffsetHandleTarget {
    * let go, but cannot be grabbed until the edit commits or is refused.
    */
   locked?: boolean;
+  /**
+   * A value is being typed on the keypad. The typed value drives the handle,
+   * its ghost and the drag preview; exact frames landing meanwhile re-derive
+   * this target without replacing any of them.
+   */
+  entry?: boolean;
 }
 
 /**
@@ -4246,7 +4252,11 @@ export function ModelViewer({
       } else if (offsetRigRef.current) {
         // A typed value previews like a drag: solid over the old part's
         // ghost, taken before the proxy deforms the body.
+        // Back at zero there is no change to show: drop the ghost (typed
+        // entry keeps it across exact frames, so nothing else would), and
+        // take it again for the next nonzero value.
         if (Math.abs(value) > 1e-9) beginOffsetGhost();
+        else clearOffsetGhost();
         offsetRigRef.current.setValue(value);
         queueOffsetBodyProxy(value);
       } else {
@@ -10916,7 +10926,9 @@ export function ModelViewer({
       offsetBodyProxyControllerRef.current?.discard();
       // Exact frames replace bodies mid-drag; once the drag is over, the
       // next bodies are the committed or restored part.
-      if (!offsetDragActiveRef.current) offsetGhostClearRef.current?.();
+      // Typed entry keeps its ghost the same way while exact frames land.
+      if (!offsetDragActiveRef.current && !offsetHandleRef.current?.entry)
+        offsetGhostClearRef.current?.();
       // The manager owns hover-slot geometry even while the slots are
       // parented under bodies, so it must detach them before body disposal.
       context.selection.resetForRebuild();
@@ -12023,7 +12035,7 @@ export function ModelViewer({
     // simply withdrawn for validation.
     if (
       previous &&
-      offsetHandle?.locked &&
+      (offsetHandle?.locked || offsetHandle?.entry) &&
       built &&
       sameOffsetHandleTarget(built.handle, offsetHandle)
     ) {
@@ -12035,7 +12047,7 @@ export function ModelViewer({
     const takesOver =
       previous !== null &&
       offsetHandle !== null &&
-      built?.handle.locked === true &&
+      (built?.handle.locked === true || built?.handle.entry === true) &&
       built.handle.bodyId === offsetHandle.bodyId;
     if (previous) {
       if (takesOver) previous.dispose();

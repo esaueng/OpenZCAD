@@ -19393,7 +19393,10 @@ export function App() {
       ...(total === undefined
         ? {}
         : { totalBaseline: total.total, totalSense: total.sense }),
-      ...(interaction.phase === 'validating' ? { locked: true } : {})
+      ...(interaction.phase === 'validating' ? { locked: true } : {}),
+      // Keypad entry: typed values drive the handle, its ghost and the
+      // preview; landing exact frames must not rebuild them under the hand.
+      ...(interaction.phase === 'exact-entry' ? { entry: true } : {})
     };
   }, [doc, interaction, renderedOffsetPreview, representations]);
 
