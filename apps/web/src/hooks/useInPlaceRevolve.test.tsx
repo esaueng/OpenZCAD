@@ -153,7 +153,9 @@ describe('useInPlaceRevolve', () => {
     act(() => hook.result.current.start(PICK));
     act(() => hook.result.current.pickAxis('sketch-vertical'));
     await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
-    act(() => hook.result.current.setAngle(270, 'sweep * 3'));
+    act(() => {
+      hook.result.current.setAngle(270, 'sweep * 3');
+    });
     await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
     act(() => {
       hook.result.current.done();
@@ -184,7 +186,9 @@ describe('useInPlaceRevolve', () => {
     const { hook, built } = setup();
     act(() => hook.result.current.start(PICK));
     act(() => hook.result.current.pickAxis('sketch-vertical'));
-    act(() => hook.result.current.setAngle(0.5));
+    act(() => {
+      hook.result.current.setAngle(0.5);
+    });
     expect(hook.result.current.angle).toBe(0.5);
     await waitFor(() => expect(built.at(-1)?.angleDeg).toBe(0.5));
   });
@@ -220,7 +224,9 @@ describe('useInPlaceRevolve', () => {
     act(() => release!());
     await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
     release = null;
-    act(() => hook.result.current.setAngle(180));
+    act(() => {
+      hook.result.current.setAngle(180);
+    });
     // The 360° frame is still on screen: Done must not commit 180° unseen.
     expect(hook.result.current.canFinish).toBe(false);
     act(() => {
