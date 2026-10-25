@@ -5,6 +5,7 @@ import { proposalErasureStatements } from './e2eeProposals';
 import { projectGroupErasureStatements } from './e2eeProjects';
 import { assistantConsentErasureStatements } from './e2eeAssistantConsents';
 import { deviceRemovalErasureStatements } from './e2eeDeviceRemoval';
+import { projectMigrationErasureStatements } from './e2eeProjectMigrations';
 import {
   encryptedProjectUsage,
   projectVersionErasureStatements
@@ -492,7 +493,13 @@ export async function deleteAccountData(
           ...(await invitationErasureStatements(db, session.userId, email)),
           // Proposals it sent in other owners' projects lose their sender
           // (migration 0039), when the table exists.
-          ...(await proposalErasureStatements(db, session.userId, input.scope))
+          ...(await proposalErasureStatements(db, session.userId, input.scope)),
+          // Before migration 0042 there is no migration state.
+          ...(await projectMigrationErasureStatements(
+            db,
+            session.userId,
+            input.scope
+          ))
         ]
       )
     );

@@ -3,6 +3,7 @@ import {
   ENCRYPTED_PROJECTS_REQUIRED_CODE,
   PROJECT_FORMAT_UNSUPPORTED_CODE,
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
+  PROJECT_MIGRATING_CODE,
   PROJECT_STORAGE_FORMAT_PLAINTEXT
 } from '@openzcad/shared';
 
@@ -40,6 +41,21 @@ export class EncryptedProjectsRequiredError extends Error {
       'This account encrypts new projects. Update OpenZCAD to create encrypted projects, or turn off "Encrypt new projects" in Settings › Encryption.'
     );
     this.name = 'EncryptedProjectsRequiredError';
+  }
+}
+
+/**
+ * ADR-024 slice 7-1: a plaintext project staged for encryption takes no
+ * plaintext writes until the move finishes or is abandoned; reads keep
+ * working.
+ */
+export class ProjectMigratingError extends Error {
+  readonly code = PROJECT_MIGRATING_CODE;
+  constructor(readonly projectId: string) {
+    super(
+      'This project is being moved to encrypted storage. It opens read-only until that finishes.'
+    );
+    this.name = 'ProjectMigratingError';
   }
 }
 

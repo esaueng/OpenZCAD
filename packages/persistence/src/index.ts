@@ -285,7 +285,8 @@ export {
   EncryptedProjectSharingError,
   EncryptedProjectsRequiredError,
   isPlaintextStorageFormat,
-  ProjectFormatUnsupportedError
+  ProjectFormatUnsupportedError,
+  ProjectMigratingError
 } from './project-format';
 
 /**

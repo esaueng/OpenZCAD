@@ -9,7 +9,11 @@ import {
   isE2eeAssistantConsentStorageReady,
   liveAssistantConsentRoute
 } from './e2eeAssistantConsents';
-import { assertProjectRouteFormat } from './projectFormatGate';
+import {
+  assertProjectNotMigrating,
+  assertProjectRouteFormat
+} from './projectFormatGate';
+import { sweepProjectMigrations } from './e2eeProjectMigrations';
 import { encryptedRoomHeaders, notifyEncryptedRoom } from './e2eeRoom';
 import { enforceApiRateLimit, publicRequestBucket } from './apiRateLimit';
 import {
@@ -29,6 +33,7 @@ import {
   createPersistenceService,
   isCloudflareFeatureEnabled,
   isE2eeKeysEnabled,
+  isE2eeMigrationEnabled,
   isE2eeProjectsEnabled,
   isProjectStorageFormatReady,
   projectCollaborationRollout,
@@ -44,6 +49,7 @@ import {
   EncryptedProjectSharingError,
   EncryptedProjectsRequiredError,
   ProjectFormatUnsupportedError,
+  ProjectMigratingError,
   ProjectAdoptionError,
   ProjectQuotaError,
   ProjectNotFoundError,
@@ -1283,7 +1289,8 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         session,
         isE2eeKeysEnabled(env, session.email),
         isE2eeProjectsEnabled(env, session.email),
-        encryptedInvitationHost(env, session)
+        encryptedInvitationHost(env, session),
+        isE2eeMigrationEnabled(env, session.email)
       );
       // A Commit or an account write the project's room should hear about.
       await notifyEncryptedRoom(env, request, response);
@@ -1398,7 +1405,10 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     userId,
     request.method,
     pathname,
-    isE2eeProjectsEnabled(env, session.email)
+    isE2eeProjectsEnabled(env, session.email),
+    // ADR-024 slice 7-1: every caller of a staged project (members too)
+    // meets the refusal, so the global flag decides, not the account's.
+    isCloudflareFeatureEnabled(env, 'E2EE_MIGRATION_ENABLED')
   );
 
   if (request.method === 'GET' && pathname === '/api/settings') {
@@ -2015,6 +2025,14 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const payload = parseCreateUploadSessionRequest(
       await readJsonBody(request)
     );
+    // A project staged for encryption takes no new plaintext files (7-1).
+    await assertProjectNotMigrating(
+      env.DB,
+      persistence,
+      userId,
+      payload.projectId,
+      isCloudflareFeatureEnabled(env, 'E2EE_MIGRATION_ENABLED')
+    );
     return json(await persistence.createUploadSession(userId, payload), 201);
   }
 
@@ -2213,6 +2231,13 @@ export default {
   async scheduled(_controller: unknown, env: Env): Promise<void> {
     assertSafeRuntimeConfiguration(env);
     await createPersistenceService(env).purgeExpiredUploadSessions();
+    // Purges and abandons of project migrations a browser left behind, and
+    // of stagings whose owner may no longer migrate.
+    await sweepProjectMigrations(
+      env,
+      isCloudflareFeatureEnabled(env, 'E2EE_MIGRATION_ENABLED'),
+      (email) => isE2eeMigrationEnabled(env, email)
+    );
     await publishCensus(env);
   },
   async fetch(
@@ -2308,7 +2333,8 @@ async function dispatchApiRequest(
     if (
       error instanceof ProjectFormatUnsupportedError ||
       error instanceof EncryptedProjectSharingError ||
-      error instanceof EncryptedProjectsRequiredError
+      error instanceof EncryptedProjectsRequiredError ||
+      error instanceof ProjectMigratingError
     ) {
       return json({ error: error.message, code: error.code }, 409);
     }
