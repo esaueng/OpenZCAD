@@ -26,6 +26,8 @@ import {
 } from '../lib/inPlace/tools';
 import type { RevolveAxisCandidate } from '../lib/inPlace/revolve';
 import type { InPlaceEditSeed } from '../lib/inPlace/edit';
+import { findFeature } from '@openzcad/document-core';
+import { isFeatureSuppressed } from '@openzcad/shared';
 
 /**
  * Runs whichever in-place command (U09) is active.
@@ -405,8 +407,18 @@ export function useInPlaceCommand(
           (warning) => !known.has(warning)
         );
         // A suppressed feature's edit builds no body to look for; its
-        // preview stands on the rest of the model rebuilding.
-        const suppressed = editRef.current?.suppressed === true;
+        // preview stands on the rest of the model rebuilding. Read from the
+        // model as it is: the feature may have been suppressed (or turned
+        // back on) since the edit armed.
+        const editing = editRef.current;
+        const baseNow = optionsRef.current.baseDocument();
+        const liveFeature =
+          editing && baseNow?.nodes
+            ? findFeature(baseNow, editing.featureId)
+            : null;
+        const suppressed = liveFeature
+          ? isFeatureSuppressed(liveFeature)
+          : editing?.suppressed === true;
         const valid = Boolean(
           result &&
           (suppressed ||
