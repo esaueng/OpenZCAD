@@ -122,6 +122,21 @@ describe('SelectionCard', () => {
       <SelectionCard content={content({ verbs: verbs.slice(1), onVerb })} />
     );
     expect(names()).toHaveLength(4);
+    // So does another pick with the same verbs (a second flat face).
+    fireEvent.click(
+      within(card).getByRole('button', { name: 'More selection verbs' })
+    );
+    expect(names()).toHaveLength(5);
+    rerender(
+      <SelectionCard
+        content={content({
+          label: textLabelSegments('Bracket · Bottom face'),
+          verbs: verbs.slice(1),
+          onVerb
+        })}
+      />
+    );
+    expect(names()).toHaveLength(4);
   });
 
   it('keeps a lit verb a button wherever it falls', () => {

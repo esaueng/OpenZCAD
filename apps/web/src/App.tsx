@@ -8293,6 +8293,13 @@ export function App() {
       const body = inPlaceBodyPick(bodyId);
       return body ? [body] : [];
     });
+    // A solid offset takes a body, named by any of its faces: a body picked
+    // first (its Selection card's Solid offset) is that body, its handle on
+    // a flat face where it has one.
+    const bodyFace =
+      tool === 'solid-offset' && !selectedFace && initialBodies[0]
+        ? anyInPlaceFaceOf(initialBodies[0].bodyId)
+        : null;
     cancelPanel();
     // The command bar names each step; a status toast would say it twice,
     // on the same row.
@@ -8300,9 +8307,24 @@ export function App() {
     inPlaceRef.current.start(
       tool,
       initial,
-      selectedFace ? [selectedFace] : sweptFaces,
+      selectedFace
+        ? [selectedFace]
+        : bodyFace
+          ? [bodyFace]
+          : sweptFaces,
       initialBodies
     );
+  }
+
+  /** A body's face for a command that takes the body: a flat one first. */
+  function anyInPlaceFaceOf(bodyId: BodyId): FacePick | null {
+    const faces = representations[bodyId]?.topology?.faces ?? [];
+    const face =
+      faces.find((candidate) => candidate.geometry?.surfaceType === 'plane') ??
+      faces[0];
+    return face
+      ? inPlaceFacePick(bodyId, face.topologyId, face.hash, undefined)
+      : null;
   }
 
   /** Swept faces as an in-place command's face slot holds them. */

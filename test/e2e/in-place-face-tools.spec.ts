@@ -11,6 +11,7 @@ import {
   stubApi,
   MODEL_ONLY,
   pickPlanarFace,
+  revealModelPanel,
   enterCommandValue,
   finishInPlaceCommand,
   waitForStillViewport
@@ -178,6 +179,27 @@ test('a face card keeps its four verbs and folds the rest behind More', async ({
   expect(
     (shell as { openingFaceHashes: number[] }).openingFaceHashes
   ).toHaveLength(1);
+});
+
+test("a body card's Solid offset takes that body", async ({ page }) => {
+  test.setTimeout(120_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  await openBox(page, 'Body card offset');
+  await revealModelPanel(page, 'Objects');
+  await page
+    .getByRole('list', { name: 'Objects' })
+    .getByRole('button', { name: /^Block/ })
+    .click();
+  const card = page.locator('.selection-card');
+  await card.getByRole('button', { name: 'More selection verbs' }).click();
+  await card.getByRole('button', { name: 'Selection: Solid offset' }).click();
+  const bar = page.getByRole('group', { name: 'Solid offset command' });
+  // The body is in hand: no face to click first.
+  await expect(bar).toContainText('Drag the offset');
+  await enterCommandValue(page, 'distance', '2');
+  await finishInPlaceCommand(page, 'Solid offset');
+  const [offset] = await featureData(page, 'solid-offset');
+  expect(offset).toMatchObject({ distance: 2 });
 });
 
 test('Thicken in place: one face, signed thickness from the keypad', async ({

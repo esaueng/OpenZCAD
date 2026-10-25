@@ -61,9 +61,14 @@ export function SelectionCard({
   });
   const edgeCount = operation?.selectAllEdgesCount;
   // The first verbs are buttons; the rest wait behind More, which opens for
-  // this pick only (a new pick's verbs start folded). A lit verb is always
+  // this pick only (a new pick starts folded). A lit verb is always
   // a button, wherever it falls in the order.
-  const verbsKey = content.verbs.map((verb) => verb.id).join(' ');
+  // Keyed by what is picked as well as its verbs: two flat faces have the
+  // same verbs, and the second still opens folded.
+  const verbsKey = JSON.stringify([
+    label,
+    content.verbs.map((verb) => verb.id)
+  ]);
   const [moreOpenFor, setMoreOpenFor] = useState<string | null>(null);
   const moreOpen = moreOpenFor === verbsKey;
   const shown: SelectionCalloutVerb[] = [];
