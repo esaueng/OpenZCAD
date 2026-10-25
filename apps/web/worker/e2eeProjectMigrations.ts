@@ -91,7 +91,11 @@ import {
   isProjectStorageFormatReady,
   type CloudflareEnv
 } from '@openzcad/cloudflare-adapters';
-import { checkStagingLease, decryptStagingFence } from './e2eeMigrationLease';
+import {
+  checkStagingLease,
+  decryptStagingFence,
+  type StagingLease
+} from './e2eeMigrationLease';
 import {
   ProjectMeasurementRequestError,
   parseSaveProjectMeasurementsRequest
@@ -105,6 +109,9 @@ import {
   json,
   record,
   refuse,
+  deviceListMoved,
+  deviceListUnchanged,
+  refuseDeviceListMoved,
   requireCertifiedDevice,
   runBatch,
   type Authorization
@@ -1951,6 +1958,12 @@ async function cutoverDecrypt(
       'Restore this project from the recycle bin before turning its encryption off.'
     );
   }
+  // The lease holder's device is still certified, atomically below.
+  const device = await decryptLeaseDeviceFence(
+    ctx.db,
+    ctx.userId,
+    row.device_id
+  );
   const measurements = await ctx.db
     .prepare(`SELECT ${ENCRYPTED_MEASUREMENTS_SQL} AS sequence`)
     .bind(projectId)
@@ -2038,7 +2051,8 @@ async function cutoverDecrypt(
            AND NOT ${OPTED_IN_SQL}
            AND EXISTS (SELECT 1 FROM project_document_objects
                        WHERE id = ? AND project_id = ? AND state = 'committed')
-           AND NOT EXISTS (${UNCOVERED_DECRYPT_SQL})`
+           AND NOT EXISTS (${UNCOVERED_DECRYPT_SQL})
+           AND ${device.sql}`
       )
       .bind(
         counts.revisions,
@@ -2061,7 +2075,8 @@ async function cutoverDecrypt(
         ctx.userId,
         head.objectId,
         projectId,
-        projectId
+        projectId,
+        ...device.binds
       ),
     // The format flips with the staged head; the encrypted rows go in the
     // purge.
@@ -2122,6 +2137,9 @@ async function cutoverDecrypt(
     }
     if (current.lease_id !== lease || (current.lease_expires_at ?? 0) <= now) {
       leaseLost();
+    }
+    if (await deviceListMoved(ctx.db, ctx.userId, device.key)) {
+      refuseDeviceListMoved();
     }
     refuse(
       409,
@@ -2242,12 +2260,47 @@ async function decryptPurgeStep(
   };
 }
 
+/**
+ * The device-list fence of a decrypt staging's writes and cutover: the
+ * lease holder's device (`deviceId`, the migration row's) is still
+ * certified in the owner's newest device list, and the fence holds only
+ * while that list is the one read here. It is the reverse path's
+ * counterpart of a staged encrypted version's signer fence
+ * (`writeStagedVersion`): a device removed while it holds the lease stages
+ * nothing more and cannot cut the project over. (The other fence those
+ * versions carry, a pending member rotation, guards ciphertext sealed
+ * under a key a removed device may hold; plaintext staged beside the
+ * project is sealed under none, and the purge drops the group.)
+ */
+export interface DecryptLeaseDevice {
+  readonly sql: string;
+  readonly binds: readonly unknown[];
+  /** The device-list position the fence holds at. */
+  readonly key: { generation: number; headSequence: number };
+}
+
+export async function decryptLeaseDeviceFence(
+  db: D1Database,
+  userId: string,
+  deviceId: string | null
+): Promise<DecryptLeaseDevice> {
+  if (!deviceId) {
+    refuse(
+      403,
+      'E2EE_DEVICE_NOT_CERTIFIED',
+      'Turn encryption off from a device listed in Settings › Encryption.'
+    );
+  }
+  const key = await requireCertifiedDevice(db, userId, deviceId);
+  return { ...deviceListUnchanged(userId, key), key };
+}
+
 /** The lease holder of a decrypt staging, or a refusal. */
 async function requireDecryptLease(
   ctx: Context,
   projectId: string,
   lease: string | null
-): Promise<{ leaseId: string; now: number }> {
+): Promise<{ lease: StagingLease; deviceId: string | null }> {
   if (!lease) return leaseLost();
   const check = await checkStagingLease(
     ctx.db,
@@ -2257,7 +2310,9 @@ async function requireDecryptLease(
     Date.now(),
     'decrypt'
   );
-  if (check?.kind === 'held') return check.lease;
+  if (check?.kind === 'held') {
+    return { lease: check.lease, deviceId: check.deviceId };
+  }
   if (check?.kind === 'lost') leaseLost();
   refuse(
     409,
@@ -2394,7 +2449,12 @@ async function stageDetails(
     }
     throw error;
   }
-  const fence = decryptStagingFence(projectId, ctx.userId, held);
+  const device = await decryptLeaseDeviceFence(
+    ctx.db,
+    ctx.userId,
+    held.deviceId
+  );
+  const fence = decryptStagingFence(projectId, ctx.userId, held.lease, device);
   const nowIso = new Date().toISOString();
   const statements: D1PreparedStatement[] = [
     // The fence itself, so a call with nothing to stage still proves the
@@ -2453,25 +2513,31 @@ async function stageDetails(
     );
   }
   const results = await runBatch(ctx.db, statements);
-  if ((results[0]?.meta?.changes ?? 0) !== 1) leaseLost();
+  if ((results[0]?.meta?.changes ?? 0) !== 1) {
+    if (await deviceListMoved(ctx.db, ctx.userId, device.key)) {
+      refuseDeviceListMoved();
+    }
+    leaseLost();
+  }
   return new Response(null, { status: 204 });
 }
 
 /**
  * Slice 7-3: records the staged plaintext head of a decrypting project on
  * its migration row (its document version and its object's checksum),
- * fenced on the lease. Called by the plaintext document route after the
- * head is stored (`e2eeReverseStaging.ts`).
+ * fenced on the lease and its holder's device. Called by the plaintext
+ * document route after the head is stored (`e2eeReverseStaging.ts`).
  */
 export async function recordDecryptStagedHead(
   db: D1Database,
   projectId: string,
   userId: string,
-  lease: { leaseId: string; now: number },
+  lease: StagingLease,
+  device: DecryptLeaseDevice,
   version: number,
   checksumSha256: string
 ): Promise<void> {
-  const fence = decryptStagingFence(projectId, userId, lease);
+  const fence = decryptStagingFence(projectId, userId, lease, device);
   const results = await runBatch(db, [
     db
       .prepare(
@@ -2497,6 +2563,9 @@ export async function recordDecryptStagedHead(
         'The staged head must be newer than the encrypted head it replaces.',
         { sourceVersion: row.source_version }
       );
+    }
+    if (await deviceListMoved(db, userId, device.key)) {
+      refuseDeviceListMoved();
     }
     leaseLost();
   }

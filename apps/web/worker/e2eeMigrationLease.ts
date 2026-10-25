@@ -44,10 +44,15 @@ export function migrationLeaseOf(
  * `held`: the caller owns the project, it is a live plaintext project
  * staged for encryption, and `leaseId` is its live lease. `lost`: it is
  * staged, but under another or a lapsed lease. Null: not staged at all
- * (or migration 0042 is missing).
+ * (or migration 0042 is missing). A held lease names the device that holds
+ * it (slice 7-3 fences a decrypt staging's writes on it).
  */
 export type StagingCheck =
-  | { readonly kind: 'held'; readonly lease: StagingLease }
+  | {
+      readonly kind: 'held';
+      readonly lease: StagingLease;
+      readonly deviceId: string | null;
+    }
   | { readonly kind: 'lost' }
   | null;
 
@@ -66,7 +71,7 @@ export async function checkStagingLease(
   if (!(await isE2eeProjectMigrationStorageReady(db))) return null;
   const row = await db
     .prepare(
-      `SELECT m.lease_id, m.lease_expires_at
+      `SELECT m.lease_id, m.lease_expires_at, m.device_id
        FROM e2ee_project_migrations m
        JOIN projects p ON p.id = m.project_id
        WHERE m.project_id = ? AND m.owner_user_id = ? AND p.user_id = ?
@@ -80,10 +85,14 @@ export async function checkStagingLease(
       direction,
       direction === 'encrypt' ? 1 : 2
     )
-    .first<{ lease_id: string | null; lease_expires_at: number | null }>();
+    .first<{
+      lease_id: string | null;
+      lease_expires_at: number | null;
+      device_id: string | null;
+    }>();
   if (!row) return null;
   if (row.lease_id === leaseId && (row.lease_expires_at ?? 0) > now) {
-    return { kind: 'held', lease: { leaseId, now } };
+    return { kind: 'held', lease: { leaseId, now }, deviceId: row.device_id };
   }
   return { kind: 'lost' };
 }
@@ -133,21 +142,34 @@ export async function stagedHead(
  * Slice 7-3: the fence a plaintext staging write for an encrypted project
  * being turned back into plaintext carries in its own SQL: the owner's live
  * format-2 project, staged for decryption under the request's lease, which
- * is still live at the time it was checked.
+ * is still live at the time it was checked, and `device`: the lease
+ * holder's device is still certified, as the owner's device list read when
+ * that was checked says (`decryptLeaseDeviceFence`). It is what a staged
+ * encrypted version's signer device-list fence is to the encrypting
+ * direction: a device removed meanwhile stages nothing more.
  */
 export function decryptStagingFence(
   projectId: string,
   userId: string,
-  lease: StagingLease
+  lease: StagingLease,
+  device: { readonly sql: string; readonly binds: readonly unknown[] }
 ): { sql: string; binds: unknown[] } {
   return {
-    sql: `EXISTS (SELECT 1 FROM e2ee_project_migrations dm
+    sql: `(EXISTS (SELECT 1 FROM e2ee_project_migrations dm
       JOIN projects dp ON dp.id = dm.project_id
       WHERE dm.project_id = ? AND dm.owner_user_id = ? AND dp.user_id = ?
         AND dm.direction = 'decrypt' AND dm.state = 'staging'
         AND dm.lease_id = ? AND dm.lease_expires_at > ?
-        AND dp.storage_format = 2 AND dp.status <> 'deleted')`,
-    binds: [projectId, userId, userId, lease.leaseId, lease.now]
+        AND dp.storage_format = 2 AND dp.status <> 'deleted')
+      AND ${device.sql})`,
+    binds: [
+      projectId,
+      userId,
+      userId,
+      lease.leaseId,
+      lease.now,
+      ...device.binds
+    ]
   };
 }
 

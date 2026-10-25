@@ -860,6 +860,76 @@ describe('turning an encrypted project back into plaintext', () => {
     await expectOpensAsPlaintext(srv, encrypted);
   });
 
+  it('stages and cuts over nothing once the lease holder’s device is no longer certified', async () => {
+    const srv = roomServer();
+    const encrypted = await encryptedProject(srv, { revisions: 1 });
+    const { projectId } = encrypted;
+    // The device list moves on (a removal, say) after the lease holder's
+    // device was checked and before the cutover's batch lands, as for a
+    // staged encrypted version.
+    const db = srv.env.DB as D1Database;
+    const batch = db.batch.bind(db);
+    let armed = true;
+    db.batch = async (statements: D1PreparedStatement[]) => {
+      const cut = statements.some((statement) =>
+        /SET state = 'cutover'/.test(
+          (statement as unknown as { sql?: string }).sql ?? ''
+        )
+      );
+      if (armed && cut) {
+        armed = false;
+        srv.db
+          .prepare(
+            `INSERT INTO e2ee_device_list_entries
+             SELECT user_id, generation, sequence + 1, entry, signature,
+                    substr(entry_hash, 2) || '0', created_at
+             FROM e2ee_device_list_entries WHERE user_id = ?
+             ORDER BY sequence DESC LIMIT 1`
+          )
+          .run(OWNER);
+      }
+      return batch(statements);
+    };
+    const desktop = reverseOn(srv, owner, 'owner_desktop');
+    expect(await errorOf(decryptFully(desktop, projectId))).toMatchObject({
+      status: 409,
+      code: 'E2EE_DEVICE_LIST_CHANGED'
+    });
+    expect(armed).toBe(false);
+    expect(formatOf(srv, projectId)).toBe(2);
+    expect(migrationRow(srv, projectId)).toMatchObject({
+      direction: 'decrypt',
+      state: 'staging'
+    });
+    // A lease whose device the owner's newest list no longer names stages
+    // nothing more and cannot cut the project over.
+    srv.db
+      .prepare(
+        "UPDATE e2ee_project_migrations SET device_id = 'owner_removed' WHERE project_id = ?"
+      )
+      .run(projectId);
+    const lease = migrationRow(srv, projectId)!.lease_id as string;
+    const leased = withMigrationLease(desktop.d.fetcher, lease);
+    const details = await leased(
+      `/api/e2ee/projects/${projectId}/migration/plaintext/details`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ measurements: null, workspaceSessions: [] })
+      }
+    );
+    expect(details.status).toBe(403);
+    expect(((await details.json()) as { code: string }).code).toBe(
+      'E2EE_DEVICE_NOT_CERTIFIED'
+    );
+    expect(
+      await errorOf(
+        createProjectMigrationsApi(desktop.d.fetcher).cutover(projectId, lease)
+      )
+    ).toMatchObject({ status: 403, code: 'E2EE_DEVICE_NOT_CERTIFIED' });
+    expect(formatOf(srv, projectId)).toBe(2);
+  });
+
   it('abandons: drops every staged plaintext row and object, and the project stays encrypted and writable', async () => {
     const srv = roomServer();
     const encrypted = await encryptedProject(srv, { revisions: 2 });

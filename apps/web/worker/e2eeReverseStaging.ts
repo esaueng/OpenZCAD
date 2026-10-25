@@ -13,7 +13,8 @@
  *
  * Each lands beside the ciphertext and never touches the project row, which
  * the cutover (`e2eeProjectMigrations.ts`) points at the staged head. Every
- * statement carries the lease in its own SQL. Without the reverse path open
+ * statement carries the lease in its own SQL, and the lease holder's
+ * device-list fence (its device still certified, `decryptLeaseDeviceFence`). Without the reverse path open
  * (E2EE_REVERSE_ENABLED with migration, and migration 0043), or without a
  * held lease, nothing here applies and the routes answer as before (an
  * encrypted project's plaintext routes refuse with 409).
@@ -41,7 +42,11 @@ import {
   migrationLeaseOf,
   type StagingLease
 } from './e2eeMigrationLease';
-import { recordDecryptStagedHead } from './e2eeProjectMigrations';
+import {
+  decryptLeaseDeviceFence,
+  recordDecryptStagedHead,
+  type DecryptLeaseDevice
+} from './e2eeProjectMigrations';
 import { RouteError } from './e2eeProjects';
 import { SharingRequestError } from './sharing';
 
@@ -49,6 +54,8 @@ import { SharingRequestError } from './sharing';
 export interface DecryptStaging {
   readonly projectId: string;
   readonly lease: StagingLease;
+  /** The lease holder's device, still certified when the lease was checked. */
+  readonly device: DecryptLeaseDevice;
   readonly fence: { sql: string; binds: unknown[] };
 }
 
@@ -114,10 +121,14 @@ export async function decryptStagingFor(
       LEASE_LOST_MESSAGE
     );
   }
+  const device = await translated(() =>
+    decryptLeaseDeviceFence(db, userId, check.deviceId)
+  );
   return {
     projectId,
     lease: check.lease,
-    fence: decryptStagingFence(projectId, userId, check.lease)
+    device,
+    fence: decryptStagingFence(projectId, userId, check.lease, device)
   };
 }
 
@@ -204,6 +215,7 @@ export async function stageDecryptedHead(
       staging.projectId,
       userId,
       staging.lease,
+      staging.device,
       stored.version,
       stored.checksumSha256
     )
