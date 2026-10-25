@@ -136,16 +136,21 @@ export function useInPlaceRevolve(
    */
   const [previewedAngle, setPreviewedAngle] = useState<number | null>(null);
   /**
-   * The angle each built document was built for. A frame LivePreview
-   * republishes from its cache is that same document, so its angle travels
-   * with it rather than being read from whichever build started last.
+   * The angle each built document was built for, and the body it adds. A
+   * frame LivePreview republishes from its cache is that same document, so
+   * both travel with it rather than being read from whichever build started
+   * last.
    */
-  const builtAngles = useRef(new WeakMap<ProjectDocument, number>()).current;
+  const builtFrames = useRef(
+    new WeakMap<
+      ProjectDocument,
+      { angle: number; bodyId: BodyId | undefined }
+    >()
+  ).current;
   const optionsRef = useRef(options);
   optionsRef.current = options;
   const sessionRef = useRef(session);
   sessionRef.current = session;
-  const previewBodyRef = useRef<BodyId | undefined>(undefined);
 
   const profile = session?.profile ?? null;
   const view = useMemo(
@@ -209,21 +214,20 @@ export function useInPlaceRevolve(
         if (!request || !base) return null;
         const command = optionsRef.current.buildCommand(request);
         command.validate(base);
-        previewBodyRef.current = command.resultBodyId;
         const built = command.apply(base);
-        builtAngles.set(built, value);
+        builtFrames.set(built, { angle: value, bodyId: command.resultBodyId });
         return built;
       },
       derive: (document) => optionsRef.current.derive(document),
       publish: (result) => {
-        const bodyId = previewBodyRef.current;
+        const frame = result ? builtFrames.get(result.document) : undefined;
         const valid = Boolean(
-          result && bodyId && result.derived.bodyRepresentations[bodyId]
+          result &&
+          frame?.bodyId &&
+          result.derived.bodyRepresentations[frame.bodyId]
         );
         setPreviewValid(valid);
-        setPreviewedAngle(
-          result ? (builtAngles.get(result.document) ?? null) : null
-        );
+        setPreviewedAngle(frame?.angle ?? null);
         if (!result) return;
         if (valid) {
           setRefusal(null);
@@ -267,7 +271,6 @@ export function useInPlaceRevolve(
 
   const end = useCallback(() => {
     preview.clear();
-    previewBodyRef.current = undefined;
     setSession(null);
     setRefusal(null);
     setPreviewValid(false);

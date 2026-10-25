@@ -240,7 +240,25 @@ describe('useInPlaceRevolve', () => {
 
   it('finishes on a cached frame shown again by a drag back', async () => {
     const releases: (() => void)[] = [];
+    // Each build adds a body under a new id, as the real command does: the
+    // cached frame must be judged by its own body, not the newest build's.
+    let builds = 0;
     const { hook } = setup({
+      buildCommand: () => {
+        const bodyId = `body_preview_${(builds += 1)}` as BodyId;
+        return {
+          validate: () => undefined,
+          apply: (document) =>
+            ({
+              ...document,
+              derived: {
+                ...document.derived,
+                bodyRepresentations: { [bodyId]: {} }
+              }
+            }) as ProjectDocument,
+          resultBodyId: bodyId
+        };
+      },
       derive: (document) =>
         new Promise((resolve) => {
           releases.push(() => resolve(document.derived));
