@@ -205,13 +205,12 @@ test('Save-Data loads neither Settings nor the keypad speculatively', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Saving data');
   await page.getByRole('button', { name: 'Create project' }).click();
-  // A tool card is up: within reach of the keypad, but nobody opened it.
+  // A command is up with its chips (U09): within reach of the keypad, but
+  // nobody opened it.
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await expect(
-    page
-      .getByRole('region', { name: 'Feature inspector' })
-      .getByRole('button', { name: /^Create/ })
-  ).toBeVisible();
+  await expect(page.getByTestId('command-handle-width')).toBeVisible({
+    timeout: 30_000
+  });
   await page.waitForTimeout(6_000);
   expect(fetched).toEqual([]);
 });
