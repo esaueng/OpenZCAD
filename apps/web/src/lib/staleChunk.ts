@@ -1,4 +1,11 @@
-import { lazy, type ComponentType, type LazyExoticComponent } from 'react';
+import {
+  createElement,
+  lazy,
+  type ComponentType,
+  type ComponentProps,
+  type LazyExoticComponent,
+  type ReactElement
+} from 'react';
 
 /**
  * A lazy chunk can fail after a deploy or a connection loss. The browser's
@@ -89,4 +96,54 @@ export function watchPreloadErrors(target: Window = window): () => void {
   };
   target.addEventListener('vite:preloadError', listener);
   return () => target.removeEventListener('vite:preloadError', listener);
+}
+
+/** A lazy component that can be loaded ahead of its first use. */
+export interface PreloadableLazy<P extends object> {
+  (props: P): ReactElement;
+  /** Loads and evaluates the chunk; later renders need no Suspense. */
+  preload(): Promise<void>;
+}
+
+/**
+ * {@link lazyWithStaleChunkNotice} for a surface that opens on a click and
+ * must not open empty. `React.lazy` suspends on its first render even when the
+ * chunk is already in the HTTP cache — the module still evaluates
+ * asynchronously — so Settings opened blank and the Move panel left a gap for
+ * a few frames the first time. Preloaded (or once loaded), this renders the
+ * component directly instead.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors React.lazy's own constraint
+export function preloadableLazy<T extends ComponentType<any>>(
+  factory: () => Promise<{ default: T }>
+): PreloadableLazy<ComponentProps<T>> {
+  type P = ComponentProps<T>;
+  let loaded: T | null = null;
+  let pending: Promise<{ default: T }> | null = null;
+  const load = () =>
+    (pending ??= factory().then(
+      (module) => {
+        loaded = module.default;
+        return module;
+      },
+      (error: unknown) => {
+        // A later render or preload may try again (the link may be back).
+        pending = null;
+        throw error;
+      }
+    ));
+  // Only a render that fails reports a stale chunk: a warm-up that fails
+  // offline is not something the user asked for or can see.
+  const Lazy = lazy(() =>
+    load().catch((error: unknown) => {
+      if (isChunkLoadError(error)) reportStaleChunk();
+      throw error;
+    })
+  );
+  const Preloadable = ((props: P) =>
+    loaded
+      ? createElement(loaded, props)
+      : createElement(Lazy, props)) as PreloadableLazy<P>;
+  Preloadable.preload = () => load().then(() => undefined);
+  return Preloadable;
 }

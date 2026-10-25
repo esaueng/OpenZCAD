@@ -330,6 +330,7 @@ import {
 import {
   lazyWithStaleChunkNotice,
   loadWhenOnline,
+  preloadableLazy,
   onStaleChunk,
   watchPreloadErrors,
   STALE_CHUNK_MESSAGE
@@ -913,7 +914,7 @@ function withSuspense<P extends object>(Lazy: JSXElementConstructor<P>) {
   };
 }
 
-const LazyNumericKeypad = lazyWithStaleChunkNotice(() =>
+const LazyNumericKeypad = preloadableLazy(() =>
   import('./components/NumericKeypad').then((module) => ({
     default: module.NumericKeypad
   }))
@@ -948,7 +949,7 @@ const ViewModeBar = createLazyPanel<
 // off the entry chunk, which runs at its budget. Its own boundary keeps a
 // chunk that fails to load (a tab left open across a deploy) to the panel
 // slot, with the Reload notice, instead of taking the workspace down.
-const LazyMoveOverlay = lazyWithStaleChunkNotice(() =>
+const LazyMoveOverlay = preloadableLazy(() =>
   import('./components/MoveOverlay').then((module) => ({
     default: module.MoveOverlay
   }))
@@ -1170,11 +1171,17 @@ const LazyAssistantPanel = lazyWithStaleChunkNotice(() =>
  * weight in the launcher chunk — before a project is even open — for the sake
  * of a click that may never come.
  */
-const LazySettingsPage = lazyWithStaleChunkNotice(() =>
+const LazySettingsPage = preloadableLazy(() =>
   import('./components/SettingsPage').then((module) => ({
     default: module.SettingsPage
   }))
 );
+/**
+ * Surfaces a click opens, loaded while the page is idle: their first open
+ * used to show an empty frame or two while the chunk evaluated, even with
+ * the chunk already prefetched.
+ */
+const FIRST_USE_SURFACES = [LazySettingsPage, LazyMoveOverlay, LazyNumericKeypad];
 const LazyProjectSharingDialog = lazyWithStaleChunkNotice(() =>
   import('./components/ProjectSharingDialog').then((module) => ({
     default: module.ProjectSharingDialog
@@ -2763,6 +2770,21 @@ export function App() {
       stopPreload();
     };
   }, [announce]);
+  // Load what a click opens while the page is idle, so its first open is not
+  // an empty frame. A failure here is left to the surface's own load, which
+  // reports a stale chunk where the user is looking.
+  useEffect(() => {
+    const warm = () => {
+      for (const surface of FIRST_USE_SURFACES)
+        surface.preload().catch(() => undefined);
+    };
+    if (typeof window.requestIdleCallback === 'function') {
+      const idle = window.requestIdleCallback(warm, { timeout: 5_000 });
+      return () => window.cancelIdleCallback(idle);
+    }
+    const timer = window.setTimeout(warm, 2_000);
+    return () => window.clearTimeout(timer);
+  }, []);
   /** A change of selection or command retires the message it interrupts. */
   const retireStatusMessage = useCallback(() => {
     setStatusEntry((current) => retireStatus(current, Date.now()));

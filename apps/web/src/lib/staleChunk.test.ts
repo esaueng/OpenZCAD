@@ -82,3 +82,41 @@ describe('preload errors', () => {
     stopListening();
   });
 });
+
+describe('preloadableLazy', () => {
+  it('renders a preloaded component on its first render, without suspending', async () => {
+    const { render, screen } = await import('@testing-library/react');
+    const { Suspense, createElement } = await import('react');
+    const { preloadableLazy } = await import('./staleChunk');
+    const Surface = preloadableLazy(() =>
+      Promise.resolve({
+        default: ({ label }: { label: string }) =>
+          createElement('p', null, label)
+      })
+    );
+    await Surface.preload();
+    render(
+      createElement(
+        Suspense,
+        { fallback: createElement('p', null, 'loading') },
+        createElement(Surface, { label: 'Settings' })
+      )
+    );
+    expect(screen.getByText('Settings')).toBeTruthy();
+    expect(screen.queryByText('loading')).toBeNull();
+  });
+
+  it('does not report a stale chunk when only a preload fails', async () => {
+    const { preloadableLazy } = await import('./staleChunk');
+    const listener = vi.fn();
+    const stop = onStaleChunk(listener);
+    const Surface = preloadableLazy(() =>
+      Promise.reject(
+        new TypeError('Failed to fetch dynamically imported module: x.js')
+      )
+    );
+    await expect(Surface.preload()).rejects.toThrow();
+    expect(listener).not.toHaveBeenCalled();
+    stop();
+  });
+});
