@@ -8736,6 +8736,7 @@ export function App() {
         sweepCurveExists(current, sketchId, entityId),
       body: (bodyId) => inPlaceBodyPick(bodyId),
       laterTransforms: laterInPlaceSteps(current, feature),
+      laterReshapes: laterDirectEdit(current, feature),
       datumAxis: (featureId) => current.derived.datumAxes?.[featureId] ?? null,
       bodyVertices: (bodyId) =>
         representations[bodyId]?.mesh.vertices ?? null
@@ -8844,6 +8845,26 @@ export function App() {
         !isFeatureSuppressed(later)
           ? [later.data]
           : []
+      );
+  }
+
+  /**
+   * Whether a later direct edit republishes a transform's body reshaped, so
+   * the model's body cannot be taken back to the one before the transform.
+   */
+  function laterDirectEdit(
+    current: ProjectDocument,
+    feature: FeatureNode
+  ): boolean {
+    const data = feature.data;
+    if (data.featureKind !== 'transform') return false;
+    return featureHistory(current)
+      .downstream(feature.featureId)
+      .some(
+        (later) =>
+          later.data.featureKind === 'direct-edit' &&
+          later.data.targetBodyId === data.targetBodyId &&
+          !isFeatureSuppressed(later)
       );
   }
 
