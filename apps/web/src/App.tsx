@@ -7174,9 +7174,16 @@ export function App() {
     sketchCount: sketchOptions.length,
     closedProfileSketchCount,
     liveBodyCount: committedBodyCount,
-    exactGeometryReady: !toolsWaiting,
+    exactGeometryReady: displayedGeometryComplete,
     hasEdgeSelected: selectedEdges.length > 0
   };
+  // What the palette, the selection card and the command bar show. Launching
+  // a tool still reads `availability`, so a tool that needs the finished
+  // model cannot open from the one a short rebuild is replacing; it only
+  // stops the buttons greying out and back for that rebuild's length.
+  const shownAvailability: ToolAvailability = toolsWaiting
+    ? availability
+    : { ...availability, exactGeometryReady: true };
 
   /**
    * A History row whose feature a later one consumed, brought into focus:
@@ -7331,7 +7338,7 @@ export function App() {
               interaction.mode === 'face' &&
               Boolean(interaction.target.resizeBodyFeatureId),
             pressedAction: calloutPressedAction,
-            availability
+            availability: shownAvailability
           }),
           ...(calloutImportedFace === 'edit'
             ? [editFaceVerb(editFaceOpen, editDisabledReason)]
@@ -23137,7 +23144,7 @@ export function App() {
               group: group.label,
               shortcut: keymap.label(toolCommandId(toolId)),
               icon: meta.icon,
-              disabledReason: toolDisabledReason(toolId, availability),
+              disabledReason: toolDisabledReason(toolId, shownAvailability),
               offPick: !toolApplies(commandContext, toolId),
               run: () => launchTool(toolId)
             };
@@ -24473,7 +24480,7 @@ export function App() {
             : undefined
         }
         activeTool={tool}
-        availability={availability}
+        availability={shownAvailability}
         onLaunchTool={launchTool}
         moreOpen={panels.commandFoldOpen}
         onToggleMore={() => {

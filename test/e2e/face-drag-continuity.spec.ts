@@ -576,3 +576,41 @@ test('applying a fillet goes straight from its preview to the blend face', async
   await expect(page.locator('.selection-card')).toContainText('Blend face');
   expect(await page.evaluate(() => window.__bodyCardFrames)).toBe(0);
 });
+
+test('a tool that needs the finished model waits for a genuine rebuild', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  await slowAnalysis(page);
+  const { canvas, handle } = await armedBox(page);
+  await page.mouse.move(handle.x, handle.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    handle.x + handle.dx * handle.pixels * 3,
+    handle.y + handle.dy * handle.pixels * 3,
+    { steps: 8 }
+  );
+  await expect(canvas).toHaveAttribute('data-e2e-height-proxy-offset', '3');
+  await page.mouse.up();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Offset face' })
+  ).toHaveCount(1, { timeout: 30_000 });
+  await page.keyboard.press('Escape');
+  // A rename is a real rebuild: the model on screen is the one it replaces.
+  await page.evaluate(() => {
+    window.__slowAnalysis!.armed = true;
+  });
+  const objects = page.getByRole('list', { name: 'Objects' });
+  await objects.getByRole('button', { name: 'Rename body Box 1' }).click();
+  const field = objects.getByRole('textbox', { name: 'Rename body Box 1' });
+  await field.fill('Plate');
+  await field.press('Enter');
+  await expect
+    .poll(() => page.evaluate(() => window.__slowAnalysis!.held))
+    .toBeGreaterThan(0);
+  await page.getByRole('button', { name: /^Hole/ }).first().click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Waiting for exact geometry'
+  );
+  await expect(page.getByRole('region', { name: /^Hole/ })).toHaveCount(0);
+});
