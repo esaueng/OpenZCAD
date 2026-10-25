@@ -684,7 +684,7 @@ describe('an untouched edit writes the feature back as stored', () => {
           },
           { sketchId: SKETCH, profile: { all: true, sourceEntityIds: ['a'] } }
         ]
-      } as FeatureData),
+      }),
       {
         ...EDIT_CTX,
         profile: (sketchId, reference) =>
