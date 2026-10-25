@@ -29,6 +29,8 @@ export interface InPlaceCommandBarProps {
    */
   options?: readonly InPlaceOption[];
   onOption?(optionId: string, value: string): void;
+  /** Transfers the current draft to the full numeric form before committing. */
+  onPreciseValues?(): void;
   onDone(): void;
   onCancel(): void;
 }
@@ -40,6 +42,7 @@ export function InPlaceCommandBar({
   refusal = null,
   options = [],
   onOption,
+  onPreciseValues,
   onDone,
   onCancel
 }: InPlaceCommandBarProps) {
@@ -53,6 +56,15 @@ export function InPlaceCommandBar({
       <span className="in-place-command-hint" role="status" aria-live="polite">
         {refusal ?? hint}
       </span>
+      {onPreciseValues && (
+        <button
+          type="button"
+          className="in-place-command-cancel"
+          onClick={onPreciseValues}
+        >
+          Precise values…
+        </button>
+      )}
       {options.length > 0 ? (
         <details className="in-place-command-options">
           <summary aria-label={`${title} options`}>

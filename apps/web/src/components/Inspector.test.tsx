@@ -28,10 +28,14 @@ import {
   commandFactories,
   type AnyCommand
 } from '@openzcad/command-system';
-import { DEFAULT_BODY_COLOR, edgeTopologyWitnessHash, toUserId } from '@openzcad/shared';
+import {
+  DEFAULT_BODY_COLOR,
+  edgeTopologyWitnessHash,
+  toUserId
+} from '@openzcad/shared';
 import type { MassPropertiesRead } from '@openzcad/kernel-adapter/exact';
 import { MASS_DENSITY_STORAGE_KEY } from '../lib/massDensityPreference';
-import { Inspector } from './Inspector';
+import { BodyStats, Inspector } from './Inspector';
 import {
   createPrimitiveCommand,
   primitivePlacement
@@ -176,6 +180,12 @@ function makeProps(
 }
 
 describe('direct pick details', () => {
+  it('identifies committed measurements when a form has unapplied values', () => {
+    render(<BodyStats body={body} units="mm" lastApplied />);
+    expect(screen.getByText('Measurements (last applied)')).toBeVisible();
+    expect(screen.getByText('last applied model')).toBeVisible();
+    expect(screen.queryByText('live')).toBeNull();
+  });
   it('draws no card for an inferred face, edge or body until asked', () => {
     const picks: Array<Partial<ComponentProps<typeof Inspector>>> = [
       { selectedTopology: frontFace },
@@ -1583,7 +1593,11 @@ describe('Inspector sketch editing (S04)', () => {
   it('keeps a lone projected circle out of the one-shape form (I01)', () => {
     // Apply there would rebuild a plain circle and drop the edge link.
     const witness: EdgeWitnessV1 = {
-      curveType: 'CIRCLE', length: 1, closed: true, center: [0, 0, 0], axis: null
+      curveType: 'CIRCLE',
+      length: 1,
+      closed: true,
+      center: [0, 0, 0],
+      axis: null
     };
     const props = sketchProps([
       {

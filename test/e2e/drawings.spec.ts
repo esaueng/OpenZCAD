@@ -225,6 +225,11 @@ test('exports the same bytes after a reload re-meshes the model', async ({
   ).toBeVisible();
   // Edit only once the creation has rebuilt: an edit opened against the
   // rebuilding model is refused ("The model changed").
+  await expect(page.locator('.viewer-host canvas')).toHaveAttribute(
+    'data-e2e-rendered-bodies',
+    '1',
+    { timeout: 60_000 }
+  );
   await expect(page.getByRole('contentinfo')).not.toContainText(
     /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i,
     { timeout: 60_000 }

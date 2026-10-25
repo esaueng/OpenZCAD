@@ -1570,6 +1570,7 @@ import {
   shouldAdoptAccountSettings
 } from './lib/appSettings';
 import { usePanelSuspension } from './hooks/usePanelSuspension';
+import { sketchObjectLabels } from './lib/sketch/objectLabels';
 import {
   loadPanelState,
   savePanelState,
@@ -2602,6 +2603,8 @@ export function App() {
   } | null>(null);
   const [modelingEditFeature, setModelingEditFeature] =
     useState<FeatureNode | null>(null);
+  const [modelingCreateInitial, setModelingCreateInitial] =
+    useState<ModelingOperationFormState | null>(null);
   /** The fillet/chamfer form's current size, mirrored onto the edge handle. */
   const [edgeFormSize, setEdgeFormSize] = useState<number | null>(null);
   /**
@@ -3207,11 +3210,15 @@ export function App() {
     }
     sketchPickingRef.current = sketchPicking;
   }, [sketchPicking, retireStatusMessage]);
-  // A sketch takes the stage: the panels and the "More tools" fold step
-  // aside for it and return when it ends, the preference untouched. A drag
+  // A sketch or feature form takes the stage: model panels and "More tools"
+  // step aside and return when it ends, the preference untouched. A drag
   // on the model leaves them in place (see `effectivePanels`).
   const panels = usePanelSuspension(panelState, {
-    sketching: interaction.mode === 'sketch'
+    sketching: interaction.mode === 'sketch',
+    editing:
+      panelState.workspaceMode === 'build' &&
+      (tool !== null ||
+        (selectedFeatureNode !== null && featureSelectionSource !== 'inferred'))
   });
   const toolRef = useRef(tool);
   toolRef.current = tool;
@@ -4915,6 +4922,13 @@ export function App() {
         : `Cannot ${action}: ${reason}.`
     );
     return false;
+  }
+
+  // Saving a revision preserves the document; it does not model in Draw.
+  function ensureCanSave(action = 'save a revision'): boolean {
+    return workspaceModeRef.current === 'drawing'
+      ? ensureCanEditDrawings(action)
+      : ensureCanEdit(action);
   }
 
   function ensureCanEditParameters(action = 'change this parameter'): boolean {
@@ -7579,6 +7593,7 @@ export function App() {
     setSketchDimensionDraft(null);
     setSketchEditDraft(null);
     setModelingEditFeature(null);
+    setModelingCreateInitial(null);
     setFeatureFormError(null);
     clearAutoFrame();
     if (!geometry.retainReadyGeometry(normalized)) geometry.invalidate();
@@ -8509,6 +8524,7 @@ export function App() {
     // A tool opens its create card; openModelingFeatureEditor sets the
     // feature back afterwards when it is reopening one instead.
     setModelingEditFeature(null);
+    setModelingCreateInitial(null);
     setFormFacePickTarget(null);
     setViewportFormFacePick(null);
     setRevertPill(null);
@@ -12167,7 +12183,7 @@ export function App() {
       );
       return;
     }
-    if (!ensureCanEdit('save a named revision')) {
+    if (!ensureCanSave('save a named revision')) {
       return;
     }
     setNamingSave(true);
@@ -12195,7 +12211,7 @@ export function App() {
       );
       return;
     }
-    if (!ensureCanEdit('save a shared revision')) return;
+    if (!ensureCanSave()) return;
     accountSavePendingRef.current = true;
     let sourceWarning: string | null = null;
     let savedOnDevice = false;
@@ -12255,7 +12271,7 @@ export function App() {
       if (
         !isCurrentProject() ||
         projectOpenElsewhereRef.current ||
-        !ensureCanEdit('save a shared revision')
+        !ensureCanSave()
       )
         return;
       savingDocument = savingManager.document;
@@ -12272,7 +12288,7 @@ export function App() {
         await retryUnavailableAccountProject(savingDocument);
         return;
       }
-      if (!ensureCanEdit('save a shared revision')) {
+      if (!ensureCanSave()) {
         setSaveState(
           collaboration.conflict || accountConflict ? 'conflict' : 'local'
         );
@@ -12368,7 +12384,7 @@ export function App() {
       const readDocument = () =>
         isCurrentProject() &&
         !projectOpenElsewhereRef.current &&
-        ensureCanEdit('save a shared revision')
+        ensureCanSave()
           ? savingManager.document
           : null;
       const writeCheckpoint = async (input: {
@@ -16893,12 +16909,26 @@ export function App() {
     ]
   );
 
+  const sketchLabels = useMemo(
+    () =>
+      editingSketchNode && sketchReadDocument
+        ? sketchObjectLabels(sketchReadDocument, editingSketchNode)
+        : new Map<string, string>(),
+    [editingSketchNode, sketchReadDocument]
+  );
+
   const sketchOverview = useMemo(() => {
     const objects =
       editingSketchNode?.objectIds.flatMap((id) => {
         const node = sketchReadDocument?.nodes[id];
         return node?.kind === 'sketch-object'
-          ? [{ id, data: node.data, label: node.name || node.data.objectKind }]
+          ? [
+              {
+                id,
+                data: node.data,
+                label: sketchLabels.get(id) ?? node.name ?? node.data.objectKind
+              }
+            ]
           : [];
       }) ?? [];
     try {
@@ -16924,7 +16954,12 @@ export function App() {
         error: errorMessage(error, 'Unable to analyze this sketch.')
       };
     }
-  }, [editingSketchNode, resolveDocumentValue, sketchReadDocument]);
+  }, [
+    editingSketchNode,
+    resolveDocumentValue,
+    sketchReadDocument,
+    sketchLabels
+  ]);
 
   useEffect(() => {
     setSketchDiagnosticPoints([]);
@@ -16940,10 +16975,7 @@ export function App() {
       return [];
     }
     const nameOf = (objectId: EntityId) => {
-      const node = doc.nodes[objectId];
-      return node?.kind === 'sketch-object'
-        ? node.name || node.data.objectKind
-        : 'entity';
+      return sketchLabels.get(objectId) ?? 'entity';
     };
     const conflicting = new Set(
       sketchSolveStatus?.conflictingConstraintIds ?? []
@@ -16966,7 +16998,7 @@ export function App() {
           data.constraintKind === 'angle' ||
           data.constraintKind === 'radius'
       }));
-  }, [editingSketchNode, doc, sketchSolveStatus]);
+  }, [editingSketchNode, doc, sketchSolveStatus, sketchLabels]);
 
   /** The selected entity's own constraints, for the entity editor's list. */
   const selectedEntityConstraints = useMemo(() => {
@@ -16974,10 +17006,7 @@ export function App() {
       return [];
     }
     const nameOf = (objectId: EntityId) => {
-      const node = doc.nodes[objectId];
-      return node?.kind === 'sketch-object'
-        ? node.name || node.data.objectKind
-        : 'entity';
+      return sketchLabels.get(objectId) ?? 'entity';
     };
     return (editingSketchNode.constraints ?? [])
       .filter(({ origin }) => origin !== 'promotion-structure')
@@ -16993,7 +17022,7 @@ export function App() {
           data.constraintKind === 'angle' ||
           data.constraintKind === 'radius'
       }));
-  }, [editingSketchNode, doc, selectedSketchEntity]);
+  }, [editingSketchNode, doc, selectedSketchEntity, sketchLabels]);
 
   /**
    * The rectangle or polygon the selected line is a side of (S04), as its
@@ -26281,7 +26310,11 @@ export function App() {
                       key={`${modelingOperation}:${modelingEditFeature?.featureId ?? 'new'}`}
                       operation={modelingOperation}
                       editing={modelingEditFeature !== null}
-                      initial={modelingEditInitial}
+                      initial={
+                        modelingEditInitial ??
+                        modelingCreateInitial ??
+                        undefined
+                      }
                       scope={parameterScope.scope}
                       bodies={bodyOptions}
                       faceOptions={modelingOperationFaces}
@@ -26371,6 +26404,7 @@ export function App() {
                         units={doc.units}
                         document={doc}
                         worker={geometry}
+                        lastApplied
                       />
                     </Fragment>
                   ))}
@@ -27019,6 +27053,25 @@ export function App() {
                     value: inPlace.options[option.id] ?? option.initial
                   }))}
                   onOption={inPlace.setOption}
+                  onPreciseValues={
+                    inPlace.tool === 'hole' &&
+                    inPlace.request?.tool === 'modeling'
+                      ? () => {
+                          const request = inPlace.request;
+                          if (
+                            request?.tool !== 'modeling' ||
+                            request.state.operation !== 'hole'
+                          )
+                            return;
+                          inPlace.cancel(true);
+                          if (!openTool('hole')) return;
+                          setModelingTargetBodyId(
+                            request.state.value.targetBodyId || null
+                          );
+                          setModelingCreateInitial(request.state);
+                        }
+                      : undefined
+                  }
                   onDone={() => inPlace.done()}
                   onCancel={() => inPlace.cancel()}
                 />

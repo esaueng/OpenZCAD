@@ -97,6 +97,7 @@ import {
   sheetBodyIds
 } from '../lib/drawing/sheetSources';
 import { saveCadBinaryFile, saveCadTextFile } from '../lib/desktopBridge';
+import { drawingBodyReplacements } from '../lib/drawing/bodySuccessors';
 
 /**
  * D01 drawing workspace: the sheet canvas and its properties.
@@ -150,6 +151,11 @@ type SheetStatus =
   | { kind: 'ready'; fingerprint: string }
   | { kind: 'pending' }
   | { kind: 'stale'; fingerprint: string }
+  | {
+      kind: 'replaced';
+      fingerprint: string;
+      replacements: { from: BodyId; to: BodyId }[];
+    }
   | { kind: 'missing'; bodyNames: string[] };
 
 type ViewState =
@@ -158,6 +164,7 @@ type ViewState =
   | { state: 'error'; message: string };
 
 function sheetStatus(
+  document: ProjectDocument,
   sheet: DrawingSheet,
   bodies: DrawingWorkspaceProps['bodies'],
   geometryPending: boolean,
@@ -169,6 +176,16 @@ function sheetStatus(
   // is not deletion yet, so wait before calling anything missing.
   if (geometryPending) return { kind: 'pending' };
   const missing = ids.filter((id) => !bodies[id] || bodies[id].consumed);
+  if (missing.length > 0) {
+    const replacements = drawingBodyReplacements(document, bodies, ids);
+    if (replacements && replacements.length > 0) {
+      const targets = new Map(replacements.map(({ from, to }) => [from, to]));
+      const fingerprint = drawingSourceFingerprint(bodies, [
+        ...new Set(ids.map((id) => targets.get(id) ?? id))
+      ]);
+      if (fingerprint) return { kind: 'replaced', fingerprint, replacements };
+    }
+  }
   if (missing.length > 0)
     return {
       kind: 'missing',
@@ -397,6 +414,8 @@ function statusMessage(status: SheetStatus): string | null {
       return 'Waiting for the model to finish updating.';
     case 'stale':
       return 'The model changed since this sheet was drawn. Update it to redraw the views.';
+    case 'replaced':
+      return 'Finishing features replaced a body this sheet draws. Update to use the current body and check its dimensions. Changed edges may need re-picking.';
     case 'missing':
       return `This sheet draws ${status.bodyNames.join(', ')}, which no longer exists as a body. Remove it from the views that use it.`;
   }
@@ -838,13 +857,14 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     () =>
       sheet
         ? sheetStatus(
+            document,
             sheet,
             bodies,
             props.geometryPending,
             fingerprints.get(sheet.sheetId) ?? null
           )
         : null,
-    [sheet, bodies, props.geometryPending, fingerprints]
+    [document, sheet, bodies, props.geometryPending, fingerprints]
   );
   const projections = useViewProjections(
     sheet,
@@ -1584,8 +1604,13 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             type="button"
             className="primary"
             onClick={createSheet}
-            disabled={!editable}
-            title={editDisabledReason ?? undefined}
+            disabled={!editable || props.geometryPending}
+            title={
+              editDisabledReason ??
+              (props.geometryPending
+                ? 'Waiting for the model to finish updating.'
+                : undefined)
+            }
           >
             <Plus size={14} aria-hidden="true" /> New drawing sheet
           </button>
@@ -1650,9 +1675,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               type="button"
               className="secondary"
               onClick={createSheet}
-              disabled={!editable}
+              disabled={!editable || props.geometryPending}
               title={
-                editDisabledReason ?? 'New sheet with the four standard views'
+                editDisabledReason ??
+                (props.geometryPending
+                  ? 'Waiting for the model to finish updating.'
+                  : 'New sheet with the four standard views')
               }
             >
               <Plus size={13} aria-hidden="true" /> New
@@ -1687,13 +1715,18 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         {message && (
           <div className={`drawing-banner is-${status.kind}`} role="status">
             <span>{message}</span>
-            {status.kind === 'stale' && (
+            {(status.kind === 'stale' || status.kind === 'replaced') && (
               <button
                 type="button"
                 className="primary"
                 disabled={!editable}
                 onClick={() =>
-                  updateSheet({ source: { fingerprint: status.fingerprint } })
+                  updateSheet({
+                    source: { fingerprint: status.fingerprint },
+                    ...(status.kind === 'replaced'
+                      ? { bodyReplacements: status.replacements }
+                      : {})
+                  })
                 }
               >
                 <RefreshCw size={13} aria-hidden="true" /> Update

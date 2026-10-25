@@ -470,12 +470,15 @@ export function BodyStats({
   body,
   units,
   document,
-  worker
+  worker,
+  lastApplied = false
 }: {
   body: BodyRepresentation;
   units: UnitSystem;
   document?: ProjectDocument | null;
   worker?: InspectorProps['massPropertiesWorker'];
+  /** A form's draft is not the geometry these properties measure. */
+  lastApplied?: boolean;
 }) {
   const projectId = document?.projectId ?? null;
   const [massOpen, setMassOpen] = useState(false);
@@ -652,7 +655,10 @@ export function BodyStats({
   }
   return (
     <>
-      <CollapsibleSection title="Measurements" defaultOpen>
+      <CollapsibleSection
+        title={lastApplied ? 'Measurements (last applied)' : 'Measurements'}
+        defaultOpen
+      >
         <div className="kv-grid">
           <b>volume</b>
           <span>
@@ -667,7 +673,11 @@ export function BodyStats({
           <span>{body.faceCount}</span>
           <b>status</b>
           <span>
-            {body.consumed ? 'combined into a later feature' : 'live'}
+            {body.consumed
+              ? 'combined into a later feature'
+              : lastApplied
+                ? 'last applied model'
+                : 'live'}
           </span>
         </div>
       </CollapsibleSection>

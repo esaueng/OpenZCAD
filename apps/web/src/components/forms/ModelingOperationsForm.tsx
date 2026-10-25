@@ -1,3 +1,4 @@
+import { modelingRefusalSummary } from '../../lib/modelingRefusal';
 import {
   useEffect,
   useRef,
@@ -534,12 +535,20 @@ function preflightMessage(
           Checking that the result builds…
         </p>
       );
-    case 'refused':
+    case 'refused': {
+      const summary = modelingRefusalSummary(state.reason);
       return (
-        <p className="field-error" role="alert">
-          {refusalSentence(state.reason, editing)}
-        </p>
+        <div className="field-error" role="alert">
+          <p>{refusalSentence(summary ?? state.reason, editing)}</p>
+          {summary && (
+            <details>
+              <summary>Technical details</summary>
+              <p>{state.reason}</p>
+            </details>
+          )}
+        </div>
       );
+    }
   }
 }
 

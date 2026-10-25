@@ -28,6 +28,36 @@ const faces: ModelingFaceOption[] = [
 ];
 
 describe('Modeling operations form', () => {
+  it('explains an empty cut and keeps the engine details behind a disclosure', async () => {
+    const reason =
+      'Subtract refused: Kernel refusal operation_failed (internal): empty result: Cut with target fully contained in tool';
+    const onSubmit = vi.fn();
+    render(
+      <ModelingOperationsForm
+        operation="hole"
+        scope={{}}
+        bodies={bodies}
+        faceOptions={faces}
+        onSubmit={onSubmit}
+        onPreflight={async () => ({ status: 'refused', reason })}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: faces[0]!.label }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Diameter' }), {
+      target: { value: '100' }
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create hole' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.querySelector('p')?.textContent).toContain(
+      'This cut would remove the entire target body. Reduce its size or move it.'
+    );
+    const details = within(alert)
+      .getByText('Technical details')
+      .closest('details')!;
+    expect(details.open).toBe(false);
+    expect(details.textContent).toContain(reason);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
   it('asks for a target body only when there is a choice to make', () => {
     const props = {
       operation: 'hole' as const,

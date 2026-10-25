@@ -347,3 +347,18 @@ notes to D01 sheets:
   as references, point-to-line and min/max distances, title-block layouts,
   hole callouts, per-drawing unit and precision properties, and annotations
   on section and detail views (D03).
+
+## Finishing-body update repair
+
+When a finishing feature consumes a drawing's body, the sheet offers the
+existing explicit Update action for an unambiguous chain of one-to-one
+hole, fillet, chamfer, shell, solid-offset, draft or thicken results. This
+updates all affected views and their annotation body references in one
+undoable command, together with the source fingerprint. The stored edge
+hashes and witnesses, view positions and annotation formatting are kept.
+The ordinary edge resolver checks them against the result; a removed or
+ambiguous edge stays broken and requires Re-pick before export. Split
+halves, copies, booleans and missing paths are never guessed. This adds no
+persisted drawing fields or geometry approximations. Regression coverage:
+`test/drawing-body-succession.test.ts`, `DrawingWorkspace.test.tsx`, and
+`test/e2e/design-review-fixes.spec.ts`.

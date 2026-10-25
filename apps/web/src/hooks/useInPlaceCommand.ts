@@ -79,6 +79,8 @@ export interface InPlaceCommand {
   active: boolean;
   tool: InPlaceToolId | null;
   spec: InPlaceToolSpec | null;
+  /** The same draft the preview and Done use; a numeric form can take it over. */
+  request: InPlaceRequest | null;
   slots: InPlaceSlots;
   axisCandidates: RevolveAxisCandidate[];
   handles: HandleSpec[];
@@ -682,6 +684,7 @@ export function useInPlaceCommand(
     active: session !== null,
     tool: session?.tool ?? null,
     spec,
+    request,
     slots,
     axisCandidates,
     handles,

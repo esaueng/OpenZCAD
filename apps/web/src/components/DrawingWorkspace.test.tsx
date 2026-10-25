@@ -7,8 +7,11 @@ import {
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import type { AnyCommand } from '@openzcad/command-system';
-import { createProjectDocument } from '@openzcad/document-core';
+import { commandFactories, type AnyCommand } from '@openzcad/command-system';
+import {
+  addPrimitiveFeature,
+  createProjectDocument
+} from '@openzcad/document-core';
 import {
   toUserId,
   type BodyId,
@@ -172,6 +175,78 @@ function starter(fingerprint: string): DrawingSheet {
 }
 
 describe('DrawingWorkspace', () => {
+  it('waits for ready geometry before offering a new sheet', async () => {
+    const { onCommand } = setup({ geometryPending: true });
+    const create = screen.getByRole('button', { name: 'New drawing sheet' });
+    expect(create).toBeDisabled();
+    expect(create).toHaveAttribute(
+      'title',
+      'Waiting for the model to finish updating.'
+    );
+    await userEvent.click(create);
+    expect(onCommand).not.toHaveBeenCalled();
+  });
+  it('offers an explicit body succession Update instead of a dead-end missing-body warning', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Plate', toUserId('test')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      }
+    );
+    const source = base.bodyOrder[0]!;
+    const document = commandFactories
+      .filletEdges({
+        name: 'Fillet',
+        targetBodyId: source,
+        edgeHashes: [1],
+        size: 1
+      })
+      .apply(base);
+    const target = document.bodyOrder.at(-1)!;
+    const bodies = {
+      [source]: { ...cube(), bodyId: source, consumed: true },
+      [target]: { ...cube(), bodyId: target }
+    };
+    const sheet = createStarterSheet({
+      name: 'Sheet 1',
+      bodyIds: [source],
+      bodies,
+      units: 'mm',
+      paper: { size: 'A3', orientation: 'landscape' },
+      projectionAngle: 'first',
+      fingerprint: 'v1:old'
+    });
+    document.drawings = { sheets: [sheet] };
+    const onCommand = vi.fn((_command: AnyCommand) => true);
+    render(
+      <DrawingWorkspace
+        document={document}
+        bodies={bodies}
+        geometryPending={false}
+        defaultBodyIds={[target]}
+        requestTessellation={displayTessellation(bodies)}
+        editDisabledReason={null}
+        onCommand={onCommand}
+        onStatus={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Finishing features replaced a body'
+    );
+    expect(screen.getByRole('button', { name: 'PDF' })).toBeDisabled();
+    expect(onCommand).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole('button', { name: 'Update' }));
+    expect(onCommand).toHaveBeenCalledTimes(1);
+    const command = onCommand.mock.calls[0]![0];
+    expect(command.kind).toBe('drawing.sheet.update');
+    expect(command.payload).toMatchObject({
+      sheetId: sheet.sheetId,
+      bodyReplacements: [{ from: source, to: target }],
+      source: { fingerprint: drawingSourceFingerprint(bodies, [target]) }
+    });
+  });
   it('starts a sheet with the four standard views, fenced to the model', async () => {
     const { onCommand } = setup();
     await userEvent.click(

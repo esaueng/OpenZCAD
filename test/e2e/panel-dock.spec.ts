@@ -8,6 +8,7 @@ import {
   modelPanel,
   promptField,
   railPanelButton,
+  revealModelPanel,
   stubApi,
   test,
   type PanelTitle,
@@ -541,6 +542,9 @@ test('the inspector and the right lane stay clear of the dock, inside the rail',
     height: 720
   });
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  // Feature forms suspend the panels; explicitly reopen them to check the
+  // user-requested simultaneous layout.
+  await revealModelPanel(page, 'History');
   const inspector = page.locator('.stage-right > .inspector-float');
   await expect(inspector).toBeVisible();
   const lane = await box(inspector);
@@ -569,6 +573,7 @@ test('on a stage too narrow for both, an unpinned panel covers the lane instead 
     height: 720
   });
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await revealModelPanel(page, 'History');
   const inspector = page.locator('.stage-right > .inspector-float');
   await expect(inspector).toBeVisible();
   const full = await box(inspector);
@@ -1166,6 +1171,7 @@ test('a command card heads the right lane, and a tool card keeps its actions in 
   // A tall tool card: Hole now runs in place (U09) and opens none, so the
   // Fillet card, with its edge list and radius rows, stands in.
   await page.getByRole('button', { name: /^Fillet/ }).click();
+  await revealModelPanel(page, 'History');
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   const submit = inspector.getByRole('button', { name: /^Create/ });
   await expect(submit).toBeVisible();

@@ -37,6 +37,8 @@ export interface DrawingSheetUpdateInput {
   titleBlock?: Partial<Record<keyof DrawingTitleBlock, string>>;
   /** Explicit Update: rebinds the sheet to the current model. */
   source?: DrawingSheet['source'];
+  /** Explicit body succession; subshape witnesses are retained and rechecked. */
+  bodyReplacements?: { from: BodyId; to: BodyId }[];
 }
 
 export interface DrawingSheetDeleteInput {
@@ -173,6 +175,31 @@ export function updateDrawingSheet(
       mirrorProjectedViews(sheet);
     }
     if (input.source) sheet.source = { ...input.source };
+    if (input.bodyReplacements) {
+      if (!input.source)
+        throw new Error(
+          'Rebinding drawing bodies requires an explicit source Update.'
+        );
+      const sources = new Set(sheet.views.flatMap((view) => view.bodyIds));
+      const replacements = new Map<BodyId, BodyId>();
+      for (const { from, to } of input.bodyReplacements) {
+        if (!sources.has(from) || replacements.has(from) || from === to) {
+          throw new Error('Invalid drawing body replacement.');
+        }
+        assertBodiesExist(document, [to]);
+        replacements.set(from, to);
+      }
+      for (const view of sheet.views) {
+        view.bodyIds = [
+          ...new Set(view.bodyIds.map((id) => replacements.get(id) ?? id))
+        ];
+      }
+      for (const annotation of sheet.annotations ?? []) {
+        for (const edge of drawingAnnotationEdges(annotation)) {
+          edge.bodyId = replacements.get(edge.bodyId) ?? edge.bodyId;
+        }
+      }
+    }
     if (input.titleBlock) {
       const titleBlock: DrawingTitleBlock = { ...sheet.titleBlock };
       for (const [key, value] of Object.entries(input.titleBlock) as [

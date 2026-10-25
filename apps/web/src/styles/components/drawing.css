@@ -160,6 +160,7 @@
 }
 
 .drawing-banner.is-stale,
+.drawing-banner.is-replaced,
 .drawing-banner.is-missing {
   border-color: var(--color-warning);
 }

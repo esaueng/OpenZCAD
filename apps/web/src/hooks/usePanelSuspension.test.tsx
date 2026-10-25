@@ -5,6 +5,7 @@ import { usePanelSuspension } from './usePanelSuspension';
 interface Props {
   commandFoldOpen: boolean;
   sketching: boolean;
+  editing?: boolean;
 }
 
 const IDLE: Props = {
@@ -14,13 +15,25 @@ const IDLE: Props = {
 
 function renderSuspension(initialProps: Props = IDLE) {
   return renderHook(
-    ({ commandFoldOpen, sketching }: Props) =>
-      usePanelSuspension({ commandFoldOpen }, { sketching }),
+    ({ commandFoldOpen, sketching, editing }: Props) =>
+      usePanelSuspension({ commandFoldOpen }, { sketching, editing }),
     { initialProps }
   );
 }
 
 describe('usePanelSuspension', () => {
+  it('gives a feature form room without overwriting the saved layout', () => {
+    const { result, rerender } = renderSuspension();
+    rerender({ ...IDLE, editing: true });
+    expect(result.current.panelsHidden).toBe(true);
+    act(() => result.current.release('panels'));
+    expect(result.current.panelsHidden).toBe(false);
+    rerender(IDLE);
+    rerender({ ...IDLE, editing: true });
+    expect(result.current.panelsHidden).toBe(true);
+    rerender(IDLE);
+    expect(result.current.commandFoldOpen).toBe(true);
+  });
   it('steps the panels aside for a sketch and brings them back after', () => {
     const { result, rerender } = renderSuspension();
     expect(result.current.panelsHidden).toBe(false);
