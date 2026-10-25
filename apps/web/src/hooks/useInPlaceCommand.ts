@@ -65,6 +65,12 @@ export interface UseInPlaceCommandOptions extends InPlaceContext {
    */
   baseVersion?: number | null;
   /**
+   * Whether the model's geometry for this version has settled: a reseed
+   * read before it (a face's new lineage against the old topology) is read
+   * again once it has.
+   */
+  geometrySettled?: boolean;
+  /**
    * An edit's seed read again from the feature as the model has it now, so
    * a value the user has not changed follows a change made to it since (an
    * undo, a collaborator), with the command that now edits it; null once
@@ -773,6 +779,9 @@ export function useInPlaceCommand(
   useEffect(() => {
     setSession((current) => {
       if (!current) return current;
+      // A Done still validating commits the request it took: the session
+      // holds still until it settles, so what lands is what was shown.
+      if (committingRef.current) return current;
       let changed = false;
       // An edited feature's own plane, stored as written, likewise: the
       // numbers a slide starts from are its fields read again.
@@ -995,7 +1004,7 @@ export function useInPlaceCommand(
           }
         : current;
     });
-  }, [options.baseVersion]);
+  }, [options.baseVersion, options.geometrySettled]);
 
   const end = useCallback(() => {
     commitToken.current += 1;
@@ -1018,7 +1027,7 @@ export function useInPlaceCommand(
     optionsRef.current.onStatus(
       `${armed.name}: it is no longer edited here · its edit closed.`
     );
-  }, [options.baseVersion, end]);
+  }, [options.baseVersion, options.geometrySettled, end]);
 
   const sessionCount = useRef(0);
   const start = useCallback(

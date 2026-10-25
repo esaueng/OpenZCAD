@@ -3754,6 +3754,8 @@ export function App() {
     parameterCandidate.base.projectId === doc?.projectId &&
     parameterCandidate.base.version === doc?.version;
   const exactGeometryReady = !parameterDraftActive && geometry.isReadyFor(doc);
+  const exactGeometryReadyRef = useRef(exactGeometryReady);
+  exactGeometryReadyRef.current = exactGeometryReady;
   // What is drawn is complete when the worker has caught up, or when a
   // validated commit attached its own complete rebuild to this version: the
   // broadcast rebuild that follows only re-derives it for the worker's live
@@ -20192,9 +20194,12 @@ export function App() {
     imagePlaneBasis,
     baseDocument: () => managerRef.current?.document ?? null,
     baseVersion: doc?.version ?? null,
+    geometrySettled: exactGeometryReady,
     reseed: (edit) => {
       const current = managerRef.current?.document;
-      if (!current) return undefined;
+      // Picks read against topology still rebuilding would not resolve;
+      // the reseed waits for it (and runs again once it settles).
+      if (!current || !exactGeometryReadyRef.current) return undefined;
       // Gone, or now made by no in-place command: null ends the edit.
       const feature = findFeature(current, edit.featureId);
       return feature && feature.data.featureKind === edit.data.featureKind
