@@ -337,12 +337,14 @@ test('names a deleted sketch input and restores the dependent model with undo', 
   await expect(confirm.getByText('Extrude base')).toBeVisible();
   await confirm.getByRole('button', { name: 'Delete' }).click();
   await page.locator('.feature-row-main', { hasText: 'Extrude base' }).click();
+  await revealModelPanel(page, 'History');
   await expect(
     details.getByText(/An input sketch is missing from history/)
   ).toBeVisible();
   await page.keyboard.press('Control+z');
   await expectBodyCount(page, 1);
   await page.locator('.feature-row-main', { hasText: 'Extrude base' }).click();
+  await revealModelPanel(page, 'History');
   await expect(
     details.getByRole('button', { name: 'Inspect Base profile' })
   ).toBeVisible();
