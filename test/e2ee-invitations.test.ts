@@ -939,7 +939,12 @@ describe('encrypted invitations (slice 5-3a)', () => {
         groupInfo: 'AAAA',
         wraps: [],
         archive: {},
-        add
+        add,
+        deviceList: srv.db
+          .prepare(
+            'SELECT generation, MAX(sequence) AS headSequence FROM e2ee_device_list_entries WHERE user_id = ? AND generation = (SELECT MAX(generation) FROM e2ee_identities WHERE user_id = ?)'
+          )
+          .get(THIRD, THIRD)
       },
       THIRD
     );

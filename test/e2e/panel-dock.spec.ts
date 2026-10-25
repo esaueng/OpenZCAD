@@ -1164,11 +1164,12 @@ test('a command card heads the right lane, and a tool card keeps its actions in 
   });
   await expect(page.locator('.panel-column')).toBeVisible();
 
-  // A tool card: Hole and Fillet now run in place (U09) and open none, so
-  // the Box card stands in.
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  // A tool card: every Build tool now runs in place (U09) and opens none,
+  // so a Box's edit card, opened from its History row, stands in.
+  await createPrimitiveInPlace(page, 'box');
+  await page.locator('.feature-row-main', { hasText: /^Box/ }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  const submit = inspector.getByRole('button', { name: /^Create/ });
+  const submit = inspector.getByRole('button', { name: 'Apply', exact: true });
   await expect(submit).toBeVisible();
   const layout = await page.evaluate(() => {
     const rect = (selector: string) =>

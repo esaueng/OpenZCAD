@@ -230,6 +230,15 @@ async function openStore(
           // Every listener still hears it.
         }
       }
+    },
+    // A Commit refused because this account's devices changed elsewhere
+    // (#908 review): `account` is stale, so the next operation opens the
+    // store again on a freshly loaded account view, whose Commit carries
+    // the rotation a removal made due. The unlocked keys stay.
+    onDeviceListChanged: () => {
+      if (opened?.userId === userId && opened.revision === revision) {
+        opened = null;
+      }
     }
   };
   const blobs = createEncryptedContentBlobs({
