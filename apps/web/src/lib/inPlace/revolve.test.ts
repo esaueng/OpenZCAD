@@ -5,6 +5,7 @@ import {
   clampRevolveAngle,
   revolveAxisCandidates,
   revolveHint,
+  revolveProfileRegions,
   revolveRigPlacement,
   sketchAxisForLine
 } from './revolve';
@@ -153,5 +154,35 @@ describe('revolve angles', () => {
     expect(clampRevolveAngle(400)).toBe(360);
     expect(clampRevolveAngle(Number.NaN)).toBe(360);
     expect(clampRevolveAngle(270)).toBe(270);
+  });
+});
+
+describe('the regions a pick names', () => {
+  const regions = [
+    { regionFingerprint: 1, sourceEntityIds: ['a', 'b'] },
+    { regionFingerprint: 2, sourceEntityIds: ['c', 'd'] }
+  ];
+
+  it('finds a renumbered region again by its entities', () => {
+    expect(
+      revolveProfileRegions(regions, {
+        regionFingerprint: 99,
+        reference: { sourceEntityIds: ['d', 'c'] }
+      }).map((region) => region.regionFingerprint)
+    ).toEqual([2]);
+  });
+
+  it('keeps an exact fingerprint and spans every region for an entity-wide pick', () => {
+    expect(
+      revolveProfileRegions(regions, {
+        regionFingerprint: 1,
+        reference: { sourceEntityIds: ['c', 'd'] }
+      }).map((region) => region.regionFingerprint)
+    ).toEqual([1]);
+    expect(
+      revolveProfileRegions(regions, {
+        reference: { all: true, sourceEntityIds: ['a'] }
+      })
+    ).toHaveLength(2);
   });
 });

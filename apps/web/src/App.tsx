@@ -1418,6 +1418,7 @@ import {
   type InPlaceProfilePick,
   type InPlaceRevolveRequest
 } from './hooks/useInPlaceRevolve';
+import { MIN_REVOLVE_ANGLE } from './lib/inPlace/revolve';
 import { PreviewRebuilds } from './lib/previewRebuilds';
 import {
   blendPreviewSelectionKey,
@@ -18060,6 +18061,9 @@ export function App() {
         axis,
         startDirection,
         radius,
+        // The rig shares the command's domain, so a sub-degree angle is
+        // drawn and labelled as the angle that is stored.
+        minDeg: MIN_REVOLVE_ANGLE,
         angleDeg: inPlaceRevolveRef.current.angle
       }
     };

@@ -202,6 +202,32 @@ describe('useInPlaceRevolve', () => {
     await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
   });
 
+  it('holds Done until the new angle has its own frame', async () => {
+    let release: (() => void) | null = null;
+    const { hook, commit } = setup({
+      derive: (document) =>
+        new Promise((resolve) => {
+          release = () => resolve(document.derived);
+        })
+    });
+    act(() => hook.result.current.start(PICK));
+    act(() => hook.result.current.pickAxis('sketch-vertical'));
+    await waitFor(() => expect(release).not.toBeNull());
+    act(() => release!());
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    release = null;
+    act(() => hook.result.current.setAngle(180));
+    // The 360° frame is still on screen: Done must not commit 180° unseen.
+    expect(hook.result.current.canFinish).toBe(false);
+    act(() => {
+      expect(hook.result.current.done()).toBe(false);
+    });
+    expect(commit).not.toHaveBeenCalled();
+    await waitFor(() => expect(release).not.toBeNull());
+    act(() => release!());
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+  });
+
   it('cannot finish while the preview is refused, and says why', async () => {
     const { hook, commit } = setup({ baseDocument: () => fakeDocument(false) });
     act(() => hook.result.current.start(PICK));

@@ -218,3 +218,37 @@ export function clampRevolveAngle(value: number): number {
 export function revolveAngleInRange(value: number): boolean {
   return Number.isFinite(value) && value > 0 && value <= 360;
 }
+
+/**
+ * The regions a picked profile names, for drawing its handle. An entity-wide
+ * reference is every region; a region pick is its fingerprint, or, when an
+ * undo or redo renumbered it, the region bounded by the same entities. Only a
+ * pick that matches nothing falls back to the whole sketch.
+ */
+export function revolveProfileRegions<
+  Region extends {
+    regionFingerprint: number;
+    sourceEntityIds?: readonly string[];
+  }
+>(
+  regions: readonly Region[],
+  pick: {
+    regionFingerprint?: number | undefined;
+    reference: { all?: boolean; sourceEntityIds?: readonly string[] };
+  }
+): readonly Region[] {
+  if (pick.reference.all === true) return regions;
+  const byFingerprint = regions.filter(
+    (region) => region.regionFingerprint === pick.regionFingerprint
+  );
+  if (byFingerprint.length > 0) return byFingerprint;
+  const wanted = new Set(pick.reference.sourceEntityIds ?? []);
+  if (wanted.size > 0) {
+    const same = regions.filter((region) => {
+      const ids = region.sourceEntityIds ?? [];
+      return ids.length === wanted.size && ids.every((id) => wanted.has(id));
+    });
+    if (same.length > 0) return same;
+  }
+  return regions;
+}

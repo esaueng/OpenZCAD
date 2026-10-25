@@ -13,6 +13,7 @@ import { GEOMETRY_PREVIEW_SCHEDULING, LivePreview } from '../lib/livePreview';
 import {
   clampRevolveAngle,
   revolveAngleInRange,
+  revolveProfileRegions,
   revolveAxisCandidates,
   revolveHint,
   revolveRigPlacement,
@@ -39,6 +40,8 @@ export interface InPlaceSketchView {
   regions: readonly {
     regionFingerprint: number;
     outer: readonly { x: number; y: number }[];
+    /** The authored entities bounding it, which survive a renumbering. */
+    sourceEntityIds?: readonly string[];
   }[];
 }
 
@@ -124,6 +127,13 @@ export function useInPlaceRevolve(
   const [session, setSession] = useState<RevolveSession | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [previewValid, setPreviewValid] = useState(false);
+  /**
+   * The angle the shown frame was built for. Done waits until it is the
+   * session's angle: a drag or a typed value not previewed yet would commit
+   * a solid nobody has seen, and a refusal would arrive after it closed.
+   */
+  const [previewedAngle, setPreviewedAngle] = useState<number | null>(null);
+  const buildingAngleRef = useRef<number | null>(null);
   const optionsRef = useRef(options);
   optionsRef.current = options;
   const sessionRef = useRef(session);
@@ -158,13 +168,12 @@ export function useInPlaceRevolve(
 
   const placement = useMemo(() => {
     if (!view || !axis) return null;
-    // The picked region's outline; every region of the sketch only when the
-    // pick has been remapped away (a rebuild renumbered its fingerprint).
-    const picked = view.regions.filter(
-      (region) => region.regionFingerprint === profile?.regionFingerprint
-    );
-    const outline = (picked.length > 0 ? picked : view.regions).flatMap(
-      (region) => region.outer.map((point) => toWorld(view.basis, point))
+    // The picked region's outline, found again by its entities when an undo
+    // or redo renumbered its fingerprint.
+    const outline = (
+      profile ? revolveProfileRegions(view.regions, profile) : []
+    ).flatMap((region) =>
+      region.outer.map((point) => toWorld(view.basis, point))
     );
     return revolveRigPlacement(outline, axis);
   }, [view, axis, profile]);
@@ -188,6 +197,7 @@ export function useInPlaceRevolve(
   const preview = useRef(
     new LivePreview<ProjectDocument, ProjectDocument['derived']>({
       build: (value: number) => {
+        buildingAngleRef.current = value;
         const request = requestRef.current(value);
         const base = optionsRef.current.baseDocument();
         if (!request || !base) return null;
@@ -203,6 +213,7 @@ export function useInPlaceRevolve(
           result && bodyId && result.derived.bodyRepresentations[bodyId]
         );
         setPreviewValid(valid);
+        setPreviewedAngle(buildingAngleRef.current);
         if (!result) return;
         if (valid) {
           setRefusal(null);
@@ -313,7 +324,13 @@ export function useInPlaceRevolve(
     [preview]
   );
 
-  const canFinish = Boolean(profile && axis && previewValid);
+  const canFinish = Boolean(
+    profile &&
+    axis &&
+    previewValid &&
+    previewedAngle !== null &&
+    previewedAngle === (session?.angle ?? 360)
+  );
 
   const done = useCallback(() => {
     const current = sessionRef.current;
