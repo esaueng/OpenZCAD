@@ -639,10 +639,15 @@ test('a tool that needs the finished model waits for a genuine rebuild', async (
   await expect
     .poll(() => page.evaluate(() => window.__slowAnalysis!.held))
     .toBeGreaterThan(0);
-  await page.getByRole('button', { name: /^Hole/ }).first().click();
-  await expect(page.getByRole('contentinfo')).toContainText(
-    'Waiting for exact geometry'
-  );
+  // The rail shows readiness a beat late (so a quick rebuild never blinks
+  // it), but launches check it at once. Whichever a runner's speed lands on,
+  // Hole must not open: a click while the rail still shows it ready is
+  // refused with a status, and once the rail catches up it is disabled and
+  // names the wait.
+  const hole = page.getByRole('button', { name: /^Hole/ }).first();
+  await hole.click({ timeout: 1_000 }).catch(() => undefined);
+  await expect(hole).toBeDisabled();
+  await expect(hole).toHaveAccessibleName(/Waiting for exact geometry/);
   await expect(page.getByRole('region', { name: /^Hole/ })).toHaveCount(0);
   await page.evaluate(() => window.__slowAnalysis!.release!());
 });
