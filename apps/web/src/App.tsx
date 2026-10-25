@@ -3436,10 +3436,31 @@ export function App() {
     projectId: string;
     version: number;
     geometry: GeometryReadyState;
+    /** Meshes of a version a validated commit already shows complete. */
+    committed: boolean;
+  } | null>(null);
+  /**
+   * The version a validated commit attached its complete rebuild to. The
+   * broadcast rebuild that follows publishes that version's meshes before its
+   * analysis. The worker's live state is still catching up, which saved
+   * measurements must wait for, but the selection, its card and highlight
+   * describe the complete result on screen: withdrawing them for that window
+   * flashed the whole body for a few frames after every commit.
+   */
+  const committedDerivedRef = useRef<{
+    projectId: string;
+    version: number;
   } | null>(null);
   const geometry = useGeometryWorker({
     onGeometryReady: (geometry, projectId, version) => {
-      setGeometrySnapshot({ projectId, version, geometry });
+      const committed = committedDerivedRef.current;
+      setGeometrySnapshot({
+        projectId,
+        version,
+        geometry,
+        committed:
+          committed?.projectId === projectId && committed.version === version
+      });
       // Accepted meshes already contain the committed Move transform.
       setMoveCommitHold(null);
     },
@@ -6218,7 +6239,9 @@ export function App() {
       label: faceLabel(body, face.hash, face.topologyId)
     };
   }, [renderedRepresentations, renderedSelectedTopology]);
-  const currentGeometrySnapshot =
+  // Meshes whose analysis the worker has not finished. Saved measurements
+  // wait for it in every case.
+  const analysisPendingSnapshot =
     !previewDoc &&
     !parameterDraftActive &&
     geometry.state.phase !== 'failed' &&
@@ -6226,6 +6249,12 @@ export function App() {
     geometrySnapshot.projectId === doc?.projectId &&
     geometrySnapshot?.version === doc?.version
       ? geometrySnapshot.geometry
+      : null;
+  // The rest of the workspace waits only when the result on screen is not
+  // already complete: after a validated commit it is.
+  const currentGeometrySnapshot =
+    analysisPendingSnapshot && !geometrySnapshot?.committed
+      ? analysisPendingSnapshot
       : null;
   // Meshes still waiting for their topology, or a face preview whose analysis
   // is incomplete, leave the model panels' details unfinished. The panels'
@@ -6930,7 +6959,7 @@ export function App() {
     modelingLocked,
     exactGeometryReady,
     geometryPending:
-      currentGeometrySnapshot !== null || currentFaceGeometryPreview !== null,
+      analysisPendingSnapshot !== null || currentFaceGeometryPreview !== null,
     representations,
     renderedRepresentations,
     viewerBodies: completedViewerBodies,
@@ -7522,6 +7551,17 @@ export function App() {
     );
   }
 
+  /** Notes a commit that attached a complete (analysed) rebuild. */
+  function recordCompleteCommit(
+    document: ProjectDocument,
+    derived: ProjectDocument['derived']
+  ): void {
+    committedDerivedRef.current =
+      'analysis' in derived
+        ? null
+        : { projectId: document.projectId, version: document.version };
+  }
+
   /**
    * Backfills kernel-proven references onto legacy face and edge selections.
    * A geometric fingerprint embeds its dimensions, so the only
@@ -7615,6 +7655,7 @@ export function App() {
         // renders the new geometry in the same batch instead of flashing the
         // stale meshes until the broadcast rebuild echoes back.
         next = managerRef.current.commitDerivedState(derived);
+        recordCompleteCommit(next, derived);
         recordFeatureAttribution(next, derived);
         setMoveCommitHold(null);
       }
@@ -7663,6 +7704,7 @@ export function App() {
       let next = managerRef.current.runTransaction(label, commands);
       if (derived) {
         next = managerRef.current.commitDerivedState(derived);
+        recordCompleteCommit(next, derived);
         recordFeatureAttribution(next, derived);
         setMoveCommitHold(null);
       }
@@ -22862,7 +22904,7 @@ export function App() {
       formattedMeasurements={formattedMeasurements}
       enabled={measuring}
       geometryPending={
-        currentGeometrySnapshot !== null || currentFaceGeometryPreview !== null
+        analysisPendingSnapshot !== null || currentFaceGeometryPreview !== null
       }
       activeMeasurementId={activeMeasurementId}
       mode={measurementMode}
