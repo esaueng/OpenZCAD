@@ -163,6 +163,11 @@ export interface InPlaceCommand {
     touched: boolean
   ): void;
   done(): boolean;
+  /**
+   * An edit's Done waits on its validated commit: `true` ends the edit,
+   * `false` (refused) leaves it open to correct and retry.
+   */
+  settleEdit(edit: InPlaceEditSeed, committed: boolean): void;
   /** Ends the command; `quiet` when another action already says why. */
   cancel(quiet?: boolean): void;
 }
@@ -194,6 +199,7 @@ export function useInPlaceCommand(
   // A typed value the tool refused: it stands until the next accepted
   // value, and Done waits with it, since the chip went back to the value
   // before and finishing would commit that instead of what was typed.
+  const [committing, setCommitting] = useState(false);
   const [entryRefusal, setEntryRefusal] = useState<{
     valueId: string;
     message: string;
@@ -555,6 +561,7 @@ export function useInPlaceCommand(
   const end = useCallback(() => {
     preview.clear();
     setSession(null);
+    setCommitting(false);
     setRefusal(null);
     setEntryRefusal(null);
     setPreviewValid(false);
@@ -573,6 +580,7 @@ export function useInPlaceCommand(
       optionsRef.current.publishPreview(null);
       setRefusal(null);
       setEntryRefusal(null);
+      setCommitting(false);
       setPreviewValid(false);
       setSession({
         tool,
@@ -618,6 +626,7 @@ export function useInPlaceCommand(
       optionsRef.current.publishPreview(null);
       setRefusal(null);
       setEntryRefusal(null);
+      setCommitting(false);
       setPreviewValid(false);
       setSession({
         tool,
@@ -987,6 +996,7 @@ export function useInPlaceCommand(
   // Done waits for a valid preview of exactly what it would commit: a pick
   // that changed the request since the last frame has not been shown yet.
   const canFinish = Boolean(
+    !committing &&
     !entryRefusal &&
     request &&
     previewValid &&
@@ -999,7 +1009,11 @@ export function useInPlaceCommand(
     if (!current || !spec || !canFinish) return false;
     if (requestKeyRef.current !== previewedKey) return false;
     const editing = editRef.current;
-    end();
+    // A new feature is done once Done is pressed; an edit stays open until
+    // its commit is validated, so a refusal (the model moved meanwhile)
+    // leaves it there to correct rather than gone.
+    if (editing) setCommitting(true);
+    else end();
     optionsRef.current.commit(
       current,
       editing?.name ?? spec.featureName ?? spec.title,
@@ -1007,6 +1021,16 @@ export function useInPlaceCommand(
     );
     return true;
   }, [spec, canFinish, previewedKey, end]);
+
+  const settleEdit = useCallback(
+    (edit: InPlaceEditSeed, committed: boolean) => {
+      // Only the edit that was committing: one armed since is its own.
+      if (editRef.current !== edit) return;
+      setCommitting(false);
+      if (committed) end();
+    },
+    [end]
+  );
 
   const cancel = useCallback(
     (quiet = false) => {
@@ -1083,6 +1107,7 @@ export function useInPlaceCommand(
     touched: session?.touched ?? EMPTY_TOUCHED,
     restoreValue,
     done,
+    settleEdit,
     cancel
   };
 }

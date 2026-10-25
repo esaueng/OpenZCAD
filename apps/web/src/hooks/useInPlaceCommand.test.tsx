@@ -1020,6 +1020,29 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     });
   });
 
+  it('keeps an edit open until its commit lands, and open to retry if refused', async () => {
+    const { hook, commit } = setup();
+    act(() => hook.result.current.edit('subtract', SEED));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.done();
+    });
+    expect(commit).toHaveBeenCalledTimes(1);
+    // Validating: still the edit, and no second Done.
+    expect(hook.result.current.editing).toBe(SEED);
+    expect(hook.result.current.canFinish).toBe(false);
+    // Refused: the edit is there to correct, and Done can go again.
+    act(() => hook.result.current.settleEdit(SEED, false));
+    expect(hook.result.current.editing).toBe(SEED);
+    expect(hook.result.current.canFinish).toBe(true);
+    act(() => {
+      hook.result.current.done();
+    });
+    // Landed: the edit ends.
+    act(() => hook.result.current.settleEdit(SEED, true));
+    expect(hook.result.current.editing).toBeNull();
+  });
+
   it('switches operation with its bodies, and hides a locked option', () => {
     const { hook } = setup();
     act(() => hook.result.current.edit('subtract', SEED));

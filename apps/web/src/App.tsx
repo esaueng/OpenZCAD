@@ -1490,6 +1490,7 @@ import { useSteadySaveState } from './hooks/useSteadySaveState';
 import { useMeasurementWorkbench } from './hooks/useMeasurementWorkbench';
 import {
   useValidatedFeatureCommit,
+  type ValidatedFeatureOutcome,
   type ValidatedFeatureRunOptions
 } from './hooks/useValidatedFeatureCommit';
 import { PatternProgress } from './components/PatternProgress';
@@ -4394,18 +4395,18 @@ export function App() {
   function runPattern(
     command: AnyCommand,
     options: ValidatedFeatureRunOptions
-  ): void {
+  ): Promise<ValidatedFeatureOutcome> {
     const reservation = validatedFeature.reserve();
     if (!reservation) {
       setStatus(
         'Another exact operation is still finishing. Try again once it completes.'
       );
-      return;
+      return Promise.resolve('busy');
     }
     const abort = new AbortController();
     patternAbortRef.current = abort;
     setPatternProgress({ name: options.featureName });
-    void executeValidatedFeature(command, {
+    return executeValidatedFeature(command, {
       ...options,
       reservation,
       signal: abort.signal,
@@ -8286,11 +8287,15 @@ export function App() {
     command: AnyCommand,
     feature: FeatureNode,
     featureName: string,
-    resultBodyId: BodyId | undefined = feature.bodyId
+    resultBodyId: BodyId | undefined = feature.bodyId,
+    /** Told whether the edit landed; an in-place edit waits on it. */
+    settled?: (committed: boolean) => void
   ): void {
     const editSession = editCardSessionRef.current;
     if (!doc || !resultBodyId) {
-      if (executeCommand(command)) finishFeatureEdit(feature, editSession);
+      const committed = executeCommand(command);
+      if (committed) finishFeatureEdit(feature, editSession);
+      settled?.(Boolean(committed));
       return;
     }
     const run =
@@ -8313,7 +8318,10 @@ export function App() {
       successMessage: commandOutcomeMessage(command.label),
       onSuccess: () => finishFeatureEdit(feature, editSession),
       cancelled: () => !editSessionIsCurrent(feature, editSession)
-    });
+    }).then(
+      (outcome) => settled?.(outcome === 'committed'),
+      () => settled?.(false)
+    );
   }
 
   /**
@@ -8661,9 +8669,18 @@ export function App() {
       command = inPlaceEditCommand(request, named);
     } catch (error) {
       setStatus(errorMessage(error, `${feature.name} could not be edited.`));
+      inPlaceRef.current.settleEdit(edit, false);
       return;
     }
-    applyValidatedFeature(command, feature, feature.name, edit.resultBodyId);
+    // The edit stays open until this lands: refused, it is still there to
+    // correct and try again.
+    applyValidatedFeature(
+      command,
+      feature,
+      feature.name,
+      edit.resultBodyId,
+      (committed) => inPlaceRef.current.settleEdit(edit, committed)
+    );
   }
 
   /**
@@ -19340,7 +19357,7 @@ export function App() {
       if (request.tool === 'pattern' && resultBodyId) {
         // Through the pattern runner, so a large pattern shows its progress
         // and can be stopped, as the card's did.
-        runPattern(command, {
+        void runPattern(command, {
           featureName: name,
           resultBodyId,
           successMessage: commandOutcomeMessage(command.label),
@@ -27729,7 +27746,7 @@ export function App() {
                   });
                   const resultBodyId = command.payload.ids?.bodyId;
                   if (resultBodyId)
-                    runPattern(command, {
+                    void runPattern(command, {
                       featureName: name,
                       resultBodyId,
                       successMessage: commandOutcomeMessage(command.label),
