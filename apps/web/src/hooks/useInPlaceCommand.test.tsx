@@ -1355,6 +1355,43 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     });
   });
 
+  it('keeps a new feature open until its commit lands, and open to retry if refused', async () => {
+    let settle: (committed: boolean) => void = () => undefined;
+    const commit = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          settle = resolve;
+        })
+    );
+    const { hook } = setup({ commit });
+    act(() => hook.result.current.start('revolve', [PICK]));
+    act(() => hook.result.current.pickAxis('sketch-vertical'));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.done();
+    });
+    // Validating: still open, its picks kept, no second Done.
+    expect(hook.result.current.active).toBe(true);
+    expect(hook.result.current.canFinish).toBe(false);
+    // Refused (or held off by another exact operation): there to retry.
+    await act(async () => {
+      settle(false);
+      await Promise.resolve();
+    });
+    expect(hook.result.current.active).toBe(true);
+    expect(hook.result.current.slots.profiles).toHaveLength(1);
+    expect(hook.result.current.canFinish).toBe(true);
+    act(() => {
+      hook.result.current.done();
+    });
+    // Landed: the command ends.
+    await act(async () => {
+      settle(true);
+      await Promise.resolve();
+    });
+    expect(hook.result.current.active).toBe(false);
+  });
+
   it('keeps an edit open until its commit lands, and open to retry if refused', async () => {
     const { hook, commit } = setup();
     act(() => hook.result.current.edit('subtract', SEED));

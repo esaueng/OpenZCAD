@@ -8272,12 +8272,12 @@ export function App() {
     command: AnyCommand,
     featureName: string,
     resultBodyId: BodyId | undefined
-  ): void {
+  ): Promise<ValidatedFeatureOutcome> | undefined {
     if (!resultBodyId) {
       createFeature(command);
-      return;
+      return undefined;
     }
-    void executeValidatedFeature(command, {
+    return executeValidatedFeature(command, {
       featureName,
       resultBodyId,
       successMessage: commandOutcomeMessage(command.label),
@@ -19405,15 +19405,18 @@ export function App() {
       if (request.tool === 'pattern' && resultBodyId) {
         // Through the pattern runner, so a large pattern shows its progress
         // and can be stopped, as the card's did.
-        void runPattern(command, {
+        return runPattern(command, {
           featureName: name,
           resultBodyId,
           successMessage: commandOutcomeMessage(command.label),
           onSuccess: finishFeatureCreation
-        });
-        return;
+        }).then((outcome) => outcome === 'committed');
       }
-      createValidatedFeature(command, name, resultBodyId);
+      // The command stays open until this lands: refused or held off by
+      // another exact operation, its picks are still there to retry.
+      return createValidatedFeature(command, name, resultBodyId)?.then(
+        (outcome) => outcome === 'committed'
+      );
     },
     publishPreview: setPreviewDoc,
     onStatus: setStatus
@@ -27765,7 +27768,7 @@ export function App() {
                     name,
                     bodyName: newBodyName(value.name)
                   });
-                  createValidatedFeature(
+                  void createValidatedFeature(
                     command,
                     name,
                     command.payload.ids?.bodyId
@@ -27780,7 +27783,7 @@ export function App() {
                     name,
                     bodyName: newBodyName(value.name)
                   });
-                  createValidatedFeature(
+                  void createValidatedFeature(
                     command,
                     name,
                     command.payload.ids?.bodyId
@@ -27809,7 +27812,7 @@ export function App() {
                       ? { axisRotation: value.axisRotation }
                       : {})
                   });
-                  createValidatedFeature(
+                  void createValidatedFeature(
                     command,
                     name,
                     // A copy's result is its new body; a Move's, its target.
