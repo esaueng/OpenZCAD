@@ -13,6 +13,7 @@ import {
 } from '@openzcad/document-core';
 import { computeSketchProfileAnalysis } from '@openzcad/geometry';
 import {
+  FEATURE_SUPPRESSED_METADATA_KEY,
   toUserId,
   type ProjectDocument,
   type SketchSectionReference
@@ -369,4 +370,52 @@ test('refuses a saved section that cannot resolve to an upstream sketch', async 
   expect(findFeature(await backup(page), data.featureId)?.data).toEqual(
     feature.data
   );
+});
+
+test('a suppressed loft edits in place and stays suppressed', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  const data = fixture('loft');
+  const node = Object.values(data.document.nodes).find(
+    (candidate) =>
+      candidate.kind === 'feature' && candidate.featureId === data.featureId
+  )!;
+  // Suppressed: it makes no body, so no exact rebuild could find one.
+  const document: ProjectDocument = {
+    ...data.document,
+    nodes: {
+      ...data.document.nodes,
+      [node.id]: {
+        ...node,
+        metadata: { ...node.metadata, [FEATURE_SUPPRESSED_METADATA_KEY]: true }
+      }
+    }
+  };
+  await openFixture(page, document);
+  await page
+    .locator('.feature-row-main', { hasText: 'Authored feature' })
+    .click();
+  const bar = page.getByRole('group', {
+    name: 'Edit Authored feature command'
+  });
+  await expect(bar).toContainText('2 sections');
+  await bar.locator('summary').click();
+  await bar.getByRole('radio', { name: 'Smooth' }).click();
+  await bar.locator('summary').click();
+  await finishInPlaceCommand(page, 'Edit Authored feature');
+  await expect
+    .poll(
+      async () => {
+        const stored = findFeature(await backup(page), data.featureId);
+        return stored?.data.featureKind === 'loft'
+          ? [
+              stored.data.mode,
+              stored.metadata?.[FEATURE_SUPPRESSED_METADATA_KEY]
+            ]
+          : null;
+      },
+      { timeout: 30_000 }
+    )
+    .toEqual(['smooth', true]);
 });
