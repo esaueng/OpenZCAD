@@ -677,9 +677,15 @@ describe('device removal across shared encrypted projects (slice 5-7)', () => {
         bob.offline = true;
       }
     };
-    await removeDevice(bob.e2ee, bob.account, phoneId, bobRecovery).catch(
-      () => undefined
-    );
+    // Its cutoff statement lands with the entry; nothing after does.
+    const { participant } = participantFor(bob);
+    await removeDevice(
+      bob.e2ee,
+      bob.account,
+      phoneId,
+      bobRecovery,
+      participant
+    ).catch(() => undefined);
     online(bob);
     await refresh(bob);
     const membersOf = async () =>
