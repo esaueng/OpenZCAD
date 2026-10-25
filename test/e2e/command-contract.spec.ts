@@ -173,7 +173,7 @@ test('cap height under chamfers: Enter commits the chip value, Escape leaves his
   page
 }) => {
   test.setTimeout(180_000);
-  const { canvas, inspector, consoleErrors } = await createCylinder(
+  const { canvas, consoleErrors } = await createCylinder(
     page,
     'Contract offset'
   );
@@ -420,7 +420,7 @@ test('one Escape clears a refused offset: card, preview, handle and selection', 
   await page.addInitScript(() => {
     window.__openzcadE2EExactFaceDrag = true;
   });
-  const { canvas, inspector, consoleErrors } = await createCylinder(
+  const { canvas, consoleErrors } = await createCylinder(
     page,
     'Contract refused offset'
   );

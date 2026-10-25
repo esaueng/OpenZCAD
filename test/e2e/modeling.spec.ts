@@ -1206,13 +1206,15 @@ test('fillets all twelve edges of a box in one exact feature', async ({
     .getByRole('button', { name: /^Create/ })
     .click();
 
+  // U09 phase 7: in place, all twelve edges from Options, the default
+  // radius.
   await page.getByRole('button', { name: /^Fillet/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByRole('button', { name: 'Select all 12 edges' }).click();
-  await expect(inspector.locator('.selection-summary')).toContainText(
-    '12 edges selected'
-  );
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  const filletBar = page.getByRole('group', { name: 'Fillet command' });
+  await filletBar.locator('summary').click();
+  await filletBar.getByRole('button', { name: 'Select all 12 edges' }).click();
+  await filletBar.locator('summary').click();
+  await expect(filletBar).toContainText('12 edges');
+  await finishInPlaceCommand(page, 'Fillet');
 
   const fillet = page.locator('.feature-row', { hasText: 'Fillet' });
   await expect(fillet).toBeVisible();
@@ -1443,12 +1445,11 @@ for (const modifier of [
     await inspector.getByLabel('Height', { exact: true }).fill('12');
     await inspector.getByRole('button', { name: /^Create/ }).click();
 
-    await page
-      .getByRole('button', { name: new RegExp(`^${modifier.label}`) })
-      .click();
-    await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
-    await inspector.getByLabel(modifier.sizeLabel, { exact: true }).fill('1');
-    await inspector.getByRole('button', { name: /^Create/ }).click();
+    await blendEdgesInPlace(page, {
+      tool: modifier.label,
+      allEdges: 2,
+      size: '1'
+    });
 
     const cylinder = page.locator('.feature-row', { hasText: /^Cylinder/ });
     const blend = page.locator('.feature-row', {
@@ -1808,18 +1809,16 @@ for (const modifier of [
     await page
       .getByRole('button', { name: modifier.tool, exact: true })
       .click();
-    const inspector = page.getByRole('region', {
-      name: 'Feature inspector'
-    });
-    await expect(inspector.locator('.selection-summary')).toContainText(
-      '2 edges selected'
-    );
-    // The tool's card is the one surface for the command: the edge
-    // operation's "Ready" chip no longer stands above it saying the same.
+    // U09 phase 7: the tool runs in place on the two picked edges. Its bar
+    // is the one surface for the command: the edge operation's "Ready" chip
+    // no longer stands above it saying the same.
+    const title = modifier.label === 'fillet' ? 'Fillet' : 'Chamfer';
+    const bar = page.getByRole('group', { name: `${title} command` });
+    await expect(bar).toContainText('2 edges');
     await expect(
       page.getByRole('region', { name: /^(Fillet|Chamfer) operation$/ })
     ).toHaveCount(0);
-    await inspector.getByRole('button', { name: /^Create/ }).click();
+    await finishInPlaceCommand(page, title);
 
     const feature = page.locator('.feature-row', {
       hasText: modifier.label === 'fillet' ? 'Fillet' : 'Chamfer'
@@ -1860,33 +1859,30 @@ test('a refused fillet size marks the handle and says why in the card', async ({
     timeout: 30_000
   });
 
+  // U09 phase 7: the tool runs in place, and its bar says why a size is
+  // refused while Done waits for one that builds.
   await page.getByRole('button', { name: /^Fillet/ }).click();
+  const bar = page.getByRole('group', { name: 'Fillet command' });
   await setSelectionFilter(page, 'Edge');
   const edge = await locateEdge(page);
   await page.mouse.click(edge.x, edge.y);
-  await expect(inspector.locator('.selection-summary')).toContainText(
-    '1 edge selected'
-  );
+  await expect(bar).toContainText('1 edge');
 
-  const radius = inspector.getByRole('textbox', {
-    name: 'Radius',
-    exact: true
-  });
-  const chip = page.getByTestId('direct-manipulation-value');
+  const done = bar.getByRole('button', { name: /Done/ });
+  const chip = page.getByTestId('command-handle-radius');
   // The default box is 30 × 18 × 24: no edge of it carries r80.
-  await radius.fill('80');
-  await expect(inspector.getByRole('alert')).toContainText(
-    'could not be created',
-    { timeout: 30_000 }
-  );
-  await expect(chip).toHaveAttribute('data-state', 'warning');
-  await expect(chip).toContainText('80');
-
-  await radius.fill('1');
-  await expect(inspector.getByRole('alert')).toHaveCount(0, {
+  await enterCommandValue(page, 'radius', '80');
+  await expect(page.locator('.in-place-command.refused')).toBeVisible({
     timeout: 30_000
   });
-  await expect(chip).toHaveAttribute('data-state', 'ready');
+  await expect(done).toBeDisabled();
+  await expect(chip).toContainText('80');
+
+  await enterCommandValue(page, 'radius', '1');
+  await expect(page.locator('.in-place-command.refused')).toHaveCount(0, {
+    timeout: 30_000
+  });
+  await expect(done).toBeEnabled({ timeout: 30_000 });
 });
 
 test('the armed fillet handle rounds every shift-selected edge, not just the last', async ({
@@ -2300,9 +2296,14 @@ test('grounds an AI fillet request onto every selected edge', async ({
     .getByRole('button', { name: /^Create/ })
     .click();
 
-  await page.getByRole('button', { name: /^Fillet/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByRole('button', { name: 'Select all 12 edges' }).click();
+  // Every edge selected first, from the edge's own selection chip.
+  await setSelectionFilter(page, 'Edge');
+  const edge = await locateEdge(page);
+  await page.mouse.click(edge.x, edge.y);
+  await page
+    .locator('.selection-callout-chip')
+    .getByRole('button', { name: 'Select all 12 edges' })
+    .click();
   await expect(promptField(page)).toHaveAttribute(
     'placeholder',
     'Ask about 12 selected edges…'
@@ -2738,13 +2739,15 @@ test('imports a STEP solid, fillets it, and re-exports it', async ({
 
   // Blend imported topology: the twelve edges have to be pickable, which
   // means the import published exact edges with resolvable identities.
+  // U09 phase 7: in place, all twelve edges from Options, the default
+  // radius.
   await page.getByRole('button', { name: /^Fillet/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByRole('button', { name: 'Select all 12 edges' }).click();
-  await expect(inspector.locator('.selection-summary')).toContainText(
-    '12 edges selected'
-  );
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  const filletBar = page.getByRole('group', { name: 'Fillet command' });
+  await filletBar.locator('summary').click();
+  await filletBar.getByRole('button', { name: 'Select all 12 edges' }).click();
+  await filletBar.locator('summary').click();
+  await expect(filletBar).toContainText('12 edges');
+  await finishInPlaceCommand(page, 'Fillet');
 
   const fillet = page.locator('.feature-row', { hasText: 'Fillet' });
   await expect(fillet).toBeVisible();
@@ -2984,9 +2987,9 @@ test('models a parametric part and exports a true STEP file', async ({
   const filletTool = page.getByRole('button', { name: /^Fillet/ });
   await expect(filletTool).toBeEnabled();
   await filletTool.click();
-  await expect(page.locator('.selection-summary')).toContainText(
-    'Select edges in the viewport or select every edge below.'
-  );
+  await expect(
+    page.getByRole('group', { name: 'Fillet command' })
+  ).toContainText('Click the edges to fillet');
   await page.keyboard.press('Escape'); // back to the tool launcher
 
   // Second body and a subtract that consumes both inputs. The shipped default

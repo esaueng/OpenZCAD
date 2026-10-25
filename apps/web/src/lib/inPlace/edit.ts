@@ -1,6 +1,7 @@
 import type { FeatureUpdateInput } from '@openzcad/document-core';
 import {
   isDatumPlaneRef,
+  type EdgeTopologyReferenceV5,
   type BodyId,
   type FeatureData,
   type FeatureId,
@@ -51,8 +52,15 @@ export interface InPlaceEditContext {
   face(bodyId: BodyId, hash: number): FacePick | null;
   /** Any planar face of a body, for a command any face names. */
   anyFace(bodyId: BodyId): FacePick | null;
-  /** A body's edge by its hash, with where its handles stand. */
-  edge(bodyId: BodyId, hash: number): EdgePick | null;
+  /**
+   * A body's edge by its stored identity (its lineage name when it has one,
+   * else its hash), with where its handles stand.
+   */
+  edge(
+    bodyId: BodyId,
+    hash: number,
+    reference?: EdgeTopologyReferenceV5
+  ): EdgePick | null;
   body(bodyId: BodyId): BodyPick | null;
 }
 
@@ -402,16 +410,20 @@ export function inPlaceEditSeed(
       // stored with (or none): an untouched edit writes the same set back.
       const named = data.edgeReferences?.length === data.edgeHashes.length;
       data.edgeHashes.forEach((hash, index) => {
-        const edge = ctx.edge(data.targetBodyId, hash);
+        const stored = named ? data.edgeReferences![index]! : undefined;
+        const edge = ctx.edge(data.targetBodyId, hash, stored);
         if (!edge) missing.push('edge');
         const { reference: _current, ...placed } = edge ?? {
           bodyId: data.targetBodyId,
           hash,
           topologyId: ''
         };
+        // Placed where the edge is now (found by name if its hash moved),
+        // but stored back as it was stored.
         seed.slots.edges.push({
           ...placed,
-          ...(named ? { reference: data.edgeReferences![index]! } : {})
+          hash,
+          ...(stored ? { reference: stored } : {})
         });
       });
       if (data.featureKind === 'fillet') {

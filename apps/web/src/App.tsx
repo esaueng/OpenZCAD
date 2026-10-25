@@ -751,6 +751,7 @@ import type {
 } from './lib/interaction/machine';
 import {
   refreshEdgeFormReferencesForCommit,
+  resolveEdge,
   resolveFace
 } from './lib/topologyResolution';
 import { useLineageDemand } from './lib/lineageDemand';
@@ -8212,6 +8213,32 @@ export function App() {
     );
   }
 
+  /** Where a stored blend's handle stands: on its first lit blend face. */
+  function inPlaceBlendAnchor(
+    current: ProjectDocument,
+    feature: FeatureNode
+  ): { middle: Vector3; outward: Vector3 } | null {
+    const focus = historyFeatureFocus(current, feature, (bodyId) => {
+      const body = current.derived.bodyRepresentations[bodyId];
+      return Boolean(body && !body.consumed && !hiddenBodyIds.has(bodyId));
+    });
+    if (focus.kind !== 'focus') return null;
+    for (const selection of focus.faces) {
+      const geometry = current.derived.bodyRepresentations[
+        selection.bodyId
+      ]?.topology?.faces.find(
+        (face) =>
+          face.topologyId === selection.topologyId ||
+          face.hash === selection.hash
+      )?.geometry;
+      const middle = geometry?.centroid ?? geometry?.center;
+      if (middle && geometry?.normal) {
+        return { middle, outward: geometry.normal };
+      }
+    }
+    return null;
+  }
+
   /**
    * A model edge as a fillet's or chamfer's edge slot holds it: its lineage
    * name, and where its handles stand (the middle of its drawn polyline,
@@ -8328,7 +8355,25 @@ export function App() {
           ?.regions[0]?.regionFingerprint ?? null,
       face: (bodyId, hash) =>
         inPlaceFacePick(bodyId, undefined, hash, undefined),
-      edge: (bodyId, hash) => inPlaceEdgePick(bodyId, undefined, hash),
+      edge: (bodyId, hash, reference) => {
+        const found = resolveEdge(representations[bodyId], {
+          hash,
+          ...(reference ? { reference } : {})
+        });
+        const pick = found.ok
+          ? inPlaceEdgePick(bodyId, found.entry.topologyId, found.entry.hash)
+          : null;
+        if (pick?.middle) return pick;
+        // A consumed input may publish its edges without a drawn polyline:
+        // the handle then stands on the feature's own blend face, the one
+        // its History row lights, pointing into the body.
+        const blend = inPlaceBlendAnchor(current, feature);
+        return pick
+          ? { ...pick, ...(blend ?? {}) }
+          : blend
+            ? { bodyId, hash, topologyId: '', ...blend }
+            : null;
+      },
       anyFace: (bodyId) => {
         const face = representations[bodyId]?.topology?.faces.find(
           (candidate) => candidate.geometry?.surfaceType === 'plane'
@@ -14777,7 +14822,7 @@ export function App() {
           target !== null &&
           selection.bodyId !== target &&
           !inPlaceEditMayUse(
-            producingFeatureOf({ bodyId: selection.bodyId as BodyId }),
+            producingFeatureOf({ bodyId: selection.bodyId }),
             editing
           );
         const edge =

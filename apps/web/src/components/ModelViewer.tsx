@@ -693,6 +693,8 @@ export type CommandHandleView = (
 };
 
 const EMPTY_COMMAND_HANDLES: readonly CommandHandleView[] = [];
+/** How far inside the canvas edge a command chip is kept, in CSS pixels. */
+const COMMAND_CHIP_MARGIN_PX = 12;
 
 export interface SketchViewData {
   sketchId: string;
@@ -4057,17 +4059,47 @@ export function ModelViewer({
                 view.params.anchor.z
               )
             : (entry.anchor ?? new THREE.Vector3());
-        const ndc = anchor.clone().project(context.activeCamera);
-        if (ndc.z > 1 || ndc.z < -1) {
+        // Hidden only behind the camera. A point past the far plane (a
+        // value typed far beyond the model) still projects where it lies,
+        // and its chip is kept on the canvas so it can be tapped to fix it.
+        // A handle drawn out past the camera (a large value along a direction
+        // that faces the viewer) puts its chip at the handle's base instead.
+        const camera = context.activeCamera;
+        const behind = (point: THREE.Vector3) =>
+          (camera as THREE.PerspectiveCamera).isPerspectiveCamera === true &&
+          point.clone().applyMatrix4(camera.matrixWorldInverse).z > 0;
+        const placed =
+          behind(anchor) && entry.rig ? entry.rig.group.position : anchor;
+        if (behind(placed)) {
           entry.chip.hidden = true;
           continue;
         }
-        const x = edgeChipCenterX(
-          ((ndc.x + 1) / 2) * canvasCssWidth,
-          laneLeft,
-          chipWidths.get(valueId) ?? 0
+        const ndc = placed.clone().project(camera);
+        // Kept on the canvas: a value typed far past the model (a radius
+        // the kernel then refuses) must leave its chip where it can be
+        // tapped again to fix it.
+        const halfWidth = (chipWidths.get(valueId) ?? 0) / 2;
+        const x = Math.min(
+          Math.max(
+            edgeChipCenterX(
+              ((ndc.x + 1) / 2) * canvasCssWidth,
+              laneLeft,
+              chipWidths.get(valueId) ?? 0
+            ),
+            COMMAND_CHIP_MARGIN_PX + halfWidth
+          ),
+          Math.max(
+            COMMAND_CHIP_MARGIN_PX + halfWidth,
+            canvasCssWidth - COMMAND_CHIP_MARGIN_PX - halfWidth
+          )
         );
-        const y = ((1 - ndc.y) / 2) * canvasCssHeight;
+        const y = Math.min(
+          Math.max(
+            ((1 - ndc.y) / 2) * canvasCssHeight,
+            COMMAND_CHIP_MARGIN_PX * 2
+          ),
+          canvasCssHeight - COMMAND_CHIP_MARGIN_PX * 2
+        );
         const text = view.format(value);
         if (entry.chip.textContent !== text) entry.chip.textContent = text;
         hud.showAt(entry.chip, x, y);

@@ -8,7 +8,8 @@ import {
   setSelectionFilter,
   stubApi,
   WORKSPACE_SESSION_STORAGE_KEY,
-  revealModelPanel
+  revealModelPanel,
+  finishInPlaceCommand
 } from './openzcad-fixtures';
 import type { Locator, Page } from '@playwright/test';
 
@@ -1230,10 +1231,13 @@ test('double-clicking a filleted rim takes the whole run of edges', async ({
   // Rounding every edge turns each face boundary into a smooth run of lines
   // and arcs — the shape the whole feature exists for. A raw box has only
   // sharp corners, so every run on one would be a single edge.
+  // U09 phase 7: in place, every edge from Options, the default radius.
   await page.getByRole('button', { name: /^Fillet/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByRole('button', { name: 'Select all 12 edges' }).click();
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  const filletBar = page.getByRole('group', { name: 'Fillet command' });
+  await filletBar.locator('summary').click();
+  await filletBar.getByRole('button', { name: 'Select all 12 edges' }).click();
+  await filletBar.locator('summary').click();
+  await finishInPlaceCommand(page, 'Fillet');
   await expect(
     page.locator('.feature-row', { hasText: 'Fillet' })
   ).toBeVisible();
