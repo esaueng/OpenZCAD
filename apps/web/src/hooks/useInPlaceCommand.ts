@@ -274,7 +274,8 @@ export interface InPlaceCommand {
    */
   settleEdit(edit: InPlaceEditSeed, committed: boolean): void;
   /** Ends the command; `quiet` when another action already says why. */
-  cancel(quiet?: boolean): void;
+  /** Ends the command; false while a Done is still validating (not quiet). */
+  cancel(quiet?: boolean): boolean;
 }
 
 const EMPTY_RAWS: Record<string, string> = {};
@@ -1416,7 +1417,7 @@ export function useInPlaceCommand(
 
   const cancel = useCallback(
     (quiet = false) => {
-      if (!spec) return;
+      if (!spec) return true;
       const editing = editRef.current;
       // A Done still validating cannot be taken back: Cancel would say
       // nothing was added (or changed) and the commit could land after.
@@ -1428,7 +1429,7 @@ export function useInPlaceCommand(
             ? `${editing.name} is still being saved · wait for it to finish.`
             : `${spec.title} is still being added · wait for it to finish.`
         );
-        return;
+        return false;
       }
       end();
       if (!quiet) {
@@ -1438,6 +1439,7 @@ export function useInPlaceCommand(
             : `${spec.title} canceled; nothing was added.`
         );
       }
+      return true;
     },
     [spec, end]
   );

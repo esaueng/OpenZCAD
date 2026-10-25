@@ -8617,7 +8617,8 @@ export function App() {
    */
   function cancelInPlaceCommand() {
     const editing = inPlaceRef.current.editing;
-    inPlaceRef.current.cancel();
+    // A Done still validating keeps the command, and its selection, open.
+    if (!inPlaceRef.current.cancel()) return;
     if (editing) {
       setSelectedFeatureNode(null);
       setSelectedBodyIds([]);
