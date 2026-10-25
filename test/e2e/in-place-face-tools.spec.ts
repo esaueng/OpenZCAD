@@ -168,7 +168,7 @@ test('a face card keeps its four verbs and folds the rest behind More', async ({
   for (const verb of ['Draft', 'Thicken', 'Plane']) {
     await expect(
       card.getByRole('button', { name: `Selection: ${verb}` })
-    ).toBeVisible();
+    ).toBeEnabled();
   }
   // The picked face is the shell's first opening.
   await card.getByRole('button', { name: 'Selection: Shell' }).click();

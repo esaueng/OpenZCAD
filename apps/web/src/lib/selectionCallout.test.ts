@@ -153,6 +153,23 @@ describe('selectionCalloutVerbs', () => {
     ).toEqual(['Shell', 'Draft']);
   });
 
+  it('disables a datum verb on a pick no datum can follow, and says why', () => {
+    const reason = 'An axis runs along a straight edge; this edge is curved.';
+    const axis = selectionCalloutVerbs({
+      kind: 'edges',
+      datumRefusal: reason,
+      availability: READY
+    }).find((verb) => verb.id === 'tool:datum-axis');
+    expect(axis).toMatchObject({ disabled: true, title: reason });
+    const plane = selectionCalloutVerbs({
+      kind: 'face',
+      faceCapabilities: planarFace,
+      datumRefusal: 'no identity',
+      availability: READY
+    }).find((verb) => verb.id === 'tool:datum-plane');
+    expect(plane).toMatchObject({ disabled: true, title: 'no identity' });
+  });
+
   it('disables a tool verb with the reason it cannot run', () => {
     const [union] = selectionCalloutVerbs({
       kind: 'bodies',

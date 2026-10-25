@@ -146,6 +146,12 @@ export interface SelectionCalloutVerbInput {
   resizeBody?: boolean;
   /** The selection action already armed, drawn pressed. */
   pressedAction?: SelectionActionId | null;
+  /**
+   * Why the pick cannot be a datum's source (Plane on a flat face, Axis on
+   * a round face or an edge): a face or edge with no identity a rebuild can
+   * find again, or a curved edge. The datum verb is then disabled with it.
+   */
+  datumRefusal?: string | null;
   availability: ToolAvailability;
 }
 
@@ -234,7 +240,13 @@ export function selectionCalloutVerbs(
 ): SelectionCalloutVerb[] {
   const { availability } = input;
   const tools = (...ids: ToolId[]) =>
-    ids.map((tool) => toolVerb(tool, availability));
+    ids.map((tool) => {
+      const verb = toolVerb(tool, availability);
+      return (tool === 'datum-plane' || tool === 'datum-axis') &&
+        input.datumRefusal
+        ? { ...verb, disabled: true, title: input.datumRefusal }
+        : verb;
+    });
   switch (input.kind) {
     case 'face': {
       const capabilities = input.faceCapabilities ?? [];

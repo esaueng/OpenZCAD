@@ -7482,6 +7482,49 @@ export function App() {
       ? 'edit'
       : 'details';
   })();
+  // Why the pick cannot seed a datum, by the rules the Plane and Axis cards
+  // apply to it (datumFaceSourceFromPick, datumAxisEdgeFromPick,
+  // datumAxisFaceFromPick): a rebuildable identity, and a straight edge.
+  const calloutDatumRefusal = ((): string | null => {
+    const lost = (what: string, datum: string) =>
+      `This ${what} has no identity a rebuild can find again, so ${datum} cannot follow it.`;
+    if (calloutKind === 'face' && renderedSelectedTopology) {
+      const face = representations[
+        renderedSelectedTopology.bodyId
+      ]?.topology?.faces.find(
+        (candidate) => candidate.hash === renderedSelectedTopology.hash
+      );
+      const surface = face?.geometry?.surfaceType.toLowerCase();
+      if (surface === 'cylinder' || surface === 'cone') {
+        return face?.reference ? null : lost('face', 'an axis');
+      }
+      const attachment = faceSketchAttachment({
+        bodyId: renderedSelectedTopology.bodyId,
+        pickedHash: renderedSelectedTopology.hash,
+        face
+      });
+      return attachment.ok &&
+        attachment.planeRef.type === 'face' &&
+        attachment.planeRef.sourceCentroid
+        ? null
+        : lost('face', 'a plane');
+    }
+    if (calloutKind === 'edges') {
+      const picked = selectedEdges[0] ?? renderedSelectedTopology;
+      const edge = picked
+        ? representations[picked.bodyId]?.topology?.edges.find(
+            (candidate) => candidate.hash === picked.hash
+          )
+        : undefined;
+      const reference = edge?.reference;
+      if (!reference) return lost('edge', 'an axis');
+      return reference.witness.closed ||
+        !/^line$/i.test(reference.witness.curveType)
+        ? 'An axis runs along a straight edge; this edge is curved.'
+        : null;
+    }
+    return null;
+  })();
   const calloutVerbsKey =
     calloutKind && calloutInteractive
       ? JSON.stringify([
@@ -7493,6 +7536,7 @@ export function App() {
               interaction.mode === 'face' &&
               Boolean(interaction.target.resizeBodyFeatureId),
             pressedAction: calloutPressedAction,
+            datumRefusal: calloutDatumRefusal,
             availability: shownAvailability
           }),
           ...(calloutImportedFace === 'edit'
