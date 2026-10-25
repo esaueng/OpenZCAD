@@ -105,6 +105,7 @@ import {
   wrapsField,
   type Authorization
 } from './e2eeProjects';
+import { memberRotationFence } from './e2eeDeviceRemoval';
 import {
   adoptionField,
   copyBlobObjects,
@@ -1018,6 +1019,8 @@ async function writeVersion(
   const now = new Date().toISOString();
   const newVersion = version.header.documentVersion;
   const signerFence = deviceListUnchanged(ctx.userId, version.signerList);
+  // A co-member's pending rotation (slice 5-7), atomically.
+  const rotationFence = await memberRotationFence(ctx.db, projectId, keyEpoch);
   // Every later statement lands only once the head moved to this version.
   const moved = {
     sql: `EXISTS (SELECT 1 FROM projects WHERE id = ? AND document_version = ?
@@ -1043,7 +1046,8 @@ async function writeVersion(
                            WHERE project_id = ? AND document_version > ?)
            AND EXISTS (SELECT 1 FROM e2ee_project_groups
                        WHERE project_id = ? AND key_epoch_base + epoch = ?)
-           AND ${signerFence.sql}`
+           AND ${signerFence.sql}
+           AND ${rotationFence.sql}`
       )
       .bind(
         newVersion,
@@ -1061,7 +1065,8 @@ async function writeVersion(
         input.expectedVersion,
         projectId,
         keyEpoch,
-        ...signerFence.binds
+        ...signerFence.binds,
+        ...rotationFence.binds
       ),
     // The replaced head's body goes first, so the quota sees the new one
     // replace it; a revision keeps its body.
@@ -1130,6 +1135,8 @@ async function writeVersion(
     if (await deviceListMoved(ctx.db, ctx.userId, version.signerList)) {
       refuseDeviceListMoved();
     }
+    // Refuses if a removal stored meanwhile names a later epoch.
+    await memberRotationFence(ctx.db, projectId, keyEpoch);
     return explainRefusedWrite(
       ctx,
       projectId,
@@ -1598,6 +1605,7 @@ async function saveInfo(
       }
     : { sql: '', binds: [] };
   const infoFence = deviceListUnchanged(ctx.userId, info.signerList);
+  const rotationFence = await memberRotationFence(ctx.db, projectId, keyEpoch);
   const now = new Date().toISOString();
   const results = await runVersionBatch(ctx, [
     ctx.db
@@ -1610,6 +1618,7 @@ async function saveInfo(
            AND EXISTS (SELECT 1 FROM e2ee_project_groups
                        WHERE project_id = ? AND key_epoch_base + epoch = ?)
            AND ${infoFence.sql}
+           AND ${rotationFence.sql}
            ${named.sql}
          ON CONFLICT (project_id, kind, scope) DO UPDATE SET
            sequence = excluded.sequence, key_epoch = excluded.key_epoch,
@@ -1635,6 +1644,7 @@ async function saveInfo(
         projectId,
         keyEpoch,
         ...infoFence.binds,
+        ...rotationFence.binds,
         ...named.binds,
         stored?.sequence ?? 0
       )
@@ -1643,6 +1653,7 @@ async function saveInfo(
     if (await deviceListMoved(ctx.db, ctx.userId, info.signerList)) {
       refuseDeviceListMoved();
     }
+    await memberRotationFence(ctx.db, projectId, keyEpoch);
     const current = await infoRow(ctx.db, projectId);
     if (current && current.sequence !== (stored?.sequence ?? 0)) {
       sequenceConflict(current.sequence);

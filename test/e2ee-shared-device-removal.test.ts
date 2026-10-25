@@ -16,6 +16,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from '../apps/web/worker/index';
+import { memberRotationFence } from '../apps/web/worker/e2eeDeviceRemoval';
 import {
   EnvelopeKey,
   accountKeySequences,
@@ -818,6 +819,63 @@ describe('device removal across shared encrypted projects (slice 5-7)', () => {
     await expect(
       saveEdit(alice, pendingId, 'Owner edit')
     ).rejects.toMatchObject({ code: 'E2EE_MEMBER_ROTATION_PENDING' });
+
+    // The Worker refuses it on its own (#906 review): a browser whose check
+    // ran before Bob's cutoff was stored, here one that sees neither the
+    // phone's leaf nor the cutoff, still cannot land a version under the
+    // key the phone holds.
+    const headBefore = headRow(srv, pendingId).version_hash;
+    const loaded = await alice.store.loadProject(pendingId);
+    const realStatus = alice.sessions.status.bind(alice.sessions);
+    const blindStatus = vi
+      .spyOn(alice.sessions, 'status')
+      .mockImplementation(async (ref) => {
+        const status = await realStatus(ref);
+        return {
+          ...status,
+          members: status.members.filter((m) => m.deviceId !== phoneId)
+        };
+      });
+    const blindCutoffs = vi
+      .spyOn(alice.groups.api, 'memberCutoffs')
+      .mockResolvedValue({ statements: [] });
+    await expect(
+      alice.store.saveProjectDocument({
+        projectId: loaded.projectId,
+        expectedVersion: loaded.version,
+        document: { ...loaded, name: 'Owner edit', version: loaded.version + 1 }
+      })
+    ).rejects.toMatchObject({
+      status: 409,
+      code: 'E2EE_MEMBER_ROTATION_PENDING'
+    });
+    expect(blindCutoffs).toHaveBeenCalled();
+    blindStatus.mockRestore();
+    blindCutoffs.mockRestore();
+    expect(headRow(srv, pendingId).version_hash).toBe(headBefore);
+
+    // The fence the Worker puts in the write's batch holds only while the
+    // cutoffs it read are the ones stored: one stored between its read and
+    // the batch makes the batch change nothing.
+    const fence = await memberRotationFence(
+      srv.env.DB as D1Database,
+      rotatedId,
+      keyEpochOf(srv, rotatedId)
+    );
+    const holds = () =>
+      (
+        srv.db
+          .prepare(`SELECT ${fence.sql} AS ok`)
+          .get(...(fence.binds as never[])) as { ok: number }
+      ).ok;
+    expect(holds()).toBe(1);
+    srv.db
+      .prepare(
+        `UPDATE e2ee_revocation_cutoffs SET updated_at = '2099-01-01T00:00:00.000Z'
+         WHERE user_id = ?`
+      )
+      .run(BOB);
+    expect(holds()).toBe(0);
 
     // Its later Commit there: the Worker refuses it outright...
     const pending = await stolen.sessions.commit(refOf(bobPhone, pendingId), {

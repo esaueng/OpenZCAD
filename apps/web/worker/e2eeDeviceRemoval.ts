@@ -180,6 +180,100 @@ function statementError(error: unknown): never {
 
 // --- Revocation cutoffs ------------------------------------------------------
 
+/** The accounts with access to a project: its owner and its members. */
+const PROJECT_ACCOUNTS = `(SELECT user_id FROM projects WHERE id = ?
+                         UNION SELECT user_id FROM project_members
+                         WHERE project_id = ?)`;
+
+/** One key per stored cutoff statement; any change to the set changes it. */
+const CUTOFF_KEYS = `SELECT c.user_id || '/' || c.generation || '/' ||
+                            c.entry_sequence || '/' || c.updated_at AS k,
+                            c.statement
+                     FROM e2ee_revocation_cutoffs c
+                     WHERE c.user_id IN ${PROJECT_ACCOUNTS}
+                     ORDER BY k`;
+
+/**
+ * A write under `keyEpoch` must not land while someone with access to the
+ * project has stored a cutoff naming a later key epoch for it (slice 5-7):
+ * that account removed a device that still holds this epoch's key, and its
+ * rotation has not landed. The browsers check this before they write; this
+ * is the Worker's own check, made atomic by the returned fence, which holds
+ * only while those accounts' cutoff statements are the ones read here. So a
+ * removal stored between the check and the batch refuses the write.
+ *
+ * The statements were verified against their account's device list when
+ * they were stored. Without migration 0036 nothing can be stored, and the
+ * fence is empty.
+ */
+export async function memberRotationFence(
+  db: D1Database,
+  projectId: string,
+  keyEpoch: number
+): Promise<{ sql: string; binds: readonly unknown[] }> {
+  if (!(await isE2eeDeviceRemovalStorageReady(db))) {
+    return { sql: '1', binds: [] };
+  }
+  const { results } = await db
+    .prepare(CUTOFF_KEYS)
+    .bind(projectId, projectId)
+    .all<{ k: string; statement: string }>();
+  const rows = results ?? [];
+  for (const row of rows) {
+    const named = decodeRevocationCutoffs(
+      fromBase64Url(row.statement)
+    ).cutoffs.find((cutoff) => cutoff.projectId === projectId);
+    if (named && keyEpoch < named.cutoffEpoch) {
+      refuseMemberRotationPending();
+    }
+  }
+  return {
+    sql: `COALESCE((SELECT group_concat(k, ',') FROM (${CUTOFF_KEYS})), '') = ?`,
+    binds: [projectId, projectId, rows.map((row) => row.k).join(',')]
+  };
+}
+
+/**
+ * A cutoff names the key epoch its project's rotation lands in: the epoch
+ * after the current one when the statement is made, or the current one once
+ * the rotation landed later. Nothing honest names an epoch beyond the next,
+ * and one that did would hold every writer of a shared project off (each
+ * refuses a write below it) until the epoch caught up (#906 review).
+ */
+async function requirePlausibleCutoffs(
+  db: D1Database,
+  cutoffs: readonly { projectId: string; cutoffEpoch: number }[]
+): Promise<void> {
+  if (cutoffs.length === 0) return;
+  const { results } = await db
+    .prepare(
+      `SELECT project_id, key_epoch_base + epoch AS key_epoch
+       FROM e2ee_project_groups
+       WHERE project_id IN (SELECT value FROM json_each(?))`
+    )
+    .bind(JSON.stringify(cutoffs.map((cutoff) => cutoff.projectId)))
+    .all<{ project_id: string; key_epoch: number }>();
+  const current = new Map(
+    (results ?? []).map((row) => [row.project_id, row.key_epoch])
+  );
+  for (const cutoff of cutoffs) {
+    const keyEpoch = current.get(cutoff.projectId);
+    if (keyEpoch !== undefined && cutoff.cutoffEpoch > keyEpoch + 1) {
+      invalid(
+        `The cutoff for ${cutoff.projectId} names key epoch ${cutoff.cutoffEpoch}, past the next one (${keyEpoch + 1}).`
+      );
+    }
+  }
+}
+
+export function refuseMemberRotationPending(): never {
+  refuse(
+    409,
+    'E2EE_MEMBER_ROTATION_PENDING',
+    'A member of this project removed one of their devices, which may still hold its current key. Saving resumes once one of their other devices has opened the project.'
+  );
+}
+
 interface CutoffRow {
   generation: number;
   entry_sequence: number;
@@ -284,6 +378,7 @@ async function storeCutoffs(
     current.list,
     { generation }
   ).catch(statementError);
+  await requirePlausibleCutoffs(db, value.cutoffs);
   if (value.entrySequence !== entrySequence) {
     invalid('entrySequence must be the entry the statement names');
   }

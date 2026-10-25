@@ -616,6 +616,26 @@ describe('device removal across encrypted projects', () => {
     expect(((await regression.json()) as { code: string }).code).toBe(
       'E2EE_CUTOFF_REGRESSION'
     );
+    // Nor past the next key epoch, which would hold every writer of the
+    // project off until the epoch caught up (#906 review).
+    const signedFar = await signRevocationCutoffs(identity, {
+      ...statement,
+      issuedAt: statement.issuedAt + 2,
+      cutoffs: statement.cutoffs.map((c) => ({
+        ...c,
+        cutoffEpoch: keyEpochOf(srv, c.projectId) + 2
+      }))
+    });
+    const far = await srv.call('PUT', '/api/e2ee/revocation-cutoffs', {
+      body: {
+        generation: 1,
+        entrySequence: statement.entrySequence,
+        statement: toBase64Url(signedFar.statement),
+        signature: toBase64Url(signedFar.signature)
+      }
+    });
+    expect(far.status).toBe(400);
+    expect(await far.text()).toMatch(/past the next one/);
     const tampered = await srv.call('PUT', '/api/e2ee/revocation-cutoffs', {
       body: {
         generation: 1,
@@ -657,7 +677,11 @@ describe('device removal across encrypted projects', () => {
     let raced = false;
     laptop.fetcher = async (path, init = {}) => {
       const response = await real(path, init);
-      if (!raced && path === '/api/e2ee/device-list' && init.method === 'POST') {
+      if (
+        !raced &&
+        path === '/api/e2ee/device-list' &&
+        init.method === 'POST'
+      ) {
         raced = true;
         await removeDevice(
           desktop.e2ee,
@@ -715,7 +739,11 @@ describe('device removal across encrypted projects', () => {
     let joined = false;
     let appended = false;
     laptop.fetcher = async (path, init = {}) => {
-      if (!joined && path === '/api/e2ee/device-list' && init.method === 'POST') {
+      if (
+        !joined &&
+        path === '/api/e2ee/device-list' &&
+        init.method === 'POST'
+      ) {
         joined = true;
         await saveEdit(desktop, projectId, 'Desktop edit');
       }
