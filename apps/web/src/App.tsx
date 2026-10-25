@@ -19526,12 +19526,15 @@ export function App() {
     inPlace.active && inPlaceSpec?.bodyMode
       ? inPlace.slots.bodies.map((body) => body.bodyId).join(',')
       : null;
+  // Again after an undo or redo, which clears the selection while the
+  // command keeps its bodies.
+  const inPlaceBaseVersion = doc?.version ?? null;
   useEffect(() => {
     if (inPlaceBodyIds === null) return;
     setSelectedBodyIds(
       inPlaceBodyIds ? (inPlaceBodyIds.split(',') as BodyId[]) : []
     );
-  }, [inPlaceBodyIds]);
+  }, [inPlaceBodyIds, inPlaceBaseVersion]);
   const inPlaceAxisPicker = useMemo(
     () =>
       inPlaceSpec?.wantsAxis &&
@@ -19709,14 +19712,17 @@ export function App() {
   inPlaceBodyPickRef.current = inPlaceBodyPick;
   useEffect(() => {
     const editing = inPlaceEditing;
-    if (!editing || !doc) return;
+    // A new command's picks follow the model too (an undo, a collaborator's
+    // rebuild): a Scale's box, a Shell's faces.
+    if (!doc || inPlace.tool === null) return;
     // The edited feature as it is now: a saved hole's position or a scale's
     // factor may have changed since the edit armed.
-    const liveFeature = findFeature(doc, editing.featureId);
-    const liveData =
-      liveFeature && liveFeature.data.featureKind === editing.data.featureKind
+    const liveFeature = editing ? findFeature(doc, editing.featureId) : null;
+    const liveData = editing
+      ? liveFeature && liveFeature.data.featureKind === editing.data.featureKind
         ? liveFeature.data
-        : editing.data;
+        : editing.data
+      : null;
     // A path, a guide and a boolean's inputs are ordered: one lost before a
     // kept one clears that list to be picked again in order.
     let reordered = false;
@@ -19763,7 +19769,7 @@ export function App() {
       );
       if (!fresh) return [pick];
       const point =
-        pick.savedPosition && liveData.featureKind === 'hole'
+        pick.savedPosition && liveData?.featureKind === 'hole'
           ? (holeWorldPosition(fresh, liveData, {
               evaluate: (value) =>
                 evalParamValue(value, parameterScope.scope, doc.units)
@@ -19807,6 +19813,15 @@ export function App() {
     const bodies = kept.map((pick) => {
       const fresh = inPlaceBodyPickRef.current(pick.bodyId);
       if (!fresh) return pick;
+      if (!editing || !liveData) {
+        // A new command works on the body as it is now.
+        const same =
+          JSON.stringify([fresh.min, fresh.max]) ===
+          JSON.stringify([pick.min, pick.max]);
+        if (same) return pick;
+        bodiesMoved = true;
+        return fresh;
+      }
       const live = findFeature(doc, editing.featureId);
       const boxContext = {
         evaluate: (value: ParamValue) =>
@@ -19869,8 +19884,8 @@ export function App() {
     );
     setStatus(
       reordered
-        ? `${editing.name}: a saved pick no longer exists in the model · pick that list again, in order.`
-        : `${editing.name}: a saved pick no longer exists in the model · pick it again.`
+        ? `${editing?.name ?? inPlaceTitle}: a saved pick no longer exists in the model · pick that list again, in order.`
+        : `${editing?.name ?? inPlaceTitle}: a saved pick no longer exists in the model · pick it again.`
     );
   }, [
     inPlaceEditing,
@@ -19880,6 +19895,7 @@ export function App() {
     representations,
     exactGeometryReady,
     parameterScope.scope,
+    inPlaceTitle,
     setStatus
   ]);
 
