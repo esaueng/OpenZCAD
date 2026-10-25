@@ -460,10 +460,17 @@ function copyRecord(record: VersionLogRecord): VersionLogRecord {
  * The newest head a revoking browser had accepted for a project when a
  * device was revoked (ADR-024, Key lifecycle). The device's signatures are
  * accepted only on that version or earlier ones.
+ *
+ * `keyEpoch`, when given, is the first key epoch the device must not know
+ * (the identity-signed per-project cutoff): a version written under it or
+ * a later one is refused as well. A cutoff without a head
+ * (`documentVersion` and `versionHash` both absent) limits by key epoch
+ * alone; one of the two forms is required.
  */
 export interface VersionCutoff {
-  readonly documentVersion: number;
-  readonly versionHash: Uint8Array;
+  readonly documentVersion?: number;
+  readonly versionHash?: Uint8Array;
+  readonly keyEpoch?: number;
 }
 
 /** The `cutoffs` map key for one device of one user. Ids hold no spaces. */
@@ -582,21 +589,39 @@ function cutoffsOf(
     if (typeof key !== 'string') {
       fail('invalid-argument', 'cutoffs are keyed by authorCutoffKey');
     }
+    if (typeof cutoff !== 'object' || cutoff === null) {
+      fail('invalid-argument', 'A cutoff must be an object');
+    }
+    const headless =
+      cutoff.documentVersion === undefined && cutoff.versionHash === undefined;
     if (
-      typeof cutoff !== 'object' ||
-      cutoff === null ||
-      !isUint(cutoff.documentVersion, Number.MAX_SAFE_INTEGER) ||
-      !(cutoff.versionHash instanceof Uint8Array) ||
-      cutoff.versionHash.byteLength !== HASH_BYTES
+      !headless &&
+      (!isUint(cutoff.documentVersion, Number.MAX_SAFE_INTEGER) ||
+        !(cutoff.versionHash instanceof Uint8Array) ||
+        cutoff.versionHash.byteLength !== HASH_BYTES)
     ) {
       fail(
         'invalid-argument',
         'A cutoff is a document version and a 32-byte hash'
       );
     }
+    if (
+      cutoff.keyEpoch !== undefined &&
+      !isUint(cutoff.keyEpoch, Number.MAX_SAFE_INTEGER)
+    ) {
+      fail('invalid-argument', 'A cutoff key epoch is an unsigned integer');
+    }
+    if (headless && cutoff.keyEpoch === undefined) {
+      fail('invalid-argument', 'A cutoff names a head, a key epoch or both');
+    }
     out.set(key, {
-      documentVersion: cutoff.documentVersion,
-      versionHash: copyBytes(cutoff.versionHash)
+      ...(headless
+        ? {}
+        : {
+            documentVersion: cutoff.documentVersion,
+            versionHash: copyBytes(cutoff.versionHash!)
+          }),
+      ...(cutoff.keyEpoch === undefined ? {} : { keyEpoch: cutoff.keyEpoch })
     });
   }
   return out;
@@ -660,10 +685,14 @@ async function verifyCapturedAuthor(
         `Device ${author.deviceId} is revoked and has no cutoff for this project`
       );
     }
-    const within =
+    const withinHead =
+      cutoff.documentVersion === undefined ||
       header.documentVersion < cutoff.documentVersion ||
       (header.documentVersion === cutoff.documentVersion &&
-        equalBytes(hash, cutoff.versionHash));
+        equalBytes(hash, cutoff.versionHash!));
+    const withinEpoch =
+      cutoff.keyEpoch === undefined || header.keyEpoch < cutoff.keyEpoch;
+    const within = withinHead && withinEpoch;
     if (!within) {
       throw new AuthorshipError(
         'outside-cutoff',
