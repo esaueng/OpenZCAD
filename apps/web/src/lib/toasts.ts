@@ -18,6 +18,23 @@ export interface ToastModel {
   id: number;
   message: string;
   action?: ToastAction;
+  /**
+   * The status entry (its `at` stamp) this toast restates, captured when that
+   * outcome status was set (a delete, a duplicate). Only that status steps
+   * aside for it, for good; any other status, set before or after, is left
+   * alone, and so is every status under a toast that restates none (a reload
+   * offer, a failure).
+   */
+  repeatsStatusAt?: number;
+}
+
+/** Which status entry the status readout should treat the toast as repeating. */
+export function statusRepeatedByToast(
+  toast: ToastModel | null
+): { toastId: number; statusAt: number } | null {
+  return toast?.repeatsStatusAt === undefined
+    ? null
+    : { toastId: toast.id, statusAt: toast.repeatsStatusAt };
 }
 
 export function countLabel(

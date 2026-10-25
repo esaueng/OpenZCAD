@@ -27,6 +27,7 @@ import {
   envelopeBodyLength,
   envelopeKeyFromBytes,
   parseEnvelope,
+  parseEnvelopeShape,
   type ContentBlobReference,
   type PayloadLimits
 } from './envelope';
@@ -897,6 +898,63 @@ describe('content blobs', () => {
     expect(await decryptContentBlob(reference, envelope)).toEqual(STEP);
     const other = await blob();
     expect(other.reference.blobId).not.toBe(reference.blobId);
+  });
+
+  it('stores a lost blob again under its id with a fresh key', async () => {
+    const first = await blob();
+    const again = await encryptContentBlob(
+      EnvelopeKey.generate(),
+      'import-source',
+      STEP,
+      { compression: 'none', chunkSize: CHUNK, blobId: first.reference.blobId }
+    );
+    expect(again.reference.blobId).toBe(first.reference.blobId);
+    expect(parseEnvelope(again.envelope).header).toMatchObject({
+      blobId: first.reference.blobId
+    });
+    // A new key and so new ciphertext: the old reference does not open it.
+    expect(again.reference.key).not.toEqual(first.reference.key);
+    expect(again.reference.ciphertextHash).not.toEqual(
+      first.reference.ciphertextHash
+    );
+    expect(await decryptContentBlob(again.reference, again.envelope)).toEqual(
+      STEP
+    );
+    await expect(
+      decryptContentBlob(first.reference, again.envelope)
+    ).rejects.toThrow(E2eeError);
+    await expect(
+      encryptContentBlob(EnvelopeKey.generate(), 'import-source', STEP, {
+        blobId: ''
+      })
+    ).rejects.toMatchObject({ code: 'invalid-argument' });
+  });
+
+  it('checks a stored blob from its prefix and total length alone', async () => {
+    const { envelope } = await blob(STEP, 64);
+    const whole = parseEnvelope(envelope);
+    const head = envelope.slice(0, whole.prefix.byteLength + 3);
+    expect(parseEnvelopeShape(head, envelope.byteLength)).toEqual(whole);
+    // A body cut inside a chunk's tag is caught by its length alone.
+    expect(() =>
+      parseEnvelopeShape(head, whole.prefix.byteLength + 64 + 16 + 5)
+    ).toThrowError(expect.objectContaining({ code: 'malformed' }));
+    // A body cut at a chunk boundary still parses: only an uncompressed
+    // blob's payload length shows that (the Worker checks it), and only
+    // the final chunk shows it to a reader.
+    expect(
+      parseEnvelopeShape(head, whole.prefix.byteLength + 64 + 16).payloadLength
+    ).toBe(64);
+    // A head without the whole prefix, or a length inside it, is refused.
+    expect(() =>
+      parseEnvelopeShape(envelope.slice(0, 9), envelope.byteLength)
+    ).toThrowError(expect.objectContaining({ code: 'malformed' }));
+    expect(() => parseEnvelopeShape(head, 5)).toThrowError(
+      expect.objectContaining({ code: 'malformed' })
+    );
+    expect(() => parseEnvelopeShape(head, -1)).toThrowError(
+      expect.objectContaining({ code: 'invalid-argument' })
+    );
   });
 
   it('compresses by default and round-trips through JSON references', async () => {

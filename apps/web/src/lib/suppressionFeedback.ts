@@ -12,6 +12,8 @@ export interface SuppressionNotice {
   name: string;
   resume: boolean;
   before: ReadonlySet<FeatureId> | null;
+  /** The outcome status the toggle set, which the deferred toast restates. */
+  statusAt?: number;
 }
 
 /** A causal count needs geometry from the live document before the toggle. */

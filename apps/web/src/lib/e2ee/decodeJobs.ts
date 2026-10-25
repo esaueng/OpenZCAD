@@ -32,18 +32,22 @@ import {
   decryptContentBlobStream,
   decodeEncryptedDocumentBody,
   decodeKeyArchiveBody,
+  decodeMeasurementsBody,
   decodeProjectInfoBody,
+  decodeViewStateBody,
   decryptProjectEnvelope,
   type ContentBlobKind,
   type ContentBlobReference,
   type E2eeErrorCode,
   type EncryptedDocumentBody,
   type KeyArchiveBody,
+  type MeasurementsBody,
   type ProjectEnvelopeExpectation,
   type ProjectEnvelopeHeader,
   type ProjectEnvelopeHeaderInit,
   type ProjectEnvelopeKind,
-  type ProjectInfoBody
+  type ProjectInfoBody,
+  type ViewStateBody
 } from '@openzcad/crypto';
 import {
   JsonComplexityGuard,
@@ -81,8 +85,11 @@ export interface ContentBlobDecodeJob {
  */
 export interface SealDocumentJob {
   readonly type: 'seal-document';
-  readonly header: ProjectEnvelopeHeaderInit;
+  /** The header; its `blobIds` are always derived from `blobs`. */
+  readonly header: Omit<ProjectEnvelopeHeaderInit, 'blobIds'>;
   readonly document: Readonly<Record<string, unknown>>;
+  /** The content blobs the document names (ADR-024 content blobs). */
+  readonly blobs?: readonly ContentBlobReference[];
   readonly revisionVersionHashes: ReadonlyMap<string, Uint8Array>;
 }
 
@@ -94,6 +101,14 @@ export interface SealDocumentResult {
   readonly versionKey: Uint8Array;
 }
 
+/** Every body a project envelope's codec reads. */
+export type ProjectEnvelopeBody =
+  | EncryptedDocumentBody
+  | ProjectInfoBody
+  | KeyArchiveBody
+  | MeasurementsBody
+  | ViewStateBody;
+
 export type DecodeJob =
   ProjectEnvelopeDecodeJob | ContentBlobDecodeJob | SealDocumentJob;
 
@@ -101,7 +116,7 @@ export interface ProjectEnvelopeDecodeResult {
   readonly type: 'project-envelope';
   readonly header: ProjectEnvelopeHeader;
   /** The body as its kind's codec read it (`decodeProjectBody`). */
-  readonly value: EncryptedDocumentBody | ProjectInfoBody | KeyArchiveBody;
+  readonly value: ProjectEnvelopeBody;
 }
 
 export type ContentBlobDecodeResult =
@@ -204,14 +219,14 @@ export function parseGuardedJson(bytes: Uint8Array): unknown {
  * refused, so `{}`, a non-canonical project info or key archive, or a body
  * whose blob references disagree with the header never reaches the caller.
  * Documents and share snapshots then get the shared structural check.
- * Measurements and view state have no body codec yet (slice 4-7), so they
- * are refused rather than handed out as unchecked JSON.
+ * Measurements and view state carry an app record each (slice 4-7); the
+ * page checks the record after this, as it checks a document.
  */
 export function decodeProjectBody(
   kind: ProjectEnvelopeKind,
   header: ProjectEnvelopeHeader,
   plaintext: Uint8Array
-): EncryptedDocumentBody | ProjectInfoBody | KeyArchiveBody {
+): ProjectEnvelopeBody {
   switch (kind) {
     case 'document':
     case 'share-snapshot': {
@@ -224,10 +239,14 @@ export function decodeProjectBody(
       return decodeProjectInfoBody(plaintext, header);
     case 'key-archive':
       return decodeKeyArchiveBody(plaintext, header);
+    case 'measurements':
+      return decodeMeasurementsBody(plaintext, header);
+    case 'view-state':
+      return decodeViewStateBody(plaintext, header);
     default:
       throw new E2eeError(
         'invalid-argument',
-        `${kind} envelopes have no body codec yet`
+        `${String(kind)} envelopes have no body codec`
       );
   }
 }
@@ -355,16 +374,24 @@ export async function sealDocumentJob(
   if (job?.header?.kind !== 'document') {
     throw new E2eeError('invalid-argument', 'Only documents are sealed here');
   }
+  // The header names exactly the blobs the body references: derived here,
+  // never assembled separately, and checked again by the body encoder
+  // (`checkBlobReferences`).
+  const blobs = [...(job.blobs ?? [])];
+  const header: ProjectEnvelopeHeaderInit = {
+    ...job.header,
+    blobIds: blobs.map((reference) => reference.blobId)
+  };
   const plaintext = encodeEncryptedDocumentBody(
     {
       document: job.document,
-      blobs: [],
+      blobs,
       revisionVersionHashes: job.revisionVersionHashes
     },
-    job.header
+    header
   );
   const key = EnvelopeKey.generate();
-  const envelope = await encryptProjectEnvelope(key, job.header, plaintext);
+  const envelope = await encryptProjectEnvelope(key, header, plaintext);
   return {
     type: 'seal-document',
     envelope,

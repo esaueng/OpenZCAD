@@ -9,6 +9,16 @@ import {
   thumbnailSourceBlob,
   uploadCloudThumbnail
 } from './cloudThumbnail';
+import { rememberProjectFormats } from './api';
+import {
+  pageBlobReferences,
+  setEncryptedBlobReader
+} from './e2ee/blobReferences';
+
+const { publishEncryptedThumbnail } = vi.hoisted(() => ({
+  publishEncryptedThumbnail: vi.fn(async () => 'f'.repeat(32))
+}));
+vi.mock('./e2ee/encryptedProjects', () => ({ publishEncryptedThumbnail }));
 
 describe('cloud thumbnails', () => {
   afterEach(() => {
@@ -119,5 +129,68 @@ describe('cloud thumbnails', () => {
       uploadSessionId: 'upload_thumbnail',
       artifactId
     });
+  });
+
+  // ADR-024 Phase 4, slice 4-7.
+  it('publishes an encrypted project’s thumbnail as a blob, never an artifact', async () => {
+    const projectId = toProjectId('proj_encrypted_thumbnail');
+    rememberProjectFormats([{ projectId, storageFormat: 2 }]);
+    const transport = {
+      createUploadSession: vi.fn(),
+      uploadArtifact: vi.fn(),
+      createMultipartUpload: vi.fn(),
+      uploadArtifactPart: vi.fn(),
+      completeMultipartUpload: vi.fn(),
+      abortMultipartUpload: vi.fn(),
+      finalizeArtifact: vi.fn()
+    };
+    await expect(
+      uploadCloudThumbnail(transport, {
+        projectId,
+        version: 3,
+        updatedAt: '2026-10-24T00:00:00.000Z',
+        source: 'data:image/webp;base64,cHJldmlldw=='
+      })
+    ).resolves.toBe('f'.repeat(32));
+    expect(publishEncryptedThumbnail).toHaveBeenCalledWith(
+      projectId,
+      expect.any(Blob)
+    );
+    const [, image] = publishEncryptedThumbnail.mock.calls[0] as unknown as [
+      string,
+      Blob
+    ];
+    expect(await image.text()).toBe('preview');
+    expect(transport.createUploadSession).not.toHaveBeenCalled();
+    expect(transport.uploadArtifact).not.toHaveBeenCalled();
+    rememberProjectFormats([{ projectId, storageFormat: 1 }]);
+  });
+
+  it('reads an encrypted thumbnail through the page’s blob reader', async () => {
+    const blobId = 'e'.repeat(32);
+    pageBlobReferences.remember('proj_encrypted_thumbnail', {
+      blobId,
+      kind: 'thumbnail',
+      key: new Uint8Array(32),
+      ciphertextHash: new Uint8Array(32),
+      plaintextLength: 7
+    });
+    const reader = vi.fn(async () => new TextEncoder().encode('preview'));
+    setEncryptedBlobReader(reader);
+    vi.stubGlobal('fetch', vi.fn());
+    try {
+      const source = await downloadCloudThumbnail(blobId);
+      expect(source).toBe(`data:image/webp;base64,${btoa('preview')}`);
+      expect(reader).toHaveBeenCalledWith(
+        'proj_encrypted_thumbnail',
+        blobId,
+        undefined,
+        undefined
+      );
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      setEncryptedBlobReader(null);
+      pageBlobReferences.clear();
+    }
   });
 });

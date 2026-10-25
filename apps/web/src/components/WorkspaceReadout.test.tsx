@@ -2,6 +2,7 @@ import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import { OVERLAY_EXIT_MS } from '../hooks/useDelayedUnmount';
 import { STATUS_MIN_DWELL_MS } from '../hooks/usePacedStatus';
 import {
   STATUS_CLOCK_STEP_MS,
@@ -287,6 +288,168 @@ describe('WorkspaceReadout message lifetime', () => {
         vi.advanceTimersByTime(2 * STATUS_CLOCK_STEP_MS);
       });
       expect(toast).toHaveClass('hidden');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the message in the pill while it fades out', () => {
+    vi.useFakeTimers();
+    try {
+      render(readout('Deleted Boss bore.', Date.now()));
+      const toast = screen.getByRole('contentinfo');
+      act(() => {
+        vi.advanceTimersByTime(STATUS_LIFETIME_MS + STATUS_CLOCK_STEP_MS);
+      });
+      // The fade has started; the words have not left before it ran.
+      expect(toast).toHaveClass('hidden');
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Deleted Boss bore.'
+      );
+      act(() => {
+        vi.advanceTimersByTime(OVERLAY_EXIT_MS);
+      });
+      expect(screen.getByRole('status')).toHaveTextContent('');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not bring back a settled message an action toast already said', () => {
+    vi.useFakeTimers();
+    try {
+      const at = Date.now();
+      const view = (toastUp: boolean) => (
+        <WorkspaceReadout
+          status="Deleted Boss bore."
+          statusAt={at}
+          tone="ready"
+          logOpen={false}
+          onToggleLog={vi.fn()}
+          repeatingToast={toastUp ? { toastId: 1, statusAt: at } : null}
+          {...SUMMARY}
+        />
+      );
+      const { rerender } = render(view(true));
+      act(() => {
+        vi.advanceTimersByTime(STATUS_LIFETIME_MS - 1000);
+      });
+      // The Undo toast leaves before the message's own lifetime is up: the
+      // message used to return for that last second, and the lane with it.
+      rerender(view(false));
+      expect(screen.getByRole('contentinfo')).toHaveClass('hidden');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retires a repeated message even when its toast leaves before the rebuild settles', () => {
+    vi.useFakeTimers();
+    try {
+      const at = Date.now();
+      const view = (tone: 'running' | 'ready', toastUp: boolean) => (
+        <WorkspaceReadout
+          status="Deleted Boss bore."
+          statusAt={at}
+          tone={tone}
+          logOpen={false}
+          onToggleLog={vi.fn()}
+          repeatingToast={toastUp ? { toastId: 1, statusAt: at } : null}
+          {...SUMMARY}
+        />
+      );
+      // The delete's toast goes up while the model is still rebuilding...
+      const { rerender } = render(view('running', true));
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      // ...and is dismissed before the rebuild settles.
+      rerender(view('running', false));
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      rerender(view('ready', false));
+      expect(screen.getByRole('contentinfo')).toHaveClass('hidden');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves a newer status alone under a deferred toast that repeats an older one', () => {
+    vi.useFakeTimers();
+    try {
+      const suppressedAt = Date.now();
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      // A suppression's toast waits for its rebuild; meanwhile a display
+      // change sets a newer status. The toast, raised now, restates the
+      // suppression's status, not this one.
+      const displayAt = Date.now();
+      const view = (toastUp: boolean) => (
+        <WorkspaceReadout
+          status="Display: Wireframe."
+          statusAt={displayAt}
+          tone="ready"
+          logOpen={false}
+          onToggleLog={vi.fn()}
+          repeatingToast={
+            toastUp ? { toastId: 2, statusAt: suppressedAt } : null
+          }
+          {...SUMMARY}
+        />
+      );
+      const { rerender } = render(view(false));
+      rerender(view(true));
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      rerender(view(false));
+      expect(screen.getByRole('contentinfo')).not.toHaveClass('hidden');
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Display: Wireframe.'
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a message set after the toast was raised, which it does not repeat', () => {
+    vi.useFakeTimers();
+    try {
+      const deletedAt = Date.now();
+      const toast = { toastId: 1, statusAt: deletedAt };
+      const view = (
+        status: string,
+        statusAt: number,
+        repeatingToast: typeof toast | null
+      ) => (
+        <WorkspaceReadout
+          status={status}
+          statusAt={statusAt}
+          tone="ready"
+          logOpen={false}
+          onToggleLog={vi.fn()}
+          repeatingToast={repeatingToast}
+          {...SUMMARY}
+        />
+      );
+      const { rerender } = render(view('Deleted Boss bore.', deletedAt, toast));
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      // A display change while Undo is still up: its own news, not the
+      // toast's, so it must still be read once the toast goes.
+      const displayAt = Date.now();
+      rerender(view('Display: Wireframe.', displayAt, toast));
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      rerender(view('Display: Wireframe.', displayAt, null));
+      expect(screen.getByRole('contentinfo')).not.toHaveClass('hidden');
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Display: Wireframe.'
+      );
     } finally {
       vi.useRealTimers();
     }

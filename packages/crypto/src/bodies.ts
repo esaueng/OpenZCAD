@@ -67,6 +67,9 @@ const DOCUMENT_JSON_LIMITS = { depth: 72, separators: 1_100_000 } as const;
 // refuse nesting the format never has.
 const PROJECT_INFO_JSON_LIMITS = { depth: 6, separators: 1024 * 1024 } as const;
 const KEY_ARCHIVE_JSON_LIMITS = { depth: 4, separators: 1024 * 1024 } as const;
+// Measurements and view state are app records the app validates after
+// decoding; the depth only refuses nesting neither ever has.
+const RECORD_JSON_LIMITS = { depth: 32, separators: 1024 * 1024 } as const;
 
 /** What a body is checked against: the header (or its init) it travels under. */
 export type BodyEnvelopeHeader = Pick<
@@ -624,6 +627,124 @@ export function decodeProjectInfoBody(
     fail('malformed', 'Project info body is not in canonical form');
   }
   return body;
+}
+
+// --- Measurements and view state -----------------------------------------
+
+/**
+ * The body of a `measurements` envelope: the project's stored measurement
+ * record, as the app writes it. The app checks the record itself after
+ * decoding (`parseStoredMeasurements`); this codec checks the frame, the
+ * size and the nesting, and that the envelope references no blobs.
+ */
+export interface MeasurementsBody {
+  readonly record: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * The body of a `view-state` envelope: one workspace session (camera,
+ * saved views, display settings) of one user, as the app writes it. The app
+ * checks the session after decoding.
+ */
+export interface ViewStateBody {
+  readonly session: Readonly<Record<string, unknown>>;
+}
+
+function encodeRecordBody(
+  field: 'record' | 'session',
+  value: unknown,
+  header: BodyEnvelopeHeader,
+  kind: 'measurements' | 'view-state',
+  what: string
+): Bytes {
+  checkKind(header, [kind], 'invalid-argument');
+  if (!isPlainRecord(value))
+    fail('invalid-argument', `${field} must be an object`);
+  checkBlobReferences({ blobIds: header.blobIds ?? [] }, []);
+  return serialize(
+    { version: BODY_VERSION_1, [field]: value },
+    PLAINTEXT_CEILINGS[kind],
+    RECORD_JSON_LIMITS,
+    what
+  );
+}
+
+function decodeRecordBody(
+  field: 'record' | 'session',
+  bytes: Uint8Array,
+  header: BodyEnvelopeHeader,
+  kind: 'measurements' | 'view-state',
+  what: string
+): Readonly<Record<string, unknown>> {
+  checkKind(header, [kind], 'malformed');
+  const record = exactKeys(
+    parseBody(bytes, PLAINTEXT_CEILINGS[kind], RECORD_JSON_LIMITS, what),
+    ['version', field],
+    [],
+    what,
+    'malformed'
+  );
+  checkBodyVersion(record.version);
+  const value = record[field];
+  if (!isPlainRecord(value)) fail('malformed', `${field} must be an object`);
+  checkBlobReferences({ blobIds: header.blobIds ?? [] }, []);
+  return value;
+}
+
+export function encodeMeasurementsBody(
+  body: MeasurementsBody,
+  header: BodyEnvelopeHeader
+): Bytes {
+  return encodeRecordBody(
+    'record',
+    body?.record,
+    header,
+    'measurements',
+    'Measurements body'
+  );
+}
+
+export function decodeMeasurementsBody(
+  bytes: Uint8Array,
+  header: BodyEnvelopeHeader
+): MeasurementsBody {
+  return {
+    record: decodeRecordBody(
+      'record',
+      bytes,
+      header,
+      'measurements',
+      'Measurements body'
+    )
+  };
+}
+
+export function encodeViewStateBody(
+  body: ViewStateBody,
+  header: BodyEnvelopeHeader
+): Bytes {
+  return encodeRecordBody(
+    'session',
+    body?.session,
+    header,
+    'view-state',
+    'View state body'
+  );
+}
+
+export function decodeViewStateBody(
+  bytes: Uint8Array,
+  header: BodyEnvelopeHeader
+): ViewStateBody {
+  return {
+    session: decodeRecordBody(
+      'session',
+      bytes,
+      header,
+      'view-state',
+      'View state body'
+    )
+  };
 }
 
 // --- Key archives ---------------------------------------------------------

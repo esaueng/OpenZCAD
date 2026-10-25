@@ -9,6 +9,8 @@ import {
   type DeviceListPin
 } from '@openzcad/crypto';
 import { handleE2eeRequest } from '../../apps/web/worker/e2ee';
+import { D1R2PersistenceService } from '@openzcad/cloudflare-adapters';
+import { toUserId } from '@openzcad/shared';
 import {
   enrollWithRecoveryKey,
   loadEncryption,
@@ -38,6 +40,92 @@ export interface E2eeServer {
   projectsEnabled: boolean;
   /** Runs the account's key flows in Node, as another device would. */
   readonly nodeDevice: () => E2eeContext;
+  /** The artifact bucket encrypted content blobs are uploaded to. */
+  readonly objects: Map<string, Uint8Array>;
+  readonly bucket: unknown;
+}
+
+/**
+ * An in-memory R2 bucket with what upload sessions use: single puts,
+ * multipart uploads, heads, ranged and streamed reads, deletes.
+ */
+function memoryBucket(objects: Map<string, Uint8Array>) {
+  const multipart = new Map<
+    string,
+    { key: string; parts: Map<number, Uint8Array> }
+  >();
+  let next = 0;
+  const bytes = (body: ArrayBuffer | ArrayBufferView) =>
+    body instanceof ArrayBuffer
+      ? new Uint8Array(body.slice(0))
+      : new Uint8Array(
+          body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength)
+        );
+  const resumed = (key: string, uploadId: string) => ({
+    key,
+    uploadId,
+    uploadPart: async (partNumber: number, body: ArrayBuffer) => {
+      multipart.get(uploadId)!.parts.set(partNumber, bytes(body));
+      return { partNumber, etag: `${uploadId}-${partNumber}` };
+    },
+    complete: async (parts: { partNumber: number }[]) => {
+      const upload = multipart.get(uploadId)!;
+      const chunks = parts.map((part) => upload.parts.get(part.partNumber)!);
+      const out = new Uint8Array(
+        chunks.reduce((total, chunk) => total + chunk.byteLength, 0)
+      );
+      let offset = 0;
+      for (const chunk of chunks) {
+        out.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      objects.set(key, out);
+      multipart.delete(uploadId);
+      return { key, size: out.byteLength };
+    },
+    abort: async () => {
+      multipart.delete(uploadId);
+    }
+  });
+  return {
+    put: async (key: string, body: ArrayBuffer) => {
+      objects.set(key, bytes(body));
+      return { size: objects.get(key)!.byteLength };
+    },
+    head: async (key: string) =>
+      objects.has(key) ? { size: objects.get(key)!.byteLength } : null,
+    get: async (
+      key: string,
+      options?: { range?: { offset?: number; length?: number } }
+    ) => {
+      const stored = objects.get(key);
+      if (!stored) return null;
+      const offset = options?.range?.offset ?? 0;
+      const body = stored.slice(
+        offset,
+        options?.range?.length === undefined
+          ? undefined
+          : offset + options.range.length
+      );
+      return {
+        size: stored.byteLength,
+        arrayBuffer: async () => body.slice().buffer,
+        get body() {
+          return new Blob([body.slice()]).stream();
+        }
+      };
+    },
+    delete: async (key: string) => {
+      objects.delete(key);
+    },
+    createMultipartUpload: async (key: string) => {
+      const uploadId = `multipart-${++next}`;
+      multipart.set(uploadId, { key, parts: new Map() });
+      return resumed(key, uploadId);
+    },
+    resumeMultipartUpload: (key: string, uploadId: string) =>
+      resumed(key, uploadId)
+  };
 }
 
 export function createE2eeServer({
@@ -48,10 +136,13 @@ export function createE2eeServer({
   db.prepare(
     `INSERT INTO users (id, email, created_at) VALUES (?, NULL, ?)`
   ).run(E2E_USER_ID, new Date().toISOString());
+  const objects = new Map<string, Uint8Array>();
   const server: E2eeServer = {
     db,
     enabled,
     projectsEnabled,
+    objects,
+    bucket: memoryBucket(objects),
     nodeDevice: () => ({
       userId: E2E_USER_ID,
       api: createE2eeApi((path, init) => call(server, path, init)),
@@ -72,9 +163,18 @@ async function call(
   path: string,
   init: RequestInit = {}
 ): Promise<Response> {
-  const env = { DB: d1Database(server.db), AUTH_MODE: 'development', ENVIRONMENT: 'development' };
+  const env = {
+    DB: d1Database(server.db),
+    AUTH_MODE: 'development',
+    ENVIRONMENT: 'development',
+    ARTIFACTS: server.bucket
+  };
   const session = { userId: E2E_USER_ID };
-  if (server.enabled && !['GET', 'HEAD', 'OPTIONS'].includes(init.method ?? 'GET')) await admitDevelopmentE2eeWrite(env.DB, session);
+  if (
+    server.enabled &&
+    !['GET', 'HEAD', 'OPTIONS'].includes(init.method ?? 'GET')
+  )
+    await admitDevelopmentE2eeWrite(env.DB, session);
   return handleE2eeRequest(
     new Request(`https://zcad.test${path}`, init),
     env,
@@ -82,6 +182,77 @@ async function call(
     server.enabled,
     server.projectsEnabled
   );
+}
+
+/**
+ * Routes this page's upload-session calls (`/api/uploads/:id/…`, which
+ * encrypted content blobs ride on) to the real persistence service over
+ * the server's database and bucket.
+ */
+export async function installUploadRoutes(
+  page: Page,
+  server: E2eeServer
+): Promise<void> {
+  const persistence = new D1R2PersistenceService({
+    DB: d1Database(server.db),
+    ARTIFACTS: server.bucket
+  } as never);
+  const user = toUserId(E2E_USER_ID);
+  await page.route('**/api/uploads/**', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const body = request.postDataBuffer();
+    const buffer = () =>
+      new Uint8Array(body ?? new Uint8Array(0)).slice().buffer;
+    const match =
+      /^\/api\/uploads\/([^/]+)\/(content|multipart|multipart\/complete|parts\/(\d+))$/.exec(
+        url.pathname
+      );
+    try {
+      if (!match) throw new Error('Unknown upload route');
+      const [, id, action, part] = match;
+      const uploadId = url.searchParams.get('uploadId') ?? '';
+      if (action === 'content' && request.method() === 'PUT') {
+        await persistence.putUpload(user, id!, buffer());
+        return await route.fulfill({ status: 204, body: '' });
+      }
+      if (action === 'multipart' && request.method() === 'POST') {
+        return await route.fulfill({
+          status: 201,
+          json: await persistence.createMultipartUpload(user, id!)
+        });
+      }
+      if (action === 'multipart' && request.method() === 'DELETE') {
+        await persistence.abortMultipartUpload(user, id!, uploadId);
+        return await route.fulfill({ status: 204, body: '' });
+      }
+      if (part && request.method() === 'PUT') {
+        return await route.fulfill({
+          json: await persistence.putUploadPart(
+            user,
+            id!,
+            uploadId,
+            Number(part),
+            buffer()
+          )
+        });
+      }
+      if (action === 'multipart/complete') {
+        await persistence.completeMultipartUpload(
+          user,
+          id!,
+          JSON.parse(new TextDecoder().decode(buffer())) as never
+        );
+        return await route.fulfill({ status: 204, body: '' });
+      }
+      throw new Error('Unknown upload route');
+    } catch (error) {
+      return route.fulfill({
+        status: 409,
+        json: { error: error instanceof Error ? error.message : String(error) }
+      });
+    }
+  });
 }
 
 /** Routes this browser context's `/api/e2ee/*` calls to `server`. */
@@ -113,9 +284,11 @@ export interface SeededAccount {
   /** The formatted recovery key, as a user would type it. */
   readonly recoveryKey: string;
   readonly deviceLabel: string;
+  /** The seeded device, to write into another browser as the same device. */
+  readonly device: DeviceMaterial;
 }
 
-interface DeviceMaterial {
+export interface DeviceMaterial {
   readonly record: Omit<
     StoredDevice,
     'signing' | 'unlock' | 'signingPublicKey' | 'unlockPublicKey'
@@ -162,7 +335,7 @@ async function materialOf(
  * the private halves imported non-extractable, the pin beside them. Run it
  * after the first navigation and before opening Settings › Encryption.
  */
-async function writeDevice(
+export async function writeDevice(
   page: Page,
   material: DeviceMaterial
 ): Promise<void> {
@@ -260,8 +433,13 @@ export async function seedE2eeDevice(
   }
   const state = await loadEncryption(node);
   if (state.kind !== 'ready') throw new Error('seed failed');
-  await writeDevice(page, await materialOf(device, state.account.list.pin));
-  return { recoveryKey: recovery.formatted, deviceLabel: label };
+  const material = await materialOf(device, state.account.list.pin);
+  await writeDevice(page, material);
+  return {
+    recoveryKey: recovery.formatted,
+    deviceLabel: label,
+    device: material
+  };
 }
 
 /** Opens Settings › Encryption, unless a reload already restored it. */

@@ -334,10 +334,11 @@ test('resize hole: Enter commits the chip value, Escape leaves history alone', a
     .click();
   // One 5 mm hole through the top face: the bore is the body's only
   // cylindrical face, so the cylinder hook's wall read measures it.
+  // U09: Hole runs in place. Click the face, set the diameter on its chip's
+  // keypad, then Done.
   await page.getByRole('button', { name: /^Hole/ }).click();
-  const entry = page.getByRole('group', { name: 'Entry face' });
-  await page.getByRole('textbox', { name: 'Diameter', exact: true }).fill('5');
-  await entry.getByRole('button', { name: 'Pick faces in viewport' }).click();
+  const holeBar = page.getByRole('group', { name: 'Hole command' });
+  await expect(holeBar).toContainText('Click a flat face');
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toBeVisible({ timeout: 120_000 });
   const topFace = () =>
@@ -354,7 +355,15 @@ test('resize hole: Enter commits the chip value, Escape leaves history alone', a
   await expect
     .poll(topFace, READ_TIMEOUT)
     .toMatchObject({ lineageName: 'primitive.box.face.z-max' });
-  await page.getByRole('button', { name: 'Create hole' }).click();
+  await expect(holeBar).toContainText('drag the diameter');
+  await page.getByTestId('command-handle-diameter').click();
+  const holeKeypad = page.locator('.numeric-keypad');
+  await holeKeypad.locator('input').fill('5');
+  await holeKeypad.locator('input').press('Enter');
+  await expect(holeBar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  await holeBar.getByRole('button', { name: /Done/ }).click();
   await expect(
     page.locator('.feature-row-main', { hasText: 'Hole' })
   ).toBeVisible({ timeout: 20_000 });

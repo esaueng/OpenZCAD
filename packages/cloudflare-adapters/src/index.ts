@@ -505,6 +505,73 @@ export const isE2eeProjectVersionStorageReady = cachedSchemaProbe(
   (row) => row?.ready === E2EE_PROJECT_VERSION_TABLES.length
 );
 
+/** The tables migration 0034 adds (encrypted content blobs), children first. */
+export const E2EE_CONTENT_BLOB_TABLES = Object.freeze([
+  'e2ee_version_blobs',
+  'e2ee_content_blobs'
+] as const);
+
+/**
+ * Whether migration 0034 is installed: its content blob tables and the
+ * `upload_sessions.e2ee_blob_kind` marker (ADR-024 Phase 4, content blobs).
+ * Ordinary uploads, artifact finalize, project purge, erasure and usage
+ * name neither the column nor the tables before this answers yes, so a
+ * database without the migration keeps serving them; only the encrypted
+ * blob routes answer 503.
+ */
+export const isE2eeContentBlobStorageReady = cachedSchemaProbe(
+  `SELECT (SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN
+     ('e2ee_content_blobs', 'e2ee_version_blobs'))
+   + (SELECT COUNT(*) FROM pragma_table_info('upload_sessions')
+      WHERE name = 'e2ee_blob_kind') AS ready`,
+  (row) => row?.ready === E2EE_CONTENT_BLOB_TABLES.length + 1
+);
+
+/** An encrypted blob's opaque object key: no file name, no kind. */
+export function encryptedBlobObjectKey(
+  projectId: string,
+  blobId: string
+): string {
+  return `e2ee/${projectId}/${blobId}`;
+}
+
+/**
+ * How much of a stored blob finalize reads: a content blob's prefix is a
+ * few dozen bytes (magic, header fields and an id of at most 128 bytes).
+ */
+export const ENCRYPTED_BLOB_HEAD_BYTES = 4096;
+
+/** A refusal of the encrypted blob routes, with its status and code. */
+export class EncryptedBlobError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message: string
+  ) {
+    super(message);
+    this.name = 'EncryptedBlobError';
+  }
+}
+
+export interface EncryptedBlobRecord {
+  readonly blobId: string;
+  readonly kind: string;
+  readonly ciphertextBytes: number;
+  readonly objectKey: string;
+}
+
+export type EncryptedBlobUploadResult =
+  | { readonly committed: true; readonly blob: EncryptedBlobRecord }
+  | {
+      readonly committed: false;
+      readonly session: {
+        readonly uploadSessionId: string;
+        readonly uploadUrl: string;
+        readonly expiresAt: string;
+        readonly blobId: string;
+      };
+    };
+
 type UploadReservationState =
   'legacy' | 'open' | 'uploading' | 'completing' | 'completed' | 'aborting';
 
@@ -525,6 +592,11 @@ interface DurableUploadSession {
   uploadProtocolVersion: number;
   completionStartedAt: number | null;
   expiresAt: string;
+  /**
+   * Migration 0034: the content blob kind of an encrypted blob's session,
+   * null for an ordinary artifact upload (and for every session before it).
+   */
+  e2eeBlobKind: string | null;
 }
 
 interface DurableUploadPart {
@@ -2939,6 +3011,25 @@ export class D1R2PersistenceService implements PersistenceService {
   private async accountArtifactUsage(
     ownerUserId: UserId
   ): Promise<{ bytes: number; count: number }> {
+    // Encrypted content blobs (migration 0034) are finalized artifact bytes
+    // too; before it, there are none to add.
+    const blobs = (await isE2eeContentBlobStorageReady(this.env.DB))
+      ? {
+          bytes: ` + COALESCE((
+                  SELECT SUM(blobs.ciphertext_bytes)
+                  FROM e2ee_content_blobs blobs
+                  JOIN projects ON projects.id = blobs.project_id
+                  WHERE projects.user_id = ?
+                ), 0)`,
+          count: ` + (
+                  SELECT COUNT(*)
+                  FROM e2ee_content_blobs blobs
+                  JOIN projects ON projects.id = blobs.project_id
+                  WHERE projects.user_id = ?
+                )`,
+          binds: [ownerUserId]
+        }
+      : { bytes: '', count: '', binds: [] };
     const row = await this.env
       .DB!.prepare(
         `SELECT usage.finalized_bytes AS accounted_total,
@@ -2947,17 +3038,23 @@ export class D1R2PersistenceService implements PersistenceService {
                   FROM artifacts
                   JOIN projects ON projects.id = artifacts.project_id
                   WHERE projects.user_id = ?
-                ), 0) AS actual_total,
+                ), 0)${blobs.bytes} AS actual_total,
                 (
                   SELECT COUNT(*)
                   FROM artifacts
                   JOIN projects ON projects.id = artifacts.project_id
                   WHERE projects.user_id = ?
-                ) AS count
+                )${blobs.count} AS count
          FROM artifact_account_usage usage
          WHERE usage.owner_user_id = ?`
       )
-      .bind(ownerUserId, ownerUserId, ownerUserId)
+      .bind(
+        ownerUserId,
+        ...blobs.binds,
+        ownerUserId,
+        ...blobs.binds,
+        ownerUserId
+      )
       .first<{
         accounted_total: number;
         actual_total: number;
@@ -3466,13 +3563,17 @@ export class D1R2PersistenceService implements PersistenceService {
   private async loadUploadSession(
     uploadSessionId: string
   ): Promise<DurableUploadSession | null> {
+    // The encrypted-blob marker only once migration 0034 put it there.
+    const blobKind = (await isE2eeContentBlobStorageReady(this.env.DB))
+      ? ', e2ee_blob_kind'
+      : '';
     const upload = await this.env
       .DB!.prepare(
         `SELECT id, artifact_id, project_id, object_key, file_name,
                 content_type, kind, metadata_json, expires_at, owner_user_id,
                 reserved_bytes, reservation_state, multipart_upload_id,
                 single_part, upload_protocol_version,
-                completion_started_at
+                completion_started_at${blobKind}
          FROM upload_sessions WHERE id = ?`
       )
       .bind(uploadSessionId)
@@ -3493,6 +3594,7 @@ export class D1R2PersistenceService implements PersistenceService {
         single_part: number;
         upload_protocol_version: number;
         completion_started_at: number | null;
+        e2ee_blob_kind?: string | null;
       }>();
     if (!upload) return null;
     if (
@@ -3538,7 +3640,8 @@ export class D1R2PersistenceService implements PersistenceService {
       singlePart: upload.single_part === 1,
       uploadProtocolVersion: upload.upload_protocol_version,
       completionStartedAt: upload.completion_started_at,
-      expiresAt: upload.expires_at
+      expiresAt: upload.expires_at,
+      e2eeBlobKind: upload.e2ee_blob_kind ?? null
     };
   }
 
@@ -3554,14 +3657,21 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     const access = await this.requireProjectEdit(userId, upload.projectId);
-    // A session opened before the project became encrypted writes no
-    // plaintext into it afterwards.
-    assertPlaintextProject(access);
     if (!this.env.ARTIFACTS) {
       throw new ArtifactStorageError();
     }
     if (upload.ownerUserId !== access.ownerUserId) {
       throw new ArtifactStorageError('Upload reservation owner is invalid.');
+    }
+    // ADR-024 Phase 4: an encrypted project takes only encrypted blobs, and
+    // a plaintext project only ordinary artifacts, part by part. A plaintext
+    // session opened before the project became encrypted writes nothing more.
+    if (upload.e2eeBlobKind === null) {
+      assertPlaintextProject(access);
+    } else if (isPlaintextStorageFormat(access.storageFormat)) {
+      throw new ArtifactStorageError(
+        'This upload carries an encrypted blob, but the project is not end-to-end encrypted.'
+      );
     }
     if (upload.reservationState === 'legacy') {
       throw new ArtifactStorageError(
@@ -4110,6 +4220,400 @@ export class D1R2PersistenceService implements PersistenceService {
     }
   }
 
+  // --- Encrypted content blobs (ADR-024 Phase 4, migration 0034) ----------
+
+  /** The owner's access to an encrypted project, or the refusal. */
+  private async requireEncryptedBlobOwner(
+    userId: UserId,
+    projectId: string
+  ): Promise<ProjectAccess> {
+    if (!this.env.DB || !(await isE2eeContentBlobStorageReady(this.env.DB))) {
+      throw new EncryptedBlobError(
+        503,
+        'E2EE_UNAVAILABLE',
+        'Encrypted files are unavailable until the database is updated.'
+      );
+    }
+    const access = await this.requireProjectEdit(userId, projectId);
+    if (access.role !== 'owner') throw new ProjectNotFoundError(projectId);
+    if (isPlaintextStorageFormat(access.storageFormat)) {
+      throw new EncryptedBlobError(
+        409,
+        'E2EE_PROJECT_NOT_ENCRYPTED',
+        'This project is not end-to-end encrypted.'
+      );
+    }
+    if (!this.env.ARTIFACTS) {
+      throw new EncryptedBlobError(
+        501,
+        'FEATURE_DISABLED',
+        'Artifact storage is disabled for this deployment.'
+      );
+    }
+    return access;
+  }
+
+  private async committedEncryptedBlob(
+    projectId: string,
+    blobId: string
+  ): Promise<EncryptedBlobRecord | null> {
+    const row = await this.env
+      .DB!.prepare(
+        `SELECT blob_id, kind, ciphertext_bytes, state, object_key
+         FROM e2ee_content_blobs WHERE project_id = ? AND blob_id = ?`
+      )
+      .bind(projectId, blobId)
+      .first<{
+        blob_id: string;
+        kind: string;
+        ciphertext_bytes: number;
+        state: string;
+        object_key: string;
+      }>();
+    if (!row) return null;
+    if (row.state !== 'committed') {
+      throw new EncryptedBlobError(
+        409,
+        'E2EE_BLOB_RELEASED',
+        'This encrypted file is being removed. Upload it again under a new id.'
+      );
+    }
+    return {
+      blobId: row.blob_id,
+      kind: row.kind,
+      ciphertextBytes: row.ciphertext_bytes,
+      objectKey: row.object_key
+    };
+  }
+
+  /**
+   * An upload session for an encrypted content blob whose id the browser
+   * proposes (its envelope header's `blobId`). The ciphertext then goes up
+   * through the ordinary single-part or multipart routes, with the same
+   * reservations and quotas as any artifact, under the opaque object key
+   * `e2ee/<projectId>/<blobId>`. A retry gets the same session back, and a
+   * blob already committed is reported as such.
+   */
+  async createEncryptedBlobUpload(
+    userId: UserId,
+    request: { projectId: string; blobId: string; kind: string },
+    authorization: { sql: string; binds: readonly unknown[] }
+  ): Promise<EncryptedBlobUploadResult> {
+    const access = await this.requireEncryptedBlobOwner(
+      userId,
+      request.projectId
+    );
+    const committed = await this.committedEncryptedBlob(
+      request.projectId,
+      request.blobId
+    );
+    if (committed) {
+      if (committed.kind !== request.kind) {
+        throw new EncryptedBlobError(
+          409,
+          'E2EE_BLOB_ID_TAKEN',
+          'That blob id is already in use.'
+        );
+      }
+      return { committed: true, blob: committed };
+    }
+    const reuse = async (): Promise<EncryptedBlobUploadResult | null> => {
+      const row = await this.env
+        .DB!.prepare('SELECT id FROM upload_sessions WHERE artifact_id = ?')
+        .bind(request.blobId)
+        .first<{ id: string }>();
+      if (!row) return null;
+      const session = await this.loadUploadSession(row.id);
+      const expiresAt = session ? Date.parse(session.expiresAt) : Number.NaN;
+      if (
+        !session ||
+        session.projectId !== request.projectId ||
+        session.e2eeBlobKind !== request.kind ||
+        session.ownerUserId !== access.ownerUserId ||
+        !Number.isFinite(expiresAt) ||
+        expiresAt < Date.now() ||
+        session.reservationState === 'aborting'
+      ) {
+        throw new EncryptedBlobError(
+          409,
+          'E2EE_BLOB_ID_TAKEN',
+          'That blob id is already in use.'
+        );
+      }
+      return {
+        committed: false,
+        session: {
+          uploadSessionId: session.uploadSessionId,
+          uploadUrl: `/api/uploads/${session.uploadSessionId}/content`,
+          expiresAt: session.expiresAt,
+          blobId: request.blobId
+        }
+      };
+    };
+    const existing = await reuse();
+    if (existing) return existing;
+    await this.purgeExpiredUploadSessionsForOwner(access.ownerUserId);
+    await this.refreshAccountQuota(access.ownerUserId);
+    const uploadSessionId = toUploadSessionId(`upload_${crypto.randomUUID()}`);
+    const expiresAt = new Date(
+      Date.now() + UPLOAD_SESSION_TTL_MS
+    ).toISOString();
+    try {
+      const inserted = await this.env
+        .DB!.prepare(
+          `INSERT INTO upload_sessions
+         (id, artifact_id, project_id, object_key, file_name, content_type,
+          kind, metadata_json, expires_at, owner_user_id, reserved_bytes,
+          reservation_state, multipart_upload_id, completion_started_at,
+          upload_protocol_version, e2ee_blob_kind)
+         SELECT ?, ?, ?, ?, ?, 'application/octet-stream', 'e2ee-blob', '{}',
+                ?, ?, 0, 'open', NULL, NULL, 1, ?
+         WHERE ${authorization.sql}
+           AND EXISTS (
+             SELECT 1 FROM projects
+             WHERE id = ? AND user_id = ? AND storage_format = 2
+               AND status <> 'deleted'
+               AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id)
+           )`
+        )
+        .bind(
+          uploadSessionId,
+          request.blobId,
+          request.projectId,
+          encryptedBlobObjectKey(request.projectId, request.blobId),
+          // Opaque: the file's name stays inside the encrypted document.
+          request.blobId,
+          expiresAt,
+          access.ownerUserId,
+          request.kind,
+          ...authorization.binds,
+          request.projectId,
+          access.ownerUserId
+        )
+        .run();
+      if (inserted.meta?.changes !== 1) {
+        throw new EncryptedBlobError(
+          401,
+          'E2EE_SESSION_REQUIRED',
+          'Sign in again before uploading to this encrypted project.'
+        );
+      }
+    } catch (error) {
+      if (error instanceof EncryptedBlobError) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (/UNIQUE constraint/i.test(message)) {
+        const raced = await reuse();
+        if (raced) return raced;
+      }
+      throw artifactAccountingError(
+        error,
+        (await this.ownerEntitlements(access.ownerUserId)).artifactLimitBytes
+      );
+    }
+    return {
+      committed: false,
+      session: {
+        uploadSessionId,
+        uploadUrl: `/api/uploads/${uploadSessionId}/content`,
+        expiresAt,
+        blobId: request.blobId
+      }
+    };
+  }
+
+  /**
+   * Commits an uploaded encrypted blob: the stored object must be the
+   * session's whole reservation, and `inspect` (the Worker's envelope check,
+   * given the object's first bytes and its size) must accept it. A refused
+   * object is discarded with its session. With `dedupeTag`, the blob takes
+   * the tag over from any older blob of the project. The row, the release of
+   * the reservation and the session's removal land in one batch.
+   */
+  async finalizeEncryptedBlob(
+    userId: UserId,
+    request: {
+      projectId: string;
+      blobId: string;
+      uploadSessionId: string;
+      dedupeTag: string | null;
+    },
+    authorization: { sql: string; binds: readonly unknown[] },
+    inspect: (head: Uint8Array, size: number, kind: string) => void
+  ): Promise<EncryptedBlobRecord> {
+    const access = await this.requireEncryptedBlobOwner(
+      userId,
+      request.projectId
+    );
+    const committed = await this.committedEncryptedBlob(
+      request.projectId,
+      request.blobId
+    );
+    if (committed) return committed;
+    const upload = await this.requireUploadSession(
+      userId,
+      request.uploadSessionId
+    );
+    if (
+      upload.projectId !== request.projectId ||
+      upload.artifactId !== request.blobId ||
+      upload.e2eeBlobKind === null
+    ) {
+      throw new EncryptedBlobError(
+        404,
+        'E2EE_BLOB_UPLOAD_NOT_FOUND',
+        'Upload session not found, expired, or already used.'
+      );
+    }
+    if (
+      upload.reservationState !== 'completed' ||
+      !upload.multipartUploadId ||
+      upload.reservedBytes < 1
+    ) {
+      throw new EncryptedBlobError(
+        409,
+        'E2EE_BLOB_UPLOAD_INCOMPLETE',
+        'The encrypted file has not finished uploading.'
+      );
+    }
+    const stored = await this.env.ARTIFACTS!.head(upload.objectKey);
+    if (!stored || stored.size !== upload.reservedBytes) {
+      throw new ArtifactStorageError(
+        'Completed multipart object does not match its reservation.'
+      );
+    }
+    const kind = upload.e2eeBlobKind;
+    try {
+      const object = await this.env.ARTIFACTS!.get(upload.objectKey, {
+        range: {
+          offset: 0,
+          length: Math.min(stored.size, ENCRYPTED_BLOB_HEAD_BYTES)
+        }
+      });
+      if (!object) {
+        throw new ArtifactStorageError('The uploaded object disappeared.');
+      }
+      // A bucket that ignores the range still yields the head.
+      const head = new Uint8Array(await object.arrayBuffer()).slice(
+        0,
+        ENCRYPTED_BLOB_HEAD_BYTES
+      );
+      inspect(head, stored.size, kind);
+    } catch (error) {
+      if (!(error instanceof ArtifactStorageError)) {
+        await this.cleanupUploadSession(upload).catch(() => false);
+      }
+      throw error;
+    }
+    const sessionFence = `EXISTS (
+      SELECT 1 FROM upload_sessions
+      WHERE id = ? AND artifact_id = ? AND project_id = ?
+        AND owner_user_id = ? AND e2ee_blob_kind = ?
+        AND reservation_state = 'completed' AND reserved_bytes = ?
+        AND multipart_upload_id IS NOT NULL
+        AND completion_started_at IS NULL
+    ) AND EXISTS (
+      SELECT 1 FROM projects
+      WHERE id = ? AND user_id = ? AND storage_format = 2
+        AND status <> 'deleted'
+        AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id)
+    ) AND ${authorization.sql}`;
+    const fenceBinds = [
+      request.uploadSessionId,
+      request.blobId,
+      request.projectId,
+      access.ownerUserId,
+      kind,
+      stored.size,
+      request.projectId,
+      access.ownerUserId,
+      ...authorization.binds
+    ];
+    const createdAt = nowIso();
+    const statements: D1PreparedStatement[] = [];
+    if (request.dedupeTag !== null) {
+      statements.push(
+        this.env
+          .DB!.prepare(
+            `UPDATE e2ee_content_blobs SET dedupe_tag = NULL
+             WHERE project_id = ? AND dedupe_tag = ? AND ${sessionFence}`
+          )
+          .bind(request.projectId, request.dedupeTag, ...fenceBinds)
+      );
+    }
+    const insertIndex = statements.length;
+    statements.push(
+      this.env
+        .DB!.prepare(
+          `INSERT INTO e2ee_content_blobs
+             (project_id, blob_id, kind, object_key, ciphertext_bytes,
+              dedupe_tag, state, created_at)
+           SELECT ?, ?, ?, ?, ?, ?, 'committed', ? WHERE ${sessionFence}`
+        )
+        .bind(
+          request.projectId,
+          request.blobId,
+          kind,
+          upload.objectKey,
+          stored.size,
+          request.dedupeTag,
+          createdAt,
+          ...fenceBinds
+        ),
+      this.env
+        .DB!.prepare(
+          `DELETE FROM artifact_upload_parts
+           WHERE upload_session_id = ?
+             AND EXISTS (SELECT 1 FROM e2ee_content_blobs
+                         WHERE project_id = ? AND blob_id = ?)`
+        )
+        .bind(request.uploadSessionId, request.projectId, request.blobId),
+      this.env
+        .DB!.prepare(
+          `DELETE FROM upload_sessions
+           WHERE id = ? AND artifact_id = ?
+             AND EXISTS (SELECT 1 FROM e2ee_content_blobs
+                         WHERE project_id = ? AND blob_id = ?)`
+        )
+        .bind(
+          request.uploadSessionId,
+          request.blobId,
+          request.projectId,
+          request.blobId
+        )
+    );
+    let results: Awaited<ReturnType<D1Database['batch']>>;
+    try {
+      results = await this.env.DB!.batch(statements);
+    } catch (error) {
+      const mapped = artifactAccountingError(
+        error,
+        (await this.ownerEntitlements(access.ownerUserId)).artifactLimitBytes
+      );
+      if (mapped instanceof ArtifactQuotaError) {
+        await this.cleanupUploadSession(upload).catch(() => false);
+      }
+      throw mapped;
+    }
+    if (results[insertIndex]?.meta?.changes !== 1) {
+      const raced = await this.committedEncryptedBlob(
+        request.projectId,
+        request.blobId
+      );
+      if (raced) return raced;
+      throw new EncryptedBlobError(
+        401,
+        'E2EE_SESSION_REQUIRED',
+        'Sign in again before uploading to this encrypted project.'
+      );
+    }
+    return {
+      blobId: request.blobId,
+      kind,
+      ciphertextBytes: stored.size,
+      objectKey: upload.objectKey
+    };
+  }
+
   async finalizeArtifact(
     userId: UserId,
     request: FinalizeArtifactRequest
@@ -4145,7 +4649,8 @@ export class D1R2PersistenceService implements PersistenceService {
       upload.artifactId !== request.artifactId ||
       upload.reservationState !== 'completed' ||
       !upload.multipartUploadId ||
-      upload.reservedBytes < 1
+      upload.reservedBytes < 1 ||
+      upload.e2eeBlobKind !== null
     ) {
       return null;
     }
@@ -5360,6 +5865,35 @@ export class D1R2PersistenceService implements PersistenceService {
         ...E2EE_PROJECT_VERSION_TABLES.map(
           (table) => `DELETE FROM ${table} WHERE project_id IN`
         )
+      );
+    }
+    // Encrypted content blobs (migration 0034): their objects first, the
+    // same way. Their rows then go references first, through the claim
+    // migration 0034 requires of every committed blob, before the project
+    // row their accounting trigger reads.
+    if (await isE2eeContentBlobStorageReady(this.env.DB)) {
+      const blobs = await this.env
+        .DB!.prepare(
+          `SELECT object_key FROM e2ee_content_blobs
+           WHERE project_id IN (${placeholders})`
+        )
+        .bind(...projectIds)
+        .all<{ object_key: string }>();
+      if ((blobs.results ?? []).length && !this.env.ARTIFACTS) {
+        throw new ArtifactStorageError(
+          'Encrypted project storage is unavailable.'
+        );
+      }
+      await Promise.all(
+        (blobs.results ?? []).map((row) =>
+          this.env.ARTIFACTS!.delete(row.object_key)
+        )
+      );
+      groupTables.unshift(
+        'DELETE FROM e2ee_version_blobs WHERE project_id IN',
+        `UPDATE e2ee_content_blobs SET state = 'deleting'
+         WHERE state = 'committed' AND project_id IN`,
+        'DELETE FROM e2ee_content_blobs WHERE project_id IN'
       );
     }
     // The child rows declare ON DELETE CASCADE, but foreign-key enforcement is

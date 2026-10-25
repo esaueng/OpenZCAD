@@ -142,6 +142,12 @@ export class LivePreview<TDocument, TDerived> {
   private settle = false;
   /** True once something has been published and not yet cleared. */
   private active = false;
+  /**
+   * Set by `replace()` until its value publishes: the preview on screen
+   * belongs to an older value, so a newest value that builds nothing must
+   * take it down rather than leave it standing.
+   */
+  private replacing = false;
   /** Token of the newest value that has reached publish(). */
   private publishedToken = 0;
 
@@ -182,11 +188,14 @@ export class LivePreview<TDocument, TDerived> {
     this.slow = true;
   }
 
-  /** Queues a scalar when it satisfies this previewer's value policy. */
-  request(value: number) {
+  /**
+   * Queues a scalar when it satisfies this previewer's value policy. False
+   * when the value was turned away (by the policy or the slow-path guard).
+   */
+  request(value: number): boolean {
     const accepted = this.options.acceptValue?.(value) ?? value > 0;
     if (!accepted) {
-      return;
+      return false;
     }
     if (!this.slow) {
       const expected = this.options.expectedFrameMs?.();
@@ -196,7 +205,7 @@ export class LivePreview<TDocument, TDerived> {
       }
     }
     if (this.slow && !this.options.continueAfterSlow) {
-      return;
+      return false;
     }
     const running =
       this.runningGeneration === this.generation &&
@@ -212,7 +221,7 @@ export class LivePreview<TDocument, TDerived> {
       this.lastValue === value &&
       (this.pending !== null || running || completed)
     ) {
-      return;
+      return true;
     }
     this.lastValue = value;
     const token = ++this.token;
@@ -226,15 +235,32 @@ export class LivePreview<TDocument, TDerived> {
       if (completed && this.completedPreview) {
         if (this.options.cancelSuperseded) this.abort?.abort();
         this.publishedToken = token;
+        this.replacing = false;
         this.options.publish(this.completedPreview);
       }
-      return;
+      return true;
     }
     this.pending = { value, token, requestedAt: this.now() };
     if (this.options.cancelSuperseded) this.abort?.abort();
     if (!this.inFlight) {
       this.schedule();
     }
+    return true;
+  }
+
+  /**
+   * Moves an open preview to a new value, keeping the one on screen until the
+   * new one is ready. `clear()` then `request()` blanked the preview for a
+   * whole rebuild on every keystroke or stepper click. A new value with no
+   * preview of its own (turned away, or one that builds nothing) still takes
+   * the old one down.
+   */
+  replace(value: number): void {
+    const shown = this.active;
+    this.stop();
+    // Before the request: it may build (and find nothing) synchronously.
+    this.replacing = shown;
+    if (!this.request(value)) this.clear();
   }
 
   private now() {
@@ -281,7 +307,14 @@ export class LivePreview<TDocument, TDerived> {
         : request.token;
     try {
       document = this.options.build(request.value);
-      if (!document) return;
+      if (!document) {
+        if (this.replacing && current() && request.token === this.token) {
+          this.replacing = false;
+          this.active = false;
+          this.options.publish(null);
+        }
+        return;
+      }
       const abort = new AbortController();
       this.abort = abort;
       const result = this.options.derive(document, abort.signal);
@@ -298,6 +331,7 @@ export class LivePreview<TDocument, TDerived> {
       ) {
         this.publishedToken = completionToken();
         this.completedPreview = { value: request.value, document, derived };
+        this.replacing = false;
         this.options.publish({ document, derived });
       }
     } catch (error) {
@@ -361,6 +395,7 @@ export class LivePreview<TDocument, TDerived> {
     this.slow = false;
     this.settle = false;
     this.publishedToken = this.token;
+    this.replacing = false;
   }
 
   /**

@@ -250,10 +250,13 @@ test('a command started from the selection chip takes the face-drag rig down', a
   const sizePill = page.locator('.dimension-callout');
   await expect(sizePill).toHaveCount(1);
 
-  // Hole from the chip opens its card on that face. The span belonged to
-  // the pick; it used to stay drawn next to the hole preview.
+  // Hole from the chip starts in place on that face (U09), already past its
+  // face step. The span belonged to the pick; it used to stay drawn next to
+  // the hole preview.
   await chip.getByRole('button', { name: 'Selection: Hole' }).click();
-  await expect(page.getByRole('button', { name: 'Create hole' })).toBeVisible();
+  await expect(page.getByRole('group', { name: 'Hole command' })).toContainText(
+    'drag the diameter'
+  );
   await expect(sizePill).toHaveCount(0);
 });
 

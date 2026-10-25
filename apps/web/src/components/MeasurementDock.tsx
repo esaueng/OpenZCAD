@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react';
+import { useSettledFlag } from '../hooks/useSettledFlag';
 import {
   Check,
   ClipboardCopy,
@@ -66,6 +67,9 @@ interface MeasurementDockProps {
  * The measurement workbench. Results are saved with the project, never with
  * the model: nothing here changes geometry.
  */
+/** How long an update must run before the dock marks its rows as updating. */
+export const MEASUREMENT_UPDATING_MS = 400;
+
 export function MeasurementDock({
   measurements,
   formattedMeasurements,
@@ -87,6 +91,11 @@ export function MeasurementDock({
   onCopy,
   onExport
 }: MeasurementDockProps) {
+  // Copies and CSV are held from the first pending frame, so no stale value
+  // leaves the dock. Saying "Updating…" waits until the update has taken
+  // visible time: most finish within a frame or two, and swapping every value
+  // out and back read as the dock flashing.
+  const updating = useSettledFlag(geometryPending, MEASUREMENT_UPDATING_MS);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftLabel, setDraftLabel] = useState('');
   const [draftNote, setDraftNote] = useState('');
@@ -129,7 +138,7 @@ export function MeasurementDock({
     closeEditor(id);
   }
 
-  const instruction = geometryPending
+  const instruction = updating
     ? 'Measurements will refresh when the model finishes updating.'
     : !enabled
       ? 'Measure is off. Choose a mode to resume.'
@@ -142,6 +151,7 @@ export function MeasurementDock({
       ref={dockRef}
       className="measurement-dock"
       aria-label="Measurement workbench"
+      data-busy={geometryPending && !updating ? 'quiet' : undefined}
     >
       <header className="measurement-dock-head">
         <Ruler size={14} aria-hidden="true" />
@@ -256,7 +266,7 @@ export function MeasurementDock({
               <div
                 className={`measurement-row${
                   activeMeasurementId === entry.id ? ' active' : ''
-                }${geometryPending || entry.status !== 'current' ? ' stale' : ''}`}
+                }${updating || entry.status !== 'current' ? ' stale' : ''}`}
                 role="listitem"
                 key={entry.id}
               >
@@ -329,18 +339,18 @@ export function MeasurementDock({
                         >
                           {formatted.quality}
                         </span>
-                        {geometryPending || entry.status !== 'current' ? (
+                        {updating || entry.status !== 'current' ? (
                           <span
-                            className={`measurement-status ${geometryPending ? 'stale' : entry.status}`}
+                            className={`measurement-status ${updating ? 'stale' : entry.status}`}
                           >
-                            {geometryPending ? 'updating' : entry.status}
+                            {updating ? 'updating' : entry.status}
                           </span>
                         ) : null}
                       </span>
                       <span className="measurement-row-value">
-                        {geometryPending ? 'Updating…' : formatted.value}
+                        {updating ? 'Updating…' : formatted.value}
                       </span>
-                      {!geometryPending && formatted.detail ? (
+                      {!updating && formatted.detail ? (
                         <small className="measurement-row-note">
                           {formatted.detail}
                         </small>

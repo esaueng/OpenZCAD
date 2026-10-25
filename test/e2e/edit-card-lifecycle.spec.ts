@@ -1,5 +1,10 @@
 import type { Page } from '@playwright/test';
-import { test, expect, stubApi } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  stubApi,
+  createHoleInPlace
+} from './openzcad-fixtures';
 
 /**
  * F19 (1 October 2026 design review): every edit card behaves the same. It
@@ -78,12 +83,10 @@ test('Hole: selecting the feature opens its form, and Apply closes it', async ({
   test.setTimeout(90_000);
   await createProject(page, 'Hole edit card');
   await createBox(page);
-  await page.getByRole('button', { name: /^Hole/ }).click();
-  const entry = page.getByRole('group', { name: 'Entry face' });
-  await entry.getByRole('button', { name: /Box 1 · Top face/ }).click();
-  await page.getByRole('textbox', { name: 'Diameter', exact: true }).fill('5');
-  await page.getByRole('button', { name: 'Create hole' }).click();
+  // U09: a new hole is drilled in place; editing it still opens its card.
+  await createHoleInPlace(page, { diameter: '5' });
   await expect(row(page, /^Hole/)).toBeVisible({ timeout: 20_000 });
+  const entry = page.getByRole('group', { name: 'Entry face' });
   const inspector = inspectorOf(page);
   await expect(inspector).toHaveCount(0);
 

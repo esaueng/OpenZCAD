@@ -1,5 +1,11 @@
 import type { Locator } from '@playwright/test';
-import { createProject, expect, stubApi, test } from './openzcad-fixtures';
+import {
+  createProject,
+  expect,
+  finishInPlaceCommand,
+  stubApi,
+  test
+} from './openzcad-fixtures';
 
 const READ_TIMEOUT = { timeout: 30_000 };
 
@@ -82,24 +88,29 @@ test('the Box card ghosts the plate, and a Hole face click places the hole', asy
   await expect
     .poll(() => clickTop({ x: 90.3, y: 24.8, z: 6 }), READ_TIMEOUT)
     .toMatchObject({ lineageName: 'primitive.box.face.z-max' });
-  const along = (label: string) =>
-    inspector.getByRole('textbox', { name: label, exact: true });
-  // The field along X is listed first on a top face.
-  const position = inspector.getByRole('group', {
-    name: 'Position on face (from center)'
-  });
-  await expect(position.getByRole('textbox').first()).toHaveAccessibleName(
-    'V · along +X'
-  );
-  await expect(along('V · along +X')).toHaveValue('40');
-  await expect(along('U · along −Y')).toHaveValue('5');
+  // U09: Hole runs in place; the click places it, with no card to read.
+  const holeBar = page.getByRole('group', { name: 'Hole command' });
+  await expect(holeBar).toContainText('drag the diameter');
+  await expect(inspector).toHaveCount(0);
 
-  // A second click on the same face moves the hole.
+  // A second click on the same face moves the hole: its diameter handle
+  // follows, and the bore checked below runs at (10, 45), rounded to the
+  // snap.
+  const diameterHandle = async () =>
+    canvas.evaluate((element) => {
+      const raw = element.dataset.e2eCommandHandles;
+      return raw
+        ? ((JSON.parse(raw) as Record<string, { x: number }>).diameter?.x ??
+            null)
+        : null;
+    });
+  await expect.poll(diameterHandle, READ_TIMEOUT).not.toBeNull();
+  const firstHandle = await diameterHandle();
   await clickTop({ x: 10.2, y: 45.4, z: 6 });
-  await expect(along('V · along +X')).toHaveValue('-40');
-  await expect(along('U · along −Y')).toHaveValue('-15');
-
-  await inspector.getByRole('button', { name: 'Create hole' }).click();
+  await expect
+    .poll(async () => Math.abs((await diameterHandle())! - firstHandle!))
+    .toBeGreaterThan(20);
+  await finishInPlaceCommand(page, 'Hole');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Hole' })
   ).toBeVisible({ timeout: 30_000 });

@@ -287,11 +287,12 @@ export function rememberProjectFormats(
 }
 
 /**
- * Encrypted projects keep these on this device until later slices of
- * ADR-024 Phase 4 encrypt them: files (imports, exports, thumbnails: 4-6 and
- * 4-7), measurements and view state (4-7), copies and adoption (4-8). The
- * refusal happens here, before anything is sent: the plaintext routes would
- * refuse a format-2 project too, but only after receiving its data.
+ * What encrypted projects keep on this device until later slices of ADR-024
+ * Phase 4 encrypt it: copies and adoption (4-8). Their files, thumbnails,
+ * exports, measurements and view state (4-6, 4-7) go through the encrypted
+ * routes, never the plaintext ones, which refuse here before anything is
+ * sent: the Worker would refuse a format-2 project too, but only after
+ * receiving its data.
  */
 export const E2EE_LOCAL_ONLY_CODE = 'E2EE_LOCAL_ONLY';
 
@@ -521,8 +522,10 @@ export const api = {
     }),
   /**
    * The shelf. Encrypted projects arrive with a placeholder name and their
-   * project-info envelope; their names are decrypted here when this device
-   * holds the account's keys, and stay the placeholder otherwise.
+   * project-info envelope; their names and thumbnails are decrypted here
+   * when this device holds the account's keys, and stay the placeholder
+   * otherwise. A thumbnail is named by its blob id, whose reference this
+   * page then holds, so the shelf reads it through the decode worker.
    */
   listProjects: async (): Promise<ListProjectsResponse> => {
     const { encryptedProjectInfo, ...listing } = await requestJson<
@@ -532,14 +535,25 @@ export const api = {
       rememberProjectFormats(listing.projects);
     if (!encryptedProjectInfo?.length) return listing;
     try {
-      const names = await (
+      const shelf = await (
         await encryptedProjects()
-      ).encryptedProjectNames(encryptedProjectInfo);
+      ).encryptedProjectShelf(encryptedProjectInfo);
       return {
         ...listing,
         projects: listing.projects.map((project) => {
-          const name = names.get(project.projectId);
-          return name === undefined ? project : { ...project, name };
+          const entry = shelf.get(project.projectId);
+          return entry === undefined
+            ? project
+            : {
+                ...project,
+                name: entry.name,
+                ...(entry.thumbnailBlobId
+                  ? {
+                      thumbnailArtifactId:
+                        entry.thumbnailBlobId as ProjectSummary['thumbnailArtifactId']
+                    }
+                  : {})
+              };
         })
       };
     } catch {
@@ -918,19 +932,35 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload)
     }),
-  discardMeshPayload: (
+  discardMeshPayload: async (
     projectId: string,
     artifactId: string,
     kind?: 'stl-import' | 'mesh-import' | 'reference-image'
-  ) =>
-    requestJson<{ deleted: boolean }>(
+  ) => {
+    // An encrypted project's unreferenced blob is garbage-collected once no
+    // retained version names it (ADR-024 Phase 4, content blobs).
+    if (isEncryptedProject(projectId)) return { deleted: true };
+    return requestJson<{ deleted: boolean }>(
       `/api/artifacts/${encodeURIComponent(artifactId)}/discard-unreferenced`,
       { method: 'POST', body: JSON.stringify({ projectId, kind }) }
-    ),
-  listArtifacts: (projectId: string) =>
-    requestJson<ListArtifactsResponse>(
+    );
+  },
+  /**
+   * The project's stored files. An encrypted project's archived exports are
+   * listed in its verified project info (ADR-024 Phase 4, slice 4-7).
+   */
+  listArtifacts: async (projectId: string): Promise<ListArtifactsResponse> => {
+    if (isEncryptedProject(projectId)) {
+      return {
+        artifacts: await (
+          await encryptedProjects()
+        ).listEncryptedArtifacts(projectId)
+      };
+    }
+    return requestJson<ListArtifactsResponse>(
       `/api/projects/${encodeURIComponent(projectId)}/artifacts`
-    ),
+    );
+  },
   getArtifactMetadata: (artifactId: string) =>
     requestJson<ArtifactMetadataResponse>(
       `/api/artifacts/${encodeURIComponent(artifactId)}`

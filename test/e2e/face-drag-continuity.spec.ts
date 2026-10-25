@@ -1,5 +1,10 @@
 import type { Locator, Page } from '@playwright/test';
-import { test, expect, stubApi } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  stubApi,
+  finishInPlaceCommand
+} from './openzcad-fixtures';
 
 /**
  * A face push/pull must not flash intermediate states: the unmoved part
@@ -61,7 +66,9 @@ async function armedBox(page: Page, options: { hole?: boolean } = {}) {
       .locator('.selection-card')
       .getByRole('button', { name: 'Selection: Hole', exact: true })
       .click();
-    await page.getByRole('button', { name: /^Create hole/ }).click();
+    // U09: Hole runs in place from the face just picked, at the point it
+    // was picked: the Ø6 through default, then Done.
+    await finishInPlaceCommand(page, 'Hole');
     await expect(
       page.locator('.feature-row-main', { hasText: 'Hole' })
     ).toBeVisible();
@@ -318,12 +325,18 @@ test('the face an exact preview redrew can still be grabbed after a refusal', as
     x: handle.x - handle.dx * handle.pixels * value,
     y: handle.y - handle.dy * handle.pixels * value
   });
+  const armedFace = await canvas.getAttribute('data-e2e-selected-face');
   await page.mouse.move(handle.x, handle.y);
   await page.mouse.down();
   await page.mouse.move(at(6).x, at(6).y, { steps: 12 });
   // The chip reads the total: the 18 mm box less the 6 mm push.
   await expect(chip).toHaveText('12 mm');
-  await expect(page.locator('.selection-card')).toContainText('Box 1 · Face');
+  // The exact preview is on screen: the face drawn selected is its own,
+  // renumbered one (the card keeps naming the face it came from).
+  await expect(canvas).not.toHaveAttribute(
+    'data-e2e-selected-face',
+    armedFace ?? ''
+  );
   // Through the back of the 18 mm box: refused, keeping the 6 mm preview.
   await page.mouse.move(at(24).x, at(24).y, { steps: 12 });
   await page.mouse.up();

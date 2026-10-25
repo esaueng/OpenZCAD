@@ -64,4 +64,36 @@ describe('InPlaceCommandBar', () => {
     fireEvent.click(screen.getByRole('button', { name: /Cancel/ }));
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
+
+  it('offers rare choices behind Options and reports a pick', () => {
+    const onOption = vi.fn();
+    render(
+      <InPlaceCommandBar
+        title="Hole"
+        hint="Drag the diameter"
+        canFinish
+        options={[
+          {
+            id: 'depthMode',
+            label: 'Depth',
+            value: 'through',
+            choices: [
+              { value: 'through', label: 'Through all' },
+              { value: 'blind', label: 'Blind' }
+            ]
+          }
+        ]}
+        onOption={onOption}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    const group = screen.getByRole('radiogroup', { name: 'Depth' });
+    expect(
+      screen.getByRole('radio', { name: 'Through all' }).getAttribute('aria-checked')
+    ).toBe('true');
+    fireEvent.click(screen.getByRole('radio', { name: 'Blind' }));
+    expect(onOption).toHaveBeenCalledWith('depthMode', 'blind');
+    expect(group).toBeTruthy();
+  });
 });

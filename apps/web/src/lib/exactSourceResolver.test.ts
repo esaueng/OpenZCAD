@@ -21,10 +21,15 @@ import {
   saveLocalProject
 } from './localProjectStore';
 import {
+  preloadEncryptedImportSources,
   preloadSharedImportSources,
   resolveExactSourceBytes,
   SOURCE_DOWNLOAD_IDLE_MS
 } from './exactSourceResolver';
+import {
+  pageBlobReferences,
+  setEncryptedBlobReader
+} from './e2ee/blobReferences';
 import { archiveAccountImportSources } from './accountImportSources';
 import { readSharedSourceBytes } from './sharedSourceDownload';
 import {
@@ -673,5 +678,69 @@ describe('reference source download budget', () => {
       await vi.advanceTimersByTimeAsync(10_000);
     }
     expect(signals[0]!.aborted).toBe(true);
+  });
+});
+
+/**
+ * ADR-024 Phase 4, content blobs: an encrypted project's sources are blobs
+ * only this page holds keys for, so geometry workers cannot fetch them. The
+ * page puts them in the local blob store first, decrypted by its registered
+ * reader and checked against the document's own checksum, and never asks
+ * the plaintext download route.
+ */
+describe('encrypted project sources', () => {
+  const BLOB = 'b'.repeat(32);
+  afterEach(() => {
+    setEncryptedBlobReader(null);
+    pageBlobReferences.clear();
+  });
+
+  function holdReference(plaintextLength: number) {
+    pageBlobReferences.remember('proj_encrypted', {
+      blobId: BLOB,
+      kind: 'import-source',
+      key: new Uint8Array(32),
+      ciphertextHash: new Uint8Array(32),
+      plaintextLength
+    });
+  }
+
+  it('fetches, checks and caches a source before the workers need it', async () => {
+    const { document, source, checksumSha256 } = await sharedImport(BLOB);
+    holdReference(source.byteLength);
+    const reader = vi.fn(async () => new Uint8Array(source));
+    setEncryptedBlobReader(reader);
+    const plaintext = vi.fn<typeof fetch>();
+    vi.stubGlobal('fetch', plaintext);
+    await preloadEncryptedImportSources(document);
+    expect(reader).toHaveBeenCalledWith(
+      'proj_encrypted',
+      BLOB,
+      expect.anything(),
+      expect.any(Function)
+    );
+    expect(await loadSourceBlob(checksumSha256)).toEqual(source);
+    expect(plaintext).not.toHaveBeenCalled();
+    // Cached now: a second preload reads nothing.
+    await preloadEncryptedImportSources(document);
+    expect(reader).toHaveBeenCalledOnce();
+  });
+
+  it('refuses decrypted bytes that are not the document’s source', async () => {
+    const { document, source, checksumSha256 } = await sharedImport(BLOB);
+    holdReference(source.byteLength);
+    setEncryptedBlobReader(async () => new TextEncoder().encode('other'));
+    await expect(preloadEncryptedImportSources(document)).rejects.toThrow(
+      /could not be fetched/
+    );
+    expect(await loadSourceBlob(checksumSha256)).toBeNull();
+  });
+
+  it('leaves an id this page holds no key for to the ordinary paths', async () => {
+    const { document } = await sharedImport('artifact_plain');
+    const reader = vi.fn();
+    setEncryptedBlobReader(reader);
+    await preloadEncryptedImportSources(document);
+    expect(reader).not.toHaveBeenCalled();
   });
 });

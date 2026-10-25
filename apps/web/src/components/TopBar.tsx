@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import type { ArtifactRecord, AuthSession, UnitSystem } from '@openzcad/shared';
 import { BrandMark } from './BrandMark';
+import { isEncryptedProject } from '../lib/api';
 import type { WorkspaceMode } from '../lib/panelState';
 import type { CollaborationStatus } from '../lib/useCollaboration';
 import { COLLABORATION_LABELS } from '../lib/collaborationLabels';
@@ -781,8 +782,14 @@ export function TopBar({
                   <a
                     key={artifact.artifactId}
                     className="topbar-menu-item"
-                    href={`/api/artifacts/${artifact.artifactId}/download`}
-                    download={artifact.name}
+                    // An encrypted project's file has no plaintext route:
+                    // the click decrypts it and saves it from a blob URL.
+                    {...(isEncryptedProject(artifact.projectId)
+                      ? { href: '#' }
+                      : {
+                          href: `/api/artifacts/${artifact.artifactId}/download`,
+                          download: artifact.name
+                        })}
                     onClick={
                       onDownloadArtifact
                         ? (event) => {

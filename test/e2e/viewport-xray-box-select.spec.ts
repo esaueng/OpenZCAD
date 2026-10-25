@@ -218,19 +218,15 @@ test('wireframe edge sweeps select the rear edges drawn without X-ray', async ({
   await expect(canvas(page)).not.toHaveAttribute('data-e2e-xray', /.*/);
   await setSelectionFilter(page, 'Edge');
   const { minX, minY, maxY, maxZ, pad, midX } = await boxExtent(page);
-  await sweep(
-    page,
-    [minX - pad, maxY + pad, maxZ],
-    [midX, minY - pad, maxZ]
+  await sweep(page, [minX - pad, maxY + pad, maxZ], [midX, minY - pad, maxZ]);
+  await expect(page.getByRole('contentinfo')).toContainText(
+    '4 edges selected.'
   );
-  await expect(page.getByRole('contentinfo')).toContainText('4 edges selected.');
   await page.keyboard.press('Escape');
-  await sweep(
-    page,
-    [midX, maxY + pad, maxZ],
-    [minX - pad, minY - pad, maxZ]
+  await sweep(page, [midX, maxY + pad, maxZ], [minX - pad, minY - pad, maxZ]);
+  await expect(page.getByRole('contentinfo')).toContainText(
+    '8 edges selected.'
   );
-  await expect(page.getByRole('contentinfo')).toContainText('8 edges selected.');
   await expect(canvas(page)).toHaveAttribute(
     'data-e2e-selected-edges',
     /^[^,]+(,[^,]+){7}$/
@@ -272,7 +268,9 @@ test('shaded edge sweeps take only the edges made visible by X-ray', async ({
 
   await toggleXray(page);
   await sweep(page, outerLeft, middleBelow);
-  await expect(page.getByRole('contentinfo')).toContainText('4 edges selected.');
+  await expect(page.getByRole('contentinfo')).toContainText(
+    '4 edges selected.'
+  );
   await toggleXray(page);
   await sweep(page, outerLeft, middleBelow);
   await expect(canvas(page)).not.toHaveAttribute(
@@ -667,17 +665,17 @@ for (const operation of ['Shell', 'Draft']) {
     if ((await fold.getAttribute('aria-expanded')) === 'true') {
       await fold.click();
     }
-    const faces = page
-      .getByRole('region', { name: 'Feature inspector' })
-      .getByRole('group', {
-        name: operation === 'Shell' ? 'Opening faces' : 'Faces to draft'
-      });
-    await expect(faces.getByRole('button', { pressed: true })).toHaveCount(1);
+    // U09: the command runs in place and lights the faces it holds. (Its
+    // bar may show the kernel's refusal of these faces instead of a count:
+    // a draft of the top face along +Z is refused.)
+    await expect(
+      page.getByRole('group', { name: `${operation} command` })
+    ).toBeVisible();
+    await expect(canvas(page)).toHaveAttribute('data-e2e-focus-faces', '1');
     await toggleXray(page);
     // This window accepts the left side only: the earlier top face extends
-    // outside it and must remain in both the form list and the highlights.
+    // outside it and must remain in both the command and the highlights.
     await sweep(page, [minX - pad, maxY + pad, maxZ], [midX, minY - pad, maxZ]);
-    await expect(faces.getByRole('button', { pressed: true })).toHaveCount(2);
     await expect(canvas(page)).not.toHaveAttribute(
       'data-e2e-selected-face',
       /.*/
@@ -717,21 +715,13 @@ for (const operation of ['Shell', 'Draft']) {
       .getByRole('button', { name: new RegExp(`^${operation}`) })
       .first()
       .click();
+    // U09: the command takes the swept faces of one body, and the lit faces
+    // shrink to exactly those: one box's six. (The kernel refuses opening or
+    // drafting all six, which the bar reports in place of the count.)
     await expect(
-      page.getByRole('region', { name: 'Feature inspector' })
+      page.getByRole('group', { name: `${operation} command` })
     ).toBeVisible();
-    await expect(canvas(page)).not.toHaveAttribute(
-      'data-e2e-focus-faces',
-      /.*/
-    );
-    await expect
-      .poll(
-        async () =>
-          (await canvas(page).getAttribute('data-e2e-selected-bodies'))?.split(
-            ','
-          ).length
-      )
-      .toBe(1);
+    await expect(canvas(page)).toHaveAttribute('data-e2e-focus-faces', '6');
   });
 }
 

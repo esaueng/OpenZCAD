@@ -5,15 +5,32 @@
  * entry chunk. It unlocks this device's account keys the way Settings ›
  * Encryption does (verifying the device list against this browser's pin)
  * and hands `encryptedProjectStore.ts` the account, this device's certified
- * signing key, the MLS sessions and the decode worker. Everything is
- * dropped when the key session ends (sign-out, expiry, another account).
+ * signing key, the MLS sessions and the decode worker. It also opens the
+ * page's encrypted content blobs (`encryptedContentBlobs.ts`): archiving a
+ * file into an encrypted project, and reading one back for the source
+ * resolver through the decode worker. Slice 4-7 adds the project info's
+ * thumbnail and archived exports, encrypted measurements and view state
+ * (`replacedEnvelopes.ts`), and the restore of blobs the account lost.
+ * Everything is dropped when the key session ends (sign-out, expiry,
+ * another account).
  */
 import type {
+  ArtifactRecord,
   CreateProjectRequest,
   CreateProjectResponse,
   E2eeProjectEnvelopeRecord
 } from '@openzcad/shared';
 import { ApiError } from '../api';
+import type { ArchiveArtifactInput } from '../archiveArtifact';
+import {
+  pageBlobReferences,
+  sessionBoundReferences,
+  setEncryptedBlobReader
+} from './blobReferences';
+import {
+  createEncryptedContentBlobs,
+  type EncryptedContentBlobs
+} from './encryptedContentBlobs';
 import { desktopFetch } from '../desktopBridge';
 import { loadEncryption, type E2eeContext } from './accountKeys';
 import { createE2eeDecoder, type E2eeDecoder } from './decodeWorker';
@@ -28,6 +45,20 @@ import { deviceKeyStore } from './keychainDeviceKeys';
 import { getKeySessionRevision, subscribeKeySession } from './keySession';
 import { mlsProjectSessions } from './mls/projectSessions';
 import { createProjectGroupsApi, projectGroupAccount } from './projectGroups';
+import {
+  createEncryptedMeasurements,
+  createEncryptedViewStates,
+  type EncryptedMeasurements,
+  type EncryptedViewStates
+} from './replacedEnvelopes';
+import {
+  EXPORT_ARTIFACT_KINDS,
+  archiveExport,
+  exportArtifacts,
+  publishThumbnail,
+  type ProjectFilesDeps
+} from './encryptedProjectInfo';
+import { versionPins } from './versionPins';
 
 export { E2EE_KEYS_LOCKED_CODE };
 
@@ -35,6 +66,9 @@ interface Opened {
   readonly userId: string;
   readonly revision: number;
   readonly store: Promise<EncryptedProjectStore>;
+  readonly blobs: Promise<EncryptedContentBlobs>;
+  readonly measurements: Promise<EncryptedMeasurements>;
+  readonly viewStates: Promise<EncryptedViewStates>;
 }
 
 let opened: Opened | null = null;
@@ -45,6 +79,9 @@ subscribeKeySession(() => {
   opened = null;
   decoder?.dispose();
   decoder = null;
+  // Blob keys go with the key session that opened their documents.
+  setEncryptedBlobReader(null);
+  pageBlobReferences.clear();
 });
 
 /** Warnings a fresh browser raises, such as a head older than the account's activity. */
@@ -79,7 +116,12 @@ const locked = () =>
     E2EE_KEYS_LOCKED_CODE
   );
 
-async function openStore(userId: string): Promise<EncryptedProjectStore> {
+async function openStore(userId: string): Promise<{
+  store: EncryptedProjectStore;
+  blobs: EncryptedContentBlobs;
+  measurements: EncryptedMeasurements;
+  viewStates: EncryptedViewStates;
+}> {
   const e2ee: E2eeContext = {
     userId,
     api: createE2eeApi(),
@@ -98,15 +140,41 @@ async function openStore(userId: string): Promise<EncryptedProjectStore> {
       : null;
   decoder ??= createE2eeDecoder();
   const pageDecoder = decoder;
-  return createEncryptedProjectStore({
-    groups: {
-      api: createProjectGroupsApi(),
-      sessions: mlsProjectSessions(),
-      account: projectGroupAccount(e2ee, account),
-      device
-    },
+  // Results finishing after this key session ends keep no keys.
+  const references = sessionBoundReferences(pageBlobReferences);
+  const groups = {
+    api: createProjectGroupsApi(),
+    sessions: mlsProjectSessions(),
+    account: projectGroupAccount(e2ee, account),
+    device
+  };
+  const blobs = createEncryptedContentBlobs({
+    groups,
+    references,
+    // Decrypted in the decode worker, within its content-blob budget.
+    decode: (job) => pageDecoder.decodeContentBlob(job),
+    // A lost blob is stored again from this device's source store.
+    loadLocal: async (checksum) =>
+      (await import('../localProjectStore')).loadSourceBlob(checksum)
+  });
+  setEncryptedBlobReader((projectId, blobId, signal, onProgress) =>
+    blobs.read(projectId, blobId, signal, onProgress)
+  );
+  const pins = versionPins();
+  const store = createEncryptedProjectStore({
+    groups,
+    pins,
+    blobReferences: references,
+    restoreBlobs: (projectId, blobIds) => blobs.restore(projectId, blobIds),
     open: (job) => pageDecoder.decodeProjectEnvelope(job),
     seal: (job) => pageDecoder.sealDocument(job),
+    // Geometry workers resolve sources from this device's blob store: put
+    // the document's encrypted sources there before it is rebuilt.
+    onDocument: async (_projectId, document) => {
+      const { preloadEncryptedImportSources } =
+        await import('../exactSourceResolver');
+      await preloadEncryptedImportSources(document);
+    },
     onWarning: (warning) => {
       for (const listener of warningListeners) {
         try {
@@ -117,20 +185,104 @@ async function openStore(userId: string): Promise<EncryptedProjectStore> {
       }
     }
   });
+  return {
+    store,
+    blobs,
+    measurements: createEncryptedMeasurements({
+      userId,
+      kit: store.replaced,
+      pins
+    }),
+    viewStates: createEncryptedViewStates({ userId, kit: store.replaced, pins })
+  };
+}
+
+async function openedForSession(): Promise<Opened> {
+  const userId = await sessionUserId();
+  const revision = getKeySessionRevision();
+  if (opened?.userId !== userId || opened.revision !== revision) {
+    const both = openStore(userId);
+    const current: Opened = {
+      userId,
+      revision,
+      store: both.then(({ store }) => store),
+      blobs: both.then(({ blobs }) => blobs),
+      measurements: both.then(({ measurements }) => measurements),
+      viewStates: both.then(({ viewStates }) => viewStates)
+    };
+    opened = current;
+    both.catch(() => {
+      if (opened === current) opened = null;
+    });
+    current.blobs.catch(() => undefined);
+    current.measurements.catch(() => undefined);
+    current.viewStates.catch(() => undefined);
+  }
+  return opened;
 }
 
 /** This page's store for the signed-in account, opened once per key session. */
 export async function encryptedProjectStore(): Promise<EncryptedProjectStore> {
-  const userId = await sessionUserId();
-  const revision = getKeySessionRevision();
-  if (opened?.userId !== userId || opened.revision !== revision) {
-    const store = openStore(userId);
-    opened = { userId, revision, store };
-    store.catch(() => {
-      if (opened?.store === store) opened = null;
-    });
+  return (await openedForSession()).store;
+}
+
+/** The thumbnail and export paths' view of this page. */
+async function projectFiles(): Promise<ProjectFilesDeps> {
+  const session = await openedForSession();
+  const [store, blobs] = await Promise.all([session.store, session.blobs]);
+  return {
+    info: store.info,
+    // Bound to the session current now: a late thumbnail or export keeps no key.
+    references: sessionBoundReferences(pageBlobReferences),
+    archive: (projectId, input) => blobs.archive(projectId, input)
+  };
+}
+
+/**
+ * `archiveArtifact` for an encrypted project: the file becomes an encrypted
+ * content blob, and its blob id is the artifact id the document records.
+ * An export is listed in the project info as well (slice 4-7).
+ */
+export async function archiveEncryptedArtifact(
+  projectId: string,
+  input: ArchiveArtifactInput
+): Promise<string> {
+  if (EXPORT_ARTIFACT_KINDS.has(input.kind)) {
+    return archiveExport(await projectFiles(), projectId, input);
   }
-  return opened.store;
+  return (await (await openedForSession()).blobs).archive(projectId, input);
+}
+
+/**
+ * The account's archived exports of an encrypted project, as the File menu
+ * lists stored files: from its verified project info, newest first.
+ */
+export async function listEncryptedArtifacts(
+  projectId: string
+): Promise<ArtifactRecord[]> {
+  const { body } = await (await encryptedProjectStore()).info.read(projectId);
+  return exportArtifacts(projectId, body);
+}
+
+/**
+ * Publishes a captured shelf thumbnail of an encrypted project: a thumbnail
+ * blob, named by a new project info (slice 4-7). Resolves to its blob id.
+ */
+export async function publishEncryptedThumbnail(
+  projectId: string,
+  image: Blob
+): Promise<string> {
+  return publishThumbnail(await projectFiles(), projectId, image);
+}
+
+/** The page's encrypted measurements client (`measurementCloudSync.ts`). */
+export async function encryptedMeasurements(): Promise<EncryptedMeasurements> {
+  return (await openedForSession()).measurements;
+}
+
+/** The page's encrypted view-state client (`workspaceResume.ts`). */
+export async function encryptedViewStates(): Promise<EncryptedViewStates> {
+  return (await openedForSession()).viewStates;
 }
 
 export async function createEncryptedProject(
@@ -143,13 +295,43 @@ export async function createEncryptedProject(
 export async function encryptedProjectNames(
   records: readonly E2eeProjectEnvelopeRecord[]
 ): Promise<Map<string, string>> {
-  const store = await encryptedProjectStore();
   const names = new Map<string, string>();
+  for (const [projectId, shelf] of await encryptedProjectShelf(records)) {
+    names.set(projectId, shelf.name);
+  }
+  return names;
+}
+
+/** What the shelf shows of an encrypted project, from its project info. */
+export interface EncryptedShelfEntry {
+  readonly name: string;
+  /** The thumbnail blob, whose reference this page now holds. */
+  readonly thumbnailBlobId?: string;
+}
+
+/**
+ * Names and thumbnails by project id, from verified project-info
+ * envelopes; one that fails to verify is left out. Each thumbnail's
+ * reference is registered with this page, so the shelf downloads and
+ * decrypts it like any other blob.
+ */
+export async function encryptedProjectShelf(
+  records: readonly E2eeProjectEnvelopeRecord[]
+): Promise<Map<string, EncryptedShelfEntry>> {
+  const store = await encryptedProjectStore();
+  const shelf = new Map<string, EncryptedShelfEntry>();
   await Promise.all(
     records.map(async (record) => {
-      const name = await store.projectName(record);
-      if (name !== null) names.set(record.projectId, name);
+      try {
+        const body = await store.info.verify(record);
+        shelf.set(record.projectId, {
+          name: body.name,
+          ...(body.thumbnail ? { thumbnailBlobId: body.thumbnail.blobId } : {})
+        });
+      } catch {
+        // Left out: the placeholder name, no picture.
+      }
     })
   );
-  return names;
+  return shelf;
 }

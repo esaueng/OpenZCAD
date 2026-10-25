@@ -3,7 +3,11 @@ import {
   type ProjectWorkspaceSession
 } from '@openzcad/shared';
 import { desktopFetch } from './desktopBridge';
-import { encryptedLocalOnly, isEncryptedProject } from './api';
+import { isEncryptedProject } from './api';
+
+/** An encrypted project's view state: signed, encrypted envelopes (slice 4-7). */
+const encryptedViewStates = async () =>
+  (await import('./e2ee/encryptedProjects')).encryptedViewStates();
 
 export function workspaceDeviceId(): string {
   const key = 'openzcad-workspace-device:v1';
@@ -35,7 +39,9 @@ export function resumeCandidate(
 
 export const workspaceSessionApi = {
   async load(projectId: string): Promise<ProjectWorkspaceSession[]> {
-    if (isEncryptedProject(projectId)) throw encryptedLocalOnly('View states');
+    if (isEncryptedProject(projectId)) {
+      return (await encryptedViewStates()).load(projectId);
+    }
     const response = await desktopFetch(
       `/api/projects/${encodeURIComponent(projectId)}/workspace-sessions`,
       { credentials: 'same-origin' }
@@ -50,7 +56,7 @@ export const workspaceSessionApi = {
     session: Omit<ProjectWorkspaceSession, 'updatedAt'>
   ): Promise<void> {
     if (isEncryptedProject(session.projectId)) {
-      throw encryptedLocalOnly('View states');
+      return (await encryptedViewStates()).save(session);
     }
     const response = await desktopFetch(
       `/api/projects/${encodeURIComponent(session.projectId)}/workspace-sessions`,

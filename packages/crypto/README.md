@@ -75,7 +75,8 @@ Call everything before chunk 0 the _prefix_.
 Changing any header byte, dropping, reordering or duplicating a chunk, cutting
 the file short, or moving a chunk or body into another envelope fails
 authentication. `parseEnvelope` checks structure without a key, which is all a
-server can do.
+server can do; `parseEnvelopeShape(head, length)` runs the same checks from the
+prefix and the total length, for a body held in an object store.
 
 ### Decompression limits
 
@@ -132,6 +133,13 @@ closes cleanly, because only the final chunk and the hash prove that nothing
 was cut off or swapped. The `reference` promise from `encryptContentBlobStream` always
 settles: it resolves when the envelope finishes, and it rejects with
 `aborted` if the source fails or the consumer cancels.
+
+A content blob's id is fresh and random. The one exception is
+`ContentBlobOptions.blobId`, for storing again a blob the account lost or
+collected while a document still names it by that id: the blob is encrypted
+under a fresh key, so one key still encrypts exactly one envelope, and the
+new reference (new key, new ciphertext hash) replaces the old one in the
+next version that names the blob.
 
 ## Versions and signatures
 
@@ -213,14 +221,23 @@ blob the header omits, or the reverse, is refused (`context-mismatch`).
 | `EncryptedDocumentBody` | document, share-snapshot | `document` (object), `blobs` (references), `revisionVersionHashes` (revision id → lowercase hex)      |
 | `ProjectInfoBody`       | project-info             | `name`, optional `thumbnail` reference, `exports` (`ref`, `fileName`, `contentType`, flat `metadata`) |
 | `KeyArchiveBody`        | key-archive              | `previousKeys` (`keyEpoch`, `key`), `dedupeSecret`, `epochRecord`, `epochAuthenticator`; no blob refs |
+| `MeasurementsBody`      | measurements             | `record` (object: the app's stored measurement record); no blob refs                                  |
+| `ViewStateBody`         | view-state               | `session` (object: one workspace session); no blob refs                                               |
 
 `revisionVersionHashes` lets a historical read prove that a retained
 revision belongs to this history through the signed head, instead of a chain
 walk through overwritten autosaves. A key archive's previous keys are
 strictly ascending and older than its own key epoch (`context-mismatch` on
 read). Project info and key archives also accept only their canonical
-encoding; the document is checked by the shared document validators after
-decoding.
+encoding; the document, the measurement record and the workspace session are
+checked by the app's own validators after decoding.
+
+Project info, measurements and view state are replaced as a whole. Their
+header's document version is their sequence (the measurements' revision),
+which the server stores in plaintext to fence writes. Project info and
+measurements name the previous envelope's hash as their previous-version
+hash (none for the first), so each forms its own chain; view state names
+none.
 
 Device lists live here (below). The contacts list, the custom roster and
 its revocation cutoffs are parked on the `claude/e2ee-chains` branch: MLS

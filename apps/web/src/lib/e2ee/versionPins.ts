@@ -1,15 +1,25 @@
 /**
  * Fork-consistency pins for encrypted projects (ADR-024, Version integrity):
  * per account and project, the newest head this browser accepted (its
- * version hash, document version and key epoch) and the newest project-info
- * sequence it saw. A current-head read must descend from the pin and then
- * moves it forward; a historical read never moves it.
+ * version hash, document version and key epoch), the newest project info it
+ * accepted (its sequence and envelope hash), and the newest measurements
+ * and view-state envelopes it accepted (slice 4-7). A current-head read must
+ * descend from the pin and then moves it forward; a historical read never
+ * moves it. A replaced envelope is never accepted below its pinned sequence,
+ * nor at it with another hash.
  *
  * Kept in their own small IndexedDB database, `openzcad-e2ee-versions`, as
  * the MLS session store keeps its own: upgrading `openzcad-e2ee` (device
  * keys and device-list pins) would block on every tab still holding it at
- * version 1.
+ * version 1. Pins written before slice 4-7 read with no info hash and no
+ * envelope pins.
  */
+
+/** A replaced envelope's pin: its sequence and lowercase hex hash. */
+export interface EnvelopePin {
+  readonly sequence: number;
+  readonly hash: string;
+}
 
 export interface ProjectVersionPin {
   /**
@@ -21,6 +31,13 @@ export interface ProjectVersionPin {
   readonly keyEpoch: number;
   /** The newest project-info sequence accepted; 0 before any. */
   readonly infoSequence: number;
+  /** That project info's envelope hash; null when not recorded. */
+  readonly infoHash: string | null;
+  /**
+   * Measurements (`measurements`) and view states
+   * (`view-state:<sessionId>`), by key.
+   */
+  readonly envelopes: Readonly<Record<string, EnvelopePin>>;
 }
 
 /** A head to pin: what `advance` swaps in. */
@@ -45,28 +62,83 @@ export interface VersionPinStore {
     expectedHeadHash: string | null,
     next: PinnedHead
   ): Promise<boolean>;
-  /** Raises the info sequence only; false when the stored one is newer. */
+  /**
+   * Raises the info sequence (and records its hash); false when the stored
+   * one is newer, or the same sequence with another hash.
+   */
   advanceInfo(
     userId: string,
     projectId: string,
-    sequence: number
+    sequence: number,
+    hash?: string
+  ): Promise<boolean>;
+  /** The same rule for a measurements or view-state envelope, by key. */
+  advanceEnvelope(
+    userId: string,
+    projectId: string,
+    key: string,
+    next: EnvelopePin
   ): Promise<boolean>;
 }
 
 const HASH = /^[0-9a-f]{64}$/;
+/** Envelope pins one project keeps (view states rotate; judgment). */
+const MAX_ENVELOPE_PINS = 64;
 
-function isPin(value: unknown): value is ProjectVersionPin {
-  const pin = value as Partial<ProjectVersionPin> | null;
+function isEnvelopePin(value: unknown): value is EnvelopePin {
+  const pin = value as Partial<EnvelopePin> | null;
   return (
     typeof pin === 'object' &&
     pin !== null &&
-    (pin.headHash === null ||
-      (typeof pin.headHash === 'string' && HASH.test(pin.headHash))) &&
-    Number.isSafeInteger(pin.documentVersion) &&
-    Number.isSafeInteger(pin.keyEpoch) &&
-    Number.isSafeInteger(pin.infoSequence)
+    Number.isSafeInteger(pin.sequence) &&
+    typeof pin.hash === 'string' &&
+    HASH.test(pin.hash)
   );
 }
+
+/** A stored pin, with the fields older pins lack filled in; null if invalid. */
+function readPin(value: unknown): ProjectVersionPin | null {
+  const pin = value as Partial<ProjectVersionPin> | null;
+  if (
+    typeof pin !== 'object' ||
+    pin === null ||
+    !(
+      pin.headHash === null ||
+      (typeof pin.headHash === 'string' && HASH.test(pin.headHash))
+    ) ||
+    !Number.isSafeInteger(pin.documentVersion) ||
+    !Number.isSafeInteger(pin.keyEpoch) ||
+    !Number.isSafeInteger(pin.infoSequence)
+  ) {
+    return null;
+  }
+  const envelopes: Record<string, EnvelopePin> = {};
+  if (typeof pin.envelopes === 'object' && pin.envelopes !== null) {
+    for (const [key, entry] of Object.entries(pin.envelopes)) {
+      if (isEnvelopePin(entry)) envelopes[key] = entry;
+    }
+  }
+  return {
+    headHash: pin.headHash!,
+    documentVersion: pin.documentVersion!,
+    keyEpoch: pin.keyEpoch!,
+    infoSequence: pin.infoSequence!,
+    infoHash:
+      typeof pin.infoHash === 'string' && HASH.test(pin.infoHash)
+        ? pin.infoHash
+        : null,
+    envelopes
+  };
+}
+
+const emptyPin = (): ProjectVersionPin => ({
+  headHash: null,
+  documentVersion: 0,
+  keyEpoch: 0,
+  infoSequence: 0,
+  infoHash: null,
+  envelopes: {}
+});
 
 /** The head swap both stores apply inside one transaction. */
 export function swappedPin(
@@ -88,27 +160,84 @@ export function swappedPin(
     return null;
   }
   return {
+    ...(current ?? emptyPin()),
     headHash: next.headHash,
     documentVersion: next.documentVersion,
-    keyEpoch: next.keyEpoch,
-    infoSequence: current?.infoSequence ?? 0
+    keyEpoch: next.keyEpoch
   };
+}
+
+/**
+ * Whether a replaced envelope at `sequence` with `hash` may follow the one
+ * pinned: never an older sequence, never the pinned sequence with another
+ * hash (a fork), and a hash the pin did not record is taken as it comes.
+ */
+export function envelopeMayFollow(
+  pinned: { sequence: number; hash: string | null } | null,
+  sequence: number,
+  hash: string | null
+): boolean {
+  if (!pinned) return true;
+  if (sequence < pinned.sequence) return false;
+  return !(
+    sequence === pinned.sequence &&
+    hash !== null &&
+    pinned.hash !== null &&
+    hash !== pinned.hash
+  );
 }
 
 function raisedInfo(
   current: ProjectVersionPin | null,
-  sequence: number
+  sequence: number,
+  hash: string | null
 ): ProjectVersionPin | null {
   if (!Number.isSafeInteger(sequence) || sequence < 0) return null;
-  if (current && sequence < current.infoSequence) return null;
-  return current
-    ? { ...current, infoSequence: sequence }
-    : {
-        headHash: null,
-        documentVersion: 0,
-        keyEpoch: 0,
-        infoSequence: sequence
-      };
+  if (hash !== null && !HASH.test(hash)) return null;
+  if (
+    current &&
+    !envelopeMayFollow(
+      { sequence: current.infoSequence, hash: current.infoHash },
+      sequence,
+      hash
+    )
+  ) {
+    return null;
+  }
+  const base = current ?? emptyPin();
+  return {
+    ...base,
+    infoSequence: sequence,
+    infoHash: hash ?? (sequence === base.infoSequence ? base.infoHash : null)
+  };
+}
+
+function raisedEnvelope(
+  current: ProjectVersionPin | null,
+  key: string,
+  next: EnvelopePin
+): ProjectVersionPin | null {
+  if (!isEnvelopePin(next) || next.sequence < 0 || key.length > 256) {
+    return null;
+  }
+  const base = current ?? emptyPin();
+  if (
+    !envelopeMayFollow(base.envelopes[key] ?? null, next.sequence, next.hash)
+  ) {
+    return null;
+  }
+  const envelopes = { ...base.envelopes };
+  delete envelopes[key];
+  envelopes[key] = { sequence: next.sequence, hash: next.hash };
+  // The oldest-written pins go first (insertion order).
+  const keys = Object.keys(envelopes);
+  for (const stale of keys.slice(
+    0,
+    Math.max(0, keys.length - MAX_ENVELOPE_PINS)
+  )) {
+    delete envelopes[stale];
+  }
+  return { ...base, envelopes };
 }
 
 export function memoryVersionPins(): VersionPinStore {
@@ -130,8 +259,12 @@ export function memoryVersionPins(): VersionPinStore {
       update(userId, projectId, (current) =>
         swappedPin(current, expected, next)
       ),
-    advanceInfo: async (userId, projectId, sequence) =>
-      update(userId, projectId, (current) => raisedInfo(current, sequence))
+    advanceInfo: async (userId, projectId, sequence, hash) =>
+      update(userId, projectId, (current) =>
+        raisedInfo(current, sequence, hash ?? null)
+      ),
+    advanceEnvelope: async (userId, projectId, key, next) =>
+      update(userId, projectId, (current) => raisedEnvelope(current, key, next))
   };
 }
 
@@ -183,7 +316,7 @@ async function transact(
       reject(tx.error ?? new Error('IndexedDB version pin transaction failed'));
     const read = objects.get([userId, projectId]);
     read.onsuccess = () => {
-      const current = isPin(read.result) ? read.result : null;
+      const current = readPin(read.result);
       const next = change ? change(current) : null;
       if (next) objects.put(next, [userId, projectId]);
       result = { current: next ?? current, changed: next !== null };
@@ -201,10 +334,16 @@ export function indexedDbVersionPins(): VersionPinStore {
           swappedPin(current, expected, next)
         )
       ).changed,
-    advanceInfo: async (userId, projectId, sequence) =>
+    advanceInfo: async (userId, projectId, sequence, hash) =>
       (
         await transact(userId, projectId, (current) =>
-          raisedInfo(current, sequence)
+          raisedInfo(current, sequence, hash ?? null)
+        )
+      ).changed,
+    advanceEnvelope: async (userId, projectId, key, next) =>
+      (
+        await transact(userId, projectId, (current) =>
+          raisedEnvelope(current, key, next)
         )
       ).changed
   };

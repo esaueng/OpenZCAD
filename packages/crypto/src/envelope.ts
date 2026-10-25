@@ -1049,6 +1049,13 @@ export interface ContentBlobOptions {
   readonly compression?: Compression;
   /** Defaults to 1 MiB. */
   readonly chunkSize?: number;
+  /**
+   * Defaults to a fresh random id. Given only to store again, under a
+   * fresh key, a blob the account lost or collected while a document still
+   * names it by this id: the key is new, so one key still encrypts exactly
+   * one envelope, and the new reference replaces the old one.
+   */
+  readonly blobId?: string;
 }
 
 /**
@@ -1070,7 +1077,7 @@ export async function createContentBlobWriterWith(
   const header: ContentBlobHeader = {
     class: 'content',
     kind,
-    blobId: toHex(random(BLOB_ID_BYTES)),
+    blobId: options.blobId ?? toHex(random(BLOB_ID_BYTES)),
     compression: options.compression ?? 'gzip',
     chunkSize: options.chunkSize ?? DEFAULT_CHUNK_SIZE,
     plaintextLength: options.plaintextLength
@@ -1305,12 +1312,34 @@ export interface EnvelopeShape extends EnvelopePrefix {
  * key holder decrypts it.
  */
 export function parseEnvelope(envelope: Uint8Array): EnvelopeShape {
-  const length = envelopePrefixLength(envelope);
-  if (length === null || envelope.byteLength < length) {
+  return parseEnvelopeShape(envelope, envelope?.byteLength);
+}
+
+/**
+ * `parseEnvelope` for a server that keeps the body somewhere it cannot
+ * buffer, such as an object store: `head` holds the envelope's first bytes,
+ * at least its whole prefix, and `envelopeLength` is the envelope's total
+ * length. The checks are the same, and no chunk is read.
+ */
+export function parseEnvelopeShape(
+  head: Uint8Array,
+  envelopeLength: number
+): EnvelopeShape {
+  if (!(head instanceof Uint8Array)) {
+    throw new E2eeError('invalid-argument', 'An envelope is bytes');
+  }
+  if (!isUint(envelopeLength, Number.MAX_SAFE_INTEGER)) {
+    throw new E2eeError(
+      'invalid-argument',
+      'An envelope length is a non-negative safe integer'
+    );
+  }
+  const length = envelopePrefixLength(head);
+  if (length === null || head.byteLength < length || envelopeLength < length) {
     throw new E2eeError('malformed', 'Envelope ends inside its header');
   }
-  const prefix = decodeEnvelopePrefix(envelope.subarray(0, length));
-  const body = envelope.byteLength - length;
+  const prefix = decodeEnvelopePrefix(head.subarray(0, length));
+  const body = envelopeLength - length;
   const cipherSize = prefix.header.chunkSize + GCM_TAG_BYTES;
   const remainder = body % cipherSize;
   if (body < GCM_TAG_BYTES || (remainder !== 0 && remainder < GCM_TAG_BYTES)) {

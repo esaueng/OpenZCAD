@@ -195,6 +195,8 @@ import {
   type StaleDirectEditFaceRepair
 } from '@openzcad/document-core';
 import {
+  CURRENT_CANONICAL_BASIS_REVISION,
+  canonicalPlaneBasis,
   canonicalPlaneRefForEdit,
   circleProfile,
   computeSketchProfileAnalysis,
@@ -1414,16 +1416,21 @@ import {
 import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
 import { useThumbnailCaptureActivity } from './hooks/useThumbnailCaptureActivity';
 import { GEOMETRY_PREVIEW_SCHEDULING, LivePreview } from './lib/livePreview';
+import { mergeSweptFaces, useInPlaceCommand } from './hooks/useInPlaceCommand';
 import {
-  useInPlaceRevolve,
-  type InPlaceProfilePick,
-  type InPlaceRevolveRequest
-} from './hooks/useInPlaceRevolve';
+  IN_PLACE_TOOL_SPECS,
+  clampValue,
+  isInPlaceTool,
+  type InPlaceRequest,
+  type BodyPick,
+  type FacePick,
+  type InPlaceToolId,
+  type ProfilePick
+} from './lib/inPlace/tools';
 import {
-  clampRevolveAngle,
-  MIN_REVOLVE_ANGLE,
-  revolveAngleInRange
-} from './lib/inPlace/revolve';
+  parseCurveCandidateId,
+  sketchCurveCandidates
+} from './lib/inPlace/curves';
 import { PreviewRebuilds } from './lib/previewRebuilds';
 import {
   blendPreviewSelectionKey,
@@ -1503,6 +1510,7 @@ import {
 import {
   countLabel,
   deleteFeatureToastMessage,
+  statusRepeatedByToast,
   UNDO_FLOOR_TRIMMED_NOTICE,
   UNDO_FLOOR_TRIMMED_REASON,
   type ToastAction,
@@ -1527,6 +1535,7 @@ import {
   type ProjectConflict
 } from './lib/conflictRecovery';
 import {
+  buildModelingOperationSubmission,
   modelingFaceOptions,
   type EditableModelingFeatureData,
   modelingFeatureIsEditable,
@@ -2662,6 +2671,12 @@ export function App() {
   }));
   const status = statusEntry.text;
   /**
+   * The stamp of the last status `setStatus` wrote, read synchronously by a
+   * toast that restates it: which status a toast repeats is fixed when that
+   * status is set, not when the toast is raised.
+   */
+  const lastStatusAtRef = useRef(statusEntry.at);
+  /**
    * Informational messages expire (lib/statusLifetime); `sticky` is for text
    * that describes a mode the user is still in, such as sketching on a plane.
    */
@@ -2670,11 +2685,13 @@ export function App() {
       text: string,
       options?: { sticky?: boolean; detail?: string; unlogged?: boolean }
     ) => {
+      const at = Date.now();
+      lastStatusAtRef.current = at;
       setStatusEntry({
         text,
         ...(options?.detail ? { detail: options.detail } : {}),
         ...(options?.unlogged ? { unlogged: true } : {}),
-        at: Date.now(),
+        at,
         sticky: options?.sticky ?? false
       });
     },
@@ -2690,20 +2707,31 @@ export function App() {
   const [newBuildAvailable, setNewBuildAvailable] = useState(false);
   const [downloadInterrupted, setDownloadInterrupted] = useState(false);
   const toastIdRef = useRef(0);
-  const announce = useCallback((message: string, action?: ToastAction) => {
-    toastIdRef.current += 1;
-    const id = toastIdRef.current;
-    // An action-bearing toast (the delete Undo above all) is never silently
-    // replaced by a text-only notice: the action moves into the slot the new
-    // message would have taken, so Undo stays one click away no matter how
-    // fast notices arrive.
-    setToast((current) => {
-      if (current?.action && !action) {
-        return { id, message, action: current.action };
-      }
-      return { id, message, action };
-    });
-  }, []);
+  const announce = useCallback(
+    (
+      message: string,
+      action?: ToastAction,
+      options?: { repeatsStatusAt?: number }
+    ) => {
+      toastIdRef.current += 1;
+      const id = toastIdRef.current;
+      const repeats =
+        options?.repeatsStatusAt === undefined
+          ? {}
+          : { repeatsStatusAt: options.repeatsStatusAt };
+      // An action-bearing toast (the delete Undo above all) is never silently
+      // replaced by a text-only notice: the action moves into the slot the new
+      // message would have taken, so Undo stays one click away no matter how
+      // fast notices arrive.
+      setToast((current) => {
+        if (current?.action && !action) {
+          return { id, message, action: current.action, ...repeats };
+        }
+        return { id, message, action, ...repeats };
+      });
+    },
+    []
+  );
   const dismissToast = useCallback((id: number) => {
     setToast((current) => (current?.id === id ? null : current));
   }, []);
@@ -3425,10 +3453,15 @@ export function App() {
     if (feedback.state === 'pending') return;
     suppressionNoticeRef.current = null;
     if (feedback.state !== 'ready') return;
-    announce(feedback.message, {
-      label: 'Undo',
-      run: handleUndo
-    });
+    // The status this restates was set by the toggle itself, before the
+    // rebuild it waited for; a newer status set meanwhile is not its repeat.
+    announce(
+      feedback.message,
+      { label: 'Undo', run: handleUndo },
+      notice.statusAt === undefined
+        ? undefined
+        : { repeatsStatusAt: notice.statusAt }
+    );
   };
   const pendingPartCountRef = useRef<Pick<
     ProjectDocument,
@@ -4435,10 +4468,11 @@ export function App() {
     feature: FeatureNode,
     value: ExtrudeFormValue | null
   ) {
-    edgeFormPreview.clear();
     setFeatureFormError(null);
-    if (!value || geometryBusy || !feature.bodyId || !managerRef.current)
+    if (!value || geometryBusy || !feature.bodyId || !managerRef.current) {
+      edgeFormPreview.clear();
       return;
+    }
     try {
       const command = extrudeEditCommand(feature, value);
       command.validate(managerRef.current.document);
@@ -4447,10 +4481,13 @@ export function App() {
         bodyId: feature.bodyId,
         extrude: feature.featureId
       };
-      edgeFormPreview.request(
+      // The last preview stays up until this value's arrives: clearing it
+      // first showed the unextruded part for a rebuild on every keystroke.
+      edgeFormPreview.replace(
         extrudePreviewMagnitude(value, resolveDocumentValue)
       );
     } catch (error) {
+      edgeFormPreview.clear();
       setFeatureFormError(
         errorMessage(error, 'Unable to preview this extrusion.')
       );
@@ -4460,7 +4497,9 @@ export function App() {
   function applyExtrudeForm(feature: FeatureNode, value: ExtrudeFormValue) {
     if (geometryBusy || !feature.bodyId || !doc) return;
     const editSession = editCardSessionRef.current;
-    edgeFormPreview.clear();
+    // Validation rebuilds what the preview already shows: keep it up until
+    // the commit replaces it, or the edit is refused.
+    edgeFormPreview.stop();
     const request = ++extrudeEditRequest.current;
     void executeValidatedFeature(extrudeEditCommand(feature, value), {
       featureName: value.name,
@@ -4471,10 +4510,15 @@ export function App() {
           index === 0 ? { ...target, featureName: value.name } : target
       ),
       successMessage: `Edit ${value.name}`,
-      onSuccess: () => finishFeatureEdit(feature, editSession),
+      onSuccess: () => {
+        edgeFormPreview.clear();
+        finishFeatureEdit(feature, editSession);
+      },
       cancelled: () =>
         request !== extrudeEditRequest.current ||
         !editSessionIsCurrent(feature, editSession)
+    }).then((outcome) => {
+      if (outcome !== 'committed') edgeFormPreview.clear();
     });
   }
 
@@ -4511,7 +4555,8 @@ export function App() {
       feature?.bodyId ??
       ('ids' in command.payload ? command.payload.ids?.bodyId : undefined);
     if (!bodyId || !doc) return;
-    edgeFormPreview.clear();
+    // As for Extrude: the preview stays until the commit or a refusal.
+    edgeFormPreview.stop();
     setEdgeFormSize(null);
     void executeValidatedFeature(command, {
       featureName: refreshedValue.name,
@@ -4525,12 +4570,16 @@ export function App() {
           }
         : {}),
       successMessage: `${refreshedValue.name} applied.`,
-      onSuccess: feature
-        ? () => finishFeatureEdit(feature, editSession)
-        : finishFeatureCreation,
+      onSuccess: () => {
+        edgeFormPreview.clear();
+        if (feature) finishFeatureEdit(feature, editSession);
+        else finishFeatureCreation();
+      },
       ...(feature
         ? { cancelled: () => !editSessionIsCurrent(feature, editSession) }
         : {})
+    }).then((outcome) => {
+      if (outcome !== 'committed') edgeFormPreview.clear();
     });
   }
 
@@ -6851,6 +6900,10 @@ export function App() {
    * explicit pick events below rather than coupling its history to selection
    * state effects.
    */
+  // A boolean, not the interaction: the summary must not be rebuilt (and
+  // the card's label rewritten) on every interaction step of a drag.
+  const offsettingFace =
+    interaction.mode === 'face' && interaction.op === 'offset-face';
   const selectionSummary = useMemo<{
     label: readonly LabelSegment[];
     detail?: string;
@@ -6909,11 +6962,43 @@ export function App() {
       };
     }
     if (renderedSelectedTopology?.kind === 'face') {
-      const body = renderedRepresentations[renderedSelectedTopology.bodyId];
+      // While a face offset's preview is on screen the pick resolves to the
+      // preview's face, which carries no lineage name: the card read "Face"
+      // for the whole of a typed value's preview. It keeps naming the
+      // committed face the pick came from. Its quantity still comes from the
+      // face on screen, since an offset can change a face's boundary (a
+      // tapered or imported part); while the preview has none to give, the
+      // line holds a placeholder rather than leaving and shifting the card.
+      // Other edits (a cylinder's radius, a fillet's) name and measure from
+      // the preview: their figure is the dragged value, which the viewer
+      // writes into the label live.
+      const sourceBody =
+        currentFaceGeometryPreview &&
+        offsettingFace &&
+        selectedTopology?.kind === 'face' &&
+        selectedTopology.bodyId === renderedSelectedTopology.bodyId
+          ? representations[selectedTopology.bodyId]
+          : undefined;
+      const fromSource =
+        sourceBody !== undefined &&
+        selectedTopology !== null &&
+        resolveFace(sourceBody, selectedTopology).ok;
+      const namingTopology =
+        fromSource && selectedTopology
+          ? selectedTopology
+          : renderedSelectedTopology;
+      const namingBody = fromSource
+        ? sourceBody
+        : renderedRepresentations[renderedSelectedTopology.bodyId];
+      const measuredBody = fromSource
+        ? currentFaceGeometryPreview?.geometry.bodyRepresentations[
+            renderedSelectedTopology.bodyId
+          ]
+        : namingBody;
       // Through the shared fail-closed resolver rather than a local `find`, so
       // the chip cannot print a confident figure for a pick the measurement
       // tape is simultaneously refusing as ambiguous.
-      const resolved = resolveFace(body, renderedSelectedTopology);
+      const resolved = resolveFace(measuredBody, renderedSelectedTopology);
       const geometry = resolved.ok ? resolved.entry.geometry : undefined;
       if (
         geometry?.featureType === 'through-hole' &&
@@ -6925,10 +7010,7 @@ export function App() {
           detail: value
         };
       }
-      const label = topologySelectionLabelSegments(
-        body,
-        renderedSelectedTopology
-      );
+      const label = topologySelectionLabelSegments(namingBody, namingTopology);
       // A cylinder is the other pick that carries a number of its own; every
       // other face kind has a name but nothing to measure yet.
       const cylinderDiameter =
@@ -6940,7 +7022,9 @@ export function App() {
             ? `Ø ${round(cylinderDiameter)} ${units}`
             : geometry?.area !== undefined
               ? `${formatMeasuredQuantity(geometry.area)} ${units}²`
-              : undefined
+              : fromSource
+                ? `— ${units}²`
+                : undefined
       };
     }
     if (selectedBodyIds.length > 1) {
@@ -6971,7 +7055,11 @@ export function App() {
     renderedSelectedTopology,
     selectedBodyIds,
     renderedRepresentations,
-    currentGeometrySnapshot
+    currentGeometrySnapshot,
+    currentFaceGeometryPreview,
+    selectedTopology,
+    representations,
+    offsettingFace
   ]);
 
   const {
@@ -8082,23 +8170,127 @@ export function App() {
   }
 
   /**
-   * Starts the in-place Revolve: the selected region's sketch fills the
-   * profile slot; with nothing selected, the next region click does.
+   * Starts an in-place command: the selected regions fill its profile slot
+   * (in selection order, for a loft); with none selected, region clicks do.
    */
-  function startInPlaceRevolve() {
-    const selected = selectedProfiles[0];
-    const initial = selected ? inPlaceProfilePick(selected) : null;
+  function startInPlaceCommand(tool: InPlaceToolId) {
+    const initial = selectedProfiles.flatMap((region) => {
+      const pick = inPlaceProfilePick(region);
+      return pick ? [pick] : [];
+    });
+    // A face selected first (the selection card's Hole, Shell…) is the
+    // command's first face, clicked where it was clicked.
+    const current = interactionRef.current;
+    const selectedFace =
+      current.mode === 'face'
+        ? inPlaceFacePick(
+            current.target.bodyId,
+            current.target.topologyId,
+            undefined,
+            {
+              x: current.target.point[0],
+              y: current.target.point[1],
+              z: current.target.point[2]
+            }
+          )
+        : null;
+    // Faces a box swept first are a face-list command's faces, on one body;
+    // the wider sweep is dropped so its highlights promise nothing more.
+    const sweptFaces =
+      !selectedFace &&
+      boxSelectedFaces &&
+      IN_PLACE_TOOL_SPECS[tool].faceMode === 'many'
+        ? mergeSweptFaces([], inPlaceFacesFor(boxSelectedFaces))
+        : [];
+    if (sweptFaces.length > 0) {
+      setBoxFaces(null);
+      setSelectedBodyIds([sweptFaces[0]!.bodyId]);
+    }
+    // Bodies selected first (in the Objects panel, say) are its bodies, in
+    // the order they were picked: a subtract's first is its base.
+    const initialBodies = selectedBodyIds.flatMap((bodyId) => {
+      const body = inPlaceBodyPick(bodyId);
+      return body ? [body] : [];
+    });
     cancelPanel();
     // The command bar names each step; a status toast would say it twice,
     // on the same row.
     retireStatusMessage();
-    inPlaceRevolveRef.current.start(initial);
+    inPlaceRef.current.start(
+      tool,
+      initial,
+      selectedFace ? [selectedFace] : sweptFaces,
+      initialBodies
+    );
+  }
+
+  /** Swept faces as an in-place command's face slot holds them. */
+  function inPlaceFacesFor(selections: readonly TopologySelection[]) {
+    return selections.flatMap((selection) => {
+      const face = inPlaceFacePick(
+        selection.bodyId,
+        selection.topologyId,
+        selection.hash,
+        undefined
+      );
+      return face ? [face] : [];
+    });
+  }
+
+  /** A model face as an in-place command's face slot holds it. */
+  function inPlaceFacePick(
+    bodyId: string,
+    topologyId: string | undefined,
+    hash: number | undefined,
+    point: { x: number; y: number; z: number } | undefined
+  ): FacePick | null {
+    const matches = (candidate: { topologyId: string; hash: number }) =>
+      (topologyId !== undefined && candidate.topologyId === topologyId) ||
+      (hash !== undefined && candidate.hash === hash);
+    let resolvedBodyId = bodyId as BodyId;
+    let face = representations[resolvedBodyId]?.topology?.faces.find(matches);
+    if (!face) {
+      // While a preview shows, a click lands on the preview's body, which the
+      // document does not have. The face meant is the edited body's face in
+      // the same plane: clicking the face again is how a hole moves.
+      const shown = previewDoc?.derived.bodyRepresentations[
+        resolvedBodyId
+      ]?.topology?.faces.find(matches)?.geometry;
+      const target = inPlaceRef.current.slots.faces[0]?.bodyId;
+      const normal = shown?.normal;
+      const on = shown?.centroid ?? shown?.center;
+      if (target && normal && on) {
+        face = representations[target]?.topology?.faces.find((candidate) => {
+          const g = candidate.geometry;
+          const at = g?.centroid ?? g?.center;
+          if (!g?.normal || !at) return false;
+          const aligned =
+            g.normal.x * normal.x + g.normal.y * normal.y + g.normal.z * normal.z;
+          const apart =
+            (at.x - on.x) * normal.x +
+            (at.y - on.y) * normal.y +
+            (at.z - on.z) * normal.z;
+          return aligned > 1 - 1e-6 && Math.abs(apart) < 1e-6;
+        });
+        if (face) resolvedBodyId = target;
+      }
+    }
+    if (!face) return null;
+    const geometry = face.geometry;
+    return {
+      bodyId: resolvedBodyId,
+      hash: face.hash,
+      topologyId: face.topologyId,
+      ...(geometry?.surfaceType ? { surfaceType: geometry.surfaceType } : {}),
+      ...(geometry?.normal ? { normal: geometry.normal } : {}),
+      ...(geometry?.centroid ? { centroid: geometry.centroid } : {}),
+      ...(geometry?.center ? { center: geometry.center } : {}),
+      ...(point ? { point } : {})
+    };
   }
 
   /** A picked region as the in-place command's profile slot holds it. */
-  function inPlaceProfilePick(
-    region: RegionPickData
-  ): InPlaceProfilePick | null {
+  function inPlaceProfilePick(region: RegionPickData): ProfilePick | null {
     const [reference] = profileReferencesForSelection(
       [region],
       entityWideProfileSource
@@ -8270,15 +8462,15 @@ export function App() {
       return;
     }
     if (applyMove && !confirmMove()) return;
-    // U09: a new Revolve runs in place, with no card, once any unapplied
-    // Move has been applied or discarded above. Editing an existing one
-    // still opens its card until history edits re-arm the handles.
-    if (nextTool === 'revolve' && !feature) {
-      startInPlaceRevolve();
+    // U09: a new feature from an in-place tool runs with no card, once any
+    // unapplied Move has been applied or discarded above. Editing an
+    // existing one still opens its card until history edits re-arm handles.
+    if (isInPlaceTool(nextTool) && !feature) {
+      startInPlaceCommand(nextTool);
       return;
     }
-    // Any other tool takes over from a running Revolve, quietly.
-    inPlaceRevolveRef.current.cancel(true);
+    // Any other tool takes over from a running in-place command, quietly.
+    inPlaceRef.current.cancel(true);
     if (!openTool(nextTool) || !feature || !data) return;
     // Only after Apply/Discard: Cancel must leave the Move's target and the
     // current editor untouched. The edit uses its own consumed source body.
@@ -8534,7 +8726,7 @@ export function App() {
     // An in-place command is the panel it replaced: whatever closes panels
     // (another tool, a workspace switch, Measure) ends it too, quietly,
     // since the action that closed it says what happened.
-    inPlaceRevolveRef.current.cancel(true);
+    inPlaceRef.current.cancel(true);
     extrudeEditRequest.current += 1;
     // The mode hint the panel set ("Move/Rotate: drag the arrows…") describes
     // a state the user has just left; it must not outlive the panel.
@@ -14298,9 +14490,55 @@ export function App() {
     detail?: PickDetail,
     contextMenu?: { x: number; y: number }
   ): boolean {
-    if (inPlaceRevolveRef.current.active) {
-      // The command owns the model's clicks: a profile, then an axis line.
-      // A stray face or edge pick must not open a card under it.
+    if (inPlaceRef.current.active) {
+      // The command owns the model's clicks: profiles, axis lines, curves,
+      // and the faces a face tool takes. A stray pick must not open a card
+      // under it.
+      const command = inPlaceRef.current;
+      if (selection?.kind === 'face' && command.spec?.faceMode) {
+        const face = inPlaceFacePick(
+          selection.bodyId,
+          selection.topologyId,
+          selection.hash,
+          detail?.point
+        );
+        if (face) return command.pickFace(face);
+      }
+      if (selection && command.spec?.bodyMode) {
+        // With the body picked, a flat face is the plane to mirror or split
+        // across; otherwise any face names its body.
+        if (
+          command.spec.wantsPlane &&
+          command.slots.bodies.length > 0 &&
+          selection.kind === 'face'
+        ) {
+          const face = inPlaceFacePick(
+            selection.bodyId,
+            selection.topologyId,
+            selection.hash,
+            detail?.point
+          );
+          const on = face?.centroid ?? face?.center ?? face?.point;
+          if (
+            face?.normal &&
+            on &&
+            (face.surfaceType === undefined ||
+              face.surfaceType.toLowerCase() === 'plane')
+          ) {
+            return command.pickPlane({
+              kind: 'face',
+              origin: on,
+              normal: face.normal
+            });
+          }
+          return false;
+        }
+        const shown = representations[selection.bodyId]
+          ? selection.bodyId
+          : (command.slots.bodies[0]?.bodyId ?? null);
+        const body = shown ? inPlaceBodyPick(shown) : null;
+        if (body) return command.pickBody(body);
+      }
       return false;
     }
     if (selection && currentGeometrySnapshot !== null) {
@@ -15110,6 +15348,12 @@ export function App() {
       setMovePreview(null);
       setTool(null);
     }
+    if (inPlaceRef.current.spec?.faceMode === 'many') {
+      // U09: a sweep during Shell or Draft adds its faces to the command,
+      // the way it filled the card's face list.
+      const faces = inPlaceFacesFor(selections);
+      if (inPlaceRef.current.addFaces(faces) !== null) return;
+    }
     if (modelingOperationPicksFaces(tool) && modelingTargetBodyId) {
       boxFacesIntoForm(tool, modelingTargetBodyId, selections);
       return;
@@ -15272,28 +15516,30 @@ export function App() {
       ? `${interaction.target.sketchId}:${interaction.targets.map((target) => target.regionFingerprint).join(',')}:${JSON.stringify(interaction.extrudeChoice)}`
       : null;
   useEffect(() => {
-    regionExtrudePreview.clear();
     setPreviewDeferred(false);
     setLastValidPreview(null);
     const current = interactionRef.current;
-    if (current.mode === 'region') {
-      const distance =
-        regionExtrudeSettings.current?.distance ?? current.lastValue;
-      if (distance) {
-        try {
-          regionExtrudePreview.request(
-            resolveParamValue(
-              distance,
-              parameterScopeRef.current.scope,
-              'distance',
-              managerRef.current?.document.units
-            )
-          );
-        } catch {
-          // Incomplete expressions keep the form open without a preview.
-        }
+    const distance =
+      current.mode === 'region'
+        ? (regionExtrudeSettings.current?.distance ?? current.lastValue)
+        : null;
+    let resolved: number | null = null;
+    if (distance) {
+      try {
+        resolved = resolveParamValue(
+          distance,
+          parameterScopeRef.current.scope,
+          'distance',
+          managerRef.current?.document.units
+        );
+      } catch {
+        // Incomplete expressions keep the form open without a preview.
       }
     }
+    // A new choice or region set replaces the preview on screen when it
+    // lands, rather than blanking it for the rebuild.
+    if (resolved === null) regionExtrudePreview.clear();
+    else regionExtrudePreview.replace(resolved);
   }, [regionInteractionKey, regionExtrudePreview]);
 
   /**
@@ -18119,105 +18365,297 @@ export function App() {
     modelingEditFeature,
     sketchReadDocument
   ]);
-  /** U09: the Revolve command as built for preview and commit. */
-  function inPlaceRevolveCommand(request: InPlaceRevolveRequest, name: string) {
-    return commandFactories.revolveSketch({
-      name,
-      bodyName: newBodyName(name),
-      sketchId: request.sketchId,
-      profile: request.profile,
-      ...('axis' in request.axis
-        ? { axis: request.axis.axis }
-        : {
-            axis: 'vertical' as const,
-            axisRef: {
-              type: 'datum-axis' as const,
-              datumFeatureId: request.axis.datumFeatureId
-            }
-          }),
-      ...(request.angleDeg === undefined ? {} : { angleDeg: request.angleDeg })
-    });
+  /** U09: an in-place request as the command its commit would run. */
+  function inPlaceCommandFor(request: InPlaceRequest, name: string): AnyCommand {
+    const bodyName = newBodyName(name);
+    switch (request.tool) {
+      case 'revolve':
+        return commandFactories.revolveSketch({
+          name,
+          bodyName,
+          sketchId: request.sketchId,
+          profile: request.profile,
+          ...('axis' in request.axis
+            ? { axis: request.axis.axis }
+            : 'datumFeatureId' in request.axis
+              ? {
+                  axis: 'vertical' as const,
+                  axisRef: {
+                    type: 'datum-axis' as const,
+                    datumFeatureId: request.axis.datumFeatureId
+                  }
+                }
+              : { axis: 'vertical' as const }),
+          ...(request.angleDeg === undefined
+            ? {}
+            : { angleDeg: request.angleDeg })
+        });
+      case 'loft':
+        return commandFactories.loftSections({
+          name,
+          bodyName,
+          sections: request.sections,
+          mode: request.mode,
+          ...(request.endPoint ? { endPoint: request.endPoint } : {})
+        });
+      case 'sweep':
+        return commandFactories.sweepProfile({
+          name,
+          bodyName,
+          profile: request.profile,
+          path: {
+            sketchId: request.path.sketchId,
+            entityIds: request.path.entityIds as EntityId[]
+          },
+          mode: request.mode,
+          ...(request.guide
+            ? {
+                guide: {
+                  sketchId: request.guide.sketchId,
+                  entityIds: request.guide.entityIds as EntityId[]
+                }
+              }
+            : {})
+        });
+      case 'helical-sweep':
+        return commandFactories.helicalSweepProfile({
+          name,
+          bodyName,
+          profile: request.profile,
+          axisOrigin: request.axisOrigin,
+          axisDirection: request.axisDirection,
+          radius: request.radius,
+          pitch: request.pitch,
+          turns: request.turns
+        });
+      case 'modeling': {
+        // Through the card's own submission builder, so a face operation
+        // run in place is validated and stored exactly as the card's was.
+        const targetBodyId =
+          'targetBodyId' in request.state.value
+            ? request.state.value.targetBodyId
+            : '';
+        const body = targetBodyId ? representations[targetBodyId] : undefined;
+        const submission = buildModelingOperationSubmission(
+          {
+            ...request.state,
+            value: { ...request.state.value, name }
+          } as ModelingOperationFormState,
+          modelingFaceOptions(body?.topology, body)
+        );
+        return commandForModelingSubmission(submission);
+      }
+      case 'boolean':
+        // A union or intersect result is named for itself; a subtract keeps
+        // its base body's name, exactly as the card's Create does.
+        return commandFactories.booleanBodies({
+          name,
+          bodyName,
+          operation: request.operation,
+          targetBodyIds: request.targetBodyIds,
+          ...(request.keepOriginals
+            ? { keepOriginals: request.keepOriginals }
+            : {})
+        });
+      case 'transform':
+        return commandFactories.transformBody({
+          name,
+          targetBodyId: request.targetBodyId,
+          translation: request.translation,
+          ...(request.scale !== undefined ? { scale: request.scale } : {}),
+          ...(request.pivot !== undefined ? { pivot: request.pivot } : {}),
+          ...(request.axisRotation
+            ? { axisRotation: request.axisRotation }
+            : {}),
+          ...(request.copy ? { copy: true, bodyName } : {})
+        });
+      case 'pattern':
+        return commandFactories.patternBody({
+          name,
+          targetBodyId: request.targetBodyId,
+          patternKind: request.patternKind,
+          count: request.count,
+          axis: request.axis,
+          ...(request.spacing !== undefined ? { spacing: request.spacing } : {}),
+          ...(request.angleDeg !== undefined
+            ? { angleDeg: request.angleDeg }
+            : {}),
+          ...(request.axis2 !== undefined ? { axis2: request.axis2 } : {}),
+          ...(request.spacing2 !== undefined
+            ? { spacing2: request.spacing2 }
+            : {}),
+          ...(request.count2 !== undefined ? { count2: request.count2 } : {}),
+          ...(request.axisRef ? { axisRef: request.axisRef } : {})
+        });
+    }
   }
-  const inPlaceRevolve = useInPlaceRevolve({
+  /**
+   * The body a request's result lands on: a new body for most, the moved
+   * body itself for an in-place transform, which makes none.
+   */
+  function inPlaceResultBodyId(
+    request: InPlaceRequest,
+    command: AnyCommand
+  ): BodyId | undefined {
+    const ids = (command.payload as { ids?: { bodyId?: BodyId } } | undefined)
+      ?.ids;
+    if (ids?.bodyId) return ids.bodyId;
+    return request.tool === 'transform' ? request.targetBodyId : undefined;
+  }
+  /** A body as an in-place command's body slot holds it, with its box. */
+  function inPlaceBodyPick(bodyId: BodyId): BodyPick | null {
+    const vertices = representations[bodyId]?.mesh.vertices;
+    if (!vertices || vertices.length < 3) return null;
+    const min = { x: Infinity, y: Infinity, z: Infinity };
+    const max = { x: -Infinity, y: -Infinity, z: -Infinity };
+    for (let index = 0; index + 2 < vertices.length; index += 3) {
+      const x = vertices[index]!;
+      const y = vertices[index + 1]!;
+      const z = vertices[index + 2]!;
+      if (x < min.x) min.x = x;
+      if (y < min.y) min.y = y;
+      if (z < min.z) min.z = z;
+      if (x > max.x) max.x = x;
+      if (y > max.y) max.y = y;
+      if (z > max.z) max.z = z;
+    }
+    return { bodyId, min, max };
+  }
+  const inPlace = useInPlaceCommand({
     sketchViews: availableSketchViews,
-    document: doc,
+    datumAxes: doc?.derived.datumAxes,
+    linearSnap: appSettings.sketching.snapEnabled
+      ? appSettings.sketching.linearSnap
+      : null,
+    datumLabel: (featureId) =>
+      (doc && findFeature(doc, featureId)?.name) ?? 'Datum axis',
+    bodyBounds: (bodyId) => inPlaceBodyPick(bodyId),
     baseDocument: () => managerRef.current?.document ?? null,
+    baseVersion: doc?.version ?? null,
     derive: (document) => geometry.syncOnce(document),
-    buildCommand: (request) => {
-      const command = inPlaceRevolveCommand(request, 'Revolve');
+    buildCommand: (request, title) => {
+      const command = inPlaceCommandFor(request, title);
       return {
         validate: (document) => command.validate(document),
         apply: (document) => command.apply(document),
-        resultBodyId: command.payload.ids?.bodyId
+        resultBodyId: inPlaceResultBodyId(request, command)
       };
     },
-    commit: (request) => {
-      const name = newFeatureName('Revolve');
-      const command = inPlaceRevolveCommand(request, name);
-      createValidatedFeature(command, name, command.payload.ids?.bodyId);
+    commit: (request, title) => {
+      const name = newFeatureName(title);
+      const command = inPlaceCommandFor(request, name);
+      const resultBodyId = inPlaceResultBodyId(request, command);
+      if (request.tool === 'pattern' && resultBodyId) {
+        // Through the pattern runner, so a large pattern shows its progress
+        // and can be stopped, as the card's did.
+        runPattern(command, {
+          featureName: name,
+          resultBodyId,
+          successMessage: commandOutcomeMessage(command.label),
+          onSuccess: finishFeatureCreation
+        });
+        return;
+      }
+      createValidatedFeature(command, name, resultBodyId);
     },
     publishPreview: setPreviewDoc,
-    datumLabel: (featureId) =>
-      (doc && findFeature(doc, featureId)?.name) ?? 'Datum axis',
     onStatus: setStatus
   });
-  const inPlaceRevolveRef = useRef(inPlaceRevolve);
-  inPlaceRevolveRef.current = inPlaceRevolve;
-  const { placement: revolvePlacement, sketchId: revolveSketchId } =
-    inPlaceRevolve;
-  const revolveAxisId = inPlaceRevolve.axisId;
-  const revolveRegion = inPlaceRevolve.regionFingerprint;
-  /** The angle handle, rebuilt only for a new profile or axis. */
-  const inPlaceRevolveHandle = useMemo(() => {
-    if (!revolvePlacement || !revolveSketchId || !revolveAxisId) return null;
-    const { center, axis, startDirection, radius } = revolvePlacement;
-    return {
-      key: [
-        revolveSketchId,
-        revolveRegion,
-        revolveAxisId,
-        center.x,
-        center.y,
-        center.z,
-        startDirection.x,
-        startDirection.y,
-        startDirection.z,
-        // An undo can reverse a datum axis under the same id: the sweep turns
-        // the other way, so the rig is rebuilt about the new direction.
-        axis.x,
-        axis.y,
-        axis.z,
-        radius
-      ].join(':'),
-      params: {
-        center,
-        axis,
-        startDirection,
-        radius,
-        // The rig shares the command's domain, so a sub-degree angle is
-        // drawn and labelled as the angle that is stored.
-        minDeg: MIN_REVOLVE_ANGLE,
-        angleDeg: inPlaceRevolveRef.current.angle
-      }
-    };
-  }, [revolvePlacement, revolveSketchId, revolveRegion, revolveAxisId]);
+  const inPlaceRef = useRef(inPlace);
+  inPlaceRef.current = inPlace;
+  /** The keypad moves a command handle through this, without a render. */
+  const commandSetterRef = useRef<
+    ((valueId: string, value: number) => void) | null
+  >(null);
+  const inPlaceSpec = inPlace.spec;
+  const inPlaceUnits = doc?.units ?? 'mm';
+  /** A face-list command's faces, lit as a sweep's are. */
+  const inPlaceFocusFaces = useMemo<TopologySelection[] | null>(
+    () =>
+      inPlaceSpec?.faceMode === 'many' && inPlace.slots.faces.length > 0
+        ? inPlace.slots.faces.map((face) => ({
+            bodyId: face.bodyId,
+            kind: 'face',
+            topologyId: face.topologyId,
+            hash: face.hash
+          }))
+        : null,
+    [inPlaceSpec, inPlace.slots.faces]
+  );
+  /** The command's handles, with how each chip reads its value. */
+  const inPlaceHandles = useMemo(
+    () =>
+      inPlace.handles.map((handle) => {
+        const valueSpec = inPlaceSpec?.values.find(
+          (candidate) => candidate.id === handle.valueId
+        );
+        const round = (value: number) =>
+          formatNumber(Math.round(value * 100) / 100);
+        const format =
+          valueSpec?.unit === 'angle'
+            ? (value: number) => `${round(value)}°`
+            : valueSpec?.label === '×'
+              ? (value: number) => `× ${round(value)}`
+              : valueSpec?.unit === 'count'
+              ? (value: number) => `${round(value)} ${valueSpec.label.toLowerCase()}`
+              : (value: number) =>
+                  `${valueSpec?.label ?? ''} ${round(value)} ${inPlaceUnits}`.trim();
+        return {
+          ...handle,
+          value: inPlace.values[handle.valueId] ?? valueSpec?.initial ?? 0,
+          ...(valueSpec?.min === undefined ? {} : { min: valueSpec.min }),
+          ...(valueSpec?.max === undefined ? {} : { max: valueSpec.max }),
+          format
+        };
+      }),
+    // The viewer keys its rigs on `key`, so a value change here only moves
+    // a chip-only value's text; it never rebuilds a rig.
+    [inPlace.handles, inPlace.values, inPlaceSpec, inPlaceUnits]
+  );
+  // A body tool's picked bodies are the selection: each wears its pick
+  // number in the viewport, base first, as the boolean card's list did.
+  const inPlaceBodyIds =
+    inPlace.active && inPlaceSpec?.bodyMode
+      ? inPlace.slots.bodies.map((body) => body.bodyId).join(',')
+      : null;
+  useEffect(() => {
+    if (inPlaceBodyIds === null) return;
+    setSelectedBodyIds(
+      inPlaceBodyIds ? (inPlaceBodyIds.split(',') as BodyId[]) : []
+    );
+  }, [inPlaceBodyIds]);
   const inPlaceAxisPicker = useMemo(
     () =>
-      inPlaceRevolve.active && revolveSketchId
+      inPlaceSpec?.wantsAxis &&
+      (inPlace.slots.profiles.length > 0 || inPlace.slots.bodies.length > 0)
         ? {
-            candidates: inPlaceRevolve.axisCandidates,
-            selectedId: revolveAxisId
+            candidates: inPlace.axisCandidates,
+            selectedId: inPlace.slots.axis?.id ?? null
           }
         : null,
-    [
-      inPlaceRevolve.active,
-      inPlaceRevolve.axisCandidates,
-      revolveSketchId,
-      revolveAxisId
-    ]
+    [inPlaceSpec, inPlace.slots, inPlace.axisCandidates]
   );
-  /** The keypad moves the command handle through this, without a render. */
-  const commandSetterRef = useRef<((value: number) => void) | null>(null);
+  const inPlaceCurveCandidates = useMemo(() => {
+    if (!doc || !inPlaceSpec?.wantsPath) return null;
+    const resolve = sketchValueResolver(parameterScope.scope, doc.units);
+    // Every sketch's curves, the profile's own included: one sketch may hold
+    // both a closed profile and the open spine it sweeps along.
+    return sketchCurveCandidates(doc, availableSketchViews, (value) =>
+      resolve(value)
+    );
+  }, [doc, inPlaceSpec, availableSketchViews, parameterScope]);
+  const inPlaceCurvePicker = useMemo(
+    () =>
+      inPlaceCurveCandidates
+        ? {
+            candidates: inPlaceCurveCandidates,
+            selectedIds: [...inPlace.slots.path, ...inPlace.slots.guide].map(
+              (curve) => `${curve.sketchId}|${curve.entityId}`
+            )
+          }
+        : null,
+    [inPlaceCurveCandidates, inPlace.slots.path, inPlace.slots.guide]
+  );
 
   // Editing needs hidden source profiles; visibility remains a viewport concern.
   const sketchViews = useMemo(
@@ -18330,9 +18768,9 @@ export function App() {
     region: RegionPickData,
     modifiers: { additive: boolean; toggle: boolean }
   ) {
-    if (inPlaceRevolveRef.current.active) {
+    if (inPlaceRef.current.active) {
       const pick = inPlaceProfilePick(region);
-      if (pick) inPlaceRevolveRef.current.pickProfile(pick);
+      if (pick) inPlaceRef.current.pickProfile(pick);
       return;
     }
     if (interactionRef.current.mode !== 'sketch') {
@@ -18599,10 +19037,13 @@ export function App() {
       exact = 1;
     }
     const preview = reusableRegionExtrudePreview.current;
-    // Read before clear(): the frame keeps running either way, and a commit
+    // Read before stop(): the frame keeps running either way, and a commit
     // for the same extrusion awaits it rather than queuing a second rebuild.
     const running = regionExtrudePreview.running;
-    regionExtrudePreview.clear();
+    // The preview on screen stays while the extrusion is checked; the commit
+    // or the refusal takes it down. Clearing it here showed the bare sketch
+    // for the whole validation.
+    regionExtrudePreview.stop();
     setPreviewDeferred(false);
     const input = regionExtrudeInputFor(target, exact ?? rounded);
     const choice = regionExtrudeSettings.current?.choice ??
@@ -18614,7 +19055,10 @@ export function App() {
     const request = ++regionExtrudeCommitRequest.current;
     void (async () => {
       const manager = managerRef.current;
-      if (!manager) return;
+      if (!manager) {
+        regionExtrudePreview.clear();
+        return;
+      }
       const base = manager.document;
       const isCurrent = () =>
         request === regionExtrudeCommitRequest.current &&
@@ -18680,7 +19124,10 @@ export function App() {
             : null;
           throw mixed ? new Error(mixed) : error;
         }
-        if (!resolved || !isCurrent()) return;
+        if (!resolved || !isCurrent()) {
+          if (isCurrent()) regionExtrudePreview.clear();
+          return;
+        }
         // One drag is one operation: selected profiles that would not each
         // extrude the same way are refused, not silently merged into one.
         const mixed = await regionInferenceRefusal(
@@ -18694,7 +19141,7 @@ export function App() {
         const resultBodyId = command.payload.ids?.bodyId;
         if (!resultBodyId)
           throw new Error('Extrude could not reserve a result body.');
-        await executeValidatedDirectEdit(
+        const committed = await executeValidatedDirectEdit(
           command,
           resultBodyId,
           regionExtrudeOutcome(resolved, rounded, doc?.units),
@@ -18714,8 +19161,12 @@ export function App() {
             derived: resolved.derived
           }
         );
+        // A commit or refusal already took the preview down; a run turned
+        // away while another was in flight did not.
+        if (!committed && isCurrent()) regionExtrudePreview.clear();
       } catch (error) {
         if (isCurrent()) {
+          regionExtrudePreview.clear();
           reportPreviewFailure(
             errorMessage(error, 'The selected extrusion could not be created.'),
             rounded
@@ -19457,15 +19908,19 @@ export function App() {
         : null;
     const command =
       reuse?.candidate.command ?? buildEdgeModifierCommand(exact ?? rounded);
-    edgePreview.clear();
     if (
       !command ||
       rounded <= 0 ||
       !('targetBodyId' in command.payload) ||
       !('edgeHashes' in command.payload)
     ) {
+      edgePreview.clear();
       return;
     }
+    // The blend on screen stays while it is checked; the commit or the
+    // refusal takes it down. Clearing it here showed the sharp edges for the
+    // whole validation whenever the release outran its preview.
+    edgePreview.stop();
     const op = interaction.op;
     const resultBodyId =
       command.payload.ids?.bodyId ?? command.payload.targetBodyId;
@@ -19476,14 +19931,15 @@ export function App() {
       resultBodyId,
       `${op === 'fillet' ? 'Filleted' : 'Chamfered'} ${command.payload.edgeHashes.length} edge${command.payload.edgeHashes.length === 1 ? '' : 's'} at ${rounded} ${doc?.units ?? ''}.`,
       rounded,
-      op === 'fillet'
-        ? () => {
-            pendingBlendRearmRef.current = {
-              bodyId: resultBodyId,
-              before: facesBefore
-            };
-          }
-        : undefined,
+      () => {
+        edgePreview.clear();
+        if (op === 'fillet') {
+          pendingBlendRearmRef.current = {
+            bodyId: resultBodyId,
+            before: facesBefore
+          };
+        }
+      },
       undefined,
       reuse
         ? {
@@ -19492,7 +19948,9 @@ export function App() {
             derived: reuse.derived
           }
         : undefined
-    );
+    ).then((committed) => {
+      if (!committed) edgePreview.clear();
+    });
   }
 
   /** Edge chip tapped: exact entry for the blend radius/distance. */
@@ -19593,7 +20051,8 @@ export function App() {
     if (!command) {
       return;
     }
-    edgePreview.clear();
+    // As for a new blend: the preview stays until the commit or a refusal.
+    edgePreview.stop();
     const removing = size <= 1e-9;
     const sourceFace = base.derived.bodyRepresentations[
       current.target.bodyId as BodyId
@@ -19628,8 +20087,9 @@ export function App() {
         : `Set ${feature?.name ?? 'imported blend'} radius to R ${formatNumber(size)} ${base.units}.`,
       size,
       removing
-        ? undefined
+        ? () => edgePreview.clear()
         : () => {
+            edgePreview.clear();
             const committed = managerRef.current?.document;
             const faces =
               committed?.derived.bodyRepresentations[
@@ -19746,7 +20206,9 @@ export function App() {
             derived: reuse.derived
           }
         : undefined
-    );
+    ).then((committed) => {
+      if (!committed) edgePreview.clear();
+    });
   }
 
   /** Chip tapped: open the anchored keypad prefilled with the drag value. */
@@ -19963,11 +20425,16 @@ export function App() {
     if (!open) {
       return false;
     }
-    if (open.kind === 'command') {
+    if (open.kind === 'command' && open.commandValueId) {
       // Back to the value the handle showed when the chip was tapped.
-      const baseline = open.baseline ?? inPlaceRevolveRef.current.angle;
-      commandSetterRef.current?.(baseline);
-      inPlaceRevolveRef.current.previewAngle(baseline);
+      const valueId = open.commandValueId;
+      const baseline = open.baseline ?? inPlaceRef.current.values[valueId] ?? 0;
+      commandSetterRef.current?.(valueId, baseline);
+      if (open.baselineRaw !== undefined) {
+        inPlaceRef.current.setValue(valueId, baseline, open.baselineRaw);
+      } else {
+        inPlaceRef.current.previewValue(valueId, baseline);
+      }
     } else if (open.kind === 'sketch-dimension') {
       setSketchDimensionDraft(null);
       setStatus('Dimension entry canceled.');
@@ -20551,6 +21018,21 @@ export function App() {
   function handleSelectFeatureFromTree(nodeId: string, toggle = true) {
     const current = managerRef.current?.document;
     if (!current) return;
+    // A datum plane's row is a plane an in-place Mirror or Split can take:
+    // the way to reach one a body hides in the viewport.
+    const clicked = current.nodes[nodeId];
+    if (
+      inPlaceRef.current.active &&
+      inPlaceRef.current.spec?.wantsPlane &&
+      clicked?.kind === 'feature' &&
+      clicked.data.featureKind === 'datum-plane'
+    ) {
+      inPlaceRef.current.pickPlane({
+        kind: 'datum',
+        featureId: clicked.featureId
+      });
+      return;
+    }
     const next =
       toggle &&
       featureSelectionSource === 'pinned' &&
@@ -20735,6 +21217,12 @@ export function App() {
   }
 
   function handleSelectBodyFromTree(bodyId: BodyId, additive: boolean) {
+    // An in-place command that takes bodies takes them from the list too.
+    if (inPlaceRef.current.active && inPlaceRef.current.spec?.bodyMode) {
+      const body = inPlaceBodyPick(bodyId);
+      if (body) inPlaceRef.current.pickBody(body);
+      return;
+    }
     if (deferMoveSelection({ kind: 'body-tree', bodyId, additive })) return;
     if (movePreview) {
       setMovePreview(null);
@@ -20844,10 +21332,15 @@ export function App() {
         if (managerRef.current !== owner) return;
         const copy = findFeature(owner.document, copyId);
         if (copy) handleSelectFeatureFromTree(copy.id, false);
-        announce(`Duplicated ${feature.name}.`, {
-          label: 'Undo',
-          run: handleUndo
-        });
+        // The success status is set right after this callback returns: the
+        // toast is raised once it exists, so it restates that one.
+        queueMicrotask(() =>
+          announce(
+            `Duplicated ${feature.name}.`,
+            { label: 'Undo', run: handleUndo },
+            { repeatsStatusAt: lastStatusAtRef.current }
+          )
+        );
       }
     });
   }
@@ -20889,10 +21382,11 @@ export function App() {
       // running), so it has to be closed with the feature it was editing.
       if (modelingEditFeature?.featureId === featureId) closeFeaturePanel();
       clearSelection();
-      announce(deleteFeatureToastMessage(name, dependentCount), {
-        label: 'Undo',
-        run: handleUndo
-      });
+      announce(
+        deleteFeatureToastMessage(name, dependentCount),
+        { label: 'Undo', run: handleUndo },
+        { repeatsStatusAt: lastStatusAtRef.current }
+      );
     }
   }
 
@@ -21128,7 +21622,8 @@ export function App() {
         featureId: liveFeature.featureId,
         name: liveFeature.name,
         resume,
-        before
+        before,
+        statusAt: lastStatusAtRef.current
       };
     }
   }
@@ -21190,7 +21685,15 @@ export function App() {
             .map(({ featureId, name }) => ({ featureId, name }))
         });
       },
-      onSuccess: () => announce(message, { label: 'Undo', run: handleUndo })
+      // As for Duplicate: raised once the success status exists.
+      onSuccess: () =>
+        queueMicrotask(() =>
+          announce(
+            message,
+            { label: 'Undo', run: handleUndo },
+            { repeatsStatusAt: lastStatusAtRef.current }
+          )
+        )
     });
   }
 
@@ -21211,7 +21714,9 @@ export function App() {
       executeTransaction('Resume full history', commands)
     ) {
       announce(
-        'Full history resumed. Manually suppressed features remain suppressed.'
+        'Full history resumed. Manually suppressed features remain suppressed.',
+        undefined,
+        { repeatsStatusAt: lastStatusAtRef.current }
       );
     }
   }
@@ -21250,7 +21755,11 @@ export function App() {
       return;
     }
     if (executeTransaction(`Roll back after ${name}`, commands)) {
-      announce(`History rolled back after ${name}. Later features are paused.`);
+      announce(
+        `History rolled back after ${name}. Later features are paused.`,
+        undefined,
+        { repeatsStatusAt: lastStatusAtRef.current }
+      );
     }
   }
 
@@ -22243,15 +22752,15 @@ export function App() {
         }
         return;
       }
-      if (inPlaceRevolve.active) {
+      if (inPlace.active) {
         if (event.key === 'Escape') {
           event.preventDefault();
-          if (!cancelOpenKeypad()) inPlaceRevolve.cancel();
+          if (!cancelOpenKeypad()) inPlace.cancel();
           return;
         }
         if (event.key === 'Enter' && !typing) {
           event.preventDefault();
-          inPlaceRevolve.done();
+          inPlace.done();
           return;
         }
       }
@@ -24479,7 +24988,7 @@ export function App() {
             ? clearSelection
             : undefined
         }
-        activeTool={tool}
+        activeTool={tool ?? inPlace.tool}
         availability={shownAvailability}
         onLaunchTool={launchTool}
         moreOpen={panels.commandFoldOpen}
@@ -24906,7 +25415,9 @@ export function App() {
             // card (View, Tweak, a running tool) the pick keeps its name.
             pickLabel={calloutWithOperation === null}
             focusGhostBodies={focusGhostBodies}
-            {...(focusFaces ? { focusFaces } : {})}
+            {...((inPlaceFocusFaces ?? focusFaces)
+              ? { focusFaces: inPlaceFocusFaces ?? focusFaces }
+              : {})}
             canUndo={!viewMode && undoAvailable}
             undoFloorTrimmed={undoFloorTrimmed}
             canRedo={!viewMode && redoAvailable}
@@ -25026,13 +25537,25 @@ export function App() {
             }}
             sketchViews={sketchViews}
             selectedProfileIds={viewerSelectedProfileIds}
-            // An in-place Revolve arms the regions exactly as the Extrude
-            // tool does, for the whole command: another region is how its
-            // profile is retargeted, even once a preview solid covers it.
-            profileSelectionMode={tool === 'extrude' || inPlaceRevolve.active}
+            // An in-place command that takes profiles arms the regions
+            // exactly as the Extrude tool does, for the whole command: a
+            // region under the preview solid is still how a profile is
+            // retargeted, or a Loft's next section picked.
+            profileSelectionMode={
+              tool === 'extrude' ||
+              (inPlace.active &&
+                inPlaceSpec !== null &&
+                inPlaceSpec.profileMode !== 'none')
+            }
             onSelectRegion={handleSelectRegion}
             onHoverRegion={handleHoverRegion}
-            planePickerArmed={!modelingLocked && tool === 'sketch'}
+            planePickerArmed={
+              !modelingLocked &&
+              (tool === 'sketch' ||
+                Boolean(
+                  inPlaceSpec?.wantsPlane && inPlace.slots.bodies.length > 0
+                ))
+            }
             datumDocument={doc}
             hiddenDatumIds={hiddenDatumIds}
             referenceImages={referenceImageDisplays(
@@ -25050,14 +25573,37 @@ export function App() {
             primitiveGhost={
               tool && PRIMITIVE_TOOLS.includes(tool) ? primitiveGhost : null
             }
-            onPickPlane={startSketchOnPlane}
+            onPickPlane={(plane) => {
+              // An in-place Mirror or Split takes the ghost plane it waits
+              // for; otherwise a ghost plane starts a sketch on it.
+              if (inPlace.active && inPlaceSpec?.wantsPlane) {
+                const basis = canonicalPlaneBasis(
+                  plane,
+                  CURRENT_CANONICAL_BASIS_REVISION
+                );
+                inPlace.pickPlane({
+                  kind: 'principal',
+                  plane,
+                  origin: { x: 0, y: 0, z: 0 },
+                  normal: basis.normal
+                });
+                return;
+              }
+              startSketchOnPlane(plane);
+            }}
             // A face re-pick or a measurement owns every viewport click; a
             // datum must not open its card over one still armed.
             // Only a free viewport selects a datum by clicking it: an open
             // tool or card (Hole, Shell, a Plane draft…), a sketch, a
             // re-pick or Measure owns the click and keeps its draft.
             onPickDatum={
-              faceRepair ||
+              inPlace.active && inPlaceSpec?.wantsPlane
+                ? (featureId) =>
+                    inPlace.pickPlane({
+                      kind: 'datum',
+                      featureId: featureId as FeatureId
+                    })
+                : faceRepair ||
               datumRepair ||
               toFacePick ||
               measuring ||
@@ -25095,18 +25641,35 @@ export function App() {
             onMeasurePreview={measuring ? previewMeasurement : null}
             regionHandle={modelingLocked ? null : regionHandleTarget}
             axisPicker={modelingLocked ? null : inPlaceAxisPicker}
-            onPickAxis={inPlaceRevolve.pickAxis}
-            commandAngleHandle={modelingLocked ? null : inPlaceRevolveHandle}
-            onCommandHandlePreview={inPlaceRevolve.previewAngle}
-            onCommandHandleRelease={inPlaceRevolve.previewAngle}
-            onOpenCommandKeypad={(value) => {
+            onPickAxis={inPlace.pickAxis}
+            curvePicker={modelingLocked ? null : inPlaceCurvePicker}
+            onPickCurve={(id, additive) => {
+              const curve = parseCurveCandidateId(id);
+              // Each click adds a curve to the path (or takes a picked one
+              // back out); Shift is not needed, so it means nothing here.
+              void additive;
+              if (curve) inPlace.pickCurve(curve);
+            }}
+            commandHandles={modelingLocked ? undefined : inPlaceHandles}
+            onCommandHandlePreview={inPlace.previewValue}
+            onCommandHandleRelease={inPlace.previewValue}
+            onOpenCommandKeypad={(valueId, value) => {
+              const valueSpec = inPlaceSpec?.values.find(
+                (candidate) => candidate.id === valueId
+              );
+              if (!valueSpec) return false;
+              const raw = inPlace.raws[valueId];
               setKeypad({
                 kind: 'command',
-                label: 'Angle',
-                initial: String(Math.round(value * 10) / 10),
+                commandValueId: valueId,
+                label: valueSpec.label,
+                // A parametric value opens as its expression, and comes
+                // back as one if entry is canceled.
+                initial: raw ?? String(Math.round(value * 100) / 100),
                 selectInitial: true,
-                unitKind: 'angle',
-                baseline: value
+                unitKind: valueSpec.unit,
+                baseline: value,
+                ...(raw !== undefined ? { baselineRaw: raw } : {})
               });
               return true;
             }}
@@ -25118,36 +25681,55 @@ export function App() {
                   {viewMode && <ViewModeRail {...partsProps} />}
                   {measurementDock}
                 </>
-              ) : inPlaceRevolve.active ? (
-                keypad?.kind === 'command' ? (
+              ) : inPlace.active ? (
+                keypad?.kind === 'command' && keypad.commandValueId ? (
                   <NumericKeypad
                     request={keypad}
                     units={doc.units}
                     scope={parameterScope.scope}
                     anchorRef={keypadAnchorRef}
                     onPreview={(value) => {
-                      // An expression outside the revolve's range never
-                      // moves the handle: Enter refuses it, and the angle
-                      // must still be the one it was.
-                      if (!revolveAngleInRange(value)) return;
-                      commandSetterRef.current?.(value);
-                      inPlaceRevolve.previewAngle(value);
+                      const valueId = keypad.commandValueId!;
+                      const valueSpec = inPlaceSpec?.values.find(
+                        (candidate) => candidate.id === valueId
+                      );
+                      // A value outside the command's range never moves the
+                      // handle: Enter refuses it as an expression, and the
+                      // value must still be the one it was.
+                      if (valueSpec && clampValue(valueSpec, value) !== value) {
+                        return;
+                      }
+                      commandSetterRef.current?.(valueId, value);
+                      inPlace.previewValue(valueId, value);
                     }}
                     onCommit={(value, raw) => {
-                      const baseline = keypad.baseline ?? inPlaceRevolve.angle;
+                      const valueId = keypad.commandValueId!;
+                      const valueSpec = inPlaceSpec?.values.find(
+                        (candidate) => candidate.id === valueId
+                      );
+                      const baseline =
+                        keypad.baseline ?? inPlace.values[valueId] ?? value;
                       setKeypad(null);
                       // Expressions stay parametric in the stored feature.
-                      const accepted = inPlaceRevolve.setAngle(
+                      const accepted = inPlace.setValue(
+                        valueId,
                         value,
                         Number.isFinite(Number(raw)) ? undefined : raw
                       );
                       if (accepted) {
-                        commandSetterRef.current?.(clampRevolveAngle(value));
+                        commandSetterRef.current?.(
+                          valueId,
+                          valueSpec ? clampValue(valueSpec, value) : value
+                        );
                       } else {
-                        // Refused: back to the angle shown when the chip was
+                        // Refused: back to the value shown when the chip was
                         // tapped, undoing any in-range keystroke previews.
-                        commandSetterRef.current?.(baseline);
-                        inPlaceRevolve.previewAngle(baseline);
+                        commandSetterRef.current?.(valueId, baseline);
+                        if (keypad.baselineRaw !== undefined) {
+                          inPlace.setValue(valueId, baseline, keypad.baselineRaw);
+                        } else {
+                          inPlace.previewValue(valueId, baseline);
+                        }
                       }
                     }}
                     onCancel={cancelOpenKeypad}
@@ -25445,16 +26027,21 @@ export function App() {
                       });
                     }}
                     onPreview={(value) => {
-                      regionExtrudePreview.clear();
                       setLastValidPreview(null);
-                      if (!value) return;
+                      if (!value) {
+                        regionExtrudePreview.clear();
+                        return;
+                      }
                       const distance = resolveDocumentValue(value.distance);
                       offsetSetterRef.current?.(distance);
                       dispatchInteraction({
                         type: 'set-extrude-choice',
                         choice: value.choice
                       });
-                      regionExtrudePreview.request(distance);
+                      // The last preview stays up until this one lands:
+                      // clearing first showed the bare sketch for a whole
+                      // rebuild on every keystroke.
+                      regionExtrudePreview.replace(distance);
                     }}
                     onSubmit={(value) => {
                       regionExtrudeSettings.current = value;
@@ -26401,14 +26988,19 @@ export function App() {
             onToggleLog={() => setActivityLogOpen((open) => !open)}
             prompt={workspacePrompt}
             commandRow={
-              inPlaceRevolve.active ? (
+              inPlace.active && inPlaceSpec ? (
                 <InPlaceCommandBar
-                  title="Revolve"
-                  hint={inPlaceRevolve.hint}
-                  refusal={inPlaceRevolve.refusal}
-                  canFinish={inPlaceRevolve.canFinish}
-                  onDone={() => inPlaceRevolve.done()}
-                  onCancel={() => inPlaceRevolve.cancel()}
+                  title={inPlaceSpec.title}
+                  hint={inPlace.hint}
+                  refusal={inPlace.refusal}
+                  canFinish={inPlace.canFinish}
+                  options={(inPlaceSpec.options ?? []).map((option) => ({
+                    ...option,
+                    value: inPlace.options[option.id] ?? option.initial
+                  }))}
+                  onOption={inPlace.setOption}
+                  onDone={() => inPlace.done()}
+                  onCancel={() => inPlace.cancel()}
                 />
               ) : null
             }
@@ -26418,6 +27010,7 @@ export function App() {
             warningCount={diagnostics.length}
             documentVersion={doc.version}
             saveState={presentedSaveState}
+            repeatingToast={statusRepeatedByToast(toast)}
             searchBar={
               <CommandBar
                 commands={paletteCommands}

@@ -61,10 +61,19 @@ import {
 } from './e2eeProjectPreferences';
 import { handleE2eeProjectRequest, isE2eeProjectPath } from './e2eeProjects';
 import {
+  blobBucket,
+  handleE2eeContentBlobRequest,
+  isE2eeContentBlobPath
+} from './e2eeContentBlobs';
+import {
   handleE2eeProjectDocumentRequest,
   isE2eeProjectDocumentPath,
   type E2eeObjectBucket
 } from './e2eeProjectDocuments';
+import {
+  handleE2eeProjectEnvelopeRequest,
+  isE2eeProjectEnvelopePath
+} from './e2eeProjectEnvelopes';
 import {
   isE2eeProjectGroupStorageReady,
   isE2eeProjectVersionStorageReady
@@ -1868,12 +1877,33 @@ export async function handleE2eeRequest(
         () => readBody(request)
       );
     }
+    if (isE2eeContentBlobPath(pathname)) {
+      // Encrypted content blobs (e2eeContentBlobs.ts).
+      return await handleE2eeContentBlobRequest(
+        request,
+        env,
+        userId,
+        projectsEnabled,
+        db.authorization
+      );
+    }
     if (isE2eeProjectDocumentPath(pathname)) {
       // Encrypted document versions (e2eeProjectDocuments.ts).
       return await handleE2eeProjectDocumentRequest(
         request,
         rawDb,
         projectBucket(env),
+        userId,
+        projectsEnabled,
+        db.authorization,
+        blobBucket(env)
+      );
+    }
+    if (isE2eeProjectEnvelopePath(pathname)) {
+      // Encrypted measurements and view state (e2eeProjectEnvelopes.ts).
+      return await handleE2eeProjectEnvelopeRequest(
+        request,
+        rawDb,
         userId,
         projectsEnabled,
         db.authorization
