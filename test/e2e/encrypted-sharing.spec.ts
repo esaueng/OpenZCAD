@@ -197,8 +197,8 @@ test('invites to an encrypted project, verifies both ways and opens it as the in
   await expect(toggle).toBeEnabled();
   await toggle.click();
   await expect(toggle).toBeChecked();
-  await alice.keyboard.press('Escape');
-  await expect(aliceSettings).toHaveCount(0);
+  // One Escape can land while the toggle's save still holds focus.
+  await closeSettings(alice);
   await alice.getByLabel('Project name').fill('Secret bracket');
   await alice.getByRole('button', { name: 'Create project' }).click();
   await alice.getByRole('button', { name: /^Box \(B\)/ }).click();
