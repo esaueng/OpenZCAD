@@ -15391,10 +15391,8 @@ export function App() {
     // unblended edge keeps, and the validated commit refuses one the
     // kernel cannot find rather than guessing.
     const editing = inPlaceRef.current.editing;
-    const target =
-      editing && 'targetBodyId' in editing.data
-        ? (editing.data.targetBodyId ?? null)
-        : null;
+    // The body as the feature stores it now: it may have been retargeted.
+    const target = inPlaceEditTarget(editing);
     const remap =
       target !== null &&
       selection.bodyId !== target &&
@@ -19856,10 +19854,7 @@ export function App() {
   // The body Select all works on: the picked edges' body, else (an edit's
   // edges all cleared) the body the edited blend rounds, which the model
   // no longer shows, before any one body on screen.
-  const inPlaceEditedBlendTarget =
-    inPlace.editing && 'targetBodyId' in inPlace.editing.data
-      ? (inPlace.editing.data.targetBodyId ?? null)
-      : null;
+  const inPlaceEditedBlendTarget = inPlaceEditTarget(inPlace.editing);
   const inPlaceEdgeBody = inPlaceSpec?.edgeMode
     ? (inPlace.slots.edges[0]?.bodyId ??
       inPlaceEditedBlendTarget ??
