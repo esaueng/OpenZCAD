@@ -133,12 +133,26 @@ export interface InPlaceCommand {
   previewValue(valueId: string, value: number): void;
   /** False when a typed expression is refused, leaving the value as it was. */
   setValue(valueId: string, value: number, raw?: string): boolean;
+  /** Values the user has set, which the picks' or values' defaults leave alone. */
+  touched: readonly string[];
+  /**
+   * A value put back as it was before an entry was canceled: its number,
+   * its expression, and whether it was set, so a default it followed still
+   * applies to it.
+   */
+  restoreValue(
+    valueId: string,
+    value: number,
+    raw: string | undefined,
+    touched: boolean
+  ): void;
   done(): boolean;
   /** Ends the command; `quiet` when another action already says why. */
   cancel(quiet?: boolean): void;
 }
 
 const EMPTY_RAWS: Record<string, string> = {};
+const EMPTY_TOUCHED: readonly string[] = [];
 
 const EMPTY_SLOTS: InPlaceSlots = {
   profiles: [],
@@ -649,7 +663,12 @@ export function useInPlaceCommand(
   }, []);
 
   const writeValue = useCallback(
-    (valueId: string, value: number, raw: string | undefined) => {
+    (
+      valueId: string,
+      value: number,
+      raw: string | undefined,
+      typed: boolean
+    ) => {
       const current = sessionRef.current;
       const valueSpec = current
         ? IN_PLACE_TOOL_SPECS[current.tool].values.find(
@@ -658,16 +677,18 @@ export function useInPlaceCommand(
         : undefined;
       // An expression is stored as typed, so it must already be a value the
       // tool accepts: clamping it for the preview would show one value and
-      // commit another.
+      // commit another. Nor is a typed end of an open range nudged inside
+      // it, where its chip would still read as the refused end.
       if (
         current &&
         valueSpec &&
-        raw !== undefined &&
+        (raw !== undefined || (typed && valueSpec.exclusive)) &&
         clampValue(valueSpec, value) !== value
       ) {
         const whole = valueSpec.integer ? 'whole numbers ' : '';
-        const range =
-          valueSpec.max === undefined
+        const range = valueSpec.exclusive
+          ? `more than ${valueSpec.min ?? 0} and less than ${valueSpec.max}`
+          : valueSpec.max === undefined
             ? `${whole ? `${whole}of ` : ''}at least ${valueSpec.min ?? 0}`
             : `${whole}${valueSpec.min ?? 0} to ${valueSpec.max}`;
         setRefusal(
@@ -701,13 +722,37 @@ export function useInPlaceCommand(
     []
   );
   const previewValue = useCallback(
-    (valueId: string, value: number) => writeValue(valueId, value, undefined),
+    (valueId: string, value: number) =>
+      writeValue(valueId, value, undefined, false),
     [writeValue]
   );
   const setValue = useCallback(
     (valueId: string, value: number, raw?: string) =>
-      writeValue(valueId, value, raw),
+      writeValue(valueId, value, raw, true),
     [writeValue]
+  );
+  const restoreValue = useCallback(
+    (
+      valueId: string,
+      value: number,
+      raw: string | undefined,
+      wasTouched: boolean
+    ) => {
+      setSession((current) => {
+        if (!current) return current;
+        const raws = { ...current.raws };
+        if (raw === undefined) delete raws[valueId];
+        else raws[valueId] = raw;
+        const others = current.touched.filter((id) => id !== valueId);
+        return {
+          ...current,
+          values: { ...current.values, [valueId]: value },
+          raws,
+          touched: wasTouched ? [...others, valueId] : others
+        };
+      });
+    },
+    []
   );
 
   // Done waits for a valid preview of exactly what it would commit: a pick
@@ -793,6 +838,8 @@ export function useInPlaceCommand(
     setOption,
     previewValue,
     setValue,
+    touched: session?.touched ?? EMPTY_TOUCHED,
+    restoreValue,
     done,
     cancel
   };
