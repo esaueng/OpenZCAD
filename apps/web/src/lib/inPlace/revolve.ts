@@ -214,9 +214,13 @@ export function clampRevolveAngle(value: number): number {
   return Math.min(360, Math.max(MIN_REVOLVE_ANGLE, value));
 }
 
-/** Whether an entered angle is one a revolve can store as typed. */
+/**
+ * Whether an entered angle is one a revolve can store as typed and preview as
+ * it is: `[MIN_REVOLVE_ANGLE, 360]`. A smaller positive angle is one the
+ * kernel takes but the preview would have to clamp, so it is refused too.
+ */
 export function revolveAngleInRange(value: number): boolean {
-  return Number.isFinite(value) && value > 0 && value <= 360;
+  return Number.isFinite(value) && value >= MIN_REVOLVE_ANGLE && value <= 360;
 }
 
 /**

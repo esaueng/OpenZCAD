@@ -166,7 +166,11 @@ describe('useInPlaceRevolve', () => {
     act(() => hook.result.current.start(PICK));
     act(() => hook.result.current.pickAxis('sketch-vertical'));
     await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
-    act(() => hook.result.current.setAngle(400, 'sweep * 5'));
+    let accepted = true;
+    act(() => {
+      accepted = hook.result.current.setAngle(400, 'sweep * 5');
+    });
+    expect(accepted).toBe(false);
     expect(hook.result.current.refusal).toMatch(/sweep \* 5 is 400°/);
     expect(hook.result.current.angle).toBe(360);
     act(() => {

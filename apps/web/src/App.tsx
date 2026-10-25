@@ -1418,7 +1418,11 @@ import {
   type InPlaceProfilePick,
   type InPlaceRevolveRequest
 } from './hooks/useInPlaceRevolve';
-import { MIN_REVOLVE_ANGLE } from './lib/inPlace/revolve';
+import {
+  clampRevolveAngle,
+  MIN_REVOLVE_ANGLE,
+  revolveAngleInRange
+} from './lib/inPlace/revolve';
 import { PreviewRebuilds } from './lib/previewRebuilds';
 import {
   blendPreviewSelectionKey,
@@ -24886,12 +24890,10 @@ export function App() {
             }}
             sketchViews={sketchViews}
             selectedProfileIds={viewerSelectedProfileIds}
-            // An in-place Revolve waiting for its profile arms the regions
-            // exactly as the Extrude tool does.
-            profileSelectionMode={
-              tool === 'extrude' ||
-              (inPlaceRevolve.active && inPlaceRevolve.sketchId === null)
-            }
+            // An in-place Revolve arms the regions exactly as the Extrude
+            // tool does, for the whole command: another region is how its
+            // profile is retargeted, even once a preview solid covers it.
+            profileSelectionMode={tool === 'extrude' || inPlaceRevolve.active}
             onSelectRegion={handleSelectRegion}
             onHoverRegion={handleHoverRegion}
             planePickerArmed={!modelingLocked && tool === 'sketch'}
@@ -24988,17 +24990,29 @@ export function App() {
                     scope={parameterScope.scope}
                     anchorRef={keypadAnchorRef}
                     onPreview={(value) => {
+                      // An expression outside the revolve's range never
+                      // moves the handle: Enter refuses it, and the angle
+                      // must still be the one it was.
+                      if (!revolveAngleInRange(value)) return;
                       commandSetterRef.current?.(value);
                       inPlaceRevolve.previewAngle(value);
                     }}
                     onCommit={(value, raw) => {
+                      const baseline = keypad.baseline ?? inPlaceRevolve.angle;
                       setKeypad(null);
-                      commandSetterRef.current?.(value);
                       // Expressions stay parametric in the stored feature.
-                      inPlaceRevolve.setAngle(
+                      const accepted = inPlaceRevolve.setAngle(
                         value,
                         Number.isFinite(Number(raw)) ? undefined : raw
                       );
+                      if (accepted) {
+                        commandSetterRef.current?.(clampRevolveAngle(value));
+                      } else {
+                        // Refused: back to the angle shown when the chip was
+                        // tapped, undoing any in-range keystroke previews.
+                        commandSetterRef.current?.(baseline);
+                        inPlaceRevolve.previewAngle(baseline);
+                      }
                     }}
                     onCancel={cancelOpenKeypad}
                   />

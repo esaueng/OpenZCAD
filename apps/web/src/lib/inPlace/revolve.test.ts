@@ -4,6 +4,7 @@ import type { FeatureId } from '@openzcad/shared';
 import {
   clampRevolveAngle,
   revolveAxisCandidates,
+  revolveAngleInRange,
   revolveHint,
   revolveProfileRegions,
   revolveRigPlacement,
@@ -154,6 +155,15 @@ describe('revolve angles', () => {
     expect(clampRevolveAngle(400)).toBe(360);
     expect(clampRevolveAngle(Number.NaN)).toBe(360);
     expect(clampRevolveAngle(270)).toBe(270);
+  });
+});
+
+describe('typed revolve angles', () => {
+  it('are refused below the previewable minimum, not clamped to it', () => {
+    expect(revolveAngleInRange(0.0005)).toBe(false);
+    expect(revolveAngleInRange(1e-3)).toBe(true);
+    expect(revolveAngleInRange(360)).toBe(true);
+    expect(revolveAngleInRange(360.5)).toBe(false);
   });
 });
 

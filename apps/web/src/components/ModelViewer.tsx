@@ -2239,6 +2239,11 @@ export function ModelViewer({
     pointerId: number;
     startValue: number;
   } | null>(null);
+  /**
+   * Ends a held command drag as pointer-up would, without a value: the rig
+   * effect calls it when the command goes away under the pointer.
+   */
+  const retireCommandDragRef = useRef<(() => void) | null>(null);
   const onCommandHandlePreviewRef = useRef(onCommandHandlePreview);
   onCommandHandlePreviewRef.current = onCommandHandlePreview;
   const onCommandHandleReleaseRef = useRef(onCommandHandleRelease);
@@ -2714,6 +2719,14 @@ export function ModelViewer({
         cameraRig.controls.enabled = enabled;
       }
     });
+    retireCommandDragRef.current = () => {
+      const drag = commandDragRef.current;
+      if (!drag) return;
+      commandDragRef.current = null;
+      onDirectManipulationChangeRef.current(false);
+      gestures.release(drag.pointerId, 'grab');
+      requestRender();
+    };
 
     const picker = new PickService({
       domElement: renderer.domElement,
@@ -10159,6 +10172,7 @@ export function ModelViewer({
       pixelRatioQuery?.removeEventListener('change', onPixelRatioChange);
       observer.disconnect();
       panelObserver.disconnect();
+      retireCommandDragRef.current = null;
       areaObserver.disconnect();
       stopWatchingTheme();
       renderer.domElement.removeEventListener(
@@ -12335,7 +12349,9 @@ export function ModelViewer({
         commandRigRef.current = null;
         commandSetterRef.current = null;
       }
-      commandDragRef.current = null;
+      // A command canceled mid-drag lets go of the pointer and the drag
+      // phase, or the pointer-up that follows finds no drag to end.
+      retireCommandDragRef.current?.();
       context.requestRender();
     };
   }, [commandHandleKey, commandSetterRef]);

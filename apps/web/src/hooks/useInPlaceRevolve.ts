@@ -12,6 +12,7 @@ import type {
 import { GEOMETRY_PREVIEW_SCHEDULING, LivePreview } from '../lib/livePreview';
 import {
   clampRevolveAngle,
+  MIN_REVOLVE_ANGLE,
   revolveAngleInRange,
   revolveProfileRegions,
   revolveAxisCandidates,
@@ -107,7 +108,8 @@ export interface InPlaceRevolve {
   pickProfile(profile: InPlaceProfilePick): void;
   pickAxis(axisId: string): void;
   previewAngle(value: number): void;
-  setAngle(value: number, raw?: string): void;
+  /** False when a typed expression is refused, leaving the angle as it was. */
+  setAngle(value: number, raw?: string): boolean;
   done(): boolean;
   /** Ends the command; `quiet` when another action already says why. */
   cancel(quiet?: boolean): void;
@@ -311,15 +313,16 @@ export function useInPlaceRevolve(
       // and commit another.
       if (raw !== undefined && !revolveAngleInRange(value)) {
         setRefusal(
-          `${raw} is ${value}°; a revolve takes more than 0° and up to 360°.`
+          `${raw} is ${value}°; a revolve takes ${MIN_REVOLVE_ANGLE}° to 360°.`
         );
-        return;
+        return false;
       }
       const angle = clampRevolveAngle(value);
       setSession((current) =>
         current ? { ...current, angle, angleRaw: raw ?? null } : current
       );
       preview.request(angle);
+      return true;
     },
     [preview]
   );
