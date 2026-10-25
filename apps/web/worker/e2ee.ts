@@ -983,9 +983,10 @@ function removedDevices(
  * A recovery-key replacement starts a new device list whose genesis lists
  * only the devices it keeps. Revocation cutoffs (device removal) name
  * devices revoked within one list, so a device the new genesis drops that
- * signed a version or envelope of one of the account's encrypted projects
- * keeps the replacement from landing: browsers could no longer resolve
- * what it signed. A device that signed nothing is dropped as before.
+ * signed a version, envelope or key archive of one of the account's
+ * encrypted projects keeps the replacement from landing: browsers could no
+ * longer resolve what it signed. A device that signed nothing is dropped as
+ * before.
  * Nothing to check before migration 0033.
  *
  * Returns a fence for the identity write itself, so a version such a
@@ -1012,8 +1013,16 @@ async function projectSignerFence(
                         AND v.signer_device_id IN (${marks}))
            OR EXISTS (SELECT 1 FROM e2ee_project_envelopes e
                       WHERE e.project_id = p.id
-                        AND e.signer_device_id IN (${marks}))))`,
-    binds: [userId, ...removedDeviceIds, ...removedDeviceIds]
+                        AND e.signer_device_id IN (${marks}))
+           OR EXISTS (SELECT 1 FROM e2ee_key_archives a
+                      WHERE a.project_id = p.id
+                        AND a.signer_device_id IN (${marks}))))`,
+    binds: [
+      userId,
+      ...removedDeviceIds,
+      ...removedDeviceIds,
+      ...removedDeviceIds
+    ]
   };
   await refuseIfSigned(db, fence);
   return fence;
