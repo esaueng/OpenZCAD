@@ -319,24 +319,24 @@ describe('WorkspaceReadout message lifetime', () => {
     vi.useFakeTimers();
     try {
       const at = Date.now();
-      const view = (actionToastId: number | null) => (
+      const view = (toastUp: boolean) => (
         <WorkspaceReadout
           status="Deleted Boss bore."
           statusAt={at}
           tone="ready"
           logOpen={false}
           onToggleLog={vi.fn()}
-          actionToastId={actionToastId}
+          repeatingToast={toastUp ? { toastId: 1, statusAt: at } : null}
           {...SUMMARY}
         />
       );
-      const { rerender } = render(view(1));
+      const { rerender } = render(view(true));
       act(() => {
         vi.advanceTimersByTime(STATUS_LIFETIME_MS - 1000);
       });
       // The Undo toast leaves before the message's own lifetime is up: the
       // message used to return for that last second, and the lane with it.
-      rerender(view(null));
+      rerender(view(false));
       expect(screen.getByRole('contentinfo')).toHaveClass('hidden');
     } finally {
       vi.useRealTimers();
@@ -347,32 +347,68 @@ describe('WorkspaceReadout message lifetime', () => {
     vi.useFakeTimers();
     try {
       const at = Date.now();
-      const view = (
-        tone: 'running' | 'ready',
-        actionToastId: number | null
-      ) => (
+      const view = (tone: 'running' | 'ready', toastUp: boolean) => (
         <WorkspaceReadout
           status="Deleted Boss bore."
           statusAt={at}
           tone={tone}
           logOpen={false}
           onToggleLog={vi.fn()}
-          actionToastId={actionToastId}
+          repeatingToast={toastUp ? { toastId: 1, statusAt: at } : null}
           {...SUMMARY}
         />
       );
       // The delete's toast goes up while the model is still rebuilding...
-      const { rerender } = render(view('running', 1));
+      const { rerender } = render(view('running', true));
       act(() => {
         vi.advanceTimersByTime(1000);
       });
       // ...and is dismissed before the rebuild settles.
-      rerender(view('running', null));
+      rerender(view('running', false));
       act(() => {
         vi.advanceTimersByTime(1000);
       });
-      rerender(view('ready', null));
+      rerender(view('ready', false));
       expect(screen.getByRole('contentinfo')).toHaveClass('hidden');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves a newer status alone under a deferred toast that repeats an older one', () => {
+    vi.useFakeTimers();
+    try {
+      const suppressedAt = Date.now();
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      // A suppression's toast waits for its rebuild; meanwhile a display
+      // change sets a newer status. The toast, raised now, restates the
+      // suppression's status, not this one.
+      const displayAt = Date.now();
+      const view = (toastUp: boolean) => (
+        <WorkspaceReadout
+          status="Display: Wireframe."
+          statusAt={displayAt}
+          tone="ready"
+          logOpen={false}
+          onToggleLog={vi.fn()}
+          repeatingToast={
+            toastUp ? { toastId: 2, statusAt: suppressedAt } : null
+          }
+          {...SUMMARY}
+        />
+      );
+      const { rerender } = render(view(false));
+      rerender(view(true));
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      rerender(view(false));
+      expect(screen.getByRole('contentinfo')).not.toHaveClass('hidden');
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Display: Wireframe.'
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -382,10 +418,11 @@ describe('WorkspaceReadout message lifetime', () => {
     vi.useFakeTimers();
     try {
       const deletedAt = Date.now();
+      const toast = { toastId: 1, statusAt: deletedAt };
       const view = (
         status: string,
         statusAt: number,
-        actionToastId: number | null
+        repeatingToast: typeof toast | null
       ) => (
         <WorkspaceReadout
           status={status}
@@ -393,18 +430,18 @@ describe('WorkspaceReadout message lifetime', () => {
           tone="ready"
           logOpen={false}
           onToggleLog={vi.fn()}
-          actionToastId={actionToastId}
+          repeatingToast={repeatingToast}
           {...SUMMARY}
         />
       );
-      const { rerender } = render(view('Deleted Boss bore.', deletedAt, 1));
+      const { rerender } = render(view('Deleted Boss bore.', deletedAt, toast));
       act(() => {
         vi.advanceTimersByTime(1000);
       });
       // A display change while Undo is still up: its own news, not the
       // toast's, so it must still be read once the toast goes.
       const displayAt = Date.now();
-      rerender(view('Display: Wireframe.', displayAt, 1));
+      rerender(view('Display: Wireframe.', displayAt, toast));
       act(() => {
         vi.advanceTimersByTime(1000);
       });

@@ -1503,7 +1503,7 @@ import {
 import {
   countLabel,
   deleteFeatureToastMessage,
-  statusRepeatingToastId,
+  statusRepeatedByToast,
   UNDO_FLOOR_TRIMMED_NOTICE,
   UNDO_FLOOR_TRIMMED_REASON,
   type ToastAction,
@@ -2661,6 +2661,12 @@ export function App() {
   }));
   const status = statusEntry.text;
   /**
+   * The stamp of the last status `setStatus` wrote, read synchronously by a
+   * toast that restates it: which status a toast repeats is fixed when that
+   * status is set, not when the toast is raised.
+   */
+  const lastStatusAtRef = useRef(statusEntry.at);
+  /**
    * Informational messages expire (lib/statusLifetime); `sticky` is for text
    * that describes a mode the user is still in, such as sketching on a plane.
    */
@@ -2669,11 +2675,13 @@ export function App() {
       text: string,
       options?: { sticky?: boolean; detail?: string; unlogged?: boolean }
     ) => {
+      const at = Date.now();
+      lastStatusAtRef.current = at;
       setStatusEntry({
         text,
         ...(options?.detail ? { detail: options.detail } : {}),
         ...(options?.unlogged ? { unlogged: true } : {}),
-        at: Date.now(),
+        at,
         sticky: options?.sticky ?? false
       });
     },
@@ -2693,11 +2701,14 @@ export function App() {
     (
       message: string,
       action?: ToastAction,
-      options?: { repeatsStatus?: boolean }
+      options?: { repeatsStatusAt?: number }
     ) => {
       toastIdRef.current += 1;
       const id = toastIdRef.current;
-      const repeats = options?.repeatsStatus ? { repeatsStatus: true } : {};
+      const repeats =
+        options?.repeatsStatusAt === undefined
+          ? {}
+          : { repeatsStatusAt: options.repeatsStatusAt };
       // An action-bearing toast (the delete Undo above all) is never silently
       // replaced by a text-only notice: the action moves into the slot the new
       // message would have taken, so Undo stays one click away no matter how
@@ -3432,10 +3443,14 @@ export function App() {
     if (feedback.state === 'pending') return;
     suppressionNoticeRef.current = null;
     if (feedback.state !== 'ready') return;
+    // The status this restates was set by the toggle itself, before the
+    // rebuild it waited for; a newer status set meanwhile is not its repeat.
     announce(
       feedback.message,
       { label: 'Undo', run: handleUndo },
-      { repeatsStatus: true }
+      notice.statusAt === undefined
+        ? undefined
+        : { repeatsStatusAt: notice.statusAt }
     );
   };
   const pendingPartCountRef = useRef<Pick<
@@ -20797,10 +20812,14 @@ export function App() {
         if (managerRef.current !== owner) return;
         const copy = findFeature(owner.document, copyId);
         if (copy) handleSelectFeatureFromTree(copy.id, false);
-        announce(
-          `Duplicated ${feature.name}.`,
-          { label: 'Undo', run: handleUndo },
-          { repeatsStatus: true }
+        // The success status is set right after this callback returns: the
+        // toast is raised once it exists, so it restates that one.
+        queueMicrotask(() =>
+          announce(
+            `Duplicated ${feature.name}.`,
+            { label: 'Undo', run: handleUndo },
+            { repeatsStatusAt: lastStatusAtRef.current }
+          )
         );
       }
     });
@@ -20846,7 +20865,7 @@ export function App() {
       announce(
         deleteFeatureToastMessage(name, dependentCount),
         { label: 'Undo', run: handleUndo },
-        { repeatsStatus: true }
+        { repeatsStatusAt: lastStatusAtRef.current }
       );
     }
   }
@@ -21083,7 +21102,8 @@ export function App() {
         featureId: liveFeature.featureId,
         name: liveFeature.name,
         resume,
-        before
+        before,
+        statusAt: lastStatusAtRef.current
       };
     }
   }
@@ -21145,11 +21165,14 @@ export function App() {
             .map(({ featureId, name }) => ({ featureId, name }))
         });
       },
+      // As for Duplicate: raised once the success status exists.
       onSuccess: () =>
-        announce(
-          message,
-          { label: 'Undo', run: handleUndo },
-          { repeatsStatus: true }
+        queueMicrotask(() =>
+          announce(
+            message,
+            { label: 'Undo', run: handleUndo },
+            { repeatsStatusAt: lastStatusAtRef.current }
+          )
         )
     });
   }
@@ -21173,7 +21196,7 @@ export function App() {
       announce(
         'Full history resumed. Manually suppressed features remain suppressed.',
         undefined,
-        { repeatsStatus: true }
+        { repeatsStatusAt: lastStatusAtRef.current }
       );
     }
   }
@@ -21215,7 +21238,7 @@ export function App() {
       announce(
         `History rolled back after ${name}. Later features are paused.`,
         undefined,
-        { repeatsStatus: true }
+        { repeatsStatusAt: lastStatusAtRef.current }
       );
     }
   }
@@ -26384,7 +26407,7 @@ export function App() {
             warningCount={diagnostics.length}
             documentVersion={doc.version}
             saveState={presentedSaveState}
-            actionToastId={statusRepeatingToastId(toast)}
+            repeatingToast={statusRepeatedByToast(toast)}
             searchBar={
               <CommandBar
                 commands={paletteCommands}

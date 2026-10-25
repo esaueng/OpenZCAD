@@ -19,19 +19,22 @@ export interface ToastModel {
   message: string;
   action?: ToastAction;
   /**
-   * The toast restates the outcome the status line already carries (a
-   * delete, a duplicate): that status steps aside for it for good. Any other
-   * notice raised meanwhile (a reload offer, a failure) leaves the status
-   * alone.
+   * The status entry (its `at` stamp) this toast restates, captured when that
+   * outcome status was set (a delete, a duplicate). Only that status steps
+   * aside for it, for good; any other status, set before or after, is left
+   * alone, and so is every status under a toast that restates none (a reload
+   * offer, a failure).
    */
-  repeatsStatus?: boolean;
+  repeatsStatusAt?: number;
 }
 
-/** The toast the status readout should treat as repeating its message. */
-export function statusRepeatingToastId(
+/** Which status entry the status readout should treat the toast as repeating. */
+export function statusRepeatedByToast(
   toast: ToastModel | null
-): number | null {
-  return toast?.repeatsStatus ? toast.id : null;
+): { toastId: number; statusAt: number } | null {
+  return toast?.repeatsStatusAt === undefined
+    ? null
+    : { toastId: toast.id, statusAt: toast.repeatsStatusAt };
 }
 
 export function countLabel(

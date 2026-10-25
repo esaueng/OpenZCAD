@@ -67,12 +67,13 @@ interface WorkspaceReadoutProps {
    */
   searchBar: ReactNode;
   /**
-   * The id of the action toast (Undo) that is up, or null. The status that
-   * was live when that toast was raised is the one it repeats: once settled,
-   * it steps aside for good rather than returning for a moment as the toast
-   * leaves. A status set later is news of its own and keeps its lifetime.
+   * The toast that is up and the status entry (its `statusAt` stamp) it
+   * restates, or null. That status, and only that one, steps aside for good
+   * rather than returning for a moment as the toast leaves. Any other status
+   * (set before or after, or under a toast that restates none) keeps its
+   * lifetime.
    */
-  actionToastId?: number | null;
+  repeatingToast?: { toastId: number; statusAt: number } | null;
 }
 
 /**
@@ -98,7 +99,7 @@ export function WorkspaceReadout({
   documentVersion,
   saveState,
   searchBar,
-  actionToastId = null
+  repeatingToast = null
 }: WorkspaceReadoutProps) {
   const sticky = statusSticky ?? false;
   // A message already past its lifetime when the readout mounts — entering
@@ -146,22 +147,13 @@ export function WorkspaceReadout({
   // A settled message an action toast already said ("Deleted Boss bore."
   // under "Deleted Boss bore · Undo") is spent: it used to come back for a
   // beat as the toast faded, and the toast jumped up its row and down again.
-  // Which status a toast repeats is fixed when the toast is raised: the
-  // action and its message are set in the same batch.
-  const [raised, setRaised] = useState<{
-    toastId: number;
-    statusAt: number | undefined;
-  } | null>(null);
-  if ((raised?.toastId ?? null) !== actionToastId) {
-    setRaised(
-      actionToastId === null ? null : { toastId: actionToastId, statusAt }
-    );
-  }
+  // Which status a toast repeats is fixed when that status is set (App
+  // records its stamp), so a toast raised later, or a status set while it is
+  // up, never retires a status it does not restate.
   const repeated =
-    raised !== null &&
-    raised.toastId === actionToastId &&
+    repeatingToast !== null &&
     statusAt !== undefined &&
-    raised.statusAt === statusAt;
+    repeatingToast.statusAt === statusAt;
   // Recorded while the toast is up, whatever the tone: after a delete the
   // model is still rebuilding when the toast is raised, and a toast dismissed
   // before the rebuild settled left nothing to retire the repeat later.
@@ -175,7 +167,7 @@ export function WorkspaceReadout({
     (statusAt === 0 ||
       statusAt === expiredAtMount ||
       statusAt === expiredAt ||
-      (statusAt === spentAt && actionToastId === null));
+      (statusAt === spentAt && !repeated));
   const messageLive = !expired && status !== '';
   // The geometry line is the floor under the message: it carries the live
   // message ahead of the phase, and the projection note once it has gone.
