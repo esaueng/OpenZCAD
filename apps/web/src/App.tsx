@@ -8549,29 +8549,9 @@ export function App() {
     );
   }
 
-  /**
-   * U09 phase 7: re-arms the in-place command that made a stored feature,
-   * seeded from it, instead of opening its card. The feature stays pinned,
-   * so its History row and its readout stay on screen while it is edited.
-   * False when the feature has no in-place editor or cannot be edited now.
-   */
-  function startInPlaceEdit(feature: FeatureNode): boolean {
-    const current = managerRef.current?.document;
-    const tool = inPlaceToolForFeature(feature.data);
-    if (!current || !tool) return false;
-    // What a new feature needs on screen (two live bodies for a boolean,
-    // closed profiles for a loft) the stored feature already has, consumed.
-    const reason = toolDisabledReason(tool, {
-      ...availability,
-      liveBodyCount: Number.POSITIVE_INFINITY,
-      sketchCount: Number.POSITIVE_INFINITY,
-      closedProfileSketchCount: Number.POSITIVE_INFINITY
-    });
-    if (reason) {
-      setStatus(`${TOOL_META[tool].label}: ${reason}.`);
-      return false;
-    }
-    const armed = inPlaceEditSeed(feature, {
+  /** The in-place command and seed for a stored feature, from `current`. */
+  function inPlaceEditSeedFor(current: ProjectDocument, feature: FeatureNode) {
+    return inPlaceEditSeed(feature, {
       evaluate: (value) =>
         evalParamValue(value, parameterScope.scope, current.units),
       profile: (sketchId, reference) => {
@@ -8636,6 +8616,31 @@ export function App() {
       bodyVertices: (bodyId) =>
         representations[bodyId]?.mesh.vertices ?? null
     });
+  }
+
+  /**
+   * U09 phase 7: re-arms the in-place command that made a stored feature,
+   * seeded from it, instead of opening its card. The feature stays pinned,
+   * so its History row and its readout stay on screen while it is edited.
+   * False when the feature has no in-place editor or cannot be edited now.
+   */
+  function startInPlaceEdit(feature: FeatureNode): boolean {
+    const current = managerRef.current?.document;
+    const tool = inPlaceToolForFeature(feature.data);
+    if (!current || !tool) return false;
+    // What a new feature needs on screen (two live bodies for a boolean,
+    // closed profiles for a loft) the stored feature already has, consumed.
+    const reason = toolDisabledReason(tool, {
+      ...availability,
+      liveBodyCount: Number.POSITIVE_INFINITY,
+      sketchCount: Number.POSITIVE_INFINITY,
+      closedProfileSketchCount: Number.POSITIVE_INFINITY
+    });
+    if (reason) {
+      setStatus(`${TOOL_META[tool].label}: ${reason}.`);
+      return false;
+    }
+    const armed = inPlaceEditSeedFor(current, feature);
     if (!armed) return false;
     // A running command (another edit, a create) gives way quietly.
     inPlaceRef.current.cancel(true);
@@ -19326,6 +19331,15 @@ export function App() {
       evalParamValue(value, parameterScope.scope, doc?.units),
     baseDocument: () => managerRef.current?.document ?? null,
     baseVersion: doc?.version ?? null,
+    reseed: (edit) => {
+      const current = managerRef.current?.document;
+      const feature = current ? findFeature(current, edit.featureId) : null;
+      return current &&
+        feature &&
+        feature.data.featureKind === edit.data.featureKind
+        ? (inPlaceEditSeedFor(current, feature)?.seed ?? null)
+        : null;
+    },
     derive: (document) => geometry.syncOnce(document),
     buildCommand: (request, title, edit) => {
       if (edit) {

@@ -207,6 +207,44 @@ describe('body tools', () => {
     });
   });
 
+  it('mirror: a typed plane needs no pick and goes out as typed', () => {
+    const spec = IN_PLACE_TOOL_SPECS.mirror;
+    const slots: InPlaceSlots = { ...EMPTY, bodies: [BODY] };
+    expect(spec.ready(slots, {})).toBe(false);
+    expect(spec.ready(slots, { planeMode: 'typed' })).toBe(true);
+    expect(
+      spec.request(
+        slots,
+        {
+          planeOX: 'wall',
+          planeOY: 0,
+          planeOZ: 1,
+          planeNX: 0,
+          planeNY: 1,
+          planeNZ: 0
+        },
+        { planeMode: 'typed' },
+        CTX,
+        {
+          planeOX: 4,
+          planeOY: 0,
+          planeOZ: 1,
+          planeNX: 0,
+          planeNY: 1,
+          planeNZ: 0
+        }
+      )
+    ).toMatchObject({
+      state: {
+        operation: 'mirror',
+        value: {
+          origin: { x: 'wall', y: '0', z: '1' },
+          normal: { x: '0', y: '1', z: '0' }
+        }
+      }
+    });
+  });
+
   it('split: a datum plane is stored by id and has no slide', () => {
     const spec = IN_PLACE_TOOL_SPECS.split;
     const slots: InPlaceSlots = {

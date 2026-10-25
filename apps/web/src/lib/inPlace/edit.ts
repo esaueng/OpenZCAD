@@ -391,20 +391,12 @@ export function inPlaceEditSeed(
           featureId: data.plane.datumFeatureId
         };
       } else {
-        const origin = evaluated(data.plane.origin, ctx);
-        const normal = evaluated(data.plane.normal, ctx);
-        if (origin && normal) {
-          seed.slots.plane = {
-            kind: 'saved',
-            origin,
-            normal,
-            fields: {
-              origin: vectorText(data.plane.origin),
-              normal: vectorText(data.plane.normal)
-            }
-          };
-        } else {
-          missing.push('plane');
+        // A plane stored by its numbers opens typed, each on its own chip,
+        // expressions and all: the way it was given is the way it is edited.
+        seed.options.planeMode = 'typed';
+        for (const axis of ['x', 'y', 'z'] as const) {
+          value(`planeO${axis.toUpperCase()}`, data.plane.origin[axis]);
+          value(`planeN${axis.toUpperCase()}`, data.plane.normal[axis]);
         }
       }
       value('offset', 0);
@@ -511,14 +503,6 @@ export function inPlaceEditSeed(
     seed.notice = `${feature.name}: its saved ${what} no longer resolves · pick it again.`;
   }
   return { tool, seed };
-}
-
-function vectorText(vector: ParametricVector3): {
-  x: string;
-  y: string;
-  z: string;
-} {
-  return { x: String(vector.x), y: String(vector.y), z: String(vector.z) };
 }
 
 function evaluated(

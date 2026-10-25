@@ -53,6 +53,12 @@ export interface UseInPlaceCommandOptions extends InPlaceContext {
    * built on the old one must not stand for what Done would now commit.
    */
   baseVersion?: number | null;
+  /**
+   * An edit's seed read again from the feature as the model has it now, so
+   * a value the user has not changed follows a change made to it since (an
+   * undo, a collaborator).
+   */
+  reseed?(edit: InPlaceEditSeed): InPlaceEditSeed | null;
   derive(document: ProjectDocument): Promise<ProjectDocument['derived']>;
   /**
    * Builds the same command the commit runs, named for the tool so a kernel
@@ -200,6 +206,11 @@ export function useInPlaceCommand(
   // value, and Done waits with it, since the chip went back to the value
   // before and finishing would commit that instead of what was typed.
   const [committing, setCommitting] = useState(false);
+  /** What an edit last seeded its values from: the user's own changes differ. */
+  const seededRef = useRef<{
+    values: Record<string, number>;
+    raws: Record<string, string>;
+  } | null>(null);
   const [entryRefusal, setEntryRefusal] = useState<{
     valueId: string;
     message: string;
@@ -284,7 +295,15 @@ export function useInPlaceCommand(
         ? [...own, ...axisCandidatesFor(EMPTY_SLOTS, ctx, spec.axisSource)]
         : [];
     }
-    return [...own, ...axisCandidatesFor({ ...EMPTY_SLOTS, profiles }, ctx)];
+    return [
+      ...own,
+      ...axisCandidatesFor(
+        { ...EMPTY_SLOTS, profiles },
+        ctx,
+        'sketch',
+        editSeed?.slots.axisId
+      )
+    ];
     // The base version re-reads the saved axis's expressions, as the effect
     // below does for typed values: a parameter can change with no change
     // to the feature itself.
@@ -363,7 +382,7 @@ export function useInPlaceCommand(
   const chosen = useMemo(() => session?.options ?? {}, [session?.options]);
   const request = useMemo(
     () =>
-      spec && spec.ready(slots)
+      spec && spec.ready(slots, chosen)
         ? spec.request(slots, paramValues, chosen, ctx, numbers)
         : null,
     [spec, slots, paramValues, chosen, ctx, numbers]
@@ -542,7 +561,43 @@ export function useInPlaceCommand(
         }
       }
       const values = { ...current.values };
-      for (const [valueId, raw] of Object.entries(current.raws)) {
+      let raws = current.raws;
+      // A stored value the user has not changed since it was seeded takes
+      // the feature's value as it is now.
+      const baseline = seededRef.current;
+      const live =
+        current.edit && baseline
+          ? optionsRef.current.reseed?.(current.edit)
+          : null;
+      if (live && baseline) {
+        const ids = new Set([
+          ...Object.keys(live.values),
+          ...Object.keys(live.raws),
+          ...Object.keys(baseline.values),
+          ...Object.keys(baseline.raws)
+        ]);
+        const nextRaws = { ...raws };
+        for (const id of ids) {
+          // A written value is the user's own until its text changes; its
+          // number moves with the model.
+          const untouched =
+            baseline.raws[id] !== undefined
+              ? raws[id] === baseline.raws[id]
+              : raws[id] === undefined && values[id] === baseline.values[id];
+          if (!untouched) continue;
+          if (live.values[id] === values[id] && live.raws[id] === raws[id]) {
+            continue;
+          }
+          if (live.values[id] === undefined) delete values[id];
+          else values[id] = live.values[id]!;
+          if (live.raws[id] === undefined) delete nextRaws[id];
+          else nextRaws[id] = live.raws[id]!;
+          changed = true;
+        }
+        raws = nextRaws;
+        seededRef.current = { values: live.values, raws: live.raws };
+      }
+      for (const [valueId, raw] of Object.entries(raws)) {
         const number = optionsRef.current.evaluate?.(raw);
         if (
           number !== null &&
@@ -554,7 +609,7 @@ export function useInPlaceCommand(
           changed = true;
         }
       }
-      return changed ? { ...current, slots, values } : current;
+      return changed ? { ...current, slots, values, raws } : current;
     });
   }, [options.baseVersion]);
 
@@ -622,6 +677,7 @@ export function useInPlaceCommand(
 
   const edit = useCallback(
     (tool: InPlaceToolId, seed: InPlaceEditSeed) => {
+      seededRef.current = { values: seed.values, raws: seed.raws };
       preview.clear();
       optionsRef.current.publishPreview(null);
       setRefusal(null);

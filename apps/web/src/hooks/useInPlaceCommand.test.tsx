@@ -974,6 +974,36 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     });
   });
 
+  it('takes a value changed by someone else unless the user changed it', () => {
+    let live: Record<string, number> = { planeOX: 5, planeOY: 0 };
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      evaluate: (value) => Number(value),
+      baseVersion: 1,
+      reseed: (edit) => ({ ...edit, values: { ...live }, raws: {} })
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('mirror', {
+        ...SEED,
+        values: { planeOX: 5, planeOY: 0 },
+        options: { planeMode: 'typed' }
+      })
+    );
+    act(() => {
+      hook.result.current.setValue('planeOY', 3);
+    });
+    live = { planeOX: 12, planeOY: 9 };
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.values).toMatchObject({
+      planeOX: 12,
+      planeOY: 3
+    });
+  });
+
   it("reads a helix's saved axis again when the model changes", () => {
     let rise = 10;
     const options: UseInPlaceCommandOptions = {

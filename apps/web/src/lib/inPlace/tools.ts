@@ -368,7 +368,8 @@ export interface InPlaceToolSpec {
     numbers: Record<string, number>
   ): Record<string, number>;
   hint(slots: InPlaceSlots, options?: Record<string, string>): string;
-  ready(slots: InPlaceSlots): boolean;
+  /** Whether the picks (and, for a typed plane or axis, the options) suffice. */
+  ready(slots: InPlaceSlots, options?: Record<string, string>): boolean;
   /**
    * `values` holds what is stored: a typed expression as typed, else the
    * number. `numbers` holds every value as a number, for whatever the
@@ -427,7 +428,8 @@ export function profileOutline(
 export function axisCandidatesFor(
   slots: InPlaceSlots,
   ctx: InPlaceContext,
-  source: 'sketch' | 'datum' | 'world' = 'sketch'
+  source: 'sketch' | 'datum' | 'world' = 'sketch',
+  keep?: string | null
 ): RevolveAxisCandidate[] {
   if (source === 'datum' || source === 'world') {
     // Every resolved datum axis, wherever it runs.
@@ -456,7 +458,7 @@ export function axisCandidatesFor(
   const first = slots.profiles[0];
   const view = first ? viewFor(ctx, first.sketchId) : null;
   return view
-    ? revolveAxisCandidates(view.basis, ctx.datumAxes, ctx.datumLabel)
+    ? revolveAxisCandidates(view.basis, ctx.datumAxes, ctx.datumLabel, keep)
     : [];
 }
 
@@ -1574,13 +1576,41 @@ function planeHandleOrigin(
 }
 
 /** The plane handle every plane-taking tool shares. */
-function planeHandles(slots: InPlaceSlots): HandleSpec[] {
-  const plane = slots.plane;
+function planeHandles(
+  slots: InPlaceSlots,
+  values: Record<string, number>,
+  _ctx: InPlaceContext,
+  options: Record<string, string>
+): HandleSpec[] {
   const body = slots.bodies[0];
-  if (!plane || plane.kind === 'datum' || !body) return [];
+  const typed = options.planeMode === 'typed';
+  // A typed plane's six numbers, each on its chip above the body.
+  const chips =
+    typed && body
+      ? (() => {
+          const centre = {
+            x: (body.min.x + body.max.x) / 2,
+            y: (body.min.y + body.max.y) / 2,
+            z: body.max.z
+          };
+          const spread = Math.max((body.max.x - body.min.x) / 4, 1e-3);
+          return [
+            ...vectorChips('planeO', bodyKey(body), centre, spread),
+            ...vectorChips(
+              'planeN',
+              bodyKey(body),
+              { ...centre, z: centre.z + spread },
+              spread
+            )
+          ];
+        })()
+      : [];
+  const plane = commandPlane(slots, values, values, options);
+  if (!plane || plane.kind === 'datum' || !body) return chips;
   const origin = planeHandleOrigin(plane, body);
-  if (!origin) return [];
+  if (!origin) return chips;
   return [
+    ...chips,
     {
       valueId: 'offset',
       kind: 'linear',
@@ -1645,6 +1675,115 @@ const PLANE_OFFSET: ValueSpec = {
   initial: 0
 };
 
+/**
+ * Three values for a typed point or vector, `prefix`X, Y and Z: what the
+ * retired cards took as three fields, a chip each in place.
+ */
+function vectorValues(
+  prefix: string,
+  unit: ValueSpec['unit'],
+  initial: Vector3
+): ValueSpec[] {
+  return (['x', 'y', 'z'] as const).map((axis) => ({
+    id: `${prefix}${axis.toUpperCase()}`,
+    label: `${axis.toUpperCase()}`,
+    unit,
+    initial: initial[axis]
+  }));
+}
+
+/** A typed vector as stored: each part as typed, expressions and all. */
+function typedVector(
+  values: Record<string, ParamValue>,
+  prefix: string,
+  fallback: Vector3
+): ParametricVector3 {
+  return {
+    x: values[`${prefix}X`] ?? fallback.x,
+    y: values[`${prefix}Y`] ?? fallback.y,
+    z: values[`${prefix}Z`] ?? fallback.z
+  };
+}
+
+/** A typed vector as numbers. */
+function typedNumbers(
+  values: Record<string, number>,
+  prefix: string,
+  fallback: Vector3
+): Vector3 {
+  return {
+    x: values[`${prefix}X`] ?? fallback.x,
+    y: values[`${prefix}Y`] ?? fallback.y,
+    z: values[`${prefix}Z`] ?? fallback.z
+  };
+}
+
+/** A typed vector's three chips, side by side at `anchor`. */
+function vectorChips(
+  prefix: string,
+  key: string,
+  anchor: Vector3,
+  spread: number
+): HandleSpec[] {
+  return (['X', 'Y', 'Z'] as const).map((axis, index) => ({
+    valueId: `${prefix}${axis}`,
+    kind: 'chip' as const,
+    key: `${key}:${prefix}${axis}`,
+    params: {
+      anchor: {
+        x: anchor.x + (index - 1) * spread,
+        y: anchor.y,
+        z: anchor.z
+      }
+    }
+  }));
+}
+
+/** Choose between a picked plane and one typed by its origin and normal. */
+const PLANE_MODE_OPTION: OptionSpec = {
+  id: 'planeMode',
+  label: 'Plane',
+  choices: [
+    { value: 'picked', label: 'A picked plane' },
+    { value: 'typed', label: 'Typed (origin and normal)' }
+  ],
+  initial: 'picked'
+};
+
+const TYPED_PLANE_VALUES: ValueSpec[] = [
+  ...vectorValues('planeO', 'length', { x: 0, y: 0, z: 0 }),
+  ...vectorValues('planeN', 'count', { x: 0, y: 0, z: 1 })
+];
+
+/**
+ * The plane a Mirror or Split stands on: the picked one, or the typed one
+ * (kept as typed, a `saved` plane, so it slides like any other).
+ */
+function commandPlane(
+  slots: InPlaceSlots,
+  values: Record<string, ParamValue>,
+  numbers: Record<string, number>,
+  options: Record<string, string>
+): PlanePick | null {
+  if (options.planeMode !== 'typed') return slots.plane;
+  const text = (vector: ParametricVector3) => ({
+    x: String(vector.x),
+    y: String(vector.y),
+    z: String(vector.z)
+  });
+  const normal = typedNumbers(numbers, 'planeN', { x: 0, y: 0, z: 1 });
+  if (Math.hypot(normal.x, normal.y, normal.z) === 0) return null;
+  return {
+    kind: 'saved',
+    origin: typedNumbers(numbers, 'planeO', { x: 0, y: 0, z: 0 }),
+    normal,
+    fields: {
+      origin: text(typedVector(values, 'planeO', { x: 0, y: 0, z: 0 })),
+      normal: text(typedVector(values, 'planeN', { x: 0, y: 0, z: 1 }))
+    }
+  };
+}
+
 /** The card's plane fields for a picked plane. */
 function planeFields(plane: PlanePick): {
   origin: { x: string; y: string; z: string };
@@ -1672,8 +1811,15 @@ function planeFields(plane: PlanePick): {
   return { origin: strings(plane.origin), normal: strings(plane.normal) };
 }
 
-function planeHint(slots: InPlaceSlots, what: string): string | null {
+function planeHint(
+  slots: InPlaceSlots,
+  what: string,
+  options?: Record<string, string>
+): string | null {
   if (slots.bodies.length === 0) return `Click the body to ${what}`;
+  if (options?.planeMode === 'typed') {
+    return `Type the plane's origin and normal on their chips · ${FINISH}`;
+  }
   if (!slots.plane) {
     return 'Pick the plane: a ghost plane, a datum plane or a flat face';
   }
@@ -1688,15 +1834,19 @@ const mirror: InPlaceToolSpec = {
   wantsPlane: true,
   wantsAxis: false,
   wantsPath: false,
-  values: [PLANE_OFFSET],
-  hint: (slots) =>
-    planeHint(slots, 'mirror') ??
+  values: [PLANE_OFFSET, ...TYPED_PLANE_VALUES],
+  options: [PLANE_MODE_OPTION],
+  hint: (slots, options) =>
+    planeHint(slots, 'mirror', options) ??
     `Slide the plane, or pick another · ${FINISH}`,
-  ready: (slots) => slots.bodies.length > 0 && slots.plane !== null,
-  request(slots, values) {
+  ready: (slots, options) =>
+    slots.bodies.length > 0 &&
+    (slots.plane !== null || options?.planeMode === 'typed'),
+  request(slots, values, options, _ctx, numbers) {
     const body = slots.bodies[0];
-    if (!body || !slots.plane) return null;
-    const fields = offsetPlaneFields(slots.plane, values.offset);
+    const plane = commandPlane(slots, values, numbers ?? {}, options);
+    if (!body || !plane) return null;
+    const fields = offsetPlaneFields(plane, values.offset);
     return {
       tool: 'modeling',
       state: {
@@ -1720,8 +1870,9 @@ const split: InPlaceToolSpec = {
   wantsPlane: true,
   wantsAxis: false,
   wantsPath: false,
-  values: [PLANE_OFFSET],
+  values: [PLANE_OFFSET, ...TYPED_PLANE_VALUES],
   options: [
+    PLANE_MODE_OPTION,
     {
       id: 'keepOriginal',
       label: 'Original',
@@ -1732,13 +1883,17 @@ const split: InPlaceToolSpec = {
       initial: 'no'
     }
   ],
-  hint: (slots) =>
-    planeHint(slots, 'split') ?? `Slide the plane, or pick another · ${FINISH}`,
-  ready: (slots) => slots.bodies.length > 0 && slots.plane !== null,
-  request(slots, values, options) {
+  hint: (slots, options) =>
+    planeHint(slots, 'split', options) ??
+    `Slide the plane, or pick another · ${FINISH}`,
+  ready: (slots, options) =>
+    slots.bodies.length > 0 &&
+    (slots.plane !== null || options?.planeMode === 'typed'),
+  request(slots, values, options, _ctx, numbers) {
     const body = slots.bodies[0];
-    if (!body || !slots.plane) return null;
-    const fields = offsetPlaneFields(slots.plane, values.offset);
+    const plane = commandPlane(slots, values, numbers ?? {}, options);
+    if (!body || !plane) return null;
+    const fields = offsetPlaneFields(plane, values.offset);
     return {
       tool: 'modeling',
       state: {
