@@ -24,8 +24,9 @@
  * the caller's newest device list certifies. Served by `handleE2eeRequest`
  * after the key rollout gate and, for writes, the session/erasure write
  * authorization; here: E2EE_PROJECTS_ENABLED, migrations 0031–0033 (503
- * without them), owner only and format-2 projects only. The plaintext
- * routes keep refusing format 2, and are untouched.
+ * without them) and format-2 projects only: any member reads and keeps its
+ * own view state, the owner and editors write measurements (slice 5-2).
+ * The plaintext routes keep refusing format 2, and are untouched.
  */
 import {
   fromBase64Url,
@@ -49,8 +50,9 @@ import {
   isProjectStorageFormatReady
 } from '@openzcad/cloudflare-adapters';
 import {
-  PROJECT_FENCE,
+  MEMBER_FENCE,
   RouteError,
+  WRITER_FENCE,
   bytesField,
   deviceListMoved,
   deviceListUnchanged,
@@ -61,7 +63,8 @@ import {
   refuse,
   refuseDeviceListMoved,
   requireCertifiedDevice,
-  requireOwnedEncryptedProject,
+  fenceBinds,
+  requireEncryptedProjectAccess,
   runBatch,
   uintField,
   type Authorization
@@ -270,7 +273,8 @@ function upsert(
          (project_id, kind, scope, sequence, key_epoch, envelope,
           wrapped_version_key, signature, signer_device_id, updated_at)
        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-       WHERE ${ctx.authorization.sql} AND ${PROJECT_FENCE}
+       WHERE ${ctx.authorization.sql}
+         AND ${kind === 'measurements' ? WRITER_FENCE : MEMBER_FENCE}
          AND EXISTS (SELECT 1 FROM e2ee_project_groups
                      WHERE project_id = ? AND key_epoch_base + epoch = ?)
          AND ${extra.sql}
@@ -297,8 +301,7 @@ function upsert(
       input.signerDeviceId,
       now,
       ...ctx.authorization.binds,
-      projectId,
-      ctx.userId,
+      ...fenceBinds(projectId, ctx.userId),
       projectId,
       input.header.keyEpoch,
       ...extra.binds,
@@ -596,10 +599,16 @@ export async function handleE2eeProjectEnvelopeRequest(
       (route === 'view-states' && method === 'GET') ||
       (sessionId !== null && method === 'PUT');
     if (!known) refuse(404, 'NOT_FOUND', 'Not found.');
-    // The owner reads a project in the recycle bin, as in plaintext (4-8).
-    await requireOwnedEncryptedProject(db, userId, projectId, {
-      allowDeleted: method === 'GET'
-    });
+    // Any member reads, and keeps its own view state; the owner and editors
+    // write measurements (slice 5-2), as the plaintext routes' read and edit
+    // access. The owner reads a project in the recycle bin (4-8).
+    await requireEncryptedProjectAccess(
+      db,
+      userId,
+      projectId,
+      method === 'PUT' && route === 'measurements' ? 'write' : 'read',
+      { allowDeleted: method === 'GET' }
+    );
     if (route === 'measurements') {
       return method === 'GET'
         ? json(

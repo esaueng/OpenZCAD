@@ -377,6 +377,109 @@ describe('contacts routes', () => {
       (error: unknown) => error instanceof E2eeApiError && error.status === 404
     );
   });
+
+  it('ends an invitation’s relation with the membership it led to (#898, #902 review)', async () => {
+    const srv = serverWith();
+    await person(srv, ALICE);
+    await person(srv, STRANGER);
+    share(srv);
+    const lookUp = async (user: string, target: string) =>
+      (
+        await srv.call(
+          'GET',
+          `/api/e2ee/users/${encodeURIComponent(target)}/device-list`,
+          { user }
+        )
+      ).status;
+    const people = async (user: string) =>
+      (
+        await json<E2eeContactsResponse>(
+          await srv.call('GET', '/api/e2ee/contacts', { user })
+        )
+      ).people.map((p) => p.userId);
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const removeMember = (user: string) =>
+      srv.db.prepare('DELETE FROM project_members WHERE user_id = ?').run(user);
+
+    // A plaintext invitation the stranger accepted, then removal from the
+    // project: nothing relates them any more.
+    srv.db
+      .prepare(
+        `INSERT INTO project_invitations
+           (id, project_id, email, role, token_hash, invited_by_user_id,
+            created_at, expires_at, accepted_by_user_id, accepted_at)
+         VALUES ('inv_done', 'proj_shared', ?, 'viewer', 'hash_done', ?, 1, ?, ?, 2)`
+      )
+      .run(EMAILS[STRANGER]!, ALICE, nowSeconds + 3600, STRANGER);
+    srv.db
+      .prepare(
+        `INSERT INTO project_members
+           (project_id, user_id, role, added_by_user_id, created_at, updated_at)
+         VALUES ('proj_shared', ?, 'viewer', ?, 1, 1)`
+      )
+      .run(STRANGER, ALICE);
+    expect(await lookUp(ALICE, STRANGER)).toBe(200);
+    removeMember(STRANGER);
+    expect(await lookUp(ALICE, STRANGER)).toBe(404);
+    expect(await lookUp(STRANGER, ALICE)).toBe(404);
+    expect(await people(ALICE)).not.toContain(STRANGER);
+    expect(await people(STRANGER)).toEqual([]);
+
+    // An accepted encrypted invitation relates both sides while it is open,
+    // and not once it expires or its Add completes it.
+    const encrypted = (completedAt: string | null, expiresAt: number) => {
+      srv.db.prepare('DELETE FROM e2ee_invitations').run();
+      srv.db
+        .prepare(
+          `INSERT INTO e2ee_invitations
+             (invitation_id, project_id, invited_by_user_id, email_hash, role,
+              token_hash, statement, signature, signer_device_id, created_at,
+              expires_at, accepted_by_user_id, accepted_at, completed_at,
+              completed_epoch)
+           VALUES ('einv', 'proj_shared', ?, ?, 'viewer', ?, 'statement', ?,
+                   'device', '2026-10-24', ?, ?, '2026-10-24', ?, ?)`
+        )
+        .run(
+          ALICE,
+          'e'.repeat(64),
+          't'.repeat(64),
+          's'.repeat(87),
+          expiresAt,
+          STRANGER,
+          completedAt,
+          completedAt === null ? null : 1
+        );
+    };
+    encrypted(null, Date.now() + 3_600_000);
+    expect(await lookUp(ALICE, STRANGER)).toBe(200);
+    expect(await lookUp(STRANGER, ALICE)).toBe(200);
+    expect(await people(ALICE)).toContain(STRANGER);
+    encrypted(null, Date.now() - 1);
+    expect(await lookUp(ALICE, STRANGER)).toBe(404);
+    expect(await lookUp(STRANGER, ALICE)).toBe(404);
+    expect(await people(STRANGER)).toEqual([]);
+    encrypted('2026-10-25', Date.now() + 3_600_000);
+    expect(await lookUp(ALICE, STRANGER)).toBe(404);
+    expect(await lookUp(STRANGER, ALICE)).toBe(404);
+
+    // A removed member who held a leaf in the project: its owner and
+    // members can still check that member's signatures on the history, but
+    // the removed member can no longer read theirs.
+    srv.db
+      .prepare(
+        `INSERT INTO e2ee_project_leaves
+           (project_id, user_id, device_id, leaf_key, certification, created_at)
+         VALUES ('proj_shared', ?, 'device', ?, ?, '2026-10-24')`
+      )
+      .run(STRANGER, 'k'.repeat(87), 'c'.repeat(98));
+    expect(await lookUp(ALICE, STRANGER)).toBe(200);
+    expect(await lookUp(BOB, STRANGER)).toBe(200);
+    expect(await lookUp(STRANGER, ALICE)).toBe(404);
+    expect(await lookUp(STRANGER, BOB)).toBe(404);
+    // Once Bob leaves too, the project's history is no longer his to check.
+    removeMember(BOB);
+    expect(await lookUp(BOB, STRANGER)).toBe(404);
+  });
 });
 
 describe('verifying contacts in the browser', () => {
@@ -608,7 +711,9 @@ describe('verifying contacts in the browser', () => {
     );
     // A device-list answer for Bob's first identity, held back for later.
     const path = `/api/e2ee/users/${BOB}/device-list`;
-    const oldAnswer = await (await srv.call('GET', path, { user: ALICE })).text();
+    const oldAnswer = await (
+      await srv.call('GET', path, { user: ALICE })
+    ).text();
     const replacement = await generateRecoveryKey();
     bob.account = ready(
       await replaceRecoveryKey(
@@ -637,9 +742,9 @@ describe('verifying contacts in the browser', () => {
     await expect(inspectContact(replaying, book, BOB)).rejects.toMatchObject({
       code: 'fork'
     });
-    expect(
-      (await alice.pins.readContact(ALICE, BOB))?.identityKeyHash
-    ).toBe(toHex(await publicKeyHash(bob.account.list.identityKey)));
+    expect((await alice.pins.readContact(ALICE, BOB))?.identityKeyHash).toBe(
+      toHex(await publicKeyHash(bob.account.list.identityKey))
+    );
   });
 
   it('refuses a result whose pin another tab moved past (#898 review)', async () => {
@@ -660,9 +765,9 @@ describe('verifying contacts in the browser', () => {
         advanceContact: async () => false
       }
     };
-    await expect(
-      loadContacts(lostRace, alice.account)
-    ).rejects.toMatchObject({ code: 'fork' });
+    await expect(loadContacts(lostRace, alice.account)).rejects.toMatchObject({
+      code: 'fork'
+    });
     await expect(inspectContact(lostRace, book, BOB)).rejects.toMatchObject({
       code: 'fork'
     });

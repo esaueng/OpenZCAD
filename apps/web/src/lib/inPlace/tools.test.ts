@@ -36,7 +36,9 @@ const EMPTY: InPlaceSlots = {
   faces: [],
   bodies: [],
   plane: null,
-  edges: []
+  edges: [],
+  refs: [],
+  image: null
 };
 
 const BODY: BodyPick = {

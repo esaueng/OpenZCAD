@@ -28,7 +28,7 @@ import {
 import { parseEnvelope, toHex, versionHash } from '@openzcad/crypto';
 import { projectBucket } from './e2ee';
 import { blobBucket } from './e2eeContentBlobs';
-import { RouteError, requireOwnedEncryptedProject } from './e2eeProjects';
+import { RouteError, requireEncryptedProjectAccess } from './e2eeProjects';
 import { roomVersionStore } from './e2eeProjectDocuments';
 import { sessionHashWriteAuthorization } from './e2eeWriteAuthorization';
 import { assertPlaintextRoomAccess } from './projectFormatGate';
@@ -53,6 +53,20 @@ function writeRefusal(error: RouteError): E2eeRoomWriteResult {
         kind: 'epoch-stale',
         keyEpoch: Number(error.extra.keyEpoch ?? 0)
       };
+    case 'E2EE_BLOB_UNKNOWN': {
+      // The browser stores the lost blobs again and resubmits (slice 5-6),
+      // as an account save does (slice 4-7).
+      const listed = error.extra.blobIds;
+      return {
+        kind: 'refused',
+        code: 'blob-unknown',
+        message: error.message,
+        ...(Array.isArray(listed) &&
+        listed.every((id) => typeof id === 'string')
+          ? { blobIds: listed }
+          : {})
+      };
+    }
   }
   return {
     kind: 'refused',
@@ -179,7 +193,15 @@ export function e2eeRoomAccount(env: CloudflareEnv): E2eeRoomAccount | null {
         };
       }
       try {
-        await requireOwnedEncryptedProject(db, input.userId, input.projectId);
+        // The same storage access as the document route (slice 5-2): the
+        // owner or an editor, read from the Worker's mirror of the MLS roles
+        // at the moment of the write (slice 5-6).
+        await requireEncryptedProjectAccess(
+          db,
+          input.userId,
+          input.projectId,
+          'write'
+        );
         const saved = await roomVersionStore.writeVersion(
           {
             db,
@@ -217,7 +239,7 @@ export function e2eeRoomAccount(env: CloudflareEnv): E2eeRoomAccount | null {
 }
 
 const NOTICE_ROUTE =
-  /^\/api\/e2ee\/projects\/([^/]+)\/(mls\/commits|document|revisions)$/;
+  /^\/api\/e2ee\/projects\/([^/]+)\/(mls\/commits|mls\/proposals|document|revisions)$/;
 
 /**
  * After an encrypted route's write lands, tells the project's room: a
@@ -247,7 +269,10 @@ export async function notifyEncryptedRoom(
     return;
   }
   const route = match[2]!;
-  let notice: { kind: 'epoch'; keyEpoch: number } | { kind: 'head' };
+  let notice:
+    | { kind: 'epoch'; keyEpoch: number }
+    | { kind: 'head' }
+    | { kind: 'members' };
   if (route === 'mls/commits' && request.method === 'POST') {
     try {
       const { group } = (await response.clone().json()) as {
@@ -259,6 +284,10 @@ export async function notifyEncryptedRoom(
     } catch {
       return;
     }
+  } else if (route === 'mls/proposals' && request.method === 'POST') {
+    // A member left by its SelfRemove (slice 5-5), losing access at once
+    // (decision M4): its sockets close (slice 5-6).
+    notice = { kind: 'members' };
   } else if (
     (route === 'document' && request.method === 'PUT') ||
     (route === 'revisions' && request.method === 'POST')
@@ -290,20 +319,17 @@ export async function notifyEncryptedRoom(
 /**
  * The room a caller may reach for a project, as headers for the room
  * request: none for a plaintext project; for an encrypted project's owner
- * while encrypted projects are open to the account, the format and the
- * session's write credential. Anything else is refused as before (members as
- * sharing, which arrives in Phase 5).
+ * or member while encrypted projects are open to the account, the format and
+ * the session's write credential (members since slice 5-6: editors submit,
+ * viewers receive; the room re-reads the role on every submission). Anything
+ * else is refused as before.
  */
 export async function encryptedRoomHeaders(
   request: Request,
   access: Pick<ProjectAccess, 'projectId' | 'role' | 'storageFormat'>,
   encryptedProjectsEnabled: boolean
 ): Promise<Record<string, string>> {
-  if (
-    !encryptedProjectsEnabled ||
-    access.role !== 'owner' ||
-    access.storageFormat !== 2
-  ) {
+  if (!encryptedProjectsEnabled || access.storageFormat !== 2) {
     assertPlaintextRoomAccess(access);
     return {};
   }

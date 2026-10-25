@@ -26,9 +26,10 @@
  *
  * Served by `handleE2eeRequest` after the key rollout gate, key-table
  * readiness and, for writes, the session/erasure write authorization. Here:
- * E2EE_PROJECTS_ENABLED, migrations 0031–0033 (503 without them), owner
- * only and format-2 projects only. The plaintext project routes keep
- * refusing format 2.
+ * E2EE_PROJECTS_ENABLED, migrations 0031–0033 (503 without them) and
+ * format-2 projects only; any member reads, the owner and editors write
+ * (slice 5-2), and a create is the caller's own. The plaintext project
+ * routes keep refusing format 2.
  */
 import {
   parseEnvelope,
@@ -80,6 +81,7 @@ import {
   CHAINED,
   PROJECT_FENCE,
   RouteError,
+  WRITER_FENCE,
   archiveField,
   bytesField,
   deviceListMoved,
@@ -96,12 +98,14 @@ import {
   refuse,
   refuseDeviceListMoved,
   requireCertifiedDevice,
-  requireOwnedEncryptedProject,
+  fenceBinds,
+  requireEncryptedProjectAccess,
   runBatch,
   uintField,
   wrapsField,
   type Authorization
 } from './e2eeProjects';
+import { memberRotationFence } from './e2eeDeviceRemoval';
 import {
   adoptionField,
   copyBlobObjects,
@@ -160,6 +164,11 @@ interface Context {
   authorization: Authorization;
   /** Content blobs (migration 0034) and the bucket they live in. */
   blobs: { ready: boolean; bucket: E2eeBlobBucket | null };
+  /**
+   * The project's owner, whose storage a member's save counts against
+   * (slice 5-2); the caller when absent (a create).
+   */
+  ownerUserId?: string;
 }
 
 // --- Input -----------------------------------------------------------------
@@ -710,10 +719,11 @@ function insertVersion(
 /** A quota trigger's refusal, with the owner's limit. */
 async function quotaRefusal(ctx: Context, error: unknown): Promise<never> {
   const message = error instanceof Error ? error.message : String(error);
+  const owner = ctx.ownerUserId ?? ctx.userId;
   if (message.includes('project_account_count_quota')) {
     const row = await ctx.db
       .prepare('SELECT project_limit FROM users WHERE id = ?')
-      .bind(ctx.userId)
+      .bind(owner)
       .first<{ project_limit: number }>();
     refuse(
       413,
@@ -725,7 +735,7 @@ async function quotaRefusal(ctx: Context, error: unknown): Promise<never> {
   if (message.includes('project_account_storage_quota')) {
     const row = await ctx.db
       .prepare('SELECT project_storage_limit_bytes FROM users WHERE id = ?')
-      .bind(ctx.userId)
+      .bind(owner)
       .first<{ project_storage_limit_bytes: number }>();
     refuse(
       413,
@@ -1009,6 +1019,8 @@ async function writeVersion(
   const now = new Date().toISOString();
   const newVersion = version.header.documentVersion;
   const signerFence = deviceListUnchanged(ctx.userId, version.signerList);
+  // A co-member's pending rotation (slice 5-7), atomically.
+  const rotationFence = await memberRotationFence(ctx.db, projectId, keyEpoch);
   // Every later statement lands only once the head moved to this version.
   const moved = {
     sql: `EXISTS (SELECT 1 FROM projects WHERE id = ? AND document_version = ?
@@ -1020,8 +1032,12 @@ async function writeVersion(
       .prepare(
         `UPDATE projects SET document_version = ?, updated_at = ?
          ${revisionId === null ? '' : ', last_revision_id = ?, revision_count = COALESCE(revision_count, 0) + 1'}
-         WHERE id = ? AND user_id = ? AND storage_format = 2
+         WHERE id = ? AND storage_format = 2
            AND status <> 'deleted' AND document_version = ?
+           AND (user_id = ? OR EXISTS (
+             SELECT 1 FROM project_members m
+             WHERE m.project_id = projects.id AND m.user_id = ?
+               AND m.role = 'editor'))
            AND ${ctx.authorization.sql}
            AND EXISTS (SELECT 1 FROM e2ee_project_versions
                        WHERE project_id = ? AND document_version = ?
@@ -1030,15 +1046,17 @@ async function writeVersion(
                            WHERE project_id = ? AND document_version > ?)
            AND EXISTS (SELECT 1 FROM e2ee_project_groups
                        WHERE project_id = ? AND key_epoch_base + epoch = ?)
-           AND ${signerFence.sql}`
+           AND ${signerFence.sql}
+           AND ${rotationFence.sql}`
       )
       .bind(
         newVersion,
         now,
         ...(revisionId === null ? [] : [revisionId]),
         projectId,
-        ctx.userId,
         input.expectedVersion,
+        ctx.userId,
+        ctx.userId,
         ...ctx.authorization.binds,
         projectId,
         input.expectedVersion,
@@ -1047,7 +1065,8 @@ async function writeVersion(
         input.expectedVersion,
         projectId,
         keyEpoch,
-        ...signerFence.binds
+        ...signerFence.binds,
+        ...rotationFence.binds
       ),
     // The replaced head's body goes first, so the quota sees the new one
     // replace it; a revision keeps its body.
@@ -1116,6 +1135,8 @@ async function writeVersion(
     if (await deviceListMoved(ctx.db, ctx.userId, version.signerList)) {
       refuseDeviceListMoved();
     }
+    // Refuses if a removal stored meanwhile names a later epoch.
+    await memberRotationFence(ctx.db, projectId, keyEpoch);
     return explainRefusedWrite(
       ctx,
       projectId,
@@ -1584,6 +1605,7 @@ async function saveInfo(
       }
     : { sql: '', binds: [] };
   const infoFence = deviceListUnchanged(ctx.userId, info.signerList);
+  const rotationFence = await memberRotationFence(ctx.db, projectId, keyEpoch);
   const now = new Date().toISOString();
   const results = await runVersionBatch(ctx, [
     ctx.db
@@ -1592,10 +1614,11 @@ async function saveInfo(
            (project_id, kind, scope, sequence, key_epoch, envelope,
             wrapped_version_key, signature, signer_device_id, updated_at)
          SELECT ?, 'project-info', '', ?, ?, ?, ?, ?, ?, ?
-         WHERE ${ctx.authorization.sql} AND ${PROJECT_FENCE}
+         WHERE ${ctx.authorization.sql} AND ${WRITER_FENCE}
            AND EXISTS (SELECT 1 FROM e2ee_project_groups
                        WHERE project_id = ? AND key_epoch_base + epoch = ?)
            AND ${infoFence.sql}
+           AND ${rotationFence.sql}
            ${named.sql}
          ON CONFLICT (project_id, kind, scope) DO UPDATE SET
            sequence = excluded.sequence, key_epoch = excluded.key_epoch,
@@ -1617,11 +1640,11 @@ async function saveInfo(
         info.signerDeviceId,
         now,
         ...ctx.authorization.binds,
-        projectId,
-        ctx.userId,
+        ...fenceBinds(projectId, ctx.userId),
         projectId,
         keyEpoch,
         ...infoFence.binds,
+        ...rotationFence.binds,
         ...named.binds,
         stored?.sequence ?? 0
       )
@@ -1630,6 +1653,7 @@ async function saveInfo(
     if (await deviceListMoved(ctx.db, ctx.userId, info.signerList)) {
       refuseDeviceListMoved();
     }
+    await memberRotationFence(ctx.db, projectId, keyEpoch);
     const current = await infoRow(ctx.db, projectId);
     if (current && current.sequence !== (stored?.sequence ?? 0)) {
       sequenceConflict(current.sequence);
@@ -1928,10 +1952,17 @@ export async function handleE2eeProjectDocumentRequest(
       (method === 'PUT' && ['document', 'info'].includes(route)) ||
       (method === 'POST' && route === 'revisions');
     if (!known) refuse(404, 'NOT_FOUND', 'Not found.');
+    // Any member reads; the owner and editors write (slice 5-2). Browsers
+    // check every version's author against the MLS roles of its epoch.
     // The owner reads a project in the recycle bin, as in plaintext (4-8).
-    await requireOwnedEncryptedProject(db, userId, projectId, {
-      allowDeleted: method === 'GET'
-    });
+    const access = await requireEncryptedProjectAccess(
+      db,
+      userId,
+      projectId,
+      method === 'GET' ? 'read' : 'write',
+      { allowDeleted: method === 'GET' }
+    );
+    ctx.ownerUserId = access.ownerUserId;
     switch (`${method} ${route}`) {
       case 'PUT document':
         return await saveDocument(ctx, projectId, request);
@@ -1994,10 +2025,13 @@ export async function withEncryptedProjectInfo(
                 e.wrapped_version_key, e.signature, e.signer_device_id, e.updated_at
          FROM e2ee_project_envelopes e
          JOIN projects p ON p.id = e.project_id
-         WHERE p.user_id = ? AND p.storage_format = 2
+         WHERE p.storage_format = 2
+           AND (p.user_id = ? OR EXISTS (
+             SELECT 1 FROM project_members m
+             WHERE m.project_id = p.id AND m.user_id = ?))
            AND e.kind = 'project-info' AND e.scope = ''`
       )
-      .bind(userId)
+      .bind(userId, userId)
       .all<EnvelopeRow & { project_id: string }>();
     return {
       ...listing,

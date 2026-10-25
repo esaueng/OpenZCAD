@@ -137,7 +137,9 @@ function untouched(
     faces: armed.seed.slots.faces,
     bodies: armed.seed.slots.bodies,
     plane: armed.seed.slots.plane,
-    edges: armed.seed.slots.edges
+    edges: armed.seed.slots.edges,
+    refs: [],
+    image: null
   };
   const ctx: InPlaceContext = {
     sketchViews: [],

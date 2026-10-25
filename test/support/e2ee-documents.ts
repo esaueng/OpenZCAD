@@ -427,6 +427,11 @@ export interface DeviceOptions {
    * naming a lost blob fails as before.
    */
   localSources?: Map<string, Uint8Array>;
+  /**
+   * The project's other members (slice 5-2): their current verified device
+   * lists, as contacts and pins (slice 5-1) will supply them.
+   */
+  members?: readonly Account[];
 }
 
 /** One device: its own engine, MLS store and pins over the shared server. */
@@ -483,7 +488,14 @@ export function device(
         throw new Error('no older account key in this test');
       }
     },
-    device: deviceId ? account.devices.get(deviceId)! : null
+    device: deviceId ? account.devices.get(deviceId)! : null,
+    ...(options.members
+      ? {
+          members: {
+            lists: async () => options.members!.map((member) => member.list)
+          }
+        }
+      : {})
   };
   result.documents = createEncryptedDocumentsApi(fetcher);
   result.references = options.references ?? createBlobReferenceRegistry();
