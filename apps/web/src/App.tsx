@@ -1446,6 +1446,7 @@ import {
 import { datumAxisChoices } from './lib/datumAxisChoices';
 import {
   holeWorldPosition,
+  inPlaceEditBodyBox,
   keepAbsentHoleSteps,
   inPlaceEditLineage,
   inPlaceEditMovedBodies,
@@ -8541,6 +8542,14 @@ export function App() {
     // A running command (another edit, a create) gives way quietly.
     inPlaceRef.current.cancel(true);
     retireStatusMessage();
+    // Each arming is its own edit session, even of the same row: a Done
+    // still validating from the last one must not finish this one.
+    if (editCardSessionRef.current) {
+      editCardSessionRef.current = {
+        ...editCardSessionRef.current,
+        generation: editCardSessionRef.current.generation + 1
+      };
+    }
     inPlaceRef.current.edit(armed.tool, armed.seed);
     if (armed.seed.notice) setStatus(armed.seed.notice);
     return true;
@@ -8734,10 +8743,15 @@ export function App() {
     const joined = descendants?.mixed.has(resolvedBodyId) ?? false;
     // A hole goes where the click lands, and on a body a later feature moved
     // (a copy, a mirror, a pattern) that is not where the hole's own face is.
+    // So does a draft's clicked-point hinge.
+    const usesPoint =
+      inPlaceRef.current.tool === 'hole' ||
+      (inPlaceRef.current.tool === 'draft' &&
+        inPlaceRef.current.options.neutral === 'point');
     if (
       later &&
       editing &&
-      inPlaceRef.current.tool === 'hole' &&
+      usesPoint &&
       managerRef.current &&
       inPlaceEditMovedBodies(
         managerRef.current.document,
@@ -19675,6 +19689,10 @@ export function App() {
   const inPlaceEditPicks = inPlace.slots;
   const inPlaceFacePickRef = useRef(inPlaceFacePick);
   inPlaceFacePickRef.current = inPlaceFacePick;
+  const inPlaceBodyPickRef = useRef(inPlaceBodyPick);
+  inPlaceBodyPickRef.current = inPlaceBodyPick;
+  const inPlaceEdgePickRef = useRef(inPlaceEdgePick);
+  inPlaceEdgePickRef.current = inPlaceEdgePick;
   useEffect(() => {
     const editing = inPlaceEditing;
     if (!editing || !doc) return;
@@ -19739,7 +19757,7 @@ export function App() {
       IN_PLACE_TOOL_SPECS[inPlace.tool].bodyMode === 'many';
     // Gone means gone from the document, or still without a shape once the
     // exact rebuild has finished: a body between rebuilds keeps its place.
-    const bodies = listsBodies
+    const kept = listsBodies
       ? inPlaceEditPicks.bodies.filter(
           (pick) =>
             representations[pick.bodyId] ||
@@ -19749,8 +19767,35 @@ export function App() {
               ))
         )
       : inPlaceEditPicks.bodies;
-    // A blend's edges, the same way: by lineage first, taking a moved hash.
+    // A body the update reshaped is read again, so the handles placed from
+    // its box (a scale's corner, a pattern's spacing) follow it.
+    let bodiesMoved = false;
+    const bodies = kept.map((pick) => {
+      const fresh = inPlaceBodyPickRef.current(pick.bodyId);
+      if (!fresh) return pick;
+      const box = inPlaceEditBodyBox(fresh, editing.data, {
+        evaluate: (value) =>
+          evalParamValue(value, parameterScope.scope, doc.units)
+      });
+      const same =
+        JSON.stringify([box.min, box.max]) ===
+        JSON.stringify([pick.min, pick.max]);
+      if (same) return pick;
+      bodiesMoved = true;
+      return box;
+    });
+    // A blend's edges, the same way: by lineage first, and read afresh where
+    // they stand now (the handle's middle and way out, a variable fillet's
+    // far end), so the chips follow an edge the update moved.
     let edgesMoved = false;
+    const placedEdge = (pick: EdgePick) =>
+      JSON.stringify([
+        pick.hash,
+        pick.topologyId,
+        pick.middle,
+        pick.outward,
+        pick.end
+      ]);
     const edges = inPlaceEditPicks.edges.flatMap((pick) => {
       const body = representations[pick.bodyId];
       if (!body?.topology) return [pick];
@@ -19759,16 +19804,29 @@ export function App() {
         ...(pick.reference ? { reference: pick.reference } : {})
       });
       if (!found.ok) return [];
-      if (
-        found.entry.hash === pick.hash &&
-        found.entry.topologyId === pick.topologyId
-      ) {
-        return [pick];
-      }
+      const fresh = inPlaceEdgePickRef.current(
+        pick.bodyId,
+        found.entry.topologyId,
+        found.entry.hash
+      );
+      // An input that publishes no drawn edge keeps the blend face anchor
+      // its seed placed the handle on.
+      const next: EdgePick = fresh
+        ? {
+            ...pick,
+            ...(Object.fromEntries(
+              Object.entries(fresh).filter(([, part]) => part !== undefined)
+            ) as EdgePick),
+            ...(pick.reference ? { reference: pick.reference } : {})
+          }
+        : {
+            ...pick,
+            hash: found.entry.hash,
+            topologyId: found.entry.topologyId
+          };
+      if (placedEdge(next) === placedEdge(pick)) return [pick];
       edgesMoved = true;
-      return [
-        { ...pick, hash: found.entry.hash, topologyId: found.entry.topologyId }
-      ];
+      return [next];
     });
     if (
       path.length === inPlaceEditPicks.path.length &&
@@ -19777,9 +19835,10 @@ export function App() {
       bodies.length === inPlaceEditPicks.bodies.length &&
       edges.length === inPlaceEditPicks.edges.length
     ) {
-      if (facesMoved || edgesMoved) {
+      if (facesMoved || bodiesMoved || edgesMoved) {
         inPlaceRef.current.setPicks({
           ...(facesMoved ? { faces } : {}),
+          ...(bodiesMoved ? { bodies } : {}),
           ...(edgesMoved ? { edges } : {})
         });
       }

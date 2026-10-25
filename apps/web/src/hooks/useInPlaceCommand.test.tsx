@@ -218,6 +218,29 @@ describe('useInPlaceCommand: revolve', () => {
     expect(commit).not.toHaveBeenCalled();
   });
 
+  it('reads a typed expression again when the model changes under it', () => {
+    let sweep = 90;
+    const commit = vi.fn();
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], commit),
+      evaluate: (value) => (value === 'sweep * 3' ? sweep * 3 : null),
+      baseVersion: 1
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() => hook.result.current.start('revolve', [PICK]));
+    act(() => {
+      hook.result.current.setValue('angle', 270, 'sweep * 3');
+    });
+    expect(hook.result.current.values.angle).toBe(270);
+    // A collaborator sets sweep to 100: the next version reads 300.
+    sweep = 100;
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.values.angle).toBe(300);
+  });
+
   it('keeps a sub-degree revolve', () => {
     const { hook } = setup();
     act(() => hook.result.current.start('revolve', [PICK]));
@@ -526,6 +549,21 @@ describe('useInPlaceCommand: hole step chips', () => {
     expect(accepted).toBe(true);
     expect(hook.result.current.refusal).toBeNull();
     await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+  });
+
+  it('another value changing leaves a refused entry holding Done', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('hole', [], [FACE]));
+    act(() => hook.result.current.setOption('style', 'countersink'));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.setValue('countersinkAngleDeg', 180);
+    });
+    act(() => {
+      hook.result.current.setValue('diameter', 8);
+    });
+    expect(hook.result.current.refusal).toMatch(/countersink angle/);
+    expect(hook.result.current.canFinish).toBe(false);
   });
 
   it('a style that hides the refused value lets Done go', async () => {
