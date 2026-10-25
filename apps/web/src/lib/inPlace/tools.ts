@@ -964,26 +964,31 @@ const hole: InPlaceToolSpec = {
     { id: 'depth', label: 'Depth', unit: 'length', initial: 10, min: 0.1 },
     // The step's sizes, on chips while its style is chosen. Until one is
     // set it follows the bore, as the card's defaults did.
+    // Any positive size, as the card's validation takes it (a step's
+    // diameter must also clear the bore, which the preview refuses by name).
     {
       id: 'counterboreDiameter',
       label: 'Counterbore ⌀',
       unit: 'length',
       initial: 10.8,
-      min: 0.1
+      min: 0,
+      exclusive: true
     },
     {
       id: 'counterboreDepth',
       label: 'Counterbore depth',
       unit: 'length',
       initial: 3,
-      min: 0.01
+      min: 0,
+      exclusive: true
     },
     {
       id: 'countersinkDiameter',
       label: 'Countersink ⌀',
       unit: 'length',
       initial: 12,
-      min: 0.1
+      min: 0,
+      exclusive: true
     },
     {
       // The full included angle, strictly between 0° and 180°, as the
@@ -2114,7 +2119,40 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   'grid-pattern': gridPattern
 };
 
-/** Values a value spec accepts: clamped to its range, finite. */
+/**
+ * Whether a typed value is one the spec takes as it is: finite, whole if it
+ * must be, and inside its range (strictly, for an open range).
+ */
+export function valueInRange(spec: ValueSpec, value: number): boolean {
+  if (!Number.isFinite(value)) return false;
+  if (spec.integer && !Number.isInteger(value)) return false;
+  const { min, max } = spec;
+  return spec.exclusive
+    ? (min === undefined || value > min) && (max === undefined || value < max)
+    : (min === undefined || value >= min) &&
+        (max === undefined || value <= max);
+}
+
+/**
+ * A value as a chip or the keypad shows it: to two places, unless that
+ * would show a value the spec refuses (179.9999995° is not 180°), when it
+ * is shown in full.
+ */
+export function displayedValue(
+  spec: ValueSpec | undefined,
+  value: number
+): number {
+  const rounded = Math.round(value * 100) / 100;
+  return !spec || valueInRange(spec, rounded) || !valueInRange(spec, value)
+    ? rounded
+    : value;
+}
+
+/**
+ * A dragged value brought inside its spec's range, finite. An open range's
+ * ends are kept just inside it; a typed value is checked with
+ * {@link valueInRange} instead, so no valid entry is nudged.
+ */
 export function clampValue(spec: ValueSpec, value: number): number {
   if (!Number.isFinite(value)) return spec.initial;
   const whole = spec.integer ? Math.round(value) : value;

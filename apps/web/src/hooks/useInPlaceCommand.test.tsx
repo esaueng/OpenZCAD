@@ -494,6 +494,24 @@ describe('useInPlaceCommand: hole step chips', () => {
     });
     expect(accepted).toBe(false);
     expect(hook.result.current.values.countersinkAngleDeg).toBe(0.5);
+    expect(hook.result.current.refusal).toBe(
+      '180; Hole countersink angle takes more than 0 and less than 180.'
+    );
+    // Every value strictly inside the open range is taken as typed.
+    act(() => {
+      accepted = hook.result.current.setValue(
+        'countersinkAngleDeg',
+        179.9999995
+      );
+    });
+    expect(accepted).toBe(true);
+    expect(hook.result.current.values.countersinkAngleDeg).toBe(179.9999995);
+    // A step's sizes take any positive value, as the card did.
+    act(() => {
+      accepted = hook.result.current.setValue('countersinkDiameter', 0.005);
+    });
+    expect(accepted).toBe(true);
+    expect(hook.result.current.values.countersinkDiameter).toBe(0.005);
   });
 
   it('a canceled chip entry leaves the step following the bore', async () => {

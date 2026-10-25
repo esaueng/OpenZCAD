@@ -1425,7 +1425,9 @@ import { useMediaQuery } from './hooks/useMediaQuery';
 import {
   IN_PLACE_TOOL_SPECS,
   clampValue,
+  displayedValue,
   isInPlaceTool,
+  valueInRange,
   type InPlaceRequest,
   type BodyPick,
   type FacePick,
@@ -18846,8 +18848,13 @@ export function App() {
         const valueSpec = inPlaceSpec?.values.find(
           (candidate) => candidate.id === handle.valueId
         );
-        const round = (value: number) =>
-          formatNumber(Math.round(value * 100) / 100);
+        // A value two places would show as a refused one is shown in full.
+        const round = (value: number) => {
+          const shown = displayedValue(valueSpec, value);
+          return shown === Math.round(value * 100) / 100
+            ? formatNumber(shown)
+            : String(shown);
+        };
         const format =
           valueSpec?.unit === 'angle'
             ? (value: number) => `${round(value)}°`
@@ -26001,7 +26008,7 @@ export function App() {
                 label: valueSpec.label,
                 // A parametric value opens as its expression, and comes
                 // back as one if entry is canceled.
-                initial: raw ?? String(Math.round(value * 100) / 100),
+                initial: raw ?? String(displayedValue(valueSpec, value)),
                 selectInitial: true,
                 unitKind: valueSpec.unit,
                 baseline: value,
@@ -26032,7 +26039,7 @@ export function App() {
                       // A value outside the command's range never moves the
                       // handle: Enter refuses it as an expression, and the
                       // value must still be the one it was.
-                      if (valueSpec && clampValue(valueSpec, value) !== value) {
+                      if (valueSpec && !valueInRange(valueSpec, value)) {
                         return;
                       }
                       commandSetterRef.current?.(valueId, value);

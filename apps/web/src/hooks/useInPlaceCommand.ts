@@ -5,6 +5,7 @@ import {
   IN_PLACE_TOOL_SPECS,
   axisCandidatesFor,
   clampValue,
+  valueInRange,
   type BodyPick,
   type CurvePick,
   type FacePick,
@@ -683,16 +684,20 @@ export function useInPlaceCommand(
         current &&
         valueSpec &&
         (raw !== undefined || (typed && valueSpec.exclusive)) &&
-        clampValue(valueSpec, value) !== value
+        !valueInRange(valueSpec, value)
       ) {
         const whole = valueSpec.integer ? 'whole numbers ' : '';
         const range = valueSpec.exclusive
-          ? `more than ${valueSpec.min ?? 0} and less than ${valueSpec.max}`
+          ? `more than ${valueSpec.min ?? 0}${
+              valueSpec.max === undefined
+                ? ''
+                : ` and less than ${valueSpec.max}`
+            }`
           : valueSpec.max === undefined
             ? `${whole ? `${whole}of ` : ''}at least ${valueSpec.min ?? 0}`
             : `${whole}${valueSpec.min ?? 0} to ${valueSpec.max}`;
         setRefusal(
-          `${raw} is ${value}; ${IN_PLACE_TOOL_SPECS[current.tool].title} ${valueSpec.label.toLowerCase()} takes ${range}.`
+          `${raw === undefined ? value : `${raw} is ${value}`}; ${IN_PLACE_TOOL_SPECS[current.tool].title} ${valueSpec.label.toLowerCase()} takes ${range}.`
         );
         return false;
       }
@@ -709,7 +714,11 @@ export function useInPlaceCommand(
           ...current,
           values: {
             ...current.values,
-            [valueId]: clampValue(valueSpec, value)
+            // In range, a value stands as given: only one outside it (a
+            // drag past an end) is brought back inside.
+            [valueId]: valueInRange(valueSpec, value)
+              ? value
+              : clampValue(valueSpec, value)
           },
           raws,
           touched: current.touched.includes(valueId)
