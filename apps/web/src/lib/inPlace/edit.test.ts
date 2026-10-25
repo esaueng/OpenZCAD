@@ -7,7 +7,7 @@ import {
   listFeaturesInOrder,
   transformBody
 } from '@openzcad/document-core';
-import { toUserId } from '@openzcad/shared';
+import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import type { FeatureUpdateInput } from '@openzcad/document-core';
 import type {
   BodyId,
@@ -18,6 +18,7 @@ import type {
   SketchId
 } from '@openzcad/shared';
 import {
+  withFeatureBuilt,
   inPlaceEditBodyBox,
   inPlaceEditLineage,
   keepAbsentHoleSteps,
@@ -526,23 +527,25 @@ describe('an untouched edit writes the feature back as stored', () => {
     });
   });
 
-  it('a suppressed feature is edited without a body to build', () => {
-    const data: FeatureData = {
-      featureKind: 'shell',
-      targetBodyId: BODY,
-      openingFaceHashes: [11],
-      thickness: 1
-    };
+  it('a suppressed feature previews built, its document left as it is', () => {
     const node = {
-      ...feature(data, 'body_s' as BodyId),
-      metadata: { suppressed: true }
-    } as unknown as FeatureNode;
-    expect(inPlaceEditSeed(node, EDIT_CTX)!.seed.suppressed).toBe(true);
-    expect(inPlaceEditSeed(feature(data), EDIT_CTX)!.seed.suppressed).toBe(
-      undefined
-    );
+      id: 'node_s',
+      kind: 'feature',
+      featureId: 'feat_s',
+      name: 'Shell',
+      data: {},
+      metadata: { suppressed: true, colour: 'red' }
+    };
+    const document = {
+      nodes: { node_s: node }
+    } as unknown as ProjectDocument;
+    const built = withFeatureBuilt(document, 'feat_s' as FeatureId);
+    expect(built.nodes.node_s?.metadata).toEqual({ colour: 'red' });
+    expect(node.metadata).toEqual({ suppressed: true, colour: 'red' });
+    // A live feature, or another one, leaves the document alone.
+    expect(withFeatureBuilt(built, 'feat_s' as FeatureId)).toBe(built);
+    expect(withFeatureBuilt(document, 'feat_x' as FeatureId)).toBe(document);
   });
-
   it('hole: step sizes it never stored stay absent until they are set', () => {
     const saved: FeatureData = {
       featureKind: 'hole',
@@ -890,6 +893,53 @@ describe('inPlaceEditBodyBox', () => {
     expect(
       inPlaceEditBodyBox(shown, scale(false), EDIT_CTX, [nudge])
     ).toMatchObject({ min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 5, z: 2 } });
+  });
+
+  it('takes a later turn about an axis back too', () => {
+    // Shown: scaled ×2 about the origin, then turned a quarter about Z.
+    const shown = {
+      bodyId: BODY,
+      min: { x: -10, y: 0, z: 0 },
+      max: { x: 0, y: 20, z: 4 }
+    };
+    const turn = {
+      featureKind: 'transform',
+      targetBodyId: BODY,
+      transform: {
+        translation: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 }
+      },
+      axisRotation: {
+        axis: { type: 'datum-axis', datumFeatureId: 'axis_1' as FeatureId },
+        angleDeg: 90
+      }
+    } as FeatureData;
+    const ctx = {
+      ...EDIT_CTX,
+      datumAxis: () => ({
+        origin: { x: 0, y: 0, z: 0 },
+        direction: { x: 0, y: 0, z: 1 }
+      })
+    };
+    expect(inPlaceEditBodyBox(shown, scale(false), ctx, [turn])).toMatchObject({
+      min: { x: 0, y: 0, z: 0 },
+      max: { x: 10, y: 5, z: 2 }
+    });
+    // A Move's own turn, the same way.
+    const moved = {
+      ...turn,
+      axisRotation: undefined,
+      transform: {
+        ...(turn as { transform: object }).transform,
+        rotationDeg: { x: 0, y: 0, z: 90 }
+      }
+    } as unknown as FeatureData;
+    expect(inPlaceEditBodyBox(shown, scale(false), ctx, [moved])).toMatchObject(
+      {
+        min: { x: 0, y: 0, z: 0 },
+        max: { x: 10, y: 5, z: 2 }
+      }
+    );
   });
 
   it('leaves a copy source, and any other body, as the model shows it', () => {
