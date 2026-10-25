@@ -18647,15 +18647,17 @@ export function App() {
     onStatus: setStatus
   });
   // A value keypad opens from an armed handle, a running command or a tool
-  // card. Load it once one is up, so a keypad that beats the idle warm-up (or
-  // runs under Save-Data, which skips it) does not appear late.
+  // card. Load it once one is up, so a keypad that beats the idle warm-up
+  // does not appear late. Save-Data still asks for nothing speculative: there
+  // the keypad loads when it is actually opened.
   const keypadWithinReach =
     tool !== null ||
     inPlace.active ||
     interaction.mode !== 'idle' ||
     movePreview !== null;
   useEffect(() => {
-    if (keypadWithinReach) LazyNumericKeypad.preload().catch(() => undefined);
+    if (!keypadWithinReach || prefersSavingData()) return;
+    LazyNumericKeypad.preload().catch(() => undefined);
   }, [keypadWithinReach]);
   const inPlaceRef = useRef(inPlace);
   inPlaceRef.current = inPlace;
