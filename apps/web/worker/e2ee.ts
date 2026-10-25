@@ -123,9 +123,9 @@ const ENCRYPTED_CONTENT_WRITE_ROUTE =
 /**
  * Writes that would share an encrypted project, or settle a member's
  * departure, while its plaintext is staged (slice 7-3 with Phase 5): share
- * links and their keys, authority and snapshots (5-10), proposals (5-5),
- * new invitations and KeyPackages (5-3a). Revoking an invitation stays
- * open. The reverse cutover refuses a shared project anyway; this keeps a
+ * links and their keys, authority and snapshots (5-10; matched before that
+ * slice's routes exist, so they arrive covered), proposals (5-5), new
+ * invitations and KeyPackages (5-3a). Revoking an invitation stays open. The reverse cutover refuses a shared project anyway; this keeps a
  * staging from being undone by a write it cannot see.
  */
 const ENCRYPTED_SHARING_WRITE_ROUTE =
