@@ -1724,7 +1724,16 @@ const scale: InPlaceToolSpec = {
   wantsAxis: false,
   wantsPath: false,
   values: [
-    { id: 'factor', label: '×', unit: 'count', initial: 1, min: 0.01, max: 100 }
+    // Any positive factor, as the kernel takes it (a unit conversion's
+    // 0.001 or 1000 included).
+    {
+      id: 'factor',
+      label: '×',
+      unit: 'count',
+      initial: 1,
+      min: 0,
+      exclusive: true
+    }
   ],
   options: [COPY_OPTION],
   hint: (slots) =>
