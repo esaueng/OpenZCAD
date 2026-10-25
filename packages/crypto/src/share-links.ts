@@ -58,12 +58,14 @@ export const SHARE_AUTHORITY_VERSION_1 = 1;
 export const SHARE_LINK_GRANT_VERSION_1 = 1;
 export const SHARE_LINK_TOMBSTONE_VERSION_1 = 1;
 export const SHARE_KEY_WRAP_VERSION_1 = 1;
+export const SHARE_LINK_FORGET_VERSION_1 = 1;
 
 const DELEGATION_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x53); // "OZS"
 const AUTHORITY_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x41); // "OZA"
 const GRANT_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x4c); // "OZL"
 const TOMBSTONE_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x59); // "OZY"
 const KEY_WRAP_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x57); // "OZW"
+const FORGET_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x46); // "OZF"
 
 const MAX_U32 = 0xffffffff;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -1190,6 +1192,74 @@ export async function verifyShareKeyWrap(
     key,
     'share key wrap',
     encodeShareKeyWrap(value),
+    signature
+  );
+}
+
+// --- Link forgets ------------------------------------------------------------
+
+/**
+ * An owner device's request that the server forget a link the owner
+ * tombstoned: drop its snapshot, key wraps and statement for good. The
+ * server takes it only signed by a device the owner's current device list
+ * certifies, so an owner device removed while its session stays signed in
+ * cannot break every distributed URL. The link id binds it to one link (ids
+ * are never reused), the key epoch to the project's current one.
+ */
+export interface ShareLinkForgetStatement {
+  readonly projectId: string;
+  readonly shareId: string;
+  /** The project's current key epoch. */
+  readonly keyEpoch: number;
+}
+
+/**
+ * Canonical bytes: `"OZF" | u8 1 | u8 length + project id | u8 length +
+ * link id | u32 key epoch`. Never stored: the signer sends the fields and
+ * the signature, and the server rebuilds these bytes.
+ */
+export function encodeShareLinkForget(value: ShareLinkForgetStatement): Bytes {
+  const fail = (message: string): never => {
+    throw new E2eeError('invalid-argument', message);
+  };
+  if (value === null || typeof value !== 'object') fail('Expected a forget');
+  if (!isEnvelopeId(value.projectId)) fail('projectId is not an id');
+  if (!isEnvelopeId(value.shareId)) fail('shareId is not an id');
+  if (!isUint(value.keyEpoch, MAX_U32)) fail('keyEpoch must be a u32');
+  const writer = new ByteWriter()
+    .bytes(FORGET_MAGIC)
+    .u8(SHARE_LINK_FORGET_VERSION_1);
+  writeId(writer, value.projectId);
+  writeId(writer, value.shareId);
+  return writer.u32(value.keyEpoch).finish();
+}
+
+/** An owner device signs a link forget: `u8 1 | r || s`. */
+export async function signShareLinkForget(
+  deviceKey: SigningPrivateKey,
+  value: ShareLinkForgetStatement
+): Promise<Bytes> {
+  return signStatement(
+    deviceKey,
+    'share link forget',
+    encodeShareLinkForget(value)
+  );
+}
+
+/**
+ * Whether `signature` is `signerKey`'s over this forget. Throws for a
+ * malformed signature or an unknown signature version.
+ */
+export async function verifyShareLinkForget(
+  signerKey: Uint8Array | CryptoKey,
+  value: ShareLinkForgetStatement,
+  signature: Uint8Array
+): Promise<boolean> {
+  const { key } = await verifyingKey(signerKey);
+  return statementValid(
+    key,
+    'share link forget',
+    encodeShareLinkForget(value),
     signature
   );
 }

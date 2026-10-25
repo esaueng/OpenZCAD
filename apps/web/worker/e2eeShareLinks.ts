@@ -11,8 +11,10 @@
  * epoch's project key, the newest share-authority statement and the newest
  * snapshot; per account, the newest identity-signed share delegation.
  *
- * It still checks what it can, as defense in depth: the owner registers,
- * forgets and states links; the owner and editors post key wraps (for the
+ * It still checks what it can, as defense in depth: the owner registers
+ * and states links and forgets them (signed by a device the owner's newest
+ * device list certifies over the link and the current key epoch, fenced on
+ * that list's head); the owner and editors post key wraps (for the
  * group's current key epoch only, signed by a device the caller's newest
  * device list certifies and fenced on that list's head; the first stored
  * wins) and snapshots (a
@@ -55,6 +57,7 @@ import {
   verifyShareAuthority,
   verifyShareDelegation,
   verifyShareKeyWrap,
+  verifyShareLinkForget,
   versionHash,
   type ShareDelegation
 } from '@openzcad/crypto';
@@ -640,13 +643,46 @@ async function createLink(
 async function forgetLink(
   ctx: Context,
   projectId: string,
-  shareId: string
+  shareId: string,
+  body: Record<string, unknown>
 ): Promise<Response> {
+  const keyEpoch = uintField(body.keyEpoch, 'keyEpoch');
+  const deviceId = idField(body.deviceId, 'deviceId');
+  const signature = bytesField(body.signature, 'signature', {
+    exact: STATEMENT_SIGNATURE_BYTES
+  }).bytes;
   const row = await linkRow(ctx.db, projectId, shareId);
   if (!row) {
     refuse(404, 'E2EE_SHARE_LINK_NOT_FOUND', 'This share link does not exist.');
   }
   if (row.revoked_at !== null) return json({ ok: true });
+  const current = await currentKeyEpoch(ctx.db, projectId);
+  if (keyEpoch !== current) stale(current);
+  // Forgetting is permanent and breaks every URL of the link, so the owner
+  // account is not enough: only a device the owner's newest device list
+  // certifies may ask, proven by its signature over this link and the
+  // current key epoch. An owner device removed while its session stays
+  // signed in cannot forget the links.
+  const device = await requireCertifiedDevice(ctx.db, ctx.userId, deviceId);
+  let verified: boolean;
+  try {
+    verified = await verifyShareLinkForget(
+      device.signingKey,
+      { projectId, shareId, keyEpoch },
+      signature
+    );
+  } catch {
+    verified = false;
+  }
+  if (!verified) {
+    refuse(
+      400,
+      'E2EE_SIGNATURE_INVALID',
+      'The forget request is not signed by the device it names.'
+    );
+  }
+  // ...and a removal of that device landing first makes the batch refuse.
+  const signerList = deviceListUnchanged(ctx.userId, device);
   const snapshot = await ctx.db
     .prepare(
       `SELECT envelope_key FROM e2ee_share_snapshots
@@ -662,7 +698,10 @@ async function forgetLink(
          SET revoked_at = ?, authority = NULL, authority_signature = NULL,
              authority_sequence = NULL, authority_expires_at = NULL
          WHERE project_id = ? AND share_id = ? AND revoked_at IS NULL
-           AND ${ctx.authorization.sql} AND ${PROJECT_FENCE}`
+           AND ${ctx.authorization.sql} AND ${PROJECT_FENCE}
+           AND EXISTS (SELECT 1 FROM e2ee_project_groups
+             WHERE project_id = ? AND key_epoch_base + epoch = ?)
+           AND ${signerList.sql}`
       )
       .bind(
         now,
@@ -670,7 +709,10 @@ async function forgetLink(
         shareId,
         ...ctx.authorization.binds,
         projectId,
-        ctx.userId
+        ctx.userId,
+        projectId,
+        keyEpoch,
+        ...signerList.binds
       ),
     ctx.db
       .prepare(
@@ -692,6 +734,11 @@ async function forgetLink(
   if (!changed(results[0])) {
     const after = await linkRow(ctx.db, projectId, shareId);
     if (after?.revoked_at) return json({ ok: true });
+    if (await deviceListMoved(ctx.db, ctx.userId, device)) {
+      refuseDeviceListMoved();
+    }
+    const epoch = await currentKeyEpoch(ctx.db, projectId);
+    if (epoch !== keyEpoch) stale(epoch);
     sessionRequired();
   }
   if (snapshot?.envelope_key && ctx.bucket) {
@@ -1206,7 +1253,7 @@ export async function handleE2eeShareLinkRequest(
     idField(shareId, 'shareId');
     if (action === null && method === 'DELETE') {
       await requireOwnedEncryptedProject(db, userId, projectId);
-      return await forgetLink(ctx, projectId, shareId);
+      return await forgetLink(ctx, projectId, shareId, await readJson(request));
     }
     if (action === 'keys' && method === 'POST') {
       await requireEncryptedProjectAccess(db, userId, projectId, 'write');

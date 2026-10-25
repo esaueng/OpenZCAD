@@ -22,6 +22,7 @@ import {
   signShareAuthority,
   signShareDelegation,
   signShareKeyWrap,
+  signShareLinkForget,
   toBase64Url,
   toHex,
   wrapKey,
@@ -33,6 +34,7 @@ import {
   createE2eeShareLinksApi,
   decodeE2eeFrame,
   type E2eeSharedSnapshotMetadata,
+  type E2eeShareLinkForgetRequest,
   type ProjectDocument
 } from '@openzcad/shared';
 import { shareLinkErasureStatements } from '../apps/web/worker/e2eeShareLinks';
@@ -228,12 +230,16 @@ function failingForget(ctx: Device['shareLinks'], times: number) {
       ...ctx,
       api: {
         ...ctx.api,
-        forget: async (projectId: string, shareId: string) => {
+        forget: async (
+          projectId: string,
+          shareId: string,
+          request: E2eeShareLinkForgetRequest
+        ) => {
           calls.push(shareId);
           if (left-- > 0) {
             throw new E2eeShareLinkApiError(503, 'Service unavailable');
           }
-          return ctx.api.forget(projectId, shareId);
+          return ctx.api.forget(projectId, shareId, request);
         }
       }
     }
@@ -654,6 +660,213 @@ describe('revoking a link (slice 5-10)', { timeout: 120_000 }, () => {
     expect((await listShareLinks(laptop.shareLinks, projectId)).links).toEqual(
       []
     );
+  });
+});
+
+describe('forgetting a link (slice 5-10)', { timeout: 120_000 }, () => {
+  /**
+   * `DELETE …/share-links/:shareId` as OWNER's session, naming `deviceId`
+   * and signed by OWNER's `signer` over `signed` (this link at the current
+   * key epoch unless given).
+   */
+  async function forgetAs(
+    srv: Server,
+    projectId: string,
+    shareId: string,
+    signer: string,
+    deviceId: string,
+    signed: { shareId?: string; keyEpoch?: number } = {}
+  ) {
+    const keyEpoch = signed.keyEpoch ?? serverKeyEpoch(srv, projectId);
+    const signature = await signShareLinkForget(
+      owner.devices.get(signer)!.signing.privateKey,
+      { projectId, shareId: signed.shareId ?? shareId, keyEpoch }
+    );
+    return answer(
+      await srv.call(
+        'DELETE',
+        `/api/e2ee/projects/${projectId}/share-links/${shareId}`,
+        {
+          user: OWNER,
+          body: { keyEpoch, deviceId, signature: toBase64Url(signature) }
+        }
+      )
+    );
+  }
+
+  const answer = async (response: Response) => ({
+    status: response.status,
+    code: ((await response.json()) as { code?: string }).code
+  });
+
+  /** The link still serves its snapshot, with its key wraps and statement. */
+  function stillServes(srv: Server, projectId: string, link: CreatedShareLink) {
+    return (async () => {
+      expect((await served(srv, link.fragment.token)).status).toBe(200);
+      expect(linkRow(srv, projectId, link.shareId)!.revoked_at).toBe(null);
+      expect(
+        linkRow(srv, projectId, link.shareId)!.authority_sequence
+      ).not.toBe(null);
+    })();
+  }
+
+  it('refuses a removed owner device whose session stays signed in, and the owner’s certified device still revokes', async () => {
+    const { srv, laptop, projectId } = await linkedProject();
+    await delegate(laptop);
+    const created = await createShareLink(laptop.shareLinks, projectId, 'view');
+    await owner.revoke(srv.db, 'owner_desktop');
+    try {
+      // The removed device names itself...
+      expect(
+        await forgetAs(
+          srv,
+          projectId,
+          created.shareId,
+          'owner_desktop',
+          'owner_desktop'
+        )
+      ).toEqual({ status: 403, code: 'E2EE_DEVICE_NOT_CERTIFIED' });
+      // ...or a sibling it cannot sign for...
+      expect(
+        await forgetAs(
+          srv,
+          projectId,
+          created.shareId,
+          'owner_desktop',
+          'owner_laptop'
+        )
+      ).toEqual({ status: 400, code: 'E2EE_SIGNATURE_INVALID' });
+      // ...or asks as the owner account alone, as before.
+      expect(
+        await answer(
+          await srv.call(
+            'DELETE',
+            `/api/e2ee/projects/${projectId}/share-links/${created.shareId}`,
+            { user: OWNER }
+          )
+        )
+      ).toMatchObject({ status: 400 });
+      await stillServes(srv, projectId, created);
+      expect(countFor(srv, 'e2ee_share_keys', projectId)).toBeGreaterThan(0);
+
+      // The owner's certified device revokes, and the server forgets it.
+      await revokeShareLink(laptop.shareLinks, projectId, created.shareId);
+      expect((await served(srv, created.fragment.token)).status).toBe(404);
+      expect(linkRow(srv, projectId, created.shareId)!.revoked_at).not.toBe(
+        null
+      );
+      expect(countFor(srv, 'e2ee_share_keys', projectId)).toBe(0);
+      expect(countFor(srv, 'e2ee_share_snapshots', projectId)).toBe(0);
+    } finally {
+      owner = await makeAccount(OWNER, ['owner_laptop', 'owner_desktop']);
+    }
+  });
+
+  it('refuses a signature for another link or another key epoch', async () => {
+    const { srv, laptop, projectId } = await linkedProject();
+    await delegate(laptop);
+    const first = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const second = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const keyEpoch = serverKeyEpoch(srv, projectId);
+    expect(keyEpoch).toBeGreaterThan(0);
+    // A signature over the first link replayed against the second.
+    expect(
+      await forgetAs(
+        srv,
+        projectId,
+        second.shareId,
+        'owner_laptop',
+        'owner_laptop',
+        { shareId: first.shareId }
+      )
+    ).toEqual({ status: 400, code: 'E2EE_SIGNATURE_INVALID' });
+    // A signature over an earlier key epoch, or a later one.
+    for (const epoch of [keyEpoch - 1, keyEpoch + 1]) {
+      expect(
+        await forgetAs(
+          srv,
+          projectId,
+          second.shareId,
+          'owner_laptop',
+          'owner_laptop',
+          { keyEpoch: epoch }
+        )
+      ).toEqual({ status: 409, code: 'E2EE_EPOCH_STALE' });
+    }
+    // The current epoch's claimed but an earlier one's signed.
+    const signature = await signShareLinkForget(
+      owner.devices.get('owner_laptop')!.signing.privateKey,
+      { projectId, shareId: second.shareId, keyEpoch: keyEpoch - 1 }
+    );
+    expect(
+      await answer(
+        await srv.call(
+          'DELETE',
+          `/api/e2ee/projects/${projectId}/share-links/${second.shareId}`,
+          {
+            body: {
+              keyEpoch,
+              deviceId: 'owner_laptop',
+              signature: toBase64Url(signature)
+            }
+          }
+        )
+      )
+    ).toEqual({ status: 400, code: 'E2EE_SIGNATURE_INVALID' });
+    await stillServes(srv, projectId, first);
+    await stillServes(srv, projectId, second);
+    // The certified device's own signature over the link forgets it.
+    expect(
+      await forgetAs(
+        srv,
+        projectId,
+        second.shareId,
+        'owner_laptop',
+        'owner_laptop'
+      )
+    ).toEqual({ status: 200, code: undefined });
+    expect((await served(srv, second.fragment.token)).status).toBe(404);
+    await stillServes(srv, projectId, first);
+  });
+
+  it('a device-list change between the device check and the forget changes nothing', async () => {
+    const { srv, laptop, projectId } = await linkedProject();
+    await delegate(laptop);
+    const created = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const keys = countFor(srv, 'e2ee_share_keys', projectId);
+    // The owner's list moves on (a removal, say) after the signer was
+    // checked and before the link is forgotten.
+    const push = srv.statements.push.bind(srv.statements);
+    srv.statements.push = (...sql: string[]) => {
+      if (
+        sql.some((s) => /^\s*UPDATE e2ee_share_links\s+SET revoked_at/.test(s))
+      ) {
+        srv.statements.push = push;
+        srv.db
+          .prepare(
+            `INSERT INTO e2ee_device_list_entries
+             SELECT user_id, generation, sequence + 1, entry, signature,
+                    substr(entry_hash, 2) || '0', created_at
+             FROM e2ee_device_list_entries WHERE user_id = ?
+             ORDER BY sequence DESC LIMIT 1`
+          )
+          .run(OWNER);
+      }
+      return push(...sql);
+    };
+    expect(
+      await forgetAs(
+        srv,
+        projectId,
+        created.shareId,
+        'owner_laptop',
+        'owner_laptop'
+      )
+    ).toEqual({ status: 409, code: 'E2EE_DEVICE_LIST_CHANGED' });
+    expect(srv.statements.push).toBe(push);
+    await stillServes(srv, projectId, created);
+    expect(countFor(srv, 'e2ee_share_keys', projectId)).toBe(keys);
+    expect(countFor(srv, 'e2ee_share_snapshots', projectId)).toBe(1);
   });
 });
 

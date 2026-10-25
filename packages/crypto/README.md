@@ -494,6 +494,16 @@ an epoch's project key, and the server rebuilds the bytes from the request
 and checks the signature against that device's current certified key
 before keeping the first wrap for the epoch.
 
+A sixth, `"OZF"` link forget (`share link forget`), is never stored either:
+a certified owner device signs `u8 len + project id | u8 len + link id |
+u32 key epoch` (the project's current key epoch) when it asks the server to
+forget a link it tombstoned, and the server rebuilds the bytes from the
+request, refuses any other epoch than the current one and checks the
+signature against that device's current certified key before dropping the
+link's snapshot, key wraps and statement, so an owner device removed while
+its session stays signed in cannot break the links. The link id binds the
+signature to one link (ids are never reused).
+
 Key hashes are `publicKeyHash` of a device signing key, as
 `DeviceRecord.signingKeyHash` names it. Statements a visitor sees name no
 user id. Times are Unix milliseconds:

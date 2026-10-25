@@ -13,12 +13,13 @@
  *   (`shareLinkFragment.ts`).
  * - **Revoke** (owner). A signed permanent tombstone ("OZY") replaces the
  *   grant in a new version; the server is then asked to forget the link
- *   (its snapshot, key wraps and statement go at once). The tombstone, not
- *   that one request, is what counts: while the server still lists a link
- *   the head tombstones, its revocation is pending and the owner's browser
- *   asks again (`forgetRevokedShareLinks`) on the next revoke, whenever the
- *   sharing dialog loads the links, and after a removal. Revoking a link
- *   already tombstoned only asks the server again.
+ *   (its snapshot, key wraps and statement go at once), by a request this
+ *   device signs ("OZF") over the link and the current key epoch. The
+ *   tombstone, not that one request, is what counts: while the server still
+ *   lists a link the head tombstones, its revocation is pending and the
+ *   owner's browser asks again (`forgetRevokedShareLinks`) on the next
+ *   revoke, whenever the sharing dialog loads the links, and after a
+ *   removal. Revoking a link already tombstoned only asks the server again.
  * - **Statements** ("OZA", owner devices the delegation names): at most
  *   seven days, a sequence that rises per link, naming the signing keys of
  *   the owner's and every current editor's devices as this browser pinned
@@ -62,6 +63,7 @@ import {
   signShareAuthority,
   signShareDelegation,
   signShareKeyWrap,
+  signShareLinkForget,
   signShareLinkGrant,
   signShareLinkTombstone,
   toBase64Url,
@@ -859,6 +861,11 @@ export interface ForgetOutcome {
  * again, until the listing no longer names the link. Owner only; anyone
  * else, and a head without tombstones, gets an empty result without a
  * request. `listed` is a listing just read, to skip reading it again.
+ *
+ * Each request is signed by this device ("OZF", `signShareLinkForget`)
+ * over the link and the project's current key epoch: the server forgets a
+ * link only for a device the owner's newest device list certifies. A
+ * request refused as stale is signed again once at the epoch caught up to.
  */
 export async function forgetRevokedShareLinks(
   ctx: ShareLinksContext,
@@ -877,14 +884,43 @@ export async function forgetRevokedShareLinks(
   const owner = await projectOwnerOf(ctx.groups, projectId, head.keyEpoch);
   if (owner !== ctx.groups.account.userId) return outcome();
   const listed = options.listed ?? (await ctx.api.list(projectId));
-  for (const record of listed.links) {
-    if (!revoked.has(record.shareId)) continue;
+  const pending = listed.links.filter((record) => revoked.has(record.shareId));
+  if (!pending.length) return outcome();
+  let keyEpoch: Promise<number> | null = null;
+  const currentKeyEpoch = (refresh: boolean) => {
+    if (!keyEpoch || refresh) {
+      keyEpoch = joinProjectGroup(ctx.groups, projectId).then(
+        (state) => state.keyEpoch
+      );
+    }
+    return keyEpoch;
+  };
+  const send = async (shareId: string, refresh: boolean) => {
+    const { device } = requireDevice(ctx);
+    const epoch = await currentKeyEpoch(refresh);
+    const signature = await signShareLinkForget(device.signing.privateKey, {
+      projectId,
+      shareId,
+      keyEpoch: epoch
+    });
+    await ctx.api
+      .forget(projectId, shareId, {
+        keyEpoch: epoch,
+        deviceId: device.deviceId,
+        signature: b64(signature)
+      })
+      .catch((error: unknown) => {
+        if ((error as { status?: number }).status !== 404) throw error;
+      });
+  };
+  for (const record of pending) {
     try {
-      await ctx.api
-        .forget(projectId, record.shareId)
-        .catch((error: unknown) => {
-          if ((error as { status?: number }).status !== 404) throw error;
-        });
+      await send(record.shareId, false).catch((error: unknown) => {
+        if ((error as { code?: string }).code !== 'E2EE_EPOCH_STALE') {
+          throw error;
+        }
+        return send(record.shareId, true);
+      });
       forgotten.push(record.shareId);
     } catch (error) {
       failed.push({ shareId: record.shareId, reason: describe(error) });

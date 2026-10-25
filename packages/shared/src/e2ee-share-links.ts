@@ -19,7 +19,9 @@
  *   owner's delegation.
  * - `POST …/share-links` (owner): registers a link the owner just granted.
  * - `DELETE …/share-links/:shareId` (owner): forgets a link the owner just
- *   tombstoned: its snapshot, key wraps and statement go at once.
+ *   tombstoned, signed by a certified device of the owner over the
+ *   project's current key epoch: its snapshot, key wraps and statement go
+ *   at once.
  * - `POST …/share-links/:shareId/keys` (owner or editor): the share key
  *   under the current key epoch's project key, signed by a certified
  *   device of the caller; the first one stored wins.
@@ -76,6 +78,22 @@ export interface E2eeShareKeyWrap {
  */
 export interface E2eeShareKeyUpload extends E2eeShareKeyWrap {
   /** The sending device, certified in the caller's device list. */
+  deviceId: string;
+  /** 65 bytes: `u8 1 | r || s` by `deviceId`'s certified signing key. */
+  signature: string;
+}
+
+/**
+ * The body of `DELETE …/share-links/:shareId`: the sending owner device's
+ * signature (`signShareLinkForget`) over the project, the link and the
+ * project's current key epoch. The server forgets the link only while
+ * `deviceId` is certified in the owner's newest device list, so an owner
+ * device removed while its session stays signed in cannot break the links.
+ */
+export interface E2eeShareLinkForgetRequest {
+  /** The project's current key epoch (409 `E2EE_EPOCH_STALE` otherwise). */
+  keyEpoch: number;
+  /** The sending device, certified in the owner's device list. */
   deviceId: string;
   /** 65 bytes: `u8 1 | r || s` by `deviceId`'s certified signing key. */
   signature: string;
@@ -189,7 +207,11 @@ export interface E2eeShareLinksApi {
     projectId: string,
     request: E2eeCreateShareLinkRequest
   ): Promise<E2eeShareLinkResponse>;
-  forget(projectId: string, shareId: string): Promise<{ ok: true }>;
+  forget(
+    projectId: string,
+    shareId: string,
+    request: E2eeShareLinkForgetRequest
+  ): Promise<{ ok: true }>;
   postKey(
     projectId: string,
     shareId: string,
@@ -264,7 +286,8 @@ export function createE2eeShareLinksApi(fetcher: Fetch): E2eeShareLinksApi {
   return {
     list: (projectId) => call(links(projectId)),
     create: (projectId, request) => call(links(projectId), 'POST', request),
-    forget: (projectId, shareId) => call(link(projectId, shareId), 'DELETE'),
+    forget: (projectId, shareId, request) =>
+      call(link(projectId, shareId), 'DELETE', request),
     postKey: (projectId, shareId, key) =>
       call(`${link(projectId, shareId)}/keys`, 'POST', key),
     putAuthority: (projectId, shareId, authority) =>
