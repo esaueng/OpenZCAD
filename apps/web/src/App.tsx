@@ -373,6 +373,10 @@ import {
   isProjectFormatUnsupportedError
 } from './lib/api';
 import { assistantDisabledReason } from './lib/assistant/encryptedProject';
+import {
+  refreshEncryptedMemberRole,
+  useEncryptedMemberRole
+} from './lib/e2ee/useEncryptedMemberRole';
 import { useAssistantConsentGate } from './lib/assistant/consentGate';
 import {
   retainEncryptionStatus,
@@ -4693,13 +4697,42 @@ export function App() {
     (cloudProjectIds.has(doc.projectId) ||
       remoteVersionsRef.current.has(doc.projectId))
   );
+  // A member's copy of someone else's end-to-end encrypted project (ADR-024
+  // slice 5-4): its edits go through the encrypted store, which writes only
+  // on top of the head it read, not through the plaintext room. What the
+  // member may do comes from the project's MLS roles, not the room.
+  const encryptedMemberProject = Boolean(
+    !shareSession &&
+    activeProjectIsCloud &&
+    session &&
+    doc &&
+    doc.ownerUserId !== session.userId &&
+    isEncryptedProject(doc.projectId)
+  );
+  const encryptedMemberRole = useEncryptedMemberRole(
+    encryptedMemberProject ? (doc?.projectId ?? null) : null,
+    encryptedMemberProject
+  );
+  const encryptedMemberRoleRef = useRef(encryptedMemberRole);
+  encryptedMemberRoleRef.current = encryptedMemberRole;
+  // Why an encrypted member cannot edit, if it cannot: a viewer, or a role
+  // not known yet.
+  const encryptedMemberEditReason = !encryptedMemberProject
+    ? null
+    : encryptedMemberRole === 'viewer'
+      ? 'This shared project is read-only'
+      : encryptedMemberRole === null
+        ? 'Waiting for project access'
+        : null;
   // Member edits use the lease-checked room. The account document endpoint
-  // deliberately refuses editor writes while leases are enforced.
+  // deliberately refuses editor writes while leases are enforced. An
+  // encrypted member's are the account's own writes (above).
   const sharedAccountProject = Boolean(
     !shareSession &&
     activeProjectIsCloud &&
     session &&
-    doc?.ownerUserId !== session.userId
+    doc?.ownerUserId !== session.userId &&
+    !encryptedMemberProject
   );
 
   // An end-to-end encrypted project's room relays ciphertext (ADR-024
@@ -4855,14 +4888,16 @@ export function App() {
   // workspace is the parameters, and Make a copy is the road to Build.
   const buildModeDisabledReason = shareSession
     ? 'This is a shared link — Make a copy to open Build mode'
-    : !sharedProjectDisabled &&
-        cloudAvailable &&
-        session &&
-        projectSharingEnabled &&
-        (collaboration.role === 'viewer' ||
-          collaboration.status === 'read-only')
+    : !sharedProjectDisabled && encryptedMemberRole === 'viewer'
       ? 'This shared project is read-only'
-      : null;
+      : !sharedProjectDisabled &&
+          cloudAvailable &&
+          session &&
+          projectSharingEnabled &&
+          (collaboration.role === 'viewer' ||
+            collaboration.status === 'read-only')
+        ? 'This shared project is read-only'
+        : null;
   // A parameter change is still a document edit, so a read-only seat locks
   // Tweak exactly as it locks Build. A shared link is the opposite: Tweak is
   // the whole point of the visit.
@@ -4946,24 +4981,26 @@ export function App() {
         null
       : sharedProjectDisabled
         ? 'Project sharing is disabled in Settings'
-        : !activeProjectIsCloud ||
-            !cloudAvailable ||
-            !session ||
-            !projectSharingEnabled
-          ? null
-          : collaboration.conflict
-            ? 'Resolve the collaboration conflict before editing'
-            : collaboration.role === 'viewer' ||
-                collaboration.status === 'read-only'
-              ? 'This shared project is read-only'
-              : collaboration.role === null
-                ? 'Waiting for project access'
-                : collaborationRollout.editLeasesEnforced &&
-                    !activeCollaborationLease
-                  ? collaboration.status === 'lease-denied'
-                    ? 'Another collaborator holds the edit lease'
-                    : 'Waiting for the project edit lease'
-                  : null;
+        : encryptedMemberProject
+          ? encryptedMemberEditReason
+          : !activeProjectIsCloud ||
+              !cloudAvailable ||
+              !session ||
+              !projectSharingEnabled
+            ? null
+            : collaboration.conflict
+              ? 'Resolve the collaboration conflict before editing'
+              : collaboration.role === 'viewer' ||
+                  collaboration.status === 'read-only'
+                ? 'This shared project is read-only'
+                : collaboration.role === null
+                  ? 'Waiting for project access'
+                  : collaborationRollout.editLeasesEnforced &&
+                      !activeCollaborationLease
+                    ? collaboration.status === 'lease-denied'
+                      ? 'Another collaborator holds the edit lease'
+                      : 'Waiting for the project edit lease'
+                    : null;
   // View mode joins the same guard every other modeling edit uses. Project
   // rename has its own mode-aware guard below because it is workspace metadata:
   // owners may change it from either mode, while editors remain Build-only.
@@ -5340,6 +5377,15 @@ export function App() {
           );
         } else if (status.state === 'refused') {
           setStatus(errorMessage(status.error, PROJECT_TOO_LARGE_FOR_ACCOUNT));
+          // A write refused as read-only: an encrypted member was demoted
+          // (slice 5-4). Its page re-reads the role and locks editing.
+          if (
+            status.projectId &&
+            status.error instanceof ApiError &&
+            status.error.code === 'E2EE_PROJECT_READ_ONLY'
+          ) {
+            refreshEncryptedMemberRole(status.projectId);
+          }
         }
       },
       onSynced({ projectId, version }) {
@@ -7926,6 +7972,14 @@ export function App() {
       return;
     }
     if (sharedAccountProject) return;
+    // Only an editor's copy of an encrypted project goes to the account; a
+    // viewer's never would be accepted (slice 5-4).
+    if (
+      encryptedMemberProject &&
+      encryptedMemberRoleRef.current !== 'editor'
+    ) {
+      return;
+    }
     // Nothing reaches the account until its device transaction has committed.
     // The displayed state stays Saving while any newer device write is pending.
     const controller = cloudProjectAutosaveRef.current;
@@ -27576,15 +27630,19 @@ export function App() {
                   }
                 }}
                 role={
-                  collaboration.role ??
-                  // An encrypted project's sharing goes through its MLS
-                  // group, not the room (slice 5-3b): its owner manages it
-                  // even while no room confirms the role.
-                  (isEncryptedProject(doc.projectId) &&
-                  session &&
-                  doc.ownerUserId === session.userId
-                    ? 'owner'
-                    : null)
+                  // A member's role in an encrypted project is its MLS
+                  // role (slice 5-4), not the room's.
+                  encryptedMemberProject
+                    ? encryptedMemberRole
+                    : (collaboration.role ??
+                      // An encrypted project's sharing goes through its MLS
+                      // group, not the room (slice 5-3b): its owner manages
+                      // it even while no room confirms the role.
+                      (isEncryptedProject(doc.projectId) &&
+                      session &&
+                      doc.ownerUserId === session.userId
+                        ? 'owner'
+                        : null))
                 }
                 collaborationStatus={collaboration.status}
                 lease={collaboration.lease}

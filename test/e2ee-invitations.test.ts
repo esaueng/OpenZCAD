@@ -35,6 +35,7 @@ import {
   releaseDevelopmentE2eeWrite
 } from '../apps/web/worker/e2eeWriteAuthorization';
 import { hashProjectInvitationToken } from '../apps/web/worker/sharing';
+import type { CommitRequest } from '@openzcad/mls';
 import { commitProjectGroup } from '../apps/web/src/lib/e2ee/projectGroups';
 import { forgetAllProjectKeys } from '../apps/web/src/lib/e2ee/unlockedProjectKeys';
 import {
@@ -275,7 +276,9 @@ const claim = (
  */
 async function heldCommit(
   d: Device,
-  projectId: string
+  projectId: string,
+  /** A setRoles Commit stands in for an Add's; `{}` is an ordinary one. */
+  request: CommitRequest = { setRoles: [{ userId: OTHER, role: 'editor' }] }
 ): Promise<Record<string, unknown>> {
   let held: Record<string, unknown> | null = null;
   d.before = async (path, init) => {
@@ -284,11 +287,12 @@ async function heldCommit(
       throw new Error('held back');
     }
   };
-  await commitProjectGroup(d.groups, projectId, {
-    setRoles: [{ userId: OTHER, role: 'editor' }]
-  }).catch(() => undefined);
+  await commitProjectGroup(d.groups, projectId, request).catch(() => undefined);
   d.before = undefined;
   if (!held) throw new Error('No Commit was sent');
+  // An Add states its invitee through `add`, not as a role change of a
+  // member (slice 5-4).
+  delete (held as Record<string, unknown>).roles;
   return held;
 }
 
@@ -979,19 +983,17 @@ describe('encrypted invitations (slice 5-3a)', () => {
 });
 
 describe('the plaintext route’s recipient rules', () => {
-  it('refuses an editor invitation while edit leases are not enforced', async () => {
+  // Slice 5-4: the edit-lease rule keeps plaintext editors in the
+  // lease-checked room; an encrypted project's editors write only on top of
+  // the head they read, and its room is the owner's until slice 5-6.
+  it('sends an editor invitation while edit leases are not enforced', async () => {
     const { srv, mailbox } = server(undefined, {
       PROJECT_EDIT_LEASES_ENFORCED: 'false'
     });
     const { projectId } = await encryptedProject(srv);
     const editor = await invite(srv, projectId);
-    expect(editor.response.status).toBe(409);
-    expect(await json(editor.response)).toMatchObject({
-      code: 'EDIT_LEASE_REQUIRED'
-    });
-    expect(
-      (await invite(srv, projectId, { role: 'viewer' })).response.status
-    ).toBe(201);
+    expect(editor.response.status).toBe(201);
+    expect(editor.value.role).toBe('editor');
     expect(mailbox.sent).toHaveLength(1);
   });
 });
@@ -1038,7 +1040,7 @@ describe('without migration 0038', () => {
     const { response } = await invite(srv, projectId);
     expect(response.status).toBe(503);
     // A Commit without an Add lands; one with an Add answers 503.
-    const body = await heldCommit(laptop, projectId);
+    const body = await heldCommit(laptop, projectId, {});
     const withAdd = await commit(srv, projectId, {
       ...body,
       add: { invitationId: 'inv_x', keyPackages: [], welcome: 'AAAA' }

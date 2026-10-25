@@ -56,6 +56,15 @@ export interface EncryptedSharingClient {
     role: ProjectMemberRole
   ): Promise<void>;
   revoke(projectId: string, invitationId: string): Promise<void>;
+  /**
+   * The owner's role change of a member (slice 5-4): an MLS Commit the
+   * Worker mirrors into the member list.
+   */
+  changeRole(
+    projectId: string,
+    userId: string,
+    role: ProjectMemberRole
+  ): Promise<void>;
 }
 
 /** The page's client: crypto loads with the first encrypted dialog. */
@@ -93,6 +102,11 @@ export const pageEncryptedSharingClient: EncryptedSharingClient = {
     const { encryptedInvitations } =
       await import('../lib/e2ee/encryptedProjects');
     await (await encryptedInvitations()).api.revoke(projectId, invitationId);
+  },
+  async changeRole(projectId, userId, role) {
+    const { changeEncryptedMemberRole } =
+      await import('../lib/e2ee/memberships');
+    await changeEncryptedMemberRole(projectId, userId, role);
   }
 };
 
@@ -132,8 +146,10 @@ export interface ProjectSharingDialogProps {
   editorInvitationsEnabled?: boolean;
   /**
    * The project is end-to-end encrypted (slice 5-3b): invitations are
-   * signed and members added through MLS, share links and role changes are
-   * not offered yet, and plaintext sharing is untouched.
+   * signed and members added through MLS, and roles change by the owner's
+   * MLS Commit (slice 5-4); share links are not offered yet, and plaintext
+   * sharing is untouched. Editors need no edit-lease rollout here: an
+   * encrypted project's editors write only on top of the head they read.
    */
   encrypted?: boolean;
   encryptedClient?: EncryptedSharingClient;
@@ -410,6 +426,7 @@ export function ProjectSharingDialog({
   const leaseIsActive = activeLease(lease, projectId);
   const interactionBusy = hydrating || busy !== null;
   const isOwner = !localProject && role === 'owner';
+  const editorsAllowed = encrypted || editorInvitationsEnabled;
 
   // Every control is disabled while an action runs, and a revoke or remove
   // takes its own row away, so the control that started it drops focus on
@@ -522,6 +539,10 @@ export function ProjectSharingDialog({
     footerParts.push('access not confirmed');
   } else if (role === 'viewer') {
     footerParts.push('you are a viewer');
+  } else if (encrypted) {
+    // No room lease: the account accepts an editor's version only on top
+    // of the head it read.
+    footerParts.push('you can edit');
   } else {
     footerParts.push(
       leaseIsActive ? 'you hold the edit lease' : 'edit lease not held'
@@ -769,10 +790,31 @@ export function ProjectSharingDialog({
                           {PRESENCE_LABELS[person.presence ?? 'idle']}
                         </span>
                       ) : null}
-                      {member && encrypted ? (
+                      {member && encrypted && !isOwner ? (
                         <span className="sharing-kind">
                           {ROLE_LABELS[member.role]}
                         </span>
+                      ) : null}
+                      {member && encrypted && isOwner ? (
+                        <select
+                          className="sharing-role-select"
+                          aria-label={`Role for ${name}`}
+                          value={member.role}
+                          disabled={interactionBusy}
+                          onChange={(event) =>
+                            void mutate(`member:${member.userId}`, async () => {
+                              await encryptedClient.changeRole(
+                                projectId,
+                                member.userId,
+                                event.target.value as ProjectMemberRole
+                              );
+                              await refresh();
+                            })
+                          }
+                        >
+                          <option value="viewer">Viewer</option>
+                          <option value="editor">Editor</option>
+                        </select>
                       ) : null}
                       {member && !encrypted ? (
                         <>
@@ -982,7 +1024,7 @@ export function ProjectSharingDialog({
                     }
                   >
                     <option value="viewer">Viewer</option>
-                    <option value="editor" disabled={!editorInvitationsEnabled}>
+                    <option value="editor" disabled={!editorsAllowed}>
                       Editor
                     </option>
                   </select>

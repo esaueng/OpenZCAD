@@ -106,6 +106,7 @@ import type {
   E2eeProjectKeysResponse,
   E2eeProjectLeavesResponse,
   E2eeMlsAddRequest,
+  E2eeMlsRoleChange,
   E2eeWelcomeResponse
 } from '@openzcad/shared';
 import { desktopFetch } from '../desktopBridge';
@@ -118,6 +119,7 @@ import { E2eeApiError } from './e2eeApi';
 import type { CertifyingDevice } from './mls/certify';
 import {
   parseEpochContext,
+  parseGroupInfoContext,
   projectGroupId,
   type EpochContext
 } from './mls/epochRoles';
@@ -370,7 +372,12 @@ export type ProjectGroupErrorCode =
   /** A Commit signed by a removed device, after its removal (slice 4-10). */
   | 'removed-device'
   /** A reset refused: someone else is in the group, or no confirmation. */
-  | 'reset-refused';
+  | 'reset-refused'
+  /**
+   * A membership change refused before it is sent (slice 5-4): not the
+   * owner, not a member, or an ownership transfer.
+   */
+  | 'membership-refused';
 
 export class ProjectGroupError extends Error {
   override readonly name = 'ProjectGroupError';
@@ -1428,6 +1435,10 @@ async function submitPending(
     readonly replaceDedupeSecret?: boolean;
     /** An owner's Add states its invitation, KeyPackages and Welcome. */
     readonly add?: E2eeMlsAddRequest;
+    /** An owner's role changes of current members (slice 5-4). */
+    readonly roles?: readonly E2eeMlsRoleChange[];
+    /** The identities an owner's Commit drops from the roles. */
+    readonly dropUsers?: readonly string[];
   }
 ): Promise<Submitted> {
   const ref = refOf(ctx, device, projectId);
@@ -1497,7 +1508,11 @@ async function submitPending(
         next.rejoinPsk
       ),
       archive,
-      ...(pending.add ? { add: pending.add } : {})
+      ...(pending.add ? { add: pending.add } : {}),
+      ...(pending.roles?.length ? { roles: [...pending.roles] } : {}),
+      ...(pending.dropUsers?.length
+        ? { dropUsers: [...pending.dropUsers] }
+        : {})
     });
     if (!sameBytes(bytes(response.commit.message), pending.commit)) {
       throw new ProjectGroupError(
@@ -1931,6 +1946,9 @@ async function commitLoop(
       await directoryFor(ctx, projectId, group),
       built.invitee
     );
+    // The Worker mirrors an owner's role changes and checks the new epoch's
+    // roles against them (slice 5-4); an Add states its invitee instead.
+    const roles = built.invitee ? [] : statedRoles(built.request);
     const pending = await ctx.sessions.commit(ref, directory, built.request);
     const submitted = await submitPending(
       ctx,
@@ -1943,7 +1961,9 @@ async function commitLoop(
         replaceDedupeSecret: built.rotation,
         ...(built.invitee
           ? { add: addRequest(built.invitee, pending.welcome) }
-          : {})
+          : {}),
+        roles,
+        dropUsers: built.request.dropUsers ?? []
       }
     );
     if (submitted.accepted) {
@@ -1981,6 +2001,105 @@ export function commitProjectGroup(
     return {
       request: { ...request, ...(remove.length ? { remove } : {}) },
       rotation: true
+    };
+  });
+}
+
+/**
+ * The role changes a Commit request's `setRoles` makes, as the Worker
+ * reads them. An `owner` entry is passed on as it is, for the Worker to
+ * refuse: `changeMemberRole` never builds one.
+ */
+function statedRoles(request: CommitRequest): E2eeMlsRoleChange[] {
+  return (request.setRoles ?? []).map((change) => ({
+    userId: change.userId,
+    role: change.role as E2eeMlsRoleChange['role']
+  }));
+}
+
+/**
+ * Whether a stored pending Commit changes the roles (slice 5-4): it is
+ * never resent bare, since the Worker refuses a role change it does not
+ * state. The change it carried is made again by whoever asked for it.
+ */
+async function changesRoles(
+  ctx: ProjectGroupContext,
+  ref: MlsProjectRef,
+  status: SessionStatus,
+  directory: DirectoryInput
+): Promise<boolean> {
+  const next = await ctx.sessions.previewPending(ref, directory);
+  let roles: ProjectRoles;
+  try {
+    roles = parseGroupInfoContext(next.groupInfo).roles;
+  } catch {
+    return true;
+  }
+  const before = new Map(
+    (status.roles?.users ?? []).map((user) => [user.userId, user.role])
+  );
+  return (
+    roles.users.length !== before.size ||
+    roles.users.some((user) => before.get(user.userId) !== user.role)
+  );
+}
+
+// --- Role changes (slice 5-4) -------------------------------------------------
+
+/**
+ * The owner changes a member's role (ADR-024, roles): one Commit whose
+ * `setRoles` gives `userId` the new role from the next epoch on. Every
+ * member's MLS policy accepts it only from the owner; the Worker mirrors
+ * it into `project_members` in the same batch and refuses a Commit whose new
+ * roles are not exactly that change. A demoted editor's earlier versions
+ * keep verifying (each is checked against the roles of its own epoch); from
+ * the new epoch on, its browser and the Worker refuse its writes, and every
+ * browser refuses a version it signs. Ownership never moves on an
+ * encrypted project. Resolves without a Commit when the role already holds.
+ */
+export function changeMemberRole(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  userId: string,
+  role: 'editor' | 'viewer'
+): Promise<ProjectGroupState> {
+  if ((role as string) !== 'editor' && (role as string) !== 'viewer') {
+    return Promise.reject(
+      new ProjectGroupError(
+        'membership-refused',
+        'An encrypted project’s owner cannot be changed.'
+      )
+    );
+  }
+  return commitLoop(ctx, projectId, async (status, group) => {
+    const owner = status.roles?.users.find((entry) => entry.role === 'owner');
+    if (owner?.userId !== ctx.account.userId) {
+      throw new ProjectGroupError(
+        'membership-refused',
+        'Only the owner can change roles in an encrypted project.'
+      );
+    }
+    if (userId === owner.userId) {
+      throw new ProjectGroupError(
+        'membership-refused',
+        'An encrypted project’s owner cannot be changed.'
+      );
+    }
+    const entry = status.roles?.users.find((u) => u.userId === userId);
+    if (!entry) {
+      throw new ProjectGroupError(
+        'membership-refused',
+        'That person is not a member of this project.'
+      );
+    }
+    if (entry.role === role) return null;
+    const rotation = await rotationRequest(ctx, projectId, status, group);
+    return {
+      request: {
+        setRoles: [{ userId, role }],
+        ...(rotation?.remove?.length ? { remove: rotation.remove } : {})
+      },
+      rotation: rotation !== null
     };
   });
 }
@@ -2475,15 +2594,17 @@ export async function recoverProjectGroup(
   }
   // An Add (it carries a Welcome) is never sent again without the
   // invitation and KeyPackages it states (slice 5-3b): the owner's next
-  // completion builds it afresh from the claim.
+  // completion builds it afresh from the claim. Nor is a role change
+  // without the change it states (slice 5-4).
+  const directory = await directoryFor(ctx, projectId, group);
   if (
     pending.welcome ||
-    (await rotationRequest(ctx, projectId, status, group))
+    (await rotationRequest(ctx, projectId, status, group)) ||
+    (await changesRoles(ctx, ref, status, directory))
   ) {
     await ctx.sessions.discardCommit(ref);
     return 'discarded';
   }
-  const directory = await directoryFor(ctx, projectId, group);
   const submitted = await submitPending(
     ctx,
     device,

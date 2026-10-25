@@ -130,8 +130,9 @@ export interface E2eeInvitationHost {
   /** Project sharing is open to this account (the collaboration rollout). */
   readonly sharingEnabled: boolean;
   /**
-   * The plaintext invitation route's recipient rules (edit leases for an
-   * editor, the canary allowlist): a refusal, or null to go ahead.
+   * The plaintext invitation route's recipient rules that apply here (the
+   * canary allowlist; since slice 5-4 not its edit-lease rule for
+   * editors): a refusal, or null to go ahead.
    */
   recipientRefusal?(
     email: string,
@@ -953,6 +954,11 @@ async function readWelcome(
 
 /** What an Add adds to its Commit's batch (`submitCommit`). */
 export interface PreparedAdd {
+  /** The invitee and the role its invitation names (the new roles' entry). */
+  readonly invitee: {
+    readonly userId: string;
+    readonly role: 'editor' | 'viewer';
+  };
   /** ANDed into the Commit row's own insert, which gates the batch. */
   readonly gateSql: string;
   readonly gateBinds: readonly unknown[];
@@ -1121,6 +1127,7 @@ export async function prepareAddCommit(
     PROJECT_MEMBER_CAP
   ];
   return {
+    invitee: { userId: invitee, role: invitation.role },
     gateSql,
     gateBinds,
     statements: (now) => [

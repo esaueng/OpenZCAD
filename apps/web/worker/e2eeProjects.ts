@@ -50,6 +50,7 @@ import {
   isProjectStorageFormatReady
 } from '@openzcad/cloudflare-adapters';
 import { prepareAddCommit, type PreparedAdd } from './e2eeInvitations';
+import { prepareMembershipCommit } from './e2eeMembership';
 
 export const E2EE_PROJECT_ROUTE =
   /^\/api\/e2ee\/projects\/([^/]+)\/(mls\/commits|mls\/group-info|mls\/leaves|keys|keys\/archives)$/;
@@ -903,6 +904,18 @@ async function submitCommit(
           kind,
           add: body.add
         });
+  // The roles of the new epoch, and any role change it states (slice 5-4).
+  const membership = await prepareMembershipCommit(db, {
+    userId,
+    projectId,
+    epoch,
+    kind,
+    storedGroupInfo: group.group_info,
+    groupInfo,
+    roles: body.roles,
+    dropUsers: body.dropUsers,
+    invitee: add?.invitee ?? null
+  });
   const now = new Date().toISOString();
   // The device was certified in this device-list head; a removal that
   // lands first makes the Commit refuse, so a removed device cannot move
@@ -918,7 +931,9 @@ async function submitCommit(
          WHERE ${authorization.sql} AND ${MEMBER_FENCE}
            AND EXISTS (SELECT 1 FROM e2ee_project_groups
                        WHERE project_id = ? AND epoch = ? AND key_epoch_base = ?)
-           AND ${signerList.sql}${add ? ` AND ${add.gateSql}` : ''}`
+           AND ${signerList.sql}${add ? ` AND ${add.gateSql}` : ''}${
+             membership.gateSql ? ` AND ${membership.gateSql}` : ''
+           }`
       )
       .bind(
         projectId,
@@ -934,7 +949,8 @@ async function submitCommit(
         epoch,
         group.key_epoch_base,
         ...signerList.binds,
-        ...(add?.gateBinds ?? [])
+        ...(add?.gateBinds ?? []),
+        ...membership.gateBinds
       ),
     db
       .prepare(
@@ -946,7 +962,8 @@ async function submitCommit(
     ...(leaf ? [insertLeaf(db, projectId, userId, deviceId, leaf, now)] : []),
     ...insertWraps(db, projectId, userId, wraps, now),
     insertArchive(db, projectId, archive, now),
-    ...(add ? add.statements(now) : [])
+    ...(add ? add.statements(now) : []),
+    ...membership.chained(now)
   ];
   // Two submissions for one epoch can both pass the read above. Whichever
   // batch runs second either finds the epoch fence moved (no rows change)
@@ -962,6 +979,7 @@ async function submitCommit(
     if (current && current.epoch > epoch)
       await epochTaken(db, projectId, epoch);
     if (add) await add.explain();
+    await membership.explain();
     refuse(
       401,
       'E2EE_SESSION_REQUIRED',

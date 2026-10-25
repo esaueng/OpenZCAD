@@ -114,6 +114,30 @@ function decodeRoles(data: Uint8Array): ProjectRoles {
 /** Parses a TLS-encoded GroupContext and its roles extension. */
 export function parseEpochContext(groupContext: Uint8Array): EpochContext {
   const reader = new Reader(groupContext);
+  const context = readGroupContext(reader);
+  if (!reader.done) fail('The GroupContext has trailing bytes.');
+  return context;
+}
+
+/** RFC 9420 §6: `mls_group_info` in an MLSMessage. */
+const WIRE_FORMAT_GROUP_INFO = 4;
+
+/**
+ * The GroupContext of an MLSMessage-framed GroupInfo (RFC 9420 §12.4.3),
+ * which every Commit carries for its new epoch (slice 5-4). Only the
+ * framing and the GroupContext are read: the GroupInfo's own extensions,
+ * confirmation tag and signature are not checked here. The Worker uses it
+ * to compare the roles a Commit's new epoch states with the change its
+ * request says it makes, as defense in depth; browsers check the Commit.
+ */
+export function parseGroupInfoContext(groupInfo: Uint8Array): EpochContext {
+  const reader = new Reader(groupInfo);
+  if (reader.uint(2) !== 1) fail('Not an MLS 1.0 message.');
+  if (reader.uint(2) !== WIRE_FORMAT_GROUP_INFO) fail('Not a GroupInfo.');
+  return readGroupContext(reader);
+}
+
+function readGroupContext(reader: Reader): EpochContext {
   if (reader.uint(2) !== 1) fail('Not an MLS 1.0 GroupContext.');
   reader.uint(2); // cipher suite
   const groupId = reader.vector();
@@ -121,7 +145,6 @@ export function parseEpochContext(groupContext: Uint8Array): EpochContext {
   reader.vector(); // tree hash
   reader.vector(); // confirmed transcript hash
   const extensions = new Reader(reader.vector());
-  if (!reader.done) fail('The GroupContext has trailing bytes.');
   let roles: ProjectRoles | null = null;
   while (!extensions.done) {
     const type = extensions.uint(2);
