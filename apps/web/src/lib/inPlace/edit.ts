@@ -572,10 +572,11 @@ function presetPull(pull: ParametricVector3): string | null {
 }
 
 /** Where a stored hole stands on its face, in world space. */
-function holeWorldPosition(
+/** Where a stored hole stands on `face`: its saved position, in the world. */
+export function holeWorldPosition(
   face: FacePick,
   data: Extract<FeatureData, { featureKind: 'hole' }>,
-  ctx: InPlaceEditContext
+  ctx: Pick<InPlaceEditContext, 'evaluate'>
 ): Vector3 | null {
   const anchor =
     data.positionAnchor === 'centroid'
