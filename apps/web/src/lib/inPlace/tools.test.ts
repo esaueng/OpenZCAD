@@ -479,6 +479,37 @@ describe('body tools', () => {
     });
   });
 
+  it('rotate about axis: an axis through the body middle still has its rig', () => {
+    const spec = IN_PLACE_TOOL_SPECS['axis-rotate'];
+    // BODY's middle is (10, 5, 2): a vertical axis through it.
+    const axis = {
+      id: 'datum:centre',
+      label: 'Centre',
+      origin: { x: 10, y: 5, z: 0 },
+      direction: { x: 0, y: 0, z: 1 },
+      choice: { datumFeatureId: 'centre' as FeatureId }
+    };
+    const [handle] = spec.handles(
+      { ...EMPTY, bodies: [BODY], axis },
+      {},
+      CTX,
+      {}
+    );
+    expect(handle).toMatchObject({ valueId: 'angle', kind: 'angle' });
+    expect(handle?.kind === 'angle' && handle.params.radius).toBeCloseTo(
+      Math.hypot(10, 5) * 1.15
+    );
+    // A body with no extent has no rig: its angle is typed.
+    const point = {
+      ...BODY,
+      min: { x: 10, y: 5, z: 0 },
+      max: { x: 10, y: 5, z: 4 }
+    };
+    expect(
+      spec.handles({ ...EMPTY, bodies: [point], axis }, {}, CTX, {})
+    ).toEqual([expect.objectContaining({ valueId: 'angle', kind: 'chip' })]);
+  });
+
   it('booleans: picks in order, the first the base; keep from Options', () => {
     const spec = IN_PLACE_TOOL_SPECS.subtract;
     expect(spec.ready({ ...EMPTY, bodies: [BODY] })).toBe(false);

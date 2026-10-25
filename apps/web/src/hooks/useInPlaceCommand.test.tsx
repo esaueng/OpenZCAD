@@ -181,7 +181,9 @@ describe('useInPlaceCommand: revolve', () => {
     const onStatus = vi.fn();
     const { hook } = setup({ onStatus });
     act(() => hook.result.current.start('revolve', [PICK]));
-    act(() => hook.result.current.cancel(true));
+    act(() => {
+      hook.result.current.cancel(true);
+    });
     expect(hook.result.current.active).toBe(false);
     expect(onStatus).not.toHaveBeenCalled();
   });
@@ -377,7 +379,9 @@ describe('useInPlaceCommand: revolve', () => {
   it('cancels without committing and clears the preview', () => {
     const { hook, commit, publishPreview } = setup();
     act(() => hook.result.current.start('revolve', [PICK]));
-    act(() => hook.result.current.cancel());
+    act(() => {
+      hook.result.current.cancel();
+    });
     expect(hook.result.current.active).toBe(false);
     expect(commit).not.toHaveBeenCalled();
     expect(publishPreview).toHaveBeenLastCalledWith(null);
@@ -1374,7 +1378,11 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     // Cancel that would claim nothing was added.
     expect(hook.result.current.active).toBe(true);
     expect(hook.result.current.canFinish).toBe(false);
-    act(() => hook.result.current.cancel());
+    let closed = true;
+    act(() => {
+      closed = hook.result.current.cancel();
+    });
+    expect(closed).toBe(false);
     expect(hook.result.current.active).toBe(true);
     // Refused (or held off by another exact operation): there to retry.
     await act(async () => {
@@ -1444,7 +1452,9 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     const onStatus = vi.fn();
     const { hook } = setup({ onStatus });
     act(() => hook.result.current.edit('subtract', SEED));
-    act(() => hook.result.current.cancel());
+    act(() => {
+      hook.result.current.cancel();
+    });
     expect(onStatus).toHaveBeenCalledWith('Edit canceled; Cut 2 is unchanged.');
     expect(hook.result.current.editing).toBeNull();
   });
