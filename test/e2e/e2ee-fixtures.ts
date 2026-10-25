@@ -286,6 +286,8 @@ export interface SeededAccount {
   readonly deviceLabel: string;
   /** The seeded device, to write into another browser as the same device. */
   readonly device: DeviceMaterial;
+  /** The recovery key's secret, for enrolling more seeded browsers. */
+  readonly recoverySecret: Uint8Array;
 }
 
 export interface DeviceMaterial {
@@ -438,8 +440,34 @@ export async function seedE2eeDevice(
   return {
     recoveryKey: recovery.formatted,
     deviceLabel: label,
-    device: material
+    device: material,
+    recoverySecret: recovery.secret
   };
+}
+
+/**
+ * Makes another browser (its own context) a second certified, unlockable
+ * device of the account `seeded` set up, enrolled with its recovery key.
+ */
+export async function seedAnotherE2eeDevice(
+  page: Page,
+  server: E2eeServer,
+  seeded: SeededAccount,
+  label = 'Second browser'
+): Promise<void> {
+  const node = server.nodeDevice();
+  const before = await loadEncryption(node);
+  if (before.kind !== 'ready') throw new Error('seed failed');
+  await enrollWithRecoveryKey(
+    node,
+    before.account,
+    seeded.recoverySecret,
+    label
+  );
+  const device = (await node.store.loadDevice(E2E_USER_ID))!;
+  const after = await loadEncryption(node);
+  if (after.kind !== 'ready') throw new Error('seed failed');
+  await writeDevice(page, await materialOf(device, after.account.list.pin));
 }
 
 /** Opens Settings › Encryption, unless a reload already restored it. */

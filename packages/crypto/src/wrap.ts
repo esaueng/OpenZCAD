@@ -175,8 +175,14 @@ export type WrapContext =
       readonly purpose: 'rejoin-psk';
       readonly userId: string;
       readonly projectId: string;
-      /** The MLS group epoch the PSK was exported in. */
-      readonly epoch: number;
+      /**
+       * The key epoch of the MLS epoch the PSK was exported in: the
+       * monotonic project-key generation (decision D10), group key epoch
+       * base plus MLS epoch, not the MLS epoch itself. MLS epochs restart
+       * at 0 after a group reset, so without it a server could present one
+       * group generation's wrap as another's.
+       */
+      readonly keyEpoch: number;
     }
   | {
       /**
@@ -279,7 +285,7 @@ const CONTEXT_FIELDS: Record<WrapPurpose, Record<string, FieldRule>> = {
     shareId: 'string',
     versionId: 'string'
   },
-  'rejoin-psk': { userId: 'string', projectId: 'string', epoch: 'uint' },
+  'rejoin-psk': { userId: 'string', projectId: 'string', keyEpoch: 'uint' },
   'archived-project-key': {
     projectId: 'string',
     archivedEpoch: 'uint',

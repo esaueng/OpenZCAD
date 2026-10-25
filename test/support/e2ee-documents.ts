@@ -95,11 +95,6 @@ export interface Account {
   seed(db: DatabaseSync): void;
   /** Revokes a device in a new identity-signed entry, seeded into `db`. */
   revoke(db: DatabaseSync, deviceId: string): Promise<void>;
-  /**
-   * The body of a POST /api/e2ee/device-list that removes `deviceId`, with
-   * the rotated keys but none of their wraps; nothing is seeded or remembered.
-   */
-  removalRequest(deviceId: string): Promise<Record<string, unknown>>;
 }
 
 const ecdhPublic = async () =>
@@ -193,21 +188,6 @@ export async function makeAccount(
       hashes.push(toHex(await deviceListEntryHash(signed.entry)));
       insertEntry(db, chain.length - 1);
       account.list = await verifyDeviceList(identityRaw, chain);
-    },
-    async removalRequest(deviceId) {
-      const entry = nextDeviceListEntry(account.list, {
-        issuedAt: ADDED_AT + chain.length * 1000,
-        removeDeviceIds: [deviceId],
-        encryptionKey: await ecdhPublic(),
-        accountKeyCommitment: await accountKeyCommitment(generateSymmetricKey())
-      });
-      const signed = await signDeviceListEntry(identity.privateKey, entry);
-      return {
-        generation: 1,
-        entry: toBase64Url(signed.entry),
-        signature: toBase64Url(signed.signature),
-        wraps: []
-      };
     }
   };
   return account;

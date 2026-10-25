@@ -2089,3 +2089,34 @@ export async function encryptedProjectUsage(
       }
     : none;
 }
+// --- The collaboration room (slice 4-9) -------------------------------------
+
+/** The context a version write runs in, for the room's account seam. */
+export type E2eeVersionContext = Context;
+
+/**
+ * What the encrypted collaboration room (`e2eeRoom.ts`) uses of this module:
+ * the stored head and its body, and the very version write the document and
+ * revision routes make (`writeVersion`), so a room version lands in the same
+ * log, under the same fences, as an autosave or a named save.
+ */
+export const roomVersionStore = {
+  headRow,
+  storedVersion,
+  versionBody,
+  currentKeyEpoch,
+  writeVersion,
+  async rowByHash(
+    db: D1Database,
+    projectId: string,
+    versionHash: string
+  ): Promise<VersionRow | null> {
+    return db
+      .prepare(
+        `SELECT ${VERSION_COLUMNS} FROM e2ee_project_versions
+         WHERE project_id = ? AND version_hash = ?`
+      )
+      .bind(projectId, versionHash)
+      .first<VersionRow>();
+  }
+};

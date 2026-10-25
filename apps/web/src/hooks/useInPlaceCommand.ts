@@ -5,6 +5,7 @@ import {
   IN_PLACE_TOOL_SPECS,
   axisCandidatesFor,
   clampValue,
+  valueInRange,
   type BodyPick,
   type CurvePick,
   type FacePick,
@@ -125,12 +126,26 @@ export interface InPlaceCommand {
   previewValue(valueId: string, value: number): void;
   /** False when a typed expression is refused, leaving the value as it was. */
   setValue(valueId: string, value: number, raw?: string): boolean;
+  /** Values the user has set, which the picks' or values' defaults leave alone. */
+  touched: readonly string[];
+  /**
+   * A value put back as it was before an entry was canceled: its number,
+   * its expression, and whether it was set, so a default it followed still
+   * applies to it.
+   */
+  restoreValue(
+    valueId: string,
+    value: number,
+    raw: string | undefined,
+    touched: boolean
+  ): void;
   done(): boolean;
   /** Ends the command; `quiet` when another action already says why. */
   cancel(quiet?: boolean): void;
 }
 
 const EMPTY_RAWS: Record<string, string> = {};
+const EMPTY_TOUCHED: readonly string[] = [];
 
 const EMPTY_SLOTS: InPlaceSlots = {
   profiles: [],
@@ -154,6 +169,13 @@ export function useInPlaceCommand(
 ): InPlaceCommand {
   const [session, setSession] = useState<Session | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
+  // A typed value the tool refused: it stands until the next accepted
+  // value, and Done waits with it, since the chip went back to the value
+  // before and finishing would commit that instead of what was typed.
+  const [entryRefusal, setEntryRefusal] = useState<{
+    valueId: string;
+    message: string;
+  } | null>(null);
   const [previewValid, setPreviewValid] = useState(false);
   const optionsRef = useRef(options);
   optionsRef.current = options;
@@ -204,11 +226,27 @@ export function useInPlaceCommand(
     [session, axisCandidates]
   );
 
-  // Defaults the picks suggest (a helix radius through the profile) land on
-  // every value the user has not set, each time the slots change.
+  const values = useMemo(() => session?.values ?? {}, [session?.values]);
+  /** Every value as a number, its initial one where none is set. */
+  const numbers = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const valueSpec of spec?.values ?? []) {
+      out[valueSpec.id] = values[valueSpec.id] ?? valueSpec.initial;
+    }
+    return out;
+  }, [spec, values]);
+
+  // Defaults the picks suggest (a helix radius through the profile), or
+  // another value does (a hole step from its bore), land on every value the
+  // user has not set, each time they change.
   const defaultsKey = spec?.defaults
-    ? JSON.stringify(spec.defaults(slots, ctx))
+    ? JSON.stringify(spec.defaults(slots, ctx, numbers))
     : '';
+  /** The defaults as they stand now, for a value put back unset. */
+  const defaultsRef = useRef<Record<string, number>>({});
+  defaultsRef.current = defaultsKey
+    ? (JSON.parse(defaultsKey) as Record<string, number>)
+    : {};
   useEffect(() => {
     if (!defaultsKey) return;
     const defaults = JSON.parse(defaultsKey) as Record<string, number>;
@@ -226,21 +264,12 @@ export function useInPlaceCommand(
     });
   }, [defaultsKey]);
 
-  const values = useMemo(() => session?.values ?? {}, [session?.values]);
   const paramValues = useMemo(() => {
     const out: Record<string, ParamValue> = { ...values };
     for (const [id, raw] of Object.entries(session?.raws ?? {})) out[id] = raw;
     return out;
   }, [values, session?.raws]);
   const chosen = useMemo(() => session?.options ?? {}, [session?.options]);
-  /** Every value as a number, its initial one where none is set. */
-  const numbers = useMemo(() => {
-    const out: Record<string, number> = {};
-    for (const valueSpec of spec?.values ?? []) {
-      out[valueSpec.id] = values[valueSpec.id] ?? valueSpec.initial;
-    }
-    return out;
-  }, [spec, values]);
   const request = useMemo(
     () =>
       spec && spec.ready(slots)
@@ -351,6 +380,7 @@ export function useInPlaceCommand(
     preview.clear();
     setSession(null);
     setRefusal(null);
+    setEntryRefusal(null);
     setPreviewValid(false);
     optionsRef.current.publishPreview(null);
   }, [preview]);
@@ -366,6 +396,7 @@ export function useInPlaceCommand(
       preview.clear();
       optionsRef.current.publishPreview(null);
       setRefusal(null);
+      setEntryRefusal(null);
       setPreviewValid(false);
       setSession({
         tool,
@@ -607,6 +638,9 @@ export function useInPlaceCommand(
   );
 
   const setOption = useCallback((optionId: string, value: string) => {
+    // A refused entry was never applied, and a new choice (a hole's style)
+    // may not even show its value: the refusal no longer holds Done.
+    setEntryRefusal(null);
     setSession((current) => {
       if (!current) return current;
       const specs = IN_PLACE_TOOL_SPECS[current.tool].options ?? [];
@@ -642,26 +676,36 @@ export function useInPlaceCommand(
       // A typed value must already be one the tool accepts. An expression
       // is stored as typed, so clamping it for the preview would show one
       // value and commit another; a typed number clamped would build what
-      // was not asked for (a −5 width as a sliver). Only a drag clamps.
+      // was not asked for (a −5 width as a sliver), and a typed end of an
+      // open range nudged inside it would leave its chip reading as the
+      // refused end. Only a drag clamps.
       if (
         current &&
         valueSpec &&
         typed &&
-        clampValue(valueSpec, value) !== value
+        !valueInRange(valueSpec, value)
       ) {
         const whole = valueSpec.integer ? 'whole numbers ' : '';
-        const range =
-          valueSpec.max === undefined
+        const range = valueSpec.exclusive
+          ? `more than ${valueSpec.min ?? 0}${
+              valueSpec.max === undefined
+                ? ''
+                : ` and less than ${valueSpec.max}`
+            }`
+          : valueSpec.max === undefined
             ? `${whole ? `${whole}of ` : ''}at least ${valueSpec.min ?? 0}`
             : `${whole}${valueSpec.min ?? 0} to ${valueSpec.max}`;
-        const what = `${IN_PLACE_TOOL_SPECS[current.tool].title} ${valueSpec.label.toLowerCase()}`;
-        setRefusal(
-          raw === undefined
-            ? `${what} takes ${range}, not ${value}.`
-            : `${raw} is ${value}; ${what} takes ${range}.`
-        );
+        setEntryRefusal({
+          valueId,
+          message: `${raw === undefined ? value : `${raw} is ${value}`}; ${IN_PLACE_TOOL_SPECS[current.tool].title} ${valueSpec.label.toLowerCase()} takes ${range}.`
+        });
         return false;
       }
+      // Only the refused value, taken now, lifts its refusal: another value
+      // changing leaves the refused one still not what was typed.
+      setEntryRefusal((refused) =>
+        refused?.valueId === valueId ? null : refused
+      );
       setSession((current) => {
         if (!current) return current;
         const valueSpec = IN_PLACE_TOOL_SPECS[current.tool].values.find(
@@ -671,7 +715,11 @@ export function useInPlaceCommand(
         const raws = { ...current.raws };
         if (raw === undefined) delete raws[valueId];
         else raws[valueId] = raw;
-        const next = clampValue(valueSpec, value);
+        // In range, a value stands as given: only one outside it (a drag
+        // past an end) is brought back inside.
+        const next = valueInRange(valueSpec, value)
+          ? value
+          : clampValue(valueSpec, value);
         // Values that move with this one, unless typed as expressions.
         const linked = Object.fromEntries(
           Object.entries(
@@ -710,10 +758,41 @@ export function useInPlaceCommand(
       writeValue(valueId, value, raw, true),
     [writeValue]
   );
+  const restoreValue = useCallback(
+    (
+      valueId: string,
+      value: number,
+      raw: string | undefined,
+      wasTouched: boolean
+    ) => {
+      // Unset, it takes its default as the default stands now: the value
+      // it followed may have moved while the entry was open (a bore dragged
+      // under an open step chip).
+      const restored =
+        !wasTouched && valueId in defaultsRef.current
+          ? defaultsRef.current[valueId]!
+          : value;
+      setSession((current) => {
+        if (!current) return current;
+        const raws = { ...current.raws };
+        if (raw === undefined) delete raws[valueId];
+        else raws[valueId] = raw;
+        const others = current.touched.filter((id) => id !== valueId);
+        return {
+          ...current,
+          values: { ...current.values, [valueId]: restored },
+          raws,
+          touched: wasTouched ? [...others, valueId] : others
+        };
+      });
+    },
+    []
+  );
 
   // Done waits for a valid preview of exactly what it would commit: a pick
   // that changed the request since the last frame has not been shown yet.
   const canFinish = Boolean(
+    !entryRefusal &&
     request &&
     previewValid &&
     previewedKey !== null &&
@@ -758,7 +837,7 @@ export function useInPlaceCommand(
     raws: session?.raws ?? EMPTY_RAWS,
     options: chosen,
     hint: spec ? spec.hint(slots, chosen) : '',
-    refusal,
+    refusal: entryRefusal?.message ?? refusal,
     canFinish,
     start,
     pickProfile,
@@ -772,6 +851,8 @@ export function useInPlaceCommand(
     setOption,
     previewValue,
     setValue,
+    touched: session?.touched ?? EMPTY_TOUCHED,
+    restoreValue,
     done,
     cancel
   };

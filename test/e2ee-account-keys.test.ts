@@ -777,7 +777,7 @@ describe('refusing what a server substitutes', () => {
 });
 
 describe('replacing the recovery key', () => {
-  it('keeps a device that signed encrypted projects until cutoffs exist (4-10)', async () => {
+  it('keeps a device that signed encrypted projects out of a replacement that drops it', async () => {
     const srv = server();
     const { laptop, recovery } = await setUp(srv);
     const phone = await enrolled(srv, recovery.secret, 'Phone');
@@ -818,7 +818,7 @@ describe('replacing the recovery key', () => {
     ).toMatchObject({ generation: 1 });
   });
 
-  it('refuses a removal whose device signs an encrypted project meanwhile', async () => {
+  it('keeps a removed device that signed encrypted projects out of a replacement too (#894 review)', async () => {
     const srv = server();
     const { laptop, recovery } = await setUp(srv);
     const phone = await enrolled(srv, recovery.secret, 'Phone');
@@ -828,35 +828,76 @@ describe('replacing the recovery key', () => {
       .prepare(
         `INSERT INTO projects (id, user_id, name, document_json,
            document_version, updated_at, storage_format)
-         VALUES ('proj_racing', ?, '', '{}', 1, ?, 2)`
+         VALUES ('proj_signed', ?, '', '{}', 1, ?, 2)`
       )
       .run(USER, now);
-    // The removal's own check sees nothing signed; the phone's save lands
-    // between that check and the device-list write.
-    srv.beforeWrite = async (sql) => {
-      if (!sql.includes('INSERT INTO e2ee_device_list_entries')) return;
-      srv.beforeWrite = undefined;
-      srv.db
-        .prepare(
-          `INSERT INTO e2ee_project_envelopes (project_id, kind, scope,
-             sequence, key_epoch, envelope, wrapped_version_key, signature,
-             signer_device_id, updated_at)
-           VALUES ('proj_racing', 'project-info', '', 1, 0, 'e', ?, ?, ?, ?)`
-        )
-        .run('w'.repeat(55), 's'.repeat(98), phoneId, now);
-    };
-    const refused = await refusal(
-      removeDevice(
+    srv.db
+      .prepare(
+        `INSERT INTO e2ee_project_envelopes (project_id, kind, scope, sequence,
+           key_epoch, envelope, wrapped_version_key, signature,
+           signer_device_id, updated_at)
+         VALUES ('proj_signed', 'project-info', '', 1, 0, 'e', ?, ?, ?, ?)`
+      )
+      .run('w'.repeat(55), 's'.repeat(98), phoneId, now);
+    // The phone is removed first: its cutoffs name this generation's list.
+    ready(
+      await removeDevice(
         laptop,
         ready(await loadEncryption(laptop)),
         phoneId,
         recovery.secret
       )
     );
+    // A replacement would carry neither that list nor the phone.
+    const refused = await refusal(
+      replaceRecoveryKey(
+        laptop,
+        ready(await loadEncryption(laptop)),
+        (await generateRecoveryKey()).secret,
+        recovery.secret
+      )
+    );
     expect(refused.code).toBe('E2EE_DEVICE_SIGNED_PROJECTS');
-    expect(
-      ready(await loadEncryption(laptop)).list.devices.map((d) => d.deviceId)
-    ).toContain(phoneId);
+  });
+
+  it('keeps a removed device that signed a key archive out of a replacement (#894 review)', async () => {
+    const srv = server();
+    const { laptop, recovery } = await setUp(srv);
+    const phone = await enrolled(srv, recovery.secret, 'Phone');
+    const phoneId = phone.account.device!.deviceId;
+    const now = '2026-10-25T00:00:00.000Z';
+    srv.db
+      .prepare(
+        `INSERT INTO projects (id, user_id, name, document_json,
+           document_version, updated_at, storage_format)
+         VALUES ('proj_archived', ?, '', '{}', 1, ?, 2)`
+      )
+      .run(USER, now);
+    // The phone signed only a key archive: no version, no envelope.
+    srv.db
+      .prepare(
+        `INSERT INTO e2ee_key_archives (project_id, key_epoch, envelope,
+           wrapped_version_key, signature, signer_device_id, created_at)
+         VALUES ('proj_archived', 1, 'e', ?, ?, ?, ?)`
+      )
+      .run('w'.repeat(55), 's'.repeat(98), phoneId, now);
+    ready(
+      await removeDevice(
+        laptop,
+        ready(await loadEncryption(laptop)),
+        phoneId,
+        recovery.secret
+      )
+    );
+    const refused = await refusal(
+      replaceRecoveryKey(
+        laptop,
+        ready(await loadEncryption(laptop)),
+        (await generateRecoveryKey()).secret,
+        recovery.secret
+      )
+    );
+    expect(refused.code).toBe('E2EE_DEVICE_SIGNED_PROJECTS');
   });
 
   it('bounds retained generations and cascades old entries without touching another account', async () => {

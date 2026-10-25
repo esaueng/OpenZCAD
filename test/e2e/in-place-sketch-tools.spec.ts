@@ -175,6 +175,52 @@ test('Loft runs in place: two section clicks, then Done', async ({ page }) => {
   expect(lofts[0]!.sections).toHaveLength(2);
 });
 
+test('a picked region offers Loft, which takes it as the first section', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  let document = withMarker('Region verbs');
+  document = addSketchFeature(document, {
+    name: 'Base',
+    plane: 'XY',
+    offset: 0,
+    object: { objectKind: 'rectangle', width: 20, height: 20, centerX: 30, centerY: 0 }
+  }).document;
+  document = addSketchFeature(document, {
+    name: 'Top',
+    plane: 'XY',
+    offset: 20,
+    object: { objectKind: 'circle', radius: 6, centerX: 30, centerY: 0 }
+  }).document;
+  await openDocument(page, document);
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
+    timeout: 30_000
+  });
+  // A region pick arms Extrude; its card offers the other profile tools.
+  const card = page.getByRole('region', { name: 'Extrude operation' });
+  await expect
+    .poll(async () => {
+      await pickProfile(canvas, 0);
+      return card.count();
+    })
+    .toBe(1);
+  await expect(card.getByRole('button', { name: 'Selection: Revolve' })).toBeVisible();
+  await expect(card.getByRole('button', { name: 'Selection: Sweep' })).toBeVisible();
+  await card.getByRole('button', { name: 'Selection: Loft' }).click();
+  await expect(card).toHaveCount(0);
+  const bar = page.locator('.in-place-command');
+  await expect(bar).toContainText('next section');
+  await pickProfile(canvas, 1);
+  await expect(bar).toContainText('2 sections');
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  await bar.getByRole('button', { name: /Done/ }).click();
+  await expectBodyCount(page, 2);
+});
+
 test('Sweep runs in place: profile, path curve clicks, Done', async ({
   page
 }) => {

@@ -225,6 +225,7 @@ import {
   regionChipState,
   type OffsetChipMode
 } from '../lib/offsetChip';
+import { faceDepthBehind, faceSamples } from '../lib/faceDepthBehind';
 import { setLiveDiameter } from '../lib/liveLabels';
 import type { SelectionCalloutContent } from '../lib/selectionCallout';
 import {
@@ -435,6 +436,12 @@ export interface OffsetHandleTarget {
    * let go, but cannot be grabbed until the edit commits or is refused.
    */
   locked?: boolean;
+  /**
+   * A value is being typed on the keypad. The typed value drives the handle,
+   * its ghost and the drag preview; exact frames landing meanwhile re-derive
+   * this target without replacing any of them.
+   */
+  entry?: boolean;
 }
 
 /**
@@ -1853,11 +1860,7 @@ function bodyExtentBehind(
   let least = Number.POSITIVE_INFINITY;
   const vertex = new THREE.Vector3();
   object.updateWorldMatrix(true, true);
-  object.traverse((child) => {
-    if (!(child instanceof THREE.Mesh)) {
-      return;
-    }
-    const mesh = child as THREE.Mesh<THREE.BufferGeometry, THREE.Material>;
+  forEachMesh(object, (mesh) => {
     const position = mesh.geometry.getAttribute('position') as
       THREE.BufferAttribute | THREE.InterleavedBufferAttribute | undefined;
     if (!position) {
@@ -1866,7 +1869,7 @@ function bodyExtentBehind(
     for (let index = 0; index < position.count; index += 1) {
       vertex
         .fromBufferAttribute(position, index)
-        .applyMatrix4(child.matrixWorld);
+        .applyMatrix4(mesh.matrixWorld);
       const along = vertex.sub(origin).dot(direction);
       if (along < least) {
         least = along;
@@ -4146,9 +4149,17 @@ export function ModelViewer({
         const value = entry.rig ? entry.rig.value() : view.value;
         const scale =
           (entry.rig?.group.userData.gizmoScale as number | undefined) ?? 1;
+        // A chip-only value's anchor is read live: it may follow another
+        // value (a hole step's rim), which rebuilds no rig.
         const anchor = entry.rig
           ? entry.rig.chipAnchor(scale)
-          : (entry.anchor ?? new THREE.Vector3());
+          : view.kind === 'chip'
+            ? new THREE.Vector3(
+                view.params.anchor.x,
+                view.params.anchor.y,
+                view.params.anchor.z
+              )
+            : (entry.anchor ?? new THREE.Vector3());
         const ndc = anchor.clone().project(context.activeCamera);
         if (ndc.z > 1 || ndc.z < -1) {
           entry.chip.hidden = true;
@@ -4281,7 +4292,11 @@ export function ModelViewer({
       } else if (offsetRigRef.current) {
         // A typed value previews like a drag: solid over the old part's
         // ghost, taken before the proxy deforms the body.
+        // Back at zero there is no change to show: drop the ghost (typed
+        // entry keeps it across exact frames, so nothing else would), and
+        // take it again for the next nonzero value.
         if (Math.abs(value) > 1e-9) beginOffsetGhost();
+        else clearOffsetGhost();
         offsetRigRef.current.setValue(value);
         queueOffsetBodyProxy(value);
       } else {
@@ -11133,7 +11148,9 @@ export function ModelViewer({
       offsetBodyProxyControllerRef.current?.discard();
       // Exact frames replace bodies mid-drag; once the drag is over, the
       // next bodies are the committed or restored part.
-      if (!offsetDragActiveRef.current) offsetGhostClearRef.current?.();
+      // Typed entry keeps its ghost the same way while exact frames land.
+      if (!offsetDragActiveRef.current && !offsetHandleRef.current?.entry)
+        offsetGhostClearRef.current?.();
       // The manager owns hover-slot geometry even while the slots are
       // parented under bodies, so it must detach them before body disposal.
       context.selection.resetForRebuild();
@@ -12240,7 +12257,7 @@ export function ModelViewer({
     // simply withdrawn for validation.
     if (
       previous &&
-      offsetHandle?.locked &&
+      (offsetHandle?.locked || offsetHandle?.entry) &&
       built &&
       sameOffsetHandleTarget(built.handle, offsetHandle)
     ) {
@@ -12252,7 +12269,7 @@ export function ModelViewer({
     const takesOver =
       previous !== null &&
       offsetHandle !== null &&
-      built?.handle.locked === true &&
+      (built?.handle.locked === true || built?.handle.entry === true) &&
       built.handle.bodyId === offsetHandle.bodyId;
     if (previous) {
       if (takesOver) previous.dispose();
@@ -12277,20 +12294,28 @@ export function ModelViewer({
       offsetHandle.normal
     );
     const body = context.objectsByBodyId.get(offsetHandle.bodyId);
+    const handleOrigin = new THREE.Vector3(
+      placement.origin.x,
+      placement.origin.y,
+      placement.origin.z
+    );
+    const handleDirection = new THREE.Vector3(
+      placement.direction.x,
+      placement.direction.y,
+      placement.direction.z
+    );
+    // Total reads the material behind the face, not the whole body's reach
+    // behind the face's plane (which spanned to an unrelated lobe).
+    const depthSamples = body ? faceSamples(body, offsetHandle.topologyId) : [];
     const extentBehind = body
-      ? bodyExtentBehind(
+      ? (faceDepthBehind(
           body,
-          new THREE.Vector3(
-            placement.origin.x,
-            placement.origin.y,
-            placement.origin.z
-          ),
-          new THREE.Vector3(
-            placement.direction.x,
-            placement.direction.y,
-            placement.direction.z
-          )
-        )
+          handleOrigin,
+          handleDirection,
+          depthSamples.length > 0
+            ? depthSamples
+            : [{ point: handleOrigin, weight: 1 }]
+        ) ?? bodyExtentBehind(body, handleOrigin, handleDirection))
       : null;
     const chipState = faceOffsetChipState(
       offsetHandle.totalBaseline,

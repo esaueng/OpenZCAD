@@ -3,7 +3,8 @@ import {
   finishInPlaceCommand,
   test,
   expect,
-  stubApi
+  stubApi,
+  enterCommandValue
 } from './openzcad-fixtures';
 
 test('invalid primitive dimensions never enter saved history', async ({
@@ -22,13 +23,15 @@ test('invalid primitive dimensions never enter saved history', async ({
   const entry = page.locator('.numeric-keypad input');
   await entry.fill('-5');
   await entry.press('Enter');
-  await expect(bar).toContainText('Box width takes at least 0.001, not -5.');
+  await expect(bar).toContainText('-5; Box width takes at least 0.001.');
   await expect(width).toContainText('Width 30');
   await expect(
     page.getByText(
       'No features yet. Pick a tool from the tool rail on the left to start.'
     )
   ).toBeVisible();
+  // Done waits until the refused size is given again.
+  await enterCommandValue(page, 'width', '30');
   await finishInPlaceCommand(page, 'Box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
   await expect(

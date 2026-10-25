@@ -4,10 +4,8 @@ import { handleGlimpseUsage, countApi, type GlimpseEnv } from './glimpse';
 import { handleE2eeRequest } from './e2ee';
 import { withEncryptedProjectInfo } from './e2eeProjectDocuments';
 import { accountRequiresEncryptedProjects } from './e2eeProjectPreferences';
-import {
-  assertPlaintextRoomAccess,
-  assertProjectRouteFormat
-} from './projectFormatGate';
+import { assertProjectRouteFormat } from './projectFormatGate';
+import { encryptedRoomHeaders, notifyEncryptedRoom } from './e2eeRoom';
 import { enforceApiRateLimit, publicRequestBucket } from './apiRateLimit';
 import {
   FREECAD_WORKER_PATH,
@@ -20,8 +18,8 @@ import {
   parseWorkspaceSession,
   saveWorkspaceSession
 } from './workspaceSessions';
+import type { ProjectCollaborationRoom } from '@openzcad/cloudflare-adapters';
 import {
-  ProjectCollaborationRoom,
   ProjectObjectStorageError,
   createPersistenceService,
   isCloudflareFeatureEnabled,
@@ -869,8 +867,13 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         await publicRequestBucket(request, env, 'socket'),
         60
       );
+      // An encrypted project's room opens only while E2EE_PROJECTS_ENABLED
+      // is on (ADR-024 slice 4-9); the ticket names the format it was
+      // issued for, and the room checks the account's access again.
       const plaintextOnly = (await isProjectStorageFormatReady(env.DB))
-        ? ' AND storage_format = 1'
+        ? isCloudflareFeatureEnabled(env, 'E2EE_PROJECTS_ENABLED')
+          ? ' AND storage_format IN (1, 2)'
+          : ' AND storage_format = 1'
         : '';
       const exists = await env
         .DB!.prepare(
@@ -1171,13 +1174,16 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         await enforceApiRateLimit(env, `api:${userId}`, 120);
         await assertAccountNotErasing(env.DB, userId);
       }
-      return await handleE2eeRequest(
+      const response = await handleE2eeRequest(
         request,
         env,
         session,
         isE2eeKeysEnabled(env, session.email),
         isE2eeProjectsEnabled(env, session.email)
       );
+      // A Commit or an account write the project's room should hear about.
+      await notifyEncryptedRoom(env, request, response);
+      return response;
     } finally {
       // Authentication may have admitted a development write before a
       // rate-limit/fence refusal; release it even without route dispatch.
@@ -1287,7 +1293,8 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     persistence,
     userId,
     request.method,
-    pathname
+    pathname,
+    isE2eeProjectsEnabled(env, session.email)
   );
 
   if (request.method === 'GET' && pathname === '/api/settings') {
@@ -1661,7 +1668,11 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   if (request.method === 'POST' && collaborationTicketMatch) {
     const projectId = collaborationTicketMatch[1]!;
     const access = await persistence.requireProjectRead(userId, projectId);
-    assertPlaintextRoomAccess(access);
+    const encryptedRoom = await encryptedRoomHeaders(
+      request,
+      access,
+      isE2eeProjectsEnabled(env, session.email)
+    );
     if (!(await isProjectSharingPreferenceEnabled(access.ownerUserId, env))) {
       return json(
         {
@@ -1675,7 +1686,8 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       'x-openzcad-internal-ticket-request': 'v1',
       'x-openzcad-user-id': userId,
       'x-openzcad-display-name': session.displayName,
-      'x-openzcad-project-role': access.role
+      'x-openzcad-project-role': access.role,
+      ...encryptedRoom
     });
     if (session.email) {
       headers.set('x-openzcad-user-email', session.email);
@@ -1715,7 +1727,11 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     assertSameOrigin(request);
     const projectId = collaborationMatch[1]!;
     const access = await persistence.requireProjectRead(userId, projectId);
-    assertPlaintextRoomAccess(access);
+    const encryptedRoom = await encryptedRoomHeaders(
+      request,
+      access,
+      isE2eeProjectsEnabled(env, session.email)
+    );
     if (!(await isProjectSharingPreferenceEnabled(access.ownerUserId, env))) {
       return json(
         {
@@ -1742,6 +1758,9 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     headers.set('x-openzcad-project-role', access.role);
     if (session.email) {
       headers.set('x-openzcad-user-email', session.email);
+    }
+    for (const [name, value] of Object.entries(encryptedRoom)) {
+      headers.set(name, value);
     }
     const roomUrl = new URL(request.url);
     roomUrl.searchParams.set('projectId', projectId);
@@ -2336,4 +2355,5 @@ async function dispatchApiRequest(
   }
 }
 
-export { ProjectCollaborationRoom };
+// The adapters' room, given the encrypted account seam (ADR-024 slice 4-9).
+export { ProjectCollaborationRoom } from './e2eeRoom';

@@ -47,7 +47,9 @@ import {
   type EncryptionState,
   type NewDeviceApprovalStep
 } from '../lib/e2ee/accountKeys';
+import type { RemovalOutcome } from '../lib/e2ee/deviceRemoval';
 import { createE2eeApi, E2eeApiError } from '../lib/e2ee/e2eeApi';
+import { projectRemovalStep } from '../lib/e2ee/projectRemovalStep';
 import { DeviceListPinConflict } from '../lib/e2ee/deviceStore';
 import {
   deviceKeyFactory,
@@ -70,6 +72,7 @@ import {
 } from '../lib/e2ee/keySession';
 import { Group, Notice, SettingRow, Status } from './settingsControls';
 import { ProjectEncryptionPreference } from './ProjectEncryptionPreference';
+import { EncryptedProjectRecovery } from './EncryptedProjectRecovery';
 import '../styles/components/encryption.css';
 
 /**
@@ -279,6 +282,12 @@ function messageFor(error: unknown): string {
   if (error instanceof Error && error.name === 'E2eeError') {
     return `The keys did not verify: ${error.message}`;
   }
+  if (
+    error instanceof Error &&
+    (error.name === 'DeviceRemovalError' || error.name === 'ProjectGroupError')
+  ) {
+    return error.message;
+  }
   return 'Encryption keys are unavailable right now. Check your connection and try again.';
 }
 
@@ -297,6 +306,15 @@ function formatDate(value: number | string): string {
     month: 'short',
     day: 'numeric'
   });
+}
+
+/** What a removal left for the other devices, in plain words. */
+function removalNotice(outcome: RemovalOutcome): string | null {
+  const left = outcome.left.filter((item) => item.projectId !== '*').length;
+  if (outcome.left.length === 0) return null;
+  if (left === 0)
+    return 'The device was removed, but its encrypted projects could not be updated yet. Your other devices update each one before their next save.';
+  return `The device was removed. ${left} encrypted ${left === 1 ? 'project gets' : 'projects get'} new keys the next time another of your devices saves ${left === 1 ? 'it' : 'them'}.`;
 }
 
 async function readRecoveryKey(text: string): Promise<Bytes> {
@@ -328,8 +346,14 @@ function AccountPanel({
   );
   const canUsePasskey =
     passkeysAvailable() && !identityChanged && passkeys.length > 0;
+  const [removalLeft, setRemovalLeft] = useState<string | null>(null);
+  const projectStep = () =>
+    projectRemovalStep(ctx, (outcome) =>
+      setRemovalLeft(removalNotice(outcome))
+    );
   return (
     <>
+      {removalLeft ? <Notice tone="warning">{removalLeft}</Notice> : null}
       {identityChanged ? (
         <Notice tone="warning" role="alert">
           Your encryption keys were replaced on another device, so this device
@@ -427,6 +451,13 @@ function AccountPanel({
           </SettingRow>
         </Group>
       ) : null}
+      {certified ? (
+        <EncryptedProjectRecovery
+          ctx={ctx}
+          account={account}
+          canUsePasskey={canUsePasskey}
+        />
+      ) : null}
       <Group title="Devices" note={`${account.list.devices.length} certified`}>
         {account.list.devices.map((device) => (
           <SettingRow
@@ -493,10 +524,13 @@ function AccountPanel({
           intro="All read-only devices will need approval again. Certified devices keep working."
           actionLabel="Revoke read-only access"
           danger
-          onSubmit={(secret) => revokeReadOnlyDevices(ctx, account, secret)}
+          onSubmit={(secret) =>
+            revokeReadOnlyDevices(ctx, account, secret, projectStep())
+          }
           onPasskey={
             canUsePasskey
-              ? () => revokeReadOnlyDevices(ctx, account, 'passkey')
+              ? () =>
+                  revokeReadOnlyDevices(ctx, account, 'passkey', projectStep())
               : undefined
           }
         />
@@ -509,11 +543,18 @@ function AccountPanel({
           actionLabel="Remove device"
           danger
           onSubmit={(secret) =>
-            removeDevice(ctx, account, flow.deviceId, secret)
+            removeDevice(ctx, account, flow.deviceId, secret, projectStep())
           }
           onPasskey={
             canUsePasskey
-              ? () => removeDevice(ctx, account, flow.deviceId, 'passkey')
+              ? () =>
+                  removeDevice(
+                    ctx,
+                    account,
+                    flow.deviceId,
+                    'passkey',
+                    projectStep()
+                  )
               : undefined
           }
         />
@@ -588,11 +629,18 @@ function AccountPanel({
           danger
           intro="This replaces your account and encryption keys. The removed passkey cannot open future keys. Delete it from your passkey provider separately."
           onSubmit={(secret) =>
-            removePasskey(ctx, account, flow.targetId, secret)
+            removePasskey(ctx, account, flow.targetId, secret, projectStep())
           }
           onPasskey={
             canUsePasskey
-              ? () => removePasskey(ctx, account, flow.targetId, 'passkey')
+              ? () =>
+                  removePasskey(
+                    ctx,
+                    account,
+                    flow.targetId,
+                    'passkey',
+                    projectStep()
+                  )
               : undefined
           }
         />

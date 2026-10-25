@@ -328,9 +328,12 @@ import {
   type FacePickOperation,
   type FormFacePick
 } from './lib/holeFacePick';
+import { prefersSavingData } from './lib/saveData';
+import { useSurfaceReady } from './hooks/useSurfaceReady';
 import {
   lazyWithStaleChunkNotice,
   loadWhenOnline,
+  preloadableLazy,
   onStaleChunk,
   watchPreloadErrors,
   STALE_CHUNK_MESSAGE
@@ -721,6 +724,7 @@ import {
   selectionCalloutVerbs,
   type SelectionCalloutContent,
   type SelectionCalloutKind,
+  type SelectionCalloutVerbInput,
   type SelectionCalloutOperation,
   type SelectionCalloutVerbId
 } from './lib/selectionCallout';
@@ -913,7 +917,7 @@ function withSuspense<P extends object>(Lazy: JSXElementConstructor<P>) {
   };
 }
 
-const LazyNumericKeypad = lazyWithStaleChunkNotice(() =>
+const LazyNumericKeypad = preloadableLazy(() =>
   import('./components/NumericKeypad').then((module) => ({
     default: module.NumericKeypad
   }))
@@ -948,7 +952,7 @@ const ViewModeBar = createLazyPanel<
 // off the entry chunk, which runs at its budget. Its own boundary keeps a
 // chunk that fails to load (a tab left open across a deploy) to the panel
 // slot, with the Reload notice, instead of taking the workspace down.
-const LazyMoveOverlay = lazyWithStaleChunkNotice(() =>
+const LazyMoveOverlay = preloadableLazy(() =>
   import('./components/MoveOverlay').then((module) => ({
     default: module.MoveOverlay
   }))
@@ -1170,11 +1174,21 @@ const LazyAssistantPanel = lazyWithStaleChunkNotice(() =>
  * weight in the launcher chunk — before a project is even open — for the sake
  * of a click that may never come.
  */
-const LazySettingsPage = lazyWithStaleChunkNotice(() =>
+const LazySettingsPage = preloadableLazy(() =>
   import('./components/SettingsPage').then((module) => ({
     default: module.SettingsPage
   }))
 );
+/**
+ * Surfaces a click opens, loaded while the page is idle: their first open
+ * used to show an empty frame or two while the chunk evaluated, even with
+ * the chunk already prefetched.
+ */
+const FIRST_USE_SURFACES = [
+  LazySettingsPage,
+  LazyMoveOverlay,
+  LazyNumericKeypad
+];
 const LazyProjectSharingDialog = lazyWithStaleChunkNotice(() =>
   import('./components/ProjectSharingDialog').then((module) => ({
     default: module.ProjectSharingDialog
@@ -1422,7 +1436,10 @@ import { footprintPlacement } from './lib/inPlace/primitives';
 import {
   IN_PLACE_TOOL_SPECS,
   clampValue,
+  displayedValue,
   isInPlaceTool,
+  keypadText,
+  valueInRange,
   type InPlaceRequest,
   type BodyPick,
   type FacePick,
@@ -2324,6 +2341,10 @@ export function App() {
       desktopAuthorizationAttempt !== null ||
       loadSettingsViewState().open
   );
+  // An open that beats the idle warm-up waits for the chunk instead of
+  // showing an empty overlay; the workspace still holds its keys meanwhile.
+  const settingsShown =
+    useSurfaceReady(LazySettingsPage, settingsOpen) && settingsOpen;
   const settingsDialogRef = useRef<HTMLDivElement | null>(null);
   useModalFocus(settingsDialogRef, {
     enabled: settingsOpen,
@@ -2762,6 +2783,26 @@ export function App() {
       stopPreload();
     };
   }, [announce]);
+  // Load what a click opens while the page is idle, so its first open is not
+  // an empty frame. A failure here is left to the surface's own load, which
+  // reports a stale chunk where the user is looking.
+  useEffect(() => {
+    // Save-Data asks for nothing speculative, as the chunk prefetch honours.
+    if (prefersSavingData()) return;
+    // Offline, a failed module download can stay cached until navigation,
+    // so wait for the connection rather than poison the surfaces' own loads.
+    const warm = () =>
+      void loadWhenOnline(async () => {
+        for (const surface of FIRST_USE_SURFACES)
+          surface.preload().catch(() => undefined);
+      });
+    if (typeof window.requestIdleCallback === 'function') {
+      const idle = window.requestIdleCallback(warm, { timeout: 5_000 });
+      return () => window.cancelIdleCallback(idle);
+    }
+    const timer = window.setTimeout(warm, 2_000);
+    return () => window.clearTimeout(timer);
+  }, []);
   /** A change of selection or command retires the message it interrupts. */
   const retireStatusMessage = useCallback(() => {
     setStatusEntry((current) => retireStatus(current, Date.now()));
@@ -3345,6 +3386,9 @@ export function App() {
   /** Opens exact entry for the armed handle, as tapping its chip would. */
   const openExactEntryRef = useRef<(() => boolean) | null>(null);
   const contextMenuActionsRef = useRef<Record<string, () => void>>({});
+  /** Counts tool launches, so a launch held for its panel's chunk can tell
+   * whether another has superseded it. */
+  const toolLaunchRef = useRef(0);
   const viewportMenuHandlersRef = useRef({
     launchTool,
     validateSelectionEdit,
@@ -4624,6 +4668,10 @@ export function App() {
     doc?.ownerUserId !== session.userId
   );
 
+  // An end-to-end encrypted project's room relays ciphertext (ADR-024
+  // slice 4-9): only its owner's own devices until sharing arrives, and every
+  // version the room accepts is already the account's.
+  const encryptedRoomProject = isEncryptedProject(doc?.projectId);
   const collaboration = useCollaboration({
     enabled: cloudFunctionsEnabled,
     document: doc,
@@ -4631,15 +4679,23 @@ export function App() {
     // account credentials to a collaboration room after this exact project has
     // been resolved as a cloud-backed document. Desktop exchanges its native
     // bearer credential for a short-lived, one-use WebSocket ticket.
-    // The live room comes to encrypted projects with ADR-024 slice 4-9;
-    // until then the browser does not connect for format 2.
     session:
       activeProjectIsCloud &&
       cloudAvailable &&
       liveCollaborationEnabled &&
-      !isEncryptedProject(doc?.projectId)
+      (!encryptedRoomProject || doc?.ownerUserId === session?.userId)
         ? session
         : null,
+    encrypted: encryptedRoomProject,
+    onAccountVersion(projectId, version) {
+      // The room wrote this browser's version to the account: that is the
+      // fence the next account write (should the room drop) builds on.
+      remoteVersionsRef.current.set(projectId, version);
+      cloudProjectAutosaveRef.current?.adoptAccountVersion(projectId, version);
+      if (managerRef.current?.document.version === version) {
+        setSaveState('synced');
+      }
+    },
     onRemoteDocument(incomingDocument, context) {
       const current = managerRef.current?.document;
       // An unsolicited broadcast at or behind the local version is this
@@ -4683,10 +4739,23 @@ export function App() {
         }
       })();
       const controller = cloudProjectAutosaveRef.current;
-      const accountVersion =
-        controller?.syncedVersion ??
-        remoteVersionsRef.current.get(remoteDocument.projectId) ??
-        null;
+      // An encrypted room's version is the account's: the room wrote it
+      // there before relaying it (ADR-024 slice 4-9). A local merge the room
+      // has not acknowledged yet is not: the account still holds the head it
+      // builds on, so a refused or lost resubmission falls back to autosave.
+      const encryptedAccountVersion =
+        context?.accountVersion ?? remoteDocument.version;
+      if (encryptedRoomProject) {
+        remoteVersionsRef.current.set(
+          remoteDocument.projectId,
+          encryptedAccountVersion
+        );
+      }
+      const accountVersion = encryptedRoomProject
+        ? encryptedAccountVersion
+        : (controller?.syncedVersion ??
+          remoteVersionsRef.current.get(remoteDocument.projectId) ??
+          null);
       if (
         controller &&
         accountVersion !== null &&
@@ -5288,6 +5357,45 @@ export function App() {
     session,
     shareSession,
     sharedAccountProject
+  ]);
+
+  // An encrypted room that stops relaying (offline, refused, too large, no
+  // lease) after it carried this project's edits leaves the account to
+  // autosave, which picks up the open version the room did not store
+  // (ADR-024 slice 4-9). A room that never went live changes nothing.
+  const encryptedRoomCarriedRef = useRef<string | null>(null);
+  useEffect(() => {
+    const projectId = doc?.projectId ?? null;
+    if (!encryptedRoomProject || sharedAccountProject || !projectId) {
+      encryptedRoomCarriedRef.current = null;
+      return;
+    }
+    if (collaboration.status === 'live') {
+      encryptedRoomCarriedRef.current = projectId;
+      return;
+    }
+    if (
+      encryptedRoomCarriedRef.current !== projectId ||
+      ['connecting', 'conflict', 'read-only'].includes(collaboration.status)
+    ) {
+      return;
+    }
+    encryptedRoomCarriedRef.current = null;
+    const controller = cloudProjectAutosaveRef.current;
+    const current = managerRef.current?.document;
+    if (
+      controller &&
+      controller.syncedVersion !== null &&
+      current?.projectId === projectId &&
+      !controller.holdsDocument(current)
+    ) {
+      controller.schedule(current);
+    }
+  }, [
+    doc?.projectId,
+    encryptedRoomProject,
+    sharedAccountProject,
+    collaboration.status
   ]);
 
   useEffect(() => {
@@ -7098,6 +7206,19 @@ export function App() {
     viewerBodies: completedViewerBodies,
     setStatus
   });
+  /** What a Move launched now would act on, read live by a held launch: the
+   * project and selection (a replaced project can share an empty one), and
+   * which command holds the lane, so Measure, a tool or a sketch taken up
+   * meanwhile drops it as surely as another launch would. */
+  const moveSourceRef = useRef('');
+  moveSourceRef.current = [
+    doc?.projectId ?? '',
+    selectedBodyIds.join(','),
+    selectedSketch?.sketchId ?? '',
+    tool ?? '',
+    measuring ? 'measuring' : '',
+    interaction.mode
+  ].join('|');
 
   // Sketch profiles lifted onto their 3D planes for the viewport overlay.
   const sketchOverlays = useMemo<SketchOverlay[]>(() => {
@@ -7417,6 +7538,67 @@ export function App() {
       ? 'edit'
       : 'details';
   })();
+  // Why the pick cannot seed a datum, by the rules the Plane and Axis cards
+  // apply to it (datumFaceSourceFromPick, datumAxisEdgeFromPick,
+  // datumAxisFaceFromPick): a rebuildable identity, and a straight edge.
+  const calloutDatumRefusal = ((): string | null => {
+    const lost = (what: string, datum: string) =>
+      `This ${what} has no identity a rebuild can find again, so ${datum} cannot follow it.`;
+    if (calloutKind === 'face' && renderedSelectedTopology) {
+      const face = representations[
+        renderedSelectedTopology.bodyId
+      ]?.topology?.faces.find(
+        (candidate) => candidate.hash === renderedSelectedTopology.hash
+      );
+      const surface = face?.geometry?.surfaceType.toLowerCase();
+      if (surface === 'cylinder' || surface === 'cone') {
+        return face?.reference ? null : lost('face', 'an axis');
+      }
+      const attachment = faceSketchAttachment({
+        bodyId: renderedSelectedTopology.bodyId,
+        pickedHash: renderedSelectedTopology.hash,
+        face
+      });
+      return attachment.ok &&
+        attachment.planeRef.type === 'face' &&
+        attachment.planeRef.sourceCentroid
+        ? null
+        : lost('face', 'a plane');
+    }
+    if (calloutKind === 'edges') {
+      // The edge the Axis card takes: the last one picked.
+      const picked =
+        renderedSelectedTopology?.kind === 'edge'
+          ? renderedSelectedTopology
+          : selectedEdges.at(-1);
+      const edge = picked
+        ? representations[picked.bodyId]?.topology?.edges.find(
+            (candidate) => candidate.hash === picked.hash
+          )
+        : undefined;
+      const reference = edge?.reference;
+      if (!reference) return lost('edge', 'an axis');
+      return reference.witness.closed ||
+        !/^line$/i.test(reference.witness.curveType)
+        ? 'An axis runs along a straight edge; this edge is curved.'
+        : null;
+    }
+    return null;
+  })();
+  // The picked face's kind, for the verbs when the machine does not hold it.
+  const calloutFaceSurface = ((): SelectionCalloutVerbInput['faceSurface'] => {
+    if (calloutKind !== 'face' || !renderedSelectedTopology) return undefined;
+    const surface = representations[renderedSelectedTopology.bodyId]?.topology
+      ?.faces.find(
+        (candidate) => candidate.hash === renderedSelectedTopology.hash
+      )
+      ?.geometry?.surfaceType.toLowerCase();
+    if (!surface) return undefined;
+    if (surface === 'plane') return 'planar';
+    return surface === 'cylinder' || surface === 'cone'
+      ? 'cylindrical'
+      : 'other';
+  })();
   const calloutVerbsKey =
     calloutKind && calloutInteractive
       ? JSON.stringify([
@@ -7428,6 +7610,8 @@ export function App() {
               interaction.mode === 'face' &&
               Boolean(interaction.target.resizeBodyFeatureId),
             pressedAction: calloutPressedAction,
+            datumRefusal: calloutDatumRefusal,
+            faceSurface: calloutFaceSurface,
             availability: shownAvailability
           }),
           ...(calloutImportedFace === 'edit'
@@ -7437,6 +7621,18 @@ export function App() {
               : [])
         ])
       : '[]';
+  // The pick as an identity, for the card's per-pick state (its More fold).
+  const calloutPickKey = JSON.stringify([
+    renderedSelectedTopology
+      ? [
+          renderedSelectedTopology.kind,
+          renderedSelectedTopology.bodyId,
+          renderedSelectedTopology.topologyId ?? renderedSelectedTopology.hash
+        ]
+      : null,
+    selectedEdges.map((edge) => [edge.bodyId, edge.topologyId ?? edge.hash]),
+    selectedBodyIds
+  ]);
   const selectionCallout = useMemo<SelectionCalloutContent | null>(() => {
     const onVerb = (id: SelectionCalloutVerbId) =>
       selectionCalloutVerbRef.current(id);
@@ -7479,6 +7675,7 @@ export function App() {
         ? { detail: selectionSummary.detail }
         : {}),
       verbs,
+      pickKey: calloutPickKey,
       anchor: 'selection',
       onVerb,
       onClear: () => clearSelectionRef.current()
@@ -7489,6 +7686,7 @@ export function App() {
     selectionSummary,
     selectedBodyIds,
     calloutVerbsKey,
+    calloutPickKey,
     calloutInteractive
   ]);
 
@@ -7659,6 +7857,11 @@ export function App() {
       if (!newerQueued) setSaveState(cloudAvailable ? 'synced' : 'local');
     } else if (controller.holdsDocument(pending)) {
       if (!newerQueued) setSaveState('synced');
+    } else if (encryptedRoomProject && collaboration.status === 'live') {
+      // The encrypted room writes this version to the account itself
+      // (ADR-024 slice 4-9); a second, separately sealed copy would only
+      // race it. Should the room drop, the effect below hands it to autosave.
+      if (!newerQueued) setSaveState('syncing');
     } else {
       controller.schedule(pending);
     }
@@ -8156,7 +8359,36 @@ export function App() {
    * values were never applied is not left open under the new tool's card
    * (F15) — the user is asked once whether to apply or discard it.
    */
-  function launchTool(nextTool: ToolId, modelingFeature?: FeatureNode) {
+  function launchTool(
+    nextTool: ToolId,
+    modelingFeature?: FeatureNode,
+    panelLoadSettled = false
+  ) {
+    const launch = ++toolLaunchRef.current;
+    // Move's panel takes the selection card's place. Before its chunk has
+    // loaded (a launch that beats the idle warm-up, or Save-Data, which skips
+    // it) the swap left neither on screen, so the card stays up until the
+    // panel can render. A failed load launches anyway, to report it.
+    if (
+      nextTool === 'transform' &&
+      !panelLoadSettled &&
+      !LazyMoveOverlay.isLoaded()
+    ) {
+      // The launch belongs to the selection it was made from: one cleared or
+      // replaced while the panel loaded abandons it.
+      const source = moveSourceRef.current;
+      const relaunch = () => {
+        if (toolLaunchRef.current !== launch) return;
+        if (moveSourceRef.current !== source) return;
+        viewportMenuHandlersRef.current.launchTool(
+          nextTool,
+          modelingFeature,
+          true
+        );
+      };
+      LazyMoveOverlay.preload().then(relaunch, relaunch);
+      return;
+    }
     const current = managerRef.current?.document;
     if (modelingFeature && !current) return;
     const request = {
@@ -8204,7 +8436,17 @@ export function App() {
               z: current.target.point[2]
             }
           )
-        : null;
+        : // A face picked with direct manipulation off never arms the
+          // machine: the selection itself names it (a hole then starts at
+          // the face's middle, there being no click point to keep).
+          selectedTopology?.kind === 'face'
+          ? inPlaceFacePick(
+              selectedTopology.bodyId,
+              selectedTopology.topologyId,
+              selectedTopology.hash,
+              undefined
+            )
+          : null;
     // Faces a box swept first are a face-list command's faces, on one body;
     // the wider sweep is dropped so its highlights promise nothing more.
     const sweptFaces =
@@ -8223,6 +8465,13 @@ export function App() {
       const body = inPlaceBodyPick(bodyId);
       return body ? [body] : [];
     });
+    // A solid offset takes a body, named by any of its faces: a body picked
+    // first (its Selection card's Solid offset) is that body, its handle on
+    // a flat face where it has one.
+    const bodyFace =
+      tool === 'solid-offset' && !selectedFace && initialBodies[0]
+        ? anyInPlaceFaceOf(initialBodies[0].bodyId)
+        : null;
     cancelPanel();
     // A command takes the command slot alone: Measure ends as it would for
     // any other tool, so the two never stack.
@@ -8236,9 +8485,24 @@ export function App() {
     inPlaceRef.current.start(
       tool,
       initial,
-      selectedFace ? [selectedFace] : sweptFaces,
+      selectedFace
+        ? [selectedFace]
+        : bodyFace
+          ? [bodyFace]
+          : sweptFaces,
       initialBodies
     );
+  }
+
+  /** A body's face for a command that takes the body: a flat one first. */
+  function anyInPlaceFaceOf(bodyId: BodyId): FacePick | null {
+    const faces = representations[bodyId]?.topology?.faces ?? [];
+    const face =
+      faces.find((candidate) => candidate.geometry?.surfaceType === 'plane') ??
+      faces[0];
+    return face
+      ? inPlaceFacePick(bodyId, face.topologyId, face.hash, undefined)
+      : null;
   }
 
   /** Swept faces as an in-place command's face slot holds them. */
@@ -18599,8 +18863,23 @@ export function App() {
     publishPreview: setPreviewDoc,
     onStatus: setStatus
   });
+  // A value keypad opens from an armed handle, a running command or a tool
+  // card. Load it once one is up, so a keypad that beats the idle warm-up
+  // does not appear late. Save-Data still asks for nothing speculative: there
+  // the keypad loads when it is actually opened.
+  const keypadWithinReach =
+    tool !== null ||
+    inPlace.active ||
+    interaction.mode !== 'idle' ||
+    movePreview !== null;
+  useEffect(() => {
+    if (!keypadWithinReach || prefersSavingData()) return;
+    LazyNumericKeypad.preload().catch(() => undefined);
+  }, [keypadWithinReach]);
   const inPlaceRef = useRef(inPlace);
   inPlaceRef.current = inPlace;
+  /** Whether the value a command keypad opened on had been set by the user. */
+  const commandKeypadTouchedRef = useRef(false);
   /** The keypad moves a command handle through this, without a render. */
   const commandSetterRef = useRef<
     ((valueId: string, value: number) => void) | null
@@ -18630,13 +18909,14 @@ export function App() {
     );
     if (!valueSpec) return false;
     const raw = inPlace.raws[valueId];
+    commandKeypadTouchedRef.current = inPlace.touched.includes(valueId);
     setKeypad({
       kind: 'command',
       commandValueId: valueId,
       label: valueSpec.label,
       // A parametric value opens as its expression, and comes back as one
       // if entry is canceled.
-      initial: raw ?? String(Math.round(value * 100) / 100),
+      initial: raw ?? keypadText(value),
       selectInitial: true,
       unitKind: valueSpec.unit,
       baseline: value,
@@ -18665,8 +18945,13 @@ export function App() {
         const valueSpec = inPlaceSpec?.values.find(
           (candidate) => candidate.id === handle.valueId
         );
-        const round = (value: number) =>
-          formatNumber(Math.round(value * 100) / 100);
+        // A value two places would show as a refused one is shown in full.
+        const round = (value: number) => {
+          const shown = displayedValue(valueSpec, value);
+          return shown === Math.round(value * 100) / 100
+            ? formatNumber(shown)
+            : String(shown);
+        };
         const format =
           valueSpec?.unit === 'angle'
             ? (value: number) => `${round(value)}°`
@@ -19387,7 +19672,10 @@ export function App() {
       ...(total === undefined
         ? {}
         : { totalBaseline: total.total, totalSense: total.sense }),
-      ...(interaction.phase === 'validating' ? { locked: true } : {})
+      ...(interaction.phase === 'validating' ? { locked: true } : {}),
+      // Keypad entry: typed values drive the handle, its ghost and the
+      // preview; landing exact frames must not rebuild them under the hand.
+      ...(interaction.phase === 'exact-entry' ? { entry: true } : {})
     };
   }, [doc, interaction, renderedOffsetPreview, representations]);
 
@@ -20513,11 +20801,13 @@ export function App() {
       const valueId = open.commandValueId;
       const baseline = open.baseline ?? inPlaceRef.current.values[valueId] ?? 0;
       commandSetterRef.current?.(valueId, baseline);
-      if (open.baselineRaw !== undefined) {
-        inPlaceRef.current.setValue(valueId, baseline, open.baselineRaw);
-      } else {
-        inPlaceRef.current.previewValue(valueId, baseline);
-      }
+      // Unset stays unset: a step that followed its bore still follows it.
+      inPlaceRef.current.restoreValue(
+        valueId,
+        baseline,
+        open.baselineRaw,
+        commandKeypadTouchedRef.current
+      );
     } else if (open.kind === 'sketch-dimension') {
       setSketchDimensionDraft(null);
       setStatus('Dimension entry canceled.');
@@ -23372,54 +23662,60 @@ export function App() {
   // Settings layers over whatever is behind it instead of replacing it.
   // Returning it in place of the shell unmounted the whole workspace, and with
   // it the assistant's conversation and any request still streaming.
+  // One dialog from the moment Settings is asked for: modal (focus held, the
+  // background inert) and found by anything looking for it, but drawn only
+  // once its page has loaded, so an early open shows no empty overlay.
   const settingsOverlay = settingsOpen ? (
     <div
       ref={settingsDialogRef}
-      className="settings-overlay"
+      className={settingsShown ? 'settings-overlay' : 'settings-pending'}
       role="dialog"
       aria-modal="true"
       aria-label="Settings"
+      aria-busy={settingsShown ? undefined : true}
       tabIndex={-1}
     >
-      <SettingsPage
-        settings={appSettings}
-        cloudFunctionsEnabled={cloudFunctionsEnabled}
-        accountState={accountSettings}
-        authConfig={authConfig}
-        authConfigStatus={authConfigStatus}
-        health={deploymentHealth}
-        session={session}
-        busy={settingsBusy}
-        message={settingsMessage}
-        initialSection={
-          pendingInvitationToken || desktopAuthorizationAttempt
-            ? 'account'
-            : undefined
-        }
-        projectInvitationPending={pendingInvitationToken !== null}
-        projectInvitationError={pendingInvitationError}
-        desktopAuthorizationAttempt={desktopAuthorizationAttempt}
-        desktopAuthorizationApproved={desktopAuthorizationApproved}
-        desktopAuthorizationCode={desktopAuthorizationCode}
-        workspaceOpen={doc !== null}
-        onDesktopAuthorizationCodeChange={setDesktopAuthorizationCode}
-        onChange={handleAppSettingsChange}
-        onCloudFunctionsEnabledChange={handleCloudFunctionsEnabledChange}
-        onSaveCredential={(token) => void handleSaveAssistantCredential(token)}
-        onDeleteCredential={() => void handleDeleteAssistantCredential()}
-        onTestAssistant={() => void handleTestAssistantConnection()}
-        onRequestLoginCode={handleRequestLoginCode}
-        onVerifyLoginCode={handleVerifyLoginCode}
-        onRefreshAuthConfig={handleRefreshAuthConfig}
-        onStartDesktopLogin={handleStartDesktopLogin}
-        onApproveDesktopLogin={handleApproveDesktopLogin}
-        onLogout={handleLogout}
-        onDeleteCloudData={handleDeleteCloudData}
-        onReset={handleResetAppSettings}
-        onApplyViewportDefaults={applyViewportDefaults}
-        onDismissProjectInvitation={dismissProjectInvitation}
-        onClose={closeSettings}
-      />
+      {settingsShown && (
+        <SettingsPage
+          settings={appSettings}
+          cloudFunctionsEnabled={cloudFunctionsEnabled}
+          accountState={accountSettings}
+          authConfig={authConfig}
+          authConfigStatus={authConfigStatus}
+          health={deploymentHealth}
+          session={session}
+          busy={settingsBusy}
+          message={settingsMessage}
+          initialSection={
+            pendingInvitationToken || desktopAuthorizationAttempt
+              ? 'account'
+              : undefined
+          }
+          projectInvitationPending={pendingInvitationToken !== null}
+          projectInvitationError={pendingInvitationError}
+          desktopAuthorizationAttempt={desktopAuthorizationAttempt}
+          desktopAuthorizationApproved={desktopAuthorizationApproved}
+          desktopAuthorizationCode={desktopAuthorizationCode}
+          workspaceOpen={doc !== null}
+          onDesktopAuthorizationCodeChange={setDesktopAuthorizationCode}
+          onChange={handleAppSettingsChange}
+          onCloudFunctionsEnabledChange={handleCloudFunctionsEnabledChange}
+          onSaveCredential={(token) => void handleSaveAssistantCredential(token)}
+          onDeleteCredential={() => void handleDeleteAssistantCredential()}
+          onTestAssistant={() => void handleTestAssistantConnection()}
+          onRequestLoginCode={handleRequestLoginCode}
+          onVerifyLoginCode={handleVerifyLoginCode}
+          onRefreshAuthConfig={handleRefreshAuthConfig}
+          onStartDesktopLogin={handleStartDesktopLogin}
+          onApproveDesktopLogin={handleApproveDesktopLogin}
+          onLogout={handleLogout}
+          onDeleteCloudData={handleDeleteCloudData}
+          onReset={handleResetAppSettings}
+          onApplyViewportDefaults={applyViewportDefaults}
+          onDismissProjectInvitation={dismissProjectInvitation}
+          onClose={closeSettings}
+        />
+      )}
     </div>
   ) : null;
 
@@ -25786,7 +26082,7 @@ export function App() {
                       // A value outside the command's range never moves the
                       // handle: Enter refuses it as an expression, and the
                       // value must still be the one it was.
-                      if (valueSpec && clampValue(valueSpec, value) !== value) {
+                      if (valueSpec && !valueInRange(valueSpec, value)) {
                         return;
                       }
                       commandSetterRef.current?.(valueId, value);
@@ -25814,12 +26110,14 @@ export function App() {
                       } else {
                         // Refused: back to the value shown when the chip was
                         // tapped, undoing any in-range keystroke previews.
+                        // Set or unset as it was, as Escape restores it.
                         commandSetterRef.current?.(valueId, baseline);
-                        if (keypad.baselineRaw !== undefined) {
-                          inPlace.setValue(valueId, baseline, keypad.baselineRaw);
-                        } else {
-                          inPlace.previewValue(valueId, baseline);
-                        }
+                        inPlace.restoreValue(
+                          valueId,
+                          baseline,
+                          keypad.baselineRaw,
+                          commandKeypadTouchedRef.current
+                        );
                       }
                     }}
                     onCancel={cancelOpenKeypad}
@@ -26080,6 +26378,16 @@ export function App() {
                   : undefined
               }
               cancelableWhileValidating={interaction.mode === 'region'}
+              // A region's other profile tools, which take the same pick.
+              verbs={
+                interaction.mode === 'region' && tool === null
+                  ? selectionCalloutVerbs({
+                      kind: selectedProfiles.length > 1 ? 'regions' : 'region',
+                      availability: shownAvailability
+                    }).filter((verb) => verb.id !== 'tool:extrude')
+                  : undefined
+              }
+              onVerb={(id) => launchTool(id.slice('tool:'.length) as ToolId)}
               children={
                 interaction.mode === 'region' ? (
                   <ExtrudeForm
