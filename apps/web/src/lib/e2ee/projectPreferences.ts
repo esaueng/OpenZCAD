@@ -164,6 +164,17 @@ async function verify(
     };
   }
   await ctx.pins.write(ctx.userId, opened.sequence, opened.encryptNewProjects);
+  // Another tab may have pinned a newer record since this one was read: an
+  // older record is then a rollback, however it verified.
+  const after = await ctx.pins.read(ctx.userId);
+  if (after !== null && after > opened.sequence) {
+    return {
+      kind: 'refused',
+      reason: 'rollback',
+      message: ROLLBACK_MESSAGE,
+      floor: Math.max(floor, after)
+    };
+  }
   return {
     kind: 'verified',
     encryptNewProjects: opened.encryptNewProjects,

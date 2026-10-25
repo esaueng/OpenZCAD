@@ -27,43 +27,65 @@ const PIN_KEY = (userId: string) =>
 const OPT_IN_KEY = (userId: string) =>
   `openzcad:e2ee-project-preference-opt-in:v1:${userId}`;
 
+type Locks = Pick<LockManager, 'request'>;
+
 /**
  * Pins in localStorage. Storage that is blocked or cleared loses the pin,
  * which only weakens rollback detection back to first use; it never makes a
  * forged record verify.
+ *
+ * A write reads and writes with no await in between, under a Web Lock per
+ * account, so neither another call on this page nor another tab can slip
+ * an older sequence or its value in after a newer one.
  */
 export function localStoragePreferencePins(
   storage: Pick<Storage, 'getItem' | 'setItem'> | null = typeof window ===
   'undefined'
     ? null
-    : window.localStorage
+    : window.localStorage,
+  locks: Locks | null = typeof navigator === 'undefined'
+    ? null
+    : (navigator.locks ?? null)
 ): PreferencePinStore {
+  const readPin = (userId: string): number | null => {
+    try {
+      const value = Number(storage?.getItem(PIN_KEY(userId)) ?? NaN);
+      return Number.isSafeInteger(value) && value >= 1 ? value : null;
+    } catch {
+      return null;
+    }
+  };
+  const writePin = (
+    userId: string,
+    sequence: number,
+    encryptNewProjects: boolean | undefined
+  ) => {
+    try {
+      const current = readPin(userId);
+      // A pin only moves forward, whichever tab writes it; the value
+      // follows the record that set it.
+      if (current === null || sequence > current) {
+        storage?.setItem(PIN_KEY(userId), String(sequence));
+      }
+      if (
+        encryptNewProjects !== undefined &&
+        (current === null || sequence >= current)
+      ) {
+        storage?.setItem(OPT_IN_KEY(userId), encryptNewProjects ? '1' : '0');
+      }
+    } catch {
+      /* Best effort: see above. */
+    }
+  };
   return {
-    async read(userId) {
-      try {
-        const value = Number(storage?.getItem(PIN_KEY(userId)) ?? NaN);
-        return Number.isSafeInteger(value) && value >= 1 ? value : null;
-      } catch {
-        return null;
-      }
-    },
+    read: async (userId) => readPin(userId),
     async write(userId, sequence, encryptNewProjects) {
-      try {
-        const current = await this.read(userId);
-        // A pin only moves forward, whichever tab writes it; the value
-        // follows the record that set it.
-        if (current === null || sequence > current) {
-          storage?.setItem(PIN_KEY(userId), String(sequence));
-        }
-        if (
-          encryptNewProjects !== undefined &&
-          (current === null || sequence >= current)
-        ) {
-          storage?.setItem(OPT_IN_KEY(userId), encryptNewProjects ? '1' : '0');
-        }
-      } catch {
-        /* Best effort: see above. */
-      }
+      if (!locks) return writePin(userId, sequence, encryptNewProjects);
+      await locks.request(
+        `openzcad-e2ee-preference-pin:${userId}`,
+        { mode: 'exclusive' },
+        async () => writePin(userId, sequence, encryptNewProjects)
+      );
     },
     async optedIn(userId) {
       try {
