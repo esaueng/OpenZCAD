@@ -4,6 +4,7 @@ import {
   IN_PLACE_TOOL_SPECS,
   axisCandidatesFor,
   clampValue,
+  displayedValue,
   isInPlaceTool,
   valueInRange,
   type BodyPick,
@@ -75,6 +76,15 @@ describe('the in-place tool table', () => {
     )!;
     expect(valueInRange(count, 3.5)).toBe(false);
     expect(valueInRange(count, Number.NaN)).toBe(false);
+  });
+
+  it('shows a value to two places unless that would show a refused one', () => {
+    const angle = IN_PLACE_TOOL_SPECS.hole.values.find(
+      (value) => value.id === 'countersinkAngleDeg'
+    )!;
+    expect(displayedValue(angle, 82.3456)).toBe(82.35);
+    expect(displayedValue(angle, 179.9999995)).toBe(179.9999995);
+    expect(displayedValue(angle, 0.0000005)).toBe(0.0000005);
   });
 
   it('clamps a value to its range and falls back when not finite', () => {

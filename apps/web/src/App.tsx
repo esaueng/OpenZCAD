@@ -1420,6 +1420,7 @@ import { mergeSweptFaces, useInPlaceCommand } from './hooks/useInPlaceCommand';
 import {
   IN_PLACE_TOOL_SPECS,
   clampValue,
+  displayedValue,
   isInPlaceTool,
   valueInRange,
   type InPlaceRequest,
@@ -18538,8 +18539,13 @@ export function App() {
         const valueSpec = inPlaceSpec?.values.find(
           (candidate) => candidate.id === handle.valueId
         );
-        const round = (value: number) =>
-          formatNumber(Math.round(value * 100) / 100);
+        // A value two places would show as a refused one is shown in full.
+        const round = (value: number) => {
+          const shown = displayedValue(valueSpec, value);
+          return shown === Math.round(value * 100) / 100
+            ? formatNumber(shown)
+            : String(shown);
+        };
         const format =
           valueSpec?.unit === 'angle'
             ? (value: number) => `${round(value)}°`
@@ -25618,7 +25624,7 @@ export function App() {
                 label: valueSpec.label,
                 // A parametric value opens as its expression, and comes
                 // back as one if entry is canceled.
-                initial: raw ?? String(Math.round(value * 100) / 100),
+                initial: raw ?? String(displayedValue(valueSpec, value)),
                 selectInitial: true,
                 unitKind: valueSpec.unit,
                 baseline: value,

@@ -1939,6 +1939,21 @@ export function valueInRange(spec: ValueSpec, value: number): boolean {
 }
 
 /**
+ * A value as a chip or the keypad shows it: to two places, unless that
+ * would show a value the spec refuses (179.9999995° is not 180°), when it
+ * is shown in full.
+ */
+export function displayedValue(
+  spec: ValueSpec | undefined,
+  value: number
+): number {
+  const rounded = Math.round(value * 100) / 100;
+  return !spec || valueInRange(spec, rounded) || !valueInRange(spec, value)
+    ? rounded
+    : value;
+}
+
+/**
  * A dragged value brought inside its spec's range, finite. An open range's
  * ends are kept just inside it; a typed value is checked with
  * {@link valueInRange} instead, so no valid entry is nudged.
