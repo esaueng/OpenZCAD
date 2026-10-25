@@ -6441,6 +6441,11 @@ export function App() {
     () => partBodies.filter((body) => !hiddenBodyIds.has(body.bodyId)),
     [partBodies, hiddenBodyIds]
   );
+  // Only whether a face offset is in progress matters to the bodies: keyed on
+  // the whole interaction, every drag, keypad or selection event handed the
+  // viewer a new bodies array and re-ran each of its bodies effects.
+  const faceOffsetInteraction =
+    interaction.mode === 'face' && interaction.op === 'offset-face';
   const viewerBodies = useMemo<GeometryBodyRepresentation[]>(() => {
     const bodies = (
       currentFaceGeometryPreview
@@ -6455,9 +6460,7 @@ export function App() {
     // a ghost of the part as it was, and a hue change mid-drag would read as
     // a different part.
     const faceOffsetPreview =
-      currentFaceGeometryPreview &&
-      interaction.mode === 'face' &&
-      interaction.op === 'offset-face';
+      currentFaceGeometryPreview && faceOffsetInteraction;
     return !faceOffsetPreview &&
       (currentFaceGeometryPreview || (previewDoc && !currentGeometrySnapshot))
       ? tintPreviewResultBodies(bodies, representations)
@@ -6467,7 +6470,7 @@ export function App() {
     hiddenBodyIds,
     currentGeometrySnapshot,
     currentFaceGeometryPreview,
-    interaction,
+    faceOffsetInteraction,
     previewDoc,
     representations
   ]);
@@ -19262,10 +19265,11 @@ export function App() {
   }, [doc, interaction, renderedOffsetPreview, representations]);
 
   const cylinderRadiusHandleTarget = useMemo(() => {
+    // Validation keeps the handle, locked where it was let go, as the offset
+    // handle does: retiring it there faded it out and back in on a refusal.
     if (
       interaction.mode !== 'face' ||
-      interaction.op !== 'resize-cylinder-radius' ||
-      interaction.phase === 'validating'
+      interaction.op !== 'resize-cylinder-radius'
     ) {
       return null;
     }
@@ -19334,7 +19338,8 @@ export function App() {
             y: target.axisEnd[1],
             z: target.axisEnd[2]
           }
-        )
+        ),
+      ...(interaction.phase === 'validating' ? { locked: true } : {})
     };
   }, [doc, interaction, representations]);
   const cylinderSelectionKey =
@@ -19497,7 +19502,12 @@ export function App() {
       return false;
     }
     const current = interactionRef.current;
-    if (current.mode !== 'face' || current.op !== 'resize-cylinder-radius') {
+    if (
+      current.mode !== 'face' ||
+      current.op !== 'resize-cylinder-radius' ||
+      // One edit at a time: the held handle is locked while it validates.
+      current.phase === 'validating'
+    ) {
       return false;
     }
     const sourceRadius = current.target.radius;
