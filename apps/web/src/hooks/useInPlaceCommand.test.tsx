@@ -858,6 +858,16 @@ describe('useInPlaceCommand: primitives', () => {
     );
   });
 
+  it('names each start anew, even of the same tool', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('box'));
+    const first = hook.result.current.sessionId;
+    act(() => hook.result.current.start('box'));
+    expect(hook.result.current.sessionId).not.toBe(first);
+    act(() => hook.result.current.cancel(true));
+    expect(hook.result.current.sessionId).toBeNull();
+  });
+
   it('refuses a footprint for a command placed some other way', () => {
     const { hook } = setup();
     act(() => hook.result.current.start('revolve'));

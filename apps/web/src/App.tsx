@@ -19374,7 +19374,7 @@ export function App() {
   const inPlaceUnits = doc?.units ?? 'mm';
   // A command canceled mid-drag never sees the release: the next one must
   // not start with its arrows still waiting for it.
-  const inPlaceSessionKey = inPlace.active ? inPlace.tool : null;
+  const inPlaceSessionKey = inPlace.sessionId;
   useEffect(() => setFootprintDragging(false), [inPlaceSessionKey]);
   /** The bodies a primitive's footprint may stand on: the model's own. */
   const committedBodyIds = useMemo(
@@ -26521,7 +26521,11 @@ export function App() {
             holeGhost={holePreviewState?.ghost ?? null}
             footprintPicker={
               !modelingLocked && inPlace.active && inPlaceSpec?.footprint
-                ? { shape: inPlaceSpec.footprint, bodyIds: committedBodyIds }
+                ? {
+                    shape: inPlaceSpec.footprint,
+                    bodyIds: committedBodyIds,
+                    session: inPlace.sessionId ?? 0
+                  }
                 : null
             }
             onFootprint={(gesture) => {

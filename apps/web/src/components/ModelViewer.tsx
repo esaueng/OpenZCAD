@@ -1117,6 +1117,8 @@ export interface ModelViewerProps {
   footprintPicker?: {
     shape: 'rectangle' | 'circle';
     bodyIds: readonly string[];
+    /** The command it belongs to: a new one retires a drag in progress. */
+    session: number;
   } | null;
   /** Each frame of a footprint drag, and its release. */
   onFootprint?(gesture: FootprintGesture): void;
@@ -13424,11 +13426,14 @@ export function ModelViewer({
     };
   }, [holeGhost]);
 
-  // A footprint drag outlives no command: one canceled under the pointer
-  // lets go, and draws nothing more.
-  useEffect(() => {
-    if (!footprintPicker) retireFootprintRef.current?.();
-  }, [footprintPicker]);
+  // A footprint drag outlives no command: one canceled under the pointer,
+  // or replaced by another (even of the same tool, in the same render),
+  // lets go and draws nothing more.
+  const footprintSession = footprintPicker?.session ?? null;
+  useEffect(
+    () => () => retireFootprintRef.current?.(),
+    [footprintSession]
+  );
 
   // The viewport renders on demand, so a typed offset has to ask for the
   // frame that shows it; without this the ghosts only move on the next

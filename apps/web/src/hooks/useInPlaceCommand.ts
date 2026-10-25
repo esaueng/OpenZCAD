@@ -68,6 +68,8 @@ export interface UseInPlaceCommandOptions extends InPlaceContext {
 }
 
 interface Session {
+  /** Which start this is: a new one each time a command starts. */
+  id: number;
   tool: InPlaceToolId;
   slots: {
     profiles: ProfilePick[];
@@ -91,6 +93,11 @@ interface Session {
 
 export interface InPlaceCommand {
   active: boolean;
+  /**
+   * The running command's identity, new on every start (even of the same
+   * tool), so a gesture begun under one is never finished by the next.
+   */
+  sessionId: number | null;
   tool: InPlaceToolId | null;
   spec: InPlaceToolSpec | null;
   slots: InPlaceSlots;
@@ -440,6 +447,7 @@ export function useInPlaceCommand(
     optionsRef.current.publishPreview(null);
   }, [preview]);
 
+  const sessionCount = useRef(0);
   const start = useCallback(
     (
       tool: InPlaceToolId,
@@ -454,7 +462,9 @@ export function useInPlaceCommand(
       setRefusal(null);
       setEntryRefusal(null);
       setPreviewValid(false);
+      sessionCount.current += 1;
       setSession({
+        id: sessionCount.current,
         tool,
         slots: {
           profiles:
@@ -1038,6 +1048,7 @@ export function useInPlaceCommand(
 
   return {
     active: session !== null,
+    sessionId: session?.id ?? null,
     tool: session?.tool ?? null,
     spec,
     slots,
