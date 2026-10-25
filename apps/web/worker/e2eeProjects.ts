@@ -902,14 +902,17 @@ async function submitCommit(
   // rotation of a removal: one built before a removal on another device
   // leaves the removed leaf in the group, which then learns the new key,
   // yet would release the rotation fence. The batch below is fenced on
-  // `account`, so once equal it lands only while this head holds. A
-  // browser older than the field states none; its Commit is fenced on the
-  // head read here, as before, rather than refused outright, so a page
-  // open across a deploy keeps committing.
+  // `account`, so once equal it lands only while this head holds. A member
+  // Commit must state it: one from a page older than the field would be
+  // fenced on the head read here instead, and could stand in for a
+  // removal's rotation it never carried (#913 review), so it is refused
+  // and the page reloads. An External Commit never counts as a rotation
+  // and needs none.
   if (
-    stated &&
-    (stated.generation !== account.generation ||
-      stated.headSequence !== account.headSequence)
+    (kind === 'commit' && !stated) ||
+    (stated &&
+      (stated.generation !== account.generation ||
+        stated.headSequence !== account.headSequence))
   ) {
     refuseDeviceListMoved();
   }

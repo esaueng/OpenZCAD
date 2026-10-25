@@ -811,6 +811,29 @@ describe('device removal across shared encrypted projects (slice 5-7)', () => {
     expect(await wire.json()).toMatchObject({
       code: 'E2EE_DEVICE_LIST_CHANGED'
     });
+    // A member Commit that states no head (a page older than the field) is
+    // refused too, rather than fenced on the head the Worker reads (#913
+    // review): it could not show it carries the removal.
+    const unstated = await srv.call(
+      'POST',
+      `/api/e2ee/projects/${projectId}/mls/commits`,
+      {
+        user: BOB,
+        body: {
+          epoch: groupRow(srv, projectId).epoch,
+          kind: 'commit',
+          deviceId: deviceIdOf(bobDesktop),
+          message: 'AAAA',
+          groupInfo: 'AAAA',
+          wraps: [],
+          archive: {}
+        }
+      }
+    );
+    expect(unstated.status).toBe(409);
+    expect(await unstated.json()).toMatchObject({
+      code: 'E2EE_DEVICE_LIST_CHANGED'
+    });
 
     // Reloaded, the desktop's next Commit removes the phone's leaf and
     // states the current head, which the Worker accepts as the rotation.
