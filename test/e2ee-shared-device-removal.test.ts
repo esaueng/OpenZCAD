@@ -73,6 +73,7 @@ import {
   postOwnEpochKeys,
   projectGroupAccount,
   projectKeyForEpoch,
+  removeMember,
   type ProjectGroupContext
 } from '../apps/web/src/lib/e2ee/projectGroups';
 import {
@@ -657,6 +658,43 @@ async function people() {
 // --- Removal from shared projects ---------------------------------------------
 
 describe('device removal across shared encrypted projects (slice 5-7)', () => {
+  it('carries a removal’s rotation in every Commit, a member removal included (#908 review)', async () => {
+    const { alice, bob, bobRecovery, bobPhone } = await people();
+    // Bob's project, shared with Alice; his phone holds a leaf in it.
+    const projectId = await createEncrypted(bob, 'Owned and shared');
+    await share(bob, projectId, alice, 'viewer');
+    await joinProjectGroup(alice.groups, projectId);
+    // Bob's laptop posts his keys of the epoch Alice's join made.
+    await catchUpProjectGroup(bob.groups, projectId);
+    await joinProjectGroup(bobPhone.groups, projectId);
+    await catchUpProjectGroup(bob.groups, projectId);
+    await catchUpProjectGroup(alice.groups, projectId);
+    const phoneId = deviceIdOf(bobPhone);
+    // The removal goes offline right after the device list is written,
+    // before it rotates anything.
+    bob.after = (path, init) => {
+      if (init.method === 'POST' && path.endsWith('/device-list')) {
+        bob.offline = true;
+      }
+    };
+    await removeDevice(bob.e2ee, bob.account, phoneId, bobRecovery).catch(
+      () => undefined
+    );
+    online(bob);
+    await refresh(bob);
+    const membersOf = async () =>
+      (await bob.sessions.status(refOf(bob, projectId))).members;
+    await catchUpProjectGroup(bob.groups, projectId);
+    expect((await membersOf()).map((m) => m.deviceId)).toContain(phoneId);
+
+    // The owner's next Commit is a member removal: it removes the phone's
+    // leaf too, so the Worker may count it as the rotation.
+    await removeMember(bob.groups, projectId, ALICE);
+    const after = await membersOf();
+    expect(after.map((m) => m.deviceId)).not.toContain(phoneId);
+    expect(after.some((m) => m.userId === ALICE)).toBe(false);
+  });
+
   it('lets a member remove a stolen device: co-members refuse its later Commits and versions and still read its earlier ones', async () => {
     const { srv, alice, bob, bobRecovery, bobDesktop, bobPhone, carol } =
       await people();

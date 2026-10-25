@@ -2299,6 +2299,33 @@ interface BuiltCommit {
 }
 
 /**
+ * Every Commit this account sends carries the rotation a removal left due:
+ * the Remove of its own revoked leaves and a new dedupe secret. The Worker
+ * counts this account's next member Commit as that rotation (its fence on
+ * writes, slice 5-7), so no Commit of ours, a member removal or a role
+ * change included, may leave a revoked leaf behind (#908 review).
+ */
+async function withDueRotation(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  status: SessionStatus,
+  group: E2eeProjectGroupRecord,
+  built: BuiltCommit
+): Promise<BuiltCommit> {
+  if (built.rotation) return built;
+  const rotation = await rotationRequest(ctx, projectId, status, group);
+  if (!rotation) return built;
+  const remove = [
+    ...new Set([...(built.request.remove ?? []), ...(rotation.remove ?? [])])
+  ];
+  return {
+    ...built,
+    request: { ...built.request, ...(remove.length ? { remove } : {}) },
+    rotation: true
+  };
+}
+
+/**
  * Catch up, build the Commit for the current epoch, submit it with its new
  * epoch's material, and rebase onto a winner up to `attempts` times. A null
  * build means nothing needs committing, unless proposals are pending in the
@@ -2330,10 +2357,11 @@ async function commitLoop(
       status,
       members
     );
-    const built =
+    const asked =
       (await build(status, group, departures)) ??
       (departures.settles ? { request: {}, rotation: false } : null);
-    if (!built) return caught;
+    if (!asked) return caught;
+    const built = await withDueRotation(ctx, projectId, status, group, asked);
     const directory = withInvitee(members, built.invitee);
     // The Worker mirrors an owner's role changes and checks the new epoch's
     // roles against them (slice 5-4); an Add states its invitee instead.
