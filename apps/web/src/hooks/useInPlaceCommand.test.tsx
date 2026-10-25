@@ -326,7 +326,9 @@ describe('useInPlaceCommand: revolve', () => {
     await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
     expect(publishPreview).toHaveBeenLastCalledWith(expect.anything());
     builds = false;
-    act(() => hook.result.current.setValue('angle', 90));
+    act(() => {
+      hook.result.current.setValue('angle', 90);
+    });
     await waitFor(() =>
       expect(hook.result.current.refusal).toMatch(/not a closed profile/)
     );
