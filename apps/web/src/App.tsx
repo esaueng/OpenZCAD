@@ -3417,9 +3417,23 @@ export function App() {
     version: number;
     geometry: GeometryReadyState;
   } | null>(null);
+  /**
+   * The version a validated commit attached its complete rebuild to. The
+   * broadcast rebuild that follows publishes that version's meshes before its
+   * analysis; opening the "analysis pending" window for them withdrew the
+   * selection, its card and its highlight for a few frames after every
+   * commit, though the result on screen was already complete.
+   */
+  const committedDerivedRef = useRef<{
+    projectId: string;
+    version: number;
+  } | null>(null);
   const geometry = useGeometryWorker({
     onGeometryReady: (geometry, projectId, version) => {
-      setGeometrySnapshot({ projectId, version, geometry });
+      const committed = committedDerivedRef.current;
+      if (committed?.projectId !== projectId || committed.version !== version) {
+        setGeometrySnapshot({ projectId, version, geometry });
+      }
       // Accepted meshes already contain the committed Move transform.
       setMoveCommitHold(null);
     },
@@ -7497,6 +7511,17 @@ export function App() {
     );
   }
 
+  /** Notes a commit that attached a complete (analysed) rebuild. */
+  function recordCompleteCommit(
+    document: ProjectDocument,
+    derived: ProjectDocument['derived']
+  ): void {
+    committedDerivedRef.current =
+      'analysis' in derived
+        ? null
+        : { projectId: document.projectId, version: document.version };
+  }
+
   /**
    * Backfills kernel-proven references onto legacy face and edge selections.
    * A geometric fingerprint embeds its dimensions, so the only
@@ -7590,6 +7615,7 @@ export function App() {
         // renders the new geometry in the same batch instead of flashing the
         // stale meshes until the broadcast rebuild echoes back.
         next = managerRef.current.commitDerivedState(derived);
+        recordCompleteCommit(next, derived);
         recordFeatureAttribution(next, derived);
         setMoveCommitHold(null);
       }
@@ -7638,6 +7664,7 @@ export function App() {
       let next = managerRef.current.runTransaction(label, commands);
       if (derived) {
         next = managerRef.current.commitDerivedState(derived);
+        recordCompleteCommit(next, derived);
         recordFeatureAttribution(next, derived);
         setMoveCommitHold(null);
       }

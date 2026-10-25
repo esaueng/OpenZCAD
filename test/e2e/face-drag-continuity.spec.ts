@@ -14,6 +14,8 @@ declare global {
     __faceDragLog?: { t: number; name: string; value: string | null }[];
     __holdFinal?: { hold: boolean; held: number; release(): void };
     __openzcadE2EExactFaceDrag?: boolean;
+    __slowAnalysis?: { armed: boolean; held: number };
+    __cardlessFrames?: number;
   }
 }
 
@@ -349,4 +351,93 @@ test('the face an exact preview redrew can still be grabbed after a refusal', as
   await expect(chip).not.toHaveText(before ?? '');
   await page.keyboard.press('Escape');
   await page.mouse.up();
+});
+
+/**
+ * Once armed, lets a rebuild's early meshes through and holds everything the
+ * worker sends after them for 700 ms, in order: the analysis of a large
+ * model takes that long, while a small one finishes inside the same frame.
+ */
+async function slowAnalysis(page: Page) {
+  await page.addInitScript(() => {
+    window.__slowAnalysis = { armed: false, held: 0 };
+    const descriptor = Object.getOwnPropertyDescriptor(
+      Worker.prototype,
+      'onmessage'
+    )!;
+    Object.defineProperty(Worker.prototype, 'onmessage', {
+      ...descriptor,
+      set(listener: (event: MessageEvent) => void) {
+        let holdingUntil = 0;
+        let queue: MessageEvent[] = [];
+        const flush = () => {
+          const due = queue;
+          queue = [];
+          holdingUntil = 0;
+          for (const event of due) listener.call(this, event);
+        };
+        descriptor.set!.call(this, (event: MessageEvent) => {
+          const gate = window.__slowAnalysis!;
+          if (holdingUntil) {
+            queue.push(event);
+            return;
+          }
+          listener.call(this, event);
+          const data = event.data as {
+            type?: string;
+            packet?: { state?: { analysis?: string } };
+          };
+          if (
+            gate.armed &&
+            data.type === 'projection-delta' &&
+            data.packet?.state?.analysis === 'pending'
+          ) {
+            gate.held += 1;
+            holdingUntil = performance.now() + 700;
+            setTimeout(flush, 700);
+          }
+        });
+      }
+    });
+  });
+}
+
+test('the committed face stays selected while the follow-up rebuild analyses', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  await slowAnalysis(page);
+  const { canvas, handle } = await armedBox(page);
+  await page.evaluate(() => {
+    window.__slowAnalysis!.armed = true;
+    window.__cardlessFrames = 0;
+    const sample = () => {
+      const card = document.querySelector('.selection-card');
+      if (!card || /direct edit/i.test(document.body.innerText))
+        window.__cardlessFrames! += 1;
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+  await page.mouse.move(handle.x, handle.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    handle.x + handle.dx * handle.pixels * 3,
+    handle.y + handle.dy * handle.pixels * 3,
+    { steps: 12 }
+  );
+  await expect(canvas).toHaveAttribute('data-e2e-height-proxy-offset', '3');
+  await page.mouse.up();
+  await expect(page.getByText('Offset face by', { exact: false })).toBeVisible({
+    timeout: 30_000
+  });
+  await expect
+    .poll(() => page.evaluate(() => window.__slowAnalysis!.held))
+    .toBeGreaterThan(0);
+  // Through the held analysis and a little after it.
+  await page.waitForTimeout(1200);
+  await expect(page.locator('.selection-card')).toContainText(
+    'Box 1 · Front face'
+  );
+  expect(await page.evaluate(() => window.__cardlessFrames)).toBe(0);
 });
