@@ -57,7 +57,7 @@ import {
   type E2eeContext,
   type EncryptionState
 } from '../apps/web/src/lib/e2ee/accountKeys';
-import { createE2eeApi } from '../apps/web/src/lib/e2ee/e2eeApi';
+import { createE2eeApi, E2eeApiError } from '../apps/web/src/lib/e2ee/e2eeApi';
 import { memoryDeviceStore } from '../apps/web/src/lib/e2ee/deviceStore';
 import { unlockedAccount } from '../apps/web/src/lib/e2ee/unlockedKeys';
 import {
@@ -786,6 +786,31 @@ describe('device removal across shared encrypted projects (slice 5-7)', () => {
     forgetAllProjectKeys();
     await joinProjectGroup(carol.groups, rotatedId);
     expect((await carol.store.loadProject(rotatedId)).name).toBe('Phone edit');
+
+    // A write never takes "Bob's cutoffs could not be read" for "Bob has
+    // none" (#906 review): a cutoff it cannot see may name a later epoch.
+    // The head is read first; only the write's own check meets the failure.
+    const current = await alice.store.loadProject(rotatedId);
+    const unreadable = vi
+      .spyOn(alice.groups.api, 'memberCutoffs')
+      .mockRejectedValue(new E2eeApiError(503, 'Try again.'));
+    const refused = await alice.store
+      .saveProjectDocument({
+        projectId: rotatedId,
+        expectedVersion: current.version,
+        document: {
+          ...current,
+          name: 'Owner edit',
+          version: current.version + 1
+        }
+      })
+      .then(
+        () => null,
+        (error: unknown) => error
+      );
+    expect(refused).toMatchObject({ status: 503 });
+    unreadable.mockRestore();
+    expect(headRow(srv, rotatedId).signer_device_id).toBe(phoneId);
 
     // In the project the removal has not rotated yet, the phone's leaf still
     // learns every epoch: the owner reads but writes nothing until one of

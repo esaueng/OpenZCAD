@@ -822,7 +822,12 @@ async function directoryCutoffs(
 export async function memberRevocationCutoffs(
   ctx: ProjectGroupContext,
   projectId: string,
-  lists?: readonly VerifiedDeviceList[]
+  lists?: readonly VerifiedDeviceList[],
+  /**
+   * Rethrow a failed read instead of treating it as no statements. A write
+   * must not take "the cutoffs could not be read" for "none exists".
+   */
+  { failClosed = false }: { failClosed?: boolean } = {}
 ): Promise<Map<string, Map<string, ProjectCutoff>>> {
   const out = new Map<string, Map<string, ProjectCutoff>>();
   const others = (lists ?? (await projectDeviceLists(ctx, projectId))).filter(
@@ -830,9 +835,10 @@ export async function memberRevocationCutoffs(
       list.userId !== ctx.account.userId && revokedDevices(list).length > 0
   );
   if (others.length === 0 || !ctx.api.memberCutoffs) return out;
-  const { statements } = await ctx.api
-    .memberCutoffs(projectId)
-    .catch(() => ({ statements: [] }));
+  const read = ctx.api.memberCutoffs(projectId);
+  const { statements } = failClosed
+    ? await read
+    : await read.catch(() => ({ statements: [] }));
   for (const list of others) {
     const verified: RevocationCutoffs[] = [];
     for (const record of statements) {
@@ -2259,7 +2265,10 @@ export async function pendingMemberRotation(
       list.userId !== ctx.account.userId && revokedDevices(list).length > 0
   );
   if (lists.length === 0) return null;
-  const cutoffs = await memberRevocationCutoffs(ctx, projectId, lists);
+  // A cutoff that could not be read may name a later epoch: refuse.
+  const cutoffs = await memberRevocationCutoffs(ctx, projectId, lists, {
+    failClosed: true
+  });
   for (const list of lists) {
     for (const revoked of revokedDevices(list)) {
       const cutoff = cutoffs.get(list.userId)?.get(revoked.id);
