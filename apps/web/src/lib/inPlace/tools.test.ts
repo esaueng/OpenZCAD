@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BodyId, FeatureId, SketchId } from '@openzcad/shared';
+import { TOOL_META } from '../tools';
+import { placementFrame } from './primitives';
 import {
   IN_PLACE_TOOL_SPECS,
   axisCandidatesFor,
@@ -58,7 +60,8 @@ describe('the in-place tool table', () => {
   it('names every converted tool and nothing else', () => {
     expect(isInPlaceTool('revolve')).toBe(true);
     expect(isInPlaceTool('grid-pattern')).toBe(true);
-    expect(isInPlaceTool('box')).toBe(false);
+    expect(isInPlaceTool('box')).toBe(true);
+    expect(isInPlaceTool('torus')).toBe(true);
     expect(isInPlaceTool('fillet')).toBe(false);
   });
 
@@ -612,5 +615,164 @@ describe('review: loft apex and guided sweeps', () => {
         ctx
       )
     ).toMatchObject({ mode: 'standard' });
+  });
+});
+
+describe('primitives run in place', () => {
+  const kinds = ['box', 'cylinder', 'cone', 'sphere', 'torus'] as const;
+
+  it('are named as their tools, ready at once, with the card sizes', () => {
+    const initials = Object.fromEntries(
+      kinds.map((kind) => [
+        kind,
+        Object.fromEntries(
+          IN_PLACE_TOOL_SPECS[kind].values.map((value) => [
+            value.id,
+            value.initial
+          ])
+        )
+      ])
+    );
+    for (const kind of kinds) {
+      expect(IN_PLACE_TOOL_SPECS[kind].title).toBe(TOOL_META[kind].label);
+      expect(IN_PLACE_TOOL_SPECS[kind].ready(EMPTY)).toBe(true);
+    }
+    expect(initials).toEqual({
+      box: { width: 30, depth: 18, height: 24, x: 0, y: 0, z: 0 },
+      cylinder: { radius: 6, height: 28, x: 0, y: 0, z: 0 },
+      cone: { bottomRadius: 6, topRadius: 2, height: 28, x: 0, y: 0, z: 0 },
+      sphere: { radius: 6, x: 0, y: 0, z: 0 },
+      torus: { majorRadius: 6, minorRadius: 2, x: 0, y: 0, z: 0 }
+    });
+  });
+
+  it('keep the position behind Options, named for the point it places', () => {
+    const positions = (kind: (typeof kinds)[number]) =>
+      IN_PLACE_TOOL_SPECS[kind].values
+        .filter((value) => value.inOptions)
+        .map((value) => value.label);
+    expect(positions('box')).toEqual(['Corner X', 'Corner Y', 'Corner Z']);
+    expect(positions('cone')[0]).toBe('Base center X');
+    expect(positions('torus')[2]).toBe('Center Z');
+    // A cone may come to a point at one end, as the card allowed.
+    const cone = IN_PLACE_TOOL_SPECS.cone.values;
+    expect(cone.find((value) => value.id === 'topRadius')?.min).toBe(0);
+    expect(cone.find((value) => value.id === 'height')?.min).toBeGreaterThan(0);
+  });
+
+  it('build the card default before any drag', () => {
+    expect(
+      IN_PLACE_TOOL_SPECS.sphere.request(EMPTY, { radius: 6, x: 0, y: 0, z: 0 }, {}, CTX)
+    ).toEqual({
+      tool: 'primitive',
+      kind: 'sphere',
+      dimensions: { radius: 6 },
+      position: { x: 0, y: 0, z: 0 }
+    });
+  });
+
+  it('turn onto a side face in the same request', () => {
+    const request = IN_PLACE_TOOL_SPECS.cylinder.request(
+      {
+        ...EMPTY,
+        placement: {
+          frame: placementFrame({ x: 1, y: 0, z: 0 }),
+          signU: 1,
+          signV: 1
+        }
+      },
+      { radius: 3, height: 10, x: 20, y: 0, z: 5 },
+      {},
+      CTX
+    );
+    expect(request).toMatchObject({
+      tool: 'primitive',
+      kind: 'cylinder',
+      position: { x: 20, y: 0, z: 5 },
+      rotationDeg: { x: 90, y: 0, z: 90 }
+    });
+  });
+
+  it('stand each arrow on the side it sizes, rebuilt only when that moves', () => {
+    const spec = IN_PLACE_TOOL_SPECS.box;
+    const values = { width: 30, depth: 18, height: 24, x: 0, y: 0, z: 0 };
+    const handles = spec.handles(EMPTY, values, CTX, {});
+    expect(handles.map((handle) => [handle.valueId, handle.params])).toEqual([
+      [
+        'width',
+        { origin: { x: 0, y: 9, z: 0 }, direction: { x: 1, y: 0, z: 0 } }
+      ],
+      [
+        'depth',
+        { origin: { x: 15, y: 0, z: 0 }, direction: { x: 0, y: 1, z: 0 } }
+      ],
+      [
+        'height',
+        { origin: { x: 15, y: 9, z: 0 }, direction: { x: 0, y: 0, z: 1 } }
+      ]
+    ]);
+    // Dragging the height moves nothing the other arrows stand on.
+    const taller = spec.handles(EMPTY, { ...values, height: 40 }, CTX, {});
+    expect(taller.map((handle) => handle.key)).toEqual(
+      handles.map((handle) => handle.key)
+    );
+    // A new position rebuilds them all.
+    const moved = spec.handles(EMPTY, { ...values, x: 5 }, CTX, {});
+    moved.forEach((handle, index) =>
+      expect(handle.key).not.toBe(handles[index]!.key)
+    );
+  });
+
+  it('put a cone top arrow on its top, and a ring tube arrow on the ring', () => {
+    const cone = IN_PLACE_TOOL_SPECS.cone.handles(
+      EMPTY,
+      { bottomRadius: 6, topRadius: 2, height: 28, x: 0, y: 0, z: 0 },
+      CTX,
+      {}
+    );
+    expect(cone.find((handle) => handle.valueId === 'topRadius')?.params).toEqual(
+      { origin: { x: 0, y: 0, z: 28 }, direction: { x: 1, y: 0, z: 0 } }
+    );
+    const torus = IN_PLACE_TOOL_SPECS.torus.handles(
+      EMPTY,
+      { majorRadius: 6, minorRadius: 2, x: 0, y: 0, z: 0 },
+      CTX,
+      {}
+    );
+    expect(
+      torus.find((handle) => handle.valueId === 'minorRadius')?.params
+    ).toEqual({ origin: { x: 6, y: 0, z: 0 }, direction: { x: 0, y: 0, z: 1 } });
+  });
+
+  it('keep a box hung under a face on the face when its height changes', () => {
+    const spec = IN_PLACE_TOOL_SPECS.box;
+    // Hung under a face at Z = 20: lowest corner at Z = -4 for height 24.
+    const slots = {
+      ...EMPTY,
+      placement: {
+        frame: placementFrame({ x: 0, y: 0, z: 1 }),
+        signU: 1 as const,
+        signV: 1 as const,
+        hangs: 'z' as const
+      }
+    };
+    const values = { width: 10, depth: 6, height: 24, x: 0, y: 0, z: -4 };
+    expect(spec.carries?.('height', 10, values, slots)).toEqual({ z: 10 });
+    expect(spec.carries?.('width', 12, values, slots)).toBeNull();
+    // Its arrows stand on the face; the height arrow points away from it,
+    // and a new height rebuilds none of them.
+    const handles = spec.handles(slots, values, CTX, {});
+    expect(handles.find((handle) => handle.valueId === 'height')?.params).toEqual(
+      { origin: { x: 5, y: 3, z: 20 }, direction: { x: 0, y: 0, z: -1 } }
+    );
+    const shorter = spec.handles(
+      slots,
+      { ...values, height: 10, z: 10 },
+      CTX,
+      {}
+    );
+    expect(shorter.map((handle) => handle.key)).toEqual(
+      handles.map((handle) => handle.key)
+    );
   });
 });

@@ -1,5 +1,5 @@
-import type { Locator } from '@playwright/test';
 import {
+  createPrimitiveInPlace,
   createProject,
   expect,
   finishInPlaceCommand,
@@ -9,25 +9,14 @@ import {
 
 const READ_TIMEOUT = { timeout: 30_000 };
 
-interface GhostAttribute {
-  kind: string;
-  dimensions: Record<string, number>;
-  position: { x: number; y: number; z: number };
-}
-
-async function ghostOf(canvas: Locator): Promise<GhostAttribute | null> {
-  const raw = await canvas.getAttribute('data-e2e-primitive-ghost');
-  return raw ? (JSON.parse(raw) as GhostAttribute) : null;
-}
-
 /**
  * Design review 2026-10-11, G6 and G7, on the review's own part: a
- * 100 × 60 × 6 plate. The Box card draws the plate before Create and drops
- * the ghost when it closes; a click on the plate's top face with the Hole
- * card open places the hole where the click landed, and a second click moves
- * it.
+ * 100 × 60 × 6 plate. The Box draws the plate before Done (U09: its exact
+ * preview, with its sizes on chips) and drops it on Escape; a click on the
+ * plate's top face with the Hole command open places the hole where the
+ * click landed, and a second click moves it.
  */
-test('the Box card ghosts the plate, and a Hole face click places the hole', async ({
+test('the Box previews the plate, and a Hole face click places the hole', async ({
   page
 }) => {
   test.setTimeout(150_000);
@@ -38,33 +27,28 @@ test('the Box card ghosts the plate, and a Hole face click places the hole', asy
   const canvas = page.locator('.viewer-host canvas');
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
-  // G6: the card's values are drawn before Create, and follow the fields.
+  // G6: the box is drawn before Done, its sizes on its chips.
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
   await expect(canvas).toBeVisible({ timeout: 120_000 });
-  await expect
-    .poll(() => ghostOf(canvas), READ_TIMEOUT)
-    .toEqual({
-      kind: 'box',
-      dimensions: { width: 30, height: 18, depth: 24 },
-      position: { x: 0, y: 0, z: 0 }
-    });
-  // Escape closes the card, and the ghost goes with it.
-  await inspector.getByRole('textbox', { name: 'Width (X)' }).press('Escape');
-  await expect(inspector).toHaveCount(0);
-  await expect(canvas).not.toHaveAttribute('data-e2e-primitive-ghost', /.+/);
+  const boxBar = page.getByRole('group', { name: 'Box command' });
+  await expect(boxBar.getByRole('button', { name: /^Done/ })).toBeEnabled(
+    READ_TIMEOUT
+  );
+  await expect(page.getByTestId('command-handle-width')).toContainText('30');
+  await expect(page.getByTestId('command-handle-depth')).toContainText('18');
+  await expect(page.getByTestId('command-handle-height')).toContainText('24');
+  // Escape cancels it, and the preview goes with it.
+  await page.keyboard.press('Escape');
+  await expect(boxBar).toHaveCount(0);
+  await expect(page.getByTestId('command-handle-width')).toHaveCount(0);
+  await expect(page.locator('.body-row')).toHaveCount(0);
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByRole('textbox', { name: 'Width (X)' }).fill('100');
-  await inspector.getByRole('textbox', { name: 'Depth (Y)' }).fill('60');
-  await inspector.getByRole('textbox', { name: 'Height (Z)' }).fill('6');
-  await expect
-    .poll(async () => (await ghostOf(canvas))?.dimensions, READ_TIMEOUT)
-    .toEqual({ width: 100, height: 60, depth: 6 });
-  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '100', depth: '60', height: '6' }
+  });
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled({
     timeout: 30_000
   });
-  await expect(canvas).not.toHaveAttribute('data-e2e-primitive-ghost', /.+/);
 
   // G7: a click near the +X end places the hole there, snapped to 1 mm.
   await page.getByRole('button', { name: /^Hole/ }).click();

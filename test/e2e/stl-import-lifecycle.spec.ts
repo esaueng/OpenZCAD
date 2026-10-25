@@ -3,7 +3,8 @@ import {
   expect,
   stubApi,
   expectBodyCount,
-  seedUnitlessImportUnits
+  seedUnitlessImportUnits,
+  createPrimitiveInPlace
 } from './openzcad-fixtures';
 import type { Page } from '@playwright/test';
 import { IMPORT_CARD_DELAY_MS } from '../../apps/web/src/lib/importProgress';
@@ -158,8 +159,7 @@ test('settles an STL parse refusal and releases the geometry reservation', async
   await expect(page.locator('.activity-pill.error')).toBeVisible();
   await expect(page.locator('.activity-pill-cancel')).toHaveCount(0);
   await expectBodyCount(page, 0);
-  await page.getByRole('button', { name: /^Box \(/ }).click();
-  await page.getByRole('button', { name: 'Create', exact: true }).click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
 });
 

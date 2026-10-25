@@ -6,7 +6,12 @@ import {
 } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import { toUserId } from '@openzcad/shared';
-import { expect, test, stubApi } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  expect,
+  test,
+  stubApi
+} from './openzcad-fixtures';
 
 type BlendResult = {
   topologyId: string;
@@ -83,11 +88,9 @@ test('creates, re-edits twice, and removes a selected history fillet', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Fillet Select To Edit');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByLabel('Radius', { exact: true }).fill('10');
-  await inspector.getByLabel('Height', { exact: true }).fill('20');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '10', height: '20' }
+  });
 
   const canvas = page.locator('.viewer-host canvas');
   const status = page.getByRole('contentinfo');
@@ -240,11 +243,7 @@ test('previews and reverses a box fillet backed by verified evolution lineage', 
   await page.goto('/');
   await page.getByLabel('Project name').fill('Box Fillet Evolution');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
 
   const canvas = page.locator('.viewer-host canvas');
   const status = page.getByRole('contentinfo');
@@ -470,11 +469,7 @@ test('still refuses an oversize radius after a slow blend preview', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Slow blend refusal');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   const canvas = page.locator('.viewer-host canvas');
   await expect
     .poll(

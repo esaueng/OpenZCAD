@@ -23,6 +23,7 @@ import {
 } from '../lib/inPlace/tools';
 import { placeImage as placedImage } from '../lib/inPlace/image';
 import type { RevolveAxisCandidate } from '../lib/inPlace/revolve';
+import type { PlacementPick } from '../lib/inPlace/primitives';
 
 /**
  * Runs whichever in-place command (U09) is active.
@@ -67,6 +68,8 @@ export interface UseInPlaceCommandOptions extends InPlaceContext {
 }
 
 interface Session {
+  /** Which start this is: a new one each time a command starts. */
+  id: number;
   tool: InPlaceToolId;
   slots: {
     profiles: ProfilePick[];
@@ -76,6 +79,7 @@ interface Session {
     faces: FacePick[];
     bodies: BodyPick[];
     plane: PlanePick | null;
+    placement: PlacementPick | null;
     refs: RefPick[];
     image: ImageSlot | null;
   };
@@ -89,6 +93,11 @@ interface Session {
 
 export interface InPlaceCommand {
   active: boolean;
+  /**
+   * The running command's identity, new on every start (even of the same
+   * tool), so a gesture begun under one is never finished by the next.
+   */
+  sessionId: number | null;
   tool: InPlaceToolId | null;
   spec: InPlaceToolSpec | null;
   slots: InPlaceSlots;
@@ -125,6 +134,15 @@ export interface InPlaceCommand {
   /** A body click (any of its faces): refused when the tool takes none. */
   pickBody(body: BodyPick): boolean;
   pickPlane(plane: PlanePick): boolean;
+  /**
+   * A primitive's footprint drag: where it was drawn, and the values it set
+   * (the pressed point and the footprint's sizes). Refused (false) when the
+   * command is placed some other way.
+   */
+  placeFootprint(
+    placement: PlacementPick,
+    values: Record<string, number>
+  ): boolean;
   /** A datum source: refused (false) when the tool takes no such source. */
   pickRef(ref: RefPick): boolean;
   /** A plane or a point for the picture being placed. */
@@ -162,6 +180,7 @@ const EMPTY_SLOTS: InPlaceSlots = {
   faces: [],
   bodies: [],
   plane: null,
+  placement: null,
   refs: [],
   image: null
 };
@@ -230,6 +249,7 @@ export function useInPlaceCommand(
             faces: session.slots.faces,
             bodies: session.slots.bodies,
             plane: session.slots.plane,
+            placement: session.slots.placement,
             refs: session.slots.refs,
             image: session.slots.image
           }
@@ -427,6 +447,7 @@ export function useInPlaceCommand(
     optionsRef.current.publishPreview(null);
   }, [preview]);
 
+  const sessionCount = useRef(0);
   const start = useCallback(
     (
       tool: InPlaceToolId,
@@ -441,7 +462,9 @@ export function useInPlaceCommand(
       setRefusal(null);
       setEntryRefusal(null);
       setPreviewValid(false);
+      sessionCount.current += 1;
       setSession({
+        id: sessionCount.current,
         tool,
         slots: {
           profiles:
@@ -464,6 +487,7 @@ export function useInPlaceCommand(
               : initialBodies
             : [],
           plane: null,
+          placement: null,
           refs: toolSpec.takeRef
             ? (extra.refs ?? []).reduce<RefPick[]>(
                 (refs, ref) => toolSpec.takeRef!(refs, ref),
@@ -654,6 +678,42 @@ export function useInPlaceCommand(
     return true;
   }, []);
 
+  const placeFootprint = useCallback(
+    (placement: PlacementPick, placed: Record<string, number>) => {
+      const current = sessionRef.current;
+      const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
+      if (!current || !toolSpec?.footprint) return false;
+      // A drawn value replaces a refused typed one, and its refusal with it.
+      setEntryRefusal((refused) =>
+        refused && refused.valueId in placed ? null : refused
+      );
+      setSession((latest) => {
+        if (!latest) return latest;
+        const specs = IN_PLACE_TOOL_SPECS[latest.tool].values;
+        const values = { ...latest.values };
+        const raws = { ...latest.raws };
+        const touched = [...latest.touched];
+        for (const [id, value] of Object.entries(placed)) {
+          const valueSpec = specs.find((candidate) => candidate.id === id);
+          if (!valueSpec) continue;
+          // A drawn size replaces a typed one: the drag is the newer word.
+          values[id] = clampValue(valueSpec, value);
+          delete raws[id];
+          if (!touched.includes(id)) touched.push(id);
+        }
+        return {
+          ...latest,
+          slots: { ...latest.slots, placement },
+          values,
+          raws,
+          touched
+        };
+      });
+      return true;
+    },
+    []
+  );
+
   const pickRef = useCallback((ref: RefPick) => {
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
@@ -820,14 +880,16 @@ export function useInPlaceCommand(
         });
         return true;
       }
-      // An expression is stored as typed, so it must already be a value the
-      // tool accepts: clamping it for the preview would show one value and
-      // commit another. Nor is a typed end of an open range nudged inside
-      // it, where its chip would still read as the refused end.
+      // A typed value must already be one the tool accepts. An expression
+      // is stored as typed, so clamping it for the preview would show one
+      // value and commit another; a typed number clamped would build what
+      // was not asked for (a −5 width as a sliver), and a typed end of an
+      // open range nudged inside it would leave its chip reading as the
+      // refused end. Only a drag clamps.
       if (
         current &&
         valueSpec &&
-        (raw !== undefined || (typed && valueSpec.exclusive)) &&
+        typed &&
         !valueInRange(valueSpec, value)
       ) {
         const whole = valueSpec.integer ? 'whole numbers ' : '';
@@ -846,6 +908,25 @@ export function useInPlaceCommand(
         });
         return false;
       }
+      // In range alone, a value may still not stand beside the others (a
+      // cone's second zero radius): typed, it is refused; dragged, it stays.
+      const crossed =
+        current && valueSpec
+          ? (IN_PLACE_TOOL_SPECS[current.tool].refuseValue?.(
+              valueId,
+              value,
+              current.values
+            ) ?? null)
+          : null;
+      if (crossed) {
+        if (typed) {
+          setEntryRefusal({
+            valueId,
+            message: `${raw === undefined ? value : `${raw} is ${value}`}; ${crossed}`
+          });
+        }
+        return false;
+      }
       // Only the refused value, taken now, lifts its refusal: another value
       // changing leaves the refused one still not what was typed.
       setEntryRefusal((refused) =>
@@ -860,15 +941,17 @@ export function useInPlaceCommand(
         const raws = { ...current.raws };
         if (raw === undefined) delete raws[valueId];
         else raws[valueId] = raw;
+        // In range, a value stands as given: only one outside it (a drag
+        // past an end) is brought back inside.
+        const next = valueInRange(valueSpec, value)
+          ? value
+          : clampValue(valueSpec, value);
         return {
           ...current,
           values: {
             ...current.values,
-            // In range, a value stands as given: only one outside it (a
-            // drag past an end) is brought back inside.
-            [valueId]: valueInRange(valueSpec, value)
-              ? value
-              : clampValue(valueSpec, value)
+            ...carriedValues(current, valueId, next),
+            [valueId]: next
           },
           raws,
           touched: current.touched.includes(valueId)
@@ -912,7 +995,13 @@ export function useInPlaceCommand(
         const others = current.touched.filter((id) => id !== valueId);
         return {
           ...current,
-          values: { ...current.values, [valueId]: restored },
+          // What moved with the entry's previews goes back with it (a hung
+          // box's corner, with its height).
+          values: {
+            ...current.values,
+            ...carriedValues(current, valueId, restored),
+            [valueId]: restored
+          },
           raws,
           touched: wasTouched ? [...others, valueId] : others
         };
@@ -959,6 +1048,7 @@ export function useInPlaceCommand(
 
   return {
     active: session !== null,
+    sessionId: session?.id ?? null,
     tool: session?.tool ?? null,
     spec,
     slots,
@@ -979,6 +1069,7 @@ export function useInPlaceCommand(
     addFaces,
     pickBody,
     pickPlane,
+    placeFootprint,
     pickRef,
     placeImage,
     setOption,
@@ -989,6 +1080,27 @@ export function useInPlaceCommand(
     done,
     cancel
   };
+}
+
+/**
+ * The values that move with `valueId` becoming `value` (a spec's `carries`),
+ * leaving any held as a typed expression alone.
+ */
+function carriedValues(
+  session: Session,
+  valueId: string,
+  value: number
+): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(
+      IN_PLACE_TOOL_SPECS[session.tool].carries?.(
+        valueId,
+        value,
+        session.values,
+        { ...EMPTY_SLOTS, placement: session.slots.placement }
+      ) ?? {}
+    ).filter(([id]) => session.raws[id] === undefined)
+  );
 }
 
 /**

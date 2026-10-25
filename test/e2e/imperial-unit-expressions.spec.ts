@@ -1,6 +1,8 @@
 import type { Page } from '@playwright/test';
 import {
+  enterCommandValue,
   expect,
+  finishInPlaceCommand,
   stubApi,
   test,
   bodyCardFromHistory
@@ -10,11 +12,12 @@ import {
  * Production QA CAD-004 (2026-10-11), ROADMAP F05: in an inch project the Box
  * form refused `1 in + 25.4 mm` and `50.8 mm`, saying the field did not know
  * the document's units. A primitive size is a length in the document's units
- * from the field preview through the committed build, undo/redo, reload and
- * STEP export; an angle typed into it is refused by its dimension.
+ * from the entry preview through the committed build, undo/redo, reload and
+ * STEP export; an angle typed into it is refused by its dimension. A new box
+ * runs in place (U09), so its sizes are typed on their chips' keypad.
  */
-function inspectorOf(page: Page) {
-  return page.getByRole('region', { name: 'Feature inspector' });
+function keypadOf(page: Page) {
+  return page.locator('.numeric-keypad');
 }
 
 async function createInchProject(page: Page, name: string) {
@@ -43,21 +46,26 @@ test('sizes a box with mixed-unit expressions in an inch project, through undo, 
   await createInchProject(page, 'QA imperial expressions');
 
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  const inspector = inspectorOf(page);
-  const width = inspector.getByRole('textbox', { name: 'Width (X)' });
-  await width.fill('1 in + 25.4 mm');
-  await expect(width).not.toHaveAttribute('aria-invalid');
-  await expect(width).toHaveAccessibleDescription('= 2');
-  const depth = inspector.getByRole('textbox', { name: 'Depth (Y)' });
-  await depth.fill('50.8 mm');
-  await expect(depth).toHaveAccessibleDescription('= 2');
-  await depth.fill('25.4 mm');
-  await inspector.getByRole('textbox', { name: 'Height (Z)' }).fill('0.5');
+  const keypad = keypadOf(page);
+  const entry = keypad.locator('input');
+  await page.getByTestId('command-handle-width').click();
+  await entry.fill('1 in + 25.4 mm');
+  await expect(entry).toHaveAttribute('aria-invalid', 'false');
+  await expect(keypad.locator('.keypad-expr-preview')).toHaveText(/^= 2 /);
+  await entry.press('Enter');
+  await expect(keypad).toHaveCount(0);
+  await page.getByTestId('command-handle-depth').click();
+  await entry.fill('50.8 mm');
+  await expect(keypad.locator('.keypad-expr-preview')).toHaveText(/^= 2 /);
+  await entry.fill('25.4 mm');
+  await entry.press('Enter');
+  await expect(keypad).toHaveCount(0);
+  await enterCommandValue(page, 'height', '0.5');
   await testInfo.attach('imperial-expression-form', {
     body: await page.screenshot(),
     contentType: 'image/png'
   });
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await finishInPlaceCommand(page, 'Box');
   const status = page.getByRole('contentinfo');
   await expect(status).toContainText('warnings0', { timeout: 30_000 });
 
@@ -112,15 +120,19 @@ test('refuses an angle typed into a box size in an inch project', async ({
 }) => {
   await createInchProject(page, 'QA imperial refusal');
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  const inspector = inspectorOf(page);
-  const width = inspector.getByRole('textbox', { name: 'Width (X)' });
-  await width.fill('30 deg');
-  await expect(width).toHaveAttribute('aria-invalid', 'true');
-  await expect(width).toHaveAccessibleDescription(
+  const keypad = keypadOf(page);
+  const entry = keypad.locator('input');
+  await page.getByTestId('command-handle-width').click();
+  await entry.fill('30 deg');
+  await expect(entry).toHaveAttribute('aria-invalid', 'true');
+  await expect(keypad.locator('.keypad-expr-preview')).toHaveText(
     /expected a length, not an angle or area/
   );
-  await expect(
-    inspector.getByRole('button', { name: /^Create/ })
-  ).toBeDisabled();
+  // Enter refuses it; the width stays the one shown.
+  await entry.press('Enter');
+  await expect(keypad).toBeVisible();
+  await entry.press('Escape');
+  await expect(keypad).toHaveCount(0);
+  await expect(page.getByTestId('command-handle-width')).toContainText('30');
   await expect(page.locator('.body-row')).toHaveCount(0);
 });

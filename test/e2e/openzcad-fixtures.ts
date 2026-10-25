@@ -1437,3 +1437,179 @@ export async function pickDatumRow(page: Page, name: string) {
     await expect(button).toHaveAttribute('aria-pressed', 'false');
   }
 }
+
+export type PrimitiveToolKind =
+  'box' | 'cylinder' | 'cone' | 'sphere' | 'torus';
+
+const PRIMITIVE_TOOL_BUTTONS: Record<PrimitiveToolKind, RegExp> = {
+  box: /^Box \(B\)/,
+  cylinder: /^Cylinder \(C\)/,
+  cone: /^Cone/,
+  sphere: /^Sphere/,
+  torus: /^Torus/
+};
+
+const PRIMITIVE_TITLES: Record<PrimitiveToolKind, string> = {
+  box: 'Box',
+  cylinder: 'Cylinder',
+  cone: 'Cone',
+  sphere: 'Sphere',
+  torus: 'Torus'
+};
+
+/** The point each primitive's position places, as its Options name it. */
+const PRIMITIVE_ANCHORS: Record<PrimitiveToolKind, string> = {
+  box: 'Corner',
+  cylinder: 'Base center',
+  cone: 'Base center',
+  sphere: 'Center',
+  torus: 'Center'
+};
+
+export interface PrimitiveInPlaceOptions {
+  /**
+   * Sizes by chip: a box's `width`, `depth` and `height` (X, Y and Z on the
+   * ground), a cylinder's `radius` and `height`, a cone's `bottomRadius`,
+   * `topRadius` and `height`, a sphere's `radius`, a torus's `majorRadius`
+   * and `minorRadius`. Anything left out keeps the card's default.
+   */
+  sizes?: Partial<Record<string, string | number>>;
+  /** Where the primitive's anchor point goes, typed from Options. */
+  at?: Partial<Record<'x' | 'y' | 'z', string | number>>;
+  /**
+   * Renames the feature and its body afterwards, to what the card's Name
+   * field made: the feature `name`, its body `name 1`.
+   */
+  name?: string;
+}
+
+/**
+ * Places a primitive in place (U09): its tool, each size typed on its chip's
+ * keypad, the position typed from the bar's Options, Done. With nothing
+ * given it is the default the card's Create made, at the origin.
+ */
+export async function createPrimitiveInPlace(
+  page: Page,
+  kind: PrimitiveToolKind = 'box',
+  options: PrimitiveInPlaceOptions = {}
+) {
+  const title = PRIMITIVE_TITLES[kind];
+  await page
+    .getByRole('button', { name: PRIMITIVE_TOOL_BUTTONS[kind] })
+    .click();
+  const bar = page.getByRole('group', { name: `${title} command` });
+  await expect(bar).toBeVisible();
+  for (const [valueId, value] of Object.entries(options.sizes ?? {})) {
+    if (value === undefined) continue;
+    await enterCommandValue(page, valueId, String(value));
+  }
+  const at = Object.entries(options.at ?? {}).filter(
+    (entry): entry is [string, string | number] => entry[1] !== undefined
+  );
+  if (at.length > 0) {
+    await setInPlaceOptionValues(
+      page,
+      title,
+      Object.fromEntries(
+        at.map(([axis, value]) => [
+          `${PRIMITIVE_ANCHORS[kind]} ${axis.toUpperCase()}`,
+          String(value)
+        ])
+      )
+    );
+  }
+  await finishInPlaceCommand(page, title);
+  if (options.name) await renamePrimitive(page, title, options.name);
+}
+
+/**
+ * Types exact values behind an in-place command's Options (a primitive's
+ * position), each through its keypad, and closes Options again.
+ */
+export async function setInPlaceOptionValues(
+  page: Page,
+  title: string,
+  values: Record<string, string>
+) {
+  const bar = page.getByRole('group', { name: `${title} command` });
+  const options = bar.locator('details.in-place-command-options');
+  // An open More tools fold stands over the bar on a narrow window: fold it
+  // while Options are typed, and open it again after.
+  const moreTools = page.getByRole('button', { name: /^More tools/ });
+  const folded =
+    (await moreTools.count()) > 0 &&
+    (await moreTools.getAttribute('aria-expanded')) === 'true';
+  if (folded) await moreTools.click();
+  for (const [label, value] of Object.entries(values)) {
+    if ((await options.getAttribute('open')) === null) {
+      await options.locator('summary').click();
+    }
+    await bar.getByRole('button', { name: label, exact: true }).click();
+    const keypad = page.locator('.numeric-keypad');
+    await expect(keypad).toBeVisible();
+    await keypad.locator('input').fill(value);
+    await keypad.locator('input').press('Enter');
+    await expect(keypad).toHaveCount(0);
+    await expect(
+      bar.getByRole('button', { name: label, exact: true })
+    ).toContainText(value);
+  }
+  if ((await options.getAttribute('open')) !== null) {
+    await options.locator('summary').click();
+  }
+  if (folded) await moreTools.click();
+}
+
+/**
+ * Names the last primitive as the card's Name field did: its History row
+ * becomes `name` and its Objects row `name 1`.
+ */
+async function renamePrimitive(page: Page, title: string, name: string) {
+  // Panels this opens are closed again: the card's Name field opened none.
+  const opened: PanelTitle[] = [];
+  for (const panel of ['History', 'Objects'] as const) {
+    const button = railPanelButton(page, panel);
+    if ((await button.getAttribute('aria-pressed')) !== 'true') {
+      opened.push(panel);
+    }
+  }
+  await revealModelPanel(page, 'History');
+  const history = modelPanel(page, 'History');
+  // The primitive's own row, not the "Place …" Move a position adds.
+  const row = history.locator(`.feature-row-main[title^="${title}"]`).last();
+  const featureName = (await row.getAttribute('title'))!.split(' — ')[0]!;
+  await row.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Rename' }).click();
+  const field = history.getByRole('textbox', { name: `Rename ${featureName}` });
+  await field.fill(name);
+  await field.press('Enter');
+  await expect(
+    history.locator(`.feature-row-main[title^="${name} — "]`)
+  ).toHaveCount(1);
+  await revealModelPanel(page, 'Objects');
+  const objects = modelPanel(page, 'Objects');
+  const rename = objects
+    .getByRole('button', { name: new RegExp(`^Rename body ${title} \\d+$`) })
+    .last();
+  const bodyName = (await rename.getAttribute('aria-label'))!.replace(
+    'Rename body ',
+    ''
+  );
+  await rename.click();
+  const bodyField = objects.getByRole('textbox', {
+    name: `Rename body ${bodyName}`
+  });
+  await bodyField.fill(`${name} 1`);
+  await bodyField.press('Enter');
+  await expect(
+    objects.getByRole('button', { name: `Rename body ${name} 1` })
+  ).toHaveCount(1);
+  // Last opened first: an unpinned panel gives way to the next one, so the
+  // first may already be closed.
+  for (const panel of opened.reverse()) {
+    const button = railPanelButton(page, panel);
+    if ((await button.getAttribute('aria-pressed')) !== 'true') continue;
+    await button.click();
+    await expect(button).toHaveAttribute('aria-pressed', 'false');
+  }
+}

@@ -1,7 +1,7 @@
 import type { BrowserContext, Page, Browser } from '@playwright/test';
 import { withEncryptedProjectInfo } from '../../apps/web/worker/e2eeProjectDocuments';
 import { d1Database } from '../d1-sqlite';
-import { expect, stubApi } from './openzcad-fixtures';
+import { createPrimitiveInPlace, expect, stubApi } from './openzcad-fixtures';
 import {
   addE2eeUser,
   createE2eeServer,
@@ -262,11 +262,7 @@ export async function shareWithBob(
   await expect(aliceSettings).toHaveCount(0);
   await alice.getByLabel('Project name').fill(PROJECT_NAME);
   await alice.getByRole('button', { name: 'Create project' }).click();
-  await alice.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await alice
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(alice, 'box');
   await expect(
     alice.getByRole('status', { name: 'Saved', exact: true })
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });

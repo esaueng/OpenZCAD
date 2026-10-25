@@ -12,7 +12,8 @@ import {
   locateEdge,
   setSelectionFilter,
   stubApi,
-  test
+  test,
+  createPrimitiveInPlace
 } from './openzcad-fixtures';
 
 async function makePart(page: Page, name: string) {
@@ -22,11 +23,9 @@ async function makePart(page: Page, name: string) {
   await page.getByLabel('Project name').fill(name);
   await page.getByRole('button', { name: 'Create project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  for (const label of ['Width (X)', 'Depth (Y)', 'Height (Z)']) {
-    await inspector.getByLabel(label).fill('60');
-  }
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '60', depth: '60', height: '60' }
+  });
   await expectBodyCount(page, 1);
   await expect(inspector).toHaveCount(0);
   const canvas = page.locator('.viewer-host canvas');
@@ -632,12 +631,10 @@ test('an Items body pick settles the original Move and preserves Shift selection
     page,
     'Items Move guard'
   );
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Name').fill('Other');
-  for (const label of ['Width (X)', 'Depth (Y)', 'Height (Z)']) {
-    await inspector.getByLabel(label).fill('60');
-  }
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '60', depth: '60', height: '60' },
+    name: 'Other'
+  });
   await expectBodyCount(page, 2);
   await expect(inspector).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
