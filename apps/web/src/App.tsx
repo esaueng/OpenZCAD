@@ -327,6 +327,7 @@ import {
   type FacePickOperation,
   type FormFacePick
 } from './lib/holeFacePick';
+import { prefersSavingData } from './lib/saveData';
 import {
   lazyWithStaleChunkNotice,
   loadWhenOnline,
@@ -2774,6 +2775,8 @@ export function App() {
   // an empty frame. A failure here is left to the surface's own load, which
   // reports a stale chunk where the user is looking.
   useEffect(() => {
+    // Save-Data asks for nothing speculative, as the chunk prefetch honours.
+    if (prefersSavingData()) return;
     const warm = () => {
       for (const surface of FIRST_USE_SURFACES)
         surface.preload().catch(() => undefined);

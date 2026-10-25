@@ -120,3 +120,36 @@ describe('preloadableLazy', () => {
     stop();
   });
 });
+
+describe('warm-up failures', () => {
+  it('keeps a failed warm-up out of the preload-error notice', async () => {
+    const { preloadableLazy } = await import('./staleChunk');
+    const listener = vi.fn();
+    const stopNotice = onStaleChunk(listener);
+    const target = new EventTarget() as unknown as Window;
+    const stopWatch = watchPreloadErrors(target);
+    const failure = new TypeError(
+      'Failed to fetch dynamically imported module: settings.js'
+    );
+    const Surface = preloadableLazy(() => {
+      // Vite announces the failed preload before the import rejects.
+      const event = new Event('vite:preloadError') as Event & {
+        payload?: unknown;
+      };
+      event.payload = failure;
+      target.dispatchEvent(event);
+      return Promise.reject(failure);
+    });
+    await expect(Surface.preload()).rejects.toThrow();
+    expect(listener).not.toHaveBeenCalled();
+    // A load nobody started speculatively still reports.
+    const event = new Event('vite:preloadError') as Event & {
+      payload?: unknown;
+    };
+    event.payload = failure;
+    target.dispatchEvent(event);
+    expect(listener).toHaveBeenCalledTimes(1);
+    stopWatch();
+    stopNotice();
+  });
+});

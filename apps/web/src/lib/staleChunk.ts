@@ -90,6 +90,9 @@ export function lazyWithStaleChunkNotice<T extends ComponentType<any>>(
  */
 export function watchPreloadErrors(target: Window = window): () => void {
   const listener = (event: Event) => {
+    // A warm-up nobody asked for fails silently; the surface's own load
+    // reports when the user actually opens it.
+    if (speculativeLoads > 0) return;
     if (isChunkLoadError((event as Event & { payload?: unknown }).payload)) {
       reportStaleChunk();
     }
@@ -97,6 +100,15 @@ export function watchPreloadErrors(target: Window = window): () => void {
   target.addEventListener('vite:preloadError', listener);
   return () => target.removeEventListener('vite:preloadError', listener);
 }
+
+/**
+ * Warm-ups in flight. Vite announces a failed chunk preload as
+ * `vite:preloadError` before the import rejects, so the global reporter above
+ * cannot tell a speculative load from one the user is waiting on except by
+ * this count. A user-facing load that fails meanwhile still reports through
+ * its own lazy component.
+ */
+let speculativeLoads = 0;
 
 /** A lazy component that can be loaded ahead of its first use. */
 export interface PreloadableLazy<P extends object> {
@@ -144,6 +156,17 @@ export function preloadableLazy<T extends ComponentType<any>>(
     loaded
       ? createElement(loaded, props)
       : createElement(Lazy, props)) as PreloadableLazy<P>;
-  Preloadable.preload = () => load().then(() => undefined);
+  Preloadable.preload = () => {
+    speculativeLoads += 1;
+    return load().then(
+      () => {
+        speculativeLoads -= 1;
+      },
+      (error: unknown) => {
+        speculativeLoads -= 1;
+        throw error;
+      }
+    );
+  };
   return Preloadable;
 }
