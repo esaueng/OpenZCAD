@@ -7561,6 +7561,9 @@ export function App() {
       normalized,
       session?.userId ?? normalized.ownerUserId
     );
+    // A replacement can share the project and version of the document a
+    // commit completed (an adopted conflict copy) without sharing its model.
+    forgetCompleteCommit();
     // Sessions and numeric drafts refer to ids in the previous document.
     // Hydration may preserve the camera, never an armed sketch or handle.
     cancelDirectManipulationRef.current?.();
@@ -7687,6 +7690,12 @@ export function App() {
         ? 'Trackpad detected: two fingers pan, pinch to zoom. Scroll wheel is under Settings › Controls.'
         : 'Mouse wheel detected: scroll to zoom. Scroll wheel is under Settings › Controls.'
     );
+  }
+
+  /** Drops the commit witness when the document it described is replaced. */
+  function forgetCompleteCommit(): void {
+    committedDerivedRef.current = null;
+    setCompleteCommit(null);
   }
 
   /** Notes a commit that attached a complete (analysed) rebuild. */
@@ -11219,6 +11228,7 @@ export function App() {
     clearActiveProject();
     forgetProjectView();
     managerRef.current = null;
+    forgetCompleteCommit();
     clearAutoFrame();
     setDoc(null);
     setArtifacts([]);
