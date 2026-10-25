@@ -18,6 +18,7 @@ import {
   type ProfilePick
 } from '../lib/inPlace/tools';
 import type { RevolveAxisCandidate } from '../lib/inPlace/revolve';
+import type { PlacementPick } from '../lib/inPlace/primitives';
 
 /**
  * Runs whichever in-place command (U09) is active.
@@ -66,6 +67,7 @@ interface Session {
     faces: FacePick[];
     bodies: BodyPick[];
     plane: PlanePick | null;
+    placement: PlacementPick | null;
   };
   options: Record<string, string>;
   values: Record<string, number>;
@@ -110,6 +112,15 @@ export interface InPlaceCommand {
   /** A body click (any of its faces): refused when the tool takes none. */
   pickBody(body: BodyPick): boolean;
   pickPlane(plane: PlanePick): boolean;
+  /**
+   * A primitive's footprint drag: where it was drawn, and the values it set
+   * (the pressed point and the footprint's sizes). Refused (false) when the
+   * command is placed some other way.
+   */
+  placeFootprint(
+    placement: PlacementPick,
+    values: Record<string, number>
+  ): boolean;
   setOption(optionId: string, value: string): void;
   previewValue(valueId: string, value: number): void;
   /** False when a typed expression is refused, leaving the value as it was. */
@@ -128,7 +139,8 @@ const EMPTY_SLOTS: InPlaceSlots = {
   guide: [],
   faces: [],
   bodies: [],
-  plane: null
+  plane: null,
+  placement: null
 };
 
 function sameProfile(a: ProfilePick, b: ProfilePick): boolean {
@@ -185,7 +197,8 @@ export function useInPlaceCommand(
             guide: session.slots.guide,
             faces: session.slots.faces,
             bodies: session.slots.bodies,
-            plane: session.slots.plane
+            plane: session.slots.plane,
+            placement: session.slots.placement
           }
         : EMPTY_SLOTS,
     [session, axisCandidates]
@@ -376,7 +389,8 @@ export function useInPlaceCommand(
               ? initialBodies.slice(0, 1)
               : initialBodies
             : [],
-          plane: null
+          plane: null,
+          placement: null
         },
         options: Object.fromEntries(
           (toolSpec.options ?? []).map((option) => [option.id, option.initial])
@@ -560,6 +574,38 @@ export function useInPlaceCommand(
     return true;
   }, []);
 
+  const placeFootprint = useCallback(
+    (placement: PlacementPick, placed: Record<string, number>) => {
+      const current = sessionRef.current;
+      const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
+      if (!current || !toolSpec?.footprint) return false;
+      setSession((latest) => {
+        if (!latest) return latest;
+        const specs = IN_PLACE_TOOL_SPECS[latest.tool].values;
+        const values = { ...latest.values };
+        const raws = { ...latest.raws };
+        const touched = [...latest.touched];
+        for (const [id, value] of Object.entries(placed)) {
+          const valueSpec = specs.find((candidate) => candidate.id === id);
+          if (!valueSpec) continue;
+          // A drawn size replaces a typed one: the drag is the newer word.
+          values[id] = clampValue(valueSpec, value);
+          delete raws[id];
+          if (!touched.includes(id)) touched.push(id);
+        }
+        return {
+          ...latest,
+          slots: { ...latest.slots, placement },
+          values,
+          raws,
+          touched
+        };
+      });
+      return true;
+    },
+    []
+  );
+
   const setOption = useCallback((optionId: string, value: string) => {
     setSession((current) => {
       if (!current) return current;
@@ -581,20 +627,26 @@ export function useInPlaceCommand(
   }, []);
 
   const writeValue = useCallback(
-    (valueId: string, value: number, raw: string | undefined) => {
+    (
+      valueId: string,
+      value: number,
+      raw: string | undefined,
+      typed: boolean
+    ) => {
       const current = sessionRef.current;
       const valueSpec = current
         ? IN_PLACE_TOOL_SPECS[current.tool].values.find(
             (candidate) => candidate.id === valueId
           )
         : undefined;
-      // An expression is stored as typed, so it must already be a value the
-      // tool accepts: clamping it for the preview would show one value and
-      // commit another.
+      // A typed value must already be one the tool accepts. An expression
+      // is stored as typed, so clamping it for the preview would show one
+      // value and commit another; a typed number clamped would build what
+      // was not asked for (a −5 width as a sliver). Only a drag clamps.
       if (
         current &&
         valueSpec &&
-        raw !== undefined &&
+        typed &&
         clampValue(valueSpec, value) !== value
       ) {
         const whole = valueSpec.integer ? 'whole numbers ' : '';
@@ -602,8 +654,11 @@ export function useInPlaceCommand(
           valueSpec.max === undefined
             ? `${whole ? `${whole}of ` : ''}at least ${valueSpec.min ?? 0}`
             : `${whole}${valueSpec.min ?? 0} to ${valueSpec.max}`;
+        const what = `${IN_PLACE_TOOL_SPECS[current.tool].title} ${valueSpec.label.toLowerCase()}`;
         setRefusal(
-          `${raw} is ${value}; ${IN_PLACE_TOOL_SPECS[current.tool].title} ${valueSpec.label.toLowerCase()} takes ${range}.`
+          raw === undefined
+            ? `${what} takes ${range}, not ${value}.`
+            : `${raw} is ${value}; ${what} takes ${range}.`
         );
         return false;
       }
@@ -633,12 +688,13 @@ export function useInPlaceCommand(
     []
   );
   const previewValue = useCallback(
-    (valueId: string, value: number) => writeValue(valueId, value, undefined),
+    (valueId: string, value: number) =>
+      writeValue(valueId, value, undefined, false),
     [writeValue]
   );
   const setValue = useCallback(
     (valueId: string, value: number, raw?: string) =>
-      writeValue(valueId, value, raw),
+      writeValue(valueId, value, raw, true),
     [writeValue]
   );
 
@@ -699,6 +755,7 @@ export function useInPlaceCommand(
     addFaces,
     pickBody,
     pickPlane,
+    placeFootprint,
     setOption,
     previewValue,
     setValue,

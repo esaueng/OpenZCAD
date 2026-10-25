@@ -1,6 +1,7 @@
 import type { Dialog, Page, Request } from '@playwright/test';
 import type { ProjectDocument } from '@openzcad/shared';
 import {
+  createPrimitiveInPlace,
   createProject,
   expect,
   expectBodyCount,
@@ -79,7 +80,7 @@ async function prepareLocalBox(page: Page, name: string) {
   await stubApi(page);
   await page.route('**/api/session', (route) => route.fulfill({ json: null }));
   await createProject(page, name);
-  await addPrimitive(page, /^Box \(B\)/);
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await expect(
     page.getByRole('status', { name: 'Local only', exact: true })
@@ -87,14 +88,6 @@ async function prepareLocalBox(page: Page, name: string) {
   await expect
     .poll(async () => (await storedProject(page))?.featureOrder.length)
     .toBe(1);
-}
-
-async function addPrimitive(page: Page, name: RegExp) {
-  await page.getByRole('button', { name }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: 'Create', exact: true })
-    .click();
 }
 
 async function expectBoxAndSphere(page: Page) {
@@ -144,12 +137,13 @@ for (const connectivity of ['online', 'offline edit'] as const) {
     page
   }) => {
     await prepareLocalBox(page, `Local departure ${connectivity}`);
-    // Load the Sphere card before disconnecting: this isolates device saving
-    // from fetching its lazy UI chunk.
+    // Open the Sphere command before disconnecting: this isolates device
+    // saving from fetching its lazy UI chunk and building its preview.
     await page.getByRole('button', { name: /^Sphere/ }).click();
     const create = page
-      .getByRole('region', { name: 'Feature inspector' })
-      .getByRole('button', { name: 'Create', exact: true });
+      .getByRole('group', { name: 'Sphere command' })
+      .getByRole('button', { name: /Done/ });
+    await expect(create).toBeEnabled({ timeout: 30_000 });
     if (connectivity === 'offline edit') {
       await page.context().setOffline(true);
       expect(await page.evaluate(() => navigator.onLine)).toBe(false);
@@ -270,16 +264,17 @@ for (const connectivity of ['online', 'offline edit'] as const) {
     try {
       await holdProjectStorage(blocker, baseline!.projectId);
       await page.bringToFront();
-      // Load the lazy card before disconnecting so the offline case exercises
+      // Open the command before disconnecting so the offline case exercises
       // saving and departure, independently of fetching the tool's UI chunk.
       await page.getByRole('button', { name: /^Sphere/ }).click();
+      const done = page
+        .getByRole('group', { name: 'Sphere command' })
+        .getByRole('button', { name: /Done/ });
+      await expect(done).toBeEnabled({ timeout: 30_000 });
       if (connectivity === 'offline edit') {
         await page.context().setOffline(true);
       }
-      await page
-        .getByRole('region', { name: 'Feature inspector' })
-        .getByRole('button', { name: 'Create', exact: true })
-        .click();
+      await done.click();
       await expectBoxAndSphere(page);
       await expect(page.getByRole('status', { name: /^Saving/ })).toBeVisible();
 
@@ -361,7 +356,7 @@ test('keeps the failed workspace open on internal departure and retries before r
         (window as typeof window & { projectWriteFailures: number })
           .projectWriteFailures
     );
-  await addPrimitive(page, /^Sphere/);
+  await createPrimitiveInPlace(page, 'sphere');
   await expectBoxAndSphere(page);
   await expect(
     page.getByRole('status', { name: 'Not saved', exact: true })

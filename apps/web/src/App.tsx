@@ -19,6 +19,7 @@ import type {
   GeometryBodyRepresentation,
   GeometryReadyState,
   ParameterKind,
+  PrimitiveKind,
   UserId
 } from '@openzcad/shared';
 import { clearAssistantHistory } from './lib/assistant/historyStorage';
@@ -472,7 +473,6 @@ import {
   useKeymap
 } from './lib/keymap';
 import {
-  PRIMITIVE_TOOLS,
   TOOL_GROUPS,
   TOOL_META,
   toolDisabledReason,
@@ -1417,6 +1417,8 @@ import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
 import { useThumbnailCaptureActivity } from './hooks/useThumbnailCaptureActivity';
 import { GEOMETRY_PREVIEW_SCHEDULING, LivePreview } from './lib/livePreview';
 import { mergeSweptFaces, useInPlaceCommand } from './hooks/useInPlaceCommand';
+import { createPrimitiveCommand } from './lib/primitivePlacement';
+import { footprintPlacement } from './lib/inPlace/primitives';
 import {
   IN_PLACE_TOOL_SPECS,
   clampValue,
@@ -1464,7 +1466,6 @@ import {
   type HolePreview
 } from './lib/holeGhost';
 import { holePositionFromPick } from './lib/holePositionAxes';
-import type { PrimitiveGhost } from './lib/primitiveGhost';
 import {
   failedHistoryExportBodies,
   withheldExportMessage,
@@ -2585,10 +2586,8 @@ export function App() {
    */
   /** The open Hole card's values, for the bore the viewport draws. */
   const [holeDraft, setHoleDraft] = useState<HoleDraft | null>(null);
-  /** The open primitive card's solid, for the ghost the viewport draws. */
-  const [primitiveGhost, setPrimitiveGhost] = useState<PrimitiveGhost | null>(
-    null
-  );
+  /** A primitive's footprint is being drawn: its arrows wait for the release. */
+  const [footprintDragging, setFootprintDragging] = useState(false);
   /**
    * The last ghost and what it was computed from. A through hole scans the
    * body's mesh for its depth, which is not work to redo on every render.
@@ -8161,6 +8160,12 @@ export function App() {
       return body ? [body] : [];
     });
     cancelPanel();
+    // A command takes the command slot alone: Measure ends as it would for
+    // any other tool, so the two never stack.
+    if (measuring && !modelingLocked) {
+      setMeasuring(false);
+      clearMeasurementPicks();
+    }
     // The command bar names each step; a status toast would say it twice,
     // on the same row.
     retireStatusMessage();
@@ -18433,6 +18438,17 @@ export function App() {
           ...(request.count2 !== undefined ? { count2: request.count2 } : {}),
           ...(request.axisRef ? { axisRef: request.axisRef } : {})
         });
+      case 'primitive':
+        // The card's own Create, which numbers the feature and its body
+        // from the plain name and adds the placement Move when it moved.
+        return createPrimitiveCommand(
+          request.kind,
+          name,
+          request.dimensions,
+          request.position,
+          managerRef.current?.document,
+          request.rotationDeg
+        );
     }
   }
   /**
@@ -18443,7 +18459,11 @@ export function App() {
     request: InPlaceRequest,
     command: AnyCommand
   ): BodyId | undefined {
-    const ids = (command.payload as { ids?: { bodyId?: BodyId } } | undefined)
+    // A placed primitive is its Create and its placement Move: the body is
+    // the Create's.
+    const leaf =
+      request.tool === 'primitive' ? (command.commands?.[0] ?? command) : command;
+    const ids = (leaf.payload as { ids?: { bodyId?: BodyId } } | undefined)
       ?.ids;
     if (ids?.bodyId) return ids.bodyId;
     return request.tool === 'transform' ? request.targetBodyId : undefined;
@@ -18488,6 +18508,11 @@ export function App() {
       };
     },
     commit: (request, title) => {
+      if (request.tool === 'primitive') {
+        // Committed as the card's Create was: the preview already built it.
+        createFeature(inPlaceCommandFor(request, title));
+        return;
+      }
       const name = newFeatureName(title);
       const command = inPlaceCommandFor(request, name);
       const resultBodyId = inPlaceResultBodyId(request, command);
@@ -18515,6 +18540,44 @@ export function App() {
   >(null);
   const inPlaceSpec = inPlace.spec;
   const inPlaceUnits = doc?.units ?? 'mm';
+  // A command canceled mid-drag never sees the release: the next one must
+  // not start with its arrows still waiting for it.
+  const inPlaceSessionKey = inPlace.active ? inPlace.tool : null;
+  useEffect(() => setFootprintDragging(false), [inPlaceSessionKey]);
+  /** The bodies a primitive's footprint may stand on: the model's own. */
+  const committedBodyIds = useMemo(
+    () => (doc ? [...doc.bodyOrder] : []),
+    [doc]
+  );
+  /**
+   * Opens the keypad on an in-place command's value: from its chip, or from
+   * the bar's Options at `at` (a position, which has no handle).
+   */
+  function openInPlaceKeypad(
+    valueId: string,
+    value: number,
+    at?: { x: number; y: number }
+  ): boolean {
+    const valueSpec = inPlaceSpec?.values.find(
+      (candidate) => candidate.id === valueId
+    );
+    if (!valueSpec) return false;
+    const raw = inPlace.raws[valueId];
+    setKeypad({
+      kind: 'command',
+      commandValueId: valueId,
+      label: valueSpec.label,
+      // A parametric value opens as its expression, and comes back as one
+      // if entry is canceled.
+      initial: raw ?? String(Math.round(value * 100) / 100),
+      selectInitial: true,
+      unitKind: valueSpec.unit,
+      baseline: value,
+      ...(raw !== undefined ? { baselineRaw: raw } : {}),
+      ...(at ? { fixedClientAnchor: at } : {})
+    });
+    return true;
+  }
   /** A face-list command's faces, lit as a sweep's are. */
   const inPlaceFocusFaces = useMemo<TopologySelection[] | null>(
     () =>
@@ -25516,9 +25579,30 @@ export function App() {
             }
             planePickerOffset={sketchPlaneOffset}
             holeGhost={holePreviewState?.ghost ?? null}
-            primitiveGhost={
-              tool && PRIMITIVE_TOOLS.includes(tool) ? primitiveGhost : null
+            footprintPicker={
+              !modelingLocked && inPlace.active && inPlaceSpec?.footprint
+                ? { shape: inPlaceSpec.footprint, bodyIds: committedBodyIds }
+                : null
             }
+            onFootprint={(gesture) => {
+              const kind = inPlaceRef.current.tool;
+              if (!kind || !IN_PLACE_TOOL_SPECS[kind].footprint) return;
+              setFootprintDragging(gesture.phase === 'move');
+              const placed = footprintPlacement(
+                kind as PrimitiveKind,
+                gesture.frame,
+                gesture.start,
+                gesture.end,
+                gesture.moved,
+                appSettings.sketching.snapEnabled
+                  ? appSettings.sketching.linearSnap
+                  : null
+              );
+              inPlaceRef.current.placeFootprint(placed.placement, {
+                ...placed.values,
+                ...placed.anchor
+              });
+            }}
             onPickPlane={(plane) => {
               // An in-place Mirror or Split takes the ghost plane it waits
               // for; otherwise a ghost plane starts a sketch on it.
@@ -25596,29 +25680,14 @@ export function App() {
               void additive;
               if (curve) inPlace.pickCurve(curve);
             }}
-            commandHandles={modelingLocked ? undefined : inPlaceHandles}
+            commandHandles={
+              modelingLocked || footprintDragging ? undefined : inPlaceHandles
+            }
             onCommandHandlePreview={inPlace.previewValue}
             onCommandHandleRelease={inPlace.previewValue}
-            onOpenCommandKeypad={(valueId, value) => {
-              const valueSpec = inPlaceSpec?.values.find(
-                (candidate) => candidate.id === valueId
-              );
-              if (!valueSpec) return false;
-              const raw = inPlace.raws[valueId];
-              setKeypad({
-                kind: 'command',
-                commandValueId: valueId,
-                label: valueSpec.label,
-                // A parametric value opens as its expression, and comes
-                // back as one if entry is canceled.
-                initial: raw ?? String(Math.round(value * 100) / 100),
-                selectInitial: true,
-                unitKind: valueSpec.unit,
-                baseline: value,
-                ...(raw !== undefined ? { baselineRaw: raw } : {})
-              });
-              return true;
-            }}
+            onOpenCommandKeypad={(valueId, value) =>
+              openInPlaceKeypad(valueId, value)
+            }
             commandSetterRef={commandSetterRef}
             facePickOnly={toFacePick !== null}
             modeOverlay={
@@ -26383,7 +26452,6 @@ export function App() {
             ) : (
               <Inspector
                 tool={tool}
-                onPrimitiveGhostChange={setPrimitiveGhost}
                 commitError={featureFormError}
                 selectedFeature={selectedFeature}
                 documentVersion={editFormVersion(fieldDefinitions.current, doc)}
@@ -26440,7 +26508,6 @@ export function App() {
                 onSelectAllEdges={handleSelectAllEdges}
                 onClearSelectedEdges={handleClearSelectedEdges}
                 document={doc}
-                onCreatePrimitive={createFeature}
                 onRemoveSelectedEdge={(edge) =>
                   handleSelectTopologyFromViewer(edge, true)
                 }
@@ -26945,6 +27012,25 @@ export function App() {
                     value: inPlace.options[option.id] ?? option.initial
                   }))}
                   onOption={inPlace.setOption}
+                  values={inPlaceSpec.values
+                    .filter((value) => value.inOptions)
+                    .map((value) => ({
+                      id: value.id,
+                      label: value.label,
+                      text:
+                        inPlace.raws[value.id] ??
+                        `${formatNumber(inPlace.values[value.id] ?? value.initial)} ${inPlaceUnits}`
+                    }))}
+                  onValue={(valueId, at) => {
+                    const valueSpec = inPlaceSpec.values.find(
+                      (candidate) => candidate.id === valueId
+                    );
+                    openInPlaceKeypad(
+                      valueId,
+                      inPlace.values[valueId] ?? valueSpec?.initial ?? 0,
+                      at
+                    );
+                  }}
                   onDone={() => inPlace.done()}
                   onCancel={() => inPlace.cancel()}
                 />

@@ -210,4 +210,42 @@ describe('primitive placement', () => {
       dimensions: { width: 40 }
     });
   });
+
+  it('places a turned primitive in one Move, read as a later edit', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Turned', toUserId('user_turned_placement'))
+    );
+    manager.execute(
+      createPrimitiveCommand(
+        'cylinder',
+        'Cylinder',
+        { radius: 3, height: 10 },
+        { x: 20, y: 0, z: 5 },
+        manager.document,
+        { x: 90, y: 0, z: 90 }
+      )
+    );
+    const moves = features(manager).filter(
+      (feature) => feature.data.featureKind === 'transform'
+    );
+    expect(moves.map((move) => move.name)).toEqual(['Place Cylinder']);
+    expect(moves[0]!.data).toMatchObject({
+      transform: {
+        translation: { x: 20, y: 0, z: 5 },
+        rotationDeg: { x: 90, y: 0, z: 90 }
+      }
+    });
+    // Its card edits the sizes; a turn stays a Move of its own.
+    expect(primitivePlacement(manager.document, primitiveOf(manager)).feature).toBeNull();
+  });
+
+  it('adds no Move for an unturned primitive at the origin', () => {
+    expect(
+      createPrimitiveCommand('box', 'Box', box, { x: 0, y: 0, z: 0 }, null, {
+        x: 0,
+        y: 0,
+        z: 0
+      }).kind
+    ).toBe('primitive.add');
+  });
 });

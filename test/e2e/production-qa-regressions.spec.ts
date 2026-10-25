@@ -8,7 +8,8 @@ import {
   enterCommandValue,
   finishInPlaceCommand,
   pickObjectsBody,
-  revealModelPanel
+  revealModelPanel,
+  createPrimitiveInPlace
 } from './openzcad-fixtures';
 import type { Page } from '@playwright/test';
 
@@ -138,18 +139,11 @@ for (const [width, height] of [
     await stubApi(page);
     await page.goto('/');
     await create(page, 'QA pattern cancel');
-    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
     const inspector = page.getByRole('region', { name: 'Feature inspector' });
     // Off the Z axis, so three copies about it stay apart: a world axis
     // through the corner-origin box would run along an edge they all share,
     // which exact union refuses.
-    await inspector
-      .getByRole('group', { name: 'Position' })
-      .getByRole('textbox', { name: 'Corner X' })
-      .fill('20');
-    await inspector
-      .getByRole('button', { name: 'Create', exact: true })
-      .click();
+    await createPrimitiveInPlace(page, 'box', { at: { x: '20' } });
     await expectBodyCount(page, 1);
     await page
       .getByRole('combobox', { name: 'Search commands' })

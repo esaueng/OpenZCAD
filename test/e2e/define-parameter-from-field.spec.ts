@@ -1,10 +1,16 @@
-import { expect, test, stubApi } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  expect,
+  test,
+  stubApi
+} from './openzcad-fixtures';
 
 /**
  * G5 (11 Oct 2026 design review): `width` typed into a Box's Width before
  * any parameter of that name existed ended at "Unknown identifier" and a
  * disabled Create. The field now offers to define it in place, with the value
- * it replaced; the definition is its own undo step, before the box.
+ * it replaced; the definition is its own undo step, before the edit. A new
+ * box runs in place (U09), so the field is its History card's.
  */
 test('defines a parameter from the Box field that first names it', async ({
   page
@@ -18,13 +24,14 @@ test('defines a parameter from the Box field that first names it', async ({
   await page.getByRole('button', { name: 'Create project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await createPrimitiveInPlace(page, 'box');
+  await page.locator('.feature-row-main', { hasText: /^Box/ }).click();
   const width = inspector.getByRole('textbox', { name: 'Width (X)' });
-  const create = inspector.getByRole('button', { name: 'Create', exact: true });
+  const apply = inspector.getByRole('button', { name: 'Apply', exact: true });
   await width.fill('width');
   await expect(inspector.getByText('is not defined yet')).toBeVisible();
   await expect(inspector.getByText(/Unknown identifier/)).toHaveCount(0);
-  await expect(create).toBeDisabled();
+  await expect(apply).toBeDisabled();
 
   // The value it replaced is offered; Enter there defines, and does not
   // reach the card.
@@ -36,12 +43,12 @@ test('defines a parameter from the Box field that first names it', async ({
   await value.press('Enter');
   await expect(inspector.getByText('= 80')).toBeVisible();
   await expect(value).toHaveCount(0);
-  await expect(create).toBeEnabled();
+  await expect(apply).toBeEnabled();
   await expect(width).toBeFocused();
 
-  // Back in the field, Enter creates the box over the new parameter.
+  // Back in the field, Enter applies the box over the new parameter.
   await width.press('Enter');
-  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+  await expect(inspector).toHaveCount(0);
 
   const parametersPanel = page.getByRole('button', {
     name: 'Parameters panel'
@@ -53,13 +60,13 @@ test('defines a parameter from the Box field that first names it', async ({
   });
   await expect(expression).toHaveValue('80');
 
-  // Two steps: undo takes the box, then the parameter.
+  // Two steps: undo takes the edit, then the parameter; the box stays.
   const undo = page.getByRole('button', { name: 'Undo', exact: true });
   await undo.click();
-  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeDisabled();
   await expect(expression).toHaveValue('80');
   await undo.click();
   await expect(expression).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
   expect(errors).toEqual([]);
 });

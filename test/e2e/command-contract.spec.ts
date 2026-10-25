@@ -5,7 +5,12 @@ import {
   createProjectDocument
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
-import { expect, test, stubApi } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  expect,
+  test,
+  stubApi
+} from './openzcad-fixtures';
 
 /**
  * ROADMAP U01, coherence plan phase 2 gate: one value, one commit gesture.
@@ -114,11 +119,10 @@ async function createCylinder(page: Page, project: string) {
   await page.goto('/');
   await page.getByLabel('Project name').fill(project);
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByLabel('Radius', { exact: true }).fill('14');
-  await inspector.getByLabel('Height', { exact: true }).fill('28');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '14', height: '28' }
+  });
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toBeVisible({ timeout: 120_000 });
   await expect(page.getByRole('contentinfo')).not.toContainText(
@@ -327,11 +331,7 @@ test('resize hole: Enter commits the chip value, Escape leaves history alone', a
   await page.goto('/');
   await page.getByLabel('Project name').fill('Contract hole');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   // One 5 mm hole through the top face: the bore is the body's only
   // cylindrical face, so the cylinder hook's wall read measures it.
   // U09: Hole runs in place. Click the face, set the diameter on its chip's

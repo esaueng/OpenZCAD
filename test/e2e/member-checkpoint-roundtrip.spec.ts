@@ -1,6 +1,12 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  test,
+  expect,
+  stubApi,
+  expectBodyCount
+} from './openzcad-fixtures';
 import {
   appendRevision,
   addPrimitiveFeature,
@@ -333,14 +339,6 @@ function roomFixture(
   };
 }
 
-async function addPrimitive(page: Page, name: RegExp) {
-  await page.getByRole('button', { name }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: 'Create', exact: true })
-    .click();
-}
-
 async function startNamedSave(page: Page) {
   await page.keyboard.press('ControlOrMeta+Shift+s');
   const dialog = page.getByRole('dialog', { name: 'Name this save' });
@@ -361,13 +359,13 @@ test('restoring a device-only member point syncs the model without publishing pr
   await page.goto('/');
   await page.getByLabel('Project name').fill(server.read().name);
   await page.getByRole('button', { name: 'Create project' }).click();
-  await addPrimitive(page, /^Box \(B\)/);
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await startNamedSave(page);
   await expect(page.getByRole('contentinfo')).toContainText(
     'The named save is stored on this device.'
   );
-  await addPrimitive(page, /^Cylinder/);
+  await createPrimitiveInPlace(page, 'cylinder');
   await expectBodyCount(page, 2);
   await expect.poll(() => server.read().bodyOrder.length).toBe(2);
   const checkpoints = server.read().checkpoints;
@@ -404,13 +402,13 @@ test('does not record a restore when the room changes while its saved revision l
   await page.goto('/');
   await page.getByLabel('Project name').fill(server.read().name);
   await page.getByRole('button', { name: 'Create project' }).click();
-  await addPrimitive(page, /^Box \(B\)/);
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await startNamedSave(page);
   await expect.poll(server.requested).toBe(true);
   server.release();
   await expect(page.getByRole('contentinfo')).toContainText('Saved revision.');
-  await addPrimitive(page, /^Cylinder/);
+  await createPrimitiveInPlace(page, 'cylinder');
   await expectBodyCount(page, 2);
   await expect.poll(() => server.read().bodyOrder.length).toBe(2);
   const saved = server.stored()!;
@@ -511,13 +509,13 @@ test('branches a device-only member point while the account cannot be reached', 
   await page.goto('/');
   await page.getByLabel('Project name').fill(server.read().name);
   await page.getByRole('button', { name: 'Create project' }).click();
-  await addPrimitive(page, /^Box \(B\)/);
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await startNamedSave(page);
   await expect(page.getByRole('contentinfo')).toContainText(
     'The named save is stored on this device.'
   );
-  await addPrimitive(page, /^Cylinder/);
+  await createPrimitiveInPlace(page, 'cylinder');
   await expectBodyCount(page, 2);
   const row = page.locator('.revision-row', { hasText: 'Clicked box' });
   await row.hover();
@@ -556,7 +554,7 @@ for (const roomStored of [true, false]) {
       await page.goto('/');
       await page.getByLabel('Project name').fill(server.read().name);
       await page.getByRole('button', { name: 'Create project' }).click();
-      await addPrimitive(page, /^Box \(B\)/);
+      await createPrimitiveInPlace(page, 'box');
       await expectBodyCount(page, 1);
       await expect(
         page.getByRole('status', { name: 'Saved', exact: true })
@@ -648,7 +646,7 @@ test('a clicked member checkpoint survives buffered edits and restores through t
   await page.goto('/');
   await page.getByLabel('Project name').fill(server.read().name);
   await page.getByRole('button', { name: 'Create project' }).click();
-  await addPrimitive(page, /^Box \(B\)/);
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await expect(
     page.getByRole('status', { name: 'Saved', exact: true })
@@ -656,7 +654,7 @@ test('a clicked member checkpoint survives buffered edits and restores through t
   await startNamedSave(page);
   await expect.poll(server.requested).toBe(true);
   try {
-    await addPrimitive(page, /^Cylinder/);
+    await createPrimitiveInPlace(page, 'cylinder');
     await expectBodyCount(page, 2);
     await page.waitForTimeout(650);
     expect(server.input()?.bodyOrder).toHaveLength(1);
@@ -720,7 +718,7 @@ test('a late member checkpoint leaves the newer share navigation and status unch
   await page.goto('/');
   await page.getByLabel('Project name').fill(server.read().name);
   await page.getByRole('button', { name: 'Create project' }).click();
-  await addPrimitive(page, /^Box \(B\)/);
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await expect(
     page.getByRole('status', { name: 'Saved', exact: true })
@@ -786,7 +784,7 @@ for (const timing of ['after adoption', 'before broadcast'] as const) {
         await page.goto('/');
         await page.getByLabel('Project name').fill(server.read().name);
         await page.getByRole('button', { name: 'Create project' }).click();
-        await addPrimitive(page, /^Box \(B\)/);
+        await createPrimitiveInPlace(page, 'box');
         await expectBodyCount(page, 1);
         await expect(
           page.getByRole('status', { name: 'Saved', exact: true })
@@ -798,7 +796,7 @@ for (const timing of ['after adoption', 'before broadcast'] as const) {
           server.release();
           await expect(named).toHaveCount(1);
         }
-        await addPrimitive(page, /^Cylinder \(C\)/);
+        await createPrimitiveInPlace(page, 'cylinder');
         await expectBodyCount(page, 2);
         if (timing === 'before broadcast') {
           expect(server.stored()).toBeNull();
@@ -857,14 +855,14 @@ test('a committed member checkpoint fences buffered edits after a new lease repl
     await page.goto('/');
     await page.getByLabel('Project name').fill(server.read().name);
     await page.getByRole('button', { name: 'Create project' }).click();
-    await addPrimitive(page, /^Box \(B\)/);
+    await createPrimitiveInPlace(page, 'box');
     await expectBodyCount(page, 1);
     await expect(
       page.getByRole('status', { name: 'Saved', exact: true })
     ).toBeVisible();
     await startNamedSave(page);
     await expect.poll(server.requested).toBe(true);
-    await addPrimitive(page, /^Cylinder/);
+    await createPrimitiveInPlace(page, 'cylinder');
     await expectBodyCount(page, 2);
     expect(server.input()?.bodyOrder).toHaveLength(1);
     server.release();
@@ -1000,7 +998,7 @@ for (const [sendTiming, ackFault, sourceArchived] of [
         page.getByRole('group', { name: 'Workspace status' })
       ).toContainText('syncLocal source only');
       if (!pending) expect(server.sourceWritePending()).toBe(false);
-      await addPrimitive(page, /^Box \(B\)/);
+      await createPrimitiveInPlace(page, 'box');
       await expectBodyCount(page, 2);
       if (pending)
         await expect.poll(server.sourceWritePending).toBe(true);
@@ -1008,7 +1006,7 @@ for (const [sendTiming, ackFault, sourceArchived] of [
       await startNamedSave(page);
       if (buffered) {
         await expect.poll(server.sourceWritePending).toBe(true);
-        await addPrimitive(page, /^Cylinder/);
+        await createPrimitiveInPlace(page, 'cylinder');
         await expectBodyCount(page, 3);
         expect(server.requested()).toBe(false);
         expect(server.read().bodyOrder).toHaveLength(1);
@@ -1116,7 +1114,7 @@ for (const [sendTiming, ackFault, sourceArchived] of [
             window as unknown as { __restoreCheckpointSendTimer(): void }
           ).__restoreCheckpointSendTimer()
         );
-      await addPrimitive(page, /^Cylinder \(C\)/);
+      await createPrimitiveInPlace(page, 'cylinder');
       await expectBodyCount(page, buffered ? 4 : 3);
       await expect
         .poll(() => server.read().bodyOrder.length)

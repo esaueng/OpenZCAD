@@ -1,13 +1,15 @@
 import { expect, test } from '@playwright/test';
 import {
   askAssistant,
+  createPrimitiveInPlace,
   createProject,
   expectBodyCount,
   MODEL_ONLY,
   modelPanel,
   promptField,
   stubApi,
-  stubAssistant
+  stubAssistant,
+  finishInPlaceCommand
 } from './openzcad-fixtures';
 
 /*
@@ -191,10 +193,7 @@ test('search names a feature and opens History unpinned on it', async ({
   await stubApi(page, { panelLayout: MODEL_ONLY });
   await createProject(page, 'Find Part');
 
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Name').fill('Base plate');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', { name: 'Base plate' });
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
   await expect(page.locator('.model-panel')).toHaveCount(0);
 
@@ -275,11 +274,10 @@ test('a slash lists commands with ghost completion, and Tab accepts it', async (
   await expect(search).toBeFocused();
   await expect(search).toHaveValue('/Box');
   await page.keyboard.press('Enter');
-  // The command ran: the Box tool's inspector is up and the field is clear.
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await expect(inspector).toBeVisible();
+  // The command ran: the Box command is up (U09) and the field is clear.
+  await expect(page.getByRole('group', { name: 'Box command' })).toBeVisible();
   await expect(search).toHaveValue('');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await finishInPlaceCommand(page, 'Box');
 
   // The same words without the slash list the command above an ask row,
   // but Enter asks: the ask row is the one highlighted.
@@ -318,7 +316,7 @@ test('without an assistant, plain words search the commands and Enter runs one',
   await search.press('Enter');
 
   await expect(
-    page.getByRole('region', { name: 'Feature inspector' })
+    page.getByRole('group', { name: 'Cylinder command' })
   ).toBeVisible();
   await expect(search).toHaveValue('');
 });

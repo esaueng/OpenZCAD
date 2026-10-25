@@ -1,5 +1,6 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import {
+  createPrimitiveInPlace,
   seedDismissedWorkspaceTour,
   revealModelPanel,
   modelPanel,
@@ -110,11 +111,7 @@ async function createBoxProject(page: Page, name: string) {
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 }
 
@@ -923,11 +920,7 @@ test('empty-state copy points at the tool rail beside the history', async ({
 
   // Selecting an edge points at the same place, and neither tool it names has
   // a keyboard shortcut, so the rail is the only route.
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(hint).toHaveCount(0);
 });
 

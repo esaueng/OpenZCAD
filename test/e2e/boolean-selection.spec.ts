@@ -1,4 +1,5 @@
 import {
+  createPrimitiveInPlace,
   expect,
   test,
   stubApi,
@@ -19,16 +20,13 @@ test('numbers the picked bodies in the viewport as an in-place boolean takes the
   await page.goto('/');
   await page.getByLabel('Project name').fill('Numbered Union');
   await page.getByRole('button', { name: 'Create project' }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
   const canvas = page.locator('.viewer-host canvas');
 
   for (const name of ['Lower', 'Upper']) {
-    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-    await inspector.getByLabel('Name').fill(name);
-    await inspector.getByLabel('Width (X)').fill('10');
-    await inspector.getByLabel('Depth (Y)').fill('10');
-    await inspector.getByLabel('Height (Z)').fill('10');
-    await inspector.getByRole('button', { name: /^Create/ }).click();
+    await createPrimitiveInPlace(page, 'box', {
+      sizes: { width: '10', depth: '10', height: '10' },
+      name: name
+    });
   }
 
   await page.getByRole('button', { name: /^Subtract \(X\)/ }).click();

@@ -12,6 +12,7 @@ import type {
   InPlaceRequest,
   ProfilePick
 } from '../lib/inPlace/tools';
+import { GROUND_FRAME, placementFrame } from '../lib/inPlace/primitives';
 
 const FRONT: PlaneBasis = {
   origin: { x: 0, y: 0, z: 0 },
@@ -211,6 +212,18 @@ describe('useInPlaceCommand: revolve', () => {
     expect(request.tool === 'revolve' && request.angleDeg).not.toBe(
       'sweep * 5'
     );
+  });
+
+  it('refuses a typed number outside the range instead of clamping it', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('box'));
+    act(() => {
+      expect(hook.result.current.setValue('width', -5)).toBe(false);
+    });
+    expect(hook.result.current.refusal).toBe(
+      'Box width takes at least 0.001, not -5.'
+    );
+    expect(hook.result.current.values.width).toBe(30);
   });
 
   it('keeps a sub-degree revolve', () => {
@@ -498,5 +511,79 @@ describe('review: a sweep guide rail', () => {
       'g1'
     ]);
     expect(hook.result.current.hint).toMatch(/Guide rail of 1/);
+  });
+});
+
+describe('useInPlaceCommand: primitives', () => {
+  it('previews the card default at once, and Enter commits it', async () => {
+    const { hook, commit, built } = setup();
+    act(() => hook.result.current.start('box'));
+    expect(hook.result.current.hint).toMatch(/footprint/);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(built.at(-1)).toEqual({
+      tool: 'primitive',
+      kind: 'box',
+      dimensions: { width: 30, height: 18, depth: 24 },
+      position: { x: 0, y: 0, z: 0 }
+    });
+    act(() => {
+      hook.result.current.done();
+    });
+    expect(commit).toHaveBeenCalledWith(built.at(-1), 'Box');
+  });
+
+  it('takes a footprint: its plane, the press and the drawn sizes', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('box'));
+    // A typed width is replaced by the drawn one.
+    act(() => {
+      hook.result.current.setValue('width', 12, 'w');
+    });
+    act(() => {
+      expect(
+        hook.result.current.placeFootprint(
+          { frame: placementFrame({ x: 0, y: 0, z: 1 }), signU: -1, signV: 1 },
+          { width: 20, depth: 15, x: 10, y: 5, z: 6 }
+        )
+      ).toBe(true);
+    });
+    expect(hook.result.current.raws).toEqual({});
+    expect(hook.result.current.hint).toMatch(/arrows/);
+    await waitFor(() =>
+      expect(built.at(-1)).toEqual({
+        tool: 'primitive',
+        kind: 'box',
+        dimensions: { width: 20, height: 15, depth: 24 },
+        position: { x: -10, y: 5, z: 6 }
+      })
+    );
+    expect(hook.result.current.handles.map((handle) => handle.valueId)).toEqual(
+      ['width', 'depth', 'height']
+    );
+  });
+
+  it('keeps a typed position parametric', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('cylinder'));
+    act(() => {
+      hook.result.current.setValue('x', 15, 'gap');
+    });
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        kind: 'cylinder',
+        position: { x: 'gap', y: 0, z: 0 }
+      })
+    );
+  });
+
+  it('refuses a footprint for a command placed some other way', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('revolve'));
+    expect(
+      hook.result.current.placeFootprint(
+        { frame: GROUND_FRAME, signU: 1, signV: 1 },
+        { radius: 4 }
+      )
+    ).toBe(false);
   });
 });

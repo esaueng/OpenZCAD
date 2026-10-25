@@ -1,4 +1,9 @@
-import { test, expect, stubApi } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  test,
+  expect,
+  stubApi
+} from './openzcad-fixtures';
 
 /**
  * M10: a Move made with the gizmo stores the body's centre as its pivot, the
@@ -13,11 +18,9 @@ test('a gizmo rotation stores its pivot, and editing the angle keeps it', async 
   await page.getByLabel('Project name').fill('Pivot');
   await page.getByRole('button', { name: 'Create project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Width (X)').fill('40');
-  await inspector.getByLabel('Depth (Y)').fill('20');
-  await inspector.getByLabel('Height (Z)').fill('10');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '40', depth: '20', height: '10' }
+  });
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
   await page.keyboard.press('m');
@@ -65,11 +68,9 @@ test('a translation-only gizmo Move still stores its pivot', async ({
   await page.getByLabel('Project name').fill('Pivot slide');
   await page.getByRole('button', { name: 'Create project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Width (X)').fill('40');
-  await inspector.getByLabel('Depth (Y)').fill('20');
-  await inspector.getByLabel('Height (Z)').fill('10');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '40', depth: '20', height: '10' }
+  });
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
   await page.keyboard.press('m');

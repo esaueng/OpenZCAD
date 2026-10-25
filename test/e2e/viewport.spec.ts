@@ -1,4 +1,5 @@
 import {
+  createPrimitiveInPlace,
   enableFullRender,
   test,
   expect,
@@ -8,7 +9,8 @@ import {
   setSelectionFilter,
   stubApi,
   WORKSPACE_SESSION_STORAGE_KEY,
-  revealModelPanel
+  revealModelPanel,
+  finishInPlaceCommand
 } from './openzcad-fixtures';
 import type { Locator, Page } from '@playwright/test';
 
@@ -75,11 +77,7 @@ test('keeps undo and redo in the quick-actions rail', async ({ page }) => {
   await expect(undo).toBeDisabled();
   await expect(redo).toBeDisabled();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await expect(undo).toBeEnabled();
 
@@ -99,11 +97,7 @@ test('viewport context menu hides a body and the sidebar eye restores it', async
   await page.getByLabel('Project name').fill('Visibility Part');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
   // Right-click the body → contextual actions → Hide body.
@@ -150,11 +144,7 @@ test('choosing Move from an edge right-click disarms the fillet handle it just a
   await page.goto('/');
   await page.getByLabel('Project name').fill('Menu Disarm');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
   await setSelectionFilter(page, 'Edge');
@@ -217,11 +207,7 @@ test('the viewport scale indicator tracks zoom in document units', async ({
   await page.getByLabel('Project name').fill('Scale Indicator Part');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
 
   const indicator = page.getByTestId('viewport-scale-indicator');
@@ -300,11 +286,10 @@ test('Space centres and faces an exact planar selection head-on', async ({
   await page.getByLabel('Project name').fill('Normal Face View');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByLabel('Radius', { exact: true }).fill('14');
-  await inspector.getByLabel('Height', { exact: true }).fill('28');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '14', height: '28' }
+  });
   const cylinderFeature = page.locator('.feature-row-main', {
     hasText: 'Cylinder'
   });
@@ -388,11 +373,7 @@ test('the wheel zooms toward the pointer, and the preference turns it off', asyn
 
   // A body gives the camera something to frame, so the orbit target is not
   // sitting at the origin by coincidence.
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
 
   const canvas = page.locator('.viewer-host canvas');
@@ -505,11 +486,7 @@ test('a batched trackpad pinch renders as bounded zoom steps', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Smooth Zoom Part');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
 
   const canvas = page.locator('.viewer-host canvas');
@@ -615,11 +592,7 @@ test('clicking geometry re-pivots the orbit without moving the view', async ({
   await page.getByLabel('Project name').fill('Pivot Part');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
 
   const canvas = page.locator('.viewer-host canvas');
@@ -661,11 +634,7 @@ test('the orientation widget snaps to a view the rail cannot reach', async ({
   await page.getByLabel('Project name').fill('Orientation Part');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
@@ -817,11 +786,7 @@ test('a view request interrupts the glide already in flight', async ({
   await page.getByLabel('Project name').fill('Interrupt Part');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
@@ -892,11 +857,7 @@ test('the middle-button drag preference changes what a middle drag does', async 
   await page.getByLabel('Project name').fill('Middle Drag Part');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
 
   const camera = async () =>
@@ -1014,11 +975,7 @@ test('persists only the final camera pose after a gesture settles', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Settled Camera Part');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
@@ -1120,12 +1077,8 @@ test('repeated face clicks reach a body behind direct-edit handles', async ({
   await page.getByLabel('Project name').fill('Depth Cycle Part');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  for (const primitive of [/^Box \(B\)/, /^Cylinder \(C\)/]) {
-    await page.getByRole('button', { name: primitive }).click();
-    await page
-      .getByRole('region', { name: 'Feature inspector' })
-      .getByRole('button', { name: /^Create/ })
-      .click();
+  for (const kind of ['box', 'cylinder'] as const) {
+    await createPrimitiveInPlace(page, kind);
   }
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
@@ -1172,11 +1125,7 @@ test('double-clicking a face selects its whole body', async ({ page }) => {
   await page.getByLabel('Project name').fill('Body Double Click Part');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await page.keyboard.press('Escape');
 
@@ -1221,11 +1170,7 @@ test('double-clicking a filleted rim takes the whole run of edges', async ({
   await page.getByLabel('Project name').fill('Tangent Run Part');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
 
   // Rounding every edge turns each face boundary into a smooth run of lines
   // and arcs — the shape the whole feature exists for. A raw box has only
@@ -1334,11 +1279,7 @@ test('the selection filter changes what a click takes', async ({ page }) => {
   await page.getByLabel('Project name').fill('Filter Part');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await page.keyboard.press('Escape');
 
@@ -1403,11 +1344,7 @@ test('dragging a box selects several bodies at once', async ({ page }) => {
   await page.getByRole('button', { name: 'Create project' }).click();
 
   // Two bodies far enough apart that a rectangle can take one and not both.
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
@@ -1420,11 +1357,7 @@ test('dragging a box selects several bodies at once', async ({ page }) => {
     page.locator('.feature-row-main', { hasText: 'Move' })
   ).toBeVisible();
 
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'cylinder');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Cylinder' })
   ).toBeVisible();
@@ -1518,11 +1451,7 @@ test('box selection releases the previous direct-edit target', async ({
   await page.getByLabel('Project name').fill('Box Target Part');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
@@ -1632,11 +1561,7 @@ test('the status bar names the one Escape exit, and one press takes it', async (
   await page.getByLabel('Project name').fill('Prompt Part');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
@@ -1784,9 +1709,7 @@ test('Escape backs out of the sketch plane prompt', async ({ page }) => {
   // Escape landed on idle rather than another rung: the tool is released, so
   // the next plain keystroke is a workspace shortcut again.
   await page.keyboard.press('b');
-  await expect(
-    page.getByRole('region', { name: 'Feature inspector' })
-  ).toBeVisible();
+  await expect(page.getByRole('group', { name: 'Box command' })).toBeVisible();
   await page.keyboard.press('Escape');
 
   // The close button is the same exit for the pointer — and it is reachable:
@@ -1831,11 +1754,7 @@ test('a shortcut still fires when a panel opened because you selected something'
   await page.getByRole('button', { name: 'Create project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  // The create dialog is the case where landing in the field is right: the user
-  // just asked for it, and typing a size is the next thing they mean to do.
-  await expect(inspector.getByLabel('Width (X)')).toBeFocused();
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.locator('.body-row')).toHaveCount(1);
   await page.keyboard.press('Escape');
 
@@ -1966,11 +1885,7 @@ test('section view toggles, picks its plane in the panel, cuts exactly at rest, 
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(page.locator('.viewer-host canvas')).toBeVisible();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
@@ -2143,14 +2058,16 @@ test('controls announce themselves as what they are', async ({ page }) => {
 
   await page.getByLabel('Project name').fill('Names');
   await page.getByRole('button', { name: 'Create project' }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
-  // The keycap glyph was part of the button's name: "Create ↵".
+  // The keycap glyph was part of the button's name: "Create ↵". A box runs
+  // in place now (U09); its Done is named the same way.
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
   await expect(
-    inspector.getByRole('button', { name: 'Create', exact: true })
+    page
+      .getByRole('group', { name: 'Box command' })
+      .getByRole('button', { name: 'Done', exact: true })
   ).toBeVisible();
-  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await finishInPlaceCommand(page, 'Box');
   await expect(page.locator('.body-row')).toHaveCount(1);
 
   // The row's accessible NAME comes from its content, so it was always the
@@ -2169,11 +2086,7 @@ test('the selection callout follows the body it names through a move', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Callout Move');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
   // Selecting the body names it in the Selection card, not over the model;
@@ -2274,11 +2187,7 @@ test('a viewport callout keeps its position while it animates in', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Callout Entrance');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
   // A running Move hangs the name callout over the body it moves.
   await page
@@ -2347,11 +2256,7 @@ test('clicking a cube corner past its drawn facet snaps to that isometric view',
   await page.goto('/');
   await page.getByLabel('Project name').fill('Cube Corner');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
   // Start somewhere that is definitely not isometric, so arriving there is
@@ -2481,11 +2386,7 @@ test('the frozen shadow map thaws for a moving body but not for the camera', asy
   await page.goto('/');
   await page.getByLabel('Project name').fill('Shadow Freeze');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
   const canvas = page.locator('.viewer-host canvas');
@@ -2555,11 +2456,7 @@ test('the render loop stops drawing once the scene is still', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Idle Loop');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
   const canvas = page.locator('.viewer-host canvas');
@@ -2608,11 +2505,7 @@ test('two fingers pan while a wheel notch still zooms', async ({ page }) => {
   await page.goto('/');
   await page.getByLabel('Project name').fill('Trackpad Part');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
@@ -2686,11 +2579,7 @@ test('pressing to orbit writes no storage on the press frame', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Gesture Latency Part');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();

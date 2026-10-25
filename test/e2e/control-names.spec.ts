@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import {
+  createPrimitiveInPlace,
   expect,
   modelPanel,
   revealModelPanel,
@@ -21,19 +22,19 @@ test('commands, export formats and body rows are named by what they do', async (
   await page.goto('/');
   await page.getByLabel('Project name').fill('Named Controls');
   await page.getByRole('button', { name: 'Create project' }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
+  // A primitive runs in place (U09): Done is named by its verb, and Enter is
+  // its shortcut, not its title.
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Name').fill('Lower');
-  // Named by its verb; Enter is its shortcut, not its title.
-  const create = inspector.getByRole('button', { name: 'Create', exact: true });
-  await expect(create).toHaveAttribute('aria-keyshortcuts', 'Enter');
-  await expect(create).not.toHaveAttribute('title', /.*/);
-  await create.click();
+  const done = page
+    .getByRole('group', { name: 'Box command' })
+    .getByRole('button', { name: /^Done/ });
+  await expect(done).toHaveAttribute('aria-keyshortcuts', 'Enter');
+  await expect(done).not.toHaveAttribute('title', /.*/);
+  await page.keyboard.press('Escape');
+  await createPrimitiveInPlace(page, 'box', { name: 'Lower' });
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Name').fill('Upper');
-  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await createPrimitiveInPlace(page, 'box', { name: 'Upper' });
   await expect(
     page.locator('.feature-row-main', { hasText: 'Upper' })
   ).toBeVisible();
@@ -278,13 +279,8 @@ test('rail and row icons take a 24 px pointer target without taking a neighbourâ
   await page.getByLabel('New parameter expression').fill('30');
   await page.getByRole('button', { name: 'Add parameter' }).click();
   await expect(page.locator('.param-row')).toContainText('w');
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
   for (const name of ['Lower', 'Upper']) {
-    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-    await inspector.getByLabel('Name').fill(name);
-    await inspector
-      .getByRole('button', { name: 'Create', exact: true })
-      .click();
+    await createPrimitiveInPlace(page, 'box', { name: name });
     await expect(
       page.locator('.feature-row-main', { hasText: name })
     ).toBeVisible();

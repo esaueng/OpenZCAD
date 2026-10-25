@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import {
   askAssistant,
   bareCanvasDrags,
+  createPrimitiveInPlace,
   expect,
   expectBodyCount,
   expectConsumedBodyCount,
@@ -40,12 +41,8 @@ test('suppresses features and rolls the timeline back as one undoable edit', asy
   await page.getByLabel('Project name').fill('Suppression Timeline');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  for (const tool of [/^Box \(B\)/, /^Cylinder \(C\)/]) {
-    await page.getByRole('button', { name: tool }).click();
-    await page
-      .getByRole('region', { name: 'Feature inspector' })
-      .getByRole('button', { name: /^Create/ })
-      .click();
+  for (const kind of ['box', 'cylinder'] as const) {
+    await createPrimitiveInPlace(page, kind);
   }
   await expectBodyCount(page, 2);
 
@@ -99,11 +96,10 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await page.goto('/');
   await page.getByLabel('Project name').fill('Cylinder Radius Drag');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByLabel('Radius', { exact: true }).fill('14');
-  await inspector.getByLabel('Height', { exact: true }).fill('28');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '14', height: '28' }
+  });
   await expect(page.getByRole('heading', { name: 'Objects 1' })).toBeVisible();
 
   const canvas = page.locator('.viewer-host canvas');
@@ -284,11 +280,7 @@ test('resizes a literal box by dragging an exact face', async ({ page }) => {
   await page.getByLabel('Project name').fill('Direct Edit Part');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
   const canvas = page.locator('.viewer-host canvas');
@@ -380,11 +372,7 @@ test('switches a planar-face selection into an editable arc sketch', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Context Sketch Part');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
 
   const canvas = page.locator('.viewer-host canvas');
   const bounds = await canvas.boundingBox();
@@ -485,11 +473,7 @@ test('refuses suppression that would stale an attached sketch and allows pausing
   await page.goto('/');
   await page.getByLabel('Project name').fill('Stale Face Attachment');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
 
   const canvas = page.locator('.viewer-host canvas');
   const bounds = await canvas.boundingBox();
@@ -593,11 +577,7 @@ test('keeps face sketching available after a primitive direct edit', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Direct Edit Sketch Guard');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
 
   const canvas = page.locator('.viewer-host canvas');
   // Explicitly choose local face extrusion; every box side now defaults to resize.
@@ -1057,11 +1037,7 @@ test('infers and stores an additive extrude from exact overlap', async ({
   await page.getByLabel('Project name').fill('Stored Extrude Operation');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
 
   const canvas = page.locator('.viewer-host canvas');
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
@@ -1144,11 +1120,7 @@ test('the Edit Sketch offer does not outlive the mode it was made in', async ({
   await page.getByLabel('Project name').fill('Edit Sketch offer');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
 
   const canvas = page.locator('.viewer-host canvas');
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
@@ -1199,11 +1171,7 @@ test('fillets all twelve edges of a box in one exact feature', async ({
   await page.getByLabel('Project name').fill('All-edge Fillet');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
 
   await page.getByRole('button', { name: /^Fillet/ }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
@@ -1241,13 +1209,12 @@ test('radius drag resizes a cylinder after bottom adjustment and filleting', asy
   await page.getByLabel('Project name').fill('One Body Radius');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   // Stated rather than inherited: this test drags the radius by a fixed screen
   // distance and asserts where it lands, so it owns its starting size.
-  await inspector.getByLabel('Radius', { exact: true }).fill('14');
-  await inspector.getByLabel('Height', { exact: true }).fill('28');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '14', height: '28' }
+  });
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
   const canvas = page.locator('.viewer-host canvas');
@@ -1353,11 +1320,10 @@ test('keeps a two-rim fillet while editing a cylinder from 4.6 to 6.4 mm', async
   await page.getByLabel('Project name').fill('Filleted Cylinder Resize');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByLabel('Radius', { exact: true }).fill('4.6');
-  await inspector.getByLabel('Height', { exact: true }).fill('12');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '4.6', height: '12' }
+  });
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
   await page.getByRole('button', { name: /^Fillet/ }).click();
@@ -1434,11 +1400,10 @@ for (const modifier of [
       .fill(`${modifier.label} Cylinder Radius Drag`);
     await page.getByRole('button', { name: 'Create project' }).click();
 
-    await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
     const inspector = page.getByRole('region', { name: 'Feature inspector' });
-    await inspector.getByLabel('Radius', { exact: true }).fill('4.6');
-    await inspector.getByLabel('Height', { exact: true }).fill('12');
-    await inspector.getByRole('button', { name: /^Create/ }).click();
+    await createPrimitiveInPlace(page, 'cylinder', {
+      sizes: { radius: '4.6', height: '12' }
+    });
 
     await page
       .getByRole('button', { name: new RegExp(`^${modifier.label}`) })
@@ -1585,12 +1550,9 @@ test('preflights and splits a box into two live half bodies', async ({
   await page.getByLabel('Project name').fill('Split Halves');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Width (X)').fill('20');
-  await inspector.getByLabel('Depth (Y)').fill('20');
-  await inspector.getByLabel('Height (Z)').fill('20');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '20', depth: '20', height: '20' }
+  });
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
@@ -1640,11 +1602,7 @@ test('preflights and drills a through hole into the top face', async ({
   await page.getByLabel('Project name').fill('Drilled Block');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
 
   // U09: Hole runs in place. A face click fills its face (it does not open
   // the face's Offset card), the diameter goes on its chip's keypad, and
@@ -1722,11 +1680,7 @@ test('preflights and creates an exact open-top shell', async ({ page }) => {
   await page.getByLabel('Project name').fill('Open Top Shell');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
 
   // U09: Shell runs in place: click the opening, Done commits the checked
   // result.
@@ -1807,11 +1761,7 @@ for (const modifier of [
     await page.getByLabel('Project name').fill(`Multi-edge ${modifier.label}`);
     await page.getByRole('button', { name: 'Create project' }).click();
 
-    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-    await page
-      .getByRole('region', { name: 'Feature inspector' })
-      .getByRole('button', { name: /^Create/ })
-      .click();
+    await createPrimitiveInPlace(page, 'box');
 
     await shiftSelectTwoVisibleBoxEdges(page);
     await page
@@ -1862,9 +1812,8 @@ test('a refused fillet size marks the handle and says why in the card', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Refused fillet');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled({
     timeout: 30_000
   });
@@ -1912,11 +1861,7 @@ test('the armed fillet handle rounds every shift-selected edge, not just the las
   await page.getByLabel('Project name').fill('Handle multi edge');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
 
   await shiftSelectTwoVisibleBoxEdges(page);
   await expect(
@@ -2303,11 +2248,7 @@ test('grounds an AI fillet request onto every selected edge', async ({
   await page.getByLabel('Project name').fill('AI Selection Part');
   await page.getByRole('button', { name: 'Create project' }).click();
   await openAssistant(page);
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
 
   await page.getByRole('button', { name: /^Fillet/ }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
@@ -2405,13 +2346,9 @@ test('rejects a disconnected Union proposed by the assistant before commit', asy
   await openAssistant(page);
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Name').fill('Lower');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', { name: 'Lower' });
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Name').fill('Upper');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', { name: 'Upper' });
 
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
   const separateMove = page.getByRole('form', { name: 'Move controls' });
@@ -2607,11 +2544,7 @@ test('grounds all cylinder edges onto its two visible rims', async ({
   await page.getByLabel('Project name').fill('AI Cylinder Rims');
   await page.getByRole('button', { name: 'Create project' }).click();
   await openAssistant(page);
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'cylinder');
   // The document feature lands before its asynchronously derived B-rep and
   // topology. The assistant digest must be captured only after that geometry
   // is ready, especially on a slower single-worker CI runner.
@@ -2931,11 +2864,7 @@ test('archives a browser-generated STEP export and lists the stored file', async
   await page.goto('/');
   await page.getByLabel('Project name').fill('Archived Part');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
 
   const fileMenu = page.locator('details.file-menu');
@@ -2972,12 +2901,7 @@ test('models a parametric part and exports a true STEP file', async ({
   await expect(page.locator('.param-row')).toContainText('w');
 
   // Box driven by the parameter: 60 x 18 x 24 = 25920.
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page.getByLabel('Width (X)').fill('w * 2');
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box', { sizes: { width: 'w * 2' } });
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
@@ -3003,15 +2927,7 @@ test('models a parametric part and exports a true STEP file', async ({
   // refuses severing cuts instead of silently approximating them, so the old
   // r=14 setup (28-diameter cylinder centred at y=9 spans y −5..23 and severs
   // the box) now fails the build rather than warning about facets.
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByLabel('Radius', { exact: true })
-    .fill('6');
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'cylinder', { sizes: { radius: '6' } });
   await expect(
     page.locator('.feature-row-main', { hasText: 'Cylinder' })
   ).toBeVisible();
@@ -3164,12 +3080,10 @@ test('renames a parameter without stranding dependent expressions', async ({
   await page.getByLabel('New parameter expression').fill('width_x * 2');
   await page.getByRole('button', { name: 'Add parameter' }).click();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByLabel('Width (X)').fill('twice');
-  await inspector.getByLabel('Depth (Y)').fill('width_x');
-  await inspector.getByLabel('Height (Z)').fill('2');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: 'twice', depth: 'width_x', height: '2' }
+  });
 
   await page.getByRole('button', { name: 'Rename parameter width_x' }).click();
   const rename = page.getByRole('textbox', {
@@ -3233,11 +3147,7 @@ test('exports a 3MF package through the mesh export dialog', async ({
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
@@ -3298,18 +3208,12 @@ test('mesh export keeps the keyboard, its scope and its verdict together', async
   await page.goto('/');
   await page.getByLabel('Project name').fill('Export Scope');
   await page.getByRole('button', { name: 'Create project' }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  for (const name of ['Base', 'Boss']) {
-    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-    await inspector.getByLabel('Name').fill(name);
-    await inspector.getByRole('button', { name: /^Create/ }).click();
-    await expect(
-      page.locator('.feature-row-main', { hasText: name })
-    ).toBeVisible();
-  }
+  // Default names: a rename would add undo steps this spec counts.
+  await createPrimitiveInPlace(page, 'box');
+  await createPrimitiveInPlace(page, 'box');
   const featureRows = page.locator('.feature-row-main');
   await expect(featureRows).toHaveCount(2);
-  await page.locator('.feature-row-main', { hasText: 'Base' }).click();
+  await page.locator('.feature-row-main[title^="Box — "]').click();
   await expect(page.locator('.panel-body')).toContainText('volume', {
     ignoreCase: true
   });
@@ -3322,7 +3226,7 @@ test('mesh export keeps the keyboard, its scope and its verdict together', async
   await openExport();
   const dialog = page.getByRole('dialog', { name: /Export mesh/ });
   const scope = dialog.locator('.export-dialog-scope');
-  await expect(scope).toContainText('Exports Base ');
+  await expect(scope).toContainText('Exports Box 1 ');
 
   await dialog.getByRole('button', { name: /Check watertightness/ }).click();
   await expect(dialog.locator('.export-dialog-report')).toContainText(
@@ -3335,14 +3239,14 @@ test('mesh export keeps the keyboard, its scope and its verdict together', async
   // Undo behind the open dialog must not rewind the model.
   await page.keyboard.press('ControlOrMeta+z');
   await expect(featureRows).toHaveCount(2);
-  await expect(scope).toContainText('Exports Base ');
+  await expect(scope).toContainText('Exports Box 1 ');
 
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);
 
   // The same key closed the dialog and nothing else: Base is still the scope.
   await openExport();
-  await expect(scope).toContainText('Exports Base ');
+  await expect(scope).toContainText('Exports Box 1 ');
   // Focus lost to the page (a backdrop click) still closes on Escape.
   await page.evaluate(() => (document.activeElement as HTMLElement).blur());
   await page.keyboard.press('Escape');
@@ -3372,19 +3276,15 @@ test('rejects a disconnected Union and succeeds after the gap is closed', async 
   await page.getByRole('button', { name: 'Create project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Name').fill('Lower');
-  await inspector.getByLabel('Width (X)').fill('10');
-  await inspector.getByLabel('Depth (Y)').fill('10');
-  await inspector.getByLabel('Height (Z)').fill('10');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '10', depth: '10', height: '10' },
+    name: 'Lower'
+  });
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Name').fill('Upper');
-  await inspector.getByLabel('Width (X)').fill('10');
-  await inspector.getByLabel('Depth (Y)').fill('10');
-  await inspector.getByLabel('Height (Z)').fill('10');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '10', depth: '10', height: '10' },
+    name: 'Upper'
+  });
 
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
   const liftMove = page.getByRole('form', { name: 'Move controls' });
@@ -3435,11 +3335,7 @@ test('M opens the move gizmo overlay and applies an exact move', async ({
   await page.getByLabel('Project name').fill('Move Part');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
   // Single body: pressing M arms the gizmo flow directly.
@@ -3484,9 +3380,7 @@ test('opening a tool over an unapplied Move asks once and never stacks two cards
   await page.getByRole('button', { name: 'Create project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   for (const name of ['Lower', 'Upper']) {
-    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-    await inspector.getByLabel('Name').fill(name);
-    await inspector.getByRole('button', { name: /^Create/ }).click();
+    await createPrimitiveInPlace(page, 'box', { name: name });
   }
   await expect(page.locator('.feature-row')).toHaveCount(2);
 
@@ -3547,8 +3441,7 @@ test('opening a history editor preserves an unapplied Move until its choice is s
   await page.getByLabel('Project name').fill('Deferred History Edit');
   await page.getByRole('button', { name: 'Create project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box');
   // U09: the split is made in place (Right ghost plane slid to x = 5) and
   // keeps its default name, "Split".
   await page.getByRole('button', { name: /^Split/ }).click();
@@ -3654,10 +3547,10 @@ test('opening a primitive history editor settles an unapplied Move before changi
   await page.getByRole('button', { name: 'Create project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   for (const name of ['Original box', 'Other box']) {
-    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-    await inspector.getByLabel('Name', { exact: true }).fill(name);
-    await inspector.getByLabel('Width (X)').fill('10');
-    await inspector.getByRole('button', { name: /^Create/ }).click();
+    await createPrimitiveInPlace(page, 'box', {
+      sizes: { width: '10' },
+      name: name
+    });
     await expect(inspector).toHaveCount(0);
   }
   await expectBodyCount(page, 2);
@@ -3736,10 +3629,8 @@ test('opening Measure over an unapplied Move settles the card from the ruler and
   await page.goto('/');
   await page.getByLabel('Project name').fill('Deferred Measure');
   await page.getByRole('button', { name: 'Create project' }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
   for (let index = 0; index < 2; index += 1) {
-    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-    await inspector.getByRole('button', { name: /^Create/ }).click();
+    await createPrimitiveInPlace(page, 'box');
   }
   await expectBodyCount(page, 2);
   const move = page.getByRole('form', { name: 'Move controls' });
@@ -3801,15 +3692,12 @@ test('Remus resolves the former face-plane tangent-union refusal', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Refusal Copy');
   await page.getByRole('button', { name: 'Create project' }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
   // A box and the default cylinder, slid until its axis lies in the box's
   // y = 0 face plane. The previous kernel could not close this tangency;
   // Remus resolves it as an exact union, cylinder wall and all.
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByRole('button', { name: /^Create/ }).click();
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box');
+  await createPrimitiveInPlace(page, 'cylinder');
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
   const shift = page.getByRole('form', { name: 'Move controls' });
   await shift.getByLabel('Move X in mm').fill('15');
@@ -3835,15 +3723,11 @@ test('Remus resolves the former small-radius tangent-union fallback', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Tangent Union');
   await page.getByRole('button', { name: 'Create project' }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
   // A small cylinder with its axis in the box's y = 0 face plane used to
   // facet or fail. Remus keeps the same construction exact.
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByRole('button', { name: /^Create/ }).click();
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  await inspector.getByLabel('Radius').fill('6');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box');
+  await createPrimitiveInPlace(page, 'cylinder', { sizes: { radius: '6' } });
 
   // Moving along X keeps the axis in the y = 0 face plane.
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
@@ -3876,10 +3760,8 @@ test('the panel refuses a zero extrude and keeps a boolean name honest', async (
   // WF-10: a name nobody typed should say what the feature does. Switching the
   // operation used to leave "Union" on a subtract, so the history row, the body
   // and the panel heading all named an operation that never ran.
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByRole('button', { name: /^Create/ }).click();
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box');
+  await createPrimitiveInPlace(page, 'cylinder');
 
   // U09: each boolean is its own in-place command, titled for what it does,
   // so a subtract can no longer carry a union's name.
@@ -4045,12 +3927,8 @@ test('Move is one UI: the gizmo names the feature and picks the body', async ({
 
   // Two bodies and nothing selected — the case that used to open a different
   // Move UI from the one a selection would have opened (WF-07).
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Name').fill('Lower');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Name').fill('Upper');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', { name: 'Lower' });
+  await createPrimitiveInPlace(page, 'box', { name: 'Upper' });
   await page.keyboard.press('Escape');
 
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
@@ -4155,11 +4033,7 @@ test('dragging the move gizmo streams live values and commits what was dragged',
   await page.getByLabel('Project name').fill('Move Drag Stream');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
   const canvas = page.locator('.viewer-host canvas');
@@ -4499,11 +4373,7 @@ test('cancelling an export stops its archive upload', async ({ page }) => {
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await page.locator('.feature-row-main', { hasText: 'Box' }).click();
   await expect(page.locator('.panel-body')).toContainText('volume', {
     ignoreCase: true
@@ -4734,9 +4604,7 @@ test('sketches on the wall of a drag-style extrusion and on a hash-only face', a
   // Fuse a box into the plate: every face of a boolean result is hash-only.
   // That must not end the task — the sketch lands on a fixed plane at the
   // face, and the status says so instead of refusing.
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('contentinfo')).toContainText('Added box.');
   // U09: Union runs in place: two bodies, then Done.
   await page.getByRole('button', { name: /^Union \(U\)/ }).click();
@@ -4766,13 +4634,10 @@ test('a refused boolean never lands in history and says why in the form', async 
   await page.goto('/');
   await page.getByLabel('Project name').fill('Refused Boolean');
   await page.getByRole('button', { name: 'Create project' }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder');
   await expectBodyCount(page, 2);
 
   // Move the cylinder clear of the box: intersecting disjoint solids is an

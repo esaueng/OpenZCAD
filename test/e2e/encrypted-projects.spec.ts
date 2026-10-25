@@ -1,6 +1,11 @@
 import { withEncryptedProjectInfo } from '../../apps/web/worker/e2eeProjectDocuments';
 import { d1Database } from '../d1-sqlite';
-import { expect, stubApi, test } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  expect,
+  stubApi,
+  test
+} from './openzcad-fixtures';
 import {
   createE2eeServer,
   E2E_USER_ID,
@@ -118,11 +123,7 @@ test('creates, autosaves, reloads and saves an encrypted project', async ({
 
   await page.getByLabel('Project name').fill('Secret bracket');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(
     page.getByRole('status', { name: 'Saved', exact: true })
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });

@@ -27,11 +27,10 @@ import { ExprInput } from '../ExprInput';
 import { edgeModifierSliderRange } from '../../lib/edgeModifierEdit';
 import { useFieldAutoFocus } from './fieldAutoFocus';
 import { isPickListRow } from './pickListRow';
-import { PRIMITIVE_ANCHORS } from '../../lib/primitivePlacement';
 import {
-  primitiveGhostFor,
-  type PrimitiveGhost
-} from '../../lib/primitiveGhost';
+  PRIMITIVE_ANCHORS,
+  PRIMITIVE_FIELDS
+} from '../../lib/primitivePlacement';
 import { ownedTopologyName } from '../../lib/topologyLabels';
 import { TextObjectFields, type TextAttributes } from '../TextObjectFields';
 import {
@@ -245,53 +244,6 @@ function countError(
 // Primitive
 // ---------------------------------------------------------------------------
 
-/**
- * Starting sizes for a new primitive.
- *
- * The box is the part; everything round is a feature you add to it, and the
- * defaults have to be able to say that. A round primitive is therefore sized
- * to fit inside the box's smallest footprint dimension (18) with clearance on
- * both sides, which is also the condition its booleans need: measured against
- * this box, a cylinder unions exactly up to radius 8 and facets from 9, where
- * its diameter reaches the box's depth and goes tangent to both faces. The
- * old radius 14 was a diameter of 28 against a depth of 18, so the first union
- * a new user attempted could not succeed at ANY position — the two shapes were
- * simply the wrong sizes for each other.
- *
- * Heights run past the box's 24 so a new solid protrudes rather than hiding
- * inside it: a boolean between two bodies you cannot both see is not a first
- * thing to meet.
- */
-const PRIMITIVE_FIELDS: Record<
-  PrimitiveKind,
-  { key: string; label: string; initial: string }[]
-> = {
-  // Labelled by what the dimension IS, not by the document key that carries
-  // it. The keys are OCCT's makeBox(dx, dy, dz), so `depth` lands on Z — and Z
-  // is up here, which made "Depth (Z)" the upright size and "Height (Y)" a
-  // horizontal one, while the cylinder next door called its vertical extent
-  // Height. Keys are untouched; only the human contract changes.
-  box: [
-    { key: 'width', label: 'Width (X)', initial: '30' },
-    { key: 'height', label: 'Depth (Y)', initial: '18' },
-    { key: 'depth', label: 'Height (Z)', initial: '24' }
-  ],
-  cylinder: [
-    { key: 'radius', label: 'Radius', initial: '6' },
-    { key: 'height', label: 'Height', initial: '28' }
-  ],
-  sphere: [{ key: 'radius', label: 'Radius', initial: '6' }],
-  cone: [
-    { key: 'bottomRadius', label: 'Bottom radius', initial: '6' },
-    { key: 'topRadius', label: 'Top radius', initial: '2' },
-    { key: 'height', label: 'Height', initial: '28' }
-  ],
-  torus: [
-    { key: 'majorRadius', label: 'Ring radius', initial: '6' },
-    { key: 'minorRadius', label: 'Tube radius', initial: '2' }
-  ]
-};
-
 interface PrimitiveFormProps {
   kind: PrimitiveKind;
   scope: Record<string, number>;
@@ -312,12 +264,6 @@ interface PrimitiveFormProps {
     position: ParametricVector3
   ): void;
   onCancel?: () => void;
-  /**
-   * The card's values as a ghost, on every change that moves it, so the
-   * viewport can draw the primitive before Create; null while a field does
-   * not resolve to a size that builds, and when the card closes.
-   */
-  onGhostChange?: (ghost: PrimitiveGhost | null) => void;
 }
 
 const POSITION_AXES = ['x', 'y', 'z'] as const;
@@ -331,8 +277,7 @@ export function PrimitiveForm({
   initialPosition,
   submitLabel,
   onSubmit,
-  onCancel,
-  onGhostChange
+  onCancel
 }: PrimitiveFormProps) {
   const fields = PRIMITIVE_FIELDS[kind];
   const anchor = PRIMITIVE_ANCHORS[kind];
@@ -414,21 +359,6 @@ export function PrimitiveForm({
     POSITION_AXES.every(
       (axis) => position[axis].trim() === documentPosition[axis]
     );
-  // Keyed on the resolved numbers, so a keystroke that leaves the value the
-  // same (`30` → `30.`, `w` while w = 30) does not rebuild the ghost.
-  const ghost = onGhostChange
-    ? primitiveGhostFor(kind, values, position, scope, documentUnits)
-    : null;
-  const ghostKey = ghost ? JSON.stringify(ghost) : null;
-  const ghostCallback = useRef(onGhostChange);
-  ghostCallback.current = onGhostChange;
-  useEffect(() => {
-    ghostCallback.current?.(
-      ghostKey ? (JSON.parse(ghostKey) as PrimitiveGhost) : null
-    );
-  }, [ghostKey]);
-  // Create, Cancel and Escape all close the card: the ghost goes with it.
-  useEffect(() => () => ghostCallback.current?.(null), []);
 
   const canSubmit =
     !unchanged &&

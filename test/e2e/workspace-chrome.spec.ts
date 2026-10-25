@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import {
+  createPrimitiveInPlace,
   createProject,
   seedDismissedWorkspaceTour,
   seedOpenCommandFold,
@@ -44,11 +45,7 @@ test('View mode opens its standard views inside the window', async ({
   await seedDismissedWorkspaceTour(page);
   await seedOpenCommandFold(page);
   await createProject(page, 'Views panel');
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
   await page

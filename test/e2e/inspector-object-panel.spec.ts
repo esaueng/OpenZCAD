@@ -1,5 +1,11 @@
 import { DEFAULT_APP_SETTINGS } from '@openzcad/shared';
-import { createProject, expect, stubApi, test } from './openzcad-fixtures';
+import {
+  createProject,
+  expect,
+  stubApi,
+  test,
+  createPrimitiveInPlace
+} from './openzcad-fixtures';
 
 for (const directManipulation of [true, false]) {
   test(`a pick opens no card and History opens the feature with direct manipulation ${directManipulation ? 'on' : 'off'}`, async ({
@@ -29,12 +35,12 @@ for (const directManipulation of [true, false]) {
     });
     await createProject(page, 'Object inspector');
     await expect(page).toHaveTitle(/OpenZCAD/);
-    await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
     const inspector = page.getByRole('region', { name: 'Feature inspector' });
-    await inspector.getByLabel('Radius', { exact: true }).fill('14');
     const featureName = 'CylinderDefinition'.repeat(16);
-    await inspector.getByLabel('Name', { exact: true }).fill(featureName);
-    await inspector.getByRole('button', { name: /^Create/ }).click();
+    await createPrimitiveInPlace(page, 'cylinder', {
+      sizes: { radius: '14' },
+      name: featureName
+    });
     await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
     // An Objects row pick opens no card: the Selection card names the body.
     await page.locator('.body-row-main').first().click();

@@ -1,4 +1,5 @@
 import {
+  createPrimitiveInPlace,
   test,
   expect,
   stubApi,
@@ -17,11 +18,10 @@ for (const [tool, field] of [
     await page.goto('/');
     await page.getByLabel('Project name').fill('Edge form preview');
     await page.getByRole('button', { name: 'Create project' }).click();
-    await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
     const inspector = page.getByRole('region', { name: 'Feature inspector' });
-    await inspector.getByLabel('Radius', { exact: true }).fill('14');
-    await inspector.getByLabel('Height', { exact: true }).fill('28');
-    await inspector.getByRole('button', { name: /^Create/ }).click();
+    await createPrimitiveInPlace(page, 'cylinder', {
+      sizes: { radius: '14', height: '28' }
+    });
     await page.getByRole('button', { name: new RegExp(`^${tool}`) }).click();
     await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
     await inspector.getByLabel(field, { exact: true }).fill('1');
@@ -58,11 +58,10 @@ test('a fillet takes another edge after creation from its own form', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Fillet retarget');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByLabel('Radius', { exact: true }).fill('14');
-  await inspector.getByLabel('Height', { exact: true }).fill('28');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '14', height: '28' }
+  });
   await expect(page.locator('.feature-row')).toHaveCount(1);
 
   // One rim first.

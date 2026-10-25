@@ -11,8 +11,12 @@ import { axisDimensionLabel } from '../lib/primitiveDimensionLabel';
 import * as THREE from 'three';
 import type { HoleGhost } from '../lib/holeGhost';
 import { buildHoleGhostRig } from './viewer/holeGhostRig';
-import type { PrimitiveGhost } from '../lib/primitiveGhost';
-import { buildPrimitiveGhostRig } from './viewer/primitiveGhostRig';
+import {
+  framePlaneHit,
+  placementFrame,
+  principalFrameFor,
+  type PlacementFrame
+} from '../lib/inPlace/primitives';
 import { currentRenderProfile } from './viewer/renderProfile';
 import { createdBodiesToFrame, type AutoFrameRequest } from '../lib/autoFrame';
 import {
@@ -671,6 +675,17 @@ function buildRegionFollowerRig(
   });
 }
 
+/** U09: one frame of a primitive's footprint drag, in world space. */
+export interface FootprintGesture {
+  phase: 'move' | 'end';
+  /** The plane drawn on: a face's, or a principal plane's. */
+  frame: PlacementFrame;
+  start: { x: number; y: number; z: number };
+  end: { x: number; y: number; z: number };
+  /** False for a press that never travelled: a click. */
+  moved: boolean;
+}
+
 /** U09: one value's handle, as the in-place command hands it over. */
 export type CommandHandleView = (
   | {
@@ -1073,8 +1088,18 @@ export interface ModelViewerProps {
    * it exists. Null while no hole can be placed.
    */
   holeGhost?: HoleGhost | null;
-  /** The solid the open primitive card would create, drawn before Create. */
-  primitiveGhost?: PrimitiveGhost | null;
+  /**
+   * U09: a primitive placed by a press-drag. A press on a flat face of one of
+   * `bodyIds` draws on that face's plane, anywhere else on the ground (or
+   * the upright principal plane facing the view, when the ground is
+   * edge-on). The drag's outline is drawn at once; the exact solid follows.
+   */
+  footprintPicker?: {
+    shape: 'rectangle' | 'circle';
+    bodyIds: readonly string[];
+  } | null;
+  /** Each frame of a footprint drag, and its release. */
+  onFootprint?(gesture: FootprintGesture): void;
   /**
    * Committed R01 datum planes, drawn on the frames the exact build resolved.
    * Hidden, suppressed and unresolved datums are simply absent.
@@ -2066,7 +2091,8 @@ export function ModelViewer({
   onHoverRegion,
   planePickerArmed,
   holeGhost = null,
-  primitiveGhost = null,
+  footprintPicker = null,
+  onFootprint,
   datumPlanes,
   datumAxes,
   referenceImages,
@@ -2341,6 +2367,12 @@ export function ModelViewer({
   const curvePickerRigRef = useRef<ReturnType<
     typeof buildCurvePickerRig
   > | null>(null);
+  const footprintPickerRef = useRef(footprintPicker);
+  footprintPickerRef.current = footprintPicker;
+  const onFootprintRef = useRef(onFootprint);
+  onFootprintRef.current = onFootprint;
+  /** Drops a footprint drag in progress, as when its command goes away. */
+  const retireFootprintRef = useRef<(() => void) | null>(null);
   const onPickCurveRef = useRef(onPickCurve);
   onPickCurveRef.current = onPickCurve;
   const onCommandHandlePreviewRef = useRef(onCommandHandlePreview);
@@ -8606,6 +8638,11 @@ export function ModelViewer({
     }
 
     const handlePointerMove = (event: PointerEvent) => {
+      if (footprintDrag && event.pointerId === footprintDrag.pointerId) {
+        event.preventDefault();
+        moveFootprint(event);
+        return;
+      }
       const commandDrag = commandDragRef.current;
       const draggedRig = commandDrag
         ? commandRigsRef.current.get(commandDrag.valueId)?.rig
@@ -8731,6 +8768,164 @@ export function ModelViewer({
         cameraRig.pivotOn(result.hit.point);
       }
     }
+
+    // U09 footprint drag: the plane it draws on, where it started, and the
+    // outline drawn while the exact solid catches up.
+    let footprintDrag: {
+      pointerId: number;
+      frame: PlacementFrame;
+      start: THREE.Vector3;
+      end: THREE.Vector3;
+      startX: number;
+      startY: number;
+      moved: boolean;
+    } | null = null;
+    let footprintOutline: THREE.LineLoop | null = null;
+    const drawFootprintOutline = () => {
+      const drag = footprintDrag;
+      const shape = footprintPickerRef.current?.shape;
+      if (!drag || !shape) return;
+      const u = new THREE.Vector3(drag.frame.u.x, drag.frame.u.y, drag.frame.u.z);
+      const v = new THREE.Vector3(drag.frame.v.x, drag.frame.v.y, drag.frame.v.z);
+      const delta = drag.end.clone().sub(drag.start);
+      const along = delta.dot(u);
+      const across = delta.dot(v);
+      const points: THREE.Vector3[] = [];
+      if (shape === 'rectangle') {
+        points.push(
+          drag.start.clone(),
+          drag.start.clone().addScaledVector(u, along),
+          drag.start.clone().addScaledVector(u, along).addScaledVector(v, across),
+          drag.start.clone().addScaledVector(v, across)
+        );
+      } else {
+        const radius = Math.hypot(along, across);
+        for (let step = 0; step < 64; step += 1) {
+          const angle = (step / 64) * Math.PI * 2;
+          points.push(
+            drag.start
+              .clone()
+              .addScaledVector(u, Math.cos(angle) * radius)
+              .addScaledVector(v, Math.sin(angle) * radius)
+          );
+        }
+      }
+      if (!footprintOutline) {
+        footprintOutline = new THREE.LineLoop(
+          new THREE.BufferGeometry(),
+          new THREE.LineBasicMaterial({
+            color: SKETCH_COLOR,
+            depthTest: false,
+            transparent: true
+          })
+        );
+        footprintOutline.renderOrder = 999;
+        context.scene.add(footprintOutline);
+      }
+      footprintOutline.geometry.dispose();
+      footprintOutline.geometry = new THREE.BufferGeometry().setFromPoints(points);
+      requestRender();
+    };
+    const clearFootprintOutline = () => {
+      if (!footprintOutline) return;
+      context.scene.remove(footprintOutline);
+      footprintOutline.geometry.dispose();
+      (footprintOutline.material as THREE.Material).dispose();
+      footprintOutline = null;
+      requestRender();
+    };
+    const footprintGesture = (
+      drag: NonNullable<typeof footprintDrag>,
+      phase: FootprintGesture['phase']
+    ): FootprintGesture => ({
+      phase,
+      frame: drag.frame,
+      start: { x: drag.start.x, y: drag.start.y, z: drag.start.z },
+      end: { x: drag.end.x, y: drag.end.y, z: drag.end.z },
+      moved: drag.moved
+    });
+    /**
+     * Starts a footprint where the press lands: on a flat face of a body the
+     * command may stand on, else on the principal plane facing the view.
+     */
+    const beginFootprint = (event: PointerEvent): boolean => {
+      const picker = footprintPickerRef.current;
+      if (!picker) return false;
+      const candidate = pick(event);
+      setRayFromEvent(event);
+      const ray = context.raycaster.ray;
+      let frame: PlacementFrame | null = null;
+      let start: THREE.Vector3 | null = null;
+      const selection = candidate?.kind === 'face' ? candidate.selection : null;
+      if (selection && picker.bodyIds.includes(selection.bodyId)) {
+        const face = bodiesRef.current
+          .find((body) => body.bodyId === selection.bodyId)
+          ?.topology?.faces.find(
+            (entry) => entry.topologyId === selection.topologyId
+          );
+        const geometry = face?.geometry;
+        const on = geometry?.centroid ?? geometry?.center;
+        if (geometry?.surfaceType === 'plane' && geometry.normal && on) {
+          frame = placementFrame(geometry.normal);
+          // On the face's own plane, not the mesh's triangle under it.
+          const hit = framePlaneHit(frame, on, ray.origin, ray.direction);
+          start = hit ? new THREE.Vector3(hit.x, hit.y, hit.z) : null;
+        }
+      }
+      if (!frame || !start) {
+        frame = principalFrameFor(ray.direction);
+        const hit = framePlaneHit(
+          frame,
+          { x: 0, y: 0, z: 0 },
+          ray.origin,
+          ray.direction
+        );
+        start = hit ? new THREE.Vector3(hit.x, hit.y, hit.z) : null;
+      }
+      if (!start) return false;
+      footprintDrag = {
+        pointerId: event.pointerId,
+        frame,
+        start,
+        end: start.clone(),
+        startX: event.clientX,
+        startY: event.clientY,
+        moved: false
+      };
+      return true;
+    };
+    const moveFootprint = (event: PointerEvent) => {
+      const drag = footprintDrag;
+      if (!drag) return;
+      setRayFromEvent(event);
+      const ray = context.raycaster.ray;
+      const hit = framePlaneHit(drag.frame, drag.start, ray.origin, ray.direction);
+      if (hit) drag.end.set(hit.x, hit.y, hit.z);
+      if (
+        !drag.moved &&
+        Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) > 4
+      ) {
+        drag.moved = true;
+      }
+      if (!drag.moved) return;
+      drawFootprintOutline();
+      onFootprintRef.current?.(footprintGesture(drag, 'move'));
+    };
+    const endFootprint = (event: PointerEvent, report: boolean) => {
+      const drag = footprintDrag;
+      if (!drag) return;
+      footprintDrag = null;
+      clearFootprintOutline();
+      gestures.release(event, null);
+      if (report) onFootprintRef.current?.(footprintGesture(drag, 'end'));
+    };
+    retireFootprintRef.current = () => {
+      const drag = footprintDrag;
+      if (!drag) return;
+      footprintDrag = null;
+      clearFootprintOutline();
+      gestures.release(drag.pointerId, null);
+    };
 
     const handlePointerDown = (event: PointerEvent) => {
       if (
@@ -8995,6 +9190,13 @@ export function ModelViewer({
           return;
         }
       }
+      // U09: a primitive's footprint. Its arrows above take the press first,
+      // so a press anywhere else draws a new footprint.
+      if (event.button === 0 && beginFootprint(event)) {
+        gestures.capture(event, null);
+        event.preventDefault();
+        return;
+      }
       const axisPickerRig = axisPickerRigRef.current;
       if (axisPickerRig && event.button === 0) {
         // A rig armed since the last render has no world matrices yet.
@@ -9225,6 +9427,11 @@ export function ModelViewer({
           onCommandHandleReleaseRef.current?.(commandDrag.valueId, rig.value());
         }
         requestRender();
+        return;
+      }
+      if (footprintDrag && event.pointerId === footprintDrag.pointerId) {
+        moveFootprint(event);
+        endFootprint(event, true);
         return;
       }
       if (event.pointerId === shiftOrbitPointerId) {
@@ -9846,6 +10053,10 @@ export function ModelViewer({
         return;
       }
       pendingHoverEvent = null;
+      // An abandoned footprint keeps what it drew, as a release would.
+      if (footprintDrag && event.pointerId === footprintDrag.pointerId) {
+        endFootprint(event, true);
+      }
       if (event.pointerId === lockedHandlePointerId) {
         lockedHandlePointerId = null;
         gestures.release(event, null);
@@ -12972,27 +13183,11 @@ export function ModelViewer({
     };
   }, [holeGhost]);
 
-  // The open Box/Cylinder/… card's solid (viewer/primitiveGhostRig), three
-  // geometry rebuilt per value change — no kernel call per keystroke.
+  // A footprint drag outlives no command: one canceled under the pointer
+  // lets go, and draws nothing more.
   useEffect(() => {
-    const context = contextRef.current;
-    if (!context || !primitiveGhost) {
-      return;
-    }
-    const rig = buildPrimitiveGhostRig(primitiveGhost, SKETCH_COLOR);
-    context.scene.add(rig.group);
-    const canvas = context.renderer.domElement;
-    if (E2E_CANVAS_HOOKS_ENABLED) {
-      canvas.dataset.e2ePrimitiveGhost = JSON.stringify(primitiveGhost);
-    }
-    context.requestRender();
-    return () => {
-      context.scene.remove(rig.group);
-      rig.dispose();
-      delete canvas.dataset.e2ePrimitiveGhost;
-      context.requestRender();
-    };
-  }, [primitiveGhost]);
+    if (!footprintPicker) retireFootprintRef.current?.();
+  }, [footprintPicker]);
 
   // The viewport renders on demand, so a typed offset has to ask for the
   // frame that shows it; without this the ghosts only move on the next

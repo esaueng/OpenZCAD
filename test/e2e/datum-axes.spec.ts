@@ -1,6 +1,7 @@
 import type { Locator, Page } from '@playwright/test';
 import {
   clickWorldPoint,
+  createPrimitiveInPlace,
   enterCommandValue,
   expect,
   expectBodyCount,
@@ -268,11 +269,9 @@ test('datum axes drive a revolve, a rotate about axis and a circular pattern', a
   await expect.poll(async () => (await drawnAxes(canvas)).length).toBe(2);
 
   // A 2 mm block turned half a turn about Axis 2 lands at x 18..20.
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Width (X)').fill('2');
-  await inspector.getByLabel('Depth (Y)').fill('2');
-  await inspector.getByLabel('Height (Z)').fill('2');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '2', depth: '2', height: '2' }
+  });
   await expectBodyCount(page, 2);
   // U09: Rotate about axis runs in place: the body, then a click on the
   // Axis 2 line (x = 10, vertical), then the angle on its chip's keypad.
