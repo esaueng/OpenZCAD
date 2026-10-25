@@ -38,16 +38,24 @@ describe('required validation gate', () => {
   });
 
   it('prepares cold Git evidence without bypassing offline or stale-pin assertions', () => {
-    const result = spawnSync('python3', ['scripts/test-fleet-test-fixtures.py'], {
-      encoding: 'utf8'
-    });
+    const result = spawnSync(
+      'python3',
+      ['scripts/test-fleet-test-fixtures.py'],
+      {
+        encoding: 'utf8'
+      }
+    );
     expect(result.status, result.stderr).toBe(0);
   });
   const caller = readFileSync('.github/workflows/ci.yml', 'utf8');
   const ci = workflow;
 
   it('keeps the immutable runner policy identical to the reviewed source', () => {
-    const pinned = execFileSync('git', ['show', `${FLEET_CI_PIN}:${FLEET_CI_PATH}`], {encoding:'utf8'});
+    const pinned = execFileSync(
+      'git',
+      ['show', `${FLEET_CI_PIN}:${FLEET_CI_PATH}`],
+      { encoding: 'utf8' }
+    );
     expect(
       pinned,
       `Edit a new versioned fleet-ci file, not ${FLEET_CI_PATH}; see docs/runner-routing.md.`
@@ -59,7 +67,9 @@ describe('required validation gate', () => {
       /uses: esaueng\/OpenZCAD\/\.github\/workflows\/fleet-ci(?:-v\d+)?\.yml@[0-9a-f]{40}\n/
     );
     expect(caller).not.toMatch(/secrets: inherit|runs-on:/);
-    expect(caller).toContain('      contents: read\n      pull-requests: read\n');
+    expect(caller).toContain(
+      '      contents: read\n      pull-requests: read\n'
+    );
     expect(ci).toContain(
       'needs: [queue-trust, quality, unit, validation]\n    if: always()'
     );
@@ -95,7 +105,7 @@ describe('required validation gate', () => {
     }
   );
 
-  it('starts pull-request shards after quality and queue shards at once', () => {
+  it('starts pull-request shards beside quality and runs none for queue candidates', () => {
     const job = (name: string) => {
       const start = ci.indexOf(`\n  ${name}:\n`);
       expect(start).toBeGreaterThan(-1);
@@ -104,10 +114,19 @@ describe('required validation gate', () => {
     };
     const direct = job('e2e-tests');
     const pr = job('e2e-tests-pr');
-    expect(direct).toContain("if: ${{ !cancelled() && (github.event_name != 'pull_request') }}\n");
+    // Auto-merge enqueues a PR only once `checks / e2e` passed on its head, so
+    // queue candidates run no shards; dispatches still run the direct set.
+    expect(direct).toContain(
+      "if: ${{ !cancelled() && github.event_name != 'pull_request' && github.event_name != 'merge_group' }}\n"
+    );
     expect(direct).toContain('needs: queue-trust\n');
-    expect(pr).toContain("if: ${{ !cancelled() && needs.quality.result == 'success' && (github.event_name == 'pull_request') }}\n");
-    expect(pr).toContain('needs: [queue-trust, quality]\n');
+    // Pull-request shards no longer wait for lint and typecheck: on the Team
+    // plan's 60 runners the wait cost more than the runners it saved.
+    expect(pr).toContain(
+      "if: ${{ !cancelled() && (github.event_name == 'pull_request') }}\n"
+    );
+    expect(pr).toContain('needs: queue-trust\n');
+    expect(pr).not.toContain('quality');
     // Both shard sets run the same matrix and steps, not drifting copies.
     expect(direct).toContain('strategy: &e2e-strategy\n');
     expect(direct).toContain('steps: &e2e-steps\n');
@@ -119,24 +138,31 @@ describe('required validation gate', () => {
   });
 
   it.each([
-    ['success', 'skipped', 0],
-    ['skipped', 'success', 0],
-    ['skipped', 'skipped', 1],
-    ['failure', 'skipped', 1],
-    ['cancelled', 'skipped', 1],
-    ['skipped', 'failure', 1],
-    ['skipped', 'cancelled', 1],
-    ['success', 'success', 1],
-    ['success', 'failure', 1]
+    ['pull_request', 'skipped', 'success', 0],
+    ['pull_request', 'skipped', 'skipped', 1],
+    ['pull_request', 'skipped', 'failure', 1],
+    ['pull_request', 'skipped', 'cancelled', 1],
+    ['pull_request', 'success', 'success', 1],
+    ['pull_request', 'success', 'failure', 1],
+    ['workflow_dispatch', 'success', 'skipped', 0],
+    ['workflow_dispatch', 'skipped', 'skipped', 1],
+    ['workflow_dispatch', 'failure', 'skipped', 1],
+    ['workflow_dispatch', 'cancelled', 'skipped', 1],
+    ['merge_group', 'skipped', 'skipped', 0],
+    ['merge_group', 'failure', 'skipped', 1],
+    ['merge_group', 'cancelled', 'skipped', 1],
+    ['merge_group', 'skipped', 'failure', 1],
+    ['', 'skipped', 'skipped', 1]
   ])(
-    'requires one green shard set: direct %s, pull request %s',
-    (direct, pr, status) => {
+    'requires one green shard set on %s: direct %s, pull request %s',
+    (event, direct, pr, status) => {
       const result = spawnSync(
         'bash',
         ['-e', '-c', stepScript('Require one green shard set', ci)],
         {
           env: {
             ...process.env,
+            EVENT_NAME: String(event),
             DIRECT_RESULT: String(direct),
             PR_RESULT: String(pr)
           }
@@ -166,16 +192,28 @@ describe('required validation gate', () => {
 
 describe('routing fixture deadlines', () => {
   let evidence: {
-    control: { exit_code: number; five_second_timeout: boolean; fetches: number };
-    prepared: { exit_code: number; five_second_timeout: boolean; fetches: number };
+    control: {
+      exit_code: number;
+      five_second_timeout: boolean;
+      fetches: number;
+    };
+    prepared: {
+      exit_code: number;
+      five_second_timeout: boolean;
+      fetches: number;
+    };
     fixture_delay_seconds: number;
   };
 
   beforeAll(() => {
     evidence = JSON.parse(
-      execFileSync('python3', ['scripts/test-fleet-test-fixtures.py', '--deadline-evidence'], {
-        encoding: 'utf8'
-      })
+      execFileSync(
+        'python3',
+        ['scripts/test-fleet-test-fixtures.py', '--deadline-evidence'],
+        {
+          encoding: 'utf8'
+        }
+      )
     ) as typeof evidence;
   });
 

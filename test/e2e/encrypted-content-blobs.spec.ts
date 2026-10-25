@@ -224,6 +224,136 @@ test('imports a STEP file into an encrypted project and resolves it in a fresh b
 });
 
 /**
+ * ADR-024 Phase 4, slice 4-8: Duplicate on the shelf copies an end-to-end
+ * encrypted project in the browser. The page decrypts the verified head,
+ * builds the copy with the ordinary builders and writes its first version
+ * under a new MLS group, naming the source's blob with the same id and key;
+ * the account copies the blob's ciphertext byte for byte, so nothing is
+ * uploaded or encrypted again. A fresh browser of the same device, holding
+ * no copy of the file, opens the copy and rebuilds its import from the
+ * copy's own blob.
+ */
+test('duplicates an encrypted project and opens the copy in a fresh browser', async ({
+  page,
+  browser
+}) => {
+  test.setTimeout(180_000);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const uploads: string[] = [];
+  const server = createE2eeServer({ projectsEnabled: true });
+  await serveAccount(page, server);
+
+  await page.goto('/');
+  const seeded = await seedE2eeDevice(page, server);
+  const settings = await openEncryptionSettings(page);
+  const toggle = settings.getByRole('checkbox', {
+    name: 'Encrypt new projects'
+  });
+  await expect(toggle).toBeEnabled();
+  await toggle.click();
+  await expect(toggle).toBeChecked();
+  await page.keyboard.press('Escape');
+  await expect(settings).toHaveCount(0);
+
+  await page.getByLabel('Project name').fill('Secret original');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
+    name: 'secret-cube.step',
+    mimeType: 'application/step',
+    buffer: STEP
+  });
+  await expectBodyCount(page, 1);
+  await expect(
+    page.getByRole('status', { name: 'Saved', exact: true })
+  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  await expect
+    .poll(() => count(server, 'SELECT COUNT(*) AS n FROM e2ee_version_blobs'), {
+      timeout: SYNC_BUDGET_MS
+    })
+    .toBeGreaterThan(0);
+  const { project_id: sourceId, blob_id: blobId } = server.db
+    .prepare(
+      "SELECT project_id, blob_id FROM e2ee_content_blobs WHERE kind = 'import-source'"
+    )
+    .get() as { project_id: string; blob_id: string };
+
+  await page.getByTitle('Back to projects').click();
+  // Leaving publishes shelf thumbnails; the import is never stored again.
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname;
+    if (request.method() === 'POST' && path.endsWith('/blobs/uploads')) {
+      const { kind } = request.postDataJSON() as { kind: string };
+      if (kind !== 'thumbnail') uploads.push(`${kind} ${path}`);
+    }
+  });
+  await page
+    .getByRole('button', { name: 'Actions for Secret original', exact: true })
+    .click();
+  await page.getByRole('menuitem', { name: 'Duplicate', exact: true }).click();
+  await expect(
+    page.locator('.start-tile-open', { hasText: 'Secret original (copy)' })
+  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  const copies = server.db
+    .prepare(
+      `SELECT project_id, object_key FROM e2ee_content_blobs
+       WHERE blob_id = ? ORDER BY project_id = ? DESC`
+    )
+    .all(blobId, sourceId) as { project_id: string; object_key: string }[];
+  expect(copies).toHaveLength(2);
+  const copyId = copies[1]!.project_id;
+  expect(copyId).not.toBe(sourceId);
+  // Byte for byte the source's ciphertext, uploaded by nobody.
+  expect(Buffer.from(server.objects.get(copies[1]!.object_key)!)).toEqual(
+    Buffer.from(server.objects.get(copies[0]!.object_key)!)
+  );
+  expect(uploads).toEqual([]);
+  // Still ciphertext only: neither the file nor the names.
+  const stored = [
+    JSON.stringify(server.db.prepare('SELECT * FROM projects').all()),
+    JSON.stringify(
+      server.db.prepare('SELECT * FROM e2ee_project_envelopes').all()
+    ),
+    ...[...server.objects.values()].map((bytes) =>
+      Buffer.from(bytes).toString('latin1')
+    )
+  ].join('\n');
+  expect(stored).not.toContain('Secret original');
+  expect(stored).not.toContain('ISO-10303-21');
+
+  // A fresh browser of the same device holds no copy of the file.
+  const fresh = await browser.newContext();
+  try {
+    const second = await fresh.newPage();
+    second.on('pageerror', (error) => errors.push(error.message));
+    const blobReads: string[] = [];
+    second.on('request', (request) => {
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith(`/blobs/${blobId}`)) blobReads.push(path);
+    });
+    await serveAccount(second, server);
+    await second.goto('/');
+    await writeDevice(second, seeded.device);
+    await second.reload();
+    expect(await holdsSource(second)).toBe(false);
+    const card = second.locator('.start-tile-project', {
+      hasText: 'Secret original (copy)'
+    });
+    await expect(card).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    await card.locator('.start-tile-open').click();
+    await expectBodyCount(second, 1);
+    // The import rebuilt from the copy's own blob.
+    expect(blobReads).toEqual([
+      `/api/e2ee/projects/${encodeURIComponent(copyId)}/blobs/${blobId}`
+    ]);
+    await expect(second.getByText(/could not be fetched/)).toHaveCount(0);
+  } finally {
+    await fresh.close();
+  }
+  expect(errors).toEqual([]);
+});
+
+/**
  * ADR-024 Phase 4, slice 4-7: leaving an encrypted project publishes its
  * shelf thumbnail as an encrypted thumbnail blob named by a new project
  * info, never an artifact, and a fresh browser of the same device, holding

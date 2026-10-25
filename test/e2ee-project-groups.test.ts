@@ -1033,12 +1033,31 @@ describe('solo MLS groups', () => {
     expect(
       (await srv.call('GET', `/api/e2ee/projects/proj_missing/keys`)).status
     ).toBe(404);
-    // A trashed project is not served.
+    // A trashed project is read by its owner, as in plaintext (slice
+    // 4-8), and written to by nobody.
     srv.db
       .prepare("UPDATE projects SET status = 'deleted' WHERE id = ?")
       .run(encrypted);
     expect(
       (await srv.call('GET', `/api/e2ee/projects/${encrypted}/keys`)).status
+    ).toBe(200);
+    expect(
+      (
+        await srv.call(
+          'POST',
+          `/api/e2ee/projects/${encrypted}/mls/group-info`,
+          {
+            body: {}
+          }
+        )
+      ).status
+    ).toBe(404);
+    expect(
+      (
+        await srv.call('GET', `/api/e2ee/projects/${encrypted}/keys`, {
+          user: 'user_other'
+        })
+      ).status
     ).toBe(404);
 
     // Without E2EE_PROJECTS_ENABLED (or the key routes) nothing opens.

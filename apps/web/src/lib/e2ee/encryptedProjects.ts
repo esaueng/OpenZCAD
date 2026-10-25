@@ -38,6 +38,7 @@ import { createE2eeApi } from './e2eeApi';
 import {
   E2EE_KEYS_LOCKED_CODE,
   createEncryptedProjectStore,
+  type EncryptedCopyRequest,
   type EncryptedProjectStore,
   type EncryptedProjectWarning
 } from './encryptedProjectStore';
@@ -289,6 +290,16 @@ export async function createEncryptedProject(
   request: CreateProjectRequest
 ): Promise<CreateProjectResponse> {
   return (await encryptedProjectStore()).createProject(request);
+}
+
+/**
+ * Stores a copy or branch of an encrypted project the page built from its
+ * verified source (slice 4-8): the account copies its files byte for byte.
+ */
+export async function copyEncryptedProject(
+  request: EncryptedCopyRequest
+): Promise<CreateProjectResponse> {
+  return (await encryptedProjectStore()).copyProject(request);
 }
 
 /** Decrypted names by project id; a name that fails to verify is left out. */

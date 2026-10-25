@@ -159,7 +159,34 @@ export interface E2eeCreateProjectMetadata {
   group: E2eeCreateProjectGroupRequest;
   version: E2eeVersionUpload;
   info: E2eeProjectEnvelopeUpload;
+  /** A copy or branch of another encrypted project (slice 4-8). */
+  copyFrom?: E2eeCopyFrom;
+  /** A device project saved to the account (slice 4-8; decision D2). */
+  adoption?: E2eeAdoption;
 }
+
+/**
+ * The source of an encrypted copy (ADR-024 Phase 4, slice 4-8). The Worker
+ * copies each listed content blob's object byte for byte, under the same
+ * blob id, into the new project; the copy's first version and project info
+ * carry the same blob ids and keys, so nothing is encrypted again. Every
+ * listed blob must be a committed blob of a source the caller owns, and
+ * named by the new version's or project info's header.
+ */
+export interface E2eeCopyFrom {
+  projectId: string;
+  blobIds: string[];
+  /** A branch: the source's named save it starts from. */
+  revisionId?: string;
+}
+
+/** The device project id an encrypted adoption binds, as plaintext does. */
+export interface E2eeAdoption {
+  localProjectId: string;
+}
+
+/** The most blobs one copy may list: imports, pictures, a thumbnail, exports. */
+export const E2EE_MAX_COPY_BLOBS = 1_200;
 
 /** One version log record, as `verifyVersionLog` takes it. */
 export interface E2eeVersionLogEntry {

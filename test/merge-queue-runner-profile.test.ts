@@ -3,27 +3,26 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { expect, it } from 'vitest';
 
-const workflow = readFileSync('.github/workflows/fleet-ci-v2.yml', 'utf8');
+import { FLEET_CI_PATH } from './fleet-workflow';
+
+const workflow = readFileSync(FLEET_CI_PATH, 'utf8');
 const alignment =
   '          CI_MEMORY=$((CI_MEMORY / $(getconf PAGESIZE) * $(getconf PAGESIZE)))\n';
 
-it('preserves every reviewed queue workflow byte outside the approved profile', () => {
+it('keeps the reviewed runner isolation step byte for byte', () => {
   expect(workflow.split(alignment)).toHaveLength(2);
-  const previous = workflow
-    .replace(
-      'ci-server-jane-1|ci-server-jane-2|ci-server-jane-3)',
-      'ci-server-jane-1|ci-server-jane-2)'
-    )
-    .replace('CI_MEMORY=5000000000', 'CI_MEMORY=6442450944')
-    .replace(alignment, '')
-    .replace('labels: ci-server-jane-5gb\n', 'labels: ci-server-jane\n')
-    .replaceAll('"labels":"ci-server-jane-5gb"', '"labels":"ci-server-jane"');
-  // Digest of the complete reviewed v2 callee in e3248bad. Keeping the
-  // baseline here also verifies shallow CI checkouts without fetching a PR.
-  // Only the explicit resource profile and selector literals can differ.
-  expect(createHash('sha256').update(previous).digest('hex')).toBe(
-    'bc1137220e6e4b943c8a944fc5b73f6f5f24b2011cad02fd1247d1c842026a5e'
+  const isolation = workflow.match(
+    /^ {6}- &fleet-isolation\n[\s\S]*?(?=^ {6}- |^ {2}[\w-]+:)/m
+  )![0];
+  // Digest of the isolation step in the reviewed v2 callee (6cd1c223), whose
+  // whole-file digest against e3248bad pinned the three-slot profile. Later
+  // callees change application steps only; scripts/test-merge-queue-routing.py
+  // holds every other job to the reviewed baseline plus its listed edits.
+  expect(createHash('sha256').update(isolation).digest('hex')).toBe(
+    '5cefec73a90d616050ae04e3d56d233952ea40eb17bc34e70fb3d4c6fbdc9b0c'
   );
+  expect(workflow).toContain('labels: ci-server-jane-5gb\n');
+  expect(workflow).not.toContain('"labels":"ci-server-jane"');
 });
 
 const profile = workflow.match(/case "\$RUNNER_NAME" in\n[\s\S]*?\besac/)![0];
