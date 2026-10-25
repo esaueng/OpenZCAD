@@ -656,6 +656,130 @@ describe('removing a device', () => {
     expect(ready(await loadEncryption(tablet.ctx)).unlocked).toBe(true);
   });
 
+  /**
+   * A plaintext project staged for encryption (slice 7-1) by `deviceId`:
+   * still format 1, so no revocation cutoff names it. `stageInfo` has that
+   * device sign its staged project info, which the cutover turns into the
+   * encrypted project's.
+   */
+  function stagedProject(srv: Server, deviceId: string) {
+    const now = '2026-10-25T00:00:00.000Z';
+    srv.db
+      .prepare(
+        `INSERT INTO projects (id, user_id, name, document_json,
+           document_version, updated_at, storage_format)
+         VALUES ('proj_staged', ?, '', '{}', 1, ?, 1)`
+      )
+      .run(USER, now);
+    srv.db
+      .prepare(
+        `INSERT INTO e2ee_project_migrations (project_id, direction, state,
+           owner_user_id, device_id, lease_id, lease_expires_at,
+           source_version, started_at, updated_at)
+         VALUES ('proj_staged', 'encrypt', 'staging', ?, ?, ?, ?, 1, ?, ?)`
+      )
+      .run(USER, deviceId, 'l'.repeat(43), Date.now() + 60_000, now, now);
+    return {
+      stageInfo: () =>
+        srv.db
+          .prepare(
+            `INSERT INTO e2ee_project_envelopes (project_id, kind, scope,
+               sequence, key_epoch, envelope, wrapped_version_key, signature,
+               signer_device_id, updated_at)
+             VALUES ('proj_staged', 'project-info', '', 1, 0, 'e', ?, ?, ?, ?)`
+          )
+          .run('w'.repeat(55), 's'.repeat(98), deviceId, now),
+      setState: (state: string, storageFormat: 1 | 2) => {
+        srv.db
+          .prepare(
+            `UPDATE e2ee_project_migrations
+             SET state = ?, lease_id = NULL, lease_expires_at = NULL
+             WHERE project_id = 'proj_staged'`
+          )
+          .run(state);
+        srv.db
+          .prepare(
+            `UPDATE projects SET storage_format = ? WHERE id = 'proj_staged'`
+          )
+          .run(storageFormat);
+      }
+    };
+  }
+
+  it('waits while the device signed a project staged for encryption (#914 review)', async () => {
+    const srv = server();
+    const { recovery, laptop } = await setUp(srv);
+    const phone = await enrolled(srv, recovery.secret, 'Phone');
+    const tablet = await enrolled(srv, recovery.secret, 'Tablet');
+    const phoneId = phone.account.device!.deviceId;
+    const staging = stagedProject(srv, phoneId);
+    const entries = () =>
+      count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_device_list_entries');
+    const remove = async (deviceId: string) =>
+      removeDevice(
+        laptop,
+        ready(await loadEncryption(laptop)),
+        deviceId,
+        recovery.secret
+      );
+    const before = entries();
+    // The phone stages the info between the check and the append's batch:
+    // the batch's fence refuses it.
+    srv.beforeWrite = async (sql) => {
+      if (!sql.includes('INSERT INTO e2ee_device_list_entries')) return;
+      srv.beforeWrite = undefined;
+      staging.stageInfo();
+    };
+    expect((await refusal(remove(phoneId))).code).toBe(
+      'E2EE_DEVICE_SIGNED_PROJECTS'
+    );
+    expect(srv.beforeWrite).toBeUndefined();
+    expect(entries()).toBe(before);
+    // Staged before the request: the check refuses it.
+    expect((await refusal(remove(phoneId))).code).toBe(
+      'E2EE_DEVICE_SIGNED_PROJECTS'
+    );
+    expect(entries()).toBe(before);
+    // A device that signed nothing staged is removed as before.
+    ready(await remove(tablet.account.device!.deviceId));
+    expect(entries()).toBe(before + 1);
+    // An abandoned staging is never cut over: its leftovers hold nothing up.
+    staging.setState('abandoned', 1);
+    ready(await remove(phoneId));
+    expect(entries()).toBe(before + 2);
+  });
+
+  it('signs cutoffs again when a staging cuts over during the removal (#914 review)', async () => {
+    const srv = server();
+    const { recovery, laptop } = await setUp(srv);
+    const phone = await enrolled(srv, recovery.secret, 'Phone');
+    const phoneId = phone.account.device!.deviceId;
+    const staging = stagedProject(srv, phoneId);
+    const entries = () =>
+      count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_device_list_entries');
+    const before = entries();
+    // Checked with nothing staged and no encrypted project to name; then,
+    // before the append's batch, the phone stages its info and the cutover
+    // makes the project encrypted. No cutoff names it: nothing lands.
+    srv.beforeWrite = async (sql) => {
+      if (!sql.includes('INSERT INTO e2ee_device_list_entries')) return;
+      srv.beforeWrite = undefined;
+      staging.stageInfo();
+      staging.setState('cutover', 2);
+    };
+    const refused = await refusal(
+      removeDevice(
+        laptop,
+        ready(await loadEncryption(laptop)),
+        phoneId,
+        recovery.secret
+      )
+    );
+    expect(srv.beforeWrite).toBeUndefined();
+    expect(refused.code).toBe('E2EE_CUTOFFS_INCOMPLETE');
+    expect(entries()).toBe(before);
+  });
+
   it('needs the recovery key and never removes this device', async () => {
     const srv = server();
     const { recovery, laptop } = await setUp(srv);

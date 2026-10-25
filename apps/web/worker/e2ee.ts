@@ -945,18 +945,14 @@ async function handleReplaceIdentity(
     }
     throw error;
   }
-  const signerFence = await projectSignerFence(
-    db,
-    userId,
-    [
-      ...removedDevices(oldList.devices, list.head.devices),
-      // Devices already revoked in this generation: their cutoffs name this
-      // generation's list, which the new genesis no longer carries.
-      ...oldList.revoked
-        .filter((revoked) => revoked.kind === 'device')
-        .map((revoked) => revoked.id)
-    ]
-  );
+  const signerFence = await projectSignerFence(db, userId, [
+    ...removedDevices(oldList.devices, list.head.devices),
+    // Devices already revoked in this generation: their cutoffs name this
+    // generation's list, which the new genesis no longer carries.
+    ...oldList.revoked
+      .filter((revoked) => revoked.kind === 'device')
+      .map((revoked) => revoked.id)
+  ]);
   const written = await writeGeneration(db, userId, {
     generation: generation,
     identityKeyText: body.identityKey as string,
@@ -1040,15 +1036,36 @@ async function projectSignerFence(
   ) {
     return { sql: '1 = 1', binds: [] };
   }
-  const marks = removedDeviceIds.map(() => '?').join(', ');
   const staged = (await isE2eeProjectMigrationStorageReady(db))
-    ? ` OR EXISTS (SELECT 1 FROM e2ee_project_migrations m
-                   WHERE m.project_id = p.id AND m.direction = 'encrypt'
-                     AND m.state = 'staging')`
+    ? ` OR ${STAGED_FOR_ENCRYPTION_SQL}`
     : '';
-  const fence = {
+  const fence = signedProjectsFence(
+    userId,
+    `p.storage_format = 2${staged}`,
+    removedDeviceIds
+  );
+  await refuseIfSigned(db, fence);
+  return fence;
+}
+
+/** A project `p` with a live 'encrypt' staging (migration 0042). */
+const STAGED_FOR_ENCRYPTION_SQL = `EXISTS (SELECT 1 FROM e2ee_project_migrations m
+                   WHERE m.project_id = p.id AND m.direction = 'encrypt'
+                     AND m.state = 'staging')`;
+
+/**
+ * Holds while no project `p` of the user matching `projects` has a
+ * version, envelope or key archive signed by one of `deviceIds`.
+ */
+function signedProjectsFence(
+  userId: string,
+  projects: string,
+  deviceIds: readonly string[]
+): { sql: string; binds: string[] } {
+  const marks = deviceIds.map(() => '?').join(', ');
+  return {
     sql: `NOT EXISTS (SELECT 1 FROM projects p
-       WHERE p.user_id = ? AND (p.storage_format = 2${staged})
+       WHERE p.user_id = ? AND (${projects})
          AND (EXISTS (SELECT 1 FROM e2ee_project_versions v
                       WHERE v.project_id = p.id
                         AND v.signer_device_id IN (${marks}))
@@ -1058,31 +1075,85 @@ async function projectSignerFence(
            OR EXISTS (SELECT 1 FROM e2ee_key_archives a
                       WHERE a.project_id = p.id
                         AND a.signer_device_id IN (${marks}))))`,
-    binds: [
-      userId,
-      ...removedDeviceIds,
-      ...removedDeviceIds,
-      ...removedDeviceIds
-    ]
+    binds: [userId, ...deviceIds, ...deviceIds, ...deviceIds]
   };
-  await refuseIfSigned(db, fence);
-  return fence;
 }
+
+/**
+ * An ordinary device revocation lands with a cutoff statement naming every
+ * encrypted (format-2) project (`appendedRevocationCutoffs`), but a
+ * plaintext project staged for encryption is not one yet, so no cutoff can
+ * name it, and the cutover checks no signer: a device revoked after it
+ * signed a staged version, project info or key archive would leave the
+ * migrated project holding records by a revoked signer without a cutoff,
+ * which browsers refuse. So such a revocation waits until the staging is
+ * cut over (its project is then format 2 and gets a cutoff) or abandoned.
+ * A device that signed nothing staged is revoked as before.
+ *
+ * Returns a fence for the device-list entry's insert. `signed` refuses a
+ * record the device stages meanwhile; staged writes are fenced on the
+ * device list in turn (`deviceListUnchanged`). `encrypted` holds while the
+ * account owns as many format-2 projects as when checked, so a cutover
+ * landing in between, which the cutoffs' own fence misses when there were
+ * none to name, makes the append refuse and the browser sign cutoffs
+ * again. Nothing to check before migration 0042.
+ */
+async function stagedSignerFence(
+  db: D1Database,
+  userId: string,
+  revokedDeviceIds: readonly string[]
+): Promise<{
+  sql: string;
+  binds: (string | number)[];
+  signed: { sql: string; binds: string[] };
+  moved(): Promise<boolean>;
+}> {
+  if (
+    revokedDeviceIds.length === 0 ||
+    !(await isE2eeProjectVersionStorageReady(db)) ||
+    !(await isE2eeProjectMigrationStorageReady(db))
+  ) {
+    const clear = { sql: '1 = 1', binds: [] };
+    return { ...clear, signed: clear, moved: async () => false };
+  }
+  const signed = signedProjectsFence(
+    userId,
+    STAGED_FOR_ENCRYPTION_SQL,
+    revokedDeviceIds
+  );
+  await refuseIfSigned(db, signed, STAGED_SIGNER_MESSAGE);
+  const countEncrypted = `(SELECT COUNT(*) FROM projects
+                           WHERE user_id = ? AND storage_format = 2)`;
+  const encrypted = async () =>
+    (
+      await db
+        .prepare(`SELECT ${countEncrypted} AS n`)
+        .bind(userId)
+        .first<{ n: number }>()
+    )?.n ?? 0;
+  const checked = await encrypted();
+  return {
+    sql: `${signed.sql} AND ${countEncrypted} = ?`,
+    binds: [...signed.binds, userId, checked],
+    signed,
+    moved: async () => (await encrypted()) !== checked
+  };
+}
+
+const STAGED_SIGNER_MESSAGE =
+  'This device helped encrypt a project that is still being encrypted. Finish or cancel that encryption, then remove the device. Nothing was changed.';
 
 async function refuseIfSigned(
   db: D1Database,
-  fence: { sql: string; binds: string[] }
+  fence: { sql: string; binds: string[] },
+  message = 'A device this change leaves out saved encrypted projects, and those projects would stop opening. This will be possible in a coming update.'
 ): Promise<void> {
   const clear = await db
     .prepare(`SELECT (${fence.sql}) AS clear`)
     .bind(...fence.binds)
     .first<{ clear: number }>();
   if (clear?.clear !== 1) {
-    refuse(
-      409,
-      E2EE_DEVICE_SIGNED_PROJECTS_CODE,
-      'A device this change leaves out saved encrypted projects, and those projects would stop opening. This will be possible in a coming update.'
-    );
+    refuse(409, E2EE_DEVICE_SIGNED_PROJECTS_CODE, message);
   }
 }
 
@@ -1199,6 +1270,15 @@ async function handleAppend(
     body.cutoffs,
     projectsEnabled
   );
+  // Nor while a device it revokes signed a project staged for encryption,
+  // which no cutoff can name yet (`stagedSignerFence`).
+  const stagedFence = await stagedSignerFence(
+    db,
+    userId,
+    list.head.revoked
+      .filter((revocation) => revocation.kind === 'device')
+      .map((revocation) => revocation.id)
+  );
   const now = new Date().toISOString();
   const entryHash = toHex(list.headHash);
   const auth = db.authorization;
@@ -1227,7 +1307,7 @@ async function handleAppend(
          WHERE ${auth.sql} AND (SELECT MAX(sequence) FROM e2ee_device_list_entries
                 WHERE user_id = ? AND generation = ?) = ?
            AND (SELECT MAX(generation) FROM e2ee_identities WHERE user_id = ?) = ?
-           AND ${projectsFence.sql}`
+           AND ${projectsFence.sql} AND ${stagedFence.sql}`
       )
       .bind(
         userId,
@@ -1243,7 +1323,8 @@ async function handleAppend(
         before.sequence,
         userId,
         current.generation,
-        ...projectsFence.binds
+        ...projectsFence.binds,
+        ...stagedFence.binds
       ),
     ...(rotation
       ? [
@@ -1294,8 +1375,13 @@ async function handleAppend(
   const results = await db.batch(statements);
   if ((results[0]?.meta?.changes ?? 0) !== 1) {
     // A project created, shared, committed to or saved to since the
-    // cutoffs were checked: the browser signs them again.
-    if (await cutoffs?.moved()) refuseCutoffsIncomplete();
+    // cutoffs were checked, or one cut over to encrypted storage: the
+    // browser signs them again.
+    if ((await cutoffs?.moved()) || (await stagedFence.moved())) {
+      refuseCutoffsIncomplete();
+    }
+    // Or a record the revoked device staged since the check.
+    await refuseIfSigned(db, stagedFence.signed, STAGED_SIGNER_MESSAGE);
     refuse(
       409,
       'E2EE_DEVICE_LIST_CONFLICT',
