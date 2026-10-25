@@ -35,7 +35,9 @@ const EMPTY: InPlaceSlots = {
   guide: [],
   faces: [],
   bodies: [],
-  plane: null
+  plane: null,
+  refs: [],
+  image: null
 };
 
 const BODY: BodyPick = {
@@ -755,8 +757,8 @@ describe('primitives run in place', () => {
       }
     };
     const values = { width: 10, depth: 6, height: 24, x: 0, y: 0, z: -4 };
-    expect(spec.linked?.('height', 10, values, slots)).toEqual({ z: 10 });
-    expect(spec.linked?.('width', 12, values, slots)).toBeNull();
+    expect(spec.carries?.('height', 10, values, slots)).toEqual({ z: 10 });
+    expect(spec.carries?.('width', 12, values, slots)).toBeNull();
     // Its arrows stand on the face; the height arrow points away from it,
     // and a new height rebuilds none of them.
     const handles = spec.handles(slots, values, CTX, {});

@@ -31,6 +31,9 @@ export * from './e2ee-project-documents';
 export * from './e2ee-content-blobs';
 export * from './e2ee-collaboration';
 export * from './e2ee-device-removal';
+export * from './e2ee-contacts';
+export * from './e2ee-assistant-consents';
+export * from './e2ee-invitations';
 import type { ReferenceImageSet } from './reference-images';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
@@ -4265,6 +4268,11 @@ export interface EffectiveAssistantSettings {
   provider: AssistantProvider;
   model: string;
   reasoningEffort: string;
+  /**
+   * The upstream URL a request goes to, which an encrypted project's
+   * assistant consent binds (ADR-024 6-1). Empty when none is usable.
+   */
+  endpoint?: string;
 }
 
 export interface AppSettingsResponse {
@@ -4460,7 +4468,16 @@ export type CollaborationServerMessage =
    * sender keeps its own document rather than reporting itself synced against
    * state the room never took.
    */
-  | { type: 'error'; code: CollaborationErrorCode; message: string };
+  | {
+      type: 'error';
+      code: CollaborationErrorCode;
+      message: string;
+      /**
+       * With `blob-unknown` (an encrypted room, ADR-024 slice 5-6): the
+       * content blobs the account no longer holds for the project.
+       */
+      blobIds?: string[];
+    };
 
 export type CollaborationErrorCode =
   /** Larger than a single durable-storage value can hold. */
@@ -4481,7 +4498,13 @@ export type CollaborationErrorCode =
    */
   | 'format-mismatch'
   /** An encrypted version written under an older key epoch than the group's. */
-  | 'epoch-stale';
+  | 'epoch-stale'
+  /**
+   * An encrypted version names content blobs the account lost or collected
+   * (409 `E2EE_BLOB_UNKNOWN` on the account's write, slice 5-6): the
+   * browser stores them again from its own copy and resubmits.
+   */
+  | 'blob-unknown';
 
 /**
  * Longest accepted project name, measured after trimming. Shared so the client

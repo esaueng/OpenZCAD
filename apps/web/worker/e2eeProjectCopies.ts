@@ -124,7 +124,9 @@ export function adoptionField(value: unknown): E2eeAdoption {
 // --- Checks ----------------------------------------------------------------
 
 /**
- * The source is an encrypted project the caller owns, a branch's revision
+ * The source is an encrypted project the caller owns or, live, is a member
+ * of (slice 5-2: a member copies what it reads, as a plaintext member
+ * duplicates; the copy is the caller's own), a branch's revision
  * is one of its named saves, and every listed id is a committed blob of
  * it, named by the new version (`versionBlobIds`) or the new project info
  * (`infoBlobIds`, thumbnails and exports only).
@@ -142,10 +144,24 @@ export async function prepareCopy(
     invalid('A copy is a new project');
   }
   const source = await db
-    .prepare('SELECT user_id, storage_format FROM projects WHERE id = ?')
-    .bind(copyFrom.projectId)
-    .first<{ user_id: string; storage_format: number | null }>();
-  if (!source || source.user_id !== userId) {
+    .prepare(
+      `SELECT p.user_id, p.storage_format, p.status,
+         EXISTS (SELECT 1 FROM project_members m
+                 WHERE m.project_id = p.id AND m.user_id = ?) AS member
+       FROM projects p WHERE p.id = ?`
+    )
+    .bind(userId, copyFrom.projectId)
+    .first<{
+      user_id: string;
+      storage_format: number | null;
+      status: string | null;
+      member: number;
+    }>();
+  if (
+    !source ||
+    (source.user_id !== userId &&
+      (!source.member || source.status === 'deleted'))
+  ) {
     refuse(404, 'PROJECT_NOT_FOUND', 'Project not found.');
   }
   if (source.storage_format !== 2) {
@@ -241,7 +257,10 @@ export function sourceFence(
 ): { sql: string; binds: readonly unknown[] } {
   return {
     sql: `EXISTS (SELECT 1 FROM projects
-                  WHERE id = ? AND user_id = ? AND storage_format = 2)
+                  WHERE id = ? AND storage_format = 2
+                    AND (user_id = ? OR (status <> 'deleted' AND EXISTS (
+                      SELECT 1 FROM project_members m
+                      WHERE m.project_id = projects.id AND m.user_id = ?))))
           ${
             copy.revisionId === null
               ? ''
@@ -257,6 +276,7 @@ export function sourceFence(
           }`,
     binds: [
       copy.sourceProjectId,
+      userId,
       userId,
       ...(copy.revisionId === null
         ? []

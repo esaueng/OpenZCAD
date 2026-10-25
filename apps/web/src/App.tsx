@@ -35,7 +35,8 @@ import {
 import type { DatumVertexRepairSession } from './lib/datumVertexRepair';
 import {
   referenceImageDisplays,
-  referenceImageInsertPlane
+  referenceImageInsertPlane,
+  referenceImagePlaneBasis
 } from './lib/referenceImageDisplay';
 import { referenceImagesWithHistory } from '@openzcad/shared';
 import type {
@@ -264,6 +265,7 @@ import type {
   ProjectCollaborationCapabilitiesResponse
 } from '@openzcad/shared';
 import {
+  PROJECT_STORAGE_FORMAT_E2EE_V1,
   toShaprImportId,
   toSketchConstraintId,
   toUserId
@@ -348,6 +350,12 @@ import {
   type KeySessionEvent
 } from './lib/e2ee/keySession';
 import type { DeviceKeySignOutChoice } from './lib/e2ee/signOut';
+import {
+  captureEncryptedInvitationLink,
+  isEncryptedInvitationHash,
+  pendingEncryptedInvitation
+} from './lib/e2ee/encryptedInvitationLink';
+import { requestContactVerification } from './lib/e2ee/contactFocus';
 import { watchBuildVersion } from './lib/buildVersionWatch';
 import { commandOutcomeMessage } from './lib/commandOutcome';
 import { tintPreviewResultBodies } from './lib/previewBodyTint';
@@ -367,6 +375,15 @@ import {
   isProjectFormatUnsupportedError
 } from './lib/api';
 import { assistantDisabledReason } from './lib/assistant/encryptedProject';
+import {
+  refreshEncryptedMemberRole,
+  useEncryptedMemberRole
+} from './lib/e2ee/useEncryptedMemberRole';
+import { useAssistantConsentGate } from './lib/assistant/consentGate';
+import {
+  retainEncryptionStatus,
+  useEncryptionStatus
+} from './lib/e2ee/encryptionStatus';
 import {
   loadAccountProjectResult,
   type AccountProjectLoadResult
@@ -1443,9 +1460,15 @@ import {
   type InPlaceRequest,
   type BodyPick,
   type FacePick,
+  type ImageSlot,
+  type InPlaceContext,
   type InPlaceToolId,
-  type ProfilePick
+  type ProfilePick,
+  type RefPick
 } from './lib/inPlace/tools';
+import { imagePlacementPlane, placeImage } from './lib/inPlace/image';
+import type * as DatumPicks from './lib/inPlace/datumPicks';
+import type { PreparedReferenceImage } from './lib/referenceImageInsert';
 import {
   parseCurveCandidateId,
   sketchCurveCandidates
@@ -2127,6 +2150,13 @@ export function App() {
   }, []);
   useEffect(() => {
     const openFragment = () => {
+      if (isEncryptedInvitationHash(window.location.hash)) {
+        if (captureEncryptedInvitationLink()) {
+          updateSettingsViewState({ open: true, activeSection: 'encryption' });
+          setSettingsOpen(true);
+        }
+        return;
+      }
       const repeatedInvitation = projectInvitationTokenFromHash(
         window.location.hash
       );
@@ -2335,6 +2365,10 @@ export function App() {
     },
     []
   );
+  // An invitation to an encrypted project (slice 5-3b) is taken off the
+  // address bar at once; Settings › Encryption opens on it once the session
+  // is known (below), where it is accepted after encryption is set up.
+  useState(captureEncryptedInvitationLink);
   const [settingsOpen, setSettingsOpen] = useState(
     () =>
       pendingInvitationToken !== null ||
@@ -2996,6 +3030,16 @@ export function App() {
     DISABLED_COLLABORATION_ROLLOUT
   );
   const [session, setSession] = useState<AuthSession | null>(null);
+  const encryptedInvitationSessionRef = useRef<string | null>(null);
+  useEffect(() => {
+    const userId = session?.userId ?? null;
+    if (!userId || encryptedInvitationSessionRef.current === userId) return;
+    encryptedInvitationSessionRef.current = userId;
+    if (pendingEncryptedInvitation()) {
+      updateSettingsViewState({ open: true, activeSection: 'encryption' });
+      setSettingsOpen(true);
+    }
+  }, [session?.userId]);
   const [resumeViewGeneration, setResumeViewGeneration] = useState(0);
   const workspaceResume = useWorkspaceResume({
     projectId: doc?.projectId ?? null,
@@ -4659,19 +4703,71 @@ export function App() {
     (cloudProjectIds.has(doc.projectId) ||
       remoteVersionsRef.current.has(doc.projectId))
   );
+  // A member's copy of someone else's end-to-end encrypted project (ADR-024
+  // slice 5-4): its edits go through the encrypted store, which writes only
+  // on top of the head it read, not through the plaintext room. What the
+  // member may do comes from the project's MLS roles, not the room.
+  const encryptedMemberProject = Boolean(
+    !shareSession &&
+    activeProjectIsCloud &&
+    session &&
+    doc &&
+    doc.ownerUserId !== session.userId &&
+    isEncryptedProject(doc.projectId)
+  );
+  const encryptedMemberRole = useEncryptedMemberRole(
+    encryptedMemberProject ? (doc?.projectId ?? null) : null,
+    encryptedMemberProject
+  );
+  const encryptedMemberRoleRef = useRef(encryptedMemberRole);
+  encryptedMemberRoleRef.current = encryptedMemberRole;
+  // Why an encrypted member cannot edit, if it cannot: a viewer, or a role
+  // not known yet.
+  const encryptedMemberEditReason = !encryptedMemberProject
+    ? null
+    : encryptedMemberRole === 'viewer'
+      ? 'This shared project is read-only'
+      : encryptedMemberRole === null
+        ? 'Waiting for project access'
+        : null;
   // Member edits use the lease-checked room. The account document endpoint
-  // deliberately refuses editor writes while leases are enforced.
+  // deliberately refuses editor writes while leases are enforced. An
+  // encrypted member's are the account's own writes (above).
   const sharedAccountProject = Boolean(
     !shareSession &&
     activeProjectIsCloud &&
     session &&
-    doc?.ownerUserId !== session.userId
+    doc?.ownerUserId !== session.userId &&
+    !encryptedMemberProject
   );
 
   // An end-to-end encrypted project's room relays ciphertext (ADR-024
-  // slice 4-9): only its owner's own devices until sharing arrives, and every
-  // version the room accepts is already the account's.
+  // slice 4-9), and every version the room accepts is already the account's.
+  // Its owner's devices join under personal sync or sharing; its members
+  // (slice 5-6) under sharing, as a plaintext project's members do: editors
+  // submit, viewers receive.
   const encryptedRoomProject = isEncryptedProject(doc?.projectId);
+  // The top bar's encryption indicator (ADR-024 Phase 4): the page's own
+  // marker, or the listed summary, since a project opened directly may
+  // have no summary and one listed may not have been loaded through the
+  // encrypted store yet.
+  const encryptedProjectOpen = Boolean(
+    doc &&
+    (encryptedRoomProject ||
+      projects.some(
+        (project) =>
+          project.projectId === doc.projectId &&
+          project.storageFormat === PROJECT_STORAGE_FORMAT_E2EE_V1
+      ))
+  );
+  const encryptionStatus = useEncryptionStatus(
+    encryptedProjectOpen ? (doc?.projectId ?? null) : null
+  );
+  const openProjectId = doc?.projectId ?? null;
+  // Another project's outcome is forgotten once it is no longer open.
+  useEffect(() => {
+    retainEncryptionStatus(openProjectId);
+  }, [openProjectId]);
   const collaboration = useCollaboration({
     enabled: cloudFunctionsEnabled,
     document: doc,
@@ -4683,7 +4779,7 @@ export function App() {
       activeProjectIsCloud &&
       cloudAvailable &&
       liveCollaborationEnabled &&
-      (!encryptedRoomProject || doc?.ownerUserId === session?.userId)
+      (!encryptedMemberProject || projectSharingEnabled)
         ? session
         : null,
     encrypted: encryptedRoomProject,
@@ -4759,7 +4855,10 @@ export function App() {
       if (
         controller &&
         accountVersion !== null &&
-        remoteDocument.ownerUserId === sessionRef.current?.userId
+        // An encrypted member's autosave writes the account too (slice
+        // 5-4), so it follows the account's version the room relays.
+        (encryptedRoomProject ||
+          remoteDocument.ownerUserId === sessionRef.current?.userId)
       ) {
         controller.adoptAccountVersion(
           remoteDocument.projectId,
@@ -4783,6 +4882,20 @@ export function App() {
     }
   });
 
+  // The room's role notice (slice 5-6) or this browser's own refusal to
+  // seal moved an encrypted member's role: the page guard reads the MLS
+  // roles again rather than wait for its next poll (a removal closes the
+  // socket, which clears the room's role).
+  const encryptedRoomRole = encryptedMemberProject ? collaboration.role : null;
+  const encryptedRoomRoleProjectId = encryptedMemberProject
+    ? (doc?.projectId ?? null)
+    : null;
+  useEffect(() => {
+    if (encryptedRoomRoleProjectId) {
+      refreshEncryptedMemberRole(encryptedRoomRoleProjectId);
+    }
+  }, [encryptedRoomRole, encryptedRoomRoleProjectId]);
+
   const activeCollaborationLease = Boolean(
     collaboration.lease &&
     collaboration.lease.projectId === doc?.projectId &&
@@ -4800,14 +4913,19 @@ export function App() {
   // workspace is the parameters, and Make a copy is the road to Build.
   const buildModeDisabledReason = shareSession
     ? 'This is a shared link — Make a copy to open Build mode'
-    : !sharedProjectDisabled &&
-        cloudAvailable &&
-        session &&
-        projectSharingEnabled &&
-        (collaboration.role === 'viewer' ||
-          collaboration.status === 'read-only')
-      ? 'This shared project is read-only'
-      : null;
+    : !sharedProjectDisabled && encryptedMemberEditReason
+      ? // An encrypted member who may not edit (a viewer, or one whose role
+        // is not known, or no longer exists) is held in View, as a
+        // read-only collaborator is (slice 5-4).
+        encryptedMemberEditReason
+      : !sharedProjectDisabled &&
+          cloudAvailable &&
+          session &&
+          projectSharingEnabled &&
+          (collaboration.role === 'viewer' ||
+            collaboration.status === 'read-only')
+        ? 'This shared project is read-only'
+        : null;
   // A parameter change is still a document edit, so a read-only seat locks
   // Tweak exactly as it locks Build. A shared link is the opposite: Tweak is
   // the whole point of the visit.
@@ -4891,24 +5009,26 @@ export function App() {
         null
       : sharedProjectDisabled
         ? 'Project sharing is disabled in Settings'
-        : !activeProjectIsCloud ||
-            !cloudAvailable ||
-            !session ||
-            !projectSharingEnabled
-          ? null
-          : collaboration.conflict
-            ? 'Resolve the collaboration conflict before editing'
-            : collaboration.role === 'viewer' ||
-                collaboration.status === 'read-only'
-              ? 'This shared project is read-only'
-              : collaboration.role === null
-                ? 'Waiting for project access'
-                : collaborationRollout.editLeasesEnforced &&
-                    !activeCollaborationLease
-                  ? collaboration.status === 'lease-denied'
-                    ? 'Another collaborator holds the edit lease'
-                    : 'Waiting for the project edit lease'
-                  : null;
+        : encryptedMemberProject
+          ? encryptedMemberEditReason
+          : !activeProjectIsCloud ||
+              !cloudAvailable ||
+              !session ||
+              !projectSharingEnabled
+            ? null
+            : collaboration.conflict
+              ? 'Resolve the collaboration conflict before editing'
+              : collaboration.role === 'viewer' ||
+                  collaboration.status === 'read-only'
+                ? 'This shared project is read-only'
+                : collaboration.role === null
+                  ? 'Waiting for project access'
+                  : collaborationRollout.editLeasesEnforced &&
+                      !activeCollaborationLease
+                    ? collaboration.status === 'lease-denied'
+                      ? 'Another collaborator holds the edit lease'
+                      : 'Waiting for the project edit lease'
+                    : null;
   // View mode joins the same guard every other modeling edit uses. Project
   // rename has its own mode-aware guard below because it is workspace metadata:
   // owners may change it from either mode, while editors remain Build-only.
@@ -5285,6 +5405,15 @@ export function App() {
           );
         } else if (status.state === 'refused') {
           setStatus(errorMessage(status.error, PROJECT_TOO_LARGE_FOR_ACCOUNT));
+          // A write refused as read-only: an encrypted member was demoted
+          // (slice 5-4). Its page re-reads the role and locks editing.
+          if (
+            status.projectId &&
+            status.error instanceof ApiError &&
+            status.error.code === 'E2EE_PROJECT_READ_ONLY'
+          ) {
+            refreshEncryptedMemberRole(status.projectId);
+          }
         }
       },
       onSynced({ projectId, version }) {
@@ -6883,6 +7012,27 @@ export function App() {
     }),
     [selectedBodyIds, selectedEdges, selectedFeature, selectedTopology]
   );
+  // ADR-024 Phase 6: an encrypted project's assistant reads it only with this
+  // account's per-project consent. Null (no gate) for a plaintext project.
+  // A project opened directly while the listing is unavailable has no
+  // summary; this page's own marker still says it is encrypted (#869).
+  const assistantProject:
+    | Pick<ProjectSummary, 'projectId' | 'storageFormat'>
+    | undefined = doc
+    ? (projects.find((project) => project.projectId === doc.projectId) ??
+      (isEncryptedProject(doc.projectId)
+        ? {
+            projectId: doc.projectId,
+            storageFormat: PROJECT_STORAGE_FORMAT_E2EE_V1
+          }
+        : undefined))
+    : undefined;
+  const assistantConsent = useAssistantConsentGate(
+    session?.userId ?? null,
+    cloudFunctionsEnabled && appSettings.assistant.enabled
+      ? assistantProject
+      : undefined
+  );
 
   const edgeModifierBody = useMemo<BodyRepresentation | null>(() => {
     const candidateId =
@@ -7850,6 +8000,14 @@ export function App() {
       return;
     }
     if (sharedAccountProject) return;
+    // Only an editor's copy of an encrypted project goes to the account; a
+    // viewer's never would be accepted (slice 5-4).
+    if (
+      encryptedMemberProject &&
+      encryptedMemberRoleRef.current !== 'editor'
+    ) {
+      return;
+    }
     // Nothing reaches the account until its device transaction has committed.
     // The displayed state stays Saving while any newer device write is pending.
     const controller = cloudProjectAutosaveRef.current;
@@ -8492,6 +8650,82 @@ export function App() {
           : sweptFaces,
       initialBodies
     );
+    // A datum's sources: the face or edge selected first is its first.
+    const kinds = IN_PLACE_TOOL_SPECS[tool].refKinds;
+    if (kinds) {
+      const seed =
+        selectedTopology?.kind === 'face' || selectedTopology?.kind === 'edge'
+          ? { ...selectedTopology }
+          : null;
+      const at = lastPickDetailRef.current?.point ?? null;
+      void loadDatumPicks().then((picks) => {
+        const document = managerRef.current?.document;
+        if (!seed || !document || inPlaceRef.current.tool !== tool) return;
+        const ref =
+          seed.kind === 'face'
+            ? picks.faceRef(document, seed, kinds)
+            : picks.edgeRef(document, seed, at, kinds, 0);
+        if (!('reason' in ref)) inPlaceRef.current.pickRef(ref);
+      });
+    }
+  }
+
+  /** U09: the lazy datum pick module, loaded when a datum command starts. */
+  const datumPicksRef = useRef<typeof DatumPicks | null>(null);
+  function loadDatumPicks() {
+    return import('./lib/inPlace/datumPicks').then((module) => {
+      datumPicksRef.current = module;
+      return module;
+    });
+  }
+
+  /**
+   * Hands a datum pick to the running Plane or Axis, through the lazy pick
+   * module; a pick that cannot be a source says why in the status bar.
+   */
+  function pickDatumRef(
+    make: (
+      picks: typeof DatumPicks,
+      document: ProjectDocument
+    ) => RefPick | { reason: string }
+  ): boolean {
+    const command = inPlaceRef.current;
+    if (!command.active || !command.spec?.refKinds) return false;
+    const tool = command.tool;
+    void loadDatumPicks().then((picks) => {
+      const document = managerRef.current?.document;
+      if (!document || inPlaceRef.current.tool !== tool) return;
+      const ref = make(picks, document);
+      if ('reason' in ref) {
+        setStatus(ref.reason);
+        return;
+      }
+      inPlaceRef.current.pickRef(ref);
+    });
+    return true;
+  }
+
+  /**
+   * Proves a datum the preview or commit built resolved: through the datum
+   * library once it has loaded, else by its published frame or line alone.
+   */
+  function checkNewDatum(
+    base: ProjectDocument | null | undefined,
+    derived: ProjectDocument['derived'],
+    featureId: FeatureId,
+    name: string,
+    kind: 'datum-plane' | 'datum-axis'
+  ): void {
+    const picks = datumPicksRef.current;
+    if (picks && base) {
+      picks.requireNewDatum(base, derived, featureId, name, kind);
+      return;
+    }
+    const resolved =
+      kind === 'datum-plane'
+        ? derived.datumFrames?.[featureId]
+        : derived.datumAxes?.[featureId];
+    if (!resolved) throw new Error(`${name} did not resolve.`);
   }
 
   /** A body's face for a command that takes the body: a flat one first. */
@@ -8746,7 +8980,9 @@ export function App() {
     // U09: a new feature from an in-place tool runs with no card, once any
     // unapplied Move has been applied or discarded above. Editing an
     // existing one still opens its card until history edits re-arm handles.
-    if (isInPlaceTool(nextTool) && !feature) {
+    // The Image command waits for its picture: openTool asks for the file,
+    // and the command starts once it is read.
+    if (isInPlaceTool(nextTool) && nextTool !== 'reference-image' && !feature) {
       startInPlaceCommand(nextTool);
       return;
     }
@@ -8803,14 +9039,17 @@ export function App() {
       // on the selected flat face, or on Top (XY) with nothing picked. A
       // selected face it cannot lie on refuses, rather than quietly placing
       // the picture on Top, far from what the user picked.
-      const placement = referenceImageInsertPlane(selectedFaceImagePlane());
+      const selected = selectedFaceImagePlane();
+      const placement = referenceImageInsertPlane(selected);
       if ('refusal' in placement) {
         setStatus(
           `${TOOL_META['reference-image'].label}: ${placement.refusal}`
         );
         return false;
       }
-      referenceImagePlaneRef.current = placement.plane;
+      // U09: with no face selected, the command asks for a plane once the
+      // picture is read, rather than dropping it on Top.
+      referenceImagePlaneRef.current = selected ? placement.plane : null;
       referenceImageInputRef.current?.click();
       return true;
     }
@@ -9631,6 +9870,17 @@ export function App() {
   const referenceImageInputRef = useRef<HTMLInputElement | null>(null);
   /** The plane a picture chosen in the file dialog will lie on. */
   const referenceImagePlaneRef = useRef<ReferenceImagePlane | null>(null);
+  /** Counts Image file choices, so only the newest one is placed. */
+  const referenceImageInvocationRef = useRef(0);
+  /** Image file choices still being read, and older ones set aside. */
+  const referenceImagesInFlightRef = useRef(0);
+  const staleReferenceImagesRef = useRef<PreparedReferenceImage[]>([]);
+  /** Image byte releases, run one after another. */
+  const referenceImageReleasesRef = useRef<Promise<void>>(Promise.resolve());
+  /** The picture an in-place Image is placing, until Done or Cancel. */
+  const pendingReferenceImageRef = useRef<PreparedReferenceImage | null>(
+    null
+  );
 
   /**
    * The plane of the selected face, when an image can lie on it: associative
@@ -9638,14 +9888,21 @@ export function App() {
    */
   function selectedFaceImagePlane():
     ReferenceImagePlane | { reason: string } | null {
+    return faceImagePlane(selectedTopology);
+  }
+
+  /** The plane of a face, when an image can lie on it, as above. */
+  function faceImagePlane(
+    selection: TopologySelection | null
+  ): ReferenceImagePlane | { reason: string } | null {
     const current = managerRef.current?.document;
-    if (!current || selectedTopology?.kind !== 'face') return null;
+    if (!current || selection?.kind !== 'face') return null;
     const attachment = faceSketchAttachment({
-      bodyId: selectedTopology.bodyId,
-      pickedHash: selectedTopology.hash,
+      bodyId: selection.bodyId,
+      pickedHash: selection.hash,
       face: current.derived.bodyRepresentations[
-        selectedTopology.bodyId
-      ]?.topology?.faces.find((face) => face.hash === selectedTopology.hash)
+        selection.bodyId
+      ]?.topology?.faces.find((face) => face.hash === selection.hash)
     });
     return attachment.ok ? attachment.planeRef : { reason: attachment.reason };
   }
@@ -9665,14 +9922,25 @@ export function App() {
   async function insertReferenceImage(file: File) {
     const current = managerRef.current?.document;
     if (!current || !ensureCanEdit('insert an image')) return;
+    // Only the newest file chosen is placed: an older one that finishes
+    // reading later is set aside, and its bytes are let go (or handed to
+    // the placed picture, when it is the same file) once every choice in
+    // flight has settled.
+    const invocation = ++referenceImageInvocationRef.current;
+    referenceImagesInFlightRef.current += 1;
+    const seeded = referenceImagePlaneRef.current;
     const plane =
-      referenceImagePlaneRef.current ??
-      ({ type: 'canonical', plane: 'XY', offset: 0 } as const);
+      seeded ?? ({ type: 'canonical', plane: 'XY', offset: 0 } as const);
     referenceImagePlaneRef.current = null;
     setStatus(`Placing ${file.name}…`);
     try {
-      const { discardReferenceImageBytes, prepareReferenceImage } =
-        await import('./lib/referenceImageInsert');
+      const { prepareReferenceImage } = await import(
+        './lib/referenceImageInsert'
+      );
+      // A release still running (an earlier picture let go) finishes first,
+      // so reading the same file again stores its bytes afresh rather than
+      // finding bytes about to be deleted.
+      await referenceImageReleasesRef.current;
       const prepared = await prepareReferenceImage({
         file,
         document: current,
@@ -9680,22 +9948,140 @@ export function App() {
         archive: archiveArtifact
       });
       const { image } = prepared;
-      if (
-        managerRef.current?.document.projectId === current.projectId &&
-        executeCommand(commandFactories.addReferenceImage({ image }))
-      ) {
-        openReferenceImage(image.imageId);
-        setStatus(
-          `${image.name} placed. Scale it from two points, or set its width.`
-        );
+      if (invocation !== referenceImageInvocationRef.current) {
+        staleReferenceImagesRef.current.push(prepared);
+        return;
+      }
+      if (managerRef.current?.document.projectId === current.projectId) {
+        // U09: placed in place. Nothing is added until Done; Cancel lets
+        // the stored bytes go again.
+        const unplaced: ImageSlot = {
+          record: image,
+          plane: null,
+          center: { u: 0, v: 0 },
+          calibration: []
+        };
+        // A face selected first takes it, centred on the face as the card
+        // placed it; a click then moves it.
+        const slot = seeded
+          ? placeImage(
+              unplaced,
+              { plane: seeded },
+              'place',
+              imagePlacementContext,
+              {}
+            )
+          : unplaced;
+        // A picture still being placed gives way to this one, its stored
+        // bytes released in the background (nothing below waits on it, so
+        // the project checked above is still the one this starts in). The
+        // same file again reads those bytes, so it inherits the duty to
+        // release them on Cancel instead.
+        const previous = pendingReferenceImageRef.current;
+        const sameFile =
+          previous?.image.source.checksumSha256 === image.source.checksumSha256;
+        pendingReferenceImageRef.current =
+          previous && sameFile && previous.bytesCreated
+            ? { ...prepared, bytesCreated: true }
+            : prepared;
+        if (previous && !sameFile) releaseReferenceImageBytes(previous);
+        inPlaceRef.current.cancel(true);
+        cancelPanel();
+        retireStatusMessage();
+        inPlaceRef.current.start('reference-image', [], [], [], {
+          image: slot
+        });
       } else {
-        await discardReferenceImageBytes(prepared, [
-          managerRef.current?.document
-        ]);
+        releaseReferenceImageBytes(prepared);
       }
     } catch (error) {
       setStatus(errorMessage(error, 'The image could not be placed.'));
+    } finally {
+      referenceImagesInFlightRef.current -= 1;
+      if (referenceImagesInFlightRef.current === 0) releaseStaleReferenceImages();
     }
+  }
+
+  /**
+   * Lets go of the bytes superseded image choices stored, now that none is
+   * in flight. One that is the picture being placed hands its duty to
+   * release them to that picture instead, which reads the same bytes.
+   */
+  function releaseStaleReferenceImages() {
+    const stale = staleReferenceImagesRef.current;
+    staleReferenceImagesRef.current = [];
+    for (const prepared of stale) releaseReferenceImageBytes(prepared);
+  }
+
+  /**
+   * Lets one picture's stored bytes go, in order with every other release,
+   * unless a record or the picture being placed still reads them; the
+   * picture being placed, when it is the same file, takes over the duty to
+   * release them instead.
+   */
+  function releaseReferenceImageBytes(prepared: PreparedReferenceImage) {
+    const checksum = prepared.image.source.checksumSha256;
+    referenceImageReleasesRef.current = referenceImageReleasesRef.current
+      .then(async () => {
+        const pending = pendingReferenceImageRef.current;
+        if (pending?.image.source.checksumSha256 === checksum) {
+          if (prepared.bytesCreated && !pending.bytesCreated) {
+            pendingReferenceImageRef.current = {
+              ...pending,
+              bytesCreated: true
+            };
+          }
+          return;
+        }
+        const { discardReferenceImageBytes } = await import(
+          './lib/referenceImageInsert'
+        );
+        await discardReferenceImageBytes(prepared, [
+          managerRef.current?.document
+        ]);
+      })
+      .catch(() => undefined);
+  }
+
+  /** Where an image's plane lies in the live document, for placing one. */
+  function imagePlaneBasis(plane: ReferenceImagePlane) {
+    const current = managerRef.current?.document;
+    return current ? referenceImagePlaneBasis(current, plane, 'Image') : null;
+  }
+  const imagePlacementContext: InPlaceContext = {
+    sketchViews: [],
+    datumAxes: undefined,
+    datumLabel: () => '',
+    linearSnap: appSettings.sketching.snapEnabled
+      ? appSettings.sketching.linearSnap
+      : null,
+    imagePlaneBasis
+  };
+
+  /**
+   * Whether the picture being placed is waiting for a plane: none picked,
+   * Options asking for another, or its plane no longer resolving.
+   */
+  function imageNeedsPlane(
+    image: ImageSlot,
+    options: Record<string, string>
+  ): boolean {
+    return (
+      !image.plane ||
+      options.clicks === 'plane' ||
+      !imagePlaneBasis(image.plane)
+    );
+  }
+
+  /** Adds the picture an in-place Image placed, as one undoable step. */
+  function commitInPlaceImage(image: ReferenceImage) {
+    const prepared = pendingReferenceImageRef.current;
+    pendingReferenceImageRef.current = null;
+    if (executeCommand(commandFactories.addReferenceImage({ image }))) {
+      setStatus(`${image.name} placed.`);
+      return;
+    }
+    if (prepared) releaseReferenceImageBytes(prepared);
   }
 
   function applyReferenceImage(update: ReferenceImageUpdateInput): boolean {
@@ -9730,9 +10116,12 @@ export function App() {
    */
   const loadReferenceImage = useCallback(
     async (checksumSha256: string): Promise<Blob | null> => {
-      const images = (
-        managerRef.current?.document.referenceImages?.images ?? []
-      ).filter(
+      // The picture an in-place Image is still placing is offered too.
+      const pending = pendingReferenceImageRef.current?.image;
+      const images = [
+        ...(managerRef.current?.document.referenceImages?.images ?? []),
+        ...(pending ? [pending] : [])
+      ].filter(
         (candidate) => candidate.source.checksumSha256 === checksumSha256
       );
       if (images.length === 0) return null;
@@ -14777,6 +15166,42 @@ export function App() {
       // and the faces a face tool takes. A stray pick must not open a card
       // under it.
       const command = inPlaceRef.current;
+      // A datum's sources: a face is a plane or a cylinder's axis, an edge
+      // is its nearer end or (for an Axis) the edge itself.
+      const kinds = command.spec?.refKinds;
+      if (kinds && (selection?.kind === 'face' || selection?.kind === 'edge')) {
+        const picked = { ...selection };
+        const at = detail?.point ? { ...detail.point } : null;
+        const points =
+          command.tool === 'datum-axis'
+            ? command.slots.refs.filter((ref) => ref.kind === 'point').length
+            : 0;
+        return pickDatumRef((picks, document) =>
+          picked.kind === 'face'
+            ? picks.faceRef(document, picked, kinds)
+            : picks.edgeRef(document, picked, at, kinds, points)
+        );
+      }
+      // The picture being placed: a flat face takes it while it still needs
+      // a plane (or Options ask for another). Once placed, a click lands on
+      // its own plane, never a face under it.
+      const image = command.slots.image;
+      if (image && !imageNeedsPlane(image, command.options)) {
+        return detail?.point
+          ? command.placeImage({ point: { ...detail.point } })
+          : true;
+      }
+      if (image && selection?.kind === 'face') {
+        const plane = faceImagePlane(selection);
+        if (!plane || 'reason' in plane) {
+          if (plane) setStatus(plane.reason);
+          return true;
+        }
+        return command.placeImage({
+          plane,
+          ...(detail?.point ? { point: { ...detail.point } } : {})
+        });
+      }
       if (selection?.kind === 'face' && command.spec?.faceMode) {
         const face = inPlaceFacePick(
           selection.bodyId,
@@ -18780,7 +19205,31 @@ export function App() {
           managerRef.current?.document,
           request.rotationDeg
         );
+      case 'datum-plane':
+        return commandFactories.addDatumPlane({
+          name,
+          definition: request.definition
+        });
+      case 'datum-axis':
+        return commandFactories.addDatumAxis({
+          name,
+          definition: request.definition
+        });
+      case 'reference-image':
+        return commandFactories.addReferenceImage({ image: request.image });
     }
+  }
+  /** The datum a datum request adds, and which kind, or null for others. */
+  function inPlaceDatum(
+    request: InPlaceRequest,
+    command: AnyCommand
+  ): { featureId: FeatureId; kind: 'datum-plane' | 'datum-axis' } | null {
+    if (request.tool !== 'datum-plane' && request.tool !== 'datum-axis')
+      return null;
+    const featureId = (
+      command.payload as { ids?: { featureId?: FeatureId } } | undefined
+    )?.ids?.featureId;
+    return featureId ? { featureId, kind: request.tool } : null;
   }
   /**
    * The body a request's result lands on: a new body for most, the moved
@@ -18827,15 +19276,24 @@ export function App() {
     datumLabel: (featureId) =>
       (doc && findFeature(doc, featureId)?.name) ?? 'Datum axis',
     bodyBounds: (bodyId) => inPlaceBodyPick(bodyId),
+    imagePlaneBasis,
     baseDocument: () => managerRef.current?.document ?? null,
     baseVersion: doc?.version ?? null,
     derive: (document) => geometry.syncOnce(document),
     buildCommand: (request, title) => {
       const command = inPlaceCommandFor(request, title);
+      const datum = inPlaceDatum(request, command);
+      const base = managerRef.current?.document;
       return {
         validate: (document) => command.validate(document),
         apply: (document) => command.apply(document),
-        resultBodyId: inPlaceResultBodyId(request, command)
+        resultBodyId: inPlaceResultBodyId(request, command),
+        ...(datum
+          ? {
+              check: (derived: ProjectDocument['derived']) =>
+                checkNewDatum(base, derived, datum.featureId, title, datum.kind)
+            }
+          : {})
       };
     },
     commit: (request, title) => {
@@ -18844,8 +19302,27 @@ export function App() {
         createFeature(inPlaceCommandFor(request, title));
         return;
       }
+      if (request.tool === 'reference-image') {
+        commitInPlaceImage(request.image);
+        return;
+      }
       const name = newFeatureName(title);
       const command = inPlaceCommandFor(request, name);
+      const datum = inPlaceDatum(request, command);
+      if (datum) {
+        // A datum has no body to validate: its resolved frame or line is
+        // the proof, exactly as the card's Done checked it.
+        const base = managerRef.current?.document;
+        void validatedFeature.runTransaction([command], {
+          label: command.label,
+          targets: [],
+          validateDerived: (derived) =>
+            checkNewDatum(base, derived, datum.featureId, name, datum.kind),
+          successMessage: commandOutcomeMessage(command.label),
+          onSuccess: finishFeatureCreation
+        });
+        return;
+      }
       const resultBodyId = inPlaceResultBodyId(request, command);
       if (request.tool === 'pattern' && resultBodyId) {
         // Through the pattern runner, so a large pattern shows its progress
@@ -18878,6 +19355,15 @@ export function App() {
   }, [keypadWithinReach]);
   const inPlaceRef = useRef(inPlace);
   inPlaceRef.current = inPlace;
+  // An Image canceled (or replaced by another command) lets its stored
+  // bytes go again, unless something else already uses them.
+  useEffect(() => {
+    if (inPlace.tool === 'reference-image') return;
+    const pending = pendingReferenceImageRef.current;
+    if (!pending) return;
+    pendingReferenceImageRef.current = null;
+    releaseReferenceImageBytes(pending);
+  }, [inPlace.tool]);
   /** Whether the value a command keypad opened on had been set by the user. */
   const commandKeypadTouchedRef = useRef(false);
   /** The keypad moves a command handle through this, without a render. */
@@ -21394,6 +21880,35 @@ export function App() {
     // A datum plane's row is a plane an in-place Mirror or Split can take:
     // the way to reach one a body hides in the viewport.
     const clicked = current.nodes[nodeId];
+    // So is it a Plane's or Axis's source, or a plane for a picture.
+    if (
+      inPlaceRef.current.active &&
+      clicked?.kind === 'feature' &&
+      clicked.data.featureKind === 'datum-plane'
+    ) {
+      const featureId = clicked.featureId;
+      if (inPlaceRef.current.spec?.refKinds?.includes('plane')) {
+        pickDatumRef((picks, document) =>
+          picks.datumPlaneRef(document, featureId)
+        );
+        return;
+      }
+      const image = inPlaceRef.current.slots.image;
+      if (image) {
+        // As in the viewport: a placed picture takes another plane only
+        // when Options ask for one.
+        if (imageNeedsPlane(image, inPlaceRef.current.options)) {
+          inPlaceRef.current.placeImage({
+            plane: { type: 'datum', datumFeatureId: featureId }
+          });
+        } else {
+          setStatus(
+            'To put the picture on another plane, choose Pick a plane in its Options first.'
+          );
+        }
+        return;
+      }
+    }
     if (
       inPlaceRef.current.active &&
       inPlaceRef.current.spec?.wantsPlane &&
@@ -25506,6 +26021,15 @@ export function App() {
           onOpenSharing={() => setSharingOpen(true)}
           onSignIn={() => openSettingsAt('account')}
           onOpenSettings={openSettings}
+          encryption={
+            encryptedProjectOpen
+              ? {
+                  status: encryptionStatus,
+                  needsRepair: presentedSaveState === 'repair',
+                  onOpenEncryptionSettings: () => openSettingsAt('encryption')
+                }
+              : null
+          }
         />
       }
       toolBar={
@@ -25933,21 +26457,67 @@ export function App() {
               (tool === 'sketch' ||
                 Boolean(
                   inPlaceSpec?.wantsPlane && inPlace.slots.bodies.length > 0
+                ) ||
+                // Not while edges are filtered for: a ghost plane in front
+                // of an edge would take the click meant for its end.
+                Boolean(
+                  inPlaceSpec?.refKinds?.includes('plane') &&
+                    selectionFilter !== 'edge'
+                ) ||
+                Boolean(
+                  inPlace.slots.image &&
+                    imageNeedsPlane(inPlace.slots.image, inPlace.options)
                 ))
             }
-            datumDocument={doc}
+            // A Plane or Axis in progress shows the datum it would add.
+            datumDocument={
+              inPlace.active && inPlaceSpec?.refKinds && previewDoc
+                ? previewDoc
+                : doc
+            }
+            placementPlane={
+              modelingLocked
+                ? null
+                : imagePlacementPlane(
+                    inPlace.slots,
+                    inPlace.options,
+                    imagePlacementContext,
+                    inPlace.values
+                  )
+            }
+            onPlacementClick={(point) => inPlace.placeImage({ point })}
             hiddenDatumIds={hiddenDatumIds}
-            referenceImages={referenceImageDisplays(
-              doc,
-              hiddenReferenceImageIds,
-              tool === 'reference-image' ? openReferenceImageId : null,
-              tool === 'reference-image' ? referenceImageDraft : null
-            )}
+            referenceImages={
+              inPlace.request?.tool === 'reference-image'
+                ? // The picture being placed, drawn where Done would add it.
+                  referenceImageDisplays(
+                    {
+                      ...doc,
+                      referenceImages: {
+                        ...doc.referenceImages,
+                        images: [
+                          ...(doc.referenceImages?.images ?? []),
+                          inPlace.request.image
+                        ]
+                      }
+                    },
+                    hiddenReferenceImageIds,
+                    inPlace.request.image.imageId
+                  )
+                : referenceImageDisplays(
+                    doc,
+                    hiddenReferenceImageIds,
+                    tool === 'reference-image' ? openReferenceImageId : null,
+                    tool === 'reference-image' ? referenceImageDraft : null
+                  )
+            }
             loadReferenceImage={loadReferenceImage}
             selectedFeatureId={
               (modelingEditFeature ?? selectedFeature)?.featureId ?? null
             }
-            planePickerOffset={sketchPlaneOffset}
+            // Only a sketch starts on its offset ghost: an in-place command
+            // stores a principal plane at zero, so it is shown at zero.
+            planePickerOffset={tool === 'sketch' ? sketchPlaneOffset : 0}
             holeGhost={holePreviewState?.ghost ?? null}
             footprintPicker={
               !modelingLocked && inPlace.active && inPlaceSpec?.footprint
@@ -25974,7 +26544,24 @@ export function App() {
                 ...placed.anchor
               });
             }}
-            onPickPlane={(plane) => {
+            onPickPlane={(plane, point) => {
+              // A Plane or Axis takes it as a source, and a picture lies on
+              // it where it was clicked.
+              if (inPlace.active && inPlaceSpec?.refKinds?.includes('plane')) {
+                const { normal } = canonicalPlaneBasis(
+                  plane,
+                  CURRENT_CANONICAL_BASIS_REVISION
+                );
+                pickDatumRef((picks) => picks.canonicalPlaneRef(plane, normal));
+                return;
+              }
+              if (inPlace.active && inPlace.slots.image) {
+                inPlace.placeImage({
+                  plane: { ...newCanonicalPlaneRef(plane, 0), offset: 0 },
+                  ...(point ? { point } : {})
+                });
+                return;
+              }
               // An in-place Mirror or Split takes the ghost plane it waits
               // for; otherwise a ghost plane starts a sketch on it.
               if (inPlace.active && inPlaceSpec?.wantsPlane) {
@@ -25998,7 +26585,22 @@ export function App() {
             // tool or card (Hole, Shell, a Plane draft…), a sketch, a
             // re-pick or Measure owns the click and keeps its draft.
             onPickDatum={
-              inPlace.active && inPlaceSpec?.wantsPlane
+              inPlace.active && inPlaceSpec?.refKinds?.includes('plane')
+                ? (featureId) => {
+                    pickDatumRef((picks, document) =>
+                      picks.datumPlaneRef(document, featureId as FeatureId)
+                    );
+                  }
+                : inPlace.active && inPlace.slots.image
+                  ? (featureId, point) =>
+                      inPlace.placeImage({
+                        plane: {
+                          type: 'datum',
+                          datumFeatureId: featureId as FeatureId
+                        },
+                        ...(point ? { point } : {})
+                      })
+                  : inPlace.active && inPlaceSpec?.wantsPlane
                 ? (featureId) =>
                     inPlace.pickPlane({
                       kind: 'datum',
@@ -27312,9 +27914,10 @@ export function App() {
               onDraft={draftPrompt}
               onActivity={setAssistantActivity}
               disabledReason={assistantDisabledReason(
-                projects.find((project) => project.projectId === doc.projectId),
-                isEncryptedProject(doc.projectId)
+                assistantProject,
+                assistantConsent
               )}
+              consent={assistantConsent}
             />
           </ErrorBoundary>
         ) : null
@@ -27576,7 +28179,21 @@ export function App() {
                     );
                   }
                 }}
-                role={collaboration.role}
+                role={
+                  // A member's role in an encrypted project is its MLS
+                  // role (slice 5-4), not the room's.
+                  encryptedMemberProject
+                    ? encryptedMemberRole
+                    : (collaboration.role ??
+                      // An encrypted project's sharing goes through its MLS
+                      // group, not the room (slice 5-3b): its owner manages
+                      // it even while no room confirms the role.
+                      (isEncryptedProject(doc.projectId) &&
+                      session &&
+                      doc.ownerUserId === session.userId
+                        ? 'owner'
+                        : null))
+                }
                 collaborationStatus={collaboration.status}
                 lease={collaboration.lease}
                 liveMembers={collaboration.members}
@@ -27585,6 +28202,22 @@ export function App() {
                 editorInvitationsEnabled={
                   collaborationRollout.editLeasesEnforced
                 }
+                encrypted={isEncryptedProject(doc.projectId)}
+                onVerifyContact={(userId) => {
+                  requestContactVerification(userId);
+                  setSharingOpen(false);
+                  updateSettingsViewState({
+                    open: true,
+                    activeSection: 'encryption'
+                  });
+                  setSettingsOpen(true);
+                }}
+                onLeft={() => {
+                  // Leaving an encrypted project (slice 5-5): its access is
+                  // gone, so go back to the projects that remain.
+                  setSharingOpen(false);
+                  void handleGoHome();
+                }}
                 onClose={() => setSharingOpen(false)}
               />
             )}

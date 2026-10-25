@@ -1,3 +1,4 @@
+import type { Page } from '@playwright/test';
 import { withEncryptedProjectInfo } from '../../apps/web/worker/e2eeProjectDocuments';
 import { d1Database } from '../d1-sqlite';
 import {
@@ -47,6 +48,10 @@ async function listing(server: E2eeServer) {
     }))
   });
 }
+
+/** The top bar's encryption indicator (only an encrypted project has one). */
+const encryptionIndicator = (page: Page) =>
+  page.locator('.topbar-identity .encryption-menu');
 
 const count = (server: E2eeServer, sql: string) =>
   (server.db.prepare(sql).get() as { n: number }).n;
@@ -144,6 +149,27 @@ test('creates, autosaves, reloads and saves an encrypted project', async ({
   );
   expect(stored).not.toContain('Secret bracket');
 
+  // The top bar says so, verified: the page wrote and checked its heads.
+  await expect(encryptionIndicator(page)).toHaveAttribute(
+    'data-encryption-state',
+    'verified'
+  );
+  const lock = page
+    .locator('.topbar-identity')
+    .getByLabel('End-to-end encrypted', { exact: true });
+  await expect(lock).toBeVisible();
+  await lock.click();
+  await expect(
+    encryptionIndicator(page).getByText('Verified', { exact: true })
+  ).toBeVisible();
+  await expect(
+    encryptionIndicator(page).getByRole('button', {
+      name: 'Open Settings › Encryption'
+    })
+  ).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(encryptionIndicator(page)).not.toHaveAttribute('open', '');
+
   // A named save writes a revision.
   await page.keyboard.press('ControlOrMeta+s');
   await expect
@@ -178,6 +204,26 @@ test('creates, autosaves, reloads and saves an encrypted project', async ({
 
   // Reopening read and verified the account's encrypted head.
   expect(headReads).toBeGreaterThan(readsBeforeReload);
+  await expect(encryptionIndicator(page)).toHaveAttribute(
+    'data-encryption-state',
+    'verified'
+  );
   expect(plaintextWrites).toEqual([]);
   expect(errors).toEqual([]);
+});
+
+/** A plaintext project's top bar is unchanged: no encryption indicator. */
+test('shows no encryption indicator on a plaintext project', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Open bracket');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Rename project Open bracket' })
+  ).toBeVisible();
+  await expect(encryptionIndicator(page)).toHaveCount(0);
+  await expect(page.getByLabel(/End-to-end encrypted/)).toHaveCount(0);
 });

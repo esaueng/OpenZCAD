@@ -77,11 +77,27 @@ import {
   type AssistantPromptKeyDetail
 } from '../../lib/assistant/promptKeys';
 import { unconfiguredAssistantMessage } from '../../lib/assistant/unconfigured';
+import {
+  assistantConsentRoute,
+  describeAssistantRoute
+} from '../../lib/assistant/consentCopy';
+import {
+  ASSISTANT_CONSENT_LOCKED_NOTICE,
+  type AssistantConsentGate
+} from '../../lib/assistant/consentGate';
 import { labelWithKey, useKeymap } from '../../lib/keymap';
 import { platformShortcutLabel } from '../../lib/platformShortcut';
 import { QuestionCard } from './QuestionCard';
 import { ProposalCard } from './ProposalCard';
 import { RichText } from './RichText';
+import {
+  AssistantConsentChip,
+  AssistantConsentDialog
+} from './AssistantConsentDialog';
+
+/** A request an encrypted project's consent did not let leave the device. */
+export const ASSISTANT_CONSENT_NOT_GIVEN =
+  'Nothing was sent. The assistant reads this encrypted project only once you allow it.';
 
 export type AssistantPreviewOutcome =
   { ok: true } | { ok: false; reason: string };
@@ -159,6 +175,14 @@ interface AssistantPanelProps {
    * disabled — and this is the notice it shows.
    */
   disabledReason?: string | null;
+  /**
+   * The open project's consent gate when it is stored end-to-end encrypted
+   * (ADR-024 Phase 6), else null: every request from it first re-reads and
+   * verifies this account's consent, asks with the consent dialog when
+   * there is none for this copy and provider, and sends nothing otherwise.
+   * A plaintext project has no gate and nothing about it changes.
+   */
+  consent?: AssistantConsentGate | null;
 }
 
 let entrySequence = 0;
@@ -322,7 +346,8 @@ export function AssistantPanel({
   request = null,
   onDraft,
   onActivity,
-  disabledReason = null
+  disabledReason = null,
+  consent = null
 }: AssistantPanelProps) {
   const hideKey = useKeymap().label('assistant-toggle');
   const [analyzedDocument, setAnalyzedDocument] =
@@ -408,6 +433,21 @@ export function AssistantPanel({
   );
   const thinking = conversation.status === 'thinking';
   const configured = !disabledReason && (status?.configured ?? false);
+  // Who an encrypted project's request would go to; its consent names it.
+  const consentRoute = status ? assistantConsentRoute(status) : null;
+  const consentAllowed = Boolean(
+    consent && consentRoute && consent.permits(consentRoute)
+  );
+  const consentRouteLabel = status ? describeAssistantRoute(status) : '';
+  const [consentPrompt, setConsentPrompt] = useState<{
+    route: string;
+    label: string;
+    resolve(allowed: boolean): void;
+  } | null>(null);
+  const consentRef = useRef(consent);
+  consentRef.current = consent;
+  const consentStatusRef = useRef(status);
+  consentStatusRef.current = status;
   const unavailable =
     Boolean(disabledReason) ||
     (status ? !status.configured : statusError !== null);
@@ -527,6 +567,68 @@ export function AssistantPanel({
   );
 
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  // Consent withdrawn (Stop here, or a re-read that no longer verifies it)
+  // ends the request in flight: nothing more of it is read or applied.
+  // Only a request that consent let through is ended: one still waiting on
+  // the consent question is that question's to settle.
+  const consentedRequestRef = useRef<AbortController | null>(null);
+  const wasConsentAllowed = useRef(consentAllowed);
+  useEffect(() => {
+    if (wasConsentAllowed.current && !consentAllowed) {
+      consentedRequestRef.current?.abort();
+      consentedRequestRef.current = null;
+    }
+    wasConsentAllowed.current = consentAllowed;
+  }, [consentAllowed]);
+
+  /**
+   * Right before an encrypted project's request leaves the device: re-read
+   * and verify this account's consent, ask when there is none for this copy
+   * and provider, and answer why nothing may be sent, or null to send.
+   */
+  const ensureConsent = useCallback(
+    async (signal: AbortSignal): Promise<string | null> => {
+      const gate = consentRef.current;
+      if (!gate) return null;
+      const current = consentStatusRef.current;
+      if (!current) return ASSISTANT_CONSENT_NOT_GIVEN;
+      const route = assistantConsentRoute(current);
+      const decision = await gate.confirm(route);
+      if (signal.aborted) return ASSISTANT_CONSENT_NOT_GIVEN;
+      if (decision.kind === 'permitted') return null;
+      if (decision.kind === 'blocked') {
+        return decision.message;
+      }
+      const allowed = await new Promise<boolean>((resolve) => {
+        const settle = (value: boolean) => {
+          signal.removeEventListener('abort', onAbort);
+          setConsentPrompt(null);
+          resolve(value);
+        };
+        const onAbort = () => settle(false);
+        signal.addEventListener('abort', onAbort, { once: true });
+        setConsentPrompt({
+          route,
+          label: describeAssistantRoute(current),
+          resolve: settle
+        });
+      });
+      return allowed && !signal.aborted ? null : ASSISTANT_CONSENT_NOT_GIVEN;
+    },
+    []
+  );
+
+  const stopConsent = useCallback(async () => {
+    // The request in flight ends first; the revocation is then written.
+    abortRef.current?.abort();
+    abortRef.current = null;
+    if (await consentRef.current?.stop()) {
+      setNotice(
+        'The assistant no longer reads this project. Nothing more is sent.'
+      );
+    }
+  }, []);
 
   useEffect(() => {
     onActivity?.({
@@ -724,7 +826,9 @@ export function AssistantPanel({
       if (
         !(target instanceof Element) ||
         panelRef.current?.contains(target) ||
-        target.closest(ASSISTANT_PROMPT_SELECTOR)
+        target.closest(ASSISTANT_PROMPT_SELECTOR) ||
+        // The consent question is the panel's own, portaled out of it.
+        target.closest('[data-assistant-consent]')
       ) {
         return;
       }
@@ -804,6 +908,14 @@ export function AssistantPanel({
           setAnnouncement('Proposal ready to review.');
           return;
         }
+        // An encrypted project sends only with this account's verified
+        // consent for it (ADR-024 Phase 6); a plaintext one has no gate.
+        const refusal = await ensureConsent(controller.signal);
+        if (controller.signal.aborted) {
+          throw new DOMException('Stopped.', 'AbortError');
+        }
+        if (refusal !== null) throw new Error(refusal);
+        if (consentRef.current) consentedRequestRef.current = controller;
         // One immutable snapshot per turn: if the selection or document changes
         // while the provider is thinking, this turn still means what it meant
         // when it was sent.
@@ -821,6 +933,8 @@ export function AssistantPanel({
               : {}),
             digest: createCadDocumentDigest(doc, selection),
             history: historyForRequest(conversation),
+            // Verified just above: this project's consent lets it through.
+            ...(consentRef.current ? { consentedProjectId: doc.projectId } : {}),
             attachments: attachments.map((attachment) => ({
               id: attachment.id,
               mediaType: attachment.mediaType,
@@ -873,7 +987,14 @@ export function AssistantPanel({
         setAnnouncement(`Failed. ${message.split('\n')[0]}`);
       }
     },
-    [conversation, doc, onPreview, selection, findDirectSuggestion]
+    [
+      conversation,
+      doc,
+      onPreview,
+      selection,
+      findDirectSuggestion,
+      ensureConsent
+    ]
   );
 
   const handledRequestId = useRef<number | null>(null);
@@ -1550,6 +1671,22 @@ export function AssistantPanel({
             {statusNotice}
           </p>
         )}
+        {configured && consent?.status.kind === 'locked' && (
+          <p className="assistant-notice" role="status">
+            {ASSISTANT_CONSENT_LOCKED_NOTICE}
+          </p>
+        )}
+        {configured && consent?.error && !consentPrompt && (
+          <p className="assistant-notice" role="alert">
+            {consent.error}
+          </p>
+        )}
+        {configured && consentAllowed && (
+          <AssistantConsentChip
+            routeLabel={consentRouteLabel}
+            onStop={() => void stopConsent()}
+          />
+        )}
         {pending.length > 0 && (
           <div className="assistant-pending">
             {pending.map((attachment) => (
@@ -1726,6 +1863,18 @@ export function AssistantPanel({
       <p className="visually-hidden" aria-live="polite" aria-atomic="true">
         {announcement}
       </p>
+      {consentPrompt && consent && (
+        <AssistantConsentDialog
+          routeLabel={consentPrompt.label}
+          error={consent.error}
+          onAllow={async () => {
+            if (await consent.allow(consentPrompt.route)) {
+              consentPrompt.resolve(true);
+            }
+          }}
+          onCancel={() => consentPrompt.resolve(false)}
+        />
+      )}
     </section>
   );
 }

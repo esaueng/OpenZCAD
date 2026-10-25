@@ -1,18 +1,22 @@
 import { deflateSync } from 'node:zlib';
 import type { Locator, Page } from '@playwright/test';
 import {
+  clickWorldPoint,
   createPrimitiveInPlace,
+  enterCommandValue,
   expect,
   expectBodyCount,
+  finishInPlaceCommand,
   stubApi,
   test,
   waitForStillViewport
 } from './openzcad-fixtures';
 
 /**
- * I05: a reference image is placed on a plane or face, scaled from two
- * picked points and a known distance, moved, turned and faded, shown and
- * hidden from Objects — and never becomes a feature, a body or document
+ * I05: a reference image is placed in place (U09) on a plane or face where
+ * it is clicked, scaled from two points clicked on it and their real
+ * distance, turned and faded, moved onto a datum plane from its card, shown
+ * and hidden from Objects — and never becomes a feature, a body or document
  * bytes. Its pixels live in the source blob store, by hash.
  */
 
@@ -261,17 +265,20 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
   });
   const before = (await storedProject(page, projectName)).project;
 
-  // Insert: the file dialog opens and the picture lands on Top (XY), 100 mm
-  // wide at its own 2:1 aspect, drawn from its decoded pixels.
+  // Insert: the file dialog opens, then the Image command asks for a plane.
+  // A click on the Top (XY) ghost plane, clear of the box, puts the picture
+  // there, centred where it was clicked (on the sketch snap), 100 mm wide at
+  // its own 2:1 aspect, drawn from its decoded pixels. Nothing is added yet.
   await insertImage(page);
-  await expect(
-    inspector.getByRole('heading', { name: 'Bracket plan' })
-  ).toBeVisible();
+  const imageBar = page.getByRole('group', { name: 'Image command' });
+  await expect(imageBar).toContainText('Pick a plane or a flat face');
+  await clickWorldPoint(page, [3, -2, 0]);
+  await expect(imageBar).toContainText('Click to move it');
   await expect
     .poll(async () => drawnImages(canvas))
     .toEqual([
       expect.objectContaining({
-        center: { x: 0, y: 0, z: 0 },
+        center: { x: 3, y: -2, z: 0 },
         normal: { x: 0, y: 0, z: 1 },
         width: 100,
         height: 50,
@@ -281,47 +288,56 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
   const objects = page.getByRole('list', { name: 'Objects' });
   await expect(
     objects.getByRole('button', { name: /^Bracket plan/ })
-  ).toBeVisible();
+  ).toHaveCount(0);
 
-  // Two-point scale: picks 100 px apart on the 200 px picture, 30 mm apart
-  // in reality, make the image 60 mm wide (30 mm tall).
-  await inspector
-    .getByRole('button', { name: 'Scale from two points…' })
-    .click();
-  const picture = inspector.getByRole('img', { name: /click two points/ });
-  await expect(picture).toBeVisible();
-  const box = (await picture.boundingBox())!;
-  await picture.click({ position: { x: box.width * 0.2, y: box.height / 2 } });
-  await picture.click({ position: { x: box.width * 0.7, y: box.height / 2 } });
-  await expect(inspector.getByText(/Picked 100 px apart/)).toBeVisible();
-  await inspector.getByLabel('Known distance (mm)').fill('30');
-  await inspector.getByRole('button', { name: 'Scale image' }).click();
-  await expect(inspector.getByLabel('Width (mm)')).toHaveValue('60');
+  // The corner handle's chip sizes it: 40 mm wide.
+  await enterCommandValue(page, 'width', '40');
+  await expect.poll(async () => (await drawnImages(canvas))[0]?.width).toBe(40);
 
-  // Move, turn and fade it; the viewport follows the draft before Done.
-  await inspector.getByLabel('Position U (mm)').fill('10');
-  await inspector.getByLabel('Position V (mm)').fill('-5');
-  await inspector.getByLabel('Rotation (°)').fill('90');
-  await inspector.getByLabel('Image opacity').fill('0.3');
+  // Two-point scale: clicks 10 mm apart along the picture's middle row are
+  // 50 px apart on the 200 px picture; 15 mm apart in reality makes the
+  // image 60 mm wide (30 mm tall).
+  const options = imageBar.locator('summary');
+  await options.click();
+  await imageBar.getByRole('radio', { name: 'Scale from 2 points' }).click();
+  await options.click();
+  await expect(imageBar).toContainText('Click the first of two points');
+  // (Both clear of the command bar along the canvas's bottom edge.)
+  await clickWorldPoint(page, [-2, -2, 0]);
+  await expect(imageBar).toContainText('Click the second point');
+  await clickWorldPoint(page, [8, -2, 0]);
+  await expect(imageBar).toContainText('Tap the distance');
+  await enterCommandValue(page, 'span', '15');
+  await expect
+    .poll(async () => (await drawnImages(canvas))[0]?.width)
+    .toBeCloseTo(60, 0);
+
+  // Turn and fade it; the viewport follows before Done.
+  await enterCommandValue(page, 'rotation', '90');
+  await options.click();
+  await imageBar.getByRole('radio', { name: '30%' }).click();
+  await options.click();
   await expect
     .poll(async () => drawnImages(canvas))
     .toEqual([
       expect.objectContaining({
-        center: { x: 10, y: -5, z: 0 },
-        width: 60,
-        height: 30,
+        center: { x: 3, y: -2, z: 0 },
         opacity: 0.3
       })
     ]);
   const [turned] = await drawnImages(canvas);
   expect(rounded(turned!.xAxis)).toEqual({ x: 0, y: 1, z: 0 });
-  await inspector.getByRole('button', { name: 'Done' }).click();
-  await expect(inspector).toHaveCount(0);
+  expect(turned!.height).toBeCloseTo(turned!.width / 2, 6);
+  await finishInPlaceCommand(page, 'Image');
+  await expect(
+    objects.getByRole('button', { name: /^Bracket plan/ })
+  ).toBeVisible();
 
   // A datum plane carries it: 8 above Top, it follows the plane.
   await page.getByRole('button', { name: /^Plane — / }).click();
-  await inspector.getByLabel('Offset', { exact: true }).fill('8');
-  await inspector.getByRole('button', { name: 'Done' }).click();
+  await clickWorldPoint(page, [3, -2, 0]);
+  await enterCommandValue(page, 'offset', '8');
+  await finishInPlaceCommand(page, 'Plane');
   await expect(
     page.locator('.feature-row', { hasText: 'Plane 1' })
   ).toBeVisible();
@@ -355,11 +371,11 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
   const [image] = project.referenceImages!.images;
   expect(image).toMatchObject({
     name: 'Bracket plan',
-    width: 60,
     rotationDeg: 90,
     opacity: 0.3,
-    center: { u: 10, v: -5 }
+    center: { u: 3, v: -2 }
   });
+  expect(image!.width).toBeCloseTo(60, 0);
   expect(image!.plane).toMatchObject({ type: 'datum' });
   expect(blobs).toContain(image!.source.checksumSha256);
   // Archived as its own artifact, byte for byte.
@@ -371,8 +387,9 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
       .filter((command) => command.kind.startsWith('reference-image.'))
       .map((command) => command.kind)
   ).toEqual([
+    // Placed in place: one add, however long it took to place; then the
+    // card's move onto the datum.
     'reference-image.add',
-    'reference-image.update',
     'reference-image.update'
   ]);
 
@@ -393,7 +410,8 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
   // the default poll on a loaded runner.
   await expect
     .poll(async () => drawnImages(canvas), { timeout: 20_000 })
-    .toEqual([expect.objectContaining({ width: 60, textured: true })]);
+    .toEqual([expect.objectContaining({ textured: true })]);
+  expect((await drawnImages(canvas))[0]!.width).toBeCloseTo(60, 0);
   expect(archive.downloads).toBe(0);
   // A device without the picture resolves it from the archived artifact.
   await forgetSourceBlobs(page);
@@ -402,7 +420,8 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
   // the default poll on a loaded runner.
   await expect
     .poll(async () => drawnImages(canvas), { timeout: 20_000 })
-    .toEqual([expect.objectContaining({ width: 60, textured: true })]);
+    .toEqual([expect.objectContaining({ textured: true })]);
+  expect((await drawnImages(canvas))[0]!.width).toBeCloseTo(60, 0);
   expect(archive.downloads).toBe(1);
 
   // Deleted from its card, and the delete undoes.
@@ -429,7 +448,6 @@ test('an image inserted with a flat face selected lies on that face', async ({
   await page.getByLabel('Project name').fill('Face image');
   await page.getByRole('button', { name: 'Create project' }).click();
   const canvas = page.locator('.viewer-host canvas');
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await createPrimitiveInPlace(page, 'box', {
     sizes: { width: '20', depth: '20', height: '20' }
   });
@@ -455,10 +473,11 @@ test('an image inserted with a flat face selected lies on that face', async ({
   }
   expect(picked).toBe(true);
 
+  // U09: it starts in place, already on that face and centred on it.
   await insertImage(page);
-  await expect(inspector.getByRole('combobox', { name: 'Plane' })).toHaveValue(
-    'stored-face'
-  );
+  const imageBar = page.getByRole('group', { name: 'Image command' });
+  await expect(imageBar).toContainText('Click to move it');
+  await expect.poll(async () => (await drawnImages(canvas)).length).toBe(1);
   const [drawn] = await drawnImages(canvas);
   // On one of the box's six faces: centred on it, along its normal.
   const normal = rounded(drawn!.normal);
@@ -468,4 +487,33 @@ test('an image inserted with a flat face selected lies on that face', async ({
   expect(center[along]).toBe(normal[along] > 0 ? 20 : 0);
   for (const axis of (['x', 'y', 'z'] as const).filter((a) => a !== along))
     expect(center[axis]).toBe(10);
+  await finishInPlaceCommand(page, 'Image');
+  await expect(
+    page
+      .getByRole('list', { name: 'Objects' })
+      .getByRole('button', { name: /^Bracket plan/ })
+  ).toBeVisible();
+});
+
+test('an image canceled while it is placed adds nothing', async ({ page }) => {
+  test.setTimeout(120_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Canceled image');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const canvas = page.locator('.viewer-host canvas');
+  await insertImage(page);
+  const imageBar = page.getByRole('group', { name: 'Image command' });
+  await expect(imageBar).toContainText('Pick a plane or a flat face');
+  await clickWorldPoint(page, [0, 0, 0]);
+  await expect.poll(async () => (await drawnImages(canvas)).length).toBe(1);
+  await page.keyboard.press('Escape');
+  await expect(imageBar).toHaveCount(0);
+  await expect.poll(async () => drawnImages(canvas)).toEqual([]);
+  await expect(
+    page
+      .getByRole('list', { name: 'Objects' })
+      .getByRole('button', { name: /^Bracket plan/ })
+  ).toHaveCount(0);
 });

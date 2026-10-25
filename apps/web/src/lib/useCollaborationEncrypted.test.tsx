@@ -29,7 +29,8 @@ import { useCollaboration } from './useCollaboration';
 const codec = {
   encode: vi.fn<EncryptedRoomCodec['encode']>(),
   decode: vi.fn<EncryptedRoomCodec['decode']>(),
-  catchUp: vi.fn<EncryptedRoomCodec['catchUp']>()
+  catchUp: vi.fn<EncryptedRoomCodec['catchUp']>(),
+  restoreBlobs: vi.fn<EncryptedRoomCodec['restoreBlobs']>()
 };
 const loadEncryptedRoomCodec = vi.fn(async (_projectId: string) => codec);
 
@@ -191,6 +192,7 @@ beforeEach(() => {
   }));
   codec.decode.mockImplementation(async (raw) => fakeDecode(raw));
   codec.catchUp.mockResolvedValue(undefined);
+  codec.restoreBlobs.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -435,6 +437,92 @@ describe('useCollaboration in an encrypted room (ADR-024 slice 4-9)', () => {
         applyDocument: () => {}
       })
     ).rejects.toThrow('account');
+    unmount();
+  });
+
+  it('turns read-only when this account’s own MLS role refuses to seal (slice 5-6)', async () => {
+    const base = createProjectDocument('Demoted', toUserId('user_demoted'));
+    const { socket, rerender, result, unmount } = await connectedOwner(base);
+    // What the codec throws for its own role refusal
+    // (`EncryptedRoomCodecError` with `readOnly`).
+    codec.encode.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          'Viewers can read this encrypted project but cannot change it.'
+        ),
+        { readOnly: true }
+      )
+    );
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await edit(rerender, withBox(base, 'Box'));
+    error.mockRestore();
+    expect(result.current.status).toBe('read-only');
+    expect(result.current.role).toBe('viewer');
+    expect(result.current.lease).toBeNull();
+    // Nothing more is sealed or sent.
+    await edit(rerender, withBox(withBox(base, 'Box'), 'Another'));
+    expect(codec.encode).toHaveBeenCalledTimes(1);
+    expect(
+      socket.frames().filter((frame) => frame.type === 'e2ee-document')
+    ).toHaveLength(0);
+    unmount();
+  });
+
+  it('stops submitting when the room’s role notice says the role changed (slice 5-6)', async () => {
+    const base = createProjectDocument('Notice', toUserId('user_notice'));
+    const { socket, rerender, result, unmount } = await connectedOwner(base);
+    socket.receive({ type: 'lease-lost', reason: 'role-changed' });
+    await flush();
+    expect(result.current.status).toBe('read-only');
+    await edit(rerender, withBox(base, 'Box'));
+    expect(codec.encode).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('stores a lost blob again and resubmits once when the room says blob-unknown (slice 5-6)', async () => {
+    const base = createProjectDocument('Lost', toUserId('user_lost'));
+    const { socket, rerender, result, unmount } = await connectedOwner(base);
+    const next = withBox(base, 'Box');
+    await edit(rerender, next);
+    const refusal = {
+      type: 'error',
+      code: 'blob-unknown',
+      message: 'This version names files the account does not hold.',
+      blobIds: ['a'.repeat(32)]
+    };
+    socket.receive(refusal);
+    await flush();
+    expect(codec.restoreBlobs).toHaveBeenCalledWith(['a'.repeat(32)]);
+    expect(codec.encode).toHaveBeenCalledTimes(2);
+    expect(
+      socket.frames().filter((frame) => frame.type === 'e2ee-document')
+    ).toHaveLength(2);
+    // A second refusal of the same edit is not repaired again.
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    socket.receive(refusal);
+    await flush();
+    error.mockRestore();
+    expect(codec.restoreBlobs).toHaveBeenCalledTimes(1);
+    expect(result.current.status).toBe('rejected');
+    unmount();
+  });
+
+  it('reports a lost blob it cannot store again as refused', async () => {
+    const base = createProjectDocument('Gone', toUserId('user_gone'));
+    const { socket, rerender, result, unmount } = await connectedOwner(base);
+    await edit(rerender, withBox(base, 'Box'));
+    codec.restoreBlobs.mockRejectedValueOnce(new Error('No copy here.'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    socket.receive({
+      type: 'error',
+      code: 'blob-unknown',
+      message: 'This version names files the account does not hold.'
+    });
+    await flush();
+    error.mockRestore();
+    expect(codec.restoreBlobs).toHaveBeenCalledWith([]);
+    expect(codec.encode).toHaveBeenCalledTimes(1);
+    expect(result.current.status).toBe('rejected');
     unmount();
   });
 

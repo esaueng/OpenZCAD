@@ -73,6 +73,9 @@ import {
 import { Group, Notice, SettingRow, Status } from './settingsControls';
 import { ProjectEncryptionPreference } from './ProjectEncryptionPreference';
 import { EncryptedProjectRecovery } from './EncryptedProjectRecovery';
+import { EncryptionContacts } from './EncryptionContacts';
+import { EncryptedInvitations } from './EncryptedInvitations';
+import { AssistantAccessSettings } from './AssistantAccessSettings';
 import '../styles/components/encryption.css';
 
 /**
@@ -204,45 +207,64 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
           </Notice>
         </Group>
       ) : state.kind === 'not-set-up' ? (
-        flow?.kind === 'setup' ? (
-          <RecoveryKeyFlow
-            {...shared}
-            title="Save your recovery key"
-            finishLabel="Finish setup"
-            onFinish={(secret) =>
-              setUpEncryption(ctx, {
-                recoverySecret: secret,
-                label: defaultDeviceLabel(navigator.userAgent)
-              })
-            }
-          />
-        ) : (
-          <Group title="Set up">
-            <SettingRow
-              title="End-to-end encryption"
-              hint="Not set up. This creates your keys and a recovery key. Projects are not encrypted yet: that comes in a later beta step."
-            >
-              <button
-                className="primary"
-                type="button"
-                disabled={busy}
-                onClick={() => setFlow({ kind: 'setup' })}
+        <>
+          <EncryptedInvitations ready={false} />
+          {flow?.kind === 'setup' ? (
+            <RecoveryKeyFlow
+              {...shared}
+              title="Save your recovery key"
+              finishLabel="Finish setup"
+              onFinish={(secret) =>
+                setUpEncryption(ctx, {
+                  recoverySecret: secret,
+                  label: defaultDeviceLabel(navigator.userAgent)
+                })
+              }
+            />
+          ) : (
+            <Group title="Set up">
+              <SettingRow
+                title="End-to-end encryption"
+                hint="Not set up. This creates your keys and a recovery key. Projects are not encrypted yet: that comes in a later beta step."
               >
-                <ShieldCheck size={14} aria-hidden="true" />
-                Set up encryption
-              </button>
-            </SettingRow>
-          </Group>
-        )
+                <button
+                  className="primary"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setFlow({ kind: 'setup' })}
+                >
+                  <ShieldCheck size={14} aria-hidden="true" />
+                  Set up encryption
+                </button>
+              </SettingRow>
+            </Group>
+          )}
+        </>
       ) : (
-        <AccountPanel
-          {...shared}
-          account={state.account}
-          identityChanged={state.kind === 'identity-changed'}
-          onReload={reload}
-        />
+        <>
+          <AccountPanel
+            {...shared}
+            account={state.account}
+            identityChanged={state.kind === 'identity-changed'}
+            onReload={reload}
+          />
+          {state.kind === 'ready' ? (
+            <EncryptedInvitations ready={state.account.unlocked} />
+          ) : null}
+          {state.kind === 'ready' ? (
+            <EncryptionContacts
+              keys={ctx}
+              account={state.account}
+              Scanner={QrScanner}
+            />
+          ) : null}
+        </>
       )}
       <ProjectEncryptionPreference
+        userId={userId}
+        unlocked={state.kind === 'ready' && state.account.unlocked}
+      />
+      <AssistantAccessSettings
         userId={userId}
         unlocked={state.kind === 'ready' && state.account.unlocked}
       />

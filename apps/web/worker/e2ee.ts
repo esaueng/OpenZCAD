@@ -59,7 +59,18 @@ import {
   handleProjectPreferenceRequest,
   isE2eeProjectPreferenceStorageReady
 } from './e2eeProjectPreferences';
+import {
+  handleAssistantConsentRequest,
+  isAssistantConsentPath,
+  isE2eeAssistantConsentStorageReady
+} from './e2eeAssistantConsents';
 import { handleE2eeProjectRequest, isE2eeProjectPath } from './e2eeProjects';
+import { handleE2eeContactsRequest, isE2eeContactsPath } from './e2eeContacts';
+import {
+  handleE2eeInvitationRequest,
+  isE2eeInvitationPath,
+  type E2eeInvitationHost
+} from './e2eeInvitations';
 import {
   handleE2eeDeviceRemovalRequest,
   isE2eeDeviceRemovalPath
@@ -1804,12 +1815,24 @@ export async function e2eeErasureTables(
  * encrypted-projects decision (E2EE_PROJECTS_ENABLED, ADR-024 Phase 4),
  * reported disabled while migration 0031 is missing.
  */
+/** Without a host, the invitation routes stay closed. */
+const CLOSED_INVITATIONS: E2eeInvitationHost = {
+  email: null,
+  inviterLabel: '',
+  sharingEnabled: false,
+  emailConfigured: false,
+  sendInvitationEmail: () =>
+    Promise.reject(new Error('Invitation email is not configured.'))
+};
+
 export async function handleE2eeRequest(
   request: Request,
   env: E2eeRouteEnv,
   session: E2eeRouteSession,
   enabled: boolean,
-  projectsEnabled = false
+  projectsEnabled = false,
+  /** The invitation routes' email, sender and sharing rollout (5-3a). */
+  invitations: E2eeInvitationHost = CLOSED_INVITATIONS
 ): Promise<Response> {
   const { pathname } = new URL(request.url);
   const method = request.method;
@@ -1901,6 +1924,40 @@ export async function handleE2eeRequest(
         db.authorization
       );
     }
+    if (isE2eeContactsPath(pathname)) {
+      // Contacts lists and other people's device lists (e2eeContacts.ts).
+      return await handleE2eeContactsRequest(
+        request,
+        rawDb,
+        userId,
+        db.authorization,
+        () => readBody(request)
+      );
+    }
+    if (isAssistantConsentPath(pathname)) {
+      // Per-project assistant consent (e2eeAssistantConsents.ts, 6-1).
+      if (!projectsEnabled) {
+        refuse(
+          501,
+          'FEATURE_DISABLED',
+          'Encrypted projects are not available for this account yet.'
+        );
+      }
+      if (!(await isE2eeAssistantConsentStorageReady(rawDb))) {
+        refuse(
+          503,
+          'E2EE_UNAVAILABLE',
+          'The assistant on encrypted projects is unavailable until the database is updated.'
+        );
+      }
+      return await handleAssistantConsentRequest(
+        request,
+        rawDb,
+        userId,
+        db.authorization,
+        () => readBody(request)
+      );
+    }
     if (isE2eeContentBlobPath(pathname)) {
       // Encrypted content blobs (e2eeContentBlobs.ts).
       return await handleE2eeContentBlobRequest(
@@ -1931,6 +1988,18 @@ export async function handleE2eeRequest(
         userId,
         projectsEnabled,
         db.authorization
+      );
+    }
+    if (isE2eeInvitationPath(pathname)) {
+      // Invitations, KeyPackages and Welcomes (e2eeInvitations.ts, 5-3a).
+      return await handleE2eeInvitationRequest(
+        request,
+        rawDb,
+        userId,
+        projectsEnabled,
+        db.authorization,
+        invitations,
+        () => readBody(request)
       );
     }
     if (isE2eeProjectPath(pathname)) {

@@ -119,6 +119,11 @@ const MAX_MESSAGE_BYTES = 900_000;
 const MAX_CONFLICT_MERGES = 3;
 /** Resubmissions after the group moved to a newer key epoch, per edit. */
 const MAX_EPOCH_RETRIES = 2;
+/**
+ * Lost-blob repairs before an encrypted edit is acknowledged (slice 5-6),
+ * as an account save repairs once.
+ */
+const MAX_BLOB_RESTORES = 1;
 const ROOM_CHANGED_MESSAGE = 'The room changed.';
 
 export function useCollaboration({
@@ -312,6 +317,7 @@ export function useCollaboration({
     let acknowledgedDocument: ProjectDocument | null = null;
     let conflictMerges = 0;
     let epochRetries = 0;
+    let blobRestores = 0;
     // An encrypted project's room speaks envelopes: frames go through the
     // codec, in order, and nothing is decrypted on the main thread.
     const codecLoad: Promise<EncryptedRoomCodec> | null = encrypted
@@ -440,6 +446,7 @@ export function useCollaboration({
       baseVersionRef.current = message.version;
       if (message.document) acknowledgedDocument = message.document;
       epochRetries = 0;
+      blobRestores = 0;
       // An encrypted room wrote this version to the account before it
       // acknowledged it (ADR-024 slice 4-9).
       if (codecLoad) accountVersionRef.current?.(projectId, message.version);
@@ -679,6 +686,17 @@ export function useCollaboration({
         settleCheckpointDrain(
           new Error('This version cannot be shared with the room.')
         );
+        if ((error as { readOnly?: unknown } | null)?.readOnly === true) {
+          // This account's own MLS role no longer lets it write (slice
+          // 5-6): read-only, as when the room says the role changed.
+          leaseIdRef.current = null;
+          leaseRef.current = null;
+          setLease(null);
+          roleRef.current = 'viewer';
+          setRole('viewer');
+          setStatus('read-only');
+          return;
+        }
         setStatus('rejected');
       }
     };
@@ -1043,6 +1061,42 @@ export function useCollaboration({
               if (isCurrentRoom() && socketRef.current === socket)
                 sendDocument(socket, 'document', undefined, true);
             });
+          return;
+        }
+        if (
+          codecLoad &&
+          message.type === 'error' &&
+          message.code === 'blob-unknown' &&
+          !keepMinePendingRef.current &&
+          blobRestores < MAX_BLOB_RESTORES
+        ) {
+          // The account lost a blob this version names (slice 5-6): store
+          // it again from this device's copy, then seal and send again.
+          blobRestores += 1;
+          pendingDocument = null;
+          lastSentVersionRef.current = null;
+          const blobIds = Array.isArray(message.blobIds)
+            ? message.blobIds.filter(
+                (blobId): blobId is string => typeof blobId === 'string'
+              )
+            : [];
+          void codecLoad
+            .then((codec) => codec.restoreBlobs(blobIds))
+            .then(
+              () => {
+                if (isCurrentRoom() && socketRef.current === socket)
+                  sendDocument(socket, 'document', undefined, true);
+              },
+              (error: unknown) => {
+                console.error(
+                  `Encrypted collaboration files not restored: ${error instanceof Error ? error.message : String(error)}`
+                );
+                if (isCurrentRoom() && socketRef.current === socket) {
+                  settleCheckpointDrain(new Error(message.message));
+                  setStatus('rejected');
+                }
+              }
+            );
           return;
         }
         const rejected = rejectionStatus(message);

@@ -16,8 +16,10 @@
  * - **Current head.** The version log from the pinned head up to the
  *   offered head must verify (`verifyVersionLog`: chain, rising versions
  *   and epochs, every signature, the pin present); the head's author must
- *   be a certified device of this account (`verifyAuthoredEnvelope`, with
- *   revocation cutoffs) holding a leaf it certified in the head's epoch;
+ *   be a certified device of a member (this account, or since slice 5-2 a
+ *   co-member: `verifyAuthoredEnvelope`, with revocation cutoffs) holding a
+ *   leaf it certified in the head's epoch, whose user the MLS roles of that
+ *   very epoch list as owner or editor (`epochRoles`);
  *   the epoch binding must match that epoch's authenticator. Only then is
  *   the head decrypted, validated and the pin moved forward.
  * - **Historical read.** A revision is opened only if the pinned head's
@@ -144,10 +146,16 @@ import type { MlsProjectRef } from './mls/projectSessions';
 import {
   createProjectGroup,
   epochAuthenticatorForEpoch,
+  epochRoles,
   groupBaseForKeyEpoch,
   joinProjectGroup,
+  memberRevocationCutoffs,
+  pendingMemberRotation,
+  projectDeviceLists,
   projectRevocationCutoffs,
   projectKeyForEpoch,
+  ProjectGroupError,
+  type ProjectCutoff,
   type ProjectGroupContext
 } from './projectGroups';
 import {
@@ -373,6 +381,12 @@ export interface EncryptedRoomAccess {
   ): Promise<EncryptedRoomHeadState>;
   /** Processes the group's newer Commits (or rejoins). */
   catchUp(projectId: string): Promise<void>;
+  /**
+   * Stores again, from this device's copy, blobs the account lost or
+   * collected (the room's `blob-unknown`, slice 5-6), as an account save
+   * does on 409 `E2EE_BLOB_UNKNOWN`. Rejects when this page cannot.
+   */
+  restoreBlobs(projectId: string, blobIds: readonly string[]): Promise<void>;
 }
 
 const b64 = toBase64Url;
@@ -402,18 +416,33 @@ async function groupCutoffs(
   projectId: string
 ): Promise<ReadonlyMap<string, VersionCutoff>> {
   const out = new Map<string, VersionCutoff>();
-  if (!groups.account.list.revoked.some((r) => r.kind === 'device')) return out;
-  const cutoffs = await projectRevocationCutoffs(groups, projectId);
-  for (const [deviceId, cutoff] of cutoffs) {
-    out.set(authorCutoffKey(groups.account.userId, deviceId), {
-      keyEpoch: cutoff.keyEpoch,
-      ...(cutoff.head
-        ? {
-            documentVersion: cutoff.head.documentVersion,
-            versionHash: cutoff.head.versionHash
-          }
-        : {})
-    });
+  const add = (userId: string, cutoffs: ReadonlyMap<string, ProjectCutoff>) => {
+    for (const [deviceId, cutoff] of cutoffs) {
+      out.set(authorCutoffKey(userId, deviceId), {
+        keyEpoch: cutoff.keyEpoch,
+        ...(cutoff.head
+          ? {
+              documentVersion: cutoff.head.documentVersion,
+              versionHash: cutoff.head.versionHash
+            }
+          : {})
+      });
+    }
+  };
+  if (groups.account.list.revoked.some((r) => r.kind === 'device')) {
+    add(
+      groups.account.userId,
+      await projectRevocationCutoffs(groups, projectId)
+    );
+  }
+  // Co-members' removed devices (slice 5-2), from their own statements.
+  if (groups.members) {
+    for (const [memberId, cutoffs] of await memberRevocationCutoffs(
+      groups,
+      projectId
+    )) {
+      add(memberId, cutoffs);
+    }
   }
   return out;
 }
@@ -587,8 +616,11 @@ export function createEncryptedProjectStore(
 
   /**
    * The author's device held a leaf it certified, with an editing role, in
-   * the version's epoch. Solo groups: the owner is the only member, with
-   * the owner role.
+   * the version's epoch. The role is the one the group's MLS roles gave the
+   * author in that very epoch (slice 5-2: `epochRoles`, from the epoch's
+   * archived record or this device's own session), so a demoted editor's
+   * earlier versions keep verifying, and a viewer's, or one by an author
+   * the roles do not list at all, never do.
    */
   async function requireAuthority(
     projectId: string,
@@ -600,31 +632,30 @@ export function createEncryptedProjectStore(
         `Device ${author.deviceId} held no editing leaf in this project when it signed version ${author.header.documentVersion}.`
       );
     };
-    if (author.userId !== userId) refuse();
+    const authorList = (await projectDeviceLists(groups, projectId)).find(
+      (candidate) => candidate.userId === author.userId
+    );
+    if (!authorList) refuse();
     // Before a group reset (decision D9) the version names an epoch of an
     // earlier group generation.
-    const { keyEpochBase, current } = await groupBaseForKeyEpoch(
+    const { keyEpochBase } = await groupBaseForKeyEpoch(
       groups,
       projectId,
       author.header.keyEpoch
     );
     const epoch = author.header.keyEpoch - keyEpochBase;
     if (epoch < 0) refuse();
-    const signingKey = signingKeyOf(list(), author.deviceId);
+    const signingKey = signingKeyOf(authorList!, author.deviceId);
     if (!signingKey) refuse();
-    if (groups.device) {
-      const status = await groups.sessions
-        .status(refOf(groups.device, projectId))
-        .catch(() => null);
-      const role = current
-        ? status?.roles?.users.find((r) => r.userId === author.userId)
-        : undefined;
-      if (
-        role &&
-        (!['owner', 'editor'].includes(role.role) || role.since > epoch)
-      ) {
-        refuse();
-      }
+    if (
+      !(await heldEditingRole(
+        projectId,
+        author.userId,
+        author.header.keyEpoch,
+        epoch
+      ))
+    ) {
+      refuse();
     }
     const { leaves } = await groups.api.leaves(projectId);
     for (const leaf of leaves) {
@@ -646,6 +677,34 @@ export function createEncryptedProjectStore(
     refuse();
   }
 
+  /**
+   * Whether `authorId` held the owner or editor role in `keyEpoch` (MLS
+   * epoch `epoch` of its group), by the roles of that epoch. An epoch whose
+   * key this account does not hold yet (no device of it has processed that
+   * epoch, slice 5-3b) is that error, not a missing role: the roles are in
+   * the epoch's key archive.
+   */
+  async function heldEditingRole(
+    projectId: string,
+    authorId: string,
+    keyEpoch: number,
+    epoch: number
+  ): Promise<boolean> {
+    const roles = await epochRoles(groups, projectId, keyEpoch).catch(
+      (error: unknown) => {
+        if (error instanceof ProjectGroupError && error.code === 'key-missing')
+          throw error;
+        return null;
+      }
+    );
+    const role = roles?.users.find((r) => r.userId === authorId);
+    return (
+      !!role &&
+      (role.role === 'owner' || role.role === 'editor') &&
+      role.since <= epoch
+    );
+  }
+
   async function authorOf(
     projectId: string,
     envelope: Uint8Array,
@@ -653,7 +712,7 @@ export function createEncryptedProjectStore(
   ): Promise<VerifiedAuthor> {
     try {
       return await verifyAuthoredEnvelope(envelope, signature, {
-        deviceLists: [list()],
+        deviceLists: await projectDeviceLists(groups, projectId),
         cutoffs: await cutoffsFor(projectId)
       });
     } catch (error) {
@@ -662,7 +721,7 @@ export function createEncryptedProjectStore(
           'author',
           error.reason === 'outside-cutoff'
             ? 'A version was signed by a removed device after it was removed.'
-            : `A version is not signed by one of your devices (${error.reason}).`
+            : `A version is not signed by a member’s device (${error.reason}).`
         );
       }
       throw error;
@@ -719,7 +778,10 @@ export function createEncryptedProjectStore(
     entries: readonly E2eeVersionLogEntry[]
   ): Promise<void> {
     const cutoffs = await cutoffsFor(projectId);
+    const lists = await projectDeviceLists(groups, projectId);
     let pinned = pinHash;
+    let unauthorized: number | null = null;
+    let missingKey: ProjectGroupError | null = null;
     for (let start = 0; ; start += LOG_WINDOW - 1) {
       const window = entries.slice(start, start + LOG_WINDOW);
       let authorship: AuthorshipError | null = null;
@@ -738,18 +800,41 @@ export function createEncryptedProjectStore(
             }
             try {
               const author = await verifyAuthoredLogRecord(record, {
-                deviceLists: [list()],
+                deviceLists: lists,
                 cutoffs
               });
               if (
-                author.userId !== userId ||
+                (entry.signerUserId !== null &&
+                  author.userId !== entry.signerUserId) ||
                 author.deviceId !== entry.signerDeviceId
               ) {
                 return null;
               }
-              return signingKeyOf(list(), author.deviceId);
+              // Every logged version's author held an editing role in its
+              // own epoch (slice 5-2).
+              const { keyEpochBase } = await groupBaseForKeyEpoch(
+                groups,
+                projectId,
+                header.keyEpoch
+              );
+              if (
+                !(await heldEditingRole(
+                  projectId,
+                  author.userId,
+                  header.keyEpoch,
+                  header.keyEpoch - keyEpochBase
+                ))
+              ) {
+                unauthorized = entry.documentVersion;
+                return null;
+              }
+              const authorList = lists.find((l) => l.userId === author.userId);
+              return authorList
+                ? signingKeyOf(authorList, author.deviceId)
+                : null;
             } catch (error) {
               if (error instanceof AuthorshipError) authorship = error;
+              if (error instanceof ProjectGroupError) missingKey = error;
               return null;
             }
           }
@@ -762,7 +847,16 @@ export function createEncryptedProjectStore(
             'author',
             refused.reason === 'outside-cutoff'
               ? 'A version was signed by a removed device after it was removed.'
-              : `A version is not signed by one of your devices (${refused.reason}).`
+              : `A version is not signed by a member’s device (${refused.reason}).`
+          );
+        }
+        const missing = missingKey as ProjectGroupError | null;
+        if (missing) throw missing;
+        const unlisted = unauthorized as number | null;
+        if (unlisted !== null) {
+          throw integrity(
+            'authority',
+            `Version ${unlisted} of this project was signed by someone without an editing role in its epoch.`
           );
         }
         if (error instanceof VersionLogError) throw logFailure(error);
@@ -1048,11 +1142,49 @@ export function createEncryptedProjectStore(
         'E2EE_EPOCH_STALE'
       );
     }
+    // A co-member's removed device may still hold this key (slice 5-7).
+    if (await pendingMemberRotation(groups, projectId, state.keyEpoch)) {
+      throw new ApiError(
+        409,
+        'Another member of this project removed one of their devices, which may still hold its current key. Saving resumes once one of their other devices has opened the project.',
+        'E2EE_MEMBER_ROTATION_PENDING'
+      );
+    }
     return {
       keyEpoch: state.keyEpoch,
       projectKey: material.projectKey,
       epochAuthenticator: material.epochAuthenticator
     };
+  }
+
+  /**
+   * This account holds the owner or editor role in the epoch it is about to
+   * write in (slice 5-2): a viewer's browser does not send what every other
+   * browser would refuse, and what the server refuses as well.
+   */
+  async function requireOwnEditingRole(
+    projectId: string,
+    material: Material
+  ): Promise<void> {
+    const { keyEpochBase } = await groupBaseForKeyEpoch(
+      groups,
+      projectId,
+      material.keyEpoch
+    );
+    if (
+      !(await heldEditingRole(
+        projectId,
+        userId,
+        material.keyEpoch,
+        material.keyEpoch - keyEpochBase
+      ))
+    ) {
+      throw new ApiError(
+        403,
+        'Viewers can read this encrypted project but cannot change it.',
+        'E2EE_PROJECT_READ_ONLY'
+      );
+    }
   }
 
   /** Revisions the next head still names: those the document still records. */
@@ -1266,6 +1398,7 @@ export function createEncryptedProjectStore(
     let restored = false;
     for (let attempt = 0; ; attempt++) {
       const material = await currentMaterial(device, projectId);
+      await requireOwnEditingRole(projectId, material);
       const sealed = await sealDocument(
         device,
         material,
@@ -1348,47 +1481,89 @@ export function createEncryptedProjectStore(
   }
 
   /**
-   * The key a replaced envelope's signer signs with: a device this account
-   * lists, or a removed one (slice 4-10) for an envelope under a key epoch
-   * below its cutoff, which it could know. Version cutoffs' heads order
-   * document versions only, so a replaced envelope is held to the key
-   * epoch alone.
+   * Who signed a replaced envelope, checked: a device of this account, or
+   * (slice 5-2) of a co-member for the project info and measurements,
+   * which any editor writes; view state is only ever the caller's own. A
+   * removed device (slice 4-10) counts only under a key epoch below its
+   * cutoff, which it could know (version cutoffs' heads order document
+   * versions only, so a replaced envelope is held to the key epoch alone),
+   * and a co-member's envelope only when they held an editing role in its
+   * epoch. Returns the signer's user id and the signed time.
    */
-  async function replacedSigningKey(
-    record: E2eeProjectEnvelopeRecord
-  ): Promise<Uint8Array> {
-    const live = list().devices.find(
-      (d) => d.deviceId === record.signerDeviceId
-    );
-    if (live) return live.signingKey;
-    const removed = signingKeyOf(list(), record.signerDeviceId);
-    if (removed) {
-      let cutoff: VersionCutoff | undefined;
-      try {
-        cutoff = (await cutoffsFor(record.projectId)).get(
-          authorCutoffKey(userId, record.signerDeviceId)
-        );
-      } catch {
-        cutoff = undefined;
-      }
-      if (cutoff?.keyEpoch !== undefined && record.keyEpoch < cutoff.keyEpoch) {
-        return removed;
-      }
-      throw integrity(
-        'author',
-        'This envelope was signed by a removed device after it was removed.'
+  async function replacedSigner(
+    record: E2eeProjectEnvelopeRecord,
+    kind: E2eeReplacedEnvelopeKind,
+    envelope: Uint8Array
+  ): Promise<{ userId: string; signedAt: number }> {
+    const lists =
+      kind === 'view-state'
+        ? [list()]
+        : await projectDeviceLists(groups, record.projectId);
+    let refusal = 'This envelope is not signed by a device this account lists.';
+    for (const candidate of lists) {
+      const live = candidate.devices.find(
+        (d) => d.deviceId === record.signerDeviceId
       );
+      let key = live?.signingKey ?? null;
+      if (!key) {
+        const removed = signingKeyOf(candidate, record.signerDeviceId);
+        if (!removed) continue;
+        let cutoff: VersionCutoff | undefined;
+        try {
+          cutoff = (await cutoffsFor(record.projectId)).get(
+            authorCutoffKey(candidate.userId, record.signerDeviceId)
+          );
+        } catch {
+          cutoff = undefined;
+        }
+        if (
+          cutoff?.keyEpoch === undefined ||
+          record.keyEpoch >= cutoff.keyEpoch
+        ) {
+          refusal =
+            'This envelope was signed by a removed device after it was removed.';
+          continue;
+        }
+        key = removed;
+      }
+      const signed = await verifyProjectEnvelopeSignature(
+        key,
+        envelope,
+        bytes(record.signature)
+      ).catch(() => null);
+      if (!signed) {
+        refusal = 'This envelope’s signature does not verify.';
+        continue;
+      }
+      if (candidate.userId !== userId) {
+        const { keyEpochBase } = await groupBaseForKeyEpoch(
+          groups,
+          record.projectId,
+          record.keyEpoch
+        );
+        if (
+          !(await heldEditingRole(
+            record.projectId,
+            candidate.userId,
+            record.keyEpoch,
+            record.keyEpoch - keyEpochBase
+          ))
+        ) {
+          throw integrity(
+            'authority',
+            'This envelope was signed by someone without an editing role in its epoch.'
+          );
+        }
+      }
+      return { userId: candidate.userId, signedAt: signed.signedAt };
     }
-    throw integrity(
-      'author',
-      'This envelope is not signed by a device this account lists.'
-    );
+    throw integrity('author', refusal);
   }
 
   /**
    * Opens a replaced envelope (project info, measurements, view state):
-   * signed by a device this account lists (or a removed one inside its
-   * cutoff), bound to its key epoch, of the
+   * signed by a member's device (`replacedSigner`), bound to its key epoch,
+   * of the
    * kind, project, sequence and epoch the account named, then decoded by
    * its body codec.
    */
@@ -1397,15 +1572,7 @@ export function createEncryptedProjectStore(
     kind: E2eeReplacedEnvelopeKind
   ): Promise<OpenedReplaced> {
     const envelope = bytes(record.envelope);
-    const signingKey = await replacedSigningKey(record);
-    const signed = await verifyProjectEnvelopeSignature(
-      signingKey,
-      envelope,
-      bytes(record.signature)
-    ).catch(() => null);
-    if (!signed) {
-      throw integrity('author', 'This envelope’s signature does not verify.');
-    }
+    const signed = await replacedSigner(record, kind, envelope);
     let header: ProjectEnvelopeHeader;
     try {
       const parsed = parseEnvelope(envelope).header;
@@ -1474,6 +1641,10 @@ export function createEncryptedProjectStore(
   ): Promise<SealedReplaced> {
     const device = writableDevice();
     const material = await currentMaterial(device, projectId);
+    // Any member keeps its own view state; the rest is an editor's.
+    if (init.kind !== 'view-state') {
+      await requireOwnEditingRole(projectId, material);
+    }
     const header: ProjectEnvelopeHeaderInit = {
       kind: init.kind,
       projectId,
@@ -1692,6 +1863,7 @@ export function createEncryptedProjectStore(
         throw new ApiError(404, 'Project not found.', 'PROJECT_NOT_FOUND');
       }
       const material = await currentMaterial(device, projectId);
+      await requireOwnEditingRole(projectId, material);
       const sealed = await sealDocument(
         device,
         material,
@@ -1766,6 +1938,17 @@ export function createEncryptedProjectStore(
 
     async catchUp(projectId) {
       if (groups.device) await joinProjectGroup(groups, projectId);
+    },
+
+    async restoreBlobs(projectId, blobIds) {
+      if (!ctx.restoreBlobs) {
+        throw new ApiError(
+          409,
+          'This version names files the account does not hold, and this browser has no copy to store again.',
+          'E2EE_BLOB_UNKNOWN'
+        );
+      }
+      await ctx.restoreBlobs(projectId, blobIds);
     }
   };
 

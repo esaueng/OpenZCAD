@@ -52,7 +52,13 @@ export type E2eeRoomWriteResult =
   /** The account's head moved: the room re-reads it and reports a conflict. */
   | { kind: 'conflict' }
   | { kind: 'epoch-stale'; keyEpoch: number }
-  | { kind: 'refused'; code: CollaborationErrorCode; message: string };
+  | {
+      kind: 'refused';
+      code: CollaborationErrorCode;
+      message: string;
+      /** With `blob-unknown`: the blobs the account no longer holds. */
+      blobIds?: string[];
+    };
 
 /**
  * The account's encrypted version store, as the room uses it. The Worker
@@ -265,7 +271,11 @@ export type E2eeRoomOutcome =
   | { kind: 'conflict'; latest: E2eeRoomHead; base?: E2eeRoomHead }
   | {
       kind: 'error';
-      rejection: { code: CollaborationErrorCode; message: string };
+      rejection: {
+        code: CollaborationErrorCode;
+        message: string;
+        blobIds?: string[];
+      };
     };
 
 /**
@@ -318,10 +328,13 @@ export class E2eeRoomSequencer {
       kind: 'error' as const,
       rejection: { code, message }
     });
-    if (writer.role !== 'owner') {
+    // The owner and editors write (slice 5-6). The room read the role from
+    // the Worker's mirror just before (`canAuthor`), and the account's own
+    // write checks it again in the same statement batch.
+    if (writer.role === 'viewer') {
       return refuse(
         'permission-denied',
-        'Only the owner can edit this encrypted project until sharing arrives.'
+        'Viewers cannot change the collaboration document.'
       );
     }
     const parsed = parseE2eeSubmission(version);
@@ -386,7 +399,14 @@ export class E2eeRoomSequencer {
       case 'epoch-stale':
         return refuse('epoch-stale', epochStaleMessage(written.keyEpoch));
       default:
-        return refuse(written.code, written.message);
+        return {
+          kind: 'error',
+          rejection: {
+            code: written.code,
+            message: written.message,
+            ...(written.blobIds ? { blobIds: written.blobIds } : {})
+          }
+        };
     }
   }
 

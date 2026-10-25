@@ -32,8 +32,9 @@
  *
  * Served by `handleE2eeRequest` after the key rollout gate, key-table
  * readiness and, for writes, the session/erasure write authorization. Here:
- * E2EE_PROJECTS_ENABLED, migrations 0031–0034 (503 without them), owner
- * only and format-2 projects only.
+ * E2EE_PROJECTS_ENABLED, migrations 0031–0034 (503 without them) and
+ * format-2 projects only: any member downloads, the owner and editors
+ * upload (slice 5-2), against the owner's artifact storage.
  */
 import {
   envelopeBodyLength,
@@ -73,7 +74,7 @@ import {
   json,
   record,
   refuse,
-  requireOwnedEncryptedProject,
+  requireEncryptedProjectAccess,
   type Authorization
 } from './e2eeProjects';
 
@@ -372,10 +373,15 @@ export async function handleE2eeContentBlobRequest(
       (method === 'GET' && (route === '' || route === ':id')) ||
       (method === 'POST' && (route === 'uploads' || route === ':id/finalize'));
     if (!known) refuse(404, 'NOT_FOUND', 'Not found.');
-    // The owner reads a project in the recycle bin, as in plaintext (4-8).
-    await requireOwnedEncryptedProject(db, userId, projectId, {
-      allowDeleted: method === 'GET'
-    });
+    // Any member reads; the owner and editors upload (slice 5-2). The
+    // owner reads a project in the recycle bin, as in plaintext (4-8).
+    await requireEncryptedProjectAccess(
+      db,
+      userId,
+      projectId,
+      method === 'GET' ? 'read' : 'write',
+      { allowDeleted: method === 'GET' }
+    );
     const bucket = blobBucket(env);
     if (!bucket) {
       refuse(

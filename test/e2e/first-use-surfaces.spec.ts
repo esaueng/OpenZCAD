@@ -185,7 +185,7 @@ test('a Move held for its panel is dropped when its selection is cleared', async
   await expect(page.locator('form[aria-label="Move controls"]')).toHaveCount(0);
 });
 
-test('Save-Data loads neither Settings nor the keypad speculatively', async ({
+test('Save-Data loads no surface or command card speculatively', async ({
   page
 }) => {
   test.setTimeout(process.env.CI ? 240_000 : 120_000);
@@ -199,8 +199,13 @@ test('Save-Data loads neither Settings nor the keypad speculatively', async ({
   const fetched: string[] = [];
   page.on('request', (request) => {
     const url = request.url();
-    // MoveOverlay is left out: the command-card prefetch takes it as a card.
-    if (/(NumericKeypad|SettingsPage)[^/]*\.js/.test(url)) fetched.push(url);
+    // The Box card's own chunk (Inspector) loads because the card is opened.
+    if (
+      /(NumericKeypad|SettingsPage|MoveOverlay|SketchPlanePrompt|DatumPlaneForm|ModelingOperationsForm)-[^/]*\.js/.test(
+        url
+      )
+    )
+      fetched.push(url);
   });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Saving data');

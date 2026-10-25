@@ -999,3 +999,74 @@
   opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }
+
+/* ── Assistant consent on encrypted projects (ADR-024 6-1) ──
+   The question before an encrypted project's first request, and the chip
+   that stays while the answer is yes. */
+.assistant-consent-dialog {
+  width: min(560px, 100%);
+  max-height: calc(100dvh - 12vh - 32px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
+}
+
+.assistant-consent-dialog > * {
+  flex-shrink: 0;
+}
+
+.assistant-consent-dialog h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+  font-size: var(--fs-md);
+}
+
+.assistant-consent-dialog p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.assistant-consent-list {
+  display: grid;
+  gap: var(--sp-1);
+  margin: 0;
+  padding-left: var(--sp-4);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.assistant-consent-dialog .assistant-consent-error {
+  color: var(--color-error-text);
+}
+
+.assistant-consent-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+
+.assistant-consent-actions button[aria-disabled='true'] {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.assistant-consent-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+  padding-left: 28px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+}

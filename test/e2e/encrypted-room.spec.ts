@@ -1,8 +1,6 @@
-import type { BrowserContext, Page, WebSocketRoute } from '@playwright/test';
+import type { BrowserContext, Page } from '@playwright/test';
 import { withEncryptedProjectInfo } from '../../apps/web/worker/e2eeProjectDocuments';
-import { ProjectCollaborationRoom } from '../../apps/web/worker/e2eeRoom';
 import {
-  createRoomContext,
   installWorkerSocketGlobals,
   type FakeWebSocket
 } from '../collaboration-room-harness';
@@ -22,6 +20,7 @@ import {
   seedE2eeDevice,
   type E2eeServer
 } from './e2ee-fixtures';
+import { encryptedRooms } from './encrypted-room-fixtures';
 
 /** Autosave and the room wait out idle delays; the MLS Worker starts on use. */
 const SYNC_BUDGET_MS = 30_000;
@@ -49,74 +48,6 @@ async function listing(server: E2eeServer) {
       storageFormat: 2
     }))
   });
-}
-
-/**
- * The Worker's own room class in this process, over the same SQLite the
- * encrypted routes use, reached by each browser's real WebSocket through
- * Playwright's socket routing (the static preview has no Durable Object).
- */
-function encryptedRooms(server: E2eeServer) {
-  const rooms = new Map<
-    string,
-    { room: ProjectCollaborationRoom; values: Map<string, unknown> }
-  >();
-  const env = {
-    DB: d1Database(server.db),
-    ENVIRONMENT: 'development',
-    AUTH_MODE: 'development',
-    E2EE_KEYS_ENABLED: 'true',
-    E2EE_PROJECTS_ENABLED: 'true',
-    PROJECT_PERSONAL_SYNC_ENABLED: 'true'
-  };
-  const roomFor = (projectId: string) => {
-    let entry = rooms.get(projectId);
-    if (!entry) {
-      const { context, values } = createRoomContext();
-      const room = new ProjectCollaborationRoom(context, env);
-      context.activate(room);
-      entry = { room, values };
-      rooms.set(projectId, entry);
-    }
-    return entry;
-  };
-  return {
-    rooms,
-    async connect(ws: WebSocketRoute, serverSockets: FakeWebSocket[]) {
-      const projectId = /\/api\/projects\/([^/]+)\/collaboration/.exec(
-        new URL(ws.url()).pathname
-      )?.[1];
-      if (!projectId) return ws.close();
-      const { room } = roomFor(projectId);
-      // What the Worker attaches for an encrypted project's owner.
-      const response = await room.fetch(
-        new Request(`https://project-room.internal/?projectId=${projectId}`, {
-          headers: {
-            upgrade: 'websocket',
-            'x-openzcad-user-id': E2E_USER_ID,
-            'x-openzcad-display-name': 'E2E user',
-            'x-openzcad-project-role': 'owner',
-            'x-openzcad-project-format': '2'
-          }
-        })
-      );
-      if (response.status !== 101) return ws.close();
-      const socket = serverSockets.at(-1)!;
-      socket.send = (data: string) => ws.send(data);
-      const close = socket.close.bind(socket);
-      socket.close = (code: number, reason: string) => {
-        close(code, reason);
-        void ws.close({ code, reason });
-      };
-      ws.onMessage((message) => {
-        void room.webSocketMessage(
-          socket as unknown as WebSocket,
-          String(message)
-        );
-      });
-      ws.onClose(() => room.webSocketClose(socket as unknown as WebSocket));
-    }
-  };
 }
 
 /** One browser of the owner, wired to the shared account and room. */

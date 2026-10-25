@@ -1,6 +1,6 @@
 /**
- * Device removal across encrypted projects (ADR-024 Phase 4, slice 4-10;
- * roadmap L11), the browser's part:
+ * Device removal across encrypted projects (ADR-024 Phase 4, slice 4-10,
+ * and Phase 5, slice 5-7, for shared ones; roadmap L11), the browser's part:
  *
  * - **Statements.** `revocationStatements` fetches this account's
  *   identity-signed revocation cutoff statements and verifies each against
@@ -13,14 +13,20 @@
  *   identity key signs anything it catches every project up and refuses a
  *   removal it could not finish (encrypted projects but no cutoff storage,
  *   migration 0036). Once the new device list is accepted it signs, with
- *   the identity key the removal already opened, a cutoff for every owned
- *   encrypted project (the next key epoch, and the newest head), stores it,
- *   and rotates each project: a Remove of the revoked device's leaves (or
- *   an empty Commit), the new epoch's project key and rejoin PSK under the
- *   new account key, and a key archive with a new dedupe secret (D8). A
- *   rotation that landed later than predicted is re-signed. Projects it
- *   cannot rotate (this device holds no leaf and is not the named
- *   replacement) are left to the other devices, whose writers rotate
+ *   the identity key the removal already opened, a cutoff for every
+ *   encrypted project the account belongs to, owned or (slice 5-7) shared
+ *   with it as an editor or a viewer (the next key epoch, and the newest
+ *   head), stores it, and rotates each project: a Remove of the revoked
+ *   device's leaves (the policy lets any member remove its own identity's
+ *   leaves) or an empty Commit, the new epoch's project key and rejoin PSK
+ *   under the new account key, and a key archive with a new dedupe secret
+ *   (D8). A shared project's other members post their own wraps of the new
+ *   epoch when they process the Commit, and read the account's statement
+ *   (`GET /api/e2ee/projects/:id/revocation-cutoffs`) to refuse the removed
+ *   device's later Commits and versions while still reading its earlier
+ *   ones. A rotation that landed later than predicted is re-signed.
+ *   Projects it cannot rotate (this device holds no leaf and is not the
+ *   named replacement) are left to the other devices, whose writers rotate
  *   before their next write.
  */
 import {
@@ -62,7 +68,7 @@ export interface RevocationCutoffsApi {
   store(
     request: E2eeRevocationCutoffRequest
   ): Promise<E2eeRevocationCutoffResponse>;
-  /** Whether the account owns any encrypted (format 2) project. */
+  /** Whether the account has any encrypted (format 2) project, owned or shared. */
   ownsEncryptedProjects(): Promise<boolean>;
 }
 

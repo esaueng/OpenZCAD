@@ -45,7 +45,11 @@ import {
 import { deviceKeyStore } from './keychainDeviceKeys';
 import { getKeySessionRevision, subscribeKeySession } from './keySession';
 import { mlsProjectSessions } from './mls/projectSessions';
-import { createProjectGroupsApi, projectGroupAccount } from './projectGroups';
+import {
+  createProjectGroupsApi,
+  projectGroupAccount,
+  type MembersRemoved
+} from './projectGroups';
 import {
   createEncryptedMeasurements,
   createEncryptedViewStates,
@@ -61,11 +65,22 @@ import {
 } from './encryptedProjectInfo';
 import { versionPins } from './versionPins';
 import {
+  reportEncryptedFailure,
+  reportKeysUnlocked,
+  reportVerificationWarning
+} from './encryptionStatus';
+import { reportingEncryptedProjectStore } from './encryptionStatusReports';
+import {
   createRevocationCutoffsApi,
   localPendingCutoffs,
   revocationStatements,
   storePendingCutoffs
 } from './deviceRemoval';
+import { contactsContext } from './contacts';
+import { contactMemberLists } from './memberLists';
+import { createE2eeInvitationsApi } from '@openzcad/shared';
+import { contactInvitationPeople, type InvitationContext } from './invitations';
+import { invitationStore } from './invitationStore';
 
 export { E2EE_KEYS_LOCKED_CODE };
 
@@ -76,11 +91,27 @@ interface Opened {
   readonly blobs: Promise<EncryptedContentBlobs>;
   readonly measurements: Promise<EncryptedMeasurements>;
   readonly viewStates: Promise<EncryptedViewStates>;
+  readonly invitations: Promise<InvitationContext>;
 }
 
 let opened: Opened | null = null;
 let decoder: E2eeDecoder | null = null;
 const warningListeners = new Set<(warning: EncryptedProjectWarning) => void>();
+const removalListeners = new Set<(removal: MembersRemoved) => void>();
+
+/**
+ * Members who lost access to a project in a Commit this page sent or
+ * processed (slice 5-5): an owner's removal or a departure. Share links
+ * (slice 5-10) listen here to offer reissuing the project's links with new
+ * share keys, since a removed member could keep reading later snapshots of
+ * links made before the removal.
+ */
+export function subscribeMemberRemovals(
+  listener: (removal: MembersRemoved) => void
+): () => void {
+  removalListeners.add(listener);
+  return () => removalListeners.delete(listener);
+}
 
 subscribeKeySession(() => {
   opened = null;
@@ -99,7 +130,10 @@ export function subscribeEncryptedProjectWarnings(
   return () => warningListeners.delete(listener);
 }
 
-async function sessionUserId(): Promise<string> {
+async function pageSession(): Promise<{
+  userId: string;
+  email: string | null;
+}> {
   const response = await desktopFetch('/api/session', {
     credentials: 'same-origin'
   });
@@ -109,11 +143,17 @@ async function sessionUserId(): Promise<string> {
       'Sign in again to open encrypted projects.'
     );
   }
-  const session = (await response.json()) as { userId?: unknown };
+  const session = (await response.json()) as {
+    userId?: unknown;
+    email?: unknown;
+  };
   if (typeof session.userId !== 'string') {
     throw new ApiError(401, 'Sign in again to open encrypted projects.');
   }
-  return session.userId;
+  return {
+    userId: session.userId,
+    email: typeof session.email === 'string' ? session.email : null
+  };
 }
 
 const locked = () =>
@@ -123,11 +163,16 @@ const locked = () =>
     E2EE_KEYS_LOCKED_CODE
   );
 
-async function openStore(userId: string): Promise<{
+async function openStore(
+  userId: string,
+  revision: number,
+  email: string | null
+): Promise<{
   store: EncryptedProjectStore;
   blobs: EncryptedContentBlobs;
   measurements: EncryptedMeasurements;
   viewStates: EncryptedViewStates;
+  invitations: InvitationContext;
 }> {
   const e2ee: E2eeContext = {
     userId,
@@ -155,8 +200,10 @@ async function openStore(userId: string): Promise<{
   await storePendingCutoffs(cutoffsApi, localPendingCutoffs(), userId).catch(
     () => 0
   );
+  const groupsApi = createProjectGroupsApi();
+  const contacts = contactsContext(e2ee);
   const groups = {
-    api: createProjectGroupsApi(),
+    api: groupsApi,
     sessions: mlsProjectSessions(),
     account: projectGroupAccount(e2ee, account),
     device,
@@ -165,7 +212,25 @@ async function openStore(userId: string): Promise<{
     revocations: revocationStatements(cutoffsApi, {
       list: account.list,
       generation: account.generation
-    })
+    }),
+    // Shared projects (slice 5-2): co-members' device lists, checked by the
+    // contacts module (slice 5-1) against this browser's verified and seen
+    // pins. A solo project looks nothing up.
+    members: contactMemberLists({
+      contacts,
+      account,
+      leaves: (projectId) => groupsApi.leaves(projectId)
+    }),
+    // The share-link reissue hook (slice 5-5, for slice 5-10).
+    onMembersRemoved: (removal: MembersRemoved) => {
+      for (const listener of removalListeners) {
+        try {
+          listener(removal);
+        } catch {
+          // Every listener still hears it.
+        }
+      }
+    }
   };
   const blobs = createEncryptedContentBlobs({
     groups,
@@ -180,7 +245,9 @@ async function openStore(userId: string): Promise<{
     blobs.read(projectId, blobId, signal, onProgress)
   );
   const pins = versionPins();
-  const store = createEncryptedProjectStore({
+  // The editor's encryption indicator hears what this key session verifies.
+  const sessionCurrent = () => getKeySessionRevision() === revision;
+  const verifying = createEncryptedProjectStore({
     groups,
     pins,
     blobReferences: references,
@@ -195,6 +262,13 @@ async function openStore(userId: string): Promise<{
       await preloadEncryptedImportSources(document);
     },
     onWarning: (warning) => {
+      if (sessionCurrent()) {
+        reportVerificationWarning(warning.projectId, {
+          kind: warning.kind,
+          signedAt: warning.signedAt,
+          updatedAt: warning.updatedAt
+        });
+      }
       for (const listener of warningListeners) {
         try {
           listener(warning);
@@ -204,6 +278,7 @@ async function openStore(userId: string): Promise<{
       }
     }
   });
+  const store = reportingEncryptedProjectStore(verifying, sessionCurrent);
   return {
     store,
     blobs,
@@ -212,30 +287,54 @@ async function openStore(userId: string): Promise<{
       kit: store.replaced,
       pins
     }),
-    viewStates: createEncryptedViewStates({ userId, kit: store.replaced, pins })
+    viewStates: createEncryptedViewStates({
+      userId,
+      kit: store.replaced,
+      pins
+    }),
+    // Invitations (slice 5-3b): verified-contact checks through the same
+    // contacts module the co-members' lists come from.
+    invitations: {
+      groups,
+      api: createE2eeInvitationsApi(desktopFetch),
+      people: contactInvitationPeople(contacts, account),
+      store: invitationStore(),
+      email
+    }
   };
 }
 
 async function openedForSession(): Promise<Opened> {
-  const userId = await sessionUserId();
+  const { userId, email } = await pageSession();
   const revision = getKeySessionRevision();
   if (opened?.userId !== userId || opened.revision !== revision) {
-    const both = openStore(userId);
+    const both = openStore(userId, revision, email);
     const current: Opened = {
       userId,
       revision,
       store: both.then(({ store }) => store),
       blobs: both.then(({ blobs }) => blobs),
       measurements: both.then(({ measurements }) => measurements),
-      viewStates: both.then(({ viewStates }) => viewStates)
+      viewStates: both.then(({ viewStates }) => viewStates),
+      invitations: both.then(({ invitations }) => invitations)
     };
     opened = current;
-    both.catch(() => {
-      if (opened === current) opened = null;
-    });
+    both.then(
+      () => {
+        if (getKeySessionRevision() === revision) reportKeysUnlocked();
+      },
+      (error: unknown) => {
+        if (opened === current) opened = null;
+        // A locked key session shows on the indicator; nothing else does.
+        if (getKeySessionRevision() === revision) {
+          reportEncryptedFailure(null, error);
+        }
+      }
+    );
     current.blobs.catch(() => undefined);
     current.measurements.catch(() => undefined);
     current.viewStates.catch(() => undefined);
+    current.invitations.catch(() => undefined);
   }
   return opened;
 }
@@ -292,6 +391,14 @@ export async function publishEncryptedThumbnail(
   image: Blob
 ): Promise<string> {
   return publishThumbnail(await projectFiles(), projectId, image);
+}
+
+/**
+ * The page's invitations to encrypted projects (slice 5-3b): the sharing
+ * dialog's encrypted branch and Settings › Encryption › Invitations.
+ */
+export async function encryptedInvitations(): Promise<InvitationContext> {
+  return (await openedForSession()).invitations;
 }
 
 /** The page's encrypted measurements client (`measurementCloudSync.ts`). */

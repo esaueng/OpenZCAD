@@ -9,6 +9,7 @@ import {
   type DeviceListPin
 } from '@openzcad/crypto';
 import { handleE2eeRequest } from '../../apps/web/worker/e2ee';
+import type { E2eeInvitationHost } from '../../apps/web/worker/e2eeInvitations';
 import { D1R2PersistenceService } from '@openzcad/cloudflare-adapters';
 import { toUserId } from '@openzcad/shared';
 import {
@@ -38,11 +39,24 @@ export interface E2eeServer {
   enabled: boolean;
   /** E2EE_PROJECTS_ENABLED for the account (encrypted projects, Phase 4). */
   projectsEnabled: boolean;
-  /** Runs the account's key flows in Node, as another device would. */
-  readonly nodeDevice: () => E2eeContext;
+  /**
+   * Runs an account's key flows in Node, as another device would; the
+   * signed-in account unless another one (`addE2eeUser`) is named.
+   */
+  readonly nodeDevice: (userId?: string) => E2eeContext;
   /** The artifact bucket encrypted content blobs are uploaded to. */
   readonly objects: Map<string, Uint8Array>;
   readonly bucket: unknown;
+  /**
+   * Invitation emails to encrypted projects the routes sent (slice 5-3b):
+   * each recipient and the token its `#encrypted-invite=` link carries.
+   */
+  readonly mailbox: { to: string; token: string }[];
+  /**
+   * After each route answers, as the Worker then tells the project's room
+   * (`notifyEncryptedRoom`): the room specs wire their room here.
+   */
+  afterResponse?: (request: Request, response: Response) => Promise<void>;
 }
 
 /**
@@ -142,10 +156,11 @@ export function createE2eeServer({
     enabled,
     projectsEnabled,
     objects,
+    mailbox: [],
     bucket: memoryBucket(objects),
-    nodeDevice: () => ({
-      userId: E2E_USER_ID,
-      api: createE2eeApi((path, init) => call(server, path, init)),
+    nodeDevice: (userId = E2E_USER_ID) => ({
+      userId,
+      api: createE2eeApi((path, init) => call(server, path, init, userId)),
       store: memoryDeviceStore(),
       // Node-side devices are made extractable so they can be moved into a
       // browser; the app's own devices never are.
@@ -158,10 +173,26 @@ export function createE2eeServer({
   return server;
 }
 
+/**
+ * Adds another account to the server, for specs that sign two people in
+ * (each in its own browser context, with `installE2eeServer` and
+ * `seedE2eeDevice` naming it).
+ */
+export function addE2eeUser(
+  server: E2eeServer,
+  userId: string,
+  email: string | null = null
+): void {
+  server.db
+    .prepare(`INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)`)
+    .run(userId, email, new Date().toISOString());
+}
+
 async function call(
   server: E2eeServer,
   path: string,
-  init: RequestInit = {}
+  init: RequestInit = {},
+  userId = E2E_USER_ID
 ): Promise<Response> {
   const env = {
     DB: d1Database(server.db),
@@ -169,19 +200,50 @@ async function call(
     ENVIRONMENT: 'development',
     ARTIFACTS: server.bucket
   };
-  const session = { userId: E2E_USER_ID };
+  const session = { userId };
   if (
     server.enabled &&
     !['GET', 'HEAD', 'OPTIONS'].includes(init.method ?? 'GET')
   )
     await admitDevelopmentE2eeWrite(env.DB, session);
-  return handleE2eeRequest(
-    new Request(`https://zcad.test${path}`, init),
+  const request = new Request(`https://zcad.test${path}`, init);
+  const response = await handleE2eeRequest(
+    request,
     env,
     session,
     server.enabled,
-    server.projectsEnabled
+    server.projectsEnabled,
+    invitationHost(server, userId)
   );
+  await server.afterResponse?.(request, response);
+  return response;
+}
+
+/**
+ * The invitation routes' view of the session (slice 5-3b): the account's
+ * email from the users table (`addE2eeUser`), project sharing open, and
+ * invitation emails captured in `server.mailbox`.
+ */
+function invitationHost(
+  server: E2eeServer,
+  userId: string
+): E2eeInvitationHost {
+  const row = server.db
+    .prepare('SELECT email FROM users WHERE id = ?')
+    .get(userId) as { email: string | null } | undefined;
+  const email = row?.email ?? null;
+  return {
+    email,
+    inviterLabel: email ?? userId,
+    sharingEnabled: true,
+    emailConfigured: true,
+    sendInvitationEmail: async (details) => {
+      server.mailbox.push({
+        to: details.recipientEmail,
+        token: details.token
+      });
+    }
+  };
 }
 
 /**
@@ -255,23 +317,33 @@ export async function installUploadRoutes(
   });
 }
 
-/** Routes this browser context's `/api/e2ee/*` calls to `server`. */
+/**
+ * Routes this browser context's `/api/e2ee/*` calls to `server`, signed in
+ * as `userId` (the account `stubApi` signs in, unless named).
+ */
 export async function installE2eeServer(
   context: BrowserContext,
-  server: E2eeServer
+  server: E2eeServer,
+  userId = E2E_USER_ID
 ): Promise<void> {
   await context.route('**/api/e2ee/**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     // Encrypted documents travel as binary frames: pass bytes both ways.
     const body = request.postDataBuffer();
-    const response = await call(server, `${url.pathname}${url.search}`, {
-      method: request.method(),
-      headers: {
-        'content-type': request.headers()['content-type'] ?? 'application/json'
+    const response = await call(
+      server,
+      `${url.pathname}${url.search}`,
+      {
+        method: request.method(),
+        headers: {
+          'content-type':
+            request.headers()['content-type'] ?? 'application/json'
+        },
+        ...(body === null ? {} : { body: new Uint8Array(body) })
       },
-      ...(body === null ? {} : { body: new Uint8Array(body) })
-    });
+      userId
+    );
     await route.fulfill({
       status: response.status,
       contentType: response.headers.get('content-type') ?? 'application/json',
@@ -420,15 +492,16 @@ export async function seedE2eeDevice(
   server: E2eeServer,
   {
     label = 'Seeded browser',
-    otherDevices = []
-  }: { label?: string; otherDevices?: string[] } = {}
+    otherDevices = [],
+    userId = E2E_USER_ID
+  }: { label?: string; otherDevices?: string[]; userId?: string } = {}
 ): Promise<SeededAccount> {
   const recovery = await generateRecoveryKey();
-  const node = server.nodeDevice();
+  const node = server.nodeDevice(userId);
   await setUpEncryption(node, { recoverySecret: recovery.secret, label });
-  const device = (await node.store.loadDevice(E2E_USER_ID))!;
+  const device = (await node.store.loadDevice(userId))!;
   for (const other of otherDevices) {
-    const ctx = server.nodeDevice();
+    const ctx = server.nodeDevice(userId);
     const state = await loadEncryption(ctx);
     if (state.kind !== 'ready') throw new Error('seed failed');
     await enrollWithRecoveryKey(ctx, state.account, recovery.secret, other);

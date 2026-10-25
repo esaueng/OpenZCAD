@@ -7,17 +7,19 @@ import {
   expectBodyCount,
   finishInPlaceCommand,
   pickObjectsBody,
+  setSelectionFilter,
   stubApi,
   test,
   waitForStillViewport
 } from './openzcad-fixtures';
 
 /**
- * R01 datum axes: the Axis card makes an axis where two planes meet and one
- * through two typed points; a sketch revolves about the first; a body turns
- * about the second with Rotate about axis and is then patterned about it; an
- * edit of the axis moves both consumers; coincident points are refused with
- * nothing created. Every consumer stores the axis by id.
+ * R01 datum axes, made in place (U09): an axis where two ghost planes meet
+ * and one along a block's edge, which its History card retypes through two
+ * points; a sketch revolves about the first; a body turns about the second
+ * with Rotate about axis and is then patterned about it; an edit of the
+ * axis moves both consumers; coincident points are refused with nothing
+ * changed. Every consumer stores the axis by id.
  */
 
 interface DrawnAxis {
@@ -157,13 +159,16 @@ test('datum axes drive a revolve, a rotate about axis and a circular pattern', a
   const canvas = page.locator('.viewer-host canvas');
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
-  // Axis 1: where Front (XZ) meets Right (YZ), the world Z axis.
+  // Axis 1: where Front (XZ) meets Right (YZ), the world Z axis. U09: the
+  // Axis runs in place; the two ghost planes are clicked in that order.
   await page.getByRole('button', { name: /^Axis — / }).click();
-  await expect(inspector.getByRole('heading', { name: 'Axis' })).toBeVisible();
-  await inspector.getByRole('button', { name: 'Two planes' }).click();
-  await inspector.getByLabel('Plane A').selectOption('canonical:XZ');
-  await inspector.getByLabel('Plane B').selectOption('canonical:YZ');
-  await inspector.getByRole('button', { name: 'Done' }).click();
+  const axisBar = page.getByRole('group', { name: 'Axis command' });
+  await expect(axisBar).toContainText('Pick a straight edge');
+  await clickWorldPoint(page, [3, 0, 3]);
+  await expect(axisBar).toContainText('Pick the second plane');
+  await clickWorldPoint(page, [0, -3, 3]);
+  await expect(axisBar).toContainText('Where the two planes meet');
+  await finishInPlaceCommand(page, 'Axis');
   await expect(
     page.locator('.feature-row', { hasText: 'Axis 1' })
   ).toContainText('planes meet', { timeout: 20_000 });
@@ -258,26 +263,44 @@ test('datum axes drive a revolve, a rotate about axis and a circular pattern', a
       [-14, 14]
     ]);
 
-  // Axis 2 through two typed points, the vertical line at x = 10.
-  await page.getByRole('button', { name: /^Axis — / }).click();
-  await typePoint(inspector, 'From point', ['10', '0', '0']);
-  await typePoint(inspector, 'To point', ['10', '0', '1']);
-  await inspector.getByRole('button', { name: 'Done' }).click();
-  await expect(
-    page.locator('.feature-row', { hasText: 'Axis 2' })
-  ).toContainText('2 points', { timeout: 20_000 });
-  await expect.poll(async () => (await drawnAxes(canvas)).length).toBe(2);
-
-  // A 2 mm block turned half a turn about Axis 2 lands at x 18..20.
+  // A 2 mm block, and Axis 2 along its back right edge (clicked midway,
+  // with edges filtered so nothing else takes the click).
   await createPrimitiveInPlace(page, 'box', {
     sizes: { width: '2', depth: '2', height: '2' }
   });
   await expectBodyCount(page, 2);
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: /^Axis — / }).click();
+  await expect(axisBar).toContainText('Pick a straight edge');
+  await setSelectionFilter(page, 'Edge');
+  await clickWorldPoint(page, [2, 2, 1]);
+  await expect(axisBar).toContainText('Along the edge');
+  await finishInPlaceCommand(page, 'Axis');
+  await setSelectionFilter(page, 'Any');
+  const axis2Row = page.locator('.feature-row', { hasText: 'Axis 2' });
+  await expect(axis2Row).toContainText(/edge/i, { timeout: 20_000 });
+  await expect.poll(async () => (await drawnAxes(canvas)).length).toBe(2);
+
+  // Its History card retypes it through two points, the vertical line at
+  // x = 10.
+  await page.locator('.feature-row-main', { hasText: 'Axis 2' }).click();
+  await expect(
+    inspector.getByRole('heading', { name: 'Axis 2' })
+  ).toBeVisible();
+  await inspector.getByRole('button', { name: 'Two points' }).click();
+  await typePoint(inspector, 'From point', ['10', '0', '0']);
+  await typePoint(inspector, 'To point', ['10', '0', '1']);
+  await inspector.getByRole('button', { name: 'Apply' }).click();
+  await expect(axis2Row).toContainText('2 points', { timeout: 20_000 });
+
+  // The 2 mm block turned half a turn about Axis 2 lands at x 18..20.
   // U09: Rotate about axis runs in place: the body, then a click on the
   // Axis 2 line (x = 10, vertical), then the angle on its chip's keypad.
   await page.getByRole('button', { name: /^Rotate about axis — / }).click();
   await pickObjectsBody(page, 'Box 1');
-  const rotateBar = page.getByRole('group', { name: 'Rotate about axis command' });
+  const rotateBar = page.getByRole('group', {
+    name: 'Rotate about axis command'
+  });
   await expect(rotateBar).toContainText('datum axis');
   await clickWorldPoint(page, [10, 0, 6]);
   await expect(rotateBar).toContainText('Drag the angle');
@@ -308,7 +331,9 @@ test('datum axes drive a revolve, a rotate about axis and a circular pattern', a
   // count on its chip's keypad.
   await page.getByRole('button', { name: /^Circular pattern/ }).click();
   await pickObjectsBody(page, 'Box 1');
-  const patternBar = page.getByRole('group', { name: 'Circular pattern command' });
+  const patternBar = page.getByRole('group', {
+    name: 'Circular pattern command'
+  });
   await expect(patternBar).toContainText('Pick the axis');
   await clickWorldPoint(page, [10, 0, 6]);
   await expect(patternBar).toContainText('Drag the total angle');
@@ -355,13 +380,14 @@ test('datum axes drive a revolve, a rotate about axis and a circular pattern', a
     .toEqual([0, 40]);
 
   // Coincident points (equal only once evaluated) are refused by the exact
-  // check, and nothing is created.
-  await page.getByRole('button', { name: /^Axis — / }).click();
+  // check, and nothing changes.
+  await page.locator('.feature-row-main', { hasText: 'Axis 2' }).click();
+  await expect(inspector.getByRole('button', { name: 'Apply' })).toBeVisible();
   await typePoint(inspector, 'From point', ['0', '0', '0']);
   await typePoint(inspector, 'To point', ['1 - 1', '0', '0']);
-  await inspector.getByRole('button', { name: 'Done' }).click();
+  await inspector.getByRole('button', { name: 'Apply' }).click();
   await expect(inspector.getByRole('alert')).toContainText(
-    /Not created — .*coincide/,
+    /Not applied — .*coincide/,
     { timeout: 20_000 }
   );
   await expect(page.locator('.feature-row', { hasText: 'Axis 3' })).toHaveCount(

@@ -4,11 +4,15 @@ import {
   type BodyId,
   type BooleanKeepOriginals,
   type BooleanOperation,
+  type DatumAxisDefinition,
   type DatumAxisLine,
+  type DatumPlaneDefinition,
   type FeatureId,
   type ParamValue,
   type ParametricVector3,
   type PrimitiveKind,
+  type ReferenceImage,
+  type ReferenceImagePlane,
   type RevolveAxis,
   type SketchId,
   type SketchProfileReference,
@@ -31,6 +35,11 @@ import {
   primitiveBuild,
   type PlacementPick
 } from './primitives';
+import { datumAxis, datumPlane, type RefKind, type RefPick } from './datums';
+import { referenceImage, type ImageSlot } from './image';
+
+export type { RefPick } from './datums';
+export type { ImagePlacement, ImageSlot } from './image';
 
 /**
  * The in-place commands (U09), as data.
@@ -62,7 +71,10 @@ export type InPlaceToolId =
   | 'linear-pattern'
   | 'circular-pattern'
   | 'grid-pattern'
-  | PrimitiveKind;
+  | PrimitiveKind
+  | 'datum-plane'
+  | 'datum-axis'
+  | 'reference-image';
 
 export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'revolve',
@@ -88,7 +100,10 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'cylinder',
   'cone',
   'sphere',
-  'torus'
+  'torus',
+  'datum-plane',
+  'datum-axis',
+  'reference-image'
 ];
 
 export function isInPlaceTool(tool: string): tool is InPlaceToolId {
@@ -147,6 +162,10 @@ export interface InPlaceSlots {
   plane: PlanePick | null;
   /** Where a primitive's footprint was drawn; absent, it stands on the ground. */
   placement?: PlacementPick | null;
+  /** A datum's sources, in pick order: planes, edge ends, an edge, a face. */
+  refs: RefPick[];
+  /** The picture an Image command is placing. */
+  image: ImageSlot | null;
 }
 
 /** A choice too rare for a handle: it lives in the bar's Options menu. */
@@ -202,6 +221,8 @@ export interface InPlaceContext {
   linearSnap?: number | null;
   /** A body's bounding box, for references measured on it (a draft's base). */
   bodyBounds?(bodyId: BodyId): { min: Vector3; max: Vector3 } | null;
+  /** Where a reference image's plane lies now; null while it is unresolved. */
+  imagePlaneBasis?(plane: ReferenceImagePlane): PlaneBasis | null;
 }
 
 /** What to build, without names or ids; App turns it into the command. */
@@ -283,6 +304,13 @@ export type InPlaceRequest =
       dimensions: Record<string, ParamValue>;
       position: ParametricVector3;
       rotationDeg?: Vector3;
+    }
+  | { tool: 'datum-plane'; definition: DatumPlaneDefinition }
+  | { tool: 'datum-axis'; definition: DatumAxisDefinition }
+  | {
+      /** The picture as Done adds it: placed, scaled, turned. */
+      tool: 'reference-image';
+      image: ReferenceImage;
     };
 
 /** A handle the viewport draws for one value. */
@@ -325,6 +353,30 @@ export interface InPlaceToolSpec {
   bodyMode?: 'one' | 'many';
   /** Takes a plane: a ghost principal plane, a datum plane or a flat face. */
   wantsPlane?: boolean;
+  /** The datum sources its picks may be, and how a pick joins the others. */
+  refKinds?: readonly RefKind[];
+  takeRef?(refs: readonly RefPick[], ref: RefPick): RefPick[];
+  /**
+   * Nothing for the kernel to build (a reference image): the request is
+   * drawn as it stands, and Done adds it once it is ready.
+   */
+  instant?: boolean;
+  /**
+   * Values read from and written into others rather than held: a picture's
+   * real distance between two picks is its width, measured. `write` returns
+   * the values to set, or null to refuse the value.
+   */
+  linked?: Record<
+    string,
+    {
+      read(slots: InPlaceSlots, numbers: Record<string, number>): number | null;
+      write(
+        slots: InPlaceSlots,
+        numbers: Record<string, number>,
+        value: number
+      ): Record<string, number> | null;
+    }
+  >;
   /**
    * Placed by a press-drag on the ground or a flat face (a primitive): the
    * footprint the drag draws.
@@ -350,11 +402,11 @@ export interface InPlaceToolSpec {
     numbers: Record<string, number>
   ): Record<string, number>;
   /**
-   * Other values a value's change moves with it (a box hung under a face
+   * Other values a value's change carries with it (a box hung under a face
    * keeps its top there, so its corner follows its height), from the
    * values as they were. Values held as typed expressions are left alone.
    */
-  linked?(
+  carries?(
     valueId: string,
     value: number,
     values: Readonly<Record<string, number>>,
@@ -369,8 +421,13 @@ export interface InPlaceToolSpec {
     value: number,
     values: Readonly<Record<string, number>>
   ): string | null;
-  hint(slots: InPlaceSlots, options?: Record<string, string>): string;
-  ready(slots: InPlaceSlots): boolean;
+  hint(
+    slots: InPlaceSlots,
+    options?: Record<string, string>,
+    ctx?: InPlaceContext
+  ): string;
+  /** `ctx` lets a slot that names a plane require it to have resolved. */
+  ready(slots: InPlaceSlots, ctx?: InPlaceContext): boolean;
   /**
    * `values` holds what is stored: a typed expression as typed, else the
    * number. `numbers` holds every value as a number, for whatever the
@@ -2057,7 +2114,7 @@ function primitiveSpec(kind: PrimitiveKind): InPlaceToolSpec {
         ? 'At least one radius must be greater than zero.'
         : null;
     },
-    linked(valueId, value, values, slots) {
+    carries(valueId, value, values, slots) {
       // Under a face the box hangs from it: a new height moves its lowest
       // corner, so its top stays on the face.
       const hangs = slots.placement?.hangs;
@@ -2181,7 +2238,10 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   cylinder: primitiveSpec('cylinder'),
   cone: primitiveSpec('cone'),
   sphere: primitiveSpec('sphere'),
-  torus: primitiveSpec('torus')
+  torus: primitiveSpec('torus'),
+  'datum-plane': datumPlane,
+  'datum-axis': datumAxis,
+  'reference-image': referenceImage
 };
 
 /**

@@ -1,6 +1,8 @@
 import type { Locator, Page } from '@playwright/test';
 import {
+  clickWorldPoint,
   createPrimitiveInPlace,
+  enterCommandValue,
   expect,
   expectBodyCount,
   expectConsumedBodyCount,
@@ -13,7 +15,7 @@ import {
 } from './openzcad-fixtures';
 
 /**
- * R01-C: a datum plane made with the Plane card is a real feature — a sketch
+ * R01-C: a datum plane made in place (U09) is a real feature — a sketch
  * drawn on it, a Split cut on it and a Mirror reflected across it all name it
  * by id, and editing its offset moves every one of them.
  */
@@ -161,12 +163,15 @@ test('a datum plane drives a sketch, a Split and a Mirror, and an edit moves the
   });
   await expectBodyCount(page, 1);
 
-  // Plane card: an offset plane 8 above Top (XY).
+  // U09: the Plane runs in place. An offset plane 8 above Top (XY): its
+  // ghost plane clicked clear of the box, then 8 on the offset chip.
   await page.getByRole('button', { name: /^Plane — / }).click();
-  await expect(inspector.getByRole('heading', { name: 'Plane' })).toBeVisible();
-  await expect(inspector.getByLabel('Offset from')).toHaveValue('canonical:XY');
-  await inspector.getByLabel('Offset', { exact: true }).fill('8');
-  await inspector.getByRole('button', { name: 'Done' }).click();
+  const planeBar = page.getByRole('group', { name: 'Plane command' });
+  await expect(planeBar).toContainText('Pick a plane');
+  await clickWorldPoint(page, [3, -2, 0]);
+  await expect(planeBar).toContainText('Drag the offset');
+  await enterCommandValue(page, 'offset', '8');
+  await finishInPlaceCommand(page, 'Plane');
   const planeRow = page.locator('.feature-row', { hasText: 'Plane 1' });
   await expect(planeRow).toContainText('8 mm');
   await expect
