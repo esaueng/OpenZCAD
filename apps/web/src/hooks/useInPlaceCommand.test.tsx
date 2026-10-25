@@ -1370,9 +1370,12 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     act(() => {
       hook.result.current.done();
     });
-    // Validating: still open, its picks kept, no second Done.
+    // Validating: still open, its picks kept, no second Done, and no
+    // Cancel that would claim nothing was added.
     expect(hook.result.current.active).toBe(true);
     expect(hook.result.current.canFinish).toBe(false);
+    act(() => hook.result.current.cancel());
+    expect(hook.result.current.active).toBe(true);
     // Refused (or held off by another exact operation): there to retry.
     await act(async () => {
       settle(false);

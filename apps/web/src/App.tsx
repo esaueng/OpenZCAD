@@ -8675,6 +8675,8 @@ export function App() {
     const feature = current ? findFeature(current, edit.featureId) : null;
     if (!feature) {
       setStatus('This history feature is no longer available to edit.');
+      // Done is settled, not left holding the edit frozen.
+      inPlaceRef.current.settleEdit(edit, false);
       return;
     }
     // The feature's name as it is now: a rename since the edit armed (from
