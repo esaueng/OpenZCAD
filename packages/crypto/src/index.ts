@@ -251,6 +251,18 @@ export {
   type VerifyContactsListOptions
 } from './contacts';
 export {
+  ASSISTANT_CONSENT_MAC_BYTES,
+  ASSISTANT_CONSENT_MAC_INFO,
+  ASSISTANT_CONSENT_VERSION_1,
+  MAX_ASSISTANT_CONSENT_BYTES,
+  MAX_ASSISTANT_CONSENT_ROUTE_LENGTH,
+  decodeAssistantConsent,
+  encodeAssistantConsent,
+  macAssistantConsent,
+  openAssistantConsent,
+  type AssistantConsent
+} from './assistant-consent';
+export {
   MAX_VERSION_LOG_BYTES,
   MAX_VERSION_LOG_RECORDS,
   VERSION_LOG_RECORD_VERSION_1,

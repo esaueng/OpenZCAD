@@ -4,6 +4,10 @@ import { handleGlimpseUsage, countApi, type GlimpseEnv } from './glimpse';
 import { handleE2eeRequest } from './e2ee';
 import { withEncryptedProjectInfo } from './e2eeProjectDocuments';
 import { accountRequiresEncryptedProjects } from './e2eeProjectPreferences';
+import {
+  isE2eeAssistantConsentStorageReady,
+  liveAssistantConsentRoute
+} from './e2eeAssistantConsents';
 import { assertProjectRouteFormat } from './projectFormatGate';
 import { encryptedRoomHeaders, notifyEncryptedRoom } from './e2eeRoom';
 import { enforceApiRateLimit, publicRequestBucket } from './apiRateLimit';
@@ -147,6 +151,8 @@ import {
   saveProjectMeasurements
 } from './projectMeasurements';
 import {
+  assistantConsentRoute,
+  ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE,
   ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE_CODE,
   MAX_ARTIFACT_PART_BYTES,
   MAX_ARTIFACT_UPLOAD_PARTS,
@@ -628,18 +634,24 @@ async function assertPlaintextCreationAllowed(
 }
 
 /**
- * Whether the assistant may see this project (decision D7): never an
- * encrypted one until per-project consent lands (Phase 6). Only a project
- * the caller owns or is a member of is looked up, so the answer reveals
- * nothing about other accounts' projects.
+ * Whether the assistant may see this project (decision D7, lifted per
+ * project by ADR-024 Phase 6). A plaintext project passes as before and
+ * answers null. An encrypted one passes only with this account's live
+ * consent for it (migration 0041, behind E2EE_PROJECTS_ENABLED), and
+ * answers the provider route that consent named, which the caller compares
+ * with the route the request would take. Without the flag or the migration
+ * every encrypted project is refused exactly as before. Only a project the
+ * caller owns or is a member of is looked up, so the answer reveals nothing
+ * about other accounts' projects.
  */
 async function assertAssistantProjectAllowed(
   env: Env,
-  userId: string,
+  identity: { userId: string; email?: string | null },
   projectId: string
-): Promise<void> {
+): Promise<string | null> {
+  const userId = identity.userId;
   // Before migration 0031 every project is plaintext.
-  if (!(await isProjectStorageFormatReady(env.DB))) return;
+  if (!(await isProjectStorageFormatReady(env.DB))) return null;
   const row = await env.DB!.prepare(
     `SELECT p.storage_format FROM projects p
      WHERE p.id = ? AND (
@@ -652,12 +664,25 @@ async function assertAssistantProjectAllowed(
     .bind(projectId, userId, userId)
     .first<{ storage_format: number | null }>();
   if (row && row.storage_format !== null && row.storage_format !== 1) {
+    if (
+      isE2eeProjectsEnabled(env, identity.email ?? undefined) &&
+      (await isE2eeAssistantConsentStorageReady(env.DB))
+    ) {
+      const route = await liveAssistantConsentRoute(env.DB!, userId, projectId);
+      if (route !== null) return route;
+      throw new SharingRequestError(
+        409,
+        ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE,
+        'Allow the assistant for this end-to-end encrypted project first. Nothing was sent.'
+      );
+    }
     throw new SharingRequestError(
       409,
       ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE_CODE,
       'The assistant is not available on end-to-end encrypted projects yet.'
     );
   }
+  return null;
 }
 
 async function handleApiRequest(request: Request, env: Env): Promise<Response> {
@@ -1124,7 +1149,11 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const userId = identity.userId;
     await assertAccountNotErasing(env.DB, userId);
     const payload = parseAssistantProposalRequest(await readJsonBody(request));
-    await assertAssistantProjectAllowed(env, userId, payload.digest.projectId);
+    const consentedRoute = await assertAssistantProjectAllowed(
+      env,
+      identity,
+      payload.digest.projectId
+    );
     const assistant = await resolveUserAssistant(userId, env, identity.email);
     if (!assistant.effective.configured) {
       return json(
@@ -1133,6 +1162,18 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
           code: 'AI_NOT_CONFIGURED'
         },
         503
+      );
+    }
+    // An encrypted project's consent names who receives the data: another
+    // key source, provider or model needs the user's consent again.
+    if (
+      consentedRoute !== null &&
+      consentedRoute !== assistantConsentRoute(assistant.effective)
+    ) {
+      throw new SharingRequestError(
+        409,
+        ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE,
+        'The assistant provider changed since you allowed it for this encrypted project. Allow it again. Nothing was sent.'
       );
     }
     const providerIdentity = await assistantProviderIdentity(userId, env);

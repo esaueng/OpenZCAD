@@ -40,6 +40,33 @@ describe('the assistant on an encrypted project', () => {
     );
   });
 
+  it('opens to per-project consent only through a consent gate (Phase 6)', () => {
+    const encrypted = { storageFormat: 2 } as const;
+    // No gate (an older build path) or a gate that cannot store consent:
+    // off exactly as before.
+    expect(assistantDisabledReason(encrypted, null)).toBe(
+      ENCRYPTED_PROJECT_ASSISTANT_NOTICE
+    );
+    expect(
+      assistantDisabledReason(encrypted, {
+        status: { kind: 'unavailable', reason: '' }
+      })
+    ).toBe(ENCRYPTED_PROJECT_ASSISTANT_NOTICE);
+    // A gate that can ask: the panel runs and asks before sending.
+    for (const kind of ['checking', 'locked', 'ready']) {
+      expect(
+        assistantDisabledReason(encrypted, { status: { kind } })
+      ).toBeNull();
+    }
+    // A plaintext project ignores any gate.
+    expect(
+      assistantDisabledReason(
+        { storageFormat: 1 },
+        { status: { kind: 'unavailable', reason: 'x' } }
+      )
+    ).toBeNull();
+  });
+
   it('explains itself, takes nothing and sends nothing', async () => {
     const onActivity = vi.fn();
     const onDraft = vi.fn();

@@ -59,6 +59,11 @@ import {
   handleProjectPreferenceRequest,
   isE2eeProjectPreferenceStorageReady
 } from './e2eeProjectPreferences';
+import {
+  handleAssistantConsentRequest,
+  isAssistantConsentPath,
+  isE2eeAssistantConsentStorageReady
+} from './e2eeAssistantConsents';
 import { handleE2eeProjectRequest, isE2eeProjectPath } from './e2eeProjects';
 import { handleE2eeContactsRequest, isE2eeContactsPath } from './e2eeContacts';
 import {
@@ -1905,6 +1910,30 @@ export async function handleE2eeRequest(
     if (isE2eeContactsPath(pathname)) {
       // Contacts lists and other people's device lists (e2eeContacts.ts).
       return await handleE2eeContactsRequest(
+        request,
+        rawDb,
+        userId,
+        db.authorization,
+        () => readBody(request)
+      );
+    }
+    if (isAssistantConsentPath(pathname)) {
+      // Per-project assistant consent (e2eeAssistantConsents.ts, 6-1).
+      if (!projectsEnabled) {
+        refuse(
+          501,
+          'FEATURE_DISABLED',
+          'Encrypted projects are not available for this account yet.'
+        );
+      }
+      if (!(await isE2eeAssistantConsentStorageReady(rawDb))) {
+        refuse(
+          503,
+          'E2EE_UNAVAILABLE',
+          'The assistant on encrypted projects is unavailable until the database is updated.'
+        );
+      }
+      return await handleAssistantConsentRequest(
         request,
         rawDb,
         userId,
