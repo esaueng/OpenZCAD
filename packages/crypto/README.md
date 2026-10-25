@@ -272,12 +272,21 @@ UTF-8 string and type 2 a u64.
 | `dedupe-secret`          | KW     | projectId, keyEpoch                       | project key: the dedupe secret, carried across epochs                                                                    |
 | `share-key`              | KW     | projectId, keyEpoch, shareId              | project key; it never encrypts content                                                                                   |
 | `share-version-key`      | KW     | projectId, shareId, versionId             | share key: a share snapshot's version key, for link visitors                                                             |
-| `rejoin-psk`             | KW     | userId, projectId, epoch                  | account key: an MLS epoch's rejoin PSK, for an External Commit after losing MLS state                                    |
+| `rejoin-psk`             | KW     | userId, projectId, keyEpoch               | account key: an MLS epoch's rejoin PSK, for an External Commit after losing MLS state                                    |
 | `archived-project-key`   | KW     | projectId, archivedEpoch, underEpoch      | a later epoch's project key: an earlier project key; `archivedEpoch` must be below `underEpoch`                          |
 | `previous-account-key`   | KW     | userId, generation, keySequence           | the new account key: the account key it replaced, so older account-key wraps stay reachable                              |
 
 `version-key` accepts every project envelope kind, `project-info` and
 `key-archive` included. Integer fields are u32 values encoded as u64.
+
+A `rejoin-psk` wrap binds
+the key epoch of the MLS epoch the PSK was exported in (group key epoch
+base plus MLS epoch), not the MLS epoch: MLS epochs restart at 0 after an
+identity-authorized group reset, so two generations' PSKs of the same MLS
+epoch would otherwise share a context, and a server could serve one as the
+other. The MLS epoch follows from the key epoch and the group's base.
+`rejoin-psk` bound the MLS epoch until Phase 5, before any rejoin-PSK wrap
+was stored.
 
 Every unlock method is a public-key target (ADR-024, Unlock and devices), so
 a rotation can re-seal a new account key to every target without knowing any

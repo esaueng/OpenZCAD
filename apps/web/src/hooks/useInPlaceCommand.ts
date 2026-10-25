@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { BodyId, ParamValue, ProjectDocument } from '@openzcad/shared';
+import type {
+  BodyId,
+  ParamValue,
+  ParametricVector3,
+  ProjectDocument
+} from '@openzcad/shared';
 import { GEOMETRY_PREVIEW_SCHEDULING, LivePreview } from '../lib/livePreview';
 import {
   IN_PLACE_TOOL_SPECS,
@@ -240,8 +245,30 @@ export function useInPlaceCommand(
   const bodyCount = session?.slots.bodies.length ?? 0;
   const axisCandidates = useMemo(() => {
     if (!spec?.wantsAxis || !profiles) return [];
-    // An edited feature's own axis line (a helix's typed one) comes first.
-    const own = editSeed?.axes ?? [];
+    // An edited feature's own axis line (a helix's typed one) comes first,
+    // read again from what it stores whenever the model changes under the
+    // edit (an undo, a collaborator's parameter edit).
+    const saved = editSeed?.data;
+    const read = (vector: ParametricVector3) => {
+      const parts = [vector.x, vector.y, vector.z].map((part) =>
+        typeof part === 'number'
+          ? part
+          : (optionsRef.current.evaluate?.(part) ?? null)
+      );
+      return parts.some((part) => part === null)
+        ? null
+        : { x: parts[0]!, y: parts[1]!, z: parts[2]! };
+    };
+    const own = (editSeed?.axes ?? []).map((candidate) => {
+      if (candidate.id !== 'saved' || saved?.featureKind !== 'helical-sweep') {
+        return candidate;
+      }
+      const origin = read(saved.axisOrigin);
+      const direction = read(saved.axisDirection);
+      return origin && direction
+        ? { ...candidate, origin, direction }
+        : candidate;
+    });
     if (spec.axisSource === 'datum' || spec.axisSource === 'world') {
       // A body's turn: its axis lines, once the body is picked.
       return bodyCount > 0
@@ -249,7 +276,10 @@ export function useInPlaceCommand(
         : [];
     }
     return [...own, ...axisCandidatesFor({ ...EMPTY_SLOTS, profiles }, ctx)];
-  }, [spec, profiles, bodyCount, ctx, editSeed]);
+    // The base version re-reads the saved axis, as the effect below does
+    // for typed values.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spec, profiles, bodyCount, ctx, editSeed, options.baseVersion]);
   const slots: InPlaceSlots = useMemo(
     () =>
       session
@@ -828,9 +858,6 @@ export function useInPlaceCommand(
   }, []);
 
   const setOption = useCallback((optionId: string, value: string) => {
-    // A refused entry was never applied, and a new choice (a hole's style)
-    // may not even show its value: the refusal no longer holds Done.
-    setEntryRefusal(null);
     setSession((current) => {
       if (!current) return current;
       const specs = IN_PLACE_TOOL_SPECS[current.tool].options ?? [];
@@ -1016,6 +1043,16 @@ export function useInPlaceCommand(
     () => (spec ? spec.handles(slots, values, ctx, chosen) : []),
     [spec, slots, values, ctx, chosen]
   );
+  // A refused entry holds Done until its value is taken, or until the value
+  // no longer applies: a choice (a hole's style) that hides its chip.
+  useEffect(() => {
+    if (
+      entryRefusal &&
+      !handles.some((handle) => handle.valueId === entryRefusal.valueId)
+    ) {
+      setEntryRefusal(null);
+    }
+  }, [entryRefusal, handles]);
   const optionSpecs = useMemo(
     () =>
       (spec?.options ?? [])

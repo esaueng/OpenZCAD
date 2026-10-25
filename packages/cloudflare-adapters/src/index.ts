@@ -541,6 +541,18 @@ export const isE2eeContentBlobStorageReady = cachedSchemaProbe(
   (row) => row?.ready === E2EE_CONTENT_BLOB_TABLES.length + 1
 );
 
+/**
+ * Whether migration 0036 is installed: identity-signed revocation cutoffs
+ * and solo group resets (ADR-024 Phase 4, device removal). Only the
+ * device-removal and reset routes, project purge and account erasure name
+ * its tables, each after asking this.
+ */
+export const isE2eeDeviceRemovalStorageReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM sqlite_master WHERE type = 'table' AND name IN
+   ('e2ee_revocation_cutoffs', 'e2ee_group_resets')`,
+  (row) => row?.ready === 2
+);
+
 /** An encrypted blob's opaque object key: no file name, no kind. */
 export function encryptedBlobObjectKey(
   projectId: string,
@@ -5880,6 +5892,10 @@ export class D1R2PersistenceService implements PersistenceService {
           (table) => `DELETE FROM ${table} WHERE project_id IN`
         )
       );
+    }
+    // Solo group resets (migration 0036), only once the table exists.
+    if (await isE2eeDeviceRemovalStorageReady(this.env.DB)) {
+      groupTables.push('DELETE FROM e2ee_group_resets WHERE project_id IN');
     }
     // Encrypted content blobs (migration 0034): their objects first, the
     // same way. Their rows then go references first, through the claim

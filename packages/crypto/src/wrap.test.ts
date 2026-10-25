@@ -880,7 +880,7 @@ describe('sealing to a public key', () => {
 describe('project data wraps', () => {
   const ACCOUNT_KEY = patternBytes(32, 0x50);
   const CONTEXTS: WrapContext[] = [
-    { purpose: 'rejoin-psk', userId: 'u1', projectId: 'p', epoch: 12 },
+    { purpose: 'rejoin-psk', userId: 'u1', projectId: 'p', keyEpoch: 12 },
     {
       purpose: 'archived-project-key',
       projectId: 'p',
@@ -915,7 +915,7 @@ describe('project data wraps', () => {
         [
           moved(CONTEXTS[0]!, { userId: 'u2' }),
           moved(CONTEXTS[0]!, { projectId: 'q' }),
-          moved(CONTEXTS[0]!, { epoch: 13 })
+          moved(CONTEXTS[0]!, { keyEpoch: 13 })
         ]
       ],
       [
@@ -948,11 +948,52 @@ describe('project data wraps', () => {
     }
   });
 
+  it('keeps rejoin PSKs of the same MLS epoch apart across a group reset', async () => {
+    // Group generation 0 starts at key epoch 0. A reset after key epoch 5
+    // starts generation 1 at key epoch base 6 (decision D10), and its MLS
+    // epochs restart at 0. MLS epoch 3 is key epoch 3 in generation 0 and
+    // key epoch 9 in generation 1: two PSKs, two contexts.
+    const psk = (keyEpoch: number): WrapContext => ({
+      purpose: 'rejoin-psk',
+      userId: 'u1',
+      projectId: 'p',
+      keyEpoch
+    });
+    const MLS_EPOCH = 3;
+    const before = psk(0 + MLS_EPOCH);
+    const after = psk(6 + MLS_EPOCH);
+    expect(encodeWrapContext(before)).not.toEqual(encodeWrapContext(after));
+    const oldPsk = patternBytes(32, 0x10);
+    const newPsk = patternBytes(32, 0x20);
+    const oldWrap = await wrapKey(ACCOUNT_KEY, oldPsk, before);
+    const newWrap = await wrapKey(ACCOUNT_KEY, newPsk, after);
+    expect(await unwrapKey(ACCOUNT_KEY, oldWrap, before)).toEqual(oldPsk);
+    expect(await unwrapKey(ACCOUNT_KEY, newWrap, after)).toEqual(newPsk);
+    // A server that serves one generation's wrap as the other's, relabelled
+    // with the other generation's key epoch, gets nothing to open.
+    await rejectsWith(
+      unwrapKey(ACCOUNT_KEY, oldWrap, after),
+      'authentication-failed'
+    );
+    await rejectsWith(
+      unwrapKey(ACCOUNT_KEY, newWrap, before),
+      'authentication-failed'
+    );
+  });
+
   it('validates the new contexts', async () => {
     const bad: unknown[] = [
       { purpose: 'rejoin-psk', userId: 'u1', projectId: 'p' },
-      { purpose: 'rejoin-psk', userId: 'u1', projectId: 'p', epoch: -1 },
-      { purpose: 'rejoin-psk', userId: 'u1', projectId: 'p', keyEpoch: 1 },
+      { purpose: 'rejoin-psk', userId: 'u1', projectId: 'p', keyEpoch: -1 },
+      // The MLS epoch restarts at each group reset, so it is never the label.
+      { purpose: 'rejoin-psk', userId: 'u1', projectId: 'p', epoch: 1 },
+      {
+        purpose: 'rejoin-psk',
+        userId: 'u1',
+        projectId: 'p',
+        keyEpoch: 1,
+        epoch: 1
+      },
       {
         purpose: 'archived-project-key',
         projectId: 'p',
@@ -1111,7 +1152,7 @@ describe('AES-KW on an engine that skips the integrity check', () => {
     const contexts: WrapContext[] = [
       BLOB_CONTEXT,
       { purpose: 'share-key', projectId: 'p', keyEpoch: 1, shareId: 's' },
-      { purpose: 'rejoin-psk', userId: 'u1', projectId: 'p', epoch: 3 },
+      { purpose: 'rejoin-psk', userId: 'u1', projectId: 'p', keyEpoch: 3 },
       {
         purpose: 'archived-project-key',
         projectId: 'p',

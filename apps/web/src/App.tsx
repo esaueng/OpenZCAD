@@ -719,6 +719,7 @@ import {
   selectionCalloutVerbs,
   type SelectionCalloutContent,
   type SelectionCalloutKind,
+  type SelectionCalloutVerbInput,
   type SelectionCalloutOperation,
   type SelectionCalloutVerbId
 } from './lib/selectionCallout';
@@ -7356,6 +7357,67 @@ export function App() {
       ? 'edit'
       : 'details';
   })();
+  // Why the pick cannot seed a datum, by the rules the Plane and Axis cards
+  // apply to it (datumFaceSourceFromPick, datumAxisEdgeFromPick,
+  // datumAxisFaceFromPick): a rebuildable identity, and a straight edge.
+  const calloutDatumRefusal = ((): string | null => {
+    const lost = (what: string, datum: string) =>
+      `This ${what} has no identity a rebuild can find again, so ${datum} cannot follow it.`;
+    if (calloutKind === 'face' && renderedSelectedTopology) {
+      const face = representations[
+        renderedSelectedTopology.bodyId
+      ]?.topology?.faces.find(
+        (candidate) => candidate.hash === renderedSelectedTopology.hash
+      );
+      const surface = face?.geometry?.surfaceType.toLowerCase();
+      if (surface === 'cylinder' || surface === 'cone') {
+        return face?.reference ? null : lost('face', 'an axis');
+      }
+      const attachment = faceSketchAttachment({
+        bodyId: renderedSelectedTopology.bodyId,
+        pickedHash: renderedSelectedTopology.hash,
+        face
+      });
+      return attachment.ok &&
+        attachment.planeRef.type === 'face' &&
+        attachment.planeRef.sourceCentroid
+        ? null
+        : lost('face', 'a plane');
+    }
+    if (calloutKind === 'edges') {
+      // The edge the Axis card takes: the last one picked.
+      const picked =
+        renderedSelectedTopology?.kind === 'edge'
+          ? renderedSelectedTopology
+          : selectedEdges.at(-1);
+      const edge = picked
+        ? representations[picked.bodyId]?.topology?.edges.find(
+            (candidate) => candidate.hash === picked.hash
+          )
+        : undefined;
+      const reference = edge?.reference;
+      if (!reference) return lost('edge', 'an axis');
+      return reference.witness.closed ||
+        !/^line$/i.test(reference.witness.curveType)
+        ? 'An axis runs along a straight edge; this edge is curved.'
+        : null;
+    }
+    return null;
+  })();
+  // The picked face's kind, for the verbs when the machine does not hold it.
+  const calloutFaceSurface = ((): SelectionCalloutVerbInput['faceSurface'] => {
+    if (calloutKind !== 'face' || !renderedSelectedTopology) return undefined;
+    const surface = representations[renderedSelectedTopology.bodyId]?.topology
+      ?.faces.find(
+        (candidate) => candidate.hash === renderedSelectedTopology.hash
+      )
+      ?.geometry?.surfaceType.toLowerCase();
+    if (!surface) return undefined;
+    if (surface === 'plane') return 'planar';
+    return surface === 'cylinder' || surface === 'cone'
+      ? 'cylindrical'
+      : 'other';
+  })();
   const calloutVerbsKey =
     calloutKind && calloutInteractive
       ? JSON.stringify([
@@ -7367,6 +7429,8 @@ export function App() {
               interaction.mode === 'face' &&
               Boolean(interaction.target.resizeBodyFeatureId),
             pressedAction: calloutPressedAction,
+            datumRefusal: calloutDatumRefusal,
+            faceSurface: calloutFaceSurface,
             availability: shownAvailability
           }),
           ...(calloutImportedFace === 'edit'
@@ -7376,6 +7440,18 @@ export function App() {
               : [])
         ])
       : '[]';
+  // The pick as an identity, for the card's per-pick state (its More fold).
+  const calloutPickKey = JSON.stringify([
+    renderedSelectedTopology
+      ? [
+          renderedSelectedTopology.kind,
+          renderedSelectedTopology.bodyId,
+          renderedSelectedTopology.topologyId ?? renderedSelectedTopology.hash
+        ]
+      : null,
+    selectedEdges.map((edge) => [edge.bodyId, edge.topologyId ?? edge.hash]),
+    selectedBodyIds
+  ]);
   const selectionCallout = useMemo<SelectionCalloutContent | null>(() => {
     const onVerb = (id: SelectionCalloutVerbId) =>
       selectionCalloutVerbRef.current(id);
@@ -7418,6 +7494,7 @@ export function App() {
         ? { detail: selectionSummary.detail }
         : {}),
       verbs,
+      pickKey: calloutPickKey,
       anchor: 'selection',
       onVerb,
       onClear: () => clearSelectionRef.current()
@@ -7428,6 +7505,7 @@ export function App() {
     selectionSummary,
     selectedBodyIds,
     calloutVerbsKey,
+    calloutPickKey,
     calloutInteractive
   ]);
 
@@ -8177,7 +8255,17 @@ export function App() {
               z: current.target.point[2]
             }
           )
-        : null;
+        : // A face picked with direct manipulation off never arms the
+          // machine: the selection itself names it (a hole then starts at
+          // the face's middle, there being no click point to keep).
+          selectedTopology?.kind === 'face'
+          ? inPlaceFacePick(
+              selectedTopology.bodyId,
+              selectedTopology.topologyId,
+              selectedTopology.hash,
+              undefined
+            )
+          : null;
     // Faces a box swept first are a face-list command's faces, on one body;
     // the wider sweep is dropped so its highlights promise nothing more.
     const sweptFaces =
@@ -8210,6 +8298,13 @@ export function App() {
           }
         )
       : [];
+    // A solid offset takes a body, named by any of its faces: a body picked
+    // first (its Selection card's Solid offset) is that body, its handle on
+    // a flat face where it has one.
+    const bodyFace =
+      tool === 'solid-offset' && !selectedFace && initialBodies[0]
+        ? anyInPlaceFaceOf(initialBodies[0].bodyId)
+        : null;
     cancelPanel();
     // The command bar names each step; a status toast would say it twice,
     // on the same row.
@@ -8217,7 +8312,11 @@ export function App() {
     inPlaceRef.current.start(
       tool,
       initial,
-      selectedFace ? [selectedFace] : sweptFaces,
+      selectedFace
+        ? [selectedFace]
+        : bodyFace
+          ? [bodyFace]
+          : sweptFaces,
       initialBodies,
       initialEdges
     );
@@ -8556,6 +8655,17 @@ export function App() {
     )?.featureId;
   }
 
+  /** A body's face for a command that takes the body: a flat one first. */
+  function anyInPlaceFaceOf(bodyId: BodyId): FacePick | null {
+    const faces = representations[bodyId]?.topology?.faces ?? [];
+    const face =
+      faces.find((candidate) => candidate.geometry?.surfaceType === 'plane') ??
+      faces[0];
+    return face
+      ? inPlaceFacePick(bodyId, face.topologyId, face.hash, undefined)
+      : null;
+  }
+
   /** Swept faces as an in-place command's face slot holds them. */
   function inPlaceFacesFor(selections: readonly TopologySelection[]) {
     return selections.flatMap((selection) => {
@@ -8612,11 +8722,11 @@ export function App() {
     const joined = descendants?.mixed.has(resolvedBodyId) ?? false;
     // A hole goes where the click lands, and on a body a later feature moved
     // (a copy, a mirror, a pattern) that is not where the hole's own face is.
-    // So does a draft's clicked-point hinge.
+    // So does a draft's clicked-point hinge, which can be chosen after the
+    // click.
     const usesPoint =
       inPlaceRef.current.tool === 'hole' ||
-      (inPlaceRef.current.tool === 'draft' &&
-        inPlaceRef.current.options.neutral === 'point');
+      inPlaceRef.current.tool === 'draft';
     if (
       later &&
       editing &&
@@ -19083,8 +19193,16 @@ export function App() {
    * edge of the body at once (or none), and a chamfer's two setbacks
    * swapped between the faces.
    */
+  // The body Select all works on: the picked edges' body, else (an edit's
+  // edges all cleared) the body the edited blend rounds, which the model
+  // no longer shows, before any one body on screen.
+  const inPlaceEditedBlendTarget =
+    inPlace.editing && 'targetBodyId' in inPlace.editing.data
+      ? (inPlace.editing.data.targetBodyId ?? null)
+      : null;
   const inPlaceEdgeBody = inPlaceSpec?.edgeMode
     ? (inPlace.slots.edges[0]?.bodyId ??
+      inPlaceEditedBlendTarget ??
       (viewerBodies.length === 1 ? viewerBodies[0]!.bodyId : null))
     : null;
   const inPlaceBodyEdges = inPlaceEdgeBody
@@ -26481,6 +26599,16 @@ export function App() {
                   : undefined
               }
               cancelableWhileValidating={interaction.mode === 'region'}
+              // A region's other profile tools, which take the same pick.
+              verbs={
+                interaction.mode === 'region' && tool === null
+                  ? selectionCalloutVerbs({
+                      kind: selectedProfiles.length > 1 ? 'regions' : 'region',
+                      availability: shownAvailability
+                    }).filter((verb) => verb.id !== 'tool:extrude')
+                  : undefined
+              }
+              onVerb={(id) => launchTool(id.slice('tool:'.length) as ToolId)}
               children={
                 interaction.mode === 'region' ? (
                   <ExtrudeForm

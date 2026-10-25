@@ -60,6 +60,12 @@ import {
   type ProjectFilesDeps
 } from './encryptedProjectInfo';
 import { versionPins } from './versionPins';
+import {
+  createRevocationCutoffsApi,
+  localPendingCutoffs,
+  revocationStatements,
+  storePendingCutoffs
+} from './deviceRemoval';
 
 export { E2EE_KEYS_LOCKED_CODE };
 
@@ -143,11 +149,23 @@ async function openStore(userId: string): Promise<{
   const pageDecoder = decoder;
   // Results finishing after this key session ends keep no keys.
   const references = sessionBoundReferences(pageBlobReferences);
+  const cutoffsApi = createRevocationCutoffsApi();
+  // A cutoff statement an earlier removal on this device could not store
+  // goes first, so the directory and authorship below can read it.
+  await storePendingCutoffs(cutoffsApi, localPendingCutoffs(), userId).catch(
+    () => 0
+  );
   const groups = {
     api: createProjectGroupsApi(),
     sessions: mlsProjectSessions(),
     account: projectGroupAccount(e2ee, account),
-    device
+    device,
+    // Verified revocation cutoffs (slice 4-10): the MLS directory and
+    // version authorship need one for every removed device.
+    revocations: revocationStatements(cutoffsApi, {
+      list: account.list,
+      generation: account.generation
+    })
   };
   const blobs = createEncryptedContentBlobs({
     groups,

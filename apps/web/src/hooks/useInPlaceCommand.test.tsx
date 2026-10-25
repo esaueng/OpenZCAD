@@ -594,6 +594,20 @@ describe('useInPlaceCommand: hole step chips', () => {
     expect(hook.result.current.canFinish).toBe(false);
   });
 
+  it('an option that leaves the refused value shown keeps Done held', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('hole', [], [FACE]));
+    act(() => hook.result.current.setOption('style', 'countersink'));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.setValue('countersinkAngleDeg', 180);
+    });
+    // Blind depth changes the hole but still shows the refused angle.
+    act(() => hook.result.current.setOption('depthMode', 'blind'));
+    expect(hook.result.current.refusal).toMatch(/countersink angle/);
+    expect(hook.result.current.canFinish).toBe(false);
+  });
+
   it('a style that hides the refused value lets Done go', async () => {
     const { hook } = setup();
     act(() => hook.result.current.start('hole', [], [FACE]));
@@ -921,6 +935,52 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     expect(hook.result.current.slots.plane).toMatchObject({
       kind: 'saved',
       origin: { x: 8, y: 0, z: 0 }
+    });
+  });
+
+  it("reads a helix's saved axis again when the model changes", () => {
+    let rise = 10;
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      evaluate: (value) => (value === 'rise' ? rise : null),
+      baseVersion: 1
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('helical-sweep', {
+        ...SEED,
+        data: {
+          featureKind: 'helical-sweep',
+          profile: { sketchId: SKETCH },
+          axisOrigin: { x: 0, y: 0, z: 'rise' },
+          axisDirection: { x: 0, y: 0, z: 1 }
+        } as never,
+        axes: [
+          {
+            id: 'saved',
+            label: 'Its saved axis',
+            origin: { x: 0, y: 0, z: 10 },
+            direction: { x: 0, y: 0, z: 1 },
+            choice: { saved: true }
+          }
+        ],
+        slots: {
+          ...SEED.slots,
+          bodies: [],
+          profiles: [PICK],
+          axisId: 'saved'
+        }
+      })
+    );
+    rise = 25;
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.slots.axis?.origin).toEqual({
+      x: 0,
+      y: 0,
+      z: 25
     });
   });
 
