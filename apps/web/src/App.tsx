@@ -20507,10 +20507,15 @@ export function App() {
   // so Select all can take them all back.
   const heldBlendBody = inPlace.slots.edges[0]?.bodyId ?? null;
   const [lastBlendBody, setLastBlendBody] = useState<BodyId | null>(null);
+  // Only within one command: another taking over (even another blend)
+  // starts without it.
+  const blendSessionId = inPlace.sessionId;
   useEffect(() => {
-    if (!inPlace.active) setLastBlendBody(null);
-    else if (heldBlendBody) setLastBlendBody(heldBlendBody);
-  }, [inPlace.active, heldBlendBody]);
+    setLastBlendBody(null);
+  }, [blendSessionId]);
+  useEffect(() => {
+    if (heldBlendBody) setLastBlendBody(heldBlendBody);
+  }, [heldBlendBody]);
   const inPlaceEdgeBody = inPlaceSpec?.edgeMode
     ? (heldBlendBody ??
       inPlaceEditedBlendTarget ??
