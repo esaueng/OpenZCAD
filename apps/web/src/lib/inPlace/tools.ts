@@ -2408,7 +2408,10 @@ export function displayedValue(
  * Enter never changes what is stored.
  */
 export function keypadText(value: number): string {
-  return String(Number(value.toPrecision(12)));
+  // The shortest text that reads back as the same number: a short form only
+  // where it is exact, never a truncation (1.0000000000004 is not 1).
+  const short = Number(value.toPrecision(12));
+  return String(short === value ? short : value);
 }
 
 /**

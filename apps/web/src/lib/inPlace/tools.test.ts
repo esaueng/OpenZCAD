@@ -98,6 +98,8 @@ describe('the in-place tool table', () => {
     // The keypad opens on the value exactly.
     expect(keypadText(0.005)).toBe('0.005');
     expect(keypadText(12.3456)).toBe('12.3456');
+    expect(Number(keypadText(1.0000000000004))).toBe(1.0000000000004);
+    expect(Number(keypadText(179.9999999999))).toBe(179.9999999999);
   });
 
   it('clamps a value to its range and falls back when not finite', () => {

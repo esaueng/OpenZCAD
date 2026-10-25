@@ -505,6 +505,27 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(armed.seed.notice).toMatch(/saved path no longer resolves/);
   });
 
+  it('boolean: an input with no body left is left out to pick again', () => {
+    const data: FeatureData = {
+      featureKind: 'boolean',
+      operation: 'union',
+      targetBodyIds: [BODY, 'body_gone' as BodyId]
+    };
+    const armed = inPlaceEditSeed(feature(data, 'body_r' as BodyId), {
+      ...EDIT_CTX,
+      body: (bodyId) =>
+        bodyId === 'body_gone'
+          ? null
+          : {
+              bodyId,
+              min: { x: 0, y: 0, z: 0 },
+              max: { x: 1, y: 1, z: 1 }
+            }
+    })!;
+    expect(armed.seed.slots.bodies.map((body) => body.bodyId)).toEqual([BODY]);
+    expect(armed.seed.notice).toMatch(/saved body no longer resolves/);
+  });
+
   it('names what no longer resolves, and leaves that slot to pick again', () => {
     const data: FeatureData = {
       featureKind: 'shell',
