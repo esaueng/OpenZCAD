@@ -19,7 +19,6 @@ import {
   type Vector3
 } from '@openzcad/shared';
 import {
-  MIN_REVOLVE_ANGLE,
   revolveAxisCandidates,
   revolveProfileRegions,
   revolveRigPlacement,
@@ -217,9 +216,10 @@ export interface ValueSpec {
   integer?: boolean;
   /**
    * `min` and `max` are themselves refused (a countersink's angle, strictly
-   * between 0° and 180°): a value is kept just inside them.
+   * between 0° and 180°): a value is kept just inside them. `'min'` refuses
+   * only `min` (a revolve: more than 0°, up to 360°).
    */
-  exclusive?: boolean;
+  exclusive?: boolean | 'min';
 }
 
 /** A sketch as the commands read it: its plane and its region outlines. */
@@ -400,6 +400,13 @@ export interface InPlaceToolSpec {
    */
   axisSource?: 'sketch' | 'datum' | 'world';
   faceFilter?: 'planar';
+  /**
+   * While this option has this value, a click places a point (a draft's
+   * clicked hinge): a picked face clicked again keeps its place in the set
+   * and takes the point, rather than coming back out, and only the latest
+   * click carries one.
+   */
+  clickPlacesPoint?: { optionId: string; value: string };
   options?: readonly OptionSpec[];
   wantsAxis: boolean;
   wantsPath: boolean;
@@ -466,14 +473,17 @@ export function profileOutline(
   if (!view) return [];
   // Found again by its entities when an undo or redo renumbered it. An
   // implicit pick (a revolve stored before profiles) builds the sketch's
-  // first object only, so only that region places its handles.
-  const first = pick.implicit
-    ? view.regions.filter(
-        (region) => region.regionFingerprint === pick.regionFingerprint
-      )
-    : [];
-  const regions =
-    first.length > 0 ? first : revolveProfileRegions(view.regions, pick);
+  // first object only, so only that region places its handles: the one
+  // seeded, else the sketch's first as it is now (hidden when seeded, or
+  // renumbered since).
+  const regions = pick.implicit
+    ? (() => {
+        const seeded = view.regions.filter(
+          (region) => region.regionFingerprint === pick.regionFingerprint
+        );
+        return seeded.length > 0 ? seeded : view.regions.slice(0, 1);
+      })()
+    : revolveProfileRegions(view.regions, pick);
   return regions.flatMap((region) =>
     region.outer.map((point) => toWorld(view.basis, point))
   );
@@ -544,7 +554,9 @@ const revolve: InPlaceToolSpec = {
       label: 'Angle',
       unit: 'angle',
       initial: 360,
-      min: MIN_REVOLVE_ANGLE,
+      // Every angle the stored feature takes: more than 0°, up to a turn.
+      min: 0,
+      exclusive: 'min',
       max: 360
     }
   ],
@@ -1628,7 +1640,11 @@ function draftNeutralPoint(
   return { x: side('x'), y: side('y'), z: side('z') };
 }
 
-/** The first picked face that was clicked this time, so has its point. */
+/**
+ * The picked face whose click places the hinge: the only one carrying a
+ * point while the hinge is clicked (an edited draft's seeded faces carry
+ * none).
+ */
 function clickedFace(slots: InPlaceSlots): FacePick | undefined {
   return slots.faces.find((face) => face.point !== undefined);
 }
@@ -1638,6 +1654,7 @@ const draft: InPlaceToolSpec = {
   title: 'Draft',
   profileMode: 'none',
   faceMode: 'many',
+  clickPlacesPoint: { optionId: 'neutral', value: 'point' },
   wantsAxis: false,
   wantsPath: false,
   values: [
@@ -2979,10 +2996,11 @@ export function valueInRange(spec: ValueSpec, value: number): boolean {
   if (!Number.isFinite(value)) return false;
   if (spec.integer && !Number.isInteger(value)) return false;
   const { min, max } = spec;
-  return spec.exclusive
-    ? (min === undefined || value > min) && (max === undefined || value < max)
-    : (min === undefined || value >= min) &&
-        (max === undefined || value <= max);
+  const openMax = spec.exclusive === true;
+  const aboveMin =
+    min === undefined || (spec.exclusive ? value > min : value >= min);
+  const belowMax = max === undefined || (openMax ? value < max : value <= max);
+  return aboveMin && belowMax;
 }
 
 /**
@@ -3028,10 +3046,11 @@ export function keypadText(value: number): string {
 export function clampValue(spec: ValueSpec, value: number): number {
   if (!Number.isFinite(value)) return spec.initial;
   const whole = spec.integer ? Math.round(value) : value;
-  const inset = spec.exclusive ? EXCLUSIVE_INSET : 0;
+  const minInset = spec.exclusive ? EXCLUSIVE_INSET : 0;
+  const maxInset = spec.exclusive === true ? EXCLUSIVE_INSET : 0;
   return Math.min(
-    (spec.max ?? Infinity) - inset,
-    Math.max((spec.min ?? -Infinity) + inset, whole)
+    (spec.max ?? Infinity) - maxInset,
+    Math.max((spec.min ?? -Infinity) + minInset, whole)
   );
 }
 

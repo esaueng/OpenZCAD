@@ -166,6 +166,11 @@ interface Session {
   touched: string[];
   /** The stored feature this command edits; null while creating one. */
   edit: InPlaceEditSeed | null;
+  /**
+   * Whether a later direct edit reshapes the edited body, as the feature
+   * stands now (its seed said so when armed; an undo may change it).
+   */
+  reshapedLater?: boolean;
 }
 
 export interface InPlaceCommand {
@@ -341,7 +346,9 @@ export function useInPlaceCommand(
       evaluate: (value) => optionsRef.current.evaluate?.(value) ?? null,
       touched: sessionTouched,
       ...(savedData ? { saved: savedData } : {}),
-      ...(editSeed?.reshapedLater ? { reshapedLater: true } : {})
+      ...((session?.reshapedLater ?? editSeed?.reshapedLater)
+        ? { reshapedLater: true }
+        : {})
     }),
     [
       options.sketchViews,
@@ -349,7 +356,8 @@ export function useInPlaceCommand(
       options.linearSnap,
       sessionTouched,
       savedData,
-      editSeed
+      editSeed,
+      session?.reshapedLater
     ]
   );
 
@@ -590,6 +598,11 @@ export function useInPlaceCommand(
   // screen the frame after the pick that completes it.
   const generation = useRef(0);
   const editIdentity = session?.edit ?? null;
+  // A refused entry belongs to the edit it was typed in: one re-armed from
+  // a changed feature (a Linear pattern made Grid) starts without it.
+  useEffect(() => {
+    setEntryRefusal(null);
+  }, [editIdentity]);
   useEffect(() => {
     if (!requestKey) {
       // Nothing to build (a pick taken back out): no frame, and no refusal
@@ -665,6 +678,7 @@ export function useInPlaceCommand(
       let tool = current.tool;
       let chosen = current.options;
       let touched = current.touched;
+      let reshapedLater = current.reshapedLater;
       // A stored value or option the user has not changed since it was
       // seeded takes the feature's as it is now. One the user changed keeps
       // its old baseline, so it stays theirs even if the feature later comes
@@ -774,6 +788,15 @@ export function useInPlaceCommand(
           changed = true;
         };
         for (const key of SLOT_KEYS) takeSlot(key);
+        // Whether a later edit reshapes the body is the feature's now too.
+        const reshaped = live.reshapedLater === true;
+        if (
+          reshaped !==
+          (current.reshapedLater ?? current.edit?.reshapedLater === true)
+        ) {
+          reshapedLater = reshaped;
+          changed = true;
+        }
         seededRef.current = nextBaseline;
       }
       for (const [valueId, raw] of Object.entries(raws)) {
@@ -789,7 +812,16 @@ export function useInPlaceCommand(
         }
       }
       return changed
-        ? { ...current, tool, options: chosen, slots, values, raws, touched }
+        ? {
+            ...current,
+            tool,
+            options: chosen,
+            slots,
+            values,
+            raws,
+            touched,
+            ...(reshapedLater !== undefined ? { reshapedLater } : {})
+          }
         : current;
     });
   }, [options.baseVersion]);
@@ -1009,13 +1041,31 @@ export function useInPlaceCommand(
         next = [face];
       } else {
         const picked = faces.some((other) => other.hash === face.hash);
-        // Faces of one body: a face of another starts the set over, and a
-        // picked face clicked again comes back out.
-        next = !sameBody
-          ? [face]
-          : picked
-            ? faces.filter((other) => other.hash !== face.hash)
-            : [...faces, face];
+        const placing =
+          toolSpec.clickPlacesPoint !== undefined &&
+          latest.options[toolSpec.clickPlacesPoint.optionId] ===
+            toolSpec.clickPlacesPoint.value;
+        if (placing && sameBody) {
+          // The click places the point: a picked face keeps its place and
+          // takes it, another joins with it, and no other face keeps one.
+          const unplaced = faces.map((other) => {
+            const { point: _point, ...rest } = other;
+            return rest;
+          });
+          next = picked
+            ? unplaced.map((other) =>
+                other.hash === face.hash ? { ...other, ...face } : other
+              )
+            : [...unplaced, face];
+        } else {
+          // Faces of one body: a face of another starts the set over, and
+          // a picked face clicked again comes back out.
+          next = !sameBody
+            ? [face]
+            : picked
+              ? faces.filter((other) => other.hash !== face.hash)
+              : [...faces, face];
+        }
       }
       return { ...latest, slots: { ...latest.slots, faces: next } };
     });
@@ -1196,7 +1246,9 @@ export function useInPlaceCommand(
           ? `more than ${valueSpec.min ?? 0}${
               valueSpec.max === undefined
                 ? ''
-                : ` and less than ${valueSpec.max}`
+                : valueSpec.exclusive === 'min'
+                  ? ` and at most ${valueSpec.max}`
+                  : ` and less than ${valueSpec.max}`
             }`
           : valueSpec.max === undefined
             ? `${whole ? `${whole}of ` : ''}at least ${valueSpec.min ?? 0}`

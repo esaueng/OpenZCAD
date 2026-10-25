@@ -88,6 +88,11 @@ export interface InPlaceEditContext {
    * model's body then cannot be taken back to the one before the feature.
    */
   laterReshapes?: boolean;
+  /**
+   * Whether a datum plane is one the feature may stand on: it still exists
+   * (unsuppressed) and comes before the feature in history.
+   */
+  datumPlaneUsable?(featureId: FeatureId): boolean;
   /** A body's display mesh vertices (x, y, z, …), for its exact box. */
   bodyVertices?(bodyId: BodyId): ArrayLike<number> | null;
   /** A datum axis's line, for a turn the model shows already made. */
@@ -438,10 +443,16 @@ export function inPlaceEditSeed(
     case 'split': {
       body(data.targetBodyId);
       if (isDatumPlaneRef(data.plane)) {
-        seed.slots.plane = {
-          kind: 'datum',
-          featureId: data.plane.datumFeatureId
-        };
+        // A datum plane gone, or now after the feature, is not restored:
+        // the slot asks for another, as a clicked one would be refused.
+        if (ctx.datumPlaneUsable?.(data.plane.datumFeatureId) === false) {
+          missing.push('plane');
+        } else {
+          seed.slots.plane = {
+            kind: 'datum',
+            featureId: data.plane.datumFeatureId
+          };
+        }
       } else {
         // A plane stored by its numbers opens typed, each on its own chip,
         // expressions and all: the way it was given is the way it is edited.

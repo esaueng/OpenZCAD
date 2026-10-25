@@ -108,9 +108,15 @@ describe('the in-place tool table', () => {
 
   it('clamps a value to its range and falls back when not finite', () => {
     const spec = IN_PLACE_TOOL_SPECS.revolve.values[0]!;
-    // Sub-degree turns are valid revolves (U09 review).
-    expect(clampValue(spec, 0)).toBe(1e-3);
+    // Every positive turn up to a full one is a valid revolve: 0 is kept
+    // just above, 360 itself is taken.
+    expect(clampValue(spec, 0)).toBeGreaterThan(0);
+    expect(clampValue(spec, 0)).toBeLessThan(1e-3);
     expect(clampValue(spec, 0.5)).toBe(0.5);
+    expect(clampValue(spec, 400)).toBe(360);
+    expect(valueInRange(spec, 0.0005)).toBe(true);
+    expect(valueInRange(spec, 0)).toBe(false);
+    expect(valueInRange(spec, 360)).toBe(true);
     expect(clampValue(spec, Number.NaN)).toBe(360);
   });
 });

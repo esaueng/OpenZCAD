@@ -717,6 +717,47 @@ describe('useInPlaceCommand: hole step chips', () => {
   });
 });
 
+describe('a draft hinge placed by a click', () => {
+  const face = (hash: number, point?: { x: number; y: number; z: number }) => ({
+    bodyId: 'body_a' as BodyId,
+    hash,
+    topologyId: `f${hash}`,
+    surfaceType: 'plane',
+    normal: { x: 1, y: 0, z: 0 },
+    centroid: { x: 0, y: 0, z: hash },
+    ...(point ? { point } : {})
+  });
+
+  it('a drafted face clicked again takes the hinge instead of leaving', () => {
+    const { hook } = setup();
+    // As an edit seeds them: the faces, no clicked point.
+    act(() => hook.result.current.start('draft', [], [face(1), face(2)]));
+    act(() => hook.result.current.setOption('neutral', 'point'));
+    act(() => {
+      hook.result.current.pickFace(face(2, { x: 5, y: 6, z: 7 }));
+    });
+    expect(hook.result.current.slots.faces.map((f) => f.hash)).toEqual([1, 2]);
+    expect(hook.result.current.slots.faces[1]?.point).toEqual({
+      x: 5,
+      y: 6,
+      z: 7
+    });
+    // The latest click is the hinge: no other face keeps a point.
+    act(() => {
+      hook.result.current.pickFace(face(1, { x: 1, y: 1, z: 1 }));
+    });
+    expect(hook.result.current.slots.faces.map((f) => f.point ?? null)).toEqual(
+      [{ x: 1, y: 1, z: 1 }, null]
+    );
+    // Without a clicked hinge, a picked face clicked again leaves the set.
+    act(() => hook.result.current.setOption('neutral', 'base'));
+    act(() => {
+      hook.result.current.pickFace(face(1, { x: 1, y: 1, z: 1 }));
+    });
+    expect(hook.result.current.slots.faces.map((f) => f.hash)).toEqual([2]);
+  });
+});
+
 describe('a box sweep into a face-list command', () => {
   const face = (bodyId: string, hash: number) =>
     ({ bodyId: bodyId as BodyId, hash, topologyId: `f${hash}` }) as FacePick;
@@ -1210,6 +1251,36 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     expect(onStatus).toHaveBeenCalledWith(
       expect.stringMatching(/no longer edited here/)
     );
+  });
+
+  it('a re-armed edit drops a refusal typed in the edit before it', () => {
+    let live: {
+      tool: 'linear-pattern' | 'grid-pattern';
+      seed: InPlaceEditSeed;
+    } = {
+      tool: 'linear-pattern',
+      seed: SEED
+    };
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      baseVersion: 1,
+      reseed: () => live
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('linear-pattern', { ...SEED, options: {} })
+    );
+    act(() => {
+      hook.result.current.setValue('count', 0.5, '0.5');
+    });
+    expect(hook.result.current.refusal).toMatch(/takes/);
+    live = { tool: 'grid-pattern', seed: { ...SEED, options: {} } };
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.tool).toBe('grid-pattern');
+    expect(hook.result.current.refusal ?? '').not.toMatch(/takes/);
   });
 
   it('previews a re-armed edit that builds the same thing', async () => {
