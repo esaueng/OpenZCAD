@@ -589,6 +589,9 @@ export function useInPlaceCommand(
   }, []);
 
   const setOption = useCallback((optionId: string, value: string) => {
+    // A refused entry was never applied, and a new choice (a hole's style)
+    // may not even show its value: the refusal no longer holds Done.
+    setEntryRefusal(null);
     setSession((current) => {
       if (!current) return current;
       const specs = IN_PLACE_TOOL_SPECS[current.tool].options ?? [];

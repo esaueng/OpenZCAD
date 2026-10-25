@@ -1953,7 +1953,13 @@ export function displayedValue(
   const close = Math.abs(rounded - value) <= Math.abs(value) * 1e-3;
   const valid =
     !spec || valueInRange(spec, rounded) || !valueInRange(spec, value);
-  return close && valid ? rounded : Number(value.toPrecision(10));
+  if (close && valid) return rounded;
+  // Ten places, unless even they would cross into what the spec refuses
+  // (179.9999999999° rounds to 180°): then the value as it is.
+  const shortened = Number(value.toPrecision(10));
+  return !spec || valueInRange(spec, shortened) || !valueInRange(spec, value)
+    ? shortened
+    : value;
 }
 
 /**
