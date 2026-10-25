@@ -72,6 +72,8 @@ export interface InPlaceEditContext {
    * the model shows the body after them too.
    */
   laterTransforms?: readonly FeatureData[];
+  /** A body's display mesh vertices (x, y, z, …), for its exact box. */
+  bodyVertices?(bodyId: BodyId): ArrayLike<number> | null;
   /** A datum axis's line, for a turn the model shows already made. */
   datumAxis?(
     featureId: FeatureId
@@ -425,7 +427,13 @@ export function inPlaceEditSeed(
         // body is shown scaled (and moved by any later in-place step).
         seed.slots.bodies.push(
           picked && factor > 0 && !data.copy
-            ? inPlaceEditBodyBox(picked, data, ctx, ctx.laterTransforms ?? [])
+            ? inPlaceEditBodyBox(
+                picked,
+                data,
+                ctx,
+                ctx.laterTransforms ?? [],
+                !isFeatureSuppressed(feature)
+              )
             : (picked ?? {
                 bodyId: data.targetBodyId,
                 min: { x: 0, y: 0, z: 0 },
@@ -439,7 +447,13 @@ export function inPlaceEditSeed(
         // body before the turn (a copy's source was never turned).
         seed.slots.bodies.push(
           picked && !data.copy
-            ? inPlaceEditBodyBox(picked, data, ctx, ctx.laterTransforms ?? [])
+            ? inPlaceEditBodyBox(
+                picked,
+                data,
+                ctx,
+                ctx.laterTransforms ?? [],
+                !isFeatureSuppressed(feature)
+              )
             : (picked ?? {
                 bodyId: data.targetBodyId,
                 min: { x: 0, y: 0, z: 0 },
@@ -959,35 +973,53 @@ export function keepAbsentHoleSteps(
  * axis), whose handle works on the body before it (a copy's source is shown
  * as it was). Later in-place transforms of the same body (`later`, in
  * history order) are taken back first, since the model shows the body after
- * them too; a turn taken back from a box gives a box that still holds the
- * body (exact for quarter turns about its own axes).
+ * them too. With the body's vertices (`ctx.bodyVertices`) the box is exact;
+ * from its box alone, a turn gives a box that still holds the body.
  */
 export function inPlaceEditBodyBox(
   box: BodyPick,
   data: FeatureData,
-  ctx: Pick<InPlaceEditContext, 'evaluate' | 'datumAxis'>,
-  later: readonly FeatureData[] = []
+  ctx: Pick<InPlaceEditContext, 'evaluate' | 'datumAxis' | 'bodyVertices'>,
+  later: readonly FeatureData[] = [],
+  /** The feature's own transform is in the body shown (not suppressed). */
+  shownWithOwn = true
 ): BodyPick {
   if (data.featureKind !== 'transform' || data.copy) return box;
-  let before = box;
-  // Newest first: the later steps, then the feature's own.
-  for (const step of [...[...later].reverse(), data]) {
-    before = undoLaterTransform(before, step, ctx) ?? before;
+  // The body's own vertices where it publishes them: taken back through a
+  // turn they give its true box, where a turned box's corners only give a
+  // box around it.
+  const vertices = ctx.bodyVertices?.(box.bodyId);
+  let points: Vector3[] = [];
+  if (vertices && vertices.length >= 3) {
+    for (let index = 0; index + 2 < vertices.length; index += 3) {
+      points.push({
+        x: vertices[index]!,
+        y: vertices[index + 1]!,
+        z: vertices[index + 2]!
+      });
+    }
+  } else {
+    points = boxCorners(box);
   }
-  return before;
+  // Newest first: the later steps, then the feature's own.
+  const steps = [...[...later].reverse(), ...(shownWithOwn ? [data] : [])];
+  for (const step of steps) {
+    points = undoTransformPoints(points, step, ctx) ?? points;
+  }
+  return boxOf(box.bodyId, points);
 }
 
 /**
- * A box before a later in-place transform: each corner taken back through
- * the authored move (x ↦ s·R(x − p) + p + t, R the ZYX turn), then through
- * a turn about a datum axis, which the transform makes first. Null when a
+ * Points before an in-place transform: each taken back through the
+ * authored move (x ↦ s·R(x − p) + p + t, R the ZYX turn), then through a
+ * turn about a datum axis, which the transform makes first. Null when a
  * part cannot be read (an unresolved expression, an axis not built).
  */
-function undoLaterTransform(
-  box: BodyPick,
+function undoTransformPoints(
+  points: readonly Vector3[],
   step: FeatureData,
   ctx: Pick<InPlaceEditContext, 'evaluate' | 'datumAxis'>
-): BodyPick | null {
+): Vector3[] | null {
   if (step.featureKind !== 'transform' || step.copy) return null;
   const turn = evaluated(step.transform.rotationDeg, ctx as InPlaceEditContext);
   const move = evaluated(step.transform.translation, ctx as InPlaceEditContext);
@@ -1047,7 +1079,7 @@ function undoLaterTransform(
       ? turnPoint(unmoved, axisTurn.line, -axisTurn.angle)
       : unmoved;
   };
-  return boxOf(box.bodyId, boxCorners(box).map(back));
+  return points.map(back);
 }
 
 /**

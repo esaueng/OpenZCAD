@@ -871,6 +871,73 @@ describe('inPlaceEditBodyBox', () => {
     );
   });
 
+  it("takes a turn back from the body's own vertices, exactly", () => {
+    // A 20 × 10 box turned 30° about Z: its turned box is larger than it.
+    const turnBy = (degrees: number) => (x: number, y: number) => {
+      const a = (degrees * Math.PI) / 180;
+      return [
+        x * Math.cos(a) - y * Math.sin(a),
+        x * Math.sin(a) + y * Math.cos(a)
+      ];
+    };
+    const corners = [
+      [0, 0],
+      [20, 0],
+      [20, 10],
+      [0, 10]
+    ].map(([x, y]) => turnBy(30)(x!, y!));
+    const vertices = corners.flatMap(([x, y]) => [x!, y!, 0, x!, y!, 4]);
+    const shown = {
+      bodyId: BODY,
+      min: {
+        x: Math.min(...corners.map((c) => c[0]!)),
+        y: Math.min(...corners.map((c) => c[1]!)),
+        z: 0
+      },
+      max: {
+        x: Math.max(...corners.map((c) => c[0]!)),
+        y: Math.max(...corners.map((c) => c[1]!)),
+        z: 4
+      }
+    };
+    const rotate = {
+      featureKind: 'transform',
+      targetBodyId: BODY,
+      transform: {
+        translation: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 }
+      },
+      axisRotation: {
+        axis: { type: 'datum-axis', datumFeatureId: 'axis_1' as FeatureId },
+        angleDeg: 30
+      }
+    } as FeatureData;
+    const box = inPlaceEditBodyBox(shown, rotate, {
+      ...EDIT_CTX,
+      datumAxis: () => ({
+        origin: { x: 0, y: 0, z: 0 },
+        direction: { x: 0, y: 0, z: 1 }
+      }),
+      bodyVertices: () => vertices
+    });
+    expect(box).toMatchObject({
+      min: { x: 0, y: 0, z: 0 },
+      max: { x: 20, y: 10, z: 4 }
+    });
+  });
+
+  it('leaves a suppressed scale out of what it takes back', () => {
+    const box = {
+      bodyId: BODY,
+      min: { x: 0, y: 0, z: 0 },
+      max: { x: 20, y: 10, z: 4 }
+    };
+    // Suppressed, the body shown is the one before the scale already.
+    expect(inPlaceEditBodyBox(box, scale(false), EDIT_CTX, [], false)).toEqual(
+      box
+    );
+  });
+
   it('leaves a copy source, and any other body, as the model shows it', () => {
     expect(inPlaceEditBodyBox(box, scale(true), EDIT_CTX)).toBe(box);
     expect(
