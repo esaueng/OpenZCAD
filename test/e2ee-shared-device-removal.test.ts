@@ -869,13 +869,26 @@ describe('device removal across shared encrypted projects (slice 5-7)', () => {
           .get(...(fence.binds as never[])) as { ok: number }
       ).ok;
     expect(holds()).toBe(1);
-    srv.db
+    // A replacement within the same millisecond keeps updated_at but not the
+    // signature (#906 review).
+    const signatures = srv.db
       .prepare(
-        `UPDATE e2ee_revocation_cutoffs SET updated_at = '2099-01-01T00:00:00.000Z'
+        `SELECT entry_sequence, signature FROM e2ee_revocation_cutoffs
          WHERE user_id = ?`
       )
-      .run(BOB);
+      .all(BOB) as { entry_sequence: number; signature: string }[];
+    const setSignature = srv.db.prepare(
+      `UPDATE e2ee_revocation_cutoffs SET signature = ?
+       WHERE user_id = ? AND entry_sequence = ?`
+    );
+    for (const row of signatures) {
+      setSignature.run('A'.repeat(87), BOB, row.entry_sequence);
+    }
     expect(holds()).toBe(0);
+    for (const row of signatures) {
+      setSignature.run(row.signature, BOB, row.entry_sequence);
+    }
+    expect(holds()).toBe(1);
 
     // Its later Commit there: the Worker refuses it outright...
     const pending = await stolen.sessions.commit(refOf(bobPhone, pendingId), {

@@ -185,9 +185,13 @@ const PROJECT_ACCOUNTS = `(SELECT user_id FROM projects WHERE id = ?
                          UNION SELECT user_id FROM project_members
                          WHERE project_id = ?)`;
 
-/** One key per stored cutoff statement; any change to the set changes it. */
+/**
+ * One key per stored cutoff statement; any change to the set changes it.
+ * The signature stands for the statement: a replacement is a new statement
+ * with its own signature, even within one millisecond of the last.
+ */
 const CUTOFF_KEYS = `SELECT c.user_id || '/' || c.generation || '/' ||
-                            c.entry_sequence || '/' || c.updated_at AS k,
+                            c.entry_sequence || '/' || c.signature AS k,
                             c.statement
                      FROM e2ee_revocation_cutoffs c
                      WHERE c.user_id IN ${PROJECT_ACCOUNTS}
