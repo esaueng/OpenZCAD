@@ -81,7 +81,6 @@ import {
   CHAINED,
   PROJECT_FENCE,
   RouteError,
-  WRITER_FENCE,
   archiveField,
   bytesField,
   deviceListMoved,
@@ -98,14 +97,16 @@ import {
   refuse,
   refuseDeviceListMoved,
   requireCertifiedDevice,
-  fenceBinds,
+  projectFence,
   requireEncryptedProjectAccess,
   runBatch,
   uintField,
   wrapsField,
-  type Authorization
+  type Authorization,
+  type EncryptedProjectAccess
 } from './e2eeProjects';
 import { memberRotationFence } from './e2eeDeviceRemoval';
+import { stagedHead } from './e2eeMigrationLease';
 import {
   adoptionField,
   copyBlobObjects,
@@ -169,6 +170,11 @@ interface Context {
    * (slice 5-2); the caller when absent (a create).
    */
   ownerUserId?: string;
+  /**
+   * The caller's access, once checked; with `staging` (slice 7-1) the
+   * project is plaintext and its ciphertext is staged under a lease.
+   */
+  access?: EncryptedProjectAccess;
 }
 
 // --- Input -----------------------------------------------------------------
@@ -841,7 +847,9 @@ async function retain(ctx: Context, projectId: string): Promise<void> {
       )
       .bind(projectId, MAX_PROJECT_REVISIONS)
       .all<{ revision_id: string }>();
-    if ((dropped.results ?? []).length) {
+    // A staged project's plaintext row keeps its own revision count; the
+    // cutover sets it (slice 7-1).
+    if ((dropped.results ?? []).length && !ctx.access?.staging) {
       await ctx.db.batch([
         ...(dropped.results ?? []).map((row) =>
           ctx.db
@@ -957,6 +965,9 @@ async function writeVersion(
   envelope: Uint8Array,
   revisionId: string | null
 ): Promise<SavedVersion> {
+  if (ctx.access?.staging) {
+    return writeStagedVersion(ctx, projectId, metadata, envelope, revisionId);
+  }
   const input = versionInput(metadata, 'version');
   if (input.expectedVersion === 0) {
     invalid('expectedVersion must name the stored head');
@@ -1148,6 +1159,254 @@ async function writeVersion(
   if (
     (results[1]?.meta?.changes ?? 0) === 1 &&
     head.envelope_key &&
+    ctx.bucket
+  ) {
+    try {
+      await ctx.bucket.delete(head.envelope_key);
+    } catch {
+      // The row no longer names it; an orphan costs storage only.
+    }
+  }
+  await retain(ctx, projectId);
+  return { version, updatedAt: now };
+}
+
+/**
+ * Slice 7-1: one staged version of a plaintext project moving to encrypted
+ * storage. The same checks and log as {@link writeVersion}, but the head it
+ * moves is the migration row's staged head, never `projects` (whose
+ * plaintext head the plaintext reads keep serving until the cutover), the
+ * first staged version builds on nothing (`expectedVersion` 0), and every
+ * statement fences on the caller's live lease.
+ */
+async function writeStagedVersion(
+  ctx: Context,
+  projectId: string,
+  metadata: Record<string, unknown>,
+  envelope: Uint8Array,
+  revisionId: string | null
+): Promise<SavedVersion> {
+  const access = ctx.access!;
+  const input = versionInput(metadata, 'version');
+  const version = await checkedDocumentEnvelope(
+    ctx,
+    projectId,
+    envelope,
+    input
+  );
+  const staged = await stagedHead(ctx.db, projectId);
+  const head = await headRow(ctx.db, projectId);
+  const stagedVersion = staged?.stagedVersion ?? 0;
+  if (
+    stagedVersion !== input.expectedVersion ||
+    (head?.document_version ?? 0) !== stagedVersion
+  ) {
+    refuse(
+      409,
+      'REVISION_CONFLICT',
+      `Project ${projectId} has a newer staged version.`,
+      { currentVersion: stagedVersion }
+    );
+  }
+  const previous = version.header.previousVersionHash;
+  if (
+    input.expectedVersion > 0 &&
+    (!previous || !head || toHex(previous) !== head.version_hash)
+  ) {
+    refuse(
+      409,
+      'E2EE_HEAD_MISMATCH',
+      'This version does not build on the staged head. Reload it.',
+      { currentVersion: stagedVersion }
+    );
+  }
+  const keyEpoch = await currentKeyEpoch(ctx.db, projectId);
+  if (version.header.keyEpoch !== keyEpoch) {
+    refuse(
+      409,
+      'E2EE_EPOCH_STALE',
+      'The project’s keys moved to a newer epoch. Catch up and save again.',
+      { keyEpoch }
+    );
+  }
+  if (revisionId !== null) {
+    const taken = await ctx.db
+      .prepare(
+        `SELECT 1 AS taken FROM e2ee_project_revisions
+         WHERE project_id = ? AND revision_id = ?`
+      )
+      .bind(projectId, revisionId)
+      .first<{ taken: number }>();
+    if (taken) {
+      refuse(
+        409,
+        'REVISION_ID_CONFLICT',
+        'Revision ID conflicts with an existing save state.'
+      );
+    }
+  }
+  const body = await storeBody(ctx, projectId, version);
+  const now = new Date().toISOString();
+  const newVersion = version.header.documentVersion;
+  const fence = projectFence(access, projectId, ctx.userId, 'owner');
+  // As writeVersion: a removed signer cannot stage after its revocation,
+  // and a pending rotation (slice 5-7) holds the write off, atomically.
+  const signerFence = deviceListUnchanged(ctx.userId, version.signerList);
+  const rotationFence = await memberRotationFence(ctx.db, projectId, keyEpoch);
+  // Every later statement lands only once the staged head moved here.
+  const moved = {
+    sql: `EXISTS (SELECT 1 FROM e2ee_project_migrations
+                  WHERE project_id = ? AND staged_version = ?
+                    AND state = 'staging')`,
+    binds: [projectId, newVersion] as const
+  };
+  const statements: D1PreparedStatement[] = [
+    ctx.db
+      .prepare(
+        `UPDATE e2ee_project_migrations
+         SET staged_version = ?, staged_hash = ?, updated_at = ?
+         WHERE project_id = ? AND state = 'staging' AND staged_version = ?
+           AND ${ctx.authorization.sql} AND ${fence.sql}
+           AND ((? = 0 AND NOT EXISTS (SELECT 1 FROM e2ee_project_versions
+                                       WHERE project_id = ?))
+             OR EXISTS (SELECT 1 FROM e2ee_project_versions
+                        WHERE project_id = ? AND document_version = ?
+                          AND version_hash = ?))
+           AND NOT EXISTS (SELECT 1 FROM e2ee_project_versions
+                           WHERE project_id = ? AND document_version > ?)
+           AND EXISTS (SELECT 1 FROM e2ee_project_groups
+                       WHERE project_id = ? AND key_epoch_base + epoch = ?)
+           AND ${signerFence.sql}
+           AND ${rotationFence.sql}`
+      )
+      .bind(
+        newVersion,
+        version.hash,
+        now,
+        projectId,
+        input.expectedVersion,
+        ...ctx.authorization.binds,
+        ...fence.binds,
+        input.expectedVersion,
+        projectId,
+        projectId,
+        input.expectedVersion,
+        head?.version_hash ?? '',
+        projectId,
+        input.expectedVersion,
+        projectId,
+        keyEpoch,
+        ...signerFence.binds,
+        ...rotationFence.binds
+      ),
+    // The replaced staged head's body goes first, unless a named save
+    // keeps it, as an autosave prunes an encrypted project's.
+    ctx.db
+      .prepare(
+        `UPDATE e2ee_project_versions SET envelope_key = NULL, envelope_inline = NULL
+         WHERE project_id = ? AND document_version = ? AND ${moved.sql}
+           AND NOT EXISTS (SELECT 1 FROM e2ee_project_revisions
+                           WHERE project_id = ? AND document_version = ?)`
+      )
+      .bind(
+        projectId,
+        input.expectedVersion,
+        ...moved.binds,
+        projectId,
+        input.expectedVersion
+      ),
+    insertVersion(ctx, projectId, version, input, body, now, moved),
+    ...(revisionId === null
+      ? []
+      : [
+          ctx.db
+            .prepare(
+              `INSERT INTO e2ee_project_revisions
+                 (project_id, revision_id, document_version, version_hash,
+                  author_user_id, created_at)
+               SELECT ?, ?, ?, ?, ?, ? WHERE ${CHAINED}`
+            )
+            .bind(
+              projectId,
+              revisionId,
+              newVersion,
+              version.hash,
+              ctx.userId,
+              now
+            )
+        ]),
+    ...(version.header.blobIds.length
+      ? [
+          insertVersionBlobs(
+            ctx.db,
+            projectId,
+            version.hash,
+            version.header.blobIds,
+            moved
+          )
+        ]
+      : [])
+  ];
+  let results: Awaited<ReturnType<typeof runVersionBatch>>;
+  try {
+    results = await runVersionBatch(ctx, statements);
+  } catch (error) {
+    await discardBody(ctx, body);
+    throw error;
+  }
+  const accepted =
+    (results[0]?.meta?.changes ?? 0) === 1 &&
+    (results[2]?.meta?.changes ?? 0) === 1 &&
+    (revisionId === null || (results[3]?.meta?.changes ?? 0) === 1);
+  if (!accepted) {
+    await discardBody(ctx, body);
+    if (await deviceListMoved(ctx.db, ctx.userId, version.signerList)) {
+      refuseDeviceListMoved();
+    }
+    // Refuses if a removal stored meanwhile names a later epoch.
+    await memberRotationFence(ctx.db, projectId, keyEpoch);
+    const current = await stagedHead(ctx.db, projectId);
+    const lease = await ctx.db
+      .prepare(
+        `SELECT 1 AS held FROM e2ee_project_migrations
+         WHERE project_id = ? AND state = 'staging' AND lease_id = ?
+           AND lease_expires_at > ?`
+      )
+      .bind(projectId, access.staging!.leaseId, Date.now())
+      .first<{ held: number }>();
+    if (!lease) {
+      refuse(
+        409,
+        'E2EE_MIGRATION_LEASE_LOST',
+        'This project’s migration lease lapsed or moved to another device. Start the migration again to resume.'
+      );
+    }
+    if ((current?.stagedVersion ?? 0) !== input.expectedVersion) {
+      refuse(
+        409,
+        'REVISION_CONFLICT',
+        `Project ${projectId} has a newer staged version.`,
+        { currentVersion: current?.stagedVersion ?? 0 }
+      );
+    }
+    const epoch = await currentKeyEpoch(ctx.db, projectId);
+    if (epoch !== version.header.keyEpoch) {
+      refuse(
+        409,
+        'E2EE_EPOCH_STALE',
+        'The project’s keys moved to a newer epoch. Catch up and save again.',
+        { keyEpoch: epoch }
+      );
+    }
+    refuse(
+      401,
+      'E2EE_SESSION_REQUIRED',
+      'Sign in again before saving this encrypted project.'
+    );
+  }
+  if (
+    (results[1]?.meta?.changes ?? 0) === 1 &&
+    head?.envelope_key &&
     ctx.bucket
   ) {
     try {
@@ -1607,6 +1866,7 @@ async function saveInfo(
   const infoFence = deviceListUnchanged(ctx.userId, info.signerList);
   const rotationFence = await memberRotationFence(ctx.db, projectId, keyEpoch);
   const now = new Date().toISOString();
+  const writer = projectFence(ctx.access, projectId, ctx.userId, 'writer');
   const results = await runVersionBatch(ctx, [
     ctx.db
       .prepare(
@@ -1614,7 +1874,7 @@ async function saveInfo(
            (project_id, kind, scope, sequence, key_epoch, envelope,
             wrapped_version_key, signature, signer_device_id, updated_at)
          SELECT ?, 'project-info', '', ?, ?, ?, ?, ?, ?, ?
-         WHERE ${ctx.authorization.sql} AND ${WRITER_FENCE}
+         WHERE ${ctx.authorization.sql} AND ${writer.sql}
            AND EXISTS (SELECT 1 FROM e2ee_project_groups
                        WHERE project_id = ? AND key_epoch_base + epoch = ?)
            AND ${infoFence.sql}
@@ -1640,7 +1900,7 @@ async function saveInfo(
         info.signerDeviceId,
         now,
         ...ctx.authorization.binds,
-        ...fenceBinds(projectId, ctx.userId),
+        ...writer.binds,
         projectId,
         keyEpoch,
         ...infoFence.binds,
@@ -1778,7 +2038,20 @@ async function loadDocument(
   const since = queryUint(url, 'since');
   const project = await projectRow(ctx.db, projectId);
   const head = await headRow(ctx.db, projectId);
-  if (!head || head.document_version !== project.document_version) {
+  // Slice 7-1: a staged project's head is the migration row's, and its
+  // state is what has been staged, not the plaintext row's.
+  const staged = ctx.access?.staging
+    ? await stagedProjectState(ctx.db, project)
+    : null;
+  if (staged && !head) {
+    refuse(
+      404,
+      'E2EE_MIGRATION_NOT_STAGED',
+      'Nothing of this project has been staged yet.'
+    );
+  }
+  const state = staged ?? projectState(project);
+  if (!head || head.document_version !== state.documentVersion) {
     refuse(
       503,
       'PROJECT_DOCUMENT_UNAVAILABLE',
@@ -1792,7 +2065,7 @@ async function loadDocument(
       : await logPage(ctx.db, projectId, since, head.document_version);
   return frameResponse(
     {
-      project: projectState(project),
+      project: state,
       head: storedVersion(head),
       log: page.log,
       more: page.more,
@@ -1800,6 +2073,35 @@ async function loadDocument(
     } satisfies E2eeDocumentHeadMetadata,
     envelope
   );
+}
+
+/** A staged project's state: its staged head and named saves (slice 7-1). */
+async function stagedProjectState(
+  db: D1Database,
+  project: ProjectRow
+): Promise<E2eeProjectState> {
+  const row = await db
+    .prepare(
+      `SELECT m.staged_version,
+         (SELECT COUNT(*) FROM e2ee_project_revisions r
+          WHERE r.project_id = m.project_id) AS revision_count,
+         (SELECT r.revision_id FROM e2ee_project_revisions r
+          WHERE r.project_id = m.project_id
+          ORDER BY r.document_version DESC LIMIT 1) AS last_revision_id
+       FROM e2ee_project_migrations m WHERE m.project_id = ?`
+    )
+    .bind(project.id)
+    .first<{
+      staged_version: number;
+      revision_count: number;
+      last_revision_id: string | null;
+    }>();
+  return {
+    ...projectState(project),
+    documentVersion: row?.staged_version ?? 0,
+    revisionCount: row?.revision_count ?? 0,
+    lastRevisionId: row?.last_revision_id ?? null
+  };
 }
 
 async function loadVersions(
@@ -1892,7 +2194,9 @@ export async function handleE2eeProjectDocumentRequest(
   userId: string,
   projectsEnabled: boolean,
   authorization: Authorization,
-  blobBucket: E2eeBlobBucket | null = null
+  blobBucket: E2eeBlobBucket | null = null,
+  /** Slice 7-1: the request's migration lease, while migration is open. */
+  migrationLease: string | null = null
 ): Promise<Response> {
   try {
     if (!projectsEnabled) {
@@ -1960,9 +2264,10 @@ export async function handleE2eeProjectDocumentRequest(
       userId,
       projectId,
       method === 'GET' ? 'read' : 'write',
-      { allowDeleted: method === 'GET' }
+      { allowDeleted: method === 'GET', migrationLease }
     );
     ctx.ownerUserId = access.ownerUserId;
+    ctx.access = access;
     switch (`${method} ${route}`) {
       case 'PUT document':
         return await saveDocument(ctx, projectId, request);

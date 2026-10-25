@@ -48,7 +48,8 @@ import type {
 } from '@openzcad/shared';
 import {
   isE2eeProjectGroupStorageReady,
-  isProjectStorageFormatReady
+  isProjectStorageFormatReady,
+  stagedForEncryptionSql
 } from '@openzcad/cloudflare-adapters';
 import { prepareAddCommit, type PreparedAdd } from './e2eeInvitations';
 import { prepareMembershipCommit } from './e2eeMembership';
@@ -58,6 +59,8 @@ import {
   postProposal,
   prepareProposalSettlement
 } from './e2eeProposals';
+import { E2EE_MIGRATION_CODES } from '@openzcad/shared';
+import { checkStagingLease, type StagingLease } from './e2eeMigrationLease';
 
 export const E2EE_PROJECT_ROUTE =
   /^\/api\/e2ee\/projects\/([^/]+)\/(mls\/commits|mls\/group-info|mls\/leaves|mls\/proposals|keys|keys\/archives)$/;
@@ -353,6 +356,12 @@ export type EncryptedProjectNeed = 'read' | 'write' | 'commit';
 export interface EncryptedProjectAccess {
   readonly role: EncryptedProjectRole;
   readonly ownerUserId: string;
+  /**
+   * Slice 7-1: a plaintext project the owner is staging for encryption,
+   * under this live lease. Its writes carry {@link projectFence}'s staged
+   * fence instead of the format-2 ones.
+   */
+  readonly staging?: StagingLease;
 }
 
 /**
@@ -368,7 +377,16 @@ export async function requireEncryptedProjectAccess(
   userId: string,
   projectId: string,
   need: EncryptedProjectNeed,
-  options: { allowDeleted?: boolean } = {}
+  options: {
+    allowDeleted?: boolean;
+    /**
+     * Slice 7-1: the migration lease the request names (only while
+     * E2EE_MIGRATION_ENABLED is on). With it, the owner of a plaintext
+     * project staged for encryption under that live lease gets owner
+     * access to its staged rows.
+     */
+    migrationLease?: string | null;
+  } = {}
 ): Promise<EncryptedProjectAccess> {
   const row = await db
     .prepare(
@@ -401,6 +419,28 @@ export async function requireEncryptedProjectAccess(
     return notFound();
   }
   if (row.storage_format !== 2) {
+    if (
+      options.migrationLease &&
+      role === 'owner' &&
+      row.status !== 'deleted'
+    ) {
+      const staging = await checkStagingLease(
+        db,
+        projectId,
+        userId,
+        options.migrationLease
+      );
+      if (staging?.kind === 'held') {
+        return { role, ownerUserId: row.user_id, staging: staging.lease };
+      }
+      if (staging?.kind === 'lost') {
+        refuse(
+          409,
+          E2EE_MIGRATION_CODES.leaseLost,
+          'This project’s migration lease lapsed or moved to another device. Start the migration again to resume.'
+        );
+      }
+    }
     refuse(
       409,
       'E2EE_PROJECT_NOT_ENCRYPTED',
@@ -430,6 +470,49 @@ export const MEMBER_FENCE = fenceOf('');
 export const WRITER_FENCE = fenceOf(" AND fm.role = 'editor'");
 export const fenceBinds = (projectId: string, userId: string) =>
   [projectId, userId, userId] as const;
+
+/** A fence inside a write statement, with its binds. */
+export interface SqlFence {
+  readonly sql: string;
+  readonly binds: readonly unknown[];
+}
+
+/**
+ * Slice 7-1: the owner's live plaintext project, staged for encryption
+ * under the request's lease, which is still live. Bound with the project
+ * id, the owner, the lease id and the time the lease was checked at.
+ */
+const STAGED_FENCE = `EXISTS (SELECT 1 FROM projects fp
+  WHERE fp.id = ? AND fp.user_id = ? AND fp.storage_format = 1
+    AND fp.status <> 'deleted' AND ${stagedForEncryptionSql('fp')})`;
+
+/**
+ * The fence a write for `access` carries: `member` (MEMBER_FENCE),
+ * `writer` (WRITER_FENCE) or `owner` (PROJECT_FENCE) on an encrypted
+ * project, and on a project being staged for encryption (slice 7-1) the
+ * staged fence on the lease, whatever the kind: only its owner's lease
+ * holder writes there.
+ */
+export function projectFence(
+  access: EncryptedProjectAccess | undefined,
+  projectId: string,
+  userId: string,
+  kind: 'member' | 'writer' | 'owner'
+): SqlFence {
+  if (access?.staging) {
+    return {
+      sql: STAGED_FENCE,
+      binds: [projectId, userId, access.staging.leaseId, access.staging.now]
+    };
+  }
+  if (kind === 'owner') {
+    return { sql: PROJECT_FENCE, binds: [projectId, userId] };
+  }
+  return {
+    sql: kind === 'writer' ? WRITER_FENCE : MEMBER_FENCE,
+    binds: fenceBinds(projectId, userId)
+  };
+}
 
 /**
  * Owner of a live format-2 project; anything else is refused. With
@@ -806,8 +889,10 @@ async function createGroup(
   userId: string,
   projectId: string,
   authorization: Authorization,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  access?: EncryptedProjectAccess
 ): Promise<Response> {
+  const fence = projectFence(access, projectId, userId, 'owner');
   const groupId = idField(body.groupId, 'groupId');
   const deviceId = idField(body.deviceId, 'deviceId');
   const groupInfo = bytesField(body.groupInfo, 'groupInfo', {
@@ -827,7 +912,7 @@ async function createGroup(
            (project_id, group_id, generation, key_epoch_base, epoch,
             initial_group_info, group_info, group_info_epoch, updated_at)
          SELECT ?, ?, 0, 0, 0, ?, ?, 0, ?
-         WHERE ${authorization.sql} AND ${PROJECT_FENCE}
+         WHERE ${authorization.sql} AND ${fence.sql}
            AND NOT EXISTS (SELECT 1 FROM e2ee_project_groups WHERE project_id = ?)
            AND ${signerList.sql}`
       )
@@ -838,8 +923,7 @@ async function createGroup(
         groupInfo,
         now,
         ...authorization.binds,
-        projectId,
-        userId,
+        ...fence.binds,
         projectId,
         ...signerList.binds
       ),
@@ -875,8 +959,10 @@ async function submitCommit(
   userId: string,
   projectId: string,
   authorization: Authorization,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  access?: EncryptedProjectAccess
 ): Promise<Response> {
+  const fence = projectFence(access, projectId, userId, 'member');
   const epoch = uintField(body.epoch, 'epoch');
   const kind = body.kind;
   if (kind !== 'commit' && kind !== 'external') {
@@ -975,7 +1061,7 @@ async function submitCommit(
         `INSERT INTO e2ee_mls_commits
            (project_id, epoch, kind, sender_user_id, sender_device_id, message, created_at)
          SELECT ?, ?, ?, ?, ?, ?, ?
-         WHERE ${authorization.sql} AND ${MEMBER_FENCE}
+         WHERE ${authorization.sql} AND ${fence.sql}
            AND EXISTS (SELECT 1 FROM e2ee_project_groups
                        WHERE project_id = ? AND epoch = ? AND key_epoch_base = ?)
            AND ${signerList.sql}${add ? ` AND ${add.gateSql}` : ''}${
@@ -991,7 +1077,7 @@ async function submitCommit(
         message,
         now,
         ...authorization.binds,
-        ...fenceBinds(projectId, userId),
+        ...fence.binds,
         projectId,
         epoch,
         group.key_epoch_base,
@@ -1056,8 +1142,10 @@ async function postWraps(
   userId: string,
   projectId: string,
   authorization: Authorization,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  access?: EncryptedProjectAccess
 ): Promise<Response> {
+  const fence = projectFence(access, projectId, userId, 'member');
   const deviceId = idField(body.deviceId, 'deviceId');
   const keyEpoch = uintField(body.keyEpoch, 'keyEpoch', MAX_U32);
   const account = await requireCertifiedDevice(db, userId, deviceId);
@@ -1084,7 +1172,7 @@ async function postWraps(
              (user_id, project_id, key_epoch, purpose, account_key_generation,
               account_key_sequence, wrapped, created_at)
            SELECT ?, ?, ?, ?, ?, ?, ?, ?
-           WHERE ${authorization.sql} AND ${MEMBER_FENCE}
+           WHERE ${authorization.sql} AND ${fence.sql}
              AND EXISTS (SELECT 1 FROM e2ee_project_groups
                          WHERE project_id = ? AND key_epoch_base <= ?
                            AND key_epoch_base + epoch >= ?)
@@ -1100,7 +1188,7 @@ async function postWraps(
           wrap.wrapped,
           now,
           ...authorization.binds,
-          ...fenceBinds(projectId, userId),
+          ...fence.binds,
           projectId,
           keyEpoch,
           keyEpoch
@@ -1114,8 +1202,8 @@ async function postWraps(
   const fenced =
     results.every((result) => (result.meta?.changes ?? 0) === 1) ||
     (await db
-      .prepare(`SELECT 1 AS ok WHERE ${authorization.sql} AND ${MEMBER_FENCE}`)
-      .bind(...authorization.binds, ...fenceBinds(projectId, userId))
+      .prepare(`SELECT 1 AS ok WHERE ${authorization.sql} AND ${fence.sql}`)
+      .bind(...authorization.binds, ...fence.binds)
       .first<{ ok: number }>()) !== null;
   if (!fenced || stored.length !== 2) {
     refuse(
@@ -1307,7 +1395,9 @@ export async function handleE2eeProjectRequest(
   db: D1Database,
   userId: string,
   projectsEnabled: boolean,
-  authorization: Authorization
+  authorization: Authorization,
+  /** Slice 7-1: the request's migration lease, while migration is open. */
+  migrationLease: string | null = null
 ): Promise<Response> {
   try {
     if (!projectsEnabled) {
@@ -1354,25 +1444,34 @@ export async function handleE2eeProjectRequest(
         ));
     if (!known) refuse(404, 'NOT_FOUND', 'Not found.');
     if (method === 'POST' && route === 'mls/group-info') {
-      // The group is made with the project, by its owner.
-      await requireOwnedEncryptedProject(db, userId, projectId);
+      // The group is made with the project, by its owner; or (slice 7-1)
+      // by the owner's lease holder while it stages a plaintext project.
+      const staged = migrationLease
+        ? await requireEncryptedProjectAccess(db, userId, projectId, 'write', {
+            migrationLease
+          })
+        : undefined;
+      if (!staged?.staging) {
+        await requireOwnedEncryptedProject(db, userId, projectId);
+      }
       return await createGroup(
         db,
         userId,
         projectId,
         authorization,
-        await readBody(request)
+        await readBody(request),
+        staged
       );
     }
     // Any member reads the group and sends Commits; the MLS policy in every
     // member's browser decides what a Commit may change (slice 5-2). The
     // owner reads a project in the recycle bin, as in plaintext (4-8).
-    await requireEncryptedProjectAccess(
+    const access = await requireEncryptedProjectAccess(
       db,
       userId,
       projectId,
       method === 'GET' ? 'read' : 'commit',
-      { allowDeleted: method === 'GET' }
+      { allowDeleted: method === 'GET', migrationLease }
     );
     if (method === 'POST') {
       const body = await readBody(request);
@@ -1381,8 +1480,15 @@ export async function handleE2eeProjectRequest(
         return await postProposal(db, userId, projectId, authorization, body);
       }
       return route === 'keys'
-        ? await postWraps(db, userId, projectId, authorization, body)
-        : await submitCommit(db, userId, projectId, authorization, body);
+        ? await postWraps(db, userId, projectId, authorization, body, access)
+        : await submitCommit(
+            db,
+            userId,
+            projectId,
+            authorization,
+            body,
+            access
+          );
     }
     switch (route) {
       case 'mls/group-info': {

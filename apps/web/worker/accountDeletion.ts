@@ -6,6 +6,7 @@ import { shareLinkErasureStatements } from './e2eeShareLinks';
 import { projectGroupErasureStatements } from './e2eeProjects';
 import { assistantConsentErasureStatements } from './e2eeAssistantConsents';
 import { deviceRemovalErasureStatements } from './e2eeDeviceRemoval';
+import { projectMigrationErasureStatements } from './e2eeProjectMigrations';
 import {
   encryptedProjectUsage,
   projectVersionErasureStatements
@@ -496,7 +497,17 @@ export async function deleteAccountData(
           ...(await proposalErasureStatements(db, session.userId, input.scope)),
           // The account's share delegation, and with `all` its user id on
           // share-link rows in other owners' projects (migration 0040).
-          ...(await shareLinkErasureStatements(db, session.userId, input.scope))
+          ...(await shareLinkErasureStatements(
+            db,
+            session.userId,
+            input.scope
+          )),
+          // Before migration 0042 there is no migration state.
+          ...(await projectMigrationErasureStatements(
+            db,
+            session.userId,
+            input.scope
+          ))
         ]
       )
     );

@@ -40,6 +40,7 @@ import {
   PROJECT_INVITATION_RATE_WINDOW_SECONDS,
   PROJECT_MEMBER_CAP,
   EncryptedProjectsRequiredError,
+  ProjectMigratingError,
   ProjectNotFoundError,
   ProjectSharingError,
   RevisionConflictError,
@@ -235,6 +236,14 @@ export interface CloudflareEnv {
    * requires migration 0031 in D1 first.
    */
   E2EE_PROJECTS_ENABLED?: string;
+  /**
+   * Opens moving existing plaintext projects to encrypted storage (ADR-024
+   * Phase 7): the migration routes, staged ciphertext beside the plaintext,
+   * and the plaintext routes' PROJECT_MIGRATING refusal while a project is
+   * staged. Closed unless set to a true value, and only for accounts that
+   * encrypted projects are open to; requires migration 0042 in D1 first.
+   */
+  E2EE_MIGRATION_ENABLED?: string;
   AI_PATCH_DIRECT_EDIT_ENABLED?: string;
   AI_PATCH_GROWING_HOLDER_ENABLED?: string;
   AI_PATCH_HOLE_CONTROL_ENABLED?: string;
@@ -322,6 +331,7 @@ export const CLOUDFLARE_BOOLEAN_FLAGS = [
   'PROJECT_PERSONAL_SYNC_ENABLED',
   'E2EE_KEYS_ENABLED',
   'E2EE_PROJECTS_ENABLED',
+  'E2EE_MIGRATION_ENABLED',
   'AI_PATCH_DIRECT_EDIT_ENABLED',
   'AI_PATCH_GROWING_HOLDER_ENABLED',
   'AI_PATCH_HOLE_CONTROL_ENABLED',
@@ -429,6 +439,22 @@ export function isE2eeProjectsEnabled(
   return (
     isCloudflareFeatureEnabled(env, 'E2EE_PROJECTS_ENABLED') &&
     isE2eeKeysEnabled(env, email)
+  );
+}
+
+/**
+ * Whether one authenticated account may move its plaintext projects to
+ * encrypted storage (ADR-024 Phase 7): encrypted projects must be open to it
+ * (`isE2eeProjectsEnabled`) and E2EE_MIGRATION_ENABLED itself must be on.
+ * All three default closed.
+ */
+export function isE2eeMigrationEnabled(
+  env: CloudflareEnv,
+  email?: string
+): boolean {
+  return (
+    isCloudflareFeatureEnabled(env, 'E2EE_MIGRATION_ENABLED') &&
+    isE2eeProjectsEnabled(env, email)
   );
 }
 
@@ -640,6 +666,52 @@ export const isE2eeShareLinkStorageReady = cachedSchemaProbe(
     'e2ee_share_delegations')`,
   (row) => row?.ready === E2EE_SHARE_LINK_TABLES.length + 1
 );
+
+/**
+ * Whether migration 0042 is installed: the per-project migration state of
+ * moving plaintext projects to encrypted storage (ADR-024 Phase 7). Only
+ * the migration routes, the plaintext routes' migrating check (while
+ * E2EE_MIGRATION_ENABLED is on), artifact usage, project purge and account
+ * erasure name its table, each after asking this; a failed probe reads as
+ * missing, so ordinary traffic keeps working without it.
+ */
+export const isE2eeProjectMigrationStorageReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM sqlite_master WHERE type = 'table'
+   AND name = 'e2ee_project_migrations'`,
+  (row) => row?.ready === 1
+);
+
+/**
+ * The SQL that names a project (as `<alias>`) whose plaintext is being
+ * staged for encryption under one live lease (migration 0042). Its binds
+ * are the lease id and the current time in milliseconds.
+ */
+export function stagedForEncryptionSql(alias: string): string {
+  return `EXISTS (SELECT 1 FROM e2ee_project_migrations staged
+    WHERE staged.project_id = ${alias}.id AND staged.direction = 'encrypt'
+      AND staged.state = 'staging' AND staged.owner_user_id = ${alias}.user_id
+      AND staged.lease_id = ? AND staged.lease_expires_at > ?)`;
+}
+
+/**
+ * The SQL that holds while the project whose id is `projectIdSql` is not
+ * moving to encrypted storage: no staging, cutover or purge of it is under
+ * way (migration 0042). Every statement that advances a plaintext upload
+ * session carries it, so a session opened before staging began lands
+ * nothing after (slice 7-1): the cutover checks no artifact, and the purge
+ * would delete a late one unencrypted. No binds.
+ */
+export function projectNotMigratingSql(projectIdSql: string): string {
+  return `NOT EXISTS (SELECT 1 FROM e2ee_project_migrations migrating
+    WHERE migrating.project_id = ${projectIdSql}
+      AND migrating.state IN ('staging', 'cutover', 'purging'))`;
+}
+
+/** A staging lease an encrypted-blob write runs under (slice 7-1). */
+export interface EncryptedBlobStaging {
+  readonly leaseId: string;
+  readonly now: number;
+}
 
 /** An encrypted blob's opaque object key: no file name, no kind. */
 export function encryptedBlobObjectKey(
@@ -3127,19 +3199,24 @@ export class D1R2PersistenceService implements PersistenceService {
   ): Promise<{ bytes: number; count: number }> {
     // Encrypted content blobs (migration 0034) are finalized artifact bytes
     // too; before it, there are none to add.
+    // Since migration 0042, a plaintext project's staged blobs count only
+    // from its cutover on (decision M10), as its accounting triggers do.
+    const staged = (await isE2eeProjectMigrationStorageReady(this.env.DB))
+      ? ' AND projects.storage_format = 2'
+      : '';
     const blobs = (await isE2eeContentBlobStorageReady(this.env.DB))
       ? {
           bytes: ` + COALESCE((
                   SELECT SUM(blobs.ciphertext_bytes)
                   FROM e2ee_content_blobs blobs
                   JOIN projects ON projects.id = blobs.project_id
-                  WHERE projects.user_id = ?
+                  WHERE projects.user_id = ?${staged}
                 ), 0)`,
           count: ` + (
                   SELECT COUNT(*)
                   FROM e2ee_content_blobs blobs
                   JOIN projects ON projects.id = blobs.project_id
-                  WHERE projects.user_id = ?
+                  WHERE projects.user_id = ?${staged}
                 )`,
           binds: [ownerUserId]
         }
@@ -3509,10 +3586,14 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.ARTIFACTS) {
       throw new ArtifactStorageError();
     }
+    // Slice 7-1: a project staged for encryption takes no new plaintext
+    // files, whatever the Worker checked before.
+    await this.refuseIfMigrating(request.projectId);
     // Expired cross-account uploads are reclaimed by the scheduled sweeper.
     await this.purgeExpiredUploadSessionsForOwner(userId);
     await this.refreshAccountQuota(access.ownerUserId);
     const session = createUploadSessionRecord(request);
+    const notMigrating = await this.plaintextUploadFence('projects.id');
     try {
       const inserted = await this.env.DB.prepare(
         `INSERT INTO upload_sessions
@@ -3524,7 +3605,7 @@ export class D1R2PersistenceService implements PersistenceService {
          WHERE EXISTS (
            SELECT 1 FROM projects
            WHERE id = ? AND (user_id = ? OR status != 'deleted')
-             AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id)
+             AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id)${notMigrating}
          )`
       )
         .bind(
@@ -3543,6 +3624,7 @@ export class D1R2PersistenceService implements PersistenceService {
         )
         .run();
       if (inserted.meta?.changes === 0) {
+        await this.refuseIfMigrating(request.projectId);
         throw new ProjectNotFoundError(request.projectId);
       }
     } catch (error) {
@@ -3627,6 +3709,10 @@ export class D1R2PersistenceService implements PersistenceService {
         }
       );
       let claimed: number | undefined;
+      const notMigrating = await this.plaintextUploadFence(
+        'upload_sessions.project_id',
+        upload
+      );
       try {
         const result = await this.env.DB.prepare(
           `UPDATE upload_sessions
@@ -3635,7 +3721,7 @@ export class D1R2PersistenceService implements PersistenceService {
          WHERE id = ? AND reservation_state = 'open'
            AND multipart_upload_id IS NULL AND reserved_bytes = 0
            AND single_part = 0
-           AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = upload_sessions.project_id)`
+           AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = upload_sessions.project_id)${notMigrating}`
         )
           .bind(multipart.uploadId, uploadSessionId)
           .run();
@@ -3649,6 +3735,7 @@ export class D1R2PersistenceService implements PersistenceService {
       }
       if (claimed !== 1) {
         await multipart.abort().catch(() => undefined);
+        await this.refuseIfMigrating(upload.projectId, upload);
         throw new ArtifactStorageError('Upload session changed during upload.');
       }
       uploadId = multipart.uploadId;
@@ -3779,10 +3866,16 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     // ADR-024 Phase 4: an encrypted project takes only encrypted blobs, and
     // a plaintext project only ordinary artifacts, part by part. A plaintext
-    // session opened before the project became encrypted writes nothing more.
+    // session opened before the project became encrypted writes nothing more,
+    // nor (slice 7-1) one opened before its staging began: each statement
+    // that advances it carries the same fence (`plaintextUploadFence`).
     if (upload.e2eeBlobKind === null) {
       assertPlaintextProject(access);
-    } else if (isPlaintextStorageFormat(access.storageFormat)) {
+      await this.refuseIfMigrating(upload.projectId);
+    } else if (
+      isPlaintextStorageFormat(access.storageFormat) &&
+      !(await this.isStagedForEncryption(upload.projectId))
+    ) {
       throw new ArtifactStorageError(
         'This upload carries an encrypted blob, but the project is not end-to-end encrypted.'
       );
@@ -3799,6 +3892,73 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     await this.refreshAccountQuota(access.ownerUserId);
     return upload;
+  }
+
+  /**
+   * Whether a plaintext project is being staged for encryption (slice 7-1,
+   * migration 0042): its encrypted-blob sessions, which only the lease
+   * holder could open, carry their bytes as an encrypted project's would.
+   */
+  private async isStagedForEncryption(projectId: string): Promise<boolean> {
+    if (!(await isE2eeProjectMigrationStorageReady(this.env.DB))) return false;
+    const row = await this.env
+      .DB!.prepare(
+        `SELECT 1 AS staged FROM e2ee_project_migrations
+         WHERE project_id = ? AND direction = 'encrypt' AND state = 'staging'`
+      )
+      .bind(projectId)
+      .first<{ staged: number }>();
+    return row?.staged === 1;
+  }
+
+  /**
+   * Whether a plaintext upload (`upload` absent, or one without an
+   * encrypted-blob marker) must respect the migration state (slice 7-1):
+   * only while E2EE_MIGRATION_ENABLED is on, as the Worker's
+   * PROJECT_MIGRATING refusals, and once migration 0042 is installed, so
+   * with the flag off no upload statement names its table.
+   */
+  private async plaintextUploadFenced(
+    upload?: Pick<DurableUploadSession, 'e2eeBlobKind'>
+  ): Promise<boolean> {
+    return (
+      (!upload || upload.e2eeBlobKind === null) &&
+      isCloudflareFeatureEnabled(this.env, 'E2EE_MIGRATION_ENABLED') &&
+      (await isE2eeProjectMigrationStorageReady(this.env.DB))
+    );
+  }
+
+  /**
+   * Slice 7-1: refuses a plaintext upload to a project staged for
+   * encryption with PROJECT_MIGRATING. Call it only after access was
+   * resolved.
+   */
+  private async refuseIfMigrating(
+    projectId: string,
+    upload?: Pick<DurableUploadSession, 'e2eeBlobKind'>
+  ): Promise<void> {
+    if (
+      (await this.plaintextUploadFenced(upload)) &&
+      (await this.isStagedForEncryption(projectId))
+    ) {
+      throw new ProjectMigratingError(projectId);
+    }
+  }
+
+  /**
+   * ` AND <fence>` for a statement that creates or advances a plaintext
+   * upload of the project whose id is `projectIdSql`, so it lands nothing
+   * once that project's move to encrypted storage began
+   * (`projectNotMigratingSql`); '' for an encrypted-blob session, which a
+   * staging writes, and while the fence is closed (`plaintextUploadFenced`).
+   */
+  private async plaintextUploadFence(
+    projectIdSql: string,
+    upload?: Pick<DurableUploadSession, 'e2eeBlobKind'>
+  ): Promise<string> {
+    return (await this.plaintextUploadFenced(upload))
+      ? ` AND ${projectNotMigratingSql(projectIdSql)}`
+      : '';
   }
 
   private async uploadParts(
@@ -3888,6 +4048,42 @@ export class D1R2PersistenceService implements PersistenceService {
     return (await this.loadUploadSession(upload.uploadSessionId)) === null;
   }
 
+  /**
+   * Discards up to `limit` upload sessions of one project with their R2
+   * bytes: only encrypted-blob sessions, or only ordinary ones (slice 7-1:
+   * an abandoned staging's sessions, and a migrated project's plaintext
+   * ones). `remaining` is true while more are left, or one could not be
+   * discarded yet (an R2 completion still in flight).
+   */
+  async discardProjectUploadSessions(
+    projectId: string,
+    encrypted: boolean,
+    limit: number
+  ): Promise<{ discarded: number; remaining: boolean }> {
+    if (!this.env.DB) return { discarded: 0, remaining: false };
+    const marker = (await isE2eeContentBlobStorageReady(this.env.DB))
+      ? ` AND e2ee_blob_kind IS ${encrypted ? 'NOT ' : ''}NULL`
+      : encrypted
+        ? ' AND 0'
+        : '';
+    const { results } = await this.env.DB.prepare(
+      `SELECT id FROM upload_sessions WHERE project_id = ?${marker}
+       ORDER BY id LIMIT ?`
+    )
+      .bind(projectId, limit + 1)
+      .all<{ id: string }>();
+    const rows = results ?? [];
+    let discarded = 0;
+    let stuck = false;
+    for (const row of rows.slice(0, limit)) {
+      const upload = await this.loadUploadSession(row.id);
+      if (!upload) continue;
+      if (await this.cleanupUploadSession(upload)) discarded += 1;
+      else stuck = true;
+    }
+    return { discarded, remaining: stuck || rows.length > limit };
+  }
+
   async createMultipartUpload(
     userId: UserId,
     uploadSessionId: string
@@ -3929,6 +4125,10 @@ export class D1R2PersistenceService implements PersistenceService {
       { httpMetadata: { contentType: session.contentType } }
     );
     let changes: number | undefined;
+    const notMigrating = await this.plaintextUploadFence(
+      'upload_sessions.project_id',
+      session
+    );
     try {
       const result = await this.env.DB.prepare(
         `UPDATE upload_sessions
@@ -3936,7 +4136,7 @@ export class D1R2PersistenceService implements PersistenceService {
              completion_started_at = NULL
          WHERE id = ? AND reservation_state = 'open'
            AND multipart_upload_id IS NULL AND reserved_bytes = 0
-           AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = upload_sessions.project_id)`
+           AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = upload_sessions.project_id)${notMigrating}`
       )
         .bind(upload.uploadId, uploadSessionId)
         .run();
@@ -4042,6 +4242,10 @@ export class D1R2PersistenceService implements PersistenceService {
     );
     const part = await upload.uploadPart(partNumber, body);
     let recorded: number | undefined;
+    const notMigrating = await this.plaintextUploadFence(
+      'upload_sessions.project_id',
+      session
+    );
     try {
       const result = await this.env.DB.prepare(
         `UPDATE artifact_upload_parts
@@ -4051,7 +4255,7 @@ export class D1R2PersistenceService implements PersistenceService {
            AND EXISTS (
              SELECT 1 FROM upload_sessions
              WHERE id = ? AND reservation_state = 'uploading'
-               AND multipart_upload_id = ?
+               AND multipart_upload_id = ?${notMigrating}
            )`
       )
         .bind(
@@ -4072,6 +4276,7 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     if (recorded !== 1) {
+      await this.refuseIfMigrating(session.projectId, session);
       throw new ArtifactStorageError(
         'Upload part was replaced concurrently; retry the part.'
       );
@@ -4117,12 +4322,16 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     let frozeCompletion = false;
     if (session.reservationState === 'uploading') {
+      const notMigrating = await this.plaintextUploadFence(
+        'upload_sessions.project_id',
+        session
+      );
       const frozen = await this.env.DB.prepare(
         `UPDATE upload_sessions
          SET reservation_state = 'completing', completion_started_at = ?
          WHERE id = ? AND reservation_state = 'uploading'
            AND multipart_upload_id = ?
-           AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = upload_sessions.project_id)`
+           AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = upload_sessions.project_id)${notMigrating}`
       )
         .bind(Date.now(), uploadSessionId, request.uploadId)
         .run();
@@ -4339,7 +4548,8 @@ export class D1R2PersistenceService implements PersistenceService {
   /** The owner's or an editor's access to an encrypted project, or the refusal. */
   private async requireEncryptedBlobWriter(
     userId: UserId,
-    projectId: string
+    projectId: string,
+    staging?: EncryptedBlobStaging
   ): Promise<ProjectAccess> {
     if (!this.env.DB || !(await isE2eeContentBlobStorageReady(this.env.DB))) {
       throw new EncryptedBlobError(
@@ -4350,7 +4560,14 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     // The owner or an editor (slice 5-2; viewers are refused as not found).
     const access = await this.requireProjectEdit(userId, projectId);
-    if (isPlaintextStorageFormat(access.storageFormat)) {
+    // Slice 7-1: a plaintext project staged for encryption takes the blobs
+    // of the owner's lease holder, which the Worker checked; the writes
+    // fence on the same lease in their own SQL.
+    const staged =
+      staging !== undefined &&
+      access.role === 'owner' &&
+      isPlaintextStorageFormat(access.storageFormat);
+    if (isPlaintextStorageFormat(access.storageFormat) && !staged) {
       throw new EncryptedBlobError(
         409,
         'E2EE_PROJECT_NOT_ENCRYPTED',
@@ -4365,6 +4582,23 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     return access;
+  }
+
+  /**
+   * The format condition of an encrypted-blob write on `projects`: an
+   * encrypted project, or (slice 7-1) a plaintext one staged for encryption
+   * under the caller's live lease.
+   */
+  private encryptedBlobFormat(staging?: EncryptedBlobStaging): {
+    sql: string;
+    binds: readonly unknown[];
+  } {
+    return staging
+      ? {
+          sql: `storage_format = 1 AND ${stagedForEncryptionSql('projects')}`,
+          binds: [staging.leaseId, staging.now]
+        }
+      : { sql: 'storage_format = 2', binds: [] };
   }
 
   private async committedEncryptedBlob(
@@ -4411,12 +4645,15 @@ export class D1R2PersistenceService implements PersistenceService {
   async createEncryptedBlobUpload(
     userId: UserId,
     request: { projectId: string; blobId: string; kind: string },
-    authorization: { sql: string; binds: readonly unknown[] }
+    authorization: { sql: string; binds: readonly unknown[] },
+    staging?: EncryptedBlobStaging
   ): Promise<EncryptedBlobUploadResult> {
     const access = await this.requireEncryptedBlobWriter(
       userId,
-      request.projectId
+      request.projectId,
+      staging
     );
+    const format = this.encryptedBlobFormat(staging);
     const committed = await this.committedEncryptedBlob(
       request.projectId,
       request.blobId
@@ -4485,7 +4722,7 @@ export class D1R2PersistenceService implements PersistenceService {
          WHERE ${authorization.sql}
            AND EXISTS (
              SELECT 1 FROM projects
-             WHERE id = ? AND user_id = ? AND storage_format = 2
+             WHERE id = ? AND user_id = ? AND ${format.sql}
                AND status <> 'deleted'
                AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id)
                AND (user_id = ? OR EXISTS (
@@ -4507,6 +4744,7 @@ export class D1R2PersistenceService implements PersistenceService {
           ...authorization.binds,
           request.projectId,
           access.ownerUserId,
+          ...format.binds,
           userId,
           userId
         )
@@ -4558,12 +4796,15 @@ export class D1R2PersistenceService implements PersistenceService {
       dedupeTag: string | null;
     },
     authorization: { sql: string; binds: readonly unknown[] },
-    inspect: (head: Uint8Array, size: number, kind: string) => void
+    inspect: (head: Uint8Array, size: number, kind: string) => void,
+    staging?: EncryptedBlobStaging
   ): Promise<EncryptedBlobRecord> {
     const access = await this.requireEncryptedBlobWriter(
       userId,
-      request.projectId
+      request.projectId,
+      staging
     );
+    const format = this.encryptedBlobFormat(staging);
     const committed = await this.committedEncryptedBlob(
       request.projectId,
       request.blobId
@@ -4633,7 +4874,7 @@ export class D1R2PersistenceService implements PersistenceService {
         AND completion_started_at IS NULL
     ) AND EXISTS (
       SELECT 1 FROM projects
-      WHERE id = ? AND user_id = ? AND storage_format = 2
+      WHERE id = ? AND user_id = ? AND ${format.sql}
         AND status <> 'deleted'
         AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id)
         AND (user_id = ? OR EXISTS (
@@ -4650,6 +4891,7 @@ export class D1R2PersistenceService implements PersistenceService {
       stored.size,
       request.projectId,
       access.ownerUserId,
+      ...format.binds,
       userId,
       userId,
       ...authorization.binds
@@ -4835,13 +5077,18 @@ export class D1R2PersistenceService implements PersistenceService {
             .all<{ object_key: string }>()
         : { results: [] as Array<{ object_key: string }> };
 
+    // Slice 7-1: nothing lands once the project's move to encrypted storage
+    // began, though the session was checked just before.
+    const notMigrating = await this.plaintextUploadFence(
+      'upload_sessions.project_id'
+    );
     const validSessionSql = `EXISTS (
       SELECT 1 FROM upload_sessions
       WHERE id = ? AND artifact_id = ? AND project_id = ?
         AND owner_user_id = ?
         AND reservation_state = 'completed' AND reserved_bytes = ?
         AND multipart_upload_id IS NOT NULL
-        AND completion_started_at IS NULL
+        AND completion_started_at IS NULL${notMigrating}
     )`;
     const statements =
       artifact.kind === 'thumbnail'
@@ -4880,7 +5127,7 @@ export class D1R2PersistenceService implements PersistenceService {
          WHERE id = ? AND artifact_id = ? AND project_id = ?
            AND owner_user_id = ?
            AND reservation_state = 'completed' AND reserved_bytes = ?
-           AND multipart_upload_id IS NOT NULL
+           AND multipart_upload_id IS NOT NULL${notMigrating}
            AND EXISTS (
              SELECT 1 FROM projects
              WHERE id = upload_sessions.project_id
@@ -4943,7 +5190,9 @@ export class D1R2PersistenceService implements PersistenceService {
       )
         .bind(request.artifactId, request.projectId)
         .first<ArtifactRow>();
-      return existing ? artifactFromRow(existing) : null;
+      if (existing) return artifactFromRow(existing);
+      await this.refuseIfMigrating(request.projectId);
+      return null;
     }
 
     if (artifact.kind === 'thumbnail') {
@@ -5996,6 +6245,12 @@ export class D1R2PersistenceService implements PersistenceService {
     // Solo group resets (migration 0036), only once the table exists.
     if (await isE2eeDeviceRemovalStorageReady(this.env.DB)) {
       groupTables.push('DELETE FROM e2ee_group_resets WHERE project_id IN');
+    }
+    // Migration state (migration 0042), only once the table exists.
+    if (await isE2eeProjectMigrationStorageReady(this.env.DB)) {
+      groupTables.push(
+        'DELETE FROM e2ee_project_migrations WHERE project_id IN'
+      );
     }
     // Encrypted content blobs (migration 0034): their objects first, the
     // same way. Their rows then go references first, through the claim
@@ -7234,6 +7489,9 @@ export class ProjectCollaborationRoom extends DurableObject {
     }
     if (new URL(request.url).pathname === '/_internal/e2ee-notice') {
       return this.acceptInternalE2eeNotice(request);
+    }
+    if (new URL(request.url).pathname === '/_internal/migration') {
+      return this.acceptInternalMigration(request);
     }
     if (request.method === 'PATCH') {
       return this.acceptInternalRoleUpdate(request);
@@ -9422,6 +9680,75 @@ export class ProjectCollaborationRoom extends DurableObject {
           head
         });
       }
+      return new Response(null, { status: 204 });
+    });
+  }
+
+  /**
+   * Internal (ADR-024 slice 7-1): a plaintext project moving to encrypted
+   * storage. `lock`, when staging begins: every plaintext connection closes
+   * and pending socket tickets and edit leases go, so nothing the room
+   * holds moves on while the owner's browser stages. `purge`, after the
+   * cutover: every plaintext key goes (the latest document, its history,
+   * the copied-source journal, edit leases, tickets, the legacy layout and
+   * the index), so the room can relay the encrypted project's ciphertext.
+   * Both are idempotent; an encrypted room has no plaintext to drop.
+   */
+  private async acceptInternalMigration(request: Request): Promise<Response> {
+    const projectId = new URL(request.url).searchParams.get('projectId');
+    if (
+      request.method !== 'POST' ||
+      request.headers.get('x-openzcad-internal-migration') !== 'v1' ||
+      !projectId ||
+      (this.projectId !== null && this.projectId !== projectId)
+    ) {
+      return new Response('Invalid room migration request.', { status: 403 });
+    }
+    const body = await readSnapshotBody(request, 1024);
+    let action: unknown;
+    try {
+      action = (JSON.parse(body ?? '') as { action?: unknown }).action;
+    } catch {
+      action = null;
+    }
+    if (action !== 'lock' && action !== 'purge') {
+      return new Response('Invalid room migration request.', { status: 400 });
+    }
+    return this.enqueueLeaseOperation(async () => {
+      if (this.roomFormat === 2) return new Response(null, { status: 204 });
+      for (const socket of this.roomContext.getWebSockets()) {
+        socket.close(4003, 'This project is moving to encrypted storage.');
+      }
+      this.sockets.clear();
+      this.presence.clear();
+      this.editLeases = [];
+      if (action === 'lock') {
+        await this.roomContext.storage.delete([
+          ROOM_SOCKET_TICKETS_KEY,
+          ROOM_EDIT_LEASE_KEY
+        ]);
+        return new Response(null, { status: 204 });
+      }
+      const history = new Set<number>([
+        ...this.historyVersions,
+        ...this.documentHistory.keys()
+      ]);
+      this.latestDocument = null;
+      this.documentHistory.clear();
+      this.historyVersions = [];
+      this.historyLoaded = false;
+      this.sourceArchives = [];
+      this.sourceCopyPublicationStarted = false;
+      // The index goes last: a failed delete leaves keys it still names.
+      await this.roomContext.storage.delete([
+        ROOM_LATEST_KEY,
+        ...Array.from(history, historyKey),
+        LEGACY_ROOM_STATE_KEY,
+        ROOM_SOURCE_ARCHIVES_KEY,
+        ROOM_EDIT_LEASE_KEY,
+        ROOM_SOCKET_TICKETS_KEY
+      ]);
+      await this.roomContext.storage.delete(ROOM_META_KEY);
       return new Response(null, { status: 204 });
     });
   }
