@@ -781,7 +781,15 @@ export function useInPlaceCommand(
         }
         // So do its picks: an untouched slot takes what the feature
         // references now (an undo may have re-pointed its path or bodies).
+        // A point a click placed (a draft's clicked hinge) is the user's own
+        // pick, though a point is otherwise only where a face stands.
+        const placing = IN_PLACE_TOOL_SPECS[current.tool].clickPlacesPoint;
+        const placedPoint =
+          placing !== undefined &&
+          chosen[placing.optionId] === placing.value &&
+          slots.faces.some((face) => face.point !== undefined);
         const takeSlot = <K extends keyof Session['slots']>(key: K) => {
+          if (key === 'faces' && placedPoint) return;
           const now = slotIdentity(slots[key]);
           if (now !== slotIdentity(baseline.slots[key])) return;
           nextBaseline.slots = {
