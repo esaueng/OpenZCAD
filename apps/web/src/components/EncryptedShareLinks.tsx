@@ -6,7 +6,8 @@ import { StableLabel } from './StableLabel';
  * Share links of an end-to-end encrypted project, in the sharing dialog's
  * encrypted branch (ADR-024 Phase 5, slice 5-10). The owner creates, copies
  * and revokes links; each row says until when visitors accept it or that it
- * needs confirming. Links stay readable only while the owner's identity key
+ * needs confirming, or that its revocation is still pending on the server
+ * (revoking it again retries). Links stay readable only while the owner's identity key
  * has recently confirmed them (the share delegation): the section asks for
  * a passkey or the recovery key when there is none or it ends within a
  * week. After a removal it offers to reissue the links, and after an owner
@@ -20,7 +21,12 @@ export interface EncryptedShareLinkRow {
   readonly mode: EncryptedShareLinkMode;
   /** Null when this device cannot open the link's key. */
   readonly url: string | null;
-  readonly status: 'active' | 'needs-confirming' | 'not-published';
+  /**
+   * `revocation-pending`: revoked in the project, but the server has not
+   * confirmed it stopped serving the link; revoking it again asks again.
+   */
+  readonly status:
+    'active' | 'needs-confirming' | 'not-published' | 'revocation-pending';
   readonly expiresAt: number | null;
 }
 
@@ -33,13 +39,19 @@ export interface EncryptedShareLinksState {
     shareId: string;
     mode: EncryptedShareLinkMode;
   }[];
+  /** Why a revoked link's server copy could not be forgotten again. */
+  readonly problem?: string | null;
 }
 
 /** A passkey ceremony, or the recovery key as typed. */
 export type ShareConfirmation = 'passkey' | { readonly recoveryKey: string };
 
 export interface EncryptedShareLinkClient {
-  /** Renews statements that are due, then lists the head's active links. */
+  /**
+   * Asks the server again to forget revoked links it still serves, renews
+   * statements that are due, then lists the head's active links and the
+   * revoked ones still served.
+   */
   list(projectId: string): Promise<EncryptedShareLinksState>;
   create(
     projectId: string,
@@ -83,7 +95,10 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       })),
       needsConfirmation:
         view.isOwner && links.delegationNeedsRenewal(view.delegation),
-      retired: upkeep?.retired ?? []
+      retired: upkeep?.retired ?? [],
+      problem: upkeep?.revocations.failed.length
+        ? `A revoked link may still open for visitors: the server did not confirm it stopped serving it (${upkeep.revocations.failed[0]!.reason}). Revoke it again to retry.`
+        : null
     };
   },
   async create(projectId, mode) {
@@ -168,7 +183,8 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
 const STATUS_LABEL: Record<EncryptedShareLinkRow['status'], string> = {
   active: 'Active',
   'needs-confirming': 'Needs confirming',
-  'not-published': 'Not published yet'
+  'not-published': 'Not published yet',
+  'revocation-pending': 'Revocation pending'
 };
 
 const MODE_LABEL: Record<EncryptedShareLinkMode, string> = {
@@ -208,7 +224,9 @@ export function EncryptedShareLinks({
   const [removalSeen, setRemovalSeen] = useState(false);
 
   const load = useCallback(async () => {
-    setState(await client.list(projectId));
+    const next = await client.list(projectId);
+    setState(next);
+    if (next.problem) setError(next.problem);
   }, [client, projectId]);
 
   useEffect(() => {
@@ -228,6 +246,12 @@ export function EncryptedShareLinks({
       await load();
     } catch (caught) {
       setError(message(caught));
+      // A revoke can fail after its tombstone was written: show the link
+      // as revocation pending rather than active.
+      await client
+        .list(projectId)
+        .then(setState)
+        .catch(() => undefined);
     } finally {
       setBusy(null);
     }

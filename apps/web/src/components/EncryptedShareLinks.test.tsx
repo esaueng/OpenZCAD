@@ -143,4 +143,80 @@ describe('EncryptedShareLinks (slice 5-10)', () => {
     await user.click(screen.getByRole('button', { name: 'Reissue links' }));
     expect(client.reissue).toHaveBeenLastCalledWith('proj_x', active.links);
   });
+
+  it('keeps a revoked link the server still serves listed as revocation pending until revoking again succeeds', async () => {
+    const pending: EncryptedShareLinksState = {
+      links: [
+        {
+          shareId: 'shr_a',
+          mode: 'view',
+          url: null,
+          status: 'revocation-pending',
+          expiresAt: null
+        }
+      ],
+      needsConfirmation: false,
+      retired: []
+    };
+    const client = fakeClient([
+      { ...active, links: [active.links[0]!] },
+      pending,
+      { links: [], needsConfirmation: false, retired: [] }
+    ]);
+    vi.mocked(client.revoke).mockRejectedValueOnce(
+      new Error('The server did not confirm it stopped serving it.')
+    );
+    const user = userEvent.setup();
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    expect(await screen.findByText(/^Active until /)).toBeVisible();
+
+    // The tombstone landed but the server's forget failed.
+    await user.click(
+      screen.getByRole('button', { name: 'Revoke View only link' })
+    );
+    expect(await screen.findByText('Revocation pending')).toBeVisible();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'did not confirm it stopped serving it'
+    );
+    expect(screen.queryByText(/^Active until /)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Copy View only link' })
+    ).not.toBeInTheDocument();
+
+    // Revoking it again asks the server again.
+    await user.click(
+      screen.getByRole('button', { name: 'Revoke View only link' })
+    );
+    expect(client.revoke).toHaveBeenCalledTimes(2);
+    expect(client.revoke).toHaveBeenLastCalledWith('proj_x', 'shr_a');
+    expect(await screen.findByText('No links yet.')).toBeVisible();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('reports a pending revocation the list could not finish', async () => {
+    const client = fakeClient([
+      {
+        links: [
+          {
+            shareId: 'shr_a',
+            mode: 'tweak',
+            url: null,
+            status: 'revocation-pending',
+            expiresAt: null
+          }
+        ],
+        needsConfirmation: false,
+        retired: [],
+        problem: 'A revoked link may still open for visitors.'
+      }
+    ]);
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    expect(await screen.findByText('Revocation pending')).toBeVisible();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'A revoked link may still open for visitors.'
+    );
+    expect(
+      screen.getByRole('button', { name: 'Revoke Tweak link' })
+    ).toBeEnabled();
+  });
 });

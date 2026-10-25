@@ -13,7 +13,12 @@
  *   (`shareLinkFragment.ts`).
  * - **Revoke** (owner). A signed permanent tombstone ("OZY") replaces the
  *   grant in a new version; the server is then asked to forget the link
- *   (its snapshot, key wraps and statement go at once).
+ *   (its snapshot, key wraps and statement go at once). The tombstone, not
+ *   that one request, is what counts: while the server still lists a link
+ *   the head tombstones, its revocation is pending and the owner's browser
+ *   asks again (`forgetRevokedShareLinks`) on the next revoke, whenever the
+ *   sharing dialog loads the links, and after a removal. Revoking a link
+ *   already tombstoned only asks the server again.
  * - **Statements** ("OZA", owner devices the delegation names): at most
  *   seven days, a sequence that rises per link, naming the signing keys of
  *   the owner's and every current editor's devices as this browser pinned
@@ -76,6 +81,7 @@ import {
   type E2eeShareDelegationRecord,
   type E2eeShareLinkRecord,
   type E2eeShareLinksApi,
+  type E2eeShareLinksResponse,
   type ProjectDocument
 } from '@openzcad/shared';
 import type { BlobReferenceRegistry } from './blobReferences';
@@ -111,7 +117,12 @@ export const SHARE_AUTHORITY_RENEWAL_MS = 2 * DAY_MS;
 const SCHEMA_VERSION = 1;
 
 export type ShareLinksErrorCode =
-  'not-owner' | 'read-only-device' | 'link-not-found' | 'key-unavailable';
+  | 'not-owner'
+  | 'read-only-device'
+  | 'link-not-found'
+  | 'key-unavailable'
+  /** Tombstoned in the project; the server did not confirm forgetting it. */
+  | 'revocation-pending';
 
 export class ShareLinksError extends Error {
   override readonly name = 'ShareLinksError';
@@ -811,9 +822,63 @@ export async function createShareLink(
   };
 }
 
+export interface ForgetOutcome {
+  /** Revoked links the server stopped serving now. */
+  readonly forgotten: readonly string[];
+  /** Revoked links it still serves: their revocation is pending. */
+  readonly failed: readonly { shareId: string; reason: string }[];
+}
+
+/**
+ * The server forgets every link it still lists that the head tombstones (a
+ * revoke whose request failed after its tombstone was written): the request
+ * again, until the listing no longer names the link. Owner only; anyone
+ * else, and a head without tombstones, gets an empty result without a
+ * request. `listed` is a listing just read, to skip reading it again.
+ */
+export async function forgetRevokedShareLinks(
+  ctx: ShareLinksContext,
+  projectId: string,
+  options: {
+    readonly head?: EncryptedShareHead;
+    readonly listed?: E2eeShareLinksResponse;
+  } = {}
+): Promise<ForgetOutcome> {
+  const forgotten: string[] = [];
+  const failed: { shareId: string; reason: string }[] = [];
+  const outcome = () => ({ forgotten, failed });
+  const head = options.head ?? (await ctx.store.shareHead(projectId));
+  const revoked = head.shareLinks?.tombstonedIds;
+  if (!revoked?.size || !ctx.groups.device) return outcome();
+  const owner = await projectOwnerOf(ctx.groups, projectId, head.keyEpoch);
+  if (owner !== ctx.groups.account.userId) return outcome();
+  const listed = options.listed ?? (await ctx.api.list(projectId));
+  for (const record of listed.links) {
+    if (!revoked.has(record.shareId)) continue;
+    try {
+      await ctx.api
+        .forget(projectId, record.shareId)
+        .catch((error: unknown) => {
+          if ((error as { status?: number }).status !== 404) throw error;
+        });
+      forgotten.push(record.shareId);
+    } catch (error) {
+      failed.push({ shareId: record.shareId, reason: describe(error) });
+    }
+  }
+  return outcome();
+}
+
+/** A revoke of links the head already tombstones: nothing to write. */
+class AlreadyRevoked extends Error {}
+
 /**
  * The owner revokes links: signed permanent tombstones replace their grants
- * in one new version, then the server forgets them.
+ * in one new version, then the server forgets them and every other revoked
+ * link it still lists (`forgetRevokedShareLinks`). Links the head already
+ * tombstones write nothing: the server is only asked again. Rejects with
+ * `revocation-pending` while the server still serves one of `shareIds`; the
+ * tombstone stands and the next attempt asks again.
  */
 export async function revokeShareLinks(
   ctx: ShareLinksContext,
@@ -823,42 +888,58 @@ export async function revokeShareLinks(
   const { device, record: own } = requireDevice(ctx);
   const before = await ctx.store.shareHead(projectId);
   await requireOwner(ctx, projectId, before.keyEpoch);
-  const head = await ctx.store.writeShareLinks(
-    projectId,
-    async (current, keyEpoch) => {
-      const entries = entriesOf(current);
-      const revoking = shareIds.filter((id) =>
-        entries.grants.some((g) => g.id === id)
+  const tombstoned = (set: VerifiedShareLinkSet | null) =>
+    shareIds.length > 0 &&
+    shareIds.every((id) => set?.tombstonedIds.has(id) === true);
+  let head = before;
+  if (!tombstoned(before.shareLinks)) {
+    try {
+      head = await ctx.store.writeShareLinks(
+        projectId,
+        async (current, keyEpoch) => {
+          const entries = entriesOf(current);
+          const revoking = shareIds.filter((id) =>
+            entries.grants.some((g) => g.id === id)
+          );
+          if (!revoking.length) {
+            // Revoked meanwhile (another tab): only the server is left.
+            if (tombstoned(current)) throw new AlreadyRevoked();
+            throw new ShareLinksError(
+              'link-not-found',
+              'This share link is not active any more.'
+            );
+          }
+          const tombstones = [...entries.tombstones];
+          for (const id of revoking) {
+            tombstones.push({
+              id,
+              signed: await signShareLinkTombstone(device.signing.privateKey, {
+                projectId,
+                shareId: id,
+                keyEpoch,
+                issuedAt: nowOf(ctx),
+                signerKeyHash: own.signingKeyHash
+              })
+            });
+          }
+          return sortedSet(
+            entries.grants.filter((g) => !revoking.includes(g.id)),
+            tombstones
+          );
+        }
       );
-      if (!revoking.length) {
-        throw new ShareLinksError(
-          'link-not-found',
-          'This share link is not active any more.'
-        );
-      }
-      const tombstones = [...entries.tombstones];
-      for (const id of revoking) {
-        tombstones.push({
-          id,
-          signed: await signShareLinkTombstone(device.signing.privateKey, {
-            projectId,
-            shareId: id,
-            keyEpoch,
-            issuedAt: nowOf(ctx),
-            signerKeyHash: own.signingKeyHash
-          })
-        });
-      }
-      return sortedSet(
-        entries.grants.filter((g) => !revoking.includes(g.id)),
-        tombstones
-      );
+    } catch (error) {
+      if (!(error instanceof AlreadyRevoked)) throw error;
+      head = await ctx.store.shareHead(projectId);
     }
-  );
-  for (const id of shareIds) {
-    await ctx.api.forget(projectId, id).catch((error: unknown) => {
-      if ((error as { status?: number }).status !== 404) throw error;
-    });
+  }
+  const { failed } = await forgetRevokedShareLinks(ctx, projectId, { head });
+  const pending = failed.find((entry) => shareIds.includes(entry.shareId));
+  if (pending) {
+    throw new ShareLinksError(
+      'revocation-pending',
+      `The link is revoked in the project, but the server did not confirm it stopped serving it (${pending.reason}). Revoke it again to retry.`
+    );
   }
   return head;
 }
@@ -875,7 +956,12 @@ export type ShareLinkStatus =
   /** No statement, an expired one, or a delegation that does not cover it. */
   | 'needs-confirming'
   /** Nothing published yet. */
-  | 'not-published';
+  | 'not-published'
+  /**
+   * Tombstoned in the project, but the server still lists it, so visitors
+   * may still open its snapshot: revoking it again asks the server again.
+   */
+  | 'revocation-pending';
 
 export interface ShareLinkView {
   readonly shareId: string;
@@ -959,6 +1045,19 @@ export async function listShareLinks(
       snapshotVersion: record?.snapshot?.documentVersion ?? null
     });
   }
+  // Revoked links the server still serves stay listed until it forgets them.
+  const revoked = head.shareLinks?.tombstonedIds;
+  for (const record of listed.links) {
+    if (!revoked?.has(record.shareId)) continue;
+    links.push({
+      shareId: record.shareId,
+      mode: record.mode,
+      url: null,
+      status: 'revocation-pending',
+      expiresAt: null,
+      snapshotVersion: record.snapshot?.documentVersion ?? null
+    });
+  }
   return { isOwner, links, delegation };
 }
 
@@ -979,15 +1078,18 @@ export interface ShareLinkUpkeep {
    * reissue them (their modes).
    */
   readonly retired: readonly { shareId: string; mode: ShareLinkMode }[];
+  /** Revoked links the server was asked again to forget. */
+  readonly revocations: ForgetOutcome;
   /** The head after the upkeep; null on a read-only device. */
   readonly head: EncryptedShareHead | null;
 }
 
 /**
- * The owner's routine: links that name an earlier identity of the owner
- * are tombstoned (visitors cannot follow an identity change), and the
- * other links' statements are renewed where due. Owner only; anyone else
- * gets an empty result.
+ * The owner's routine: revoked links the server still serves are
+ * forgotten again (`forgetRevokedShareLinks`), links that name an earlier
+ * identity of the owner are tombstoned (visitors cannot follow an identity
+ * change), and the other links' statements are renewed where due. Owner
+ * only; anyone else gets an empty result.
  */
 export async function maintainShareLinks(
   ctx: ShareLinksContext,
@@ -997,15 +1099,23 @@ export async function maintainShareLinks(
   const empty: ShareLinkUpkeep = {
     authorities: { issued: [], current: [], needsConfirmation: [], failed: [] },
     retired: [],
+    revocations: { forgotten: [], failed: [] },
     head: null
   };
   if (!ctx.groups.device) return empty;
   let head = await ctx.store.shareHead(projectId);
   const links = head.shareLinks?.links ?? [];
-  if (!links.length) return { ...empty, head };
+  if (!links.length && !head.shareLinks?.tombstonedIds.size) {
+    return { ...empty, head };
+  }
   const owner = await projectOwnerOf(ctx.groups, projectId, head.keyEpoch);
   if (owner !== ctx.groups.account.userId) return { ...empty, head };
   const listed = await ctx.api.list(projectId);
+  const revocations = await forgetRevokedShareLinks(ctx, projectId, {
+    head,
+    listed
+  });
+  if (!links.length) return { ...empty, revocations, head };
   const identity = b64(ctx.groups.account.list.identityKeyHash);
   const stale = listed.links.some(
     (record) =>
@@ -1025,7 +1135,7 @@ export async function maintainShareLinks(
     head,
     ...(options.force ? { force: true } : {})
   });
-  return { authorities, retired, head };
+  return { authorities, retired, revocations, head };
 }
 
 /**
@@ -1059,7 +1169,8 @@ export async function reissueShareLinks(
 /**
  * A removal took other members' last leaf (slice 5-5's hook): the owner's
  * browser issues new statements for the project's links at once, so the
- * removed editor's devices drop out of what visitors accept.
+ * removed editor's devices drop out of what visitors accept. Revoked links
+ * the server still serves are forgotten again first.
  */
 export async function shareLinksAfterRemoval(
   ctx: ShareLinksContext,
@@ -1067,6 +1178,10 @@ export async function shareLinksAfterRemoval(
 ): Promise<AuthorityOutcome | null> {
   if (!ctx.groups.device) return null;
   const head = await ctx.store.shareHead(removal.projectId);
+  // No request unless the head tombstones links; never fails the hook.
+  await forgetRevokedShareLinks(ctx, removal.projectId, { head }).catch(
+    () => undefined
+  );
   if (!head.shareLinks?.links.length) return null;
   const owner = await projectOwnerOf(
     ctx.groups,
@@ -1083,7 +1198,8 @@ export async function shareLinksAfterRemoval(
  * owner's browser states the project's links again, so a revoked editor
  * device drops out of the authors visitors accept without waiting for the
  * owner's next save. The member's new device list is what shows the
- * device revoked; a statement whose authors already match stays.
+ * device revoked; a statement whose authors already match stays. Revoked
+ * links the server still serves are forgotten again first.
  */
 export async function shareLinksAfterDeviceRemoval(
   ctx: ShareLinksContext,
@@ -1091,6 +1207,10 @@ export async function shareLinksAfterDeviceRemoval(
 ): Promise<AuthorityOutcome | null> {
   if (!ctx.groups.device) return null;
   const head = await ctx.store.shareHead(removal.projectId);
+  // No request unless the head tombstones links; never fails the hook.
+  await forgetRevokedShareLinks(ctx, removal.projectId, { head }).catch(
+    () => undefined
+  );
   if (!head.shareLinks?.links.length) return null;
   const owner = await projectOwnerOf(
     ctx.groups,

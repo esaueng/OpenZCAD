@@ -28,6 +28,7 @@ import {
 } from '@openzcad/crypto';
 import { isE2eeShareLinkStorageReady } from '@openzcad/cloudflare-adapters';
 import {
+  E2eeShareLinkApiError,
   createE2eeShareLinksApi,
   decodeE2eeFrame,
   type E2eeSharedSnapshotMetadata,
@@ -65,6 +66,7 @@ import {
   reissueShareLinks,
   renewShareDelegation,
   revokeShareLink,
+  ShareLinksError,
   shareDelegationState,
   shareLinksAfterDeviceRemoval,
   shareLinksAfterRemoval,
@@ -209,6 +211,33 @@ const countFor = (srv: Server, table: string, projectId: string) =>
     `SELECT COUNT(*) AS n FROM ${table} WHERE project_id = ?`,
     projectId
   )[0]!.n;
+
+/**
+ * The owner's share-link context whose `DELETE …/share-links/:shareId`
+ * fails with a transient 503 the first `times` times, as a dropped
+ * connection after the tombstone committed would. `calls` names every
+ * forget it was asked for.
+ */
+function failingForget(ctx: Device['shareLinks'], times: number) {
+  const calls: string[] = [];
+  let left = times;
+  return {
+    calls,
+    ctx: {
+      ...ctx,
+      api: {
+        ...ctx.api,
+        forget: async (projectId: string, shareId: string) => {
+          calls.push(shareId);
+          if (left-- > 0) {
+            throw new E2eeShareLinkApiError(503, 'Service unavailable');
+          }
+          return ctx.api.forget(projectId, shareId);
+        }
+      }
+    }
+  };
+}
 
 const keyHashesOf = (account: Account) =>
   account.list.devices.map((device) => toBase64Url(device.signingKeyHash));
@@ -534,6 +563,94 @@ describe('revoking a link (slice 5-10)', { timeout: 120_000 }, () => {
       tombstones: []
     });
     await integrity(laptop.store.loadProject(projectId), 'share-links');
+  });
+
+  it('asks the server again when its forget fails after the tombstone, and a second revoke does not throw', async () => {
+    const { srv, laptop, projectId } = await linkedProject();
+    await delegate(laptop);
+    const created = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const flaky = failingForget(laptop.shareLinks, 1);
+
+    await expect(
+      revokeShareLink(flaky.ctx, projectId, created.shareId)
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof ShareLinksError && error.code === 'revocation-pending'
+    );
+    expect(flaky.calls).toEqual([created.shareId]);
+    // The tombstone committed, but the anonymous route still serves it.
+    const revokedHead = await laptop.store.shareHead(projectId);
+    expect(revokedHead.shareLinks?.links).toEqual([]);
+    expect(revokedHead.shareLinks?.tombstonedIds.has(created.shareId)).toBe(
+      true
+    );
+    expect((await served(srv, created.fragment.token)).status).toBe(200);
+    // The owner's dialog keeps it listed, as revocation pending.
+    expect(
+      (await listShareLinks(laptop.shareLinks, projectId)).links
+    ).toMatchObject([
+      { shareId: created.shareId, status: 'revocation-pending', url: null }
+    ]);
+
+    // Revoking it again writes nothing and only asks the server again.
+    const version = head(srv, projectId).document_version;
+    await revokeShareLink(flaky.ctx, projectId, created.shareId);
+    expect(flaky.calls).toEqual([created.shareId, created.shareId]);
+    expect(head(srv, projectId).document_version).toBe(version);
+    expect((await served(srv, created.fragment.token)).status).toBe(404);
+    expect(linkRow(srv, projectId, created.shareId)!.revoked_at).not.toBe(null);
+    expect((await listShareLinks(laptop.shareLinks, projectId)).links).toEqual(
+      []
+    );
+    // And once more: the server forgot it, nothing is left to ask.
+    await revokeShareLink(flaky.ctx, projectId, created.shareId);
+    expect(flaky.calls).toHaveLength(2);
+  });
+
+  it('the dialog’s upkeep and a later revoke ask again for a revocation whose forget failed', async () => {
+    const { srv, laptop, projectId } = await linkedProject();
+    await delegate(laptop);
+    const first = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const second = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const third = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const down = failingForget(laptop.shareLinks, Infinity);
+    await expect(
+      revokeShareLink(down.ctx, projectId, first.shareId)
+    ).rejects.toBeInstanceOf(ShareLinksError);
+
+    // The dialog loads the links while the server still fails: no throw,
+    // the failure is reported and the link stays pending.
+    const failing = await maintainShareLinks(down.ctx, projectId);
+    expect(failing.revocations.forgotten).toEqual([]);
+    expect(failing.revocations.failed.map((f) => f.shareId)).toEqual([
+      first.shareId
+    ]);
+    expect((await served(srv, first.fragment.token)).status).toBe(200);
+
+    // The server recovers: the next load forgets it.
+    const upkeep = await maintainShareLinks(laptop.shareLinks, projectId);
+    expect(upkeep.revocations).toEqual({
+      forgotten: [first.shareId],
+      failed: []
+    });
+    expect((await served(srv, first.fragment.token)).status).toBe(404);
+    expect((await served(srv, second.fragment.token)).status).toBe(200);
+
+    // A failed forget is asked for again by the next revoke of another link.
+    await expect(
+      revokeShareLink(
+        failingForget(laptop.shareLinks, 1).ctx,
+        projectId,
+        second.shareId
+      )
+    ).rejects.toBeInstanceOf(ShareLinksError);
+    expect((await served(srv, second.fragment.token)).status).toBe(200);
+    await revokeShareLink(laptop.shareLinks, projectId, third.shareId);
+    expect((await served(srv, second.fragment.token)).status).toBe(404);
+    expect((await served(srv, third.fragment.token)).status).toBe(404);
+    expect((await listShareLinks(laptop.shareLinks, projectId)).links).toEqual(
+      []
+    );
   });
 });
 
