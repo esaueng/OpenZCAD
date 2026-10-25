@@ -19203,20 +19203,33 @@ export function App() {
   }, [inPlaceEditGone, setStatus]);
   // A seeded profile in a consumed (hidden) sketch could not be checked when
   // the edit armed: the sketch is drawn only once the edit shows it. Checked
-  // then, once, a profile its sketch no longer has is dropped and said, so
-  // the slot asks for a new pick rather than holding one nothing can build.
-  const checkedEditProfiles = useRef<InPlaceEditSeed | null>(null);
+  // then, and again whenever one of its sketches changes under the edit (an
+  // undo, a collaborator), a profile its sketch no longer has is dropped and
+  // said, so the slot asks for a new pick rather than holding one nothing
+  // can build.
+  const checkedEditProfiles = useRef<{
+    editing: InPlaceEditSeed;
+    views: readonly ((typeof availableSketchViews)[number] | undefined)[];
+  } | null>(null);
   const regionsForReferenceRef = useRef(regionsForReference);
   regionsForReferenceRef.current = regionsForReference;
   const inPlaceProfiles = inPlace.slots.profiles;
   useEffect(() => {
     const editing = inPlaceEditing;
-    if (!editing || checkedEditProfiles.current === editing) return;
+    if (!editing) return;
     const views = inPlaceProfiles.map((pick) =>
       availableSketchViews.find((view) => view.sketchId === pick.sketchId)
     );
     if (views.some((view) => !view)) return;
-    checkedEditProfiles.current = editing;
+    const checked = checkedEditProfiles.current;
+    if (
+      checked?.editing === editing &&
+      checked.views.length === views.length &&
+      checked.views.every((view, index) => view === views[index])
+    ) {
+      return;
+    }
+    checkedEditProfiles.current = { editing, views };
     const kept = inPlaceProfiles.flatMap((pick, index) => {
       if (pick.implicit) return [pick];
       const [region] = regionsForReferenceRef.current(
