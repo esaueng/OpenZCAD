@@ -1435,6 +1435,7 @@ import {
   valueInRange,
   type InPlaceRequest,
   type BodyPick,
+  type CurvePick,
   type FacePick,
   type InPlaceToolId,
   type ProfilePick
@@ -8409,20 +8410,8 @@ export function App() {
           ? inPlaceFacePick(bodyId, face.topologyId, face.hash, undefined, true)
           : null;
       },
-      curve: (sketchId, entityId) => {
-        // As the card's path options were: a drawn line or arc of that
-        // sketch, not construction.
-        const node = current.nodes[entityId as EntityId];
-        return (
-          node?.kind === 'sketch-object' &&
-          !node.data.construction &&
-          (node.data.objectKind === 'line' || node.data.objectKind === 'arc') &&
-          (findSketch(current, sketchId)?.objectIds.includes(
-            entityId as EntityId
-          ) ??
-            false)
-        );
-      },
+      curve: (sketchId, entityId) =>
+        sweepCurveExists(current, sketchId, entityId),
       body: (bodyId) => inPlaceBodyPick(bodyId)
     });
     if (!armed) return false;
@@ -8523,6 +8512,27 @@ export function App() {
       return;
     }
     inPlaceRef.current.pickPlane({ kind: 'datum', featureId });
+  }
+
+  /**
+   * Whether a sketch still has a curve a path can take: a drawn line or arc
+   * of that sketch, not construction, as the card's path options were.
+   */
+  function sweepCurveExists(
+    current: ProjectDocument,
+    sketchId: SketchId,
+    entityId: string
+  ): boolean {
+    const node = current.nodes[entityId as EntityId];
+    return (
+      node?.kind === 'sketch-object' &&
+      !node.data.construction &&
+      (node.data.objectKind === 'line' || node.data.objectKind === 'arc') &&
+      (findSketch(current, sketchId)?.objectIds.includes(
+        entityId as EntityId
+      ) ??
+        false)
+    );
   }
 
   /** The feature that made a body, or a sketch, for {@link inPlaceEditMayUse}. */
@@ -19254,6 +19264,38 @@ export function App() {
       inPlaceRef.current.setProfiles(kept);
     }
   }, [inPlaceEditing, inPlaceProfiles, availableSketchViews, setStatus]);
+  // The same for its curves and faces while the document changes under the
+  // edit (an undo, a collaborator): a path entity or a face the model no
+  // longer has is dropped and said, since nothing on screen could click it
+  // back out of the list.
+  const inPlaceEditPicks = inPlace.slots;
+  useEffect(() => {
+    const editing = inPlaceEditing;
+    if (!editing || !doc) return;
+    const curves = (picks: readonly CurvePick[]) =>
+      picks.filter((pick) =>
+        sweepCurveExists(doc, pick.sketchId, pick.entityId)
+      );
+    // Only against a body whose topology is published: one still being
+    // analysed says nothing yet.
+    const faces = inPlaceEditPicks.faces.filter((pick) => {
+      const published = representations[pick.bodyId]?.topology;
+      return !published || published.faces.some((face) => face.hash === pick.hash);
+    });
+    const path = curves(inPlaceEditPicks.path);
+    const guide = curves(inPlaceEditPicks.guide);
+    if (
+      path.length === inPlaceEditPicks.path.length &&
+      guide.length === inPlaceEditPicks.guide.length &&
+      faces.length === inPlaceEditPicks.faces.length
+    ) {
+      return;
+    }
+    inPlaceRef.current.setPicks({ path, guide, faces });
+    setStatus(
+      `${editing.name}: a saved pick no longer exists in the model · pick it again.`
+    );
+  }, [inPlaceEditing, inPlaceEditPicks, doc, representations, setStatus]);
 
   useEffect(() => {
     setSelectedProfiles((current) => {

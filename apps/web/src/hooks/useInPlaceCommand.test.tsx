@@ -385,6 +385,27 @@ describe('useInPlaceCommand: sweep', () => {
     );
     expect(hook.result.current.slots.path).toEqual([]);
   });
+
+  it('takes a re-checked path in place of the one it held', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('sweep', [PICK]));
+    act(() =>
+      hook.result.current.pickCurve({ sketchId: OTHER, entityId: 'p1' })
+    );
+    act(() =>
+      hook.result.current.pickCurve({ sketchId: OTHER, entityId: 'p2' })
+    );
+    // p1 left the model: the re-check keeps p2 alone, and the profile stays.
+    act(() =>
+      hook.result.current.setPicks({
+        path: [{ sketchId: OTHER, entityId: 'p2' }]
+      })
+    );
+    expect(hook.result.current.slots.path).toEqual([
+      { sketchId: OTHER, entityId: 'p2' }
+    ]);
+    expect(hook.result.current.slots.profiles).toEqual([PICK]);
+  });
 });
 
 describe('useInPlaceCommand: helical sweep', () => {

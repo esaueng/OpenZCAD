@@ -118,6 +118,12 @@ export interface InPlaceCommand {
   pickProfile(pick: ProfilePick, additive?: boolean): void;
   /** Replaces the profiles (an edit's that no longer resolve, dropped). */
   setProfiles(profiles: readonly ProfilePick[]): void;
+  /** Replaces the path, guide or face picks, as a re-check leaves them. */
+  setPicks(picks: {
+    path?: readonly CurvePick[];
+    guide?: readonly CurvePick[];
+    faces?: readonly FacePick[];
+  }): void;
   pickAxis(axisId: string): void;
   pickCurve(curve: CurvePick, additive?: boolean): void;
   /** A face click: refused (false) when the tool takes no such face. */
@@ -511,6 +517,29 @@ export function useInPlaceCommand(
     );
   }, []);
 
+  const setPicks = useCallback(
+    (picks: {
+      path?: readonly CurvePick[];
+      guide?: readonly CurvePick[];
+      faces?: readonly FacePick[];
+    }) => {
+      setSession((current) =>
+        current
+          ? {
+              ...current,
+              slots: {
+                ...current.slots,
+                ...(picks.path ? { path: [...picks.path] } : {}),
+                ...(picks.guide ? { guide: [...picks.guide] } : {}),
+                ...(picks.faces ? { faces: [...picks.faces] } : {})
+              }
+            }
+          : current
+      );
+    },
+    []
+  );
+
   const pickAxis = useCallback((axisId: string) => {
     setSession((current) =>
       current ? { ...current, slots: { ...current.slots, axisId } } : current
@@ -861,6 +890,7 @@ export function useInPlaceCommand(
     start,
     pickProfile,
     setProfiles,
+    setPicks,
     pickAxis,
     pickCurve,
     pickFace,
