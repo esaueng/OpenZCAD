@@ -328,6 +328,7 @@ import {
   type FormFacePick
 } from './lib/holeFacePick';
 import { prefersSavingData } from './lib/saveData';
+import { useSurfaceReady } from './hooks/useSurfaceReady';
 import {
   lazyWithStaleChunkNotice,
   loadWhenOnline,
@@ -2331,9 +2332,13 @@ export function App() {
       desktopAuthorizationAttempt !== null ||
       loadSettingsViewState().open
   );
+  // An open that beats the idle warm-up waits for the chunk instead of
+  // showing an empty overlay; the workspace still holds its keys meanwhile.
+  const settingsShown =
+    useSurfaceReady(LazySettingsPage, settingsOpen) && settingsOpen;
   const settingsDialogRef = useRef<HTMLDivElement | null>(null);
   useModalFocus(settingsDialogRef, {
-    enabled: settingsOpen,
+    enabled: settingsShown,
     autoFocus: true
   });
   const [sharingOpen, setSharingOpen] = useState(false);
@@ -23337,7 +23342,7 @@ export function App() {
   // Settings layers over whatever is behind it instead of replacing it.
   // Returning it in place of the shell unmounted the whole workspace, and with
   // it the assistant's conversation and any request still streaming.
-  const settingsOverlay = settingsOpen ? (
+  const settingsOverlay = settingsShown ? (
     <div
       ref={settingsDialogRef}
       className="settings-overlay"

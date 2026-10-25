@@ -129,6 +129,8 @@ export interface PreloadableLazy<P extends object> {
   (props: P): ReactElement;
   /** Loads and evaluates the chunk; later renders need no Suspense. */
   preload(): Promise<void>;
+  /** Whether a render now shows the component rather than suspending. */
+  isLoaded(): boolean;
 }
 
 /**
@@ -180,5 +182,6 @@ export function preloadableLazy<T extends ComponentType<any>>(
         throw error;
       }
     );
+  Preloadable.isLoaded = () => loaded !== null;
   return Preloadable;
 }

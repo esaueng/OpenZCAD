@@ -77,3 +77,32 @@ test('Settings and Move open complete the first time', async ({ page }) => {
     moveGap: 0
   });
 });
+
+test('Settings opened before the warm-up never shows an empty overlay', async ({
+  page
+}) => {
+  await stubApi(page);
+  // Hold the Settings chunk back so the click lands before it can load.
+  await page.route(/SettingsPage[^/]*\.(js|tsx)(\?|$)/, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    await route.continue();
+  });
+  await page.addInitScript(() => {
+    window.__firstUse = { settingsBlank: 0, moveGap: 0, moving: false };
+    const sample = () => {
+      const settings = document.querySelector(
+        '[role="dialog"][aria-label*="Settings"]'
+      );
+      if (settings && !/Settings/.test((settings as HTMLElement).innerText))
+        window.__firstUse!.settingsBlank += 1;
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Settings' }).first()
+  ).toBeVisible();
+  expect(await page.evaluate(() => window.__firstUse?.settingsBlank)).toBe(0);
+});
