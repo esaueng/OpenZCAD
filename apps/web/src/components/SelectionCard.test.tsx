@@ -1,11 +1,15 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type {
   SelectionCalloutContent,
   SelectionCalloutOperation
 } from '../lib/selectionCallout';
 import { textLabelSegments } from '../lib/topologyLabels';
-import { SelectionCard, SelectionRefusal } from './SelectionCard';
+import {
+  SelectionCard,
+  SelectionRefusal,
+  VALIDATING_ANNOUNCE_MS
+} from './SelectionCard';
 
 function operation(
   overrides: Partial<SelectionCalloutOperation> = {}
@@ -99,6 +103,63 @@ describe('SelectionCard', () => {
     expect(card).toHaveAttribute('aria-busy', 'true');
     for (const button of within(card).getAllByRole('button')) {
       expect(button).toBeDisabled();
+    }
+  });
+
+  it('holds the verbs at once but announces a check only once it takes time', () => {
+    vi.useFakeTimers();
+    try {
+      const view = (phase: SelectionCalloutOperation['phase']) => (
+        <SelectionCard content={content({ operation: operation({ phase }) })} />
+      );
+      const { rerender, container } = render(view('dragging'));
+      rerender(view('validating'));
+      const card = screen.getByRole('region', {
+        name: 'Offset Face operation'
+      });
+      for (const button of within(card).getAllByRole('button')) {
+        expect(button).toBeDisabled();
+      }
+      // Still the drag's dot, held but not dimmed: most checks answer
+      // within a frame or two.
+      expect(card).not.toHaveTextContent('Validating');
+      expect(
+        container.querySelector('.selection-callout-phase-dot')
+      ).not.toBeNull();
+      expect(card).toHaveAttribute('data-busy', 'quiet');
+      act(() => {
+        vi.advanceTimersByTime(VALIDATING_ANNOUNCE_MS);
+      });
+      expect(card).toHaveTextContent('Validating');
+      expect(card).not.toHaveAttribute('data-busy');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never blinks the Validating pill for a quick check', () => {
+    vi.useFakeTimers();
+    try {
+      const view = (phase: SelectionCalloutOperation['phase']) => (
+        <SelectionCard content={content({ operation: operation({ phase }) })} />
+      );
+      const { rerender } = render(view('exact-entry'));
+      rerender(view('validating'));
+      const card = screen.getByRole('region', {
+        name: 'Offset Face operation'
+      });
+      // The typed value's pill stays as it was.
+      expect(card).toHaveTextContent('Exact entry');
+      act(() => {
+        vi.advanceTimersByTime(VALIDATING_ANNOUNCE_MS - 1);
+      });
+      rerender(view('armed'));
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(card).not.toHaveTextContent('Validating');
+    } finally {
+      vi.useRealTimers();
     }
   });
 

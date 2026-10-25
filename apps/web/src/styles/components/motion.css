@@ -335,6 +335,14 @@ textarea {
   animation: oz-pop var(--dur-base) var(--ease-out);
 }
 
+/* Each row of the notice lane lifts what stands above it (quiet-stage.css).
+   When a row comes or goes, the Undo toast and the refusal above it glide
+   to their new place instead of jumping a row's height while being read. */
+.toast,
+.selection-refusal-lane {
+  transition: bottom var(--dur-base) var(--ease-out);
+}
+
 /* Inert as well (Toast.tsx): a double-click's second press reached the
    fading Undo and undid a second step. */
 .toast.closing {

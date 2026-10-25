@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode, type RefObject } from 'react';
 import { Magnet, ScrollText } from 'lucide-react';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
+import { OVERLAY_EXIT_MS, useDelayedUnmount } from '../hooks/useDelayedUnmount';
 import { usePacedStatus } from '../hooks/usePacedStatus';
 import {
   advanceStatusClock,
@@ -65,6 +66,14 @@ interface WorkspaceReadoutProps {
    * commands or ask the assistant, under the guidance line.
    */
   searchBar: ReactNode;
+  /**
+   * The toast that is up and the status entry (its `statusAt` stamp) it
+   * restates, or null. That status, and only that one, steps aside for good
+   * rather than returning for a moment as the toast leaves. Any other status
+   * (set before or after, or under a toast that restates none) keeps its
+   * lifetime.
+   */
+  repeatingToast?: { toastId: number; statusAt: number } | null;
 }
 
 /**
@@ -89,7 +98,8 @@ export function WorkspaceReadout({
   warningCount,
   documentVersion,
   saveState,
-  searchBar
+  searchBar,
+  repeatingToast = null
 }: WorkspaceReadoutProps) {
   const sticky = statusSticky ?? false;
   // A message already past its lifetime when the readout mounts — entering
@@ -134,10 +144,30 @@ export function WorkspaceReadout({
     }, STATUS_CLOCK_STEP_MS);
     return () => window.clearInterval(timer);
   }, [statusAt, sticky, expiredAtMount]);
+  // A settled message an action toast already said ("Deleted Boss bore."
+  // under "Deleted Boss bore · Undo") is spent: it used to come back for a
+  // beat as the toast faded, and the toast jumped up its row and down again.
+  // Which status a toast repeats is fixed when that status is set (App
+  // records its stamp), so a toast raised later, or a status set while it is
+  // up, never retires a status it does not restate.
+  const repeated =
+    repeatingToast !== null &&
+    statusAt !== undefined &&
+    repeatingToast.statusAt === statusAt;
+  // Recorded while the toast is up, whatever the tone: after a delete the
+  // model is still rebuilding when the toast is raised, and a toast dismissed
+  // before the rebuild settled left nothing to retire the repeat later.
+  const [spentAt, setSpentAt] = useState<number | null>(null);
+  useEffect(() => {
+    if (repeated && statusAt !== undefined) setSpentAt(statusAt);
+  }, [repeated, statusAt]);
   const expired =
     statusAt !== undefined &&
     !sticky &&
-    (statusAt === 0 || statusAt === expiredAtMount || statusAt === expiredAt);
+    (statusAt === 0 ||
+      statusAt === expiredAtMount ||
+      statusAt === expiredAt ||
+      (statusAt === spentAt && !repeated));
   const messageLive = !expired && status !== '';
   // The geometry line is the floor under the message: it carries the live
   // message ahead of the phase, and the projection note once it has gone.
@@ -157,8 +187,14 @@ export function WorkspaceReadout({
     paced.skipped > 0
       ? `${paced.skipped} ${paced.skipped === 1 ? 'warning' : 'warnings'}`
       : null;
-  // A retired or expired message leaves the bar reading as nothing happening.
-  const shownStatus = quiet ? '' : paced.status;
+  // A retired or expired message leaves the bar reading as nothing happening,
+  // but only once its fade has run: emptied at the fade's first frame, the
+  // pill snapped to a bare dot and then faded.
+  const fading = useDelayedUnmount(
+    quiet ? null : paced.status,
+    OVERLAY_EXIT_MS
+  );
+  const shownStatus = quiet ? (fading.rendered ?? '') : paced.status;
   const featureLabel = `${featureCount} ${featureCount === 1 ? 'feature' : 'features'}`;
   const bodyLabel = `${bodyCount} ${bodyCount === 1 ? 'body' : 'bodies'}`;
   const workspaceSummary = `${projectName ?? 'Project'} · ${featureLabel} · ${bodyLabel}`;

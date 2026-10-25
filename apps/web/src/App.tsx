@@ -1510,6 +1510,7 @@ import {
 import {
   countLabel,
   deleteFeatureToastMessage,
+  statusRepeatedByToast,
   UNDO_FLOOR_TRIMMED_NOTICE,
   UNDO_FLOOR_TRIMMED_REASON,
   type ToastAction,
@@ -2668,6 +2669,12 @@ export function App() {
   }));
   const status = statusEntry.text;
   /**
+   * The stamp of the last status `setStatus` wrote, read synchronously by a
+   * toast that restates it: which status a toast repeats is fixed when that
+   * status is set, not when the toast is raised.
+   */
+  const lastStatusAtRef = useRef(statusEntry.at);
+  /**
    * Informational messages expire (lib/statusLifetime); `sticky` is for text
    * that describes a mode the user is still in, such as sketching on a plane.
    */
@@ -2676,11 +2683,13 @@ export function App() {
       text: string,
       options?: { sticky?: boolean; detail?: string; unlogged?: boolean }
     ) => {
+      const at = Date.now();
+      lastStatusAtRef.current = at;
       setStatusEntry({
         text,
         ...(options?.detail ? { detail: options.detail } : {}),
         ...(options?.unlogged ? { unlogged: true } : {}),
-        at: Date.now(),
+        at,
         sticky: options?.sticky ?? false
       });
     },
@@ -2696,20 +2705,31 @@ export function App() {
   const [newBuildAvailable, setNewBuildAvailable] = useState(false);
   const [downloadInterrupted, setDownloadInterrupted] = useState(false);
   const toastIdRef = useRef(0);
-  const announce = useCallback((message: string, action?: ToastAction) => {
-    toastIdRef.current += 1;
-    const id = toastIdRef.current;
-    // An action-bearing toast (the delete Undo above all) is never silently
-    // replaced by a text-only notice: the action moves into the slot the new
-    // message would have taken, so Undo stays one click away no matter how
-    // fast notices arrive.
-    setToast((current) => {
-      if (current?.action && !action) {
-        return { id, message, action: current.action };
-      }
-      return { id, message, action };
-    });
-  }, []);
+  const announce = useCallback(
+    (
+      message: string,
+      action?: ToastAction,
+      options?: { repeatsStatusAt?: number }
+    ) => {
+      toastIdRef.current += 1;
+      const id = toastIdRef.current;
+      const repeats =
+        options?.repeatsStatusAt === undefined
+          ? {}
+          : { repeatsStatusAt: options.repeatsStatusAt };
+      // An action-bearing toast (the delete Undo above all) is never silently
+      // replaced by a text-only notice: the action moves into the slot the new
+      // message would have taken, so Undo stays one click away no matter how
+      // fast notices arrive.
+      setToast((current) => {
+        if (current?.action && !action) {
+          return { id, message, action: current.action, ...repeats };
+        }
+        return { id, message, action, ...repeats };
+      });
+    },
+    []
+  );
   const dismissToast = useCallback((id: number) => {
     setToast((current) => (current?.id === id ? null : current));
   }, []);
@@ -3431,10 +3451,15 @@ export function App() {
     if (feedback.state === 'pending') return;
     suppressionNoticeRef.current = null;
     if (feedback.state !== 'ready') return;
-    announce(feedback.message, {
-      label: 'Undo',
-      run: handleUndo
-    });
+    // The status this restates was set by the toggle itself, before the
+    // rebuild it waited for; a newer status set meanwhile is not its repeat.
+    announce(
+      feedback.message,
+      { label: 'Undo', run: handleUndo },
+      notice.statusAt === undefined
+        ? undefined
+        : { repeatsStatusAt: notice.statusAt }
+    );
   };
   const pendingPartCountRef = useRef<Pick<
     ProjectDocument,
@@ -6832,6 +6857,10 @@ export function App() {
    * explicit pick events below rather than coupling its history to selection
    * state effects.
    */
+  // A boolean, not the interaction: the summary must not be rebuilt (and
+  // the card's label rewritten) on every interaction step of a drag.
+  const offsettingFace =
+    interaction.mode === 'face' && interaction.op === 'offset-face';
   const selectionSummary = useMemo<{
     label: readonly LabelSegment[];
     detail?: string;
@@ -6890,11 +6919,43 @@ export function App() {
       };
     }
     if (renderedSelectedTopology?.kind === 'face') {
-      const body = renderedRepresentations[renderedSelectedTopology.bodyId];
+      // While a face offset's preview is on screen the pick resolves to the
+      // preview's face, which carries no lineage name: the card read "Face"
+      // for the whole of a typed value's preview. It keeps naming the
+      // committed face the pick came from. Its quantity still comes from the
+      // face on screen, since an offset can change a face's boundary (a
+      // tapered or imported part); while the preview has none to give, the
+      // line holds a placeholder rather than leaving and shifting the card.
+      // Other edits (a cylinder's radius, a fillet's) name and measure from
+      // the preview: their figure is the dragged value, which the viewer
+      // writes into the label live.
+      const sourceBody =
+        currentFaceGeometryPreview &&
+        offsettingFace &&
+        selectedTopology?.kind === 'face' &&
+        selectedTopology.bodyId === renderedSelectedTopology.bodyId
+          ? representations[selectedTopology.bodyId]
+          : undefined;
+      const fromSource =
+        sourceBody !== undefined &&
+        selectedTopology !== null &&
+        resolveFace(sourceBody, selectedTopology).ok;
+      const namingTopology =
+        fromSource && selectedTopology
+          ? selectedTopology
+          : renderedSelectedTopology;
+      const namingBody = fromSource
+        ? sourceBody
+        : renderedRepresentations[renderedSelectedTopology.bodyId];
+      const measuredBody = fromSource
+        ? currentFaceGeometryPreview?.geometry.bodyRepresentations[
+            renderedSelectedTopology.bodyId
+          ]
+        : namingBody;
       // Through the shared fail-closed resolver rather than a local `find`, so
       // the chip cannot print a confident figure for a pick the measurement
       // tape is simultaneously refusing as ambiguous.
-      const resolved = resolveFace(body, renderedSelectedTopology);
+      const resolved = resolveFace(measuredBody, renderedSelectedTopology);
       const geometry = resolved.ok ? resolved.entry.geometry : undefined;
       if (
         geometry?.featureType === 'through-hole' &&
@@ -6906,10 +6967,7 @@ export function App() {
           detail: value
         };
       }
-      const label = topologySelectionLabelSegments(
-        body,
-        renderedSelectedTopology
-      );
+      const label = topologySelectionLabelSegments(namingBody, namingTopology);
       // A cylinder is the other pick that carries a number of its own; every
       // other face kind has a name but nothing to measure yet.
       const cylinderDiameter =
@@ -6921,7 +6979,9 @@ export function App() {
             ? `Ø ${round(cylinderDiameter)} ${units}`
             : geometry?.area !== undefined
               ? `${formatMeasuredQuantity(geometry.area)} ${units}²`
-              : undefined
+              : fromSource
+                ? `— ${units}²`
+                : undefined
       };
     }
     if (selectedBodyIds.length > 1) {
@@ -6952,7 +7012,11 @@ export function App() {
     renderedSelectedTopology,
     selectedBodyIds,
     renderedRepresentations,
-    currentGeometrySnapshot
+    currentGeometrySnapshot,
+    currentFaceGeometryPreview,
+    selectedTopology,
+    representations,
+    offsettingFace
   ]);
 
   const {
@@ -21214,10 +21278,15 @@ export function App() {
         if (managerRef.current !== owner) return;
         const copy = findFeature(owner.document, copyId);
         if (copy) handleSelectFeatureFromTree(copy.id, false);
-        announce(`Duplicated ${feature.name}.`, {
-          label: 'Undo',
-          run: handleUndo
-        });
+        // The success status is set right after this callback returns: the
+        // toast is raised once it exists, so it restates that one.
+        queueMicrotask(() =>
+          announce(
+            `Duplicated ${feature.name}.`,
+            { label: 'Undo', run: handleUndo },
+            { repeatsStatusAt: lastStatusAtRef.current }
+          )
+        );
       }
     });
   }
@@ -21259,10 +21328,11 @@ export function App() {
       // running), so it has to be closed with the feature it was editing.
       if (modelingEditFeature?.featureId === featureId) closeFeaturePanel();
       clearSelection();
-      announce(deleteFeatureToastMessage(name, dependentCount), {
-        label: 'Undo',
-        run: handleUndo
-      });
+      announce(
+        deleteFeatureToastMessage(name, dependentCount),
+        { label: 'Undo', run: handleUndo },
+        { repeatsStatusAt: lastStatusAtRef.current }
+      );
     }
   }
 
@@ -21498,7 +21568,8 @@ export function App() {
         featureId: liveFeature.featureId,
         name: liveFeature.name,
         resume,
-        before
+        before,
+        statusAt: lastStatusAtRef.current
       };
     }
   }
@@ -21560,7 +21631,15 @@ export function App() {
             .map(({ featureId, name }) => ({ featureId, name }))
         });
       },
-      onSuccess: () => announce(message, { label: 'Undo', run: handleUndo })
+      // As for Duplicate: raised once the success status exists.
+      onSuccess: () =>
+        queueMicrotask(() =>
+          announce(
+            message,
+            { label: 'Undo', run: handleUndo },
+            { repeatsStatusAt: lastStatusAtRef.current }
+          )
+        )
     });
   }
 
@@ -21581,7 +21660,9 @@ export function App() {
       executeTransaction('Resume full history', commands)
     ) {
       announce(
-        'Full history resumed. Manually suppressed features remain suppressed.'
+        'Full history resumed. Manually suppressed features remain suppressed.',
+        undefined,
+        { repeatsStatusAt: lastStatusAtRef.current }
       );
     }
   }
@@ -21620,7 +21701,11 @@ export function App() {
       return;
     }
     if (executeTransaction(`Roll back after ${name}`, commands)) {
-      announce(`History rolled back after ${name}. Later features are paused.`);
+      announce(
+        `History rolled back after ${name}. Later features are paused.`,
+        undefined,
+        { repeatsStatusAt: lastStatusAtRef.current }
+      );
     }
   }
 
@@ -26871,6 +26956,7 @@ export function App() {
             warningCount={diagnostics.length}
             documentVersion={doc.version}
             saveState={presentedSaveState}
+            repeatingToast={statusRepeatedByToast(toast)}
             searchBar={
               <CommandBar
                 commands={paletteCommands}

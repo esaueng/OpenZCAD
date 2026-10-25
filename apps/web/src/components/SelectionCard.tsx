@@ -1,11 +1,25 @@
 import { X } from 'lucide-react';
 import { useLayoutEffect, useRef } from 'react';
+import { useSettledFlag } from '../hooks/useSettledFlag';
 import { renderLabelSegments } from '../lib/liveLabels';
 import type {
   SelectionCalloutContent,
   SelectionCalloutOperation
 } from '../lib/selectionCallout';
 import { OPERATION_PHASE_LABELS } from '../lib/selectionCalloutView';
+import { StableLabel } from './StableLabel';
+
+/**
+ * How long the exact check must run before the card says so. Most releases
+ * validate within a frame or two: announcing each one blinked a pill in and
+ * out, squeezed the name and dimmed every verb.
+ */
+export const VALIDATING_ANNOUNCE_MS = 250;
+
+/** The pill reserves its widest label, so a phase change never reflows it. */
+const PHASE_PILL_RESERVE = (
+  ['exact-entry', 'validating', 'failed'] as const
+).map((phase) => OPERATION_PHASE_LABELS[phase]);
 
 /**
  * What the pick is and what can be done with it, in a card above the verb
@@ -33,7 +47,16 @@ export function SelectionCard({
   }, [label]);
   const operation = content.operation;
   const validating = operation?.phase === 'validating';
-  const phase = operation?.phase;
+  // The verbs are held from the first frame (the check owns the pick until it
+  // answers); only saying so waits until the check has visibly taken time.
+  const announced = useSettledFlag(validating, VALIDATING_ANNOUNCE_MS);
+  // A quick check keeps the marker the release came from (the drag's dot,
+  // the typed value's pill) rather than blinking a new one.
+  const before = useRef(operation?.phase);
+  const phase = validating && !announced ? before.current : operation?.phase;
+  useLayoutEffect(() => {
+    if (!validating) before.current = operation?.phase;
+  });
   const edgeCount = operation?.selectAllEdgesCount;
   return (
     <section
@@ -41,6 +64,7 @@ export function SelectionCard({
       role={operation ? 'region' : 'group'}
       aria-label={operation ? `${operation.title} operation` : 'Selection'}
       aria-busy={validating ? 'true' : undefined}
+      data-busy={validating && !announced ? 'quiet' : undefined}
     >
       <div className="selection-card-header">
         <span className="selection-card-heading">
@@ -130,7 +154,11 @@ function PhaseMarker({
     );
   }
   return (
-    <span className={`selection-callout-phase phase-${phase}`}>{label}</span>
+    <span className={`selection-callout-phase phase-${phase}`}>
+      <StableLabel reserve={PHASE_PILL_RESERVE} align="center">
+        {label}
+      </StableLabel>
+    </span>
   );
 }
 

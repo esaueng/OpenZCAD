@@ -106,6 +106,13 @@
   background: var(--color-surface-hover);
 }
 
+/* A check that has not yet taken visible time holds the verbs without
+   dimming them: most answer within a frame or two, and dimming every verb
+   for that long read as the card blinking. */
+.selection-card[data-busy='quiet'] .selection-callout-verb:disabled {
+  opacity: 1;
+}
+
 .selection-card .selection-callout-verb[aria-pressed='true'] {
   color: var(--color-accent);
   background: var(--color-accent-dim);
