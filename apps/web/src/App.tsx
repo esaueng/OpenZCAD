@@ -3340,6 +3340,8 @@ export function App() {
   const moveSnapSetterRef = useRef<((snap: MoveSnap) => void) | null>(null);
   /** Cancels the viewport's captured pointer session on keyboard Escape. */
   const cancelDirectManipulationRef = useRef<(() => boolean) | null>(null);
+  /** Ends a running in-place command quietly (it is set once that exists). */
+  const cancelInPlaceRef = useRef<(() => void) | null>(null);
   /** Opens exact entry for the armed handle, as tapping its chip would. */
   const openExactEntryRef = useRef<(() => boolean) | null>(null);
   const contextMenuActionsRef = useRef<Record<string, () => void>>({});
@@ -7616,6 +7618,9 @@ export function App() {
     // Sessions and numeric drafts refer to ids in the previous document.
     // Hydration may preserve the camera, never an armed sketch or handle.
     cancelDirectManipulationRef.current?.();
+    // So does an in-place command: a frame it built on the old document
+    // may carry the same version as the new one.
+    cancelInPlaceRef.current?.();
     patternAbortRef.current?.abort();
     setImportRun((current) => (current?.outcome ? null : current));
     exactEntryQueue.cancel();
@@ -15828,6 +15833,10 @@ export function App() {
     kind: 'face' | 'edge'
   ) {
     if (selections.length === 0) {
+      // A sweep during an in-place Fillet or Chamfer only adds edges, so
+      // one that caught none leaves its edges, and their highlight, as
+      // they were rather than clearing the selection under them.
+      if (kind === 'edge' && inPlaceRef.current.spec?.edgeMode) return;
       // An empty sweep is an empty sweep, whatever the filter.
       handleBoxSelectFromViewer([]);
       return;
@@ -19141,10 +19150,10 @@ export function App() {
     baseVersion: doc?.version ?? null,
     reseed: (edit) => {
       const current = managerRef.current?.document;
-      const feature = current ? findFeature(current, edit.featureId) : null;
-      return current &&
-        feature &&
-        feature.data.featureKind === edit.data.featureKind
+      if (!current) return undefined;
+      // Gone, or now made by no in-place command: null ends the edit.
+      const feature = findFeature(current, edit.featureId);
+      return feature && feature.data.featureKind === edit.data.featureKind
         ? inPlaceEditSeedFor(current, feature)
         : null;
     },
@@ -19207,6 +19216,7 @@ export function App() {
   }, [keypadWithinReach]);
   const inPlaceRef = useRef(inPlace);
   inPlaceRef.current = inPlace;
+  cancelInPlaceRef.current = () => inPlaceRef.current.cancel(true);
   const narrowWindow = useMediaQuery(NARROW_WINDOW_QUERY);
   const inPlaceEditing = inPlace.editing;
   useEffect(() => {

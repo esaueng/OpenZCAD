@@ -1187,6 +1187,31 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     expect(hook.result.current.editing).toBe(scaled);
   });
 
+  it('ends an edit of a feature no in-place command edits any more', () => {
+    let live: { tool: 'subtract'; seed: InPlaceEditSeed } | null = {
+      tool: 'subtract',
+      seed: SEED
+    };
+    const onStatus = vi.fn();
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      onStatus,
+      baseVersion: 1,
+      reseed: () => live
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() => hook.result.current.edit('subtract', SEED));
+    live = null;
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.editing).toBeNull();
+    expect(onStatus).toHaveBeenCalledWith(
+      expect.stringMatching(/no longer edited here/)
+    );
+  });
+
   it('previews a re-armed edit that builds the same thing', async () => {
     const { hook } = setup();
     act(() => hook.result.current.edit('subtract', SEED));

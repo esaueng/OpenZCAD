@@ -57,11 +57,13 @@ export interface UseInPlaceCommandOptions extends InPlaceContext {
   /**
    * An edit's seed read again from the feature as the model has it now, so
    * a value the user has not changed follows a change made to it since (an
-   * undo, a collaborator), with the command that now edits it.
+   * undo, a collaborator), with the command that now edits it; null once
+   * no in-place command edits it (it was deleted, or made into a Move),
+   * undefined when there is nothing to read it from.
    */
   reseed?(
     edit: InPlaceEditSeed
-  ): { tool: InPlaceToolId; seed: InPlaceEditSeed } | null;
+  ): { tool: InPlaceToolId; seed: InPlaceEditSeed } | null | undefined;
   derive(document: ProjectDocument): Promise<ProjectDocument['derived']>;
   /**
    * Builds the same command the commit runs, named for the tool so a kernel
@@ -801,6 +803,18 @@ export function useInPlaceCommand(
     setPreviewValid(false);
     optionsRef.current.publishPreview(null);
   }, [preview, setCommitting]);
+
+  // An edit of a feature no in-place command edits any more (an undo made
+  // its Scale a Move) ends: its old request would be written back over it.
+  useEffect(() => {
+    const armed = sessionRef.current?.edit;
+    if (!armed || committingRef.current || !optionsRef.current.reseed) return;
+    if (optionsRef.current.reseed(armed) !== null) return;
+    end();
+    optionsRef.current.onStatus(
+      `${armed.name}: it is no longer edited here · its edit closed.`
+    );
+  }, [options.baseVersion, end]);
 
   const start = useCallback(
     (
