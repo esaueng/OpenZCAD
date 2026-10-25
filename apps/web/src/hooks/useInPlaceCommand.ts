@@ -689,6 +689,12 @@ export function useInPlaceCommand(
         return true;
       }
       setRefusal(null);
+      // New picks are measured afresh: a distance refused for the old
+      // pair no longer stands.
+      const linked = IN_PLACE_TOOL_SPECS[current.tool].linked ?? {};
+      setEntryRefusal((refused) =>
+        refused && refused.valueId in linked ? null : refused
+      );
       setSession((latest) => {
         const image = latest?.slots.image;
         if (!latest || !image) return latest;
@@ -772,12 +778,17 @@ export function useInPlaceCommand(
             ? link.write(slotsNow, numbersFor(latest), value)
             : null;
         if (!written) {
-          setRefusal(
-            `${IN_PLACE_TOOL_SPECS[current.tool].title} cannot take ${raw ?? value} for its ${valueSpec?.label.toLowerCase() ?? 'value'}.`
-          );
+          // An entry refusal, so Done waits: the value shown was refused,
+          // and the width it would have set is not what was asked for.
+          setEntryRefusal({
+            valueId,
+            message: `${IN_PLACE_TOOL_SPECS[current.tool].title} cannot take ${raw ?? value} for its ${valueSpec?.label.toLowerCase() ?? 'value'}.`
+          });
           return false;
         }
-        setRefusal(null);
+        setEntryRefusal((refused) =>
+          refused?.valueId === valueId ? null : refused
+        );
         setSession((latestSession) => {
           if (!latestSession) return latestSession;
           const specs = IN_PLACE_TOOL_SPECS[latestSession.tool].values;

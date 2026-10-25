@@ -815,6 +815,18 @@ describe('U09 phase 6: datums and a picture', () => {
     });
     expect(accepted).toBe(true);
     expect(hook.result.current.values.width).toBeCloseTo(20);
+    // A distance that would make it wider than a picture can be is refused,
+    // and Done waits until a distance is taken.
+    act(() => {
+      accepted = hook.result.current.setValue('span', 1e7);
+    });
+    expect(accepted).toBe(false);
+    expect(hook.result.current.refusal).toMatch(/cannot take/);
+    expect(hook.result.current.canFinish).toBe(false);
+    act(() => {
+      accepted = hook.result.current.setValue('span', 10);
+    });
+    expect(hook.result.current.canFinish).toBe(true);
     act(() => {
       hook.result.current.done();
     });
