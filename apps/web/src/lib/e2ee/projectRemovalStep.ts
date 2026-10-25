@@ -2,8 +2,9 @@
  * The encrypted-project step of a removal (ADR-024 slice 4-10) as Settings
  * › Encryption hands it to `removeDevice` and the other rotations. The page
  * wiring (`pageDeviceRemoval.ts`) loads only when a removal starts; every
- * step the participant has is forwarded, `written` included, which signs
- * the cutoffs before the account is read again.
+ * step the participant has is forwarded: `cutoffsFor`, which signs the
+ * cutoffs the revoking append carries, and `written`, which signs them
+ * again before the account is read again.
  */
 import type { E2eeContext, RemovalParticipantStep } from './accountKeys';
 import type { RemovalOutcome } from './deviceRemoval';
@@ -19,6 +20,7 @@ export function projectRemovalStep(
   let loaded: ReturnType<typeof load> | null = null;
   return {
     prepare: async (account) => (await (loaded ??= load())).prepare(account),
+    cutoffsFor: async (step) => (await (loaded ??= load())).cutoffsFor?.(step),
     written: async (step) => (await (loaded ??= load())).written?.(step),
     complete: async (step) => (await (loaded ??= load())).complete(step)
   };
