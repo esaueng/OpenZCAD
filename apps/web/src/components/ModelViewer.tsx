@@ -221,6 +221,7 @@ import {
   regionChipState,
   type OffsetChipMode
 } from '../lib/offsetChip';
+import { faceDepthBehind, faceSamples } from '../lib/faceDepthBehind';
 import { setLiveDiameter } from '../lib/liveLabels';
 import type { SelectionCalloutContent } from '../lib/selectionCallout';
 import {
@@ -1828,11 +1829,7 @@ function bodyExtentBehind(
   let least = Number.POSITIVE_INFINITY;
   const vertex = new THREE.Vector3();
   object.updateWorldMatrix(true, true);
-  object.traverse((child) => {
-    if (!(child instanceof THREE.Mesh)) {
-      return;
-    }
-    const mesh = child as THREE.Mesh<THREE.BufferGeometry, THREE.Material>;
+  forEachMesh(object, (mesh) => {
     const position = mesh.geometry.getAttribute('position') as
       THREE.BufferAttribute | THREE.InterleavedBufferAttribute | undefined;
     if (!position) {
@@ -1841,7 +1838,7 @@ function bodyExtentBehind(
     for (let index = 0; index < position.count; index += 1) {
       vertex
         .fromBufferAttribute(position, index)
-        .applyMatrix4(child.matrixWorld);
+        .applyMatrix4(mesh.matrixWorld);
       const along = vertex.sub(origin).dot(direction);
       if (along < least) {
         least = along;
@@ -12063,20 +12060,28 @@ export function ModelViewer({
       offsetHandle.normal
     );
     const body = context.objectsByBodyId.get(offsetHandle.bodyId);
+    const handleOrigin = new THREE.Vector3(
+      placement.origin.x,
+      placement.origin.y,
+      placement.origin.z
+    );
+    const handleDirection = new THREE.Vector3(
+      placement.direction.x,
+      placement.direction.y,
+      placement.direction.z
+    );
+    // Total reads the material behind the face, not the whole body's reach
+    // behind the face's plane (which spanned to an unrelated lobe).
+    const depthSamples = body ? faceSamples(body, offsetHandle.topologyId) : [];
     const extentBehind = body
-      ? bodyExtentBehind(
+      ? (faceDepthBehind(
           body,
-          new THREE.Vector3(
-            placement.origin.x,
-            placement.origin.y,
-            placement.origin.z
-          ),
-          new THREE.Vector3(
-            placement.direction.x,
-            placement.direction.y,
-            placement.direction.z
-          )
-        )
+          handleOrigin,
+          handleDirection,
+          depthSamples.length > 0
+            ? depthSamples
+            : [{ point: handleOrigin, weight: 1 }]
+        ) ?? bodyExtentBehind(body, handleOrigin, handleDirection))
       : null;
     const chipState = faceOffsetChipState(
       offsetHandle.totalBaseline,
