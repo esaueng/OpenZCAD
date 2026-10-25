@@ -209,27 +209,25 @@ test('drags a selected datum plane along its normal and picks it in the viewport
     timeout: 30_000
   });
 
-  // Starting a new plane from the Plane tool keeps the old selection but is
-  // not editing it: its pin must not arm, or a drag would fill the new
-  // plane's Offset.
+  // Starting a new plane from the Plane tool (U09: in place) keeps the old
+  // selection but is not editing it: its pin must not arm, or a drag would
+  // move the old plane instead of offsetting the new one.
   await page.getByRole('button', { name: /^Plane — / }).click();
+  const planeBar = page.getByRole('group', { name: 'Plane command' });
+  await expect(planeBar).toBeVisible();
+  await expect(canvas).not.toHaveAttribute('data-e2e-handle-x', /\d/);
+  // While the command runs it owns viewport clicks: clicking the old plane
+  // never opens the old plane's editor over it.
+  await page.mouse.click(bounds.x + pin.x, bounds.y + pin.y);
+  await page.waitForTimeout(500);
+  await expect(planeBar).toBeVisible();
   await expect(
     page
       .getByRole('region', { name: 'Feature inspector' })
-      .getByRole('heading', { name: 'Plane' })
-  ).toBeVisible();
-  await expect(canvas).not.toHaveAttribute('data-e2e-handle-x', /\d/);
-  // While a card is open it owns viewport clicks: clicking the old plane
-  // does not swap the new plane's draft for the old plane's editor.
-  const draftName = page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByLabel('Name', { exact: true });
-  const newName = await draftName.inputValue();
-  expect(newName).not.toBe('Lid plane');
-  await page.mouse.click(bounds.x + pin.x, bounds.y + pin.y);
-  await page.waitForTimeout(500);
-  await expect(draftName).toHaveValue(newName);
+      .getByRole('button', { name: 'Apply' })
+  ).toHaveCount(0);
   await page.keyboard.press('Escape');
+  await expect(planeBar).toHaveCount(0);
 
   // One undo restores the plane's offset.
   await page.keyboard.press('Escape');

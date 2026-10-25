@@ -10,14 +10,18 @@ import {
   type CurvePick,
   type FacePick,
   type HandleSpec,
+  type ImagePlacement,
+  type ImageSlot,
   type InPlaceContext,
   type InPlaceRequest,
   type InPlaceSlots,
   type InPlaceToolId,
   type InPlaceToolSpec,
   type PlanePick,
-  type ProfilePick
+  type ProfilePick,
+  type RefPick
 } from '../lib/inPlace/tools';
+import { placeImage as placedImage } from '../lib/inPlace/image';
 import type { RevolveAxisCandidate } from '../lib/inPlace/revolve';
 
 /**
@@ -35,6 +39,11 @@ export interface InPlaceBuiltCommand {
   validate(document: ProjectDocument): void;
   apply(document: ProjectDocument): ProjectDocument;
   resultBodyId: BodyId | undefined;
+  /**
+   * Proves a result that adds no body (a datum) built: throws the refusal
+   * when it did not. A command with it is judged by it, not by a body.
+   */
+  check?(derived: ProjectDocument['derived']): void;
 }
 
 export interface UseInPlaceCommandOptions extends InPlaceContext {
@@ -67,6 +76,8 @@ interface Session {
     faces: FacePick[];
     bodies: BodyPick[];
     plane: PlanePick | null;
+    refs: RefPick[];
+    image: ImageSlot | null;
   };
   options: Record<string, string>;
   values: Record<string, number>;
@@ -87,6 +98,8 @@ export interface InPlaceCommand {
   /** Values held as typed expressions, by id. */
   raws: Record<string, string>;
   options: Record<string, string>;
+  /** What Done would build now, or null while a slot is still empty. */
+  request: InPlaceRequest | null;
   hint: string;
   refusal: string | null;
   canFinish: boolean;
@@ -94,7 +107,8 @@ export interface InPlaceCommand {
     tool: InPlaceToolId,
     profiles?: ProfilePick[],
     faces?: FacePick[],
-    bodies?: BodyPick[]
+    bodies?: BodyPick[],
+    extra?: { refs?: RefPick[]; image?: ImageSlot }
   ): void;
   pickProfile(pick: ProfilePick, additive?: boolean): void;
   pickAxis(axisId: string): void;
@@ -111,6 +125,10 @@ export interface InPlaceCommand {
   /** A body click (any of its faces): refused when the tool takes none. */
   pickBody(body: BodyPick): boolean;
   pickPlane(plane: PlanePick): boolean;
+  /** A datum source: refused (false) when the tool takes no such source. */
+  pickRef(ref: RefPick): boolean;
+  /** A plane or a point for the picture being placed. */
+  placeImage(placement: ImagePlacement): boolean;
   setOption(optionId: string, value: string): void;
   previewValue(valueId: string, value: number): void;
   /** False when a typed expression is refused, leaving the value as it was. */
@@ -143,7 +161,9 @@ const EMPTY_SLOTS: InPlaceSlots = {
   guide: [],
   faces: [],
   bodies: [],
-  plane: null
+  plane: null,
+  refs: [],
+  image: null
 };
 
 function sameProfile(a: ProfilePick, b: ProfilePick): boolean {
@@ -177,7 +197,9 @@ export function useInPlaceCommand(
       datumAxes: options.datumAxes,
       datumLabel: (featureId) => optionsRef.current.datumLabel(featureId),
       linearSnap: options.linearSnap ?? null,
-      bodyBounds: (bodyId) => optionsRef.current.bodyBounds?.(bodyId) ?? null
+      bodyBounds: (bodyId) => optionsRef.current.bodyBounds?.(bodyId) ?? null,
+      imagePlaneBasis: (plane) =>
+        optionsRef.current.imagePlaneBasis?.(plane) ?? null
     }),
     [options.sketchViews, options.datumAxes, options.linearSnap]
   );
@@ -207,21 +229,33 @@ export function useInPlaceCommand(
             guide: session.slots.guide,
             faces: session.slots.faces,
             bodies: session.slots.bodies,
-            plane: session.slots.plane
+            plane: session.slots.plane,
+            refs: session.slots.refs,
+            image: session.slots.image
           }
         : EMPTY_SLOTS,
     [session, axisCandidates]
   );
 
-  const values = useMemo(() => session?.values ?? {}, [session?.values]);
+  const heldValues = useMemo(() => session?.values ?? {}, [session?.values]);
   /** Every value as a number, its initial one where none is set. */
   const numbers = useMemo(() => {
     const out: Record<string, number> = {};
     for (const valueSpec of spec?.values ?? []) {
-      out[valueSpec.id] = values[valueSpec.id] ?? valueSpec.initial;
+      out[valueSpec.id] = heldValues[valueSpec.id] ?? valueSpec.initial;
     }
     return out;
-  }, [spec, values]);
+  }, [spec, heldValues]);
+  // A linked value is read from the others each time, never held.
+  const values = useMemo(() => {
+    if (!spec?.linked) return heldValues;
+    const out = { ...heldValues };
+    for (const [id, link] of Object.entries(spec.linked)) {
+      const read = link.read(slots, numbers);
+      if (read !== null) out[id] = read;
+    }
+    return out;
+  }, [spec, heldValues, slots, numbers]);
 
   // Defaults the picks suggest (a helix radius through the profile), or
   // another value does (a hole step from its bore), land on every value the
@@ -252,14 +286,14 @@ export function useInPlaceCommand(
   }, [defaultsKey]);
 
   const paramValues = useMemo(() => {
-    const out: Record<string, ParamValue> = { ...values };
+    const out: Record<string, ParamValue> = { ...heldValues };
     for (const [id, raw] of Object.entries(session?.raws ?? {})) out[id] = raw;
     return out;
-  }, [values, session?.raws]);
+  }, [heldValues, session?.raws]);
   const chosen = useMemo(() => session?.options ?? {}, [session?.options]);
   const request = useMemo(
     () =>
-      spec && spec.ready(slots)
+      spec && spec.ready(slots, ctx)
         ? spec.request(slots, paramValues, chosen, ctx, numbers)
         : null,
     [spec, slots, paramValues, chosen, ctx, numbers]
@@ -278,7 +312,14 @@ export function useInPlaceCommand(
    * last.
    */
   const builtFrames = useRef(
-    new WeakMap<ProjectDocument, { key: string; bodyId: BodyId | undefined }>()
+    new WeakMap<
+      ProjectDocument,
+      {
+        key: string;
+        bodyId: BodyId | undefined;
+        check?: InPlaceBuiltCommand['check'];
+      }
+    >()
   ).current;
 
   const preview = useRef(
@@ -294,7 +335,8 @@ export function useInPlaceCommand(
         const built = command.apply(base);
         builtFrames.set(built, {
           key: JSON.stringify(current),
-          bodyId: command.resultBodyId
+          bodyId: command.resultBodyId,
+          ...(command.check ? { check: command.check } : {})
         });
         return built;
       },
@@ -310,10 +352,21 @@ export function useInPlaceCommand(
         const fresh = result?.derived.warnings.find(
           (warning) => !known.has(warning)
         );
+        // A datum adds no body: its own check proves it resolved.
+        let unresolved: string | null = null;
+        if (result && frame?.check) {
+          try {
+            frame.check(result.derived);
+          } catch (error) {
+            unresolved =
+              error instanceof Error ? error.message : 'This did not resolve.';
+          }
+        }
         const valid = Boolean(
           result &&
-          bodyId &&
-          result.derived.bodyRepresentations[bodyId] &&
+          (frame?.check
+            ? unresolved === null
+            : bodyId && result.derived.bodyRepresentations[bodyId]) &&
           !fresh
         );
         setPreviewValid(valid);
@@ -328,6 +381,7 @@ export function useInPlaceCommand(
         } else {
           setRefusal(
             fresh ??
+              unresolved ??
               result.derived.warnings.at(-1) ??
               'This did not produce a valid body.'
           );
@@ -346,8 +400,9 @@ export function useInPlaceCommand(
   // Every change of what would be built previews at once: the solid is on
   // screen the frame after the pick that completes it.
   const generation = useRef(0);
+  const instant = spec?.instant === true;
   useEffect(() => {
-    if (!requestKey) {
+    if (!requestKey || instant) {
       // Nothing to build (a pick taken back out): no frame, and no refusal
       // left over from the request that was.
       preview.clear();
@@ -361,7 +416,7 @@ export function useInPlaceCommand(
     setPreviewValid(false);
     generation.current += 1;
     preview.request(generation.current);
-  }, [requestKey, options.baseVersion, preview]);
+  }, [requestKey, instant, options.baseVersion, preview]);
 
   const end = useCallback(() => {
     preview.clear();
@@ -377,7 +432,8 @@ export function useInPlaceCommand(
       tool: InPlaceToolId,
       initial: ProfilePick[] = [],
       initialFaces: FacePick[] = [],
-      initialBodies: BodyPick[] = []
+      initialBodies: BodyPick[] = [],
+      extra: { refs?: RefPick[]; image?: ImageSlot } = {}
     ) => {
       const toolSpec = IN_PLACE_TOOL_SPECS[tool];
       preview.clear();
@@ -407,7 +463,14 @@ export function useInPlaceCommand(
               ? initialBodies.slice(0, 1)
               : initialBodies
             : [],
-          plane: null
+          plane: null,
+          refs: toolSpec.takeRef
+            ? (extra.refs ?? []).reduce<RefPick[]>(
+                (refs, ref) => toolSpec.takeRef!(refs, ref),
+                []
+              )
+            : [],
+          image: extra.image ?? null
         },
         options: Object.fromEntries(
           (toolSpec.options ?? []).map((option) => [option.id, option.initial])
@@ -591,10 +654,92 @@ export function useInPlaceCommand(
     return true;
   }, []);
 
+  const pickRef = useCallback((ref: RefPick) => {
+    const current = sessionRef.current;
+    const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
+    if (
+      !current ||
+      !toolSpec?.takeRef ||
+      !toolSpec.refKinds?.includes(ref.kind)
+    )
+      return false;
+    setSession((latest) =>
+      latest
+        ? {
+            ...latest,
+            slots: {
+              ...latest.slots,
+              refs: toolSpec.takeRef!(latest.slots.refs, ref)
+            }
+          }
+        : latest
+    );
+    return true;
+  }, []);
+
+  const placeImage = useCallback(
+    (placement: ImagePlacement) => {
+      const current = sessionRef.current;
+      if (!current?.slots.image) return false;
+      // A plane that has not resolved has nowhere to put the picture.
+      if (placement.plane && !ctx.imagePlaneBasis?.(placement.plane)) {
+        setRefusal(
+          'This plane has not resolved, so the picture cannot lie on it. Pick another.'
+        );
+        return true;
+      }
+      setRefusal(null);
+      // New picks are measured afresh: a distance refused for the old
+      // pair no longer stands.
+      const linked = IN_PLACE_TOOL_SPECS[current.tool].linked ?? {};
+      setEntryRefusal((refused) =>
+        refused && refused.valueId in linked ? null : refused
+      );
+      setSession((latest) => {
+        const image = latest?.slots.image;
+        if (!latest || !image) return latest;
+        const next = placedImage(image, placement, latest.options.clicks, ctx, {
+          ...numbersFor(latest)
+        });
+        // A plane picked (even the same one) means clicks place again.
+        const options =
+          placement.plane && latest.options.clicks === 'plane'
+            ? { ...latest.options, clicks: 'place' }
+            : latest.options;
+        if (next === image && options === latest.options) return latest;
+        const replaned = next.plane !== image.plane;
+        return {
+          ...latest,
+          options,
+          slots: { ...latest.slots, image: next },
+          ...(replaned
+            ? {
+                // A new plane starts unslid.
+                values: { ...latest.values, offset: 0 },
+                raws: Object.fromEntries(
+                  Object.entries(latest.raws).filter(([id]) => id !== 'offset')
+                ),
+                touched: latest.touched.filter((id) => id !== 'offset')
+              }
+            : {})
+        };
+      });
+      return true;
+    },
+    [ctx]
+  );
+
   const setOption = useCallback((optionId: string, value: string) => {
     // A refused entry was never applied, and a new choice (a hole's style)
-    // may not even show its value: the refusal no longer holds Done.
-    setEntryRefusal(null);
+    // may not even show its value: the refusal no longer holds Done. A
+    // linked value's refusal stands, though: what it measures (a picture's
+    // scale picks) is still there, and only a taken value or new picks
+    // answer it.
+    const tool = sessionRef.current?.tool;
+    const linked = (tool && IN_PLACE_TOOL_SPECS[tool].linked) || {};
+    setEntryRefusal((refused) =>
+      refused && refused.valueId in linked ? refused : null
+    );
     setSession((current) => {
       if (!current) return current;
       const specs = IN_PLACE_TOOL_SPECS[current.tool].options ?? [];
@@ -627,6 +772,54 @@ export function useInPlaceCommand(
             (candidate) => candidate.id === valueId
           )
         : undefined;
+      const link = current
+        ? IN_PLACE_TOOL_SPECS[current.tool].linked?.[valueId]
+        : undefined;
+      if (current && link) {
+        // Written into the values it is read from, as numbers: what it
+        // measures is not parametric.
+        const latest = sessionRef.current!;
+        const slotsNow = slotsOf(latest);
+        const written =
+          valueSpec && clampValue(valueSpec, value) === value
+            ? link.write(slotsNow, numbersFor(latest), value)
+            : null;
+        if (!written) {
+          // An entry refusal, so Done waits: the value shown was refused,
+          // and the width it would have set is not what was asked for.
+          setEntryRefusal({
+            valueId,
+            message: `${IN_PLACE_TOOL_SPECS[current.tool].title} cannot take ${raw ?? value} for its ${valueSpec?.label.toLowerCase() ?? 'value'}.`
+          });
+          return false;
+        }
+        setEntryRefusal((refused) =>
+          refused?.valueId === valueId ? null : refused
+        );
+        setSession((latestSession) => {
+          if (!latestSession) return latestSession;
+          const specs = IN_PLACE_TOOL_SPECS[latestSession.tool].values;
+          const next = { ...latestSession.values };
+          const raws = { ...latestSession.raws };
+          for (const [id, number] of Object.entries(written)) {
+            const target = specs.find((candidate) => candidate.id === id);
+            next[id] = target ? clampValue(target, number) : number;
+            delete raws[id];
+          }
+          return {
+            ...latestSession,
+            values: next,
+            raws,
+            touched: [
+              ...latestSession.touched,
+              ...Object.keys(written).filter(
+                (id) => !latestSession.touched.includes(id)
+              )
+            ]
+          };
+        });
+        return true;
+      }
       // An expression is stored as typed, so it must already be a value the
       // tool accepts: clamping it for the preview would show one value and
       // commit another. Nor is a typed end of an open range nudged inside
@@ -733,15 +926,14 @@ export function useInPlaceCommand(
   const canFinish = Boolean(
     !entryRefusal &&
     request &&
-    previewValid &&
-    previewedKey !== null &&
-    previewedKey === requestKey
+    (instant ||
+      (previewValid && previewedKey !== null && previewedKey === requestKey))
   );
 
   const done = useCallback(() => {
     const current = requestRef.current;
     if (!current || !spec || !canFinish) return false;
-    if (requestKeyRef.current !== previewedKey) return false;
+    if (!spec.instant && requestKeyRef.current !== previewedKey) return false;
     end();
     optionsRef.current.commit(current, spec.featureName ?? spec.title);
     return true;
@@ -775,7 +967,8 @@ export function useInPlaceCommand(
     values,
     raws: session?.raws ?? EMPTY_RAWS,
     options: chosen,
-    hint: spec ? spec.hint(slots, chosen) : '',
+    request,
+    hint: spec ? spec.hint(slots, chosen, ctx) : '',
     refusal: entryRefusal?.message ?? refusal,
     canFinish,
     start,
@@ -786,6 +979,8 @@ export function useInPlaceCommand(
     addFaces,
     pickBody,
     pickPlane,
+    pickRef,
+    placeImage,
     setOption,
     previewValue,
     setValue,
@@ -821,4 +1016,28 @@ export function mergeSweptFaces(
     next.push(face);
   }
   return next;
+}
+
+/** A session's slots as the specs read them (its axis left unresolved). */
+function slotsOf(session: Session): InPlaceSlots {
+  return {
+    profiles: session.slots.profiles,
+    axis: null,
+    path: session.slots.path,
+    guide: session.slots.guide,
+    faces: session.slots.faces,
+    bodies: session.slots.bodies,
+    plane: session.slots.plane,
+    refs: session.slots.refs,
+    image: session.slots.image
+  };
+}
+
+/** A session's values as numbers, its initial one where none is set. */
+function numbersFor(session: Session): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const valueSpec of IN_PLACE_TOOL_SPECS[session.tool].values) {
+    out[valueSpec.id] = session.values[valueSpec.id] ?? valueSpec.initial;
+  }
+  return out;
 }
