@@ -1427,6 +1427,52 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     });
   });
 
+  it('keeps a hole moved by a click when the feature is read again', () => {
+    const face = {
+      bodyId: 'body_a' as BodyId,
+      hash: 11,
+      topologyId: 'f11',
+      surfaceType: 'plane',
+      normal: { x: 0, y: 0, z: 1 },
+      centroid: { x: 10, y: 5, z: 4 }
+    };
+    const stored = {
+      ...face,
+      point: { x: 10, y: 5, z: 4 },
+      savedPosition: true as const
+    };
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      baseVersion: 1,
+      reseed: (edit) => ({
+        tool: 'hole',
+        seed: { ...edit, slots: { ...edit.slots, faces: [{ ...stored }] } }
+      })
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('hole', {
+        ...SEED,
+        options: { place: 'clicked', depthMode: 'through', style: 'simple' },
+        slots: { ...SEED.slots, bodies: [], faces: [stored] }
+      })
+    );
+    // Clicked elsewhere on the same face: the hole moves there.
+    act(() => {
+      hook.result.current.pickFace({ ...face, point: { x: 14, y: 7, z: 4 } });
+    });
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.slots.faces[0]?.point).toEqual({
+      x: 14,
+      y: 7,
+      z: 4
+    });
+    expect(hook.result.current.slots.faces[0]?.savedPosition).toBeUndefined();
+  });
+
   it('previews a re-armed edit that builds the same thing', async () => {
     const { hook } = setup();
     act(() => hook.result.current.edit('subtract', SEED));
