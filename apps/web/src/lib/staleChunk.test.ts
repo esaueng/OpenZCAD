@@ -13,6 +13,9 @@ function loaderOf(component: unknown): () => Promise<unknown> {
     ._payload._result;
 }
 
+/** Lets the preload-error watcher make its deferred decision. */
+const nextTask = () => new Promise((resolve) => setTimeout(resolve, 0));
+
 describe('stale chunk handling', () => {
   it('recognises the chunk-load failures browsers raise after a deploy', () => {
     expect(
@@ -56,7 +59,7 @@ describe('stale chunk handling', () => {
 });
 
 describe('preload errors', () => {
-  it('reports a chunk the preload helper could not load, and only that', () => {
+  it('reports a chunk the preload helper could not load, and only that', async () => {
     const listener = vi.fn();
     const stopListening = onStaleChunk(listener);
     const stopWatching = watchPreloadErrors(window);
@@ -71,13 +74,16 @@ describe('preload errors', () => {
         'Failed to fetch dynamically imported module: https://zcad.app/assets/demos-BLYQ4WoN.js'
       )
     );
+    await nextTask();
     expect(listener).toHaveBeenCalledOnce();
     // The caller still gets its own rejection.
     expect(event.defaultPrevented).toBe(false);
     fire(new Error('Cannot read properties of null'));
+    await nextTask();
     expect(listener).toHaveBeenCalledOnce();
     stopWatching();
     fire(new TypeError('Importing a module script failed.'));
+    await nextTask();
     expect(listener).toHaveBeenCalledOnce();
     stopListening();
   });
@@ -141,13 +147,39 @@ describe('warm-up failures', () => {
       return Promise.reject(failure);
     });
     await expect(Surface.preload()).rejects.toThrow();
+    await nextTask();
     expect(listener).not.toHaveBeenCalled();
     // A load nobody started speculatively still reports.
     const event = new Event('vite:preloadError') as Event & {
       payload?: unknown;
     };
-    event.payload = failure;
+    event.payload = new TypeError(
+      'Failed to fetch dynamically imported module: demos.js'
+    );
     target.dispatchEvent(event);
+    await nextTask();
+    expect(listener).toHaveBeenCalledTimes(1);
+    stopWatch();
+    stopNotice();
+  });
+
+  it('still reports an unrelated import that fails while a warm-up is in flight', async () => {
+    const { preloadableLazy } = await import('./staleChunk');
+    const listener = vi.fn();
+    const stopNotice = onStaleChunk(listener);
+    const target = new EventTarget() as unknown as Window;
+    const stopWatch = watchPreloadErrors(target);
+    // A slow warm-up that has not settled.
+    const Surface = preloadableLazy(() => new Promise<never>(() => undefined));
+    void Surface.preload();
+    const event = new Event('vite:preloadError') as Event & {
+      payload?: unknown;
+    };
+    event.payload = new TypeError(
+      'Failed to fetch dynamically imported module: demos.js'
+    );
+    target.dispatchEvent(event);
+    await nextTask();
     expect(listener).toHaveBeenCalledTimes(1);
     stopWatch();
     stopNotice();

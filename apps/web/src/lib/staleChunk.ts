@@ -89,26 +89,40 @@ export function lazyWithStaleChunkNotice<T extends ComponentType<any>>(
  * is not cancelled: each caller still sees its own rejection.
  */
 export function watchPreloadErrors(target: Window = window): () => void {
+  const timers = new Set<number>();
   const listener = (event: Event) => {
-    // A warm-up nobody asked for fails silently; the surface's own load
-    // reports when the user actually opens it.
-    if (speculativeLoads > 0) return;
-    if (isChunkLoadError((event as Event & { payload?: unknown }).payload)) {
-      reportStaleChunk();
-    }
+    const error = (event as Event & { payload?: unknown }).payload;
+    if (!isChunkLoadError(error)) return;
+    // Vite announces the failure before the import rejects with this same
+    // error; decide once the rejection has reached its importer, so a
+    // warm-up's failure can be told apart from one the user is waiting on.
+    const timer = window.setTimeout(() => {
+      timers.delete(timer);
+      if (!isSpeculativeFailure(error)) reportStaleChunk();
+    }, 0);
+    timers.add(timer);
   };
   target.addEventListener('vite:preloadError', listener);
-  return () => target.removeEventListener('vite:preloadError', listener);
+  return () => {
+    target.removeEventListener('vite:preloadError', listener);
+    for (const timer of timers) window.clearTimeout(timer);
+    timers.clear();
+  };
 }
 
 /**
- * Warm-ups in flight. Vite announces a failed chunk preload as
- * `vite:preloadError` before the import rejects, so the global reporter above
- * cannot tell a speculative load from one the user is waiting on except by
- * this count. A user-facing load that fails meanwhile still reports through
- * its own lazy component.
+ * Errors from warm-ups nobody asked for. They fail silently; the surface's
+ * own load reports when the user actually opens it.
  */
-let speculativeLoads = 0;
+const speculativeFailures = new WeakSet<object>();
+
+function isSpeculativeFailure(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    speculativeFailures.has(error)
+  );
+}
 
 /** A lazy component that can be loaded ahead of its first use. */
 export interface PreloadableLazy<P extends object> {
@@ -156,17 +170,15 @@ export function preloadableLazy<T extends ComponentType<any>>(
     loaded
       ? createElement(loaded, props)
       : createElement(Lazy, props)) as PreloadableLazy<P>;
-  Preloadable.preload = () => {
-    speculativeLoads += 1;
-    return load().then(
-      () => {
-        speculativeLoads -= 1;
-      },
+  Preloadable.preload = () =>
+    load().then(
+      () => undefined,
       (error: unknown) => {
-        speculativeLoads -= 1;
+        if (typeof error === 'object' && error !== null) {
+          speculativeFailures.add(error);
+        }
         throw error;
       }
     );
-  };
   return Preloadable;
 }
