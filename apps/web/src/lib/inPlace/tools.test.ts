@@ -245,6 +245,15 @@ describe('body tools', () => {
     });
   });
 
+  it('draft: an angle either way, up to a right angle', () => {
+    const angle = IN_PLACE_TOOL_SPECS.draft.values.find(
+      (value) => value.id === 'angle'
+    )!;
+    expect(valueInRange(angle, -12)).toBe(true);
+    expect(valueInRange(angle, 60)).toBe(true);
+    expect(valueInRange(angle, 90)).toBe(false);
+  });
+
   it('scale: any positive factor, a unit conversion included', () => {
     const factor = IN_PLACE_TOOL_SPECS.scale.values.find(
       (value) => value.id === 'factor'

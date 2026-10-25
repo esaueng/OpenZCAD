@@ -938,6 +938,52 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     });
   });
 
+  it("reads a helix's saved axis again when the model changes", () => {
+    let rise = 10;
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      evaluate: (value) => (value === 'rise' ? rise : null),
+      baseVersion: 1
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('helical-sweep', {
+        ...SEED,
+        data: {
+          featureKind: 'helical-sweep',
+          profile: { sketchId: SKETCH },
+          axisOrigin: { x: 0, y: 0, z: 'rise' },
+          axisDirection: { x: 0, y: 0, z: 1 }
+        } as never,
+        axes: [
+          {
+            id: 'saved',
+            label: 'Its saved axis',
+            origin: { x: 0, y: 0, z: 10 },
+            direction: { x: 0, y: 0, z: 1 },
+            choice: { saved: true }
+          }
+        ],
+        slots: {
+          ...SEED.slots,
+          bodies: [],
+          profiles: [PICK],
+          axisId: 'saved'
+        }
+      })
+    );
+    rise = 25;
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.slots.axis?.origin).toEqual({
+      x: 0,
+      y: 0,
+      z: 25
+    });
+  });
+
   it('finishes a suppressed feature edit that builds no body', async () => {
     // Suppressed, the feature publishes no body: the preview still stands.
     const { hook } = setup({

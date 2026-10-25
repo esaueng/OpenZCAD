@@ -1386,8 +1386,11 @@ const draft: InPlaceToolSpec = {
       label: 'Draft',
       unit: 'angle',
       initial: 3,
-      min: 0.1,
-      max: 45
+      // Either way and up to a right angle, as the kernel takes it: an
+      // edited draft keeps the range it was made with.
+      min: -90,
+      max: 90,
+      exclusive: true
     }
   ],
   options: [
