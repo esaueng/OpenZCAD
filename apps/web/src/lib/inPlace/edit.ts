@@ -1085,6 +1085,32 @@ export function laterDirectEdit(
   );
 }
 
+/**
+ * The in-place moves and scales of `bodyId` after `feature` in history: a
+ * body an edit is retargeted to is shown after them, and the edited
+ * feature acts on it before them.
+ */
+export function laterStepsOnBody(
+  document: ProjectDocument,
+  feature: FeatureNode,
+  bodyId: BodyId
+): FeatureData[] {
+  const order = listFeaturesInOrder(document);
+  return order
+    .slice(
+      order.findIndex(
+        (candidate) => candidate.featureId === feature.featureId
+      ) + 1
+    )
+    .flatMap((later) =>
+      isInPlaceTransform(later.data) &&
+      later.data.targetBodyId === bodyId &&
+      !isFeatureSuppressed(later)
+        ? [later.data]
+        : []
+    );
+}
+
 /** A hole's step sizes, which an absent value derives from its bore. */
 const HOLE_STEP_KEYS: readonly string[] = [
   'counterboreDiameter',

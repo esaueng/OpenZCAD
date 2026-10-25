@@ -33,6 +33,7 @@ import {
   inPlaceToolForFeature,
   laterDirectEdit,
   laterInPlaceSteps,
+  laterStepsOnBody,
   type InPlaceEditContext
 } from './edit';
 import {
@@ -1171,6 +1172,9 @@ describe('the steps after a copying transform', () => {
       transform: { translation: { x: 10, y: 0, z: 0 } }
     });
     expect(laterDirectEdit(document, copy)).toBe(false);
+    // A body an edit is retargeted to is taken back through its own later
+    // steps, by history order.
+    expect(laterStepsOnBody(document, copy, block!)).toEqual(later);
     // A later direct edit of the source, likewise not downstream of the copy.
     const edit = {
       ...copy,

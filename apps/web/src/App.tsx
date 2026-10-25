@@ -1467,6 +1467,7 @@ import {
   keptInOrder,
   laterDirectEdit,
   laterInPlaceSteps,
+  laterStepsOnBody,
   keepAbsentHoleSteps,
   inPlaceEditLineage,
   inPlaceEditMovedBodies,
@@ -19807,32 +19808,37 @@ export function App() {
       const fresh = inPlaceBodyPickRef.current(pick.bodyId);
       if (!fresh) return pick;
       const live = findFeature(doc, editing.featureId);
+      const boxContext = {
+        evaluate: (value: ParamValue) =>
+          evalParamValue(value, parameterScope.scope, doc.units),
+        datumAxis: (featureId: FeatureId) =>
+          doc.derived.datumAxes?.[featureId] ?? null,
+        bodyVertices: (bodyId: BodyId) =>
+          representations[bodyId]?.mesh.vertices ?? null
+      };
       // A body clicked in place of the transform's own target never went
-      // through it: its box is the body as it is.
-      if (
+      // through it, but its later in-place steps did: its box is taken back
+      // through those alone, to where the edited feature acts on it.
+      const retargeted =
         liveData.featureKind === 'transform' &&
-        liveData.targetBodyId !== pick.bodyId
-      ) {
-        const same =
-          JSON.stringify([fresh.min, fresh.max]) ===
-          JSON.stringify([pick.min, pick.max]);
-        if (same) return pick;
-        bodiesMoved = true;
-        return fresh;
-      }
-      const box = inPlaceEditBodyBox(
-        fresh,
-        liveData,
-        {
-          evaluate: (value) =>
-            evalParamValue(value, parameterScope.scope, doc.units),
-          datumAxis: (featureId) => doc.derived.datumAxes?.[featureId] ?? null,
-          bodyVertices: (bodyId) =>
-        representations[bodyId]?.mesh.vertices ?? null
-        },
-        live ? laterInPlaceSteps(doc, live) : [],
-        !(live && isFeatureSuppressed(live))
-      );
+        liveData.targetBodyId !== pick.bodyId;
+      const box = retargeted
+        ? live
+          ? inPlaceEditBodyBox(
+              fresh,
+              { ...liveData, targetBodyId: pick.bodyId },
+              boxContext,
+              laterStepsOnBody(doc, live, pick.bodyId),
+              false
+            )
+          : fresh
+        : inPlaceEditBodyBox(
+            fresh,
+            liveData,
+            boxContext,
+            live ? laterInPlaceSteps(doc, live) : [],
+            !(live && isFeatureSuppressed(live))
+          );
       const same =
         JSON.stringify([box.min, box.max]) ===
         JSON.stringify([pick.min, pick.max]);

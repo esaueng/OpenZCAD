@@ -547,11 +547,19 @@ const revolve: InPlaceToolSpec = {
   handles(slots, _values, ctx) {
     const pick = slots.profiles[0];
     if (!pick || !slots.axis) return [];
-    const placement = revolveRigPlacement(
-      profileOutline(ctx, pick),
-      slots.axis
-    );
-    if (!placement) return [];
+    const outline = profileOutline(ctx, pick);
+    const placement = profileTurnRig(outline, slots.axis);
+    if (!placement) {
+      // A profile with nothing off its axis has no rig: its angle is typed.
+      return [
+        {
+          valueId: 'angle',
+          kind: 'chip',
+          key: keyOf(pick.sketchId, pick.regionFingerprint, slots.axis.id),
+          params: { anchor: outline[0] ?? slots.axis.origin }
+        }
+      ];
+    }
     return [
       {
         valueId: 'angle',
@@ -1107,6 +1115,25 @@ function bodyTurnRig(
   const centred = helixRigPlacement(corners, axis);
   const reach = Math.max(
     ...corners.map((corner) => radialDistance(corner, axis))
+  );
+  return centred && reach > 1e-9 ? { ...centred, radius: reach * 1.15 } : null;
+}
+
+/**
+ * The rig a profile turns on about an axis: as `revolveRigPlacement` places
+ * it, or, for a profile whose middle is on the axis (a symmetric pair of
+ * regions), square to the axis out to its farthest point.
+ */
+function profileTurnRig(
+  outline: readonly Vector3[],
+  axis: RevolveAxisCandidate
+): RevolveRigPlacement | null {
+  const placement = revolveRigPlacement(outline, axis);
+  if (placement) return placement;
+  const centred = helixRigPlacement(outline, axis);
+  const reach = Math.max(
+    0,
+    ...outline.map((point) => radialDistance(point, axis))
   );
   return centred && reach > 1e-9 ? { ...centred, radius: reach * 1.15 } : null;
 }

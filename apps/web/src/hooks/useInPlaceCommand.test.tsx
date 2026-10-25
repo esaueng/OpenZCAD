@@ -248,6 +248,39 @@ describe('useInPlaceCommand: revolve', () => {
     expect(hook.result.current.values.angle).toBe(300);
   });
 
+  it('refuses a typed count outside its whole range rather than rounding it', () => {
+    const { hook } = setup();
+    act(() =>
+      hook.result.current.start(
+        'linear-pattern',
+        [],
+        [],
+        [
+          {
+            bodyId: BODY,
+            min: { x: 0, y: 0, z: 0 },
+            max: { x: 10, y: 10, z: 10 }
+          }
+        ]
+      )
+    );
+    let accepted = true;
+    act(() => {
+      accepted = hook.result.current.setValue('count', 4.5, undefined);
+    });
+    expect(accepted).toBe(false);
+    expect(hook.result.current.refusal).toMatch(/takes/);
+    act(() => {
+      accepted = hook.result.current.setValue('count', 101, undefined);
+    });
+    expect(accepted).toBe(false);
+    act(() => {
+      accepted = hook.result.current.setValue('count', 6, undefined);
+    });
+    expect(accepted).toBe(true);
+    expect(hook.result.current.values.count).toBe(6);
+  });
+
   it('keeps a sub-degree revolve', () => {
     const { hook } = setup();
     act(() => hook.result.current.start('revolve', [PICK]));

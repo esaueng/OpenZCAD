@@ -1278,10 +1278,12 @@ export function useInPlaceCommand(
       // tool accepts: clamping it for the preview would show one value and
       // commit another. Nor is a typed end of an open range nudged inside
       // it, where its chip would still read as the refused end.
+      // A typed number outside the range (a pattern's 4.5 or 101 copies) is
+      // refused too, as the cards refused it: only a drag is clamped.
       if (
         current &&
         valueSpec &&
-        (raw !== undefined || (typed && valueSpec.exclusive)) &&
+        (raw !== undefined || typed) &&
         !valueInRange(valueSpec, value)
       ) {
         const whole = valueSpec.integer ? 'whole numbers ' : '';
