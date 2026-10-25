@@ -5,7 +5,8 @@ import {
   expectBodyCount,
   modelPanel,
   railPanelButton,
-  createShellInPlace
+  createShellInPlace,
+  revealModelPanel
 } from './openzcad-fixtures';
 
 test('explains a failed downstream edit and opens the exact feature for repair', async ({
@@ -20,6 +21,7 @@ test('explains a failed downstream edit and opens the exact feature for repair',
   await page.getByRole('button', { name: /Heat Sink/ }).click();
   await expectBodyCount(page, 1);
   await page.locator('.feature-row-main', { hasText: 'Extrude base' }).click();
+  await revealModelPanel(page, 'History');
   const details = page.getByRole('region', { name: 'History details' });
   await expect(
     details.getByRole('button', { name: 'Inspect Base corner fillets' })
@@ -40,6 +42,7 @@ test('explains a failed downstream edit and opens the exact feature for repair',
   await details
     .getByRole('button', { name: 'Edit Base corner fillets' })
     .click();
+  await revealModelPanel(page, 'History');
   await expect(
     inspector.getByRole('heading', { name: 'Base corner fillets' })
   ).toBeVisible();
@@ -424,6 +427,7 @@ test('renaming a modeling feature closes its stale editor and keeps the new name
   ).toBeVisible();
   // Reach the history action through the keyboard while the floating editor
   // occupies the same pointer lane as the row.
+  await revealModelPanel(page, 'History');
   const actions = row.getByRole('button', { name: 'More actions for Shell' });
   await actions.focus();
   await actions.press('Enter');
@@ -460,6 +464,7 @@ test('a failed edit brings a closed History panel forward with its record', asyn
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await expect(inspector).toBeVisible();
   // The record and its dismiss control live only in History.
+  await revealModelPanel(page, 'History');
   await page.getByRole('button', { name: 'Close History' }).click();
   await expect(railPanelButton(page, 'History')).toHaveAttribute(
     'aria-pressed',

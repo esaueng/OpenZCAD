@@ -6,6 +6,7 @@ interface Props {
   commandFoldOpen: boolean;
   sketching: boolean;
   editing?: boolean;
+  sessionId?: string;
 }
 
 const IDLE: Props = {
@@ -15,13 +16,57 @@ const IDLE: Props = {
 
 function renderSuspension(initialProps: Props = IDLE) {
   return renderHook(
-    ({ commandFoldOpen, sketching, editing }: Props) =>
-      usePanelSuspension({ commandFoldOpen }, { sketching, editing }),
+    ({ commandFoldOpen, sketching, editing, sessionId }: Props) =>
+      usePanelSuspension(
+        { commandFoldOpen },
+        { sketching, editing, sessionId }
+      ),
     { initialProps }
   );
 }
 
 describe('usePanelSuspension', () => {
+  it('honors an explicit panel request batched with opening another form', () => {
+    const { result, rerender } = renderSuspension({
+      ...IDLE,
+      editing: true,
+      sessionId: 'first'
+    });
+    act(() => {
+      result.current.release('panels');
+      result.current.release('fold');
+    });
+    act(() => {
+      result.current.release('panels');
+      rerender({ ...IDLE, editing: true, sessionId: 'second' });
+    });
+    expect(result.current.panelsHidden).toBe(false);
+    expect(result.current.foldHidden).toBe(true);
+    rerender({ ...IDLE, editing: true, sessionId: 'third' });
+    expect(result.current.panelsHidden).toBe(true);
+  });
+  it('resets a release when switching directly between suspended sessions', () => {
+    const { result, rerender } = renderSuspension({
+      ...IDLE,
+      editing: true,
+      sessionId: 'hole'
+    });
+    for (const next of [
+      { ...IDLE, sketching: true, sessionId: 'sketch' },
+      { ...IDLE, editing: true, sessionId: 'fillet' },
+      { ...IDLE, editing: true, sessionId: 'chamfer' }
+    ]) {
+      act(() => {
+        result.current.release('panels');
+        result.current.release('fold');
+      });
+      expect(result.current.panelsHidden).toBe(false);
+      expect(result.current.commandFoldOpen).toBe(true);
+      rerender(next);
+      expect(result.current.panelsHidden).toBe(true);
+      expect(result.current.commandFoldOpen).toBe(false);
+    }
+  });
   it('gives a feature form room without overwriting the saved layout', () => {
     const { result, rerender } = renderSuspension();
     rerender({ ...IDLE, editing: true });

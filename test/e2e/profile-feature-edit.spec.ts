@@ -21,7 +21,8 @@ import {
   test,
   expect,
   stubApi,
-  bodyCardFromHistory
+  bodyCardFromHistory,
+  revealModelPanel
 } from './openzcad-fixtures';
 
 function section(
@@ -212,6 +213,7 @@ for (const kind of ['loft', 'sweep', 'helical-sweep'] as const) {
     const label = kind.replaceAll('-', ' ');
     const openEditor = async () => {
       // The row opens the editable form directly (F19).
+      await revealModelPanel(page, 'History');
       await page
         .locator('.feature-row-main', { hasText: 'Authored feature' })
         .click();

@@ -1,4 +1,4 @@
-import { test, expect, stubApi } from './openzcad-fixtures';
+import { test, expect, stubApi, revealModelPanel } from './openzcad-fixtures';
 
 test('invalid primitive dimensions never enter saved history', async ({
   page
@@ -18,6 +18,7 @@ test('invalid primitive dimensions never enter saved history', async ({
   ).toBeDisabled();
   await width.press('Enter');
   await expect(inspector).toBeVisible();
+  await revealModelPanel(page, 'History');
   await expect(
     page.getByText(
       'No features yet. Pick a tool from the tool rail on the left to start.'

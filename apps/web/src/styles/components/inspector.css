@@ -514,13 +514,14 @@ fieldset.field > legend {
 .inspector .panel-body .form-footer,
 .inspector .panel-body .form-actions:not(.form-footer .form-actions) {
   position: sticky;
-  /* Down over the body's 14px bottom padding, which the scroll shows
-     content through otherwise. */
-  bottom: -14px;
+  /* Cover the body's bottom padding while keeping the footer 2px inside
+     the scrollport. Flush borders clip controls on fractional-pixel layouts. */
+  bottom: -12px;
   z-index: 1;
   margin-bottom: -14px;
   padding-block: 6px 20px;
   background: var(--color-surface);
+  box-shadow: 0 2px 0 var(--color-surface);
 }
 
 .form-footer {

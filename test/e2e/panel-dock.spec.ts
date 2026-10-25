@@ -1213,6 +1213,7 @@ test('a command card heads the right lane, and a tool card keeps its actions in 
   await page.keyboard.press('m');
   const move = page.getByRole('form', { name: 'Move controls' });
   await expect(move).toBeVisible();
+  await revealModelPanel(page, 'History');
   await expect(
     page
       .locator('.stage-right > .command-float')

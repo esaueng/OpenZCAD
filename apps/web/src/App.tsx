@@ -3213,12 +3213,26 @@ export function App() {
   // A sketch or feature form takes the stage: model panels and "More tools"
   // step aside and return when it ends, the preference untouched. A drag
   // on the model leaves them in place (see `effectivePanels`).
+  const panelFeature = selectedFeatureNode
+    ? doc?.nodes[selectedFeatureNode.id]
+    : null;
   const panels = usePanelSuspension(panelState, {
     sketching: interaction.mode === 'sketch',
     editing:
       panelState.workspaceMode === 'build' &&
-      (tool !== null ||
-        (selectedFeatureNode !== null && featureSelectionSource !== 'inferred'))
+      movePreview === null &&
+      ((tool !== null && tool !== 'transform') ||
+        (selectedFeatureNode !== null &&
+          featureSelectionSource !== 'inferred' &&
+          panelFeature?.kind === 'feature' &&
+          panelFeature.data.featureKind !== 'sketch' &&
+          panelFeature.data.featureKind !== 'transform')),
+    sessionId:
+      interaction.mode === 'sketch'
+        // A new sketch acquires its canonical ID on the first entity; that
+        // is still the same editing session and must keep a manual release.
+        ? 'active'
+        : `${tool ?? 'edit'}:${featureSelectionSource !== 'inferred' ? selectedFeatureNode?.id ?? '' : ''}`
   });
   const toolRef = useRef(tool);
   toolRef.current = tool;
@@ -23633,11 +23647,10 @@ export function App() {
    * mode, like a rail press.
    */
   const showModelPanel = (id: 'history' | 'parameters' | 'revisions') => {
-    const suspended = panels.panelsHidden;
     setPanelLayout((current) =>
       presentPanel(current, id, panelStageOrUndefined)
     );
-    if (suspended) panels.release('panels');
+    panels.release('panels');
   };
   const panelControls = (
     id: PanelId,

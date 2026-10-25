@@ -1,4 +1,4 @@
-import { expect, test, stubApi } from './openzcad-fixtures';
+import { expect, test, stubApi, revealModelPanel } from './openzcad-fixtures';
 
 /**
  * F28: a box is built from its corner and a cylinder from its base center,
@@ -58,8 +58,10 @@ test('places a cylinder on a box from the position row its card names', async ({
     .filter({ hasText: /^Cylinder/ })
     .first();
   const selectCylinder = async () => {
+    await revealModelPanel(page, 'History');
     if ((await cylinderRow.getAttribute('aria-pressed')) !== 'true')
       await cylinderRow.click();
+    await revealModelPanel(page, 'History');
     await expect(cylinderRow).toHaveAttribute('aria-pressed', 'true');
   };
   const mass = inspector.locator('details.panel-section').filter({

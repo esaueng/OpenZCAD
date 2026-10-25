@@ -5,7 +5,7 @@ export function sketchObjectLabels(
   document: ProjectDocument,
   sketch: Pick<SketchNode, 'objectIds'>
 ): Map<string, string> {
-  const objects = sketch.objectIds.flatMap((id) => {
+  const objects = [...new Set(sketch.objectIds)].flatMap((id) => {
     const node = document.nodes[id];
     return node?.kind === 'sketch-object'
       ? [{ id, name: node.name || node.data.objectKind }]

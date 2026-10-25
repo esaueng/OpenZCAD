@@ -3,6 +3,7 @@ import type { Locator, Page } from '@playwright/test';
 import {
   expect,
   expectBodyCount,
+  revealModelPanel,
   stubApi,
   test,
   waitForStillViewport
@@ -280,6 +281,7 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
       })
     ]);
   const objects = page.getByRole('list', { name: 'Objects' });
+  await revealModelPanel(page, 'Objects');
   await expect(
     objects.getByRole('button', { name: /^Bracket plan/ })
   ).toBeVisible();

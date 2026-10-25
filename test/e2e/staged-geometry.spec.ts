@@ -5,7 +5,8 @@ import {
   expect,
   stubApi,
   expectBodyCount,
-  locateEdge
+  locateEdge,
+  revealModelPanel
 } from './openzcad-fixtures';
 
 async function installAnalysisGate(page: Page) {
@@ -344,6 +345,7 @@ test('acknowledges appearance edits without reinstalling on later selection', as
   const installs = await page.evaluate(
     () => performance.getEntriesByName('oz:viewer.bodies').length
   );
+  await revealModelPanel(page, 'Objects');
   await page.locator('.body-row-main').first().click();
   await expect(page.locator('.selection-callout-chip')).toBeVisible();
   await page.keyboard.press('Escape');

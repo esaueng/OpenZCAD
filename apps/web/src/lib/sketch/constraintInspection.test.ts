@@ -216,7 +216,7 @@ describe('constraintInspectionTargets', () => {
     );
   });
 
-  it('disambiguates duplicate target labels with their first sketch positions', () => {
+  it('uses the sketch-wide labels for unary and pair targets, ignoring repeated membership', () => {
     const { document, sketch, lineA, lineB, circle, store } = fixture();
     document.nodes[lineA]!.name = 'Edge';
     document.nodes[lineB]!.name = 'Edge';
@@ -224,9 +224,13 @@ describe('constraintInspectionTargets', () => {
     store({ constraintKind: 'parallel', a: lineA, b: lineB });
     expect(constraintInspectionTargets(document, sketch, constraintId)).toEqual(
       [
-        { objectId: lineB, label: 'Edge (position 2)' },
-        { objectId: lineA, label: 'Edge (position 4)' }
+        { objectId: lineB, label: 'Edge 1' },
+        { objectId: lineA, label: 'Edge 2' }
       ]
+    );
+    store({ constraintKind: 'horizontal', objectId: lineA });
+    expect(constraintInspectionTargets(document, sketch, constraintId)).toEqual(
+      [{ objectId: lineA, label: 'Edge 2' }]
     );
   });
 });

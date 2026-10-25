@@ -10,6 +10,7 @@ import {
   expect,
   expectBodyCount,
   locateEdge,
+  revealModelPanel,
   setSelectionFilter,
   stubApi,
   test
@@ -381,6 +382,7 @@ test('a deferred edge menu opens Fillet after Discard without asking about the o
   await expect(menu).toBeHidden();
   await expect(move).toHaveCount(0);
   await expect(moveRows).toHaveCount(0);
+  await revealModelPanel(page, 'History');
   await expect(page.locator('.feature-row')).toHaveCount(1);
   expect(await maxCards()).toBe(1);
 });

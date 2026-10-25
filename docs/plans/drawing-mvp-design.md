@@ -359,6 +359,8 @@ hashes and witnesses, view positions and annotation formatting are kept.
 The ordinary edge resolver checks them against the result; a removed or
 ambiguous edge stays broken and requires Re-pick before export. Split
 halves, copies, booleans and missing paths are never guessed. This adds no
-persisted drawing fields or geometry approximations. Regression coverage:
+persisted drawing fields or geometry approximations. Schema v39 fences the new
+command payload from older clients that would ignore its body replacements.
+Regression coverage:
 `test/drawing-body-succession.test.ts`, `DrawingWorkspace.test.tsx`, and
 `test/e2e/design-review-fixes.spec.ts`.

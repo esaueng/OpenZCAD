@@ -168,7 +168,9 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // v37 adds authored boundary provenance and explicit legacy conversion ownership.
 // v38 adds U09 region profiles on revolve features (`profile`). An older
 // client would revolve the sketch's first object instead, so it must refuse.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 38 as const;
+// v39 adds explicit drawing body replacements to drawing.sheet.update commands.
+// Older clients must refuse instead of replaying only the new fingerprint.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 39 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

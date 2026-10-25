@@ -1,4 +1,4 @@
-import { expect, test, stubApi } from './openzcad-fixtures';
+import { expect, test, stubApi, revealModelPanel } from './openzcad-fixtures';
 
 test('queries mass only on disclosure and refreshes it after edit, undo and export', async ({
   page
@@ -64,7 +64,9 @@ test('queries mass only on disclosure and refreshes it after edit, undo and expo
     .filter({ hasText: /^Box/ })
     .first();
   const selectBox = async () => {
+    await revealModelPanel(page, 'History');
     if ((await row.getAttribute('aria-pressed')) !== 'true') await row.click();
+    await revealModelPanel(page, 'History');
     await expect(row).toHaveAttribute('aria-pressed', 'true');
     await expect(inspector).toBeVisible();
   };

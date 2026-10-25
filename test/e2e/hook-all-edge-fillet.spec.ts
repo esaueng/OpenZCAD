@@ -4,6 +4,7 @@ import {
   expectBodyCount,
   openAssistant,
   promptField,
+  revealModelPanel,
   stubApi,
   test
 } from './openzcad-fixtures';
@@ -215,6 +216,7 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
       timeout: 120_000
     })
     .toBeCloseTo(0.5, 2);
+  await revealModelPanel(page, 'History');
   await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'History 3' })).toHaveCount(0);
   await expect(page.locator('.feature-row', { hasText: 'Fillet' })).toHaveCount(
@@ -262,6 +264,7 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
     timeout: 120_000
   });
   await inspector.getByRole('button', { name: /^Apply/ }).click();
+  await revealModelPanel(page, 'History');
   await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   await expect(page.locator('.feature-row', { hasText: 'Fillet' })).toHaveCount(
     1

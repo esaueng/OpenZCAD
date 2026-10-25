@@ -1389,7 +1389,9 @@ test('keeps a two-rim fillet while editing a cylinder from 4.6 to 6.4 mm', async
   await expect(page.getByRole('contentinfo')).toContainText(
     'Fillet could not be created on 2 selected edges with radius 1.'
   );
+  await revealModelPanel(page, 'History');
   await fillet.locator('.feature-row-main').click();
+  await revealModelPanel(page, 'History');
   await cylinder.locator('.feature-row-main').click();
   await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
     '6.4'
@@ -3134,6 +3136,7 @@ test('models a parametric part and exports a true STEP file', async ({
   // Undo while the untouched input is focused must not let the stale visible
   // draft recommit over the newer canonical expression on blur. Dispatching on
   // window keeps focus in the field while exercising the app shortcut.
+  await revealModelPanel(page, 'Parameters');
   await paramInput.focus();
   await page.evaluate(() => {
     window.dispatchEvent(
@@ -3190,6 +3193,7 @@ test('renames a parameter without stranding dependent expressions', async ({
   await expect(inspector).toContainText('3600 mm³');
 
   const renamedValue = page.getByLabel('Expression for overall_width');
+  await revealModelPanel(page, 'Parameters');
   await renamedValue.fill('40');
   await renamedValue.press('Enter');
   await expect(inspector).toContainText('6400 mm³');
@@ -3313,6 +3317,8 @@ test('mesh export keeps the keyboard, its scope and its verdict together', async
   await expect(page.locator('.panel-body')).toContainText('volume', {
     ignoreCase: true
   });
+
+  await revealModelPanel(page, 'History');
 
   const fileMenu = page.locator('details.file-menu');
   const openExport = async () => {
@@ -3610,9 +3616,8 @@ test('opening a history editor preserves an unapplied Move until its choice is s
   await expect(ask).toBeVisible();
   await ask.getByRole('button', { name: 'Discard' }).click();
   await expect(move).toHaveCount(0);
-  await expect(
-    inspector.getByRole('heading', { name: 'Split' })
-  ).toBeVisible();
+  await revealModelPanel(page, 'History');
+  await expect(inspector.getByRole('heading', { name: 'Split' })).toBeVisible();
   await expect(
     inspector.getByRole('button', { name: 'Apply split body' })
   ).toBeVisible();
@@ -3628,10 +3633,9 @@ test('opening a history editor preserves an unapplied Move until its choice is s
   const applying = await openPendingEdit();
   await ask.getByRole('button', { name: 'Apply' }).click();
   await expect(move).toHaveCount(0);
+  await revealModelPanel(page, 'History');
   await expect(moveRows).toHaveCount(1);
-  await expect(
-    inspector.getByRole('heading', { name: 'Split' })
-  ).toBeVisible();
+  await expect(inspector.getByRole('heading', { name: 'Split' })).toBeVisible();
   await expect(
     inspector.getByRole('button', { name: 'Apply split body' })
   ).toBeVisible();
@@ -3704,6 +3708,7 @@ test('opening a primitive history editor settles an unapplied Move before changi
   await expect(ask).toBeVisible();
   await ask.getByRole('button', { name: 'Discard' }).click();
   await expect(move).toHaveCount(0);
+  await revealModelPanel(page, 'History');
   await expect(row).toHaveAttribute('aria-pressed', 'true');
   await expect(
     inspector.getByRole('heading', { name: 'Original box' })
@@ -3715,6 +3720,7 @@ test('opening a primitive history editor settles an unapplied Move before changi
   const applying = await openPendingEdit();
   await ask.getByRole('button', { name: 'Apply' }).click();
   await expect(move).toHaveCount(0);
+  await revealModelPanel(page, 'History');
   await expect(moveRows).toHaveCount(1);
   await expect(row).toHaveAttribute('aria-pressed', 'true');
   await expect(
@@ -4803,7 +4809,9 @@ test('a refused boolean never lands in history and says why in the form', async 
   await expect(page.locator('.in-place-command.refused')).toBeVisible({
     timeout: 30_000
   });
-  await expect(intersectBar.getByRole('button', { name: /Done/ })).toBeDisabled();
+  await expect(
+    intersectBar.getByRole('button', { name: /Done/ })
+  ).toBeDisabled();
   await expect(featureRows).toHaveCount(before);
   await expect(
     page.locator('.feature-row', { hasText: 'Intersect' })

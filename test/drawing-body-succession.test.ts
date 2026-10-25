@@ -11,6 +11,7 @@ import {
 } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
   type DrawingAnnotationId,
   type ProjectDocument
@@ -132,6 +133,7 @@ describe('drawing body succession', () => {
     const reopened = normalizeDocument(
       JSON.parse(JSON.stringify(manager.document)) as ProjectDocument
     );
+    expect(reopened.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     expect(reopened.drawings).toEqual(manager.document.drawings);
     expect((await adapter.syncDocument(reopened)).warnings).toEqual([]);
   });

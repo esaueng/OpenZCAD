@@ -323,6 +323,7 @@ test('rail and row icons take a 24 px pointer target without taking a neighbourâ
       const box = await row.boundingBox();
       expect(box).not.toBeNull();
       await row.click({ position: { x: 1, y: box!.height / 2 } });
+      await revealModelPanel(page, 'History');
       await expect(row).toHaveAttribute('aria-pressed', 'true');
       await page.keyboard.press('Escape');
     }
