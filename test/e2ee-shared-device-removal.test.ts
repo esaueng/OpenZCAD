@@ -73,6 +73,7 @@ import {
   postOwnEpochKeys,
   projectGroupAccount,
   projectKeyForEpoch,
+  removeMember,
   type ProjectGroupContext
 } from '../apps/web/src/lib/e2ee/projectGroups';
 import {
@@ -657,6 +658,201 @@ async function people() {
 // --- Removal from shared projects ---------------------------------------------
 
 describe('device removal across shared encrypted projects (slice 5-7)', () => {
+  it('carries a removal’s rotation in every Commit, a member removal included (#908 review)', async () => {
+    const { alice, bob, bobRecovery, bobPhone } = await people();
+    // Bob's project, shared with Alice; his phone holds a leaf in it.
+    const projectId = await createEncrypted(bob, 'Owned and shared');
+    await share(bob, projectId, alice, 'viewer');
+    await joinProjectGroup(alice.groups, projectId);
+    // Bob's laptop posts his keys of the epoch Alice's join made.
+    await catchUpProjectGroup(bob.groups, projectId);
+    await joinProjectGroup(bobPhone.groups, projectId);
+    await catchUpProjectGroup(bob.groups, projectId);
+    await catchUpProjectGroup(alice.groups, projectId);
+    const phoneId = deviceIdOf(bobPhone);
+    // The removal goes offline right after the device list is written,
+    // before it rotates anything.
+    bob.after = (path, init) => {
+      if (init.method === 'POST' && path.endsWith('/device-list')) {
+        bob.offline = true;
+      }
+    };
+    await removeDevice(bob.e2ee, bob.account, phoneId, bobRecovery).catch(
+      () => undefined
+    );
+    online(bob);
+    await refresh(bob);
+    const membersOf = async () =>
+      (await bob.sessions.status(refOf(bob, projectId))).members;
+    await catchUpProjectGroup(bob.groups, projectId);
+    expect((await membersOf()).map((m) => m.deviceId)).toContain(phoneId);
+
+    // The owner's next Commit is a member removal: it removes the phone's
+    // leaf too, so the Worker may count it as the rotation.
+    await removeMember(bob.groups, projectId, ALICE);
+    const after = await membersOf();
+    expect(after.map((m) => m.deviceId)).not.toContain(phoneId);
+    expect(after.some((m) => m.userId === ALICE)).toBe(false);
+  });
+
+  it('refuses a Commit built from a device list read before a removal on another device, so it cannot stand in for the rotation (#908 review)', async () => {
+    const { srv, alice, bob, bobRecovery, bobDesktop, bobPhone } =
+      await people();
+    // Alice's project, shared with Bob as an editor; his desktop and phone
+    // hold leaves in it.
+    const projectId = await createEncrypted(alice, 'Shared');
+    await share(alice, projectId, bob, 'editor');
+    await joinProjectGroup(bobDesktop.groups, projectId);
+    await joinProjectGroup(bobPhone.groups, projectId);
+    await catchUpProjectGroup(alice.groups, projectId);
+    await catchUpProjectGroup(bob.groups, projectId);
+    await catchUpProjectGroup(bobDesktop.groups, projectId);
+    const phoneId = deviceIdOf(bobPhone);
+    const cutoffEpoch = keyEpochOf(srv, projectId) + 1;
+    const staleHead = bobDesktop.account.list.head.sequence;
+    const head = () =>
+      (
+        srv.db
+          .prepare(
+            `SELECT MAX(sequence) AS head FROM e2ee_device_list_entries
+             WHERE user_id = ? AND generation = 1`
+          )
+          .get(BOB) as { head: number }
+      ).head;
+    expect(head()).toBe(staleHead);
+    const staleKey = new Uint8Array(unlockedAccount(BOB)!.accountKey);
+    const staleKeySequence = accountKeySequences(bobDesktop.account.list).at(
+      -1
+    )!;
+
+    // The laptop removes the phone and stores its cutoff, then goes
+    // offline before rotating anything. The desktop's page still holds the
+    // account view it loaded before, which lists the phone.
+    bob.after = (path, init) => {
+      if (init.method === 'PUT' && path.endsWith('/revocation-cutoffs')) {
+        bob.offline = true;
+      }
+    };
+    const { participant } = participantFor(bob);
+    await removeDevice(
+      bob.e2ee,
+      bob.account,
+      phoneId,
+      bobRecovery,
+      participant
+    ).catch(() => undefined);
+    online(bob);
+    expect(head()).toBe(staleHead + 1);
+    const fence = () =>
+      memberRotationFence(srv.env.DB as D1Database, projectId, cutoffEpoch);
+    await expect(fence()).rejects.toMatchObject({
+      code: 'E2EE_MEMBER_ROTATION_PENDING'
+    });
+
+    // The desktop's Commit from that view removes nothing: its list revokes
+    // no device. Landing in the cutoff's epoch, it would count as Bob's
+    // rotation while the phone's leaf learns the new key. The Worker
+    // refuses it: the device list it states is not the account's any more.
+    // (Its page keeps the account key it unlocked; this process shares
+    // one unlocked copy per account, which the laptop's removal replaced.)
+    // The page hears the refusal, to reload its account view.
+    const reload = vi.fn();
+    const stale: ProjectGroupContext = {
+      ...bobDesktop.groups,
+      account: {
+        ...bobDesktop.groups.account,
+        currentAccountKey: async () => ({
+          key: new Uint8Array(staleKey),
+          generation: 1,
+          keySequence: staleKeySequence
+        })
+      },
+      onDeviceListChanged: reload
+    };
+    const submit = vi.spyOn(stale.api, 'submitCommit');
+    await expect(commitProjectGroup(stale, projectId)).rejects.toMatchObject({
+      status: 409,
+      code: 'E2EE_DEVICE_LIST_CHANGED'
+    });
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(submit.mock.calls.at(-1)![1].deviceList).toEqual({
+      generation: 1,
+      headSequence: staleHead
+    });
+    expect(keyEpochOf(srv, projectId)).toBe(cutoffEpoch - 1);
+    await expect(fence()).rejects.toMatchObject({
+      code: 'E2EE_MEMBER_ROTATION_PENDING'
+    });
+    // The refused Commit was dropped, not left to be sent again: the stale
+    // view still catches up and reads.
+    expect(
+      await bobDesktop.sessions.pendingCommit(refOf(bobDesktop, projectId))
+    ).toBeNull();
+    await catchUpProjectGroup(stale, projectId);
+    // On the wire, whatever the rest of the request holds.
+    const wire = await srv.call(
+      'POST',
+      `/api/e2ee/projects/${projectId}/mls/commits`,
+      {
+        user: BOB,
+        body: {
+          epoch: groupRow(srv, projectId).epoch,
+          kind: 'commit',
+          deviceId: deviceIdOf(bobDesktop),
+          message: 'AAAA',
+          groupInfo: 'AAAA',
+          wraps: [],
+          archive: {},
+          deviceList: { generation: 1, headSequence: staleHead }
+        }
+      }
+    );
+    expect(wire.status).toBe(409);
+    expect(await wire.json()).toMatchObject({
+      code: 'E2EE_DEVICE_LIST_CHANGED'
+    });
+    // A member Commit that states no head (a page older than the field) is
+    // refused too, rather than fenced on the head the Worker reads (#913
+    // review): it could not show it carries the removal.
+    const unstated = await srv.call(
+      'POST',
+      `/api/e2ee/projects/${projectId}/mls/commits`,
+      {
+        user: BOB,
+        body: {
+          epoch: groupRow(srv, projectId).epoch,
+          kind: 'commit',
+          deviceId: deviceIdOf(bobDesktop),
+          message: 'AAAA',
+          groupInfo: 'AAAA',
+          wraps: [],
+          archive: {}
+        }
+      }
+    );
+    expect(unstated.status).toBe(409);
+    expect(await unstated.json()).toMatchObject({
+      code: 'E2EE_DEVICE_LIST_CHANGED'
+    });
+
+    // Reloaded, the desktop's next Commit removes the phone's leaf and
+    // states the current head, which the Worker accepts as the rotation.
+    await refresh(bobDesktop);
+    const accepted = vi.spyOn(bobDesktop.groups.api, 'submitCommit');
+    await commitProjectGroup(bobDesktop.groups, projectId);
+    expect(accepted.mock.calls.at(-1)![1].deviceList).toEqual({
+      generation: 1,
+      headSequence: head()
+    });
+    expect(keyEpochOf(srv, projectId)).toBe(cutoffEpoch);
+    await expect(fence()).resolves.toBeTruthy();
+    const members = (
+      await bobDesktop.sessions.status(refOf(bobDesktop, projectId))
+    ).members.map((m) => m.deviceId);
+    expect(members).not.toContain(phoneId);
+    expect(members).toContain(deviceIdOf(bobDesktop));
+  });
+
   it('lets a member remove a stolen device: co-members refuse its later Commits and versions and still read its earlier ones', async () => {
     const { srv, alice, bob, bobRecovery, bobDesktop, bobPhone, carol } =
       await people();
@@ -853,6 +1049,67 @@ describe('device removal across shared encrypted projects (slice 5-7)', () => {
     blindStatus.mockRestore();
     blindCutoffs.mockRestore();
     expect(headRow(srv, pendingId).version_hash).toBe(headBefore);
+
+    // Reaching the cutoff's epoch is not the rotation (#906 review): if an
+    // unrelated Commit by someone else takes that epoch, the phone's leaf
+    // is still in the group and learns its key, so the Worker refuses a
+    // write there until a Commit of Bob's lands.
+    await expect(
+      memberRotationFence(
+        srv.env.DB as D1Database,
+        pendingId,
+        predicted.get(pendingId)!
+      )
+    ).rejects.toMatchObject({ code: 'E2EE_MEMBER_ROTATION_PENDING' });
+
+    // Nor is an External Commit of Bob's by a device the revocation does not
+    // name as replacement: a rejoin removes its own stale leaf, not the
+    // phone's (#908 review). A member Commit of Bob's is the rotation.
+    const nextEpoch = groupRow(srv, pendingId).epoch;
+    const bobCommit = (kind: 'commit' | 'external', deviceId: string) =>
+      srv.db
+        .prepare(
+          `INSERT INTO e2ee_mls_commits
+             (project_id, epoch, kind, sender_user_id, sender_device_id,
+              message, created_at)
+           VALUES (?, ?, ?, ?, ?, 'AA', '2026-10-25')`
+        )
+        .run(pendingId, nextEpoch, kind, BOB, deviceId);
+    const clearBobCommit = () =>
+      srv.db
+        .prepare(
+          'DELETE FROM e2ee_mls_commits WHERE project_id = ? AND epoch = ?'
+        )
+        .run(pendingId, nextEpoch);
+    // Not even by the device the revocation names as replacement: the
+    // Worker cannot see which leaf an External Commit removed.
+    bobCommit('external', deviceIdOf(bob));
+    await expect(
+      memberRotationFence(
+        srv.env.DB as D1Database,
+        pendingId,
+        predicted.get(pendingId)!
+      )
+    ).rejects.toMatchObject({ code: 'E2EE_MEMBER_ROTATION_PENDING' });
+    clearBobCommit();
+    bobCommit('external', 'bob_tablet');
+    await expect(
+      memberRotationFence(
+        srv.env.DB as D1Database,
+        pendingId,
+        predicted.get(pendingId)!
+      )
+    ).rejects.toMatchObject({ code: 'E2EE_MEMBER_ROTATION_PENDING' });
+    clearBobCommit();
+    bobCommit('commit', 'bob_tablet');
+    await expect(
+      memberRotationFence(
+        srv.env.DB as D1Database,
+        pendingId,
+        predicted.get(pendingId)!
+      )
+    ).resolves.toBeTruthy();
+    clearBobCommit();
 
     // The fence the Worker puts in the write's batch holds only while the
     // cutoffs it read are the ones stored: one stored between its read and

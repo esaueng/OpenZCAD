@@ -10,6 +10,7 @@ import {
   type FeatureId,
   type ParamValue,
   type ParametricVector3,
+  type PrimitiveKind,
   type ReferenceImage,
   type ReferenceImagePlane,
   type RevolveAxis,
@@ -27,6 +28,13 @@ import {
 } from './revolve';
 import type { ModelingOperationFormState } from '../modelingOperations';
 import { holePositionAxes, holePositionFromPick } from '../holePositionAxes';
+import { PRIMITIVE_ANCHORS, PRIMITIVE_FIELDS } from '../primitivePlacement';
+import {
+  GROUND_FRAME,
+  footprintShape,
+  primitiveBuild,
+  type PlacementPick
+} from './primitives';
 import { datumAxis, datumPlane, type RefKind, type RefPick } from './datums';
 import { referenceImage, type ImageSlot } from './image';
 
@@ -63,6 +71,7 @@ export type InPlaceToolId =
   | 'linear-pattern'
   | 'circular-pattern'
   | 'grid-pattern'
+  | PrimitiveKind
   | 'datum-plane'
   | 'datum-axis'
   | 'reference-image';
@@ -87,6 +96,11 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'linear-pattern',
   'circular-pattern',
   'grid-pattern',
+  'box',
+  'cylinder',
+  'cone',
+  'sphere',
+  'torus',
   'datum-plane',
   'datum-axis',
   'reference-image'
@@ -146,6 +160,8 @@ export interface InPlaceSlots {
   /** In pick order: a boolean's first is its base. */
   bodies: BodyPick[];
   plane: PlanePick | null;
+  /** Where a primitive's footprint was drawn; absent, it stands on the ground. */
+  placement?: PlacementPick | null;
   /** A datum's sources, in pick order: planes, edge ends, an edge, a face. */
   refs: RefPick[];
   /** The picture an Image command is placing. */
@@ -176,6 +192,8 @@ export interface ValueSpec {
   max?: number;
   /** Whole numbers only (a pattern's counts): a fraction rounds, or is refused when typed. */
   integer?: boolean;
+  /** No handle: an exact number typed from the bar's Options (a position). */
+  inOptions?: boolean;
   /**
    * `min` and `max` are themselves refused (a countersink's angle, strictly
    * between 0° and 180°): a value is kept just inside them.
@@ -279,6 +297,14 @@ export type InPlaceRequest =
       count2?: ParamValue;
       axisRef?: { type: 'datum-axis'; datumFeatureId: FeatureId };
     }
+  | {
+      /** A primitive and its placement, as the card's Create built them. */
+      tool: 'primitive';
+      kind: PrimitiveKind;
+      dimensions: Record<string, ParamValue>;
+      position: ParametricVector3;
+      rotationDeg?: Vector3;
+    }
   | { tool: 'datum-plane'; definition: DatumPlaneDefinition }
   | { tool: 'datum-axis'; definition: DatumAxisDefinition }
   | {
@@ -352,6 +378,11 @@ export interface InPlaceToolSpec {
     }
   >;
   /**
+   * Placed by a press-drag on the ground or a flat face (a primitive): the
+   * footprint the drag draws.
+   */
+  footprint?: 'rectangle' | 'circle';
+  /**
    * Where its axis lines come from: the profile's sketch, datum axes, or the
    * world axes through the origin as well as datum axes.
    */
@@ -370,6 +401,26 @@ export interface InPlaceToolSpec {
     ctx: InPlaceContext,
     numbers: Record<string, number>
   ): Record<string, number>;
+  /**
+   * Other values a value's change carries with it (a box hung under a face
+   * keeps its top there, so its corner follows its height), from the
+   * values as they were. Values held as typed expressions are left alone.
+   */
+  carries?(
+    valueId: string,
+    value: number,
+    values: Readonly<Record<string, number>>,
+    slots: InPlaceSlots
+  ): Record<string, number> | null;
+  /**
+   * Why `value` cannot stand beside the other values, when each alone is in
+   * range (a cone's second zero radius), else null.
+   */
+  refuseValue?(
+    valueId: string,
+    value: number,
+    values: Readonly<Record<string, number>>
+  ): string | null;
   hint(
     slots: InPlaceSlots,
     options?: Record<string, string>,
@@ -1959,6 +2010,210 @@ const gridPattern: InPlaceToolSpec = {
   }
 };
 
+const PRIMITIVE_TITLES: Record<PrimitiveKind, string> = {
+  box: 'Box',
+  cylinder: 'Cylinder',
+  cone: 'Cone',
+  sphere: 'Sphere',
+  torus: 'Torus'
+};
+
+/**
+ * Each primitive's sizes, in the plane it stands on: a box's width and depth
+ * run along the footprint and its height off the plane, so on the ground
+ * they are the card's X, Y and Z. Starting values are the card's.
+ */
+const PRIMITIVE_SIZES: Record<
+  PrimitiveKind,
+  readonly { id: string; label: string; key: string; zero?: boolean }[]
+> = {
+  box: [
+    { id: 'width', label: 'Width', key: 'width' },
+    { id: 'depth', label: 'Depth', key: 'height' },
+    { id: 'height', label: 'Height', key: 'depth' }
+  ],
+  cylinder: [
+    { id: 'radius', label: 'Radius', key: 'radius' },
+    { id: 'height', label: 'Height', key: 'height' }
+  ],
+  cone: [
+    // Either end may come to a point, as the card allowed (never both).
+    { id: 'bottomRadius', label: 'Bottom radius', key: 'bottomRadius', zero: true },
+    { id: 'topRadius', label: 'Top radius', key: 'topRadius', zero: true },
+    { id: 'height', label: 'Height', key: 'height' }
+  ],
+  sphere: [{ id: 'radius', label: 'Radius', key: 'radius' }],
+  torus: [
+    { id: 'majorRadius', label: 'Ring radius', key: 'majorRadius' },
+    { id: 'minorRadius', label: 'Tube radius', key: 'minorRadius' }
+  ]
+};
+
+function primitiveSpec(kind: PrimitiveKind): InPlaceToolSpec {
+  const anchor = PRIMITIVE_ANCHORS[kind].label;
+  const initial = (key: string) =>
+    Number(PRIMITIVE_FIELDS[kind].find((field) => field.key === key)?.initial);
+  return {
+    id: kind,
+    title: PRIMITIVE_TITLES[kind],
+    profileMode: 'none',
+    footprint: footprintShape(kind),
+    wantsAxis: false,
+    wantsPath: false,
+    values: [
+      ...PRIMITIVE_SIZES[kind].map(
+        (size): ValueSpec => ({
+          id: size.id,
+          label: size.label,
+          unit: 'length',
+          initial: initial(size.key),
+          min: size.zero ? 0 : 0.001
+        })
+      ),
+      // The point the kernel builds from (a box's corner, a cylinder's base
+      // centre), where the press landed; typed exactly from Options.
+      ...(['x', 'y', 'z'] as const).map(
+        (axis): ValueSpec => ({
+          id: axis,
+          label: `${anchor} ${axis.toUpperCase()}`,
+          unit: 'length',
+          initial: 0,
+          inOptions: true
+        })
+      )
+    ],
+    hint(slots) {
+      return slots.placement
+        ? `Drag the arrows, or tap a size to type · ${FINISH}`
+        : `Drag a footprint on the ground or a face · ${FINISH}`;
+    },
+    // It stands on the ground at the origin until a drag places it, so
+    // Enter alone makes the card's default primitive.
+    ready: () => true,
+    request(slots, values) {
+      const build = primitiveBuild(kind, slots.placement, values, {
+        x: values.x ?? 0,
+        y: values.y ?? 0,
+        z: values.z ?? 0
+      });
+      return {
+        tool: 'primitive',
+        kind,
+        dimensions: build.dimensions,
+        position: build.position,
+        ...(build.rotationDeg ? { rotationDeg: build.rotationDeg } : {})
+      };
+    },
+    refuseValue(valueId, value, values) {
+      // One end of a cone may come to a point, never both: the edit card's
+      // own rule.
+      if (kind !== 'cone' || value !== 0) return null;
+      const other = valueId === 'bottomRadius' ? 'topRadius' : 'bottomRadius';
+      if (valueId !== 'bottomRadius' && valueId !== 'topRadius') return null;
+      return values[other] === 0
+        ? 'At least one radius must be greater than zero.'
+        : null;
+    },
+    carries(valueId, value, values, slots) {
+      // Under a face the box hangs from it: a new height moves its lowest
+      // corner, so its top stays on the face.
+      const hangs = slots.placement?.hangs;
+      if (kind !== 'box' || !hangs || valueId !== 'height') return null;
+      const was = values.height ?? value;
+      return { [hangs]: (values[hangs] ?? 0) + was - value };
+    },
+    handles(slots, values) {
+      return primitiveHandles(kind, slots.placement ?? null, values);
+    }
+  };
+}
+
+/**
+ * A primitive's arrows: each from the middle of the face or edge it pushes,
+ * so the tip rides the side it sizes. A rig is rebuilt only when its key
+ * changes, and its key is the line it stands on. A box hung under a face
+ * measures from the face, its height arrow pointing away from it.
+ */
+function primitiveHandles(
+  kind: PrimitiveKind,
+  placement: PlacementPick | null,
+  values: Record<string, number>
+): HandleSpec[] {
+  const { u, v, normal } = placement?.frame ?? GROUND_FRAME;
+  const along = scaled(u, placement?.signU ?? 1);
+  const across = scaled(v, placement?.signV ?? 1);
+  const corner = { x: values.x ?? 0, y: values.y ?? 0, z: values.z ?? 0 };
+  const hangs = kind === 'box' ? placement?.hangs : undefined;
+  // The footprint's plane: the face a box hangs from is its top.
+  const at = hangs
+    ? { ...corner, [hangs]: corner[hangs] + (values.height ?? 0) }
+    : corner;
+  const offset = (...steps: [Vector3, number][]): Vector3 =>
+    steps.reduce(
+      (point, [direction, distance]) => ({
+        x: point.x + direction.x * distance,
+        y: point.y + direction.y * distance,
+        z: point.z + direction.z * distance
+      }),
+      at
+    );
+  const linear = (
+    valueId: string,
+    origin: Vector3,
+    direction: Vector3
+  ): HandleSpec => ({
+    valueId,
+    kind: 'linear',
+    key: keyOf(
+      kind,
+      valueId,
+      origin.x,
+      origin.y,
+      origin.z,
+      direction.x,
+      direction.y,
+      direction.z
+    ),
+    params: { origin, direction }
+  });
+  switch (kind) {
+    case 'box': {
+      const width = values.width ?? 0;
+      const depth = values.depth ?? 0;
+      return [
+        linear('width', offset([across, depth / 2]), along),
+        linear('depth', offset([along, width / 2]), across),
+        linear(
+          'height',
+          offset([along, width / 2], [across, depth / 2]),
+          hangs
+            ? { x: -normal.x || 0, y: -normal.y || 0, z: -normal.z || 0 }
+            : normal
+        )
+      ];
+    }
+    case 'cylinder':
+      return [linear('radius', at, u), linear('height', at, normal)];
+    case 'cone': {
+      const height = values.height ?? 0;
+      return [
+        linear('bottomRadius', at, u),
+        linear('height', at, normal),
+        linear('topRadius', offset([normal, height]), u)
+      ];
+    }
+    case 'sphere':
+      return [linear('radius', at, u)];
+    case 'torus': {
+      const ring = values.majorRadius ?? 0;
+      return [
+        linear('majorRadius', at, u),
+        linear('minorRadius', offset([u, ring]), normal)
+      ];
+    }
+  }
+}
+
 export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   revolve,
   loft,
@@ -1979,6 +2234,11 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   'linear-pattern': linearPattern,
   'circular-pattern': circularPattern,
   'grid-pattern': gridPattern,
+  box: primitiveSpec('box'),
+  cylinder: primitiveSpec('cylinder'),
+  cone: primitiveSpec('cone'),
+  sphere: primitiveSpec('sphere'),
+  torus: primitiveSpec('torus'),
   'datum-plane': datumPlane,
   'datum-axis': datumAxis,
   'reference-image': referenceImage

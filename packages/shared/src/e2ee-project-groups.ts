@@ -71,6 +71,13 @@ export interface E2eeProjectGroupRecord {
    * without the migration.
    */
   pendingProposals?: number;
+  /**
+   * Set for the reader when a device removal of its own account named this
+   * project and the Worker has not yet seen that account's member Commit
+   * reaching the cutoff (slice 5-7). Its browsers then commit one; until
+   * they do, every writer is fenced off.
+   */
+  rotationDue?: true;
 }
 
 export interface E2eeProjectGroupResponse {
@@ -137,6 +144,24 @@ export interface E2eeMlsCommitRequest {
    */
   proposals?: string[];
   rejectedProposals?: string[];
+  /**
+   * The sender account's device-list head the browser built this member
+   * Commit from. Every member Commit carries the rotation of the devices
+   * that list revokes (`withDueRotation`), and the Worker counts it as a
+   * removal's rotation (slice 5-7), so it lands only while this is still
+   * the account's head (409 `E2EE_DEVICE_LIST_CHANGED` otherwise): a
+   * Commit built before a removal on another device would leave the
+   * removed leaf in the group and still release the rotation fence (#908
+   * review). Absent from browsers older than it, whose Commits are fenced
+   * on the head the Worker reads, as before.
+   */
+  deviceList?: E2eeDeviceListHead;
+}
+
+/** An account's device-list head: identity generation and entry sequence. */
+export interface E2eeDeviceListHead {
+  generation: number;
+  headSequence: number;
 }
 
 /** What a stored proposal asks for (slice 5-5): so far only leaving. */

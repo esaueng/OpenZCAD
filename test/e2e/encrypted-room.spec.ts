@@ -5,7 +5,12 @@ import {
   type FakeWebSocket
 } from '../collaboration-room-harness';
 import { d1Database } from '../d1-sqlite';
-import { expect, stubApi, test } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  expect,
+  stubApi,
+  test
+} from './openzcad-fixtures';
 import {
   createE2eeServer,
   E2E_USER_ID,
@@ -104,11 +109,7 @@ async function browserOf(
 }
 
 async function addBox(page: Page) {
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
 }
 
 /**

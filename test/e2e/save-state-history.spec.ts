@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import {
+  createPrimitiveInPlace,
   expectBodyCount,
   stubAnonymousApi,
   stubApi
@@ -37,14 +38,6 @@ function revisionRow(page: Page, reason: string) {
   return page.locator('.revision-row', { hasText: reason });
 }
 
-async function addPrimitive(page: Page, primitive: RegExp) {
-  await page.getByRole('button', { name: primitive }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
-}
-
 /**
  * A project holding a box at an explicit save point, then a cylinder added
  * after it. Restoring the save has something to remove and something to keep,
@@ -56,7 +49,7 @@ async function projectSavedWithOneBodyThenTwo(page: Page, name: string) {
   await page.getByLabel('Project name').fill(name);
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await addPrimitive(page, /^Box \(B\)/);
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
 
   await page.keyboard.press('ControlOrMeta+s');
@@ -69,7 +62,7 @@ async function projectSavedWithOneBodyThenTwo(page: Page, name: string) {
   await expect(page.locator('.feature-flag.error')).toHaveCount(0);
   await expect(page.getByText('No bodies yet')).toHaveCount(0);
 
-  await addPrimitive(page, /^Cylinder/);
+  await createPrimitiveInPlace(page, 'cylinder');
   await expectBodyCount(page, 2);
 }
 
@@ -144,7 +137,7 @@ test('offers no action for a save state whose model is not stored', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Pruned History Part');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await addPrimitive(page, /^Box \(B\)/);
+  await createPrimitiveInPlace(page, 'box');
   await page.keyboard.press('ControlOrMeta+s');
   await expect(revisionRow(page, 'Manual save')).toBeVisible();
   await expectSaveSettled(page);
@@ -173,7 +166,7 @@ test('offers no action for a save state whose model is not stored', async ({
   // Move the open document past the pruned checkpoint before reopening it.
   // Startup autosave is allowed to store the current save point again, so a
   // current checkpoint would make this fixture race its own retention setup.
-  await addPrimitive(page, /^Cylinder/);
+  await createPrimitiveInPlace(page, 'cylinder');
   await expectBodyCount(page, 2);
   await expectSaveSettled(page);
   await page.reload();
@@ -191,7 +184,7 @@ test('offers no restore for the save the project is already sitting on', async (
   await page.goto('/');
   await page.getByLabel('Project name').fill('Current Save Part');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await addPrimitive(page, /^Box \(B\)/);
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await page.keyboard.press('ControlOrMeta+s');
 
@@ -211,7 +204,7 @@ test('offers no restore for the save the project is already sitting on', async (
 
   // One edit later the project has moved off that save, and restoring it means
   // something again.
-  await addPrimitive(page, /^Cylinder/);
+  await createPrimitiveInPlace(page, 'cylinder');
   await expectBodyCount(page, 2);
   await savedRow.hover();
   await expect(
@@ -235,7 +228,7 @@ test('names a save point, and the name is what history shows', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Named Save Part');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await addPrimitive(page, /^Box \(B\)/);
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
 
   // Ctrl+S is a reflex and stays one; naming is its own gesture.
@@ -257,7 +250,7 @@ test('a named save can be restored by its name', async ({ page }) => {
   await page.goto('/');
   await page.getByLabel('Project name').fill('Named Restore Part');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await addPrimitive(page, /^Box \(B\)/);
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
 
   await page.keyboard.press('ControlOrMeta+Shift+s');
@@ -266,7 +259,7 @@ test('a named save can be restored by its name', async ({ page }) => {
   await dialog.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(revisionRow(page, 'Just the box')).toBeVisible();
 
-  await addPrimitive(page, /^Cylinder/);
+  await createPrimitiveInPlace(page, 'cylinder');
   await expectBodyCount(page, 2);
 
   const named = revisionRow(page, 'Just the box');
@@ -283,7 +276,7 @@ test('refuses an empty name rather than saving an unnamed one', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Empty Name Part');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await addPrimitive(page, /^Box \(B\)/);
+  await createPrimitiveInPlace(page, 'box');
 
   await page.keyboard.press('ControlOrMeta+Shift+s');
   const dialog = page.getByRole('dialog', { name: 'Name this save' });
@@ -307,7 +300,7 @@ test('marks a named save point with no account behind it', async ({ page }) => {
   await page.goto('/');
   await page.getByLabel('Project name').fill('Offline Named Part');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await addPrimitive(page, /^Box \(B\)/);
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
 
   await page.keyboard.press('ControlOrMeta+Shift+s');
@@ -319,7 +312,7 @@ test('marks a named save point with no account behind it', async ({ page }) => {
   await expectSaveSettled(page);
 
   // And it is a real save point: it survives a reload and can be restored.
-  await addPrimitive(page, /^Cylinder/);
+  await createPrimitiveInPlace(page, 'cylinder');
   await expectBodyCount(page, 2);
   const named = revisionRow(page, 'Local milestone');
   await named.hover();
@@ -341,7 +334,7 @@ test('the top-bar status chips only report, and saving lives on File', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Honest Chips Part');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await addPrimitive(page, /^Box \(B\)/);
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await expectSaveSettled(page);
   await expect(revisions(page)).toHaveCount(1);

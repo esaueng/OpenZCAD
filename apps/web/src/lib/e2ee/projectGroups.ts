@@ -377,6 +377,16 @@ export interface ProjectGroupContext {
    * throw is ignored.
    */
   readonly onMemberDevicesRemoved?: (removal: MemberDevicesRemoved) => void;
+  /**
+   * Told when the Worker refused a member Commit because this account's
+   * device list moved past `account.list` (409 `E2EE_DEVICE_LIST_CHANGED`:
+   * a removal or approval on another device). Every Commit built from this
+   * view is refused the same way, and one built from a view that misses a
+   * removal would leave the removed leaf in the group (#908 review), so
+   * the page reloads its account view before committing again. Best
+   * effort; a throw is ignored.
+   */
+  readonly onDeviceListChanged?: () => void;
 }
 
 /** Other members' devices whose leaves one Commit removed (slice 5-7). */
@@ -1652,7 +1662,19 @@ async function submitPending(
         : {}),
       ...(pending.departures?.rejected.length
         ? { rejectedProposals: [...pending.departures.rejected] }
-        : {})
+        : {}),
+      // A member Commit names the device list it was built from: the
+      // Worker counts it as a removal's rotation, so it must not land
+      // after a removal this list misses (#908 review). A rejoin never
+      // counts, and states none.
+      ...(next.external
+        ? {}
+        : {
+            deviceList: {
+              generation: currentGeneration(ctx),
+              headSequence: ctx.account.list.head.sequence
+            }
+          })
     });
     if (!sameBytes(bytes(response.commit.message), pending.commit)) {
       throw new ProjectGroupError(
@@ -1674,6 +1696,18 @@ async function submitPending(
         accepted: false,
         winner: (winner as E2eeMlsCommitRecord | undefined) ?? null
       };
+    }
+    if (!next.external && isApiError(error, 'E2EE_DEVICE_LIST_CHANGED')) {
+      // Built from a device list the account moved past, it did not land
+      // and must not be sent again: a removal it misses stays undone. The
+      // page reloads its account view, and the Commit built from that
+      // carries any rotation the removal made due.
+      await ctx.sessions.discardCommit(ref).catch(() => undefined);
+      try {
+        ctx.onDeviceListChanged?.();
+      } catch {
+        // The refusal is still thrown.
+      }
     }
     throw error;
   }
@@ -1799,6 +1833,13 @@ export async function joinProjectGroup(
     );
     if (submitted.accepted) {
       await ctx.sessions.confirmRejoin(ref, directory);
+      // The Worker counts only a member Commit as this account's rotation
+      // (it cannot tell what an External Commit removed, #908 review). When
+      // this rejoin itself removed a revoked leaf (the last-leaf case),
+      // nothing else may be due, so a member Commit follows to say so.
+      if (result.change.removed.some((leaf) => revoked.has(leaf.deviceId))) {
+        return await commitProjectGroup(ctx, projectId);
+      }
       return await ensureProjectRotated(ctx, projectId);
     }
     // Another Commit took the epoch: start over from the newer GroupInfo.
@@ -2015,6 +2056,10 @@ async function rotationRequest(
     .map((m) => m.index);
   if (remove.length) return { remove };
   if (status.epoch === null) return null;
+  // The Worker still waits for this account's member Commit after a
+  // removal (slice 5-7): a rejoin's External Commit does not count, nor
+  // does a follow-up a crash lost (#908 review). An empty Commit is one.
+  if (group.rotationDue) return {};
   return (await wrapIsStale(ctx, projectId, group.keyEpochBase + status.epoch))
     ? {}
     : null;
@@ -2337,6 +2382,33 @@ interface BuiltCommit {
 }
 
 /**
+ * Every Commit this account sends carries the rotation a removal left due:
+ * the Remove of its own revoked leaves and a new dedupe secret. The Worker
+ * counts this account's next member Commit as that rotation (its fence on
+ * writes, slice 5-7), so no Commit of ours, a member removal or a role
+ * change included, may leave a revoked leaf behind (#908 review).
+ */
+async function withDueRotation(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  status: SessionStatus,
+  group: E2eeProjectGroupRecord,
+  built: BuiltCommit
+): Promise<BuiltCommit> {
+  if (built.rotation) return built;
+  const rotation = await rotationRequest(ctx, projectId, status, group);
+  if (!rotation) return built;
+  const remove = [
+    ...new Set([...(built.request.remove ?? []), ...(rotation.remove ?? [])])
+  ];
+  return {
+    ...built,
+    request: { ...built.request, ...(remove.length ? { remove } : {}) },
+    rotation: true
+  };
+}
+
+/**
  * Catch up, build the Commit for the current epoch, submit it with its new
  * epoch's material, and rebase onto a winner up to `attempts` times. A null
  * build means nothing needs committing, unless proposals are pending in the
@@ -2368,10 +2440,11 @@ async function commitLoop(
       status,
       members
     );
-    const built =
+    const asked =
       (await build(status, group, departures)) ??
       (departures.settles ? { request: {}, rotation: false } : null);
-    if (!built) return caught;
+    if (!asked) return caught;
+    const built = await withDueRotation(ctx, projectId, status, group, asked);
     const directory = withInvitee(members, built.invitee);
     // The Worker mirrors an owner's role changes and checks the new epoch's
     // roles against them (slice 5-4); an Add states its invitee instead.
@@ -3262,9 +3335,10 @@ export type Recovery = 'none' | 'confirmed' | 'discarded' | 'resent';
  * very Commit; otherwise discard it (the next catch-up processes the
  * winner). A member's Commit nobody ruled on is sent again, unless a
  * removal has made a rotation due since it was built: then it is dropped,
- * so the next Commit carries the rotation. A rejoin nobody ruled on is
- * discarded, since its epoch record lived only in memory, and the next
- * join builds a fresh one.
+ * so the next Commit carries the rotation, and so it is when the Worker
+ * refuses it for a device list the account has moved past. A rejoin nobody
+ * ruled on is discarded, since its epoch record lived only in memory, and
+ * the next join builds a fresh one.
  */
 export async function recoverProjectGroup(
   ctx: ProjectGroupContext,
@@ -3322,14 +3396,23 @@ export async function recoverProjectGroup(
     await ctx.sessions.discardCommit(ref);
     return 'discarded';
   }
-  const submitted = await submitPending(
-    ctx,
-    device,
-    projectId,
-    group.keyEpochBase,
-    directory,
-    { commit: pending.commit }
-  );
+  let submitted: Submitted;
+  try {
+    submitted = await submitPending(
+      ctx,
+      device,
+      projectId,
+      group.keyEpochBase,
+      directory,
+      { commit: pending.commit }
+    );
+  } catch (error) {
+    // Built from a device list the account has since moved past (#908
+    // review): `submitPending` dropped it, so catching up goes on and the
+    // next Commit is built afresh.
+    if (isApiError(error, 'E2EE_DEVICE_LIST_CHANGED')) return 'discarded';
+    throw error;
+  }
   if (submitted.accepted) {
     await ctx.sessions.confirmCommit(ref, directory);
     return 'resent';

@@ -1,6 +1,7 @@
 import type { Locator, Page } from '@playwright/test';
 import { PROJECT_DOCUMENT_SCHEMA_VERSION } from '@openzcad/shared';
 import {
+  createPrimitiveInPlace,
   expect,
   expectBodyCount,
   revealModelPanel,
@@ -131,11 +132,9 @@ test('a linked projection follows an upstream resize and shows its deleted sourc
   const status = page.getByRole('contentinfo');
 
   // A corner-origin box: x 0..20, y 0..10, z 0..5.
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Width (X)').fill('20');
-  await inspector.getByLabel('Depth (Y)').fill('10');
-  await inspector.getByLabel('Height (Z)').fill('5');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '20', depth: '10', height: '5' }
+  });
   await expectBodyCount(page, 1);
 
   // A sketch on Top (XY); U arms Project, linked by default, and a click on

@@ -1,7 +1,12 @@
 import type { BrowserContext, Page } from '@playwright/test';
 import { withEncryptedProjectInfo } from '../../apps/web/worker/e2eeProjectDocuments';
 import { d1Database } from '../d1-sqlite';
-import { expect, stubApi, test } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  expect,
+  stubApi,
+  test
+} from './openzcad-fixtures';
 import {
   addE2eeUser,
   createE2eeServer,
@@ -201,11 +206,7 @@ test('invites to an encrypted project, verifies both ways and opens it as the in
   await closeSettings(alice);
   await alice.getByLabel('Project name').fill('Secret bracket');
   await alice.getByRole('button', { name: 'Create project' }).click();
-  await alice.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await alice
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(alice, 'box');
   await expect(
     alice.getByRole('status', { name: 'Saved', exact: true })
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });

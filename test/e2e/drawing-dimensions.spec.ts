@@ -1,5 +1,10 @@
 import type { Download, Locator, Page } from '@playwright/test';
-import { test, expect, stubApi } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  test,
+  expect,
+  stubApi
+} from './openzcad-fixtures';
 
 /**
  * D02: dimensions and notes on a drawing view. A dimension is picked from
@@ -51,11 +56,9 @@ test('dimensions a drawing view from the model and follows its Update', async ({
   await page.getByRole('button', { name: 'Create project' }).click();
 
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Width (X)').fill('30');
-  await inspector.getByLabel('Depth (Y)').fill('20');
-  await inspector.getByLabel('Height (Z)').fill('10');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '30', depth: '20', height: '10' }
+  });
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();

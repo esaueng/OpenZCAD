@@ -1,4 +1,9 @@
-import { test, expect, stubApi } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  test,
+  expect,
+  stubApi
+} from './openzcad-fixtures';
 
 /**
  * F05 Stage 1a: a parameter's type picker. A unitless parameter used as a
@@ -24,10 +29,7 @@ test('types a parameter as a length, mixes it with mm, and refuses a breaking re
   await expect(wType).not.toHaveClass(/suggested/);
 
   // Used as a box width, w is offered Length but stays unitless.
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByLabel('Width (X)').fill('w');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', { sizes: { width: 'w' } });
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();

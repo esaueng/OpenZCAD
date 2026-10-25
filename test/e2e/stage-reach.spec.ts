@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { stubApi } from './openzcad-fixtures';
+import { createPrimitiveInPlace, stubApi } from './openzcad-fixtures';
 
 /**
  * Production QA, 1 October: in short and narrow windows the rails, their
@@ -40,11 +40,7 @@ async function createBoxProject(page: Page, name: string) {
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 }
 

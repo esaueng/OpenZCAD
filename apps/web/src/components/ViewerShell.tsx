@@ -8,7 +8,6 @@ import type {
 import type { HoleGhost } from '../lib/holeGhost';
 import type { CompositeShape } from '../lib/sketch/composites';
 import type { ViewportImageSource } from './viewer/viewportImage';
-import type { PrimitiveGhost } from '../lib/primitiveGhost';
 import {
   datumOffsetHandle,
   datumPlaneDisplays,
@@ -320,8 +319,8 @@ interface ViewerShellProps {
   commandSetterRef?: ModelViewerProps['commandSetterRef'];
   /** The open Hole card's bore, drawn before it exists. */
   holeGhost?: HoleGhost | null;
-  /** The open primitive card's solid, drawn before Create. */
-  primitiveGhost?: PrimitiveGhost | null;
+  footprintPicker?: ModelViewerProps['footprintPicker'];
+  onFootprint?: ModelViewerProps['onFootprint'];
   /** The document whose resolved R01 datum planes the viewport draws. */
   datumDocument?: ProjectDocument | null;
   /** Datum planes hidden by their eye toggle. */
@@ -513,7 +512,8 @@ export function ViewerShell({
   onOpenCommandKeypad,
   commandSetterRef,
   holeGhost = null,
-  primitiveGhost = null,
+  footprintPicker = null,
+  onFootprint,
   datumDocument = null,
   hiddenDatumIds,
   referenceImages,
@@ -827,7 +827,8 @@ export function ViewerShell({
         onOpenCommandKeypad={onOpenCommandKeypad}
         commandSetterRef={commandSetterRef}
         holeGhost={holeGhost}
-        primitiveGhost={primitiveGhost}
+        footprintPicker={footprintPicker}
+        onFootprint={onFootprint}
         datumPlanes={
           datumDocument
             ? datumPlaneDisplays(
