@@ -8886,11 +8886,15 @@ export function App() {
    */
   function inPlaceEditTarget(edit: InPlaceEditSeed | null): BodyId | null {
     if (!edit) return null;
-    // A body picked in this edit (a Hole moved onto another face, a Scale
-    // retargeted) is the target until Done; the feature still stores the
-    // old one meanwhile. Untouched, the slots follow the live feature.
+    // A body picked in this edit (a blend's edges, a Hole moved onto another
+    // face, a Scale retargeted) is the target until Done; the feature still
+    // stores the old one meanwhile. Untouched, the slots follow the live
+    // feature.
     const slots = inPlaceRef.current.slots;
-    const picked = slots.faces[0]?.bodyId ?? slots.bodies[0]?.bodyId;
+    const picked =
+      slots.edges[0]?.bodyId ??
+      slots.faces[0]?.bodyId ??
+      slots.bodies[0]?.bodyId;
     if (picked) return picked;
     const live = managerRef.current
       ? findFeature(managerRef.current.document, edit.featureId)
