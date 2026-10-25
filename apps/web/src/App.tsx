@@ -1503,6 +1503,7 @@ import {
 import {
   countLabel,
   deleteFeatureToastMessage,
+  statusRepeatingToastId,
   UNDO_FLOOR_TRIMMED_NOTICE,
   UNDO_FLOOR_TRIMMED_REASON,
   type ToastAction,
@@ -2688,20 +2689,28 @@ export function App() {
   const [newBuildAvailable, setNewBuildAvailable] = useState(false);
   const [downloadInterrupted, setDownloadInterrupted] = useState(false);
   const toastIdRef = useRef(0);
-  const announce = useCallback((message: string, action?: ToastAction) => {
-    toastIdRef.current += 1;
-    const id = toastIdRef.current;
-    // An action-bearing toast (the delete Undo above all) is never silently
-    // replaced by a text-only notice: the action moves into the slot the new
-    // message would have taken, so Undo stays one click away no matter how
-    // fast notices arrive.
-    setToast((current) => {
-      if (current?.action && !action) {
-        return { id, message, action: current.action };
-      }
-      return { id, message, action };
-    });
-  }, []);
+  const announce = useCallback(
+    (
+      message: string,
+      action?: ToastAction,
+      options?: { repeatsStatus?: boolean }
+    ) => {
+      toastIdRef.current += 1;
+      const id = toastIdRef.current;
+      const repeats = options?.repeatsStatus ? { repeatsStatus: true } : {};
+      // An action-bearing toast (the delete Undo above all) is never silently
+      // replaced by a text-only notice: the action moves into the slot the new
+      // message would have taken, so Undo stays one click away no matter how
+      // fast notices arrive.
+      setToast((current) => {
+        if (current?.action && !action) {
+          return { id, message, action: current.action, ...repeats };
+        }
+        return { id, message, action, ...repeats };
+      });
+    },
+    []
+  );
   const dismissToast = useCallback((id: number) => {
     setToast((current) => (current?.id === id ? null : current));
   }, []);
@@ -20777,10 +20786,11 @@ export function App() {
         if (managerRef.current !== owner) return;
         const copy = findFeature(owner.document, copyId);
         if (copy) handleSelectFeatureFromTree(copy.id, false);
-        announce(`Duplicated ${feature.name}.`, {
-          label: 'Undo',
-          run: handleUndo
-        });
+        announce(
+          `Duplicated ${feature.name}.`,
+          { label: 'Undo', run: handleUndo },
+          { repeatsStatus: true }
+        );
       }
     });
   }
@@ -20822,10 +20832,11 @@ export function App() {
       // running), so it has to be closed with the feature it was editing.
       if (modelingEditFeature?.featureId === featureId) closeFeaturePanel();
       clearSelection();
-      announce(deleteFeatureToastMessage(name, dependentCount), {
-        label: 'Undo',
-        run: handleUndo
-      });
+      announce(
+        deleteFeatureToastMessage(name, dependentCount),
+        { label: 'Undo', run: handleUndo },
+        { repeatsStatus: true }
+      );
     }
   }
 
@@ -21123,7 +21134,12 @@ export function App() {
             .map(({ featureId, name }) => ({ featureId, name }))
         });
       },
-      onSuccess: () => announce(message, { label: 'Undo', run: handleUndo })
+      onSuccess: () =>
+        announce(
+          message,
+          { label: 'Undo', run: handleUndo },
+          { repeatsStatus: true }
+        )
     });
   }
 
@@ -21144,7 +21160,9 @@ export function App() {
       executeTransaction('Resume full history', commands)
     ) {
       announce(
-        'Full history resumed. Manually suppressed features remain suppressed.'
+        'Full history resumed. Manually suppressed features remain suppressed.',
+        undefined,
+        { repeatsStatus: true }
       );
     }
   }
@@ -21183,7 +21201,11 @@ export function App() {
       return;
     }
     if (executeTransaction(`Roll back after ${name}`, commands)) {
-      announce(`History rolled back after ${name}. Later features are paused.`);
+      announce(
+        `History rolled back after ${name}. Later features are paused.`,
+        undefined,
+        { repeatsStatus: true }
+      );
     }
   }
 
@@ -26351,7 +26373,7 @@ export function App() {
             warningCount={diagnostics.length}
             documentVersion={doc.version}
             saveState={presentedSaveState}
-            actionToastId={toast?.id ?? null}
+            actionToastId={statusRepeatingToastId(toast)}
             searchBar={
               <CommandBar
                 commands={paletteCommands}

@@ -18,6 +18,20 @@ export interface ToastModel {
   id: number;
   message: string;
   action?: ToastAction;
+  /**
+   * The toast restates the outcome the status line already carries (a
+   * delete, a duplicate): that status steps aside for it for good. Any other
+   * notice raised meanwhile (a reload offer, a failure) leaves the status
+   * alone.
+   */
+  repeatsStatus?: boolean;
+}
+
+/** The toast the status readout should treat as repeating its message. */
+export function statusRepeatingToastId(
+  toast: ToastModel | null
+): number | null {
+  return toast?.repeatsStatus ? toast.id : null;
 }
 
 export function countLabel(

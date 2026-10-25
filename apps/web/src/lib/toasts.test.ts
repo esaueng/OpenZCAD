@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   countLabel,
   deleteFeatureToastMessage,
+  statusRepeatingToastId,
   suppressFeatureToastMessage
 } from './toasts';
 
@@ -43,5 +44,30 @@ describe('countLabel', () => {
     expect(countLabel(0, 'body', 'bodies')).toBe('0 bodies');
     expect(countLabel(1, 'body', 'bodies')).toBe('1 body');
     expect(countLabel(2, 'body', 'bodies')).toBe('2 bodies');
+  });
+});
+
+describe('statusRepeatingToastId', () => {
+  it('lets an unrelated toast leave the live status alone', () => {
+    // A reload offer, a failure, any notice raised while a settled status is
+    // live: it does not repeat that status, so it must not retire it.
+    expect(
+      statusRepeatingToastId({
+        id: 7,
+        message: 'A newer OpenZCAD build is available.'
+      })
+    ).toBeNull();
+    expect(statusRepeatingToastId(null)).toBeNull();
+  });
+
+  it('names a toast that restates the status', () => {
+    expect(
+      statusRepeatingToastId({
+        id: 8,
+        message: 'Deleted Boss',
+        action: { label: 'Undo', run: () => undefined },
+        repeatsStatus: true
+      })
+    ).toBe(8);
   });
 });
