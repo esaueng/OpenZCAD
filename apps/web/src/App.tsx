@@ -721,6 +721,7 @@ import {
   selectionCalloutVerbs,
   type SelectionCalloutContent,
   type SelectionCalloutKind,
+  type SelectionCalloutVerbInput,
   type SelectionCalloutOperation,
   type SelectionCalloutVerbId
 } from './lib/selectionCallout';
@@ -7510,7 +7511,11 @@ export function App() {
         : lost('face', 'a plane');
     }
     if (calloutKind === 'edges') {
-      const picked = selectedEdges[0] ?? renderedSelectedTopology;
+      // The edge the Axis card takes: the last one picked.
+      const picked =
+        renderedSelectedTopology?.kind === 'edge'
+          ? renderedSelectedTopology
+          : selectedEdges.at(-1);
       const edge = picked
         ? representations[picked.bodyId]?.topology?.edges.find(
             (candidate) => candidate.hash === picked.hash
@@ -7525,6 +7530,20 @@ export function App() {
     }
     return null;
   })();
+  // The picked face's kind, for the verbs when the machine does not hold it.
+  const calloutFaceSurface = ((): SelectionCalloutVerbInput['faceSurface'] => {
+    if (calloutKind !== 'face' || !renderedSelectedTopology) return undefined;
+    const surface = representations[renderedSelectedTopology.bodyId]?.topology
+      ?.faces.find(
+        (candidate) => candidate.hash === renderedSelectedTopology.hash
+      )
+      ?.geometry?.surfaceType.toLowerCase();
+    if (!surface) return undefined;
+    if (surface === 'plane') return 'planar';
+    return surface === 'cylinder' || surface === 'cone'
+      ? 'cylindrical'
+      : 'other';
+  })();
   const calloutVerbsKey =
     calloutKind && calloutInteractive
       ? JSON.stringify([
@@ -7537,6 +7556,7 @@ export function App() {
               Boolean(interaction.target.resizeBodyFeatureId),
             pressedAction: calloutPressedAction,
             datumRefusal: calloutDatumRefusal,
+            faceSurface: calloutFaceSurface,
             availability: shownAvailability
           }),
           ...(calloutImportedFace === 'edit'

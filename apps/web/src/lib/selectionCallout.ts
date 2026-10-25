@@ -152,6 +152,12 @@ export interface SelectionCalloutVerbInput {
    * find again, or a curved edge. The datum verb is then disabled with it.
    */
   datumRefusal?: string | null;
+  /**
+   * The picked face's kind, read from its topology: what the tools are
+   * chosen by when the machine does not hold the face (direct manipulation
+   * off). Absent, a face is offered the tools any face takes a start from.
+   */
+  faceSurface?: 'planar' | 'cylindrical' | 'other';
   availability: ToolAvailability;
 }
 
@@ -251,7 +257,23 @@ export function selectionCalloutVerbs(
     case 'face': {
       const capabilities = input.faceCapabilities ?? [];
       if (capabilities.length === 0) {
-        return tools('sketch', 'hole', 'shell');
+        switch (input.faceSurface) {
+          case 'planar':
+            return tools(
+              'sketch',
+              'hole',
+              'shell',
+              'draft',
+              'thicken',
+              'datum-plane'
+            );
+          case 'cylindrical':
+            return tools('datum-axis', 'shell');
+          case 'other':
+            return tools('shell');
+          default:
+            return tools('sketch', 'hole', 'shell');
+        }
       }
       const verbs = capabilities.map((capability) =>
         actionVerb(capability, input.pressedAction)

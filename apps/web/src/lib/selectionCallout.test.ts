@@ -103,6 +103,26 @@ describe('selectionCalloutVerbs', () => {
     ]);
   });
 
+  it('chooses an unarmed face its tools by the kind of face it is', () => {
+    const ids = (faceSurface: 'planar' | 'cylindrical' | 'other') =>
+      selectionCalloutVerbs({
+        kind: 'face',
+        faceCapabilities: null,
+        faceSurface,
+        availability: READY
+      }).map((verb) => verb.id);
+    expect(ids('planar')).toEqual([
+      'tool:sketch',
+      'tool:hole',
+      'tool:shell',
+      'tool:draft',
+      'tool:thicken',
+      'tool:datum-plane'
+    ]);
+    expect(ids('cylindrical')).toEqual(['tool:datum-axis', 'tool:shell']);
+    expect(ids('other')).toEqual(['tool:shell']);
+  });
+
   it('switches the armed edge op, or launches the tool when none is armed', () => {
     const armed = selectionCalloutVerbs({
       kind: 'edges',
