@@ -1326,3 +1326,72 @@ describe('slow gestures wait for the hand to rest', () => {
     }
   });
 });
+
+describe('replace', () => {
+  it('keeps the shown preview until the new value publishes', async () => {
+    const second = deferred();
+    const { preview, published } = makePreview({
+      derive: (document) =>
+        document.value === 1 ? Promise.resolve('one') : second.promise
+    });
+    preview.request(1);
+    await settle();
+    expect(published).toEqual([{ value: 1 }]);
+    preview.replace(2);
+    await settle();
+    // No null in between: the first preview stays up while 2 rebuilds.
+    expect(published).toEqual([{ value: 1 }]);
+    second.resolve('two');
+    await settle();
+    expect(published).toEqual([{ value: 1 }, { value: 2 }]);
+  });
+
+  it('takes the old preview down when the new value builds nothing', async () => {
+    const published: (Doc | null)[] = [];
+    const preview = new LivePreview<Doc, string>({
+      // Zero passes the policy but has nothing to build.
+      acceptValue: () => true,
+      build: (value) => (value === 0 ? null : { value }),
+      derive: () => Promise.resolve('geometry'),
+      publish: (result) => published.push(result?.document ?? null)
+    });
+    preview.request(1);
+    await settle();
+    preview.replace(0);
+    await settle();
+    expect(published).toEqual([{ value: 1 }, null]);
+  });
+
+  it('takes the old preview down when the new value is turned away', async () => {
+    const { preview, published } = makePreview({
+      derive: () => Promise.resolve('geometry')
+    });
+    preview.request(1);
+    await settle();
+    preview.replace(-1);
+    expect(published).toEqual([{ value: 1 }, null]);
+  });
+
+  it('drops a late frame of the replaced value', async () => {
+    const first = deferred();
+    const { preview, published } = makePreview({
+      derive: (document) =>
+        document.value === 1 ? first.promise : Promise.resolve('two')
+    });
+    preview.request(1);
+    preview.replace(2);
+    first.resolve('one');
+    await settle();
+    await settle();
+    expect(published).toEqual([{ value: 2 }]);
+  });
+
+  it('publishes nothing for a value without a preview when none was shown', async () => {
+    const { preview, published } = makePreview({
+      derive: () => Promise.resolve('geometry')
+    });
+    preview.replace(-1);
+    await settle();
+    expect(published).toEqual([]);
+  });
+});
