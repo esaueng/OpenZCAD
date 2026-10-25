@@ -35,33 +35,23 @@ import type {
   BodyId,
   BodyMassProperties,
   BodyRepresentation,
-  DatumAxisRef,
   FaceGeometry,
   FeatureId,
   FeatureNode,
   MassDensitySelection,
   ParamValue,
   PrimitiveKind,
-  RevolveAxis,
-  SketchId,
   SketchNode,
   SketchObjectData,
   TopologySelection
 } from '@openzcad/shared';
 import {
-  BooleanForm,
-  type BooleanFormValue,
-  EdgeModifierForm,
   ExtrudeForm,
-  PatternForm,
   PrimitiveForm,
-  RevolveForm,
   SketchForm,
   TextSketchForm,
   TransformForm,
   type BodyOption,
-  type EdgeModifierFormValue,
-  type PatternFormValue,
   type SketchFormValue,
   type TextSketchFormValue,
   type SketchOption,
@@ -119,8 +109,6 @@ function isValidTextSketchObject(
 
 export interface InspectorCallbacks {
   onLaunchTool(tool: ToolId): void;
-  /** The boolean pick list edits the viewport's body selection in place. */
-  onSelectBodies(bodyIds: BodyId[]): void;
   /** Escape and the forms' Cancel: back to nothing selected. */
   onCancel(): void;
   /**
@@ -132,33 +120,6 @@ export interface InspectorCallbacks {
   commitError?: string | null;
   /** The primitive card's Create, already composed with its placement. */
   onCreatePrimitive(command: AnyCommand): void;
-  onCreateRevolve(value: {
-    name: string;
-    sketchId: SketchId;
-    axis: RevolveAxis;
-    angleDeg: ParamValue;
-    axisRef?: DatumAxisRef;
-  }): void;
-  onCreateBoolean(value: BooleanFormValue): void;
-  onCreateTransform(value: TransformFormValue): void;
-  onCreateEdgeModifier(
-    kind: 'fillet' | 'chamfer',
-    value: EdgeModifierFormValue
-  ): void;
-  onPreviewEdgeModifier(
-    feature: FeatureNode | null,
-    kind: 'fillet' | 'chamfer',
-    value: EdgeModifierFormValue | null
-  ): void;
-  onEdgeModifierSize?(size: number | null): void;
-  onSelectAllEdges(body: BodyRepresentation): void;
-  onClearSelectedEdges(): void;
-  /**
-   * Drops one edge from a create card's pick, as a Shift+Click on it would.
-   * Absent, the card's edge rows carry no remove button.
-   */
-  onRemoveSelectedEdge?(edge: TopologySelection): void;
-  onCreatePattern(value: PatternFormValue): void;
   /** The primitive card's Apply: its dimensions and, if moved, placement. */
   onApplyPrimitive(
     feature: FeatureNode,
@@ -185,24 +146,7 @@ export interface InspectorCallbacks {
   extrudeTargets: { bodyId: BodyId; name: string }[];
   /** F01 (v29): the viewport face pick an extrude edit's To face uses. */
   extrudeToFacePicking?(feature: FeatureNode): ExtrudeToFacePicking;
-  onApplyRevolve(
-    feature: FeatureNode,
-    value: {
-      name: string;
-      sketchId: SketchId;
-      axis: RevolveAxis;
-      angleDeg: ParamValue;
-      axisRef?: DatumAxisRef;
-    }
-  ): void;
-  onApplyBoolean(feature: FeatureNode, value: BooleanFormValue): void;
   onApplyTransform(feature: FeatureNode, value: TransformFormValue): void;
-  onApplyEdgeModifier(
-    feature: FeatureNode,
-    kind: 'fillet' | 'chamfer',
-    value: EdgeModifierFormValue
-  ): void;
-  onApplyPattern(feature: FeatureNode, value: PatternFormValue): void;
   onResizeThroughHole(
     selection: TopologySelection,
     geometry: FaceGeometry,
@@ -277,20 +221,15 @@ interface InspectorProps extends InspectorCallbacks {
   selectedBody: BodyRepresentation | null;
   selectedTopology: TopologySelection | null;
   selectedEdges: TopologySelection[];
-  edgeModifierBody: BodyRepresentation | null;
   /**
-   * The committed body projections, so an edited fillet or chamfer can name
-   * the edges it stores: they live on its input body, which a blend consumes.
+   * The committed body projections, so a split's History card can read out
+   * its second half as well as the body it names.
    */
   bodyRepresentations?: Readonly<Record<string, BodyRepresentation>>;
   scope: Record<string, number>;
   sketches: SketchOption[];
   bodies: BodyOption[];
   units: UnitSystem;
-  /** Viewport selection, in pick order — pre-fills boolean/move targets. */
-  selectedBodyIds: BodyId[];
-  /** Sketch to pre-select in extrude/revolve, e.g. the one picked in the tree. */
-  preferredSketchId: SketchId | null;
   /**
    * The command the viewport selection has armed, read straight from the
    * interaction machine. The panel names it but never edits its value: the
@@ -1387,78 +1326,13 @@ export function Inspector(props: InspectorProps) {
     selectedBody,
     selectedTopology,
     selectedEdges,
-    edgeModifierBody,
     scope,
     sketches,
     bodies,
     units,
-    selectedBodyIds,
-    preferredSketchId,
     commandSession,
     featureSelectionSource
   } = props;
-  const selectedEdgeReferences = selectedEdges.flatMap((edge) =>
-    edge.reference?.kind === 'edge' ? [edge.reference] : []
-  );
-  /**
-   * Stored edges taken off the fillet or chamfer being edited, until Apply.
-   * Keyed by the feature/version and reset when the edit session ends. The
-   * panel outlives its subject, so returning to the same feature/version must
-   * not reuse a removal from an abandoned edit.
-   */
-  const [removedEdges, setRemovedEdges] = useState<{
-    edit: string;
-    hashes: readonly number[];
-    picked: readonly number[];
-  }>({ edit: '', hashes: [], picked: [] });
-  const editSession =
-    tool === null && selectedFeature
-      ? `${selectedFeature.featureId}:${featureSelectionSource ?? ''}`
-      : null;
-  const [edgeEditSession, setEdgeEditSession] = useState(editSession);
-  if (edgeEditSession !== editSession) {
-    // Reset before rendering the reopened form, so its first preview and
-    // eventual Apply both start with the stored edges and references.
-    setEdgeEditSession(editSession);
-    if (removedEdges.hashes.length > 0) {
-      setRemovedEdges({ edit: '', hashes: [], picked: [] });
-    }
-  }
-  const edgeEditKey = selectedFeature
-    ? `edit-${selectedFeature.id}-${props.documentVersion ?? 0}`
-    : null;
-  useEffect(() => {
-    setRemovedEdges((current) => {
-      if (current.edit !== edgeEditKey || current.hashes.length === 0)
-        return current;
-      const picked =
-        featureSelectionSource === 'pinned'
-          ? selectedEdges.flatMap((edge) =>
-              edge.bodyId === selectedFeature?.bodyId && edge.hash !== undefined
-                ? [edge.hash]
-                : []
-            )
-          : [];
-      const newlyPicked = picked.filter(
-        (hash) => !current.picked.includes(hash)
-      );
-      const hashes = current.hashes.filter(
-        (hash) => !newlyPicked.includes(hash)
-      );
-      if (
-        hashes.length === current.hashes.length &&
-        picked.join(',') === current.picked.join(',')
-      )
-        return current;
-      return { edit: current.edit, hashes, picked };
-    });
-  }, [
-    selectedEdges,
-    selectedFeature?.bodyId,
-    featureSelectionSource,
-    edgeEditKey
-  ]);
-
   /**
    * Hand an edit panel the keyboard without handing it a field.
    *
@@ -1501,6 +1375,8 @@ export function Inspector(props: InspectorProps) {
   if (tool) {
     eyebrow = CARD_EYEBROWS.create;
     title = TOOL_META[tool].label;
+    // A primitive is the only tool whose create card is drawn here: the
+    // rest run in place (U09) or have cards of their own, so no body.
     if (PRIMITIVE_TOOLS.includes(tool)) {
       const kind = tool as PrimitiveKind;
       body = (
@@ -1524,167 +1400,6 @@ export function Inspector(props: InspectorProps) {
           }
           onCancel={props.onCancel}
           onGhostChange={props.onPrimitiveGhostChange}
-        />
-      );
-    } else if (tool === 'revolve') {
-      body = (
-        <RevolveForm
-          key="create-revolve"
-          scope={scope}
-          sketches={sketches}
-          initialSketchId={preferredSketchId ?? undefined}
-          datumAxes={datumAxisChoices(props.document, null)}
-          submitLabel="Create"
-          onSubmit={props.onCreateRevolve}
-          onCancel={props.onCancel}
-        />
-      );
-    } else if (
-      tool === 'union' ||
-      tool === 'subtract' ||
-      tool === 'intersect'
-    ) {
-      body = (
-        <BooleanForm
-          key={`create-${tool}`}
-          bodies={bodies}
-          presetOperation={tool}
-          selection={selectedBodyIds}
-          onSelectionChange={props.onSelectBodies}
-          submitLabel="Create"
-          onSubmit={props.onCreateBoolean}
-          onCancel={props.onCancel}
-        />
-      );
-      // No create branch for 'transform': the move gizmo is the only way to
-      // make a Move now that it carries the Name field and body picker this
-      // form existed for (WF-07). Editing an existing Move still uses
-      // TransformForm, below.
-    } else if (tool === 'axis-rotate') {
-      // R01: a Move whose turn is about a datum axis. It creates the same
-      // transform feature, with only its axis rotation set.
-      body = (
-        <TransformForm
-          key="create-axis-rotate"
-          scope={scope}
-          bodies={bodies}
-          units={units}
-          initialTarget={
-            selectedTopology?.bodyId ??
-            selectedBodyIds.at(-1) ??
-            selectedBody?.bodyId
-          }
-          defaultName="Rotate"
-          axisOnly
-          datumAxes={datumAxisChoices(props.document, null)}
-          submitLabel="Create"
-          onSubmit={props.onCreateTransform}
-          onCancel={props.onCancel}
-        />
-      );
-    } else if (tool === 'scale') {
-      // Scale has no gizmo: the factor is parametric, so the form is the
-      // right UI. It creates the same transform feature a Move does.
-      body = (
-        <TransformForm
-          key="create-scale"
-          scope={scope}
-          bodies={bodies}
-          units={units}
-          initialTarget={
-            selectedTopology?.bodyId ??
-            selectedBodyIds.at(-1) ??
-            selectedBody?.bodyId
-          }
-          defaultName="Scale"
-          submitLabel="Create"
-          onSubmit={props.onCreateTransform}
-          onCancel={props.onCancel}
-        />
-      );
-    } else if (tool === 'fillet' || tool === 'chamfer') {
-      body = (
-        <EdgeModifierForm
-          // One card per tool session, not per target body. The target drops
-          // to null and back whenever a rebuild publishes an analysis-pending
-          // snapshot — arming the tool or picking edges demands lineage, so
-          // that happens while the user is typing — and a body-keyed card
-          // remounted twice and replaced the typed size with the default.
-          key={`create-${tool}`}
-          kind={tool}
-          scope={scope}
-          targetBodyId={edgeModifierBody?.bodyId ?? null}
-          edgeHashes={selectedEdges.flatMap((edge) =>
-            edge.hash === undefined ? [] : [edge.hash]
-          )}
-          edgeReferences={
-            selectedEdges.length > 0 &&
-            selectedEdgeReferences.length === selectedEdges.length
-              ? selectedEdgeReferences
-              : undefined
-          }
-          availableEdgeCount={
-            edgeModifierBody?.topology?.edges.filter(
-              (edge) => edge.displayRole !== 'seam'
-            ).length
-          }
-          onSelectAllEdges={
-            edgeModifierBody
-              ? () => props.onSelectAllEdges(edgeModifierBody)
-              : undefined
-          }
-          onClearEdges={props.onClearSelectedEdges}
-          edgeRows={selectedEdges.flatMap((edge) => {
-            if (edge.hash === undefined) return [];
-            const owner =
-              edgeModifierBody ?? props.bodyRepresentations?.[edge.bodyId];
-            return [
-              {
-                hash: edge.hash,
-                label: edgeLabel(owner, edge.hash, edge.topologyId),
-                ...(owner ? { owner: owner.name } : {})
-              }
-            ];
-          })}
-          {...(props.onRemoveSelectedEdge
-            ? {
-                onRemoveEdge: (hash: number) => {
-                  const edge = selectedEdges.find(
-                    (candidate) => candidate.hash === hash
-                  );
-                  if (edge) props.onRemoveSelectedEdge?.(edge);
-                }
-              }
-            : {})}
-          submitLabel="Create"
-          onSubmit={(value) => props.onCreateEdgeModifier(tool, value)}
-          onPreview={(value) => props.onPreviewEdgeModifier(null, tool, value)}
-          onSizeChange={props.onEdgeModifierSize}
-          onCancel={props.onCancel}
-        />
-      );
-    } else {
-      const patternKind =
-        tool === 'linear-pattern'
-          ? 'linear'
-          : tool === 'grid-pattern'
-            ? 'grid'
-            : 'circular';
-      body = (
-        <PatternForm
-          key={`create-${patternKind}`}
-          kind={patternKind}
-          scope={scope}
-          bodies={bodies}
-          datumAxes={datumAxisChoices(props.document, null)}
-          selectedBodyId={
-            selectedTopology?.bodyId ??
-            selectedBodyIds.at(-1) ??
-            selectedBody?.bodyId
-          }
-          submitLabel="Create"
-          onSubmit={props.onCreatePattern}
-          onCancel={props.onCancel}
         />
       );
     }
@@ -1869,46 +1584,6 @@ export function Inspector(props: InspectorProps) {
           onCancel={props.onCancel}
         />
       );
-    } else if (data.featureKind === 'revolve') {
-      form = (
-        <RevolveForm
-          key={editKey}
-          scope={scope}
-          sketches={sketches}
-          initial={{
-            name: selectedFeature.name,
-            sketchId: data.sketchId,
-            axis: data.axis,
-            angleDeg: data.angleDeg,
-            ...(data.axisRef ? { axisRef: data.axisRef } : {})
-          }}
-          datumAxes={datumAxisChoices(
-            props.document,
-            selectedFeature.featureId
-          )}
-          submitLabel="Apply"
-          onSubmit={(value) => props.onApplyRevolve(selectedFeature, value)}
-          onCancel={props.onCancel}
-        />
-      );
-    } else if (data.featureKind === 'boolean') {
-      form = (
-        <BooleanForm
-          key={editKey}
-          bodies={bodies}
-          initial={{
-            name: selectedFeature.name,
-            operation: data.operation,
-            targetBodyIds: data.targetBodyIds,
-            ...(data.keepOriginals !== undefined
-              ? { keepOriginals: data.keepOriginals }
-              : {})
-          }}
-          submitLabel="Apply"
-          onSubmit={(value) => props.onApplyBoolean(selectedFeature, value)}
-          onCancel={props.onCancel}
-        />
-      );
     } else if (data.featureKind === 'transform') {
       form = (
         <TransformForm
@@ -1936,147 +1611,6 @@ export function Inspector(props: InspectorProps) {
           )}
           submitLabel="Apply"
           onSubmit={(value) => props.onApplyTransform(selectedFeature, value)}
-          onCancel={props.onCancel}
-        />
-      );
-    } else if (
-      data.featureKind === 'fillet' ||
-      data.featureKind === 'chamfer'
-    ) {
-      // Edges picked in the viewport on the blended body join the stored
-      // set, so a fillet can grow after creation the way it is created. The
-      // pick lands on the result body while the feature resolves against its
-      // consumed source; unblended edges keep their fingerprint across the
-      // two, so the added hashes resolve by fingerprint while the stored
-      // references keep naming the original edges, and a hash the kernel
-      // cannot find is refused by the validated commit rather than guessed.
-      // Only a feature pinned from its history row takes picks: a blend
-      // clicked in the viewport to *find* its fillet is an inferred
-      // selection, and that picked blend edge must not join the set.
-      const pickedEdgeHashes =
-        featureSelectionSource === 'pinned'
-          ? selectedEdges.flatMap((edge) =>
-              edge.bodyId === selectedFeature.bodyId && edge.hash !== undefined
-                ? [edge.hash]
-                : []
-            )
-          : [];
-      const addedEdgeHashes = pickedEdgeHashes.filter(
-        (hash) => !data.edgeHashes.includes(hash)
-      );
-      // An edge taken off the list leaves both the hashes and the references
-      // naming it, so the two still match one for one.
-      const removed = removedEdges.edit === editKey ? removedEdges.hashes : [];
-      const editEdgeHashes = (
-        addedEdgeHashes.length > 0
-          ? [...data.edgeHashes, ...addedEdgeHashes]
-          : data.edgeHashes
-      ).filter((hash) => !removed.includes(hash));
-      // Stored references only cover the stored hashes and a pick lands on
-      // the blended result body, whose lineage the consumed source does not
-      // carry, so a grown set goes hash-only and resolves by fingerprint.
-      const editEdgeReferences = addedEdgeHashes.some(
-        (hash) => !removed.includes(hash)
-      )
-        ? undefined
-        : data.edgeReferences?.filter(
-            (reference) => !removed.includes(reference.currentHash)
-          );
-      // Stored edges are named on the input body the blend consumed; an edge
-      // picked to grow the set, on the result it was picked on.
-      const edgeSources = [data.targetBodyId, selectedFeature.bodyId].map(
-        (bodyId) => (bodyId ? props.bodyRepresentations?.[bodyId] : undefined)
-      );
-      form = (
-        <EdgeModifierForm
-          // Edge-set changes keep the card and the values already typed.
-          key={editKey}
-          kind={data.featureKind}
-          scope={scope}
-          targetBodyId={data.targetBodyId}
-          edgeHashes={editEdgeHashes}
-          edgeReferences={editEdgeReferences}
-          edgeRows={editEdgeHashes.map((hash) => {
-            const owner = edgeSources.find((body) =>
-              body?.topology?.edges.some((edge) => edge.hash === hash)
-            );
-            return {
-              hash,
-              label: edgeLabel(owner, hash),
-              ...(owner ? { owner: owner.name } : {})
-            };
-          })}
-          onRemoveEdge={(hash) => {
-            setRemovedEdges({
-              edit: editKey,
-              hashes: [...removed, hash],
-              picked: pickedEdgeHashes
-            });
-            // A newly added edge is still a viewport pick. Release that pick
-            // too, so the next Shift+Click is a new selection that restores it.
-            const pick = selectedEdges.find(
-              (edge) =>
-                edge.bodyId === selectedFeature.bodyId && edge.hash === hash
-            );
-            if (pick) props.onRemoveSelectedEdge?.(pick);
-          }}
-          initial={{
-            name: selectedFeature.name,
-            size: data.featureKind === 'fillet' ? data.radius : data.distance,
-            ...(data.featureKind === 'chamfer' && data.angleDeg !== undefined
-              ? { angleDeg: data.angleDeg }
-              : {}),
-            ...(data.featureKind === 'fillet' && data.endRadius !== undefined
-              ? {
-                  endRadius: data.endRadius,
-                  radiusLaw: data.radiusLaw ?? 'linear'
-                }
-              : {}),
-            ...(data.featureKind === 'chamfer' && data.distance2 !== undefined
-              ? { distance2: data.distance2 }
-              : {})
-          }}
-          submitLabel="Apply"
-          onSubmit={(value) =>
-            props.onApplyEdgeModifier(selectedFeature, data.featureKind, value)
-          }
-          onPreview={(value) =>
-            props.onPreviewEdgeModifier(
-              selectedFeature,
-              data.featureKind,
-              value
-            )
-          }
-          onCancel={props.onCancel}
-        />
-      );
-    } else if (data.featureKind === 'pattern') {
-      form = (
-        <PatternForm
-          key={editKey}
-          kind={data.patternKind}
-          scope={scope}
-          bodies={bodies}
-          initial={{
-            name: selectedFeature.name,
-            targetBodyId: data.targetBodyId,
-            patternKind: data.patternKind,
-            count: data.count,
-            axis: data.axis,
-            spacing: data.spacing,
-            angleDeg: data.angleDeg,
-            ...(data.direction ? { direction: data.direction } : {}),
-            ...(data.axis2 ? { axis2: data.axis2 } : {}),
-            ...(data.spacing2 !== undefined ? { spacing2: data.spacing2 } : {}),
-            ...(data.count2 !== undefined ? { count2: data.count2 } : {}),
-            ...(data.axisRef ? { axisRef: data.axisRef } : {})
-          }}
-          datumAxes={datumAxisChoices(
-            props.document,
-            selectedFeature.featureId
-          )}
-          submitLabel="Apply"
-          onSubmit={(value) => props.onApplyPattern(selectedFeature, value)}
           onCancel={props.onCancel}
         />
       );

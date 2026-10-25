@@ -9,8 +9,6 @@ import {
 } from 'react';
 import { axisDimensionLabel } from '../lib/primitiveDimensionLabel';
 import * as THREE from 'three';
-import type { HoleGhost } from '../lib/holeGhost';
-import { buildHoleGhostRig } from './viewer/holeGhostRig';
 import type { PrimitiveGhost } from '../lib/primitiveGhost';
 import { buildPrimitiveGhostRig } from './viewer/primitiveGhostRig';
 import { currentRenderProfile } from './viewer/renderProfile';
@@ -1011,12 +1009,6 @@ export interface ModelViewerProps {
   openExactEntryRef: MutableRefObject<(() => boolean) | null>;
   /** Armed edge fillet/chamfer handle (selection-first direct manipulation). */
   edgeHandle: EdgeHandleTarget | null;
-  /**
-   * The radius/distance a form is currently proposing for the armed edges.
-   * The handle shows it so the two never disagree: the tile's form said
-   * "Radius 2" while the handle beside it read "R 0 mm".
-   */
-  edgeHandleValue?: number | null;
   /** Streamed while an edge-radius drag is in flight (throttled by App). */
   onEdgeRadiusPreview(size: number): void;
   /** Fired when the radius drag releases (or exact entry commits). */
@@ -1083,11 +1075,6 @@ export interface ModelViewerProps {
   onPickCurve?(id: string, additive: boolean): void;
   /** A datum plane was clicked where nothing in the model was under it. */
   onPickDatum?(featureId: string): void;
-  /**
-   * The bore the open Hole card would drill, drawn through the body before
-   * it exists. Null while no hole can be placed.
-   */
-  holeGhost?: HoleGhost | null;
   /** The solid the open primitive card would create, drawn before Create. */
   primitiveGhost?: PrimitiveGhost | null;
   /**
@@ -2107,7 +2094,6 @@ export function ModelViewer({
   cancelDirectManipulationRef,
   openExactEntryRef,
   edgeHandle,
-  edgeHandleValue = null,
   onEdgeRadiusPreview,
   onEdgeCommit,
   onEdgeCancel,
@@ -2119,7 +2105,6 @@ export function ModelViewer({
   onSelectRegion,
   onHoverRegion,
   planePickerArmed,
-  holeGhost = null,
   primitiveGhost = null,
   datumPlanes,
   datumAxes,
@@ -2316,8 +2301,6 @@ export function ModelViewer({
   onOffsetCancelRef.current = onOffsetCancel;
   const offsetPreviewInvalidRef = useRef(offsetPreviewInvalid);
   offsetPreviewInvalidRef.current = offsetPreviewInvalid;
-  const edgeHandleValueRef = useRef(edgeHandleValue);
-  edgeHandleValueRef.current = edgeHandleValue;
   const previewDeferredRef = useRef(previewDeferred);
   previewDeferredRef.current = previewDeferred;
   const onOpenOffsetKeypadRef = useRef(onOpenOffsetKeypad);
@@ -12265,9 +12248,9 @@ export function ModelViewer({
       (!placement || sameEdgeRigPlacement(built.placement, placement))
     ) {
       built.handle = edgeHandle;
-      // The value a rebuild would have taken: the card's typed value, else
-      // the target's (restored after a refusal or a cancelled entry).
-      const value = edgeHandleValueRef.current ?? edgeHandle.initialValue ?? 0;
+      // The value a rebuild would have taken: the target's (restored after a
+      // refusal or a cancelled entry).
+      const value = edgeHandle.initialValue ?? 0;
       if (Math.abs(previous.value() - value) > 1e-9) {
         previous.setValue(value);
         context.requestRender();
@@ -12287,10 +12270,7 @@ export function ModelViewer({
       return;
     }
     const rig = buildEdgeRadiusHandle(placement);
-    // A rebuild (the preview body came or went) keeps the value the card has
-    // typed: its effect below only runs when that value changes, so a rig
-    // rebuilt after a refused preview used to read "R 0".
-    rig.setValue(edgeHandleValueRef.current ?? edgeHandle.initialValue ?? 0);
+    rig.setValue(edgeHandle.initialValue ?? 0);
     rig.setWarning?.(offsetPreviewInvalidRef.current);
     if (sameTarget) rig.appear?.();
     if (E2E_CANVAS_HOOKS_ENABLED) {
@@ -12318,16 +12298,6 @@ export function ModelViewer({
     },
     []
   );
-
-  // A typed form value moves the handle; a drag in flight owns it instead.
-  useEffect(() => {
-    const rig = edgeRigRef.current;
-    if (!rig || edgeHandleValue === null || edgeDragActiveRef.current) {
-      return;
-    }
-    rig.setValue(edgeHandleValue);
-    contextRef.current?.requestRender();
-  }, [edgeHandleValue, edgeHandle]);
 
   // Region-detected sketch rendering: curves stay readable while bounded
   // cells get cached fill, boundary, marker, and plane-local pick targets.
@@ -13169,25 +13139,6 @@ export function ModelViewer({
       context.requestRender();
     };
   }, [datumAxisKey]);
-
-  // The open Hole card's bore (viewer/holeGhostRig): an opening on the entry
-  // face and a barrel that is a faint ghost inside the body, so it reads as a
-  // cut rather than a post. Rebuilt per value change; the viewport renders on
-  // demand, so each change asks for its frame.
-  useEffect(() => {
-    const context = contextRef.current;
-    if (!context || !holeGhost) {
-      return;
-    }
-    const rig = buildHoleGhostRig(holeGhost, SKETCH_COLOR);
-    context.scene.add(rig.group);
-    context.requestRender();
-    return () => {
-      context.scene.remove(rig.group);
-      rig.dispose();
-      context.requestRender();
-    };
-  }, [holeGhost]);
 
   // The open Box/Cylinder/… card's solid (viewer/primitiveGhostRig), three
   // geometry rebuilt per value change — no kernel call per keystroke.

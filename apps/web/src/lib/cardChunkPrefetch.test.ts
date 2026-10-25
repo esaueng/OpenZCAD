@@ -82,12 +82,11 @@ describe('command card prefetch (G16)', () => {
   });
 
   it('warms the cards a first tool opens', () => {
-    // Box (the Inspector), Hole (the modeling form), the region Extrude
-    // card and the Move panel: every lazily loaded command card.
+    // Box (the Inspector), the region Extrude card and the Move panel:
+    // every lazily loaded command card.
     const sources = COMMAND_CARD_CHUNKS.map((load) => String(load));
     for (const module of [
       'components/Inspector',
-      'components/forms/ModelingOperationsForm',
       'components/ToolCard',
       'components/MoveOverlay'
     ]) {

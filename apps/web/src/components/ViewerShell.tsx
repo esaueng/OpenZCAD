@@ -4,7 +4,6 @@ import type {
   ProjectDocument,
   SketchDimensionIdentity
 } from '@openzcad/shared';
-import type { HoleGhost } from '../lib/holeGhost';
 import type { CompositeShape } from '../lib/sketch/composites';
 import type { ViewportImageSource } from './viewer/viewportImage';
 import type { PrimitiveGhost } from '../lib/primitiveGhost';
@@ -274,7 +273,6 @@ interface ViewerShellProps {
   cancelDirectManipulationRef: MutableRefObject<(() => boolean) | null>;
   openExactEntryRef: MutableRefObject<(() => boolean) | null>;
   edgeHandle: EdgeHandleTarget | null;
-  edgeHandleValue?: number | null;
   onEdgeRadiusPreview(size: number): void;
   onEdgeCommit(size: number): void;
   onEdgeCancel(): void;
@@ -317,8 +315,6 @@ interface ViewerShellProps {
   onCommandHandleRelease?: ModelViewerProps['onCommandHandleRelease'];
   onOpenCommandKeypad?: ModelViewerProps['onOpenCommandKeypad'];
   commandSetterRef?: ModelViewerProps['commandSetterRef'];
-  /** The open Hole card's bore, drawn before it exists. */
-  holeGhost?: HoleGhost | null;
   /** The open primitive card's solid, drawn before Create. */
   primitiveGhost?: PrimitiveGhost | null;
   /** The document whose resolved R01 datum planes the viewport draws. */
@@ -473,7 +469,6 @@ export function ViewerShell({
   cancelDirectManipulationRef,
   openExactEntryRef,
   edgeHandle,
-  edgeHandleValue = null,
   onEdgeRadiusPreview,
   onEdgeCommit,
   onEdgeCancel,
@@ -508,7 +503,6 @@ export function ViewerShell({
   onCommandHandleRelease,
   onOpenCommandKeypad,
   commandSetterRef,
-  holeGhost = null,
   primitiveGhost = null,
   datumDocument = null,
   hiddenDatumIds,
@@ -785,7 +779,6 @@ export function ViewerShell({
         cancelDirectManipulationRef={cancelDirectManipulationRef}
         openExactEntryRef={openExactEntryRef}
         edgeHandle={edgeHandle}
-        edgeHandleValue={edgeHandleValue}
         onEdgeRadiusPreview={onEdgeRadiusPreview}
         onEdgeCommit={onEdgeCommit}
         onEdgeCancel={onEdgeCancel}
@@ -820,7 +813,6 @@ export function ViewerShell({
         onCommandHandleRelease={onCommandHandleRelease}
         onOpenCommandKeypad={onOpenCommandKeypad}
         commandSetterRef={commandSetterRef}
-        holeGhost={holeGhost}
         primitiveGhost={primitiveGhost}
         datumPlanes={
           datumDocument
