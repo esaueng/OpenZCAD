@@ -470,7 +470,41 @@ describe('useInPlaceCommand: hole step chips', () => {
       );
     });
     expect(accepted).toBe(false);
-    expect(hook.result.current.refusal).toMatch(/1 to 179/);
+    expect(hook.result.current.refusal).toMatch(
+      /more than 0 and less than 180/
+    );
+    // Any angle inside the open interval is the card's, decimals included.
+    act(() => {
+      accepted = hook.result.current.setValue(
+        'countersinkAngleDeg',
+        0.5,
+        '0.5'
+      );
+    });
+    expect(accepted).toBe(true);
+  });
+
+  it('a canceled chip entry leaves the step following the bore', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('hole', [], [FACE]));
+    act(() => hook.result.current.setOption('style', 'counterbore'));
+    // The keypad previews what is typed, then Escape puts the value back.
+    act(() => hook.result.current.previewValue('counterboreDiameter', 14));
+    expect(hook.result.current.touched).toContain('counterboreDiameter');
+    act(() =>
+      hook.result.current.restoreValue(
+        'counterboreDiameter',
+        10.8,
+        undefined,
+        false
+      )
+    );
+    act(() => {
+      hook.result.current.setValue('diameter', 4);
+    });
+    await waitFor(() =>
+      expect(hook.result.current.values.counterboreDiameter).toBe(7.2)
+    );
   });
 });
 

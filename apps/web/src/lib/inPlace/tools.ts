@@ -157,6 +157,11 @@ export interface ValueSpec {
   max?: number;
   /** Whole numbers only (a pattern's counts): a fraction rounds, or is refused when typed. */
   integer?: boolean;
+  /**
+   * `min` and `max` are themselves refused (a countersink's angle, strictly
+   * between 0° and 180°): a value is kept just inside them.
+   */
+  exclusive?: boolean;
 }
 
 /** A sketch as the commands read it: its plane and its region outlines. */
@@ -854,13 +859,15 @@ const hole: InPlaceToolSpec = {
       min: 0.1
     },
     {
-      // The full included angle, strictly between 0° and 180°.
+      // The full included angle, strictly between 0° and 180°, as the
+      // card's validation takes it.
       id: 'countersinkAngleDeg',
       label: 'Countersink angle',
       unit: 'angle',
       initial: 90,
-      min: 1,
-      max: 179
+      min: 0,
+      max: 180,
+      exclusive: true
     }
   ],
   options: [
@@ -1916,5 +1923,12 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
 export function clampValue(spec: ValueSpec, value: number): number {
   if (!Number.isFinite(value)) return spec.initial;
   const whole = spec.integer ? Math.round(value) : value;
-  return Math.min(spec.max ?? Infinity, Math.max(spec.min ?? -Infinity, whole));
+  const inset = spec.exclusive ? EXCLUSIVE_INSET : 0;
+  return Math.min(
+    (spec.max ?? Infinity) - inset,
+    Math.max((spec.min ?? -Infinity) + inset, whole)
+  );
 }
+
+/** How far inside an exclusive range's ends a clamped value is kept. */
+const EXCLUSIVE_INSET = 1e-6;
