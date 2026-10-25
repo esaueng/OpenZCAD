@@ -823,6 +823,9 @@ describe('U09 phase 6: datums and a picture', () => {
     expect(accepted).toBe(false);
     expect(hook.result.current.refusal).toMatch(/cannot take/);
     expect(hook.result.current.canFinish).toBe(false);
+    // An unrelated option leaves it refused.
+    act(() => hook.result.current.setOption('opacity', '0.4'));
+    expect(hook.result.current.canFinish).toBe(false);
     act(() => {
       accepted = hook.result.current.setValue('span', 10);
     });
@@ -835,7 +838,7 @@ describe('U09 phase 6: datums and a picture', () => {
     expect(title).toBe('Image');
     expect(request).toMatchObject({
       tool: 'reference-image',
-      image: { width: 20, opacity: 0.6 }
+      image: { width: 20, opacity: 0.4 }
     });
   });
 });

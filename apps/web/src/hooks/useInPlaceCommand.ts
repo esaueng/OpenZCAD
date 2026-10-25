@@ -731,8 +731,15 @@ export function useInPlaceCommand(
 
   const setOption = useCallback((optionId: string, value: string) => {
     // A refused entry was never applied, and a new choice (a hole's style)
-    // may not even show its value: the refusal no longer holds Done.
-    setEntryRefusal(null);
+    // may not even show its value: the refusal no longer holds Done. A
+    // linked value's refusal stands, though: what it measures (a picture's
+    // scale picks) is still there, and only a taken value or new picks
+    // answer it.
+    const tool = sessionRef.current?.tool;
+    const linked = (tool && IN_PLACE_TOOL_SPECS[tool].linked) || {};
+    setEntryRefusal((refused) =>
+      refused && refused.valueId in linked ? refused : null
+    );
     setSession((current) => {
       if (!current) return current;
       const specs = IN_PLACE_TOOL_SPECS[current.tool].options ?? [];
