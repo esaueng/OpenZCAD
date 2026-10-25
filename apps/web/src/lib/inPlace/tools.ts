@@ -6,6 +6,7 @@ import {
   type BooleanOperation,
   type DatumAxisLine,
   type EdgeTopologyReferenceV5,
+  type FaceTopologyReferenceV5,
   type FeatureData,
   type FeatureId,
   type ParamValue,
@@ -122,6 +123,11 @@ export interface FacePick {
    * position is kept, expressions and all, until the face is clicked again.
    */
   savedPosition?: true;
+  /**
+   * The lineage reference an edit found a stored face by, so a later
+   * re-check finds it the same way when its hash moves.
+   */
+  reference?: FaceTopologyReferenceV5;
 }
 
 /** A picked model edge, with where its handles stand. */
@@ -244,6 +250,8 @@ export interface InPlaceContext {
   saved?: FeatureData;
   /** A stored value as a number, or null when it does not resolve. */
   evaluate?(value: ParamValue): number | null;
+  /** The values the user has set (typed or dragged) in this session. */
+  touched?: readonly string[];
 }
 
 /** What to build, without names or ids; App turns it into the command. */
@@ -1441,6 +1449,18 @@ const draft: InPlaceToolSpec = {
   }
 };
 
+/** Where a scale's handle measures from: see the scale tool's handles. */
+function scalePivot(body: BodyPick, ctx: InPlaceContext): Vector3 {
+  const saved = ctx.saved;
+  if (saved?.featureKind !== 'transform') return centre(body);
+  const pivot = saved.transform.pivot;
+  if (!pivot) return { x: 0, y: 0, z: 0 };
+  const value = (part: ParamValue) =>
+    typeof part === 'number' ? part : (ctx.evaluate?.(part) ?? null);
+  const [x, y, z] = [value(pivot.x), value(pivot.y), value(pivot.z)];
+  return x === null || y === null || z === null ? centre(body) : { x, y, z };
+}
+
 function centre(body: BodyPick): Vector3 {
   return {
     x: (body.min.x + body.max.x) / 2,
@@ -1703,15 +1723,23 @@ const scale: InPlaceToolSpec = {
       ...(options.copy === 'yes' ? { copy: true } : {})
     };
   },
-  handles(slots) {
+  handles(slots, _values, ctx) {
     const body = slots.bodies[0];
     if (!body) return [];
-    const origin = centre(body);
-    const corner = {
-      x: body.max.x - origin.x,
-      y: body.max.y - origin.y,
-      z: body.max.z - origin.z
-    };
+    // From the pivot the result scales about: the body's centre for a new
+    // scale, the stored pivot for an edited one (an old scale's absent
+    // pivot is the origin), so the handle rides a corner of the preview.
+    const origin = scalePivot(body, ctx);
+    const toCorner = (point: Vector3) => ({
+      x: point.x - origin.x,
+      y: point.y - origin.y,
+      z: point.z - origin.z
+    });
+    const [far, near] = [toCorner(body.max), toCorner(body.min)];
+    const corner =
+      Math.hypot(far.x, far.y, far.z) >= Math.hypot(near.x, near.y, near.z)
+        ? far
+        : near;
     const reach = Math.hypot(corner.x, corner.y, corner.z);
     if (reach <= 1e-9) return [];
     return [
@@ -2087,10 +2115,35 @@ const gridPattern: InPlaceToolSpec = {
     slots.bodies.length === 0
       ? 'Click the body to repeat'
       : `Drag both spacings, tap the counts · ${FINISH}`,
+  // An edited grid whose second spacing or count is absent took the first's:
+  // until the user sets it, it still follows the first.
+  defaults(_slots, ctx, numbers) {
+    const saved = ctx.saved;
+    if (saved?.featureKind !== 'pattern' || saved.patternKind !== 'grid') {
+      return {};
+    }
+    return {
+      ...(saved.spacing2 === undefined && numbers.spacing !== undefined
+        ? { spacing2: numbers.spacing }
+        : {}),
+      ...(saved.count2 === undefined && numbers.count !== undefined
+        ? { count2: numbers.count }
+        : {})
+    };
+  },
   ready: (slots) => slots.bodies.length > 0,
-  request(slots, values, options) {
+  request(slots, values, options, ctx, numbers) {
     const body = slots.bodies[0];
     if (!body) return null;
+    // A second value still following the first (an edit's absent one, not
+    // set since) is left out, so the edit keeps it absent.
+    const saved = ctx.saved?.featureKind === 'pattern' ? ctx.saved : undefined;
+    const follows = (second: 'spacing2' | 'count2', first: string) =>
+      saved !== undefined &&
+      saved[second] === undefined &&
+      !ctx.touched?.includes(second) &&
+      numbers?.[second] !== undefined &&
+      numbers[second] === numbers[first];
     return {
       tool: 'pattern',
       targetBodyId: body.bodyId,
@@ -2099,8 +2152,10 @@ const gridPattern: InPlaceToolSpec = {
       axis: axisOf(options.axis),
       spacing: values.spacing ?? 20,
       axis2: axisOf(options.axis2 ?? 'y'),
-      spacing2: values.spacing2 ?? 20,
-      count2: values.count2 ?? 3
+      ...(follows('spacing2', 'spacing')
+        ? {}
+        : { spacing2: values.spacing2 ?? 20 }),
+      ...(follows('count2', 'count') ? {} : { count2: values.count2 ?? 3 })
     };
   },
   handles(slots, _values, _ctx, options) {

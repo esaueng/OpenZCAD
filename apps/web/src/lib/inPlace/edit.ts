@@ -3,6 +3,7 @@ import {
   isDatumPlaneRef,
   type EdgeTopologyReferenceV5,
   type BodyId,
+  type FaceTopologyReferenceV5,
   type ProjectDocument,
   type FeatureData,
   type FeatureId,
@@ -51,7 +52,15 @@ export interface InPlaceEditContext {
   ): ProfilePick | null;
   /** A sketch's first region, for a revolve that stores no profile. */
   firstRegion(sketchId: SketchId): number | null;
-  face(bodyId: BodyId, hash: number): FacePick | null;
+  /**
+   * A stored face, by its lineage reference first (an upstream edit can
+   * change the hash and keep the face) and then its hash.
+   */
+  face(
+    bodyId: BodyId,
+    hash: number,
+    reference?: FaceTopologyReferenceV5
+  ): FacePick | null;
   /** Any planar face of a body, for a command any face names. */
   anyFace(bodyId: BodyId): FacePick | null;
   /**
@@ -207,9 +216,16 @@ export function inPlaceEditSeed(
     if (pick) seed.slots.profiles.push(pick);
     else missing.push('profile');
   };
-  const faces = (bodyId: BodyId, hashes: readonly number[]) => {
-    for (const hash of hashes) {
-      const face = ctx.face(bodyId, hash);
+  const faces = (
+    bodyId: BodyId,
+    hashes: readonly number[],
+    references?: readonly FaceTopologyReferenceV5[]
+  ) => {
+    for (const [index, hash] of hashes.entries()) {
+      // References run beside the hashes only when there is one per face.
+      const reference =
+        references?.length === hashes.length ? references[index] : undefined;
+      const face = ctx.face(bodyId, hash, reference);
       if (face) seed.slots.faces.push(face);
       else missing.push('face');
     }
@@ -301,7 +317,11 @@ export function inPlaceEditSeed(
       break;
     }
     case 'hole': {
-      const face = ctx.face(data.targetBodyId, data.faceHash);
+      const face = ctx.face(
+        data.targetBodyId,
+        data.faceHash,
+        data.faceReference
+      );
       if (face) {
         // Its stored position is kept even when it does not resolve now;
         // the handles then stand on the face's anchor.
@@ -326,11 +346,19 @@ export function inPlaceEditSeed(
       break;
     }
     case 'shell':
-      faces(data.targetBodyId, data.openingFaceHashes);
+      faces(
+        data.targetBodyId,
+        data.openingFaceHashes,
+        data.openingFaceReferences
+      );
       value('thickness', data.thickness);
       break;
     case 'thicken':
-      faces(data.targetBodyId, [data.faceHash]);
+      faces(
+        data.targetBodyId,
+        [data.faceHash],
+        data.faceReference ? [data.faceReference] : undefined
+      );
       value('thickness', data.thickness);
       break;
     case 'solid-offset': {
@@ -342,7 +370,7 @@ export function inPlaceEditSeed(
       break;
     }
     case 'draft': {
-      faces(data.targetBodyId, data.faceHashes);
+      faces(data.targetBodyId, data.faceHashes, data.faceReferences);
       value('angle', data.angleDeg);
       const pull = presetPull(data.pullDirection);
       seed.choices.pull = [SAVED_CHOICE];
@@ -428,12 +456,14 @@ export function inPlaceEditSeed(
       data.edgeHashes.forEach((hash, index) => {
         const stored = named ? data.edgeReferences![index]! : undefined;
         const edge = ctx.edge(data.targetBodyId, hash, stored);
-        if (!edge) missing.push('edge');
-        const { reference: _current, ...placed } = edge ?? {
-          bodyId: data.targetBodyId,
-          hash,
-          topologyId: ''
-        };
+        // An edge that no longer resolves is left out, as a face or a path
+        // curve is: a click then picks its replacement rather than adding
+        // to a set nothing can build.
+        if (!edge) {
+          missing.push('edge');
+          return;
+        }
+        const { reference: _current, ...placed } = edge;
         // Placed where the edge is now (found by name if its hash moved),
         // but stored back as it was stored.
         seed.slots.edges.push({
@@ -484,8 +514,11 @@ export function inPlaceEditSeed(
           : `world-${data.axis}`;
       } else {
         value('spacing', data.spacing);
-        value('spacing2', data.spacing2 ?? data.spacing);
-        value('count2', data.count2 ?? data.count);
+        // Absent, the second spacing and count follow the first's (the
+        // tool's defaults), not a copy of them that an edit would leave
+        // behind.
+        value('spacing2', data.spacing2);
+        value('count2', data.count2);
         seed.options.axis = data.axis;
         seed.options.axis2 = data.axis2 ?? 'y';
       }
@@ -738,16 +771,12 @@ export function inPlaceFeatureUpdate(
           !(saved.axis2 === undefined && request.axis2 === 'y')
             ? { axis2: request.axis2 }
             : {}),
-          ...(request.spacing2 !== undefined &&
-          !(
-            saved.spacing2 === undefined && request.spacing2 === request.spacing
-          )
+          // A second spacing or count still following the first is not in
+          // the request (see the grid tool), so it stays absent.
+          ...(request.spacing2 !== undefined
             ? { spacing2: request.spacing2 }
             : {}),
-          ...(request.count2 !== undefined &&
-          !(saved.count2 === undefined && request.count2 === request.count)
-            ? { count2: request.count2 }
-            : {}),
+          ...(request.count2 !== undefined ? { count2: request.count2 } : {}),
           ...(request.axisRef ? { axisRef: request.axisRef } : {})
         },
         // R01: the world axis is the absent datum axis.
@@ -757,6 +786,88 @@ export function inPlaceFeatureUpdate(
       };
     }
   }
+}
+
+/**
+ * The sketches a feature was built from, as it stores them: an edit shows
+ * them even when a saved pick no longer resolves, since that is when the
+ * replacement has to be clicked.
+ */
+export function inPlaceEditSourceSketchIds(data: FeatureData): SketchId[] {
+  switch (data.featureKind) {
+    case 'revolve':
+      return [data.sketchId];
+    case 'loft':
+      return data.sections.map((section) => section.sketchId);
+    case 'sweep':
+      return [
+        data.profile.sketchId,
+        data.path.sketchId,
+        ...(data.guide ? [data.guide.sketchId] : [])
+      ];
+    case 'helical-sweep':
+      return [data.profile.sketchId];
+    default:
+      return [];
+  }
+}
+
+/** Features that reshape the one body they take, adding no other's material. */
+const SINGLE_LINEAGE_KINDS = new Set<FeatureData['featureKind']>([
+  'fillet',
+  'chamfer',
+  'hole',
+  'shell',
+  'draft',
+  'thicken',
+  'solid-offset',
+  'split',
+  'transform',
+  'mirror',
+  'pattern',
+  'direct-edit'
+]);
+
+function bodyInputs(data: FeatureData): BodyId[] {
+  if ('targetBodyIds' in data) return [...data.targetBodyIds];
+  return 'targetBodyId' in data && data.targetBodyId ? [data.targetBodyId] : [];
+}
+
+/**
+ * The bodies an edited feature's result became: its own, and every body a
+ * later feature built from them. `mixed` are those another body's material
+ * joined on the way (a union, an extrude added into it), whose faces may
+ * have come from that other body; `pure` are the rest.
+ */
+export function inPlaceEditLineage(
+  document: ProjectDocument,
+  featureId: FeatureId,
+  ownBodyIds: readonly BodyId[]
+): { pure: Set<BodyId>; mixed: Set<BodyId> } {
+  const history = featureHistory(document);
+  const pure = new Set<BodyId>(ownBodyIds);
+  const mixed = new Set<BodyId>();
+  const feature = history.features.find(
+    (candidate) => candidate.featureId === featureId
+  );
+  if (!feature) return { pure, mixed };
+  for (const bodyId of featureResultBodyIds(feature)) pure.add(bodyId);
+  for (const later of history.downstream(featureId)) {
+    const inputs = bodyInputs(later.data);
+    const fromLineage = inputs.filter(
+      (bodyId) => pure.has(bodyId) || mixed.has(bodyId)
+    );
+    // Built from the result only through a sketch or a datum: not its body.
+    if (fromLineage.length === 0) continue;
+    const joined =
+      !SINGLE_LINEAGE_KINDS.has(later.data.featureKind) ||
+      fromLineage.length < inputs.length ||
+      fromLineage.some((bodyId) => mixed.has(bodyId));
+    for (const bodyId of featureResultBodyIds(later)) {
+      (joined ? mixed : pure).add(bodyId);
+    }
+  }
+  return { pure, mixed };
 }
 
 /**

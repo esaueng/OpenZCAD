@@ -63,11 +63,7 @@ import { prepareSaveStateRestore } from './lib/saveStateRestore';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import { toggleBodyIsolation, type BodyIsolation } from './lib/bodyIsolation';
 import { failedFeatureIds } from './lib/featureRepair';
-import {
-  featureHistory,
-  featureResultBodyIds,
-  relatedFeatureIds
-} from './lib/featureHistory';
+import { featureHistory, relatedFeatureIds } from './lib/featureHistory';
 import {
   exportScope,
   exportScopeLabel,
@@ -1411,6 +1407,7 @@ import {
   valueInRange,
   type InPlaceRequest,
   type BodyPick,
+  type CurvePick,
   type EdgePick,
   type FacePick,
   type InPlaceToolId,
@@ -1422,8 +1419,10 @@ import {
 } from './lib/inPlace/curves';
 import { datumAxisChoices } from './lib/datumAxisChoices';
 import {
+  inPlaceEditLineage,
   inPlaceEditMovedBodies,
   inPlaceEditSeed,
+  inPlaceEditSourceSketchIds,
   inPlaceFeatureUpdate,
   inPlaceToolForFeature,
   type InPlaceEditSeed
@@ -8279,8 +8278,20 @@ export function App() {
       firstRegion: (sketchId) =>
         availableSketchViews.find((view) => view.sketchId === sketchId)
           ?.regions[0]?.regionFingerprint ?? null,
-      face: (bodyId, hash) =>
-        inPlaceFacePick(bodyId, undefined, hash, undefined, true),
+      face: (bodyId, hash, reference) => {
+        // As the feature rebuilds it: by lineage first, then the hash.
+        const found = resolveFace(representations[bodyId], { hash, reference });
+        const pick = found.ok
+          ? inPlaceFacePick(
+              bodyId,
+              found.entry.topologyId,
+              found.entry.hash,
+              undefined,
+              true
+            )
+          : null;
+        return pick && reference ? { ...pick, reference } : pick;
+      },
       edge: (bodyId, hash, reference) => {
         const found = resolveEdge(representations[bodyId], {
           hash,
@@ -8294,11 +8305,7 @@ export function App() {
         // the handle then stands on the feature's own blend face, the one
         // its History row lights, pointing into the body.
         const blend = inPlaceBlendAnchor(current, feature);
-        return pick
-          ? { ...pick, ...(blend ?? {}) }
-          : blend
-            ? { bodyId, hash, topologyId: '', ...blend }
-            : null;
+        return pick ? { ...pick, ...(blend ?? {}) } : null;
       },
       anyFace: (bodyId) => {
         // A flat face carries the handle best; a body with none (a sphere)
@@ -8311,20 +8318,8 @@ export function App() {
           ? inPlaceFacePick(bodyId, face.topologyId, face.hash, undefined, true)
           : null;
       },
-      curve: (sketchId, entityId) => {
-        // As the card's path options were: a drawn line or arc of that
-        // sketch, not construction.
-        const node = current.nodes[entityId as EntityId];
-        return (
-          node?.kind === 'sketch-object' &&
-          !node.data.construction &&
-          (node.data.objectKind === 'line' || node.data.objectKind === 'arc') &&
-          (findSketch(current, sketchId)?.objectIds.includes(
-            entityId as EntityId
-          ) ??
-            false)
-        );
-      },
+      curve: (sketchId, entityId) =>
+        sweepCurveExists(current, sketchId, entityId),
       body: (bodyId) => inPlaceBodyPick(bodyId)
     });
     if (!armed) return false;
@@ -8427,6 +8422,27 @@ export function App() {
     inPlaceRef.current.pickPlane({ kind: 'datum', featureId });
   }
 
+  /**
+   * Whether a sketch still has a curve a path can take: a drawn line or arc
+   * of that sketch, not construction, as the card's path options were.
+   */
+  function sweepCurveExists(
+    current: ProjectDocument,
+    sketchId: SketchId,
+    entityId: string
+  ): boolean {
+    const node = current.nodes[entityId as EntityId];
+    return (
+      node?.kind === 'sketch-object' &&
+      !node.data.construction &&
+      (node.data.objectKind === 'line' || node.data.objectKind === 'arc') &&
+      (findSketch(current, sketchId)?.objectIds.includes(
+        entityId as EntityId
+      ) ??
+        false)
+    );
+  }
+
   /** The feature that made a body, or a sketch, for {@link inPlaceEditMayUse}. */
   function producingFeatureOf(
     target: { bodyId: BodyId } | { sketchId: SketchId }
@@ -8490,12 +8506,17 @@ export function App() {
         producingFeatureOf({ bodyId: resolvedBodyId }),
         editing
       );
-    if (later && editing && !inPlaceEditDescendants(editing).has(resolvedBodyId)) {
+    const descendants =
+      later && editing ? inPlaceEditDescendants(editing) : null;
+    if (later && editing && !descendants?.has(resolvedBodyId)) {
       setStatus(
         `${editing.name} can only use faces of bodies made before it in History.`
       );
       return null;
     }
+    // Another body's material joined this one later (a union, say): only a
+    // face the edited body still has unchanged is surely one of its own.
+    const joined = descendants?.mixed.has(resolvedBodyId) ?? false;
     // A hole goes where the click lands, and on a body a later feature moved
     // (a copy, a mirror, a pattern) that is not where the hole's own face is.
     if (
@@ -8515,17 +8536,27 @@ export function App() {
     }
     const remap = later;
     if (remap && editTarget) {
-      const clicked = face?.geometry;
+      const clicked = face;
+      const clickedHash = hash ?? clicked?.hash;
       face =
         representations[editTarget]?.topology?.faces.find(
-          (candidate) => hash !== undefined && candidate.hash === hash
+          (candidate) =>
+            clickedHash !== undefined && candidate.hash === clickedHash
         ) ??
-        coplanarFace(
-          editTarget,
-          clicked?.normal,
-          clicked?.centroid ?? clicked?.center
-        );
+        (joined
+          ? undefined
+          : coplanarFace(
+              editTarget,
+              clicked?.geometry?.normal,
+              clicked?.geometry?.centroid ?? clicked?.geometry?.center
+            ));
       if (face) resolvedBodyId = editTarget;
+      else if (joined && editing) {
+        setStatus(
+          `That face may come from a body joined after ${editing.name} · pick a face of the body ${editing.name} was made on.`
+        );
+        return null;
+      }
     }
     if (!face && !remap) {
       // While a preview shows, a click lands on the preview's body, which the
@@ -8563,16 +8594,19 @@ export function App() {
    * feature after it built from them. Only a click on one of these stands
    * for the edit's input.
    */
-  function inPlaceEditDescendants(edit: InPlaceEditSeed): Set<BodyId> {
+  function inPlaceEditDescendants(edit: InPlaceEditSeed): {
+    pure: Set<BodyId>;
+    mixed: Set<BodyId>;
+    has(bodyId: BodyId): boolean;
+  } {
     const current = managerRef.current?.document;
-    const feature = current ? findFeature(current, edit.featureId) : null;
-    const bodies = new Set<BodyId>(edit.ownBodyIds);
-    if (!current || !feature) return bodies;
-    for (const bodyId of featureResultBodyIds(feature)) bodies.add(bodyId);
-    for (const later of featureHistory(current).downstream(edit.featureId)) {
-      for (const bodyId of featureResultBodyIds(later)) bodies.add(bodyId);
-    }
-    return bodies;
+    const lineage = current
+      ? inPlaceEditLineage(current, edit.featureId, edit.ownBodyIds)
+      : { pure: new Set<BodyId>(edit.ownBodyIds), mixed: new Set<BodyId>() };
+    return {
+      ...lineage,
+      has: (bodyId) => lineage.pure.has(bodyId) || lineage.mixed.has(bodyId)
+    };
   }
 
   /** A body's face in the plane through `on` facing `normal`, if it has one. */
@@ -14643,6 +14677,67 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [representations, displayedGeometryComplete]);
 
+  /**
+   * The edge a click names for an in-place Fillet or Chamfer, or null when
+   * the click is refused (and says why).
+   */
+  function inPlaceEdgeForSelection(
+    selection: TopologySelection
+  ): EdgePick | null {
+    // An edit's edges are its input body's: a click on what the blend
+    // built names the input's edge by its fingerprint, which an
+    // unblended edge keeps, and the validated commit refuses one the
+    // kernel cannot find rather than guessing.
+    const editing = inPlaceRef.current.editing;
+    const target =
+      editing && 'targetBodyId' in editing.data
+        ? (editing.data.targetBodyId ?? null)
+        : null;
+    const remap =
+      target !== null &&
+      selection.bodyId !== target &&
+      !inPlaceEditMayUse(
+        producingFeatureOf({ bodyId: selection.bodyId }),
+        editing
+      );
+    // Only what the edited blend's result became stands for its input;
+    // an edge of another later body is refused.
+    const descendants =
+      remap && editing ? inPlaceEditDescendants(editing) : null;
+    if (remap && editing && !descendants?.has(selection.bodyId)) {
+      setStatus(
+        `${editing.name} can only use edges of bodies made before it in History.`
+      );
+      return null;
+    }
+    // On a body another one joined later, only an edge the input still
+    // has is surely its own.
+    const joined = descendants?.mixed.has(selection.bodyId);
+    const onInput =
+      remap && target
+        ? inPlaceEdgePick(target, undefined, selection.hash)
+        : null;
+    if (remap && joined && !onInput && editing) {
+      setStatus(
+        `That edge may come from a body joined after ${editing.name} · pick an edge of the body ${editing.name} was made on.`
+      );
+      return null;
+    }
+    if (remap && target) {
+      return (
+        onInput ??
+        (selection.hash !== undefined
+          ? { bodyId: target, hash: selection.hash, topologyId: '' }
+          : null)
+      );
+    }
+    return inPlaceEdgePick(
+      selection.bodyId,
+      selection.topologyId,
+      selection.hash
+    );
+  }
+
   function handleSelectTopologyFromViewer(
     selection: TopologySelection | null,
     additive: boolean,
@@ -14655,45 +14750,7 @@ export function App() {
       // under it.
       const command = inPlaceRef.current;
       if (selection?.kind === 'edge' && command.spec?.edgeMode) {
-        // An edit's edges are its input body's: a click on what the blend
-        // built names the input's edge by its fingerprint, which an
-        // unblended edge keeps, and the validated commit refuses one the
-        // kernel cannot find rather than guessing.
-        const editing = command.editing;
-        const target =
-          editing && 'targetBodyId' in editing.data
-            ? (editing.data.targetBodyId ?? null)
-            : null;
-        const remap =
-          target !== null &&
-          selection.bodyId !== target &&
-          !inPlaceEditMayUse(
-            producingFeatureOf({ bodyId: selection.bodyId }),
-            editing
-          );
-        // Only what the edited blend's result became stands for its input;
-        // an edge of another later body is refused.
-        if (
-          remap &&
-          editing &&
-          !inPlaceEditDescendants(editing).has(selection.bodyId)
-        ) {
-          setStatus(
-            `${editing.name} can only use edges of bodies made before it in History.`
-          );
-          return true;
-        }
-        const edge =
-          remap && target
-            ? (inPlaceEdgePick(target, undefined, selection.hash) ??
-            (selection.hash !== undefined
-              ? { bodyId: target, hash: selection.hash, topologyId: '' }
-              : null))
-          : inPlaceEdgePick(
-              selection.bodyId,
-              selection.topologyId,
-              selection.hash
-            );
+        const edge = inPlaceEdgeForSelection(selection);
         return edge ? command.pickEdge(edge) : true;
       }
       if (selection?.kind === 'face' && command.spec?.faceMode) {
@@ -15467,6 +15524,23 @@ export function App() {
       setStatus(
         'Exact geometry is still rebuilding. Topology actions are temporarily unavailable.'
       );
+      return;
+    }
+    // A box sweep during an in-place Fillet or Chamfer adds to its edges,
+    // each taken as a click would take it, none toggled back out.
+    if (kind === 'edge' && inPlaceRef.current.spec?.edgeMode) {
+      const command = inPlaceRef.current;
+      const swept = selections.flatMap((selection) => {
+        const edge = inPlaceEdgeForSelection(selection);
+        return edge ? [edge] : [];
+      });
+      const held = new Set(
+        command.slots.edges.map((edge) => `${edge.bodyId}:${edge.hash}`)
+      );
+      command.setEdges([
+        ...command.slots.edges,
+        ...swept.filter((edge) => !held.has(`${edge.bodyId}:${edge.hash}`))
+      ]);
       return;
     }
     if (kind === 'edge') {
@@ -18980,20 +19054,26 @@ export function App() {
   );
 
   // An edit shows the sketches its feature was built from, consumed and
-  // hidden as they usually are, so a profile can be clicked again.
-  const inPlaceEditSketchIds = useMemo(
-    () =>
-      new Set(
-        inPlaceEditing
-          ? [
+  // hidden as they usually are, so a profile can be clicked again: every one
+  // it stores, including one whose saved picks no longer resolve.
+  const inPlaceEditSketchIds = useMemo(() => {
+    const feature =
+      inPlaceEditing && managerRef.current
+        ? findFeature(managerRef.current.document, inPlaceEditing.featureId)
+        : null;
+    return new Set<string>(
+      inPlaceEditing
+        ? [
+            ...(feature ? inPlaceEditSourceSketchIds(feature.data) : []),
+            ...[
               ...inPlaceEditing.slots.profiles,
               ...inPlaceEditing.slots.path,
               ...inPlaceEditing.slots.guide
-            ].map((pick) => pick.sketchId as string)
-          : []
-      ),
-    [inPlaceEditing]
-  );
+            ].map((pick) => pick.sketchId)
+          ]
+        : []
+    );
+  }, [inPlaceEditing]);
   // Editing needs hidden source profiles; visibility remains a viewport concern.
   const sketchViews = useMemo(
     () =>
@@ -19018,20 +19098,33 @@ export function App() {
   }, [inPlaceEditGone, setStatus]);
   // A seeded profile in a consumed (hidden) sketch could not be checked when
   // the edit armed: the sketch is drawn only once the edit shows it. Checked
-  // then, once, a profile its sketch no longer has is dropped and said, so
-  // the slot asks for a new pick rather than holding one nothing can build.
-  const checkedEditProfiles = useRef<InPlaceEditSeed | null>(null);
+  // then, and again whenever one of its sketches changes under the edit (an
+  // undo, a collaborator), a profile its sketch no longer has is dropped and
+  // said, so the slot asks for a new pick rather than holding one nothing
+  // can build.
+  const checkedEditProfiles = useRef<{
+    editing: InPlaceEditSeed;
+    views: readonly ((typeof availableSketchViews)[number] | undefined)[];
+  } | null>(null);
   const regionsForReferenceRef = useRef(regionsForReference);
   regionsForReferenceRef.current = regionsForReference;
   const inPlaceProfiles = inPlace.slots.profiles;
   useEffect(() => {
     const editing = inPlaceEditing;
-    if (!editing || checkedEditProfiles.current === editing) return;
+    if (!editing) return;
     const views = inPlaceProfiles.map((pick) =>
       availableSketchViews.find((view) => view.sketchId === pick.sketchId)
     );
     if (views.some((view) => !view)) return;
-    checkedEditProfiles.current = editing;
+    const checked = checkedEditProfiles.current;
+    if (
+      checked?.editing === editing &&
+      checked.views.length === views.length &&
+      checked.views.every((view, index) => view === views[index])
+    ) {
+      return;
+    }
+    checkedEditProfiles.current = { editing, views };
     const kept = inPlaceProfiles.flatMap((pick, index) => {
       if (pick.implicit) return [pick];
       const [region] = regionsForReferenceRef.current(
@@ -19056,6 +19149,67 @@ export function App() {
       inPlaceRef.current.setProfiles(kept);
     }
   }, [inPlaceEditing, inPlaceProfiles, availableSketchViews, setStatus]);
+  // The same for its curves and faces while the document changes under the
+  // edit (an undo, a collaborator): a path entity or a face the model no
+  // longer has is dropped and said, since nothing on screen could click it
+  // back out of the list.
+  const inPlaceEditPicks = inPlace.slots;
+  useEffect(() => {
+    const editing = inPlaceEditing;
+    if (!editing || !doc) return;
+    const curves = (picks: readonly CurvePick[]) =>
+      picks.filter((pick) =>
+        sweepCurveExists(doc, pick.sketchId, pick.entityId)
+      );
+    // Only against a body whose topology is published: one still being
+    // analysed says nothing yet. A face is found as the feature rebuilds
+    // it, by lineage first, and follows its hash if that moved.
+    let facesMoved = false;
+    const faces = inPlaceEditPicks.faces.flatMap((pick) => {
+      const body = representations[pick.bodyId];
+      if (!body?.topology) return [pick];
+      const found = resolveFace(body, {
+        hash: pick.hash,
+        ...(pick.reference ? { reference: pick.reference } : {})
+      });
+      if (!found.ok) return [];
+      if (found.entry.hash === pick.hash) return [pick];
+      facesMoved = true;
+      return [
+        { ...pick, hash: found.entry.hash, topologyId: found.entry.topologyId }
+      ];
+    });
+    const path = curves(inPlaceEditPicks.path);
+    const guide = curves(inPlaceEditPicks.guide);
+    // A boolean's inputs are a list a missing body could not be clicked out
+    // of; a one-body slot is replaced by the next click, so it stays.
+    const listsBodies =
+      inPlace.tool !== null &&
+      IN_PLACE_TOOL_SPECS[inPlace.tool].bodyMode === 'many';
+    const bodies = listsBodies
+      ? inPlaceEditPicks.bodies.filter((pick) => representations[pick.bodyId])
+      : inPlaceEditPicks.bodies;
+    if (
+      path.length === inPlaceEditPicks.path.length &&
+      guide.length === inPlaceEditPicks.guide.length &&
+      faces.length === inPlaceEditPicks.faces.length &&
+      bodies.length === inPlaceEditPicks.bodies.length
+    ) {
+      if (facesMoved) inPlaceRef.current.setPicks({ faces });
+      return;
+    }
+    inPlaceRef.current.setPicks({ path, guide, faces, bodies });
+    setStatus(
+      `${editing.name}: a saved pick no longer exists in the model · pick it again.`
+    );
+  }, [
+    inPlaceEditing,
+    inPlaceEditPicks,
+    inPlace.tool,
+    doc,
+    representations,
+    setStatus
+  ]);
 
   useEffect(() => {
     setSelectedProfiles((current) => {
@@ -23186,11 +23340,15 @@ export function App() {
         }
         // Enter on a focused menu trigger or menu item (a History row's
         // actions, reached by keyboard while an edit is armed from that row)
-        // opens or runs it, not Done. Any other focused button, such as the
-        // rail tool just clicked, still leaves Enter to the command (U01).
+        // opens or runs it, not Done; so does Enter on the command bar's own
+        // controls (Options, a pick's remove button, Cancel), which act for
+        // themselves. Any other focused button, such as the rail tool just
+        // clicked, still leaves Enter to the command (U01).
         const control =
           target instanceof Element &&
-          target.closest('[aria-haspopup], [role="menu"]') !== null;
+          target.closest(
+            '[aria-haspopup], [role="menu"], .in-place-command'
+          ) !== null;
         if (event.key === 'Enter' && !typing && !control) {
           event.preventDefault();
           inPlace.done();

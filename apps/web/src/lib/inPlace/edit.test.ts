@@ -10,14 +10,17 @@ import {
 import { toUserId } from '@openzcad/shared';
 import type {
   BodyId,
+  FaceTopologyReferenceV5,
   FeatureData,
   FeatureId,
   FeatureNode,
   SketchId
 } from '@openzcad/shared';
 import {
+  inPlaceEditLineage,
   inPlaceEditMovedBodies,
   inPlaceEditSeed,
+  inPlaceEditSourceSketchIds,
   inPlaceFeatureUpdate,
   inPlaceToolForFeature,
   type InPlaceEditContext
@@ -84,8 +87,14 @@ function feature(data: FeatureData, bodyId?: BodyId): FeatureNode {
   } as unknown as FeatureNode;
 }
 
-/** The request the seeded command would commit, untouched. */
-function untouched(node: FeatureNode): InPlaceRequest | null {
+/**
+ * The request the seeded command would commit, untouched, or after the user
+ * sets `changed` (the tool's defaults fill the rest, as the hook's do).
+ */
+function untouched(
+  node: FeatureNode,
+  changed: Record<string, number> = {}
+): InPlaceRequest | null {
   const armed = inPlaceEditSeed(node, EDIT_CTX)!;
   const spec = IN_PLACE_TOOL_SPECS[armed.tool];
   const axis =
@@ -119,22 +128,29 @@ function untouched(node: FeatureNode): InPlaceRequest | null {
     plane: armed.seed.slots.plane,
     edges: armed.seed.slots.edges
   };
-  const values: Record<string, number | string> = { ...armed.seed.values };
-  for (const [id, raw] of Object.entries(armed.seed.raws)) values[id] = raw;
   const ctx: InPlaceContext = {
     sketchViews: [],
     datumAxes: undefined,
     datumLabel: () => 'Axis',
     saved: node.data,
-    evaluate: EDIT_CTX.evaluate
+    evaluate: EDIT_CTX.evaluate,
+    touched: [...armed.seed.touched, ...Object.keys(changed)]
   };
-  return spec.request(
-    slots,
-    values,
-    armed.seed.options,
-    ctx,
-    armed.seed.values
-  );
+  const numbers: Record<string, number> = {
+    ...armed.seed.values,
+    ...changed
+  };
+  const touched = new Set([...armed.seed.touched, ...Object.keys(changed)]);
+  for (const [id, value] of Object.entries(
+    spec.defaults?.(slots, ctx, numbers) ?? {}
+  )) {
+    if (!touched.has(id)) numbers[id] = value;
+  }
+  const values: Record<string, number | string> = { ...numbers };
+  for (const [id, raw] of Object.entries(armed.seed.raws)) {
+    if (!(id in changed)) values[id] = raw;
+  }
+  return spec.request(slots, values, armed.seed.options, ctx, numbers);
 }
 
 describe('which in-place command edits a stored feature', () => {
@@ -388,6 +404,26 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(update?.data).not.toHaveProperty('axis2');
     expect(update?.data).not.toHaveProperty('spacing2');
     expect(update?.data).not.toHaveProperty('count2');
+    // A new first spacing or count carries the second along: still absent.
+    const followed = inPlaceFeatureUpdate(
+      { featureId: node.featureId, name: node.name, data },
+      untouched(node, { spacing: 15, count: 4 }) as Extract<
+        InPlaceRequest,
+        { tool: 'pattern' }
+      >
+    );
+    expect(followed?.data).toMatchObject({ spacing: 15, count: 4 });
+    expect(followed?.data).not.toHaveProperty('spacing2');
+    expect(followed?.data).not.toHaveProperty('count2');
+    // Set to the first's value on purpose, it is written and stops following.
+    const pinned = inPlaceFeatureUpdate(
+      { featureId: node.featureId, name: node.name, data },
+      untouched(node, { spacing2: 12, count2: 3 }) as Extract<
+        InPlaceRequest,
+        { tool: 'pattern' }
+      >
+    );
+    expect(pinned?.data).toMatchObject({ spacing2: 12, count2: 3 });
     // Set apart from the first, it is written.
     expect(
       inPlaceFeatureUpdate(
@@ -482,6 +518,18 @@ describe('an untouched edit writes the feature back as stored', () => {
     );
   });
 
+  it('fillet: an edge that no longer resolves is left for a new pick', () => {
+    const data: FeatureData = {
+      featureKind: 'fillet',
+      targetBodyId: BODY,
+      edgeHashes: [21, 99],
+      radius: 1
+    };
+    const armed = inPlaceEditSeed(feature(data, 'body_f' as BodyId), EDIT_CTX)!;
+    expect(armed.seed.slots.edges.map((edge) => edge.hash)).toEqual([21]);
+    expect(armed.seed.notice).toMatch(/no longer resolves/);
+  });
+
   it('chamfer: a stored second distance is its shape', () => {
     const data: FeatureData = {
       featureKind: 'chamfer',
@@ -534,6 +582,34 @@ describe('an untouched edit writes the feature back as stored', () => {
     })!;
     expect(armed.seed.slots.bodies.map((body) => body.bodyId)).toEqual([BODY]);
     expect(armed.seed.notice).toMatch(/saved body no longer resolves/);
+  });
+
+  it('finds a stored face by its lineage reference, as the rebuild does', () => {
+    const reference = {
+      kind: 'face',
+      producingFeatureId: 'feat_box',
+      lineageName: 'top'
+    } as unknown as FaceTopologyReferenceV5;
+    const asked: unknown[] = [];
+    const ctx: InPlaceEditContext = {
+      ...EDIT_CTX,
+      // An upstream edit changed the hash; the lineage still names the face.
+      face: (bodyId, hash, ref) => {
+        asked.push([hash, ref]);
+        return ref === reference ? { ...TOP, bodyId } : null;
+      }
+    };
+    const data: FeatureData = {
+      featureKind: 'shell',
+      targetBodyId: BODY,
+      openingFaceHashes: [99],
+      openingFaceReferences: [reference],
+      thickness: 1
+    };
+    const armed = inPlaceEditSeed(feature(data), ctx)!;
+    expect(asked).toEqual([[99, reference]]);
+    expect(armed.seed.slots.faces).toHaveLength(1);
+    expect(armed.seed.notice).toBeNull();
   });
 
   it('names what no longer resolves, and leaves that slot to pick again', () => {
@@ -597,5 +673,76 @@ describe('inPlaceEditMovedBodies', () => {
     expect(moved.has(joined.bodyId)).toBe(true);
     // The drilled body itself stands where the hole was made.
     expect(moved.has(drilled.bodyId)).toBe(false);
+  });
+});
+
+describe('inPlaceEditSourceSketchIds', () => {
+  it("names a sweep's profile, path and guide sketches from what it stores", () => {
+    const path = 'sketch_path' as SketchId;
+    const guide = 'sketch_guide' as SketchId;
+    expect(
+      inPlaceEditSourceSketchIds({
+        featureKind: 'sweep',
+        profile: { sketchId: SKETCH },
+        path: { sketchId: path, entityIds: ['gone'] },
+        guide: { sketchId: guide, entityIds: ['gone'] }
+      } as unknown as FeatureData)
+    ).toEqual([SKETCH, path, guide]);
+    expect(
+      inPlaceEditSourceSketchIds({
+        featureKind: 'shell'
+      } as unknown as FeatureData)
+    ).toEqual([]);
+  });
+});
+
+describe('inPlaceEditLineage', () => {
+  it("tells the result's own reshapes from bodies another one joined", () => {
+    let document = createProjectDocument('Lineage', toUserId('user_test'));
+    document = addPrimitiveFeature(document, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 40, height: 30, depth: 20 }
+    });
+    document = addPrimitiveFeature(document, {
+      name: 'Post',
+      primitiveKind: 'box',
+      dimensions: { width: 5, height: 5, depth: 40 }
+    });
+    const [block, post] = listFeaturesInOrder(document).flatMap((feature) =>
+      feature.bodyId ? [feature.bodyId] : []
+    );
+    const drilled = holeBody(document, {
+      name: 'Hole',
+      targetBodyId: block!,
+      faceHash: 1,
+      style: 'simple',
+      diameter: 4,
+      depthMode: 'through',
+      position: { u: 0, v: 0 }
+    });
+    document = drilled.document;
+    const hole = listFeaturesInOrder(document).at(-1)!.featureId;
+    const moved = transformBody(document, {
+      name: 'Nudge',
+      targetBodyId: drilled.bodyId,
+      translation: { x: 1, y: 0, z: 0 }
+    });
+    document = moved.document;
+    const joined = booleanBodies(document, {
+      name: 'Join',
+      operation: 'union',
+      targetBodyIds: [drilled.bodyId, post!]
+    });
+    document = joined.document;
+    const lineage = inPlaceEditLineage(document, hole, []);
+    // The hole's own result, moved in place, is still only its body.
+    expect(lineage.pure.has(drilled.bodyId)).toBe(true);
+    // The union carries the post's faces too.
+    expect(lineage.mixed.has(joined.bodyId)).toBe(true);
+    expect(lineage.pure.has(joined.bodyId)).toBe(false);
+    // The post itself was never the hole's.
+    expect(lineage.pure.has(post!)).toBe(false);
+    expect(lineage.mixed.has(post!)).toBe(false);
   });
 });

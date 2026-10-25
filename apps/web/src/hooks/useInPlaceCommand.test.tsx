@@ -210,13 +210,12 @@ describe('useInPlaceCommand: revolve', () => {
     });
     expect(hook.result.current.refusal).toMatch(/sweep \* 5 is 400/);
     expect(hook.result.current.values.angle ?? 360).toBe(360);
+    // Nothing is committed while the refusal stands, the refused value
+    // least of all.
     act(() => {
-      hook.result.current.done();
+      expect(hook.result.current.done()).toBe(false);
     });
-    const request = commit.mock.calls[0]![0];
-    expect(request.tool === 'revolve' && request.angleDeg).not.toBe(
-      'sweep * 5'
-    );
+    expect(commit).not.toHaveBeenCalled();
   });
 
   it('keeps a sub-degree revolve', () => {
@@ -326,7 +325,9 @@ describe('useInPlaceCommand: revolve', () => {
     await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
     expect(publishPreview).toHaveBeenLastCalledWith(expect.anything());
     builds = false;
-    act(() => hook.result.current.setValue('angle', 90));
+    act(() => {
+      hook.result.current.setValue('angle', 90);
+    });
     await waitFor(() =>
       expect(hook.result.current.refusal).toMatch(/not a closed profile/)
     );
@@ -406,6 +407,27 @@ describe('useInPlaceCommand: sweep', () => {
     );
     expect(hook.result.current.slots.path).toEqual([]);
   });
+
+  it('takes a re-checked path in place of the one it held', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('sweep', [PICK]));
+    act(() =>
+      hook.result.current.pickCurve({ sketchId: OTHER, entityId: 'p1' })
+    );
+    act(() =>
+      hook.result.current.pickCurve({ sketchId: OTHER, entityId: 'p2' })
+    );
+    // p1 left the model: the re-check keeps p2 alone, and the profile stays.
+    act(() =>
+      hook.result.current.setPicks({
+        path: [{ sketchId: OTHER, entityId: 'p2' }]
+      })
+    );
+    expect(hook.result.current.slots.path).toEqual([
+      { sketchId: OTHER, entityId: 'p2' }
+    ]);
+    expect(hook.result.current.slots.profiles).toEqual([PICK]);
+  });
 });
 
 describe('useInPlaceCommand: helical sweep', () => {
@@ -478,6 +500,32 @@ describe('useInPlaceCommand: hole step chips', () => {
         }
       })
     );
+  });
+
+  it('a refused entry holds Done until a value is taken, then clears', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('hole', [], [FACE]));
+    act(() => hook.result.current.setOption('style', 'countersink'));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    let accepted = true;
+    act(() => {
+      accepted = hook.result.current.setValue('countersinkAngleDeg', 180);
+    });
+    expect(accepted).toBe(false);
+    // The chip is back on the value before; Done must not commit that as
+    // if it were what was typed.
+    expect(hook.result.current.refusal).toMatch(/takes/);
+    expect(hook.result.current.canFinish).toBe(false);
+    // The value that was there before, typed again, is taken and clears it.
+    act(() => {
+      accepted = hook.result.current.setValue(
+        'countersinkAngleDeg',
+        hook.result.current.values.countersinkAngleDeg ?? 90
+      );
+    });
+    expect(accepted).toBe(true);
+    expect(hook.result.current.refusal).toBeNull();
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
   });
 
   it('a countersink shows its diameter and angle chips', () => {
