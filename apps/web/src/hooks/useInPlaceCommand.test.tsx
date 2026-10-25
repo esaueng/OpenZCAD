@@ -846,6 +846,56 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     );
   });
 
+  it("reads an edited plane's written fields again when the model changes", () => {
+    let offset = 5;
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      evaluate: (value) =>
+        value === 'gap'
+          ? offset
+          : typeof value === 'number'
+            ? value
+            : Number(value),
+      baseVersion: 1
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('mirror', {
+        ...SEED,
+        data: {
+          featureKind: 'mirror',
+          targetBodyId: 'body_a' as BodyId,
+          plane: {
+            origin: { x: 'gap', y: 0, z: 0 },
+            normal: { x: 1, y: 0, z: 0 }
+          }
+        } as never,
+        slots: {
+          ...SEED.slots,
+          bodies: [],
+          plane: {
+            kind: 'saved',
+            origin: { x: 5, y: 0, z: 0 },
+            normal: { x: 1, y: 0, z: 0 },
+            fields: {
+              origin: { x: 'gap', y: '0', z: '0' },
+              normal: { x: '1', y: '0', z: '0' }
+            }
+          }
+        }
+      })
+    );
+    offset = 8;
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.slots.plane).toMatchObject({
+      kind: 'saved',
+      origin: { x: 8, y: 0, z: 0 }
+    });
+  });
+
   it('finishes a suppressed feature edit that builds no body', async () => {
     // Suppressed, the feature publishes no body: the preview still stands.
     const { hook } = setup({
