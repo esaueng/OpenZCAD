@@ -7,7 +7,11 @@ import {
   listFeaturesInOrder,
   transformBody
 } from '@openzcad/document-core';
-import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import {
+  FEATURE_SUPPRESSED_METADATA_KEY,
+  toUserId,
+  type ProjectDocument
+} from '@openzcad/shared';
 import type { FeatureUpdateInput } from '@openzcad/document-core';
 import type {
   BodyId,
@@ -822,6 +826,26 @@ describe('inPlaceEditMovedBodies', () => {
     expect(moved.has(joined.bodyId)).toBe(true);
     // The drilled body itself stands where the hole was made.
     expect(moved.has(drilled.bodyId)).toBe(false);
+    // A suppressed copy moved nothing, nor did what is built on it.
+    const copyNode = Object.values(document.nodes).find(
+      (node) => node.kind === 'feature' && node.name === 'Copy'
+    )!;
+    const suppressed: ProjectDocument = {
+      ...document,
+      nodes: {
+        ...document.nodes,
+        [copyNode.id]: {
+          ...copyNode,
+          metadata: {
+            ...copyNode.metadata,
+            [FEATURE_SUPPRESSED_METADATA_KEY]: true
+          }
+        }
+      }
+    };
+    expect(inPlaceEditMovedBodies(suppressed, hole).has(copy.bodyId)).toBe(
+      false
+    );
   });
 });
 

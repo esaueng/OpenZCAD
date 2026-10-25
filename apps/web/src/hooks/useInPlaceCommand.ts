@@ -80,6 +80,44 @@ export interface UseInPlaceCommandOptions extends InPlaceContext {
   onStatus(message: string): void;
 }
 
+const SLOT_KEYS = [
+  'profiles',
+  'axisId',
+  'path',
+  'guide',
+  'faces',
+  'bodies',
+  'plane'
+] as const;
+
+/** Where a pick stands or what it measures, not what it references. */
+const PLACEMENT_KEYS = new Set([
+  'min',
+  'max',
+  'point',
+  'centroid',
+  'center',
+  'normal',
+  'origin',
+  'direction',
+  'middle',
+  'outward',
+  'end',
+  'fields',
+  'regionFingerprint',
+  'surfaceType'
+]);
+
+/**
+ * What a slot references, for telling a user's repick from the same picks
+ * read again (a re-measured box, a renumbered region).
+ */
+function slotIdentity(slot: unknown): string {
+  return JSON.stringify(slot ?? null, (key, value: unknown) =>
+    PLACEMENT_KEYS.has(key) ? undefined : value
+  );
+}
+
 interface Session {
   tool: InPlaceToolId;
   slots: {
@@ -205,7 +243,14 @@ export function useInPlaceCommand(
   // A typed value the tool refused: it stands until the next accepted
   // value, and Done waits with it, since the chip went back to the value
   // before and finishing would commit that instead of what was typed.
-  const [committing, setCommitting] = useState(false);
+  const [committing, setCommittingState] = useState(false);
+  // While an edit's Done is validating, its inputs hold still: a change made
+  // meanwhile would be closed away unseen by that commit's success.
+  const committingRef = useRef(false);
+  const setCommitting = useCallback((value: boolean) => {
+    committingRef.current = value;
+    setCommittingState(value);
+  }, []);
   /**
    * What an edit's values and options were seeded from, kept for each one
    * the user has not changed: the user's own changes differ from it.
@@ -214,6 +259,7 @@ export function useInPlaceCommand(
     values: Record<string, number>;
     raws: Record<string, string>;
     options: Record<string, string>;
+    slots: Session['slots'];
   } | null>(null);
   const [entryRefusal, setEntryRefusal] = useState<{
     valueId: string;
@@ -584,7 +630,8 @@ export function useInPlaceCommand(
         const nextBaseline = {
           values: { ...baseline.values },
           raws: { ...baseline.raws },
-          options: { ...baseline.options }
+          options: { ...baseline.options },
+          slots: baseline.slots
         };
         const ids = new Set([
           ...Object.keys(live.values),
@@ -632,6 +679,20 @@ export function useInPlaceCommand(
           }
           changed = true;
         }
+        // So do its picks: an untouched slot takes what the feature
+        // references now (an undo may have re-pointed its path or bodies).
+        const takeSlot = <K extends keyof Session['slots']>(key: K) => {
+          const now = slotIdentity(slots[key]);
+          if (now !== slotIdentity(baseline.slots[key])) return;
+          nextBaseline.slots = {
+            ...nextBaseline.slots,
+            [key]: live.slots[key]
+          };
+          if (slotIdentity(live.slots[key]) === now) return;
+          slots = { ...slots, [key]: live.slots[key] };
+          changed = true;
+        };
+        for (const key of SLOT_KEYS) takeSlot(key);
         seededRef.current = nextBaseline;
       }
       for (const [valueId, raw] of Object.entries(raws)) {
@@ -660,7 +721,7 @@ export function useInPlaceCommand(
     setEntryRefusal(null);
     setPreviewValid(false);
     optionsRef.current.publishPreview(null);
-  }, [preview]);
+  }, [preview, setCommitting]);
 
   const start = useCallback(
     (
@@ -711,7 +772,7 @@ export function useInPlaceCommand(
         touched: []
       });
     },
-    [preview]
+    [preview, setCommitting]
   );
 
   const edit = useCallback(
@@ -719,7 +780,8 @@ export function useInPlaceCommand(
       seededRef.current = {
         values: seed.values,
         raws: seed.raws,
-        options: seed.options
+        options: seed.options,
+        slots: seed.slots
       };
       preview.clear();
       optionsRef.current.publishPreview(null);
@@ -745,10 +807,11 @@ export function useInPlaceCommand(
         touched: [...seed.touched]
       });
     },
-    [preview]
+    [preview, setCommitting]
   );
 
   const pickProfile = useCallback((pick: ProfilePick) => {
+    if (committingRef.current) return;
     setSession((current) => {
       if (!current) return current;
       const toolSpec = IN_PLACE_TOOL_SPECS[current.tool];
@@ -812,12 +875,14 @@ export function useInPlaceCommand(
   );
 
   const pickAxis = useCallback((axisId: string) => {
+    if (committingRef.current) return;
     setSession((current) =>
       current ? { ...current, slots: { ...current.slots, axisId } } : current
     );
   }, []);
 
   const pickCurve = useCallback((curve: CurvePick, additive = true) => {
+    if (committingRef.current) return;
     setSession((current) => {
       if (!current) return current;
       // While Options say so, clicks build a sweep's guide rail instead.
@@ -841,6 +906,7 @@ export function useInPlaceCommand(
   const sessionRef = useRef(session);
   sessionRef.current = session;
   const pickFace = useCallback((face: FacePick) => {
+    if (committingRef.current) return false;
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
     if (!current || !toolSpec?.faceMode) return false;
@@ -876,6 +942,7 @@ export function useInPlaceCommand(
   }, []);
 
   const addFaces = useCallback((faces: readonly FacePick[]) => {
+    if (committingRef.current) return null;
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
     if (!current || toolSpec?.faceMode !== 'many') return null;
@@ -893,6 +960,7 @@ export function useInPlaceCommand(
   }, []);
 
   const pickBody = useCallback((body: BodyPick) => {
+    if (committingRef.current) return false;
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
     if (!current || !toolSpec?.bodyMode) return false;
@@ -921,6 +989,7 @@ export function useInPlaceCommand(
   }, []);
 
   const pickPlane = useCallback((plane: PlanePick) => {
+    if (committingRef.current) return false;
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
     if (!current || !toolSpec?.wantsPlane) return false;
@@ -951,6 +1020,7 @@ export function useInPlaceCommand(
   }, []);
 
   const setOption = useCallback((optionId: string, value: string) => {
+    if (committingRef.current) return;
     setSession((current) => {
       if (!current) return current;
       const specs = IN_PLACE_TOOL_SPECS[current.tool].options ?? [];
@@ -985,6 +1055,7 @@ export function useInPlaceCommand(
       raw: string | undefined,
       typed: boolean
     ) => {
+      if (committingRef.current) return false;
       const current = sessionRef.current;
       const valueSpec = current
         ? IN_PLACE_TOOL_SPECS[current.tool].values.find(
@@ -1119,7 +1190,7 @@ export function useInPlaceCommand(
       editing
     );
     return true;
-  }, [spec, canFinish, previewedKey, end]);
+  }, [spec, canFinish, previewedKey, end, setCommitting]);
 
   const settleEdit = useCallback(
     (edit: InPlaceEditSeed, committed: boolean) => {
@@ -1128,7 +1199,7 @@ export function useInPlaceCommand(
       setCommitting(false);
       if (committed) end();
     },
-    [end]
+    [end, setCommitting]
   );
 
   const cancel = useCallback(

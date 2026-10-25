@@ -1465,6 +1465,7 @@ import {
   withFeatureBuilt,
   holeWorldPosition,
   inPlaceEditBodyBox,
+  keptInOrder,
   keepAbsentHoleSteps,
   inPlaceEditLineage,
   inPlaceEditMovedBodies,
@@ -19596,19 +19597,24 @@ export function App() {
       return;
     }
     checkedEditProfiles.current = { editing, views };
-    const kept = inPlaceProfiles.flatMap((pick, index) => {
-      if (pick.implicit) return [pick];
-      const view = views[index];
-      if (!view) return [];
-      const [region] = regionsForReferenceRef.current(view, pick.reference);
-      return region
-        ? [{ ...pick, regionFingerprint: region.regionFingerprint }]
-        : [];
-    });
+    // Sections are ordered: one lost before a kept one clears the list.
+    const { kept, cleared } = keptInOrder(
+      inPlaceProfiles.map((pick, index) => {
+        if (pick.implicit) return pick;
+        const view = views[index];
+        if (!view) return null;
+        const [region] = regionsForReferenceRef.current(view, pick.reference);
+        return region
+          ? { ...pick, regionFingerprint: region.regionFingerprint }
+          : null;
+      })
+    );
     if (kept.length < inPlaceProfiles.length) {
       inPlaceRef.current.setProfiles(kept);
       setStatus(
-        `${editing.name}: its saved profile no longer resolves · pick it again.`
+        cleared
+          ? `${editing.name}: its saved profile no longer resolves · pick its sections again, in order.`
+          : `${editing.name}: its saved profile no longer resolves · pick it again.`
       );
     } else if (
       kept.some(
@@ -19645,9 +19651,19 @@ export function App() {
       liveFeature && liveFeature.data.featureKind === editing.data.featureKind
         ? liveFeature.data
         : editing.data;
+    // A path, a guide and a boolean's inputs are ordered: one lost before a
+    // kept one clears that list to be picked again in order.
+    let reordered = false;
+    const ordered = <T,>(entries: readonly (T | null)[]): T[] => {
+      const result = keptInOrder(entries);
+      if (result.cleared) reordered = true;
+      return result.kept;
+    };
     const curves = (picks: readonly CurvePick[]) =>
-      picks.filter((pick) =>
-        sweepCurveExists(doc, pick.sketchId, pick.entityId)
+      ordered(
+        picks.map((pick) =>
+          sweepCurveExists(doc, pick.sketchId, pick.entityId) ? pick : null
+        )
       );
     // Only against a body whose topology is published: one still being
     // analysed says nothing yet. A face is found as the feature rebuilds
@@ -19707,13 +19723,16 @@ export function App() {
     // Gone means gone from the document, or still without a shape once the
     // exact rebuild has finished: a body between rebuilds keeps its place.
     const kept = listsBodies
-      ? inPlaceEditPicks.bodies.filter(
-          (pick) =>
+      ? ordered(
+          inPlaceEditPicks.bodies.map((pick) =>
             representations[pick.bodyId] ||
             (!exactGeometryReady &&
               Object.values(doc.nodes).some(
                 (node) => node.kind === 'body' && node.bodyId === pick.bodyId
               ))
+              ? pick
+              : null
+          )
         )
       : inPlaceEditPicks.bodies;
     // A body the update reshaped is read again, so the handles placed from
@@ -19772,7 +19791,9 @@ export function App() {
     }
     inPlaceRef.current.setPicks({ path, guide, faces, bodies });
     setStatus(
-      `${editing.name}: a saved pick no longer exists in the model · pick it again.`
+      reordered
+        ? `${editing.name}: a saved pick no longer exists in the model · pick that list again, in order.`
+        : `${editing.name}: a saved pick no longer exists in the model · pick it again.`
     );
   }, [
     inPlaceEditing,

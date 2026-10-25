@@ -209,20 +209,11 @@ export function inPlaceEditSeed(
     if (number !== null) seed.values[id] = number;
   };
   const repick: string[] = [];
-  /**
-   * An ordered list (a loft's sections, a path, a boolean's inputs) with
-   * entries that no longer resolve. A new pick is appended, so the list is
-   * kept only while every gap is at its end; a gap before a kept entry would
-   * put its replacement out of place, so the whole list is picked again.
-   */
+  /** An ordered list's resolved entries, as {@link keptInOrder} keeps them. */
   const inOrder = <T>(entries: readonly (T | null)[], what: string): T[] => {
-    const gap = entries.indexOf(null);
-    if (gap === -1) return entries as T[];
-    if (entries.slice(gap).some((entry) => entry !== null)) {
-      repick.push(what);
-      return [];
-    }
-    return entries.slice(0, gap) as T[];
+    const { kept, cleared } = keptInOrder(entries);
+    if (cleared) repick.push(what);
+    return kept;
   };
   const profile = (section: SketchSectionReference) => {
     const pick = ctx.profile(section.sketchId, section.profile);
@@ -968,6 +959,8 @@ export function inPlaceEditMovedBodies(
   const moving = new Set<FeatureId>();
   const moved = new Set<BodyId>();
   for (const later of history.downstream(featureId)) {
+    // A suppressed step moved nothing: its body is shown where it was.
+    if (isFeatureSuppressed(later)) continue;
     const kind = later.data.featureKind;
     if (
       kind === 'transform' ||
@@ -982,6 +975,25 @@ export function inPlaceEditMovedBodies(
     }
   }
   return moved;
+}
+
+/**
+ * An ordered list (a loft's sections, a path, a boolean's inputs) with its
+ * unresolved entries as null. A new pick is appended, so the list is kept
+ * only while every gap is at its end; a gap before a kept entry would put
+ * its replacement out of place, so the whole list is cleared to be picked
+ * again in order.
+ */
+export function keptInOrder<T>(entries: readonly (T | null)[]): {
+  kept: T[];
+  cleared: boolean;
+} {
+  const gap = entries.indexOf(null);
+  if (gap === -1) return { kept: entries as T[], cleared: false };
+  if (entries.slice(gap).some((entry) => entry !== null)) {
+    return { kept: [], cleared: true };
+  }
+  return { kept: entries.slice(0, gap) as T[], cleared: false };
 }
 
 /** A hole's step sizes, which an absent value derives from its bore. */

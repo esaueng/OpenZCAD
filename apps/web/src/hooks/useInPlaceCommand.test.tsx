@@ -1043,6 +1043,50 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     });
   });
 
+  it('takes picks re-pointed by someone else unless the user repicked them', () => {
+    const body = (bodyId: string, size = 1) => ({
+      bodyId: bodyId as BodyId,
+      min: { x: 0, y: 0, z: 0 },
+      max: { x: size, y: size, z: size }
+    });
+    let bodies = [body('body_a'), body('body_b')];
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      baseVersion: 1,
+      reseed: (edit) => ({ ...edit, slots: { ...edit.slots, bodies } })
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('subtract', {
+        ...SEED,
+        slots: { ...SEED.slots, bodies: [body('body_a'), body('body_b')] }
+      })
+    );
+    // The same bodies measured again are not a change.
+    bodies = [body('body_a', 2), body('body_b')];
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.slots.bodies[0]?.max.x).toBe(1);
+    // An undo re-points the cutter: the untouched list follows.
+    bodies = [body('body_a'), body('body_c')];
+    hook.rerender({ ...options, baseVersion: 3 });
+    expect(hook.result.current.slots.bodies.map((b) => b.bodyId)).toEqual([
+      'body_a',
+      'body_c'
+    ]);
+    // Once the user picks, the list is theirs.
+    act(() => {
+      hook.result.current.pickBody(body('body_d'));
+    });
+    bodies = [body('body_a'), body('body_e')];
+    hook.rerender({ ...options, baseVersion: 4 });
+    expect(hook.result.current.slots.bodies.map((b) => b.bodyId)).toContain(
+      'body_d'
+    );
+  });
+
   it('previews a re-armed edit that builds the same thing', async () => {
     const { hook } = setup();
     act(() => hook.result.current.edit('subtract', SEED));
@@ -1108,9 +1152,20 @@ describe('useInPlaceCommand: editing a stored feature', () => {
       hook.result.current.done();
     });
     expect(commit).toHaveBeenCalledTimes(1);
-    // Validating: still the edit, and no second Done.
+    // Validating: still the edit, and no second Done; its inputs hold
+    // still, so what lands is what is shown.
     expect(hook.result.current.editing).toBe(SEED);
     expect(hook.result.current.canFinish).toBe(false);
+    act(() => {
+      hook.result.current.setOption('operation', 'union');
+      hook.result.current.pickBody({
+        bodyId: 'body_c' as BodyId,
+        min: { x: 0, y: 0, z: 0 },
+        max: { x: 1, y: 1, z: 1 }
+      });
+    });
+    expect(hook.result.current.options.operation).toBe('subtract');
+    expect(hook.result.current.slots.bodies).toHaveLength(2);
     // Refused: the edit is there to correct, and Done can go again.
     act(() => hook.result.current.settleEdit(SEED, false));
     expect(hook.result.current.editing).toBe(SEED);
