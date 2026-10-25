@@ -360,6 +360,46 @@ export const PROJECT_FENCE = `EXISTS (SELECT 1 FROM projects
   WHERE id = ? AND user_id = ? AND storage_format = 2 AND status <> 'deleted')`;
 
 /**
+ * Holds while the caller's device list is still the head a signer was
+ * checked against (`requireCertifiedDevice`): a write fenced by it cannot
+ * land after a removal of its signer, whose own write refuses once the
+ * device signed anything (`e2ee.ts`).
+ */
+export function deviceListUnchanged(
+  userId: string,
+  key: { generation: number; headSequence: number }
+): { sql: string; binds: (string | number)[] } {
+  return {
+    sql: `(SELECT MAX(generation) FROM e2ee_identities WHERE user_id = ?) = ?
+          AND (SELECT MAX(sequence) FROM e2ee_device_list_entries
+               WHERE user_id = ? AND generation = ?) = ?`,
+    binds: [userId, key.generation, userId, key.generation, key.headSequence]
+  };
+}
+
+/** Whether the caller's device list moved past `key`. */
+export async function deviceListMoved(
+  db: D1Database,
+  userId: string,
+  key: { generation: number; headSequence: number }
+): Promise<boolean> {
+  const fence = deviceListUnchanged(userId, key);
+  const row = await db
+    .prepare(`SELECT (${fence.sql}) AS same`)
+    .bind(...fence.binds)
+    .first<{ same: number | null }>();
+  return row?.same !== 1;
+}
+
+export function refuseDeviceListMoved(): never {
+  refuse(
+    409,
+    'E2EE_DEVICE_LIST_CHANGED',
+    'Your devices changed while this was saving. Save again.'
+  );
+}
+
+/**
  * The sending device is certified in the caller's newest device list:
  * listed, so not revoked, and not a read-only approved device (decision D4:
  * those read project keys through account-key wraps and hold no leaves).

@@ -655,6 +655,8 @@ async function writeGeneration(
     previousHead: { sequence: number; entryHash: string } | null;
     /** For a replacement: the replaced identity's account key, wrapped. */
     history: E2eeAccountKeyHistoryInput | null;
+    /** For a replacement: what must still hold when the identity lands. */
+    fence?: { sql: string; binds: string[] };
   }
 ): Promise<boolean> {
   const now = new Date().toISOString();
@@ -682,7 +684,8 @@ async function writeGeneration(
                   AND (SELECT MAX(sequence) FROM e2ee_device_list_entries
                        WHERE user_id = ? AND generation = ?) = ?`
                : '1 = 1'
-           }`
+           }
+           AND ${input.fence?.sql ?? '1 = 1'}`
       )
       .bind(
         userId,
@@ -703,7 +706,8 @@ async function writeGeneration(
               input.generation - 1,
               previousHead.sequence
             ]
-          : [])
+          : []),
+        ...(input.fence?.binds ?? [])
       ),
     db
       .prepare(
@@ -899,6 +903,11 @@ async function handleReplaceIdentity(
     }
     throw error;
   }
+  const signerFence = await projectSignerFence(
+    db,
+    userId,
+    removedDevices(oldList.devices, list.head.devices)
+  );
   const written = await writeGeneration(db, userId, {
     generation: generation,
     identityKeyText: body.identityKey as string,
@@ -914,9 +923,11 @@ async function handleReplaceIdentity(
       sequence: oldList.head.sequence,
       entryHash: toHex(oldList.headHash)
     },
-    history
+    history,
+    fence: signerFence
   });
   if (!written) {
+    await refuseIfSigned(db, signerFence);
     refuse(
       409,
       'E2EE_GENERATION_CONFLICT',
@@ -929,39 +940,72 @@ async function handleReplaceIdentity(
 export const E2EE_DEVICE_SIGNED_PROJECTS_CODE = 'E2EE_DEVICE_SIGNED_PROJECTS';
 
 /**
+ * Devices of `before` that `after` no longer lists with the same signing
+ * key: what they signed no longer resolves to a listed device.
+ */
+function removedDevices(
+  before: readonly { deviceId: string; signingKey: Uint8Array }[],
+  after: readonly { deviceId: string; signingKey: Uint8Array }[]
+): string[] {
+  return before
+    .filter(
+      (device) =>
+        !after.some(
+          (d) =>
+            d.deviceId === device.deviceId &&
+            toHex(d.signingKey) === toHex(device.signingKey)
+        )
+    )
+    .map((device) => device.deviceId);
+}
+
+/**
  * Until device removal records revocation cutoffs (ADR-024 slice 4-10), a
  * device that signed a version or envelope of one of the account's
  * encrypted projects stays: once removed, browsers would refuse what it
  * signed, and those projects would stop opening. A device that signed
  * nothing is removed as before. Nothing to check before migration 0033.
+ *
+ * Returns a fence for the device-list write itself, so a version a removed
+ * device signs meanwhile makes the write refuse; encrypted writes are
+ * fenced on the device list in turn (`deviceListUnchanged`).
  */
-async function refuseRemovingProjectSigners(
+async function projectSignerFence(
   db: D1Database,
   userId: string,
   removedDeviceIds: readonly string[]
-): Promise<void> {
+): Promise<{ sql: string; binds: string[] }> {
   if (
     removedDeviceIds.length === 0 ||
     !(await isE2eeProjectVersionStorageReady(db))
   ) {
-    return;
+    return { sql: '1 = 1', binds: [] };
   }
   const marks = removedDeviceIds.map(() => '?').join(', ');
-  const signed = await db
-    .prepare(
-      `SELECT 1 FROM projects p
+  const fence = {
+    sql: `NOT EXISTS (SELECT 1 FROM projects p
        WHERE p.user_id = ? AND p.storage_format = 2
          AND (EXISTS (SELECT 1 FROM e2ee_project_versions v
                       WHERE v.project_id = p.id
                         AND v.signer_device_id IN (${marks}))
            OR EXISTS (SELECT 1 FROM e2ee_project_envelopes e
                       WHERE e.project_id = p.id
-                        AND e.signer_device_id IN (${marks})))
-       LIMIT 1`
-    )
-    .bind(userId, ...removedDeviceIds, ...removedDeviceIds)
-    .first();
-  if (signed) {
+                        AND e.signer_device_id IN (${marks}))))`,
+    binds: [userId, ...removedDeviceIds, ...removedDeviceIds]
+  };
+  await refuseIfSigned(db, fence);
+  return fence;
+}
+
+async function refuseIfSigned(
+  db: D1Database,
+  fence: { sql: string; binds: string[] }
+): Promise<void> {
+  const clear = await db
+    .prepare(`SELECT (${fence.sql}) AS clear`)
+    .bind(...fence.binds)
+    .first<{ clear: number }>();
+  if (clear?.clear !== 1) {
     refuse(
       409,
       E2EE_DEVICE_SIGNED_PROJECTS_CODE,
@@ -1011,15 +1055,10 @@ async function handleAppend(
     signed
   ]);
   const previous = list.entries.at(-2)!.entry;
-  await refuseRemovingProjectSigners(
+  const signerFence = await projectSignerFence(
     db,
     userId,
-    previous.devices
-      .filter(
-        (device) =>
-          !list.head.devices.some((d) => d.deviceId === device.deviceId)
-      )
-      .map((device) => device.deviceId)
+    removedDevices(previous.devices, list.head.devices)
   );
   const rotation =
     toHex(previous.accountKeyCommitment) !==
@@ -1106,7 +1145,8 @@ async function handleAppend(
          SELECT ?, ?, ?, ?, ?, ?, ?
          WHERE ${auth.sql} AND (SELECT MAX(sequence) FROM e2ee_device_list_entries
                 WHERE user_id = ? AND generation = ?) = ?
-           AND (SELECT MAX(generation) FROM e2ee_identities WHERE user_id = ?) = ?`
+           AND (SELECT MAX(generation) FROM e2ee_identities WHERE user_id = ?) = ?
+           AND ${signerFence.sql}`
       )
       .bind(
         userId,
@@ -1121,7 +1161,8 @@ async function handleAppend(
         current.generation,
         before.sequence,
         userId,
-        current.generation
+        current.generation,
+        ...signerFence.binds
       ),
     ...(rotation
       ? [
@@ -1170,6 +1211,7 @@ async function handleAppend(
   ];
   const results = await db.batch(statements);
   if ((results[0]?.meta?.changes ?? 0) !== 1) {
+    await refuseIfSigned(db, signerFence);
     refuse(
       409,
       'E2EE_DEVICE_LIST_CONFLICT',

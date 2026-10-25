@@ -601,6 +601,34 @@ describe('version integrity', () => {
     });
   });
 
+  it('refuses a version whose signer’s device list changed while it was written', async () => {
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document: v1 } = await createEncrypted(laptop);
+    // The device list moves on (a removal, say) after the signer was checked
+    // and before the version lands.
+    const push = srv.statements.push.bind(srv.statements);
+    srv.statements.push = (...sql: string[]) => {
+      if (sql.some((s) => /^\s*UPDATE projects SET document_version/.test(s))) {
+        srv.statements.push = push;
+        srv.db
+          .prepare(
+            `INSERT INTO e2ee_device_list_entries
+             SELECT user_id, generation, sequence + 1, entry, signature,
+                    substr(entry_hash, 2) || '0', created_at
+             FROM e2ee_device_list_entries WHERE user_id = ?
+             ORDER BY sequence DESC LIMIT 1`
+          )
+          .run(OWNER);
+      }
+      return push(...sql);
+    };
+    await expect(
+      save(laptop, edited(v1, 'Two'), v1.version)
+    ).rejects.toMatchObject({ code: 'E2EE_DEVICE_LIST_CHANGED' });
+    expect(headOf(srv, v1.projectId).document_version).toBe(v1.version);
+  });
+
   it('keeps a device that signed encrypted projects until cutoffs exist (4-10)', async () => {
     const account = await makeAccount('user_removing', [
       'dev_a',

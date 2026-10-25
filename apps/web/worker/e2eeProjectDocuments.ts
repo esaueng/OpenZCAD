@@ -70,6 +70,8 @@ import {
   allChanged,
   archiveField,
   bytesField,
+  deviceListMoved,
+  deviceListUnchanged,
   idField,
   insertArchive,
   insertLeaf,
@@ -80,6 +82,7 @@ import {
   queryUint,
   record,
   refuse,
+  refuseDeviceListMoved,
   requireCertifiedDevice,
   requireOwnedEncryptedProject,
   runBatch,
@@ -230,7 +233,11 @@ interface CheckedVersion {
   prefix: string;
   hash: string;
   envelope: Uint8Array;
+  /** The device-list head the signer was certified in. */
+  signerList: SignerList;
 }
+
+type SignerList = { generation: number; headSequence: number };
 
 /**
  * A document envelope for this project that moves forward from
@@ -273,8 +280,14 @@ async function checkedDocumentEnvelope(
   if ((input.expectedVersion === 0) !== (header.previousVersionHash === null)) {
     invalid('Only the first version has no previous version');
   }
-  await requireSignature(ctx, envelope, input.signature, input.signerDeviceId);
+  const signerList = await requireSignature(
+    ctx,
+    envelope,
+    input.signature,
+    input.signerDeviceId
+  );
   return {
+    signerList,
     header,
     prefix: toBase64Url(shape.prefix),
     hash: toHex(await hashVersion(envelope)),
@@ -282,14 +295,17 @@ async function checkedDocumentEnvelope(
   };
 }
 
-/** The signer is certified in the caller's newest list and signed these bytes. */
+/**
+ * The signer is certified in the caller's newest list and signed these
+ * bytes. Returns that list's head, which the write is fenced on.
+ */
 async function requireSignature(
   ctx: Context,
   envelope: Uint8Array,
   signature: Uint8Array,
   deviceId: string
-): Promise<void> {
-  const { signingKey } = await requireCertifiedDevice(
+): Promise<SignerList> {
+  const { signingKey, generation, headSequence } = await requireCertifiedDevice(
     ctx.db,
     ctx.userId,
     deviceId
@@ -312,6 +328,7 @@ async function requireSignature(
       'The envelope is not signed by the device it names.'
     );
   }
+  return { generation, headSequence };
 }
 
 interface InfoInput {
@@ -322,6 +339,7 @@ interface InfoInput {
   wrappedVersionKey: string;
   signature: string;
   signerDeviceId: string;
+  signerList: SignerList;
 }
 
 async function infoInput(
@@ -353,8 +371,14 @@ async function infoInput(
     exact: VERSION_SIGNATURE_BYTES
   });
   const signerDeviceId = idField(input.signerDeviceId, 'info.signerDeviceId');
-  await requireSignature(ctx, envelope.bytes, signature.bytes, signerDeviceId);
+  const signerList = await requireSignature(
+    ctx,
+    envelope.bytes,
+    signature.bytes,
+    signerDeviceId
+  );
   return {
+    signerList,
     sequence: uintField(input.sequence, 'info.sequence'),
     envelope: envelope.text,
     envelopeBytes: envelope.bytes,
@@ -872,6 +896,7 @@ async function writeVersion(
   const body = await storeBody(ctx, projectId, version);
   const now = new Date().toISOString();
   const newVersion = version.header.documentVersion;
+  const signerFence = deviceListUnchanged(ctx.userId, version.signerList);
   // Every later statement lands only once the head moved to this version.
   const moved = {
     sql: `EXISTS (SELECT 1 FROM projects WHERE id = ? AND document_version = ?
@@ -892,7 +917,8 @@ async function writeVersion(
            AND NOT EXISTS (SELECT 1 FROM e2ee_project_versions
                            WHERE project_id = ? AND document_version > ?)
            AND EXISTS (SELECT 1 FROM e2ee_project_groups
-                       WHERE project_id = ? AND key_epoch_base + epoch = ?)`
+                       WHERE project_id = ? AND key_epoch_base + epoch = ?)
+           AND ${signerFence.sql}`
       )
       .bind(
         newVersion,
@@ -908,7 +934,8 @@ async function writeVersion(
         projectId,
         input.expectedVersion,
         projectId,
-        keyEpoch
+        keyEpoch,
+        ...signerFence.binds
       ),
     // The replaced head's body goes first, so the quota sees the new one
     // replace it; a revision keeps its body.
@@ -960,6 +987,9 @@ async function writeVersion(
     (revisionId === null || (results[3]?.meta?.changes ?? 0) === 1);
   if (!accepted) {
     await discardBody(ctx, body);
+    if (await deviceListMoved(ctx.db, ctx.userId, version.signerList)) {
+      refuseDeviceListMoved();
+    }
     return explainRefusedWrite(
       ctx,
       projectId,
@@ -1081,6 +1111,8 @@ async function createProject(
   const body = await storeBody(ctx, projectId, version);
   const now = new Date().toISOString();
   const db = ctx.db;
+  // The version and the info were checked against this same list.
+  const createFence = deviceListUnchanged(ctx.userId, account);
   const statements = [
     db
       .prepare(
@@ -1091,7 +1123,8 @@ async function createProject(
          SELECT ?, ?, '', ?, ?, 0, ?, 'active', 0, 0, NULL, 0, 2
          WHERE ${ctx.authorization.sql}
            AND NOT EXISTS (SELECT 1 FROM projects WHERE id = ?)
-           AND NOT EXISTS (SELECT 1 FROM project_adoptions WHERE cloud_project_id = ?)`
+           AND NOT EXISTS (SELECT 1 FROM project_adoptions WHERE cloud_project_id = ?)
+           AND ${createFence.sql}`
       )
       .bind(
         projectId,
@@ -1101,7 +1134,8 @@ async function createProject(
         now,
         ...ctx.authorization.binds,
         projectId,
-        projectId
+        projectId,
+        ...createFence.binds
       ),
     db
       .prepare(
@@ -1161,6 +1195,9 @@ async function createProject(
   }
   if (!allChanged(results, statements.length)) {
     await discardBody(ctx, body);
+    if (await deviceListMoved(db, ctx.userId, account)) {
+      refuseDeviceListMoved();
+    }
     const taken = await db
       .prepare(
         `SELECT 1 AS taken FROM projects WHERE id = ?
@@ -1206,6 +1243,7 @@ async function saveInfo(
       { keyEpoch }
     );
   }
+  const infoFence = deviceListUnchanged(ctx.userId, info.signerList);
   const now = new Date().toISOString();
   const results = await runVersionBatch(ctx, [
     ctx.db
@@ -1217,6 +1255,7 @@ async function saveInfo(
          WHERE ${ctx.authorization.sql} AND ${PROJECT_FENCE}
            AND EXISTS (SELECT 1 FROM e2ee_project_groups
                        WHERE project_id = ? AND key_epoch_base + epoch = ?)
+           AND ${infoFence.sql}
          ON CONFLICT (project_id, kind, scope) DO UPDATE SET
            sequence = excluded.sequence, key_epoch = excluded.key_epoch,
            envelope = excluded.envelope,
@@ -1239,10 +1278,14 @@ async function saveInfo(
         projectId,
         ctx.userId,
         projectId,
-        keyEpoch
+        keyEpoch,
+        ...infoFence.binds
       )
   ]);
   if ((results[0]?.meta?.changes ?? 0) !== 1) {
+    if (await deviceListMoved(ctx.db, ctx.userId, info.signerList)) {
+      refuseDeviceListMoved();
+    }
     const stored = await infoRow(ctx.db, projectId);
     if (stored && stored.sequence >= info.sequence) {
       refuse(
