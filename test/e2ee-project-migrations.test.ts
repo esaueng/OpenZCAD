@@ -938,6 +938,8 @@ describe('staging beside the plaintext', () => {
            WHERE upload_session_id = ? ORDER BY part_number`
         )
         .all(session) as { part_number: number; etag: string | null }[];
+    const recorded = (session: string) =>
+      parts(session).map((part) => [part.part_number, part.etag !== null]);
 
     const stale = await openUpload(laptop);
     const staleUpload = await startMultipart(laptop, stale);
@@ -946,7 +948,14 @@ describe('staging beside the plaintext', () => {
     // The desktop takes the lease over while the laptop's part is in R2:
     // the part's record lands nothing.
     let desktop: Staging | undefined;
-    const resume = srv.bucket.resumeMultipartUpload;
+    interface ResumedUpload {
+      uploadPart(part: number, body: ArrayBuffer): Promise<unknown>;
+    }
+    const original = srv.bucket.resumeMultipartUpload;
+    const resume = original as unknown as (
+      key: string,
+      id: string
+    ) => ResumedUpload;
     srv.bucket.resumeMultipartUpload = vi.fn((key: string, id: string) => {
       const upload = resume(key, id);
       return {
@@ -960,15 +969,15 @@ describe('staging beside the plaintext', () => {
           return uploaded;
         }
       };
-    }) as typeof resume;
+    });
     const raced = await putPart(laptop, stale, staleUpload, 2);
-    srv.bucket.resumeMultipartUpload = resume;
+    srv.bucket.resumeMultipartUpload = original;
     expect(desktop).toBeDefined();
     expect(raced.status).toBe(409);
     expect(await codeOf(raced)).toBe('E2EE_MIGRATION_LEASE_LOST');
-    expect(parts(stale)).toEqual([
-      { part_number: 1, etag: expect.any(String) },
-      { part_number: 2, etag: null }
+    expect(recorded(stale)).toEqual([
+      [1, true],
+      [2, false]
     ]);
 
     // After the takeover the laptop reserves, records and completes nothing.
@@ -1005,9 +1014,7 @@ describe('staging beside the plaintext', () => {
     expect(srv.bucket.multipart.has(staleUpload)).toBe(false);
     const freshUpload = await startMultipart(desktop!, fresh);
     expect((await putPart(desktop!, fresh, freshUpload, 1)).status).toBe(200);
-    expect(parts(fresh)).toEqual([
-      { part_number: 1, etag: expect.any(String) }
-    ]);
+    expect(recorded(fresh)).toEqual([[1, true]]);
   });
 
   it('lands nothing from a plaintext upload session opened before staging began (#914 review)', async () => {
