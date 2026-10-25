@@ -175,7 +175,8 @@ describe('assistant consent records (ADR-024 Phase 6, 6-1)', () => {
 
   it('refuses non-canonical, unknown and malformed records', () => {
     for (const text of [
-      RECORD.replace('{', '{ '),
+      // A space after the opening brace (one edit, by position).
+      '{ ' + RECORD.slice(1),
       RECORD.replace(
         '"v":1,"kind":"assistant-consent"',
         '"kind":"assistant-consent","v":1'
@@ -186,7 +187,8 @@ describe('assistant consent records (ADR-024 Phase 6, 6-1)', () => {
       RECORD.replace('true', '1'),
       RECORD.replace('"projectId":"proj_bracket"', '"projectId":""'),
       RECORD.replace('"route":"deployment', '"route":"\\ndeployment'),
-      RECORD.replace('}', ',"extra":1}'),
+      // An unknown key before the closing brace.
+      RECORD.slice(0, -1) + ',"extra":1}',
       'not json',
       '[]'
     ]) {
