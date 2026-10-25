@@ -611,7 +611,13 @@ describe('solo MLS groups', () => {
           message: 'AAAA',
           groupInfo: 'AAAA',
           wraps: [],
-          archive: {}
+          archive: {},
+          // The head the desktop built from (#913): only the epoch is taken.
+          deviceList: srv.db
+            .prepare(
+              'SELECT generation, MAX(sequence) AS headSequence FROM e2ee_device_list_entries WHERE user_id = ? AND generation = (SELECT MAX(generation) FROM e2ee_identities WHERE user_id = ?)'
+            )
+            .get(OWNER, OWNER) as { generation: number; headSequence: number }
         }
       }
     );
