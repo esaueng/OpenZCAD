@@ -225,6 +225,55 @@ describe('profileOutline', () => {
   });
 });
 
+describe('a revolve about its profile middle', () => {
+  it('still has its angle rig, square to the axis', () => {
+    const square = (x: number) => [
+      { x, y: 0 },
+      { x: x + 2, y: 0 },
+      { x: x + 2, y: 2 },
+      { x, y: 2 }
+    ];
+    const ctx: InPlaceContext = {
+      ...CTX,
+      sketchViews: [
+        {
+          sketchId: 's1' as SketchId,
+          basis: {
+            origin: { x: 0, y: 0, z: 0 },
+            u: { x: 1, y: 0, z: 0 },
+            v: { x: 0, y: 1, z: 0 },
+            normal: { x: 0, y: 0, z: 1 }
+          },
+          // Two regions either side of the vertical axis: their middle is on it.
+          regions: [
+            { regionFingerprint: 1, outer: square(-6) },
+            { regionFingerprint: 2, outer: square(4) }
+          ]
+        }
+      ]
+    };
+    const pick = {
+      sketchId: 's1' as SketchId,
+      reference: { all: true as const, sourceEntityIds: [] },
+      regionFingerprint: 1
+    };
+    const axis = {
+      id: 'sketch-vertical',
+      label: 'Sketch vertical axis',
+      origin: { x: 0, y: 0, z: 0 },
+      direction: { x: 0, y: 1, z: 0 },
+      choice: { axis: 'vertical' as const }
+    };
+    const [handle] = IN_PLACE_TOOL_SPECS.revolve.handles(
+      { ...EMPTY, profiles: [pick], axis },
+      {},
+      ctx,
+      {}
+    );
+    expect(handle).toMatchObject({ valueId: 'angle', kind: 'angle' });
+  });
+});
+
 describe('body tools', () => {
   it('mirror: a plane slid along its normal moves the mirror plane', () => {
     const spec = IN_PLACE_TOOL_SPECS.mirror;
