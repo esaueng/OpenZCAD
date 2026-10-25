@@ -82,7 +82,12 @@ export interface UseInPlaceCommandOptions extends InPlaceContext {
   commit(
     request: InPlaceRequest,
     title: string,
-    edit: InPlaceEditSeed | null
+    edit: InPlaceEditSeed | null,
+    /**
+     * True once the command is closed or replaced while this commit still
+     * validates: the host withdraws the candidate rather than land it.
+     */
+    withdrawn: () => boolean
   ): Promise<boolean> | void;
   publishPreview(preview: ProjectDocument | null): void;
   onStatus(message: string): void;
@@ -1320,7 +1325,8 @@ export function useInPlaceCommand(
     const landed = optionsRef.current.commit(
       current,
       editing?.name ?? spec.featureName ?? spec.title,
-      editing
+      editing,
+      () => commitToken.current !== token
     );
     if (!editing) {
       if (!landed) {
@@ -1357,10 +1363,11 @@ export function useInPlaceCommand(
     (quiet = false) => {
       if (!spec) return true;
       const editing = editRef.current;
-      // A Done still validating cannot be taken back: Cancel would say
-      // nothing was added (or changed) and the commit could land after.
-      // It waits for the outcome instead; a quiet close (another command,
-      // a replaced document) lets the commit report for itself.
+      // A Done still validating is not taken back by Cancel, which would say
+      // nothing was added (or changed) while the commit could still land:
+      // it waits for the outcome. A quiet close (another command, a new
+      // selection, a replaced document) withdraws the candidate instead,
+      // which the host's validated run checks before it commits.
       if (committingRef.current && !quiet) {
         optionsRef.current.onStatus(
           editing

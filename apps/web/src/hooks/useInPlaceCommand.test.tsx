@@ -158,7 +158,12 @@ describe('useInPlaceCommand: revolve', () => {
     act(() => {
       hook.result.current.done();
     });
-    expect(commit).toHaveBeenCalledWith(full, 'Revolve', null);
+    expect(commit).toHaveBeenCalledWith(
+      full,
+      'Revolve',
+      null,
+      expect.any(Function)
+    );
     expect(hook.result.current.active).toBe(false);
     expect(publishPreview).toHaveBeenLastCalledWith(null);
   });
@@ -905,7 +910,8 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     expect(commit).toHaveBeenCalledWith(
       expect.objectContaining({ operation: 'subtract' }),
       'Cut 2',
-      SEED
+      SEED,
+      expect.any(Function)
     );
   });
 
@@ -1401,6 +1407,35 @@ describe('useInPlaceCommand: editing a stored feature', () => {
       await Promise.resolve();
     });
     expect(hook.result.current.active).toBe(false);
+  });
+
+  it('withdraws a validating commit when another command takes over', async () => {
+    let withdrawn: () => boolean = () => false;
+    const commit = vi.fn(
+      (
+        _request: InPlaceRequest,
+        _title: string,
+        _edit: InPlaceEditSeed | null,
+        isWithdrawn: () => boolean
+      ) => {
+        withdrawn = isWithdrawn;
+        return new Promise<boolean>(() => undefined);
+      }
+    );
+    const { hook } = setup({ commit });
+    act(() => hook.result.current.start('revolve', [PICK]));
+    act(() => hook.result.current.pickAxis('sketch-vertical'));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.done();
+    });
+    expect(withdrawn()).toBe(false);
+    // A tool switch closes it quietly: the candidate is no longer wanted.
+    act(() => {
+      hook.result.current.cancel(true);
+    });
+    expect(hook.result.current.active).toBe(false);
+    expect(withdrawn()).toBe(true);
   });
 
   it('keeps an edit open until its commit lands, and open to retry if refused', async () => {
