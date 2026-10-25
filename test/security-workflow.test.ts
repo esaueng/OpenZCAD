@@ -13,6 +13,7 @@ describe('workflow runner policy', () => {
       'public-commit-metadata.yml': ['ubuntu-24.04'],
       'fleet-ci-v2.yml': Array(6).fill('*fleet-runner'),
       'fleet-ci-v3.yml': Array(6).fill('*fleet-runner'),
+      'fleet-ci-v4.yml': Array(6).fill('*fleet-runner'),
       'cloudflare.yml': ['ubuntu-latest', 'ubuntu-latest'],
       'macos-desktop.yml': ['macos-26'],
       'mls-wasm.yml': ['ubuntu-latest'],
@@ -57,7 +58,10 @@ describe('workflow runner policy', () => {
           /pull_request_target|workflow_run|secrets(?:\.|:)|id-token: write|contents: write/
         );
       }
-      if (workflowPath === 'fleet-ci-v3.yml') {
+      if (
+        workflowPath === 'fleet-ci-v3.yml' ||
+        workflowPath === 'fleet-ci-v4.yml'
+      ) {
         // Hosted shards install browser binaries only: the Ubuntu mirror
         // behind `--with-deps` stalled one shard in six for minutes.
         expect(workflow).toContain(
