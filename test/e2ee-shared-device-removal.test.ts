@@ -796,7 +796,7 @@ describe('device removal across shared encrypted projects (slice 5-7)', () => {
       .mockRejectedValue(new E2eeApiError(503, 'Try again.'));
     const refused = await alice.store
       .saveProjectDocument({
-        projectId: rotatedId,
+        projectId: current.projectId,
         expectedVersion: current.version,
         document: {
           ...current,
