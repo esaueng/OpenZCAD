@@ -72,8 +72,12 @@ import {
 import {
   DeviceRemovalError,
   createRevocationCutoffsApi,
+  cutoffHead,
+  memoryPendingCutoffs,
   removalParticipant,
   revocationStatements,
+  storePendingCutoffs,
+  type PendingCutoffStore,
   type RemovalOutcome,
   type RemovalParticipant
 } from '../apps/web/src/lib/e2ee/deviceRemoval';
@@ -384,7 +388,7 @@ function wrapRow(srv: Server, projectId: string, keyEpoch: number) {
 }
 
 /** The participant, keeping the identity key and the outcome for tests. */
-function participantFor(d: Device) {
+function participantFor(d: Device, pending?: PendingCutoffStore) {
   const seen: {
     outcome: RemovalOutcome | null;
     identity: CryptoKey | null;
@@ -393,6 +397,7 @@ function participantFor(d: Device) {
     api: createRevocationCutoffsApi((path, init) => d.fetcher(path, init)),
     groups: (account) => groupsFor(d, account),
     pins: d.pins,
+    pending: pending ?? memoryPendingCutoffs(),
     onOutcome: (outcome) => {
       seen.outcome = outcome;
     }
@@ -634,6 +639,121 @@ describe('device removal across encrypted projects', () => {
     });
     expect(others.status).toBe(200);
     expect(await others.json()).toEqual({ statements: [], projects: [] });
+  });
+
+  it('keeps a signed cutoff whose store failed and stores it later (#894 review)', async () => {
+    const { srv, recovery, laptop, desktop, phone, projects } =
+      await threeDevices(1);
+    const projectId = projects[0]!;
+    await saveEdit(phone, projectId, 'Phone edit');
+    const phoneId = deviceIdOf(phone);
+    // The device list lands; the connection drops before the cutoff does.
+    const real = laptop.fetcher;
+    let dropped = false;
+    laptop.fetcher = async (path, init = {}) => {
+      if (
+        !dropped &&
+        path === '/api/e2ee/revocation-cutoffs' &&
+        init.method === 'PUT'
+      ) {
+        dropped = true;
+        throw new TypeError('Failed to fetch');
+      }
+      return real(path, init);
+    };
+    const pending = memoryPendingCutoffs();
+    const { participant, seen } = participantFor(laptop, pending);
+    use(
+      laptop,
+      ready(
+        await removeDevice(
+          laptop.e2ee,
+          laptop.account,
+          phoneId,
+          recovery.secret,
+          participant
+        )
+      )
+    );
+    expect(seen.outcome?.cutoffsStored).toBe(false);
+    expect((await statementsOf(srv)).statements).toEqual([]);
+    expect(pending.read(USER)).toHaveLength(1);
+    // Without the statement the phone's head reads as revoked.
+    await integrityRefusal(
+      (await refresh(desktop)).store.loadProject(projectId),
+      'author'
+    );
+
+    // Sent again later (the next removal or page open does this).
+    expect(
+      await storePendingCutoffs(
+        createRevocationCutoffsApi((path, init) => laptop.fetcher(path, init)),
+        pending,
+        USER
+      )
+    ).toBe(0);
+    expect((await statementsOf(srv)).statements).toHaveLength(1);
+    await expect(
+      (await refresh(desktop)).store.loadProject(projectId)
+    ).resolves.toMatchObject({ name: 'Phone edit' });
+  });
+
+  it('refuses a Commit whose device list moved while it was written (#894 review)', async () => {
+    const { srv, desktop, projects } = await threeDevices(1);
+    const projectId = projects[0]!;
+    const before = groupRow(srv, projectId);
+    // A removal lands between the Commit's certified-device check and its
+    // batch.
+    let moved = false;
+    srv.env.DB = sqliteD1(srv.db, {
+      onStatement: (sql) => {
+        if (moved || !/^\s*INSERT INTO e2ee_mls_commits/.test(sql)) return;
+        moved = true;
+        srv.db
+          .prepare(
+            `INSERT INTO e2ee_device_list_entries
+             SELECT user_id, generation, sequence + 1, entry, signature,
+                    substr(entry_hash, 2) || '0', created_at
+             FROM e2ee_device_list_entries WHERE user_id = ?
+             ORDER BY sequence DESC LIMIT 1`
+          )
+          .run(USER);
+      }
+    });
+    // The desktop joins by external Commit on its first save.
+    await expect(
+      saveEdit(desktop, projectId, 'Desktop edit')
+    ).rejects.toMatchObject({ code: 'E2EE_DEVICE_LIST_CHANGED' });
+    expect(moved).toBe(true);
+    const after = groupRow(srv, projectId);
+    expect(after.epoch).toBe(before.epoch);
+    expect(after.generation).toBe(before.generation);
+  });
+
+  it('signs the pinned head, not a server fork at the same version (#894 review)', async () => {
+    const pins = memoryVersionPins();
+    const pinned = 'a'.repeat(64);
+    await pins.advance(USER, 'proj_fork', null, {
+      headHash: pinned,
+      documentVersion: 7,
+      keyEpoch: 2
+    });
+    const project = {
+      projectId: 'proj_fork',
+      keyEpochBase: 0,
+      epoch: 2,
+      generation: 0,
+      trashed: false,
+      head: { documentVersion: 7, versionHash: 'b'.repeat(64) }
+    } as unknown as Parameters<typeof cutoffHead>[2];
+    const head = await cutoffHead(pins, USER, project);
+    expect(toHex(head!.versionHash)).toBe(pinned);
+    // A newer server head still wins.
+    const newer = await cutoffHead(pins, USER, {
+      ...project,
+      head: { documentVersion: 8, versionHash: 'c'.repeat(64) }
+    });
+    expect(toHex(newer!.versionHash)).toBe('c'.repeat(64));
   });
 
   it('lets another device finish a removal that went offline part-way', async () => {

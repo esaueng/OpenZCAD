@@ -65,6 +65,121 @@ export interface RevocationCutoffsApi {
   ownsEncryptedProjects(): Promise<boolean>;
 }
 
+// --- Statements not stored yet ----------------------------------------------
+
+/**
+ * Signed cutoff statements this browser could not store yet, per account.
+ * Only the identity key the removal opened can sign one, and the device
+ * list already revokes the device, so a statement whose store failed is
+ * kept here and sent again rather than lost: without it the removed
+ * device's earlier versions stay refused (revoked without a cutoff).
+ */
+export interface PendingCutoffStore {
+  read(userId: string): E2eeRevocationCutoffRequest[];
+  /** Keeps `request`, replacing an older one for the same entry. */
+  save(userId: string, request: E2eeRevocationCutoffRequest): void;
+  forget(userId: string, request: E2eeRevocationCutoffRequest): void;
+}
+
+const PENDING_KEY = (userId: string) =>
+  `openzcad:e2ee-pending-cutoffs:v1:${userId}`;
+
+const sameEntry = (
+  a: E2eeRevocationCutoffRequest,
+  b: E2eeRevocationCutoffRequest
+) => a.generation === b.generation && a.entrySequence === b.entrySequence;
+
+/** In localStorage: the statements name projects and hashes, no secrets. */
+export function localPendingCutoffs(
+  storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null =
+    typeof window === 'undefined' ? null : window.localStorage
+): PendingCutoffStore {
+  const read = (userId: string): E2eeRevocationCutoffRequest[] => {
+    try {
+      const parsed: unknown = JSON.parse(
+        storage?.getItem(PENDING_KEY(userId)) ?? '[]'
+      );
+      return Array.isArray(parsed)
+        ? (parsed as E2eeRevocationCutoffRequest[])
+        : [];
+    } catch {
+      return [];
+    }
+  };
+  const write = (userId: string, requests: E2eeRevocationCutoffRequest[]) => {
+    try {
+      if (requests.length === 0) storage?.removeItem(PENDING_KEY(userId));
+      else storage?.setItem(PENDING_KEY(userId), JSON.stringify(requests));
+    } catch {
+      // Blocked storage keeps nothing; the removal reports the failure.
+    }
+  };
+  return {
+    read,
+    save(userId, request) {
+      write(userId, [
+        ...read(userId).filter((r) => !sameEntry(r, request)),
+        request
+      ]);
+    },
+    forget(userId, request) {
+      write(
+        userId,
+        read(userId).filter(
+          (r) => !(sameEntry(r, request) && r.statement === request.statement)
+        )
+      );
+    }
+  };
+}
+
+export function memoryPendingCutoffs(): PendingCutoffStore {
+  const kept = new Map<string, E2eeRevocationCutoffRequest[]>();
+  return {
+    read: (userId) => [...(kept.get(userId) ?? [])],
+    save(userId, request) {
+      kept.set(userId, [
+        ...(kept.get(userId) ?? []).filter((r) => !sameEntry(r, request)),
+        request
+      ]);
+    },
+    forget(userId, request) {
+      kept.set(
+        userId,
+        (kept.get(userId) ?? []).filter(
+          (r) => !(sameEntry(r, request) && r.statement === request.statement)
+        )
+      );
+    }
+  };
+}
+
+/**
+ * Sends every statement this browser kept for the account. A stored one,
+ * or one the account already holds a newer statement for, is forgotten;
+ * anything else stays for the next try. Resolves to how many remain.
+ */
+export async function storePendingCutoffs(
+  api: RevocationCutoffsApi,
+  pending: PendingCutoffStore,
+  userId: string
+): Promise<number> {
+  for (const request of pending.read(userId)) {
+    try {
+      await api.store(request);
+      pending.forget(userId, request);
+    } catch (error) {
+      if (
+        error instanceof ProjectGroupApiError &&
+        error.code === 'E2EE_CUTOFF_REGRESSION'
+      ) {
+        pending.forget(userId, request);
+      }
+    }
+  }
+  return pending.read(userId).length;
+}
+
 export function createRevocationCutoffsApi(
   fetcher: Fetch = desktopFetch
 ): RevocationCutoffsApi {
@@ -220,6 +335,8 @@ export interface RemovalParticipantOptions {
   groups(account: AccountView): ProjectGroupContext;
   /** This browser's accepted heads, if it keeps any. */
   readonly pins?: VersionPinStore;
+  /** Statements whose store failed, sent again later; localStorage by default. */
+  readonly pending?: PendingCutoffStore;
   readonly now?: () => number;
   /** Told the outcome of every completed removal. */
   readonly onOutcome?: (outcome: RemovalOutcome) => void;
@@ -232,9 +349,11 @@ const describe = (error: unknown) =>
  * The newest head the removing browser knows for a project: its pin, or
  * the server's head when that is newer (the revocation is stored by now,
  * so the server accepts nothing more from the removed device, and its
- * earlier versions stay readable).
+ * earlier versions stay readable). At the same version the pin wins: a
+ * server head that differs there is a fork this browser never accepted,
+ * and the cutoff must not sign it in.
  */
-async function cutoffHead(
+export async function cutoffHead(
   pins: VersionPinStore | undefined,
   userId: string,
   project: E2eeRemovalProjectRecord
@@ -243,7 +362,7 @@ async function cutoffHead(
   const server = project.head;
   if (
     pin?.headHash &&
-    (!server || pin.documentVersion > server.documentVersion)
+    (!server || pin.documentVersion >= server.documentVersion)
   ) {
     return {
       documentVersion: pin.documentVersion,
@@ -262,9 +381,14 @@ export function removalParticipant(
   options: RemovalParticipantOptions
 ): RemovalParticipant {
   const api = options.api ?? createRevocationCutoffsApi();
+  const pending = options.pending ?? localPendingCutoffs();
   const now = options.now ?? Date.now;
   return {
     async prepare(account) {
+      // A statement an earlier removal could not store goes first.
+      await storePendingCutoffs(api, pending, account.userId).catch(
+        () => undefined
+      );
       let projects: E2eeRemovalProjectRecord[];
       try {
         projects = (await api.list()).projects;
@@ -333,12 +457,17 @@ export function removalParticipant(
           issuedAt: now(),
           cutoffs
         });
-        await api.store({
+        const request = {
           generation: step.account.generation,
           entrySequence: revoking.entry.sequence,
           statement: toBase64Url(signed.statement),
           signature: toBase64Url(signed.signature)
-        });
+        };
+        // Kept before it is sent: the device list already revokes the
+        // device, and only this identity key can sign the statement.
+        pending.save(step.account.userId, request);
+        await api.store(request);
+        pending.forget(step.account.userId, request);
         statements.forget();
         cutoffsStored = true;
       };
@@ -361,7 +490,9 @@ export function removalParticipant(
           await store([...predicted.values()]);
         } catch (error) {
           // Without cutoffs nobody can rotate: every device refuses the
-          // revoked device's directory entry. Retry from Settings.
+          // revoked device's directory entry. The signed statement is kept
+          // on this device and sent again (`storePendingCutoffs`) before the
+          // next removal and whenever this page opens encrypted projects.
           left.push(
             ...projects.map((p) => ({
               projectId: p.projectId,
