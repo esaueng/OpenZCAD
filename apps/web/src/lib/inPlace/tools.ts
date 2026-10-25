@@ -1128,6 +1128,36 @@ function helixRigPlacement(
   };
 }
 
+/** A box's eight corners. */
+function boxCornersOf(box: { min: Vector3; max: Vector3 }): Vector3[] {
+  const corners: Vector3[] = [];
+  for (const x of [box.min.x, box.max.x]) {
+    for (const y of [box.min.y, box.max.y]) {
+      for (const z of [box.min.z, box.max.z]) corners.push({ x, y, z });
+    }
+  }
+  return corners;
+}
+
+/** How far a point stands from an axis line. */
+function radialDistance(
+  point: Vector3,
+  axis: Pick<RevolveAxisCandidate, 'origin' | 'direction'>
+): number {
+  const direction = unit(axis.direction);
+  const offset = {
+    x: point.x - axis.origin.x,
+    y: point.y - axis.origin.y,
+    z: point.z - axis.origin.z
+  };
+  const along = dot(offset, direction);
+  return Math.hypot(
+    offset.x - direction.x * along,
+    offset.y - direction.y * along,
+    offset.z - direction.z * along
+  );
+}
+
 /** A value as the card's text field would hold it. */
 function text(value: ParamValue | undefined, fallback: number): string {
   return value === undefined ? String(fallback) : String(value);
@@ -2334,19 +2364,26 @@ const axisRotate: InPlaceToolSpec = {
   handles(slots) {
     const body = slots.bodies[0];
     if (!body || !slots.axis) return [];
-    const placement = revolveRigPlacement(
-      [body.min, body.max, centre(body)],
-      slots.axis
+    const key = `${bodyKey(body)}:${slots.axis.id}`;
+    const corners = boxCornersOf(body);
+    // An axis through the body's middle (a centred turn) has no side for
+    // the rig to start from: it then starts square to the axis, out to the
+    // farthest corner.
+    const centred = helixRigPlacement(corners, slots.axis);
+    const reach = Math.max(
+      ...corners.map((corner) => radialDistance(corner, slots.axis!))
     );
-    if (!placement) return [];
-    return [
-      {
-        valueId: 'angle',
-        kind: 'angle',
-        key: `${bodyKey(body)}:${slots.axis.id}`,
-        params: placement
-      }
-    ];
+    const placement =
+      revolveRigPlacement([body.min, body.max, centre(body)], slots.axis) ??
+      (centred && reach > 1e-9 ? { ...centred, radius: reach * 1.15 } : null);
+    if (!placement) {
+      // Nothing to turn a rig around (a body with no extent): the angle is
+      // typed on its chip.
+      return [
+        { valueId: 'angle', kind: 'chip', key, params: { anchor: body.max } }
+      ];
+    }
+    return [{ valueId: 'angle', kind: 'angle', key, params: placement }];
   }
 };
 
