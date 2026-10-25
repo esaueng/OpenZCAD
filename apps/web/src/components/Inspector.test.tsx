@@ -28,7 +28,11 @@ import {
   commandFactories,
   type AnyCommand
 } from '@openzcad/command-system';
-import { DEFAULT_BODY_COLOR, edgeTopologyWitnessHash, toUserId } from '@openzcad/shared';
+import {
+  DEFAULT_BODY_COLOR,
+  edgeTopologyWitnessHash,
+  toUserId
+} from '@openzcad/shared';
 import type { MassPropertiesRead } from '@openzcad/kernel-adapter/exact';
 import { MASS_DENSITY_STORAGE_KEY } from '../lib/massDensityPreference';
 import { Inspector } from './Inspector';
@@ -401,6 +405,45 @@ describe('Inspector feature provenance', () => {
     ).toHaveFocus();
     expect(screen.getByLabelText('Radius')).toHaveValue('2');
     expect(screen.getByLabelText('More actions')).toBeVisible();
+  });
+});
+
+describe('a split readout', () => {
+  it('reads the second half from the document on screen, as the first', () => {
+    const secondBodyId = 'body-2' as BodyId;
+    const split: FeatureNode = {
+      ...feature,
+      featureKind: 'split',
+      name: 'Split 1',
+      data: {
+        featureKind: 'split',
+        targetBodyId: bodyId,
+        plane: { origin: { x: 5, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } },
+        secondBodyId
+      } as FeatureNode['data']
+    };
+    const half = (name: string): BodyRepresentation => ({
+      ...body,
+      bodyId: secondBodyId,
+      name
+    });
+    render(
+      <Inspector
+        {...makeProps({
+          selectedFeature: split,
+          featureSelectionSource: 'pinned',
+          commandSession: null,
+          bodyRepresentations: { [secondBodyId]: half('Half as committed') },
+          massPropertiesDocument: {
+            derived: {
+              bodyRepresentations: { [secondBodyId]: half('Half as previewed') }
+            }
+          } as unknown as ProjectDocument
+        })}
+      />
+    );
+    expect(screen.getByText('Half as previewed')).toBeInTheDocument();
+    expect(screen.queryByText('Half as committed')).toBeNull();
   });
 });
 
@@ -1583,7 +1626,11 @@ describe('Inspector sketch editing (S04)', () => {
   it('keeps a lone projected circle out of the one-shape form (I01)', () => {
     // Apply there would rebuild a plain circle and drop the edge link.
     const witness: EdgeWitnessV1 = {
-      curveType: 'CIRCLE', length: 1, closed: true, center: [0, 0, 0], axis: null
+      curveType: 'CIRCLE',
+      length: 1,
+      closed: true,
+      center: [0, 0, 0],
+      axis: null
     };
     const props = sketchProps([
       {
