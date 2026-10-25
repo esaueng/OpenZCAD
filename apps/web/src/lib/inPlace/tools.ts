@@ -337,6 +337,17 @@ export interface InPlaceToolSpec {
   values: readonly ValueSpec[];
   /** Values the picks suggest, applied to any the user has not set. */
   defaults?(slots: InPlaceSlots, ctx: InPlaceContext): Record<string, number>;
+  /**
+   * Other values a value's change moves with it (a box hung under a face
+   * keeps its top there, so its corner follows its height), from the
+   * values as they were. Values held as typed expressions are left alone.
+   */
+  linked?(
+    valueId: string,
+    value: number,
+    values: Readonly<Record<string, number>>,
+    slots: InPlaceSlots
+  ): Record<string, number> | null;
   hint(slots: InPlaceSlots, options?: Record<string, string>): string;
   ready(slots: InPlaceSlots): boolean;
   /**
@@ -1926,6 +1937,14 @@ function primitiveSpec(kind: PrimitiveKind): InPlaceToolSpec {
         ...(build.rotationDeg ? { rotationDeg: build.rotationDeg } : {})
       };
     },
+    linked(valueId, value, values, slots) {
+      // Under a face the box hangs from it: a new height moves its lowest
+      // corner, so its top stays on the face.
+      const hangs = slots.placement?.hangs;
+      if (kind !== 'box' || !hangs || valueId !== 'height') return null;
+      const was = values.height ?? value;
+      return { [hangs]: (values[hangs] ?? 0) + was - value };
+    },
     handles(slots, values) {
       return primitiveHandles(kind, slots.placement ?? null, values);
     }
@@ -1935,7 +1954,8 @@ function primitiveSpec(kind: PrimitiveKind): InPlaceToolSpec {
 /**
  * A primitive's arrows: each from the middle of the face or edge it pushes,
  * so the tip rides the side it sizes. A rig is rebuilt only when its key
- * changes, and its key names everything its line stands on.
+ * changes, and its key is the line it stands on. A box hung under a face
+ * measures from the face, its height arrow pointing away from it.
  */
 function primitiveHandles(
   kind: PrimitiveKind,
@@ -1945,7 +1965,12 @@ function primitiveHandles(
   const { u, v, normal } = placement?.frame ?? GROUND_FRAME;
   const along = scaled(u, placement?.signU ?? 1);
   const across = scaled(v, placement?.signV ?? 1);
-  const at = { x: values.x ?? 0, y: values.y ?? 0, z: values.z ?? 0 };
+  const corner = { x: values.x ?? 0, y: values.y ?? 0, z: values.z ?? 0 };
+  const hangs = kind === 'box' ? placement?.hangs : undefined;
+  // The footprint's plane: the face a box hangs from is its top.
+  const at = hangs
+    ? { ...corner, [hangs]: corner[hangs] + (values.height ?? 0) }
+    : corner;
   const offset = (...steps: [Vector3, number][]): Vector3 =>
     steps.reduce(
       (point, [direction, distance]) => ({
@@ -1955,30 +1980,23 @@ function primitiveHandles(
       }),
       at
     );
-  const base = keyOf(
-    kind,
-    at.x,
-    at.y,
-    at.z,
-    along.x,
-    along.y,
-    along.z,
-    across.x,
-    across.y,
-    across.z,
-    normal.x,
-    normal.y,
-    normal.z
-  );
   const linear = (
     valueId: string,
     origin: Vector3,
-    direction: Vector3,
-    ...depends: number[]
+    direction: Vector3
   ): HandleSpec => ({
     valueId,
     kind: 'linear',
-    key: keyOf(base, valueId, ...depends),
+    key: keyOf(
+      kind,
+      valueId,
+      origin.x,
+      origin.y,
+      origin.z,
+      direction.x,
+      direction.y,
+      direction.z
+    ),
     params: { origin, direction }
   });
   switch (kind) {
@@ -1986,14 +2004,14 @@ function primitiveHandles(
       const width = values.width ?? 0;
       const depth = values.depth ?? 0;
       return [
-        linear('width', offset([across, depth / 2]), along, depth),
-        linear('depth', offset([along, width / 2]), across, width),
+        linear('width', offset([across, depth / 2]), along),
+        linear('depth', offset([along, width / 2]), across),
         linear(
           'height',
           offset([along, width / 2], [across, depth / 2]),
-          normal,
-          width,
-          depth
+          hangs
+            ? { x: -normal.x || 0, y: -normal.y || 0, z: -normal.z || 0 }
+            : normal
         )
       ];
     }
@@ -2004,7 +2022,7 @@ function primitiveHandles(
       return [
         linear('bottomRadius', at, u),
         linear('height', at, normal),
-        linear('topRadius', offset([normal, height]), u, height)
+        linear('topRadius', offset([normal, height]), u)
       ];
     }
     case 'sphere':
@@ -2013,7 +2031,7 @@ function primitiveHandles(
       const ring = values.majorRadius ?? 0;
       return [
         linear('majorRadius', at, u),
-        linear('minorRadius', offset([u, ring]), normal, ring)
+        linear('minorRadius', offset([u, ring]), normal)
       ];
     }
   }

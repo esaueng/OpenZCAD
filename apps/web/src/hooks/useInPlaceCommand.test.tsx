@@ -562,6 +562,41 @@ describe('useInPlaceCommand: primitives', () => {
     );
   });
 
+  it('moves a hung box corner with its height, unless typed', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('box'));
+    act(() => {
+      hook.result.current.placeFootprint(
+        {
+          frame: placementFrame({ x: 0, y: 0, z: 1 }),
+          signU: 1,
+          signV: 1,
+          hangs: 'z'
+        },
+        { width: 10, depth: 6, x: 0, y: 0, z: -4 }
+      );
+    });
+    act(() => {
+      hook.result.current.previewValue('height', 10);
+    });
+    expect(hook.result.current.values.z).toBe(10);
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        dimensions: { depth: 10 },
+        position: { z: 10 }
+      })
+    );
+    // A typed Corner Z is the user's: a height change leaves it.
+    act(() => {
+      hook.result.current.setValue('z', 3, 'floor');
+    });
+    act(() => {
+      hook.result.current.previewValue('height', 12);
+    });
+    expect(hook.result.current.raws.z).toBe('floor');
+    expect(hook.result.current.values.z).toBe(3);
+  });
+
   it('keeps a typed position parametric', async () => {
     const { hook, built } = setup();
     act(() => hook.result.current.start('cylinder'));

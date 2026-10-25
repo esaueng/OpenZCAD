@@ -671,11 +671,24 @@ export function useInPlaceCommand(
         const raws = { ...current.raws };
         if (raw === undefined) delete raws[valueId];
         else raws[valueId] = raw;
+        const next = clampValue(valueSpec, value);
+        // Values that move with this one, unless typed as expressions.
+        const linked = Object.fromEntries(
+          Object.entries(
+            IN_PLACE_TOOL_SPECS[current.tool].linked?.(
+              valueId,
+              next,
+              current.values,
+              { ...EMPTY_SLOTS, placement: current.slots.placement }
+            ) ?? {}
+          ).filter(([id]) => current.raws[id] === undefined)
+        );
         return {
           ...current,
           values: {
             ...current.values,
-            [valueId]: clampValue(valueSpec, value)
+            ...linked,
+            [valueId]: next
           },
           raws,
           touched: current.touched.includes(valueId)

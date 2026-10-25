@@ -686,6 +686,21 @@ describe('selection filters narrow what a click can take', () => {
     const { service } = makeService({ bodyGroup: layered() }, 'sketch');
     expect(service.pick(centreEvent())).toBeNull();
   });
+
+  it.each(['any', 'body', 'edge', 'sketch'] as const)(
+    'still finds the face under a footprint press with the %s filter',
+    (filter) => {
+      const { service } = makeService({ bodyGroup: layered() }, filter);
+      const face = service.pickFace(centreEvent());
+      expect(face?.kind).toBe('face');
+      expect(face?.selection?.topologyId).toBe('face-1');
+    }
+  );
+
+  it('passes over the faces of bodies a footprint may not stand on', () => {
+    const { service } = makeService({ bodyGroup: layered() });
+    expect(service.pickFace(centreEvent(), () => false)).toBeNull();
+  });
 });
 
 describe('X-ray select-through', () => {

@@ -641,4 +641,36 @@ describe('primitives run in place', () => {
       torus.find((handle) => handle.valueId === 'minorRadius')?.params
     ).toEqual({ origin: { x: 6, y: 0, z: 0 }, direction: { x: 0, y: 0, z: 1 } });
   });
+
+  it('keep a box hung under a face on the face when its height changes', () => {
+    const spec = IN_PLACE_TOOL_SPECS.box;
+    // Hung under a face at Z = 20: lowest corner at Z = -4 for height 24.
+    const slots = {
+      ...EMPTY,
+      placement: {
+        frame: placementFrame({ x: 0, y: 0, z: 1 }),
+        signU: 1 as const,
+        signV: 1 as const,
+        hangs: 'z' as const
+      }
+    };
+    const values = { width: 10, depth: 6, height: 24, x: 0, y: 0, z: -4 };
+    expect(spec.linked?.('height', 10, values, slots)).toEqual({ z: 10 });
+    expect(spec.linked?.('width', 12, values, slots)).toBeNull();
+    // Its arrows stand on the face; the height arrow points away from it,
+    // and a new height rebuilds none of them.
+    const handles = spec.handles(slots, values, CTX, {});
+    expect(handles.find((handle) => handle.valueId === 'height')?.params).toEqual(
+      { origin: { x: 5, y: 3, z: 20 }, direction: { x: 0, y: 0, z: -1 } }
+    );
+    const shorter = spec.handles(
+      slots,
+      { ...values, height: 10, z: 10 },
+      CTX,
+      {}
+    );
+    expect(shorter.map((handle) => handle.key)).toEqual(
+      handles.map((handle) => handle.key)
+    );
+  });
 });

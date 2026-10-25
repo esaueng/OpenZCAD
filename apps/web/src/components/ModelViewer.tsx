@@ -8917,15 +8917,18 @@ export function ModelViewer({
      * command may stand on, else on the principal plane facing the view.
      */
     const beginFootprint = (event: PointerEvent): boolean => {
-      const picker = footprintPickerRef.current;
-      if (!picker) return false;
-      const candidate = pick(event);
+      const footprint = footprintPickerRef.current;
+      if (!footprint) return false;
+      // Unfiltered: a Body or Edge filter must not hide the face pressed on.
+      const candidate = picker.pickFace(event, (bodyId) =>
+        footprint.bodyIds.includes(bodyId)
+      );
       setRayFromEvent(event);
       const ray = context.raycaster.ray;
       let frame: PlacementFrame | null = null;
       let start: THREE.Vector3 | null = null;
-      const selection = candidate?.kind === 'face' ? candidate.selection : null;
-      if (selection && picker.bodyIds.includes(selection.bodyId)) {
+      const selection = candidate?.selection ?? null;
+      if (selection && footprint.bodyIds.includes(selection.bodyId)) {
         const face = bodiesRef.current
           .find((body) => body.bodyId === selection.bodyId)
           ?.topology?.faces.find(

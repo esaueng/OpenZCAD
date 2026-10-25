@@ -14,6 +14,7 @@ import {
   expectBodyCount,
   finishInPlaceCommand,
   setInPlaceOptionValues,
+  setSelectionFilter,
   waitForStillViewport
 } from './openzcad-fixtures';
 
@@ -204,9 +205,14 @@ test('a box drawn right to left names its real lowest corner', async ({
   ).toEqual([2, 5, 0]);
 });
 
-test('a cylinder drawn on a top face stands on it', async ({ page }) => {
+test('a cylinder drawn on a top face stands on it, whatever the filter', async ({
+  page
+}) => {
   test.setTimeout(120_000);
   await openProject(page, seededBox('Cylinder on a face'));
+  // A Body filter turns face picks into bodies; the footprint still finds
+  // the face it is drawn on (Codex review on #889).
+  await setSelectionFilter(page, 'Body');
   await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
   await expect(page.getByRole('group', { name: 'Cylinder command' })).toBeVisible();
   await dragFootprint(page, [20, 15, 20], [26, 15, 20]);

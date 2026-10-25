@@ -169,7 +169,12 @@ describe('a footprint drag', () => {
     // The footprint spans x 0..10 and y 0..6; the box hangs 5 below.
     expect(result.anchor).toEqual({ x: 0, y: 0, z: 15 });
     expect(result.values).toEqual({ width: 10, depth: 6 });
-    expect(result.placement.frame).toEqual(GROUND_FRAME);
+    expect(result.placement).toEqual({
+      frame: GROUND_FRAME,
+      signU: 1,
+      signV: 1,
+      hangs: 'z'
+    });
     expect(
       primitiveBuild('box', result.placement, { ...result.values, height: 5 }, result.anchor)
     ).toEqual({

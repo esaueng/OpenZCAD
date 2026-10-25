@@ -35,6 +35,11 @@ export interface PlacementPick {
   frame: PlacementFrame;
   signU: 1 | -1;
   signV: 1 | -1;
+  /**
+   * The world axis a box square to the world hangs along, from a face
+   * looking down it (a bottom face, say): its top stays on that face.
+   */
+  hangs?: 'x' | 'y' | 'z';
 }
 
 export interface PrimitiveBuild {
@@ -221,11 +226,13 @@ export function footprintPlacement(
       y: Math.abs(vector.y),
       z: Math.abs(vector.z)
     });
+    const hangs = AXES.find((axis) => normal[axis] < 0);
     return {
       placement: {
         frame: { u: positive(u), v: positive(v), normal: positive(normal) },
         signU: 1,
-        signV: 1
+        signV: 1,
+        ...(hangs ? { hangs } : {})
       },
       anchor: { x: lowest('x'), y: lowest('y'), z: lowest('z') },
       values: moved ? { width, depth } : {}
