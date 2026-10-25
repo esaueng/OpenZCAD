@@ -40,6 +40,7 @@ import {
   PROJECT_INVITATION_RATE_WINDOW_SECONDS,
   PROJECT_MEMBER_CAP,
   EncryptedProjectsRequiredError,
+  ProjectMigratingError,
   ProjectNotFoundError,
   ProjectSharingError,
   RevisionConflictError,
@@ -667,6 +668,20 @@ export function stagedForEncryptionSql(alias: string): string {
     WHERE staged.project_id = ${alias}.id AND staged.direction = 'encrypt'
       AND staged.state = 'staging' AND staged.owner_user_id = ${alias}.user_id
       AND staged.lease_id = ? AND staged.lease_expires_at > ?)`;
+}
+
+/**
+ * The SQL that holds while the project whose id is `projectIdSql` is not
+ * moving to encrypted storage: no staging, cutover or purge of it is under
+ * way (migration 0042). Every statement that advances a plaintext upload
+ * session carries it, so a session opened before staging began lands
+ * nothing after (slice 7-1): the cutover checks no artifact, and the purge
+ * would delete a late one unencrypted. No binds.
+ */
+export function projectNotMigratingSql(projectIdSql: string): string {
+  return `NOT EXISTS (SELECT 1 FROM e2ee_project_migrations migrating
+    WHERE migrating.project_id = ${projectIdSql}
+      AND migrating.state IN ('staging', 'cutover', 'purging'))`;
 }
 
 /** A staging lease an encrypted-blob write runs under (slice 7-1). */
@@ -3548,10 +3563,14 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.ARTIFACTS) {
       throw new ArtifactStorageError();
     }
+    // Slice 7-1: a project staged for encryption takes no new plaintext
+    // files, whatever the Worker checked before.
+    await this.refuseIfMigrating(request.projectId);
     // Expired cross-account uploads are reclaimed by the scheduled sweeper.
     await this.purgeExpiredUploadSessionsForOwner(userId);
     await this.refreshAccountQuota(access.ownerUserId);
     const session = createUploadSessionRecord(request);
+    const notMigrating = await this.plaintextUploadFence('projects.id');
     try {
       const inserted = await this.env.DB.prepare(
         `INSERT INTO upload_sessions
@@ -3563,7 +3582,7 @@ export class D1R2PersistenceService implements PersistenceService {
          WHERE EXISTS (
            SELECT 1 FROM projects
            WHERE id = ? AND (user_id = ? OR status != 'deleted')
-             AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id)
+             AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id)${notMigrating}
          )`
       )
         .bind(
@@ -3582,6 +3601,7 @@ export class D1R2PersistenceService implements PersistenceService {
         )
         .run();
       if (inserted.meta?.changes === 0) {
+        await this.refuseIfMigrating(request.projectId);
         throw new ProjectNotFoundError(request.projectId);
       }
     } catch (error) {
@@ -3666,6 +3686,10 @@ export class D1R2PersistenceService implements PersistenceService {
         }
       );
       let claimed: number | undefined;
+      const notMigrating = await this.plaintextUploadFence(
+        'upload_sessions.project_id',
+        upload
+      );
       try {
         const result = await this.env.DB.prepare(
           `UPDATE upload_sessions
@@ -3674,7 +3698,7 @@ export class D1R2PersistenceService implements PersistenceService {
          WHERE id = ? AND reservation_state = 'open'
            AND multipart_upload_id IS NULL AND reserved_bytes = 0
            AND single_part = 0
-           AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = upload_sessions.project_id)`
+           AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = upload_sessions.project_id)${notMigrating}`
         )
           .bind(multipart.uploadId, uploadSessionId)
           .run();
@@ -3688,6 +3712,7 @@ export class D1R2PersistenceService implements PersistenceService {
       }
       if (claimed !== 1) {
         await multipart.abort().catch(() => undefined);
+        await this.refuseIfMigrating(upload.projectId, upload);
         throw new ArtifactStorageError('Upload session changed during upload.');
       }
       uploadId = multipart.uploadId;
@@ -3818,9 +3843,12 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     // ADR-024 Phase 4: an encrypted project takes only encrypted blobs, and
     // a plaintext project only ordinary artifacts, part by part. A plaintext
-    // session opened before the project became encrypted writes nothing more.
+    // session opened before the project became encrypted writes nothing more,
+    // nor (slice 7-1) one opened before its staging began: each statement
+    // that advances it carries the same fence (`plaintextUploadFence`).
     if (upload.e2eeBlobKind === null) {
       assertPlaintextProject(access);
+      await this.refuseIfMigrating(upload.projectId);
     } else if (
       isPlaintextStorageFormat(access.storageFormat) &&
       !(await this.isStagedForEncryption(upload.projectId))
@@ -3858,6 +3886,56 @@ export class D1R2PersistenceService implements PersistenceService {
       .bind(projectId)
       .first<{ staged: number }>();
     return row?.staged === 1;
+  }
+
+  /**
+   * Whether a plaintext upload (`upload` absent, or one without an
+   * encrypted-blob marker) must respect the migration state (slice 7-1):
+   * only while E2EE_MIGRATION_ENABLED is on, as the Worker's
+   * PROJECT_MIGRATING refusals, and once migration 0042 is installed, so
+   * with the flag off no upload statement names its table.
+   */
+  private async plaintextUploadFenced(
+    upload?: Pick<DurableUploadSession, 'e2eeBlobKind'>
+  ): Promise<boolean> {
+    return (
+      (!upload || upload.e2eeBlobKind === null) &&
+      isCloudflareFeatureEnabled(this.env, 'E2EE_MIGRATION_ENABLED') &&
+      (await isE2eeProjectMigrationStorageReady(this.env.DB))
+    );
+  }
+
+  /**
+   * Slice 7-1: refuses a plaintext upload to a project staged for
+   * encryption with PROJECT_MIGRATING. Call it only after access was
+   * resolved.
+   */
+  private async refuseIfMigrating(
+    projectId: string,
+    upload?: Pick<DurableUploadSession, 'e2eeBlobKind'>
+  ): Promise<void> {
+    if (
+      (await this.plaintextUploadFenced(upload)) &&
+      (await this.isStagedForEncryption(projectId))
+    ) {
+      throw new ProjectMigratingError(projectId);
+    }
+  }
+
+  /**
+   * ` AND <fence>` for a statement that creates or advances a plaintext
+   * upload of the project whose id is `projectIdSql`, so it lands nothing
+   * once that project's move to encrypted storage began
+   * (`projectNotMigratingSql`); '' for an encrypted-blob session, which a
+   * staging writes, and while the fence is closed (`plaintextUploadFenced`).
+   */
+  private async plaintextUploadFence(
+    projectIdSql: string,
+    upload?: Pick<DurableUploadSession, 'e2eeBlobKind'>
+  ): Promise<string> {
+    return (await this.plaintextUploadFenced(upload))
+      ? ` AND ${projectNotMigratingSql(projectIdSql)}`
+      : '';
   }
 
   private async uploadParts(
@@ -4024,6 +4102,10 @@ export class D1R2PersistenceService implements PersistenceService {
       { httpMetadata: { contentType: session.contentType } }
     );
     let changes: number | undefined;
+    const notMigrating = await this.plaintextUploadFence(
+      'upload_sessions.project_id',
+      session
+    );
     try {
       const result = await this.env.DB.prepare(
         `UPDATE upload_sessions
@@ -4031,7 +4113,7 @@ export class D1R2PersistenceService implements PersistenceService {
              completion_started_at = NULL
          WHERE id = ? AND reservation_state = 'open'
            AND multipart_upload_id IS NULL AND reserved_bytes = 0
-           AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = upload_sessions.project_id)`
+           AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = upload_sessions.project_id)${notMigrating}`
       )
         .bind(upload.uploadId, uploadSessionId)
         .run();
@@ -4137,6 +4219,10 @@ export class D1R2PersistenceService implements PersistenceService {
     );
     const part = await upload.uploadPart(partNumber, body);
     let recorded: number | undefined;
+    const notMigrating = await this.plaintextUploadFence(
+      'upload_sessions.project_id',
+      session
+    );
     try {
       const result = await this.env.DB.prepare(
         `UPDATE artifact_upload_parts
@@ -4146,7 +4232,7 @@ export class D1R2PersistenceService implements PersistenceService {
            AND EXISTS (
              SELECT 1 FROM upload_sessions
              WHERE id = ? AND reservation_state = 'uploading'
-               AND multipart_upload_id = ?
+               AND multipart_upload_id = ?${notMigrating}
            )`
       )
         .bind(
@@ -4167,6 +4253,7 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     if (recorded !== 1) {
+      await this.refuseIfMigrating(session.projectId, session);
       throw new ArtifactStorageError(
         'Upload part was replaced concurrently; retry the part.'
       );
@@ -4212,12 +4299,16 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     let frozeCompletion = false;
     if (session.reservationState === 'uploading') {
+      const notMigrating = await this.plaintextUploadFence(
+        'upload_sessions.project_id',
+        session
+      );
       const frozen = await this.env.DB.prepare(
         `UPDATE upload_sessions
          SET reservation_state = 'completing', completion_started_at = ?
          WHERE id = ? AND reservation_state = 'uploading'
            AND multipart_upload_id = ?
-           AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = upload_sessions.project_id)`
+           AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = upload_sessions.project_id)${notMigrating}`
       )
         .bind(Date.now(), uploadSessionId, request.uploadId)
         .run();
@@ -4963,13 +5054,18 @@ export class D1R2PersistenceService implements PersistenceService {
             .all<{ object_key: string }>()
         : { results: [] as Array<{ object_key: string }> };
 
+    // Slice 7-1: nothing lands once the project's move to encrypted storage
+    // began, though the session was checked just before.
+    const notMigrating = await this.plaintextUploadFence(
+      'upload_sessions.project_id'
+    );
     const validSessionSql = `EXISTS (
       SELECT 1 FROM upload_sessions
       WHERE id = ? AND artifact_id = ? AND project_id = ?
         AND owner_user_id = ?
         AND reservation_state = 'completed' AND reserved_bytes = ?
         AND multipart_upload_id IS NOT NULL
-        AND completion_started_at IS NULL
+        AND completion_started_at IS NULL${notMigrating}
     )`;
     const statements =
       artifact.kind === 'thumbnail'
@@ -5008,7 +5104,7 @@ export class D1R2PersistenceService implements PersistenceService {
          WHERE id = ? AND artifact_id = ? AND project_id = ?
            AND owner_user_id = ?
            AND reservation_state = 'completed' AND reserved_bytes = ?
-           AND multipart_upload_id IS NOT NULL
+           AND multipart_upload_id IS NOT NULL${notMigrating}
            AND EXISTS (
              SELECT 1 FROM projects
              WHERE id = upload_sessions.project_id
@@ -5071,7 +5167,9 @@ export class D1R2PersistenceService implements PersistenceService {
       )
         .bind(request.artifactId, request.projectId)
         .first<ArtifactRow>();
-      return existing ? artifactFromRow(existing) : null;
+      if (existing) return artifactFromRow(existing);
+      await this.refuseIfMigrating(request.projectId);
+      return null;
     }
 
     if (artifact.kind === 'thumbnail') {

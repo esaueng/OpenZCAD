@@ -49,6 +49,7 @@ import {
   EncryptedProjectSharingError,
   EncryptedProjectsRequiredError,
   ProjectFormatUnsupportedError,
+  ProjectMigratingError,
   ProjectAdoptionError,
   ProjectQuotaError,
   ProjectNotFoundError,
@@ -2330,7 +2331,8 @@ async function dispatchApiRequest(
     if (
       error instanceof ProjectFormatUnsupportedError ||
       error instanceof EncryptedProjectSharingError ||
-      error instanceof EncryptedProjectsRequiredError
+      error instanceof EncryptedProjectsRequiredError ||
+      error instanceof ProjectMigratingError
     ) {
       return json({ error: error.message, code: error.code }, 409);
     }

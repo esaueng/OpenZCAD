@@ -107,11 +107,16 @@ function autosave(srv: Server, document: ProjectDocument) {
   });
 }
 
-async function plaintextUpload(
+interface PlaintextUploadSession {
+  uploadSessionId: string;
+  uploadUrl: string;
+  artifactId: string;
+}
+
+async function openPlaintextUpload(
   srv: Server,
-  projectId: string,
-  marker: string
-): Promise<string> {
+  projectId: string
+): Promise<PlaintextUploadSession> {
   const created = await srv.call('POST', '/api/uploads', {
     body: {
       projectId,
@@ -121,23 +126,39 @@ async function plaintextUpload(
     }
   });
   expect(created.status).toBe(201);
-  const { session } = (await created.json()) as {
-    session: { uploadSessionId: string; uploadUrl: string; artifactId: string };
-  };
-  expect(
-    (await srv.call('PUT', session.uploadUrl, { raw: text(marker) })).status
-  ).toBe(204);
-  expect(
-    (
-      await srv.call('POST', '/api/artifacts/finalize', {
-        body: {
-          projectId,
-          uploadSessionId: session.uploadSessionId,
-          artifactId: session.artifactId
-        }
-      })
-    ).status
-  ).toBe(200);
+  return ((await created.json()) as { session: PlaintextUploadSession })
+    .session;
+}
+
+const putPlaintextUpload = (
+  srv: Server,
+  session: PlaintextUploadSession,
+  marker: string
+) => srv.call('PUT', session.uploadUrl, { raw: text(marker) });
+
+const finalizePlaintextUpload = (
+  srv: Server,
+  projectId: string,
+  session: PlaintextUploadSession
+) =>
+  srv.call('POST', '/api/artifacts/finalize', {
+    body: {
+      projectId,
+      uploadSessionId: session.uploadSessionId,
+      artifactId: session.artifactId
+    }
+  });
+
+async function plaintextUpload(
+  srv: Server,
+  projectId: string,
+  marker: string
+): Promise<string> {
+  const session = await openPlaintextUpload(srv, projectId);
+  expect((await putPlaintextUpload(srv, session, marker)).status).toBe(204);
+  expect((await finalizePlaintextUpload(srv, projectId, session)).status).toBe(
+    200
+  );
   return session.artifactId;
 }
 
@@ -799,6 +820,70 @@ describe('staging beside the plaintext', () => {
         })
       ).status
     ).toBe(200);
+  });
+
+  it('lands nothing from a plaintext upload session opened before staging began (#914 review)', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    // One session with its bytes uploaded, one still empty.
+    const uploaded = await openPlaintextUpload(srv, plain.projectId);
+    expect(
+      (await putPlaintextUpload(srv, uploaded, 'Secret late part')).status
+    ).toBe(204);
+    const empty = await openPlaintextUpload(srv, plain.projectId);
+    const s = await startStaging(srv, plain.projectId);
+    const migrating = async (response: Promise<Response>) => {
+      const answer = await response;
+      expect(answer.status).toBe(409);
+      expect(await codeOf(answer)).toBe('PROJECT_MIGRATING');
+    };
+    await migrating(finalizePlaintextUpload(srv, plain.projectId, uploaded));
+    await migrating(putPlaintextUpload(srv, empty, 'Secret later part'));
+    await migrating(
+      srv.call('POST', `/api/uploads/${empty.uploadSessionId}/multipart`)
+    );
+    expect(count(srv, 'artifacts', plain.projectId)).toBe(0);
+    // The sessions stay (an abandon gives them back; a cutover's purge
+    // discards them), so abandoning lets the upload finish as plaintext.
+    await abandonAll(s.api, plain.projectId, s.lease);
+    expect(
+      (await finalizePlaintextUpload(srv, plain.projectId, uploaded)).status
+    ).toBe(200);
+    expect(count(srv, 'artifacts', plain.projectId)).toBe(1);
+  });
+
+  it('lands no plaintext artifact when staging begins between the check and the write (#914 review)', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    const session = await openPlaintextUpload(srv, plain.projectId);
+    expect(
+      (await putPlaintextUpload(srv, session, 'Secret racing part')).status
+    ).toBe(204);
+    // The session passed every check; staging starts before its artifact
+    // row lands, as if the owner's browser started it at that moment.
+    const db = srv.env.DB as D1Database;
+    const batch = db.batch.bind(db);
+    let armed = true;
+    db.batch = async (statements: D1PreparedStatement[]) => {
+      const finalizing = statements.some((statement) =>
+        /INSERT INTO artifacts/.test(
+          (statement as unknown as { sql?: string }).sql ?? ''
+        )
+      );
+      if (armed && finalizing) {
+        armed = false;
+        await startStaging(srv, plain.projectId);
+      }
+      return batch(statements);
+    };
+    const answer = await finalizePlaintextUpload(srv, plain.projectId, session);
+    expect(armed).toBe(false);
+    expect(answer.status).toBe(409);
+    expect(await codeOf(answer)).toBe('PROJECT_MIGRATING');
+    expect(count(srv, 'artifacts', plain.projectId)).toBe(0);
+    expect(migrationRow(srv, plain.projectId)).toMatchObject({
+      state: 'staging'
+    });
   });
 });
 
