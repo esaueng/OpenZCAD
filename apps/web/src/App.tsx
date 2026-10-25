@@ -23480,11 +23480,15 @@ export function App() {
         }
         // Enter on a focused menu trigger or menu item (a History row's
         // actions, reached by keyboard while an edit is armed from that row)
-        // opens or runs it, not Done. Any other focused button, such as the
-        // rail tool just clicked, still leaves Enter to the command (U01).
+        // opens or runs it, not Done; so does Enter on the command bar's own
+        // controls (Options, a pick's remove button, Cancel), which act for
+        // themselves. Any other focused button, such as the rail tool just
+        // clicked, still leaves Enter to the command (U01).
         const control =
           target instanceof Element &&
-          target.closest('[aria-haspopup], [role="menu"]') !== null;
+          target.closest(
+            '[aria-haspopup], [role="menu"], .in-place-command'
+          ) !== null;
         if (event.key === 'Enter' && !typing && !control) {
           event.preventDefault();
           inPlace.done();
