@@ -19486,7 +19486,10 @@ export function App() {
     ) {
       return false;
     }
-    dispatchInteraction({ type: 'keypad-open' });
+    // Reopened in place by the chip's Total/Offset switch: a refused preview
+    // stays refused (`keypad-open` would clear the failure and re-enable
+    // Apply for the value the kernel just turned down).
+    if (!keypadRef.current) dispatchInteraction({ type: 'keypad-open' });
     setKeypad({
       kind: 'offset',
       label:

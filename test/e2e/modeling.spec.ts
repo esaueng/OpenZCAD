@@ -649,7 +649,25 @@ test('keeps face sketching available after a primitive direct edit', async ({
   await modeTag.click();
   await expect(modeTag).toHaveText(/^Offset/);
   await expect(offsetKeypad).toBeVisible();
+  // A refused value stays refused across the switch: reopening entry in the
+  // other mode must not re-enable Apply for what the kernel turned down.
+  await offsetKeypad.getByRole('textbox').fill(String(-(span + 5)));
+  await expect(
+    offsetKeypad.getByRole('button', { name: 'Apply offset' })
+  ).toBeDisabled({ timeout: 30_000 });
+  // The refused preview carries the chip under the keypad; the switch is
+  // still a button, reachable from the keyboard.
+  await modeTag.press('Enter');
+  await expect(totalKeypad).toBeVisible();
+  await expect(
+    totalKeypad.getByRole('button', { name: 'Apply total' })
+  ).toBeDisabled();
+  await modeTag.press('Enter');
+  await expect(offsetKeypad).toBeVisible();
   await offsetKeypad.getByRole('textbox').fill('2');
+  await expect(
+    offsetKeypad.getByRole('button', { name: 'Apply offset' })
+  ).toBeEnabled({ timeout: 30_000 });
   await offsetKeypad.getByRole('button', { name: 'Apply offset' }).click();
   await expect(
     page.locator('.feature-row-main', { hasText: 'Offset face' })
