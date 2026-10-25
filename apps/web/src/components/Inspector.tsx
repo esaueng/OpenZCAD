@@ -1800,9 +1800,13 @@ export function Inspector(props: InspectorProps) {
     const editingInPlace =
       inPlaceTool !== null &&
       props.inPlaceEditFeatureId === selectedFeature.featureId;
+    // As the first half is: from the document on screen, so an edit's
+    // preview (a moved split plane) shows both halves as they will be.
     const splitHalf =
       data.featureKind === 'split'
-        ? props.bodyRepresentations?.[data.secondBodyId]
+        ? (props.massPropertiesDocument?.derived.bodyRepresentations[
+            data.secondBodyId
+          ] ?? props.bodyRepresentations?.[data.secondBodyId])
         : undefined;
     const featurePanel = (
       <>
