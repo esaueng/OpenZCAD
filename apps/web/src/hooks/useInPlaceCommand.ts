@@ -185,6 +185,10 @@ export function useInPlaceCommand(
 ): InPlaceCommand {
   const [session, setSession] = useState<Session | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
+  // A typed value the tool refused: it stands until the next accepted
+  // value, and Done waits with it, since the chip went back to the value
+  // before and finishing would commit that instead of what was typed.
+  const [entryRefusal, setEntryRefusal] = useState<string | null>(null);
   const [previewValid, setPreviewValid] = useState(false);
   const optionsRef = useRef(options);
   optionsRef.current = options;
@@ -407,6 +411,7 @@ export function useInPlaceCommand(
     preview.clear();
     setSession(null);
     setRefusal(null);
+    setEntryRefusal(null);
     setPreviewValid(false);
     optionsRef.current.publishPreview(null);
   }, [preview]);
@@ -422,6 +427,7 @@ export function useInPlaceCommand(
       preview.clear();
       optionsRef.current.publishPreview(null);
       setRefusal(null);
+      setEntryRefusal(null);
       setPreviewValid(false);
       setSession({
         tool,
@@ -751,11 +757,12 @@ export function useInPlaceCommand(
           : valueSpec.max === undefined
             ? `${whole ? `${whole}of ` : ''}at least ${valueSpec.min ?? 0}`
             : `${whole}${valueSpec.min ?? 0} to ${valueSpec.max}`;
-        setRefusal(
+        setEntryRefusal(
           `${raw === undefined ? value : `${raw} is ${value}`}; ${IN_PLACE_TOOL_SPECS[current.tool].title} ${valueSpec.label.toLowerCase()} takes ${range}.`
         );
         return false;
       }
+      setEntryRefusal(null);
       setSession((current) => {
         if (!current) return current;
         const valueSpec = IN_PLACE_TOOL_SPECS[current.tool].values.find(
@@ -829,6 +836,7 @@ export function useInPlaceCommand(
   // Done waits for a valid preview of exactly what it would commit: a pick
   // that changed the request since the last frame has not been shown yet.
   const canFinish = Boolean(
+    !entryRefusal &&
     request &&
     previewValid &&
     previewedKey !== null &&
@@ -895,7 +903,7 @@ export function useInPlaceCommand(
     optionSpecs,
     editing: editSeed,
     hint: spec ? spec.hint(slots, chosen) : '',
-    refusal,
+    refusal: entryRefusal ?? refusal,
     canFinish,
     edit,
     start,
