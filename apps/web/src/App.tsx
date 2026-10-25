@@ -23441,6 +23441,8 @@ export function App() {
         onClose={closeSettings}
       />
     </div>
+  ) : settingsOpen ? (
+    <div className="settings-pending" aria-busy="true" />
   ) : null;
 
   if (!doc) {

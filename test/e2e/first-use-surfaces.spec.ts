@@ -100,7 +100,18 @@ test('Settings opened before the warm-up never shows an empty overlay', async ({
     requestAnimationFrame(sample);
   });
   await page.goto('/');
+  const create = page.getByRole('button', { name: 'Create project' });
+  await expect(create).toBeVisible();
+  const box = (await create.boundingBox())!;
   await page.getByRole('button', { name: 'Open settings' }).click();
+  // Settings is still loading: the start screen behind takes no clicks.
+  expect(
+    await page.evaluate(
+      ({ x, y }) =>
+        document.elementFromPoint(x, y)?.closest('.settings-pending') !== null,
+      { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+    )
+  ).toBe(true);
   await expect(
     page.getByRole('heading', { name: 'Settings' }).first()
   ).toBeVisible();
