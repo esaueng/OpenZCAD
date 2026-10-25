@@ -987,6 +987,28 @@ describe('inPlaceEditBodyBox', () => {
     ).toMatchObject({ min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 5, z: 2 } });
   });
 
+  it("takes a copy's source back through its later steps alone", () => {
+    // A copy never scaled its source; a later move did shift it +10 in x.
+    const shown = {
+      bodyId: BODY,
+      min: { x: 10, y: 0, z: 0 },
+      max: { x: 30, y: 10, z: 4 }
+    };
+    const nudge = {
+      featureKind: 'transform',
+      targetBodyId: BODY,
+      transform: {
+        translation: { x: 10, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 }
+      }
+    } as FeatureData;
+    expect(
+      inPlaceEditBodyBox(shown, scale(true), EDIT_CTX, [nudge])
+    ).toMatchObject({ min: { x: 0, y: 0, z: 0 }, max: { x: 20, y: 10, z: 4 } });
+    // With no later step, the source is as shown.
+    expect(inPlaceEditBodyBox(box, scale(true), EDIT_CTX)).toBe(box);
+  });
+
   it('takes a later turn about an axis back too', () => {
     // Shown: scaled ×2 about the origin, then turned a quarter about Z.
     const shown = {

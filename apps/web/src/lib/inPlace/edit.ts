@@ -485,10 +485,10 @@ export function inPlaceEditSeed(
         // The box shown is the body's after the scale: the handle works on
         // the body before it, about the pivot the feature stores.
         const factor = seed.values.factor ?? 1;
-        // A copy leaves its source as it was: only an in-place scale's
-        // body is shown scaled (and moved by any later in-place step).
+        // A copy leaves its source as it was, but a later in-place step may
+        // still have moved it: the box is taken back through those alone.
         seed.slots.bodies.push(
-          picked && factor > 0 && !data.copy
+          picked && factor > 0
             ? inPlaceEditBodyBox(
                 picked,
                 data,
@@ -506,9 +506,10 @@ export function inPlaceEditSeed(
         seed.slots.axisId = `datum:${data.axisRotation.axis.datumFeatureId}`;
         value('angle', data.axisRotation.angleDeg);
         // The model shows the body turned: the angle's rig works from the
-        // body before the turn (a copy's source was never turned).
+        // body before the turn (a copy's source was never turned by it, but
+        // may have been by a later step).
         seed.slots.bodies.push(
-          picked && !data.copy
+          picked
             ? inPlaceEditBodyBox(
                 picked,
                 data,
@@ -1071,7 +1072,9 @@ export function inPlaceEditBodyBox(
   /** The feature's own transform is in the body shown (not suppressed). */
   shownWithOwn = true
 ): BodyPick {
-  if (data.featureKind !== 'transform' || data.copy) return box;
+  if (data.featureKind !== 'transform') return box;
+  // A copy never transformed its source: only the later steps are undone.
+  const own = shownWithOwn && !data.copy;
   // The body's own vertices where it publishes them: taken back through a
   // turn they give its true box, where a turned box's corners only give a
   // box around it.
@@ -1089,7 +1092,8 @@ export function inPlaceEditBodyBox(
     points = boxCorners(box);
   }
   // Newest first: the later steps, then the feature's own.
-  const steps = [...[...later].reverse(), ...(shownWithOwn ? [data] : [])];
+  if (later.length === 0 && !own) return box;
+  const steps = [...[...later].reverse(), ...(own ? [data] : [])];
   for (const step of steps) {
     points = undoTransformPoints(points, step, ctx) ?? points;
   }
