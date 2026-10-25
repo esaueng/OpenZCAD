@@ -20100,7 +20100,6 @@ export function App() {
   const regionsForReferenceRef = useRef(regionsForReference);
   regionsForReferenceRef.current = regionsForReference;
   const inPlaceProfiles = inPlace.slots.profiles;
-  const inPlaceTool = inPlace.tool;
   const inPlaceTitle = inPlace.spec?.title ?? 'This command';
   useEffect(() => {
     const editing = inPlaceEditing;
