@@ -72,6 +72,11 @@ export interface InPlaceEditContext {
    * the model shows the body after them too.
    */
   laterTransforms?: readonly FeatureData[];
+  /**
+   * Whether a later direct edit reshapes the edited feature's body: the
+   * model's body then cannot be taken back to the one before the feature.
+   */
+  laterReshapes?: boolean;
   /** A body's display mesh vertices (x, y, z, …), for its exact box. */
   bodyVertices?(bodyId: BodyId): ArrayLike<number> | null;
   /** A datum axis's line, for a turn the model shows already made. */
@@ -111,6 +116,11 @@ export interface InPlaceEditSeed {
   lockedOptions: string[];
   /** What could not be restored and must be picked again, if anything. */
   notice: string | null;
+  /**
+   * A scale whose body a later direct edit reshapes: its box is only
+   * approximate, so its factor is typed on a chip rather than dragged.
+   */
+  reshapedLater?: true;
 }
 
 /**
@@ -543,6 +553,10 @@ export function inPlaceEditSeed(
     }
     default:
       return null;
+  }
+  if (tool === 'scale' && ctx.laterReshapes) {
+    seed.reshapedLater = true;
+    seed.notice = `${feature.name}: a later edit reshapes this body · type the factor on its chip.`;
   }
   if (missing.length > 0) {
     const what = [...new Set(missing)].join(' and ');

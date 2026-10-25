@@ -213,6 +213,11 @@ export interface InPlaceSketchView {
 }
 
 export interface InPlaceContext {
+  /**
+   * An edited body's box is only approximate (a later direct edit reshapes
+   * it): handles measured from it are typed chips instead.
+   */
+  reshapedLater?: boolean;
   sketchViews: readonly InPlaceSketchView[];
   datumAxes: Record<FeatureId, DatumAxisLine> | undefined;
   datumLabel(featureId: FeatureId): string;
@@ -2153,7 +2158,7 @@ const scale: InPlaceToolSpec = {
       ...(options.copy === 'yes' ? { copy: true } : {})
     };
   },
-  handles(slots, values, _ctx, options) {
+  handles(slots, values, ctx, options) {
     const body = slots.bodies[0];
     if (!body) return [];
     // From the pivot the result scales about, so the handle rides a corner
@@ -2188,6 +2193,18 @@ const scale: InPlaceToolSpec = {
         ? far
         : near;
     const reach = Math.hypot(corner.x, corner.y, corner.z);
+    if (ctx.reshapedLater) {
+      // A box that is only approximate would mismeasure a drag.
+      return [
+        ...chips,
+        {
+          valueId: 'factor',
+          kind: 'chip',
+          key: `${bodyKey(body)}:factor-chip`,
+          params: { anchor: body.max }
+        }
+      ];
+    }
     if (reach <= 1e-9) return chips;
     return [
       ...chips,

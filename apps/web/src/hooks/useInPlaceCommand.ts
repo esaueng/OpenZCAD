@@ -323,14 +323,16 @@ export function useInPlaceCommand(
       bodyBounds: (bodyId) => optionsRef.current.bodyBounds?.(bodyId) ?? null,
       evaluate: (value) => optionsRef.current.evaluate?.(value) ?? null,
       touched: sessionTouched,
-      ...(savedData ? { saved: savedData } : {})
+      ...(savedData ? { saved: savedData } : {}),
+      ...(editSeed?.reshapedLater ? { reshapedLater: true } : {})
     }),
     [
       options.sketchViews,
       options.datumAxes,
       options.linearSnap,
       sessionTouched,
-      savedData
+      savedData,
+      editSeed
     ]
   );
 
@@ -640,6 +642,7 @@ export function useInPlaceCommand(
       let raws = current.raws;
       let tool = current.tool;
       let chosen = current.options;
+      let touched = current.touched;
       // A stored value or option the user has not changed since it was
       // seeded takes the feature's as it is now. One the user changed keeps
       // its old baseline, so it stays theirs even if the feature later comes
@@ -702,6 +705,16 @@ export function useInPlaceCommand(
               ? raws[id] === baseline.raws[id]
               : raws[id] === undefined && values[id] === baseline.values[id];
           if (!untouched) continue;
+          // Whether the feature stores it at all follows the feature too: a
+          // size it now stores is no default to replace, and one it dropped
+          // is left absent again.
+          const stored = live.touched.includes(id);
+          if (stored !== touched.includes(id)) {
+            touched = stored
+              ? [...touched, id]
+              : touched.filter((other) => other !== id);
+            changed = true;
+          }
           take(nextBaseline.values, id, live.values[id]);
           take(nextBaseline.raws, id, live.raws[id]);
           if (live.values[id] === values[id] && live.raws[id] === raws[id]) {
@@ -754,7 +767,7 @@ export function useInPlaceCommand(
         }
       }
       return changed
-        ? { ...current, tool, options: chosen, slots, values, raws }
+        ? { ...current, tool, options: chosen, slots, values, raws, touched }
         : current;
     });
   }, [options.baseVersion]);

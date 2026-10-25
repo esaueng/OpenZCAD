@@ -377,6 +377,14 @@ describe('body tools', () => {
     });
   });
 
+  it('scale: a body a later edit reshapes is scaled on a typed chip', () => {
+    const spec = IN_PLACE_TOOL_SPECS.scale;
+    const slots = { ...EMPTY, bodies: [BODY] };
+    expect(
+      spec.handles(slots, {}, { ...CTX, reshapedLater: true }, {})
+    ).toEqual([expect.objectContaining({ valueId: 'factor', kind: 'chip' })]);
+  });
+
   it('solid offset: a curved-only body still gets its offset handle', () => {
     const spec = IN_PLACE_TOOL_SPECS['solid-offset'];
     // A sphere's face publishes no normal.
