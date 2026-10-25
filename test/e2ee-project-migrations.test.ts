@@ -482,6 +482,76 @@ describe('the migration lease', () => {
     ).toMatchObject({ status: 409, code: 'E2EE_MIGRATION_LEASE_LOST' });
   });
 
+  it('hands out no lease unless the room confirmed its lock (#914 review)', async () => {
+    let room: 'down' | 'throws' | 'up' = 'down';
+    const locks: string[] = [];
+    const srv = server({
+      PROJECT_ROOM: {
+        getByName: (name: string) => ({
+          fetch: async (request: Request) => {
+            if (room === 'throws') throw new Error('room unreachable');
+            const { action } = (await request.json()) as { action: string };
+            locks.push(`${name}:${action}:${room}`);
+            return new Response(null, { status: room === 'up' ? 204 : 500 });
+          }
+        })
+      }
+    });
+    const plain = await plaintextProject(srv);
+    const api = createProjectMigrationsApi(
+      device(srv, owner, 'owner_laptop').fetcher
+    );
+    const startEncrypt = () =>
+      api.start(plain.projectId, {
+        direction: 'encrypt',
+        deviceId: 'owner_laptop'
+      });
+
+    // A fresh start whose lock fails, or cannot reach the room, issues
+    // nothing and leaves the plaintext writable.
+    for (const mode of ['down', 'throws'] as const) {
+      room = mode;
+      expect(await errorOf(startEncrypt())).toMatchObject({
+        status: 503,
+        code: 'PROJECT_ROOM_UNAVAILABLE'
+      });
+      expect(migrationRow(srv, plain.projectId)).toMatchObject({
+        state: 'abandoned',
+        lease_id: null,
+        lease_expires_at: null,
+        purge_cursor: null
+      });
+    }
+    expect(locks).toEqual([`${plain.projectId}:lock:down`]);
+    const saved = await autosave(srv, plain);
+    expect(saved.status).toBe(200);
+    const head = (await saved.json()) as ProjectDocument;
+
+    // The room answers again: the retry stages from the new head.
+    room = 'up';
+    const started = await startEncrypt();
+    expect(started.migration).toMatchObject({
+      leaseHeld: true,
+      sourceVersion: head.version
+    });
+
+    // A resumed staging whose lock fails keeps its rows, but no live lease.
+    srv.db
+      .prepare('UPDATE e2ee_project_migrations SET lease_expires_at = 1')
+      .run();
+    room = 'down';
+    expect(await errorOf(startEncrypt())).toMatchObject({
+      status: 503,
+      code: 'PROJECT_ROOM_UNAVAILABLE'
+    });
+    const resumed = migrationRow(srv, plain.projectId)!;
+    expect(resumed.state).toBe('staging');
+    expect(resumed.lease_id).not.toBe(started.leaseId);
+    expect(resumed.lease_expires_at as number).toBeLessThanOrEqual(Date.now());
+    room = 'up';
+    expect((await startEncrypt()).migration.leaseHeld).toBe(true);
+  });
+
   it('starts only for the owner of a live, unshared plaintext project', async () => {
     const srv = server();
     const plain = await plaintextProject(srv);

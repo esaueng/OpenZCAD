@@ -360,6 +360,47 @@ async function tellRoom(
   return response.ok;
 }
 
+/**
+ * Takes back a lease the start issued but never handed out, because the
+ * room did not confirm its lock. A fresh staging with nothing staged goes
+ * back to `abandoned` with no cleanup due, so the plaintext unlocks and a
+ * retry starts afresh; a resumed one keeps its staged rows under a lease
+ * that lapses at once, which the retry takes over.
+ */
+async function withdrawLease(
+  db: D1Database,
+  projectId: string,
+  leaseId: string,
+  fresh: boolean
+): Promise<void> {
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const statements: D1PreparedStatement[] = [];
+  if (fresh) {
+    statements.push(
+      db
+        .prepare(
+          `UPDATE e2ee_project_migrations
+           SET state = 'abandoned', device_id = NULL, lease_id = NULL,
+               lease_expires_at = NULL, updated_at = ?, finished_at = ?
+           WHERE project_id = ? AND state = 'staging' AND lease_id = ?
+             AND NOT ${STAGED_ROWS_SQL}`
+        )
+        .bind(nowIso, nowIso, projectId, leaseId, ...stagedRowsBinds(projectId))
+    );
+  }
+  statements.push(
+    db
+      .prepare(
+        `UPDATE e2ee_project_migrations
+         SET lease_expires_at = ?, updated_at = ?
+         WHERE project_id = ? AND state = 'staging' AND lease_id = ?`
+      )
+      .bind(now, nowIso, projectId, leaseId)
+  );
+  await runBatch(db, statements);
+}
+
 const leaseLost = (): never =>
   refuse(
     409,
@@ -542,13 +583,33 @@ async function start(
       );
     }
   }
-  // Nothing the room holds may move on while the browser stages. A room
-  // that cannot be told still meets the cutover's check that the
-  // plaintext did not move.
+  // Nothing the room holds may move on while the browser stages. The
+  // cutover checks D1's head and measurements, not the room's, so a room
+  // that kept its sockets could persist plaintext edits only it holds,
+  // which the purge then deletes: no lease leaves here unless the room
+  // confirmed the lock (#914 review).
+  let locked: boolean;
   try {
-    await tellRoom(ctx.env, projectId, 'lock');
+    locked = await tellRoom(ctx.env, projectId, 'lock');
   } catch {
-    // Best effort; see above.
+    locked = false;
+  }
+  if (!locked) {
+    try {
+      await withdrawLease(
+        ctx.db,
+        projectId,
+        leaseId,
+        existing?.state !== 'staging'
+      );
+    } catch {
+      // The lease still never leaves here, and lapses on its own.
+    }
+    refuse(
+      503,
+      'PROJECT_ROOM_UNAVAILABLE',
+      'The project’s room could not be locked right now. Try again.'
+    );
   }
   return json(
     {
