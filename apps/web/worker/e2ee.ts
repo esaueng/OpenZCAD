@@ -926,6 +926,50 @@ async function handleReplaceIdentity(
   return loadAccount(db, userId);
 }
 
+export const E2EE_DEVICE_SIGNED_PROJECTS_CODE = 'E2EE_DEVICE_SIGNED_PROJECTS';
+
+/**
+ * Until device removal records revocation cutoffs (ADR-024 slice 4-10), a
+ * device that signed a version or envelope of one of the account's
+ * encrypted projects stays: once removed, browsers would refuse what it
+ * signed, and those projects would stop opening. A device that signed
+ * nothing is removed as before. Nothing to check before migration 0033.
+ */
+async function refuseRemovingProjectSigners(
+  db: D1Database,
+  userId: string,
+  removedDeviceIds: readonly string[]
+): Promise<void> {
+  if (
+    removedDeviceIds.length === 0 ||
+    !(await isE2eeProjectVersionStorageReady(db))
+  ) {
+    return;
+  }
+  const marks = removedDeviceIds.map(() => '?').join(', ');
+  const signed = await db
+    .prepare(
+      `SELECT 1 FROM projects p
+       WHERE p.user_id = ? AND p.storage_format = 2
+         AND (EXISTS (SELECT 1 FROM e2ee_project_versions v
+                      WHERE v.project_id = p.id
+                        AND v.signer_device_id IN (${marks}))
+           OR EXISTS (SELECT 1 FROM e2ee_project_envelopes e
+                      WHERE e.project_id = p.id
+                        AND e.signer_device_id IN (${marks})))
+       LIMIT 1`
+    )
+    .bind(userId, ...removedDeviceIds, ...removedDeviceIds)
+    .first();
+  if (signed) {
+    refuse(
+      409,
+      E2EE_DEVICE_SIGNED_PROJECTS_CODE,
+      'This device saved encrypted projects, and removing it is not available yet: those projects would stop opening. It will be in a coming update.'
+    );
+  }
+}
+
 async function handleAppend(
   db: WriteDatabase,
   userId: string,
@@ -967,6 +1011,16 @@ async function handleAppend(
     signed
   ]);
   const previous = list.entries.at(-2)!.entry;
+  await refuseRemovingProjectSigners(
+    db,
+    userId,
+    previous.devices
+      .filter(
+        (device) =>
+          !list.head.devices.some((d) => d.deviceId === device.deviceId)
+      )
+      .map((device) => device.deviceId)
+  );
   const rotation =
     toHex(previous.accountKeyCommitment) !==
     toHex(list.head.accountKeyCommitment);

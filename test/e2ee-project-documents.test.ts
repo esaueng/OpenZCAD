@@ -601,6 +601,48 @@ describe('version integrity', () => {
     });
   });
 
+  it('keeps a device that signed encrypted projects until cutoffs exist (4-10)', async () => {
+    const account = await makeAccount('user_removing', [
+      'dev_a',
+      'dev_b',
+      'dev_c'
+    ]);
+    const srv = newServer([account]);
+    const b = device(srv, account, 'dev_b');
+    const { document: v1 } = await createEncrypted(b);
+    const entries = () =>
+      rows(
+        srv,
+        'SELECT sequence FROM e2ee_device_list_entries WHERE user_id = ?',
+        account.userId
+      ).length;
+    const before = entries();
+
+    // Removing the signer would leave its versions without a cutoff.
+    const refused = await srv.call('POST', '/api/e2ee/device-list', {
+      user: account.userId,
+      body: await account.removalRequest('dev_b')
+    });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({
+      code: 'E2EE_DEVICE_SIGNED_PROJECTS'
+    });
+    expect(entries()).toBe(before);
+    await expect(
+      device(srv, account, 'dev_a').store.loadProject(v1.projectId)
+    ).resolves.toMatchObject({ name: 'Bracket' });
+
+    // A device that signed nothing passes on to the ordinary checks (this
+    // request carries none of the rotated wraps, so those refuse it).
+    const unsigned = await srv.call('POST', '/api/e2ee/device-list', {
+      user: account.userId,
+      body: await account.removalRequest('dev_c')
+    });
+    expect(await unsigned.json()).not.toMatchObject({
+      code: 'E2EE_DEVICE_SIGNED_PROJECTS'
+    });
+  });
+
   it('warns a fresh browser that the head trails the account activity', async () => {
     const srv = server();
     const laptop = device(srv, owner, 'owner_laptop', {
