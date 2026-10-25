@@ -364,6 +364,61 @@ describe('review: values the cards accepted stay expressible', () => {
     });
   });
 
+  it('a hole step follows the bore until a chip sets it', () => {
+    const spec = IN_PLACE_TOOL_SPECS.hole;
+    expect(
+      spec.defaults?.({ ...EMPTY, faces: [TOP] }, CTX, { diameter: 4 })
+    ).toEqual({
+      counterboreDiameter: 7.2,
+      counterboreDepth: 2,
+      countersinkDiameter: 8
+    });
+    const request = spec.request(
+      { ...EMPTY, faces: [TOP] },
+      {
+        diameter: 4,
+        countersinkDiameter: 'sink',
+        countersinkAngleDeg: 82
+      },
+      { style: 'countersink' },
+      CTX,
+      { diameter: 4 }
+    );
+    expect(request).toMatchObject({
+      state: {
+        value: {
+          style: 'countersink',
+          countersinkDiameter: 'sink',
+          countersinkAngleDeg: '82'
+        }
+      }
+    });
+  });
+
+  it('a hole step puts its two chips across its rim', () => {
+    const handles = IN_PLACE_TOOL_SPECS.hole.handles(
+      { ...EMPTY, faces: [TOP] },
+      { diameter: 4, counterboreDiameter: 8, counterboreDepth: 2 },
+      CTX,
+      { style: 'counterbore' }
+    );
+    expect(handles.map((handle) => [handle.valueId, handle.kind])).toEqual([
+      ['diameter', 'linear'],
+      ['counterboreDiameter', 'chip'],
+      ['counterboreDepth', 'chip']
+    ]);
+    const anchors = handles
+      .slice(1)
+      .map((handle) => (handle.kind === 'chip' ? handle.params.anchor : null));
+    // Four either side of the click, across the face's v direction.
+    const spread = Math.hypot(
+      anchors[0]!.x - anchors[1]!.x,
+      anchors[0]!.y - anchors[1]!.y,
+      anchors[0]!.z - anchors[1]!.z
+    );
+    expect(spread).toBeCloseTo(8);
+  });
+
   it('draft hinges on the body base by default, or the top, the click, the origin', () => {
     const ctx: InPlaceContext = {
       ...CTX,

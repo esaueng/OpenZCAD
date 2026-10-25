@@ -191,10 +191,21 @@ export function useInPlaceCommand(
     [session, axisCandidates]
   );
 
-  // Defaults the picks suggest (a helix radius through the profile) land on
-  // every value the user has not set, each time the slots change.
+  const values = useMemo(() => session?.values ?? {}, [session?.values]);
+  /** Every value as a number, its initial one where none is set. */
+  const numbers = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const valueSpec of spec?.values ?? []) {
+      out[valueSpec.id] = values[valueSpec.id] ?? valueSpec.initial;
+    }
+    return out;
+  }, [spec, values]);
+
+  // Defaults the picks suggest (a helix radius through the profile), or
+  // another value does (a hole step from its bore), land on every value the
+  // user has not set, each time they change.
   const defaultsKey = spec?.defaults
-    ? JSON.stringify(spec.defaults(slots, ctx))
+    ? JSON.stringify(spec.defaults(slots, ctx, numbers))
     : '';
   useEffect(() => {
     if (!defaultsKey) return;
@@ -213,21 +224,12 @@ export function useInPlaceCommand(
     });
   }, [defaultsKey]);
 
-  const values = useMemo(() => session?.values ?? {}, [session?.values]);
   const paramValues = useMemo(() => {
     const out: Record<string, ParamValue> = { ...values };
     for (const [id, raw] of Object.entries(session?.raws ?? {})) out[id] = raw;
     return out;
   }, [values, session?.raws]);
   const chosen = useMemo(() => session?.options ?? {}, [session?.options]);
-  /** Every value as a number, its initial one where none is set. */
-  const numbers = useMemo(() => {
-    const out: Record<string, number> = {};
-    for (const valueSpec of spec?.values ?? []) {
-      out[valueSpec.id] = values[valueSpec.id] ?? valueSpec.initial;
-    }
-    return out;
-  }, [spec, values]);
   const request = useMemo(
     () =>
       spec && spec.ready(slots)
