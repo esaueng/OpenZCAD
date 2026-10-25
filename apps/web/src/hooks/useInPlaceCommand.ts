@@ -75,12 +75,16 @@ export interface UseInPlaceCommandOptions extends InPlaceContext {
     title: string,
     edit: InPlaceEditSeed | null
   ): InPlaceBuiltCommand;
-  /** Commits a request through the validated-feature path. */
+  /**
+   * Commits a request through the validated-feature path. An edit reports
+   * back through `settleEdit`; a new feature may return whether it landed,
+   * and the command stays open until then (nothing returned: it has).
+   */
   commit(
     request: InPlaceRequest,
     title: string,
     edit: InPlaceEditSeed | null
-  ): void;
+  ): Promise<boolean> | void;
   publishPreview(preview: ProjectDocument | null): void;
   onStatus(message: string): void;
 }
@@ -305,6 +309,8 @@ export function useInPlaceCommand(
   // While an edit's Done is validating, its inputs hold still: a change made
   // meanwhile would be closed away unseen by that commit's success.
   const committingRef = useRef(false);
+  /** Which Done is committing: a command started or ended since is not it. */
+  const commitToken = useRef(0);
   const setCommitting = useCallback((value: boolean) => {
     committingRef.current = value;
     setCommittingState(value);
@@ -840,6 +846,7 @@ export function useInPlaceCommand(
   }, [options.baseVersion]);
 
   const end = useCallback(() => {
+    commitToken.current += 1;
     preview.clear();
     setSession(null);
     setCommitting(false);
@@ -870,6 +877,7 @@ export function useInPlaceCommand(
       initialEdges: EdgePick[] = []
     ) => {
       const toolSpec = IN_PLACE_TOOL_SPECS[tool];
+      commitToken.current += 1;
       preview.clear();
       optionsRef.current.publishPreview(null);
       setRefusal(null);
@@ -923,6 +931,7 @@ export function useInPlaceCommand(
         options: seed.options,
         slots: seed.slots
       };
+      commitToken.current += 1;
       preview.clear();
       optionsRef.current.publishPreview(null);
       setRefusal(null);
@@ -1363,16 +1372,35 @@ export function useInPlaceCommand(
     if (!current || !spec || !canFinish) return false;
     if (requestKeyRef.current !== previewedKey) return false;
     const editing = editRef.current;
-    // A new feature is done once Done is pressed; an edit stays open until
-    // its commit is validated, so a refusal (the model moved meanwhile)
-    // leaves it there to correct rather than gone.
-    if (editing) setCommitting(true);
-    else end();
-    optionsRef.current.commit(
+    // A command stays open until its commit is validated, so a refusal (the
+    // model moved meanwhile, another exact operation held the lock) leaves
+    // it there to correct or retry rather than gone with its picks.
+    setCommitting(true);
+    commitToken.current += 1;
+    const token = commitToken.current;
+    const landed = optionsRef.current.commit(
       current,
       editing?.name ?? spec.featureName ?? spec.title,
       editing
     );
+    if (!editing) {
+      if (!landed) {
+        end();
+      } else {
+        void landed.then(
+          (committed) => {
+            // Only the command that was committing: one started since is
+            // its own.
+            if (commitToken.current !== token) return;
+            if (committed) end();
+            else setCommitting(false);
+          },
+          () => {
+            if (commitToken.current === token) setCommitting(false);
+          }
+        );
+      }
+    }
     return true;
   }, [spec, canFinish, previewedKey, end, setCommitting]);
 
