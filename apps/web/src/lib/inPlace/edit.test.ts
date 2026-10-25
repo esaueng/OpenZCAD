@@ -8,6 +8,7 @@ import {
   transformBody
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
+import type { FeatureUpdateInput } from '@openzcad/document-core';
 import type {
   BodyId,
   FaceTopologyReferenceV5,
@@ -18,6 +19,7 @@ import type {
 } from '@openzcad/shared';
 import {
   inPlaceEditLineage,
+  keepAbsentHoleSteps,
   inPlaceEditMovedBodies,
   inPlaceEditSeed,
   inPlaceEditSourceSketchIds,
@@ -457,6 +459,70 @@ describe('an untouched edit writes the feature back as stored', () => {
         scale: 3
       }
     });
+  });
+
+  it("scale: a copy's handle works on its source as it stands", () => {
+    const data: FeatureData = {
+      featureKind: 'transform',
+      targetBodyId: BODY,
+      copy: true,
+      transform: {
+        translation: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: 2
+      }
+    };
+    const armed = inPlaceEditSeed(feature(data), EDIT_CTX)!;
+    // The source is live and unscaled: its box is not shrunk again.
+    expect(armed.seed.slots.bodies[0]).toMatchObject({
+      max: { x: 20, y: 10, z: 4 }
+    });
+  });
+
+  it('a suppressed feature is edited without a body to build', () => {
+    const data: FeatureData = {
+      featureKind: 'shell',
+      targetBodyId: BODY,
+      openingFaceHashes: [11],
+      thickness: 1
+    };
+    const node = {
+      ...feature(data, 'body_s' as BodyId),
+      metadata: { suppressed: true }
+    } as unknown as FeatureNode;
+    expect(inPlaceEditSeed(node, EDIT_CTX)!.seed.suppressed).toBe(true);
+    expect(inPlaceEditSeed(feature(data), EDIT_CTX)!.seed.suppressed).toBe(
+      undefined
+    );
+  });
+
+  it('hole: step sizes it never stored stay absent until they are set', () => {
+    const saved: FeatureData = {
+      featureKind: 'hole',
+      targetBodyId: BODY,
+      faceHash: 11,
+      style: 'counterbore',
+      diameter: 6,
+      depthMode: 'through',
+      position: { u: 0, v: 0 }
+    };
+    const update = {
+      featureId: 'feat_1' as FeatureId,
+      data: {
+        ...saved,
+        counterboreDiameter: 11,
+        counterboreDepth: 3
+      }
+    } as unknown as FeatureUpdateInput;
+    expect(keepAbsentHoleSteps(update, saved, []).data).not.toHaveProperty(
+      'counterboreDiameter'
+    );
+    expect(
+      keepAbsentHoleSteps(update, saved, ['counterboreDepth']).data
+    ).toMatchObject({ counterboreDepth: 3 });
+    expect(
+      keepAbsentHoleSteps(update, saved, ['counterboreDepth']).data
+    ).not.toHaveProperty('counterboreDiameter');
   });
 
   it('boolean: its bodies, operation and kept inputs', () => {
