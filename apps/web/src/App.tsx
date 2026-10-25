@@ -1422,6 +1422,7 @@ import {
   clampValue,
   displayedValue,
   isInPlaceTool,
+  keypadText,
   valueInRange,
   type InPlaceRequest,
   type BodyPick,
@@ -25624,7 +25625,7 @@ export function App() {
                 label: valueSpec.label,
                 // A parametric value opens as its expression, and comes
                 // back as one if entry is canceled.
-                initial: raw ?? String(displayedValue(valueSpec, value)),
+                initial: raw ?? keypadText(value),
                 selectInitial: true,
                 unitKind: valueSpec.unit,
                 baseline: value,
