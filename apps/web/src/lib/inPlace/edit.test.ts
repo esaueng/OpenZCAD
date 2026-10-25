@@ -86,8 +86,14 @@ function feature(data: FeatureData, bodyId?: BodyId): FeatureNode {
   } as unknown as FeatureNode;
 }
 
-/** The request the seeded command would commit, untouched. */
-function untouched(node: FeatureNode): InPlaceRequest | null {
+/**
+ * The request the seeded command would commit, untouched, or after the user
+ * sets `changed` (the tool's defaults fill the rest, as the hook's do).
+ */
+function untouched(
+  node: FeatureNode,
+  changed: Record<string, number> = {}
+): InPlaceRequest | null {
   const armed = inPlaceEditSeed(node, EDIT_CTX)!;
   const spec = IN_PLACE_TOOL_SPECS[armed.tool];
   const axis =
@@ -121,8 +127,6 @@ function untouched(node: FeatureNode): InPlaceRequest | null {
     plane: armed.seed.slots.plane,
     edges: armed.seed.slots.edges
   };
-  const values: Record<string, number | string> = { ...armed.seed.values };
-  for (const [id, raw] of Object.entries(armed.seed.raws)) values[id] = raw;
   const ctx: InPlaceContext = {
     sketchViews: [],
     datumAxes: undefined,
@@ -130,13 +134,21 @@ function untouched(node: FeatureNode): InPlaceRequest | null {
     saved: node.data,
     evaluate: EDIT_CTX.evaluate
   };
-  return spec.request(
-    slots,
-    values,
-    armed.seed.options,
-    ctx,
-    armed.seed.values
-  );
+  const numbers: Record<string, number> = {
+    ...armed.seed.values,
+    ...changed
+  };
+  const touched = new Set([...armed.seed.touched, ...Object.keys(changed)]);
+  for (const [id, value] of Object.entries(
+    spec.defaults?.(slots, ctx, numbers) ?? {}
+  )) {
+    if (!touched.has(id)) numbers[id] = value;
+  }
+  const values: Record<string, number | string> = { ...numbers };
+  for (const [id, raw] of Object.entries(armed.seed.raws)) {
+    if (!(id in changed)) values[id] = raw;
+  }
+  return spec.request(slots, values, armed.seed.options, ctx, numbers);
 }
 
 describe('which in-place command edits a stored feature', () => {
@@ -390,6 +402,17 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(update?.data).not.toHaveProperty('axis2');
     expect(update?.data).not.toHaveProperty('spacing2');
     expect(update?.data).not.toHaveProperty('count2');
+    // A new first spacing or count carries the second along: still absent.
+    const followed = inPlaceFeatureUpdate(
+      { featureId: node.featureId, name: node.name, data },
+      untouched(node, { spacing: 15, count: 4 }) as Extract<
+        InPlaceRequest,
+        { tool: 'pattern' }
+      >
+    );
+    expect(followed?.data).toMatchObject({ spacing: 15, count: 4 });
+    expect(followed?.data).not.toHaveProperty('spacing2');
+    expect(followed?.data).not.toHaveProperty('count2');
     // Set apart from the first, it is written.
     expect(
       inPlaceFeatureUpdate(

@@ -514,8 +514,11 @@ export function inPlaceEditSeed(
           : `world-${data.axis}`;
       } else {
         value('spacing', data.spacing);
-        value('spacing2', data.spacing2 ?? data.spacing);
-        value('count2', data.count2 ?? data.count);
+        // Absent, the second spacing and count follow the first's (the
+        // tool's defaults), not a copy of them that an edit would leave
+        // behind.
+        value('spacing2', data.spacing2);
+        value('count2', data.count2);
         seed.options.axis = data.axis;
         seed.options.axis2 = data.axis2 ?? 'y';
       }

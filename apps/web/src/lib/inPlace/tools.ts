@@ -2107,10 +2107,34 @@ const gridPattern: InPlaceToolSpec = {
     slots.bodies.length === 0
       ? 'Click the body to repeat'
       : `Drag both spacings, tap the counts · ${FINISH}`,
+  // An edited grid whose second spacing or count is absent took the first's:
+  // until the user sets it, it still follows the first.
+  defaults(_slots, ctx, numbers) {
+    const saved = ctx.saved;
+    if (saved?.featureKind !== 'pattern' || saved.patternKind !== 'grid') {
+      return {};
+    }
+    return {
+      ...(saved.spacing2 === undefined && numbers.spacing !== undefined
+        ? { spacing2: numbers.spacing }
+        : {}),
+      ...(saved.count2 === undefined && numbers.count !== undefined
+        ? { count2: numbers.count }
+        : {})
+    };
+  },
   ready: (slots) => slots.bodies.length > 0,
-  request(slots, values, options) {
+  request(slots, values, options, ctx, numbers) {
     const body = slots.bodies[0];
     if (!body) return null;
+    // A second value still following the first is the first, as typed, so
+    // the edit can tell it apart from one set to the same number.
+    const saved = ctx.saved?.featureKind === 'pattern' ? ctx.saved : undefined;
+    const follows = (second: 'spacing2' | 'count2', first: string) =>
+      saved !== undefined &&
+      saved[second] === undefined &&
+      numbers?.[second] !== undefined &&
+      numbers[second] === numbers[first];
     return {
       tool: 'pattern',
       targetBodyId: body.bodyId,
@@ -2119,8 +2143,12 @@ const gridPattern: InPlaceToolSpec = {
       axis: axisOf(options.axis),
       spacing: values.spacing ?? 20,
       axis2: axisOf(options.axis2 ?? 'y'),
-      spacing2: values.spacing2 ?? 20,
-      count2: values.count2 ?? 3
+      spacing2: follows('spacing2', 'spacing')
+        ? (values.spacing ?? 20)
+        : (values.spacing2 ?? 20),
+      count2: follows('count2', 'count')
+        ? (values.count ?? 3)
+        : (values.count2 ?? 3)
     };
   },
   handles(slots, _values, _ctx, options) {
