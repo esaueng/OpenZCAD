@@ -188,7 +188,10 @@ export function useInPlaceCommand(
   // A typed value the tool refused: it stands until the next accepted
   // value, and Done waits with it, since the chip went back to the value
   // before and finishing would commit that instead of what was typed.
-  const [entryRefusal, setEntryRefusal] = useState<string | null>(null);
+  const [entryRefusal, setEntryRefusal] = useState<{
+    valueId: string;
+    message: string;
+  } | null>(null);
   const [previewValid, setPreviewValid] = useState(false);
   const optionsRef = useRef(options);
   optionsRef.current = options;
@@ -764,12 +767,17 @@ export function useInPlaceCommand(
           : valueSpec.max === undefined
             ? `${whole ? `${whole}of ` : ''}at least ${valueSpec.min ?? 0}`
             : `${whole}${valueSpec.min ?? 0} to ${valueSpec.max}`;
-        setEntryRefusal(
-          `${raw === undefined ? value : `${raw} is ${value}`}; ${IN_PLACE_TOOL_SPECS[current.tool].title} ${valueSpec.label.toLowerCase()} takes ${range}.`
-        );
+        setEntryRefusal({
+          valueId,
+          message: `${raw === undefined ? value : `${raw} is ${value}`}; ${IN_PLACE_TOOL_SPECS[current.tool].title} ${valueSpec.label.toLowerCase()} takes ${range}.`
+        });
         return false;
       }
-      setEntryRefusal(null);
+      // Only the refused value, taken now, lifts its refusal: another value
+      // changing leaves the refused one still not what was typed.
+      setEntryRefusal((refused) =>
+        refused?.valueId === valueId ? null : refused
+      );
       setSession((current) => {
         if (!current) return current;
         const valueSpec = IN_PLACE_TOOL_SPECS[current.tool].values.find(
@@ -910,7 +918,7 @@ export function useInPlaceCommand(
     optionSpecs,
     editing: editSeed,
     hint: spec ? spec.hint(slots, chosen) : '',
-    refusal: entryRefusal ?? refusal,
+    refusal: entryRefusal?.message ?? refusal,
     canFinish,
     edit,
     start,
