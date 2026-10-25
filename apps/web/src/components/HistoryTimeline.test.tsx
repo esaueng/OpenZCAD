@@ -82,6 +82,18 @@ it('shows preparation instead of repair while accepted geometry awaits analysis'
   expect(screen.getByText('needs repair')).toBeInTheDocument();
 });
 
+it('keeps a brief rebuild quiet without calling the step broken', () => {
+  const pending = feature(1);
+  pending.bodyId = 'body-pending' as FeatureNode['bodyId'];
+  renderTimeline({
+    features: [pending],
+    geometryPending: true,
+    geometryPendingShown: false
+  });
+  expect(screen.queryByText('preparing')).not.toBeInTheDocument();
+  expect(screen.queryByText('needs repair')).not.toBeInTheDocument();
+});
+
 afterEach(() => {
   vi.useRealTimers();
 });

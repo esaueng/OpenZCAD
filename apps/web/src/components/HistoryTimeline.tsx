@@ -124,6 +124,8 @@ export interface HistoryTimelineProps {
    */
   relatedFeatureIds?: ReadonlySet<FeatureId> | null;
   geometryPending?: boolean;
+  /** Whether a pending rebuild is announced; defaults to `geometryPending`. */
+  geometryPendingShown?: boolean;
   selectedFeatureNodeId: string | null;
   hiddenBodyIds: ReadonlySet<string>;
   hiddenSketchIds: ReadonlySet<string>;
@@ -335,6 +337,7 @@ export function HistoryTimeline({
   failedFeatureIds,
   relatedFeatureIds = null,
   geometryPending = false,
+  geometryPendingShown = geometryPending,
   selectedFeatureNodeId,
   hiddenBodyIds,
   hiddenSketchIds,
@@ -807,7 +810,7 @@ export function HistoryTimeline({
             ? 'suppressed'
             : paused
               ? 'paused'
-              : geometryPending
+              : geometryPending && geometryPendingShown
                 ? 'preparing'
                 : failed
                   ? 'needs repair'

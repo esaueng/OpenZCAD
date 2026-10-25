@@ -64,6 +64,12 @@ export interface DragRig {
    */
   orient?(camera: THREE.Camera): void;
   /**
+   * Skips the entrance: shows the rig at once, for a rig that takes over
+   * from one already on screen (a handle re-armed on the face it just moved),
+   * where fading in would read as the handle blinking out and back.
+   */
+  appear?(): void;
+  /**
    * Starts the rig leaving. Disarming disposes immediately without this; with
    * it the caller keeps stepping the rig until `isGone()`, then disposes.
    */

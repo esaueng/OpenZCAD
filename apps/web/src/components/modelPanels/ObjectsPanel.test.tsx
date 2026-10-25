@@ -118,6 +118,16 @@ describe('ObjectsPanel', () => {
     ).toBeNull();
   });
 
+  it('keeps a brief rebuild quiet without claiming the model is empty', () => {
+    renderPanel({ geometryPending: true, geometryPendingShown: false });
+    expect(screen.queryByText('Preparing model details…')).toBeNull();
+    expect(
+      screen.queryByText(
+        'No objects yet. Create a body or sketch to get started.'
+      )
+    ).toBeNull();
+  });
+
   it('says how to start when there are no objects', () => {
     renderPanel();
     expect(

@@ -69,6 +69,7 @@ import {
   SNAP_LABELS,
   SNAP_RADIUS_PX,
   isBoxSelectDrag,
+  BOX_SELECT_MIN_PX,
   rectFromDrag,
   edgeRunSelections,
   edgeHandlePlacement,
@@ -412,6 +413,11 @@ export interface OffsetHandleTarget {
   totalBaseline?: number;
   /** -1 when a drag along the handle subtracts from that total; default +1. */
   totalSense?: 1 | -1;
+  /**
+   * The released value is being validated: the handle stays where it was
+   * let go, but cannot be grabbed until the edit commits or is refused.
+   */
+  locked?: boolean;
 }
 
 /**
@@ -1672,6 +1678,31 @@ function faceBoundaryLoops(
   );
 }
 
+/**
+ * Whether two offset handles arm the same face the same way. Preview profiles
+ * are rebuilt with every derivation, so only which kind is present counts.
+ */
+function sameOffsetHandleTarget(
+  a: OffsetHandleTarget,
+  b: OffsetHandleTarget
+): boolean {
+  const sameVector = (
+    u: { x: number; y: number; z: number },
+    v: { x: number; y: number; z: number }
+  ) => u.x === v.x && u.y === v.y && u.z === v.z;
+  return (
+    a.bodyId === b.bodyId &&
+    a.topologyId === b.topologyId &&
+    sameVector(a.point, b.point) &&
+    sameVector(a.normal, b.normal) &&
+    a.totalBaseline === b.totalBaseline &&
+    a.totalSense === b.totalSense &&
+    !a.linearProfilePreview === !b.linearProfilePreview &&
+    !a.stepProfilePreview === !b.stepProfilePreview &&
+    !a.profilePreview === !b.profilePreview
+  );
+}
+
 function bodyExtentBehind(
   object: THREE.Object3D,
   origin: THREE.Vector3,
@@ -2081,6 +2112,9 @@ export function ModelViewer({
   cylinderRadiusHandleRef.current = cylinderRadiusHandle;
   const offsetHandleRef = useRef(offsetHandle);
   offsetHandleRef.current = offsetHandle;
+  /** The selection as rendered: an exact preview may renumber the face. */
+  const selectedTopologyRef = useRef(selectedTopology);
+  selectedTopologyRef.current = selectedTopology;
   const edgeHandleRef = useRef(edgeHandle);
   edgeHandleRef.current = edgeHandle;
   const cylinderDimensionModeRef = useRef(cylinderDimensionMode);
@@ -2369,6 +2403,10 @@ export function ModelViewer({
   } | null>(null);
   /** Live offset-handle rig; owned by the offsetHandle effect below. */
   const offsetRigRef = useRef<DragRig | null>(null);
+  /** The handle the live offset rig was built from. */
+  const offsetRigBuiltRef = useRef<{ handle: OffsetHandleTarget } | null>(
+    null
+  );
   const offsetDragActiveRef = useRef(false);
   /** How far the body reaches behind the armed face, for the "Total" reading. */
   const offsetExtentRef = useRef<number | null>(null);
@@ -2999,7 +3037,15 @@ export function ModelViewer({
       pointerId: number;
       startX: number;
       startY: number;
+      /** Pressed on the armed offset face: travel drags it instead. */
+      faceGrab?: boolean;
     } | null = null;
+    /**
+     * A press on the offset handle while its release validates. Held to its
+     * own release, which would otherwise fall through to a selection click
+     * on the face beneath and re-arm the handle mid-validation.
+     */
+    let lockedHandlePointerId: number | null = null;
     /** Pointer whose Shift+left-drag is currently routed to camera orbit. */
     let shiftOrbitPointerId: number | null = null;
     let faceDrag: FaceDragState | null = null;
@@ -3237,6 +3283,8 @@ export function ModelViewer({
       preview: CylinderProfilePreview;
       pending: number | null;
       requestedAt: number;
+      /** The last offset the proxy showed; null while it shows the part. */
+      shown: number | null;
     } | null = null;
     // While a face offset is dragged and then validated, the body shows the
     // part as it will be — the viewport proxy or the exact preview — and a
@@ -3330,7 +3378,8 @@ export function ModelViewer({
         offsetBodyProxy = {
           preview,
           pending: null,
-          requestedAt: performance.now()
+          requestedAt: performance.now(),
+          shown: null
         };
         return true;
       }
@@ -3352,10 +3401,19 @@ export function ModelViewer({
       const offset = proxy.pending;
       proxy.pending = null;
       if (!proxy.preview.apply(offset)) {
-        restoreOffsetBodyProxy();
+        // A declined value leaves the proxy showing the part as it was, which
+        // flashed the unmoved body for a frame mid-drag. Hold the last value
+        // it could show until the exact stream answers for this one, the
+        // way a refused exact preview keeps the last accepted shape.
+        if (proxy.shown === null || !proxy.preview.apply(proxy.shown)) {
+          restoreOffsetBodyProxy();
+        } else {
+          refreshShadowMap();
+        }
         onOffsetPreviewRef.current(offset, true);
         return;
       }
+      proxy.shown = offset;
       profilePreviewBadge.hidden = false;
       renderer.domElement.dataset.e2eHeightProxyOffset = String(offset);
       refreshShadowMap();
@@ -3711,6 +3769,42 @@ export function ModelViewer({
       gestures.capture(event, 'crosshair');
     }
 
+    /**
+     * Starts an offset drag on the armed rig, from the arrow (or a selected
+     * region's follower arrow) or from the armed face itself. `press` is where
+     * the gesture began; `event` is the pointer event that claims it.
+     */
+    function beginOffsetDrag(
+      armedRig: DragRig,
+      follower: DragRig | null,
+      press: { pointerId: number; clientX: number; clientY: number },
+      event: PointerEvent
+    ) {
+      regionChipRigRef.current = follower;
+      const grabbed = follower ?? armedRig;
+      const screen = screenDirectionFor(
+        grabbed.origin
+          .clone()
+          .addScaledVector(grabbed.direction, grabbed.value()),
+        grabbed.direction
+      );
+      offsetDrag = {
+        pointerId: press.pointerId,
+        startX: press.clientX,
+        startY: press.clientY,
+        directionX: screen.directionX,
+        directionY: screen.directionY,
+        pixelsPerUnit: screen.pixelsPerUnit,
+        initialOffset: armedRig.value()
+      };
+      // The ghost copies the body before the proxy deforms it.
+      beginOffsetGhost();
+      beginOffsetBodyProxy();
+      offsetDragActiveRef.current = true;
+      onDirectManipulationChangeRef.current(true);
+      gestures.capture(event);
+    }
+
     // Value chip for the offset handle: tracks the arrow tip every frame.
     // Tapping it opens exact numeric entry, per the drag-or-type contract.
     /**
@@ -3748,6 +3842,8 @@ export function ModelViewer({
         return true;
       }
       const offsetRig = offsetRigRef.current;
+      // A handle held through validation shows its value but takes no entry.
+      if (offsetRig && offsetHandleRef.current?.locked) return true;
       if (offsetRig) {
         // Exact entry edits whatever the chip is showing: the whole span
         // (a primitive's height, or the body's reach behind the face) in
@@ -7899,6 +7995,32 @@ export function ModelViewer({
         scope.__ozDragApplies = (scope.__ozDragApplies ?? 0) + 1;
       }
       if (boxSelect && event.pointerId === boxSelect.pointerId) {
+        if (boxSelect.faceGrab) {
+          const rig = offsetRigRef.current;
+          const press = boxSelect;
+          if (
+            rig &&
+            !offsetHandleRef.current?.locked &&
+            Math.hypot(
+              event.clientX - press.startX,
+              event.clientY - press.startY
+            ) >= BOX_SELECT_MIN_PX
+          ) {
+            boxSelect = null;
+            beginOffsetDrag(
+              rig,
+              null,
+              {
+                pointerId: press.pointerId,
+                clientX: press.startX,
+                clientY: press.startY
+              },
+              event
+            );
+            applyPointerMove(event);
+          }
+          return;
+        }
         drawSelectionBand(boxSelect.startX, boxSelect.startY, event);
         return;
       }
@@ -8535,31 +8657,36 @@ export function ModelViewer({
         const follower =
           handleHits.length > 0 ? null : regionFollowerUnderRay();
         if (handleHits.length > 0 || follower) {
-          regionChipRigRef.current = follower;
-          const grabbed = follower ?? armedRig;
-          const screen = screenDirectionFor(
-            grabbed.origin
-              .clone()
-              .addScaledVector(grabbed.direction, grabbed.value()),
-            grabbed.direction
-          );
-          offsetDrag = {
-            pointerId: event.pointerId,
-            startX: event.clientX,
-            startY: event.clientY,
-            directionX: screen.directionX,
-            directionY: screen.directionY,
-            pixelsPerUnit: screen.pixelsPerUnit,
-            initialOffset: armedRig.value()
-          };
-          // The ghost copies the body before the proxy deforms it.
-          beginOffsetGhost();
-          beginOffsetBodyProxy();
-          offsetDragActiveRef.current = true;
-          onDirectManipulationChangeRef.current(true);
-          gestures.capture(event);
+          if (offsetHandleRef.current?.locked) {
+            lockedHandlePointerId = event.pointerId;
+            gestures.capture(event, null);
+            event.preventDefault();
+            return;
+          }
+          beginOffsetDrag(armedRig, follower, event, event);
           event.preventDefault();
           return;
+        }
+        // The armed face itself is the thing being pushed or pulled: a press
+        // on it that travels drags the face, as the arrow does. It used to
+        // start a selection band, and a short sweep across the face took
+        // the whole body instead. A press that stays put is still a click.
+        const armedTarget = offsetHandleRef.current;
+        if (armedTarget && !armedTarget.locked) {
+          const hit = pick(event)?.selection;
+          const shown = selectedTopologyRef.current;
+          if (
+            hit?.kind === 'face' &&
+            hit.bodyId === armedTarget.bodyId &&
+            (hit.topologyId === armedTarget.topologyId ||
+              (shown?.kind === 'face' &&
+                shown.bodyId === hit.bodyId &&
+                shown.topologyId === hit.topologyId))
+          ) {
+            beginBoxSelect(event);
+            boxSelect!.faceGrab = true;
+            return;
+          }
         }
       }
       const armedEdgeRig = edgeRigRef.current;
@@ -8710,6 +8837,11 @@ export function ModelViewer({
       if (event.pointerId === shiftOrbitPointerId) {
         shiftOrbitPointerId = null;
         cameraRig.setShiftOrbitActive(false);
+      }
+      if (event.pointerId === lockedHandlePointerId) {
+        lockedHandlePointerId = null;
+        gestures.release(event, null);
+        return;
       }
       if (boxSelect && event.pointerId === boxSelect.pointerId) {
         const started = boxSelect;
@@ -9321,6 +9453,10 @@ export function ModelViewer({
         return;
       }
       pendingHoverEvent = null;
+      if (event.pointerId === lockedHandlePointerId) {
+        lockedHandlePointerId = null;
+        gestures.release(event, null);
+      }
       if (sketchMoveRef.current?.pointerId === event.pointerId) {
         const drag = sketchMoveRef.current;
         gestures.release(event, '');
@@ -11359,10 +11495,35 @@ export function ModelViewer({
     if (!context || offsetDragActiveRef.current) {
       return;
     }
-    if (offsetRigRef.current) {
-      retireRig(offsetRigRef.current, retiringRigsRef.current);
+    const previous = offsetRigRef.current;
+    const built = offsetRigBuiltRef.current;
+    // Validating a released drag re-derives the same handle, locked. Keep the
+    // rig where it was let go — value, ghost and proxy included — instead of
+    // fading it out and back in around the commit. Meshes that land meanwhile
+    // wait for the commit's own rebuild, as they did while the handle was
+    // simply withdrawn for validation.
+    if (
+      previous &&
+      offsetHandle?.locked &&
+      built &&
+      sameOffsetHandleTarget(built.handle, offsetHandle)
+    ) {
+      built.handle = offsetHandle;
+      return;
+    }
+    // The handle validation held, re-armed on the face it just moved (or
+    // restored after a refusal), takes over from the one on screen at once.
+    const takesOver =
+      previous !== null &&
+      offsetHandle !== null &&
+      built?.handle.locked === true &&
+      built.handle.bodyId === offsetHandle.bodyId;
+    if (previous) {
+      if (takesOver) previous.dispose();
+      else retireRig(previous, retiringRigsRef.current);
     }
     offsetRigRef.current = null;
+    offsetRigBuiltRef.current = null;
     if (offsetChipRef.current) {
       offsetChipRef.current.hidden = true;
     }
@@ -11428,22 +11589,30 @@ export function ModelViewer({
     });
     rig.setValue(offsetHandle.initialValue ?? 0);
     rig.setWarning?.(offsetPreviewInvalidRef.current);
+    if (takesOver) rig.appear?.();
     // Fat-line materials need the viewport resolution for correct widths.
     const { width, height } = context.fatLineResolution();
     syncFatLineResolution(rig.worldGroup, width, height);
     context.scene.add(rig.group);
     context.scene.add(rig.worldGroup);
     offsetRigRef.current = rig;
+    offsetRigBuiltRef.current = { handle: offsetHandle };
     context.requestRender();
-    return () => {
-      if (!offsetDragActiveRef.current) {
-        retireRig(rig, retiringRigsRef.current);
-        if (offsetRigRef.current === rig) {
-          offsetRigRef.current = null;
-        }
-      }
-    };
   }, [offsetHandle, bodies]);
+
+  // The rig effect above retires its own rig when the handle changes; this
+  // retires the last one when the viewer goes.
+  useEffect(
+    () => () => {
+      const rig = offsetRigRef.current;
+      if (rig && !offsetDragActiveRef.current) {
+        retireRig(rig, retiringRigsRef.current);
+        offsetRigRef.current = null;
+        offsetRigBuiltRef.current = null;
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     offsetRigRef.current?.setWarning?.(offsetPreviewInvalid);

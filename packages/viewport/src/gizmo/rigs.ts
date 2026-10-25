@@ -82,6 +82,13 @@ function createRigPresence(roots: readonly THREE.Object3D[]) {
       apply();
       return true;
     },
+    /** Skips the entrance ramp: the rig is fully shown from its first frame. */
+    showNow() {
+      if (presenceTarget === 0) return;
+      presence = presenceTarget;
+      presenceFirstStep = false;
+      apply();
+    },
     /** Starts the rig leaving; it stops being hot on the way out. */
     beginExit() {
       presenceFirstStep ||= presenceTarget !== 0;
@@ -618,6 +625,10 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
       );
       orderByDepth(pin.solids, camera);
       changeArrow.orient(camera);
+    },
+    appear() {
+      presence.showNow();
+      paintArrows();
     },
     beginExit() {
       presence.beginExit();
