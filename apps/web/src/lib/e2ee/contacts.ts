@@ -181,6 +181,14 @@ function signedOf(record: E2eeContactsEntryRecord): SignedContactsEntry {
   };
 }
 
+/** An answer older than what this browser (another tab included) accepted. */
+function staleAnswer(what: string): never {
+  throw new ContactsError(
+    'fork',
+    `The server showed an older or different ${what} than this browser already accepted. Nothing was changed.`
+  );
+}
+
 function refused(error: unknown, what: string): never {
   if (isE2eeError(error, 'chain-broken')) {
     throw new ContactsError(
@@ -242,11 +250,13 @@ async function acceptList(
     throw new ContactsError('invalid', 'The contacts list names another user.');
   }
   requireActive(ctx);
-  await ctx.pins.advanceList(userId, {
+  const advanced = await ctx.pins.advanceList(userId, {
     identityKeyHash: identityHash,
     sequence: list.pin.sequence,
     entryHash: toHex(list.pin.entryHash)
   });
+  // Another tab pinned a newer list meanwhile: this one is stale.
+  if (!advanced) staleAnswer('contacts list');
   return list;
 }
 
@@ -394,6 +404,16 @@ export async function inspectContact(
   const verifiedSame =
     record?.status === 'verified' &&
     toHex(record.identityKeyHash) === identityHash;
+  // A different identity was already seen for this contact: the verified
+  // one coming back is a rollback, not a reason to trust it again. Only a
+  // signed key change or a new verification moves on from there.
+  if (
+    verifiedSame &&
+    pin?.keyChanged &&
+    pin.identityKeyHash !== identityHash
+  ) {
+    staleAnswer('device list');
+  }
   // Fork consistency: the list must extend the signed verification and
   // whatever newer head this browser accepted for the same identity.
   const pins: DeviceListPin[] = [];
@@ -420,7 +440,7 @@ export async function inspectContact(
       Boolean(pin?.keyChanged) ||
       (pin !== null && pin.identityKeyHash !== identityHash));
   requireActive(ctx);
-  await ctx.pins.advanceContact(
+  const advanced = await ctx.pins.advanceContact(
     userId,
     {
       contactUserId,
@@ -433,6 +453,7 @@ export async function inspectContact(
     // A replaced identity is surfaced as `keyChanged` before it is pinned.
     { replaceIdentity: true }
   );
+  if (!advanced) staleAnswer('device list');
   const { hash, code } = await contactVerificationCode(
     identityKey,
     list.headHash

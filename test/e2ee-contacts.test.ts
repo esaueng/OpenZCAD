@@ -11,6 +11,7 @@ import {
   generateSigningKeyPair,
   nextContactsEntry,
   publicKeyHash,
+  toHex,
   signContactsEntry,
   toBase64Url,
   type Bytes
@@ -593,6 +594,78 @@ describe('verifying contacts in the browser', () => {
       'key-changed',
       'verify'
     ]);
+  });
+
+  it('refuses the old verified identity once a replacement was seen (#898 review)', async () => {
+    const { srv, alice, bob } = await pair();
+    let book = await loadContacts(alice.contacts, alice.account);
+    book = await verifyContact(
+      alice.contacts,
+      alice.account,
+      book,
+      await inspectContact(alice.contacts, book, BOB),
+      alice.recovery.secret
+    );
+    // A device-list answer for Bob's first identity, held back for later.
+    const path = `/api/e2ee/users/${BOB}/device-list`;
+    const oldAnswer = await (await srv.call('GET', path, { user: ALICE })).text();
+    const replacement = await generateRecoveryKey();
+    bob.account = ready(
+      await replaceRecoveryKey(
+        bob.keys,
+        bob.account,
+        replacement.secret,
+        bob.recovery.secret
+      )
+    );
+    // Alice sees the replacement: the downgrade is pinned.
+    expect(await inspectContact(alice.contacts, book, BOB)).toMatchObject({
+      keyChanged: true
+    });
+    // A delayed answer (another tab, say) brings the old identity back.
+    const replaying: ContactsContext = {
+      ...alice.contacts,
+      api: createContactsApi(async (p, init) =>
+        p === path
+          ? new Response(oldAnswer, {
+              status: 200,
+              headers: { 'content-type': 'application/json' }
+            })
+          : fetcher(srv, ALICE)(p, init)
+      )
+    };
+    await expect(inspectContact(replaying, book, BOB)).rejects.toMatchObject({
+      code: 'fork'
+    });
+    expect(
+      (await alice.pins.readContact(ALICE, BOB))?.identityKeyHash
+    ).toBe(toHex(await publicKeyHash(bob.account.list.identityKey)));
+  });
+
+  it('refuses a result whose pin another tab moved past (#898 review)', async () => {
+    const { alice } = await pair();
+    let book = await loadContacts(alice.contacts, alice.account);
+    book = await verifyContact(
+      alice.contacts,
+      alice.account,
+      book,
+      await inspectContact(alice.contacts, book, BOB),
+      alice.recovery.secret
+    );
+    const lostRace: ContactsContext = {
+      ...alice.contacts,
+      pins: {
+        ...alice.pins,
+        advanceList: async () => false,
+        advanceContact: async () => false
+      }
+    };
+    await expect(
+      loadContacts(lostRace, alice.account)
+    ).rejects.toMatchObject({ code: 'fork' });
+    await expect(inspectContact(lostRace, book, BOB)).rejects.toMatchObject({
+      code: 'fork'
+    });
   });
 
   it('signs a key change and the new verification in one step', async () => {
