@@ -158,10 +158,12 @@ function snapped(value: number, step: number): number {
 }
 
 /**
- * What a footprint drag from `start` to `end` on `frame` sets: the pressed
- * point (snapped in the plane, never off it), the drag's senses, and the
- * footprint's sizes. A press that never travelled places the primitive at
- * the press and leaves its sizes as they were.
+ * What a footprint drag from `start` to `end` on `frame` sets: the position
+ * values (the kernel's own anchor point, snapped in the plane but never off
+ * it), the drag's senses, and the footprint's sizes. A press that never
+ * travelled places the primitive at the press and leaves its sizes as they
+ * were. `sizes` are the command's current sizes, which a box square to the
+ * world needs to find its lowest corner.
  */
 export function footprintPlacement(
   kind: PrimitiveKind,
@@ -169,7 +171,8 @@ export function footprintPlacement(
   start: Vector3,
   end: Vector3,
   moved: boolean,
-  snap: number | null
+  snap: number | null,
+  sizes: Readonly<Record<string, number>> = {}
 ): {
   placement: PlacementPick;
   anchor: Vector3;
@@ -189,18 +192,48 @@ export function footprintPlacement(
     y: Math.round(anchor.y * 1e9) / 1e9,
     z: Math.round(anchor.z * 1e9) / 1e9
   };
-  if (!moved) {
-    return { placement: { frame, signU: 1, signV: 1 }, anchor: rounded, values: {} };
-  }
   const delta = plus(end, scaled(start, -1));
-  const along = dot(delta, u);
-  const across = dot(delta, v);
+  const along = moved ? dot(delta, u) : 0;
+  const across = moved ? dot(delta, v) : 0;
   const size = (value: number) => Math.max(step, snapped(Math.abs(value), step));
   const placement: PlacementPick = {
     frame,
     signU: along < 0 ? -1 : 1,
     signV: across < 0 ? -1 : 1
   };
+  if (kind === 'box' && [u, v, normal].every(isAxis)) {
+    // Square to the world, a box stands unturned from its lowest corner, as
+    // the card placed it: that corner is its position, whichever way the
+    // footprint was dragged and whichever way the face looks.
+    const width = moved ? size(along) : (sizes.width ?? 30);
+    const depth = moved ? size(across) : (sizes.depth ?? 18);
+    const height = sizes.height ?? 24;
+    const lowest = (axis: 'x' | 'y' | 'z') =>
+      Math.round(
+        (rounded[axis] +
+          Math.min(0, placement.signU * width * u[axis]) +
+          Math.min(0, placement.signV * depth * v[axis]) +
+          Math.min(0, height * normal[axis])) *
+          1e9
+      ) / 1e9;
+    const positive = (vector: Vector3): Vector3 => ({
+      x: Math.abs(vector.x),
+      y: Math.abs(vector.y),
+      z: Math.abs(vector.z)
+    });
+    return {
+      placement: {
+        frame: { u: positive(u), v: positive(v), normal: positive(normal) },
+        signU: 1,
+        signV: 1
+      },
+      anchor: { x: lowest('x'), y: lowest('y'), z: lowest('z') },
+      values: moved ? { width, depth } : {}
+    };
+  }
+  if (!moved) {
+    return { placement: { frame, signU: 1, signV: 1 }, anchor: rounded, values: {} };
+  }
   if (kind === 'box') {
     return {
       placement,
@@ -213,36 +246,6 @@ export function footprintPlacement(
     anchor: rounded,
     values: { [ROUND_FOOTPRINT[kind]]: size(Math.hypot(along, across)) }
   };
-}
-
-/**
- * `Σ coefficient · value`, as a number when every value is one, else as an
- * expression that keeps a typed value live in the document. A lone value
- * with coefficient 1 is returned as it was.
- */
-export function linearValue(
-  terms: readonly (readonly [ParamValue, number])[]
-): ParamValue {
-  const live = terms.filter(([, coefficient]) => coefficient !== 0);
-  if (live.length === 1 && live[0]![1] === 1) return live[0]![0];
-  let constant = 0;
-  const parts: string[] = [];
-  for (const [value, coefficient] of live) {
-    if (typeof value === 'number') {
-      constant += value * coefficient;
-      continue;
-    }
-    parts.push(
-      coefficient === 1
-        ? `(${value})`
-        : coefficient === -1
-          ? `-(${value})`
-          : `(${value}) * ${coefficient}`
-    );
-  }
-  const total = Math.round(constant * 1e9) / 1e9;
-  if (parts.length === 0) return total;
-  return [...parts, ...(total === 0 ? [] : [String(total)])].join(' + ');
 }
 
 /**
@@ -319,23 +322,16 @@ export function primitiveBuild(
         [normal, height]
       ] as const;
       if (sides.every(([direction]) => isAxis(cleaned(direction)))) {
-        // Square to the world: the same unturned box, its lowest corner
-        // wherever the drag's senses put it.
+        // Square to the world: the same unturned box the card made, its
+        // position its lowest corner (`footprintPlacement` finds it).
         const dimensions: Record<string, ParamValue> = {};
-        const position: ParametricVector3 = { ...at };
         for (const axis of AXES) {
-          const [direction, size] = sides.find(
+          const [, size] = sides.find(
             ([candidate]) => clean(candidate[axis]) !== 0
           )!;
           dimensions[BOX_KEYS[axis]] = size;
-          if (clean(direction[axis]) < 0) {
-            position[axis] = linearValue([
-              [at[axis], 1],
-              [size, -1]
-            ]);
-          }
         }
-        return { dimensions, position };
+        return { dimensions, position: { ...at } };
       }
       // A tilted face: the box turns with it. Its own X and Y run along the
       // drag's senses, swapped when they would make a left-handed frame.
@@ -358,19 +354,7 @@ export function primitiveBuild(
         height: values.height ?? 28
       };
       if (isPlusZ(normal)) return { dimensions, position: { ...at } };
-      // Upside down a cylinder is the same solid with its base lower.
-      if (isMinusZ(normal)) {
-        return {
-          dimensions,
-          position: {
-            ...at,
-            z: linearValue([
-              [at.z, 1],
-              [dimensions.height, -1]
-            ])
-          }
-        };
-      }
+      // Under a face it turns over, so its base center stays on the face.
       return { ...turned(u, v, normal), dimensions };
     }
     case 'cone': {

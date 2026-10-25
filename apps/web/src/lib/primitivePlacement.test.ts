@@ -211,10 +211,12 @@ describe('primitive placement', () => {
     });
   });
 
-  it('places a turned primitive in one Move, read as a later edit', () => {
-    const manager = new CommandManager(
-      createProjectDocument('Turned', toUserId('user_turned_placement'))
+  it('places a turned primitive in one Move that History edits', () => {
+    const initial = createProjectDocument(
+      'Turned',
+      toUserId('user_turned_placement')
     );
+    const manager = new CommandManager(initial);
     manager.execute(
       createPrimitiveCommand(
         'cylinder',
@@ -225,18 +227,41 @@ describe('primitive placement', () => {
         { x: 90, y: 0, z: 90 }
       )
     );
-    const moves = features(manager).filter(
-      (feature) => feature.data.featureKind === 'transform'
+    const moves = () =>
+      features(manager).filter(
+        (feature) => feature.data.featureKind === 'transform'
+      );
+    expect(moves().map((move) => move.name)).toEqual(['Place Cylinder']);
+    // Its own turned Move is its placement: History reads where it stands
+    // and moves it there, keeping the turn (Codex review on #889).
+    const cylinder = primitiveOf(manager);
+    expect(primitivePlacement(manager.document, cylinder)).toMatchObject({
+      feature: { featureId: moves()[0]!.featureId },
+      position: { x: 20, y: 0, z: 5 }
+    });
+    manager.execute(
+      applyPrimitiveCommand(
+        manager.document,
+        cylinder,
+        'Cylinder',
+        { radius: 3, height: 10 },
+        { x: 25, y: 0, z: 5 }
+      )
     );
-    expect(moves.map((move) => move.name)).toEqual(['Place Cylinder']);
-    expect(moves[0]!.data).toMatchObject({
+    expect(moves()).toHaveLength(1);
+    expect(moves()[0]!.data).toMatchObject({
       transform: {
-        translation: { x: 20, y: 0, z: 5 },
+        translation: { x: 25, y: 0, z: 5 },
         rotationDeg: { x: 90, y: 0, z: 90 }
       }
     });
-    // Its card edits the sizes; a turn stays a Move of its own.
-    expect(primitivePlacement(manager.document, primitiveOf(manager)).feature).toBeNull();
+    // Undo and replay keep the mark: it is a command of the placement.
+    expect(
+      primitivePlacement(
+        replayCommands(initial, manager.document.commandLog),
+        cylinder
+      ).feature
+    ).not.toBeNull();
   });
 
   it('adds no Move for an unturned primitive at the origin', () => {

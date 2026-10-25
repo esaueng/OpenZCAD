@@ -25670,7 +25670,8 @@ export function App() {
                 gesture.moved,
                 appSettings.sketching.snapEnabled
                   ? appSettings.sketching.linearSnap
-                  : null
+                  : null,
+                inPlaceRef.current.values
               );
               inPlaceRef.current.placeFootprint(placed.placement, {
                 ...placed.values,

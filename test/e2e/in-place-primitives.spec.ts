@@ -13,6 +13,7 @@ import {
   enterCommandValue,
   expectBodyCount,
   finishInPlaceCommand,
+  setInPlaceOptionValues,
   waitForStillViewport
 } from './openzcad-fixtures';
 
@@ -175,6 +176,32 @@ test('a box is drawn corner to corner on the ground, then given its height', asy
     [move?.translation.x, move?.translation.y, move?.translation.z].map(round)
   ).toEqual([5, 5, 0]);
   expect(move?.rotationDeg).toEqual({ x: 0, y: 0, z: 0 });
+});
+
+test('a box drawn right to left names its real lowest corner', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await openProject(page, null);
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await dragFootprint(page, [25, 15, 0], [5, 5, 0]);
+  await expect(page.getByTestId('command-handle-width')).toContainText(
+    /Width 20(\.0)? mm/
+  );
+  // Options show where the box starts, and a typed corner moves it there.
+  const bar = page.getByRole('group', { name: 'Box command' });
+  await bar.locator('summary').click();
+  await expect(
+    bar.getByRole('button', { name: 'Corner X', exact: true })
+  ).toHaveText(/^5(\.0)? mm$/);
+  await bar.locator('summary').click();
+  await setInPlaceOptionValues(page, 'Box', { 'Corner X': '2' });
+  await finishInPlaceCommand(page, 'Box');
+
+  const { move } = placementOf(await exportedDocument(page), 'Box');
+  expect(
+    [move?.translation.x, move?.translation.y, move?.translation.z].map(round)
+  ).toEqual([2, 5, 0]);
 });
 
 test('a cylinder drawn on a top face stands on it', async ({ page }) => {

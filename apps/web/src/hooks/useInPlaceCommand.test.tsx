@@ -542,8 +542,8 @@ describe('useInPlaceCommand: primitives', () => {
     act(() => {
       expect(
         hook.result.current.placeFootprint(
-          { frame: placementFrame({ x: 0, y: 0, z: 1 }), signU: -1, signV: 1 },
-          { width: 20, depth: 15, x: 10, y: 5, z: 6 }
+          { frame: placementFrame({ x: 0, y: 0, z: 1 }), signU: 1, signV: 1 },
+          { width: 20, depth: 15, x: -10, y: 5, z: 6 }
         )
       ).toBe(true);
     });

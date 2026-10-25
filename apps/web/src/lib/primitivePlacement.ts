@@ -119,13 +119,21 @@ function samePosition(
 }
 
 /**
+ * Marks the Move an in-place placement made on a plane not square to Z
+ * (U09): its turn belongs to the placement, about the point the primitive
+ * was built at, so its translation is still where the anchor sits.
+ */
+export const PRIMITIVE_PLACEMENT_METADATA_KEY = 'primitivePlacement' as const;
+
+/**
  * A pure-translation Move directly after the primitive, on its body.
  *
  * The same rule the face-drag planner uses when it moves a box or cylinder
  * base (`shiftPrimitiveBase`): that Move is the primitive's own placement,
  * so its translation is where the anchor point sits. Anything rotated or
  * scaled, suppressed, or further down the history is a later edit, not the
- * placement, and a new placement goes in ahead of it.
+ * placement, and a new placement goes in ahead of it — except the turned
+ * Move a placement made itself, which it marks.
  */
 function isPlacement(
   candidate: FeatureNode | undefined,
@@ -140,9 +148,12 @@ function isPlacement(
     isInPlaceTransform(candidate.data) &&
     candidate.data.targetBodyId === bodyId &&
     (candidate.data.transform.scale ?? 1) === 1 &&
-    Object.values(candidate.data.transform.rotationDeg).every(
+    (Object.values(candidate.data.transform.rotationDeg).every(
       (value) => value === 0
-    )
+    ) ||
+      (candidate.metadata?.[PRIMITIVE_PLACEMENT_METADATA_KEY] === true &&
+        candidate.data.transform.pivot === undefined &&
+        candidate.data.axisRotation === undefined))
   );
 }
 
@@ -202,14 +213,28 @@ export function createPrimitiveCommand(
     dimensions
   });
   if (isOrigin(position) && !turned) return add;
+  const place = commandFactories.transformBody({
+    name: `Place ${featureName}`,
+    targetBodyId: add.payload.ids!.bodyId,
+    translation: position,
+    ...(turned ? { rotationDeg } : {})
+  });
   return composeCommands(add.label, [
     add,
-    commandFactories.transformBody({
-      name: `Place ${featureName}`,
-      targetBodyId: add.payload.ids!.bodyId,
-      translation: position,
-      ...(turned ? { rotationDeg } : {})
-    })
+    place,
+    ...(turned
+      ? [
+          // The turn is the placement's, so History edits this Move's
+          // translation rather than slipping a Move in ahead of the turn.
+          commandFactories.setNodeMetadata(
+            {
+              nodeId: place.payload.ids!.featureNodeId,
+              metadata: { [PRIMITIVE_PLACEMENT_METADATA_KEY]: true }
+            },
+            add.label
+          )
+        ]
+      : [])
   ]);
 }
 

@@ -5,7 +5,6 @@ import {
   eulerDegrees,
   footprintPlacement,
   framePlaneHit,
-  linearValue,
   placementFrame,
   primitiveBuild,
   principalFrameFor,
@@ -137,20 +136,61 @@ describe('placement frames', () => {
 });
 
 describe('a footprint drag', () => {
-  it('sizes a box from corner to corner, keeping the senses it ran', () => {
+  it('sizes a box corner to corner, its position the lowest corner', () => {
+    // Dragged right to left: Corner X is where the box really starts, so a
+    // typed Corner X moves that corner (Codex review on #889).
     const result = footprintPlacement(
       'box',
       GROUND_FRAME,
       { x: 10.04, y: 5.02, z: 0 },
       { x: -9.7, y: 20.3, z: 0 },
       true,
-      1
+      1,
+      { height: 24 }
     );
     expect(result).toEqual({
-      placement: { frame: GROUND_FRAME, signU: -1, signV: 1 },
-      anchor: { x: 10, y: 5, z: 0 },
+      placement: { frame: GROUND_FRAME, signU: 1, signV: 1 },
+      anchor: { x: -10, y: 5, z: 0 },
       values: { width: 20, depth: 15 }
     });
+  });
+
+  it('hangs a box under a bottom face from its lowest corner', () => {
+    const bottom = placementFrame({ x: 0, y: 0, z: -1 });
+    const result = footprintPlacement(
+      'box',
+      bottom,
+      { x: 0, y: 0, z: 20 },
+      { x: 10, y: 6, z: 20 },
+      true,
+      1,
+      { height: 5 }
+    );
+    // The footprint spans x 0..10 and y 0..6; the box hangs 5 below.
+    expect(result.anchor).toEqual({ x: 0, y: 0, z: 15 });
+    expect(result.values).toEqual({ width: 10, depth: 6 });
+    expect(result.placement.frame).toEqual(GROUND_FRAME);
+    expect(
+      primitiveBuild('box', result.placement, { ...result.values, height: 5 }, result.anchor)
+    ).toEqual({
+      dimensions: { width: 10, height: 6, depth: 5 },
+      position: { x: 0, y: 0, z: 15 }
+    });
+  });
+
+  it('places a clicked box at its lowest corner too', () => {
+    const bottom = placementFrame({ x: 0, y: 0, z: -1 });
+    expect(
+      footprintPlacement(
+        'box',
+        bottom,
+        { x: 3, y: 4, z: 20 },
+        { x: 3, y: 4, z: 20 },
+        false,
+        1,
+        { width: 30, depth: 18, height: 24 }
+      )
+    ).toMatchObject({ anchor: { x: 3, y: -14, z: -4 }, values: {} });
   });
 
   it('sizes a round primitive by its radius from the press', () => {
@@ -207,34 +247,6 @@ describe('a footprint drag', () => {
   });
 });
 
-describe('linear values', () => {
-  it('stays a number while every term is one', () => {
-    expect(linearValue([[10, 1]])).toBe(10);
-    expect(
-      linearValue([
-        [10, 1],
-        [4, -1]
-      ])
-    ).toBe(6);
-  });
-
-  it('keeps a typed value live', () => {
-    expect(linearValue([['w', 1]])).toBe('w');
-    expect(
-      linearValue([
-        [10, 1],
-        ['w', -1]
-      ])
-    ).toBe('-(w) + 10');
-    expect(
-      linearValue([
-        ['x0', 1],
-        ['w', 0.5]
-      ])
-    ).toBe('(x0) + (w) * 0.5');
-  });
-});
-
 describe('the placement turn', () => {
   it('takes the kernel axes onto the asked ones', () => {
     const cases: [Vector3, Vector3, Vector3][] = [
@@ -282,29 +294,17 @@ describe('what a placement builds', () => {
   });
 
   it('keeps a box unturned on any face square to an axis', () => {
-    // Dragged toward -X on the ground: the lowest corner moves back.
+    // Its position is its lowest corner, exactly as given.
     expect(
       primitiveBuild(
         'box',
-        placed({ x: 0, y: 0, z: 1 }, -1, 1),
+        placed({ x: 0, y: 0, z: 1 }),
         { width: 20, depth: 15, height: 5 },
-        { x: 10, y: 5, z: 0 }
+        { x: -10, y: 5, z: 'lift' }
       )
     ).toEqual({
       dimensions: { width: 20, height: 15, depth: 5 },
-      position: { x: -10, y: 5, z: 0 }
-    });
-    // Under a bottom face it hangs down.
-    expect(
-      primitiveBuild(
-        'box',
-        placed({ x: 0, y: 0, z: -1 }),
-        { width: 20, depth: 15, height: 5 },
-        { x: 0, y: 0, z: 0 }
-      )
-    ).toEqual({
-      dimensions: { width: 20, height: 15, depth: 5 },
-      position: { x: 0, y: -15, z: -5 }
+      position: { x: -10, y: 5, z: 'lift' }
     });
     // On a +X side face its height runs along X.
     expect(
@@ -357,18 +357,16 @@ describe('what a placement builds', () => {
     }
   });
 
-  it('flips a cylinder under a face without turning it', () => {
-    expect(
-      primitiveBuild(
-        'cylinder',
-        placed({ x: 0, y: 0, z: -1 }),
-        { radius: 3, height: 'h' },
-        { x: 1, y: 2, z: 0 }
-      )
-    ).toEqual({
-      dimensions: { radius: 3, height: 'h' },
-      position: { x: 1, y: 2, z: '-(h)' }
-    });
+  it('turns a cylinder over under a face, its base center on the face', () => {
+    const build = primitiveBuild(
+      'cylinder',
+      placed({ x: 0, y: 0, z: -1 }),
+      { radius: 3, height: 'h' },
+      { x: 1, y: 2, z: 0 }
+    );
+    expect(build.position).toEqual({ x: 1, y: 2, z: 0 });
+    expect(build.dimensions).toEqual({ radius: 3, height: 'h' });
+    near(turn(build.rotationDeg!, { x: 0, y: 0, z: 1 }), { x: 0, y: 0, z: -1 });
   });
 
   it('turns a cylinder, a cone and a torus onto a side face', () => {
