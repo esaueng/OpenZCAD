@@ -57,11 +57,13 @@ export const SHARE_DELEGATION_VERSION_1 = 1;
 export const SHARE_AUTHORITY_VERSION_1 = 1;
 export const SHARE_LINK_GRANT_VERSION_1 = 1;
 export const SHARE_LINK_TOMBSTONE_VERSION_1 = 1;
+export const SHARE_KEY_WRAP_VERSION_1 = 1;
 
 const DELEGATION_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x53); // "OZS"
 const AUTHORITY_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x41); // "OZA"
 const GRANT_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x4c); // "OZL"
 const TOMBSTONE_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x59); // "OZY"
+const KEY_WRAP_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x57); // "OZW"
 
 const MAX_U32 = 0xffffffff;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -1115,6 +1117,81 @@ export async function signShareLinkTombstone(
       statement
     )
   };
+}
+
+// --- Share-key wraps ---------------------------------------------------------
+
+/**
+ * A device's statement that it stores a link's share key wrapped under one
+ * key epoch's project key. The server keeps the first wrap per epoch, so it
+ * takes one only when signed by a device the caller's current device list
+ * certifies: a revoked device of an account that stays an editor cannot
+ * plant a wrap no member can open.
+ */
+export interface ShareKeyWrapStatement {
+  readonly projectId: string;
+  readonly shareId: string;
+  readonly keyEpoch: number;
+  /** The wrap itself (`share-key`), 1 to 255 bytes. */
+  readonly wrapped: Uint8Array;
+}
+
+/**
+ * Canonical bytes: `"OZW" | u8 1 | u8 length + project id | u8 length +
+ * link id | u32 key epoch | u8 length + wrap`. Never stored: the signer
+ * sends the fields and the signature, and the server rebuilds these bytes.
+ */
+export function encodeShareKeyWrap(value: ShareKeyWrapStatement): Bytes {
+  const fail = (message: string): never => {
+    throw new E2eeError('invalid-argument', message);
+  };
+  if (value === null || typeof value !== 'object') fail('Expected a key wrap');
+  if (!isEnvelopeId(value.projectId)) fail('projectId is not an id');
+  if (!isEnvelopeId(value.shareId)) fail('shareId is not an id');
+  if (!isUint(value.keyEpoch, MAX_U32)) fail('keyEpoch must be a u32');
+  if (
+    !(value.wrapped instanceof Uint8Array) ||
+    value.wrapped.byteLength === 0 ||
+    value.wrapped.byteLength > 255
+  ) {
+    fail('wrapped must be 1 to 255 bytes');
+  }
+  const writer = new ByteWriter()
+    .bytes(KEY_WRAP_MAGIC)
+    .u8(SHARE_KEY_WRAP_VERSION_1);
+  writeId(writer, value.projectId);
+  writeId(writer, value.shareId);
+  return writer
+    .u32(value.keyEpoch)
+    .u8(value.wrapped.byteLength)
+    .bytes(value.wrapped)
+    .finish();
+}
+
+/** A device signs the share-key wrap it stores: `u8 1 | r || s`. */
+export async function signShareKeyWrap(
+  deviceKey: SigningPrivateKey,
+  value: ShareKeyWrapStatement
+): Promise<Bytes> {
+  return signStatement(deviceKey, 'share key wrap', encodeShareKeyWrap(value));
+}
+
+/**
+ * Whether `signature` is `signerKey`'s over this wrap. Throws for a
+ * malformed signature or an unknown signature version.
+ */
+export async function verifyShareKeyWrap(
+  signerKey: Uint8Array | CryptoKey,
+  value: ShareKeyWrapStatement,
+  signature: Uint8Array
+): Promise<boolean> {
+  const { key } = await verifyingKey(signerKey);
+  return statementValid(
+    key,
+    'share key wrap',
+    encodeShareKeyWrap(value),
+    signature
+  );
 }
 
 // --- The active link set ---------------------------------------------------

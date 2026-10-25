@@ -61,6 +61,7 @@ import {
   signProjectEnvelope,
   signShareAuthority,
   signShareDelegation,
+  signShareKeyWrap,
   signShareLinkGrant,
   signShareLinkTombstone,
   toBase64Url,
@@ -358,10 +359,12 @@ export const signWithIdentityKey =
 // --- Share keys -----------------------------------------------------------------
 
 /**
- * A link's share key: its newest wrap at or below `keyEpoch`, opened under
- * that epoch's project key and checked against the grant's hash. Without a
- * wrap at `keyEpoch` itself, the key is wrapped again under its project key
- * and stored; a wrap someone stored first must open to the same key.
+ * A link's share key: the newest of its wraps at or below `keyEpoch` that
+ * opens under that epoch's project key to the grant's hash (a wrap that
+ * does not, stored first by a faulty client, does not hide an older one
+ * that does). Without any wrap at `keyEpoch` itself, the key is wrapped
+ * again under its project key, signed by this device and stored; a wrap
+ * someone stored first must open to the same key.
  */
 async function shareKeyFor(
   ctx: ShareLinksContext,
@@ -371,10 +374,10 @@ async function shareKeyFor(
   record: E2eeShareLinkRecord,
   keyEpoch: number
 ): Promise<Uint8Array> {
-  const wrap = [...record.keys]
+  const wraps = [...record.keys]
     .filter((key) => key.keyEpoch <= keyEpoch)
-    .sort((a, b) => b.keyEpoch - a.keyEpoch)[0];
-  if (!wrap) {
+    .sort((a, b) => b.keyEpoch - a.keyEpoch);
+  if (!wraps.length) {
     throw new ShareLinksError(
       'key-unavailable',
       'This link’s key is not stored for the project’s keys this device holds.'
@@ -387,16 +390,37 @@ async function shareKeyFor(
       { projectId, keyEpoch: keyEpochOf, shareId },
       expectedHash
     );
-  const key = await open(wrap.keyEpoch, wrap.wrapped);
-  if (wrap.keyEpoch === keyEpoch) return key;
+  let key: Uint8Array | null = null;
+  let newestError: unknown = null;
+  for (const wrap of wraps) {
+    try {
+      key = await open(wrap.keyEpoch, wrap.wrapped);
+      break;
+    } catch (error) {
+      newestError ??= error;
+    }
+  }
+  if (!key) throw newestError;
+  // A wrap at `keyEpoch` is stored already (the first one wins), even one
+  // that did not open: the key checked against the grant is enough.
+  if (wraps[0]!.keyEpoch === keyEpoch) return key;
+  const { device } = requireDevice(ctx);
   const wrapped = await wrapKey(
     await projectKeyForEpoch(ctx.groups, projectId, keyEpoch),
     key,
     { purpose: 'share-key', projectId, keyEpoch, shareId }
   );
+  const signature = await signShareKeyWrap(device.signing.privateKey, {
+    projectId,
+    shareId,
+    keyEpoch,
+    wrapped
+  });
   const stored = await ctx.api.postKey(projectId, shareId, {
     keyEpoch,
-    wrapped: b64(wrapped)
+    wrapped: b64(wrapped),
+    deviceId: device.deviceId,
+    signature: b64(signature)
   });
   if (stored.key.wrapped !== b64(wrapped)) {
     const theirs = await open(keyEpoch, stored.key.wrapped);

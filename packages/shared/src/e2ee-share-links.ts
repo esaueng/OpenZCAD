@@ -21,7 +21,8 @@
  * - `DELETE …/share-links/:shareId` (owner): forgets a link the owner just
  *   tombstoned: its snapshot, key wraps and statement go at once.
  * - `POST …/share-links/:shareId/keys` (owner or editor): the share key
- *   under the current key epoch's project key; the first one stored wins.
+ *   under the current key epoch's project key, signed by a certified
+ *   device of the caller; the first one stored wins.
  * - `PUT …/share-links/:shareId/authority` (owner): a new statement.
  * - `PUT …/share-links/:shareId/snapshot` (owner or editor): a frame with
  *   the signed share-snapshot envelope.
@@ -65,6 +66,19 @@ export interface E2eeCreateShareLinkRequest {
 export interface E2eeShareKeyWrap {
   keyEpoch: number;
   wrapped: string;
+}
+
+/**
+ * `POST …/share-links/:shareId/keys`: a wrap the sending device signs
+ * (`signShareKeyWrap`). The server keeps it only while `deviceId` is
+ * certified in the caller's newest device list, so a revoked device of an
+ * account that stays an editor cannot plant the epoch's first wrap.
+ */
+export interface E2eeShareKeyUpload extends E2eeShareKeyWrap {
+  /** The sending device, certified in the caller's device list. */
+  deviceId: string;
+  /** 65 bytes: `u8 1 | r || s` by `deviceId`'s certified signing key. */
+  signature: string;
 }
 
 export interface E2eeShareAuthorityRecord extends E2eeSignedStatement {
@@ -179,7 +193,7 @@ export interface E2eeShareLinksApi {
   postKey(
     projectId: string,
     shareId: string,
-    key: E2eeShareKeyWrap
+    key: E2eeShareKeyUpload
   ): Promise<E2eeShareKeyResponse>;
   putAuthority(
     projectId: string,

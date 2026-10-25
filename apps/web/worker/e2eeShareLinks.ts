@@ -13,7 +13,9 @@
  *
  * It still checks what it can, as defense in depth: the owner registers,
  * forgets and states links; the owner and editors post key wraps (for the
- * group's current key epoch only; the first stored wins) and snapshots (a
+ * group's current key epoch only, signed by a device the caller's newest
+ * device list certifies and fenced on that list's head; the first stored
+ * wins) and snapshots (a
  * share-snapshot envelope of this project under the current key epoch,
  * signed by a device the caller's newest device list certifies, never
  * older than the link's stored snapshot nor newer than the project's
@@ -52,6 +54,7 @@ import {
   verifyProjectEnvelopeSignature,
   verifyShareAuthority,
   verifyShareDelegation,
+  verifyShareKeyWrap,
   versionHash,
   type ShareDelegation
 } from '@openzcad/crypto';
@@ -81,12 +84,15 @@ import {
   RouteError,
   WRITER_FENCE,
   bytesField,
+  deviceListMoved,
+  deviceListUnchanged,
   fenceBinds,
   idField,
   invalid,
   json,
   record,
   refuse,
+  refuseDeviceListMoved,
   requireCertifiedDevice,
   requireEncryptedProjectAccess,
   requireOwnedEncryptedProject,
@@ -701,13 +707,40 @@ async function postKey(
   body: Record<string, unknown>
 ): Promise<Response> {
   const keyEpoch = uintField(body.keyEpoch, 'keyEpoch');
-  const wrapped = bytesField(body.wrapped, 'wrapped', {
-    exact: WRAP_BYTES
-  }).text;
+  const wrap = bytesField(body.wrapped, 'wrapped', { exact: WRAP_BYTES });
+  const wrapped = wrap.text;
+  const deviceId = idField(body.deviceId, 'deviceId');
+  const signature = bytesField(body.signature, 'signature', {
+    exact: STATEMENT_SIGNATURE_BYTES
+  }).bytes;
   await liveLink(ctx.db, projectId, shareId);
   const current = await currentKeyEpoch(ctx.db, projectId);
   if (keyEpoch !== current) stale(current);
-  await runBatch(ctx.db, [
+  // The first wrap per epoch wins, so only a device the caller's newest
+  // device list certifies may store one, proven by its signature: a revoked
+  // device of an account that stays an editor cannot plant a wrap no member
+  // can open and so break publication for the link.
+  const device = await requireCertifiedDevice(ctx.db, ctx.userId, deviceId);
+  let verified: boolean;
+  try {
+    verified = await verifyShareKeyWrap(
+      device.signingKey,
+      { projectId, shareId, keyEpoch, wrapped: wrap.bytes },
+      signature
+    );
+  } catch {
+    verified = false;
+  }
+  if (!verified) {
+    refuse(
+      400,
+      'E2EE_SIGNATURE_INVALID',
+      'The key wrap is not signed by the device it names.'
+    );
+  }
+  // ...and a removal of that device landing first makes the insert refuse.
+  const signerList = deviceListUnchanged(ctx.userId, device);
+  const results = await runBatch(ctx.db, [
     ctx.db
       .prepare(
         `INSERT INTO e2ee_share_keys
@@ -719,6 +752,7 @@ async function postKey(
              WHERE project_id = ? AND share_id = ? AND revoked_at IS NULL)
            AND EXISTS (SELECT 1 FROM e2ee_project_groups
              WHERE project_id = ? AND key_epoch_base + epoch = ?)
+           AND ${signerList.sql}
          ON CONFLICT (project_id, share_id, key_epoch) DO NOTHING`
       )
       .bind(
@@ -733,9 +767,16 @@ async function postKey(
         projectId,
         shareId,
         projectId,
-        keyEpoch
+        keyEpoch,
+        ...signerList.binds
       )
   ]);
+  if (
+    !changed(results[0]) &&
+    (await deviceListMoved(ctx.db, ctx.userId, device))
+  ) {
+    refuseDeviceListMoved();
+  }
   const stored = await ctx.db
     .prepare(
       `SELECT key_epoch, wrapped FROM e2ee_share_keys

@@ -21,6 +21,7 @@ import {
   signProjectEnvelope,
   signShareAuthority,
   signShareDelegation,
+  signShareKeyWrap,
   toBase64Url,
   toHex,
   wrapKey,
@@ -477,7 +478,9 @@ describe('creating a link (slice 5-10)', { timeout: 120_000 }, () => {
     const key = await srv.call('POST', `${base}/${created.shareId}/keys`, {
       body: {
         keyEpoch: serverKeyEpoch(srv, projectId) + 5,
-        wrapped: 'A'.repeat(55)
+        wrapped: 'A'.repeat(55),
+        deviceId: 'owner_laptop',
+        signature: 'A'.repeat(87)
       }
     });
     expect(key.status).toBe(409);
@@ -857,6 +860,242 @@ describe(
     });
   }
 );
+
+describe('share-key wraps (slice 5-10)', { timeout: 120_000 }, () => {
+  /**
+   * A link created at the owner's key epoch, then the editor's second
+   * device revoked (OTHER stays an editor) and the project rotated past it:
+   * the link has no wrap for the new epoch yet, so the first one stored
+   * for it wins. Restores OTHER's account after `run`.
+   */
+  async function rotatedLink(
+    run: (setup: {
+      srv: Server;
+      laptop: Device;
+      member: Device;
+      projectId: string;
+      created: CreatedShareLink;
+      keyEpoch: number;
+      previous: number;
+    }) => Promise<void>
+  ) {
+    const { srv, laptop, member, projectId } = await linkedProject();
+    const desktop = device(srv, other, 'other_desktop', {
+      members: othersOf(other)
+    });
+    await joinProjectGroup(desktop.groups, projectId);
+    await catchUpProjectGroup(member.groups, projectId);
+    await catchUpProjectGroup(laptop.groups, projectId);
+    await delegate(laptop);
+    const created = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const before = serverKeyEpoch(srv, projectId);
+    await other.revoke(srv.db, 'other_desktop');
+    try {
+      await ensureProjectRotated(member.groups, projectId);
+      await catchUpProjectGroup(laptop.groups, projectId);
+      const keyEpoch = serverKeyEpoch(srv, projectId);
+      expect(keyEpoch).toBeGreaterThan(before);
+      expect(wrapEpochs(srv, created.shareId)).toEqual([before]);
+      await run({
+        srv,
+        laptop,
+        member,
+        projectId,
+        created,
+        keyEpoch,
+        previous: before
+      });
+    } finally {
+      other = await makeAccount(OTHER, ['other_laptop', 'other_desktop']);
+    }
+  }
+
+  const wrapEpochs = (srv: Server, shareId: string) =>
+    rows<{ key_epoch: number }>(
+      srv,
+      `SELECT key_epoch FROM e2ee_share_keys WHERE share_id = ?
+       ORDER BY key_epoch`,
+      shareId
+    ).map((row) => row.key_epoch);
+
+  /** A wrap of random bytes `signer` signs, posted as OTHER naming `deviceId`. */
+  async function postWrap(
+    srv: Server,
+    projectId: string,
+    shareId: string,
+    keyEpoch: number,
+    signer: string,
+    deviceId: string
+  ) {
+    const wrapped = crypto.getRandomValues(new Uint8Array(41));
+    const signature = await signShareKeyWrap(
+      other.devices.get(signer)!.signing.privateKey,
+      { projectId, shareId, keyEpoch, wrapped }
+    );
+    const response = await srv.call(
+      'POST',
+      `/api/e2ee/projects/${projectId}/share-links/${shareId}/keys`,
+      {
+        user: OTHER,
+        body: {
+          keyEpoch,
+          wrapped: toBase64Url(wrapped),
+          deviceId,
+          signature: toBase64Url(signature)
+        }
+      }
+    );
+    return {
+      status: response.status,
+      code: ((await response.json()) as { code?: string }).code
+    };
+  }
+
+  it('refuses a wrap from a revoked device of an account that stays an editor', async () => {
+    await rotatedLink(
+      async ({ srv, projectId, created, keyEpoch, previous }) => {
+        // The revoked device's session names itself...
+        expect(
+          await postWrap(
+            srv,
+            projectId,
+            created.shareId,
+            keyEpoch,
+            'other_desktop',
+            'other_desktop'
+          )
+        ).toEqual({ status: 403, code: 'E2EE_DEVICE_NOT_CERTIFIED' });
+        // ...or a sibling it cannot sign for.
+        expect(
+          await postWrap(
+            srv,
+            projectId,
+            created.shareId,
+            keyEpoch,
+            'other_desktop',
+            'other_laptop'
+          )
+        ).toEqual({ status: 400, code: 'E2EE_SIGNATURE_INVALID' });
+        expect(wrapEpochs(srv, created.shareId)).toEqual([previous]);
+      }
+    );
+  });
+
+  it('a certified device’s wrap still lands after a revoked device tried first, and the link keeps publishing', async () => {
+    await rotatedLink(
+      async ({
+        srv,
+        laptop,
+        member,
+        projectId,
+        created,
+        keyEpoch,
+        previous
+      }) => {
+        await postWrap(
+          srv,
+          projectId,
+          created.shareId,
+          keyEpoch,
+          'other_desktop',
+          'other_desktop'
+        );
+        // The editor's certified page republishes under the new epoch: it
+        // wraps the share key for it, signed by its own device.
+        const outcome = await publishShareSnapshots(
+          member.shareLinks,
+          projectId
+        );
+        expect(outcome.failed).toEqual([]);
+        expect(outcome.published).toEqual([created.shareId]);
+        expect(wrapEpochs(srv, created.shareId)).toEqual([previous, keyEpoch]);
+        const [stored] = rows<{ created_by_user_id: string }>(
+          srv,
+          `SELECT created_by_user_id FROM e2ee_share_keys
+         WHERE share_id = ? AND key_epoch = ?`,
+          created.shareId,
+          keyEpoch
+        );
+        expect(stored!.created_by_user_id).toBe(OTHER);
+        // Every member opens the stored wrap, and visitors the snapshot.
+        expect(
+          (await listShareLinks(laptop.shareLinks, projectId)).links[0]!.url
+        ).toBe(created.url);
+        expect((await visit(srv, created.url)).verified.shareId).toBe(
+          created.shareId
+        );
+      }
+    );
+  });
+
+  it('a stored wrap that does not open does not hide an older one that does', async () => {
+    await rotatedLink(async ({ srv, laptop, member, projectId, created }) => {
+      // A wrap no member can open, stored first for the new epoch (as one
+      // could before the server asked for a certified device's signature).
+      const keyEpoch = serverKeyEpoch(srv, projectId);
+      srv.db
+        .prepare(
+          `INSERT INTO e2ee_share_keys
+             (project_id, share_id, key_epoch, wrapped, created_by_user_id,
+              created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          projectId,
+          created.shareId,
+          keyEpoch,
+          toBase64Url(crypto.getRandomValues(new Uint8Array(41))),
+          OTHER,
+          new Date().toISOString()
+        );
+      const outcome = await publishShareSnapshots(member.shareLinks, projectId);
+      expect(outcome).toEqual({ published: [created.shareId], failed: [] });
+      expect(
+        (await listShareLinks(laptop.shareLinks, projectId)).links[0]!.url
+      ).toBe(created.url);
+      expect((await visit(srv, created.url)).verified.shareId).toBe(
+        created.shareId
+      );
+    });
+  });
+
+  it('a device-list change between the device check and the insert stores nothing', async () => {
+    await rotatedLink(
+      async ({ srv, projectId, created, keyEpoch, previous }) => {
+        // The list moves on (a removal, say) after the signer was checked
+        // and before the wrap is inserted.
+        const push = srv.statements.push.bind(srv.statements);
+        srv.statements.push = (...sql: string[]) => {
+          if (sql.some((s) => /^\s*INSERT INTO e2ee_share_keys/.test(s))) {
+            srv.statements.push = push;
+            srv.db
+              .prepare(
+                `INSERT INTO e2ee_device_list_entries
+               SELECT user_id, generation, sequence + 1, entry, signature,
+                      substr(entry_hash, 2) || '0', created_at
+               FROM e2ee_device_list_entries WHERE user_id = ?
+               ORDER BY sequence DESC LIMIT 1`
+              )
+              .run(OTHER);
+          }
+          return push(...sql);
+        };
+        expect(
+          await postWrap(
+            srv,
+            projectId,
+            created.shareId,
+            keyEpoch,
+            'other_laptop',
+            'other_laptop'
+          )
+        ).toEqual({ status: 409, code: 'E2EE_DEVICE_LIST_CHANGED' });
+        expect(srv.statements.push).toBe(push);
+        expect(wrapEpochs(srv, created.shareId)).toEqual([previous]);
+      }
+    );
+  });
+});
 
 describe('the delegation (slice 5-10)', { timeout: 120_000 }, () => {
   it('needs confirming without one, and visitors refuse links once it expires', async () => {

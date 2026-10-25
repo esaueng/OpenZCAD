@@ -476,7 +476,7 @@ identity key). The share key never encrypts content; it wraps each share
 snapshot's version key (`share-version-key`). Its hash is
 `shareKeyHash(key) = SHA-256(label "v1 share key hash" | key)`.
 
-Four signed statements, each `magic | u8 version = 1 | …`, canonical (one
+Four stored signed statements, each `magic | u8 version = 1 | …`, canonical (one
 encoding; lists sorted and without duplicates), with a signature
 `u8 1 | r || s` over `label "v1 <kind> signature" | statement`:
 
@@ -486,6 +486,13 @@ encoding; lists sorted and without duplicates), with a signature
 | `"OZA"` share-authority (`share authority`)     | an owner device the delegation names | u8 len + project id \| u8 len + link id \| 32-byte share key hash \| u8 mode (1 view, 2 tweak) \| 32-byte owner identity key hash \| u32 sequence \| u64 issuedAt \| u64 expiresAt \| 32-byte signer key hash \| u16 count (1–2048) + 32-byte author key hashes, sorted |
 | `"OZL"` link grant (`share link grant`)         | an owner device                      | u8 len + project id \| u8 len + link id \| 32-byte share key hash \| u8 mode \| u32 key epoch \| u64 issuedAt \| 32-byte signer key hash                                                                                                                                |
 | `"OZY"` link tombstone (`share link tombstone`) | an owner device                      | u8 len + project id \| u8 len + link id \| u32 key epoch \| u64 issuedAt \| 32-byte signer key hash                                                                                                                                                                     |
+
+A fifth, `"OZW"` share-key wrap (`share key wrap`), is never stored: a
+certified owner or editor device signs `u8 len + project id | u8 len + link
+id | u32 key epoch | u8 len + wrap` when it stores a link's share key under
+an epoch's project key, and the server rebuilds the bytes from the request
+and checks the signature against that device's current certified key
+before keeping the first wrap for the epoch.
 
 Key hashes are `publicKeyHash` of a device signing key, as
 `DeviceRecord.signingKeyHash` names it. Statements a visitor sees name no
