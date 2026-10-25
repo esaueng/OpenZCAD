@@ -1,5 +1,6 @@
 import { e2eeErasureTables } from './e2ee';
 import { projectGroupErasureStatements } from './e2eeProjects';
+import { deviceRemovalErasureStatements } from './e2eeDeviceRemoval';
 import {
   encryptedProjectUsage,
   projectVersionErasureStatements
@@ -471,7 +472,9 @@ export async function deleteAccountData(
             db,
             session.userId,
             input.scope
-          ))
+          )),
+          // Before migration 0036 there are no revocation cutoffs.
+          ...(await deviceRemovalErasureStatements(db, session.userId))
         ]
       )
     );

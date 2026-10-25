@@ -1088,7 +1088,8 @@ test('a face click raises one selection chip with verbs and no other surface', a
   );
   const verbs = chip.locator('.selection-callout-verb');
   expect(await verbs.count()).toBeGreaterThanOrEqual(1);
-  expect(await verbs.count()).toBeLessThanOrEqual(3);
+  // Four at most as buttons; a face's other tools wait behind More.
+  expect(await verbs.count()).toBeLessThanOrEqual(4);
   await expect(
     chip.getByRole('button', { name: 'Deselect all' })
   ).toBeVisible();

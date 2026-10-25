@@ -81,6 +81,25 @@
   opacity: 1;
 }
 
+.selection-card .selection-callout-more {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--color-text-muted);
+  background: transparent;
+  border-radius: var(--radius-sm);
+}
+
+.selection-card .selection-callout-more:hover,
+.selection-card .selection-callout-more[aria-expanded='true'] {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
 .selection-card .selection-callout-clear:hover {
   color: var(--color-text);
   background: var(--color-surface-hover);

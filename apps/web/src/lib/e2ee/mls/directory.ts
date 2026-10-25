@@ -19,18 +19,18 @@
  * rather than left out, so a forged or unattributable record is visible
  * instead of silently weakening or narrowing the directory.
  *
- * Not supplied yet, and so never defaulted (later slices must fill them):
- *
  * - **Revocation cutoffs.** For a revoked device the policy needs the first
  *   epoch of this project's group whose rejoin PSK that device must not
  *   know. The device list records revocations by entry sequence, not by
  *   group epoch, so a cutoff can only come from trusted per-project state
- *   the caller passes in `revocationCutoffs`. Without one the directory is
- *   refused (`revocation-cutoff-missing`): dropping the device would drop
- *   its cutoff and let a sibling rejoin with an older PSK, and guessing 0
- *   would be a silent default.
- * - **`replacedBy`.** Device-list revocations do not name a replacement
- *   device, so the last-leaf rejoin exception is unavailable.
+ *   the caller passes in `revocationCutoffs` (slice 4-10: the identity-
+ *   signed cutoff statement, `projectGroups.ts`). Without one the
+ *   directory is refused (`revocation-cutoff-missing`): dropping the device
+ *   would drop its cutoff and let a sibling rejoin with an older PSK, and
+ *   guessing 0 would be a silent default.
+ * - **`replacedBy`.** A device revocation may name the device replacing it
+ *   (identity-signed, in the verified list); it is passed on, so the named
+ *   replacement can use the last-leaf rejoin exception.
  */
 import type { VerifiedDeviceList } from '@openzcad/crypto';
 import type {
@@ -57,8 +57,8 @@ export interface DirectoryInput {
   /**
    * Per user, per revoked device id: the first epoch of this project's
    * group whose rejoin PSK the device must not know (0 when the group never
-   * had an epoch it could know). Required for every revoked device; nothing
-   * verified supplies it yet (see the module comment).
+   * had an epoch it could know). Required for every revoked device (see
+   * the module comment).
    */
   readonly revocationCutoffs?: ReadonlyMap<string, ReadonlyMap<string, number>>;
 }
@@ -87,6 +87,7 @@ interface DeviceDraft {
   /** The key that certifies this device's leaves; absent if unknown. */
   readonly signingKey: Uint8Array | undefined;
   readonly revocationCutoffEpoch?: number;
+  readonly replacedBy?: string;
   readonly leafKeys: LeafKeyCertification[];
 }
 
@@ -127,6 +128,9 @@ function devicesOf(
       status: 'revoked',
       signingKey: revoked.device?.signingKey,
       revocationCutoffEpoch: cutoff,
+      ...(revoked.replacedBy === undefined
+        ? {}
+        : { replacedBy: revoked.replacedBy }),
       leafKeys: []
     });
   }
@@ -209,6 +213,9 @@ export async function buildDeviceDirectory(
         deviceId: device.deviceId,
         status: device.status,
         leafKeys: device.leafKeys,
+        ...(device.replacedBy === undefined
+          ? {}
+          : { replacedBy: device.replacedBy }),
         ...(device.revocationCutoffEpoch === undefined
           ? {}
           : { revocationCutoffEpoch: device.revocationCutoffEpoch })

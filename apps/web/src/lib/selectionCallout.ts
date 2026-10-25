@@ -89,6 +89,11 @@ export interface SelectionCalloutContent {
    * body, and the face or edge on it).
    */
   label: readonly LabelSegment[] | null;
+  /**
+   * What is picked, as an identity: two picks with one name (two upward
+   * faces of a stepped body are both "Top face") still differ here.
+   */
+  pickKey?: string;
   /** The key measurement: area or diameter, length, or overall size. */
   detail?: string;
   verbs: readonly SelectionCalloutVerb[];
@@ -127,7 +132,7 @@ export interface SelectionCalloutOperation {
 }
 
 export type SelectionCalloutKind =
-  'face' | 'faces' | 'edges' | 'body' | 'bodies';
+  'face' | 'faces' | 'edges' | 'body' | 'bodies' | 'region' | 'regions';
 
 export interface SelectionCalloutVerbInput {
   kind: SelectionCalloutKind;
@@ -146,13 +151,25 @@ export interface SelectionCalloutVerbInput {
   resizeBody?: boolean;
   /** The selection action already armed, drawn pressed. */
   pressedAction?: SelectionActionId | null;
+  /**
+   * Why the pick cannot be a datum's source (Plane on a flat face, Axis on
+   * a round face or an edge): a face or edge with no identity a rebuild can
+   * find again, or a curved edge. The datum verb is then disabled with it.
+   */
+  datumRefusal?: string | null;
+  /**
+   * The picked face's kind, read from its topology: what the tools are
+   * chosen by when the machine does not hold the face (direct manipulation
+   * off). Absent, a face is offered the tools any face takes a start from.
+   */
+  faceSurface?: 'planar' | 'cylindrical' | 'other';
   availability: ToolAvailability;
 }
 
 /**
- * Enough to act on the pick without turning the chip into a toolbar: a
- * primitive's face needs four (Resize, Offset, Sketch, Hole), every other
- * pick three or fewer.
+ * The verbs the card shows as buttons: enough to act on the pick without
+ * turning it into a toolbar. The rest of the pick's verbs (U09 §5) wait
+ * behind its More disclosure, in the same order.
  */
 export const MAX_SELECTION_VERBS = 4;
 
@@ -177,13 +194,21 @@ function actionVerb(
   };
 }
 
+/** Shorter names for tools whose palette label is long for a pick's card. */
+const TOOL_VERB_LABELS: Partial<Record<ToolId, string>> = {
+  'axis-rotate': 'Rotate',
+  'linear-pattern': 'Pattern',
+  'datum-plane': 'Plane',
+  'datum-axis': 'Axis'
+};
+
 function toolVerb(
   tool: ToolId,
   availability: ToolAvailability
 ): SelectionCalloutVerb {
   return {
     id: `tool:${tool}`,
-    label: TOOL_META[tool].label,
+    label: TOOL_VERB_LABELS[tool] ?? TOOL_META[tool].label,
     title: toolTitle(
       tool,
       availability,
@@ -211,29 +236,51 @@ function edgeVerb(
 }
 
 /**
- * The verbs for a pick, in the order they are usually reached for:
+ * The verbs for a pick, in the order they are usually reached for (U09 §5):
  * a face offers its own edit (Resize and Offset on a primitive, Offset, or
- * Radius on a cylinder), Sketch and Hole; several faces (a box sweep) the
- * tools that take a list of faces, Shell and Draft; edges offer Fillet and
- * Chamfer; a body Move and Mirror; several
- * bodies Union first. At most {@link MAX_SELECTION_VERBS}.
+ * Radius on a cylinder) and the tools that take it — Sketch, Hole, Shell,
+ * Draft, Thicken and Plane for a flat face, Axis and Shell for a round one;
+ * several faces (a box sweep) Shell and Draft; edges Fillet, Chamfer and
+ * Axis; a body Move, Rotate, Scale, Mirror, Split, Pattern and Solid
+ * offset; several bodies the booleans and Move; a sketch region Extrude,
+ * Revolve, Sweep and Loft. The card shows the first
+ * {@link MAX_SELECTION_VERBS} and keeps the rest behind More.
  */
 export function selectionCalloutVerbs(
   input: SelectionCalloutVerbInput
 ): SelectionCalloutVerb[] {
   const { availability } = input;
-  let verbs: SelectionCalloutVerb[];
+  const tools = (...ids: ToolId[]) =>
+    ids.map((tool) => {
+      const verb = toolVerb(tool, availability);
+      return (tool === 'datum-plane' || tool === 'datum-axis') &&
+        input.datumRefusal
+        ? { ...verb, disabled: true, title: input.datumRefusal }
+        : verb;
+    });
   switch (input.kind) {
     case 'face': {
       const capabilities = input.faceCapabilities ?? [];
       if (capabilities.length === 0) {
-        verbs = [
-          toolVerb('sketch', availability),
-          toolVerb('hole', availability)
-        ];
-        break;
+        switch (input.faceSurface) {
+          case 'planar':
+            return tools(
+              'sketch',
+              'hole',
+              'shell',
+              'draft',
+              'thicken',
+              'datum-plane'
+            );
+          case 'cylindrical':
+            return tools('datum-axis', 'shell');
+          case 'other':
+            return tools('shell');
+          default:
+            return tools('sketch', 'hole', 'shell');
+        }
       }
-      verbs = capabilities.map((capability) =>
+      const verbs = capabilities.map((capability) =>
         actionVerb(capability, input.pressedAction)
       );
       if (input.resizeBody) {
@@ -247,38 +294,55 @@ export function selectionCalloutVerbs(
           pressed: input.pressedAction === 'resize-body'
         });
       }
-      // A face that takes a sketch is planar, and a planar face takes a hole.
+      // A face that takes a sketch is flat, and a flat face takes every tool
+      // that starts from one.
       if (
         capabilities.some(
           (capability) => capability.action === 'sketch-on-face'
         )
       ) {
-        verbs.push(toolVerb('hole', availability));
+        verbs.push(
+          ...tools('hole', 'shell', 'draft', 'thicken', 'datum-plane')
+        );
+      } else if (
+        capabilities.some(
+          (capability) => capability.action === 'resize-radial-face'
+        )
+      ) {
+        verbs.push(...tools('datum-axis', 'shell'));
       }
-      break;
+      return verbs;
     }
     case 'faces':
-      verbs = [
-        toolVerb('shell', availability),
-        toolVerb('draft', availability)
-      ];
-      break;
+      return tools('shell', 'draft');
     case 'edges':
-      verbs = [edgeVerb('fillet', input), edgeVerb('chamfer', input)];
-      break;
+      return [
+        edgeVerb('fillet', input),
+        edgeVerb('chamfer', input),
+        ...tools('datum-axis')
+      ];
+    // No Shell: it starts from the faces it opens, so a face's card offers
+    // it, and from a body it would have no body to keep.
     case 'body':
-      verbs = [
-        toolVerb('transform', availability),
-        toolVerb('mirror', availability)
-      ];
-      break;
+      return tools(
+        'transform',
+        'axis-rotate',
+        'scale',
+        'mirror',
+        'split',
+        'linear-pattern',
+        'solid-offset'
+      );
     case 'bodies':
-      verbs = [
-        toolVerb('union', availability),
-        toolVerb('transform', availability),
-        toolVerb('mirror', availability)
-      ];
-      break;
+      return tools('union', 'subtract', 'intersect', 'transform');
+    // A region's tools that start from one profile; Loft takes it as its
+    // first section and asks for the next (a pick never spans two
+    // sketches, so two picked regions are never a loft's sections). Pattern
+    // and Move take bodies: a sketch moves from its own History row.
+    case 'region':
+      return tools('extrude', 'revolve', 'sweep', 'loft');
+    // Several regions of one sketch: only Extrude takes them together.
+    case 'regions':
+      return tools('extrude');
   }
-  return verbs.slice(0, MAX_SELECTION_VERBS);
 }
