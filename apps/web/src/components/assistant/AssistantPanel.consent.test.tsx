@@ -318,7 +318,11 @@ describe('assistant consent on an encrypted project (ADR-024 6-1)', () => {
         sequence: 2
       })
     );
-    expect(await pins.read(USER, doc.projectId)).toBe(2);
+    // The pin rises once the stored revocation verifies, just after the
+    // server row: wait for it rather than racing it.
+    await waitFor(async () =>
+      expect(await pins.read(USER, doc.projectId)).toBe(2)
+    );
     expect(screen.queryByText('Allowed for this project')).toBeNull();
 
     hold = null;

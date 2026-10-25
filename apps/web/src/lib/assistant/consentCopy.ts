@@ -128,9 +128,21 @@ export function describeAssistantRoute(
   status: AssistantConsentRouteInput
 ): string {
   const provider = PROVIDER_NAMES[status.provider] ?? status.provider;
-  return status.source === 'personal'
-    ? `your own key with ${provider}, model ${status.model}`
-    : `OpenZCAD’s AI provider, ${provider}, model ${status.model}`;
+  const route =
+    status.source === 'personal'
+      ? `your own key with ${provider}, model ${status.model}`
+      : `OpenZCAD’s AI provider, ${provider}, model ${status.model}`;
+  const host = endpointHost(status.endpoint);
+  return host ? `${route}, at ${host}` : route;
+}
+
+function endpointHost(endpoint: string | undefined): string | null {
+  if (!endpoint) return null;
+  try {
+    return new URL(endpoint).host;
+  } catch {
+    return null;
+  }
 }
 
 /** The sentences around the list; shown in the dialog and on Settings. */

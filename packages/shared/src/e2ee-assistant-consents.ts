@@ -8,6 +8,8 @@
  * allowed the assistant (plan default M6).
  */
 
+import { sha256HexSync } from './sha256-sync';
+
 /**
  * The consent copy's version. Bump it whenever the list of what an
  * assistant request sends changes (apps/web/src/lib/assistant/consentCopy.ts
@@ -24,32 +26,48 @@ export const ASSISTANT_CONSENT_COPY_VERSION = 1;
 export const ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE =
   'ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED';
 
-/** Who receives an assistant request: whose key, which provider and model. */
+/**
+ * Who receives an assistant request: whose key, which provider and model,
+ * and the upstream endpoint the Worker sends it to.
+ */
 export interface AssistantConsentRouteInput {
   /** Absent from older status answers; a deployment key then. */
   source?: 'deployment' | 'personal';
   provider: string;
   model: string;
+  /**
+   * The normalized upstream URL: a personal base URL, the deployment's
+   * `AI_BASE_URL` or the provider's default. Absent from older Workers.
+   */
+  endpoint?: string;
 }
 
 /**
  * The provider route a consent names, as one string both the browser and
  * the Worker compute from the effective assistant settings. A change of
- * key source, provider or model is a different route, so consent is asked
- * again.
+ * key source, provider, model or endpoint is a different route, so consent
+ * is asked again. The readable part is cut short for display only; the
+ * digest binds every component in full, so distinct routes never collide.
  */
 export function assistantConsentRoute(
   input: AssistantConsentRouteInput
 ): string {
-  const clean = (value: string) =>
-    value
-      .replace(/[^\x20-\x7e]/g, '?')
-      .replace(/\|/g, '/')
-      .slice(0, 120);
+  const source = input.source === 'personal' ? 'personal' : 'deployment';
+  const label = (value: string, max: number) =>
+    value.replace(/[^\x20-\x7e]|\|/g, '?').slice(0, max);
   return [
-    input.source === 'personal' ? 'personal' : 'deployment',
-    clean(input.provider),
-    clean(input.model)
+    'v2',
+    source,
+    label(input.provider, 40),
+    label(input.model, 60),
+    sha256HexSync(
+      JSON.stringify([
+        source,
+        input.provider,
+        input.model,
+        input.endpoint ?? ''
+      ])
+    )
   ].join('|');
 }
 

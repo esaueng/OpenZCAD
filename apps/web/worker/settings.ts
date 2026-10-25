@@ -24,7 +24,11 @@ import {
   type UserId
 } from '@openzcad/shared';
 import type { CloudflareEnv } from '@openzcad/cloudflare-adapters';
-import { getAssistantStatus, type AssistantRuntimeConfig } from './assistant';
+import {
+  assistantEndpointIdentity,
+  getAssistantStatus,
+  type AssistantRuntimeConfig
+} from './assistant';
 import { isPrivateHostname } from './privateNetwork';
 import { HttpError } from './validation';
 
@@ -678,7 +682,39 @@ export function deploymentAssistantAllowed(
   );
 }
 
+/**
+ * The endpoint a request would go to, which an encrypted project's consent
+ * route binds: a personal base URL only applies to a personal key.
+ */
+function withAssistantEndpoint(
+  effective: EffectiveAssistantSettings,
+  settings: AppSettings,
+  env: CloudflareEnv
+): EffectiveAssistantSettings {
+  return {
+    ...effective,
+    endpoint: assistantEndpointIdentity(
+      env,
+      effective.provider,
+      effective.source === 'personal' ? settings.assistant.baseUrl : undefined
+    )
+  };
+}
+
 function effectiveAssistantStatus(
+  settings: AppSettings,
+  credential: CredentialRow | null,
+  env: CloudflareEnv,
+  email?: string
+): EffectiveAssistantSettings {
+  return withAssistantEndpoint(
+    unboundAssistantStatus(settings, credential, env, email),
+    settings,
+    env
+  );
+}
+
+function unboundAssistantStatus(
   settings: AppSettings,
   credential: CredentialRow | null,
   env: CloudflareEnv,
@@ -719,6 +755,27 @@ export async function resolveUserAssistant(
   runtime: AssistantRuntimeConfig | null;
 }> {
   const { settings } = await readSettings(userId, env);
+  const resolved = await resolveAssistantFromSettings(
+    settings,
+    userId,
+    env,
+    email
+  );
+  return {
+    ...resolved,
+    effective: withAssistantEndpoint(resolved.effective, settings, env)
+  };
+}
+
+async function resolveAssistantFromSettings(
+  settings: AppSettings,
+  userId: UserId,
+  env: CloudflareEnv,
+  email?: string
+): Promise<{
+  effective: EffectiveAssistantSettings;
+  runtime: AssistantRuntimeConfig | null;
+}> {
   if (!settings.assistant.enabled) {
     return {
       effective: {

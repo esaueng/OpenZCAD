@@ -81,7 +81,17 @@ export function AssistantConsentDialog({
           </p>
         ) : null}
         <div className="assistant-consent-actions">
-          <button type="button" className="secondary" onClick={onCancel}>
+          {/* Blocked while the allow is being stored, like the backdrop and
+              Escape: a decline then would close the dialog while the
+              consent it means to refuse still lands. */}
+          <button
+            type="button"
+            className="secondary"
+            aria-disabled={busy || undefined}
+            onClick={() => {
+              if (!busy) onCancel();
+            }}
+          >
             Not now
           </button>
           <button

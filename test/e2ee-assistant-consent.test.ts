@@ -119,6 +119,7 @@ async function seed(
   };
   return {
     db,
+    env,
     call,
     projectId: encrypted.projectId,
     plaintextId: plaintext.projectId,
@@ -151,7 +152,8 @@ async function consentBody(
     route = assistantConsentRoute({
       source: 'deployment',
       provider: 'openrouter',
-      model: 'openai/gpt-5.6-sol'
+      model: 'openai/gpt-5.6-sol',
+      endpoint: 'https://openrouter.ai/api/v1/responses'
     }),
     copyVersion = ASSISTANT_CONSENT_COPY_VERSION
   } = {}
@@ -398,6 +400,31 @@ describe('assistant consent on encrypted projects (ADR-024 6-1)', () => {
       ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE
     );
     expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it('asks again when the upstream endpoint changes under the same provider and model', async () => {
+    const { call, env, projectId } = await seed(FLAGS_ON);
+    const upstream = stubProvider();
+    await call('PUT', `/api/e2ee/assistant-consents/${projectId}`, {
+      body: await consentBody(projectId, 1)
+    });
+    // The deployment now forwards to another endpoint: same provider and
+    // model, but not where the user agreed to send this project.
+    (env as Record<string, unknown>).AI_BASE_URL =
+      'https://openrouter.ai/api/v1/other';
+    const moved = await call('POST', '/api/assistant/proposals', {
+      body: proposal(projectId)
+    });
+    expect(moved.status).toBe(409);
+    expect(await codeOf(moved)).toBe(
+      ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE
+    );
+    expect(upstream).not.toHaveBeenCalled();
+    // The status the browser reads names the new endpoint, so it asks again.
+    const status = (await (
+      await call('GET', '/api/assistant/status')
+    ).json()) as { endpoint?: string };
+    expect(status.endpoint).toBe('https://openrouter.ai/api/v1/other');
   });
 
   it('lists the caller’s consents and shows co-members who allowed it (M6)', async () => {

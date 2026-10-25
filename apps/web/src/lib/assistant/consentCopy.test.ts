@@ -160,19 +160,53 @@ describe('what the assistant consent copy lists (ADR-024 6-1)', () => {
         model: 'gpt-5'
       })
     ).toBe('your own key with OpenAI, model gpt-5');
-    // Key source, provider and model each make a different route.
+    // A known endpoint is named by its host.
+    expect(
+      describeAssistantRoute({
+        source: 'personal',
+        provider: 'responses-compatible',
+        model: 'm',
+        endpoint: 'https://llm.example.com/v1/responses'
+      })
+    ).toBe(
+      'your own key with a Responses-compatible endpoint, model m, at llm.example.com'
+    );
+    // Key source, provider, model and endpoint each make a different route.
     const routes = new Set(
       [
         { source: 'deployment', provider: 'openai', model: 'm' },
         { source: 'personal', provider: 'openai', model: 'm' },
         { source: 'personal', provider: 'openrouter', model: 'm' },
         { source: 'personal', provider: 'openrouter', model: 'n' },
+        {
+          source: 'personal',
+          provider: 'openrouter',
+          model: 'n',
+          endpoint: 'https://a.example/v1'
+        },
+        {
+          source: 'personal',
+          provider: 'openrouter',
+          model: 'n',
+          endpoint: 'https://b.example/v1'
+        },
         { provider: 'openai', model: 'm' }
       ].map((input) => assistantConsentRoute(input as never))
     );
-    expect(routes.size).toBe(4);
-    expect(assistantConsentRoute({ provider: 'a|b', model: 'é' })).toBe(
-      'deployment|a/b|?'
+    expect(routes.size).toBe(6);
+  });
+
+  it('never lets two models share a route, however they are written', () => {
+    const route = (model: string) =>
+      assistantConsentRoute({ source: 'personal', provider: 'openai', model });
+    // Characters the readable part replaces, and models longer than it keeps.
+    const long = 'x'.repeat(150);
+    const models = ['a|b', 'a/b', 'a?b', 'aéb', 'a€b', long, `${long}y`];
+    expect(new Set(models.map(route)).size).toBe(models.length);
+    // Readable, bounded, and well inside a record's 256-character route.
+    expect(route(`${long}y`)).toMatch(
+      /^v2\|personal\|openai\|x{60}\|[0-9a-f]{64}$/
     );
+    expect(route('a|b').split('|')).toHaveLength(5);
   });
 });

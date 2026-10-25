@@ -88,6 +88,8 @@ export interface AssistantStatus {
   provider: string;
   model: string;
   reasoningEffort: string;
+  /** Where requests go; an encrypted project's consent binds it. */
+  endpoint?: string;
 }
 
 function outputTextFromPart(part: unknown): string | undefined {
