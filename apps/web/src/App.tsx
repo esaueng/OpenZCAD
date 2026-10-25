@@ -1446,6 +1446,7 @@ import {
 import { datumAxisChoices } from './lib/datumAxisChoices';
 import {
   holeWorldPosition,
+  keepAbsentHoleSteps,
   inPlaceEditLineage,
   inPlaceEditMovedBodies,
   inPlaceEditSeed,
@@ -19252,8 +19253,13 @@ export function App() {
         } as ModelingOperationFormState,
         modelingFaceOptions(body?.topology, body)
       );
-      const update = modelingFeatureUpdate(edit.featureId, submission);
-      if (!update) throw new Error(`${edit.name} cannot be edited this way.`);
+      const built = modelingFeatureUpdate(edit.featureId, submission);
+      if (!built) throw new Error(`${edit.name} cannot be edited this way.`);
+      const update = keepAbsentHoleSteps(
+        built,
+        edit.data,
+        inPlaceRef.current.touched
+      );
       return commandFactories.updateFeature(update, `Edit ${edit.name}`);
     }
     if (request.tool === 'edge-modifier') {

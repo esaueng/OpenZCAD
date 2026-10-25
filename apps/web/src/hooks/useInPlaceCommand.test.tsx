@@ -808,6 +808,24 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     );
   });
 
+  it('finishes a suppressed feature edit that builds no body', async () => {
+    // Suppressed, the feature publishes no body: the preview still stands.
+    const { hook } = setup({
+      buildCommand: () => ({
+        validate: () => undefined,
+        apply: () =>
+          ({
+            derived: { bodyRepresentations: {}, warnings: [] }
+          }) as unknown as ProjectDocument,
+        resultBodyId: BODY
+      })
+    });
+    act(() =>
+      hook.result.current.edit('subtract', { ...SEED, suppressed: true })
+    );
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+  });
+
   it('switches operation with its bodies, and hides a locked option', () => {
     const { hook } = setup();
     act(() => hook.result.current.edit('subtract', SEED));

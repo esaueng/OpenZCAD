@@ -368,10 +368,13 @@ export function useInPlaceCommand(
         const fresh = result?.derived.warnings.find(
           (warning) => !known.has(warning)
         );
+        // A suppressed feature's edit builds no body to look for; its
+        // preview stands on the rest of the model rebuilding.
+        const suppressed = editRef.current?.suppressed === true;
         const valid = Boolean(
           result &&
-          bodyId &&
-          result.derived.bodyRepresentations[bodyId] &&
+          (suppressed ||
+            (bodyId && result.derived.bodyRepresentations[bodyId])) &&
           !fresh
         );
         setPreviewValid(valid);

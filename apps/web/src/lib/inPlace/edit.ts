@@ -1,6 +1,7 @@
 import type { FeatureUpdateInput } from '@openzcad/document-core';
 import {
   isDatumPlaneRef,
+  isFeatureSuppressed,
   type EdgeTopologyReferenceV5,
   type BodyId,
   type FaceTopologyReferenceV5,
@@ -84,6 +85,11 @@ export interface InPlaceEditSeed {
   data: FeatureData;
   /** The body a valid preview must still build. */
   resultBodyId: BodyId | undefined;
+  /**
+   * The feature is suppressed (or rolled back): it builds no body while it
+   * stays so, and its edit's preview is judged without one.
+   */
+  suppressed?: true;
   /** Bodies the feature itself makes, which it can never take as input. */
   ownBodyIds: BodyId[];
   slots: {
@@ -174,6 +180,7 @@ export function inPlaceEditSeed(
     resultBodyId:
       feature.bodyId ??
       ('targetBodyId' in data ? data.targetBodyId : undefined),
+    ...(isFeatureSuppressed(feature) ? { suppressed: true as const } : {}),
     ownBodyIds: [
       ...(feature.bodyId ? [feature.bodyId] : []),
       ...(data.featureKind === 'split' ? [data.secondBodyId] : [])
@@ -426,8 +433,10 @@ export function inPlaceEditSeed(
         const factor = seed.values.factor ?? 1;
         const pivot = (data.transform.pivot &&
           evaluated(data.transform.pivot, ctx)) ?? { x: 0, y: 0, z: 0 };
+        // A copy leaves its source as it was: only an in-place scale's
+        // body is shown scaled.
         seed.slots.bodies.push(
-          picked && factor > 0
+          picked && factor > 0 && !data.copy
             ? unscaled(picked, pivot, factor)
             : (picked ?? {
                 bodyId: data.targetBodyId,
@@ -899,4 +908,37 @@ export function inPlaceEditMovedBodies(
     }
   }
   return moved;
+}
+
+/** A hole's step sizes, which an absent value derives from its bore. */
+const HOLE_STEP_KEYS: readonly string[] = [
+  'counterboreDiameter',
+  'counterboreDepth',
+  'countersinkDiameter',
+  'countersinkAngleDeg'
+];
+
+/**
+ * A hole edit's update with the step sizes it never stored left out, unless
+ * the user has set them since: an absent size follows the bore, and storing
+ * the size it derives today would pin it there.
+ */
+export function keepAbsentHoleSteps(
+  update: FeatureUpdateInput,
+  saved: FeatureData,
+  touched: readonly string[]
+): FeatureUpdateInput {
+  if (saved.featureKind !== 'hole') return update;
+  const stored = saved as unknown as Record<string, unknown>;
+  return {
+    ...update,
+    data: Object.fromEntries(
+      Object.entries(update.data as Record<string, unknown>).filter(
+        ([key]) =>
+          !HOLE_STEP_KEYS.includes(key) ||
+          stored[key] !== undefined ||
+          touched.includes(key)
+      )
+    ) as FeatureUpdateInput['data']
+  };
 }
