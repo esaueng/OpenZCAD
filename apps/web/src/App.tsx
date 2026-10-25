@@ -1467,6 +1467,7 @@ import { useSteadySaveState } from './hooks/useSteadySaveState';
 import { useMeasurementWorkbench } from './hooks/useMeasurementWorkbench';
 import {
   useValidatedFeatureCommit,
+  type ValidatedFeatureOutcome,
   type ValidatedFeatureRunOptions
 } from './hooks/useValidatedFeatureCommit';
 import { PatternProgress } from './components/PatternProgress';
@@ -4317,18 +4318,18 @@ export function App() {
   function runPattern(
     command: AnyCommand,
     options: ValidatedFeatureRunOptions
-  ): void {
+  ): Promise<ValidatedFeatureOutcome> {
     const reservation = validatedFeature.reserve();
     if (!reservation) {
       setStatus(
         'Another exact operation is still finishing. Try again once it completes.'
       );
-      return;
+      return Promise.resolve('busy');
     }
     const abort = new AbortController();
     patternAbortRef.current = abort;
     setPatternProgress({ name: options.featureName });
-    void executeValidatedFeature(command, {
+    return executeValidatedFeature(command, {
       ...options,
       reservation,
       signal: abort.signal,
@@ -8080,11 +8081,15 @@ export function App() {
     command: AnyCommand,
     feature: FeatureNode,
     featureName: string,
-    resultBodyId: BodyId | undefined = feature.bodyId
+    resultBodyId: BodyId | undefined = feature.bodyId,
+    /** Told whether the edit landed; an in-place edit waits on it. */
+    settled?: (committed: boolean) => void
   ): void {
     const editSession = editCardSessionRef.current;
     if (!doc || !resultBodyId) {
-      if (executeCommand(command)) finishFeatureEdit(feature, editSession);
+      const committed = executeCommand(command);
+      if (committed) finishFeatureEdit(feature, editSession);
+      settled?.(Boolean(committed));
       return;
     }
     const run =
@@ -8107,7 +8112,10 @@ export function App() {
       successMessage: commandOutcomeMessage(command.label),
       onSuccess: () => finishFeatureEdit(feature, editSession),
       cancelled: () => !editSessionIsCurrent(feature, editSession)
-    });
+    }).then(
+      (outcome) => settled?.(outcome === 'committed'),
+      () => settled?.(false)
+    );
   }
 
   /**
@@ -8436,29 +8444,9 @@ export function App() {
     };
   }
 
-  /**
-   * U09 phase 7: re-arms the in-place command that made a stored feature,
-   * seeded from it, instead of opening its card. The feature stays pinned,
-   * so its History row and its readout stay on screen while it is edited.
-   * False when the feature has no in-place editor or cannot be edited now.
-   */
-  function startInPlaceEdit(feature: FeatureNode): boolean {
-    const current = managerRef.current?.document;
-    const tool = inPlaceToolForFeature(feature.data);
-    if (!current || !tool) return false;
-    // What a new feature needs on screen (two live bodies for a boolean,
-    // closed profiles for a loft) the stored feature already has, consumed.
-    const reason = toolDisabledReason(tool, {
-      ...availability,
-      liveBodyCount: Number.POSITIVE_INFINITY,
-      sketchCount: Number.POSITIVE_INFINITY,
-      closedProfileSketchCount: Number.POSITIVE_INFINITY
-    });
-    if (reason) {
-      setStatus(`${TOOL_META[tool].label}: ${reason}.`);
-      return false;
-    }
-    const armed = inPlaceEditSeed(feature, {
+  /** The in-place command and seed for a stored feature, from `current`. */
+  function inPlaceEditSeedFor(current: ProjectDocument, feature: FeatureNode) {
+    return inPlaceEditSeed(feature, {
       evaluate: (value) =>
         evalParamValue(value, parameterScope.scope, current.units),
       profile: (sketchId, reference) => {
@@ -8538,6 +8526,31 @@ export function App() {
       bodyVertices: (bodyId) =>
         representations[bodyId]?.mesh.vertices ?? null
     });
+  }
+
+  /**
+   * U09 phase 7: re-arms the in-place command that made a stored feature,
+   * seeded from it, instead of opening its card. The feature stays pinned,
+   * so its History row and its readout stay on screen while it is edited.
+   * False when the feature has no in-place editor or cannot be edited now.
+   */
+  function startInPlaceEdit(feature: FeatureNode): boolean {
+    const current = managerRef.current?.document;
+    const tool = inPlaceToolForFeature(feature.data);
+    if (!current || !tool) return false;
+    // What a new feature needs on screen (two live bodies for a boolean,
+    // closed profiles for a loft) the stored feature already has, consumed.
+    const reason = toolDisabledReason(tool, {
+      ...availability,
+      liveBodyCount: Number.POSITIVE_INFINITY,
+      sketchCount: Number.POSITIVE_INFINITY,
+      closedProfileSketchCount: Number.POSITIVE_INFINITY
+    });
+    if (reason) {
+      setStatus(`${TOOL_META[tool].label}: ${reason}.`);
+      return false;
+    }
+    const armed = inPlaceEditSeedFor(current, feature);
     if (!armed) return false;
     // A running command (another edit, a create) gives way quietly.
     inPlaceRef.current.cancel(true);
@@ -8571,9 +8584,18 @@ export function App() {
       command = inPlaceEditCommand(request, named);
     } catch (error) {
       setStatus(errorMessage(error, `${feature.name} could not be edited.`));
+      inPlaceRef.current.settleEdit(edit, false);
       return;
     }
-    applyValidatedFeature(command, feature, feature.name, edit.resultBodyId);
+    // The edit stays open until this lands: refused, it is still there to
+    // correct and try again.
+    applyValidatedFeature(
+      command,
+      feature,
+      feature.name,
+      edit.resultBodyId,
+      (committed) => inPlaceRef.current.settleEdit(edit, committed)
+    );
   }
 
   /**
@@ -18940,7 +18962,9 @@ export function App() {
             ? { spacing2: request.spacing2 }
             : {}),
           ...(request.count2 !== undefined ? { count2: request.count2 } : {}),
-          ...(request.axisRef ? { axisRef: request.axisRef } : {})
+          ...(request.axisRef ? { axisRef: request.axisRef } : {}),
+          // A custom repeat vector, which the axis then only stands beside.
+          ...(request.direction ? { direction: request.direction } : {})
         });
       case 'edge-modifier':
         // Through the card's own command, so a fillet or chamfer made in
@@ -19020,7 +19044,8 @@ export function App() {
   ): AnyCommand {
     // What the command does not show is kept from the feature as it is now,
     // not as it was when the edit armed: a collaborator's change to a field
-    // the edit leaves alone (a scale's pivot) must not be written back over.
+    // the edit leaves alone (a scale's translation) must not be written back
+    // over.
     const live = managerRef.current
       ? findFeature(managerRef.current.document, armed.featureId)
       : null;
@@ -19092,6 +19117,15 @@ export function App() {
       evalParamValue(value, parameterScope.scope, doc?.units),
     baseDocument: () => managerRef.current?.document ?? null,
     baseVersion: doc?.version ?? null,
+    reseed: (edit) => {
+      const current = managerRef.current?.document;
+      const feature = current ? findFeature(current, edit.featureId) : null;
+      return current &&
+        feature &&
+        feature.data.featureKind === edit.data.featureKind
+        ? (inPlaceEditSeedFor(current, feature)?.seed ?? null)
+        : null;
+    },
     derive: (document) => geometry.syncOnce(document),
     buildCommand: (request, title, edit) => {
       if (edit) {
@@ -19123,7 +19157,7 @@ export function App() {
       if (request.tool === 'pattern' && resultBodyId) {
         // Through the pattern runner, so a large pattern shows its progress
         // and can be stopped, as the card's did.
-        runPattern(command, {
+        void runPattern(command, {
           featureName: name,
           resultBodyId,
           successMessage: commandOutcomeMessage(command.label),
@@ -19404,7 +19438,10 @@ export function App() {
           ]
         : []
     );
-  }, [inPlaceEditing]);
+    // The live feature is read again with the document: an undo or a
+    // collaborator may point it at another sketch while the edit is armed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inPlaceEditing, doc]);
   // Editing needs hidden source profiles; visibility remains a viewport concern.
   const sketchViews = useMemo(
     () =>
@@ -19591,6 +19628,19 @@ export function App() {
       const fresh = inPlaceBodyPickRef.current(pick.bodyId);
       if (!fresh) return pick;
       const live = findFeature(doc, editing.featureId);
+      // A body clicked in place of the transform's own target never went
+      // through it: its box is the body as it is.
+      if (
+        liveData.featureKind === 'transform' &&
+        liveData.targetBodyId !== pick.bodyId
+      ) {
+        const same =
+          JSON.stringify([fresh.min, fresh.max]) ===
+          JSON.stringify([pick.min, pick.max]);
+        if (same) return pick;
+        bodiesMoved = true;
+        return fresh;
+      }
       const box = inPlaceEditBodyBox(
         fresh,
         liveData,

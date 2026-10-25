@@ -54,6 +54,12 @@ export interface UseInPlaceCommandOptions extends InPlaceContext {
    * built on the old one must not stand for what Done would now commit.
    */
   baseVersion?: number | null;
+  /**
+   * An edit's seed read again from the feature as the model has it now, so
+   * a value the user has not changed follows a change made to it since (an
+   * undo, a collaborator).
+   */
+  reseed?(edit: InPlaceEditSeed): InPlaceEditSeed | null;
   derive(document: ProjectDocument): Promise<ProjectDocument['derived']>;
   /**
    * Builds the same command the commit runs, named for the tool so a kernel
@@ -175,6 +181,11 @@ export interface InPlaceCommand {
     touched: boolean
   ): void;
   done(): boolean;
+  /**
+   * An edit's Done waits on its validated commit: `true` ends the edit,
+   * `false` (refused) leaves it open to correct and retry.
+   */
+  settleEdit(edit: InPlaceEditSeed, committed: boolean): void;
   /** Ends the command; `quiet` when another action already says why. */
   cancel(quiet?: boolean): void;
 }
@@ -207,6 +218,16 @@ export function useInPlaceCommand(
   // A typed value the tool refused: it stands until the next accepted
   // value, and Done waits with it, since the chip went back to the value
   // before and finishing would commit that instead of what was typed.
+  const [committing, setCommitting] = useState(false);
+  /**
+   * What an edit's values and options were seeded from, kept for each one
+   * the user has not changed: the user's own changes differ from it.
+   */
+  const seededRef = useRef<{
+    values: Record<string, number>;
+    raws: Record<string, string>;
+    options: Record<string, string>;
+  } | null>(null);
   const [entryRefusal, setEntryRefusal] = useState<{
     valueId: string;
     message: string;
@@ -291,7 +312,15 @@ export function useInPlaceCommand(
         ? [...own, ...axisCandidatesFor(EMPTY_SLOTS, ctx, spec.axisSource)]
         : [];
     }
-    return [...own, ...axisCandidatesFor({ ...EMPTY_SLOTS, profiles }, ctx)];
+    return [
+      ...own,
+      ...axisCandidatesFor(
+        { ...EMPTY_SLOTS, profiles },
+        ctx,
+        'sketch',
+        editSeed?.slots.axisId
+      )
+    ];
     // The base version re-reads the saved axis's expressions, as the effect
     // below does for typed values: a parameter can change with no change
     // to the feature itself.
@@ -371,7 +400,7 @@ export function useInPlaceCommand(
   const chosen = useMemo(() => session?.options ?? {}, [session?.options]);
   const request = useMemo(
     () =>
-      spec && spec.ready(slots)
+      spec && spec.ready(slots, chosen)
         ? spec.request(slots, paramValues, chosen, ctx, numbers)
         : null,
     [spec, slots, paramValues, chosen, ctx, numbers]
@@ -485,6 +514,7 @@ export function useInPlaceCommand(
   // Every change of what would be built previews at once: the solid is on
   // screen the frame after the pick that completes it.
   const generation = useRef(0);
+  const editIdentity = session?.edit ?? null;
   useEffect(() => {
     if (!requestKey) {
       // Nothing to build (a pick taken back out): no frame, and no refusal
@@ -500,7 +530,9 @@ export function useInPlaceCommand(
     setPreviewValid(false);
     generation.current += 1;
     preview.request(generation.current);
-  }, [requestKey, options.baseVersion, preview]);
+    // A re-armed edit is a new request even when it builds the same thing
+    // (two like Scales of one body): its own frame, so Done is not held.
+  }, [requestKey, options.baseVersion, preview, editIdentity]);
 
   // A typed expression is stored as typed and evaluated against the model:
   // when the model changes under the command (an undo, a collaborator's
@@ -554,7 +586,73 @@ export function useInPlaceCommand(
         }
       }
       const values = { ...current.values };
-      for (const [valueId, raw] of Object.entries(current.raws)) {
+      let raws = current.raws;
+      let tool = current.tool;
+      let chosen = current.options;
+      // A stored value or option the user has not changed since it was
+      // seeded takes the feature's as it is now. One the user changed keeps
+      // its old baseline, so it stays theirs even if the feature later comes
+      // to match it.
+      const baseline = seededRef.current;
+      const live =
+        current.edit && baseline
+          ? optionsRef.current.reseed?.(current.edit)
+          : null;
+      if (live && baseline) {
+        const nextBaseline = {
+          values: { ...baseline.values },
+          raws: { ...baseline.raws },
+          options: { ...baseline.options }
+        };
+        const ids = new Set([
+          ...Object.keys(live.values),
+          ...Object.keys(live.raws),
+          ...Object.keys(baseline.values),
+          ...Object.keys(baseline.raws)
+        ]);
+        const nextRaws = { ...raws };
+        const take = <T>(
+          target: Record<string, T>,
+          id: string,
+          value: T | undefined
+        ) => {
+          if (value === undefined) delete target[id];
+          else target[id] = value;
+        };
+        for (const id of ids) {
+          // A written value is the user's own until its text changes; its
+          // number moves with the model.
+          const untouched =
+            baseline.raws[id] !== undefined
+              ? raws[id] === baseline.raws[id]
+              : raws[id] === undefined && values[id] === baseline.values[id];
+          if (!untouched) continue;
+          take(nextBaseline.values, id, live.values[id]);
+          take(nextBaseline.raws, id, live.raws[id]);
+          if (live.values[id] === values[id] && live.raws[id] === raws[id]) {
+            continue;
+          }
+          take(values, id, live.values[id]);
+          take(nextRaws, id, live.raws[id]);
+          changed = true;
+        }
+        raws = nextRaws;
+        const optionSpecs = IN_PLACE_TOOL_SPECS[current.tool].options ?? [];
+        for (const [id, value] of Object.entries(live.options)) {
+          if (chosen[id] !== baseline.options[id]) continue;
+          nextBaseline.options[id] = value;
+          if (chosen[id] === value) continue;
+          chosen = { ...chosen, [id]: value };
+          // A Boolean's operation is its tool.
+          const optionSpec = optionSpecs.find((spec) => spec.id === id);
+          if (optionSpec?.switchesTool && value in IN_PLACE_TOOL_SPECS) {
+            tool = value as InPlaceToolId;
+          }
+          changed = true;
+        }
+        seededRef.current = nextBaseline;
+      }
+      for (const [valueId, raw] of Object.entries(raws)) {
         const number = optionsRef.current.evaluate?.(raw);
         if (
           number !== null &&
@@ -566,13 +664,16 @@ export function useInPlaceCommand(
           changed = true;
         }
       }
-      return changed ? { ...current, slots, values } : current;
+      return changed
+        ? { ...current, tool, options: chosen, slots, values, raws }
+        : current;
     });
   }, [options.baseVersion]);
 
   const end = useCallback(() => {
     preview.clear();
     setSession(null);
+    setCommitting(false);
     setRefusal(null);
     setEntryRefusal(null);
     setPreviewValid(false);
@@ -592,6 +693,7 @@ export function useInPlaceCommand(
       optionsRef.current.publishPreview(null);
       setRefusal(null);
       setEntryRefusal(null);
+      setCommitting(false);
       setPreviewValid(false);
       setSession({
         tool,
@@ -634,10 +736,16 @@ export function useInPlaceCommand(
 
   const edit = useCallback(
     (tool: InPlaceToolId, seed: InPlaceEditSeed) => {
+      seededRef.current = {
+        values: seed.values,
+        raws: seed.raws,
+        options: seed.options
+      };
       preview.clear();
       optionsRef.current.publishPreview(null);
       setRefusal(null);
       setEntryRefusal(null);
+      setCommitting(false);
       setPreviewValid(false);
       setSession({
         tool,
@@ -1046,6 +1154,7 @@ export function useInPlaceCommand(
   // Done waits for a valid preview of exactly what it would commit: a pick
   // that changed the request since the last frame has not been shown yet.
   const canFinish = Boolean(
+    !committing &&
     !entryRefusal &&
     request &&
     previewValid &&
@@ -1058,7 +1167,11 @@ export function useInPlaceCommand(
     if (!current || !spec || !canFinish) return false;
     if (requestKeyRef.current !== previewedKey) return false;
     const editing = editRef.current;
-    end();
+    // A new feature is done once Done is pressed; an edit stays open until
+    // its commit is validated, so a refusal (the model moved meanwhile)
+    // leaves it there to correct rather than gone.
+    if (editing) setCommitting(true);
+    else end();
     optionsRef.current.commit(
       current,
       editing?.name ?? spec.featureName ?? spec.title,
@@ -1066,6 +1179,16 @@ export function useInPlaceCommand(
     );
     return true;
   }, [spec, canFinish, previewedKey, end]);
+
+  const settleEdit = useCallback(
+    (edit: InPlaceEditSeed, committed: boolean) => {
+      // Only the edit that was committing: one armed since is its own.
+      if (editRef.current !== edit) return;
+      setCommitting(false);
+      if (committed) end();
+    },
+    [end]
+  );
 
   const cancel = useCallback(
     (quiet = false) => {
@@ -1144,6 +1267,7 @@ export function useInPlaceCommand(
     touched: session?.touched ?? EMPTY_TOUCHED,
     restoreValue,
     done,
+    settleEdit,
     cancel
   };
 }
