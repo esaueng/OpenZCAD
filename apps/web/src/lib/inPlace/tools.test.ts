@@ -4,7 +4,10 @@ import {
   IN_PLACE_TOOL_SPECS,
   axisCandidatesFor,
   clampValue,
+  displayedValue,
   isInPlaceTool,
+  keypadText,
+  valueInRange,
   type BodyPick,
   type FacePick,
   type InPlaceContext,
@@ -55,6 +58,48 @@ describe('the in-place tool table', () => {
     expect(isInPlaceTool('grid-pattern')).toBe(true);
     expect(isInPlaceTool('box')).toBe(false);
     expect(isInPlaceTool('fillet')).toBe(false);
+  });
+
+  it('takes a typed value inside its range, strictly for an open one', () => {
+    const angle = IN_PLACE_TOOL_SPECS.hole.values.find(
+      (value) => value.id === 'countersinkAngleDeg'
+    )!;
+    expect(valueInRange(angle, 0)).toBe(false);
+    expect(valueInRange(angle, 0.0000005)).toBe(true);
+    expect(valueInRange(angle, 180)).toBe(false);
+    const depth = IN_PLACE_TOOL_SPECS.hole.values.find(
+      (value) => value.id === 'counterboreDepth'
+    )!;
+    expect(valueInRange(depth, 0.005)).toBe(true);
+    expect(valueInRange(depth, 0)).toBe(false);
+    const count = IN_PLACE_TOOL_SPECS['linear-pattern'].values.find(
+      (value) => value.id === 'count'
+    )!;
+    expect(valueInRange(count, 3.5)).toBe(false);
+    expect(valueInRange(count, Number.NaN)).toBe(false);
+  });
+
+  it('shows a value to two places unless that would show a refused one', () => {
+    const angle = IN_PLACE_TOOL_SPECS.hole.values.find(
+      (value) => value.id === 'countersinkAngleDeg'
+    )!;
+    expect(displayedValue(angle, 82.3456)).toBe(82.35);
+    expect(displayedValue(angle, 179.9999995)).toBe(179.9999995);
+    // Past ten places too: what ten would round onto the refused end is
+    // shown as it is.
+    expect(displayedValue(angle, 179.9999999999)).toBe(179.9999999999);
+    expect(displayedValue(angle, 0.0000005)).toBe(0.0000005);
+    // A small value keeps its digits: 0.005 mm is not shown as 0.01.
+    const depth = IN_PLACE_TOOL_SPECS.hole.values.find(
+      (value) => value.id === 'counterboreDepth'
+    )!;
+    expect(displayedValue(depth, 0.005)).toBe(0.005);
+    expect(displayedValue(depth, 12.3456)).toBe(12.35);
+    // The keypad opens on the value exactly.
+    expect(keypadText(0.005)).toBe('0.005');
+    expect(keypadText(12.3456)).toBe('12.3456');
+    expect(Number(keypadText(1.0000000000004))).toBe(1.0000000000004);
+    expect(Number(keypadText(179.9999999999))).toBe(179.9999999999);
   });
 
   it('clamps a value to its range and falls back when not finite', () => {
@@ -362,6 +407,61 @@ describe('review: values the cards accepted stay expressible', () => {
         }
       }
     });
+  });
+
+  it('a hole step follows the bore until a chip sets it', () => {
+    const spec = IN_PLACE_TOOL_SPECS.hole;
+    expect(
+      spec.defaults?.({ ...EMPTY, faces: [TOP] }, CTX, { diameter: 4 })
+    ).toEqual({
+      counterboreDiameter: 7.2,
+      counterboreDepth: 2,
+      countersinkDiameter: 8
+    });
+    const request = spec.request(
+      { ...EMPTY, faces: [TOP] },
+      {
+        diameter: 4,
+        countersinkDiameter: 'sink',
+        countersinkAngleDeg: 82
+      },
+      { style: 'countersink' },
+      CTX,
+      { diameter: 4 }
+    );
+    expect(request).toMatchObject({
+      state: {
+        value: {
+          style: 'countersink',
+          countersinkDiameter: 'sink',
+          countersinkAngleDeg: '82'
+        }
+      }
+    });
+  });
+
+  it('a hole step puts its two chips across its rim', () => {
+    const handles = IN_PLACE_TOOL_SPECS.hole.handles(
+      { ...EMPTY, faces: [TOP] },
+      { diameter: 4, counterboreDiameter: 8, counterboreDepth: 2 },
+      CTX,
+      { style: 'counterbore' }
+    );
+    expect(handles.map((handle) => [handle.valueId, handle.kind])).toEqual([
+      ['diameter', 'linear'],
+      ['counterboreDiameter', 'chip'],
+      ['counterboreDepth', 'chip']
+    ]);
+    const anchors = handles
+      .slice(1)
+      .map((handle) => (handle.kind === 'chip' ? handle.params.anchor : null));
+    // Four either side of the click, across the face's v direction.
+    const spread = Math.hypot(
+      anchors[0]!.x - anchors[1]!.x,
+      anchors[0]!.y - anchors[1]!.y,
+      anchors[0]!.z - anchors[1]!.z
+    );
+    expect(spread).toBeCloseTo(8);
   });
 
   it('draft hinges on the body base by default, or the top, the click, the origin', () => {

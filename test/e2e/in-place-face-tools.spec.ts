@@ -91,7 +91,9 @@ async function startTool(page: Page, tool: RegExp, title: string) {
     await moreTools.click();
   }
   await page.getByRole('button', { name: tool }).click();
-  await expect(page.getByRole('group', { name: `${title} command` })).toBeVisible();
+  await expect(
+    page.getByRole('group', { name: `${title} command` })
+  ).toBeVisible();
   await expect(page.locator('form.feature-form')).toHaveCount(0);
 }
 
@@ -126,6 +128,69 @@ test('Hole in place: blind depth from Options, diameter from the keypad', async 
   await finishInPlaceCommand(page, 'Hole');
   const [hole] = await featureData(page, 'hole');
   expect(hole).toMatchObject({ diameter: 4, depthMode: 'blind', depth: 8 });
+});
+
+test('Hole in place: a counterbore follows the bore until its chips size it', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  await openBox(page, 'In-place counterbore');
+  await startTool(page, /^Hole/, 'Hole');
+  await expect.poll(() => pickPlanarFace(page, TOP)).not.toBeNull();
+  const bar = page.getByRole('group', { name: 'Hole command' });
+  await bar.locator('summary').click();
+  await bar.getByRole('radio', { name: 'Counterbore' }).click();
+  await bar.locator('summary').click();
+  // The step's chips appear with sizes derived from the 6 mm bore.
+  await expect(
+    page.getByTestId('command-handle-counterboreDiameter')
+  ).toHaveText('Counterbore ⌀ 10.8 mm');
+  await expect(page.getByTestId('command-handle-counterboreDepth')).toHaveText(
+    'Counterbore depth 3 mm'
+  );
+  await enterCommandValue(page, 'diameter', '4');
+  // An unset step still follows the bore; a typed one is kept.
+  await expect(
+    page.getByTestId('command-handle-counterboreDiameter')
+  ).toHaveText('Counterbore ⌀ 7.2 mm');
+  await enterCommandValue(page, 'counterboreDepth', '2.5');
+  await enterCommandValue(page, 'counterboreDiameter', '9');
+  await finishInPlaceCommand(page, 'Hole');
+  const [hole] = await featureData(page, 'hole');
+  expect(hole).toMatchObject({
+    style: 'counterbore',
+    diameter: 4,
+    counterboreDiameter: 9,
+    counterboreDepth: 2.5
+  });
+});
+
+test('Hole in place: a countersink takes its angle from a chip', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  await openBox(page, 'In-place countersink');
+  await startTool(page, /^Hole/, 'Hole');
+  await expect.poll(() => pickPlanarFace(page, TOP)).not.toBeNull();
+  const bar = page.getByRole('group', { name: 'Hole command' });
+  await bar.locator('summary').click();
+  await bar.getByRole('radio', { name: 'Countersink' }).click();
+  await bar.locator('summary').click();
+  await expect(
+    page.getByTestId('command-handle-countersinkAngleDeg')
+  ).toHaveText('90°');
+  await enterCommandValue(page, 'countersinkAngleDeg', '82');
+  await enterCommandValue(page, 'countersinkDiameter', '11');
+  await finishInPlaceCommand(page, 'Hole');
+  const [hole] = await featureData(page, 'hole');
+  expect(hole).toMatchObject({
+    style: 'countersink',
+    diameter: 6,
+    countersinkDiameter: 11,
+    countersinkAngleDeg: 82
+  });
 });
 
 test('Shell in place: two openings, wall from the keypad', async ({ page }) => {

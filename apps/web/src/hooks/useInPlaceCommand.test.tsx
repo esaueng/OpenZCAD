@@ -204,13 +204,12 @@ describe('useInPlaceCommand: revolve', () => {
     });
     expect(hook.result.current.refusal).toMatch(/sweep \* 5 is 400/);
     expect(hook.result.current.values.angle ?? 360).toBe(360);
+    // Nothing is committed while the refusal stands, the refused value
+    // least of all.
     act(() => {
-      hook.result.current.done();
+      expect(hook.result.current.done()).toBe(false);
     });
-    const request = commit.mock.calls[0]![0];
-    expect(request.tool === 'revolve' && request.angleDeg).not.toBe(
-      'sweep * 5'
-    );
+    expect(commit).not.toHaveBeenCalled();
   });
 
   it('keeps a sub-degree revolve', () => {
@@ -401,6 +400,205 @@ describe('useInPlaceCommand: helical sweep', () => {
       hook.result.current.pickProfile({ ...PICK, regionFingerprint: 8 })
     );
     expect(hook.result.current.values.radius).toBe(25);
+  });
+});
+
+describe('useInPlaceCommand: hole step chips', () => {
+  const FACE: FacePick = {
+    bodyId: 'body_a' as BodyId,
+    hash: 11,
+    topologyId: 'f11',
+    surfaceType: 'plane',
+    normal: { x: 0, y: 0, z: 1 },
+    centroid: { x: 10, y: 5, z: 4 },
+    point: { x: 12, y: 6, z: 4 }
+  };
+
+  it('sizes an unset step from the bore and keeps one the user set', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('hole', [], [FACE]));
+    act(() => hook.result.current.setOption('style', 'counterbore'));
+    expect(hook.result.current.handles.map((handle) => handle.valueId)).toEqual(
+      ['diameter', 'counterboreDiameter', 'counterboreDepth']
+    );
+    act(() => {
+      hook.result.current.setValue('diameter', 4);
+    });
+    await waitFor(() =>
+      expect(hook.result.current.values.counterboreDiameter).toBe(7.2)
+    );
+    expect(hook.result.current.values.counterboreDepth).toBe(2);
+    act(() => {
+      hook.result.current.setValue('counterboreDepth', 3, 'cb_depth');
+    });
+    act(() => {
+      hook.result.current.setValue('diameter', 5);
+    });
+    await waitFor(() =>
+      expect(hook.result.current.values.counterboreDiameter).toBe(9)
+    );
+    expect(hook.result.current.raws.counterboreDepth).toBe('cb_depth');
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        state: {
+          value: {
+            style: 'counterbore',
+            diameter: '5',
+            counterboreDiameter: '9',
+            counterboreDepth: 'cb_depth'
+          }
+        }
+      })
+    );
+  });
+
+  it('a refused entry holds Done until a value is taken, then clears', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('hole', [], [FACE]));
+    act(() => hook.result.current.setOption('style', 'countersink'));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    let accepted = true;
+    act(() => {
+      accepted = hook.result.current.setValue('countersinkAngleDeg', 180);
+    });
+    expect(accepted).toBe(false);
+    // The chip is back on the value before; Done must not commit that as
+    // if it were what was typed.
+    expect(hook.result.current.refusal).toMatch(/takes/);
+    expect(hook.result.current.canFinish).toBe(false);
+    // The value that was there before, typed again, is taken and clears it.
+    act(() => {
+      accepted = hook.result.current.setValue(
+        'countersinkAngleDeg',
+        hook.result.current.values.countersinkAngleDeg ?? 90
+      );
+    });
+    expect(accepted).toBe(true);
+    expect(hook.result.current.refusal).toBeNull();
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+  });
+
+  it('another value changing leaves a refused entry holding Done', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('hole', [], [FACE]));
+    act(() => hook.result.current.setOption('style', 'countersink'));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.setValue('countersinkAngleDeg', 180);
+    });
+    act(() => {
+      hook.result.current.setValue('diameter', 8);
+    });
+    expect(hook.result.current.refusal).toMatch(/countersink angle/);
+    expect(hook.result.current.canFinish).toBe(false);
+  });
+
+  it('a style that hides the refused value lets Done go', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('hole', [], [FACE]));
+    act(() => hook.result.current.setOption('style', 'countersink'));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.setValue('countersinkAngleDeg', 180);
+    });
+    expect(hook.result.current.canFinish).toBe(false);
+    act(() => hook.result.current.setOption('style', 'simple'));
+    expect(hook.result.current.refusal).toBeNull();
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+  });
+
+  it('a countersink shows its diameter and angle chips', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('hole', [], [FACE]));
+    act(() => hook.result.current.setOption('style', 'countersink'));
+    expect(hook.result.current.handles.map((handle) => handle.valueId)).toEqual(
+      ['diameter', 'countersinkDiameter', 'countersinkAngleDeg']
+    );
+    // The angle is the full included angle, strictly inside 0°–180°.
+    let accepted = true;
+    act(() => {
+      accepted = hook.result.current.setValue(
+        'countersinkAngleDeg',
+        180,
+        '180'
+      );
+    });
+    expect(accepted).toBe(false);
+    expect(hook.result.current.refusal).toMatch(
+      /more than 0 and less than 180/
+    );
+    // Any angle inside the open interval is the card's, decimals included.
+    act(() => {
+      accepted = hook.result.current.setValue(
+        'countersinkAngleDeg',
+        0.5,
+        '0.5'
+      );
+    });
+    expect(accepted).toBe(true);
+    // A typed end of the open range is refused too, not nudged inside it.
+    act(() => {
+      accepted = hook.result.current.setValue('countersinkAngleDeg', 180);
+    });
+    expect(accepted).toBe(false);
+    expect(hook.result.current.values.countersinkAngleDeg).toBe(0.5);
+    expect(hook.result.current.refusal).toBe(
+      '180; Hole countersink angle takes more than 0 and less than 180.'
+    );
+    // Every value strictly inside the open range is taken as typed.
+    act(() => {
+      accepted = hook.result.current.setValue(
+        'countersinkAngleDeg',
+        179.9999995
+      );
+    });
+    expect(accepted).toBe(true);
+    expect(hook.result.current.values.countersinkAngleDeg).toBe(179.9999995);
+    // A step's sizes take any positive value, as the card did.
+    act(() => {
+      accepted = hook.result.current.setValue('countersinkDiameter', 0.005);
+    });
+    expect(accepted).toBe(true);
+    expect(hook.result.current.values.countersinkDiameter).toBe(0.005);
+  });
+
+  it('a canceled chip entry leaves the step following the bore', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('hole', [], [FACE]));
+    act(() => hook.result.current.setOption('style', 'counterbore'));
+    // The keypad previews what is typed, then Escape puts the value back.
+    act(() => hook.result.current.previewValue('counterboreDiameter', 14));
+    expect(hook.result.current.touched).toContain('counterboreDiameter');
+    act(() =>
+      hook.result.current.restoreValue(
+        'counterboreDiameter',
+        10.8,
+        undefined,
+        false
+      )
+    );
+    act(() => {
+      hook.result.current.setValue('diameter', 4);
+    });
+    await waitFor(() =>
+      expect(hook.result.current.values.counterboreDiameter).toBe(7.2)
+    );
+
+    // The bore moves while the step's keypad is open, then Escape: the step,
+    // still unset, takes the default as it stands now.
+    act(() => hook.result.current.previewValue('counterboreDiameter', 14));
+    act(() => {
+      hook.result.current.setValue('diameter', 5);
+    });
+    act(() =>
+      hook.result.current.restoreValue(
+        'counterboreDiameter',
+        7.2,
+        undefined,
+        false
+      )
+    );
+    expect(hook.result.current.values.counterboreDiameter).toBe(9);
   });
 });
 

@@ -1433,7 +1433,10 @@ import { mergeSweptFaces, useInPlaceCommand } from './hooks/useInPlaceCommand';
 import {
   IN_PLACE_TOOL_SPECS,
   clampValue,
+  displayedValue,
   isInPlaceTool,
+  keypadText,
+  valueInRange,
   type InPlaceRequest,
   type BodyPick,
   type FacePick,
@@ -18740,6 +18743,8 @@ export function App() {
   }, [keypadWithinReach]);
   const inPlaceRef = useRef(inPlace);
   inPlaceRef.current = inPlace;
+  /** Whether the value a command keypad opened on had been set by the user. */
+  const commandKeypadTouchedRef = useRef(false);
   /** The keypad moves a command handle through this, without a render. */
   const commandSetterRef = useRef<
     ((valueId: string, value: number) => void) | null
@@ -18766,8 +18771,13 @@ export function App() {
         const valueSpec = inPlaceSpec?.values.find(
           (candidate) => candidate.id === handle.valueId
         );
-        const round = (value: number) =>
-          formatNumber(Math.round(value * 100) / 100);
+        // A value two places would show as a refused one is shown in full.
+        const round = (value: number) => {
+          const shown = displayedValue(valueSpec, value);
+          return shown === Math.round(value * 100) / 100
+            ? formatNumber(shown)
+            : String(shown);
+        };
         const format =
           valueSpec?.unit === 'angle'
             ? (value: number) => `${round(value)}°`
@@ -20617,11 +20627,13 @@ export function App() {
       const valueId = open.commandValueId;
       const baseline = open.baseline ?? inPlaceRef.current.values[valueId] ?? 0;
       commandSetterRef.current?.(valueId, baseline);
-      if (open.baselineRaw !== undefined) {
-        inPlaceRef.current.setValue(valueId, baseline, open.baselineRaw);
-      } else {
-        inPlaceRef.current.previewValue(valueId, baseline);
-      }
+      // Unset stays unset: a step that followed its bore still follows it.
+      inPlaceRef.current.restoreValue(
+        valueId,
+        baseline,
+        open.baselineRaw,
+        commandKeypadTouchedRef.current
+      );
     } else if (open.kind === 'sketch-dimension') {
       setSketchDimensionDraft(null);
       setStatus('Dimension entry canceled.');
@@ -25852,13 +25864,15 @@ export function App() {
               );
               if (!valueSpec) return false;
               const raw = inPlace.raws[valueId];
+              commandKeypadTouchedRef.current =
+                inPlace.touched.includes(valueId);
               setKeypad({
                 kind: 'command',
                 commandValueId: valueId,
                 label: valueSpec.label,
                 // A parametric value opens as its expression, and comes
                 // back as one if entry is canceled.
-                initial: raw ?? String(Math.round(value * 100) / 100),
+                initial: raw ?? keypadText(value),
                 selectInitial: true,
                 unitKind: valueSpec.unit,
                 baseline: value,
@@ -25889,7 +25903,7 @@ export function App() {
                       // A value outside the command's range never moves the
                       // handle: Enter refuses it as an expression, and the
                       // value must still be the one it was.
-                      if (valueSpec && clampValue(valueSpec, value) !== value) {
+                      if (valueSpec && !valueInRange(valueSpec, value)) {
                         return;
                       }
                       commandSetterRef.current?.(valueId, value);
@@ -25917,12 +25931,14 @@ export function App() {
                       } else {
                         // Refused: back to the value shown when the chip was
                         // tapped, undoing any in-range keystroke previews.
+                        // Set or unset as it was, as Escape restores it.
                         commandSetterRef.current?.(valueId, baseline);
-                        if (keypad.baselineRaw !== undefined) {
-                          inPlace.setValue(valueId, baseline, keypad.baselineRaw);
-                        } else {
-                          inPlace.previewValue(valueId, baseline);
-                        }
+                        inPlace.restoreValue(
+                          valueId,
+                          baseline,
+                          keypad.baselineRaw,
+                          commandKeypadTouchedRef.current
+                        );
                       }
                     }}
                     onCancel={cancelOpenKeypad}

@@ -4117,9 +4117,17 @@ export function ModelViewer({
         const value = entry.rig ? entry.rig.value() : view.value;
         const scale =
           (entry.rig?.group.userData.gizmoScale as number | undefined) ?? 1;
+        // A chip-only value's anchor is read live: it may follow another
+        // value (a hole step's rim), which rebuilds no rig.
         const anchor = entry.rig
           ? entry.rig.chipAnchor(scale)
-          : (entry.anchor ?? new THREE.Vector3());
+          : view.kind === 'chip'
+            ? new THREE.Vector3(
+                view.params.anchor.x,
+                view.params.anchor.y,
+                view.params.anchor.z
+              )
+            : (entry.anchor ?? new THREE.Vector3());
         const ndc = anchor.clone().project(context.activeCamera);
         if (ndc.z > 1 || ndc.z < -1) {
           entry.chip.hidden = true;
