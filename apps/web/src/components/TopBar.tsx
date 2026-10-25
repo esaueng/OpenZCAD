@@ -19,6 +19,10 @@ import {
 } from 'lucide-react';
 import type { ArtifactRecord, AuthSession, UnitSystem } from '@openzcad/shared';
 import { BrandMark } from './BrandMark';
+import {
+  EncryptionIndicator,
+  type EncryptionIndicatorProps
+} from './EncryptionIndicator';
 import { isEncryptedProject } from '../lib/api';
 import type { WorkspaceMode } from '../lib/panelState';
 import type { CollaborationStatus } from '../lib/useCollaboration';
@@ -125,6 +129,11 @@ interface TopBarProps {
    */
   onSignIn?(): void;
   onOpenSettings(): void;
+  /**
+   * The open project's encryption status, only for an end-to-end encrypted
+   * project (ADR-024 Phase 4). Absent or null, nothing is shown.
+   */
+  encryption?: EncryptionIndicatorProps | null;
 }
 
 export function TopBar({
@@ -169,7 +178,8 @@ export function TopBar({
   onGoHome,
   onOpenSharing,
   onSignIn,
-  onOpenSettings
+  onOpenSettings,
+  encryption = null
 }: TopBarProps) {
   const keymap = useKeymap();
   const saveKey = keymap.label('file-save');
@@ -454,6 +464,11 @@ export function TopBar({
         </button>
         <div className="topbar-divider" />
         {breadcrumb}
+        {/* Beside the breadcrumb, not in it: the breadcrumb clips overflow
+            for the name's ellipsis, and would clip the popover too. */}
+        {encryption && projectName ? (
+          <EncryptionIndicator {...encryption} />
+        ) : null}
       </div>
       <div
         className="mode-switch topbar-island"
