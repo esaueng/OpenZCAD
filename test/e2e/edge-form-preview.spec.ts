@@ -3,7 +3,8 @@ import {
   expect,
   stubApi,
   setSelectionFilter,
-  locateEdge
+  locateEdge,
+  revealModelPanel
 } from './openzcad-fixtures';
 
 for (const [tool, field] of [
@@ -30,6 +31,7 @@ for (const [tool, field] of [
       'Preview · Create to save the result.'
     );
     await expect(inspector.getByLabel(field, { exact: true })).toHaveValue('1');
+    await revealModelPanel(page, 'History');
     await expect(page.locator('.feature-row')).toHaveCount(1);
     await inspector.getByRole('button', { name: /^Create/ }).click();
     const feature = page.locator('.feature-row', {

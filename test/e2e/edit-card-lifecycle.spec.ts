@@ -3,7 +3,8 @@ import {
   test,
   expect,
   stubApi,
-  createHoleInPlace
+  createHoleInPlace,
+  revealModelPanel
 } from './openzcad-fixtures';
 
 /**
@@ -220,6 +221,7 @@ test('Fillet: Apply closes the card, a refused Apply keeps it open with the reas
   await expect(inspector).toHaveCount(0);
   await row(page, /^Fillet/).click();
   await expect(radius).toHaveValue('2');
+  await revealModelPanel(page, 'History');
   await expect(page.locator('.feature-row')).toHaveCount(2);
 });
 
