@@ -3657,9 +3657,6 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     const access = await this.requireProjectEdit(userId, upload.projectId);
-    // A session opened before the project became encrypted writes no
-    // plaintext into it afterwards.
-    assertPlaintextProject(access);
     if (!this.env.ARTIFACTS) {
       throw new ArtifactStorageError();
     }
@@ -3667,7 +3664,8 @@ export class D1R2PersistenceService implements PersistenceService {
       throw new ArtifactStorageError('Upload reservation owner is invalid.');
     }
     // ADR-024 Phase 4: an encrypted project takes only encrypted blobs, and
-    // a plaintext project only ordinary artifacts, part by part.
+    // a plaintext project only ordinary artifacts, part by part. A plaintext
+    // session opened before the project became encrypted writes nothing more.
     if (upload.e2eeBlobKind === null) {
       assertPlaintextProject(access);
     } else if (isPlaintextStorageFormat(access.storageFormat)) {
