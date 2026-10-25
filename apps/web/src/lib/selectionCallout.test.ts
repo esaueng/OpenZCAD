@@ -138,7 +138,6 @@ describe('selectionCalloutVerbs', () => {
       'Mirror',
       'Split',
       'Pattern',
-      'Shell',
       'Solid offset'
     ]);
     expect(

@@ -2,10 +2,10 @@
 row: U09
 ---
 
-Phase 7: the Selection card carries every verb the plan's §5 table gives a
+Phase 7: the Selection card carries the verbs the plan's §5 table gives a
 pick. A flat face adds Shell, Draft, Thicken and Plane after its own edits,
 Sketch and Hole; a round face Axis and Shell; edges Axis; a body Rotate,
-Scale, Split, Pattern, Shell and Solid offset beside Move and Mirror; two
+Scale, Split, Pattern and Solid offset beside Move and Mirror; two
 bodies Subtract and Intersect beside Union and Move. The card shows the
 first four as buttons, so a pick's usual verbs keep their places, and the
 rest behind a More button in its header; a lit verb is always a button. A

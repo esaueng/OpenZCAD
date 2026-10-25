@@ -224,7 +224,7 @@ function edgeVerb(
  * Radius on a cylinder) and the tools that take it — Sketch, Hole, Shell,
  * Draft, Thicken and Plane for a flat face, Axis and Shell for a round one;
  * several faces (a box sweep) Shell and Draft; edges Fillet, Chamfer and
- * Axis; a body Move, Rotate, Scale, Mirror, Split, Pattern, Shell and Solid
+ * Axis; a body Move, Rotate, Scale, Mirror, Split, Pattern and Solid
  * offset; several bodies the booleans and Move; a sketch region Extrude,
  * Revolve, Sweep and Loft. The card shows the first
  * {@link MAX_SELECTION_VERBS} and keeps the rest behind More.
@@ -282,6 +282,8 @@ export function selectionCalloutVerbs(
         edgeVerb('chamfer', input),
         ...tools('datum-axis')
       ];
+    // No Shell: it starts from the faces it opens, so a face's card offers
+    // it, and from a body it would have no body to keep.
     case 'body':
       return tools(
         'transform',
@@ -290,7 +292,6 @@ export function selectionCalloutVerbs(
         'mirror',
         'split',
         'linear-pattern',
-        'shell',
         'solid-offset'
       );
     case 'bodies':
