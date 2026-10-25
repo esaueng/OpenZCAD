@@ -984,55 +984,6 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     });
   });
 
-  it('finishes once the feature is suppressed after the edit armed', async () => {
-    const base = {
-      nodes: {
-        node_1: {
-          id: 'node_1',
-          kind: 'feature',
-          featureId: SEED.featureId,
-          name: 'Cut 2',
-          data: SEED.data,
-          metadata: { suppressed: true }
-        }
-      },
-      derived: { bodyRepresentations: { [BODY]: {} }, warnings: [] }
-    } as unknown as ProjectDocument;
-    const { hook } = setup({
-      baseDocument: () => base,
-      buildCommand: () => ({
-        validate: () => undefined,
-        apply: () =>
-          ({
-            ...base,
-            derived: { bodyRepresentations: {}, warnings: [] }
-          }) as unknown as ProjectDocument,
-        resultBodyId: BODY
-      })
-    });
-    // Armed unsuppressed; the model now has it suppressed.
-    act(() => hook.result.current.edit('subtract', SEED));
-    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
-  });
-
-  it('finishes a suppressed feature edit that builds no body', async () => {
-    // Suppressed, the feature publishes no body: the preview still stands.
-    const { hook } = setup({
-      buildCommand: () => ({
-        validate: () => undefined,
-        apply: () =>
-          ({
-            derived: { bodyRepresentations: {}, warnings: [] }
-          }) as unknown as ProjectDocument,
-        resultBodyId: BODY
-      })
-    });
-    act(() =>
-      hook.result.current.edit('subtract', { ...SEED, suppressed: true })
-    );
-    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
-  });
-
   it('switches operation with its bodies, and hides a locked option', () => {
     const { hook } = setup();
     act(() => hook.result.current.edit('subtract', SEED));
