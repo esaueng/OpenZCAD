@@ -923,6 +923,17 @@ describe('device removal across shared encrypted projects (slice 5-7)', () => {
           'DELETE FROM e2ee_mls_commits WHERE project_id = ? AND epoch = ?'
         )
         .run(pendingId, nextEpoch);
+    // Not even by the device the revocation names as replacement: the
+    // Worker cannot see which leaf an External Commit removed.
+    bobCommit('external', deviceIdOf(bob));
+    await expect(
+      memberRotationFence(
+        srv.env.DB as D1Database,
+        pendingId,
+        predicted.get(pendingId)!
+      )
+    ).rejects.toMatchObject({ code: 'E2EE_MEMBER_ROTATION_PENDING' });
+    clearBobCommit();
     bobCommit('external', 'bob_tablet');
     await expect(
       memberRotationFence(

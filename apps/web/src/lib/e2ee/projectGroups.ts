@@ -1778,6 +1778,13 @@ export async function joinProjectGroup(
     );
     if (submitted.accepted) {
       await ctx.sessions.confirmRejoin(ref, directory);
+      // The Worker counts only a member Commit as this account's rotation
+      // (it cannot tell what an External Commit removed, #908 review). When
+      // this rejoin itself removed a revoked leaf (the last-leaf case),
+      // nothing else may be due, so a member Commit follows to say so.
+      if (result.change.removed.some((leaf) => revoked.has(leaf.deviceId))) {
+        return await commitProjectGroup(ctx, projectId);
+      }
       return await ensureProjectRotated(ctx, projectId);
     }
     // Another Commit took the epoch: start over from the newer GroupInfo.

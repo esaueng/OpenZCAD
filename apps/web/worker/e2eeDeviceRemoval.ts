@@ -233,7 +233,7 @@ export async function memberRotationFence(
     if (
       named &&
       (keyEpoch < named.cutoffEpoch ||
-        !(await landed!.reached(row.user_id, named.cutoffEpoch, statement)))
+        !landed!.reached(row.user_id, named.cutoffEpoch))
     ) {
       refuseMemberRotationPending();
     }
@@ -251,79 +251,39 @@ export async function memberRotationFence(
  * group, learns that epoch's key too (#906 review). Only the account's own
  * devices may remove its leaves, so the rotation is done once the group was
  * started over (a reset, decision D9) at or after the cutoff, which leaves
- * every revoked leaf behind, or once a Commit that account sent lands in the
- * cutoff's epoch or later and that Commit is the rotation:
- *
- * - a member Commit, which removes every revoked leaf of its sender's
- *   account (`ensureProjectRotated`);
- * - an External Commit only in the last-leaf case: sent by the device the
- *   revocation names as replacement, when that is the one revoked device of
- *   the revocation that ever held a leaf here, or when none did. An External
- *   Commit removes at most one stale leaf, and a rejoin by any other device
- *   removes its own (#908 review).
+ * every revoked leaf behind, or once a member Commit that account sent
+ * lands in the cutoff's epoch or later: every member Commit removes its
+ * sender account's revoked leaves (`withDueRotation`). An External Commit
+ * never counts, since the Worker cannot tell which leaf it removed; a
+ * rejoin that removed a revoked leaf is followed by a member Commit
+ * (`joinProjectGroup`, #908 review).
  */
-async function rotationsLanded(db: D1Database, projectId: string) {
+async function rotationsLanded(
+  db: D1Database,
+  projectId: string
+): Promise<{ reached(userId: string, cutoffEpoch: number): boolean }> {
   const group = await db
     .prepare(
       'SELECT key_epoch_base FROM e2ee_project_groups WHERE project_id = ?'
     )
     .bind(projectId)
     .first<{ key_epoch_base: number }>();
+  const { results } = await db
+    .prepare(
+      `SELECT sender_user_id, MAX(epoch) AS epoch FROM e2ee_mls_commits
+       WHERE project_id = ? AND sender_user_id IS NOT NULL AND kind = 'commit'
+       GROUP BY sender_user_id`
+    )
+    .bind(projectId)
+    .all<{ sender_user_id: string; epoch: number }>();
   const base = group?.key_epoch_base ?? 0;
-  const { results: commits } = await db
-    .prepare(
-      `SELECT sender_user_id, sender_device_id, kind, epoch FROM e2ee_mls_commits
-       WHERE project_id = ? AND sender_user_id IS NOT NULL`
-    )
-    .bind(projectId)
-    .all<{
-      sender_user_id: string;
-      sender_device_id: string | null;
-      kind: 'commit' | 'external';
-      epoch: number;
-    }>();
-  const { results: leaves } = await db
-    .prepare(
-      'SELECT DISTINCT user_id, device_id FROM e2ee_project_leaves WHERE project_id = ?'
-    )
-    .bind(projectId)
-    .all<{ user_id: string; device_id: string }>();
-  const heldLeaf = new Set(
-    (leaves ?? []).map((leaf) => `${leaf.user_id}/${leaf.device_id}`)
+  // A Commit sent in MLS epoch e makes key epoch base + e + 1.
+  const latest = new Map(
+    (results ?? []).map((row) => [row.sender_user_id, base + row.epoch + 1])
   );
   return {
-    async reached(
-      userId: string,
-      cutoffEpoch: number,
-      statement: { generation: number; entrySequence: number }
-    ): Promise<boolean> {
-      if (cutoffEpoch <= base) return true;
-      // A Commit sent in MLS epoch e makes key epoch base + e + 1.
-      const after = (commits ?? []).filter(
-        (c) => c.sender_user_id === userId && base + c.epoch + 1 >= cutoffEpoch
-      );
-      if (after.some((c) => c.kind === 'commit')) return true;
-      if (!after.length) return false;
-      let list: VerifiedDeviceList;
-      try {
-        const current = await currentList(db, userId);
-        if (current.generation !== statement.generation) return false;
-        list = current.list;
-      } catch {
-        return false;
-      }
-      const revoked = list.revoked.filter(
-        (r) => r.kind === 'device' && r.revokedAt === statement.entrySequence
-      );
-      const withLeaves = revoked.filter((r) =>
-        heldLeaf.has(`${userId}/${r.id}`)
-      );
-      if (withLeaves.length === 0) return true;
-      const replacement = withLeaves.length === 1 && withLeaves[0]!.replacedBy;
-      return (
-        !!replacement && after.some((c) => c.sender_device_id === replacement)
-      );
-    }
+    reached: (userId, cutoffEpoch) =>
+      cutoffEpoch <= base || (latest.get(userId) ?? -1) >= cutoffEpoch
   };
 }
 

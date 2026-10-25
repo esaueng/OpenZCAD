@@ -1283,12 +1283,22 @@ describe('device removal across encrypted projects', () => {
     expect(keyEpochOf(srv, projectId)).toBe(before);
 
     // The laptop, the replacement, rejoins and removes the phone's leaf in
-    // the same external Commit.
+    // the same external Commit; a member Commit follows, which the Worker
+    // counts as the rotation (#908 review).
     laptop.offline = false;
     laptop.after = undefined;
     use(laptop, state);
     const joined = await joinProjectGroup(laptop.groups, projectId);
-    expect(joined.keyEpoch).toBe(before + 1);
+    expect(joined.keyEpoch).toBe(before + 2);
+    expect(
+      (
+        srv.db
+          .prepare(
+            'SELECT kind FROM e2ee_mls_commits WHERE project_id = ? ORDER BY epoch DESC LIMIT 2'
+          )
+          .all(projectId) as { kind: string }[]
+      ).map((row) => row.kind)
+    ).toEqual(['commit', 'external']);
     const status = await laptop.sessions.status({
       userId: USER,
       deviceId: deviceIdOf(laptop),
@@ -1298,7 +1308,7 @@ describe('device removal across encrypted projects', () => {
     const cutoff = (
       await projectRevocationCutoffs(laptop.groups, projectId)
     ).get(phoneId)!;
-    expect(cutoff.keyEpoch).toBe(joined.keyEpoch);
+    expect(cutoff.keyEpoch).toBe(before + 1);
     // Then the desktop rejoins with a PSK from after the removal.
     await saveEdit(desktop, projectId, 'Desktop now');
     expect((await laptop.store.loadProject(projectId)).name).toBe(
