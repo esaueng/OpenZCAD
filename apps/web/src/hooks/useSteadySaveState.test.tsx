@@ -80,6 +80,22 @@ describe('useSteadySaveState', () => {
     expect(result.current).toBe('saving');
   });
 
+  it("does not carry one project's Syncing into the next project's save", () => {
+    const { result, rerender } = render('synced', 'p1');
+    rerender({ state: 'syncing', projectId: 'p1' });
+    act(() => {
+      vi.advanceTimersByTime(700);
+    });
+    expect(result.current).toBe('syncing');
+    // Still in flight as the next project opens with its own device save.
+    rerender({ state: 'saving', projectId: 'p2' });
+    expect(result.current).toBe('saving');
+    act(() => {
+      vi.advanceTimersByTime(700);
+    });
+    expect(result.current).toBe('saving');
+  });
+
   it('does not hold a reopened project’s state from its last opening', () => {
     const { result, rerender } = render('synced', 'p1');
     rerender({ state: 'synced', projectId: null });

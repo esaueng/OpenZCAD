@@ -3037,6 +3037,12 @@ export function ModelViewer({
       /** Pressed on the armed offset face: travel drags it instead. */
       faceGrab?: boolean;
     } | null = null;
+    /**
+     * A press on the offset handle while its release validates. Held to its
+     * own release, which would otherwise fall through to a selection click
+     * on the face beneath and re-arm the handle mid-validation.
+     */
+    let lockedHandlePointerId: number | null = null;
     /** Pointer whose Shift+left-drag is currently routed to camera orbit. */
     let shiftOrbitPointerId: number | null = null;
     let faceDrag: FaceDragState | null = null;
@@ -8649,6 +8655,8 @@ export function ModelViewer({
           handleHits.length > 0 ? null : regionFollowerUnderRay();
         if (handleHits.length > 0 || follower) {
           if (offsetHandleRef.current?.locked) {
+            lockedHandlePointerId = event.pointerId;
+            gestures.capture(event, null);
             event.preventDefault();
             return;
           }
@@ -8822,6 +8830,11 @@ export function ModelViewer({
       if (event.pointerId === shiftOrbitPointerId) {
         shiftOrbitPointerId = null;
         cameraRig.setShiftOrbitActive(false);
+      }
+      if (event.pointerId === lockedHandlePointerId) {
+        lockedHandlePointerId = null;
+        gestures.release(event, null);
+        return;
       }
       if (boxSelect && event.pointerId === boxSelect.pointerId) {
         const started = boxSelect;
@@ -9433,6 +9446,10 @@ export function ModelViewer({
         return;
       }
       pendingHoverEvent = null;
+      if (event.pointerId === lockedHandlePointerId) {
+        lockedHandlePointerId = null;
+        gestures.release(event, null);
+      }
       if (sketchMoveRef.current?.pointerId === event.pointerId) {
         const drag = sketchMoveRef.current;
         gestures.release(event, '');

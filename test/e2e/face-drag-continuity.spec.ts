@@ -12,6 +12,7 @@ import { test, expect, stubApi } from './openzcad-fixtures';
 declare global {
   interface Window {
     __faceDragLog?: { t: number; name: string; value: string | null }[];
+    __holdFinal?: { hold: boolean; held: number; release(): void };
   }
 }
 
@@ -171,6 +172,77 @@ test('the handle stays on screen from release through the commit', async ({
   // where it used to fade out on release and back in after the commit.
   await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
   expect(await removals(page, 'data-e2e-handle-x', released)).toBe(0);
+});
+
+/** Holds the worker's complete-rebuild replies, so a release stays validating. */
+async function holdValidation(page: Page) {
+  await page.addInitScript(() => {
+    const finals: (() => void)[] = [];
+    window.__holdFinal = {
+      hold: false,
+      held: 0,
+      release() {
+        this.hold = false;
+        for (const deliver of finals.splice(0)) deliver();
+      }
+    };
+    const descriptor = Object.getOwnPropertyDescriptor(
+      Worker.prototype,
+      'onmessage'
+    )!;
+    Object.defineProperty(Worker.prototype, 'onmessage', {
+      ...descriptor,
+      set(listener: (event: MessageEvent) => void) {
+        descriptor.set!.call(this, (event: MessageEvent) => {
+          const result = event.data as { type?: string; requestId?: string };
+          const gate = window.__holdFinal!;
+          if (
+            gate.hold &&
+            result.type === 'sync' &&
+            typeof result.requestId === 'string'
+          ) {
+            gate.held += 1;
+            finals.push(() => listener.call(this, event));
+          } else listener.call(this, event);
+        });
+      }
+    });
+  });
+}
+
+test('a press on the handle while its release validates changes nothing', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  await holdValidation(page);
+  const { canvas, handle } = await armedBox(page);
+  await page.evaluate(() => {
+    window.__holdFinal!.hold = true;
+  });
+  const endX = handle.x + handle.dx * handle.pixels * 3;
+  const endY = handle.y + handle.dy * handle.pixels * 3;
+  await page.mouse.move(handle.x, handle.y);
+  await page.mouse.down();
+  await page.mouse.move(endX, endY, { steps: 12 });
+  await expect(canvas).toHaveAttribute('data-e2e-height-proxy-offset', '3');
+  await page.mouse.up();
+  const card = page.getByRole('region', { name: 'Offset Face operation' });
+  await expect
+    .poll(() => page.evaluate(() => window.__holdFinal!.held))
+    .toBe(1);
+  await expect(card).toContainText('Validating');
+  // The held handle sits over the face. Its release used to fall through to
+  // a selection click on that face and re-arm it mid-validation.
+  await page.mouse.click(endX, endY);
+  await page.waitForTimeout(300);
+  await expect(card).toContainText('Validating');
+  await page.evaluate(() => window.__holdFinal!.release());
+  await expect(page.getByText('Offset face by', { exact: false })).toBeVisible({
+    timeout: 30_000
+  });
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Offset face' })
+  ).toHaveCount(1);
 });
 
 test('dragging the selected face itself pushes it, as the arrow does', async ({
