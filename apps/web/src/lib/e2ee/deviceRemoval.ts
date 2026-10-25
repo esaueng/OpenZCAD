@@ -448,8 +448,16 @@ export function removalParticipant(
     async written(step) {
       if (step.kind !== 'device' || !listed?.length) return;
       try {
+        // Listed again now: the device list already revokes the device, so
+        // its Commits are fenced off and these epochs are past anything it
+        // committed. Only when that request fails does the listing from
+        // before the identity key was opened stand in.
+        const current = await api
+          .list()
+          .then((answer) => answer.projects)
+          .catch(() => listed!);
         const cutoffs: ProjectRevocationCutoff[] = [];
-        for (const project of listed) {
+        for (const project of current) {
           const head = await cutoffHead(options.pins, step.userId, project);
           cutoffs.push({
             projectId: project.projectId,

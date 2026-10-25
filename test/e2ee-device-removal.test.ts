@@ -703,6 +703,65 @@ describe('device removal across encrypted projects', () => {
     );
   });
 
+  it('signs the fallback cutoff past a Commit that landed before the write (#894 review)', async () => {
+    const { srv, recovery, laptop, desktop, phone, projects } =
+      await threeDevices(1);
+    const projectId = projects[0]!;
+    await saveEdit(phone, projectId, 'Phone edit');
+    const phoneId = deviceIdOf(phone);
+    // While the identity key is being opened, the desktop joins (a Commit);
+    // after the device list lands, the reload fails.
+    const real = laptop.fetcher;
+    let joined = false;
+    let appended = false;
+    laptop.fetcher = async (path, init = {}) => {
+      if (!joined && path === '/api/e2ee/device-list' && init.method === 'POST') {
+        joined = true;
+        await saveEdit(desktop, projectId, 'Desktop edit');
+      }
+      if (appended && path === '/api/e2ee/account') {
+        throw new TypeError('Failed to fetch');
+      }
+      const response = await real(path, init);
+      if (path === '/api/e2ee/device-list' && init.method === 'POST') {
+        appended = true;
+      }
+      return response;
+    };
+    const pending = memoryPendingCutoffs();
+    const { participant } = participantFor(laptop, pending);
+    await expect(
+      removeDevice(
+        laptop.e2ee,
+        laptop.account,
+        phoneId,
+        recovery.secret,
+        participant
+      )
+    ).rejects.toBeDefined();
+    expect(joined).toBe(true);
+    laptop.fetcher = real;
+    const epochNow = keyEpochOf(srv, projectId);
+    expect(
+      await storePendingCutoffs(
+        createRevocationCutoffsApi((path, init) => laptop.fetcher(path, init)),
+        pending,
+        USER
+      )
+    ).toBe(0);
+    const { statements } = await statementsOf(srv);
+    const statement = await verifyRevocationCutoffs(
+      {
+        statement: fromBase64Url(statements[0]!.statement),
+        signature: fromBase64Url(statements[0]!.signature)
+      },
+      ready(await loadEncryption(laptop.e2ee)).list,
+      { generation: 1 }
+    );
+    // Past the desktop's Commit, not the epoch prepare listed.
+    expect(statement.cutoffs[0]!.cutoffEpoch).toBe(epochNow + 1);
+  });
+
   it('keeps a signed cutoff when the reload after the device-list write fails (#894 review)', async () => {
     const { srv, recovery, laptop, desktop, phone, projects } =
       await threeDevices(1);
