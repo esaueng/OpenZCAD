@@ -1418,6 +1418,18 @@ export function useInPlaceCommand(
     (quiet = false) => {
       if (!spec) return;
       const editing = editRef.current;
+      // A Done still validating cannot be taken back: Cancel would say
+      // nothing was added (or changed) and the commit could land after.
+      // It waits for the outcome instead; a quiet close (another command,
+      // a replaced document) lets the commit report for itself.
+      if (committingRef.current && !quiet) {
+        optionsRef.current.onStatus(
+          editing
+            ? `${editing.name} is still being saved · wait for it to finish.`
+            : `${spec.title} is still being added · wait for it to finish.`
+        );
+        return;
+      }
       end();
       if (!quiet) {
         optionsRef.current.onStatus(
