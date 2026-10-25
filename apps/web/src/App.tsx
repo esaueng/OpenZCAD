@@ -9719,6 +9719,8 @@ export function App() {
   /** Image file choices still being read, and older ones set aside. */
   const referenceImagesInFlightRef = useRef(0);
   const staleReferenceImagesRef = useRef<PreparedReferenceImage[]>([]);
+  /** Image byte releases, run one after another. */
+  const referenceImageReleasesRef = useRef<Promise<void>>(Promise.resolve());
   /** The picture an in-place Image is placing, until Done or Cancel. */
   const pendingReferenceImageRef = useRef<PreparedReferenceImage | null>(
     null
@@ -9776,8 +9778,13 @@ export function App() {
     referenceImagePlaneRef.current = null;
     setStatus(`Placing ${file.name}…`);
     try {
-      const { discardReferenceImageBytes, prepareReferenceImage } =
-        await import('./lib/referenceImageInsert');
+      const { prepareReferenceImage } = await import(
+        './lib/referenceImageInsert'
+      );
+      // A release still running (an earlier picture let go) finishes first,
+      // so reading the same file again stores its bytes afresh rather than
+      // finding bytes about to be deleted.
+      await referenceImageReleasesRef.current;
       const prepared = await prepareReferenceImage({
         file,
         document: current,
@@ -9817,15 +9824,11 @@ export function App() {
         const previous = pendingReferenceImageRef.current;
         const sameFile =
           previous?.image.source.checksumSha256 === image.source.checksumSha256;
-        if (previous && !sameFile) {
-          void discardReferenceImageBytes(previous, [
-            managerRef.current?.document
-          ]);
-        }
         pendingReferenceImageRef.current =
           previous && sameFile && previous.bytesCreated
             ? { ...prepared, bytesCreated: true }
             : prepared;
+        if (previous && !sameFile) releaseReferenceImageBytes(previous);
         inPlaceRef.current.cancel(true);
         cancelPanel();
         retireStatusMessage();
@@ -9833,9 +9836,7 @@ export function App() {
           image: slot
         });
       } else {
-        await discardReferenceImageBytes(prepared, [
-          managerRef.current?.document
-        ]);
+        releaseReferenceImageBytes(prepared);
       }
     } catch (error) {
       setStatus(errorMessage(error, 'The image could not be placed.'));
@@ -9853,23 +9854,37 @@ export function App() {
   function releaseStaleReferenceImages() {
     const stale = staleReferenceImagesRef.current;
     staleReferenceImagesRef.current = [];
-    for (const prepared of stale) {
-      const pending = pendingReferenceImageRef.current;
-      if (
-        pending &&
-        pending.image.source.checksumSha256 ===
-          prepared.image.source.checksumSha256
-      ) {
-        if (prepared.bytesCreated && !pending.bytesCreated) {
-          pendingReferenceImageRef.current = { ...pending, bytesCreated: true };
+    for (const prepared of stale) releaseReferenceImageBytes(prepared);
+  }
+
+  /**
+   * Lets one picture's stored bytes go, in order with every other release,
+   * unless a record or the picture being placed still reads them; the
+   * picture being placed, when it is the same file, takes over the duty to
+   * release them instead.
+   */
+  function releaseReferenceImageBytes(prepared: PreparedReferenceImage) {
+    const checksum = prepared.image.source.checksumSha256;
+    referenceImageReleasesRef.current = referenceImageReleasesRef.current
+      .then(async () => {
+        const pending = pendingReferenceImageRef.current;
+        if (pending?.image.source.checksumSha256 === checksum) {
+          if (prepared.bytesCreated && !pending.bytesCreated) {
+            pendingReferenceImageRef.current = {
+              ...pending,
+              bytesCreated: true
+            };
+          }
+          return;
         }
-        continue;
-      }
-      void import('./lib/referenceImageInsert').then(
-        ({ discardReferenceImageBytes }) =>
-          discardReferenceImageBytes(prepared, [managerRef.current?.document])
-      );
-    }
+        const { discardReferenceImageBytes } = await import(
+          './lib/referenceImageInsert'
+        );
+        await discardReferenceImageBytes(prepared, [
+          managerRef.current?.document
+        ]);
+      })
+      .catch(() => undefined);
   }
 
   /** Where an image's plane lies in the live document, for placing one. */
@@ -9910,12 +9925,7 @@ export function App() {
       setStatus(`${image.name} placed.`);
       return;
     }
-    if (prepared) {
-      void import('./lib/referenceImageInsert').then(
-        ({ discardReferenceImageBytes }) =>
-          discardReferenceImageBytes(prepared, [managerRef.current?.document])
-      );
-    }
+    if (prepared) releaseReferenceImageBytes(prepared);
   }
 
   function applyReferenceImage(update: ReferenceImageUpdateInput): boolean {
@@ -19176,10 +19186,7 @@ export function App() {
     const pending = pendingReferenceImageRef.current;
     if (!pending) return;
     pendingReferenceImageRef.current = null;
-    void import('./lib/referenceImageInsert').then(
-      ({ discardReferenceImageBytes }) =>
-        discardReferenceImageBytes(pending, [managerRef.current?.document])
-    );
+    releaseReferenceImageBytes(pending);
   }, [inPlace.tool]);
   /** Whether the value a command keypad opened on had been set by the user. */
   const commandKeypadTouchedRef = useRef(false);
