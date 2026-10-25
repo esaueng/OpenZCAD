@@ -16245,6 +16245,10 @@ export function App() {
     kind: 'face' | 'edge'
   ) {
     if (selections.length === 0) {
+      // A sweep during an in-place Fillet or Chamfer only adds edges, so
+      // one that caught none leaves its edges, and their highlight, as
+      // they were rather than clearing the selection under them.
+      if (kind === 'edge' && inPlaceRef.current.spec?.edgeMode) return;
       // An empty sweep is an empty sweep, whatever the filter.
       handleBoxSelectFromViewer([]);
       return;

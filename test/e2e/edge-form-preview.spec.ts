@@ -115,7 +115,9 @@ test('a fillet takes another edge after creation from its History row', async ({
   await expect(page.getByTitle('Feature failed to build')).toHaveCount(0);
 });
 
-test('a box sweep during Fillet adds the edges it catches', async ({ page }) => {
+test('a box sweep during Fillet adds the edges it catches', async ({
+  page
+}) => {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Fillet sweep');
@@ -139,6 +141,17 @@ test('a box sweep during Fillet adds the edges it catches', async ({ page }) => 
   });
   await page.mouse.up();
   await expect(bar).toContainText('2 edges');
+  const highlighted = await canvas.getAttribute('data-e2e-selected-edges');
+  expect(highlighted?.split(',')).toHaveLength(2);
+  // A sweep that catches nothing leaves the held edges, highlight and all.
+  await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.12);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.22, {
+    steps: 6
+  });
+  await page.mouse.up();
+  await expect(bar).toContainText('2 edges');
+  await expect(canvas).toHaveAttribute('data-e2e-selected-edges', highlighted!);
   await enterCommandValue(page, 'radius', '1');
   await finishInPlaceCommand(page, 'Fillet');
   await expect(
