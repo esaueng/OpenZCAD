@@ -745,8 +745,7 @@ describe('turning an encrypted project back into plaintext', () => {
           PROJECT_MIGRATING_CODE
         );
         // Nor may it be shared meanwhile: share links (5-10, gated ahead of
-        // that slice), proposals
-        // (5-5), invitations and KeyPackages (5-3a).
+        // that slice), proposals (5-5), invitations and KeyPackages (5-3a).
         for (const [method, path] of [
           ['POST', 'share-links'],
           ['PUT', 'share-links/share_1/snapshot'],
