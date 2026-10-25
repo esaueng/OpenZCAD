@@ -8,7 +8,6 @@ import type {
   FeatureKind,
   ParamValue,
   PlaneId,
-  RevolveAxis,
   UnitSystem
 } from '@openzcad/shared';
 
@@ -214,11 +213,6 @@ export const PLANE_LABELS: Record<PlaneId, string> = {
   XZ: 'Front (XZ)',
   XY: 'Top (XY)',
   YZ: 'Right (YZ)'
-};
-
-export const REVOLVE_AXIS_LABELS: Record<RevolveAxis, string> = {
-  vertical: 'Sketch vertical axis',
-  horizontal: 'Sketch horizontal axis'
 };
 
 export function inferContentType(fileName: string): string {

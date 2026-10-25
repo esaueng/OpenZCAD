@@ -139,13 +139,10 @@ function makeProps(
     selectedBody: body,
     selectedTopology: frontFace,
     selectedEdges: [],
-    edgeModifierBody: null,
     scope: {},
     sketches: [],
     bodies: [{ bodyId, name: body.name, consumed: false }],
     units: 'mm',
-    selectedBodyIds: [bodyId],
-    preferredSketchId: null,
     commandSession: {
       id: 'fillet',
       title: 'Fillet',
@@ -158,15 +155,7 @@ function makeProps(
     // 'direct pick details' below pins that it stays closed until then.
     directPickDetails: true,
     onLaunchTool: vi.fn(),
-    onSelectBodies: vi.fn(),
     onCancel: vi.fn(),
-    onCreateRevolve: vi.fn(),
-    onCreateBoolean: vi.fn(),
-    onCreateTransform: vi.fn(),
-    onCreateEdgeModifier: vi.fn(),
-    onSelectAllEdges: vi.fn(),
-    onClearSelectedEdges: vi.fn(),
-    onCreatePattern: vi.fn(),
     onApplyPrimitive: vi.fn(),
     onApplySketch: vi.fn(),
     onConvertSketchToFixedPlane: vi.fn(),
@@ -175,12 +164,7 @@ function makeProps(
     onApplyExtrude: vi.fn(),
     onPreviewExtrude: vi.fn(),
     extrudeTargets: [],
-    onApplyRevolve: vi.fn(),
-    onApplyBoolean: vi.fn(),
     onApplyTransform: vi.fn(),
-    onApplyEdgeModifier: vi.fn(),
-    onPreviewEdgeModifier: vi.fn(),
-    onApplyPattern: vi.fn(),
     onResizeThroughHole: vi.fn(),
     onRemoveFaceFeature: vi.fn(),
     onPinFeature: vi.fn(),
@@ -538,91 +522,6 @@ describe('primitive card position', () => {
       z: 0
     });
     expect(listFeaturesInOrder(manager.document)).toHaveLength(2);
-  });
-});
-
-describe('creating an edge modifier while the target settles', () => {
-  // While a rebuild's analysis is pending — arming the tool or picking edges
-  // demands lineage, which starts one — App hands the card no target body and
-  // no edges, then restores both. A card keyed by its body remounted on each
-  // flip and replaced a typed size with the default: an all-edges fillet
-  // typed as 99 was created with radius 2.
-  const rimEdges: TopologySelection[] = [11, 12].map((hash) => ({
-    bodyId,
-    kind: 'edge',
-    topologyId: `edge:${hash}`,
-    hash
-  }));
-  const cylinder: BodyRepresentation = {
-    ...body,
-    source: 'primitive',
-    topology: {
-      faces: body.topology!.faces,
-      edges: [11, 12].map((hash) => ({
-        topologyId: `edge:${hash}`,
-        hash,
-        points: []
-      }))
-    }
-  };
-  const settling = (kind: 'fillet' | 'chamfer') =>
-    makeProps({
-      tool: kind,
-      selectedFeature: null,
-      selectedTopology: null,
-      commandSession: null,
-      edgeModifierBody: null,
-      selectedEdges: []
-    });
-  const settled = { edgeModifierBody: cylinder, selectedEdges: rimEdges };
-
-  it.each(['fillet', 'chamfer'] as const)(
-    'keeps a %s size typed before the edge selection arrives',
-    (kind) => {
-      const props = settling(kind);
-      const { rerender } = render(<Inspector {...props} />);
-      const size = screen.getByRole('textbox', {
-        name: kind === 'fillet' ? 'Radius' : 'Distance'
-      });
-      fireEvent.change(size, { target: { value: '99' } });
-
-      rerender(<Inspector {...props} {...settled} />);
-      expect(size).toBeInTheDocument();
-      expect(size).toHaveValue('99');
-      // A later pending snapshot drops the target again and restores it.
-      rerender(<Inspector {...props} />);
-      rerender(<Inspector {...props} {...settled} />);
-      expect(size).toHaveValue('99');
-      expect(props.onPreviewEdgeModifier).toHaveBeenLastCalledWith(
-        null,
-        kind,
-        expect.objectContaining({ size: 99, edgeHashes: [11, 12] })
-      );
-
-      fireEvent.submit(
-        screen.getByRole('button', { name: /Create/ }).closest('form')!
-      );
-      expect(props.onCreateEdgeModifier).toHaveBeenCalledExactlyOnceWith(
-        kind,
-        expect.objectContaining({ size: 99, edgeHashes: [11, 12] })
-      );
-    }
-  );
-
-  it('keeps the default size when the user typed nothing', () => {
-    const props = settling('fillet');
-    const { rerender } = render(<Inspector {...props} />);
-    rerender(<Inspector {...props} {...settled} />);
-    rerender(<Inspector {...props} />);
-    rerender(<Inspector {...props} {...settled} />);
-    expect(screen.getByRole('textbox', { name: 'Radius' })).toHaveValue('2');
-    fireEvent.submit(
-      screen.getByRole('button', { name: /Create/ }).closest('form')!
-    );
-    expect(props.onCreateEdgeModifier).toHaveBeenCalledExactlyOnceWith(
-      'fillet',
-      expect.objectContaining({ size: 2, edgeHashes: [11, 12] })
-    );
   });
 });
 
@@ -1254,7 +1153,6 @@ describe('Inspector sketch editing (S04)', () => {
       selectedSketchObject: first?.kind === 'sketch-object' ? first.data : null,
       selectedBody: null,
       selectedTopology: null,
-      selectedBodyIds: [],
       commandSession: null,
       featureSelectionSource: 'pinned'
     });

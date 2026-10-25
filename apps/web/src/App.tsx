@@ -77,9 +77,10 @@ import {
   viewImageScope
 } from './lib/imageExport';
 import { FeatureBuildError } from './lib/featureValidation';
-import { edgeModifierCommand } from './lib/edgeModifierEdit';
-import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
-import type { FaceNamer } from './lib/faceProducerName';
+import {
+  edgeModifierCommand,
+  type EdgeModifierFormValue
+} from './lib/edgeModifierEdit';
 import {
   datumPlaneSources,
   documentNodesWithHistory,
@@ -99,7 +100,6 @@ import {
   saveImportedProject
 } from './lib/localProjectStore';
 import {
-  Fragment,
   Suspense,
   useCallback,
   useEffect,
@@ -325,15 +325,6 @@ import {
   sketchUsesProjectionGeometry
 } from './lib/sketch/releaseGeometry';
 import { textPlacementBudgetError } from './lib/sketch/textPlacement';
-import {
-  modelingOperationNeedsPlanarFaces,
-  modelingOperationPicksFaces,
-  resolveFormFaceBox,
-  resolveFormFacePick,
-  formFaceListOperation,
-  type FacePickOperation,
-  type FormFacePick
-} from './lib/holeFacePick';
 import { prefersSavingData } from './lib/saveData';
 import { useSurfaceReady } from './hooks/useSurfaceReady';
 import {
@@ -765,7 +756,6 @@ import {
   type LabelSegment
 } from './lib/topologyLabels';
 import type { FeatureSelectionSource } from './lib/inspectorHeading';
-import { CARD_EYEBROWS } from './lib/cardEyebrows';
 import type {
   CommandDiagnostic,
   InteractionState
@@ -1098,13 +1088,6 @@ const LazySelectionCard = lazyWithStaleChunkNotice(() =>
     default: module.SelectionCard
   }))
 );
-// A modeling feature's History card reads out its body, as every other
-// feature's card does; the readout lives in the Inspector's chunk.
-const LazyBodyMeasurements = lazyWithStaleChunkNotice(() =>
-  import('./components/Inspector').then((module) => ({
-    default: module.BodyStats
-  }))
-);
 const LazySelectionRefusal = lazyWithStaleChunkNotice(() =>
   import('./components/SelectionCard').then((module) => ({
     default: module.SelectionRefusal
@@ -1264,11 +1247,6 @@ const LazyInspector = lazyWithStaleChunkNotice(() =>
     default: module.Inspector
   }))
 );
-const LazyModelingOperationsForm = lazyWithStaleChunkNotice(() =>
-  import('./components/forms/ModelingOperationsForm').then((module) => ({
-    default: module.ModelingOperationsForm
-  }))
-);
 const LazySketchPlanePrompt = lazyWithStaleChunkNotice(() =>
   import('./components/SketchPlanePrompt').then((module) => ({
     default: module.SketchPlanePrompt
@@ -1309,8 +1287,6 @@ const CommandCard = withSuspense(LazyCommandCard);
 const SelectionCard = withSuspense(LazySelectionCard);
 
 const SelectionRefusal = withSuspense(LazySelectionRefusal);
-
-const BodyMeasurements = withSuspense(LazyBodyMeasurements);
 
 const WorkspaceTour = withSuspense(LazyWorkspaceTour);
 
@@ -1386,8 +1362,6 @@ function Inspector(props: ComponentProps<typeof LazyInspector>) {
     </Suspense>
   );
 }
-
-const ModelingOperationsForm = withSuspense(LazyModelingOperationsForm);
 
 const SketchPlanePrompt = withSuspense(LazySketchPlanePrompt);
 
@@ -1530,17 +1504,10 @@ import {
   type AffectedFeatureTarget
 } from './lib/affectedFeatureTargets';
 import {
-  holePositionAnchor,
-  holePreview,
-  type HolePreview
-} from './lib/holeGhost';
-import { holePositionFromPick } from './lib/holePositionAxes';
-import {
   failedHistoryExportBodies,
   withheldExportMessage,
   type WithheldExportBody
 } from './lib/failedHistoryExport';
-import type { HoleDraft } from './components/forms/ModelingOperationsForm';
 import { extrudeSketchGuidance } from './lib/extrudeGuidance';
 import {
   settleSuppressionNotice,
@@ -1608,25 +1575,17 @@ import {
   buildModelingOperationSubmission,
   modelingFaceOptions,
   type EditableModelingFeatureData,
-  modelingFeatureIsEditable,
-  modelingFeatureEditReferences,
   modelingFeatureUpdate,
-  modelingFormStateFromFeature,
-  modelingOperationDisabledReason,
-  type ModelingOperationKind,
   type ModelingOperationFormState,
-  type ModelingOperationSubmission,
-  type ModelingPathOption,
-  type ModelingProfileOption
+  type ModelingOperationSubmission
 } from './lib/modelingOperations';
 import {
   advanceEditCardSession,
   editCardSessionMatches,
   type EditCardSession
 } from './lib/editCardLifecycle';
-import { CardHeader, CardSkeleton } from './components/CardHeader';
+import { CardSkeleton } from './components/CardHeader';
 import { useCommandCardPrefetch } from './lib/cardChunkPrefetch';
-import { PanelOverflow } from './components/PanelOverflow';
 import {
   clearActiveProject,
   rememberActiveProject,
@@ -2653,13 +2612,6 @@ export function App() {
     /** Requested vertex roles are staged without touching the document. */
     vertices?: DatumVertexRepairSession;
   } | null>(null);
-  const [formFacePickTarget, setFormFacePickTarget] = useState<BodyId | null>(
-    null
-  );
-  const [viewportFormFacePick, setViewportFormFacePick] =
-    useState<FormFacePick | null>(null);
-  /** The in-card sweep waiting for the form's complete accepted face list. */
-  const pendingFormFaceSweepRef = useRef<FormFacePick | null>(null);
   /** Null means the active tool decides what picking is narrowed to. */
   const [manualSelectionFilter, setManualSelectionFilter] =
     useState<SelectionFilter | null>(null);
@@ -2728,37 +2680,14 @@ export function App() {
     useState<BodyAppearancePreview | null>(null);
   const [moveSnap, setMoveSnap] = useState<MoveSnap | null>(null);
   const [tool, setTool] = useState<ToolId | null>(null);
-  const [modelingTargetBodyId, setModelingTargetBodyId] =
-    useState<BodyId | null>(null);
-  /**
-   * The feature a modeling form is editing, when it was opened from a
-   * history row rather than a tool tile. Null while creating. The form is
-   * the same one; only the command it commits differs.
-   */
-  /** The open Hole card's values, for the bore the viewport draws. */
-  const [holeDraft, setHoleDraft] = useState<HoleDraft | null>(null);
   /** A primitive's footprint is being drawn: its arrows wait for the release. */
   const [footprintDragging, setFootprintDragging] = useState(false);
   /**
-   * The last ghost and what it was computed from. A through hole scans the
-   * body's mesh for its depth, which is not work to redo on every render.
+   * The datum plane or axis its card is editing, when it was opened from a
+   * history row rather than a tool tile. Null while creating.
    */
-  const holeGhostCache = useRef<{
-    key: string;
-    body: unknown;
-    preview: HolePreview;
-  } | null>(null);
   const [modelingEditFeature, setModelingEditFeature] =
     useState<FeatureNode | null>(null);
-  /** The fillet/chamfer form's current size, mirrored onto the edge handle. */
-  const [edgeFormSize, setEdgeFormSize] = useState<number | null>(null);
-  /**
-   * The card's typed fillet/chamfer size did not build in preview. The handle
-   * on the edge kept showing "R 5 mm" like any good value while the only word
-   * of the refusal was in the lane, so it is carried to the handle's warning
-   * state and to the card.
-   */
-  const [edgeFormPreviewRefused, setEdgeFormPreviewRefused] = useState(false);
   /**
    * A fillet that just landed from an edge drag: its new blend face is picked
    * on the next topology so the radius stays live instead of the gesture
@@ -2767,19 +2696,6 @@ export function App() {
   const pendingBlendRearmRef = useRef<{
     bodyId: BodyId;
     before: BodyTopology['faces'] | undefined;
-  } | null>(null);
-  useEffect(() => {
-    if (!modelingOperationPicksFaces(tool)) {
-      setFormFacePickTarget(null);
-      setViewportFormFacePick(null);
-    }
-  }, [tool]);
-  const modelingPreflightRef = useRef<{
-    signature: string;
-    command: AnyCommand;
-    resultBodyId: BodyId;
-    featureName: string;
-    baseVersion: number;
   } | null>(null);
   const [sketchConstruction, setSketchConstruction] = useState(false);
   /**
@@ -4574,13 +4490,6 @@ export function App() {
               warning ??
                 (valid ? null : 'This extrusion did not produce a valid body.')
             );
-          } else if (edgeFormCandidate.current) {
-            setEdgeFormPreviewRefused(!valid);
-            setFeatureFormError(
-              valid
-                ? null
-                : (warning ?? 'This size did not produce a valid body.')
-            );
           }
           // In the card's own verb: with a tool open this is its create
           // card, whose button says Create; an edit card's says Apply.
@@ -4597,9 +4506,6 @@ export function App() {
         const message = errorMessage(error, 'Unable to preview this size.');
         if (edgeFormCandidate.current?.extrude) {
           setFeatureFormError(message);
-        } else if (edgeFormCandidate.current) {
-          setEdgeFormPreviewRefused(true);
-          setFeatureFormError(message);
         }
         setStatus(message);
       },
@@ -4611,7 +4517,6 @@ export function App() {
   useEffect(() => {
     edgeFormPreview.clear();
     edgeFormCandidate.current = null;
-    setEdgeFormPreviewRefused(false);
     return () => edgeFormPreview.clear();
   }, [
     edgeFormPreview,
@@ -4620,38 +4525,6 @@ export function App() {
     tool,
     requestedFeatureNodeId
   ]);
-
-  function previewEdgeForm(
-    feature: FeatureNode | null,
-    kind: 'fillet' | 'chamfer',
-    value: EdgeModifierFormValue | null
-  ) {
-    // A new value has not been refused yet.
-    setEdgeFormPreviewRefused(false);
-    if (!value || geometryBusy) {
-      edgeFormPreview.clear();
-      setEdgeFormSize(null);
-      return;
-    }
-    try {
-      const command = edgeModifierCommand(feature, kind, value);
-      const bodyId =
-        feature?.bodyId ??
-        ('ids' in command.payload ? command.payload.ids?.bodyId : undefined);
-      if (!bodyId || !managerRef.current) return;
-      command.validate(managerRef.current.document);
-      edgeFormCandidate.current = { command, bodyId };
-      const size = resolveParamValue(
-        value.size,
-        getParameterScope(managerRef.current.document).scope
-      );
-      setEdgeFormSize(size);
-      edgeFormPreview.request(size);
-    } catch (error) {
-      edgeFormPreview.clear();
-      setStatus(errorMessage(error, 'Unable to preview this size.'));
-    }
-  }
 
   function previewExtrudeForm(
     feature: FeatureNode,
@@ -4706,67 +4579,6 @@ export function App() {
       cancelled: () =>
         request !== extrudeEditRequest.current ||
         !editSessionIsCurrent(feature, editSession)
-    }).then((outcome) => {
-      if (outcome !== 'committed') edgeFormPreview.clear();
-    });
-  }
-
-  function applyEdgeForm(
-    feature: FeatureNode | null,
-    kind: 'fillet' | 'chamfer',
-    value: EdgeModifierFormValue
-  ) {
-    if (geometryBusy) return;
-    const editSession = editCardSessionRef.current;
-    // K05 on-demand probe: a pick made before the demanded rebuild arrived
-    // carries no lineage name, so the form holds no `edgeReferences` at all
-    // (they are all-or-nothing). Re-read CURRENT lineage by hash at commit
-    // time and use it only when every picked edge resolves to a named
-    // reference for that same hash; otherwise commit exactly what the form
-    // holds.
-    const formBody =
-      representations[value.targetBodyId] ??
-      renderedRepresentations[value.targetBodyId];
-    const namedReferences = refreshEdgeFormReferencesForCommit(
-      formBody,
-      value.edgeHashes,
-      value.edgeReferences
-    );
-    const refreshedValue = {
-      ...(namedReferences
-        ? { ...value, edgeReferences: namedReferences }
-        : value),
-      // Edits keep their name; a new fillet is numbered past any other.
-      name: feature ? value.name : newFeatureName(value.name)
-    };
-    const command = edgeModifierCommand(feature, kind, refreshedValue);
-    const bodyId =
-      feature?.bodyId ??
-      ('ids' in command.payload ? command.payload.ids?.bodyId : undefined);
-    if (!bodyId || !doc) return;
-    // As for Extrude: the preview stays until the commit or a refusal.
-    edgeFormPreview.stop();
-    setEdgeFormSize(null);
-    void executeValidatedFeature(command, {
-      featureName: refreshedValue.name,
-      resultBodyId: bodyId,
-      ...(feature
-        ? {
-            targets: affectedFeatureTargets(doc, feature.featureId).map(
-              (target, index) =>
-                index === 0 ? { ...target, featureName: value.name } : target
-            )
-          }
-        : {}),
-      successMessage: `${refreshedValue.name} applied.`,
-      onSuccess: () => {
-        edgeFormPreview.clear();
-        if (feature) finishFeatureEdit(feature, editSession);
-        else finishFeatureCreation();
-      },
-      ...(feature
-        ? { cancelled: () => !editSessionIsCurrent(feature, editSession) }
-        : {})
     }).then((outcome) => {
       if (outcome !== 'committed') edgeFormPreview.clear();
     });
@@ -6443,31 +6255,6 @@ export function App() {
   // Text profiles resolve faces synchronously on this thread as well as in the
   // worker, so the faces this document names have to be parsed here too.
   const textFontsVersion = useDocumentFonts(doc ?? null);
-
-  /**
-   * Face lists name a face after the feature that made it ("Box 2 · top").
-   * The namer is its own chunk, kept out of the entry: it starts loading as
-   * the app comes up, long before any face list opens, and until it lands
-   * (or if it never does) a list keeps the viewport's names.
-   */
-  const [faceNamerFor, setFaceNamerFor] = useState<
-    ((document: ProjectDocument) => FaceNamer) | null
-  >(null);
-  useEffect(() => {
-    let live = true;
-    import('./lib/faceProducerName')
-      .then((module) => {
-        if (live) setFaceNamerFor(() => module.faceNamerFor);
-      })
-      .catch(() => undefined);
-    return () => {
-      live = false;
-    };
-  }, []);
-  const faceNamer = useMemo(
-    () => (doc && faceNamerFor ? faceNamerFor(doc) : undefined),
-    [doc, faceNamerFor]
-  );
 
   const representations = useMemo(
     () => doc?.derived.bodyRepresentations ?? {},
@@ -9626,9 +9413,6 @@ export function App() {
     // Only after Apply/Discard: Cancel must leave the Move's target and the
     // current editor untouched. The edit uses its own consumed source body.
     const targetBodyId = 'targetBodyId' in data ? data.targetBodyId : null;
-    setModelingTargetBodyId(targetBodyId);
-    setViewportFormFacePick(null);
-    setFormFacePickTarget(null);
     setSelectedBodyIds(targetBodyId ? [targetBodyId] : []);
     setModelingEditFeature(feature);
   }
@@ -9648,8 +9432,6 @@ export function App() {
     // A tool opens its create card; openModelingFeatureEditor sets the
     // feature back afterwards when it is reopening one instead.
     setModelingEditFeature(null);
-    setFormFacePickTarget(null);
-    setViewportFormFacePick(null);
     setRevertPill(null);
     exactEntryQueue.cancel();
     // Through the ref, not the render's variable: this function is invoked
@@ -9776,60 +9558,11 @@ export function App() {
         return true;
       }
     }
-    if (
-      nextTool === 'mirror' ||
-      nextTool === 'split' ||
-      nextTool === 'hole' ||
-      nextTool === 'shell' ||
-      nextTool === 'solid-offset' ||
-      nextTool === 'draft' ||
-      nextTool === 'thicken'
-    ) {
-      const targetBodyId = defaultModelingTargetBody(nextTool);
-      setModelingTargetBodyId(targetBodyId);
-      // A face already picked on that body is the answer to the form's first
-      // question, so it lands in the face field instead of being thrown away.
-      // So are the faces a box swept, for the cards that list faces.
-      const seeded =
-        modelingOperationPicksFaces(nextTool) && targetBodyId
-          ? boxSelectedFaces && formFaceListOperation(nextTool)
-            ? resolveFormFaceBox(
-                nextTool,
-                targetBodyId,
-                boxSelectedFaces,
-                representations[targetBodyId]?.topology
-              )
-            : selectedTopology?.kind === 'face'
-              ? resolveFormFacePick(
-                  nextTool,
-                  targetBodyId,
-                  selectedTopology,
-                  representations[targetBodyId]?.topology
-                )
-              : null
-          : null;
-      setViewportFormFacePick(seeded?.ok ? seeded.pick : null);
-      if (seeded?.ok && boxSelectedFaces && targetBodyId) {
-        // The card accepts one target body. Drop the wider sweep so its
-        // highlights cannot promise faces the operation will never receive.
-        setBoxFaces(null);
-        setSelectedBodyIds([targetBodyId]);
-      }
-      setFormFacePickTarget(null);
-    }
-    // Selection is kept on purpose: booleans/move/fillet pre-fill from it.
+    // Selection is kept on purpose.
     setTool(nextTool);
     return true;
   }
 
-  /**
-   * Which body a modeling form opens on: the body under the current
-   * selection, else the newest live body that can actually take the
-   * operation (a planar face for hole and draft). Bodies are listed in
-   * document order, so "first" was whichever body happened to be oldest —
-   * on a box-plus-sphere model that opened Hole on the sphere with a refusal
-   * already showing.
-   */
   /** Opens a history feature in the modeling form it was created with. */
   function openModelingFeatureEditor(feature: FeatureNode) {
     // An in-place command's feature re-arms that command from its row, as a
@@ -9849,19 +9582,6 @@ export function App() {
       return;
     }
     launchTool(data.featureKind, feature);
-  }
-
-  function defaultModelingTargetBody(operation: ToolId): BodyId | null {
-    const preferred = selectedTopology?.bodyId ?? selectedBodyIds.at(-1);
-    if (preferred && !representations[preferred]?.consumed) return preferred;
-    const live = viewerBodies.map((body) => body.bodyId);
-    const suits = (bodyId: BodyId) =>
-      !modelingOperationPicksFaces(operation) ||
-      !modelingOperationNeedsPlanarFaces(operation) ||
-      (representations[bodyId]?.topology?.faces ?? []).some(
-        (face) => face.geometry?.surfaceType === 'plane'
-      );
-    return [...live].reverse().find(suits) ?? live.at(-1) ?? null;
   }
 
   /**
@@ -9892,12 +9612,9 @@ export function App() {
     // a state the user has just left; it must not outlive the panel.
     retireStatusMessage();
     edgeFormPreview.clear();
-    setEdgeFormSize(null);
     exactEntryQueue.cancel();
     setFeatureFormError(null);
     setModelingEditFeature(null);
-    setFormFacePickTarget(null);
-    setViewportFormFacePick(null);
     setPreviewDoc(null);
     // A cancelled extrude releases its profiles rather than restoring the
     // selection it started from: Escape lands on nothing selected, not on a
@@ -15706,95 +15423,6 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [representations, displayedGeometryComplete]);
 
-  /** The open edit's stored hole anchor; null when no hole is being edited. */
-  function editedHoleAnchor(): { positionAnchor?: 'centroid' } | null {
-    if (!modelingEditFeature) return null;
-    return modelingEditFeature.data.featureKind === 'hole'
-      ? modelingEditFeature.data
-      : {};
-  }
-
-  function handleFormFacePick(
-    operation: FacePickOperation,
-    selection: TopologySelection | null,
-    detail?: PickDetail
-  ) {
-    const label = TOOL_META[operation].label;
-    if (!selection) {
-      // Empty canvas: nothing to add, and the form keeps what it has.
-      return;
-    }
-    if (!exactGeometryReady) {
-      setStatus(
-        `${label}: wait for exact geometry to finish rebuilding, then pick the face.`
-      );
-      return;
-    }
-    let targetBodyId = modelingTargetBodyId;
-    if (selection.bodyId !== targetBodyId) {
-      // A pick on another live body retargets the form to it rather than
-      // refusing; the face list and picks start over on the new body.
-      if (representations[selection.bodyId]?.consumed) {
-        setStatus(`${label}: that body was combined into a later feature.`);
-        return;
-      }
-      targetBodyId = selection.bodyId;
-      modelingPreflightRef.current = null;
-      setModelingTargetBodyId(targetBodyId);
-      setSelectedBodyIds([targetBodyId]);
-      if (selection.kind !== 'face') {
-        setSelectedTopology(null);
-        setStatus(
-          `${label}: target body changed to ${representations[targetBodyId]?.name ?? 'the picked body'}.`
-        );
-        return;
-      }
-    }
-    if (!targetBodyId) return;
-    const picked = resolveFormFacePick(
-      operation,
-      targetBodyId,
-      selection,
-      representations[targetBodyId]?.topology
-    );
-    if (!picked.ok) {
-      setStatus(picked.reason);
-      return;
-    }
-    modelingPreflightRef.current = null;
-    // A Hole click places the hole where it landed (G7): the point, measured
-    // in the face's U/V frame from the anchor the hole is drilled against.
-    const face =
-      operation === 'hole' && detail
-        ? representations[targetBodyId]?.topology?.faces.find(
-            (candidate) => candidate.hash === picked.pick.hash
-          )?.geometry
-        : undefined;
-    const position =
-      face && detail
-        ? holePositionFromPick(
-            face,
-            holePositionAnchor(editedHoleAnchor(), face),
-            detail.point,
-            appSettings.sketching.snapEnabled
-              ? appSettings.sketching.linearSnap
-              : null
-          )
-        : null;
-    setViewportFormFacePick(
-      position ? { ...picked.pick, position } : picked.pick
-    );
-    setSelectedTopology(picked.selection);
-    setSelectedBodyIds([targetBodyId]);
-    setSelectedEdges([]);
-    setFormFacePickTarget(null);
-    setStatus(
-      operation === 'hole'
-        ? 'Hole entry face selected · adjust the hole and check the result.'
-        : `${label}: face picked · click more faces to add or remove them, then check the result.`
-    );
-  }
-
   /**
    * The edge a click names for an in-place Fillet or Chamfer, or null when
    * the click is refused (and says why).
@@ -16214,13 +15842,6 @@ export function App() {
       );
       return;
     }
-    // A form that collects faces owns every viewport pick while it is open:
-    // the click fills its face field instead of arming a drag handle and
-    // replacing the form with the Offset Face card.
-    if (modelingOperationPicksFaces(tool) && modelingTargetBodyId) {
-      handleFormFacePick(tool, selection, detail);
-      return;
-    }
     // The pick detail (click point + normal) anchors selection-first drag
     // handles; stashed for the direct-manipulation flow.
     lastPickDetailRef.current = detail ?? null;
@@ -16505,7 +16126,7 @@ export function App() {
       if (!pinnedEdgeFeature) {
         inferFeatureNodeFor(selection.bodyId);
       }
-      if (!additive && tool !== 'fillet' && tool !== 'chamfer') {
+      if (!additive) {
         setTool(null);
       }
       setStatus(
@@ -16516,25 +16137,13 @@ export function App() {
       return;
     }
     setSelectedEdges([]);
-    // With a boolean tool open every body click is a pick-list toggle: the
-    // form is asking for bodies, so a plain click adds the next one (or drops
-    // it) and keeps the tool up, the way fillet keeps its edge picks. Closing
-    // the tool on the click it was waiting for was the old behaviour.
-    const booleanToolOpen =
-      tool === 'union' || tool === 'subtract' || tool === 'intersect';
-    const toggles = additive || booleanToolOpen;
-    const nextIds = toggles
+    const nextIds = additive
       ? selectedBodyIds.includes(selection.bodyId)
         ? selectedBodyIds.filter((id) => id !== selection.bodyId)
         : [...selectedBodyIds, selection.bodyId]
       : [selection.bodyId];
     setSelectedBodyIds(nextIds);
-    if (
-      !additive &&
-      !booleanToolOpen &&
-      tool !== 'fillet' &&
-      tool !== 'chamfer'
-    ) {
+    if (!additive) {
       setTool(null);
     }
     // The edit panel and topology context follow a single-body selection;
@@ -16544,26 +16153,6 @@ export function App() {
         additive ? { bodyId: nextIds[0]!, kind: 'body' } : selection
       );
       inferFeatureNodeFor(nextIds[0]!);
-    } else {
-      setSelectedTopology(null);
-      setSelectedFeatureNode(null);
-    }
-  }
-
-  /**
-   * The boolean form's pick list, in pick order. It is the same selection the
-   * viewport shows, so a row toggled here lights (or clears) its body's
-   * outline and number out in the scene.
-   */
-  function handleSelectBodiesFromPickList(bodyIds: BodyId[]) {
-    if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
-      dispatchInteraction({ type: 'clear' });
-    }
-    setSelectedEdges([]);
-    setSelectedBodyIds(bodyIds);
-    if (bodyIds.length === 1) {
-      setSelectedTopology({ bodyId: bodyIds[0]!, kind: 'body' });
-      inferFeatureNodeFor(bodyIds[0]!);
     } else {
       setSelectedTopology(null);
       setSelectedFeatureNode(null);
@@ -16582,10 +16171,9 @@ export function App() {
       }));
     handleSelectEdgeChainFromViewer(edges);
     if (
-      tool === 'chamfer' ||
-      (tool === null &&
-        interaction.mode === 'edges' &&
-        interaction.op === 'chamfer')
+      tool === null &&
+      interaction.mode === 'edges' &&
+      interaction.op === 'chamfer'
     ) {
       dispatchInteraction({ type: 'set-edge-op', op: 'chamfer' });
     }
@@ -16831,10 +16419,6 @@ export function App() {
       const faces = inPlaceFacesFor(selections);
       if (inPlaceRef.current.addFaces(faces) !== null) return;
     }
-    if (modelingOperationPicksFaces(tool) && modelingTargetBodyId) {
-      boxFacesIntoForm(tool, modelingTargetBodyId, selections);
-      return;
-    }
     if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
       dispatchInteraction({ type: 'clear' });
     }
@@ -16848,83 +16432,6 @@ export function App() {
     setStatus(
       `${selections.length} ${selections.length === 1 ? 'face' : 'faces'} selected.`
     );
-  }
-
-  /** A sweep's faces, into the open card that collects faces. */
-  function boxFacesIntoForm(
-    operation: FacePickOperation,
-    targetBodyId: BodyId,
-    selections: TopologySelection[]
-  ) {
-    const label = TOOL_META[operation].label;
-    if (!exactGeometryReady) {
-      setStatus(
-        `${label}: wait for exact geometry to finish rebuilding, then pick the faces.`
-      );
-      return;
-    }
-    const result = resolveFormFaceBox(
-      operation,
-      targetBodyId,
-      selections,
-      representations[targetBodyId]?.topology
-    );
-    if (!result.ok) {
-      setStatus(result.reason);
-      return;
-    }
-    modelingPreflightRef.current = null;
-    const faceList = formFaceListOperation(operation);
-    pendingFormFaceSweepRef.current = faceList ? result.pick : null;
-    setViewportFormFacePick(result.pick);
-    if (faceList) {
-      // The form owns the list: it adds this sweep to earlier selections.
-      // Its committed-state callback below supplies the complete highlight.
-      setSelectedBodyIds([targetBodyId]);
-      setSelectedTopology(null);
-      setBoxFaces(null);
-      setSelectedEdges([]);
-    } else {
-      highlightFormFaces(targetBodyId, [result.pick.hash], false);
-    }
-    setFormFacePickTarget(null);
-    setStatus(
-      `${label}: ${result.added} ${result.added === 1 ? 'face' : 'faces'} from the box${
-        result.skipped > 0 ? ` (${result.skipped} left out)` : ''
-      } · check the result.`
-    );
-  }
-
-  function highlightFormFaces(
-    targetBodyId: BodyId,
-    hashes: readonly number[],
-    multiple: boolean
-  ) {
-    const bodyIds = [targetBodyId];
-    const accepted = new Set(hashes);
-    const faces: TopologySelection[] = (
-      representations[targetBodyId]?.topology?.faces ?? []
-    )
-      .filter((face) => accepted.has(face.hash))
-      .map((face) => ({
-        bodyId: targetBodyId,
-        kind: 'face',
-        topologyId: face.topologyId,
-        hash: face.hash,
-        ...(face.reference ? { reference: face.reference } : {})
-      }));
-    setSelectedBodyIds(bodyIds);
-    setSelectedTopology(multiple ? null : (faces[0] ?? null));
-    setBoxFaces(multiple ? { bodyIds, faces } : null);
-    setSelectedEdges([]);
-  }
-
-  function handleClearSelectedEdges() {
-    setSelectedEdges([]);
-    const bodyId = edgeModifierBody?.bodyId;
-    setSelectedTopology(bodyId ? { bodyId, kind: 'body' } : null);
-    setSelectedBodyIds(bodyId ? [bodyId] : []);
-    setStatus('Edge selection cleared.');
   }
 
   /**
@@ -25127,15 +24634,6 @@ export function App() {
         }
         return;
       }
-      if (event.key === 'Escape' && formFacePickTarget) {
-        event.preventDefault();
-        setFormFacePickTarget(null);
-        setStatus(
-          `${TOOL_META[tool ?? 'hole'].label}: face picking canceled · settings preserved.`
-        );
-        return;
-      }
-
       if (tool === 'sketch') {
         // `tool` is only 'sketch' while the plane prompt is up: choosing a
         // plane clears it and hands the keys to the sketch session, which is
@@ -26491,12 +25989,6 @@ export function App() {
   // dropped: the entity editor, keypad and rail render in the same branch
   // and must stay.
   const hideSketchToolCard = interaction.mode === 'sketch';
-  // An edge picked for the Fillet or Chamfer tool arms the same operation the
-  // tool's own card is creating. Its "Fillet · Ready" chip above that card
-  // said the same thing twice, with a second set of verbs; the card and the
-  // handle on the edge are enough.
-  const toolFormOwnsEdgePick =
-    (tool === 'fillet' || tool === 'chamfer') && interaction.mode === 'edges';
 
   // View mode writes its own hints rather than filtering the build chain below.
   // Selecting a cylinder still arms the radius interaction even with its handle
@@ -26552,29 +26044,21 @@ export function App() {
               ]
                 .filter(Boolean)
                 .join(' · ')
-            : tool === 'fillet' || tool === 'chamfer'
-              ? selectedEdges.length > 0
-                ? `${selectedEdges.length} edge${selectedEdges.length === 1 ? '' : 's'} selected · Shift+Click adjusts · Enter creates`
-                : 'Click an edge (Shift adds more) or choose Select all edges'
-              : tool === 'union' || tool === 'subtract' || tool === 'intersect'
-                ? selectedBodyIds.length >= 2
-                  ? `${selectedBodyIds.length} bodies picked, numbered in the viewport · Click toggles · Enter creates`
-                  : 'Click bodies in the viewport or the list · pick order sets the base'
-                : tool
-                  ? 'Enter creates · Esc cancels'
-                  : selectedBodyIds.length >= 2
-                    ? `${selectedBodyIds.length} bodies picked${booleanKeyHints() ? ` — ${booleanKeyHints()}` : ''}`
-                    : selectedTopology?.kind === 'face'
-                      ? faceSelectedHint
-                      : selectedTopology?.kind === 'edge'
-                        ? // Neither tool has a shortcut, so the rail is the only
-                          // route: name it the way the rail names itself.
-                          'Edge selected — Fillet or Chamfer in Feature tools'
-                        : selectedFeature
-                          ? 'Edit in the panel · Del deletes · Esc closes'
-                          : viewerBodies.length > 0
-                            ? 'Click a body, face, or edge · Shift+Click adds to selection'
-                            : idleHint));
+            : tool
+              ? 'Enter creates · Esc cancels'
+              : selectedBodyIds.length >= 2
+                ? `${selectedBodyIds.length} bodies picked${booleanKeyHints() ? ` — ${booleanKeyHints()}` : ''}`
+                : selectedTopology?.kind === 'face'
+                  ? faceSelectedHint
+                  : selectedTopology?.kind === 'edge'
+                    ? // Neither tool has a shortcut, so the rail is the only
+                      // route: name it the way the rail names itself.
+                      'Edge selected — Fillet or Chamfer in Feature tools'
+                    : selectedFeature
+                      ? 'Edit in the panel · Del deletes · Esc closes'
+                      : viewerBodies.length > 0
+                        ? 'Click a body, face, or edge · Shift+Click adds to selection'
+                        : idleHint));
   const openReferenceImageEntry =
     (openReferenceImageId &&
       doc?.referenceImages?.images.find(
@@ -26597,218 +26081,6 @@ export function App() {
     (tool !== null ||
       (selectedFeature !== null && featureSelectionSource !== 'inferred') ||
       editFaceOpen);
-  // The body an edited modeling feature built, read out on its History card
-  // as every other feature's body is: a pick opens no card, so History is
-  // where a body's volume is read. A feature that keeps its target's body
-  // (a hole, a shell) names it itself.
-  // Every body the feature produced: a split leaves two, and with no card
-  // for a pick, its History card is the only place either half is read.
-  const modelingEditBodies = (() => {
-    if (!modelingEditFeature) return [];
-    const bodyIds = new Set<BodyId>();
-    for (const node of Object.values(doc.nodes)) {
-      if (
-        node.kind === 'body' &&
-        node.featureId === modelingEditFeature.featureId
-      ) {
-        bodyIds.add(node.bodyId);
-      }
-    }
-    if (bodyIds.size === 0 && modelingEditFeature.bodyId) {
-      bodyIds.add(modelingEditFeature.bodyId);
-    }
-    if (modelingEditFeature.data.featureKind === 'split') {
-      bodyIds.add(modelingEditFeature.data.secondBodyId);
-    }
-    return [...bodyIds].flatMap((bodyId) => {
-      const body = renderedRepresentations[bodyId];
-      return body ? [body] : [];
-    });
-  })();
-  const modelingOperation: ModelingOperationKind | null =
-    tool === 'mirror' ||
-    tool === 'split' ||
-    tool === 'hole' ||
-    tool === 'shell' ||
-    tool === 'solid-offset' ||
-    tool === 'loft' ||
-    tool === 'sweep' ||
-    tool === 'helical-sweep' ||
-    tool === 'draft' ||
-    tool === 'thicken'
-      ? tool
-      : null;
-  const modelingEditSketchIds =
-    doc && modelingEditFeature
-      ? new Set(
-          listNodesByKind(doc, 'feature').flatMap((feature) =>
-            feature.data.featureKind === 'sketch' &&
-            !isFeatureSuppressed(feature) &&
-            doc.featureOrder.indexOf(feature.featureId) >= 0 &&
-            doc.featureOrder.indexOf(feature.featureId) <
-              doc.featureOrder.indexOf(modelingEditFeature.featureId)
-              ? [feature.data.sketchId]
-              : []
-          )
-        )
-      : null;
-  const modelingProfileOptions: ModelingProfileOption[] = availableSketchViews
-    .filter(
-      (view) =>
-        !modelingEditSketchIds || modelingEditSketchIds.has(view.sketchId)
-    )
-    .flatMap((view) =>
-      view.regions.flatMap((region, index) => {
-        const sketchName =
-          sketchOptions.find((option) => option.sketchId === view.sketchId)
-            ?.name ?? 'Sketch';
-        const pick: RegionPickData = {
-          sketchId: view.sketchId,
-          profileId: region.profileId,
-          regionFingerprint: region.regionFingerprint,
-          samplePoint: region.samplePoint,
-          centroid: region.centroid,
-          boundingBox: region.boundingBox,
-          sourceEntityIds: region.sourceEntityIds,
-          sourceBoundaryLoops: region.sourceBoundaryLoops,
-          area: region.area
-        };
-        const [profile] = profileReferencesForSelection(
-          [pick],
-          entityWideProfileSource
-        );
-        return !profile || profile.all === true
-          ? []
-          : [
-              {
-                id: `${view.sketchId}:${region.profileId}`,
-                label: `${sketchName} · Profile ${index + 1}`,
-                section: { sketchId: view.sketchId, profile },
-                region: {
-                  outer: region.outer,
-                  holes: region.holes,
-                  boundingBox: region.boundingBox
-                }
-              }
-            ];
-      })
-    );
-  const modelingPathOptions: ModelingPathOption[] = doc
-    ? sketchOptions.flatMap((option) => {
-        const sketch = findSketch(doc, option.sketchId);
-        if (
-          !sketch ||
-          (modelingEditSketchIds && !modelingEditSketchIds.has(option.sketchId))
-        )
-          return [];
-        const entityIds = sketch.objectIds.filter((entityId) => {
-          const node = doc.nodes[entityId];
-          return (
-            node?.kind === 'sketch-object' &&
-            !node.data.construction &&
-            (node.data.objectKind === 'line' || node.data.objectKind === 'arc')
-          );
-        });
-        return entityIds.length === 0
-          ? []
-          : [
-              {
-                id: option.sketchId,
-                label: `${option.name} · ${entityIds.length} path ${entityIds.length === 1 ? 'entity' : 'entities'}`,
-                path: { sketchId: option.sketchId, entityIds }
-              }
-            ];
-      })
-    : [];
-  let modelingEditInitial: ModelingOperationFormState | undefined;
-  let modelingEditReferenceError: string | undefined;
-  let modelingFormProfiles = modelingProfileOptions;
-  let modelingFormPaths = modelingPathOptions;
-  if (
-    modelingEditFeature &&
-    modelingFeatureIsEditable(modelingEditFeature.data.featureKind)
-  ) {
-    const data = modelingEditFeature.data as EditableModelingFeatureData;
-    try {
-      modelingEditInitial = modelingFormStateFromFeature(
-        modelingEditFeature.name,
-        data,
-        modelingProfileOptions,
-        modelingPathOptions
-      );
-      const references = modelingFeatureEditReferences(
-        data,
-        modelingProfileOptions,
-        modelingPathOptions
-      );
-      modelingFormProfiles = references.profiles;
-      modelingFormPaths = references.paths;
-    } catch (error) {
-      modelingEditReferenceError = errorMessage(
-        error,
-        'Saved sketch references are unavailable.'
-      );
-    }
-  }
-  const modelingTargetBody = modelingTargetBodyId
-    ? representations[modelingTargetBodyId]
-    : undefined;
-  const modelingFaces = modelingFaceOptions(
-    modelingTargetBody?.topology,
-    modelingTargetBody,
-    faceNamer
-  );
-  const holePreviewState = ((): HolePreview | null => {
-    if (modelingOperation !== 'hole' || !holeDraft) return null;
-    const body = representations[holeDraft.targetBodyId];
-    const key = JSON.stringify(holeDraft);
-    const cached = holeGhostCache.current;
-    if (cached && cached.key === key && cached.body === body) {
-      return cached.preview;
-    }
-    const face = body?.topology?.faces.find(
-      (candidate) => candidate.hash === holeDraft.faceHash
-    );
-    // No representation yet (a rebuild in flight) is not a refusal: wait.
-    const preview: HolePreview | null = body
-      ? holePreview({
-          // A face the body no longer has is said so; one without measured
-          // geometry is refused as not a planar entry face.
-          face: face ? (face.geometry ?? {}) : null,
-          // The anchor the submission will carry: a new hole measures from
-          // the area centroid when the face reports one; an edited hole
-          // keeps the anchor it was drilled against.
-          anchor: holePositionAnchor(editedHoleAnchor(), face?.geometry),
-          u: holeDraft.u,
-          v: holeDraft.v,
-          diameter: holeDraft.diameter,
-          outerDiameter: holeDraft.outerDiameter,
-          depth: holeDraft.depth,
-          bodyPositions: body.mesh.vertices
-        })
-      : null;
-    if (preview) holeGhostCache.current = { key, body, preview };
-    return preview;
-  })();
-  const modelingOperationFaces =
-    modelingOperation === 'draft' || modelingOperation === 'hole'
-      ? modelingFaces.filter((face) => face.surfaceType === 'plane')
-      : modelingFaces;
-  const modelingUnsupportedReason = modelingOperation
-    ? (editDisabledReason ??
-      modelingOperationDisabledReason(modelingOperation, {
-        exactState: exactGeometryReady
-          ? 'ready'
-          : geometry.state.phase === 'failed'
-            ? 'failed'
-            : 'pending',
-        exactFailureReason: geometry.state.error,
-        hasTargetBody: Boolean(modelingTargetBody),
-        openingFaceCount: modelingOperationFaces.length,
-        profileCount: modelingProfileOptions.length,
-        pathCount: modelingPathOptions.length
-      }))
-    : null;
 
   function commandForModelingSubmission(
     created: ModelingOperationSubmission
@@ -26850,135 +26122,6 @@ export function App() {
       case 'thicken':
         return commandFactories.thickenFace(submission.input);
     }
-  }
-
-  async function preflightModelingSubmission(
-    submission: ModelingOperationSubmission
-  ): Promise<{ status: 'ready' } | { status: 'refused'; reason: string }> {
-    const manager = managerRef.current;
-    if (!manager || !ensureCanEdit('preflight this modeling operation')) {
-      return {
-        status: 'refused',
-        reason: editDisabledReason ?? 'Project editing is unavailable.'
-      };
-    }
-    const current = manager.document;
-    const signature = JSON.stringify(submission);
-    try {
-      const editUpdate = modelingEditFeature
-        ? modelingFeatureUpdate(modelingEditFeature.featureId, submission)
-        : null;
-      const command = editUpdate
-        ? commandFactories.updateFeature(
-            editUpdate,
-            `Edit ${submission.input.name}`
-          )
-        : commandForModelingSubmission(submission);
-      command.validate(current);
-      const candidate = command.apply(current);
-      const derived = await geometry.syncOnce(candidate);
-      // Deliberately stricter than the judge the commit itself uses, and
-      // deliberately left that way. A modeling operation is appended to the
-      // end of history (`featureOrder.push`), so it has nothing downstream to
-      // break — the "new warning anywhere" rule that looks like a deadlock
-      // waiting to happen cannot actually fire as one here. What it does
-      // catch, and what the feature-scoped judge does not, is
-      // `Body "<name>" failed exact B-rep validation.`, which the kernel
-      // announces on a different channel while still registering the body.
-      //
-      // Making the two agree therefore means making the COMMIT stricter, not
-      // this looser — and that needs the kernel to separate a defect from the
-      // invalidity a STEP import deliberately admits (see
-      // imported-step-validation.ts, which keeps and flags a supplier's open
-      // shell on purpose). Until warnings carry that distinction, relaxing
-      // this would trade a refusal that works for one that does not exist.
-      const existingWarnings = new Set(current.derived.warnings);
-      const warning = derived.warnings.find(
-        (candidateWarning) => !existingWarnings.has(candidateWarning)
-      );
-      if (warning) {
-        throw new Error(warning);
-      }
-      const ids = (
-        command.payload as unknown as {
-          ids?: { bodyId?: BodyId };
-        }
-      ).ids;
-      const resultBodyId = editUpdate
-        ? modelingEditFeature?.bodyId
-        : ids?.bodyId;
-      if (!resultBodyId || !derived.bodyRepresentations[resultBodyId]) {
-        throw new Error(
-          `${submission.input.name} did not produce its expected exact result body.`
-        );
-      }
-      if (
-        managerRef.current !== manager ||
-        manager.document.projectId !== current.projectId ||
-        manager.document.version !== current.version
-      ) {
-        throw new Error(
-          'The model changed while the result was being checked. Try again.'
-        );
-      }
-      modelingPreflightRef.current = {
-        signature,
-        command,
-        resultBodyId,
-        featureName:
-          (command.payload as { name?: string }).name ?? submission.input.name,
-        baseVersion: current.version
-      };
-      return { status: 'ready' };
-    } catch (error) {
-      modelingPreflightRef.current = null;
-      return {
-        status: 'refused',
-        reason: errorMessage(error, 'The result could not be checked.')
-      };
-    }
-  }
-
-  function submitModelingOperation(submission: ModelingOperationSubmission) {
-    const approved = modelingPreflightRef.current;
-    const manager = managerRef.current;
-    if (
-      !approved ||
-      !manager ||
-      approved.signature !== JSON.stringify(submission) ||
-      approved.baseVersion !== manager.document.version
-    ) {
-      setStatus('The model changed after the result was checked. Try again.');
-      return;
-    }
-    const editing = modelingEditFeature;
-    const editSession = editCardSessionRef.current;
-    void executeValidatedFeature(approved.command, {
-      featureName: approved.featureName,
-      resultBodyId: approved.resultBodyId,
-      ...(editing && doc
-        ? {
-            targets: affectedFeatureTargets(doc, editing.featureId).map(
-              (target, index) =>
-                index === 0
-                  ? { ...target, featureName: approved.featureName }
-                  : target
-            )
-          }
-        : {}),
-      successMessage: commandOutcomeMessage(approved.command.label),
-      ...(editing
-        ? { cancelled: () => !editSessionIsCurrent(editing, editSession) }
-        : {}),
-      onSuccess: () => {
-        if (editing) {
-          finishFeatureEdit(editing, editSession);
-          return;
-        }
-        setModelingEditFeature(null);
-        finishFeatureCreation();
-      }
-    });
   }
 
   // The sketch rail floats over the viewport in the classic layout and sits
@@ -27878,9 +27021,7 @@ export function App() {
             }}
             onOffsetCancel={handleOffsetCancel}
             offsetPreviewInvalid={
-              (isOperationState(interaction) &&
-                interaction.phase === 'failed') ||
-              edgeFormPreviewRefused
+              isOperationState(interaction) && interaction.phase === 'failed'
             }
             previewDeferred={previewDeferred}
             onOpenOffsetKeypad={handleOpenOffsetKeypad}
@@ -27898,7 +27039,6 @@ export function App() {
             cancelDirectManipulationRef={cancelDirectManipulationRef}
             openExactEntryRef={openExactEntryRef}
             edgeHandle={modelingLocked ? null : edgeHandleTarget}
-            edgeHandleValue={edgeFormSize}
             onEdgeRadiusPreview={(size) => edgePreview.request(size)}
             onEdgeCommit={handleEdgeCommit}
             onEdgeCancel={handleEdgeCancel}
@@ -28043,7 +27183,6 @@ export function App() {
             // Only a sketch starts on its offset ghost: an in-place command
             // stores a principal plane at zero, so it is shown at zero.
             planePickerOffset={tool === 'sketch' ? sketchPlaneOffset : 0}
-            holeGhost={holePreviewState?.ghost ?? null}
             footprintPicker={
               !modelingLocked && inPlace.active && inPlaceSpec?.footprint
                 ? {
@@ -28476,9 +27615,7 @@ export function App() {
         modelingLocked ? null : measurementDock ? (
           measurementDock
         ) : contextualToolCard ? (
-          hideSketchToolCard ||
-          toolFormOwnsEdgePick ||
-          calloutOperationModel ? null : (
+          hideSketchToolCard || calloutOperationModel ? null : (
             <ToolCard
               model={contextualToolCard}
               focusRequest={
@@ -28721,168 +27858,7 @@ export function App() {
             label="Inspector"
             resetKey={`${doc.projectId}:${doc.version}`}
           >
-            {modelingOperation ? (
-              // The same panel chrome the Inspector draws for its own forms:
-              // bare in `.inspector-float`, this form sat straight on the
-              // viewport under the orientation widget and the utility rail.
-              <section
-                className="inspector"
-                aria-label="Feature inspector"
-                // One Escape cancels this card from anywhere in it, as it
-                // does every Inspector card (F19). Face picking keeps its own
-                // rung: that press only stops picking (the workspace keys).
-                onKeyDown={(event) => {
-                  if (event.key !== 'Escape' || formFacePickTarget) return;
-                  event.stopPropagation();
-                  cancelPanel();
-                }}
-              >
-                <CardHeader
-                  title={
-                    modelingEditFeature?.name ??
-                    TOOL_META[modelingOperation].label
-                  }
-                  eyebrow={
-                    modelingEditFeature
-                      ? CARD_EYEBROWS.edit
-                      : CARD_EYEBROWS.create
-                  }
-                  actions={
-                    modelingEditFeature ? (
-                      // The same overflow every Inspector edit card has: now
-                      // that selecting the feature opens this form (F19),
-                      // this is where its delete is.
-                      <PanelOverflow>
-                        <button
-                          type="button"
-                          className="panel-overflow-item danger"
-                          title="Delete feature (Del)"
-                          onClick={() => {
-                            if (validateSelectionEdit())
-                              handleDeleteFeature(
-                                modelingEditFeature.featureId,
-                                modelingEditFeature.name
-                              );
-                          }}
-                        >
-                          <Trash2 size={13} aria-hidden="true" />
-                          Delete feature
-                        </button>
-                      </PanelOverflow>
-                    ) : null
-                  }
-                  // Closes the panel and keeps the pick; Escape (and the
-                  // form's Cancel) return to nothing selected.
-                  closeTitle="Close"
-                  closeLabel="Close panel"
-                  onClose={closeFeaturePanel}
-                />
-                <div className="panel-body">
-                  {modelingEditReferenceError ? (
-                    <p role="alert" className="field-error">
-                      {modelingEditReferenceError}
-                    </p>
-                  ) : (
-                    <ModelingOperationsForm
-                      key={`${modelingOperation}:${modelingEditFeature?.featureId ?? 'new'}`}
-                      operation={modelingOperation}
-                      editing={modelingEditFeature !== null}
-                      initial={modelingEditInitial}
-                      scope={parameterScope.scope}
-                      bodies={bodyOptions}
-                      faceOptions={modelingOperationFaces}
-                      profileOptions={modelingFormProfiles}
-                      pathOptions={modelingFormPaths}
-                      datumDocument={doc}
-                      datumBefore={modelingEditFeature?.featureId ?? null}
-                      initialTarget={modelingTargetBodyId ?? undefined}
-                      viewportFacePick={viewportFormFacePick}
-                      unsupportedReason={modelingUnsupportedReason ?? undefined}
-                      onPreflight={preflightModelingSubmission}
-                      onSubmit={submitModelingOperation}
-                      onHoleDraftChange={setHoleDraft}
-                      holePreviewNotice={holePreviewState?.notice ?? null}
-                      onCancel={cancelPanel}
-                      onTargetBodyChange={(bodyId) => {
-                        modelingPreflightRef.current = null;
-                        setFormFacePickTarget(null);
-                        setViewportFormFacePick(null);
-                        setModelingTargetBodyId(bodyId);
-                        setSelectedBodyIds([bodyId]);
-                        setSelectedTopology(null);
-                      }}
-                      onFaceListStateChange={(bodyId, hashes) => {
-                        const sweep = pendingFormFaceSweepRef.current;
-                        const accepted = new Set(hashes);
-                        if (
-                          sweep &&
-                          sweep === viewportFormFacePick &&
-                          sweep.bodyId === bodyId &&
-                          (sweep.hashes ?? [sweep.hash]).every((hash) =>
-                            accepted.has(hash)
-                          )
-                        ) {
-                          pendingFormFaceSweepRef.current = null;
-                          highlightFormFaces(bodyId, hashes, true);
-                        }
-                      }}
-                      onOpeningFaceSelectionChange={(hashes) => {
-                        setFormFacePickTarget(null);
-                        setViewportFormFacePick(null);
-                        const selectedHash = hashes.at(-1);
-                        const face = modelingTargetBody?.topology?.faces.find(
-                          (candidate) => candidate.hash === selectedHash
-                        );
-                        setSelectedTopology(
-                          selectedHash !== undefined &&
-                            face &&
-                            modelingTargetBodyId
-                            ? {
-                                kind: 'face',
-                                bodyId: modelingTargetBodyId,
-                                topologyId: face.topologyId,
-                                hash: face.hash,
-                                reference: face.reference
-                              }
-                            : null
-                        );
-                      }}
-                      onRequestOpeningFaceSelection={() => {
-                        setManualSelectionFilter('face');
-                        if (
-                          modelingOperationPicksFaces(modelingOperation) &&
-                          modelingTargetBodyId
-                        ) {
-                          setFormFacePickTarget(modelingTargetBodyId);
-                          setStatus(
-                            modelingOperationNeedsPlanarFaces(modelingOperation)
-                              ? `${TOOL_META[modelingOperation].label}: click a flat face on the target body. Esc cancels face picking.`
-                              : `${TOOL_META[modelingOperation].label}: click faces on the target body to add or remove them. Esc cancels face picking.`
-                          );
-                          return;
-                        }
-                        setStatus(
-                          `${TOOL_META[modelingOperation].label}: pick an exact face, then select it in the face list.`
-                        );
-                      }}
-                    />
-                  )}
-                  {modelingEditBodies.map((body) => (
-                    <Fragment key={body.bodyId}>
-                      {modelingEditBodies.length > 1 && (
-                        <h3 className="section-title">{body.name}</h3>
-                      )}
-                      <BodyMeasurements
-                        body={body}
-                        units={doc.units}
-                        document={doc}
-                        worker={geometry}
-                      />
-                    </Fragment>
-                  ))}
-                </div>
-              </section>
-            ) : tool === 'reference-image' && openReferenceImageEntry ? (
+            {tool === 'reference-image' && openReferenceImageEntry ? (
               <ReferenceImageCard
                 key={openReferenceImageEntry.imageId}
                 document={doc}
@@ -28984,18 +27960,11 @@ export function App() {
                     ? []
                     : selectedEdges
                 }
-                edgeModifierBody={
-                  currentGeometrySnapshot || currentFaceGeometryPreview
-                    ? null
-                    : edgeModifierBody
-                }
                 bodyRepresentations={representations}
                 scope={parameterScope.scope}
                 sketches={sketchOptions}
                 bodies={bodyOptions}
                 units={doc.units}
-                selectedBodyIds={selectedBodyIds}
-                preferredSketchId={selectedSketch?.sketchId ?? null}
                 commandSession={commandSession}
                 featureSelectionSource={featureSelectionSource}
                 directPickDetails={editFaceOpen}
@@ -29006,7 +27975,6 @@ export function App() {
                 massPropertiesDocument={previewDoc ?? doc}
                 massPropertiesWorker={geometry}
                 onLaunchTool={launchTool}
-                onSelectBodies={handleSelectBodiesFromPickList}
                 onPreviewBodyAppearance={previewBodyAppearance}
                 onCommitBodyAppearance={commitBodyAppearance}
                 onCancel={cancelPanel}
@@ -29016,92 +27984,7 @@ export function App() {
                   setEditFaceKey(null);
                   closeFeaturePanel();
                 }}
-                onSelectAllEdges={handleSelectAllEdges}
-                onClearSelectedEdges={handleClearSelectedEdges}
                 document={doc}
-                onRemoveSelectedEdge={(edge) =>
-                  handleSelectTopologyFromViewer(edge, true)
-                }
-                onCreateRevolve={(value) => {
-                  const name = newFeatureName(value.name);
-                  const command = commandFactories.revolveSketch({
-                    ...value,
-                    name,
-                    bodyName: newBodyName(value.name)
-                  });
-                  void createValidatedFeature(
-                    command,
-                    name,
-                    command.payload.ids?.bodyId
-                  );
-                }}
-                onCreateBoolean={(value) => {
-                  const name = newFeatureName(value.name);
-                  // A union or intersect result is named for itself
-                  // ("Union 1"); a subtract keeps its base body's name.
-                  const command = commandFactories.booleanBodies({
-                    ...value,
-                    name,
-                    bodyName: newBodyName(value.name)
-                  });
-                  void createValidatedFeature(
-                    command,
-                    name,
-                    command.payload.ids?.bodyId
-                  );
-                }}
-                onCreateTransform={(value) => {
-                  const name = newFeatureName(value.name);
-                  const command = commandFactories.transformBody({
-                    name,
-                    targetBodyId: value.targetBodyId,
-                    translation: value.translation,
-                    rotationDeg: value.rotationDeg,
-                    ...(value.scale !== undefined
-                      ? { scale: value.scale }
-                      : {}),
-                    ...(value.pivot !== undefined
-                      ? { pivot: value.pivot }
-                      : {}),
-                    ...(value.copy
-                      ? {
-                          copy: true,
-                          bodyName: newCopyBodyName(value.targetBodyId)
-                        }
-                      : {}),
-                    ...(value.axisRotation
-                      ? { axisRotation: value.axisRotation }
-                      : {})
-                  });
-                  void createValidatedFeature(
-                    command,
-                    name,
-                    // A copy's result is its new body; a Move's, its target.
-                    command.payload.ids && 'bodyId' in command.payload.ids
-                      ? command.payload.ids.bodyId
-                      : value.targetBodyId
-                  );
-                }}
-                onPreviewEdgeModifier={previewEdgeForm}
-                onEdgeModifierSize={setEdgeFormSize}
-                onCreateEdgeModifier={(kind, value) =>
-                  applyEdgeForm(null, kind, value)
-                }
-                onCreatePattern={(value) => {
-                  const name = newFeatureName(value.name);
-                  const command = commandFactories.patternBody({
-                    ...value,
-                    name
-                  });
-                  const resultBodyId = command.payload.ids?.bodyId;
-                  if (resultBodyId)
-                    void runPattern(command, {
-                      featureName: name,
-                      resultBodyId,
-                      successMessage: commandOutcomeMessage(command.label),
-                      onSuccess: finishFeatureCreation
-                    });
-                }}
                 onApplyPrimitive={(feature, name, command) => {
                   const editSession = editCardSessionRef.current;
                   if (!doc || !feature.bodyId) {
@@ -29260,75 +28143,6 @@ export function App() {
                     feature.featureId
                   )
                 }
-                onApplyRevolve={(feature, value) => {
-                  // R01: the sketch axis is the absent datum axis. U09: a
-                  // region picked in the old sketch names nothing in a new
-                  // one, so a retarget takes the new sketch's first detected
-                  // region (its first object alone is a lone edge in a sketch
-                  // drawn since S04), and only a sketch with no region at all
-                  // clears it.
-                  const retargeted =
-                    feature.data.featureKind === 'revolve' &&
-                    feature.data.profile !== undefined &&
-                    value.sketchId !== feature.data.sketchId;
-                  const region = retargeted
-                    ? availableSketchViews.find(
-                        (view) => view.sketchId === value.sketchId
-                      )?.regions[0]
-                    : undefined;
-                  const [profile] = region
-                    ? profileReferencesForSelection(
-                        [{ ...region, sketchId: value.sketchId }],
-                        entityWideProfileSource
-                      )
-                    : [];
-                  const cleared = [
-                    ...(value.axisRef ? [] : ['axisRef']),
-                    ...(retargeted && !profile ? ['profile'] : [])
-                  ];
-                  return applyValidatedFeature(
-                    commandFactories.updateFeature(
-                      {
-                        featureId: feature.featureId,
-                        name: value.name,
-                        data: {
-                          featureKind: 'revolve',
-                          sketchId: value.sketchId,
-                          axis: value.axis,
-                          angleDeg: value.angleDeg,
-                          ...(value.axisRef ? { axisRef: value.axisRef } : {}),
-                          ...(profile ? { profile } : {})
-                        },
-                        ...(cleared.length ? { clearData: cleared } : {})
-                      },
-                      `Edit ${value.name}`
-                    ),
-                    feature,
-                    value.name
-                  );
-                }}
-                onApplyBoolean={(feature, value) => {
-                  const command = commandFactories.updateFeature(
-                    {
-                      featureId: feature.featureId,
-                      name: value.name,
-                      data: {
-                        featureKind: 'boolean',
-                        operation: value.operation,
-                        targetBodyIds: value.targetBodyIds,
-                        ...(value.keepOriginals !== undefined
-                          ? { keepOriginals: value.keepOriginals }
-                          : {})
-                      },
-                      // M11: consuming every input is the absent field.
-                      ...(value.keepOriginals === undefined
-                        ? { clearData: ['keepOriginals'] }
-                        : {})
-                    },
-                    `Edit ${value.name}`
-                  );
-                  applyValidatedFeature(command, feature, value.name);
-                }}
                 onApplyTransform={(feature, value) =>
                   applyValidatedFeature(
                     commandFactories.updateFeature(
@@ -29367,42 +28181,6 @@ export function App() {
                     value.name,
                     // A copy (M10) rebuilds its own body, not its source.
                     feature.bodyId ?? value.targetBodyId
-                  )
-                }
-                onApplyEdgeModifier={applyEdgeForm}
-                onApplyPattern={(feature, value) =>
-                  applyValidatedFeature(
-                    commandFactories.updateFeature(
-                      {
-                        featureId: feature.featureId,
-                        name: value.name,
-                        data: {
-                          featureKind: 'pattern',
-                          targetBodyId: value.targetBodyId,
-                          patternKind: value.patternKind,
-                          count: value.count,
-                          axis: value.axis,
-                          spacing: value.spacing,
-                          angleDeg: value.angleDeg,
-                          ...(value.direction
-                            ? { direction: value.direction }
-                            : {}),
-                          ...(value.axis2 ? { axis2: value.axis2 } : {}),
-                          ...(value.spacing2 !== undefined
-                            ? { spacing2: value.spacing2 }
-                            : {}),
-                          ...(value.count2 !== undefined
-                            ? { count2: value.count2 }
-                            : {}),
-                          ...(value.axisRef ? { axisRef: value.axisRef } : {})
-                        },
-                        // R01: the world axis is the absent datum axis.
-                        ...(value.axisRef ? {} : { clearData: ['axisRef'] })
-                      },
-                      `Edit ${value.name}`
-                    ),
-                    feature,
-                    value.name
                   )
                 }
                 onResizeThroughHole={handleResizeThroughHole}

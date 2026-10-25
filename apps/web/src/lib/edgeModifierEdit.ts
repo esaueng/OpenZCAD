@@ -1,6 +1,28 @@
 import { commandFactories } from '@openzcad/command-system';
-import type { FeatureNode } from '@openzcad/shared';
-import type { EdgeModifierFormValue } from '../components/forms/FeatureForms';
+import type {
+  BodyId,
+  EdgeTopologyReferenceV5,
+  FeatureNode,
+  ParamValue,
+  VariableFilletLaw
+} from '@openzcad/shared';
+
+/** A fillet or chamfer as its command takes it, created or edited. */
+export interface EdgeModifierFormValue {
+  name: string;
+  targetBodyId: BodyId;
+  edgeHashes: number[];
+  edgeReferences?: EdgeTopologyReferenceV5[];
+  size: ParamValue;
+  /** Chamfer only: bevel angle in degrees; absent means symmetric 45°. */
+  angleDeg?: ParamValue;
+  /** Fillet only: far-end radius; absent means a constant-radius fillet. */
+  endRadius?: ParamValue;
+  /** Fillet only: read only with `endRadius`; absent means 'linear'. */
+  radiusLaw?: VariableFilletLaw;
+  /** Chamfer only: setback on the other face; absent means symmetric. */
+  distance2?: ParamValue;
+}
 
 export function edgeModifierCommand(
   feature: FeatureNode | null,
@@ -65,10 +87,4 @@ export function edgeModifierCommand(
     },
     `Edit ${value.name}`
   );
-}
-
-export function edgeModifierSliderRange(initialSize: number) {
-  const max = Math.max(10, initialSize * 4);
-  const step = 10 ** Math.floor(Math.log10(max / 1000));
-  return { min: step, max, step };
 }
