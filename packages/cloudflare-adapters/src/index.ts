@@ -143,8 +143,22 @@ import {
   type SaveRevisionRequest,
   type UpdateProjectRequest,
   type UploadSessionRecord,
-  type UserId
+  type UserId,
+  type E2eeCollaborationClientMessage,
+  type E2eeCollaborationServerMessage
 } from '@openzcad/shared';
+import {
+  E2eeRoomLedger,
+  E2eeRoomSequencer,
+  parseE2eeRoomCredential,
+  roomHead,
+  validE2eeRoomCredential,
+  type E2eeRoomAccount,
+  type E2eeRoomCredential,
+  type E2eeRoomOutcome,
+  type E2eeRoomWriter
+} from './e2ee-room';
+export * from './e2ee-room';
 import {
   adoptProjectDocument,
   reidentifyProjectDocument,
@@ -6617,6 +6631,9 @@ interface CollaborationSocketTicket {
   email?: string;
   role: SharedProjectAccessRole;
   expiresAt: number;
+  /** An end-to-end encrypted project's room (ADR-024 slice 4-9). */
+  format?: 2;
+  credential?: E2eeRoomCredential;
 }
 
 /** Socket identity survives Durable Object hibernation; access is rechecked on use. */
@@ -6628,6 +6645,10 @@ interface CollaborationSocketAttachment {
   email?: string;
   clientId?: string;
   presence?: 'active' | 'idle';
+  /** Set only on an encrypted project's sockets; see {@link E2eeRoomLedger}. */
+  format?: 2;
+  /** The session encrypted versions are written under. */
+  credential?: E2eeRoomCredential;
 }
 
 type RoomWebSocket = WebSocket & {
@@ -6645,6 +6666,20 @@ interface CollaborationSocketConnection {
   displayName: string;
   email?: string;
   role: SharedProjectAccessRole;
+  format?: 2;
+  credential?: E2eeRoomCredential;
+}
+
+/** The encrypted half of a socket's identity, when it has one. */
+function encryptedIdentity(
+  value: Pick<CollaborationSocketAttachment, 'format' | 'credential'>
+): Pick<CollaborationSocketAttachment, 'format' | 'credential'> {
+  return value.format === 2
+    ? {
+        format: 2,
+        ...(value.credential ? { credential: value.credential } : {})
+      }
+    : {};
 }
 
 function socketAttachment(
@@ -6669,7 +6704,10 @@ function socketAttachment(
     (item.clientId !== undefined && item.clientId.length > 256) ||
     (item.presence !== undefined &&
       item.presence !== 'active' &&
-      item.presence !== 'idle')
+      item.presence !== 'idle') ||
+    (item.format !== undefined && item.format !== 2) ||
+    (item.credential !== undefined &&
+      (item.format !== 2 || !validE2eeRoomCredential(item.credential)))
   )
     return null;
   return item as CollaborationSocketAttachment;
@@ -6743,6 +6781,8 @@ interface RoomMeta {
   projectId: string | null;
   latestVersion: number | null;
   historyVersions: number[];
+  /** Present only on an encrypted project's room, whose versions live apart. */
+  format?: 2;
 }
 
 interface LegacyRoomState {
@@ -6812,6 +6852,14 @@ export class ProjectCollaborationRoom extends DurableObject {
   private historyLoad: Promise<void> | null = null;
   private projectId: string | null = null;
   private erasing = false;
+  /**
+   * 2 once the room serves an end-to-end encrypted project (ADR-024 slice
+   * 4-9): its versions live in {@link E2eeRoomLedger}, never in the
+   * plaintext keys, and plaintext requests are refused. Null otherwise.
+   */
+  private roomFormat: 2 | null = null;
+  private e2eeLedgerState: E2eeRoomLedger | null = null;
+  private e2eeAccountState: E2eeRoomAccount | null | undefined;
 
   constructor(ctx: unknown, env: unknown) {
     super(ctx, env);
@@ -6831,7 +6879,8 @@ export class ProjectCollaborationRoom extends DurableObject {
           userId: attachment.userId,
           displayName: attachment.displayName,
           role: attachment.role,
-          email: attachment.email
+          email: attachment.email,
+          ...encryptedIdentity(attachment)
         });
         this.presence.set(attachment.clientId, attachment.presence ?? 'active');
       }
@@ -6865,6 +6914,7 @@ export class ProjectCollaborationRoom extends DurableObject {
           'Copied project identity could not be restored.'
         );
       this.projectId = meta.projectId ?? this.projectId;
+      this.roomFormat = meta.format === 2 ? 2 : null;
       this.historyVersions = meta.historyVersions ?? [];
       this.latestDocument =
         (await this.roomContext.storage.get<ProjectDocument>(
@@ -7021,6 +7071,9 @@ export class ProjectCollaborationRoom extends DurableObject {
         status: 410
       });
     }
+    if (new URL(request.url).pathname === '/_internal/e2ee-notice') {
+      return this.acceptInternalE2eeNotice(request);
+    }
     if (request.method === 'PATCH') {
       return this.acceptInternalRoleUpdate(request);
     }
@@ -7040,6 +7093,7 @@ export class ProjectCollaborationRoom extends DurableObject {
     let displayName = request.headers.get('x-openzcad-display-name');
     let email = request.headers.get('x-openzcad-user-email') ?? undefined;
     let role = trustedProjectRole(request.headers);
+    let encrypted = trustedEncryptedIdentity(request.headers);
     if (ticketValues.length > 0) {
       const claim =
         projectId && ticketValues.length === 1
@@ -7054,6 +7108,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       displayName = claim.displayName;
       email = claim.email;
       role = claim.role;
+      encrypted = encryptedIdentity(claim);
     }
     if (
       !userId ||
@@ -7075,6 +7130,11 @@ export class ProjectCollaborationRoom extends DurableObject {
       if (this.projectId && this.projectId !== projectId) {
         return new Response('Room project mismatch.', { status: 409 });
       }
+      const formatRefusal =
+        encrypted.format === 2
+          ? await this.enterEncryptedRoom(projectId, email)
+          : this.plaintextRefusal();
+      if (formatRefusal) return formatRefusal;
       if (this.projectId !== projectId) {
         this.projectId = projectId;
         await this.persistRoomState();
@@ -7100,7 +7160,8 @@ export class ProjectCollaborationRoom extends DurableObject {
         userId,
         displayName,
         role,
-        email
+        email,
+        ...encrypted
       } satisfies CollaborationSocketAttachment);
       return new Response(null, { status: 101, webSocket: client });
     });
@@ -7125,7 +7186,8 @@ export class ProjectCollaborationRoom extends DurableObject {
         identity.userId,
         identity.displayName,
         identity.role,
-        identity.email
+        identity.email,
+        encryptedIdentity(identity)
       );
     } catch {
       console.error('Collaboration message handling failed.');
@@ -7183,6 +7245,8 @@ export class ProjectCollaborationRoom extends DurableObject {
     this.sourceCopyPublicationStarted = false;
     this.historyVersions = [];
     this.projectId = null;
+    this.roomFormat = null;
+    this.e2eeLedgerState = null;
     await this.roomContext.storage.deleteAll();
   }
 
@@ -7540,12 +7604,18 @@ export class ProjectCollaborationRoom extends DurableObject {
     if (!this.collaborationAccessAllowed(role, email)) {
       return new Response('Collaboration access is disabled.', { status: 403 });
     }
+    const encrypted = trustedEncryptedIdentity(request.headers);
     return this.enqueueTicketOperation(async () => {
       if (this.erasing)
         return new Response('Project was erased.', { status: 410 });
       if (this.projectId && this.projectId !== projectId) {
         return new Response('Room project mismatch.', { status: 409 });
       }
+      const formatRefusal =
+        encrypted.format === 2
+          ? await this.enterEncryptedRoom(projectId, email)
+          : this.plaintextRefusal();
+      if (formatRefusal) return formatRefusal;
       if (this.projectId !== projectId) {
         this.projectId = projectId;
         await this.persistRoomState();
@@ -7570,7 +7640,8 @@ export class ProjectCollaborationRoom extends DurableObject {
         displayName,
         email,
         role,
-        expiresAt
+        expiresAt,
+        ...encrypted
       };
       await this.roomContext.storage.put(ROOM_SOCKET_TICKETS_KEY, pending);
       return Response.json(
@@ -7686,6 +7757,9 @@ export class ProjectCollaborationRoom extends DurableObject {
         ? { ...claim, role: 'owner' }
         : null;
     }
+    // An encrypted project's room is its owner's own devices until sharing
+    // arrives (ADR-024 Phase 5).
+    if (claim.format === 2) return null;
     if (!rollout.sharingEnabled) {
       return null;
     }
@@ -7699,7 +7773,8 @@ export class ProjectCollaborationRoom extends DurableObject {
     userId: UserId,
     displayName: string,
     role: SharedProjectAccessRole,
-    email?: string
+    email?: string,
+    encrypted: Pick<CollaborationSocketAttachment, 'format' | 'credential'> = {}
   ): Promise<void> {
     if (this.erasing) {
       socket.close(4001, 'Cloud project was permanently deleted.');
@@ -7720,9 +7795,10 @@ export class ProjectCollaborationRoom extends DurableObject {
       socket.close(1009, 'Collaboration message is too large.');
       return;
     }
-    let message: CollaborationClientMessage;
+    let message: CollaborationClientMessage | E2eeCollaborationClientMessage;
     try {
-      message = JSON.parse(raw) as CollaborationClientMessage;
+      message = JSON.parse(raw) as
+        CollaborationClientMessage | E2eeCollaborationClientMessage;
     } catch {
       socket.close(1003, 'Invalid collaboration message.');
       return;
@@ -7774,10 +7850,19 @@ export class ProjectCollaborationRoom extends DurableObject {
           userId,
           displayName,
           role,
-          email
+          email,
+          ...encrypted
         },
         'active'
       );
+      if (encrypted.format === 2) {
+        // The room holds no plaintext for an encrypted project, and its
+        // first frame is the encrypted head (ADR-024 slice 4-9).
+        if (message.document) this.send(socket, formatMismatch(true));
+        await this.sendEncryptedState(socket, message.clientId, userId, role);
+        await this.broadcastPresence();
+        return;
+      }
       if (message.document) {
         await this.acceptDocument(
           socket,
@@ -7848,7 +7933,24 @@ export class ProjectCollaborationRoom extends DurableObject {
       );
       return;
     }
+    if (message.type === 'e2ee-document') {
+      if (encrypted.format !== 2) {
+        this.send(socket, formatMismatch(false));
+        return;
+      }
+      await this.acceptEncryptedDocument(
+        socket,
+        message.clientId,
+        message.version,
+        typeof message.leaseId === 'string' ? message.leaseId : undefined
+      );
+      return;
+    }
     if (message.type === 'document') {
+      if (encrypted.format === 2) {
+        this.send(socket, formatMismatch(true));
+        return;
+      }
       await this.acceptDocument(
         socket,
         message.clientId,
@@ -8447,6 +8549,15 @@ export class ProjectCollaborationRoom extends DurableObject {
     if (!this.collaborationAccessAllowed(role, email)) {
       return new Response('Collaboration access is disabled.', { status: 403 });
     }
+    const encrypted = trustedEncryptedIdentity(request.headers);
+    if (encrypted.format === 2) {
+      return this.acceptEncryptedHttp(
+        request,
+        { userId: userId as UserId, role, email, ...encrypted },
+        projectId
+      );
+    }
+    if (this.roomFormat === 2) return rejectionResponse(formatMismatch(true));
     if (role === 'viewer') {
       return rejectionResponse({
         code: 'permission-denied',
@@ -8747,6 +8858,318 @@ export class ProjectCollaborationRoom extends DurableObject {
     );
   }
 
+  // --- End-to-end encrypted projects (ADR-024 Phase 4, slice 4-9) ---------
+
+  /**
+   * The account's encrypted version store. This package has none: the
+   * Worker's room (`apps/web/worker/e2eeRoom.ts`) supplies it, and a room
+   * without one refuses every encrypted request.
+   */
+  protected e2eeAccount(_env: CloudflareEnv): E2eeRoomAccount | null {
+    return null;
+  }
+
+  /** The room's sequencer, while encrypted projects are open to `email`. */
+  private async encryptedSequencer(
+    email?: string
+  ): Promise<E2eeRoomSequencer | null> {
+    if (!isE2eeProjectsEnabled(this.roomEnv, email) || !this.projectId)
+      return null;
+    if (this.e2eeAccountState === undefined)
+      this.e2eeAccountState = this.e2eeAccount(this.roomEnv);
+    if (!this.e2eeAccountState) return null;
+    const storage = this.roomContext.storage;
+    this.e2eeLedgerState ??= new E2eeRoomLedger({
+      get: (key) => storage.get(key),
+      put: (entries) => storage.put(entries),
+      delete: (keys) => storage.delete(keys)
+    });
+    await this.e2eeLedgerState.load();
+    return new E2eeRoomSequencer(
+      this.e2eeAccountState,
+      this.e2eeLedgerState,
+      this.projectId
+    );
+  }
+
+  /** A plaintext request to an encrypted project's room. */
+  private plaintextRefusal(): Response | null {
+    return this.roomFormat === 2
+      ? new Response(formatMismatch(true).message, { status: 409 })
+      : null;
+  }
+
+  /**
+   * Admits an encrypted request and records the room's format. A room that
+   * already holds plaintext versions never relays envelopes. The caller
+   * holds the room queue.
+   */
+  private async enterEncryptedRoom(
+    projectId: string,
+    email?: string
+  ): Promise<Response | null> {
+    if (
+      !isE2eeProjectsEnabled(this.roomEnv, email) ||
+      (this.e2eeAccountState ??= this.e2eeAccount(this.roomEnv)) === null
+    ) {
+      return new Response(
+        'Encrypted projects are not available for this account.',
+        { status: 403 }
+      );
+    }
+    if (this.roomFormat === 2 && this.projectId === projectId) return null;
+    if (this.latestDocument || this.historyVersions.length) {
+      return new Response(formatMismatch(false).message, { status: 409 });
+    }
+    this.roomFormat = 2;
+    this.projectId = projectId;
+    await this.persistRoomState();
+    return null;
+  }
+
+  private async sendEncryptedState(
+    socket: WebSocket,
+    clientId: string,
+    userId: UserId,
+    role: SharedProjectAccessRole
+  ): Promise<void> {
+    await this.enqueueLeaseOperation(async () => {
+      const sequencer =
+        role === 'owner'
+          ? await this.encryptedSequencer(this.sockets.get(socket)?.email)
+          : null;
+      const current = await sequencer?.sync();
+      const head = sequencer?.head;
+      if (!current || !head) {
+        socket.close(1008, 'This encrypted project cannot use the room.');
+        this.removeSocket(socket);
+        return;
+      }
+      this.send(socket, {
+        type: 'e2ee-state',
+        members: this.members(),
+        role,
+        lease:
+          this.editLeases.find(
+            (lease) => lease.userId === userId && lease.clientId === clientId
+          ) ?? null,
+        head,
+        keyEpoch: current.keyEpoch
+      });
+    });
+  }
+
+  private async submitEncrypted(
+    writer: E2eeRoomWriter & { email?: string },
+    version: unknown,
+    revisionId: string | null
+  ): Promise<E2eeRoomOutcome> {
+    const sequencer =
+      this.roomFormat === 2
+        ? await this.encryptedSequencer(writer.email)
+        : null;
+    return sequencer
+      ? sequencer.submit(writer, version, revisionId)
+      : {
+          kind: 'error',
+          rejection: {
+            code: 'permission-denied',
+            message: 'Encrypted projects are not available for this account.'
+          }
+        };
+  }
+
+  private async acceptEncryptedDocument(
+    socket: WebSocket,
+    clientId: string,
+    version: unknown,
+    leaseId?: string
+  ): Promise<void> {
+    await this.enqueueLeaseOperation(async () => {
+      const connection = this.sockets.get(socket);
+      if (!connection || !(await this.canAuthor(connection, leaseId, socket))) {
+        return;
+      }
+      const outcome = await this.submitEncrypted(connection, version, null);
+      if (outcome.kind === 'error') {
+        this.send(socket, { type: 'error', ...outcome.rejection });
+        return;
+      }
+      if (outcome.kind === 'conflict') {
+        const { kind: _kind, ...frame } = outcome;
+        this.send(socket, { type: 'e2ee-conflict', ...frame });
+        return;
+      }
+      this.send(socket, { type: 'e2ee-ack', record: outcome.record });
+      const head = this.e2eeLedgerState?.latest;
+      if (outcome.advanced && head) {
+        await this.broadcast(
+          { type: 'e2ee-document', clientId, head: roomHead(head) },
+          socket
+        );
+      }
+    });
+  }
+
+  /**
+   * `POST …/collaboration` for an encrypted project: a submission too large
+   * for a socket frame, or, with `revisionId`, a named save written through
+   * the encrypted revision path (never `storeCollaborationCheckpoint`).
+   */
+  private async acceptEncryptedHttp(
+    request: Request,
+    writer: E2eeRoomWriter & { userId: UserId; email?: string },
+    projectId: string
+  ): Promise<Response> {
+    if (writer.role !== 'owner') {
+      return rejectionResponse({
+        code: 'permission-denied',
+        message:
+          'Only the owner can edit this encrypted project until sharing arrives.'
+      });
+    }
+    const body = await readSnapshotBody(request);
+    if (body === null) return oversizeSnapshotResponse();
+    let payload: unknown;
+    try {
+      payload = JSON.parse(body);
+    } catch {
+      return new Response('Invalid collaboration snapshot.', { status: 400 });
+    }
+    if (
+      !isRecord(payload) ||
+      typeof payload.clientId !== 'string' ||
+      !payload.clientId ||
+      payload.clientId.length > 256 ||
+      (payload.leaseId !== undefined && typeof payload.leaseId !== 'string') ||
+      (payload.revisionId !== undefined &&
+        (typeof payload.revisionId !== 'string' ||
+          !/^[A-Za-z0-9_-]{1,200}$/.test(payload.revisionId)))
+    ) {
+      return new Response('Invalid collaboration snapshot.', { status: 400 });
+    }
+    const clientId = payload.clientId;
+    const leaseId = payload.leaseId;
+    const revisionId = payload.revisionId ?? null;
+    return this.enqueueLeaseOperation(async () => {
+      if (this.erasing)
+        return new Response('Project was erased.', { status: 410 });
+      if (this.projectId && this.projectId !== projectId) {
+        return new Response('Room project mismatch.', { status: 409 });
+      }
+      const formatRefusal = await this.enterEncryptedRoom(
+        projectId,
+        writer.email
+      );
+      if (formatRefusal) return formatRefusal;
+      if (!(await this.membershipStillAllowsAuthoring({ ...writer }))) {
+        return rejectionResponse({
+          code: 'permission-denied',
+          message: 'Project membership no longer allows editing.'
+        });
+      }
+      if (this.leaseEnforced(writer.email)) {
+        await this.expireEditLease();
+        if (!this.matchesActiveLease(writer.userId, clientId, leaseId)) {
+          return rejectionResponse({
+            code: 'lease-required',
+            message: 'A matching active project edit lease is required.'
+          });
+        }
+      }
+      const outcome = await this.submitEncrypted(
+        writer,
+        payload.version,
+        revisionId
+      );
+      if (outcome.kind === 'error') return rejectionResponse(outcome.rejection);
+      if (outcome.kind === 'conflict') {
+        const { kind: _kind, ...frame } = outcome;
+        return Response.json(
+          {
+            type: 'e2ee-conflict',
+            ...frame
+          } satisfies E2eeCollaborationServerMessage,
+          { status: 409 }
+        );
+      }
+      const head = this.e2eeLedgerState?.latest;
+      if (outcome.advanced && head) {
+        await this.broadcast({
+          type: 'e2ee-document',
+          clientId,
+          head: roomHead(head)
+        }).catch(() => {
+          // The account write already won; delivery must not undo the ack.
+          console.error('Encrypted room broadcast failed after the write.');
+        });
+      }
+      return Response.json({
+        type: 'e2ee-ack',
+        record: outcome.record
+      } satisfies E2eeCollaborationServerMessage);
+    });
+  }
+
+  /**
+   * Internal: the Worker tells the room that a Commit moved the project's
+   * group to a new epoch (`epoch`), or that the account's head moved outside
+   * the room (`head`). Connected browsers hear about it at once.
+   */
+  private async acceptInternalE2eeNotice(request: Request): Promise<Response> {
+    const projectId = new URL(request.url).searchParams.get('projectId');
+    if (
+      request.method !== 'POST' ||
+      request.headers.get('x-openzcad-internal-e2ee-notice') !== 'v1' ||
+      !projectId ||
+      (this.projectId !== null && this.projectId !== projectId)
+    ) {
+      return new Response('Invalid encrypted room notice.', { status: 403 });
+    }
+    const body = await readSnapshotBody(request, 1024);
+    let notice: unknown;
+    try {
+      notice = JSON.parse(body ?? '');
+    } catch {
+      notice = null;
+    }
+    if (
+      !isRecord(notice) ||
+      (notice.kind !== 'epoch' && notice.kind !== 'head') ||
+      (notice.kind === 'epoch' &&
+        (!Number.isSafeInteger(notice.keyEpoch) ||
+          (notice.keyEpoch as number) < 0))
+    ) {
+      return new Response('Invalid encrypted room notice.', { status: 400 });
+    }
+    return this.enqueueLeaseOperation(async () => {
+      // Only a room that serves the project to someone has anyone to tell.
+      if (this.roomFormat !== 2 || this.sockets.size === 0) {
+        return new Response(null, { status: 204 });
+      }
+      if (notice.kind === 'epoch') {
+        await this.broadcast({
+          type: 'e2ee-epoch',
+          keyEpoch: notice.keyEpoch as number
+        });
+        return new Response(null, { status: 204 });
+      }
+      const sequencer = await this.encryptedSequencer(
+        Array.from(this.sockets.values())[0]?.email
+      );
+      const synced = await sequencer?.sync();
+      const head = sequencer?.head;
+      if (synced?.moved && head) {
+        await this.broadcast({
+          type: 'e2ee-document',
+          clientId: 'account',
+          head
+        });
+      }
+      return new Response(null, { status: 204 });
+    });
+  }
+
   /**
    * Writes the room index plus whichever documents changed. Each document owns
    * a key, so no single value grows with history depth; `put` takes them as one
@@ -8775,7 +9198,8 @@ export class ProjectCollaborationRoom extends DurableObject {
       latestVersion: this.latestDocument?.version ?? null,
       historyVersions: Array.from(this.documentHistory.keys()).sort(
         (left, right) => left - right
-      )
+      ),
+      ...(this.roomFormat === 2 ? { format: 2 as const } : {})
     } satisfies RoomMeta;
     await this.roomContext.storage.put(entries);
     // Deleting after the index no longer references these keys keeps a failed
@@ -8827,14 +9251,17 @@ export class ProjectCollaborationRoom extends DurableObject {
     } satisfies CollaborationSocketAttachment);
   }
 
-  private send(socket: WebSocket, message: CollaborationServerMessage): void {
+  private send(
+    socket: WebSocket,
+    message: CollaborationServerMessage | E2eeCollaborationServerMessage
+  ): void {
     if (socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(message));
     }
   }
 
   private async broadcast(
-    message: CollaborationServerMessage,
+    message: CollaborationServerMessage | E2eeCollaborationServerMessage,
     except?: WebSocket
   ): Promise<void> {
     let removed = false;
@@ -8907,6 +9334,35 @@ function trustedProjectRole(
     : null;
 }
 
+/**
+ * The encrypted identity the Worker attaches to a format-2 project's room
+ * request: `x-openzcad-project-format: 2` and, outside development, the
+ * session encrypted versions are written under. The Worker strips every
+ * client-supplied `x-openzcad-*` header before it forwards a request.
+ */
+function trustedEncryptedIdentity(
+  headers: Headers
+): Pick<CollaborationSocketAttachment, 'format' | 'credential'> {
+  if (headers.get('x-openzcad-project-format') !== '2') return {};
+  const credential = parseE2eeRoomCredential(
+    headers.get('x-openzcad-write-credential')
+  );
+  return { format: 2, ...(credential ? { credential } : {}) };
+}
+
+/** A plaintext frame to an encrypted room (`plaintext`), or the reverse. */
+function formatMismatch(plaintext: boolean): CollaborationRejection & {
+  type: 'error';
+} {
+  return {
+    type: 'error',
+    code: 'format-mismatch',
+    message: plaintext
+      ? 'This project is end-to-end encrypted; its room relays only encrypted versions.'
+      : 'This project is not end-to-end encrypted; its room does not relay envelopes.'
+  };
+}
+
 interface CollaborationRejection {
   code: CollaborationErrorCode;
   message: string;
@@ -8920,7 +9376,9 @@ function rejectionResponse(rejection: CollaborationRejection): Response {
       status:
         rejection.code === 'permission-denied'
           ? 403
-          : rejection.code === 'lease-required'
+          : rejection.code === 'lease-required' ||
+              rejection.code === 'format-mismatch' ||
+              rejection.code === 'epoch-stale'
             ? 409
             : rejection.code === 'document-invalid'
               ? 400

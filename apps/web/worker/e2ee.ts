@@ -108,7 +108,7 @@ export interface E2eeRouteEnv {
 }
 
 /** The project-storage bucket, as the persistence layer picks it. */
-function projectBucket(env: E2eeRouteEnv): E2eeObjectBucket | null {
+export function projectBucket(env: E2eeRouteEnv): E2eeObjectBucket | null {
   const bucket = (env.PROJECT_STORAGE ?? env.ARTIFACTS) as
     Partial<E2eeObjectBucket> | undefined;
   return bucket &&
