@@ -1324,7 +1324,11 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     const options: UseInPlaceCommandOptions = {
       ...setupOptions([], vi.fn()),
       baseVersion: 1,
-      reseed: (edit) => ({ tool: 'draft', seed: edit })
+      // The model moved: the stored faces read back renamed.
+      reseed: (edit) => ({
+        tool: 'draft',
+        seed: { ...edit, slots: { ...edit.slots, faces: [face(1), face(3)] } }
+      })
     };
     const hook = renderHook(
       (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
@@ -1341,6 +1345,7 @@ describe('useInPlaceCommand: editing a stored feature', () => {
       hook.result.current.pickFace(face(2, { x: 5, y: 6, z: 7 }));
     });
     hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.slots.faces.map((f) => f.hash)).toEqual([1, 2]);
     expect(hook.result.current.slots.faces[1]?.point).toEqual({
       x: 5,
       y: 6,
