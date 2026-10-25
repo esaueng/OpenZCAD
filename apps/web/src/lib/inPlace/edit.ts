@@ -272,8 +272,11 @@ export function inPlaceEditSeed(
       for (const section of data.sections) profile(section);
       seed.options.shape = data.mode;
       if (data.endPoint) {
-        seed.choices.end = [{ value: 'saved', label: 'At its saved apex' }];
-        seed.options.end = 'saved';
+        // Its apex as stored, each coordinate on its own chip.
+        seed.options.end = 'point';
+        value('apexX', data.endPoint.x);
+        value('apexY', data.endPoint.y);
+        value('apexZ', data.endPoint.z);
       }
       break;
     }
@@ -475,10 +478,11 @@ export function inPlaceEditSeed(
       if (data.patternKind === 'linear') {
         value('spacing', data.spacing);
         if (data.direction) {
-          seed.choices.axis = [
-            { value: 'saved', label: 'Its saved direction' }
-          ];
-          seed.options.axis = 'saved';
+          // Its repeat vector as stored, each part on its own chip.
+          seed.options.axis = 'custom';
+          value('dirX', data.direction.x);
+          value('dirY', data.direction.y);
+          value('dirZ', data.direction.z);
         } else {
           seed.options.axis = data.axis;
         }
