@@ -4654,15 +4654,19 @@ export function App() {
       })();
       const controller = cloudProjectAutosaveRef.current;
       // An encrypted room's version is the account's: the room wrote it
-      // there before relaying it (ADR-024 slice 4-9).
+      // there before relaying it (ADR-024 slice 4-9). A local merge the room
+      // has not acknowledged yet is not: the account still holds the head it
+      // builds on, so a refused or lost resubmission falls back to autosave.
+      const encryptedAccountVersion =
+        context?.accountVersion ?? remoteDocument.version;
       if (encryptedRoomProject) {
         remoteVersionsRef.current.set(
           remoteDocument.projectId,
-          remoteDocument.version
+          encryptedAccountVersion
         );
       }
       const accountVersion = encryptedRoomProject
-        ? remoteDocument.version
+        ? encryptedAccountVersion
         : (controller?.syncedVersion ??
           remoteVersionsRef.current.get(remoteDocument.projectId) ??
           null);

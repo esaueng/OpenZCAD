@@ -319,6 +319,12 @@ describe('useCollaboration in an encrypted room (ADR-024 slice 4-9)', () => {
       ...remote.featureOrder,
       ...local.featureOrder
     ]);
+    // Not the account's until the room acknowledges it: the account still
+    // holds the latest version (#886 review).
+    expect(onRemoteDocument.mock.calls[0]![1]).toEqual({
+      adopted: true,
+      accountVersion: remote.version
+    });
     // Resealed on the latest version, as an envelope.
     expect(codec.encode).toHaveBeenLastCalledWith(
       expect.objectContaining({ version: merged.version }),

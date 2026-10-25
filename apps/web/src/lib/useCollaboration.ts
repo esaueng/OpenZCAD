@@ -72,10 +72,15 @@ interface CollaborationOptions {
    * `adopted` marks an explicit user decision ("Use room version") rather than
    * an unsolicited broadcast — the handler must apply it even when the room
    * document's version is not ahead of the local one.
+   *
+   * `accountVersion` is set when the document is not yet the account's: a
+   * local three-way merge the room has not acknowledged. It names the head
+   * the account holds (the room's latest), which an encrypted room's account
+   * baseline stays on until `onAccountVersion` reports the merge accepted.
    */
   onRemoteDocument(
     document: ProjectDocument,
-    context?: { adopted?: boolean }
+    context?: { adopted?: boolean; accountVersion?: number }
   ): void;
   onConflict(document: ProjectDocument): void;
   /**
@@ -713,7 +718,12 @@ export function useCollaboration({
       setRoomVersion(latest.version);
       baseVersionRef.current = latest.version;
       documentRef.current = merged;
-      remoteHandlerRef.current(merged, { adopted: true });
+      // In an encrypted room this is not the account's until the room
+      // acknowledges it: the account still holds `latest`.
+      remoteHandlerRef.current(merged, {
+        adopted: true,
+        ...(codecLoad ? { accountVersion: latest.version } : {})
+      });
       sendDocument(socket, 'document', merged, true);
       // Refused (say the lease lapsed): the merged document stays local on the
       // latest base and goes out with the next ordinary publication.
