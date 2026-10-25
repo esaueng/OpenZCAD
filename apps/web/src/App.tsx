@@ -8954,6 +8954,8 @@ export function App() {
       bodyId: resolvedBodyId,
       hash: face.hash,
       topologyId: face.topologyId,
+      // Its lineage, so a rebuild that renames its hash still finds it.
+      ...(face.reference ? { reference: face.reference } : {}),
       ...(geometry?.surfaceType ? { surfaceType: geometry.surfaceType } : {}),
       ...(geometry?.normal ? { normal: geometry.normal } : {}),
       ...(geometry?.centroid ? { centroid: geometry.centroid } : {}),
