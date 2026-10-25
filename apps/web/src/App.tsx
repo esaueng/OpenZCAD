@@ -1429,6 +1429,7 @@ import {
   clampValue,
   displayedValue,
   isInPlaceTool,
+  keypadText,
   valueInRange,
   type InPlaceRequest,
   type BodyPick,
@@ -8375,12 +8376,29 @@ export function App() {
             : null;
       },
       anyFace: (bodyId) => {
-        const face = representations[bodyId]?.topology?.faces.find(
-          (candidate) => candidate.geometry?.surfaceType === 'plane'
-        );
+        // A flat face carries the handle best; a body with none (a sphere)
+        // still names itself by any face it has.
+        const faces = representations[bodyId]?.topology?.faces ?? [];
+        const face =
+          faces.find((candidate) => candidate.geometry?.surfaceType === 'plane') ??
+          faces[0];
         return face
           ? inPlaceFacePick(bodyId, face.topologyId, face.hash, undefined)
           : null;
+      },
+      curve: (sketchId, entityId) => {
+        // As the card's path options were: a drawn line or arc of that
+        // sketch, not construction.
+        const node = current.nodes[entityId as EntityId];
+        return (
+          node?.kind === 'sketch-object' &&
+          !node.data.construction &&
+          (node.data.objectKind === 'line' || node.data.objectKind === 'arc') &&
+          (findSketch(current, sketchId)?.objectIds.includes(
+            entityId as EntityId
+          ) ??
+            false)
+        );
       },
       body: (bodyId) => inPlaceBodyPick(bodyId)
     });
@@ -19217,11 +19235,18 @@ export function App() {
     if (!doc || !inPlaceSpec?.wantsPath) return null;
     const resolve = sketchValueResolver(parameterScope.scope, doc.units);
     // Every sketch's curves, the profile's own included: one sketch may hold
-    // both a closed profile and the open spine it sweeps along.
-    return sketchCurveCandidates(doc, availableSketchViews, (value) =>
-      resolve(value)
-    );
-  }, [doc, inPlaceSpec, availableSketchViews, parameterScope]);
+    // both a closed profile and the open spine it sweeps along. An edit
+    // offers only sketches made before its feature, as it takes profiles.
+    const views = inPlaceEditing
+      ? availableSketchViews.filter((view) =>
+          featurePrecedes(
+            producingFeatureOf({ sketchId: view.sketchId }),
+            inPlaceEditing.featureId
+          )
+        )
+      : availableSketchViews;
+    return sketchCurveCandidates(doc, views, (value) => resolve(value));
+  }, [doc, inPlaceSpec, availableSketchViews, parameterScope, inPlaceEditing]);
   const inPlaceCurvePicker = useMemo(
     () =>
       inPlaceCurveCandidates
@@ -26322,7 +26347,7 @@ export function App() {
                 label: valueSpec.label,
                 // A parametric value opens as its expression, and comes
                 // back as one if entry is canceled.
-                initial: raw ?? String(displayedValue(valueSpec, value)),
+                initial: raw ?? keypadText(value),
                 selectInitial: true,
                 unitKind: valueSpec.unit,
                 baseline: value,

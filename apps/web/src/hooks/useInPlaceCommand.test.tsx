@@ -535,6 +535,22 @@ describe('useInPlaceCommand: hole step chips', () => {
     await waitFor(() =>
       expect(hook.result.current.values.counterboreDiameter).toBe(7.2)
     );
+
+    // The bore moves while the step's keypad is open, then Escape: the step,
+    // still unset, takes the default as it stands now.
+    act(() => hook.result.current.previewValue('counterboreDiameter', 14));
+    act(() => {
+      hook.result.current.setValue('diameter', 5);
+    });
+    act(() =>
+      hook.result.current.restoreValue(
+        'counterboreDiameter',
+        7.2,
+        undefined,
+        false
+      )
+    );
+    expect(hook.result.current.values.counterboreDiameter).toBe(9);
   });
 });
 
@@ -768,5 +784,67 @@ describe('useInPlaceCommand: fillet edges', () => {
       taken = hook.result.current.pickEdge(edge('a', 1));
     });
     expect(taken).toBe(false);
+  });
+});
+
+describe("useInPlaceCommand: editing a fillet's edge set", () => {
+  const named = (hash: number) => ({
+    bodyId: 'body_a' as BodyId,
+    hash,
+    topologyId: `e${hash}`,
+    reference: { kind: 'edge', currentHash: hash } as never
+  });
+
+  it('goes hash-only with an added edge, and names the set again once it is dropped', async () => {
+    const seed: InPlaceEditSeed = {
+      featureId: 'feat_f' as FeatureId,
+      nodeId: 'node_f',
+      name: 'Rim',
+      data: {
+        featureKind: 'fillet',
+        targetBodyId: 'body_a' as BodyId,
+        edgeHashes: [1, 2],
+        radius: 2
+      },
+      resultBodyId: BODY,
+      ownBodyIds: [BODY],
+      slots: {
+        profiles: [],
+        axisId: null,
+        path: [],
+        guide: [],
+        faces: [],
+        bodies: [],
+        plane: null,
+        edges: [named(1), named(2)]
+      },
+      values: { radius: 2 },
+      raws: {},
+      touched: ['radius'],
+      options: { law: 'constant' },
+      axes: [],
+      choices: {},
+      lockedOptions: [],
+      notice: null
+    };
+    const { hook, built } = setup();
+    act(() => hook.result.current.edit('fillet', seed));
+    const added = { bodyId: 'body_a' as BodyId, hash: 3, topologyId: 'e3' };
+    act(() => {
+      hook.result.current.pickEdge(added);
+    });
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({ edgeHashes: [1, 2, 3] })
+    );
+    expect(built.at(-1)).not.toHaveProperty('edgeReferences');
+    act(() => {
+      hook.result.current.pickEdge(added);
+    });
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        edgeHashes: [1, 2],
+        edgeReferences: [named(1).reference, named(2).reference]
+      })
+    );
   });
 });

@@ -2395,9 +2395,20 @@ export function displayedValue(
   value: number
 ): number {
   const rounded = Math.round(value * 100) / 100;
-  return !spec || valueInRange(spec, rounded) || !valueInRange(spec, value)
-    ? rounded
-    : value;
+  // Two places only where they keep the value: a typed 0.005 is not 0.01,
+  // and a valid 179.9999995° is not the refused 180°.
+  const close = Math.abs(rounded - value) <= Math.abs(value) * 1e-3;
+  const valid =
+    !spec || valueInRange(spec, rounded) || !valueInRange(spec, value);
+  return close && valid ? rounded : Number(value.toPrecision(10));
+}
+
+/**
+ * A value as the keypad opens on it: exactly, so reopening it and pressing
+ * Enter never changes what is stored.
+ */
+export function keypadText(value: number): string {
+  return String(Number(value.toPrecision(12)));
 }
 
 /**

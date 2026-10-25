@@ -6,6 +6,7 @@ import {
   clampValue,
   displayedValue,
   isInPlaceTool,
+  keypadText,
   valueInRange,
   type BodyPick,
   type EdgePick,
@@ -88,6 +89,15 @@ describe('the in-place tool table', () => {
     expect(displayedValue(angle, 82.3456)).toBe(82.35);
     expect(displayedValue(angle, 179.9999995)).toBe(179.9999995);
     expect(displayedValue(angle, 0.0000005)).toBe(0.0000005);
+    // A small value keeps its digits: 0.005 mm is not shown as 0.01.
+    const depth = IN_PLACE_TOOL_SPECS.hole.values.find(
+      (value) => value.id === 'counterboreDepth'
+    )!;
+    expect(displayedValue(depth, 0.005)).toBe(0.005);
+    expect(displayedValue(depth, 12.3456)).toBe(12.35);
+    // The keypad opens on the value exactly.
+    expect(keypadText(0.005)).toBe('0.005');
+    expect(keypadText(12.3456)).toBe('12.3456');
   });
 
   it('clamps a value to its range and falls back when not finite', () => {

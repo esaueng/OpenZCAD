@@ -261,6 +261,11 @@ export function useInPlaceCommand(
   const defaultsKey = spec?.defaults
     ? JSON.stringify(spec.defaults(slots, ctx, numbers))
     : '';
+  /** The defaults as they stand now, for a value put back unset. */
+  const defaultsRef = useRef<Record<string, number>>({});
+  defaultsRef.current = defaultsKey
+    ? (JSON.parse(defaultsKey) as Record<string, number>)
+    : {};
   useEffect(() => {
     if (!defaultsKey) return;
     const defaults = JSON.parse(defaultsKey) as Record<string, number>;
@@ -799,6 +804,13 @@ export function useInPlaceCommand(
       raw: string | undefined,
       wasTouched: boolean
     ) => {
+      // Unset, it takes its default as the default stands now: the value
+      // it followed may have moved while the entry was open (a bore dragged
+      // under an open step chip).
+      const restored =
+        !wasTouched && valueId in defaultsRef.current
+          ? defaultsRef.current[valueId]!
+          : value;
       setSession((current) => {
         if (!current) return current;
         const raws = { ...current.raws };
@@ -807,7 +819,7 @@ export function useInPlaceCommand(
         const others = current.touched.filter((id) => id !== valueId);
         return {
           ...current,
-          values: { ...current.values, [valueId]: value },
+          values: { ...current.values, [valueId]: restored },
           raws,
           touched: wasTouched ? [...others, valueId] : others
         };
