@@ -19939,9 +19939,20 @@ export function App() {
   // edges all cleared) the body the edited blend rounds, which the model
   // no longer shows, before any one body on screen.
   const inPlaceEditedBlendTarget = inPlaceEditTarget(inPlace.editing);
+  // A new blend's body once its edges are cleared: the one it last held,
+  // so Select all can take them all back.
+  const heldBlendBody = inPlace.slots.edges[0]?.bodyId ?? null;
+  const [lastBlendBody, setLastBlendBody] = useState<BodyId | null>(null);
+  useEffect(() => {
+    if (!inPlace.active) setLastBlendBody(null);
+    else if (heldBlendBody) setLastBlendBody(heldBlendBody);
+  }, [inPlace.active, heldBlendBody]);
   const inPlaceEdgeBody = inPlaceSpec?.edgeMode
-    ? (inPlace.slots.edges[0]?.bodyId ??
+    ? (heldBlendBody ??
       inPlaceEditedBlendTarget ??
+      (lastBlendBody && representations[lastBlendBody]
+        ? lastBlendBody
+        : null) ??
       (viewerBodies.length === 1 ? viewerBodies[0]!.bodyId : null))
     : null;
   const inPlaceBodyEdges = inPlaceEdgeBody
