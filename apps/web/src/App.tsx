@@ -8745,7 +8745,8 @@ export function App() {
       curve: (sketchId, entityId) =>
         sweepCurveExists(current, sketchId, entityId),
       body: (bodyId) => inPlaceBodyPick(bodyId),
-      laterTransforms: laterInPlaceSteps(current, feature)
+      laterTransforms: laterInPlaceSteps(current, feature),
+      datumAxis: (featureId) => current.derived.datumAxes?.[featureId] ?? null
     });
     if (!armed) return false;
     // A running command (another edit, a create) gives way quietly.
