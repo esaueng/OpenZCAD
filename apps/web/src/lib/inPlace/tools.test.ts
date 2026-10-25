@@ -13,7 +13,8 @@ import {
   type BodyPick,
   type FacePick,
   type InPlaceContext,
-  type InPlaceSlots
+  type InPlaceSlots,
+  profileOutline
 } from './tools';
 
 const CTX: InPlaceContext = {
@@ -109,9 +110,15 @@ describe('the in-place tool table', () => {
 
   it('clamps a value to its range and falls back when not finite', () => {
     const spec = IN_PLACE_TOOL_SPECS.revolve.values[0]!;
-    // Sub-degree turns are valid revolves (U09 review).
-    expect(clampValue(spec, 0)).toBe(1e-3);
+    // Every positive turn up to a full one is a valid revolve: 0 is kept
+    // just above, 360 itself is taken.
+    expect(clampValue(spec, 0)).toBeGreaterThan(0);
+    expect(clampValue(spec, 0)).toBeLessThan(1e-3);
     expect(clampValue(spec, 0.5)).toBe(0.5);
+    expect(clampValue(spec, 400)).toBe(360);
+    expect(valueInRange(spec, 0.0005)).toBe(true);
+    expect(valueInRange(spec, 0)).toBe(false);
+    expect(valueInRange(spec, 360)).toBe(true);
     expect(clampValue(spec, Number.NaN)).toBe(360);
   });
 });
@@ -181,6 +188,94 @@ describe('face tools build the card state', () => {
   });
 });
 
+describe('profileOutline', () => {
+  it("an implicit revolve profile is the sketch's first object only", () => {
+    const square = (x: number) => [
+      { x, y: 0 },
+      { x: x + 1, y: 0 },
+      { x: x + 1, y: 1 },
+      { x, y: 1 }
+    ];
+    const ctx: InPlaceContext = {
+      ...CTX,
+      sketchViews: [
+        {
+          sketchId: 's1' as SketchId,
+          basis: {
+            origin: { x: 0, y: 0, z: 0 },
+            u: { x: 1, y: 0, z: 0 },
+            v: { x: 0, y: 1, z: 0 },
+            normal: { x: 0, y: 0, z: 1 }
+          },
+          regions: [
+            { regionFingerprint: 1, outer: square(0) },
+            { regionFingerprint: 2, outer: square(50) }
+          ]
+        }
+      ]
+    };
+    const implicit = {
+      sketchId: 's1' as SketchId,
+      reference: { all: true as const, sourceEntityIds: [] },
+      regionFingerprint: 1,
+      implicit: true as const
+    };
+    expect(profileOutline(ctx, implicit).every((p) => p.x <= 1)).toBe(true);
+    // An explicit whole-sketch pick still spans every region.
+    const { implicit: _implicit, ...whole } = implicit;
+    expect(profileOutline(ctx, whole).some((p) => p.x >= 50)).toBe(true);
+  });
+});
+
+describe('a revolve about its profile middle', () => {
+  it('still has its angle rig, square to the axis', () => {
+    const square = (x: number) => [
+      { x, y: 0 },
+      { x: x + 2, y: 0 },
+      { x: x + 2, y: 2 },
+      { x, y: 2 }
+    ];
+    const ctx: InPlaceContext = {
+      ...CTX,
+      sketchViews: [
+        {
+          sketchId: 's1' as SketchId,
+          basis: {
+            origin: { x: 0, y: 0, z: 0 },
+            u: { x: 1, y: 0, z: 0 },
+            v: { x: 0, y: 1, z: 0 },
+            normal: { x: 0, y: 0, z: 1 }
+          },
+          // Two regions either side of the vertical axis: their middle is on it.
+          regions: [
+            { regionFingerprint: 1, outer: square(-6) },
+            { regionFingerprint: 2, outer: square(4) }
+          ]
+        }
+      ]
+    };
+    const pick = {
+      sketchId: 's1' as SketchId,
+      reference: { all: true as const, sourceEntityIds: [] },
+      regionFingerprint: 1
+    };
+    const axis = {
+      id: 'sketch-vertical',
+      label: 'Sketch vertical axis',
+      origin: { x: 0, y: 0, z: 0 },
+      direction: { x: 0, y: 1, z: 0 },
+      choice: { axis: 'vertical' as const }
+    };
+    const [handle] = IN_PLACE_TOOL_SPECS.revolve.handles(
+      { ...EMPTY, profiles: [pick], axis },
+      {},
+      ctx,
+      {}
+    );
+    expect(handle).toMatchObject({ valueId: 'angle', kind: 'angle' });
+  });
+});
+
 describe('body tools', () => {
   it('mirror: a plane slid along its normal moves the mirror plane', () => {
     const spec = IN_PLACE_TOOL_SPECS.mirror;
@@ -204,6 +299,66 @@ describe('body tools', () => {
     expect(spec.handles(slots, {}, CTX, {})[0]).toMatchObject({
       valueId: 'offset',
       params: { origin: { x: 0, y: 5, z: 2 } }
+    });
+  });
+
+  it('draft: a clicked hinge waits for a click', () => {
+    const spec = IN_PLACE_TOOL_SPECS.draft;
+    // An edited draft's faces carry no clicked point.
+    const face: FacePick = {
+      bodyId: 'body_a' as BodyId,
+      hash: 3,
+      topologyId: 'f3',
+      surfaceType: 'plane',
+      centroid: { x: 0, y: 0, z: 5 }
+    };
+    const slots = { ...EMPTY, faces: [face] };
+    expect(spec.ready(slots, { neutral: 'point' })).toBe(false);
+    expect(spec.request(slots, {}, { neutral: 'point' }, CTX)).toBeNull();
+    expect(spec.hint(slots, { neutral: 'point' })).toMatch(/hinge goes/);
+    const clicked = { ...face, hash: 4, point: { x: 1, y: 2, z: 3 } };
+    const both = { ...EMPTY, faces: [face, clicked] };
+    expect(spec.ready(both, { neutral: 'point' })).toBe(true);
+    expect(spec.request(both, {}, { neutral: 'point' }, CTX)).toMatchObject({
+      state: { value: { neutralPoint: { x: '1', y: '2', z: '3' } } }
+    });
+  });
+
+  it('mirror: a typed plane needs no pick and goes out as typed', () => {
+    const spec = IN_PLACE_TOOL_SPECS.mirror;
+    const slots: InPlaceSlots = { ...EMPTY, bodies: [BODY] };
+    expect(spec.ready(slots, {})).toBe(false);
+    expect(spec.ready(slots, { planeMode: 'typed' })).toBe(true);
+    expect(
+      spec.request(
+        slots,
+        {
+          planeOX: 'wall',
+          planeOY: 0,
+          planeOZ: 1,
+          planeNX: 0,
+          planeNY: 1,
+          planeNZ: 0
+        },
+        { planeMode: 'typed' },
+        CTX,
+        {
+          planeOX: 4,
+          planeOY: 0,
+          planeOZ: 1,
+          planeNX: 0,
+          planeNY: 1,
+          planeNZ: 0
+        }
+      )
+    ).toMatchObject({
+      state: {
+        operation: 'mirror',
+        value: {
+          origin: { x: 'wall', y: '0', z: '1' },
+          normal: { x: '0', y: '1', z: '0' }
+        }
+      }
     });
   });
 
@@ -242,6 +397,133 @@ describe('body tools', () => {
     });
   });
 
+  it('takes every value the stored feature takes, no narrower', () => {
+    const spec = (tool: keyof typeof IN_PLACE_TOOL_SPECS, id: string) =>
+      IN_PLACE_TOOL_SPECS[tool].values.find((value) => value.id === id)!;
+    // Any positive size: a small inch hole, a thin wall, a fine helix.
+    for (const [tool, id] of [
+      ['hole', 'diameter'],
+      ['hole', 'depth'],
+      ['shell', 'thickness'],
+      ['solid-offset', 'distance'],
+      ['helical-sweep', 'radius'],
+      ['helical-sweep', 'turns']
+    ] as const) {
+      expect(valueInRange(spec(tool, id), 0.05)).toBe(true);
+      expect(valueInRange(spec(tool, id), 0)).toBe(false);
+    }
+    // More than a turn, either way.
+    expect(valueInRange(spec('axis-rotate', 'angle'), 450)).toBe(true);
+    expect(valueInRange(spec('circular-pattern', 'angle'), -540)).toBe(true);
+  });
+
+  it('draft: an angle either way, up to a right angle', () => {
+    const angle = IN_PLACE_TOOL_SPECS.draft.values.find(
+      (value) => value.id === 'angle'
+    )!;
+    expect(valueInRange(angle, -12)).toBe(true);
+    expect(valueInRange(angle, 60)).toBe(true);
+    expect(valueInRange(angle, 90)).toBe(false);
+  });
+
+  it('scale: any positive factor, a unit conversion included', () => {
+    const factor = IN_PLACE_TOOL_SPECS.scale.values.find(
+      (value) => value.id === 'factor'
+    )!;
+    expect(valueInRange(factor, 1000)).toBe(true);
+    expect(valueInRange(factor, 0.001)).toBe(true);
+    expect(valueInRange(factor, 0)).toBe(false);
+  });
+
+  it('scale: its handle measures from the pivot chosen, and that pivot goes out', () => {
+    const spec = IN_PLACE_TOOL_SPECS.scale;
+    const slots = { ...EMPTY, bodies: [BODY] };
+    // About the origin (an old scale's absent pivot): the handle runs from
+    // there to the corner that factor carries, and no pivot is written.
+    const [fromOrigin] = spec.handles(slots, {}, CTX, { pivot: 'origin' });
+    expect(fromOrigin).toMatchObject({
+      params: { origin: { x: 0, y: 0, z: 0 }, scale: Math.hypot(20, 10, 4) }
+    });
+    expect(
+      spec.request(slots, { factor: 2 }, { pivot: 'origin' }, CTX)
+    ).not.toHaveProperty('pivot');
+    // About a typed point: its chips, and the point as typed.
+    const handles = spec.handles(
+      slots,
+      { pivotX: 20, pivotY: 10, pivotZ: 4 },
+      CTX,
+      { pivot: 'typed' }
+    );
+    expect(handles.map((handle) => handle.valueId)).toEqual([
+      'pivotX',
+      'pivotY',
+      'pivotZ',
+      'factor'
+    ]);
+    expect(handles.at(-1)).toMatchObject({
+      params: { origin: { x: 20, y: 10, z: 4 }, scale: Math.hypot(20, 10, 4) }
+    });
+    expect(
+      spec.request(
+        slots,
+        { factor: 2, pivotX: 'px', pivotY: 10, pivotZ: 4 },
+        { pivot: 'typed' },
+        CTX
+      )
+    ).toMatchObject({ pivot: { x: 'px', y: 10, z: 4 } });
+    // A new scale grows about the body's centre.
+    expect(spec.request(slots, { factor: 2 }, {}, CTX)).toMatchObject({
+      pivot: { x: 10, y: 5, z: 2 }
+    });
+  });
+
+  it('scale: a body a later edit reshapes is scaled on a typed chip', () => {
+    const spec = IN_PLACE_TOOL_SPECS.scale;
+    const slots = { ...EMPTY, bodies: [BODY] };
+    expect(
+      spec.handles(slots, {}, { ...CTX, reshapedLater: true }, {})
+    ).toEqual([expect.objectContaining({ valueId: 'factor', kind: 'chip' })]);
+    // A body retargeted to that a later edit reshapes, likewise.
+    expect(
+      spec.handles(
+        { ...EMPTY, bodies: [{ ...BODY, reshapedLater: true }] },
+        {},
+        CTX,
+        {}
+      )
+    ).toEqual([expect.objectContaining({ valueId: 'factor', kind: 'chip' })]);
+  });
+
+  it('solid offset: a curved-only body still gets its offset handle', () => {
+    const spec = IN_PLACE_TOOL_SPECS['solid-offset'];
+    // A sphere's face publishes no normal.
+    const round: FacePick = {
+      bodyId: 'body_a' as BodyId,
+      hash: 5,
+      topologyId: 'f5',
+      surfaceType: 'sphere',
+      center: { x: 0, y: 0, z: 10 }
+    };
+    const slots = { ...EMPTY, faces: [round] };
+    expect(spec.handles(slots, {}, CTX, {})).toEqual([]);
+    const [handle] = spec.handles(
+      slots,
+      {},
+      {
+        ...CTX,
+        bodyBounds: () => ({
+          min: { x: -5, y: -5, z: -5 },
+          max: { x: 5, y: 5, z: 5 }
+        })
+      },
+      {}
+    );
+    expect(handle).toMatchObject({
+      valueId: 'distance',
+      params: { origin: { x: 0, y: 0, z: 5 }, direction: { x: 0, y: 0, z: 1 } }
+    });
+  });
+
   it('rotate about axis: only datum axes, stored by reference', () => {
     const spec = IN_PLACE_TOOL_SPECS['axis-rotate'];
     const [axis] = axisCandidatesFor(EMPTY, CTX, 'datum');
@@ -258,6 +540,56 @@ describe('body tools', () => {
       axisRotation: { axis: { datumFeatureId: 'axis_1' }, angleDeg: 90 },
       copy: true
     });
+  });
+
+  it('rotate about axis: an axis through the body middle still has its rig', () => {
+    const spec = IN_PLACE_TOOL_SPECS['axis-rotate'];
+    // BODY's middle is (10, 5, 2): a vertical axis through it.
+    const axis = {
+      id: 'datum:centre',
+      label: 'Centre',
+      origin: { x: 10, y: 5, z: 0 },
+      direction: { x: 0, y: 0, z: 1 },
+      choice: { datumFeatureId: 'centre' as FeatureId }
+    };
+    const [handle] = spec.handles(
+      { ...EMPTY, bodies: [BODY], axis },
+      {},
+      CTX,
+      {}
+    );
+    expect(handle).toMatchObject({ valueId: 'angle', kind: 'angle' });
+    expect(handle?.kind === 'angle' && handle.params.radius).toBeCloseTo(
+      Math.hypot(10, 5) * 1.15
+    );
+    // A body with no extent has no rig: its angle is typed.
+    const point = {
+      ...BODY,
+      min: { x: 10, y: 5, z: 0 },
+      max: { x: 10, y: 5, z: 4 }
+    };
+    expect(
+      spec.handles({ ...EMPTY, bodies: [point], axis }, {}, CTX, {})
+    ).toEqual([expect.objectContaining({ valueId: 'angle', kind: 'chip' })]);
+  });
+
+  it('circular pattern: an axis through the body middle keeps its angle rig and count', () => {
+    const spec = IN_PLACE_TOOL_SPECS['circular-pattern'];
+    const axis = {
+      id: 'world-z',
+      label: 'Z axis',
+      origin: { x: 10, y: 5, z: 0 },
+      direction: { x: 0, y: 0, z: 1 },
+      choice: { world: 'z' as const }
+    };
+    expect(
+      spec
+        .handles({ ...EMPTY, bodies: [BODY], axis }, {}, CTX, {})
+        .map((handle) => [handle.valueId, handle.kind])
+    ).toEqual([
+      ['angle', 'angle'],
+      ['count', 'chip']
+    ]);
   });
 
   it('booleans: picks in order, the first the base; keep from Options', () => {
@@ -371,6 +703,29 @@ describe('review: values the cards accepted stay expressible', () => {
         )
       ).toBe(2);
     }
+  });
+
+  it("a slid stored plane keeps each coordinate's text, adding to the one it moves", () => {
+    const plane = {
+      kind: 'saved' as const,
+      origin: { x: 20, y: 0, z: 3 },
+      normal: { x: 0, y: 0, z: 1 },
+      fields: {
+        origin: { x: 'width', y: '0', z: 'h' },
+        normal: { x: '0', y: '0', z: '1' }
+      }
+    };
+    const slots = { ...EMPTY, bodies: [BODY], plane };
+    const origin = (offset: number | string) =>
+      (
+        IN_PLACE_TOOL_SPECS.mirror.request(slots, { offset }, {}, CTX, {
+          offset: typeof offset === 'number' ? offset : 5
+        }) as { state: { value: { origin: unknown } } }
+      ).state.value.origin;
+    expect(origin(5)).toEqual({ x: 'width', y: '0', z: 'h + 5' });
+    expect(origin('gap')).toEqual({ x: 'width', y: '0', z: 'h + (gap)' });
+    // Untouched, it is as stored.
+    expect(origin(0)).toEqual({ x: 'width', y: '0', z: 'h' });
   });
 
   it('a typed mirror offset stays an expression in the coordinate it moves', () => {
@@ -595,6 +950,48 @@ describe('review: loft apex and guided sweeps', () => {
     expect(
       loft.handles(slots, {}, ctx, { end: 'apex' }).map((h) => h.valueId)
     ).toEqual(['apex']);
+  });
+
+  it('a helix can coil about a typed axis, stored as typed', () => {
+    const slots = { ...EMPTY, profiles: [pick('s1', 1)] };
+    const helix = IN_PLACE_TOOL_SPECS['helical-sweep'];
+    expect(helix.ready(slots, {})).toBe(false);
+    expect(helix.ready(slots, { axisMode: 'typed' })).toBe(true);
+    const numbers = {
+      axisOX: 2,
+      axisOY: 0,
+      axisOZ: 0,
+      axisDX: 0,
+      axisDY: 0,
+      axisDZ: 1
+    };
+    expect(
+      helix.request(
+        slots,
+        { ...numbers, axisOX: 'wall' },
+        { axisMode: 'typed' },
+        ctx,
+        numbers
+      )
+    ).toMatchObject({
+      tool: 'helical-sweep',
+      axisOrigin: { x: 'wall', y: 0, z: 0 },
+      axisDirection: { x: 0, y: 0, z: 1 }
+    });
+    // A zero direction is no axis.
+    expect(
+      helix.request(slots, {}, { axisMode: 'typed' }, ctx, {
+        axisDX: 0,
+        axisDY: 0,
+        axisDZ: 0
+      })
+    ).toBeNull();
+    const ids = helix
+      .handles(slots, numbers, ctx, { axisMode: 'typed' })
+      .map((h) => h.valueId);
+    expect(ids).toEqual(
+      expect.arrayContaining(['axisOX', 'axisDZ', 'radius', 'pitch', 'turns'])
+    );
   });
 
   it('a guided sweep is always Standard', () => {

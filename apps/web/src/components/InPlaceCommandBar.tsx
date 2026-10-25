@@ -13,7 +13,7 @@ export interface InPlaceOption {
   id: string;
   label: string;
   value: string;
-  choices: readonly { value: string; label: string }[];
+  choices: readonly { value: string; label: string; note?: string }[];
 }
 
 /** An exact number too rare for a handle (a primitive's position). */
@@ -73,31 +73,40 @@ export function InPlaceCommandBar({
             <MoreHorizontal size={14} aria-hidden="true" />
           </summary>
           <div className="in-place-command-options-panel">
-            {options.map((option) => (
-              <div
-                key={option.id}
-                className="in-place-option"
-                role="radiogroup"
-                aria-label={option.label}
-              >
-                <span className="in-place-option-label">{option.label}</span>
-                {option.choices.map((choice) => (
-                  <button
-                    key={choice.value}
-                    type="button"
-                    role="radio"
-                    aria-checked={choice.value === option.value}
-                    className="in-place-option-choice"
-                    onClick={() => onOption?.(option.id, choice.value)}
-                  >
-                    {choice.label}
-                  </button>
-                ))}
-              </div>
-            ))}
+            {options.map((option) => {
+              const note = option.choices.find(
+                (choice) => choice.value === option.value
+              )?.note;
+              return (
+                <div
+                  key={option.id}
+                  className="in-place-option"
+                  role="radiogroup"
+                  aria-label={option.label}
+                >
+                  <span className="in-place-option-label">{option.label}</span>
+                  {option.choices.map((choice) => (
+                    <button
+                      key={choice.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={choice.value === option.value}
+                      className="in-place-option-choice"
+                      onClick={() => onOption?.(option.id, choice.value)}
+                    >
+                      {choice.label}
+                    </button>
+                  ))}
+                  {note ? <p className="in-place-option-note">{note}</p> : null}
+                </div>
+              );
+            })}
             {values.map((value) => (
               <div key={value.id} className="in-place-option">
-                <span className="in-place-option-label" id={`in-place-value-${value.id}`}>
+                <span
+                  className="in-place-option-label"
+                  id={`in-place-value-${value.id}`}
+                >
                   {value.label}
                 </span>
                 <button

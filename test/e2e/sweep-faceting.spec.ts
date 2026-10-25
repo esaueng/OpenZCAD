@@ -76,11 +76,15 @@ test('discloses a faceted round sweep in Diagnostics and explains Smooth', async
   await expect(inspector).toContainText('3910.71 mm³');
   await page.keyboard.press('Escape');
 
-  // The Sweep card says what Smooth does.
+  // The Sweep's row re-arms it in place (U09 phase 7), and its Options say
+  // what Smooth does.
   await page.locator('.feature-row-main', { hasText: 'Bend' }).click();
-  await expect(inspector.getByLabel('Surface mode')).toHaveValue('smooth');
-  await expect(inspector).toContainText(
-    'It does not make exact curved surfaces'
+  const bar = page.getByRole('group', { name: 'Edit Bend command' });
+  await bar.locator('summary').click();
+  await expect(bar.getByRole('radio', { name: 'Smooth' })).toHaveAttribute(
+    'aria-checked',
+    'true'
   );
+  await expect(bar).toContainText('It does not make exact curved surfaces');
   expect(errors).toEqual([]);
 });

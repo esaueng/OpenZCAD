@@ -89,6 +89,8 @@ export function pageRemovalParticipant(
     prepare: async (account) => {
       if (await projectsOpen()) await participant.prepare(account);
     },
+    cutoffsFor: async (step) =>
+      (await projectsOpen()) ? participant.cutoffsFor?.(step) : undefined,
     written: async (step) => {
       if (await projectsOpen()) await participant.written?.(step);
     },

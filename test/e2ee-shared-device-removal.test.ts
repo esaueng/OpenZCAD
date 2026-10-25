@@ -677,9 +677,15 @@ describe('device removal across shared encrypted projects (slice 5-7)', () => {
         bob.offline = true;
       }
     };
-    await removeDevice(bob.e2ee, bob.account, phoneId, bobRecovery).catch(
-      () => undefined
-    );
+    // Its cutoff statement lands with the entry; nothing after does.
+    const { participant } = participantFor(bob);
+    await removeDevice(
+      bob.e2ee,
+      bob.account,
+      phoneId,
+      bobRecovery,
+      participant
+    ).catch(() => undefined);
     online(bob);
     await refresh(bob);
     const membersOf = async () =>
@@ -1334,5 +1340,84 @@ describe('device removal across shared encrypted projects (slice 5-7)', () => {
       { user: BOB, body: {} }
     );
     expect([403, 404]).toContain(byMember.status);
+  });
+
+  it('holds co-members off when a removal stops right after its device-list entry lands', async () => {
+    const { srv, alice, bob, bobRecovery, bobDesktop, bobPhone } =
+      await people();
+    const projectId = await createEncrypted(alice, 'Bracket');
+    await share(alice, projectId, bob, 'editor');
+    // Each of Bob's devices joins; the phone's version is the head, which
+    // the owner has accepted.
+    await saveEdit(bobPhone, projectId, 'Phone joins');
+    await saveEdit(bobDesktop, projectId, 'Desktop edit');
+    await saveEdit(bobPhone, projectId, 'Phone edit');
+    expect((await alice.store.loadProject(projectId)).name).toBe('Phone edit');
+    const phoneId = deviceIdOf(bobPhone);
+    const predicted = keyEpochOf(srv, projectId) + 1;
+
+    // Bob's laptop goes offline the moment its revoking entry lands: no
+    // `written`, no `complete`, no rotation.
+    bob.after = (path, init) => {
+      if (path === '/api/e2ee/device-list' && init.method === 'POST') {
+        bob.offline = true;
+      }
+    };
+    const { participant, seen } = participantFor(bob);
+    await expect(
+      removeDevice(bob.e2ee, bob.account, phoneId, bobRecovery, participant)
+    ).rejects.toBeDefined();
+    online(bob);
+    expect(seen.outcome).toBeNull();
+    expect(keyEpochOf(srv, projectId)).toBe(predicted - 1);
+
+    // The statement landed with the entry, so the owner reads it...
+    const response = await srv.call(
+      'GET',
+      `/api/e2ee/projects/${projectId}/revocation-cutoffs`,
+      { user: ALICE }
+    );
+    const { statements } =
+      (await response.json()) as E2eeMemberRevocationCutoffsResponse;
+    expect(statements.map((s) => s.userId)).toEqual([BOB]);
+    const bobList = ready(await loadEncryption(bob.e2ee)).list;
+    expect(bobList.revoked.map((r) => r.id)).toContain(phoneId);
+    const statement = await verifyRevocationCutoffs(
+      {
+        statement: fromBase64Url(statements[0]!.statement),
+        signature: fromBase64Url(statements[0]!.signature)
+      },
+      bobList,
+      { generation: 1 }
+    );
+    expect(statement.entrySequence).toBe(bobList.head.sequence);
+    expect(statement.cutoffs.map((c) => [c.projectId, c.cutoffEpoch])).toEqual([
+      [projectId, predicted]
+    ]);
+    // ...keeps reading the phone's earlier version, and writes nothing
+    // under a key the phone may still hold; nor does the Worker let such a
+    // write land.
+    expect((await alice.store.loadProject(projectId)).name).toBe('Phone edit');
+    await expect(
+      saveEdit(alice, projectId, 'Owner too early')
+    ).rejects.toMatchObject({ code: 'E2EE_MEMBER_ROTATION_PENDING' });
+    await expect(
+      memberRotationFence(
+        srv.env.DB as D1Database,
+        projectId,
+        keyEpochOf(srv, projectId)
+      )
+    ).rejects.toMatchObject({ code: 'E2EE_MEMBER_ROTATION_PENDING' });
+
+    // Once another of Bob's devices rotates, the owner writes on.
+    await refresh(bobDesktop);
+    await joinProjectGroup(bobDesktop.groups, projectId);
+    expect(keyEpochOf(srv, projectId)).toBe(predicted);
+    const status = await bobDesktop.sessions.status(
+      refOf(bobDesktop, projectId)
+    );
+    expect(status.members.map((m) => m.deviceId)).not.toContain(phoneId);
+    await saveEdit(alice, projectId, 'Owner after removal');
+    expect(headRow(srv, projectId).signer_user_id).toBe(ALICE);
   });
 });

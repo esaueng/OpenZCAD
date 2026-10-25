@@ -356,7 +356,7 @@ export const referenceImage: InPlaceToolSpec = {
   },
   // Its plane must resolve: a picture on a broken datum would be added
   // where nothing draws it.
-  ready: (slots, ctx) =>
+  ready: (slots, _options, ctx) =>
     Boolean(slots.image?.plane && ctx?.imagePlaneBasis?.(slots.image.plane)),
   request(slots, _values, options, _ctx, numbers) {
     const image = slots.image;

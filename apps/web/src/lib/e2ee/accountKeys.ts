@@ -56,6 +56,7 @@ import type {
   E2eeApprovedDeviceRecord,
   E2eeApprovalRecord,
   E2eeIdentityRecord,
+  E2eeSignedStatementRecord,
   E2eeWrapInput,
   E2eeWrapPurpose,
   E2eeWrapRecord
@@ -1428,7 +1429,8 @@ async function enrollWithUnlockMethodLocked(
  * Encrypted projects (ADR-024 Phase 4, slice 4-10): a `participant`
  * (`deviceRemoval.ts`) first refuses a removal it could not finish, then,
  * with the identity key this removal opened, signs each project's
- * revocation cutoff and rotates every project past the removal.
+ * revocation cutoff, which the revoking entry's append carries, and
+ * rotates every project past the removal.
  */
 export function removeDevice(
   ctx: E2eeContext,
@@ -1481,6 +1483,15 @@ export function revokeReadOnlyDevices(
   );
 }
 
+/** A removal's signed device-list entry, before and after it is appended. */
+export interface SignedRemovalStep {
+  readonly kind: 'device' | 'passkey' | 'read-only';
+  readonly identityPrivateKey: CryptoKey;
+  readonly userId: string;
+  readonly generation: number;
+  readonly written: { readonly sequence: number; readonly hash: Bytes };
+}
+
 /**
  * What a removal asks of encrypted projects (`removalParticipant` in
  * `deviceRemoval.ts`, loaded lazily by the caller): `prepare` runs before
@@ -1491,17 +1502,20 @@ export function revokeReadOnlyDevices(
 export interface RemovalParticipantStep {
   prepare(account: AccountView): Promise<void>;
   /**
+   * Right before the new device list is written: the signed cutoff
+   * statement of the entry about to be appended, which the append carries
+   * so the Worker stores the revocation and its statement together.
+   * Undefined when there is none to sign. Never throws.
+   */
+  cutoffsFor?(
+    step: SignedRemovalStep
+  ): Promise<E2eeSignedStatementRecord | undefined>;
+  /**
    * Right after the new device list is written, before the account is
    * read again: signs and keeps what can be signed without a request, so
    * a failed reload loses nothing. Never throws.
    */
-  written?(step: {
-    readonly kind: 'device' | 'passkey' | 'read-only';
-    readonly identityPrivateKey: CryptoKey;
-    readonly userId: string;
-    readonly generation: number;
-    readonly written: { readonly sequence: number; readonly hash: Bytes };
-  }): Promise<void>;
+  written?(step: SignedRemovalStep): Promise<void>;
   complete(step: {
     readonly kind: 'device' | 'passkey' | 'read-only';
     readonly identityPrivateKey: CryptoKey;
@@ -1603,32 +1617,52 @@ async function rotateAccountKeysLocked(
     );
     oldAccountKey.fill(0);
     accountKey.fill(0);
-    requireActiveKeyContext(ctx);
-    const response = await ctx.api.appendDeviceList({
+    // Known before the append: the cutoffs name this entry, and the Worker
+    // stores a device revocation only together with them.
+    const written = {
+      sequence: entry.sequence,
+      hash: await deviceListEntryHash(signed.entry)
+    };
+    const step: SignedRemovalStep = {
+      kind,
+      identityPrivateKey,
+      userId: ctx.userId,
       generation: account.generation,
-      entry: b64(signed.entry),
-      signature: b64(signed.signature),
-      wraps,
-      history
+      written
+    };
+    const append = async () => {
+      const cutoffs =
+        kind === 'device'
+          ? await participant?.cutoffsFor?.(step).catch(() => undefined)
+          : undefined;
+      requireActiveKeyContext(ctx);
+      return ctx.api.appendDeviceList({
+        generation: account.generation,
+        entry: b64(signed.entry),
+        signature: b64(signed.signature),
+        wraps,
+        history,
+        ...(cutoffs ? { cutoffs } : {})
+      });
+    };
+    const response = await append().catch((error: unknown) => {
+      // A project was created, shared or committed to between the listing
+      // and the append, and nothing was written: sign once more.
+      if (
+        (error as { code?: string } | null)?.code ===
+          'E2EE_CUTOFFS_INCOMPLETE' &&
+        participant?.cutoffsFor
+      ) {
+        return append();
+      }
+      throw error;
     });
     await acceptWrite(ctx, response, {
       identityKey: account.list.identityKey,
       pin: account.list.pin,
       written: signed.entry
     });
-    const written = {
-      sequence: entry.sequence,
-      hash: await deviceListEntryHash(signed.entry)
-    };
-    await participant
-      ?.written?.({
-        kind,
-        identityPrivateKey,
-        userId: ctx.userId,
-        generation: account.generation,
-        written
-      })
-      .catch(() => undefined);
+    await participant?.written?.(step).catch(() => undefined);
     const state = await loadEncryption(ctx);
     if (participant && state.kind === 'ready' && state.account.unlocked) {
       await participant.complete({
