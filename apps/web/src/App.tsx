@@ -19206,6 +19206,15 @@ export function App() {
    */
   const [inPlaceEditFeatureId, setInPlaceEditFeatureId] =
     useState<FeatureId | null>(null);
+  // The hidden sketches an armed edit reads: its feature's own inputs,
+  // and no others, so arming an edit does not outline every sketch.
+  const inPlaceEditInputSketchIds = useMemo(() => {
+    const feature =
+      doc && inPlaceEditFeatureId ? findFeature(doc, inPlaceEditFeatureId) : null;
+    return new Set<string>(
+      feature ? inPlaceEditSourceSketchIds(feature.data) : []
+    );
+  }, [doc, inPlaceEditFeatureId]);
   const availableSketchViews = useMemo(() => {
     if (!doc) {
       return [];
@@ -19222,7 +19231,7 @@ export function App() {
         !sketchViewShown(sketch.sketchId, hiddenSketchIds, movingSketch) &&
         !active &&
         !modelingEditFeature &&
-        !inPlaceEditFeatureId
+        !inPlaceEditInputSketchIds.has(sketch.sketchId)
       ) {
         return [];
       }
@@ -19346,7 +19355,7 @@ export function App() {
     hiddenSketchIds,
     movingSketch,
     modelingEditFeature,
-    inPlaceEditFeatureId,
+    inPlaceEditInputSketchIds,
     sketchReadDocument
   ]);
   /** U09: an in-place request as the command its commit would run. */
@@ -19777,6 +19786,14 @@ export function App() {
   const inPlaceRef = useRef(inPlace);
   inPlaceRef.current = inPlace;
   cancelInPlaceRef.current = () => inPlaceRef.current.cancel(true);
+  // A command's keypad belongs to the command it opened on: another one
+  // taking over (a History row re-arming, a new tool) closes it, or its
+  // value would be entered into the new command.
+  const inPlaceSessionTool = inPlace.tool;
+  const inPlaceSessionEdit = inPlace.editing;
+  useEffect(() => {
+    setKeypad((current) => (current?.kind === 'command' ? null : current));
+  }, [inPlaceSessionTool, inPlaceSessionEdit]);
   const narrowWindow = useMediaQuery(NARROW_WINDOW_QUERY);
   const inPlaceEditing = inPlace.editing;
   useEffect(() => {
