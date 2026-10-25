@@ -250,7 +250,6 @@ import {
   FEATURE_SUPPRESSED_METADATA_KEY,
   isFeatureRollbackSuppressed,
   isFeatureSuppressed,
-  isInPlaceTransform,
   projectBranchPoint,
   projectOrganization,
   toProjectId,
@@ -1466,6 +1465,8 @@ import {
   holeWorldPosition,
   inPlaceEditBodyBox,
   keptInOrder,
+  laterDirectEdit,
+  laterInPlaceSteps,
   keepAbsentHoleSteps,
   inPlaceEditLineage,
   inPlaceEditMovedBodies,
@@ -8726,55 +8727,6 @@ export function App() {
       setSelectedBodyIds([]);
       setSelectedProfiles([]);
     }
-  }
-
-  /**
-   * The in-place moves and scales after `feature` on the body it edits, in
-   * history order: the model shows that body after them.
-   */
-  function laterInPlaceSteps(
-    current: ProjectDocument,
-    feature: FeatureNode
-  ): FeatureNode['data'][] {
-    const data = feature.data;
-    if (data.featureKind !== 'transform') return [];
-    // A copy does not republish its source, so the source's later steps are
-    // not downstream of it: they are those after it in history.
-    const after = data.copy
-      ? listFeaturesInOrder(current).slice(
-          listFeaturesInOrder(current).findIndex(
-            (candidate) => candidate.featureId === feature.featureId
-          ) + 1
-        )
-      : featureHistory(current).downstream(feature.featureId);
-    return after
-      .flatMap((later) =>
-        isInPlaceTransform(later.data) &&
-        later.data.targetBodyId === data.targetBodyId &&
-        !isFeatureSuppressed(later)
-          ? [later.data]
-          : []
-      );
-  }
-
-  /**
-   * Whether a later direct edit republishes a transform's body reshaped, so
-   * the model's body cannot be taken back to the one before the transform.
-   */
-  function laterDirectEdit(
-    current: ProjectDocument,
-    feature: FeatureNode
-  ): boolean {
-    const data = feature.data;
-    if (data.featureKind !== 'transform') return false;
-    return featureHistory(current)
-      .downstream(feature.featureId)
-      .some(
-        (later) =>
-          later.data.featureKind === 'direct-edit' &&
-          later.data.targetBodyId === data.targetBodyId &&
-          !isFeatureSuppressed(later)
-      );
   }
 
   /**

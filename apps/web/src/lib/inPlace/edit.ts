@@ -1,9 +1,13 @@
-import type { FeatureUpdateInput } from '@openzcad/document-core';
+import {
+  listFeaturesInOrder,
+  type FeatureUpdateInput
+} from '@openzcad/document-core';
 import {
   FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
   FEATURE_SUPPRESSED_METADATA_KEY,
   isDatumPlaneRef,
   isFeatureSuppressed,
+  isInPlaceTransform,
   type BodyId,
   type FaceTopologyReferenceV5,
   type ProjectDocument,
@@ -1020,6 +1024,65 @@ export function keptInOrder<T>(entries: readonly (T | null)[]): {
     return { kept: [], cleared: true };
   }
   return { kept: entries.slice(0, gap) as T[], cleared: false };
+}
+
+/**
+ * The features after a transform that may act on its body: downstream of
+ * it, or for a copy (which never republishes its source) after it in
+ * history.
+ */
+function laterOnTransformBody(
+  current: ProjectDocument,
+  feature: FeatureNode
+): FeatureNode[] {
+  // A copy does not republish its source, so the source's later steps are
+  // not downstream of it: they are those after it in history.
+  if (feature.data.featureKind === 'transform' && feature.data.copy) {
+    const order = listFeaturesInOrder(current);
+    return order.slice(
+      order.findIndex(
+        (candidate) => candidate.featureId === feature.featureId
+      ) + 1
+    );
+  }
+  return featureHistory(current).downstream(feature.featureId);
+}
+
+/**
+ * The in-place moves and scales after `feature` on the body it edits, in
+ * history order: the model shows that body after them.
+ */
+export function laterInPlaceSteps(
+  current: ProjectDocument,
+  feature: FeatureNode
+): FeatureData[] {
+  const data = feature.data;
+  if (data.featureKind !== 'transform') return [];
+  return laterOnTransformBody(current, feature).flatMap((later) =>
+    isInPlaceTransform(later.data) &&
+    later.data.targetBodyId === data.targetBodyId &&
+    !isFeatureSuppressed(later)
+      ? [later.data]
+      : []
+  );
+}
+
+/**
+ * Whether a later direct edit republishes a transform's body reshaped, so
+ * the model's body cannot be taken back to the one before the transform.
+ */
+export function laterDirectEdit(
+  current: ProjectDocument,
+  feature: FeatureNode
+): boolean {
+  const data = feature.data;
+  if (data.featureKind !== 'transform') return false;
+  return laterOnTransformBody(current, feature).some(
+    (later) =>
+      later.data.featureKind === 'direct-edit' &&
+      later.data.targetBodyId === data.targetBodyId &&
+      !isFeatureSuppressed(later)
+  );
 }
 
 /** A hole's step sizes, which an absent value derives from its bore. */

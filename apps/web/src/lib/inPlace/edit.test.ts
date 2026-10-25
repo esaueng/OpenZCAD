@@ -31,6 +31,8 @@ import {
   inPlaceEditSourceSketchIds,
   inPlaceFeatureUpdate,
   inPlaceToolForFeature,
+  laterDirectEdit,
+  laterInPlaceSteps,
   type InPlaceEditContext
 } from './edit';
 import {
@@ -1132,5 +1134,56 @@ describe('inPlaceEditBodyBox', () => {
         EDIT_CTX
       )
     ).toBe(box);
+  });
+});
+
+describe('the steps after a copying transform', () => {
+  it("are the source's later steps in history, which a copy is not upstream of", () => {
+    let document = createProjectDocument(
+      'Copy then move',
+      toUserId('user_test')
+    );
+    document = addPrimitiveFeature(document, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 40, height: 30, depth: 20 }
+    });
+    const [block] = listFeaturesInOrder(document).flatMap((feature) =>
+      feature.bodyId ? [feature.bodyId] : []
+    );
+    document = transformBody(document, {
+      name: 'Copy',
+      targetBodyId: block!,
+      translation: { x: 0, y: 0, z: 0 },
+      scale: 2,
+      copy: true
+    }).document;
+    const copy = listFeaturesInOrder(document).at(-1)!;
+    document = transformBody(document, {
+      name: 'Nudge',
+      targetBodyId: block!,
+      translation: { x: 10, y: 0, z: 0 }
+    }).document;
+    const later = laterInPlaceSteps(document, copy);
+    expect(later).toHaveLength(1);
+    expect(later[0]).toMatchObject({
+      featureKind: 'transform',
+      transform: { translation: { x: 10, y: 0, z: 0 } }
+    });
+    expect(laterDirectEdit(document, copy)).toBe(false);
+    // A later direct edit of the source, likewise not downstream of the copy.
+    const edit = {
+      ...copy,
+      id: 'node_direct' as typeof copy.id,
+      featureId: 'feature_direct' as typeof copy.featureId,
+      name: 'Push face',
+      data: { featureKind: 'direct-edit', targetBodyId: block! } as never
+    };
+    const withEdit: ProjectDocument = {
+      ...document,
+      nodes: { ...document.nodes, [edit.id]: edit },
+      featureOrder: [...document.featureOrder, edit.featureId]
+    };
+    expect(laterDirectEdit(withEdit, copy)).toBe(true);
   });
 });
