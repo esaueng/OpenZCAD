@@ -321,7 +321,15 @@ export function useInPlaceCommand(
    * last.
    */
   const builtFrames = useRef(
-    new WeakMap<ProjectDocument, { key: string; bodyId: BodyId | undefined }>()
+    new WeakMap<
+      ProjectDocument,
+      {
+        key: string;
+        bodyId: BodyId | undefined;
+        /** The base version the frame was built on. */
+        base: number | null | undefined;
+      }
+    >()
   ).current;
 
   const preview = useRef(
@@ -340,6 +348,7 @@ export function useInPlaceCommand(
         command.validate(base);
         const built = command.apply(base);
         builtFrames.set(built, {
+          base: optionsRef.current.baseVersion,
           key: JSON.stringify(current),
           bodyId: command.resultBodyId
         });
@@ -347,7 +356,15 @@ export function useInPlaceCommand(
       },
       derive: (document) => optionsRef.current.derive(document),
       publish: (result) => {
-        const frame = result ? builtFrames.get(result.document) : undefined;
+        const built = result ? builtFrames.get(result.document) : undefined;
+        // A frame built on a base the model has since moved past (an undo,
+        // a collaborator's edit landing mid-build) is not what Done would
+        // commit now: it is not shown, and the frame on the new base is.
+        const frame =
+          built && built.base === optionsRef.current.baseVersion
+            ? built
+            : undefined;
+        if (built && !frame) return;
         const bodyId = frame?.bodyId;
         // As strict as the card's preflight: a warning the base model did
         // not already carry refuses the preview, even with a body built.
