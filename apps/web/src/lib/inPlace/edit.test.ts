@@ -133,7 +133,8 @@ function untouched(
     datumAxes: undefined,
     datumLabel: () => 'Axis',
     saved: node.data,
-    evaluate: EDIT_CTX.evaluate
+    evaluate: EDIT_CTX.evaluate,
+    touched: [...armed.seed.touched, ...Object.keys(changed)]
   };
   const numbers: Record<string, number> = {
     ...armed.seed.values,
@@ -414,6 +415,15 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(followed?.data).toMatchObject({ spacing: 15, count: 4 });
     expect(followed?.data).not.toHaveProperty('spacing2');
     expect(followed?.data).not.toHaveProperty('count2');
+    // Set to the first's value on purpose, it is written and stops following.
+    const pinned = inPlaceFeatureUpdate(
+      { featureId: node.featureId, name: node.name, data },
+      untouched(node, { spacing2: 12, count2: 3 }) as Extract<
+        InPlaceRequest,
+        { tool: 'pattern' }
+      >
+    );
+    expect(pinned?.data).toMatchObject({ spacing2: 12, count2: 3 });
     // Set apart from the first, it is written.
     expect(
       inPlaceFeatureUpdate(
