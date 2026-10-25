@@ -399,6 +399,25 @@ export function useInPlaceCommand(
         ? { ...candidate, origin, direction }
         : candidate;
     });
+    // A helix whose stored axis did not read when the edit armed (its
+    // parameter unresolved) gets its saved axis once it reads now.
+    if (
+      editSeed &&
+      saved?.featureKind === 'helical-sweep' &&
+      !own.some((candidate) => candidate.id === 'saved')
+    ) {
+      const origin = read(saved.axisOrigin);
+      const direction = read(saved.axisDirection);
+      if (origin && direction) {
+        own.push({
+          id: 'saved',
+          label: 'Its saved axis',
+          origin,
+          direction,
+          choice: { saved: true }
+        });
+      }
+    }
     if (spec.axisSource === 'datum' || spec.axisSource === 'world') {
       // A body's turn: its axis lines, once the body is picked.
       return bodyCount > 0
@@ -781,15 +800,21 @@ export function useInPlaceCommand(
         }
         // So do its picks: an untouched slot takes what the feature
         // references now (an undo may have re-pointed its path or bodies).
-        // A point a click placed (a draft's clicked hinge) is the user's own
-        // pick, though a point is otherwise only where a face stands.
+        // A point a click placed (a draft's clicked hinge) is the user's own,
+        // though a point is otherwise only where a face stands: the faces
+        // still follow the feature, and the point stays on its face while
+        // that face is still drafted (gone, the hinge asks for a click).
         const placing = IN_PLACE_TOOL_SPECS[current.tool].clickPlacesPoint;
-        const placedPoint =
-          placing !== undefined &&
-          chosen[placing.optionId] === placing.value &&
-          slots.faces.some((face) => face.point !== undefined);
+        const placed =
+          placing !== undefined && chosen[placing.optionId] === placing.value
+            ? slots.faces.find((face) => face.point !== undefined)
+            : undefined;
+        const sameFace = (a: FacePick, b: FacePick) =>
+          a.bodyId === b.bodyId &&
+          (a.reference !== undefined && b.reference !== undefined
+            ? slotIdentity(a.reference) === slotIdentity(b.reference)
+            : a.hash === b.hash);
         const takeSlot = <K extends keyof Session['slots']>(key: K) => {
-          if (key === 'faces' && placedPoint) return;
           const now = slotIdentity(slots[key]);
           if (now !== slotIdentity(baseline.slots[key])) return;
           nextBaseline.slots = {
@@ -797,7 +822,14 @@ export function useInPlaceCommand(
             [key]: live.slots[key]
           };
           if (slotIdentity(live.slots[key]) === now) return;
-          slots = { ...slots, [key]: live.slots[key] };
+          let next = live.slots[key];
+          if (key === 'faces' && placed?.point) {
+            const point = placed.point;
+            next = live.slots.faces.map((face) =>
+              sameFace(face, placed) ? { ...face, point } : face
+            ) as typeof next;
+          }
+          slots = { ...slots, [key]: next };
           changed = true;
         };
         for (const key of SLOT_KEYS) takeSlot(key);

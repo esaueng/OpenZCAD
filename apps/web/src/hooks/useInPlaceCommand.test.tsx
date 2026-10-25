@@ -1308,7 +1308,7 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     expect(hook.result.current.refusal ?? '').not.toMatch(/takes/);
   });
 
-  it('keeps a clicked draft hinge when the feature is read again', () => {
+  it('keeps a clicked draft hinge on its face as the faces follow the feature', () => {
     const face = (
       hash: number,
       point?: { x: number; y: number; z: number }
@@ -1321,13 +1321,13 @@ describe('useInPlaceCommand: editing a stored feature', () => {
       centroid: { x: 0, y: 0, z: hash },
       ...(point ? { point } : {})
     });
+    let stored = [face(1), face(2)];
     const options: UseInPlaceCommandOptions = {
       ...setupOptions([], vi.fn()),
       baseVersion: 1,
-      // The model moved: the stored faces read back renamed.
       reseed: (edit) => ({
         tool: 'draft',
-        seed: { ...edit, slots: { ...edit.slots, faces: [face(1), face(3)] } }
+        seed: { ...edit, slots: { ...edit.slots, faces: stored } }
       })
     };
     const hook = renderHook(
@@ -1344,12 +1344,62 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     act(() => {
       hook.result.current.pickFace(face(2, { x: 5, y: 6, z: 7 }));
     });
+    // A collaborator drafts another face: it joins, the hinge stays put.
+    stored = [face(1), face(2), face(4)];
     hook.rerender({ ...options, baseVersion: 2 });
-    expect(hook.result.current.slots.faces.map((f) => f.hash)).toEqual([1, 2]);
+    expect(hook.result.current.slots.faces.map((f) => f.hash)).toEqual([
+      1, 2, 4
+    ]);
     expect(hook.result.current.slots.faces[1]?.point).toEqual({
       x: 5,
       y: 6,
       z: 7
+    });
+    // And takes the hinge's face out: the hinge asks for a click again.
+    stored = [face(1), face(4)];
+    hook.rerender({ ...options, baseVersion: 3 });
+    expect(hook.result.current.slots.faces.map((f) => f.hash)).toEqual([1, 4]);
+    expect(hook.result.current.slots.faces.some((f) => f.point)).toBe(false);
+  });
+
+  it('builds a helix saved axis that only reads once the model changes', () => {
+    let rise: number | null = null;
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      evaluate: (value) => (value === 'rise' ? rise : Number(value)),
+      baseVersion: 1,
+      reseed: (edit) => ({
+        tool: 'helical-sweep',
+        seed: { ...edit, slots: { ...edit.slots, axisId: 'saved' } }
+      })
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    const data = {
+      featureKind: 'helical-sweep',
+      profile: { sketchId: SKETCH },
+      axisOrigin: { x: 0, y: 0, z: 'rise' },
+      axisDirection: { x: 0, y: 0, z: 1 }
+    } as never;
+    // Armed while its parameter does not resolve: no saved axis yet.
+    act(() =>
+      hook.result.current.edit('helical-sweep', {
+        ...SEED,
+        data,
+        axes: [],
+        options: {},
+        slots: { ...SEED.slots, bodies: [], profiles: [PICK], axisId: null }
+      })
+    );
+    expect(hook.result.current.slots.axis).toBeNull();
+    rise = 10;
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.slots.axis?.origin).toEqual({
+      x: 0,
+      y: 0,
+      z: 10
     });
   });
 
