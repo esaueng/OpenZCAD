@@ -21259,10 +21259,19 @@ export function App() {
         );
         return;
       }
-      if (inPlaceRef.current.slots.image) {
-        inPlaceRef.current.placeImage({
-          plane: { type: 'datum', datumFeatureId: featureId }
-        });
+      const image = inPlaceRef.current.slots.image;
+      if (image) {
+        // As in the viewport: a placed picture takes another plane only
+        // when Options ask for one.
+        if (imageNeedsPlane(image, inPlaceRef.current.options)) {
+          inPlaceRef.current.placeImage({
+            plane: { type: 'datum', datumFeatureId: featureId }
+          });
+        } else {
+          setStatus(
+            'To put the picture on another plane, choose Pick a plane in its Options first.'
+          );
+        }
         return;
       }
     }
