@@ -107,6 +107,20 @@ export function reportingEncryptedProjectStore(
     projectName: (record) => store.projectName(record),
     info: store.info,
     replaced: store.replaced,
-    roomAccess
+    roomAccess,
+    // Share links (slice 5-10): both read the verified head, and a change
+    // writes a version, so both report like a load or save.
+    shareHead: (projectId) =>
+      verifiedHead(
+        () => store.shareHead(projectId),
+        () => projectId,
+        projectId
+      ),
+    writeShareLinks: (projectId, change) =>
+      verifiedHead(
+        () => store.writeShareLinks(projectId, change),
+        () => projectId,
+        projectId
+      )
   };
 }
