@@ -265,3 +265,81 @@ test('a Move held for its panel is dropped when the project is replaced', async 
   await page.waitForTimeout(1_000);
   await expect(page.locator('form[aria-label="Move controls"]')).toHaveCount(0);
 });
+
+test('a Move held for its panel is dropped when Measure takes the lane', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  await page.route(/MoveOverlay[^/]*\.(js|tsx)(\?|$)/, async (route) => {
+    await released;
+    await route.continue();
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Measure instead');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.selection-card')).toHaveCount(0);
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  // Measure launches no tool and leaves the (empty) selection as it was.
+  await page
+    .getByRole('button', { name: 'Measure', exact: true })
+    .first()
+    .click();
+  await expect(page.getByRole('contentinfo')).toContainText('Measure ready');
+  release();
+  await page.waitForTimeout(1_000);
+  await expect(page.locator('form[aria-label="Move controls"]')).toHaveCount(0);
+});
+
+test('Settings still loading holds the keyboard as a modal', async ({
+  page
+}) => {
+  await stubApi(page);
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  await page.route(/SettingsPage[^/]*\.(js|tsx)(\?|$)/, async (route) => {
+    await released;
+    await route.continue();
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  const pending = page.locator('[role="dialog"][aria-label="Settings"]');
+  await expect(pending).toHaveAttribute('aria-busy', 'true');
+  // Focus waits inside the dialog; Tab cannot reach the start screen.
+  await expect(pending).toBeFocused();
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Tab');
+  expect(
+    await page.evaluate(() =>
+      Boolean(
+        document.activeElement?.closest(
+          '[role="dialog"][aria-label="Settings"]'
+        )
+      )
+    )
+  ).toBe(true);
+  // The start screen behind is inert, not merely covered.
+  expect(
+    await page.evaluate(() =>
+      Boolean(
+        [...document.querySelectorAll('button')]
+          .find((button) => button.textContent?.includes('Create project'))
+          ?.closest('[inert]')
+      )
+    )
+  ).toBe(true);
+  release();
+  await expect(
+    page.getByRole('heading', { name: 'Settings' }).first()
+  ).toBeVisible();
+  await expect(pending).not.toHaveAttribute('aria-busy', 'true');
+});

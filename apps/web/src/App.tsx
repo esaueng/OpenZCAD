@@ -2342,7 +2342,7 @@ export function App() {
     useSurfaceReady(LazySettingsPage, settingsOpen) && settingsOpen;
   const settingsDialogRef = useRef<HTMLDivElement | null>(null);
   useModalFocus(settingsDialogRef, {
-    enabled: settingsShown,
+    enabled: settingsOpen,
     autoFocus: true
   });
   const [sharingOpen, setSharingOpen] = useState(false);
@@ -6756,11 +6756,6 @@ export function App() {
     }
     return findSketch(doc, selectedFeature.data.sketchId) ?? null;
   }, [doc, selectedFeature]);
-  /** What a Move launched now would target, read live by a held launch:
-   * the project as well as the selection, since a replaced project can have
-   * the same (empty) selection. */
-  const moveSourceRef = useRef('');
-  moveSourceRef.current = `${doc?.projectId ?? ''}|${selectedBodyIds.join(',')}|${selectedSketch?.sketchId ?? ''}`;
 
   const selectedSketchObject = useMemo<SketchObjectData | null>(() => {
     if (!doc || !selectedSketch) {
@@ -7144,6 +7139,19 @@ export function App() {
     viewerBodies: completedViewerBodies,
     setStatus
   });
+  /** What a Move launched now would act on, read live by a held launch: the
+   * project and selection (a replaced project can share an empty one), and
+   * which command holds the lane, so Measure, a tool or a sketch taken up
+   * meanwhile drops it as surely as another launch would. */
+  const moveSourceRef = useRef('');
+  moveSourceRef.current = [
+    doc?.projectId ?? '',
+    selectedBodyIds.join(','),
+    selectedSketch?.sketchId ?? '',
+    tool ?? '',
+    measuring ? 'measuring' : '',
+    interaction.mode
+  ].join('|');
 
   // Sketch profiles lifted onto their 3D planes for the viewport overlay.
   const sketchOverlays = useMemo<SketchOverlay[]>(() => {
@@ -23396,65 +23404,61 @@ export function App() {
   // Settings layers over whatever is behind it instead of replacing it.
   // Returning it in place of the shell unmounted the whole workspace, and with
   // it the assistant's conversation and any request still streaming.
-  const settingsOverlay = settingsShown ? (
+  // One dialog from the moment Settings is asked for: modal (focus held, the
+  // background inert) and found by anything looking for it, but drawn only
+  // once its page has loaded, so an early open shows no empty overlay.
+  const settingsOverlay = settingsOpen ? (
     <div
       ref={settingsDialogRef}
-      className="settings-overlay"
+      className={settingsShown ? 'settings-overlay' : 'settings-pending'}
       role="dialog"
       aria-modal="true"
       aria-label="Settings"
+      aria-busy={settingsShown ? undefined : true}
       tabIndex={-1}
     >
-      <SettingsPage
-        settings={appSettings}
-        cloudFunctionsEnabled={cloudFunctionsEnabled}
-        accountState={accountSettings}
-        authConfig={authConfig}
-        authConfigStatus={authConfigStatus}
-        health={deploymentHealth}
-        session={session}
-        busy={settingsBusy}
-        message={settingsMessage}
-        initialSection={
-          pendingInvitationToken || desktopAuthorizationAttempt
-            ? 'account'
-            : undefined
-        }
-        projectInvitationPending={pendingInvitationToken !== null}
-        projectInvitationError={pendingInvitationError}
-        desktopAuthorizationAttempt={desktopAuthorizationAttempt}
-        desktopAuthorizationApproved={desktopAuthorizationApproved}
-        desktopAuthorizationCode={desktopAuthorizationCode}
-        workspaceOpen={doc !== null}
-        onDesktopAuthorizationCodeChange={setDesktopAuthorizationCode}
-        onChange={handleAppSettingsChange}
-        onCloudFunctionsEnabledChange={handleCloudFunctionsEnabledChange}
-        onSaveCredential={(token) => void handleSaveAssistantCredential(token)}
-        onDeleteCredential={() => void handleDeleteAssistantCredential()}
-        onTestAssistant={() => void handleTestAssistantConnection()}
-        onRequestLoginCode={handleRequestLoginCode}
-        onVerifyLoginCode={handleVerifyLoginCode}
-        onRefreshAuthConfig={handleRefreshAuthConfig}
-        onStartDesktopLogin={handleStartDesktopLogin}
-        onApproveDesktopLogin={handleApproveDesktopLogin}
-        onLogout={handleLogout}
-        onDeleteCloudData={handleDeleteCloudData}
-        onReset={handleResetAppSettings}
-        onApplyViewportDefaults={applyViewportDefaults}
-        onDismissProjectInvitation={dismissProjectInvitation}
-        onClose={closeSettings}
-      />
+      {settingsShown && (
+        <SettingsPage
+          settings={appSettings}
+          cloudFunctionsEnabled={cloudFunctionsEnabled}
+          accountState={accountSettings}
+          authConfig={authConfig}
+          authConfigStatus={authConfigStatus}
+          health={deploymentHealth}
+          session={session}
+          busy={settingsBusy}
+          message={settingsMessage}
+          initialSection={
+            pendingInvitationToken || desktopAuthorizationAttempt
+              ? 'account'
+              : undefined
+          }
+          projectInvitationPending={pendingInvitationToken !== null}
+          projectInvitationError={pendingInvitationError}
+          desktopAuthorizationAttempt={desktopAuthorizationAttempt}
+          desktopAuthorizationApproved={desktopAuthorizationApproved}
+          desktopAuthorizationCode={desktopAuthorizationCode}
+          workspaceOpen={doc !== null}
+          onDesktopAuthorizationCodeChange={setDesktopAuthorizationCode}
+          onChange={handleAppSettingsChange}
+          onCloudFunctionsEnabledChange={handleCloudFunctionsEnabledChange}
+          onSaveCredential={(token) => void handleSaveAssistantCredential(token)}
+          onDeleteCredential={() => void handleDeleteAssistantCredential()}
+          onTestAssistant={() => void handleTestAssistantConnection()}
+          onRequestLoginCode={handleRequestLoginCode}
+          onVerifyLoginCode={handleVerifyLoginCode}
+          onRefreshAuthConfig={handleRefreshAuthConfig}
+          onStartDesktopLogin={handleStartDesktopLogin}
+          onApproveDesktopLogin={handleApproveDesktopLogin}
+          onLogout={handleLogout}
+          onDeleteCloudData={handleDeleteCloudData}
+          onReset={handleResetAppSettings}
+          onApplyViewportDefaults={applyViewportDefaults}
+          onDismissProjectInvitation={dismissProjectInvitation}
+          onClose={closeSettings}
+        />
+      )}
     </div>
-  ) : settingsOpen ? (
-    // Settings is already the open dialog — a tab restoring it, or a test,
-    // finds it at once — just not drawn until its page can be.
-    <div
-      className="settings-pending"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Settings"
-      aria-busy="true"
-    />
   ) : null;
 
   if (!doc) {
