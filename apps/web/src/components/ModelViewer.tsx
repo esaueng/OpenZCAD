@@ -221,7 +221,7 @@ import {
   regionChipState,
   type OffsetChipMode
 } from '../lib/offsetChip';
-import { faceDepthBehind } from '../lib/faceDepthBehind';
+import { faceDepthBehind, faceSamples } from '../lib/faceDepthBehind';
 import { setLiveDiameter } from '../lib/liveLabels';
 import type { SelectionCalloutContent } from '../lib/selectionCallout';
 import {
@@ -12074,11 +12074,18 @@ export function ModelViewer({
       placement.direction.y,
       placement.direction.z
     );
-    // Total reads the material under the arrow, not the whole body's reach
+    // Total reads the material behind the face, not the whole body's reach
     // behind the face's plane (which spanned to an unrelated lobe).
+    const depthSamples = body ? faceSamples(body, offsetHandle.topologyId) : [];
     const extentBehind = body
-      ? (faceDepthBehind(body, handleOrigin, handleDirection) ??
-        bodyExtentBehind(body, handleOrigin, handleDirection))
+      ? (faceDepthBehind(
+          body,
+          handleOrigin,
+          handleDirection,
+          depthSamples.length > 0
+            ? depthSamples
+            : [{ point: handleOrigin, weight: 1 }]
+        ) ?? bodyExtentBehind(body, handleOrigin, handleDirection))
       : null;
     const chipState = faceOffsetChipState(
       offsetHandle.totalBaseline,
