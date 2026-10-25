@@ -2,7 +2,8 @@ import type { ParameterPreviewBody } from '../lib/parameterVisualPreview';
 import type {
   FeatureId,
   ProjectDocument,
-  SketchDimensionIdentity
+  SketchDimensionIdentity,
+  Vector3
 } from '@openzcad/shared';
 import type { CompositeShape } from '../lib/sketch/composites';
 import type { ViewportImageSource } from './viewer/viewportImage';
@@ -326,8 +327,11 @@ interface ViewerShellProps {
   loadReferenceImage?: (checksumSha256: string) => Promise<Blob | null>;
   /** The selected or edited feature, drawn highlighted when it is a datum. */
   selectedFeatureId?: FeatureId | null;
-  onPickPlane(plane: PlaneId): void;
-  onPickDatum?(featureId: string): void;
+  onPickPlane(plane: PlaneId, point?: Vector3): void;
+  onPickDatum?(featureId: string, point?: Vector3): void;
+  /** See `ModelViewer`: the plane an empty click lands on, and where. */
+  placementPlane?: { origin: Vector3; normal: Vector3 } | null;
+  onPlacementClick?(point: Vector3): void;
   /**
    * A drag of the selected datum's handle, as a change to its stored offset
    * (already signed for a reversed datum). The handle arms only when this is
@@ -511,6 +515,8 @@ export function ViewerShell({
   selectedFeatureId = null,
   onPickPlane,
   onPickDatum,
+  placementPlane = null,
+  onPlacementClick,
   onDatumOffsetDrag,
   datumOffsetDraft = null,
   onDatumOffsetEntry,
@@ -846,6 +852,8 @@ export function ViewerShell({
         {...(loadReferenceImage ? { loadReferenceImage } : {})}
         onPickPlane={onPickPlane}
         onPickDatum={onPickDatum}
+        placementPlane={placementPlane}
+        {...(onPlacementClick ? { onPlacementClick } : {})}
         onMeasurePreview={onMeasurePreview}
         regionHandle={regionHandle}
         {...(facePickOnly ? { facePickOnly } : {})}

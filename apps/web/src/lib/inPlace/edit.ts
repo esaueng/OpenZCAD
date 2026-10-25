@@ -951,6 +951,9 @@ export function inPlaceFeatureUpdate(
           : { clearData: ['axisRef'] })
       };
     }
+    default:
+      // A datum or a picture edits in its own card, not in place.
+      return null;
   }
 }
 

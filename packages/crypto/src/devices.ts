@@ -520,7 +520,12 @@ export type StatementKind =
   | 'device approval grant'
   | 'revocation cutoffs'
   | 'group reset'
-  | 'contacts list';
+  | 'contacts list'
+  | 'share delegation'
+  | 'share authority'
+  | 'share link grant'
+  | 'share link tombstone'
+  | 'project invitation';
 
 /** @internal `u8 1 | r || s` over `label "v1 <kind> signature" | statement`. */
 export async function signStatement(

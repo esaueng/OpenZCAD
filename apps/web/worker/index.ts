@@ -2,8 +2,13 @@ import { releaseDevelopmentE2eeWrite } from './e2eeWriteAuthorization';
 import { accountConsent, publishCensus } from './glimpseCensus';
 import { handleGlimpseUsage, countApi, type GlimpseEnv } from './glimpse';
 import { handleE2eeRequest } from './e2ee';
+import type { E2eeInvitationHost } from './e2eeInvitations';
 import { withEncryptedProjectInfo } from './e2eeProjectDocuments';
 import { accountRequiresEncryptedProjects } from './e2eeProjectPreferences';
+import {
+  isE2eeAssistantConsentStorageReady,
+  liveAssistantConsentRoute
+} from './e2eeAssistantConsents';
 import { assertProjectRouteFormat } from './projectFormatGate';
 import { encryptedRoomHeaders, notifyEncryptedRoom } from './e2eeRoom';
 import { enforceApiRateLimit, publicRequestBucket } from './apiRateLimit';
@@ -147,6 +152,8 @@ import {
   saveProjectMeasurements
 } from './projectMeasurements';
 import {
+  assistantConsentRoute,
+  ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE,
   ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE_CODE,
   MAX_ARTIFACT_PART_BYTES,
   MAX_ARTIFACT_UPLOAD_PARTS,
@@ -600,6 +607,67 @@ function projectInvitationEmailConfig(env: Env): {
   return { email: env.EMAIL, sender, publicAppOrigin };
 }
 
+/**
+ * What the encrypted invitation routes (ADR-024 slice 5-3a) need from this
+ * Worker: the session's email, the sender's name, the sharing rollout and
+ * the invitation email, which names the sender and never the project.
+ */
+function encryptedInvitationHost(
+  env: Env,
+  session: { email?: string | null; displayName?: string | null }
+): E2eeInvitationHost {
+  return {
+    email: session.email ?? null,
+    inviterLabel: session.email ?? session.displayName ?? 'Someone',
+    sharingEnabled: projectCollaborationRollout(env, session.email ?? undefined)
+      .sharingEnabled,
+    // The plaintext invitation route's canary rule. Its edit-lease rule
+    // does not apply (slice 5-4): it exists so a plaintext editor's writes
+    // go through the lease-checked room instead of the account route, but an
+    // encrypted project's editors write versions the account accepts only
+    // on top of the head they read (compare-and-swap), and its room serves
+    // only the owner until slice 5-6, which decides the room's leases.
+    recipientRefusal: (email) => {
+      if (
+        projectCollaborationRollout(env, session.email ?? undefined).canary &&
+        !isCloudflareFeatureEnabled(env, 'PROJECT_SHARING_ENABLED') &&
+        !projectCollaborationRollout(env, email).canary
+      ) {
+        return {
+          status: 403,
+          code: 'CANARY_RECIPIENT_REQUIRED',
+          message:
+            'During the collaboration canary, invitations can be sent only to allowlisted accounts.'
+        };
+      }
+      return null;
+    },
+    emailConfigured: Boolean(
+      env.EMAIL &&
+        env.PROJECT_INVITATION_EMAIL_FROM?.trim() &&
+        env.PUBLIC_APP_ORIGIN?.trim()
+    ),
+    sendInvitationEmail: async (details) => {
+      const config = projectInvitationEmailConfig(env);
+      try {
+        await sendProjectInvitationEmail(
+          config.email,
+          { sender: config.sender, publicAppOrigin: config.publicAppOrigin },
+          { ...details, projectName: null }
+        );
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            event: 'e2ee_invitation_email_failed',
+            errorCode: emailDeliveryErrorCode(error)
+          })
+        );
+        throw error;
+      }
+    }
+  };
+}
+
 function emailDeliveryErrorCode(error: unknown): string {
   if (!error || typeof error !== 'object' || !('code' in error)) {
     return 'UNKNOWN';
@@ -628,18 +696,24 @@ async function assertPlaintextCreationAllowed(
 }
 
 /**
- * Whether the assistant may see this project (decision D7): never an
- * encrypted one until per-project consent lands (Phase 6). Only a project
- * the caller owns or is a member of is looked up, so the answer reveals
- * nothing about other accounts' projects.
+ * Whether the assistant may see this project (decision D7, lifted per
+ * project by ADR-024 Phase 6). A plaintext project passes as before and
+ * answers null. An encrypted one passes only with this account's live
+ * consent for it (migration 0041, behind E2EE_PROJECTS_ENABLED), and
+ * answers the provider route that consent named, which the caller compares
+ * with the route the request would take. Without the flag or the migration
+ * every encrypted project is refused exactly as before. Only a project the
+ * caller owns or is a member of is looked up, so the answer reveals nothing
+ * about other accounts' projects.
  */
 async function assertAssistantProjectAllowed(
   env: Env,
-  userId: string,
+  identity: { userId: string; email?: string | null },
   projectId: string
-): Promise<void> {
+): Promise<string | null> {
+  const userId = identity.userId;
   // Before migration 0031 every project is plaintext.
-  if (!(await isProjectStorageFormatReady(env.DB))) return;
+  if (!(await isProjectStorageFormatReady(env.DB))) return null;
   const row = await env.DB!.prepare(
     `SELECT p.storage_format FROM projects p
      WHERE p.id = ? AND (
@@ -652,12 +726,25 @@ async function assertAssistantProjectAllowed(
     .bind(projectId, userId, userId)
     .first<{ storage_format: number | null }>();
   if (row && row.storage_format !== null && row.storage_format !== 1) {
+    if (
+      isE2eeProjectsEnabled(env, identity.email ?? undefined) &&
+      (await isE2eeAssistantConsentStorageReady(env.DB))
+    ) {
+      const route = await liveAssistantConsentRoute(env.DB!, userId, projectId);
+      if (route !== null) return route;
+      throw new SharingRequestError(
+        409,
+        ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE,
+        'Allow the assistant for this end-to-end encrypted project first. Nothing was sent.'
+      );
+    }
     throw new SharingRequestError(
       409,
       ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE_CODE,
       'The assistant is not available on end-to-end encrypted projects yet.'
     );
   }
+  return null;
 }
 
 async function handleApiRequest(request: Request, env: Env): Promise<Response> {
@@ -1124,7 +1211,11 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const userId = identity.userId;
     await assertAccountNotErasing(env.DB, userId);
     const payload = parseAssistantProposalRequest(await readJsonBody(request));
-    await assertAssistantProjectAllowed(env, userId, payload.digest.projectId);
+    const consentedRoute = await assertAssistantProjectAllowed(
+      env,
+      identity,
+      payload.digest.projectId
+    );
     const assistant = await resolveUserAssistant(userId, env, identity.email);
     if (!assistant.effective.configured) {
       return json(
@@ -1133,6 +1224,18 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
           code: 'AI_NOT_CONFIGURED'
         },
         503
+      );
+    }
+    // An encrypted project's consent names who receives the data: another
+    // key source, provider or model needs the user's consent again.
+    if (
+      consentedRoute !== null &&
+      consentedRoute !== assistantConsentRoute(assistant.effective)
+    ) {
+      throw new SharingRequestError(
+        409,
+        ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE,
+        'The assistant provider changed since you allowed it for this encrypted project. Allow it again. Nothing was sent.'
       );
     }
     const providerIdentity = await assistantProviderIdentity(userId, env);
@@ -1179,7 +1282,8 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         env,
         session,
         isE2eeKeysEnabled(env, session.email),
-        isE2eeProjectsEnabled(env, session.email)
+        isE2eeProjectsEnabled(env, session.email),
+        encryptedInvitationHost(env, session)
       );
       // A Commit or an account write the project's room should hear about.
       await notifyEncryptedRoom(env, request, response);

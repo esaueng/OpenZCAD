@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { prefersSavingData } from './saveData';
 
 /**
  * The lazily loaded command cards, fetched ahead of their first use.
@@ -92,6 +93,9 @@ export function useCommandCardPrefetch(ready: boolean): void {
     // Unit tests render the workspace in a DOM shim with no chunks to warm;
     // an idle import there would outlive the test that started it.
     if (!ready || import.meta.env.MODE === 'test') return;
+    // Save-Data asks for nothing speculative, as the chunk prefetch and the
+    // first-use warm-up honour: a card's chunk loads when the card opens.
+    if (prefersSavingData()) return;
     return prefetchWhenIdle(COMMAND_CARD_CHUNKS, window);
   }, [ready]);
 }

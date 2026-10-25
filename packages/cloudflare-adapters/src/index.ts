@@ -565,6 +565,59 @@ export const isE2eeContactStorageReady = cachedSchemaProbe(
   (row) => row?.ready === 1
 );
 
+/**
+ * Whether migration 0041's assistant-consent table exists (ADR-024 Phase 6,
+ * slice 6-1). Only the consent routes, the assistant gate for encrypted
+ * projects, project purge and account erasure name it, each after asking
+ * this, so a database without the migration keeps serving ordinary traffic
+ * and the assistant keeps refusing encrypted projects as before.
+ */
+export const isE2eeAssistantConsentStorageReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM pragma_table_info('e2ee_assistant_consents')
+   WHERE name IN ('user_id', 'project_id', 'allowed', 'copy_version', 'route',
+                  'record', 'record_mac', 'sequence', 'updated_at',
+                  'revoked_at')`,
+  (row) => row?.ready === 10
+);
+
+/** The tables migration 0038 adds, children before the invitations. */
+export const E2EE_INVITATION_TABLES = Object.freeze([
+  'e2ee_welcomes',
+  'e2ee_key_packages',
+  'e2ee_invitations'
+] as const);
+
+/**
+ * Whether migration 0038 is installed: invitations to encrypted projects,
+ * their KeyPackages and Welcomes (ADR-024 Phase 5, slice 5-3a). Only the
+ * encrypted invitation and KeyPackage routes, the Add form of a Commit,
+ * contacts lookups, project purge and account erasure name its tables,
+ * each after asking this; a failed probe answers "missing", so ordinary
+ * traffic and plaintext invitations keep working without the migration.
+ */
+export const isE2eeInvitationStorageReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM sqlite_master WHERE type = 'table' AND name IN
+   ('e2ee_invitations', 'e2ee_key_packages', 'e2ee_welcomes')`,
+  (row) => row?.ready === E2EE_INVITATION_TABLES.length
+);
+
+/**
+ * Whether migration 0039's proposal table exists (ADR-024 Phase 5, slice
+ * 5-5: a departing member's SelfRemove, stored for another member to
+ * commit). Only the proposal routes, the Commit route's settlement of
+ * pending proposals, project purge and account erasure name it, each after
+ * asking this; a failed probe answers "missing", so Commits, removals,
+ * role changes and ordinary traffic keep working without the migration and
+ * only leaving answers 503.
+ */
+export const isE2eeMlsProposalStorageReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM pragma_table_info('e2ee_mls_proposals')
+   WHERE name IN ('project_id', 'key_epoch', 'proposal_hash', 'kind',
+                  'sender_user_id', 'sender_device_id', 'message',
+                  'created_at', 'outcome', 'settled_key_epoch')`,
+  (row) => row?.ready === 10
+);
+
 /** An encrypted blob's opaque object key: no file name, no kind. */
 export function encryptedBlobObjectKey(
   projectId: string,
@@ -4260,8 +4313,8 @@ export class D1R2PersistenceService implements PersistenceService {
 
   // --- Encrypted content blobs (ADR-024 Phase 4, migration 0034) ----------
 
-  /** The owner's access to an encrypted project, or the refusal. */
-  private async requireEncryptedBlobOwner(
+  /** The owner's or an editor's access to an encrypted project, or the refusal. */
+  private async requireEncryptedBlobWriter(
     userId: UserId,
     projectId: string
   ): Promise<ProjectAccess> {
@@ -4272,8 +4325,8 @@ export class D1R2PersistenceService implements PersistenceService {
         'Encrypted files are unavailable until the database is updated.'
       );
     }
+    // The owner or an editor (slice 5-2; viewers are refused as not found).
     const access = await this.requireProjectEdit(userId, projectId);
-    if (access.role !== 'owner') throw new ProjectNotFoundError(projectId);
     if (isPlaintextStorageFormat(access.storageFormat)) {
       throw new EncryptedBlobError(
         409,
@@ -4337,7 +4390,7 @@ export class D1R2PersistenceService implements PersistenceService {
     request: { projectId: string; blobId: string; kind: string },
     authorization: { sql: string; binds: readonly unknown[] }
   ): Promise<EncryptedBlobUploadResult> {
-    const access = await this.requireEncryptedBlobOwner(
+    const access = await this.requireEncryptedBlobWriter(
       userId,
       request.projectId
     );
@@ -4412,6 +4465,10 @@ export class D1R2PersistenceService implements PersistenceService {
              WHERE id = ? AND user_id = ? AND storage_format = 2
                AND status <> 'deleted'
                AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id)
+               AND (user_id = ? OR EXISTS (
+                 SELECT 1 FROM project_members m
+                 WHERE m.project_id = projects.id AND m.user_id = ?
+                   AND m.role = 'editor'))
            )`
         )
         .bind(
@@ -4426,7 +4483,9 @@ export class D1R2PersistenceService implements PersistenceService {
           request.kind,
           ...authorization.binds,
           request.projectId,
-          access.ownerUserId
+          access.ownerUserId,
+          userId,
+          userId
         )
         .run();
       if (inserted.meta?.changes !== 1) {
@@ -4478,7 +4537,7 @@ export class D1R2PersistenceService implements PersistenceService {
     authorization: { sql: string; binds: readonly unknown[] },
     inspect: (head: Uint8Array, size: number, kind: string) => void
   ): Promise<EncryptedBlobRecord> {
-    const access = await this.requireEncryptedBlobOwner(
+    const access = await this.requireEncryptedBlobWriter(
       userId,
       request.projectId
     );
@@ -4554,6 +4613,10 @@ export class D1R2PersistenceService implements PersistenceService {
       WHERE id = ? AND user_id = ? AND storage_format = 2
         AND status <> 'deleted'
         AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id)
+        AND (user_id = ? OR EXISTS (
+          SELECT 1 FROM project_members m
+          WHERE m.project_id = projects.id AND m.user_id = ?
+            AND m.role = 'editor'))
     ) AND ${authorization.sql}`;
     const fenceBinds = [
       request.uploadSessionId,
@@ -4564,6 +4627,8 @@ export class D1R2PersistenceService implements PersistenceService {
       stored.size,
       request.projectId,
       access.ownerUserId,
+      userId,
+      userId,
       ...authorization.binds
     ];
     const createdAt = nowIso();
@@ -5938,6 +6003,24 @@ export class D1R2PersistenceService implements PersistenceService {
         'DELETE FROM e2ee_content_blobs WHERE project_id IN'
       );
     }
+    // Assistant consents on encrypted projects (migration 0041).
+    if (await isE2eeAssistantConsentStorageReady(this.env.DB)) {
+      groupTables.push(
+        'DELETE FROM e2ee_assistant_consents WHERE project_id IN'
+      );
+    }
+    // Stored MLS proposals (migration 0039).
+    if (await isE2eeMlsProposalStorageReady(this.env.DB)) {
+      groupTables.push('DELETE FROM e2ee_mls_proposals WHERE project_id IN');
+    }
+    // Encrypted invitations, KeyPackages and Welcomes (migration 0038).
+    if (await isE2eeInvitationStorageReady(this.env.DB)) {
+      groupTables.push(
+        ...E2EE_INVITATION_TABLES.map(
+          (table) => `DELETE FROM ${table} WHERE project_id IN`
+        )
+      );
+    }
     // The child rows declare ON DELETE CASCADE, but foreign-key enforcement is
     // a per-connection pragma; deleting them explicitly means a purge cannot
     // leave orphaned revisions behind if it is ever off.
@@ -6972,7 +7055,8 @@ export class ProjectCollaborationRoom extends DurableObject {
         const active = [first, ...additionalLeases].filter(
           (lease) =>
             lease.projectId === this.projectId &&
-            lease.userId === first.userId &&
+            // An encrypted room's authors each hold a lease (slice 5-6).
+            (this.roomFormat === 2 || lease.userId === first.userId) &&
             lease.expiresAt > Date.now()
         );
         // A hibernating room wakes for each heartbeat. Avoid rewriting an
@@ -7785,9 +7869,9 @@ export class ProjectCollaborationRoom extends DurableObject {
         ? { ...claim, role: 'owner' }
         : null;
     }
-    // An encrypted project's room is its owner's own devices until sharing
-    // arrives (ADR-024 Phase 5).
-    if (claim.format === 2) return null;
+    // An encrypted project's members reach its room as a plaintext project's
+    // do (ADR-024 slice 5-6): under the sharing rollout, in the role the
+    // Worker's mirror of the MLS roles holds.
     if (!rollout.sharingEnabled) {
       return null;
     }
@@ -8220,9 +8304,18 @@ export class ProjectCollaborationRoom extends DurableObject {
       return;
     }
     await this.expireEditLease();
-    const competing = this.editLeases.filter(
-      (lease) => lease.userId !== connection.userId
-    );
+    // An encrypted room's leases do not exclude each other (ADR-024 slice
+    // 5-6): the room orders envelopes by the version each builds on and
+    // never merges, a stale one comes back as a conflict its browser merges,
+    // and the account's write is fenced on the version it names. So the
+    // owner and its editors each hold a lease and edit live together. The
+    // lease still gates who submits: the role is read again when it is
+    // granted, renewed and used, and enforcement (`leaseEnforced`) is as for
+    // a plaintext room. A plaintext room keeps one author at a time.
+    const competing =
+      this.roomFormat === 2
+        ? []
+        : this.editLeases.filter((lease) => lease.userId !== connection.userId);
     if (competing.length) {
       this.send(socket, {
         type: 'lease-denied',
@@ -8961,30 +9054,107 @@ export class ProjectCollaborationRoom extends DurableObject {
     userId: UserId,
     role: SharedProjectAccessRole
   ): Promise<void> {
-    await this.enqueueLeaseOperation(async () => {
-      const sequencer =
-        role === 'owner'
-          ? await this.encryptedSequencer(this.sockets.get(socket)?.email)
-          : null;
-      const current = await sequencer?.sync();
-      const head = sequencer?.head;
-      if (!current || !head) {
-        socket.close(1008, 'This encrypted project cannot use the room.');
-        this.removeSocket(socket);
-        return;
-      }
-      this.send(socket, {
-        type: 'e2ee-state',
-        members: this.members(),
-        role,
-        lease:
-          this.editLeases.find(
-            (lease) => lease.userId === userId && lease.clientId === clientId
-          ) ?? null,
-        head,
-        keyEpoch: current.keyEpoch
-      });
+    await this.enqueueLeaseOperation(() =>
+      this.writeEncryptedState(socket, clientId, userId, role)
+    );
+  }
+
+  /** `sendEncryptedState` for a caller that already holds the room queue. */
+  private async writeEncryptedState(
+    socket: WebSocket,
+    clientId: string,
+    userId: UserId,
+    role: SharedProjectAccessRole
+  ): Promise<void> {
+    // Every member reads the room (slice 5-6); who may write is checked on
+    // each submission.
+    const sequencer = await this.encryptedSequencer(
+      this.sockets.get(socket)?.email
+    );
+    const current = await sequencer?.sync();
+    const head = sequencer?.head;
+    if (!current || !head) {
+      socket.close(1008, 'This encrypted project cannot use the room.');
+      this.removeSocket(socket);
+      return;
+    }
+    this.send(socket, {
+      type: 'e2ee-state',
+      members: this.members(),
+      role,
+      lease:
+        this.editLeases.find(
+          (lease) => lease.userId === userId && lease.clientId === clientId
+        ) ?? null,
+      head,
+      keyEpoch: current.keyEpoch
     });
+  }
+
+  /**
+   * Role notices (ADR-024 slice 5-6). A Commit, or a member's departure,
+   * may have moved the Worker's mirror of the MLS roles, which the Commit
+   * route updates in the Commit's own batch. Each member socket's role is
+   * read again: a member no longer listed (removed, or gone by its own
+   * SelfRemove) hears `lease-lost` and is closed; a demoted editor loses
+   * its lease and hears `lease-lost` (`role-changed`), on which its browser
+   * stops submitting and shows the read-only UI; a promoted viewer gets a
+   * fresh `e2ee-state` and may take a lease. Submissions re-check the role
+   * anyway (`canAuthor`); this is how a browser hears of it at once. The
+   * owner never changes on an encrypted project. The caller holds the room
+   * queue.
+   */
+  private async refreshEncryptedRoles(): Promise<void> {
+    const roles = new Map<UserId, SharedProjectAccessRole | null>();
+    const changed: Array<{
+      socket: WebSocket;
+      connection: CollaborationSocketConnection;
+      previous: SharedProjectAccessRole;
+    }> = [];
+    for (const [socket, connection] of Array.from(this.sockets.entries())) {
+      if (connection.role === 'owner') continue;
+      let role = roles.get(connection.userId);
+      if (role === undefined) {
+        role = await this.currentConnectionRole(connection);
+        roles.set(connection.userId, role);
+      }
+      if (role === connection.role) continue;
+      changed.push({ socket, connection, previous: connection.role });
+      if (role) {
+        connection.role = role;
+        this.rememberSocket(socket, connection);
+      }
+    }
+    if (changed.length === 0) return;
+    const cannotWrite = new Set(
+      [...roles].filter(([, role]) => role !== 'editor').map(([id]) => id)
+    );
+    const kept = this.editLeases.filter(
+      (lease) => !cannotWrite.has(lease.userId)
+    );
+    if (kept.length !== this.editLeases.length) {
+      await this.persistEditLeases(kept);
+    }
+    let removed = false;
+    for (const { socket, connection, previous } of changed) {
+      const role = roles.get(connection.userId) ?? null;
+      if (!role) {
+        this.send(socket, { type: 'lease-lost', reason: 'role-changed' });
+        socket.close(1008, 'Project access was removed.');
+        this.removeSocket(socket, false);
+        removed = true;
+      } else if (role === 'viewer') {
+        this.send(socket, { type: 'lease-lost', reason: 'role-changed' });
+      } else if (previous === 'viewer') {
+        await this.writeEncryptedState(
+          socket,
+          connection.clientId,
+          connection.userId,
+          role
+        );
+      }
+    }
+    if (removed) await this.broadcastPresence();
   }
 
   private async submitEncrypted(
@@ -9049,11 +9219,10 @@ export class ProjectCollaborationRoom extends DurableObject {
     writer: E2eeRoomWriter & { userId: UserId; email?: string },
     projectId: string
   ): Promise<Response> {
-    if (writer.role !== 'owner') {
+    if (writer.role === 'viewer') {
       return rejectionResponse({
         code: 'permission-denied',
-        message:
-          'Only the owner can edit this encrypted project until sharing arrives.'
+        message: 'Viewers cannot change the collaboration document.'
       });
     }
     const body = await readSnapshotBody(request);
@@ -9141,8 +9310,10 @@ export class ProjectCollaborationRoom extends DurableObject {
 
   /**
    * Internal: the Worker tells the room that a Commit moved the project's
-   * group to a new epoch (`epoch`), or that the account's head moved outside
-   * the room (`head`). Connected browsers hear about it at once.
+   * group to a new epoch (`epoch`), that the account's head moved outside
+   * the room (`head`), or that a member left (`members`, slice 5-6).
+   * Connected browsers hear about it at once; after a Commit or a departure
+   * each member socket's role is read again (`refreshEncryptedRoles`).
    */
   private async acceptInternalE2eeNotice(request: Request): Promise<Response> {
     const projectId = new URL(request.url).searchParams.get('projectId');
@@ -9163,7 +9334,9 @@ export class ProjectCollaborationRoom extends DurableObject {
     }
     if (
       !isRecord(notice) ||
-      (notice.kind !== 'epoch' && notice.kind !== 'head') ||
+      (notice.kind !== 'epoch' &&
+        notice.kind !== 'head' &&
+        notice.kind !== 'members') ||
       (notice.kind === 'epoch' &&
         (!Number.isSafeInteger(notice.keyEpoch) ||
           (notice.keyEpoch as number) < 0))
@@ -9175,7 +9348,13 @@ export class ProjectCollaborationRoom extends DurableObject {
       if (this.roomFormat !== 2 || this.sockets.size === 0) {
         return new Response(null, { status: 204 });
       }
+      if (notice.kind === 'members') {
+        await this.refreshEncryptedRoles();
+        return new Response(null, { status: 204 });
+      }
       if (notice.kind === 'epoch') {
+        // A Commit may change roles or drop members (slices 5-4, 5-5).
+        await this.refreshEncryptedRoles();
         await this.broadcast({
           type: 'e2ee-epoch',
           keyEpoch: notice.keyEpoch as number
@@ -9394,6 +9573,7 @@ function formatMismatch(plaintext: boolean): CollaborationRejection & {
 interface CollaborationRejection {
   code: CollaborationErrorCode;
   message: string;
+  blobIds?: string[];
 }
 
 /** Carries a refusal on the HTTP path in the same shape sockets receive. */
@@ -9406,7 +9586,8 @@ function rejectionResponse(rejection: CollaborationRejection): Response {
           ? 403
           : rejection.code === 'lease-required' ||
               rejection.code === 'format-mismatch' ||
-              rejection.code === 'epoch-stale'
+              rejection.code === 'epoch-stale' ||
+              rejection.code === 'blob-unknown'
             ? 409
             : rejection.code === 'document-invalid'
               ? 400
