@@ -279,6 +279,36 @@ describe('body tools', () => {
     });
   });
 
+  it('solid offset: a curved-only body still gets its offset handle', () => {
+    const spec = IN_PLACE_TOOL_SPECS['solid-offset'];
+    // A sphere's face publishes no normal.
+    const round: FacePick = {
+      bodyId: 'body_a' as BodyId,
+      hash: 5,
+      topologyId: 'f5',
+      surfaceType: 'sphere',
+      center: { x: 0, y: 0, z: 10 }
+    };
+    const slots = { ...EMPTY, faces: [round] };
+    expect(spec.handles(slots, {}, CTX, {})).toEqual([]);
+    const [handle] = spec.handles(
+      slots,
+      {},
+      {
+        ...CTX,
+        bodyBounds: () => ({
+          min: { x: -5, y: -5, z: -5 },
+          max: { x: 5, y: 5, z: 5 }
+        })
+      },
+      {}
+    );
+    expect(handle).toMatchObject({
+      valueId: 'distance',
+      params: { origin: { x: 0, y: 0, z: 5 }, direction: { x: 0, y: 0, z: 1 } }
+    });
+  });
+
   it('rotate about axis: only datum axes, stored by reference', () => {
     const spec = IN_PLACE_TOOL_SPECS['axis-rotate'];
     const [axis] = axisCandidatesFor(EMPTY, CTX, 'datum');

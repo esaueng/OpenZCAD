@@ -1267,7 +1267,31 @@ const solidOffset: InPlaceToolSpec = {
       }
     };
   },
-  handles: (slots) => normalHandle('distance', slots.faces[0], 1)
+  handles(slots, _values, ctx) {
+    const face = slots.faces[0];
+    const onFace = normalHandle('distance', face, 1);
+    if (onFace.length > 0 || !face) return onFace;
+    // A curved-only body (a sphere) publishes no face normal: the offset
+    // still has a handle, rising from the top of the body's box, since
+    // every face moves outward by the same distance.
+    const box = ctx.bodyBounds?.(face.bodyId);
+    if (!box) return [];
+    return [
+      {
+        valueId: 'distance',
+        kind: 'linear',
+        key: `${face.bodyId}:distance:box`,
+        params: {
+          origin: {
+            x: (box.min.x + box.max.x) / 2,
+            y: (box.min.y + box.max.y) / 2,
+            z: box.max.z
+          },
+          direction: { x: 0, y: 0, z: 1 }
+        }
+      }
+    ];
+  }
 };
 
 const PULL_DIRECTIONS: Record<string, Vector3> = {
