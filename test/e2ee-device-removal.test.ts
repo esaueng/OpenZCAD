@@ -404,6 +404,7 @@ function participantFor(d: Device, pending?: PendingCutoffStore) {
   });
   const participant: RemovalParticipant = {
     prepare: (account) => inner.prepare(account),
+    written: (step) => inner.written!(step),
     complete: (step) => {
       seen.identity = step.identityPrivateKey;
       return inner.complete(step);
@@ -700,6 +701,58 @@ describe('device removal across encrypted projects', () => {
     expect(statement.entrySequence).toBeLessThan(
       laptop.account.list.entries.at(-1)!.entry.sequence
     );
+  });
+
+  it('keeps a signed cutoff when the reload after the device-list write fails (#894 review)', async () => {
+    const { srv, recovery, laptop, desktop, phone, projects } =
+      await threeDevices(1);
+    const projectId = projects[0]!;
+    await saveEdit(phone, projectId, 'Phone edit');
+    const phoneId = deviceIdOf(phone);
+    // The device list lands; the connection drops before the account is
+    // read again, so `complete` never runs.
+    const real = laptop.fetcher;
+    let appended = false;
+    let dropped = false;
+    laptop.fetcher = async (path, init = {}) => {
+      if (appended && !dropped && path === '/api/e2ee/account') {
+        dropped = true;
+        throw new TypeError('Failed to fetch');
+      }
+      const response = await real(path, init);
+      if (path === '/api/e2ee/device-list' && init.method === 'POST') {
+        appended = true;
+      }
+      return response;
+    };
+    const pending = memoryPendingCutoffs();
+    const { participant, seen } = participantFor(laptop, pending);
+    await expect(
+      removeDevice(
+        laptop.e2ee,
+        laptop.account,
+        phoneId,
+        recovery.secret,
+        participant
+      )
+    ).rejects.toBeDefined();
+    expect(dropped).toBe(true);
+    expect(seen.outcome).toBeNull();
+    expect((await statementsOf(srv)).statements).toEqual([]);
+    expect(pending.read(USER)).toHaveLength(1);
+
+    // The next removal or page open stores it; the phone's head opens.
+    expect(
+      await storePendingCutoffs(
+        createRevocationCutoffsApi((path, init) => laptop.fetcher(path, init)),
+        pending,
+        USER
+      )
+    ).toBe(0);
+    expect((await statementsOf(srv)).statements).toHaveLength(1);
+    await expect(
+      (await refresh(desktop)).store.loadProject(projectId)
+    ).resolves.toMatchObject({ name: 'Phone edit' });
   });
 
   it('keeps a signed cutoff whose store failed and stores it later (#894 review)', async () => {

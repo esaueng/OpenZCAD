@@ -78,6 +78,9 @@ export function pageRemovalParticipant(
     prepare: async (account) => {
       if (await projectsOpen()) await participant.prepare(account);
     },
+    written: async (step) => {
+      if (await projectsOpen()) await participant.written?.(step);
+    },
     complete: async (step) =>
       (await projectsOpen())
         ? participant.complete(step)

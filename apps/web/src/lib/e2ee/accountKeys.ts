@@ -1466,6 +1466,18 @@ export function revokeReadOnlyDevices(
  */
 export interface RemovalParticipantStep {
   prepare(account: AccountView): Promise<void>;
+  /**
+   * Right after the new device list is written, before the account is
+   * read again: signs and keeps what can be signed without a request, so
+   * a failed reload loses nothing. Never throws.
+   */
+  written?(step: {
+    readonly kind: 'device' | 'passkey' | 'read-only';
+    readonly identityPrivateKey: CryptoKey;
+    readonly userId: string;
+    readonly generation: number;
+    readonly written: { readonly sequence: number; readonly hash: Bytes };
+  }): Promise<void>;
   complete(step: {
     readonly kind: 'device' | 'passkey' | 'read-only';
     readonly identityPrivateKey: CryptoKey;
@@ -1580,6 +1592,19 @@ async function rotateAccountKeysLocked(
       pin: account.list.pin,
       written: signed.entry
     });
+    const written = {
+      sequence: entry.sequence,
+      hash: await deviceListEntryHash(signed.entry)
+    };
+    await participant
+      ?.written?.({
+        kind,
+        identityPrivateKey,
+        userId: ctx.userId,
+        generation: account.generation,
+        written
+      })
+      .catch(() => undefined);
     const state = await loadEncryption(ctx);
     if (participant && state.kind === 'ready' && state.account.unlocked) {
       await participant.complete({
@@ -1587,10 +1612,7 @@ async function rotateAccountKeysLocked(
         identityPrivateKey,
         account: state.account,
         // Not the reloaded head: another device may have appended since.
-        written: {
-          sequence: entry.sequence,
-          hash: await deviceListEntryHash(signed.entry)
-        }
+        written
       });
     }
     return state;

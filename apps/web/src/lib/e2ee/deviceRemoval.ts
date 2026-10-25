@@ -293,6 +293,15 @@ export function revocationStatements(
 
 export type RemovalKind = 'device' | 'passkey' | 'read-only';
 
+/** What a removal knows once its device-list entry is written. */
+export interface WrittenRemovalStep {
+  readonly kind: RemovalKind;
+  readonly identityPrivateKey: CryptoKey;
+  readonly userId: string;
+  readonly generation: number;
+  readonly written: { readonly sequence: number; readonly hash: Uint8Array };
+}
+
 export interface RemovalStep {
   readonly kind: RemovalKind;
   /** The identity key the removal opened, for signing the cutoffs. */
@@ -321,6 +330,13 @@ export interface RemovalParticipant {
    * and bring every project this device holds up to date.
    */
   prepare(account: AccountView): Promise<void>;
+  /**
+   * Right after the device list is written, before the account is read
+   * again: signs the cutoffs from what `prepare` listed and keeps them
+   * (`PendingCutoffStore`), with no request, so a removal whose reload
+   * fails still leaves a statement to store. Never throws.
+   */
+  written?(step: WrittenRemovalStep): Promise<void>;
   /** After the new device list is accepted; never throws. */
   complete(step: RemovalStep): Promise<RemovalOutcome>;
 }
@@ -388,6 +404,8 @@ export function removalParticipant(
 ): RemovalParticipant {
   const api = options.api ?? createRevocationCutoffsApi();
   const pending = options.pending ?? localPendingCutoffs();
+  // What `prepare` listed, for `written` to sign without a request.
+  let listed: E2eeRemovalProjectRecord[] | null = null;
   const now = options.now ?? Date.now;
   return {
     async prepare(account) {
@@ -395,6 +413,7 @@ export function removalParticipant(
       await storePendingCutoffs(api, pending, account.userId).catch(
         () => undefined
       );
+      listed = null;
       let projects: E2eeRemovalProjectRecord[];
       try {
         projects = (await api.list()).projects;
@@ -411,6 +430,7 @@ export function removalParticipant(
         }
         return;
       }
+      listed = projects;
       // Up to date before the revocation, while the removed device's
       // Commits still process: afterwards the policy refuses them.
       const groups: ProjectGroupContext = {
@@ -422,6 +442,40 @@ export function removalParticipant(
         await catchUpProjectGroup(groups, project.projectId).catch(
           () => undefined
         );
+      }
+    },
+
+    async written(step) {
+      if (step.kind !== 'device' || !listed?.length) return;
+      try {
+        const cutoffs: ProjectRevocationCutoff[] = [];
+        for (const project of listed) {
+          const head = await cutoffHead(options.pins, step.userId, project);
+          cutoffs.push({
+            projectId: project.projectId,
+            cutoffEpoch: project.keyEpochBase + project.epoch + 1,
+            ...(head ? { head } : {})
+          });
+        }
+        const signed = await signRevocationCutoffs(step.identityPrivateKey, {
+          userId: step.userId,
+          generation: step.generation,
+          entrySequence: step.written.sequence,
+          entryHash: step.written.hash,
+          issuedAt: now(),
+          cutoffs
+        });
+        // Kept, not sent: `complete` signs again from a fresh listing and
+        // replaces it; if it never runs, the next removal or page open
+        // stores this one.
+        pending.save(step.userId, {
+          generation: step.generation,
+          entrySequence: step.written.sequence,
+          statement: toBase64Url(signed.statement),
+          signature: toBase64Url(signed.signature)
+        });
+      } catch {
+        // Nothing kept; `complete` signs from its own listing.
       }
     },
 
