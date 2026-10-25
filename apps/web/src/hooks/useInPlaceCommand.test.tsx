@@ -803,6 +803,23 @@ describe('useInPlaceCommand: primitives', () => {
     expect(hook.result.current.values.z).toBe(3);
   });
 
+  it('lets a drawn footprint lift the refusal of the size it replaces', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('cylinder'));
+    act(() => {
+      hook.result.current.setValue('radius', -2);
+    });
+    expect(hook.result.current.refusal).toMatch(/radius takes/);
+    act(() => {
+      hook.result.current.placeFootprint(
+        { frame: GROUND_FRAME, signU: 1, signV: 1 },
+        { radius: 4, x: 0, y: 0, z: 0 }
+      );
+    });
+    expect(hook.result.current.refusal).toBeNull();
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+  });
+
   it('lets one cone end come to a point, never both', () => {
     const { hook } = setup();
     act(() => hook.result.current.start('cone'));

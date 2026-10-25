@@ -610,6 +610,10 @@ export function useInPlaceCommand(
       const current = sessionRef.current;
       const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
       if (!current || !toolSpec?.footprint) return false;
+      // A drawn value replaces a refused typed one, and its refusal with it.
+      setEntryRefusal((refused) =>
+        refused && refused.valueId in placed ? null : refused
+      );
       setSession((latest) => {
         if (!latest) return latest;
         const specs = IN_PLACE_TOOL_SPECS[latest.tool].values;
