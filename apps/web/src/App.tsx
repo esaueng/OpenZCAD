@@ -1443,6 +1443,7 @@ import {
 import { datumAxisChoices } from './lib/datumAxisChoices';
 import {
   holeWorldPosition,
+  inPlaceEditBodyBox,
   keepAbsentHoleSteps,
   inPlaceEditLineage,
   inPlaceEditMovedBodies,
@@ -8418,6 +8419,14 @@ export function App() {
     // A running command (another edit, a create) gives way quietly.
     inPlaceRef.current.cancel(true);
     retireStatusMessage();
+    // Each arming is its own edit session, even of the same row: a Done
+    // still validating from the last one must not finish this one.
+    if (editCardSessionRef.current) {
+      editCardSessionRef.current = {
+        ...editCardSessionRef.current,
+        generation: editCardSessionRef.current.generation + 1
+      };
+    }
     inPlaceRef.current.edit(armed.tool, armed.seed);
     if (armed.seed.notice) setStatus(armed.seed.notice);
     return true;
@@ -8611,10 +8620,15 @@ export function App() {
     const joined = descendants?.mixed.has(resolvedBodyId) ?? false;
     // A hole goes where the click lands, and on a body a later feature moved
     // (a copy, a mirror, a pattern) that is not where the hole's own face is.
+    // So does a draft's clicked-point hinge.
+    const usesPoint =
+      inPlaceRef.current.tool === 'hole' ||
+      (inPlaceRef.current.tool === 'draft' &&
+        inPlaceRef.current.options.neutral === 'point');
     if (
       later &&
       editing &&
-      inPlaceRef.current.tool === 'hole' &&
+      usesPoint &&
       managerRef.current &&
       inPlaceEditMovedBodies(
         managerRef.current.document,
@@ -19299,6 +19313,8 @@ export function App() {
   const inPlaceEditPicks = inPlace.slots;
   const inPlaceFacePickRef = useRef(inPlaceFacePick);
   inPlaceFacePickRef.current = inPlaceFacePick;
+  const inPlaceBodyPickRef = useRef(inPlaceBodyPick);
+  inPlaceBodyPickRef.current = inPlaceBodyPick;
   useEffect(() => {
     const editing = inPlaceEditing;
     if (!editing || !doc) return;
@@ -19363,7 +19379,7 @@ export function App() {
       IN_PLACE_TOOL_SPECS[inPlace.tool].bodyMode === 'many';
     // Gone means gone from the document, or still without a shape once the
     // exact rebuild has finished: a body between rebuilds keeps its place.
-    const bodies = listsBodies
+    const kept = listsBodies
       ? inPlaceEditPicks.bodies.filter(
           (pick) =>
             representations[pick.bodyId] ||
@@ -19373,13 +19389,35 @@ export function App() {
               ))
         )
       : inPlaceEditPicks.bodies;
+    // A body the update reshaped is read again, so the handles placed from
+    // its box (a scale's corner, a pattern's spacing) follow it.
+    let bodiesMoved = false;
+    const bodies = kept.map((pick) => {
+      const fresh = inPlaceBodyPickRef.current(pick.bodyId);
+      if (!fresh) return pick;
+      const box = inPlaceEditBodyBox(fresh, editing.data, {
+        evaluate: (value) =>
+          evalParamValue(value, parameterScope.scope, doc.units)
+      });
+      const same =
+        JSON.stringify([box.min, box.max]) ===
+        JSON.stringify([pick.min, pick.max]);
+      if (same) return pick;
+      bodiesMoved = true;
+      return box;
+    });
     if (
       path.length === inPlaceEditPicks.path.length &&
       guide.length === inPlaceEditPicks.guide.length &&
       faces.length === inPlaceEditPicks.faces.length &&
       bodies.length === inPlaceEditPicks.bodies.length
     ) {
-      if (facesMoved) inPlaceRef.current.setPicks({ faces });
+      if (facesMoved || bodiesMoved) {
+        inPlaceRef.current.setPicks({
+          ...(facesMoved ? { faces } : {}),
+          ...(bodiesMoved ? { bodies } : {})
+        });
+      }
       return;
     }
     inPlaceRef.current.setPicks({ path, guide, faces, bodies });

@@ -18,6 +18,7 @@ import type {
   SketchId
 } from '@openzcad/shared';
 import {
+  inPlaceEditBodyBox,
   inPlaceEditLineage,
   keepAbsentHoleSteps,
   inPlaceEditMovedBodies,
@@ -739,5 +740,43 @@ describe('inPlaceEditLineage', () => {
     // The post itself was never the hole's.
     expect(lineage.pure.has(post!)).toBe(false);
     expect(lineage.mixed.has(post!)).toBe(false);
+  });
+});
+
+describe('inPlaceEditBodyBox', () => {
+  const box = {
+    bodyId: BODY,
+    min: { x: 0, y: 0, z: 0 },
+    max: { x: 20, y: 10, z: 4 }
+  };
+  const scale = (copy: boolean): FeatureData =>
+    ({
+      featureKind: 'transform',
+      targetBodyId: BODY,
+      ...(copy ? { copy: true } : {}),
+      transform: {
+        translation: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: 2
+      }
+    });
+
+  it("gives an in-place scale's handle the body before the scale", () => {
+    expect(inPlaceEditBodyBox(box, scale(false), EDIT_CTX).max).toEqual({
+      x: 10,
+      y: 5,
+      z: 2
+    });
+  });
+
+  it('leaves a copy source, and any other body, as the model shows it', () => {
+    expect(inPlaceEditBodyBox(box, scale(true), EDIT_CTX)).toBe(box);
+    expect(
+      inPlaceEditBodyBox(
+        box,
+        { featureKind: 'solid-offset', targetBodyId: BODY, distance: 1 },
+        EDIT_CTX
+      )
+    ).toBe(box);
   });
 });

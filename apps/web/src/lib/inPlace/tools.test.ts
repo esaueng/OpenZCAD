@@ -242,6 +242,15 @@ describe('body tools', () => {
     });
   });
 
+  it('scale: any positive factor, a unit conversion included', () => {
+    const factor = IN_PLACE_TOOL_SPECS.scale.values.find(
+      (value) => value.id === 'factor'
+    )!;
+    expect(valueInRange(factor, 1000)).toBe(true);
+    expect(valueInRange(factor, 0.001)).toBe(true);
+    expect(valueInRange(factor, 0)).toBe(false);
+  });
+
   it('scale: an edited scale measures its handle from the pivot it stores', () => {
     const spec = IN_PLACE_TOOL_SPECS.scale;
     const slots = { ...EMPTY, bodies: [BODY] };

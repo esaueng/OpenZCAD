@@ -413,6 +413,31 @@ export function useInPlaceCommand(
     preview.request(generation.current);
   }, [requestKey, options.baseVersion, preview]);
 
+  // A typed expression is stored as typed and evaluated against the model:
+  // when the model changes under the command (an undo, a collaborator's
+  // parameter edit), its number is read again, so the chip and the handle
+  // stand where the preview builds.
+  useEffect(() => {
+    setSession((current) => {
+      if (!current) return current;
+      let changed = false;
+      const values = { ...current.values };
+      for (const [valueId, raw] of Object.entries(current.raws)) {
+        const number = optionsRef.current.evaluate?.(raw);
+        if (
+          number !== null &&
+          number !== undefined &&
+          Number.isFinite(number) &&
+          number !== values[valueId]
+        ) {
+          values[valueId] = number;
+          changed = true;
+        }
+      }
+      return changed ? { ...current, values } : current;
+    });
+  }, [options.baseVersion]);
+
   const end = useCallback(() => {
     preview.clear();
     setSession(null);

@@ -881,3 +881,31 @@ export function keepAbsentHoleSteps(
     )
   };
 }
+
+/**
+ * The box an edit's body slot holds for `box`, the body as the model shows
+ * it: as it is, except under an in-place scale, whose handle works on the
+ * body before the stored scale (a copy's source is shown as it was).
+ */
+export function inPlaceEditBodyBox(
+  box: BodyPick,
+  data: FeatureData,
+  ctx: Pick<InPlaceEditContext, 'evaluate'>
+): BodyPick {
+  if (
+    data.featureKind !== 'transform' ||
+    data.copy ||
+    data.transform.scale === undefined
+  ) {
+    return box;
+  }
+  const factor = ctx.evaluate(data.transform.scale);
+  if (factor === null || !(factor > 0)) return box;
+  const pivot = (data.transform.pivot &&
+    evaluated(data.transform.pivot, ctx as InPlaceEditContext)) ?? {
+    x: 0,
+    y: 0,
+    z: 0
+  };
+  return unscaled(box, pivot, factor);
+}
