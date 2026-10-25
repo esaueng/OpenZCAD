@@ -64,6 +64,7 @@ export type ObjectsPanelProps = ObjectsSource &
   Pick<
     ModelPanelSource,
     | 'geometryPending'
+    | 'geometryPendingShown'
     | 'selectedFeatureNodeId'
     | 'selectedSketchProfileId'
     | 'selectedBodyIds'
@@ -247,6 +248,7 @@ export function ObjectsPanel({
   document,
   parameterValues,
   geometryPending = false,
+  geometryPendingShown = geometryPending,
   selectedFeatureNodeId,
   selectedSketchProfileId,
   selectedBodyIds,
@@ -736,7 +738,7 @@ export function ObjectsPanel({
         </div>
       </div>
       <div className="feature-list" role="list" aria-label="Objects">
-        {geometryPending && (
+        {geometryPending && geometryPendingShown && (
           <p className="muted sidebar-hint" role="status">
             Preparing model details…
           </p>

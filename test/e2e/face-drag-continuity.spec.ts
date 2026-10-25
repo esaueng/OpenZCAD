@@ -13,6 +13,7 @@ declare global {
   interface Window {
     __faceDragLog?: { t: number; name: string; value: string | null }[];
     __holdFinal?: { hold: boolean; held: number; release(): void };
+    __openzcadE2EExactFaceDrag?: boolean;
   }
 }
 
@@ -295,6 +296,57 @@ test('a value the drag preview cannot show holds the last one it could', async (
   );
   await expect(canvas).toHaveAttribute('data-e2e-height-proxy-offset', '-6');
   expect(await removals(page, 'data-e2e-height-proxy-offset', pressed)).toBe(0);
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+});
+
+test('the face an exact preview redrew can still be grabbed after a refusal', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  // Exact frames renumber the dragged face; force them for every step.
+  await page.addInitScript(() => {
+    window.__openzcadE2EExactFaceDrag = true;
+  });
+  const { canvas, handle } = await armedBox(page);
+  const chip = page.getByTestId('direct-manipulation-value');
+  const at = (value: number) => ({
+    x: handle.x - handle.dx * handle.pixels * value,
+    y: handle.y - handle.dy * handle.pixels * value
+  });
+  await page.mouse.move(handle.x, handle.y);
+  await page.mouse.down();
+  await page.mouse.move(at(6).x, at(6).y, { steps: 12 });
+  await expect(chip).toContainText('6');
+  await expect(page.locator('.selection-card')).toContainText('Box 1 · Face');
+  // Through the back of the 18 mm box: refused, keeping the 6 mm preview.
+  await page.mouse.move(at(24).x, at(24).y, { steps: 12 });
+  await page.mouse.up();
+  const card = page.getByRole('region', { name: 'Offset Face operation' });
+  await expect(card).toBeVisible();
+  await expect(card).not.toContainText('Validating', { timeout: 30_000 });
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Offset face' })
+  ).toHaveCount(0);
+  await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
+  const rearmed = await canvas.evaluate((element) => ({
+    x: Number(element.dataset.e2eHandleX),
+    y: Number(element.dataset.e2eHandleY)
+  }));
+  const bounds = (await canvas.boundingBox())!;
+  // Press the shown face beside the arrow and pull: the face follows.
+  const startX = bounds.x + rearmed.x - handle.dy * 40;
+  const startY = bounds.y + rearmed.y + handle.dx * 40;
+  const before = await chip.textContent();
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(
+    startX + handle.dx * handle.pixels * 2,
+    startY + handle.dy * handle.pixels * 2,
+    { steps: 12 }
+  );
+  await expect(canvas).toHaveAttribute('data-e2e-offset-ghost', '1');
+  await expect(chip).not.toHaveText(before ?? '');
   await page.keyboard.press('Escape');
   await page.mouse.up();
 });

@@ -6203,11 +6203,14 @@ export function App() {
       ? geometrySnapshot.geometry
       : null;
   // Meshes still waiting for their topology, or a face preview whose analysis
-  // is incomplete, leave the model panels' details unfinished. Both usually
-  // pass within a frame or two, and announcing them at once flashed
-  // "preparing" down every History row; a held one is still disclosed.
-  const panelGeometryPending = useSettledFlag(
-    currentGeometrySnapshot !== null || currentFaceGeometryPreview !== null,
+  // is incomplete, leave the model panels' details unfinished. The panels'
+  // stale-state guards read that at once; the "preparing" text waits, since
+  // both usually pass within a frame or two and announcing them flashed it
+  // down every History row. A held one is still disclosed.
+  const panelGeometryPending =
+    currentGeometrySnapshot !== null || currentFaceGeometryPreview !== null;
+  const panelGeometryPendingShown = useSettledFlag(
+    panelGeometryPending,
     PANEL_PENDING_DELAY_MS
   );
   // Warnings must describe what is actually on screen. While a preview is up the
@@ -24040,6 +24043,7 @@ export function App() {
       representations={representations}
       failedFeatureIds={failedHistoryFeatureIds}
       geometryPending={panelGeometryPending}
+      geometryPendingShown={panelGeometryPendingShown}
       relatedFeatureIds={historyRelatedFeatureIds}
       selectedFeatureNodeId={selectedFeatureNodeId}
       selectedSketchProfileId={selectedSketchProfileId}

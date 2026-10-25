@@ -26,6 +26,13 @@ export interface ModelPanelSource {
   failedFeatureIds?: ReadonlySet<FeatureId>;
   relatedFeatureIds?: ReadonlySet<FeatureId> | null;
   geometryPending?: boolean;
+  /**
+   * Whether to say so: `geometryPending` held long enough to be worth
+   * announcing. Stale-state guards read `geometryPending` itself, so a brief
+   * gap neither flashes "preparing" nor shows a failure that is not one.
+   * Defaults to `geometryPending`.
+   */
+  geometryPendingShown?: boolean;
   selectedFeatureNodeId: string | null;
   selectedSketchProfileId: string | null;
   selectedBodyIds: string[];

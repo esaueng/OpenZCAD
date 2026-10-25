@@ -2112,6 +2112,9 @@ export function ModelViewer({
   cylinderRadiusHandleRef.current = cylinderRadiusHandle;
   const offsetHandleRef = useRef(offsetHandle);
   offsetHandleRef.current = offsetHandle;
+  /** The selection as rendered: an exact preview may renumber the face. */
+  const selectedTopologyRef = useRef(selectedTopology);
+  selectedTopologyRef.current = selectedTopology;
   const edgeHandleRef = useRef(edgeHandle);
   edgeHandleRef.current = edgeHandle;
   const cylinderDimensionModeRef = useRef(cylinderDimensionMode);
@@ -8671,10 +8674,14 @@ export function ModelViewer({
         const armedTarget = offsetHandleRef.current;
         if (armedTarget && !armedTarget.locked) {
           const hit = pick(event)?.selection;
+          const shown = selectedTopologyRef.current;
           if (
             hit?.kind === 'face' &&
             hit.bodyId === armedTarget.bodyId &&
-            hit.topologyId === armedTarget.topologyId
+            (hit.topologyId === armedTarget.topologyId ||
+              (shown?.kind === 'face' &&
+                shown.bodyId === hit.bodyId &&
+                shown.topologyId === hit.topologyId))
           ) {
             beginBoxSelect(event);
             boxSelect!.faceGrab = true;
