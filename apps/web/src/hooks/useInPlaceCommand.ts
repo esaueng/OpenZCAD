@@ -56,9 +56,11 @@ export interface UseInPlaceCommandOptions extends InPlaceContext {
   /**
    * An edit's seed read again from the feature as the model has it now, so
    * a value the user has not changed follows a change made to it since (an
-   * undo, a collaborator).
+   * undo, a collaborator), with the command that now edits it.
    */
-  reseed?(edit: InPlaceEditSeed): InPlaceEditSeed | null;
+  reseed?(
+    edit: InPlaceEditSeed
+  ): { tool: InPlaceToolId; seed: InPlaceEditSeed } | null;
   derive(document: ProjectDocument): Promise<ProjectDocument['derived']>;
   /**
    * Builds the same command the commit runs, named for the tool so a kernel
@@ -116,6 +118,27 @@ function slotIdentity(slot: unknown): string {
   return JSON.stringify(slot ?? null, (key, value: unknown) =>
     PLACEMENT_KEYS.has(key) ? undefined : value
   );
+}
+
+/** An edit's session, armed from its seed. */
+function sessionFromSeed(tool: InPlaceToolId, seed: InPlaceEditSeed): Session {
+  return {
+    tool,
+    edit: seed,
+    slots: {
+      profiles: seed.slots.profiles,
+      axisId: seed.slots.axisId,
+      path: seed.slots.path,
+      guide: seed.slots.guide,
+      faces: seed.slots.faces,
+      bodies: seed.slots.bodies,
+      plane: seed.slots.plane
+    },
+    options: { ...seed.options },
+    values: { ...seed.values },
+    raws: { ...seed.raws },
+    touched: [...seed.touched]
+  };
 }
 
 interface Session {
@@ -622,10 +645,33 @@ export function useInPlaceCommand(
       // its old baseline, so it stays theirs even if the feature later comes
       // to match it.
       const baseline = seededRef.current;
-      const live =
+      const reseeded =
         current.edit && baseline
           ? optionsRef.current.reseed?.(current.edit)
           : null;
+      // A feature now made by another command (a linear pattern turned
+      // circular, a scale turned into a turn) is edited by that command:
+      // the edit re-arms from it. A Boolean's operations are one command's
+      // choices, followed below like any option.
+      if (
+        reseeded &&
+        reseeded.tool !== current.tool &&
+        !committingRef.current &&
+        !(IN_PLACE_TOOL_SPECS[current.tool].options ?? []).some(
+          (option) =>
+            option.switchesTool &&
+            option.choices.some((choice) => choice.value === reseeded.tool)
+        )
+      ) {
+        seededRef.current = {
+          values: reseeded.seed.values,
+          raws: reseeded.seed.raws,
+          options: reseeded.seed.options,
+          slots: reseeded.seed.slots
+        };
+        return sessionFromSeed(reseeded.tool, reseeded.seed);
+      }
+      const live = reseeded?.seed ?? null;
       if (live && baseline) {
         const nextBaseline = {
           values: { ...baseline.values },
@@ -789,23 +835,7 @@ export function useInPlaceCommand(
       setEntryRefusal(null);
       setCommitting(false);
       setPreviewValid(false);
-      setSession({
-        tool,
-        edit: seed,
-        slots: {
-          profiles: seed.slots.profiles,
-          axisId: seed.slots.axisId,
-          path: seed.slots.path,
-          guide: seed.slots.guide,
-          faces: seed.slots.faces,
-          bodies: seed.slots.bodies,
-          plane: seed.slots.plane
-        },
-        options: { ...seed.options },
-        values: { ...seed.values },
-        raws: { ...seed.raws },
-        touched: [...seed.touched]
-      });
+      setSession(sessionFromSeed(tool, seed));
     },
     [preview, setCommitting]
   );
