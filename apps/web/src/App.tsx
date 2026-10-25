@@ -19878,6 +19878,9 @@ export function App() {
           inPlace.slots.edges.map((edge) => [edge.bodyId, edge.hash])
         )
       : null;
+  const selectedEdgeKey = JSON.stringify(
+    selectedEdges.map((edge) => [edge.bodyId, edge.hash])
+  );
   const inPlaceEdgesRef = useRef(inPlace.slots.edges);
   inPlaceEdgesRef.current = inPlace.slots.edges;
   const litInPlaceEdges = useRef(false);
@@ -19892,6 +19895,8 @@ export function App() {
       return;
     }
     litInPlaceEdges.current = true;
+    // Already the selection: nothing to put back.
+    if (selectedEdgeKey === inPlaceEdgeKey) return;
     setSelectedEdges(
       inPlaceEdgesRef.current.map((edge) => ({
         bodyId: edge.bodyId,
@@ -19901,9 +19906,9 @@ export function App() {
         ...(edge.reference ? { reference: edge.reference } : {})
       }))
     );
-    // Again after an undo or redo, which clears the selection while the
-    // command keeps its edges.
-  }, [inPlaceEdgeKey, inPlaceBaseVersion]);
+    // Again after an undo or redo, or a selection elsewhere (the Objects
+    // tree), which clears the selection while the command keeps its edges.
+  }, [inPlaceEdgeKey, inPlaceBaseVersion, selectedEdgeKey]);
   // Picking narrows to edges while a fillet or chamfer runs, as its tool did.
   const inPlaceTool = inPlace.tool;
   useEffect(() => {
