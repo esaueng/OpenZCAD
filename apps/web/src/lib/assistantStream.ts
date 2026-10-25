@@ -8,6 +8,8 @@ import {
   type AssistantReply,
   type CadDocumentDigest
 } from '@openzcad/ai-contracts';
+import { isEncryptedProject } from './api';
+import { ENCRYPTED_PROJECT_ASSISTANT_NOTICE } from './assistant/encryptedProject';
 import { desktopFetch } from './desktopBridge';
 
 interface AssistantStreamOptions {
@@ -16,6 +18,7 @@ interface AssistantStreamOptions {
 }
 
 export type AssistantStreamErrorCode =
+  | 'AI_E2EE_PROJECT'
   | 'AI_EMPTY_REPLY'
   | 'AI_INVALID_JSON'
   | 'AI_INVALID_REPLY'
@@ -298,6 +301,14 @@ async function streamAssistantReplyAttempt(
   options: AssistantStreamOptions,
   retryAttempt: 0 | 1
 ): Promise<AssistantReply> {
+  // ADR-024 D7: nothing of an encrypted project reaches the assistant,
+  // whichever entry point asked.
+  if (isEncryptedProject(request.digest.projectId)) {
+    throw new AssistantStreamError(
+      'AI_E2EE_PROJECT',
+      ENCRYPTED_PROJECT_ASSISTANT_NOTICE
+    );
+  }
   const response = await desktopFetch('/api/assistant/proposals', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

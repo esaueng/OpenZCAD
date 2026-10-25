@@ -25930,7 +25930,8 @@ export function App() {
               onDraft={draftPrompt}
               onActivity={setAssistantActivity}
               disabledReason={assistantDisabledReason(
-                projects.find((project) => project.projectId === doc.projectId)
+                projects.find((project) => project.projectId === doc.projectId),
+                isEncryptedProject(doc.projectId)
               )}
             />
           </ErrorBoundary>
