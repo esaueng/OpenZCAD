@@ -146,6 +146,22 @@ describe('faceDepthBehind', () => {
     ).toBeNull();
   });
 
+  it('leaves wherever any surface level with the nearest hit leaves', () => {
+    // Two solids touching at x = 10, the far one drawn first: at the same
+    // distance the line meets the far one's entry face before the near
+    // one's exit face. The exit still counts.
+    const body = new THREE.Group();
+    body.add(block([10, 10, 10], [15, 0, 0]));
+    body.add(block([10, 10, 10], [5, 0, 0]));
+    expect(
+      faceDepthBehind(
+        body,
+        new THREE.Vector3(0, 1, 2),
+        new THREE.Vector3(-1, 0, 0)
+      )
+    ).toBeCloseTo(10, 6);
+  });
+
   it('decides leaving from winding when the mesh has no normals', () => {
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(10, 10, 10), BODY);
     mesh.geometry.deleteAttribute('normal');

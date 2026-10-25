@@ -106,7 +106,9 @@ export function faceDepthBehind(
         continue;
       }
       const distance = hit.distanceTo(start);
-      if (distance <= tolerance || distance >= nearest) {
+      // A hit level with the nearest (an edge or vertex shared by several
+      // triangles) still counts: any of them may be the one it leaves by.
+      if (distance <= tolerance || distance > nearest + tolerance) {
         continue;
       }
       // Whether the line leaves or enters the solid here. Shading normals
@@ -121,8 +123,13 @@ export function faceDepthBehind(
       } else {
         facing.subVectors(b, a).cross(edge.subVectors(c, a));
       }
-      nearest = distance;
-      leaves = facing.dot(back) > 0;
+      const leavesHere = facing.dot(back) > 0;
+      if (distance < nearest - tolerance) {
+        nearest = distance;
+        leaves = leavesHere;
+      } else {
+        leaves ||= leavesHere;
+      }
     }
   });
   return Number.isFinite(nearest) && leaves ? nearest - lift : null;
