@@ -535,6 +535,22 @@ describe('useInPlaceCommand: hole step chips', () => {
     await waitFor(() =>
       expect(hook.result.current.values.counterboreDiameter).toBe(7.2)
     );
+
+    // The bore moves while the step's keypad is open, then Escape: the step,
+    // still unset, takes the default as it stands now.
+    act(() => hook.result.current.previewValue('counterboreDiameter', 14));
+    act(() => {
+      hook.result.current.setValue('diameter', 5);
+    });
+    act(() =>
+      hook.result.current.restoreValue(
+        'counterboreDiameter',
+        7.2,
+        undefined,
+        false
+      )
+    );
+    expect(hook.result.current.values.counterboreDiameter).toBe(9);
   });
 });
 
