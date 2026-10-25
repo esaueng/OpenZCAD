@@ -7,6 +7,7 @@ import type {
   FinalizeArtifactRequest,
   ProjectId
 } from '@openzcad/shared';
+import { isEncryptedProject } from './api';
 import {
   uploadArtifactBody,
   type ArtifactUploadTransport
@@ -14,6 +15,15 @@ import {
 
 /** Just the artifact half of the API client, so a test can stand it up. */
 export interface ArchiveArtifactTransport extends ArtifactUploadTransport {
+  /**
+   * An end-to-end encrypted project's file (ADR-024 Phase 4): encrypted
+   * into a content blob whose id is the artifact id. Defaults to the
+   * page's encrypted store for a project this page knows is encrypted.
+   */
+  archiveEncrypted?(
+    projectId: ProjectId,
+    input: ArchiveArtifactInput
+  ): Promise<string>;
   createUploadSession(
     payload: CreateUploadSessionRequest
   ): Promise<CreateUploadSessionResponse>;
@@ -69,6 +79,17 @@ export async function archiveArtifact(
   onArtifactStored?: (artifact: ArtifactRecord) => void
 ): Promise<string> {
   input.signal?.throwIfAborted();
+  if (transport.archiveEncrypted || isEncryptedProject(projectId)) {
+    // Never through the plaintext routes, which would see the bytes. No
+    // artifact record follows: an encrypted project lists no stored files,
+    // and an unreferenced blob is collected, so nothing needs discarding.
+    if (transport.archiveEncrypted) {
+      return transport.archiveEncrypted(projectId, input);
+    }
+    const { archiveEncryptedArtifact } =
+      await import('./e2ee/encryptedProjects');
+    return archiveEncryptedArtifact(projectId, input);
+  }
   const { session: upload } = await transport.createUploadSession({
     projectId,
     fileName: input.fileName,

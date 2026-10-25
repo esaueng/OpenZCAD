@@ -714,6 +714,28 @@ export async function epochAuthenticatorForEpoch(
   return new Uint8Array(body.epochAuthenticator);
 }
 
+/**
+ * The project's asset dedupe secret, from the current key epoch's verified
+ * key archive (ADR-024: carried across epochs, replaced when someone loses
+ * access, decision D8). Content blob dedupe tags are HMACs under it.
+ */
+export async function dedupeSecretForProject(
+  ctx: ProjectGroupContext,
+  projectId: string
+): Promise<{ keyEpoch: number; secret: Uint8Array }> {
+  const group = await fetchGroup(ctx, projectId);
+  const keyEpoch = group.keyEpochBase + group.epoch;
+  const projectKey = await projectKeyForEpoch(ctx, projectId, keyEpoch);
+  const body = await openArchive(
+    ctx,
+    projectId,
+    keyEpoch,
+    projectKey,
+    await fetchArchive(ctx, projectId, keyEpoch)
+  );
+  return { keyEpoch, secret: new Uint8Array(body.dedupeSecret) };
+}
+
 interface History {
   /** Every project key up to and including the target key epoch. */
   readonly keys: Map<number, Uint8Array>;

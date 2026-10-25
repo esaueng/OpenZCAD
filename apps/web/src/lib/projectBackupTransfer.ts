@@ -7,7 +7,8 @@ import {
 import type { StoredMeasurementRecord } from './measurementRecord';
 import { withoutDerivedProjection } from '@openzcad/document-core';
 import type { ArtifactRecord, ProjectDocument } from '@openzcad/shared';
-import { api } from './api';
+import { api, isEncryptedProject } from './api';
+import { encryptedBlobSource } from './e2ee/blobReferences';
 import {
   loadLastSyncedVersion,
   listLocalSaveStateCheckpoints,
@@ -58,6 +59,28 @@ export async function readBackupResponse(
   return bytes;
 }
 
+/**
+ * An archived file's bytes: an encrypted project's blob is downloaded and
+ * decrypted in the decode worker against the reference this page holds
+ * (ADR-024 Phase 4); anything else is the plaintext download.
+ */
+async function archivedBytes(
+  artifactId: string,
+  limit?: number
+): Promise<Uint8Array<ArrayBuffer>> {
+  const encrypted = encryptedBlobSource(artifactId);
+  if (encrypted) {
+    const bytes = await encrypted.read();
+    if (limit !== undefined && bytes.byteLength > limit)
+      throw new Error('Project backup exceeds the 256 MB limit.');
+    return new Uint8Array(bytes);
+  }
+  return readBackupResponse(
+    await fetch(`/api/artifacts/${encodeURIComponent(artifactId)}/download`),
+    limit
+  );
+}
+
 export async function createProjectBackup(
   document: ProjectDocument,
   cloudProject: boolean,
@@ -92,7 +115,9 @@ export async function createProjectBackup(
     if (bytesUsed > MAX_PROJECT_BACKUP_BYTES)
       throw new Error('Project backup exceeds the 256 MB limit.');
   };
-  if (remote) {
+  // An encrypted project stores no listed files yet: its imports and
+  // pictures are blobs, reached through the document below.
+  if (remote && !isEncryptedProject(snapshot.projectId)) {
     const archived = await api.listArtifacts(snapshot.projectId);
     for (const artifact of archived.artifacts) {
       if (
@@ -179,11 +204,7 @@ export async function createProjectBackup(
           files.find((file) => file.artifact.artifactId === artifactId);
         bytes = archived
           ? backupFileBytes(archived)
-          : await readBackupResponse(
-              await fetch(
-                `/api/artifacts/${encodeURIComponent(artifactId)}/download`
-              )
-            );
+          : await archivedBytes(artifactId);
       }
       if (
         bytes.length !== ref.logicalBytes ||

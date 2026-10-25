@@ -8,6 +8,7 @@ import type {
   ProjectDocument
 } from '@openzcad/shared';
 
+import { encryptedBlobSource } from './e2ee/blobReferences';
 import { loadSourceBlob, putSourceBlob, sha256Hex } from './localProjectStore';
 import { sharedImportSourceUrl } from './projectShareClient';
 import { readSharedSourceBytes } from './sharedSourceDownload';
@@ -134,6 +135,40 @@ export async function preloadSharedImportSources(
 }
 
 /**
+ * Fetch every reference-form STEP source and mesh payload of an end-to-end
+ * encrypted project this device does not hold yet (ADR-024 Phase 4, content
+ * blobs). Their artifact ids are blob ids, and only this page holds the keys
+ * (from the verified document), so geometry workers, which resolve from the
+ * local content-addressed cache, could not fetch them themselves. Each blob
+ * is decrypted in the decode worker against its reference and then checked
+ * against the document's own checksum before it is stored.
+ */
+export async function preloadEncryptedImportSources(
+  document: ProjectDocument
+): Promise<void> {
+  const seen = new Set<string>();
+  const failures: unknown[] = [];
+  for (const node of documentNodesWithHistory(document)) {
+    if (node.kind !== 'feature') continue;
+    const ref = importedSourceReferenceOf(node.data);
+    if (!ref || seen.has(ref.checksumSha256)) continue;
+    seen.add(ref.checksumSha256);
+    const { artifactId } = node.data as { artifactId: string };
+    if (!encryptedBlobSource(artifactId)) continue;
+    if (await loadSourceBlob(ref.checksumSha256)) continue;
+    try {
+      await resolveExactSourceBytes(ref, {
+        artifactId: artifactId as ArtifactId,
+        sourceName: (node.data as { sourceName: string }).sourceName
+      });
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length) throw failures[0];
+}
+
+/**
  * One download per source, shared by every rebuild that asks for it. An edit
  * that superseded a rebuild mid-download used to leave that transfer running
  * while the next rebuild started another, each able to buffer up to the
@@ -166,6 +201,14 @@ function startDownload(key: string, artifactId: ArtifactId): SourceDownload {
     wanted: 0,
     abort: () => controller.abort(),
     bytes: (async () => {
+      // An encrypted project's blob: downloaded and decrypted against the
+      // reference this page holds, in the decode worker (ADR-024 Phase 4).
+      const encrypted = encryptedBlobSource(artifactId);
+      if (encrypted) {
+        const bytes = await encrypted.read(controller.signal, progressed);
+        progressed();
+        return bytes;
+      }
       const response = await fetch(
         `/api/artifacts/${encodeURIComponent(artifactId)}/download`,
         { signal: controller.signal }

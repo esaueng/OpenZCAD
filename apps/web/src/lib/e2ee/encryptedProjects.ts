@@ -5,8 +5,11 @@
  * entry chunk. It unlocks this device's account keys the way Settings ›
  * Encryption does (verifying the device list against this browser's pin)
  * and hands `encryptedProjectStore.ts` the account, this device's certified
- * signing key, the MLS sessions and the decode worker. Everything is
- * dropped when the key session ends (sign-out, expiry, another account).
+ * signing key, the MLS sessions and the decode worker. It also opens the
+ * page's encrypted content blobs (`encryptedContentBlobs.ts`): archiving a
+ * file into an encrypted project, and reading one back for the source
+ * resolver through the decode worker. Everything is dropped when the key
+ * session ends (sign-out, expiry, another account).
  */
 import type {
   CreateProjectRequest,
@@ -14,6 +17,16 @@ import type {
   E2eeProjectEnvelopeRecord
 } from '@openzcad/shared';
 import { ApiError } from '../api';
+import type { ArchiveArtifactInput } from '../archiveArtifact';
+import {
+  pageBlobReferences,
+  sessionBoundReferences,
+  setEncryptedBlobReader
+} from './blobReferences';
+import {
+  createEncryptedContentBlobs,
+  type EncryptedContentBlobs
+} from './encryptedContentBlobs';
 import { desktopFetch } from '../desktopBridge';
 import { loadEncryption, type E2eeContext } from './accountKeys';
 import { createE2eeDecoder, type E2eeDecoder } from './decodeWorker';
@@ -35,6 +48,7 @@ interface Opened {
   readonly userId: string;
   readonly revision: number;
   readonly store: Promise<EncryptedProjectStore>;
+  readonly blobs: Promise<EncryptedContentBlobs>;
 }
 
 let opened: Opened | null = null;
@@ -45,6 +59,9 @@ subscribeKeySession(() => {
   opened = null;
   decoder?.dispose();
   decoder = null;
+  // Blob keys go with the key session that opened their documents.
+  setEncryptedBlobReader(null);
+  pageBlobReferences.clear();
 });
 
 /** Warnings a fresh browser raises, such as a head older than the account's activity. */
@@ -79,7 +96,10 @@ const locked = () =>
     E2EE_KEYS_LOCKED_CODE
   );
 
-async function openStore(userId: string): Promise<EncryptedProjectStore> {
+async function openStore(userId: string): Promise<{
+  store: EncryptedProjectStore;
+  blobs: EncryptedContentBlobs;
+}> {
   const e2ee: E2eeContext = {
     userId,
     api: createE2eeApi(),
@@ -98,15 +118,35 @@ async function openStore(userId: string): Promise<EncryptedProjectStore> {
       : null;
   decoder ??= createE2eeDecoder();
   const pageDecoder = decoder;
-  return createEncryptedProjectStore({
-    groups: {
-      api: createProjectGroupsApi(),
-      sessions: mlsProjectSessions(),
-      account: projectGroupAccount(e2ee, account),
-      device
-    },
+  // Results finishing after this key session ends keep no keys.
+  const references = sessionBoundReferences(pageBlobReferences);
+  const groups = {
+    api: createProjectGroupsApi(),
+    sessions: mlsProjectSessions(),
+    account: projectGroupAccount(e2ee, account),
+    device
+  };
+  const blobs = createEncryptedContentBlobs({
+    groups,
+    references,
+    // Decrypted in the decode worker, within its content-blob budget.
+    decode: (job) => pageDecoder.decodeContentBlob(job)
+  });
+  setEncryptedBlobReader((projectId, blobId, signal, onProgress) =>
+    blobs.read(projectId, blobId, signal, onProgress)
+  );
+  const store = createEncryptedProjectStore({
+    groups,
+    blobReferences: references,
     open: (job) => pageDecoder.decodeProjectEnvelope(job),
     seal: (job) => pageDecoder.sealDocument(job),
+    // Geometry workers resolve sources from this device's blob store: put
+    // the document's encrypted sources there before it is rebuilt.
+    onDocument: async (_projectId, document) => {
+      const { preloadEncryptedImportSources } =
+        await import('../exactSourceResolver');
+      await preloadEncryptedImportSources(document);
+    },
     onWarning: (warning) => {
       for (const listener of warningListeners) {
         try {
@@ -117,20 +157,43 @@ async function openStore(userId: string): Promise<EncryptedProjectStore> {
       }
     }
   });
+  return { store, blobs };
+}
+
+async function openedForSession(): Promise<Opened> {
+  const userId = await sessionUserId();
+  const revision = getKeySessionRevision();
+  if (opened?.userId !== userId || opened.revision !== revision) {
+    const both = openStore(userId);
+    const current: Opened = {
+      userId,
+      revision,
+      store: both.then(({ store }) => store),
+      blobs: both.then(({ blobs }) => blobs)
+    };
+    opened = current;
+    both.catch(() => {
+      if (opened === current) opened = null;
+    });
+    current.blobs.catch(() => undefined);
+  }
+  return opened;
 }
 
 /** This page's store for the signed-in account, opened once per key session. */
 export async function encryptedProjectStore(): Promise<EncryptedProjectStore> {
-  const userId = await sessionUserId();
-  const revision = getKeySessionRevision();
-  if (opened?.userId !== userId || opened.revision !== revision) {
-    const store = openStore(userId);
-    opened = { userId, revision, store };
-    store.catch(() => {
-      if (opened?.store === store) opened = null;
-    });
-  }
-  return opened.store;
+  return (await openedForSession()).store;
+}
+
+/**
+ * `archiveArtifact` for an encrypted project: the file becomes an encrypted
+ * content blob, and its blob id is the artifact id the document records.
+ */
+export async function archiveEncryptedArtifact(
+  projectId: string,
+  input: ArchiveArtifactInput
+): Promise<string> {
+  return (await (await openedForSession()).blobs).archive(projectId, input);
 }
 
 export async function createEncryptedProject(

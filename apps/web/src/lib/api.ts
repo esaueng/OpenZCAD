@@ -918,15 +918,19 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload)
     }),
-  discardMeshPayload: (
+  discardMeshPayload: async (
     projectId: string,
     artifactId: string,
     kind?: 'stl-import' | 'mesh-import' | 'reference-image'
-  ) =>
-    requestJson<{ deleted: boolean }>(
+  ) => {
+    // An encrypted project's unreferenced blob is garbage-collected once no
+    // retained version names it (ADR-024 Phase 4, content blobs).
+    if (isEncryptedProject(projectId)) return { deleted: true };
+    return requestJson<{ deleted: boolean }>(
       `/api/artifacts/${encodeURIComponent(artifactId)}/discard-unreferenced`,
       { method: 'POST', body: JSON.stringify({ projectId, kind }) }
-    ),
+    );
+  },
   listArtifacts: (projectId: string) =>
     requestJson<ListArtifactsResponse>(
       `/api/projects/${encodeURIComponent(projectId)}/artifacts`
