@@ -747,14 +747,24 @@ const helicalSweep: InPlaceToolSpec = {
   wantsAxis: true,
   wantsPath: false,
   values: [
-    { id: 'radius', label: 'Radius', unit: 'length', initial: 10, min: 0.001 },
+    // Ranges here are what the stored feature takes, no narrower: a value
+    // made elsewhere (an import, an older card) stays editable.
+    {
+      id: 'radius',
+      label: 'Radius',
+      unit: 'length',
+      initial: 10,
+      min: 0,
+      exclusive: true
+    },
     { id: 'pitch', label: 'Pitch', unit: 'length', initial: 5 },
     {
       id: 'turns',
       label: 'Turns',
       unit: 'count',
       initial: 3,
-      min: 0.1,
+      min: 0,
+      exclusive: true,
       max: MAX_HELICAL_SWEEP_TURNS
     }
   ],
@@ -968,8 +978,22 @@ const hole: InPlaceToolSpec = {
   wantsAxis: false,
   wantsPath: false,
   values: [
-    { id: 'diameter', label: '⌀', unit: 'length', initial: 6, min: 0.1 },
-    { id: 'depth', label: 'Depth', unit: 'length', initial: 10, min: 0.1 },
+    {
+      id: 'diameter',
+      label: '⌀',
+      unit: 'length',
+      initial: 6,
+      min: 0,
+      exclusive: true
+    },
+    {
+      id: 'depth',
+      label: 'Depth',
+      unit: 'length',
+      initial: 10,
+      min: 0,
+      exclusive: true
+    },
     // The step's sizes, on chips while its style is chosen. Until one is
     // set it follows the bore, as the card's defaults did.
     // Any positive size, as the card's validation takes it (a step's
@@ -1178,7 +1202,14 @@ const shell: InPlaceToolSpec = {
   wantsAxis: false,
   wantsPath: false,
   values: [
-    { id: 'thickness', label: 'Wall', unit: 'length', initial: 2, min: 0.01 }
+    {
+      id: 'thickness',
+      label: 'Wall',
+      unit: 'length',
+      initial: 2,
+      min: 0,
+      exclusive: true
+    }
   ],
   hint(slots) {
     if (slots.faces.length === 0) return 'Click the faces to open';
@@ -1245,7 +1276,14 @@ const solidOffset: InPlaceToolSpec = {
   wantsAxis: false,
   wantsPath: false,
   values: [
-    { id: 'distance', label: 'Offset', unit: 'length', initial: 1, min: 0.01 }
+    {
+      id: 'distance',
+      label: 'Offset',
+      unit: 'length',
+      initial: 1,
+      min: 0,
+      exclusive: true
+    }
   ],
   hint(slots) {
     if (slots.faces.length === 0) return 'Click any face of the body to offset';
@@ -1764,11 +1802,9 @@ const axisRotate: InPlaceToolSpec = {
       id: 'angle',
       label: 'Angle',
       unit: 'angle',
-      initial: 90,
-      // Signed: a negative angle turns the body the other way about the
-      // axis, as the Transform card allowed.
-      min: -360,
-      max: 360
+      initial: 90
+      // Signed and unbounded, as the Transform card allowed: a negative
+      // angle turns the body the other way, and more than a turn is kept.
     }
   ],
   options: [COPY_OPTION],
@@ -1999,10 +2035,9 @@ const circularPattern: InPlaceToolSpec = {
       id: 'angle',
       label: 'Total',
       unit: 'angle',
-      initial: 360,
-      // Signed: a negative total turns the copies the other way.
-      min: -360,
-      max: 360
+      initial: 360
+      // Signed and unbounded, as the pattern itself takes it: a negative
+      // total turns the copies the other way.
     },
     {
       id: 'count',
