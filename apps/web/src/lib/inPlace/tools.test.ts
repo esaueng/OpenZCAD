@@ -387,3 +387,10 @@ describe('review: values the cards accepted stay expressible', () => {
     expect(neutral('origin')).toEqual({ x: '0', y: '0', z: '0' });
   });
 });
+
+describe('review: rotate about axis', () => {
+  it('keeps a signed angle', () => {
+    const angle = IN_PLACE_TOOL_SPECS['axis-rotate'].values[0]!;
+    expect(clampValue(angle, -90)).toBe(-90);
+  });
+});

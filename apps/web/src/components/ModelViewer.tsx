@@ -12776,10 +12776,11 @@ export function ModelViewer({
       context.requestRender();
     };
   }, [curvePickerKey]);
-  const selectedCurveKey = curvePicker?.selectedIds.join('|') ?? '';
+  // JSON, not a joined string: a curve id is itself `sketchId|entityId`.
+  const selectedCurveKey = JSON.stringify(curvePicker?.selectedIds ?? []);
   useEffect(() => {
     curvePickerRigRef.current?.setSelected(
-      selectedCurveKey ? selectedCurveKey.split('|') : []
+      JSON.parse(selectedCurveKey) as string[]
     );
     contextRef.current?.requestRender();
   }, [selectedCurveKey, curvePickerKey]);

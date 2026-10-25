@@ -137,6 +137,11 @@ export interface OptionSpec {
   label: string;
   choices: readonly { value: string; label: string }[];
   initial: string;
+  /**
+   * Another option this one may never equal (a grid's two directions):
+   * choosing that option's value swaps the two instead.
+   */
+  distinctFrom?: string;
 }
 
 export type ValueUnit = 'angle' | 'length' | 'count';
@@ -1304,7 +1309,9 @@ const axisRotate: InPlaceToolSpec = {
       label: 'Angle',
       unit: 'angle',
       initial: 90,
-      min: 1,
+      // Signed: a negative angle turns the body the other way about the
+      // axis, as the Transform card allowed.
+      min: -360,
       max: 360
     }
   ],
@@ -1591,7 +1598,10 @@ const gridPattern: InPlaceToolSpec = {
       max: 100
     }
   ],
-  options: [AXIS_OPTION('x'), AXIS_OPTION('y', 'axis2', 'Then along')],
+  options: [
+    { ...AXIS_OPTION('x'), distinctFrom: 'axis2' },
+    { ...AXIS_OPTION('y', 'axis2', 'Then along'), distinctFrom: 'axis' }
+  ],
   hint: (slots) =>
     slots.bodies.length === 0
       ? 'Click the body to repeat'

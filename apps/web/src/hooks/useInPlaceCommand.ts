@@ -537,6 +537,11 @@ export function useInPlaceCommand(
         ...(offsetSpec
           ? {
               values: { ...latest.values, offset: offsetSpec.initial },
+              // A typed offset goes too, or it would still stand in for the
+              // reset value on the new plane.
+              raws: Object.fromEntries(
+                Object.entries(latest.raws).filter(([id]) => id !== 'offset')
+              ),
               touched: latest.touched.filter((id) => id !== 'offset')
             }
           : {})
@@ -546,11 +551,23 @@ export function useInPlaceCommand(
   }, []);
 
   const setOption = useCallback((optionId: string, value: string) => {
-    setSession((current) =>
-      current
-        ? { ...current, options: { ...current.options, [optionId]: value } }
-        : current
-    );
+    setSession((current) => {
+      if (!current) return current;
+      const specs = IN_PLACE_TOOL_SPECS[current.tool].options ?? [];
+      const optionSpec = specs.find((candidate) => candidate.id === optionId);
+      const options = { ...current.options, [optionId]: value };
+      // Two options that may not match (a grid's directions) trade places
+      // rather than leave a pair the kernel refuses.
+      const other = optionSpec?.distinctFrom;
+      const otherSpec = specs.find((candidate) => candidate.id === other);
+      if (other && otherSpec) {
+        const otherValue = current.options[other] ?? otherSpec.initial;
+        if (otherValue === value) {
+          options[other] = current.options[optionId] ?? optionSpec.initial;
+        }
+      }
+      return { ...current, options };
+    });
   }, []);
 
   const writeValue = useCallback(

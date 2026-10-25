@@ -425,3 +425,57 @@ describe('a box sweep into a face-list command', () => {
     ).toEqual([2, 3]);
   });
 });
+
+describe('review: option and plane resets', () => {
+  const BODY_PICK = {
+    bodyId: 'body_a' as BodyId,
+    min: { x: 0, y: 0, z: 0 },
+    max: { x: 20, y: 10, z: 4 }
+  };
+  const YZ = {
+    kind: 'principal' as const,
+    plane: 'YZ' as const,
+    origin: { x: 0, y: 0, z: 0 },
+    normal: { x: 1, y: 0, z: 0 }
+  };
+  const XZ = {
+    kind: 'principal' as const,
+    plane: 'XZ' as const,
+    origin: { x: 0, y: 0, z: 0 },
+    normal: { x: 0, y: 1, z: 0 }
+  };
+
+  it('a new plane drops a typed offset, not only its value', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('mirror', [], [], [BODY_PICK]));
+    act(() => {
+      hook.result.current.pickPlane(YZ);
+    });
+    act(() => {
+      hook.result.current.setValue('offset', 5, 'width / 4');
+    });
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        state: { value: { origin: { x: '(width / 4)' } } }
+      })
+    );
+    act(() => {
+      hook.result.current.pickPlane(XZ);
+    });
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        state: { value: { origin: { x: '0', y: '0', z: '0' } } }
+      })
+    );
+  });
+
+  it("a grid's two directions trade places instead of matching", () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('grid-pattern', [], [], [BODY_PICK]));
+    act(() => hook.result.current.setOption('axis2', 'x'));
+    expect(hook.result.current.options).toMatchObject({
+      axis: 'y',
+      axis2: 'x'
+    });
+  });
+});
