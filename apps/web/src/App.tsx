@@ -8386,7 +8386,7 @@ export function App() {
       face: (bodyId, hash, reference) => {
         // As the feature rebuilds it: by lineage first, then the hash.
         const found = resolveFace(representations[bodyId], { hash, reference });
-        return found.ok
+        const pick = found.ok
           ? inPlaceFacePick(
               bodyId,
               found.entry.topologyId,
@@ -8395,6 +8395,7 @@ export function App() {
               true
             )
           : null;
+        return pick && reference ? { ...pick, reference } : pick;
       },
       anyFace: (bodyId) => {
         // A flat face carries the handle best; a body with none (a sphere)
@@ -19292,10 +19293,22 @@ export function App() {
         sweepCurveExists(doc, pick.sketchId, pick.entityId)
       );
     // Only against a body whose topology is published: one still being
-    // analysed says nothing yet.
-    const faces = inPlaceEditPicks.faces.filter((pick) => {
-      const published = representations[pick.bodyId]?.topology;
-      return !published || published.faces.some((face) => face.hash === pick.hash);
+    // analysed says nothing yet. A face is found as the feature rebuilds
+    // it, by lineage first, and follows its hash if that moved.
+    let facesMoved = false;
+    const faces = inPlaceEditPicks.faces.flatMap((pick) => {
+      const body = representations[pick.bodyId];
+      if (!body?.topology) return [pick];
+      const found = resolveFace(body, {
+        hash: pick.hash,
+        ...(pick.reference ? { reference: pick.reference } : {})
+      });
+      if (!found.ok) return [];
+      if (found.entry.hash === pick.hash) return [pick];
+      facesMoved = true;
+      return [
+        { ...pick, hash: found.entry.hash, topologyId: found.entry.topologyId }
+      ];
     });
     const path = curves(inPlaceEditPicks.path);
     const guide = curves(inPlaceEditPicks.guide);
@@ -19313,6 +19326,7 @@ export function App() {
       faces.length === inPlaceEditPicks.faces.length &&
       bodies.length === inPlaceEditPicks.bodies.length
     ) {
+      if (facesMoved) inPlaceRef.current.setPicks({ faces });
       return;
     }
     inPlaceRef.current.setPicks({ path, guide, faces, bodies });

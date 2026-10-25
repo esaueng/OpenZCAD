@@ -195,6 +195,7 @@ export function useInPlaceCommand(
   const editSeed = session?.edit ?? null;
   const editRef = useRef(editSeed);
   editRef.current = editSeed;
+  const sessionTouched = session?.touched ?? EMPTY_TOUCHED;
   const ctx: InPlaceContext = useMemo(
     () => ({
       sketchViews: options.sketchViews,
@@ -203,9 +204,16 @@ export function useInPlaceCommand(
       linearSnap: options.linearSnap ?? null,
       bodyBounds: (bodyId) => optionsRef.current.bodyBounds?.(bodyId) ?? null,
       evaluate: (value) => optionsRef.current.evaluate?.(value) ?? null,
+      touched: sessionTouched,
       ...(editSeed ? { saved: editSeed.data } : {})
     }),
-    [options.sketchViews, options.datumAxes, options.linearSnap, editSeed]
+    [
+      options.sketchViews,
+      options.datumAxes,
+      options.linearSnap,
+      editSeed,
+      sessionTouched
+    ]
   );
 
   const profiles = session?.slots.profiles;

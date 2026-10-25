@@ -710,16 +710,12 @@ export function inPlaceFeatureUpdate(
           !(saved.axis2 === undefined && request.axis2 === 'y')
             ? { axis2: request.axis2 }
             : {}),
-          ...(request.spacing2 !== undefined &&
-          !(
-            saved.spacing2 === undefined && request.spacing2 === request.spacing
-          )
+          // A second spacing or count still following the first is not in
+          // the request (see the grid tool), so it stays absent.
+          ...(request.spacing2 !== undefined
             ? { spacing2: request.spacing2 }
             : {}),
-          ...(request.count2 !== undefined &&
-          !(saved.count2 === undefined && request.count2 === request.count)
-            ? { count2: request.count2 }
-            : {}),
+          ...(request.count2 !== undefined ? { count2: request.count2 } : {}),
           ...(request.axisRef ? { axisRef: request.axisRef } : {})
         },
         // R01: the world axis is the absent datum axis.

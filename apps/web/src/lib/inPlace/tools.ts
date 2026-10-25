@@ -5,6 +5,7 @@ import {
   type BooleanKeepOriginals,
   type BooleanOperation,
   type DatumAxisLine,
+  type FaceTopologyReferenceV5,
   type FeatureData,
   type FeatureId,
   type ParamValue,
@@ -116,6 +117,11 @@ export interface FacePick {
    * position is kept, expressions and all, until the face is clicked again.
    */
   savedPosition?: true;
+  /**
+   * The lineage reference an edit found a stored face by, so a later
+   * re-check finds it the same way when its hash moves.
+   */
+  reference?: FaceTopologyReferenceV5;
 }
 
 /** A picked body, with the box its handles are placed from. */
@@ -222,6 +228,8 @@ export interface InPlaceContext {
   saved?: FeatureData;
   /** A stored value as a number, or null when it does not resolve. */
   evaluate?(value: ParamValue): number | null;
+  /** The values the user has set (typed or dragged) in this session. */
+  touched?: readonly string[];
 }
 
 /** What to build, without names or ids; App turns it into the command. */
@@ -2086,12 +2094,13 @@ const gridPattern: InPlaceToolSpec = {
   request(slots, values, options, ctx, numbers) {
     const body = slots.bodies[0];
     if (!body) return null;
-    // A second value still following the first is the first, as typed, so
-    // the edit can tell it apart from one set to the same number.
+    // A second value still following the first (an edit's absent one, not
+    // set since) is left out, so the edit keeps it absent.
     const saved = ctx.saved?.featureKind === 'pattern' ? ctx.saved : undefined;
     const follows = (second: 'spacing2' | 'count2', first: string) =>
       saved !== undefined &&
       saved[second] === undefined &&
+      !ctx.touched?.includes(second) &&
       numbers?.[second] !== undefined &&
       numbers[second] === numbers[first];
     return {
@@ -2102,12 +2111,10 @@ const gridPattern: InPlaceToolSpec = {
       axis: axisOf(options.axis),
       spacing: values.spacing ?? 20,
       axis2: axisOf(options.axis2 ?? 'y'),
-      spacing2: follows('spacing2', 'spacing')
-        ? (values.spacing ?? 20)
-        : (values.spacing2 ?? 20),
-      count2: follows('count2', 'count')
-        ? (values.count ?? 3)
-        : (values.count2 ?? 3)
+      ...(follows('spacing2', 'spacing')
+        ? {}
+        : { spacing2: values.spacing2 ?? 20 }),
+      ...(follows('count2', 'count') ? {} : { count2: values.count2 ?? 3 })
     };
   },
   handles(slots, _values, _ctx, options) {
