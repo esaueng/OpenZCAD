@@ -72,6 +72,8 @@ import {
   revocationStatements,
   storePendingCutoffs
 } from './deviceRemoval';
+import { contactsContext } from './contacts';
+import { contactMemberLists } from './memberLists';
 
 export { E2EE_KEYS_LOCKED_CODE };
 
@@ -164,8 +166,9 @@ async function openStore(
   await storePendingCutoffs(cutoffsApi, localPendingCutoffs(), userId).catch(
     () => 0
   );
+  const groupsApi = createProjectGroupsApi();
   const groups = {
-    api: createProjectGroupsApi(),
+    api: groupsApi,
     sessions: mlsProjectSessions(),
     account: projectGroupAccount(e2ee, account),
     device,
@@ -174,6 +177,14 @@ async function openStore(
     revocations: revocationStatements(cutoffsApi, {
       list: account.list,
       generation: account.generation
+    }),
+    // Shared projects (slice 5-2): co-members' device lists, checked by the
+    // contacts module (slice 5-1) against this browser's verified and seen
+    // pins. A solo project looks nothing up.
+    members: contactMemberLists({
+      contacts: contactsContext(e2ee),
+      account,
+      leaves: (projectId) => groupsApi.leaves(projectId)
     })
   };
   const blobs = createEncryptedContentBlobs({

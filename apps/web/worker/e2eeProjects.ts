@@ -49,6 +49,7 @@ import {
   isE2eeProjectGroupStorageReady,
   isProjectStorageFormatReady
 } from '@openzcad/cloudflare-adapters';
+import { prepareAddCommit, type PreparedAdd } from './e2eeInvitations';
 
 export const E2EE_PROJECT_ROUTE =
   /^\/api\/e2ee\/projects\/([^/]+)\/(mls\/commits|mls\/group-info|mls\/leaves|keys|keys\/archives)$/;
@@ -890,6 +891,18 @@ async function submitCommit(
   if (keyEpoch > MAX_U32) invalid('The key epoch is exhausted');
   const wraps = wrapsField(body.wraps, keyEpoch, account);
   const archive = archiveField(body.archive, projectId, keyEpoch, deviceId);
+  // An owner's Add of an invitee (slice 5-3a): exactly the KeyPackages it
+  // claimed, checked here and again by the Commit row's own insert.
+  const add: PreparedAdd | null =
+    body.add === undefined
+      ? null
+      : await prepareAddCommit(db, {
+          userId,
+          projectId,
+          epoch,
+          kind,
+          add: body.add
+        });
   const now = new Date().toISOString();
   // The device was certified in this device-list head; a removal that
   // lands first makes the Commit refuse, so a removed device cannot move
@@ -905,7 +918,7 @@ async function submitCommit(
          WHERE ${authorization.sql} AND ${MEMBER_FENCE}
            AND EXISTS (SELECT 1 FROM e2ee_project_groups
                        WHERE project_id = ? AND epoch = ? AND key_epoch_base = ?)
-           AND ${signerList.sql}`
+           AND ${signerList.sql}${add ? ` AND ${add.gateSql}` : ''}`
       )
       .bind(
         projectId,
@@ -920,7 +933,8 @@ async function submitCommit(
         projectId,
         epoch,
         group.key_epoch_base,
-        ...signerList.binds
+        ...signerList.binds,
+        ...(add?.gateBinds ?? [])
       ),
     db
       .prepare(
@@ -931,7 +945,8 @@ async function submitCommit(
       .bind(groupInfo, epoch + 1, now, projectId, epoch),
     ...(leaf ? [insertLeaf(db, projectId, userId, deviceId, leaf, now)] : []),
     ...insertWraps(db, projectId, userId, wraps, now),
-    insertArchive(db, projectId, archive, now)
+    insertArchive(db, projectId, archive, now),
+    ...(add ? add.statements(now) : [])
   ];
   // Two submissions for one epoch can both pass the read above. Whichever
   // batch runs second either finds the epoch fence moved (no rows change)
@@ -946,6 +961,7 @@ async function submitCommit(
     const current = await groupRow(db, projectId);
     if (current && current.epoch > epoch)
       await epochTaken(db, projectId, epoch);
+    if (add) await add.explain();
     refuse(
       401,
       'E2EE_SESSION_REQUIRED',

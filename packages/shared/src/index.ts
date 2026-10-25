@@ -33,6 +33,7 @@ export * from './e2ee-collaboration';
 export * from './e2ee-device-removal';
 export * from './e2ee-contacts';
 export * from './e2ee-assistant-consents';
+export * from './e2ee-invitations';
 import type { ReferenceImageSet } from './reference-images';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 

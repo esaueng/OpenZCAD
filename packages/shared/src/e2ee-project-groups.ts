@@ -4,6 +4,7 @@
  * string is unpadded base64url. The Worker orders and stores; browsers
  * verify everything that comes back.
  */
+import type { E2eeMlsAddRequest } from './e2ee-invitations';
 
 /** What an account-key wrap in the project key store holds. */
 export type E2eeProjectKeyPurpose = 'project-key' | 'rejoin-psk';
@@ -90,6 +91,8 @@ export type E2eeMlsCommitKind = 'commit' | 'external';
  * (`epoch + 1`) needs: its GroupInfo, the project key and rejoin PSK under
  * the sender's account key, its key archive, and for an external Commit the
  * joining device's certified leaf. Accepted all together or not at all.
+ * An owner's Add of an invitee (slice 5-3a, migration 0038) also states the
+ * invitation, exactly the KeyPackages it claimed and the Welcome.
  */
 export interface E2eeMlsCommitRequest {
   epoch: number;
@@ -100,6 +103,7 @@ export interface E2eeMlsCommitRequest {
   leaf?: E2eeProjectLeafInput;
   wraps: E2eeProjectKeyWrap[];
   archive: E2eeKeyArchiveRecord;
+  add?: E2eeMlsAddRequest;
 }
 
 export interface E2eeMlsCommitRecord {

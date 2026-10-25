@@ -67,6 +67,11 @@ import {
 import { handleE2eeProjectRequest, isE2eeProjectPath } from './e2eeProjects';
 import { handleE2eeContactsRequest, isE2eeContactsPath } from './e2eeContacts';
 import {
+  handleE2eeInvitationRequest,
+  isE2eeInvitationPath,
+  type E2eeInvitationHost
+} from './e2eeInvitations';
+import {
   handleE2eeDeviceRemovalRequest,
   isE2eeDeviceRemovalPath
 } from './e2eeDeviceRemoval';
@@ -1810,12 +1815,24 @@ export async function e2eeErasureTables(
  * encrypted-projects decision (E2EE_PROJECTS_ENABLED, ADR-024 Phase 4),
  * reported disabled while migration 0031 is missing.
  */
+/** Without a host, the invitation routes stay closed. */
+const CLOSED_INVITATIONS: E2eeInvitationHost = {
+  email: null,
+  inviterLabel: '',
+  sharingEnabled: false,
+  emailConfigured: false,
+  sendInvitationEmail: () =>
+    Promise.reject(new Error('Invitation email is not configured.'))
+};
+
 export async function handleE2eeRequest(
   request: Request,
   env: E2eeRouteEnv,
   session: E2eeRouteSession,
   enabled: boolean,
-  projectsEnabled = false
+  projectsEnabled = false,
+  /** The invitation routes' email, sender and sharing rollout (5-3a). */
+  invitations: E2eeInvitationHost = CLOSED_INVITATIONS
 ): Promise<Response> {
   const { pathname } = new URL(request.url);
   const method = request.method;
@@ -1971,6 +1988,18 @@ export async function handleE2eeRequest(
         userId,
         projectsEnabled,
         db.authorization
+      );
+    }
+    if (isE2eeInvitationPath(pathname)) {
+      // Invitations, KeyPackages and Welcomes (e2eeInvitations.ts, 5-3a).
+      return await handleE2eeInvitationRequest(
+        request,
+        rawDb,
+        userId,
+        projectsEnabled,
+        db.authorization,
+        invitations,
+        () => readBody(request)
       );
     }
     if (isE2eeProjectPath(pathname)) {

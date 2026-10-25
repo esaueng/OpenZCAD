@@ -45,6 +45,12 @@ import {
   encodeRevocationCutoffs
 } from './devices';
 import { exportPublicKey } from './keys';
+import {
+  decodeProjectInvitation,
+  encodeProjectInvitation,
+  invitationEmailHash,
+  verifyProjectInvitation
+} from './invitations';
 import { verifyProjectEnvelopeSignature, versionHash } from './signing';
 import {
   decodeEncryptedDocumentBody,
@@ -1065,5 +1071,69 @@ describe('share-link v1 vectors', () => {
         "wrap": "02ea30abedd7dd2e8bf1d9ceebd445f89013fc23cb2ee70759b4a9f99006c267ce18e57e37d41c5fcd",
       }
     `);
+  });
+});
+
+// Recorded by the fixed device key over the invitation vector below.
+const INVITATION_SIGNATURE =
+  '018f832bf42441b3307bd8524e6a2c5b82d30095c3ec453d07a0b0f80eb3c998fc3b915a7f5b72ada535a49062733de6913168326fd7ec4541150a6ae8f32ca623';
+
+describe('project invitation v1 vectors', () => {
+  it('hashes an email and encodes a fixed invitation, re-checked with raw WebCrypto', async () => {
+    const T = 1_760_000_000_000;
+    const emailHash = await invitationEmailHash('invitee@example.com');
+    // SHA-256(label "v1 invitation email hash" | "invitee@example.com")
+    expect(toHex(emailHash)).toBe(
+      toHex(
+        new Uint8Array(
+          await subtle.digest(
+            'SHA-256',
+            utf8('OpenZCAD E2EE v1 invitation email hashinvitee@example.com')
+          )
+        )
+      )
+    );
+    expect(toHex(emailHash)).toMatchInlineSnapshot(
+      `"b0b2e452abdf6299287b7071ae8ab8e4b7e974e98d87da731899c310aee747fd"`
+    );
+    const device = await importFixedPair(TEST_SIGNER_JWK, 'ECDSA');
+    const deviceRaw = await exportPublicKey(device.publicKey);
+    const value = {
+      projectId: 'prj_1',
+      invitationId: 'inv_1',
+      inviterUserId: 'user_vector',
+      inviteeEmailHash: emailHash,
+      role: 'viewer' as const,
+      issuedAt: T,
+      expiresAt: T + 7 * 86_400_000,
+      signerDeviceId: 'dev_vector',
+      signerKeyHash: await publicKeyHash(deviceRaw)
+    };
+    const statement = encodeProjectInvitation(value);
+    // "OZI" | 1 | u8 5 "prj_1" | u8 5 "inv_1" | u8 11 "user_vector" |
+    // email hash | u8 2 viewer | u64 issuedAt | u64 expiresAt |
+    // u8 10 "dev_vector" | signer key hash
+    expect(toHex(statement)).toMatchInlineSnapshot(
+      `"4f5a49010570726a5f3105696e765f310b757365725f766563746f72b0b2e452abdf6299287b7071ae8ab8e4b7e974e98d87da731899c310aee747fd0200000199c82cc00000000199ec3944000a6465765f766563746f727c48bdb0d12667c8d36fb0be229cbe23adfe9cc429f0b4820d16b8a5f84c700b"`
+    );
+    expect(decodeProjectInvitation(statement)).toEqual(value);
+    expect(
+      await subtle.verify(
+        { name: 'ECDSA', hash: 'SHA-256' },
+        device.publicKey,
+        fromHex(INVITATION_SIGNATURE).subarray(1),
+        concatBytes(
+          utf8('OpenZCAD E2EE v1 project invitation signature'),
+          statement
+        )
+      )
+    ).toBe(true);
+    await expect(
+      verifyProjectInvitation(
+        { statement, signature: fromHex(INVITATION_SIGNATURE) },
+        deviceRaw,
+        { now: T + 86_400_000 }
+      )
+    ).resolves.toEqual(value);
   });
 });

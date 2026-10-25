@@ -19,8 +19,14 @@ export interface ProjectInvitationEmailConfig {
 export interface ProjectInvitationEmailDetails {
   recipientEmail: string;
   inviterLabel: string;
-  projectName: string;
+  /**
+   * The project's name, or null for an end-to-end encrypted project
+   * (ADR-024): the server cannot read that name, and the invitation names
+   * the sender, not the project.
+   */
+  projectName: string | null;
   role: ProjectMemberRole;
+  /** Unix seconds. */
   expiresAt: number;
   token: string;
 }
@@ -70,7 +76,9 @@ function escapeHtml(value: string): string {
 
 export function projectInvitationUrl(
   publicAppOrigin: string,
-  token: string
+  token: string,
+  /** `encrypted-invite` for an encrypted project's invitation (5-3a). */
+  fragment: 'invite' | 'encrypted-invite' = 'invite'
 ): string {
   let origin: URL;
   try {
@@ -99,7 +107,7 @@ export function projectInvitationUrl(
       'Project invitation email is not configured.'
     );
   }
-  origin.hash = `invite=${encodeURIComponent(token)}`;
+  origin.hash = `${fragment}=${encodeURIComponent(token)}`;
   return origin.toString();
 }
 
@@ -107,6 +115,9 @@ export function buildProjectInvitationEmail(
   config: ProjectInvitationEmailConfig,
   details: ProjectInvitationEmailDetails
 ): EmailMessageBuilder {
+  if (details.projectName === null) {
+    return buildEncryptedProjectInvitationEmail(config, details);
+  }
   const invitationUrl = projectInvitationUrl(
     config.publicAppOrigin,
     details.token
@@ -140,6 +151,56 @@ export function buildProjectInvitationEmail(
       `<p style="margin:0 0 18px;line-height:1.55"><strong>${escapedInviter}</strong> invited you as a <strong>${escapedRole}</strong>.</p>`,
       `<p style="margin:0 0 22px"><a href="${escapedUrl}" style="display:inline-block;padding:11px 18px;border-radius:8px;background:#2563eb;color:#fff;text-decoration:none;font-weight:600">Open project</a></p>`,
       '<p style="margin:0 0 8px;font-size:13px;line-height:1.5;color:#667085">Sign in with the email address that received this invitation.</p>',
+      `<p style="margin:0;font-size:13px;line-height:1.5;color:#667085">This link expires ${escapedExpiry}. If you were not expecting it, you can ignore this email.</p>`,
+      '</div></div></body></html>'
+    ].join('')
+  };
+}
+
+/**
+ * The invitation to an end-to-end encrypted project (ADR-024, Sharing and
+ * collaboration): it names the sender and the role, never the project,
+ * whose name only members' browsers can read. The link carries the token
+ * as `#encrypted-invite=`, which the invitee's browser accepts through the
+ * encrypted route.
+ */
+function buildEncryptedProjectInvitationEmail(
+  config: ProjectInvitationEmailConfig,
+  details: ProjectInvitationEmailDetails
+): EmailMessageBuilder {
+  const invitationUrl = projectInvitationUrl(
+    config.publicAppOrigin,
+    details.token,
+    'encrypted-invite'
+  );
+  const roleLabel = details.role === 'editor' ? 'Editor' : 'Viewer';
+  const expiresAt = new Date(details.expiresAt * 1_000).toUTCString();
+  const escapedInviter = escapeHtml(details.inviterLabel);
+  const escapedRole = escapeHtml(roleLabel);
+  const escapedExpiry = escapeHtml(expiresAt);
+  const escapedUrl = escapeHtml(invitationUrl);
+  return {
+    to: details.recipientEmail,
+    from: { email: config.sender, name: 'OpenZCAD' },
+    subject: `${details.inviterLabel} invited you to an encrypted OpenZCAD project`,
+    text: [
+      `${details.inviterLabel} invited you to an end-to-end encrypted OpenZCAD project as a ${roleLabel.toLowerCase()}.`,
+      '',
+      `Open the invitation: ${invitationUrl}`,
+      '',
+      `Sign in with the email address that received this invitation and set up encryption if you have not. You will compare a code with ${details.inviterLabel} before you join. The link expires ${expiresAt}.`,
+      '',
+      'If you were not expecting this invitation, you can ignore this email.'
+    ].join('\n'),
+    html: [
+      '<!doctype html><html><body style="margin:0;background:#f5f7fa;color:#172033;font-family:Arial,sans-serif">',
+      '<div style="max-width:560px;margin:0 auto;padding:32px 20px">',
+      '<div style="background:#fff;border:1px solid #dfe4ec;border-radius:12px;padding:28px">',
+      '<p style="margin:0 0 8px;font-size:13px;color:#667085">OpenZCAD project invitation</p>',
+      '<h1 style="margin:0 0 18px;font-size:24px">An end-to-end encrypted project</h1>',
+      `<p style="margin:0 0 18px;line-height:1.55"><strong>${escapedInviter}</strong> invited you as a <strong>${escapedRole}</strong>.</p>`,
+      `<p style="margin:0 0 22px"><a href="${escapedUrl}" style="display:inline-block;padding:11px 18px;border-radius:8px;background:#2563eb;color:#fff;text-decoration:none;font-weight:600">Open invitation</a></p>`,
+      `<p style="margin:0 0 8px;font-size:13px;line-height:1.5;color:#667085">Sign in with the email address that received this invitation and set up encryption if you have not. You will compare a code with ${escapedInviter} before you join.</p>`,
       `<p style="margin:0;font-size:13px;line-height:1.5;color:#667085">This link expires ${escapedExpiry}. If you were not expecting it, you can ignore this email.</p>`,
       '</div></div></body></html>'
     ].join('')

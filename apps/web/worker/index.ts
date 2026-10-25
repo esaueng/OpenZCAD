@@ -2,6 +2,7 @@ import { releaseDevelopmentE2eeWrite } from './e2eeWriteAuthorization';
 import { accountConsent, publishCensus } from './glimpseCensus';
 import { handleGlimpseUsage, countApi, type GlimpseEnv } from './glimpse';
 import { handleE2eeRequest } from './e2ee';
+import type { E2eeInvitationHost } from './e2eeInvitations';
 import { withEncryptedProjectInfo } from './e2eeProjectDocuments';
 import { accountRequiresEncryptedProjects } from './e2eeProjectPreferences';
 import {
@@ -604,6 +605,73 @@ function projectInvitationEmailConfig(env: Env): {
     );
   }
   return { email: env.EMAIL, sender, publicAppOrigin };
+}
+
+/**
+ * What the encrypted invitation routes (ADR-024 slice 5-3a) need from this
+ * Worker: the session's email, the sender's name, the sharing rollout and
+ * the invitation email, which names the sender and never the project.
+ */
+function encryptedInvitationHost(
+  env: Env,
+  session: { email?: string | null; displayName?: string | null }
+): E2eeInvitationHost {
+  return {
+    email: session.email ?? null,
+    inviterLabel: session.email ?? session.displayName ?? 'Someone',
+    sharingEnabled: projectCollaborationRollout(env, session.email ?? undefined)
+      .sharingEnabled,
+    // The plaintext invitation route's recipient rules, unchanged.
+    recipientRefusal: (email, role) => {
+      if (
+        role === 'editor' &&
+        !projectCollaborationRollout(env, email).editLeasesEnforced
+      ) {
+        return {
+          status: 409,
+          code: 'EDIT_LEASE_REQUIRED',
+          message:
+            'Editor invitations require project edit lease enforcement for the invited account.'
+        };
+      }
+      if (
+        projectCollaborationRollout(env, session.email ?? undefined).canary &&
+        !isCloudflareFeatureEnabled(env, 'PROJECT_SHARING_ENABLED') &&
+        !projectCollaborationRollout(env, email).canary
+      ) {
+        return {
+          status: 403,
+          code: 'CANARY_RECIPIENT_REQUIRED',
+          message:
+            'During the collaboration canary, invitations can be sent only to allowlisted accounts.'
+        };
+      }
+      return null;
+    },
+    emailConfigured: Boolean(
+      env.EMAIL &&
+        env.PROJECT_INVITATION_EMAIL_FROM?.trim() &&
+        env.PUBLIC_APP_ORIGIN?.trim()
+    ),
+    sendInvitationEmail: async (details) => {
+      const config = projectInvitationEmailConfig(env);
+      try {
+        await sendProjectInvitationEmail(
+          config.email,
+          { sender: config.sender, publicAppOrigin: config.publicAppOrigin },
+          { ...details, projectName: null }
+        );
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            event: 'e2ee_invitation_email_failed',
+            errorCode: emailDeliveryErrorCode(error)
+          })
+        );
+        throw error;
+      }
+    }
+  };
 }
 
 function emailDeliveryErrorCode(error: unknown): string {
@@ -1220,7 +1288,8 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         env,
         session,
         isE2eeKeysEnabled(env, session.email),
-        isE2eeProjectsEnabled(env, session.email)
+        isE2eeProjectsEnabled(env, session.email),
+        encryptedInvitationHost(env, session)
       );
       // A Commit or an account write the project's room should hear about.
       await notifyEncryptedRoom(env, request, response);

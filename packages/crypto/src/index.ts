@@ -377,3 +377,20 @@ export {
   type VerifiedShareLinkSet,
   type VerifyShareLinkSetOptions
 } from './share-links';
+export {
+  INVITATION_CLOCK_SKEW_MS,
+  INVITATION_ROLES,
+  MAX_PROJECT_INVITATION_BYTES,
+  MAX_PROJECT_INVITATION_LIFETIME_MS,
+  PROJECT_INVITATION_VERSION_1,
+  ProjectInvitationError,
+  decodeProjectInvitation,
+  encodeProjectInvitation,
+  invitationEmailHash,
+  signProjectInvitation,
+  verifyProjectInvitation,
+  type InvitationExpectations,
+  type InvitationFailure,
+  type InvitationRole,
+  type ProjectInvitation
+} from './invitations';
