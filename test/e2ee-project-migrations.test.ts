@@ -661,6 +661,53 @@ describe('staging beside the plaintext', () => {
     });
   });
 
+  it('refuses a staged version whose signer’s device list changed while it was written', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    const s = await startStaging(srv, plain.projectId);
+    await s.d.store.createProject({ name: plain.name, initialDocument: plain });
+    // The device list moves on (a removal, say) after the signer was
+    // checked and before the staged version lands, as for a format-2 save.
+    const db = srv.env.DB as D1Database;
+    const batch = db.batch.bind(db);
+    let armed = true;
+    db.batch = async (statements: D1PreparedStatement[]) => {
+      const staged = statements.some((statement) =>
+        /UPDATE e2ee_project_migrations/.test(
+          (statement as unknown as { sql?: string }).sql ?? ''
+        )
+      );
+      if (armed && staged) {
+        armed = false;
+        srv.db
+          .prepare(
+            `INSERT INTO e2ee_device_list_entries
+             SELECT user_id, generation, sequence + 1, entry, signature,
+                    substr(entry_hash, 2) || '0', created_at
+             FROM e2ee_device_list_entries WHERE user_id = ?
+             ORDER BY sequence DESC LIMIT 1`
+          )
+          .run(OWNER);
+      }
+      return batch(statements);
+    };
+    const before = count(srv, 'e2ee_project_versions', plain.projectId);
+    expect(
+      await errorOf(
+        s.d.store.saveProjectDocument({
+          projectId: plain.projectId,
+          expectedVersion: plain.version,
+          document: { ...plain, version: plain.version + 1 }
+        })
+      )
+    ).toMatchObject({ status: 409, code: 'E2EE_DEVICE_LIST_CHANGED' });
+    expect(armed).toBe(false);
+    expect(count(srv, 'e2ee_project_versions', plain.projectId)).toBe(before);
+    expect(migrationRow(srv, plain.projectId)).toMatchObject({
+      staged_version: plain.version
+    });
+  });
+
   it('refuses plaintext writes, named saves, sharing and the room while staging, and keeps reads', async () => {
     const srv = server();
     const plain = await plaintextProject(srv);

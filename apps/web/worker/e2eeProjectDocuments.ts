@@ -1249,6 +1249,10 @@ async function writeStagedVersion(
   const now = new Date().toISOString();
   const newVersion = version.header.documentVersion;
   const fence = projectFence(access, projectId, ctx.userId, 'owner');
+  // As writeVersion: a removed signer cannot stage after its revocation,
+  // and a pending rotation (slice 5-7) holds the write off, atomically.
+  const signerFence = deviceListUnchanged(ctx.userId, version.signerList);
+  const rotationFence = await memberRotationFence(ctx.db, projectId, keyEpoch);
   // Every later statement lands only once the staged head moved here.
   const moved = {
     sql: `EXISTS (SELECT 1 FROM e2ee_project_migrations
@@ -1271,7 +1275,9 @@ async function writeStagedVersion(
            AND NOT EXISTS (SELECT 1 FROM e2ee_project_versions
                            WHERE project_id = ? AND document_version > ?)
            AND EXISTS (SELECT 1 FROM e2ee_project_groups
-                       WHERE project_id = ? AND key_epoch_base + epoch = ?)`
+                       WHERE project_id = ? AND key_epoch_base + epoch = ?)
+           AND ${signerFence.sql}
+           AND ${rotationFence.sql}`
       )
       .bind(
         newVersion,
@@ -1289,7 +1295,9 @@ async function writeStagedVersion(
         projectId,
         input.expectedVersion,
         projectId,
-        keyEpoch
+        keyEpoch,
+        ...signerFence.binds,
+        ...rotationFence.binds
       ),
     // The replaced staged head's body goes first, unless a named save
     // keeps it, as an autosave prunes an encrypted project's.
@@ -1352,6 +1360,11 @@ async function writeStagedVersion(
     (revisionId === null || (results[3]?.meta?.changes ?? 0) === 1);
   if (!accepted) {
     await discardBody(ctx, body);
+    if (await deviceListMoved(ctx.db, ctx.userId, version.signerList)) {
+      refuseDeviceListMoved();
+    }
+    // Refuses if a removal stored meanwhile names a later epoch.
+    await memberRotationFence(ctx.db, projectId, keyEpoch);
     const current = await stagedHead(ctx.db, projectId);
     const lease = await ctx.db
       .prepare(
