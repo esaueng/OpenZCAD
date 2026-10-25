@@ -1,10 +1,12 @@
-import { X } from 'lucide-react';
-import { useLayoutEffect, useRef } from 'react';
+import { MoreHorizontal, X } from 'lucide-react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { useSettledFlag } from '../hooks/useSettledFlag';
 import { renderLabelSegments } from '../lib/liveLabels';
-import type {
-  SelectionCalloutContent,
-  SelectionCalloutOperation
+import {
+  MAX_SELECTION_VERBS,
+  type SelectionCalloutContent,
+  type SelectionCalloutOperation,
+  type SelectionCalloutVerb
 } from '../lib/selectionCallout';
 import { OPERATION_PHASE_LABELS } from '../lib/selectionCalloutView';
 import { StableLabel } from './StableLabel';
@@ -58,6 +60,37 @@ export function SelectionCard({
     if (!validating) before.current = operation?.phase;
   });
   const edgeCount = operation?.selectAllEdgesCount;
+  // The first verbs are buttons; the rest wait behind More, which opens for
+  // this pick only (a new pick's verbs start folded). A lit verb is always
+  // a button, wherever it falls in the order.
+  const verbsKey = content.verbs.map((verb) => verb.id).join(' ');
+  const [moreOpenFor, setMoreOpenFor] = useState<string | null>(null);
+  const moreOpen = moreOpenFor === verbsKey;
+  const shown: SelectionCalloutVerb[] = [];
+  const folded: SelectionCalloutVerb[] = [];
+  for (const verb of content.verbs) {
+    (shown.length < MAX_SELECTION_VERBS || verb.pressed ? shown : folded).push(
+      verb
+    );
+  }
+  const verbButton = (verb: SelectionCalloutVerb) => (
+    <button
+      key={verb.id}
+      type="button"
+      className="selection-callout-verb"
+      title={verb.title}
+      // Named for what it acts on, so it never shares a name with the rail
+      // button or tool-card action of the same verb.
+      aria-label={`Selection: ${verb.label}`}
+      aria-pressed={verb.pressed}
+      // The exact check owns this pick until it answers: another action now
+      // would leave the old operation free to commit late.
+      disabled={verb.disabled || validating}
+      onClick={() => content.onVerb(verb.id)}
+    >
+      {verb.label}
+    </button>
+  );
   return (
     <section
       className="selection-card selection-callout-chip"
@@ -76,6 +109,25 @@ export function SelectionCard({
         {/* Armed is the resting state, and the lit verb already says which
             operation the pick carries; every other phase is news. */}
         {phase && phase !== 'armed' && <PhaseMarker phase={phase} />}
+        {/* In the header, so a folded card is no taller than it was. */}
+        {folded.length > 0 && (
+          <button
+            type="button"
+            className="selection-callout-more"
+            title={
+              moreOpen
+                ? 'Fewer verbs'
+                : `${folded.length} more: ${folded.map((verb) => verb.label).join(', ')}`
+            }
+            aria-expanded={moreOpen}
+            aria-label={
+              moreOpen ? 'Fewer selection verbs' : 'More selection verbs'
+            }
+            onClick={() => setMoreOpenFor(moreOpen ? null : verbsKey)}
+          >
+            <MoreHorizontal size={14} aria-hidden="true" />
+          </button>
+        )}
         {content.onClear && (
           <button
             type="button"
@@ -101,24 +153,8 @@ export function SelectionCard({
       )}
       {(content.verbs.length > 0 || (operation && edgeCount)) && (
         <div className="selection-callout-verbs">
-          {content.verbs.map((verb) => (
-            <button
-              key={verb.id}
-              type="button"
-              className="selection-callout-verb"
-              title={verb.title}
-              // Named for what it acts on, so it never shares a name with
-              // the rail button or tool-card action of the same verb.
-              aria-label={`Selection: ${verb.label}`}
-              aria-pressed={verb.pressed}
-              // The exact check owns this pick until it answers: another
-              // action now would leave the old operation free to commit late.
-              disabled={verb.disabled || validating}
-              onClick={() => content.onVerb(verb.id)}
-            >
-              {verb.label}
-            </button>
-          ))}
+          {shown.map(verbButton)}
+          {moreOpen && folded.map(verbButton)}
           {operation && edgeCount ? (
             <button
               type="button"

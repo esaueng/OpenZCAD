@@ -2,8 +2,10 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type {
   SelectionCalloutContent,
-  SelectionCalloutOperation
+  SelectionCalloutOperation,
+  SelectionCalloutVerb
 } from '../lib/selectionCallout';
+import type { ToolId } from '../lib/tools';
 import { textLabelSegments } from '../lib/topologyLabels';
 import {
   SelectionCard,
@@ -54,6 +56,14 @@ function content(
   };
 }
 
+function toolVerb(
+  tool: ToolId,
+  label: string,
+  pressed = false
+): SelectionCalloutVerb {
+  return { id: `tool:${tool}`, label, title: label, disabled: false, pressed };
+}
+
 describe('SelectionCard', () => {
   it('names the pick, gives its measurement and lists its verbs', () => {
     const onVerb = vi.fn();
@@ -68,6 +78,63 @@ describe('SelectionCard', () => {
       within(card).getByRole('button', { name: 'Selection: Hole' })
     );
     expect(onVerb).toHaveBeenCalledWith('tool:hole');
+  });
+
+  it('folds the verbs past the first four behind More, for this pick only', () => {
+    const verbs = (
+      [
+        ['transform', 'Move'],
+        ['axis-rotate', 'Rotate'],
+        ['scale', 'Scale'],
+        ['mirror', 'Mirror'],
+        ['split', 'Split'],
+        ['shell', 'Shell']
+      ] as const
+    ).map(([tool, label]) => toolVerb(tool, label));
+    const onVerb = vi.fn();
+    const { rerender } = render(
+      <SelectionCard content={content({ verbs, onVerb })} />
+    );
+    const card = screen.getByRole('group', { name: 'Selection' });
+    const names = () =>
+      within(card)
+        .getAllByRole('button', { name: /^Selection: / })
+        .map((button) => button.getAttribute('aria-label'));
+    expect(names()).toEqual([
+      'Selection: Move',
+      'Selection: Rotate',
+      'Selection: Scale',
+      'Selection: Mirror'
+    ]);
+    const more = within(card).getByRole('button', {
+      name: 'More selection verbs'
+    });
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    expect(more).toHaveAttribute('title', '2 more: Split, Shell');
+    fireEvent.click(more);
+    expect(names()).toHaveLength(6);
+    fireEvent.click(
+      within(card).getByRole('button', { name: 'Selection: Shell' })
+    );
+    expect(onVerb).toHaveBeenCalledWith('tool:shell');
+    // Another pick's verbs start folded again.
+    rerender(
+      <SelectionCard content={content({ verbs: verbs.slice(1), onVerb })} />
+    );
+    expect(names()).toHaveLength(4);
+  });
+
+  it('keeps a lit verb a button wherever it falls', () => {
+    const verbs = (
+      ['union', 'subtract', 'intersect', 'transform', 'mirror'] as const
+    ).map((tool) => toolVerb(tool, tool, tool === 'mirror'));
+    render(<SelectionCard content={content({ verbs })} />);
+    expect(
+      screen.getByRole('button', { name: 'Selection: mirror' })
+    ).toHaveAttribute('aria-pressed', 'true');
+    expect(
+      screen.queryByRole('button', { name: 'More selection verbs' })
+    ).toBeNull();
   });
 
   it('clears the selection from its header', () => {

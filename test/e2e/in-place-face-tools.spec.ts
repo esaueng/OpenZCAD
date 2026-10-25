@@ -149,6 +149,37 @@ test('Shell in place: two openings, wall from the keypad', async ({ page }) => {
   ).toHaveLength(2);
 });
 
+test('a face card keeps its four verbs and folds the rest behind More', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  await openBox(page, 'Face card verbs');
+  await expect.poll(() => pickPlanarFace(page, TOP)).not.toBeNull();
+  const card = page.locator('.selection-card');
+  for (const verb of ['Resize', 'Offset', 'Sketch', 'Hole']) {
+    await expect(
+      card.getByRole('button', { name: `Selection: ${verb}` })
+    ).toBeVisible();
+  }
+  await expect(card.getByRole('button', { name: 'Selection: Shell' })).toHaveCount(0);
+  await card.getByRole('button', { name: 'More selection verbs' }).click();
+  for (const verb of ['Draft', 'Thicken', 'Plane']) {
+    await expect(
+      card.getByRole('button', { name: `Selection: ${verb}` })
+    ).toBeVisible();
+  }
+  // The picked face is the shell's first opening.
+  await card.getByRole('button', { name: 'Selection: Shell' }).click();
+  const bar = page.getByRole('group', { name: 'Shell command' });
+  await expect(bar).toContainText('1 open');
+  await finishInPlaceCommand(page, 'Shell');
+  const [shell] = await featureData(page, 'shell');
+  expect(
+    (shell as { openingFaceHashes: number[] }).openingFaceHashes
+  ).toHaveLength(1);
+});
+
 test('Thicken in place: one face, signed thickness from the keypad', async ({
   page
 }) => {

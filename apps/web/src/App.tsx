@@ -26082,6 +26082,16 @@ export function App() {
                   : undefined
               }
               cancelableWhileValidating={interaction.mode === 'region'}
+              // A region's other profile tools, which take the same pick.
+              verbs={
+                interaction.mode === 'region' && tool === null
+                  ? selectionCalloutVerbs({
+                      kind: selectedProfiles.length > 1 ? 'regions' : 'region',
+                      availability: shownAvailability
+                    }).filter((verb) => verb.id !== 'tool:extrude')
+                  : undefined
+              }
+              onVerb={(id) => launchTool(id.slice('tool:'.length) as ToolId)}
               children={
                 interaction.mode === 'region' ? (
                   <ExtrudeForm

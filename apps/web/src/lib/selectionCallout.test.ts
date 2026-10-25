@@ -37,7 +37,7 @@ const planarFace = selectionCapabilities({
 });
 
 describe('selectionCalloutVerbs', () => {
-  it('offers a planar face its offset, a sketch and a hole', () => {
+  it('offers a planar face its offset and every tool that starts from it', () => {
     const verbs = selectionCalloutVerbs({
       kind: 'face',
       faceCapabilities: planarFace,
@@ -47,15 +47,47 @@ describe('selectionCalloutVerbs', () => {
     expect(verbs.map((verb) => verb.label)).toEqual([
       'Offset',
       'Sketch',
-      'Hole'
+      'Hole',
+      'Shell',
+      'Draft',
+      'Thicken',
+      'Plane'
     ]);
     expect(verbs.map((verb) => verb.id)).toEqual([
       'action:offset-face',
       'action:sketch-on-face',
-      'tool:hole'
+      'tool:hole',
+      'tool:shell',
+      'tool:draft',
+      'tool:thicken',
+      'tool:datum-plane'
     ]);
     // The armed operation reads as pressed; the others do not.
-    expect(verbs.map((verb) => verb.pressed)).toEqual([true, false, false]);
+    expect(verbs.map((verb) => verb.pressed)).toEqual([
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]);
+  });
+
+  it('offers a cylindrical face its diameter, an axis and a shell', () => {
+    const verbs = selectionCalloutVerbs({
+      kind: 'face',
+      faceCapabilities: selectionCapabilities({
+        kind: 'face',
+        target: { surfaceType: 'cylindrical', hash: 8, radius: 5 }
+      }),
+      availability: READY
+    });
+    expect(verbs.slice(-2).map((verb) => verb.id)).toEqual([
+      'tool:datum-axis',
+      'tool:shell'
+    ]);
+    expect(verbs.map((verb) => verb.id)).not.toContain('tool:hole');
   });
 
   it('falls back to the tools when the machine does not hold the face', () => {
@@ -64,7 +96,11 @@ describe('selectionCalloutVerbs', () => {
       faceCapabilities: null,
       availability: READY
     });
-    expect(verbs.map((verb) => verb.id)).toEqual(['tool:sketch', 'tool:hole']);
+    expect(verbs.map((verb) => verb.id)).toEqual([
+      'tool:sketch',
+      'tool:hole',
+      'tool:shell'
+    ]);
   });
 
   it('switches the armed edge op, or launches the tool when none is armed', () => {
@@ -76,7 +112,8 @@ describe('selectionCalloutVerbs', () => {
     });
     expect(armed.map((verb) => [verb.id, verb.pressed])).toEqual([
       ['action:fillet', true],
-      ['action:chamfer', false]
+      ['action:chamfer', false],
+      ['tool:datum-axis', false]
     ]);
     const unarmed = selectionCalloutVerbs({
       kind: 'edges',
@@ -84,21 +121,31 @@ describe('selectionCalloutVerbs', () => {
     });
     expect(unarmed.map((verb) => verb.id)).toEqual([
       'tool:fillet',
-      'tool:chamfer'
+      'tool:chamfer',
+      'tool:datum-axis'
     ]);
   });
 
-  it('offers a body Move and Mirror, and several bodies Union first', () => {
+  it('offers a body the tools that take one, and several bodies the booleans', () => {
     expect(
       selectionCalloutVerbs({ kind: 'body', availability: READY }).map(
         (verb) => verb.label
       )
-    ).toEqual(['Move', 'Mirror']);
+    ).toEqual([
+      'Move',
+      'Rotate',
+      'Scale',
+      'Mirror',
+      'Split',
+      'Pattern',
+      'Shell',
+      'Solid offset'
+    ]);
     expect(
       selectionCalloutVerbs({ kind: 'bodies', availability: READY }).map(
         (verb) => verb.label
       )
-    ).toEqual(['Union', 'Move', 'Mirror']);
+    ).toEqual(['Union', 'Subtract', 'Intersect', 'Move']);
     // A box sweep's faces: the tools that take a list of faces.
     expect(
       selectionCalloutVerbs({ kind: 'faces', availability: READY }).map(
@@ -124,7 +171,7 @@ describe('selectionCalloutVerbs', () => {
       pressedAction: 'resize-body',
       availability: READY
     });
-    expect(verbs.map((verb) => [verb.id, verb.pressed])).toEqual([
+    expect(verbs.slice(0, 4).map((verb) => [verb.id, verb.pressed])).toEqual([
       ['action:resize-body', true],
       ['action:offset-face', false],
       ['action:sketch-on-face', false],
@@ -133,27 +180,33 @@ describe('selectionCalloutVerbs', () => {
     expect(verbs[0]?.label).toBe('Resize');
   });
 
-  it('never offers more than the cap', () => {
+  it('offers a region its profile tools, and several regions Extrude', () => {
+    expect(
+      selectionCalloutVerbs({ kind: 'region', availability: READY }).map(
+        (verb) => verb.id
+      )
+    ).toEqual(['tool:extrude', 'tool:revolve', 'tool:sweep', 'tool:loft']);
+    // Revolve, Sweep and Loft take one region of a sketch at a time.
+    expect(
+      selectionCalloutVerbs({ kind: 'regions', availability: READY }).map(
+        (verb) => verb.id
+      )
+    ).toEqual(['tool:extrude']);
+  });
+
+  it('keeps the verbs a primitive face had before More', () => {
+    // The card's buttons are the first MAX_SELECTION_VERBS: the four the
+    // card always showed, so the extra tools never push one behind More.
     expect(
       selectionCalloutVerbs({
         kind: 'face',
         faceCapabilities: planarFace,
         resizeBody: true,
         availability: READY
-      }).length
-    ).toBeLessThanOrEqual(MAX_SELECTION_VERBS);
-  });
-
-  it('never offers more than three verbs without a body to resize', () => {
-    for (const kind of ['face', 'edges', 'body', 'bodies'] as const) {
-      expect(
-        selectionCalloutVerbs({
-          kind,
-          faceCapabilities: planarFace,
-          availability: READY
-        }).length
-      ).toBeLessThanOrEqual(3);
-    }
+      })
+        .slice(0, MAX_SELECTION_VERBS)
+        .map((verb) => verb.label)
+    ).toEqual(['Resize', 'Offset', 'Sketch', 'Hole']);
   });
 });
 
@@ -223,18 +276,16 @@ describe('renderSelectionCallout', () => {
     const verbs = [
       ...element.querySelectorAll<HTMLButtonElement>('.selection-callout-verb')
     ];
-    expect(verbs.map((verb) => verb.textContent)).toEqual([
+    expect(verbs.map((verb) => verb.textContent).slice(0, 3)).toEqual([
       'Offset',
       'Sketch',
       'Hole'
     ]);
     expect(verbs[0]?.getAttribute('aria-pressed')).toBe('true');
     // Never named like the rail's own Hole or the tool card's Sketch.
-    expect(verbs.map((verb) => verb.getAttribute('aria-label'))).toEqual([
-      'Selection: Offset',
-      'Selection: Sketch',
-      'Selection: Hole'
-    ]);
+    expect(
+      verbs.map((verb) => verb.getAttribute('aria-label')).slice(0, 3)
+    ).toEqual(['Selection: Offset', 'Selection: Sketch', 'Selection: Hole']);
     verbs[2]?.click();
     expect(filled.onVerb).toHaveBeenCalledWith('tool:hole');
     element
@@ -315,7 +366,8 @@ describe('renderSelectionCallout', () => {
         ])
       ).toEqual([
         ['Fillet', 'true'],
-        ['Chamfer', 'false']
+        ['Chamfer', 'false'],
+        ['Axis', 'false']
       ]);
     });
 
