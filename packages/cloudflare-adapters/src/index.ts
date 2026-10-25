@@ -601,6 +601,23 @@ export const isE2eeInvitationStorageReady = cachedSchemaProbe(
   (row) => row?.ready === E2EE_INVITATION_TABLES.length
 );
 
+/**
+ * Whether migration 0039's proposal table exists (ADR-024 Phase 5, slice
+ * 5-5: a departing member's SelfRemove, stored for another member to
+ * commit). Only the proposal routes, the Commit route's settlement of
+ * pending proposals, project purge and account erasure name it, each after
+ * asking this; a failed probe answers "missing", so Commits, removals,
+ * role changes and ordinary traffic keep working without the migration and
+ * only leaving answers 503.
+ */
+export const isE2eeMlsProposalStorageReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM pragma_table_info('e2ee_mls_proposals')
+   WHERE name IN ('project_id', 'key_epoch', 'proposal_hash', 'kind',
+                  'sender_user_id', 'sender_device_id', 'message',
+                  'created_at', 'outcome', 'settled_key_epoch')`,
+  (row) => row?.ready === 10
+);
+
 /** An encrypted blob's opaque object key: no file name, no kind. */
 export function encryptedBlobObjectKey(
   projectId: string,
@@ -5991,6 +6008,10 @@ export class D1R2PersistenceService implements PersistenceService {
       groupTables.push(
         'DELETE FROM e2ee_assistant_consents WHERE project_id IN'
       );
+    }
+    // Stored MLS proposals (migration 0039).
+    if (await isE2eeMlsProposalStorageReady(this.env.DB)) {
+      groupTables.push('DELETE FROM e2ee_mls_proposals WHERE project_id IN');
     }
     // Encrypted invitations, KeyPackages and Welcomes (migration 0038).
     if (await isE2eeInvitationStorageReady(this.env.DB)) {

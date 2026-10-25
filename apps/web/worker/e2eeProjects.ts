@@ -51,9 +51,15 @@ import {
 } from '@openzcad/cloudflare-adapters';
 import { prepareAddCommit, type PreparedAdd } from './e2eeInvitations';
 import { prepareMembershipCommit } from './e2eeMembership';
+import {
+  listProposals,
+  pendingProposalCount,
+  postProposal,
+  prepareProposalSettlement
+} from './e2eeProposals';
 
 export const E2EE_PROJECT_ROUTE =
-  /^\/api\/e2ee\/projects\/([^/]+)\/(mls\/commits|mls\/group-info|mls\/leaves|keys|keys\/archives)$/;
+  /^\/api\/e2ee\/projects\/([^/]+)\/(mls\/commits|mls\/group-info|mls\/leaves|mls\/proposals|keys|keys\/archives)$/;
 
 /** True for any path under the encrypted-project prefix, known or not. */
 export function isE2eeProjectPath(pathname: string): boolean {
@@ -916,6 +922,15 @@ async function submitCommit(
     dropUsers: body.dropUsers,
     invitee: add?.invitee ?? null
   });
+  // Every proposal pending in this epoch, settled (slice 5-5).
+  const settlement = await prepareProposalSettlement(db, {
+    projectId,
+    epoch,
+    keyEpochBase: group.key_epoch_base,
+    kind,
+    proposals: body.proposals,
+    rejectedProposals: body.rejectedProposals
+  });
   const now = new Date().toISOString();
   // The device was certified in this device-list head; a removal that
   // lands first makes the Commit refuse, so a removed device cannot move
@@ -933,7 +948,7 @@ async function submitCommit(
                        WHERE project_id = ? AND epoch = ? AND key_epoch_base = ?)
            AND ${signerList.sql}${add ? ` AND ${add.gateSql}` : ''}${
              membership.gateSql ? ` AND ${membership.gateSql}` : ''
-           }`
+           }${settlement.gateSql ? ` AND ${settlement.gateSql}` : ''}`
       )
       .bind(
         projectId,
@@ -950,7 +965,8 @@ async function submitCommit(
         group.key_epoch_base,
         ...signerList.binds,
         ...(add?.gateBinds ?? []),
-        ...membership.gateBinds
+        ...membership.gateBinds,
+        ...settlement.gateBinds
       ),
     db
       .prepare(
@@ -963,8 +979,12 @@ async function submitCommit(
     ...insertWraps(db, projectId, userId, wraps, now),
     insertArchive(db, projectId, archive, now),
     ...(add ? add.statements(now) : []),
-    ...membership.chained(now)
+    ...membership.chained(now),
+    ...settlement.chained()
   ];
+  // Each statement so far changes one row; the tail changes any number.
+  const chained = statements.length;
+  statements.push(...membership.tail);
   // Two submissions for one epoch can both pass the read above. Whichever
   // batch runs second either finds the epoch fence moved (no rows change)
   // or, on a store that checks the Commit log's primary key first, fails
@@ -972,7 +992,7 @@ async function submitCommit(
   const results = await runBatch(db, statements, () =>
     refuseIfEpochTaken(db, projectId, epoch)
   );
-  if (!allChanged(results, statements.length)) {
+  if (!allChanged(results.slice(0, chained), chained)) {
     await refuseIfEpochTaken(db, projectId, epoch);
     if (await deviceListMoved(db, userId, account)) refuseDeviceListMoved();
     const current = await groupRow(db, projectId);
@@ -1292,11 +1312,14 @@ export async function handleE2eeProjectRequest(
           'mls/commits',
           'mls/group-info',
           'mls/leaves',
+          'mls/proposals',
           'keys',
           'keys/archives'
         ].includes(route)) ||
       (method === 'POST' &&
-        ['mls/commits', 'mls/group-info', 'keys'].includes(route));
+        ['mls/commits', 'mls/group-info', 'mls/proposals', 'keys'].includes(
+          route
+        ));
     if (!known) refuse(404, 'NOT_FOUND', 'Not found.');
     if (method === 'POST' && route === 'mls/group-info') {
       // The group is made with the project, by its owner.
@@ -1321,15 +1344,32 @@ export async function handleE2eeProjectRequest(
     );
     if (method === 'POST') {
       const body = await readBody(request);
+      if (route === 'mls/proposals') {
+        // Leaving (slice 5-5): a member's SelfRemove, stored.
+        return await postProposal(db, userId, projectId, authorization, body);
+      }
       return route === 'keys'
         ? await postWraps(db, userId, projectId, authorization, body)
         : await submitCommit(db, userId, projectId, authorization, body);
     }
     switch (route) {
-      case 'mls/group-info':
+      case 'mls/group-info': {
+        const group = await requireGroup(db, projectId);
+        // Pending departures, so writers know to commit them (slice 5-5).
+        const pending = await pendingProposalCount(
+          db,
+          projectId,
+          group.key_epoch_base + group.epoch
+        );
         return json({
-          group: groupRecord(await requireGroup(db, projectId))
+          group: {
+            ...groupRecord(group),
+            ...(pending === null ? {} : { pendingProposals: pending })
+          }
         } satisfies E2eeProjectGroupResponse);
+      }
+      case 'mls/proposals':
+        return await listProposals(db, projectId, url);
       case 'mls/commits':
         return await listCommits(db, projectId, url);
       case 'mls/leaves':

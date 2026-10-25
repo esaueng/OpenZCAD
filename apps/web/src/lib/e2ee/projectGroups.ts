@@ -47,6 +47,15 @@
  *   wraps of the new epoch (`postOwnEpochKeys`); and `epochRoles` reads
  *   the roles each epoch's record holds, for checking a version's author
  *   against the role held in its own epoch.
+ * - **Roles, removal and leaving** (slices 5-4, 5-5). The owner changes
+ *   roles (`changeMemberRole`) and removes members (`removeMember`,
+ *   `dropUsers`); every Commit states the membership change it makes for
+ *   the Worker's mirror. A member leaves by a SelfRemove proposal the
+ *   Worker stores (`leaveProject`); every Commit, by anyone, first
+ *   processes and settles the proposals pending in its epoch, so writers
+ *   (and viewers, `commitPendingDepartures`) commit departures. A Commit
+ *   that removes someone replaces the dedupe secret (decision M5) and tells
+ *   `ProjectGroupContext.onMembersRemoved`.
  *
  * Everything the server returns is checked before use: leaf certifications
  * against the device list (`buildDeviceDirectory`), archives against their
@@ -82,6 +91,7 @@ import {
 } from '@openzcad/crypto';
 import type {
   CommitRequest,
+  EpochChange,
   ProjectRoles,
   RejoinPsk,
   SessionStatus
@@ -106,6 +116,9 @@ import type {
   E2eeProjectKeysResponse,
   E2eeProjectLeavesResponse,
   E2eeMlsAddRequest,
+  E2eeMlsProposalRequest,
+  E2eeMlsProposalResponse,
+  E2eeMlsProposalsResponse,
   E2eeMlsRoleChange,
   E2eeWelcomeResponse
 } from '@openzcad/shared';
@@ -120,6 +133,7 @@ import type { CertifyingDevice } from './mls/certify';
 import {
   parseEpochContext,
   parseGroupInfoContext,
+  parseSelfRemoveProposal,
   projectGroupId,
   type EpochContext
 } from './mls/epochRoles';
@@ -192,6 +206,19 @@ export interface ProjectGroupsApi {
    * migration 0038; 404 `E2EE_WELCOME_NOT_FOUND` when none).
    */
   welcome?(projectId: string, deviceId: string): Promise<E2eeWelcomeResponse>;
+  /**
+   * Proposals pending in a key epoch and members who left (slice 5-5,
+   * migration 0039; empty with `available: false` without it).
+   */
+  proposals?(
+    projectId: string,
+    keyEpoch: number
+  ): Promise<E2eeMlsProposalsResponse>;
+  /** Leave: store this device's SelfRemove proposal (slice 5-5). */
+  propose?(
+    projectId: string,
+    request: E2eeMlsProposalRequest
+  ): Promise<E2eeMlsProposalResponse>;
 }
 
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -270,7 +297,11 @@ export function createProjectGroupsApi(
     resetGroup: (projectId, request) =>
       call(`${base(projectId)}/mls/reset`, 'POST', request),
     welcome: (projectId, deviceId) =>
-      call(`${base(projectId)}/welcome${query({ deviceId })}`)
+      call(`${base(projectId)}/welcome${query({ deviceId })}`),
+    proposals: (projectId, keyEpoch) =>
+      call(`${base(projectId)}/mls/proposals${query({ keyEpoch })}`),
+    propose: (projectId, request) =>
+      call(`${base(projectId)}/mls/proposals`, 'POST', request)
   };
 }
 
@@ -319,6 +350,22 @@ export interface ProjectGroupContext {
    * solo: a leaf, archive or version of any other account is refused.
    */
   readonly members?: ProjectMemberLists;
+  /**
+   * Told when a Commit this device sent or processed took the last leaf of
+   * other members (slice 5-5: an owner's removal or a departure), so the
+   * page can offer to reissue the project's share links with new keys
+   * (slice 5-10): a removed member could keep reading later snapshots of
+   * links made before the removal. Best effort; a throw is ignored.
+   */
+  readonly onMembersRemoved?: (removal: MembersRemoved) => void;
+}
+
+/** Other members who lost their last leaf in one Commit (slice 5-5). */
+export interface MembersRemoved {
+  readonly projectId: string;
+  /** The key epoch the Commit started, which they cannot open. */
+  readonly keyEpoch: number;
+  readonly userIds: readonly string[];
 }
 
 /** Where co-members' verified device lists come from (slice 5-2). */
@@ -1439,6 +1486,8 @@ async function submitPending(
     readonly roles?: readonly E2eeMlsRoleChange[];
     /** The identities an owner's Commit drops from the roles. */
     readonly dropUsers?: readonly string[];
+    /** How it settles the proposals pending in its epoch (slice 5-5). */
+    readonly departures?: Departures;
   }
 ): Promise<Submitted> {
   const ref = refOf(ctx, device, projectId);
@@ -1512,6 +1561,12 @@ async function submitPending(
       ...(pending.roles?.length ? { roles: [...pending.roles] } : {}),
       ...(pending.dropUsers?.length
         ? { dropUsers: [...pending.dropUsers] }
+        : {}),
+      ...(pending.departures?.applied.length
+        ? { proposals: [...pending.departures.applied] }
+        : {}),
+      ...(pending.departures?.rejected.length
+        ? { rejectedProposals: [...pending.departures.rejected] }
         : {})
     });
     if (!sameBytes(bytes(response.commit.message), pending.commit)) {
@@ -1900,22 +1955,236 @@ export async function ensureProjectRotated(
     if (
       status.epoch === caught.epoch &&
       group.epoch === caught.epoch &&
-      !(await rotationRequest(ctx, projectId, status, group))
+      !((group.pendingProposals ?? 0) > 0) &&
+      !(await rotationRequest(ctx, projectId, status, group)) &&
+      (await departedIdentities(ctx, projectId, status)).length === 0
     ) {
       return caught;
     }
   }
-  return commitLoop(ctx, projectId, async (status, group) => {
-    const rotation = await rotationRequest(ctx, projectId, status, group);
-    return rotation ? { request: rotation, rotation: true } : null;
-  });
+  return commitLoop(ctx, projectId, (status, group, departures) =>
+    dueCommit(ctx, projectId, status, group, departures)
+  );
+}
+
+/**
+ * Commit what is due before anything else is written (slice 5-5): the
+ * departures pending in this epoch (any member may commit them, a viewer
+ * included), a removal's rotation, and for the owner the identities that
+ * left and hold no leaf, dropped from the roles. Resolves at once when
+ * nothing is due.
+ */
+export function commitPendingDepartures(
+  ctx: ProjectGroupContext,
+  projectId: string
+): Promise<ProjectGroupState> {
+  return commitLoop(ctx, projectId, (status, group, departures) =>
+    dueCommit(ctx, projectId, status, group, departures)
+  );
+}
+
+async function dueCommit(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  status: SessionStatus,
+  group: E2eeProjectGroupRecord,
+  departures: Departures
+): Promise<BuiltCommit | null> {
+  const rotation = await rotationRequest(ctx, projectId, status, group);
+  const departed = await departedIdentities(ctx, projectId, status);
+  if (!rotation && !departures.settles && departed.length === 0) return null;
+  return {
+    request: {
+      ...(rotation ?? {}),
+      ...(departed.length ? { dropUsers: departed } : {})
+    },
+    rotation: rotation !== null
+  };
+}
+
+// --- Departures (slice 5-5) ---------------------------------------------------
+
+/** How a Commit settles the proposals stored for its epoch. */
+interface Departures {
+  /** Hashes of the SelfRemove proposals it applies by reference. */
+  readonly applied: readonly string[];
+  /** Hashes of the ones this device's engine refused. */
+  readonly rejected: readonly string[];
+  /** Users whose leaves the applied proposals remove. */
+  readonly leaving: readonly string[];
+  /** Anything to settle at all. */
+  readonly settles: boolean;
+}
+
+const NO_DEPARTURES: Departures = {
+  applied: [],
+  rejected: [],
+  leaving: [],
+  settles: false
+};
+
+/**
+ * Fetches the proposals stored for this device's current epoch and
+ * processes each, so the next Commit applies them by reference (mls-rs
+ * includes every proposal received in the epoch). Only a member's
+ * SelfRemove of its own leaf, for this group and epoch, reaches the engine:
+ * any other cached proposal would make every Commit of the epoch break the
+ * policy. One the framing check or the engine refuses is settled as
+ * rejected, so a bad proposal cannot hold the group.
+ */
+async function processDepartures(
+  ctx: ProjectGroupContext,
+  ref: MlsProjectRef,
+  projectId: string,
+  group: E2eeProjectGroupRecord,
+  status: SessionStatus,
+  directory: DirectoryInput
+): Promise<Departures> {
+  if (
+    !ctx.api.proposals ||
+    status.epoch === null ||
+    !((group.pendingProposals ?? 0) > 0)
+  ) {
+    return NO_DEPARTURES;
+  }
+  const keyEpoch = group.keyEpochBase + status.epoch;
+  const { proposals } = await ctx.api.proposals(projectId, keyEpoch);
+  const applied: string[] = [];
+  const rejected: string[] = [];
+  const leaving = new Set<string>();
+  for (const proposal of proposals) {
+    if (proposal.keyEpoch !== keyEpoch) continue;
+    let message: Uint8Array;
+    let senderLeaf: number;
+    try {
+      message = bytes(proposal.message);
+      const digest = new Uint8Array(
+        await crypto.subtle.digest(
+          'SHA-256',
+          message as Uint8Array<ArrayBuffer>
+        )
+      );
+      const hex = [...digest]
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+      if (hex !== proposal.proposalHash) {
+        throw new Error('The server listed a proposal under another hash.');
+      }
+      const frame = parseSelfRemoveProposal(message);
+      if (
+        frame.epoch !== status.epoch ||
+        !sameBytes(frame.groupId, projectGroupId(projectId))
+      ) {
+        throw new Error('The proposal is for another group or epoch.');
+      }
+      senderLeaf = frame.senderLeaf;
+    } catch {
+      rejected.push(proposal.proposalHash);
+      continue;
+    }
+    try {
+      const processed = await ctx.sessions.process(ref, directory, message);
+      if (
+        processed.kind !== 'proposal' ||
+        processed.proposalType !== 'self-remove'
+      ) {
+        rejected.push(proposal.proposalHash);
+        continue;
+      }
+    } catch {
+      rejected.push(proposal.proposalHash);
+      continue;
+    }
+    applied.push(proposal.proposalHash);
+    const sender = status.members.find((m) => m.index === senderLeaf);
+    if (sender) leaving.add(sender.userId);
+  }
+  return {
+    applied,
+    rejected,
+    leaving: [...leaving],
+    settles: applied.length > 0 || rejected.length > 0
+  };
+}
+
+/**
+ * For the owner: identities the roles still list that hold no leaf and
+ * that the server reports as having left (slice 5-5), to drop from the
+ * roles. A departure's Commit removes the leaf but not the roles entry,
+ * which only the owner changes; until it goes, the MLS rejoin rules would
+ * still let another device of that identity rejoin with an old rejoin PSK
+ * (the Worker refuses one, since the member's access is gone). A server
+ * that lies can only name an identity without leaves, which cannot act.
+ */
+async function departedIdentities(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  status: SessionStatus
+): Promise<string[]> {
+  const roles = status.roles;
+  if (!roles || !ctx.api.proposals || status.epoch === null) return [];
+  if (
+    roles.users.find((user) => user.role === 'owner')?.userId !==
+    ctx.account.userId
+  ) {
+    return [];
+  }
+  const leafless = roles.users
+    .filter(
+      (user) =>
+        user.role !== 'owner' &&
+        !status.members.some((member) => member.userId === user.userId)
+    )
+    .map((user) => user.userId);
+  if (leafless.length === 0) return [];
+  const group = await fetchGroup(ctx, projectId);
+  const { departed } = await ctx.api.proposals(
+    projectId,
+    group.keyEpochBase + status.epoch
+  );
+  return leafless.filter((userId) => departed.includes(userId));
+}
+
+/**
+ * Tells `onMembersRemoved` which other members a processed or confirmed
+ * Commit took the last leaf of (slice 5-5, for share-link reissue).
+ */
+async function reportRemovals(
+  ctx: ProjectGroupContext,
+  ref: MlsProjectRef,
+  projectId: string,
+  keyEpochBase: number,
+  change: EpochChange
+): Promise<void> {
+  if (!ctx.onMembersRemoved || change.removed.length === 0) return;
+  const status = await ctx.sessions.status(ref);
+  const userIds = [
+    ...new Set(change.removed.map((leaf) => leaf.userId))
+  ].filter(
+    (userId) =>
+      userId !== ctx.account.userId &&
+      !status.members.some((member) => member.userId === userId)
+  );
+  if (userIds.length === 0) return;
+  try {
+    ctx.onMembersRemoved({
+      projectId,
+      keyEpoch: keyEpochBase + change.epoch,
+      userIds
+    });
+  } catch {
+    // Best effort: the Commit stands either way.
+  }
 }
 
 // --- Commit, catch up, recover --------------------------------------------
 
 interface BuiltCommit {
   readonly request: CommitRequest;
-  /** The Commit carries a due rotation: replace the dedupe secret. */
+  /**
+   * The Commit carries a due rotation: replace the dedupe secret. So does
+   * one that removes another member (decision M5), whatever this says.
+   */
   readonly rotation: boolean;
   /** An owner's Add of an invitee (slice 5-3b). */
   readonly invitee?: InviteeAddition;
@@ -1924,14 +2193,17 @@ interface BuiltCommit {
 /**
  * Catch up, build the Commit for the current epoch, submit it with its new
  * epoch's material, and rebase onto a winner up to `attempts` times. A null
- * build means nothing needs committing.
+ * build means nothing needs committing, unless proposals are pending in the
+ * epoch (slice 5-5): every Commit settles those, and one is then sent to do
+ * just that.
  */
 async function commitLoop(
   ctx: ProjectGroupContext,
   projectId: string,
   build: (
     status: SessionStatus,
-    group: E2eeProjectGroupRecord
+    group: E2eeProjectGroupRecord,
+    departures: Departures
   ) => Promise<BuiltCommit | null>
 ): Promise<ProjectGroupState> {
   const device = requireDevice(ctx);
@@ -1940,12 +2212,21 @@ async function commitLoop(
   for (let attempt = 0; attempt < attempts; attempt++) {
     const caught = await catchUpProjectGroup(ctx, projectId);
     const group = await fetchGroup(ctx, projectId);
-    const built = await build(await ctx.sessions.status(ref), group);
-    if (!built) return caught;
-    const directory = withInvitee(
-      await directoryFor(ctx, projectId, group),
-      built.invitee
+    const status = await ctx.sessions.status(ref);
+    const members = await directoryFor(ctx, projectId, group);
+    const departures = await processDepartures(
+      ctx,
+      ref,
+      projectId,
+      group,
+      status,
+      members
     );
+    const built =
+      (await build(status, group, departures)) ??
+      (departures.settles ? { request: {}, rotation: false } : null);
+    if (!built) return caught;
+    const directory = withInvitee(members, built.invitee);
     // The Worker mirrors an owner's role changes and checks the new epoch's
     // roles against them (slice 5-4); an Add states its invitee instead.
     const roles = built.invitee ? [] : statedRoles(built.request);
@@ -1958,7 +2239,13 @@ async function commitLoop(
       directory,
       {
         commit: pending.commit,
-        replaceDedupeSecret: built.rotation,
+        // Decision M5: someone loses access, so blob tags under the old
+        // dedupe secret must not continue (as for D8's device removal).
+        replaceDedupeSecret:
+          built.rotation ||
+          departures.applied.length > 0 ||
+          (built.request.dropUsers?.length ?? 0) > 0,
+        departures,
         ...(built.invitee
           ? { add: addRequest(built.invitee, pending.welcome) }
           : {}),
@@ -1967,7 +2254,14 @@ async function commitLoop(
       }
     );
     if (submitted.accepted) {
-      await ctx.sessions.confirmCommit(ref, directory);
+      const change = await ctx.sessions.confirmCommit(ref, directory);
+      await reportRemovals(
+        ctx,
+        ref,
+        projectId,
+        submitted.group.keyEpochBase,
+        change
+      );
       return stateOf(submitted.group);
     }
     // The loser rebases: drop this Commit; the next catch-up processes the
@@ -2102,6 +2396,129 @@ export function changeMemberRole(
       rotation: rotation !== null
     };
   });
+}
+
+// --- Removal and leaving (slice 5-5) ---------------------------------------
+
+/**
+ * The owner removes a member (ADR-024, removing a member): one Commit whose
+ * `dropUsers` takes the identity out of the roles with every leaf it holds,
+ * so the new epoch's keys are ones it never sees. The Worker deletes its
+ * `project_members` row, its wraps and its assistant consent in the same
+ * batch; the Commit replaces the dedupe secret (decision M5) and tells
+ * `onMembersRemoved`. A departure of that member still pending is
+ * committed first: mls-rs refuses a Commit that removes one leaf by its
+ * own SelfRemove and by the drop.
+ */
+export async function removeMember(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  userId: string
+): Promise<ProjectGroupState> {
+  let state: ProjectGroupState | null = null;
+  for (let round = 0; round < 2; round++) {
+    let departing = false;
+    state = await commitLoop(
+      ctx,
+      projectId,
+      async (status, _group, departures) => {
+        const owner = status.roles?.users.find((u) => u.role === 'owner');
+        if (owner?.userId !== ctx.account.userId) {
+          throw new ProjectGroupError(
+            'membership-refused',
+            'Only the owner can remove members of an encrypted project.'
+          );
+        }
+        if (userId === owner.userId) {
+          throw new ProjectGroupError(
+            'membership-refused',
+            'The owner cannot be removed from an encrypted project.'
+          );
+        }
+        if (!status.roles?.users.some((u) => u.userId === userId)) return null;
+        departing = departures.leaving.includes(userId);
+        // Its own departure first; the drop follows in the next round.
+        if (departing) return { request: {}, rotation: false };
+        return { request: { dropUsers: [userId] }, rotation: false };
+      }
+    );
+    if (!departing) return state;
+  }
+  return state!;
+}
+
+/**
+ * This account leaves a project (ADR-024: leaving is a proposal, never a
+ * Commit by the leaver, RFC 9420 §12.2). This device first removes the
+ * account's other leaves in a Commit of its own (a member may remove
+ * leaves of its own identity), then sends a SelfRemove proposal of its own
+ * leaf, which the Worker stores and on which it drops the account's access
+ * at once (decision M4): the project's row, wraps and assistant consent.
+ * Any remaining member commits the departure; writers do before their next
+ * write. The owner cannot leave.
+ */
+export async function leaveProject(
+  ctx: ProjectGroupContext,
+  projectId: string
+): Promise<void> {
+  const device = requireDevice(ctx);
+  const ref = refOf(ctx, device, projectId);
+  if (!ctx.api.propose) {
+    throw new ProjectGroupError(
+      'server-mismatch',
+      'This server cannot store a departure.'
+    );
+  }
+  const attempts = ctx.attempts ?? DEFAULT_ATTEMPTS;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    await commitLoop(ctx, projectId, async (status) => {
+      const roles = status.roles?.users ?? [];
+      if (
+        roles.find((u) => u.role === 'owner')?.userId === ctx.account.userId
+      ) {
+        throw new ProjectGroupError(
+          'membership-refused',
+          'The owner cannot leave an encrypted project.'
+        );
+      }
+      if (!roles.some((u) => u.userId === ctx.account.userId)) {
+        throw new ProjectGroupError(
+          'membership-refused',
+          'This account is not a member of the project.'
+        );
+      }
+      const remove = status.members
+        .filter(
+          (m) => m.userId === ctx.account.userId && m.index !== status.ownIndex
+        )
+        .map((m) => m.index);
+      return remove.length ? { request: { remove }, rotation: false } : null;
+    });
+    const group = await fetchGroup(ctx, projectId);
+    const status = await ctx.sessions.status(ref);
+    if (status.epoch !== group.epoch) continue;
+    const message = await ctx.sessions.proposeSelfRemove(
+      ref,
+      await directoryFor(ctx, projectId, group)
+    );
+    try {
+      await ctx.api.propose(projectId, {
+        epoch: status.epoch,
+        deviceId: device.deviceId,
+        kind: 'self-remove',
+        message: b64(message)
+      });
+      return;
+    } catch (error) {
+      // Someone committed meanwhile: catch up and propose again.
+      if (isApiError(error, 'E2EE_EPOCH_STALE')) continue;
+      throw error;
+    }
+  }
+  throw new ProjectGroupError(
+    'epoch-lost',
+    'The project kept changing while this device left. Try again.'
+  );
 }
 
 // --- Adding an invitee (slice 5-3b) -----------------------------------------
@@ -2305,6 +2722,56 @@ async function revokedCommitter(
 }
 
 /**
+ * Processes one Commit the sequencer accepted. A Commit that applies stored
+ * proposals by reference (a departure, slice 5-5) needs them first: the
+ * engine reports the missing proposal, the ones that Commit's epoch
+ * settled as applied are processed, after the same framing check as for a
+ * committer, and the Commit is processed again.
+ */
+async function processCommit(
+  ctx: ProjectGroupContext,
+  ref: MlsProjectRef,
+  projectId: string,
+  group: E2eeProjectGroupRecord,
+  directory: DirectoryInput,
+  commit: E2eeMlsCommitRecord
+) {
+  const message = bytes(commit.message);
+  try {
+    return await ctx.sessions.process(ref, directory, message);
+  } catch (error) {
+    if (
+      !ctx.api.proposals ||
+      !(error instanceof Error) ||
+      !/ProposalNotFound/.test(error.message)
+    ) {
+      throw error;
+    }
+  }
+  const { committed } = await ctx.api.proposals(
+    projectId,
+    group.keyEpochBase + commit.epoch
+  );
+  for (const proposal of committed) {
+    const proposalBytes = bytes(proposal.message);
+    let frame;
+    try {
+      frame = parseSelfRemoveProposal(proposalBytes);
+    } catch {
+      continue;
+    }
+    if (
+      frame.epoch !== commit.epoch ||
+      !sameBytes(frame.groupId, projectGroupId(projectId))
+    ) {
+      continue;
+    }
+    await ctx.sessions.process(ref, directory, proposalBytes);
+  }
+  return ctx.sessions.process(ref, directory, message);
+}
+
+/**
  * Process every Commit the sequencer accepted after this device's epoch,
  * after resolving any Commit a crash left pending.
  */
@@ -2362,10 +2829,13 @@ export async function catchUpProjectGroup(
       }
       let processed;
       try {
-        processed = await ctx.sessions.process(
+        processed = await processCommit(
+          ctx,
           ref,
+          projectId,
+          group,
           directory,
-          bytes(commit.message)
+          commit
         );
       } catch (error) {
         if (isPolicyRefusal(error, 'credential-revoked')) {
@@ -2387,6 +2857,13 @@ export async function catchUpProjectGroup(
       }
       epoch = processed.change.epoch;
       await afterProcessed(ctx, ref, projectId, group.keyEpochBase, commit);
+      await reportRemovals(
+        ctx,
+        ref,
+        projectId,
+        group.keyEpochBase,
+        processed.change
+      );
     }
     if (!page.more) group = await fetchGroup(ctx, projectId);
   }
@@ -2595,10 +3072,12 @@ export async function recoverProjectGroup(
   // An Add (it carries a Welcome) is never sent again without the
   // invitation and KeyPackages it states (slice 5-3b): the owner's next
   // completion builds it afresh from the claim. Nor is a role change
-  // without the change it states (slice 5-4).
+  // without the change it states (slice 5-4), nor any Commit while
+  // proposals are pending, which it would have to settle (slice 5-5).
   const directory = await directoryFor(ctx, projectId, group);
   if (
     pending.welcome ||
+    (group.pendingProposals ?? 0) > 0 ||
     (await rotationRequest(ctx, projectId, status, group)) ||
     (await changesRoles(ctx, ref, status, directory))
   ) {

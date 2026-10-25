@@ -312,6 +312,24 @@ export class MlsProjectSessions {
     return stored?.pendingCommit ? copyPending(stored.pendingCommit) : null;
   }
 
+  /**
+   * Leave (slice 5-5): a SelfRemove proposal of this device's leaf, which
+   * another member commits by reference (a Commit may not remove its own
+   * sender). Nothing changes for the group until then.
+   */
+  proposeSelfRemove(
+    ref: MlsProjectRef,
+    directory: DirectoryInput
+  ): Promise<Uint8Array> {
+    return this.operate(ref, {
+      directory,
+      mutate: true,
+      run: async (session) => ({
+        value: new Uint8Array(await session.proposeSelfRemove())
+      })
+    });
+  }
+
   /** Process a proposal or Commit the sequencer delivered, in order. */
   process(
     ref: MlsProjectRef,

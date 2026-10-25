@@ -164,16 +164,33 @@ describe('co-members’ device lists from contacts (5-1 into 5-2)', () => {
     );
   });
 
-  it('gives no list for someone the server will not look up, refusing their versions', async () => {
+  it('still verifies a removed member’s versions, whose leaf stays in the project', async () => {
     const { srv, projectId } = await sharedWithEdit();
-    // The server no longer relates the two accounts (M2): the device-list
-    // lookup answers 404, and OTHER's version is refused visibly.
     srv.db
       .prepare(
         'DELETE FROM project_members WHERE project_id = ? AND user_id = ?'
       )
       .run(projectId, OTHER);
+    const { d } = contactsBrowser(srv);
+    expect((await d.store.loadProject(projectId)).name).toBe('Member edit');
+  });
+
+  it('gives no list for someone the server will not look up, refusing their versions', async () => {
+    const { srv, projectId } = await sharedWithEdit();
     const { d, inspected } = contactsBrowser(srv);
+    // The server will not relate the two accounts (M2): the device-list
+    // lookup answers 404, and OTHER's version is refused visibly.
+    const real = d.fetcher;
+    d.fetcher = async (path, init) =>
+      path.endsWith(`/users/${OTHER}/device-list`)
+        ? new Response(
+            JSON.stringify({
+              error: 'Not found.',
+              code: 'E2EE_CONTACT_NOT_FOUND'
+            }),
+            { status: 404, headers: { 'content-type': 'application/json' } }
+          )
+        : real(path, init);
     await expect(d.store.loadProject(projectId)).rejects.toSatisfy(
       (error: unknown) =>
         error instanceof EncryptedProjectIntegrityError &&

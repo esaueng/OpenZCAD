@@ -157,6 +157,54 @@ function readGroupContext(reader: Reader): EpochContext {
   return { groupId: new Uint8Array(groupId), epoch, roles: roles! };
 }
 
+/** RFC 9420 §6: `mls_public_message` in an MLSMessage. */
+const WIRE_FORMAT_PUBLIC_MESSAGE = 1;
+/** RFC 9420 §6.1: `member`. */
+const SENDER_MEMBER = 1;
+/** RFC 9420 §6: `proposal`. */
+const CONTENT_PROPOSAL = 2;
+/**
+ * The SelfRemove proposal type the engine's mls-rs build sends (a
+ * private-use number until the MLS extensions draft assigns one); checked
+ * against the engine's own output in `epochRoles.test.ts`.
+ */
+export const SELF_REMOVE_PROPOSAL_TYPE = 0xf003;
+
+/** Who sent a SelfRemove proposal, and in which group and epoch. */
+export interface SelfRemoveFrame {
+  readonly groupId: Uint8Array;
+  readonly epoch: number;
+  readonly senderLeaf: number;
+}
+
+/**
+ * The framing of a SelfRemove proposal (slice 5-5): an MLSMessage
+ * PublicMessage whose content is a proposal of the SelfRemove type, sent by
+ * a member. Nothing after the proposal type is read, and the signature is
+ * not checked here: the MLS engine checks it when a member processes the
+ * proposal. A departing member's proposal is vetted with this before
+ * anyone's engine caches it, since a cached proposal of another type (a
+ * Remove of someone else's leaf, say) would make every Commit of that
+ * epoch break the policy.
+ */
+export function parseSelfRemoveProposal(message: Uint8Array): SelfRemoveFrame {
+  const reader = new Reader(message);
+  if (reader.uint(2) !== 1) fail('Not an MLS 1.0 message.');
+  if (reader.uint(2) !== WIRE_FORMAT_PUBLIC_MESSAGE) {
+    fail('Not a PublicMessage.');
+  }
+  const groupId = reader.vector();
+  const epoch = reader.uint(8);
+  if (reader.uint(1) !== SENDER_MEMBER) fail('Not sent by a member.');
+  const senderLeaf = reader.uint(4);
+  reader.vector(); // authenticated data
+  if (reader.uint(1) !== CONTENT_PROPOSAL) fail('Not a proposal.');
+  if (reader.uint(2) !== SELF_REMOVE_PROPOSAL_TYPE) {
+    fail('Not a SelfRemove proposal.');
+  }
+  return { groupId: new Uint8Array(groupId), epoch, senderLeaf };
+}
+
 /** The MLS group id of a project's group. */
 export function projectGroupId(projectId: string): Uint8Array {
   return new TextEncoder().encode(`${GROUP_ID_PREFIX}${projectId}`);

@@ -146,10 +146,15 @@ export async function signIn(
 /** Closes Settings (and any panel open in it). */
 export async function closeSettings(page: Page) {
   const settings = page.getByRole('dialog', { name: 'Settings' });
+  // Each Escape closes one layer (a panel, then Settings); under load the
+  // dialog can take a while to go, so wait after each.
   for (let attempt = 0; attempt < 3 && (await settings.count()); attempt++) {
     await page.keyboard.press('Escape');
+    await settings
+      .waitFor({ state: 'detached', timeout: 5_000 })
+      .catch(() => undefined);
   }
-  await expect(settings).toHaveCount(0);
+  await expect(settings).toHaveCount(0, { timeout: SYNC_BUDGET_MS });
 }
 
 /** Compares codes with `name` in the open contact panel and signs it. */

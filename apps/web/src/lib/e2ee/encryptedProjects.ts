@@ -45,7 +45,11 @@ import {
 import { deviceKeyStore } from './keychainDeviceKeys';
 import { getKeySessionRevision, subscribeKeySession } from './keySession';
 import { mlsProjectSessions } from './mls/projectSessions';
-import { createProjectGroupsApi, projectGroupAccount } from './projectGroups';
+import {
+  createProjectGroupsApi,
+  projectGroupAccount,
+  type MembersRemoved
+} from './projectGroups';
 import {
   createEncryptedMeasurements,
   createEncryptedViewStates,
@@ -93,6 +97,21 @@ interface Opened {
 let opened: Opened | null = null;
 let decoder: E2eeDecoder | null = null;
 const warningListeners = new Set<(warning: EncryptedProjectWarning) => void>();
+const removalListeners = new Set<(removal: MembersRemoved) => void>();
+
+/**
+ * Members who lost access to a project in a Commit this page sent or
+ * processed (slice 5-5): an owner's removal or a departure. Share links
+ * (slice 5-10) listen here to offer reissuing the project's links with new
+ * share keys, since a removed member could keep reading later snapshots of
+ * links made before the removal.
+ */
+export function subscribeMemberRemovals(
+  listener: (removal: MembersRemoved) => void
+): () => void {
+  removalListeners.add(listener);
+  return () => removalListeners.delete(listener);
+}
 
 subscribeKeySession(() => {
   opened = null;
@@ -201,7 +220,17 @@ async function openStore(
       contacts,
       account,
       leaves: (projectId) => groupsApi.leaves(projectId)
-    })
+    }),
+    // The share-link reissue hook (slice 5-5, for slice 5-10).
+    onMembersRemoved: (removal: MembersRemoved) => {
+      for (const listener of removalListeners) {
+        try {
+          listener(removal);
+        } catch {
+          // Every listener still hears it.
+        }
+      }
+    }
   };
   const blobs = createEncryptedContentBlobs({
     groups,

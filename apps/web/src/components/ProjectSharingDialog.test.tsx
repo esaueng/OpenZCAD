@@ -815,7 +815,9 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
       list: vi.fn(async () => invitations),
       invite: vi.fn(async () => undefined),
       revoke: vi.fn(async () => undefined),
-      changeRole: vi.fn(async () => undefined)
+      changeRole: vi.fn(async () => undefined),
+      remove: vi.fn(async () => undefined),
+      leave: vi.fn(async () => undefined)
     };
   }
 
@@ -899,6 +901,21 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
     for (const option of screen.getAllByRole('option', { name: 'Editor' })) {
       expect(option).not.toBeDisabled();
     }
+    // Removal is the owner's MLS Commit too (slice 5-5).
+    await user.click(
+      screen.getByRole('button', { name: 'Remove member@example.com' })
+    );
+    await waitFor(() =>
+      expect(encrypted.remove).toHaveBeenCalledWith('proj_encrypted', member)
+    );
+    expect(sharingClient.removeMember).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(/Removing someone keeps them out of every later version/)
+    ).toBeVisible();
+    // The owner cannot leave.
+    expect(
+      screen.queryByRole('button', { name: /Leave project/ })
+    ).not.toBeInTheDocument();
 
     await user.click(
       screen.getByRole('button', { name: 'Verify verify@example.com' })
@@ -935,6 +952,58 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
       await screen.findByText('Invitation sent to new@example.com.')
     ).toBeVisible();
     setPersonalInfoVisible(false);
+  });
+
+  it('lets a member leave after saying what that means (slice 5-5)', async () => {
+    const sharingClient = client();
+    const encrypted = encryptedClient([]);
+    const onLeft = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId="proj_encrypted"
+        role="viewer"
+        collaborationStatus="offline"
+        lease={null}
+        client={sharingClient}
+        encrypted
+        encryptedClient={encrypted}
+        onLeft={onLeft}
+        onClose={vi.fn()}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: 'Leave project…' }));
+    const confirm = screen.getByRole('group', { name: 'Leave this project' });
+    expect(confirm).toHaveTextContent(
+      'You lose access to this project at once'
+    );
+    expect(encrypted.leave).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Leave project' }));
+    await waitFor(() => expect(onLeft).toHaveBeenCalled());
+    expect(encrypted.leave).toHaveBeenCalledWith('proj_encrypted');
+    expect(sharingClient.removeMember).not.toHaveBeenCalled();
+  });
+
+  it('offers no leaving on a plaintext project', async () => {
+    render(
+      <ProjectSharingDialog
+        projectId="proj_plain"
+        role="viewer"
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        encryptedClient={encryptedClient([])}
+        onClose={vi.fn()}
+      />
+    );
+    expect(
+      screen.getByText(
+        'Only the project owner can manage members and invitations.'
+      )
+    ).toBeVisible();
+    expect(
+      screen.queryByRole('button', { name: /Leave project/ })
+    ).not.toBeInTheDocument();
   });
 
   it('leaves plaintext sharing exactly as it was', async () => {

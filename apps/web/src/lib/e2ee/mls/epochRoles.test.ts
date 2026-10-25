@@ -6,6 +6,7 @@ import {
   EpochRecordError,
   parseEpochContext,
   parseGroupInfoContext,
+  parseSelfRemoveProposal,
   projectGroupId,
   ROLES_EXTENSION_TYPE
 } from './epochRoles';
@@ -119,6 +120,31 @@ describe('epoch roles from archived records (slice 5-2)', () => {
     wrongFormat[3] = 1;
     expect(() => parseGroupInfoContext(wrongFormat)).toThrow(EpochRecordError);
     expect(() => parseGroupInfoContext(groupInfo.subarray(0, 30))).toThrow(
+      EpochRecordError
+    );
+  });
+
+  it('reads the framing of a SelfRemove proposal and nothing else (slice 5-5)', async () => {
+    const { mls } = await records();
+    const ref = {
+      userId: alice.userId,
+      deviceId: 'alice_laptop',
+      projectId: 'proj_roles'
+    };
+    const directory = { lists: [alice.list, bob.list], certifications: [] };
+    const proposal = await mls.proposeSelfRemove(ref, directory);
+    expect(parseSelfRemoveProposal(proposal)).toEqual({
+      groupId: projectGroupId('proj_roles'),
+      epoch: 2,
+      senderLeaf: 0
+    });
+    // A Commit, a GroupInfo or a cut message is not one.
+    await mls.discardCommit(ref).catch(() => undefined);
+    const { commit } = await mls.commit(ref, directory, {});
+    expect(() => parseSelfRemoveProposal(commit)).toThrow(EpochRecordError);
+    const groupInfo = (await mls.epochMaterial(ref)).groupInfo;
+    expect(() => parseSelfRemoveProposal(groupInfo)).toThrow(EpochRecordError);
+    expect(() => parseSelfRemoveProposal(proposal.subarray(0, 40))).toThrow(
       EpochRecordError
     );
   });
