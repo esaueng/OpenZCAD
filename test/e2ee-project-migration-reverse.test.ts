@@ -91,8 +91,56 @@ const ENCRYPTED_TABLES = [
   'e2ee_project_envelopes',
   'e2ee_content_blobs',
   'e2ee_version_blobs',
-  'e2ee_group_resets'
+  'e2ee_group_resets',
+  // Phase 5 and 6 rows kept beside the group (migrations 0038, 0039, 0041).
+  'e2ee_assistant_consents',
+  'e2ee_mls_proposals',
+  'e2ee_welcomes',
+  'e2ee_key_packages',
+  'e2ee_invitations'
 ];
+
+/**
+ * What Phase 5 and 6 leave about an encrypted project that nobody else
+ * holds any more: the owner's assistant consent (6-1), a settled
+ * self-remove proposal (5-5) and a revoked encrypted invitation (5-3a).
+ */
+function insertSettledSharingRows(srv: Server, projectId: string): void {
+  srv.db
+    .prepare(
+      `INSERT INTO e2ee_assistant_consents
+         (user_id, project_id, allowed, copy_version, route, record,
+          record_mac, sequence, updated_at)
+       VALUES (?, ?, 1, 1, '/api/ai', 'record', ?, 1, 'now')`
+    )
+    .run(OWNER, projectId, 'm'.repeat(43));
+  srv.db
+    .prepare(
+      `INSERT INTO e2ee_mls_proposals
+         (project_id, key_epoch, proposal_hash, kind, sender_user_id,
+          sender_device_id, message, created_at, outcome, settled_key_epoch)
+       VALUES (?, 1, ?, 'self-remove', ?, 'other_laptop', 'message', 'now',
+               'committed', 2)`
+    )
+    .run(projectId, 'p'.repeat(64), OTHER);
+  srv.db
+    .prepare(
+      `INSERT INTO e2ee_invitations
+         (invitation_id, project_id, invited_by_user_id, email_hash, role,
+          token_hash, statement, signature, signer_device_id, created_at,
+          expires_at, revoked_at)
+       VALUES ('einv_revoked', ?, ?, ?, 'viewer', ?, 'statement', ?,
+               'owner_laptop', 'now', ?, 'now')`
+    )
+    .run(
+      projectId,
+      OWNER,
+      'e'.repeat(64),
+      't'.repeat(64),
+      's'.repeat(87),
+      Date.now() + 3_600_000
+    );
+}
 
 // --- Server --------------------------------------------------------------------
 
@@ -619,6 +667,8 @@ describe('turning an encrypted project back into plaintext', () => {
       projectId
     )[0]!.bytes;
     expect(usage(srv)).toBe(blobBytes);
+    // Its sharing is settled: nothing of it blocks, and the purge drops it.
+    insertSettledSharingRows(srv, projectId);
     // The project's room relayed ciphertext.
     srv.roomSeed.set(projectId, encryptedRoomState(projectId));
     const desktop = reverseOn(srv, owner, 'owner_desktop');

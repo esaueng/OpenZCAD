@@ -81,9 +81,12 @@ import {
 } from '@openzcad/shared';
 import {
   D1R2PersistenceService,
+  E2EE_INVITATION_TABLES,
+  isE2eeAssistantConsentStorageReady,
   isE2eeContentBlobStorageReady,
   isE2eeDeviceRemovalStorageReady,
   isE2eeInvitationStorageReady,
+  isE2eeMlsProposalStorageReady,
   isE2eeProjectGroupStorageReady,
   isE2eeProjectMigrationStorageReady,
   isE2eeProjectVersionStorageReady,
@@ -2253,6 +2256,37 @@ async function decryptPurgeStep(
     return { more: false, rows: 0, objects: 0 };
   }
   const outcome = await dropStaged(db, env, projectId, DECRYPT_PURGING_FENCE);
+  if (outcome.complete) {
+    // What Phase 5 and 6 keep about an encrypted project beside its group,
+    // as a project purge drops it: assistant consents (6-1, migration 0041),
+    // stored MLS proposals (5-5, 0039), and encrypted invitations with their
+    // KeyPackages and Welcomes (5-3a, 0038), each only once its table
+    // exists. A consent left behind would let the assistant read the
+    // project again were it ever encrypted anew, without being asked.
+    const tables = [
+      ...((await isE2eeAssistantConsentStorageReady(db))
+        ? ['e2ee_assistant_consents']
+        : []),
+      ...((await isE2eeMlsProposalStorageReady(db))
+        ? ['e2ee_mls_proposals']
+        : []),
+      ...((await isE2eeInvitationStorageReady(db))
+        ? E2EE_INVITATION_TABLES
+        : [])
+    ];
+    if (tables.length) {
+      await runBatch(
+        db,
+        tables.map((table) =>
+          db
+            .prepare(
+              `DELETE FROM ${table} WHERE project_id = ? AND ${DECRYPT_PURGING_FENCE}`
+            )
+            .bind(projectId, projectId)
+        )
+      );
+    }
+  }
   return {
     more: !outcome.complete,
     rows: outcome.complete ? 1 : 0,
