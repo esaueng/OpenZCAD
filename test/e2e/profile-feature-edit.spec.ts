@@ -13,6 +13,7 @@ import {
 } from '@openzcad/document-core';
 import { computeSketchProfileAnalysis } from '@openzcad/geometry';
 import {
+  FEATURE_SUPPRESSED_METADATA_KEY,
   toUserId,
   type ProjectDocument,
   type SketchSectionReference
@@ -21,7 +22,9 @@ import {
   test,
   expect,
   stubApi,
-  bodyCardFromHistory
+  bodyCardFromHistory,
+  enterCommandValue,
+  finishInPlaceCommand
 } from './openzcad-fixtures';
 
 function section(
@@ -208,34 +211,22 @@ for (const kind of ['loft', 'sweep', 'helical-sweep'] as const) {
       await expect(page.locator('.diagnostic-row')).toContainText(
         'This helical sweep is a faceted approximation'
       );
-    const inspector = page.getByRole('region', { name: 'Feature inspector' });
-    const label = kind.replaceAll('-', ' ');
+    // U09 phase 7: the row re-arms the command in place, seeded from what
+    // the feature stores; no form opens.
+    const bar = page.getByRole('group', {
+      name: 'Edit Authored feature command'
+    });
+    const canvas = page.locator('.viewer-host canvas');
     const openEditor = async () => {
-      // The row opens the editable form directly (F19).
       await page
         .locator('.feature-row-main', { hasText: 'Authored feature' })
         .click();
-      await expect(
-        inspector.getByRole('button', { name: `Edit ${label}`, exact: true })
-      ).toHaveCount(0);
-      await expect(inspector.getByLabel('Name', { exact: true })).toHaveValue(
-        'Authored feature'
-      );
-      await expect(
-        inspector.getByRole('option', { name: /Later profile/ })
-      ).toHaveCount(0);
+      await expect(bar).toBeVisible();
+      await expect(page.locator('form.feature-form')).toHaveCount(0);
     };
     const apply = async () => {
-      // One press checks the exact result and applies it.
-      const applyButton = inspector.getByRole('button', {
-        name: `Apply ${label}`,
-        exact: true
-      });
-      await applyButton.click({ timeout: 30_000 });
-      // The card closes only once this Apply has committed (F19); the status
-      // below can still read the previous Apply's identical message, and the
-      // button is relabelled while the exact check runs.
-      await expect(inspector).toHaveCount(0, { timeout: 60_000 });
+      // Done waits for the exact check of exactly what it commits.
+      await finishInPlaceCommand(page, 'Edit Authored feature');
       await expect(page.getByRole('contentinfo')).toContainText(
         'Edited Authored feature.',
         { timeout: 30_000 }
@@ -249,73 +240,84 @@ for (const kind of ['loft', 'sweep', 'helical-sweep'] as const) {
         .getByText(/mm³/)
         .first();
       await expect(readout).toBeVisible();
-      return readout.textContent();
+      const text = await readout.textContent();
+      // The row re-armed the last feature's command; leave it as it was.
+      await page.keyboard.press('Escape');
+      return text;
     };
+    const pickRegion = (sketchId: string) =>
+      canvas.evaluate(
+        (element, detail) =>
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-select-profile', { detail })
+          ),
+        { sketchId, index: 0, additive: false }
+      );
     const originalVolume = await volume();
     await openEditor();
     if (kind === 'loft') {
-      await expect(inspector.getByLabel('Loft section 1')).toContainText(
-        'Upper profile'
+      await expect(bar).toContainText('2 sections');
+      await bar.locator('summary').click();
+      await expect(bar.getByRole('radio', { name: 'Ruled' })).toHaveAttribute(
+        'aria-checked',
+        'true'
       );
-      await expect(inspector.getByLabel('Loft section 1')).toHaveValue(
-        `${data.upper.reference.sketchId}:${data.upper.reference.profile.all !== true && data.upper.reference.profile.profileId}`
-      );
-      await expect(inspector.getByLabel('Loft section 2')).toHaveValue(
-        `${data.lower.reference.sketchId}:${data.lower.reference.profile.all !== true && data.lower.reference.profile.profileId}`
-      );
-      await expect(inspector.getByLabel('Surface mode')).toHaveValue('ruled');
-    } else {
+      await bar.locator('summary').click();
+    } else if (kind === 'sweep') {
+      await expect(bar).toContainText('Path of 1');
+      await bar.locator('summary').click();
       await expect(
-        inspector.getByRole('combobox', { name: 'Profile', exact: true })
-      ).toHaveValue(
-        `${data.lower.reference.sketchId}:${data.lower.reference.profile.all !== true && data.lower.reference.profile.profileId}`
+        bar.getByRole('radio', { name: 'Standard' })
+      ).toHaveAttribute('aria-checked', 'true');
+      await bar.locator('summary').click();
+    } else {
+      // The stored expressions are what the chips hold.
+      await expect(page.getByTestId('command-handle-radius')).toHaveText(
+        'Radius 10 mm'
       );
-      if (kind === 'sweep')
-        await expect(inspector.getByLabel('Surface mode')).toHaveValue(
-          'standard'
-        );
-      else {
-        await expect(
-          inspector.getByLabel('Radius', { exact: true })
-        ).toHaveValue('20 / 2');
-        await expect(
-          inspector.getByLabel('Pitch', { exact: true })
-        ).toHaveValue('10 / 2');
-        await expect(
-          inspector.getByRole('group', { name: 'Axis origin' }).getByLabel('X')
-        ).toHaveValue('0 / 2');
-        await expect(
-          inspector
-            .getByRole('group', { name: 'Axis direction' })
-            .getByLabel('Z')
-        ).toHaveValue('2 / 2');
-      }
+      await expect(page.getByTestId('command-handle-pitch')).toHaveText(
+        'Pitch 5 mm'
+      );
+      await expect(page.getByTestId('command-handle-turns')).toHaveText(
+        '2 turns'
+      );
     }
-    // Opening and canceling changed fields must leave the document untouched.
-    await inspector.getByLabel('Name', { exact: true }).fill('Canceled');
-    await inspector
-      .getByRole('button', { name: 'Cancel', exact: true })
-      .click();
+    // Opening and canceling a changed value must leave the document as it was.
+    if (kind === 'helical-sweep') {
+      await enterCommandValue(page, 'turns', '5');
+    } else {
+      await pickRegion(data.distractor.reference.sketchId);
+    }
+    await bar.getByRole('button', { name: /Cancel/ }).click();
+    await expect(bar).toHaveCount(0);
     expect(findFeature(await backup(page), data.featureId)?.data).toEqual(
       original.data
     );
+    // An untouched Done writes the feature back exactly as stored.
     await openEditor();
     await apply();
     const unchanged = await backup(page);
     expect(findFeature(unchanged, data.featureId)?.data).toEqual(original.data);
     expect(unchanged.featureOrder).toEqual(data.document.featureOrder);
     expect(unchanged.bodyOrder).toEqual(data.document.bodyOrder);
+    // A later sketch is a forward reference, which the edit refuses by name.
     await openEditor();
-    if (kind === 'helical-sweep')
-      await inspector.getByLabel('Turns', { exact: true }).fill('6 / 2');
-    else {
-      const selector =
-        kind === 'loft'
-          ? inspector.getByLabel('Loft section 1')
-          : inspector.getByRole('combobox', { name: 'Profile', exact: true });
-      await selector.selectOption(
-        `${data.distractor.reference.sketchId}:${data.distractor.reference.profile.all !== true && data.distractor.reference.profile.profileId}`
+    if (kind !== 'helical-sweep') {
+      const later = data.document.sketchOrder.at(-1)!;
+      await pickRegion(later);
+      await expect(page.getByRole('contentinfo')).toContainText(
+        'can only use sketches made before it in History'
       );
+    }
+    if (kind === 'helical-sweep') {
+      await enterCommandValue(page, 'turns', '6 / 2');
+    } else {
+      if (kind === 'loft') {
+        // Clicking a section takes it out; the other one replaces it.
+        await pickRegion(data.upper.reference.sketchId);
+        await expect(bar).toContainText('Pick the next section profile');
+      }
+      await pickRegion(data.distractor.reference.sketchId);
     }
     await apply();
     expect(await volume()).not.toEqual(originalVolume);
@@ -354,14 +356,66 @@ test('refuses a saved section that cannot resolve to an upstream sketch', async 
   await page
     .locator('.feature-row-main', { hasText: 'Authored feature' })
     .click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await expect(inspector.getByRole('alert')).toContainText(
-    'Saved profile no longer resolves uniquely'
+  // The edit arms without it and says so. It was the first section, so a
+  // new pick would land after the one kept: the sections are picked again,
+  // in order, and it cannot finish meanwhile.
+  const bar = page.getByRole('group', {
+    name: 'Edit Authored feature command'
+  });
+  await expect(bar).toContainText('Pick the first section profile');
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'its saved profile no longer resolves · pick its sections again, in order'
   );
-  await expect(
-    inspector.getByRole('button', { name: /Apply|exact result/ })
-  ).toHaveCount(0);
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeDisabled();
   expect(findFeature(await backup(page), data.featureId)?.data).toEqual(
     feature.data
   );
+});
+
+test('a suppressed loft edits in place and stays suppressed', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  const data = fixture('loft');
+  const node = Object.values(data.document.nodes).find(
+    (candidate) =>
+      candidate.kind === 'feature' && candidate.featureId === data.featureId
+  )!;
+  // Suppressed: it makes no body, so no exact rebuild could find one.
+  const document: ProjectDocument = {
+    ...data.document,
+    nodes: {
+      ...data.document.nodes,
+      [node.id]: {
+        ...node,
+        metadata: { ...node.metadata, [FEATURE_SUPPRESSED_METADATA_KEY]: true }
+      }
+    }
+  };
+  await openFixture(page, document);
+  await page
+    .locator('.feature-row-main', { hasText: 'Authored feature' })
+    .click();
+  const bar = page.getByRole('group', {
+    name: 'Edit Authored feature command'
+  });
+  await expect(bar).toContainText('2 sections');
+  await bar.locator('summary').click();
+  await bar.getByRole('radio', { name: 'Smooth' }).click();
+  await bar.locator('summary').click();
+  await finishInPlaceCommand(page, 'Edit Authored feature');
+  await expect
+    .poll(
+      async () => {
+        const stored = findFeature(await backup(page), data.featureId);
+        return stored?.data.featureKind === 'loft'
+          ? [
+              stored.data.mode,
+              stored.metadata?.[FEATURE_SUPPRESSED_METADATA_KEY]
+            ]
+          : null;
+      },
+      { timeout: 30_000 }
+    )
+    .toEqual(['smooth', true]);
 });

@@ -3908,6 +3908,13 @@ export interface E2eeAppendDeviceListRequest {
   wraps: E2eeWrapInput[];
   /** Required exactly when the entry rotates the account key. */
   history?: E2eeAccountKeyHistoryInput;
+  /**
+   * The identity-signed revocation cutoff statement for this entry (device
+   * removal, ADR-024 slice 4-10). Required when the entry revokes a device
+   * of an account with encrypted projects: the Worker stores it in the same
+   * batch as the entry, so no revoked device is ever left without one.
+   */
+  cutoffs?: E2eeSignedStatementRecord;
 }
 
 export interface E2eeReplaceIdentityRequest extends E2eeSetupRequest {

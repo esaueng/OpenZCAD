@@ -916,6 +916,13 @@
   z-index: var(--z-popover);
 }
 
+/* A running command's Done and Cancel stay on top: in a short narrow window
+   with a panel docked (768 × 650 with History open) the instrument rail
+   runs down into the bottom lane and covered Done. */
+.command-bar-lane:has(.in-place-command) {
+  z-index: calc(var(--z-inspector-float) + 2);
+}
+
 /* The list takes the conversation's place rather than floating over it: a
    slash, or words that name a command, typed with the stream up hide the
    stream, and the list stands on the bar where it stood, bar and list one
@@ -3369,6 +3376,16 @@ button.model-panel-grip[aria-expanded='true'] {
   flex: 0 0 100%;
   color: var(--color-text-muted);
   font-size: var(--fs-xs);
+}
+
+/* What the chosen choice does, where a card had its explanation. */
+.in-place-option-note {
+  flex: 0 0 100%;
+  max-width: 36ch;
+  margin: 2px 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
 }
 
 .in-place-option-choice {

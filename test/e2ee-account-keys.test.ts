@@ -3072,10 +3072,12 @@ describe('the Worker refuses malformed device-list writes', () => {
   it('refuses oversized bodies', async () => {
     const srv = server();
     const { laptop } = await setUp(srv);
+    // Past the body limit, which leaves room for a revocation's cutoff
+    // statement naming every project (e2eeDeviceRemoval.ts).
     const huge = await refusal(
       laptop.api.appendDeviceList({
         generation: 1,
-        entry: 'A'.repeat(600 * 1024),
+        entry: 'A'.repeat(1600 * 1024),
         signature: '',
         wraps: []
       })

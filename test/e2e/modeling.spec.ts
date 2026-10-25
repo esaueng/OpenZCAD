@@ -1629,9 +1629,9 @@ test('preflights and drills a through hole into the top face', async ({
   await expectBodyCount(page, 1);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
-  // A hole is editable after creation: its row reopens the same form,
-  // prefilled — with no "Edit hole" step in front of it (F19) — and Apply
-  // patches the feature instead of adding another, then closes the card.
+  // A hole is editable after creation: its row re-arms the Hole command in
+  // place (U09 phase 7), its chips holding the stored values, and Done
+  // patches the feature instead of adding another.
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   const liveVolume = async () => {
     await bodyCardFromHistory(page);
@@ -1642,21 +1642,15 @@ test('preflights and drills a through hole into the top face', async ({
   };
   const volumeBefore = await liveVolume();
   await page.locator('.feature-row-main', { hasText: 'Hole' }).click();
-  await expect(
-    page.getByRole('textbox', { name: 'Diameter', exact: true })
-  ).toHaveValue('5');
-  await expect(
-    page
-      .getByRole('group', { name: 'Entry face' })
-      .getByRole('button', { name: /Box 1 · Top face/ })
-  ).toHaveAttribute('aria-pressed', 'true');
-  await page.getByRole('textbox', { name: 'Diameter', exact: true }).fill('8');
-  // One press checks the exact result and, when it builds, commits it.
-  await page.getByRole('button', { name: 'Apply hole' }).click();
-  await expect(
-    page.getByRole('button', { name: /^Checking the result/ })
-  ).toHaveCount(0, { timeout: 20_000 });
-  await expect(page.getByRole('contentinfo')).toContainText('Edited Hole.');
+  await expect(page.getByTestId('command-handle-diameter')).toHaveText(
+    '⌀ 5 mm'
+  );
+  await enterCommandValue(page, 'diameter', '8');
+  // Done waits for the checked result of exactly what it commits.
+  await finishInPlaceCommand(page, 'Edit Hole');
+  await expect(page.getByRole('contentinfo')).toContainText('Edited Hole.', {
+    timeout: 20_000
+  });
   await expect(page.locator('.feature-row', { hasText: /^Hole/ })).toHaveCount(
     1
   );
@@ -1698,8 +1692,8 @@ test('preflights and creates an exact open-top shell', async ({ page }) => {
   await expectBodyCount(page, 1);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
-  // The shell is editable afterwards through the same form, prefilled, which
-  // its row opens directly (F19).
+  // The shell is editable afterwards: its row re-arms the Shell command in
+  // place (U09 phase 7), the wall chip holding the stored thickness.
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   const liveVolume = async () => {
     await bodyCardFromHistory(page);
@@ -1710,23 +1704,17 @@ test('preflights and creates an exact open-top shell', async ({ page }) => {
   };
   const volumeBefore = await liveVolume();
   await page.locator('.feature-row-main', { hasText: 'Shell' }).click();
-  const thickness = page.getByRole('textbox', {
-    name: 'Wall thickness',
-    exact: true
+  await expect(
+    page.getByRole('group', { name: 'Edit Shell command' })
+  ).toContainText('1 open');
+  await expect(page.getByTestId('command-handle-thickness')).toHaveText(
+    'Wall 2 mm'
+  );
+  await enterCommandValue(page, 'thickness', '3');
+  await finishInPlaceCommand(page, 'Edit Shell');
+  await expect(page.getByRole('contentinfo')).toContainText('Edited Shell.', {
+    timeout: 20_000
   });
-  await expect(thickness).toHaveValue('2');
-  await expect(
-    page
-      .getByRole('group', { name: 'Opening faces' })
-      .getByRole('button', { name: /Box 1 · Top face/ })
-  ).toHaveAttribute('aria-pressed', 'true');
-  await thickness.fill('3');
-  // One press checks the exact result and, when it builds, commits it.
-  await page.getByRole('button', { name: 'Apply shell' }).click();
-  await expect(
-    page.getByRole('button', { name: /^Checking the result/ })
-  ).toHaveCount(0, { timeout: 20_000 });
-  await expect(page.getByRole('contentinfo')).toContainText('Edited Shell.');
   await expect(page.locator('.feature-row', { hasText: /^Shell/ })).toHaveCount(
     1
   );
@@ -3497,40 +3485,32 @@ test('opening a history editor preserves an unapplied Move until its choice is s
   await expect(inspector).toHaveCount(0);
   await expect(moveRows).toHaveCount(0);
 
-  // Discard opens that existing feature with its saved parameters and does
-  // not append a Move or accidentally open a new-feature form.
+  // Discard re-arms that existing feature in place (U09 phase 7), seeded
+  // from its saved plane, and does not append a Move or start a new Split.
+  const splitEdit = page.getByRole('group', { name: 'Edit Split command' });
   await row.click();
   await expect(ask).toBeVisible();
   await ask.getByRole('button', { name: 'Discard' }).click();
   await expect(move).toHaveCount(0);
-  await expect(
-    inspector.getByRole('heading', { name: 'Split' })
-  ).toBeVisible();
-  await expect(
-    inspector.getByRole('button', { name: 'Apply split body' })
-  ).toBeVisible();
-  await expect(
-    inspector
-      .getByRole('group', { name: 'Plane origin' })
-      .getByLabel('X', { exact: true })
-  ).toHaveValue('5');
+  await expect(splitEdit).toContainText('Slide the plane');
+  await expect(page.getByTestId('command-handle-offset')).toHaveText(
+    'Offset 0 mm'
+  );
+  await expect(page.locator('form.feature-form')).toHaveCount(0);
   await expect(moveRows).toHaveCount(0);
-  await inspector.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await splitEdit.getByRole('button', { name: /Cancel/ }).click();
+  await expect(splitEdit).toHaveCount(0);
 
-  // Apply commits exactly one Move, then opens the same saved history edit.
+  // Apply commits exactly one Move, then re-arms the same saved history edit.
   const applying = await openPendingEdit();
   await ask.getByRole('button', { name: 'Apply' }).click();
   await expect(move).toHaveCount(0);
   await expect(moveRows).toHaveCount(1);
-  await expect(
-    inspector.getByRole('heading', { name: 'Split' })
-  ).toBeVisible();
-  await expect(
-    inspector.getByRole('button', { name: 'Apply split body' })
-  ).toBeVisible();
+  await expect(splitEdit).toContainText('Slide the plane');
   await expect(row).toBeVisible();
   await expect(row).toHaveAttribute('aria-pressed', 'true');
-  await inspector.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await splitEdit.getByRole('button', { name: /Cancel/ }).click();
+  await expect(splitEdit).toHaveCount(0);
   await moveRows.locator('.feature-row-main').click();
   await expect(
     inspector.getByRole('combobox', { name: 'Body', exact: true })

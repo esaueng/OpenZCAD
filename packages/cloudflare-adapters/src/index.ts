@@ -570,8 +570,9 @@ export const isE2eeContentBlobStorageReady = cachedSchemaProbe(
 /**
  * Whether migration 0036 is installed: identity-signed revocation cutoffs
  * and solo group resets (ADR-024 Phase 4, device removal). Only the
- * device-removal and reset routes, project purge and account erasure name
- * its tables, each after asking this.
+ * device-removal and reset routes, a device-list append that revokes a
+ * device, project purge and account erasure name its tables, each after
+ * asking this.
  */
 export const isE2eeDeviceRemovalStorageReady = cachedSchemaProbe(
   `SELECT COUNT(*) AS ready FROM sqlite_master WHERE type = 'table' AND name IN

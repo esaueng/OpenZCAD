@@ -85,17 +85,23 @@ test('subtracts while keeping the base body, then reopens the choice', async ({
   const subtract = page
     .locator('.feature-row-main', { hasText: 'Subtract' })
     .last();
+  // U09 phase 7: the row re-arms the Subtract in place, its choice in
+  // Options; the pinned row still reads out the result.
   await subtract.click();
   await expect(page.locator('.panel-body')).toContainText('750', {
     timeout: 30_000
   });
-  await expect(page.getByLabel('Keep originals')).toHaveValue('target');
+  const editBar = page.getByRole('group', { name: 'Edit Subtract command' });
+  await editBar.locator('summary').click();
+  await expect(editBar.getByRole('radio', { name: 'First' })).toHaveAttribute(
+    'aria-checked',
+    'true'
+  );
 
   // Back to consuming both: only the result is left on screen.
-  await page.getByLabel('Keep originals').selectOption('');
-  const apply = page.getByRole('button', { name: 'Apply', exact: true });
-  await apply.click();
-  await expect(apply).toHaveCount(0, { timeout: 30_000 });
+  await editBar.getByRole('radio', { name: 'None' }).click();
+  await editBar.locator('summary').click();
+  await finishInPlaceCommand(page, 'Edit Subtract');
   await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
     timeout: 30_000
   });

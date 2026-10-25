@@ -12,16 +12,20 @@
  *   `removeDevice`, `revokeReadOnlyDevices` and `removePasskey`. Before the
  *   identity key signs anything it catches every project up and refuses a
  *   removal it could not finish (encrypted projects but no cutoff storage,
- *   migration 0036). Once the new device list is accepted it signs, with
- *   the identity key the removal already opened, a cutoff for every
+ *   migration 0036). Right before the revoking entry is appended it signs,
+ *   with the identity key the removal already opened, a cutoff for every
  *   encrypted project the account belongs to, owned or (slice 5-7) shared
  *   with it as an editor or a viewer (the next key epoch, and the newest
- *   head), stores it, and rotates each project: a Remove of the revoked
- *   device's leaves (the policy lets any member remove its own identity's
- *   leaves) or an empty Commit, the new epoch's project key and rejoin PSK
- *   under the new account key, and a key archive with a new dedupe secret
- *   (D8). A shared project's other members post their own wraps of the new
- *   epoch when they process the Commit, and read the account's statement
+ *   head), which the append carries: the Worker stores the revocation and
+ *   its statement in one batch, so a removal cut off after the append
+ *   never leaves a revoked device without one. Once the new device list is
+ *   accepted it signs and stores the statement again from a fresh listing,
+ *   and rotates each project: a Remove of the revoked device's leaves (the
+ *   policy lets any member remove its own identity's leaves) or an empty
+ *   Commit, the new epoch's project key and rejoin PSK under the new
+ *   account key, and a key archive with a new dedupe secret (D8). A shared
+ *   project's other members post their own wraps of the new epoch when
+ *   they process the Commit, and read the account's statement
  *   (`GET /api/e2ee/projects/:id/revocation-cutoffs`) to refuse the removed
  *   device's later Commits and versions while still reading its earlier
  *   ones. A rotation that landed later than predicted is re-signed.
@@ -45,6 +49,7 @@ import type {
   E2eeRevocationCutoffRequest,
   E2eeRevocationCutoffResponse,
   E2eeRevocationCutoffsResponse,
+  E2eeSignedStatementRecord,
   ListProjectsResponse
 } from '@openzcad/shared';
 import { desktopFetch } from '../desktopBridge';
@@ -299,7 +304,10 @@ export function revocationStatements(
 
 export type RemovalKind = 'device' | 'passkey' | 'read-only';
 
-/** What a removal knows once its device-list entry is written. */
+/**
+ * What a removal knows once its device-list entry is signed: before the
+ * append (`cutoffsFor`) and after it (`written`).
+ */
 export interface WrittenRemovalStep {
   readonly kind: RemovalKind;
   readonly identityPrivateKey: CryptoKey;
@@ -336,6 +344,17 @@ export interface RemovalParticipant {
    * and bring every project this device holds up to date.
    */
   prepare(account: AccountView): Promise<void>;
+  /**
+   * Right before the device list is written: signs the cutoffs of the entry
+   * about to be appended (`step.written` names it before it lands), for the
+   * append to carry, so the Worker stores the revocation and its statement
+   * together and a removal cut off right after the append still leaves the
+   * statement. Undefined when there is nothing to sign (not a device
+   * removal, or no encrypted projects); never throws.
+   */
+  cutoffsFor?(
+    step: WrittenRemovalStep
+  ): Promise<E2eeSignedStatementRecord | undefined>;
   /**
    * Right after the device list is written, before the account is read
    * again: signs the cutoffs from what `prepare` listed and keeps them
@@ -413,6 +432,48 @@ export function removalParticipant(
   // What `prepare` listed, for `written` to sign without a request.
   let listed: E2eeRemovalProjectRecord[] | null = null;
   const now = options.now ?? Date.now;
+  /**
+   * The statement of `step`'s entry, from the projects listed now; only
+   * when that request fails does the listing from before the identity key
+   * was opened stand in. Undefined for anything but a device removal, or
+   * when there are no encrypted projects (or no cutoff routes) to name.
+   */
+  const signListed = async (
+    step: WrittenRemovalStep
+  ): Promise<E2eeRevocationCutoffRequest | undefined> => {
+    if (step.kind !== 'device' || listed === null) return undefined;
+    const fallback = listed;
+    const current = await api
+      .list()
+      .then((answer) => answer.projects)
+      .catch(() => fallback);
+    if (current.length === 0) return undefined;
+    const cutoffs: ProjectRevocationCutoff[] = [];
+    for (const project of current) {
+      const head = await cutoffHead(options.pins, step.userId, project);
+      cutoffs.push({
+        projectId: project.projectId,
+        // The next epoch: the rotation's, which the revoked device never
+        // learns.
+        cutoffEpoch: project.keyEpochBase + project.epoch + 1,
+        ...(head ? { head } : {})
+      });
+    }
+    const signed = await signRevocationCutoffs(step.identityPrivateKey, {
+      userId: step.userId,
+      generation: step.generation,
+      entrySequence: step.written.sequence,
+      entryHash: step.written.hash,
+      issuedAt: now(),
+      cutoffs
+    });
+    return {
+      generation: step.generation,
+      entrySequence: step.written.sequence,
+      statement: toBase64Url(signed.statement),
+      signature: toBase64Url(signed.signature)
+    };
+  };
   return {
     async prepare(account) {
       // A statement an earlier removal could not store goes first.
@@ -451,43 +512,32 @@ export function removalParticipant(
       }
     },
 
+    async cutoffsFor(step) {
+      try {
+        // The Worker stores it with the entry, which lands only with it.
+        const request = await signListed(step);
+        return (
+          request && {
+            statement: request.statement,
+            signature: request.signature
+          }
+        );
+      } catch {
+        // Sent without; the Worker refuses the append if it needed one.
+        return undefined;
+      }
+    },
+
     async written(step) {
-      if (step.kind !== 'device' || !listed?.length) return;
       try {
         // Listed again now: the device list already revokes the device, so
         // its Commits are fenced off and these epochs are past anything it
-        // committed. Only when that request fails does the listing from
-        // before the identity key was opened stand in.
-        const current = await api
-          .list()
-          .then((answer) => answer.projects)
-          .catch(() => listed!);
-        const cutoffs: ProjectRevocationCutoff[] = [];
-        for (const project of current) {
-          const head = await cutoffHead(options.pins, step.userId, project);
-          cutoffs.push({
-            projectId: project.projectId,
-            cutoffEpoch: project.keyEpochBase + project.epoch + 1,
-            ...(head ? { head } : {})
-          });
-        }
-        const signed = await signRevocationCutoffs(step.identityPrivateKey, {
-          userId: step.userId,
-          generation: step.generation,
-          entrySequence: step.written.sequence,
-          entryHash: step.written.hash,
-          issuedAt: now(),
-          cutoffs
-        });
+        // committed.
+        const request = await signListed(step);
         // Kept, not sent: `complete` signs again from a fresh listing and
         // replaces it; if it never runs, the next removal or page open
         // stores this one.
-        pending.save(step.userId, {
-          generation: step.generation,
-          entrySequence: step.written.sequence,
-          statement: toBase64Url(signed.statement),
-          signature: toBase64Url(signed.signature)
-        });
+        if (request) pending.save(step.userId, request);
       } catch {
         // Nothing kept; `complete` signs from its own listing.
       }

@@ -64,7 +64,11 @@ import {
   isAssistantConsentPath,
   isE2eeAssistantConsentStorageReady
 } from './e2eeAssistantConsents';
-import { handleE2eeProjectRequest, isE2eeProjectPath } from './e2eeProjects';
+import {
+  RouteError,
+  handleE2eeProjectRequest,
+  isE2eeProjectPath
+} from './e2eeProjects';
 import { handleE2eeContactsRequest, isE2eeContactsPath } from './e2eeContacts';
 import {
   handleE2eeInvitationRequest,
@@ -72,8 +76,11 @@ import {
   type E2eeInvitationHost
 } from './e2eeInvitations';
 import {
+  MAX_APPEND_CUTOFFS_CHARS,
+  appendedRevocationCutoffs,
   handleE2eeDeviceRemovalRequest,
-  isE2eeDeviceRemovalPath
+  isE2eeDeviceRemovalPath,
+  refuseCutoffsIncomplete
 } from './e2eeDeviceRemoval';
 import {
   blobBucket,
@@ -212,8 +219,11 @@ function record(value: unknown, what: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-async function readBody(request: Request): Promise<Record<string, unknown>> {
-  if (Number(request.headers.get('content-length') ?? '0') > MAX_BODY_BYTES) {
+async function readBody(
+  request: Request,
+  maxBytes = MAX_BODY_BYTES
+): Promise<Record<string, unknown>> {
+  if (Number(request.headers.get('content-length') ?? '0') > maxBytes) {
     refuse(413, 'E2EE_REQUEST_TOO_LARGE', 'Request body is too large.');
   }
   const reader = request.body?.getReader();
@@ -224,7 +234,7 @@ async function readBody(request: Request): Promise<Record<string, unknown>> {
     const { done, value } = await reader.read();
     if (done) break;
     size += value.byteLength;
-    if (size > MAX_BODY_BYTES) {
+    if (size > maxBytes) {
       await reader.cancel();
       refuse(413, 'E2EE_REQUEST_TOO_LARGE', 'Request body is too large.');
     }
@@ -1079,7 +1089,8 @@ async function refuseIfSigned(
 async function handleAppend(
   db: WriteDatabase,
   userId: string,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  projectsEnabled: boolean
 ): Promise<E2eeAccountResponse> {
   const { signed, entryText, signatureText } = signedEntryOf(body);
   const wraps = parseWraps(body.wraps);
@@ -1178,6 +1189,16 @@ async function handleAppend(
       invalid(`The account key is not sealed to ${device.deviceId}`);
     }
   }
+  // A device revocation lands with its signed cutoff statement, or not at
+  // all, for an account with encrypted projects (e2eeDeviceRemoval.ts).
+  const cutoffs = await appendedRevocationCutoffs(
+    db,
+    userId,
+    current.generation,
+    list,
+    body.cutoffs,
+    projectsEnabled
+  );
   const now = new Date().toISOString();
   const entryHash = toHex(list.headHash);
   const auth = db.authorization;
@@ -1194,6 +1215,9 @@ async function handleAppend(
     ]
   };
   const revokedIds = list.head.revoked.map((r) => r.id);
+  // The projects its cutoffs were checked against must not move before
+  // the batch runs; nothing lands if they did.
+  const projectsFence = cutoffs?.fence ?? { sql: '1', binds: [] };
   const statements: D1PreparedStatement[] = [
     db
       .prepare(
@@ -1202,7 +1226,8 @@ async function handleAppend(
          SELECT ?, ?, ?, ?, ?, ?, ?
          WHERE ${auth.sql} AND (SELECT MAX(sequence) FROM e2ee_device_list_entries
                 WHERE user_id = ? AND generation = ?) = ?
-           AND (SELECT MAX(generation) FROM e2ee_identities WHERE user_id = ?) = ?`
+           AND (SELECT MAX(generation) FROM e2ee_identities WHERE user_id = ?) = ?
+           AND ${projectsFence.sql}`
       )
       .bind(
         userId,
@@ -1217,7 +1242,8 @@ async function handleAppend(
         current.generation,
         before.sequence,
         userId,
-        current.generation
+        current.generation,
+        ...projectsFence.binds
       ),
     ...(rotation
       ? [
@@ -1262,10 +1288,14 @@ async function handleAppend(
         guard
       )
     ),
-    ...(history ? [insertHistory(db, userId, history, now, guard)] : [])
+    ...(history ? [insertHistory(db, userId, history, now, guard)] : []),
+    ...(cutoffs ? [cutoffs.insert(guard, now)] : [])
   ];
   const results = await db.batch(statements);
   if ((results[0]?.meta?.changes ?? 0) !== 1) {
+    // A project created, shared, committed to or saved to since the
+    // cutoffs were checked: the browser signs them again.
+    if (await cutoffs?.moved()) refuseCutoffsIncomplete();
     refuse(
       409,
       'E2EE_DEVICE_LIST_CONFLICT',
@@ -2093,7 +2123,15 @@ export async function handleE2eeRequest(
       return json(await handleSetup(db, userId, await readBody(request)), 201);
     }
     if (pathname === '/api/e2ee/device-list' && method === 'POST') {
-      return json(await handleAppend(db, userId, await readBody(request)));
+      return json(
+        await handleAppend(
+          db,
+          userId,
+          // Room for a revocation's cutoff statement next to the entry.
+          await readBody(request, MAX_BODY_BYTES + MAX_APPEND_CUTOFFS_CHARS),
+          projectsEnabled
+        )
+      );
     }
     if (pathname === '/api/e2ee/identity' && method === 'POST') {
       return json(
@@ -2183,6 +2221,14 @@ export async function handleE2eeRequest(
   } catch (error) {
     if (error instanceof E2eeRouteError) {
       return json({ error: error.message, code: error.code }, error.status);
+    }
+    if (error instanceof RouteError) {
+      // A refusal of the shared project-route helpers (the cutoffs a
+      // device-list append carries).
+      return json(
+        { error: error.message, code: error.code, ...error.extra },
+        error.status
+      );
     }
     throw error;
   } finally {

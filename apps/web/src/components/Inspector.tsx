@@ -72,7 +72,7 @@ import {
   primitivePlacement
 } from '../lib/primitivePlacement';
 import type { AnyCommand } from '@openzcad/command-system';
-import { modelingFeatureIsEditable } from '../lib/modelingOperations';
+import { inPlaceToolForFeature } from '../lib/inPlace/edit';
 import {
   evalParamValue,
   FEATURE_KIND_LABELS,
@@ -167,8 +167,13 @@ export interface InspectorCallbacks {
   onApplyTextSketch(feature: FeatureNode, value: TextSketchFormValue): void;
   /** Re-enters viewport sketch mode for the feature's sketch. */
   onEditSketchInViewport(feature: FeatureNode): void;
-  /** Reopens a modeling feature in its creation form. */
+  /**
+   * Reopens a modeling feature in its creation form, or (U09) re-arms the
+   * in-place command that made it.
+   */
   onEditModelingFeature?(feature: FeatureNode): void;
+  /** The feature an in-place command is editing now, if any. */
+  inPlaceEditFeatureId?: FeatureId | null;
   onApplyExtrude(feature: FeatureNode, value: ExtrudeFormValue): void;
   onPreviewExtrude(feature: FeatureNode, value: ExtrudeFormValue | null): void;
   extrudeBusy?: boolean;
@@ -2218,6 +2223,22 @@ export function Inspector(props: InspectorProps) {
       );
     }
 
+    // U09 phase 7: a feature an in-place command made is edited by that
+    // command, on the model, never by a form here; the panel keeps its
+    // readout. Its Edit button re-arms the command if it was not armed.
+    const inPlaceTool = inPlaceToolForFeature(data);
+    if (inPlaceTool) form = null;
+    const editingInPlace =
+      inPlaceTool !== null &&
+      props.inPlaceEditFeatureId === selectedFeature.featureId;
+    // As the first half is: from the document on screen, so an edit's
+    // preview (a moved split plane) shows both halves as they will be.
+    const splitHalf =
+      data.featureKind === 'split'
+        ? (props.massPropertiesDocument?.derived.bodyRepresentations[
+            data.secondBodyId
+          ] ?? props.bodyRepresentations?.[data.secondBodyId])
+        : undefined;
     const featurePanel = (
       <>
         {selectedTopology?.kind === 'edge' && (
@@ -2256,18 +2277,28 @@ export function Inspector(props: InspectorProps) {
         {/* Selecting a modeling feature opens its form directly (F19), so
             this only shows when that was refused — exact geometry still
             loading, say — and is the way to retry once it is ready. */}
-        {(modelingFeatureIsEditable(data.featureKind) ||
-          data.featureKind === 'datum-plane' ||
-          data.featureKind === 'datum-axis') &&
-          props.onEditModelingFeature && (
-            <button
-              type="button"
-              className="secondary feature-edit-launch"
-              onClick={() => props.onEditModelingFeature?.(selectedFeature)}
-            >
-              Edit {TOOL_META[data.featureKind].label.toLowerCase()}
-            </button>
-          )}
+        {inPlaceTool
+          ? !editingInPlace &&
+            props.onEditModelingFeature && (
+              <button
+                type="button"
+                className="secondary feature-edit-launch"
+                onClick={() => props.onEditModelingFeature?.(selectedFeature)}
+              >
+                Edit {TOOL_META[inPlaceTool].label.toLowerCase()}
+              </button>
+            )
+          : (data.featureKind === 'datum-plane' ||
+              data.featureKind === 'datum-axis') &&
+            props.onEditModelingFeature && (
+              <button
+                type="button"
+                className="secondary feature-edit-launch"
+                onClick={() => props.onEditModelingFeature?.(selectedFeature)}
+              >
+                Edit {TOOL_META[data.featureKind].label.toLowerCase()}
+              </button>
+            )}
         {form}
         {selectedTopology?.kind === 'face' &&
           selectedBody?.source === 'imported-step' && (
@@ -2298,12 +2329,29 @@ export function Inspector(props: InspectorProps) {
           />
         )}
         {selectedBody && (
-          <BodyStats
-            body={selectedBody}
-            units={units}
-            document={props.massPropertiesDocument}
-            worker={props.massPropertiesWorker}
-          />
+          <>
+            {splitHalf && (
+              <h3 className="section-title">{selectedBody.name}</h3>
+            )}
+            <BodyStats
+              body={selectedBody}
+              units={units}
+              document={props.massPropertiesDocument}
+              worker={props.massPropertiesWorker}
+            />
+          </>
+        )}
+        {/* A split leaves two halves, and its row is where both are read. */}
+        {selectedBody && splitHalf && (
+          <>
+            <h3 className="section-title">{splitHalf.name}</h3>
+            <BodyStats
+              body={splitHalf}
+              units={units}
+              document={props.massPropertiesDocument}
+              worker={props.massPropertiesWorker}
+            />
+          </>
         )}
         {selectedTopology?.kind !== 'body' && selectedTopology && (
           <div className="topology-selection">
