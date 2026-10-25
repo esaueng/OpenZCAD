@@ -25685,16 +25685,14 @@ export function App() {
                       } else {
                         // Refused: back to the value shown when the chip was
                         // tapped, undoing any in-range keystroke previews.
+                        // Set or unset as it was, as Escape restores it.
                         commandSetterRef.current?.(valueId, baseline);
-                        if (keypad.baselineRaw !== undefined) {
-                          inPlace.setValue(
-                            valueId,
-                            baseline,
-                            keypad.baselineRaw
-                          );
-                        } else {
-                          inPlace.previewValue(valueId, baseline);
-                        }
+                        inPlace.restoreValue(
+                          valueId,
+                          baseline,
+                          keypad.baselineRaw,
+                          commandKeypadTouchedRef.current
+                        );
                       }
                     }}
                     onCancel={cancelOpenKeypad}

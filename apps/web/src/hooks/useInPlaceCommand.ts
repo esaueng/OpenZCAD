@@ -597,7 +597,12 @@ export function useInPlaceCommand(
   }, []);
 
   const writeValue = useCallback(
-    (valueId: string, value: number, raw: string | undefined) => {
+    (
+      valueId: string,
+      value: number,
+      raw: string | undefined,
+      typed: boolean
+    ) => {
       const current = sessionRef.current;
       const valueSpec = current
         ? IN_PLACE_TOOL_SPECS[current.tool].values.find(
@@ -606,11 +611,12 @@ export function useInPlaceCommand(
         : undefined;
       // An expression is stored as typed, so it must already be a value the
       // tool accepts: clamping it for the preview would show one value and
-      // commit another.
+      // commit another. Nor is a typed end of an open range nudged inside
+      // it, where its chip would still read as the refused end.
       if (
         current &&
         valueSpec &&
-        raw !== undefined &&
+        (raw !== undefined || (typed && valueSpec.exclusive)) &&
         clampValue(valueSpec, value) !== value
       ) {
         const whole = valueSpec.integer ? 'whole numbers ' : '';
@@ -650,12 +656,13 @@ export function useInPlaceCommand(
     []
   );
   const previewValue = useCallback(
-    (valueId: string, value: number) => writeValue(valueId, value, undefined),
+    (valueId: string, value: number) =>
+      writeValue(valueId, value, undefined, false),
     [writeValue]
   );
   const setValue = useCallback(
     (valueId: string, value: number, raw?: string) =>
-      writeValue(valueId, value, raw),
+      writeValue(valueId, value, raw, true),
     [writeValue]
   );
   const restoreValue = useCallback(

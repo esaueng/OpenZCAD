@@ -482,6 +482,12 @@ describe('useInPlaceCommand: hole step chips', () => {
       );
     });
     expect(accepted).toBe(true);
+    // A typed end of the open range is refused too, not nudged inside it.
+    act(() => {
+      accepted = hook.result.current.setValue('countersinkAngleDeg', 180);
+    });
+    expect(accepted).toBe(false);
+    expect(hook.result.current.values.countersinkAngleDeg).toBe(0.5);
   });
 
   it('a canceled chip entry leaves the step following the bore', async () => {
