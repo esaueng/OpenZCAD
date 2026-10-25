@@ -18,9 +18,18 @@ declare global {
   interface Window {
     __faceDragLog?: { t: number; name: string; value: string | null }[];
     __holdFinal?: { hold: boolean; held: number; release(): void };
+    __holdPreviews?: { hold: boolean; held: number; deliver(): void };
     __openzcadE2EExactFaceDrag?: boolean;
-    __slowAnalysis?: { armed: boolean; held: number };
+    __slowAnalysis?: {
+      armed: boolean;
+      held: number;
+      /** Hold until `release()` instead of for 700 ms. */
+      manual?: boolean;
+      release?: () => void;
+    };
     __cardlessFrames?: number;
+    __afterCommit?: { waiting: number; unselectedRows: number };
+    __bodyCardFrames?: number;
   }
 }
 
@@ -111,7 +120,11 @@ async function recordCanvas(canvas: Locator) {
       }
     }).observe(element, {
       attributes: true,
-      attributeFilter: ['data-e2e-handle-x', 'data-e2e-height-proxy-offset']
+      attributeFilter: [
+        'data-e2e-handle-x',
+        'data-e2e-height-proxy-offset',
+        'data-e2e-offset-ghost'
+      ]
     });
   });
 }
@@ -374,7 +387,15 @@ test('the face an exact preview redrew can still be grabbed after a refusal', as
  */
 async function slowAnalysis(page: Page) {
   await page.addInitScript(() => {
-    window.__slowAnalysis = { armed: false, held: 0 };
+    const flushes: (() => void)[] = [];
+    window.__slowAnalysis = {
+      armed: false,
+      held: 0,
+      release() {
+        this.manual = false;
+        for (const flush of flushes.splice(0)) flush();
+      }
+    };
     const descriptor = Object.getOwnPropertyDescriptor(
       Worker.prototype,
       'onmessage'
@@ -408,7 +429,8 @@ async function slowAnalysis(page: Page) {
           ) {
             gate.held += 1;
             holdingUntil = performance.now() + 700;
-            setTimeout(flush, 700);
+            if (gate.manual) flushes.push(flush);
+            else setTimeout(flush, 700);
           }
         });
       }
@@ -454,4 +476,296 @@ test('the committed face stays selected while the follow-up rebuild analyses', a
     'Box 1 · Front face'
   );
   expect(await page.evaluate(() => window.__cardlessFrames)).toBe(0);
+});
+
+test('a commit reads as complete while its follow-up rebuild analyses', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  await slowAnalysis(page);
+  const { canvas, handle } = await armedBox(page);
+  const drag = async (value: number) => {
+    const x = Number(await canvas.getAttribute('data-e2e-handle-x'));
+    const y = Number(await canvas.getAttribute('data-e2e-handle-y'));
+    const bounds = (await canvas.boundingBox())!;
+    await page.mouse.move(bounds.x + x, bounds.y + y);
+    await page.mouse.down();
+    await page.mouse.move(
+      bounds.x + x + handle.dx * handle.pixels * value,
+      bounds.y + y + handle.dy * handle.pixels * value,
+      { steps: 8 }
+    );
+    await page.mouse.up();
+  };
+  await drag(3);
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Offset face' })
+  ).toHaveCount(1, { timeout: 30_000 });
+  // From here the follow-up rebuild's analysis is held for 700 ms.
+  await page.evaluate(() => {
+    window.__slowAnalysis!.armed = true;
+    window.__afterCommit = { waiting: 0, unselectedRows: 0 };
+    const sample = () => {
+      const tally = window.__afterCommit!;
+      if (
+        [...document.querySelectorAll('button')].some((button) =>
+          /Waiting for exact geometry/.test(
+            `${button.getAttribute('aria-label') ?? ''} ${button.title}`
+          )
+        )
+      )
+        tally.waiting += 1;
+      if (!document.querySelector('.feature-row.selected'))
+        tally.unselectedRows += 1;
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+  await drag(2);
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Offset face' })
+  ).toHaveCount(2, { timeout: 30_000 });
+  await expect
+    .poll(() => page.evaluate(() => window.__slowAnalysis!.held))
+    .toBeGreaterThan(0);
+  // Through the held analysis: no tool waits, the History row stays picked.
+  await page.waitForTimeout(900);
+  expect(await page.evaluate(() => window.__afterCommit)).toEqual({
+    waiting: 0,
+    unselectedRows: 0
+  });
+  // A drag released inside a held window is not refused either.
+  const held = await page.evaluate(() => window.__slowAnalysis!.held);
+  await drag(1);
+  await expect
+    .poll(() => page.evaluate(() => window.__slowAnalysis!.held))
+    .toBeGreaterThan(held);
+  await drag(-1);
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Offset face' })
+  ).toHaveCount(3, { timeout: 30_000 });
+  await expect(
+    page.getByText('still rebuilding', { exact: false })
+  ).toHaveCount(0);
+});
+
+test('applying a fillet goes straight from its preview to the blend face', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  await slowAnalysis(page);
+  await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Fillet continuity');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  const canvas = page.locator('.viewer-host canvas');
+  await expect
+    .poll(
+      () =>
+        canvas.evaluate(
+          (element) =>
+            new Promise<boolean>((resolve) => {
+              setTimeout(() => resolve(false), 1500);
+              element.dispatchEvent(
+                new CustomEvent('openzcad:e2e-select-edge', {
+                  detail: {
+                    resolve: (selection: unknown) => resolve(selection !== null)
+                  }
+                })
+              );
+            })
+        ),
+      { timeout: 30_000 }
+    )
+    .toBe(true);
+  await page.getByTestId('direct-manipulation-value').click();
+  const keypad = page.getByRole('dialog', { name: 'Radius value' });
+  await keypad.getByRole('textbox').fill('2');
+  await page.evaluate(() => {
+    window.__slowAnalysis!.armed = true;
+    window.__bodyCardFrames = 0;
+    const sample = () => {
+      // The whole-body card offers Move; a face's card never does.
+      if (document.querySelector('[aria-label="Selection: Move"]'))
+        window.__bodyCardFrames! += 1;
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+  await keypad.getByRole('button', { name: 'Apply radius' }).click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Fillet' })
+  ).toHaveCount(1, { timeout: 30_000 });
+  await expect
+    .poll(() => page.evaluate(() => window.__slowAnalysis!.held))
+    .toBeGreaterThan(0);
+  await page.waitForTimeout(1200);
+  await expect(page.locator('.selection-card')).toContainText('Blend face');
+  expect(await page.evaluate(() => window.__bodyCardFrames)).toBe(0);
+});
+
+test('a tool that needs the finished model waits for a genuine rebuild', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  await slowAnalysis(page);
+  const { canvas, handle } = await armedBox(page);
+  await page.mouse.move(handle.x, handle.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    handle.x + handle.dx * handle.pixels * 3,
+    handle.y + handle.dy * handle.pixels * 3,
+    { steps: 8 }
+  );
+  await expect(canvas).toHaveAttribute('data-e2e-height-proxy-offset', '3');
+  await page.mouse.up();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Offset face' })
+  ).toHaveCount(1, { timeout: 30_000 });
+  await page.keyboard.press('Escape');
+  // A rename is a real rebuild: the model on screen is the one it replaces.
+  // Held until released: CI runners are slow enough that a timed hold can
+  // end before the tool button is pressed.
+  await page.evaluate(() => {
+    window.__slowAnalysis!.armed = true;
+    window.__slowAnalysis!.manual = true;
+  });
+  const objects = page.getByRole('list', { name: 'Objects' });
+  await objects.getByRole('button', { name: 'Rename body Box 1' }).click();
+  const field = objects.getByRole('textbox', { name: 'Rename body Box 1' });
+  await field.fill('Plate');
+  await field.press('Enter');
+  await expect
+    .poll(() => page.evaluate(() => window.__slowAnalysis!.held))
+    .toBeGreaterThan(0);
+  // The rail shows readiness a beat late (so a quick rebuild never blinks
+  // it), but launches check it at once. Whichever a runner's speed lands on,
+  // Hole must not open: a click while the rail still shows it ready is
+  // refused with a status, and once the rail catches up it is disabled and
+  // names the wait.
+  const hole = page.getByRole('button', { name: /^Hole/ }).first();
+  await hole.click({ timeout: 1_000 }).catch(() => undefined);
+  await expect(hole).toBeDisabled();
+  await expect(hole).toHaveAccessibleName(/Waiting for exact geometry/);
+  await expect(page.getByRole('region', { name: /^Hole/ })).toHaveCount(0);
+  await page.evaluate(() => window.__slowAnalysis!.release!());
+});
+
+/**
+ * Holds the worker's exact preview replies until the spec delivers them, so
+ * each typed value's frame lands exactly when the spec says.
+ */
+async function holdPreviews(page: Page) {
+  await page.addInitScript(() => {
+    const held: (() => void)[] = [];
+    window.__holdPreviews = {
+      hold: false,
+      held: 0,
+      deliver() {
+        for (const send of held.splice(0)) send();
+      }
+    };
+    const descriptor = Object.getOwnPropertyDescriptor(
+      Worker.prototype,
+      'onmessage'
+    )!;
+    Object.defineProperty(Worker.prototype, 'onmessage', {
+      ...descriptor,
+      set(listener: (event: MessageEvent) => void) {
+        descriptor.set!.call(this, (event: MessageEvent) => {
+          const gate = window.__holdPreviews!;
+          if (
+            gate.hold &&
+            (event.data as { type?: string }).type === 'preview-geometry'
+          ) {
+            gate.held += 1;
+            held.push(() => listener.call(this, event));
+          } else listener.call(this, event);
+        });
+      }
+    });
+  });
+}
+
+const frames = (page: Page) =>
+  page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      )
+  );
+
+test('typing an offset keeps the ghost and handle while exact previews land', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  await holdPreviews(page);
+  const { canvas } = await armedBox(page);
+  await recordCanvas(canvas);
+  await page.evaluate(() => {
+    window.__holdPreviews!.hold = true;
+  });
+  const held = () => page.evaluate(() => window.__holdPreviews!.held);
+  await page.getByTestId('direct-manipulation-value').click();
+  // A box side reads its span: 18 mm deep, so 20 is a 2 mm pull.
+  const keypad = page.getByRole('dialog', { name: 'Total value' });
+  await expect(keypad).toBeVisible();
+  const field = keypad.getByRole('textbox');
+  const typing = await now(page);
+  let landed = 0;
+  for (const value of ['20', '23', '26']) {
+    await field.fill(value);
+    await expect(canvas).toHaveAttribute('data-e2e-offset-ghost', '1');
+    // The exact frame for this value is in hand; let it land.
+    await expect.poll(held, { timeout: 30_000 }).toBeGreaterThan(landed);
+    landed = await held();
+    await page.evaluate(() => window.__holdPreviews!.deliver());
+    await frames(page);
+    await frames(page);
+  }
+  // The ghost of the part as it was, and the handle, stayed up throughout.
+  expect(await removals(page, 'data-e2e-offset-ghost', typing)).toBe(0);
+  expect(await removals(page, 'data-e2e-handle-x', typing)).toBe(0);
+
+  // Back at the baseline there is no change to show, so no ghost; the next
+  // change takes it again.
+  await field.fill('18');
+  await expect(canvas).not.toHaveAttribute('data-e2e-offset-ghost', /.+/);
+  await field.fill('22');
+  await expect(canvas).toHaveAttribute('data-e2e-offset-ghost', '1');
+
+  // Escape abandons the typed value: no ghost survives it, nothing is added.
+  await page.evaluate(() => {
+    window.__holdPreviews!.hold = false;
+    window.__holdPreviews!.deliver();
+  });
+  await field.press('Escape');
+  await expect(keypad).toBeHidden();
+  await expect(canvas).not.toHaveAttribute('data-e2e-offset-ghost', /.+/);
+  await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Offset face' })
+  ).toHaveCount(0);
+
+  // Applying a typed value commits it cleanly.
+  await page.getByTestId('direct-manipulation-value').click();
+  await expect(keypad).toBeVisible();
+  await field.fill('21');
+  await field.press('Enter');
+  await expect(page.getByText('Offset face by', { exact: false })).toBeVisible({
+    timeout: 30_000
+  });
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Offset face' })
+  ).toHaveCount(1);
+  await expect(canvas).not.toHaveAttribute('data-e2e-offset-ghost', /.+/);
+  await expect(
+    page.getByRole('region', { name: 'Offset Face operation' })
+  ).toBeVisible();
 });

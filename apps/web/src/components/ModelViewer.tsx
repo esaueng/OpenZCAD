@@ -221,6 +221,7 @@ import {
   regionChipState,
   type OffsetChipMode
 } from '../lib/offsetChip';
+import { faceDepthBehind, faceSamples } from '../lib/faceDepthBehind';
 import { setLiveDiameter } from '../lib/liveLabels';
 import type { SelectionCalloutContent } from '../lib/selectionCallout';
 import {
@@ -431,6 +432,12 @@ export interface OffsetHandleTarget {
    * let go, but cannot be grabbed until the edit commits or is refused.
    */
   locked?: boolean;
+  /**
+   * A value is being typed on the keypad. The typed value drives the handle,
+   * its ghost and the drag preview; exact frames landing meanwhile re-derive
+   * this target without replacing any of them.
+   */
+  entry?: boolean;
 }
 
 /**
@@ -470,6 +477,11 @@ export interface CylinderRadiusHandleTarget {
   originalRadius: number;
   /** True when a radial scene transform exactly represents this body. */
   smoothPreview: boolean;
+  /**
+   * The released radius is being validated: the handle stays where it was
+   * let go, but cannot be grabbed until the edit commits or is refused.
+   */
+  locked?: boolean;
 }
 
 interface VisualProxyController {
@@ -1779,6 +1791,49 @@ function sameOffsetHandleTarget(
   );
 }
 
+/** Whether two cylinder handles resize the same wall from the same pick. */
+function sameCylinderHandleTarget(
+  a: CylinderRadiusHandleTarget,
+  b: CylinderRadiusHandleTarget
+): boolean {
+  const same = (
+    u: { x: number; y: number; z: number },
+    v: { x: number; y: number; z: number }
+  ) => u.x === v.x && u.y === v.y && u.z === v.z;
+  return (
+    a.bodyId === b.bodyId &&
+    a.topologyId === b.topologyId &&
+    a.originalRadius === b.originalRadius &&
+    same(a.point, b.point) &&
+    same(a.radialDirection, b.radialDirection) &&
+    same(a.axisStart, b.axisStart) &&
+    same(a.axisEnd, b.axisEnd)
+  );
+}
+
+type EdgeRigPlacement = NonNullable<EdgeHandleTarget['placement']>;
+
+/** Whether two edge handles round the same edge with the same tool. */
+function sameEdgeHandleTarget(
+  a: EdgeHandleTarget,
+  b: EdgeHandleTarget
+): boolean {
+  return (
+    a.bodyId === b.bodyId && a.topologyId === b.topologyId && a.op === b.op
+  );
+}
+
+function sameEdgeRigPlacement(a: EdgeRigPlacement, b: EdgeRigPlacement) {
+  const near = (
+    u: { x: number; y: number; z: number },
+    v: { x: number; y: number; z: number }
+  ) =>
+    Math.abs(u.x - v.x) < 1e-9 &&
+    Math.abs(u.y - v.y) < 1e-9 &&
+    Math.abs(u.z - v.z) < 1e-9;
+  return near(a.origin, b.origin) && near(a.direction, b.direction);
+}
+
 function bodyExtentBehind(
   object: THREE.Object3D,
   origin: THREE.Vector3,
@@ -1787,11 +1842,7 @@ function bodyExtentBehind(
   let least = Number.POSITIVE_INFINITY;
   const vertex = new THREE.Vector3();
   object.updateWorldMatrix(true, true);
-  object.traverse((child) => {
-    if (!(child instanceof THREE.Mesh)) {
-      return;
-    }
-    const mesh = child as THREE.Mesh<THREE.BufferGeometry, THREE.Material>;
+  forEachMesh(object, (mesh) => {
     const position = mesh.geometry.getAttribute('position') as
       THREE.BufferAttribute | THREE.InterleavedBufferAttribute | undefined;
     if (!position) {
@@ -1800,7 +1851,7 @@ function bodyExtentBehind(
     for (let index = 0; index < position.count; index += 1) {
       vertex
         .fromBufferAttribute(position, index)
-        .applyMatrix4(child.matrixWorld);
+        .applyMatrix4(mesh.matrixWorld);
       const along = vertex.sub(origin).dot(direction);
       if (along < least) {
         least = along;
@@ -2239,6 +2290,15 @@ export function ModelViewer({
     context: SceneContext;
     nonce: number;
   } | null>(null);
+  /**
+   * The normal-to-face request whose glide has started. The request is never
+   * cleared, so without this every later change of `bodies` (a selection, a
+   * drag, a preview, a commit) glided the camera back to that face.
+   */
+  const handledNormalToFaceRef = useRef<{
+    context: SceneContext;
+    nonce: number;
+  } | null>(null);
   const onViewChangeRef = useRef(onViewChange);
   onViewChangeRef.current = onViewChange;
   const onGeometryPresentedRef = useRef(onGeometryPresented);
@@ -2291,8 +2351,17 @@ export function ModelViewer({
   const onDirectManipulationChangeRef = useRef(onDirectManipulationChange);
   onDirectManipulationChangeRef.current = onDirectManipulationChange;
   const edgeHandleOpRef = useRef<'fillet' | 'chamfer'>('fillet');
+  /** The handle the live cylinder-radius rig was built for. */
+  const cylinderRigBuiltRef = useRef<{
+    handle: CylinderRadiusHandleTarget;
+  } | null>(null);
   /** Live edge-radius rig; owned by the edgeHandle effect below. */
   const edgeRigRef = useRef<DragRig | null>(null);
+  /** The handle and frame the live edge rig was built for. */
+  const edgeRigBuiltRef = useRef<{
+    handle: EdgeHandleTarget;
+    placement: EdgeRigPlacement;
+  } | null>(null);
   const edgeDragActiveRef = useRef(false);
   const sketchModeRef = useRef(sketchMode);
   sketchModeRef.current = sketchMode;
@@ -3981,6 +4050,8 @@ export function ModelViewer({
     dimensionPrefix.addEventListener('click', toggleCylinderDimensionMode);
     const openExactEntry = () => {
       const cylinderRig = cylinderRadiusRigRef.current;
+      // A handle held through validation shows its value but takes no entry.
+      if (cylinderRig && cylinderRadiusHandleRef.current?.locked) return true;
       if (
         cylinderRig &&
         onOpenCylinderRadiusKeypadRef.current(
@@ -4059,9 +4130,17 @@ export function ModelViewer({
         const value = entry.rig ? entry.rig.value() : view.value;
         const scale =
           (entry.rig?.group.userData.gizmoScale as number | undefined) ?? 1;
+        // A chip-only value's anchor is read live: it may follow another
+        // value (a hole step's rim), which rebuilds no rig.
         const anchor = entry.rig
           ? entry.rig.chipAnchor(scale)
-          : (entry.anchor ?? new THREE.Vector3());
+          : view.kind === 'chip'
+            ? new THREE.Vector3(
+                view.params.anchor.x,
+                view.params.anchor.y,
+                view.params.anchor.z
+              )
+            : (entry.anchor ?? new THREE.Vector3());
         const ndc = anchor.clone().project(context.activeCamera);
         if (ndc.z > 1 || ndc.z < -1) {
           entry.chip.hidden = true;
@@ -4194,7 +4273,11 @@ export function ModelViewer({
       } else if (offsetRigRef.current) {
         // A typed value previews like a drag: solid over the old part's
         // ghost, taken before the proxy deforms the body.
+        // Back at zero there is no change to show: drop the ghost (typed
+        // entry keeps it across exact frames, so nothing else would), and
+        // take it again for the next nonzero value.
         if (Math.abs(value) > 1e-9) beginOffsetGhost();
+        else clearOffsetGhost();
         offsetRigRef.current.setValue(value);
         queueOffsetBodyProxy(value);
       } else {
@@ -8975,6 +9058,12 @@ export function ModelViewer({
         const handleHits = context.raycaster
           .intersectObjects(armedCylinderRig.group.children, true)
           .filter((hit) => hit.object.userData.directHandle === true);
+        if (handleHits.length > 0 && cylinderTarget.locked) {
+          lockedHandlePointerId = event.pointerId;
+          gestures.capture(event, null);
+          event.preventDefault();
+          return;
+        }
         if (handleHits.length > 0) {
           const screen = screenDirectionFor(
             armedCylinderRig.group.position,
@@ -10895,7 +10984,9 @@ export function ModelViewer({
       offsetBodyProxyControllerRef.current?.discard();
       // Exact frames replace bodies mid-drag; once the drag is over, the
       // next bodies are the committed or restored part.
-      if (!offsetDragActiveRef.current) offsetGhostClearRef.current?.();
+      // Typed entry keeps its ghost the same way while exact frames land.
+      if (!offsetDragActiveRef.current && !offsetHandleRef.current?.entry)
+        offsetGhostClearRef.current?.();
       // The manager owns hover-slot geometry even while the slots are
       // parented under bodies, so it must detach them before body disposal.
       context.selection.resetForRebuild();
@@ -11923,10 +12014,32 @@ export function ModelViewer({
     if (!context || cylinderRadiusDragActiveRef.current) {
       return;
     }
-    if (cylinderRadiusRigRef.current) {
-      retireRig(cylinderRadiusRigRef.current, retiringRigsRef.current);
+    const previous = cylinderRadiusRigRef.current;
+    const built = cylinderRigBuiltRef.current;
+    // Validating a released radius re-derives the same handle, locked: keep
+    // the rig, its value and the proxy where the drag left them.
+    if (
+      previous &&
+      built &&
+      cylinderRadiusHandle?.locked &&
+      sameCylinderHandleTarget(built.handle, cylinderRadiusHandle)
+    ) {
+      built.handle = cylinderRadiusHandle;
+      return;
+    }
+    // A refused release re-arms the same wall: that handle takes over from
+    // the held one at once instead of fading out and back in.
+    const takesOver =
+      previous !== null &&
+      cylinderRadiusHandle !== null &&
+      built?.handle.locked === true &&
+      sameCylinderHandleTarget(built.handle, cylinderRadiusHandle);
+    if (previous) {
+      if (takesOver) previous.dispose();
+      else retireRig(previous, retiringRigsRef.current);
     }
     cylinderRadiusRigRef.current = null;
+    cylinderRigBuiltRef.current = null;
     if (offsetChipRef.current) {
       offsetChipRef.current.hidden = true;
     }
@@ -11942,19 +12055,27 @@ export function ModelViewer({
       direction: cylinderRadiusHandle.radialDirection,
       originalRadius: cylinderRadiusHandle.originalRadius
     });
+    if (takesOver) rig.appear?.();
     context.scene.add(rig.group);
     context.scene.add(rig.worldGroup);
     cylinderRadiusRigRef.current = rig;
+    cylinderRigBuiltRef.current = { handle: cylinderRadiusHandle };
     context.requestRender();
-    return () => {
-      if (!cylinderRadiusDragActiveRef.current) {
-        retireRig(rig, retiringRigsRef.current);
-        if (cylinderRadiusRigRef.current === rig) {
-          cylinderRadiusRigRef.current = null;
-        }
-      }
-    };
   }, [cylinderRadiusHandle]);
+
+  // The cylinder rig effect retires its own rig when the handle changes; this
+  // retires the last one when the viewer goes.
+  useEffect(
+    () => () => {
+      const rig = cylinderRadiusRigRef.current;
+      if (rig && !cylinderRadiusDragActiveRef.current) {
+        retireRig(rig, retiringRigsRef.current);
+        cylinderRadiusRigRef.current = null;
+        cylinderRigBuiltRef.current = null;
+      }
+    },
+    []
+  );
 
   // Offset-face handle: built when a face is armed, torn down on deselect or
   // commit. Never rebuilt mid-drag (the drag holds offsetDragActiveRef).
@@ -11972,7 +12093,7 @@ export function ModelViewer({
     // simply withdrawn for validation.
     if (
       previous &&
-      offsetHandle?.locked &&
+      (offsetHandle?.locked || offsetHandle?.entry) &&
       built &&
       sameOffsetHandleTarget(built.handle, offsetHandle)
     ) {
@@ -11984,7 +12105,7 @@ export function ModelViewer({
     const takesOver =
       previous !== null &&
       offsetHandle !== null &&
-      built?.handle.locked === true &&
+      (built?.handle.locked === true || built?.handle.entry === true) &&
       built.handle.bodyId === offsetHandle.bodyId;
     if (previous) {
       if (takesOver) previous.dispose();
@@ -12009,20 +12130,28 @@ export function ModelViewer({
       offsetHandle.normal
     );
     const body = context.objectsByBodyId.get(offsetHandle.bodyId);
+    const handleOrigin = new THREE.Vector3(
+      placement.origin.x,
+      placement.origin.y,
+      placement.origin.z
+    );
+    const handleDirection = new THREE.Vector3(
+      placement.direction.x,
+      placement.direction.y,
+      placement.direction.z
+    );
+    // Total reads the material behind the face, not the whole body's reach
+    // behind the face's plane (which spanned to an unrelated lobe).
+    const depthSamples = body ? faceSamples(body, offsetHandle.topologyId) : [];
     const extentBehind = body
-      ? bodyExtentBehind(
+      ? (faceDepthBehind(
           body,
-          new THREE.Vector3(
-            placement.origin.x,
-            placement.origin.y,
-            placement.origin.z
-          ),
-          new THREE.Vector3(
-            placement.direction.x,
-            placement.direction.y,
-            placement.direction.z
-          )
-        )
+          handleOrigin,
+          handleDirection,
+          depthSamples.length > 0
+            ? depthSamples
+            : [{ point: handleOrigin, weight: 1 }]
+        ) ?? bodyExtentBehind(body, handleOrigin, handleDirection))
       : null;
     const chipState = faceOffsetChipState(
       offsetHandle.totalBaseline,
@@ -12104,33 +12233,68 @@ export function ModelViewer({
     if (!context || edgeDragActiveRef.current) {
       return;
     }
-    if (edgeRigRef.current) {
-      retireRig(edgeRigRef.current, retiringRigsRef.current);
-    }
-    edgeRigRef.current = null;
+    const previous = edgeRigRef.current;
+    const built = edgeRigBuiltRef.current;
     if (!edgeHandle) {
+      if (previous) retireRig(previous, retiringRigsRef.current);
+      edgeRigRef.current = null;
+      edgeRigBuiltRef.current = null;
       context.requestRender();
       return;
     }
+    // A hidden, consumed or deleted body takes its handle with it.
+    const body = bodies.find(
+      (candidate) => candidate.bodyId === edgeHandle.bodyId
+    );
     let placement = edgeHandle.placement ?? null;
     if (!placement) {
-      const body = bodies.find(
-        (candidate) => candidate.bodyId === edgeHandle.bodyId
-      );
       const edge = body?.topology?.edges.find(
         (candidate) => candidate.topologyId === edgeHandle.topologyId
       );
-      if (!body || !edge) {
-        return;
+      if (body && edge) {
+        const center = {
+          x: (body.bbox.min.x + body.bbox.max.x) / 2,
+          y: (body.bbox.min.y + body.bbox.max.y) / 2,
+          z: (body.bbox.min.z + body.bbox.max.z) / 2
+        };
+        placement = edgeHandlePlacement(edge.points, center);
       }
-      const center = {
-        x: (body.bbox.min.x + body.bbox.max.x) / 2,
-        y: (body.bbox.min.y + body.bbox.max.y) / 2,
-        z: (body.bbox.min.z + body.bbox.max.z) / 2
-      };
-      placement = edgeHandlePlacement(edge.points, center);
     }
-    if (!placement) {
+    // The same edge armed again — the keypad opening, a preview landing, a
+    // value typed — keeps the rig on screen. Rebuilding it faded the handle
+    // out and back in, and a preview body without the picked edge left no
+    // handle at all until the preview went.
+    const sameTarget =
+      previous !== null &&
+      built !== null &&
+      sameEdgeHandleTarget(built.handle, edgeHandle);
+    // A missing edge on a body still shown is a preview's topology: keep the
+    // frame. A missing body is not.
+    if (
+      sameTarget &&
+      body !== undefined &&
+      (!placement || sameEdgeRigPlacement(built.placement, placement))
+    ) {
+      built.handle = edgeHandle;
+      // The value a rebuild would have taken: the card's typed value, else
+      // the target's (restored after a refusal or a cancelled entry).
+      const value = edgeHandleValueRef.current ?? edgeHandle.initialValue ?? 0;
+      if (Math.abs(previous.value() - value) > 1e-9) {
+        previous.setValue(value);
+        context.requestRender();
+      }
+      return;
+    }
+    if (previous) {
+      // A new frame for the same edge takes over at once; another edge or
+      // tool fades the old handle out as before.
+      if (sameTarget && body) previous.dispose();
+      else retireRig(previous, retiringRigsRef.current);
+    }
+    edgeRigRef.current = null;
+    edgeRigBuiltRef.current = null;
+    if (!placement || !body) {
+      context.requestRender();
       return;
     }
     const rig = buildEdgeRadiusHandle(placement);
@@ -12139,18 +12303,32 @@ export function ModelViewer({
     // rebuilt after a refused preview used to read "R 0".
     rig.setValue(edgeHandleValueRef.current ?? edgeHandle.initialValue ?? 0);
     rig.setWarning?.(offsetPreviewInvalidRef.current);
+    if (sameTarget) rig.appear?.();
+    if (E2E_CANVAS_HOOKS_ENABLED) {
+      const host = context.renderer.domElement;
+      host.dataset.e2eEdgeRigBuilds = String(
+        Number(host.dataset.e2eEdgeRigBuilds ?? 0) + 1
+      );
+    }
     context.scene.add(rig.group);
     edgeRigRef.current = rig;
+    edgeRigBuiltRef.current = { handle: edgeHandle, placement };
     context.requestRender();
-    return () => {
-      if (!edgeDragActiveRef.current) {
-        retireRig(rig, retiringRigsRef.current);
-        if (edgeRigRef.current === rig) {
-          edgeRigRef.current = null;
-        }
-      }
-    };
   }, [edgeHandle, bodies]);
+
+  // The edge rig effect retires its own rig when the handle changes; this
+  // retires the last one when the viewer goes.
+  useEffect(
+    () => () => {
+      const rig = edgeRigRef.current;
+      if (rig && !edgeDragActiveRef.current) {
+        retireRig(rig, retiringRigsRef.current);
+        edgeRigRef.current = null;
+        edgeRigBuiltRef.current = null;
+      }
+    },
+    []
+  );
 
   // A typed form value moves the handle; a drag in flight owns it instead.
   useEffect(() => {
@@ -13884,6 +14062,13 @@ export function ModelViewer({
     if (!context || !normalToFaceRequest) {
       return;
     }
+    const handled = handledNormalToFaceRef.current;
+    if (
+      handled?.context === context &&
+      handled.nonce === normalToFaceRequest.nonce
+    ) {
+      return;
+    }
     const body = bodies.find(
       (candidate) => candidate.bodyId === normalToFaceRequest.bodyId
     );
@@ -13928,6 +14113,10 @@ export function ModelViewer({
     if (!pose) {
       return;
     }
+    handledNormalToFaceRef.current = {
+      context,
+      nonce: normalToFaceRequest.nonce
+    };
     context.startCameraTween(
       pose,
       () => {

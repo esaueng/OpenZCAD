@@ -1,3 +1,5 @@
+import { prefersSavingData } from './saveData';
+
 /**
  * Fetches every on-demand chunk of this deploy once the page is idle, so a
  * tool opens without waiting on the network and a deploy that lands
@@ -45,9 +47,7 @@ export function prefetchLazyChunks(
   load: (href: string) => Promise<unknown> = (href) =>
     fetch(href, { priority: 'low' }).then((response) => response.arrayBuffer())
 ): void {
-  const connection = (navigator as { connection?: { saveData?: boolean } })
-    .connection;
-  if (connection?.saveData) return;
+  if (prefersSavingData()) return;
   const pending = lazyChunkUrls(doc, base);
   const next = () => {
     if (navigator.onLine === false) {

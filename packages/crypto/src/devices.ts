@@ -53,6 +53,7 @@ const DEVICE_LIST_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x44); // "OZD"
 const TRANSITION_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x54); // "OZT"
 const GRANT_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x47); // "OZG"
 const CUTOFFS_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x52); // "OZR"
+const RESET_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x58); // "OZX"
 const STATEMENT_VERSION_1 = 1;
 const SIGNATURE_BYTES = 1 + 64;
 const MAX_U32 = 0xffffffff;
@@ -516,7 +517,8 @@ type StatementKind =
   | 'device list'
   | 'identity transition'
   | 'device approval grant'
-  | 'revocation cutoffs';
+  | 'revocation cutoffs'
+  | 'group reset';
 
 async function signStatement(
   privateKey: SigningPrivateKey,
@@ -1399,26 +1401,43 @@ export async function verifyDeviceApprovalGrant(
 // --- Per-project revocation cutoffs ---------------------------------------
 
 export const REVOCATION_CUTOFFS_VERSION_1 = 1;
+/** Version 1 plus each project's cutoff head (slice 4-10). */
+export const REVOCATION_CUTOFFS_VERSION_2 = 2;
 /** Most projects one cutoff statement names. */
 export const MAX_REVOCATION_CUTOFFS = 4096;
-/** Largest canonical statement: every project id at its longest. */
+const CUTOFFS_FIXED_BYTES =
+  3 + 1 + 1 + MAX_ID_BYTES + 4 + 4 + HASH_BYTES + 8 + 2;
+/** Largest canonical version 1 statement: every project id at its longest. */
+export const MAX_REVOCATION_CUTOFFS_V1_BYTES =
+  CUTOFFS_FIXED_BYTES + MAX_REVOCATION_CUTOFFS * (1 + MAX_ID_BYTES + 8);
+/** Largest canonical statement of any version (version 2, with heads). */
 export const MAX_REVOCATION_CUTOFFS_BYTES =
-  3 +
-  1 +
-  1 +
-  MAX_ID_BYTES +
-  4 +
-  4 +
-  HASH_BYTES +
-  8 +
-  2 +
-  MAX_REVOCATION_CUTOFFS * (1 + MAX_ID_BYTES + 8);
+  CUTOFFS_FIXED_BYTES +
+  MAX_REVOCATION_CUTOFFS * (1 + MAX_ID_BYTES + 8 + 8 + HASH_BYTES);
+
+/**
+ * The newest document version of a project the revoking browser had
+ * accepted (ADR-024, Key lifecycle): the revoked device's signatures are
+ * accepted only on this version or earlier ones.
+ */
+export interface RevocationCutoffHead {
+  /** At least 1: a document's first version is 1. */
+  readonly documentVersion: number;
+  /** `versionHash` of that version's envelope. */
+  readonly versionHash: Uint8Array;
+}
 
 /** The first epoch of a project's group that a revoked device must not know. */
 export interface ProjectRevocationCutoff {
   readonly projectId: string;
-  /** Unsigned, at most `Number.MAX_SAFE_INTEGER`. */
+  /**
+   * Unsigned, at most `Number.MAX_SAFE_INTEGER`. Phase 4 uses the project's
+   * key epoch (decision D10: monotonic across group resets), so the first
+   * MLS epoch of a group is this minus the group's key-epoch base.
+   */
   readonly cutoffEpoch: number;
+  /** The cutoff head, if the project had one (version 2 statements). */
+  readonly head?: RevocationCutoffHead;
 }
 
 /**
@@ -1476,6 +1495,17 @@ function checkCutoffs(value: RevocationCutoffs, code: E2eeErrorCode): void {
     if (!isUint(cutoff.cutoffEpoch, Number.MAX_SAFE_INTEGER)) {
       fail('cutoffEpoch must be an unsigned safe integer');
     }
+    if (cutoff.head !== undefined) {
+      if (
+        cutoff.head === null ||
+        typeof cutoff.head !== 'object' ||
+        !isUint(cutoff.head.documentVersion, Number.MAX_SAFE_INTEGER) ||
+        cutoff.head.documentVersion < 1 ||
+        !isHash(cutoff.head.versionHash)
+      ) {
+        fail('A cutoff head is a document version and a 32-byte hash');
+      }
+    }
   }
 }
 
@@ -1483,12 +1513,18 @@ function checkCutoffs(value: RevocationCutoffs, code: E2eeErrorCode): void {
  * Canonical bytes: `"OZR" | u8 1 | u8 length + user id | u32 generation |
  * u32 entry sequence | 32-byte entry hash | u64 issuedAt | u16 count +
  * cutoffs by project id (u8 length + project id, u64 cutoff epoch)`.
+ *
+ * Version 2 is the same with `u64 head document version (0 for none) |
+ * 32-byte head version hash (zero for none)` after each cutoff epoch, and
+ * is used exactly when at least one cutoff names a head, so every statement
+ * has one encoding and version 1 statements stay byte for byte.
  */
 export function encodeRevocationCutoffs(value: RevocationCutoffs): Bytes {
   checkCutoffs(value, 'invalid-argument');
-  const writer = new ByteWriter()
-    .bytes(CUTOFFS_MAGIC)
-    .u8(REVOCATION_CUTOFFS_VERSION_1);
+  const version = value.cutoffs.some((c) => c.head !== undefined)
+    ? REVOCATION_CUTOFFS_VERSION_2
+    : REVOCATION_CUTOFFS_VERSION_1;
+  const writer = new ByteWriter().bytes(CUTOFFS_MAGIC).u8(version);
   writeId(writer, value.userId);
   writer
     .u32(value.generation)
@@ -1501,6 +1537,11 @@ export function encodeRevocationCutoffs(value: RevocationCutoffs): Bytes {
   )) {
     writeId(writer, cutoff.projectId);
     writer.u64(cutoff.cutoffEpoch);
+    if (version === REVOCATION_CUTOFFS_VERSION_2) {
+      writer
+        .u64(cutoff.head?.documentVersion ?? 0)
+        .bytes(cutoff.head?.versionHash ?? new Uint8Array(HASH_BYTES));
+    }
   }
   return writer.finish();
 }
@@ -1518,7 +1559,10 @@ export function decodeRevocationCutoffs(bytes: Uint8Array): RevocationCutoffs {
     throw new E2eeError('malformed', 'Not a revocation cutoff statement');
   }
   const version = reader.u8();
-  if (version !== REVOCATION_CUTOFFS_VERSION_1) {
+  if (
+    version !== REVOCATION_CUTOFFS_VERSION_1 &&
+    version !== REVOCATION_CUTOFFS_VERSION_2
+  ) {
     throw new E2eeError(
       'unsupported-version',
       `Revocation cutoffs version ${version} is not supported`
@@ -1531,7 +1575,20 @@ export function decodeRevocationCutoffs(bytes: Uint8Array): RevocationCutoffs {
   const issuedAt = reader.u64();
   const cutoffs: ProjectRevocationCutoff[] = [];
   for (let count = reader.u16(); count > 0; count -= 1) {
-    cutoffs.push({ projectId: readId(reader), cutoffEpoch: reader.u64() });
+    const projectId = readId(reader);
+    const cutoffEpoch = reader.u64();
+    if (version === REVOCATION_CUTOFFS_VERSION_1) {
+      cutoffs.push({ projectId, cutoffEpoch });
+      continue;
+    }
+    const documentVersion = reader.u64();
+    const versionHash = copyBytes(reader.bytes(HASH_BYTES));
+    // A head slot without a head must be all zero (canonical form below).
+    cutoffs.push(
+      documentVersion === 0
+        ? { projectId, cutoffEpoch }
+        : { projectId, cutoffEpoch, head: { documentVersion, versionHash } }
+    );
   }
   reader.end();
   const value: RevocationCutoffs = {
@@ -1612,6 +1669,171 @@ export async function verifyRevocationCutoffs(
     throw new E2eeError(
       'context-mismatch',
       'The cutoffs name an entry that revokes no device'
+    );
+  }
+  return value;
+}
+
+// --- Solo group resets (decision D9) ---------------------------------------
+
+export const GROUP_RESET_VERSION_1 = 1;
+
+/**
+ * What the identity key signs to replace a solo project's MLS group when
+ * none of the owner's leaves can act any more (ADR-024, "The user is the
+ * only member"; decision D9). The new group's key epochs continue after
+ * `priorKeyEpoch` (decision D10): its key-epoch base is `priorKeyEpoch + 1`
+ * and its generation `priorGroupGeneration + 1`. Bound to the device-list
+ * entry the signer held, so it names the identity state it was made under.
+ * A collaborator's browser that sees one excluding them reports the fork.
+ */
+export interface GroupReset {
+  readonly userId: string;
+  /** The identity generation of the signing identity; 1 for the first. */
+  readonly generation: number;
+  /** Sequence and `deviceListEntryHash` of the signer's device-list head. */
+  readonly entrySequence: number;
+  readonly entryHash: Uint8Array;
+  readonly projectId: string;
+  /** The generation of the group being replaced; 0 for the first group. */
+  readonly priorGroupGeneration: number;
+  /** The newest key epoch of the group being replaced. */
+  readonly priorKeyEpoch: number;
+  /** Unix milliseconds; the signer's claim, not proof of time. */
+  readonly issuedAt: number;
+}
+
+function checkGroupReset(value: GroupReset, code: E2eeErrorCode): void {
+  const fail = (message: string): never => {
+    throw new E2eeError(code, message);
+  };
+  if (value === null || typeof value !== 'object') fail('Expected a reset');
+  if (!isEnvelopeId(value.userId)) fail('Reset userId is not an id');
+  if (!isUint(value.generation, MAX_U32) || value.generation < 1) {
+    fail('generation must be a u32 of at least 1');
+  }
+  if (!isUint(value.entrySequence, MAX_U32)) {
+    fail('entrySequence must be a u32');
+  }
+  if (!isHash(value.entryHash)) fail('entryHash must be 32 bytes');
+  if (!isEnvelopeId(value.projectId)) fail('Reset projectId is not an id');
+  // The new group's generation is one more, so the old one is below u32 max.
+  if (!isUint(value.priorGroupGeneration, MAX_U32 - 1)) {
+    fail('priorGroupGeneration must be a u32 below its maximum');
+  }
+  // The new base is one more, and key epochs are u32 (migration 0032).
+  if (!isUint(value.priorKeyEpoch, MAX_U32 - 1)) {
+    fail('priorKeyEpoch must be a u32 below its maximum');
+  }
+  if (!isUint(value.issuedAt, Number.MAX_SAFE_INTEGER)) {
+    fail('issuedAt must be Unix milliseconds');
+  }
+}
+
+/**
+ * Canonical bytes: `"OZX" | u8 1 | u8 length + user id | u32 generation |
+ * u32 entry sequence | 32-byte entry hash | u8 length + project id |
+ * u32 prior group generation | u64 prior key epoch | u64 issuedAt`.
+ */
+export function encodeGroupReset(value: GroupReset): Bytes {
+  checkGroupReset(value, 'invalid-argument');
+  const writer = new ByteWriter().bytes(RESET_MAGIC).u8(GROUP_RESET_VERSION_1);
+  writeId(writer, value.userId);
+  writer.u32(value.generation).u32(value.entrySequence).bytes(value.entryHash);
+  writeId(writer, value.projectId);
+  return writer
+    .u32(value.priorGroupGeneration)
+    .u64(value.priorKeyEpoch)
+    .u64(value.issuedAt)
+    .finish();
+}
+
+/** Decodes canonical reset bytes; anything else is `malformed`. */
+export function decodeGroupReset(bytes: Uint8Array): GroupReset {
+  if (!(bytes instanceof Uint8Array)) {
+    throw new E2eeError('invalid-argument', 'Statement must be a Uint8Array');
+  }
+  const reader = new ByteReader(bytes, 'Group reset');
+  if (!equalBytes(reader.bytes(3), RESET_MAGIC)) {
+    throw new E2eeError('malformed', 'Not a group reset statement');
+  }
+  const version = reader.u8();
+  if (version !== GROUP_RESET_VERSION_1) {
+    throw new E2eeError(
+      'unsupported-version',
+      `Group reset version ${version} is not supported`
+    );
+  }
+  const userId = readId(reader);
+  const generation = reader.u32();
+  const entrySequence = reader.u32();
+  const entryHash = copyBytes(reader.bytes(HASH_BYTES));
+  const projectId = readId(reader);
+  const value: GroupReset = {
+    userId,
+    generation,
+    entrySequence,
+    entryHash,
+    projectId,
+    priorGroupGeneration: reader.u32(),
+    priorKeyEpoch: reader.u64(),
+    issuedAt: reader.u64()
+  };
+  reader.end();
+  checkGroupReset(value, 'malformed');
+  if (!equalBytes(encodeGroupReset(value), bytes)) {
+    throw new E2eeError('malformed', 'Group reset is not in canonical form');
+  }
+  return value;
+}
+
+/** The identity key signs a solo group reset. */
+export async function signGroupReset(
+  identityPrivateKey: CryptoKey,
+  value: GroupReset
+): Promise<SignedStatement> {
+  const statement = encodeGroupReset(value);
+  return {
+    statement,
+    signature: await signStatement(identityPrivateKey, 'group reset', statement)
+  };
+}
+
+/**
+ * Decodes a reset and checks it against a verified device list of
+ * `generation`: signed by that list's identity key (`authentication-failed`
+ * otherwise), for its user and generation, naming an entry the list holds
+ * by sequence and hash (`context-mismatch` otherwise).
+ */
+export async function verifyGroupReset(
+  signed: SignedStatement,
+  list: VerifiedDeviceList,
+  expected: { readonly generation: number }
+): Promise<GroupReset> {
+  const statement = copyBytes(signed.statement);
+  const signature = copyBytes(signed.signature);
+  const value = decodeGroupReset(statement);
+  const { key } = await verifyingKey(list.identityKey);
+  if (!(await statementValid(key, 'group reset', statement, signature))) {
+    throw new E2eeError(
+      'authentication-failed',
+      'The group reset is not signed by the identity key'
+    );
+  }
+  if (value.userId !== list.userId) {
+    throw new E2eeError('context-mismatch', 'The reset is for another user');
+  }
+  if (value.generation !== expected.generation) {
+    throw new E2eeError(
+      'context-mismatch',
+      'The reset is for another identity generation'
+    );
+  }
+  const named = list.entries[value.entrySequence];
+  if (!named || !equalBytes(named.hash, value.entryHash)) {
+    throw new E2eeError(
+      'context-mismatch',
+      'The reset names an entry this device list does not hold'
     );
   }
   return value;

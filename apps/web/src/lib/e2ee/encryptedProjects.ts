@@ -38,6 +38,7 @@ import { createE2eeApi } from './e2eeApi';
 import {
   E2EE_KEYS_LOCKED_CODE,
   createEncryptedProjectStore,
+  type EncryptedCopyRequest,
   type EncryptedProjectStore,
   type EncryptedProjectWarning
 } from './encryptedProjectStore';
@@ -59,6 +60,12 @@ import {
   type ProjectFilesDeps
 } from './encryptedProjectInfo';
 import { versionPins } from './versionPins';
+import {
+  createRevocationCutoffsApi,
+  localPendingCutoffs,
+  revocationStatements,
+  storePendingCutoffs
+} from './deviceRemoval';
 
 export { E2EE_KEYS_LOCKED_CODE };
 
@@ -142,11 +149,23 @@ async function openStore(userId: string): Promise<{
   const pageDecoder = decoder;
   // Results finishing after this key session ends keep no keys.
   const references = sessionBoundReferences(pageBlobReferences);
+  const cutoffsApi = createRevocationCutoffsApi();
+  // A cutoff statement an earlier removal on this device could not store
+  // goes first, so the directory and authorship below can read it.
+  await storePendingCutoffs(cutoffsApi, localPendingCutoffs(), userId).catch(
+    () => 0
+  );
   const groups = {
     api: createProjectGroupsApi(),
     sessions: mlsProjectSessions(),
     account: projectGroupAccount(e2ee, account),
-    device
+    device,
+    // Verified revocation cutoffs (slice 4-10): the MLS directory and
+    // version authorship need one for every removed device.
+    revocations: revocationStatements(cutoffsApi, {
+      list: account.list,
+      generation: account.generation
+    })
   };
   const blobs = createEncryptedContentBlobs({
     groups,
@@ -289,6 +308,16 @@ export async function createEncryptedProject(
   request: CreateProjectRequest
 ): Promise<CreateProjectResponse> {
   return (await encryptedProjectStore()).createProject(request);
+}
+
+/**
+ * Stores a copy or branch of an encrypted project the page built from its
+ * verified source (slice 4-8): the account copies its files byte for byte.
+ */
+export async function copyEncryptedProject(
+  request: EncryptedCopyRequest
+): Promise<CreateProjectResponse> {
+  return (await encryptedProjectStore()).copyProject(request);
 }
 
 /** Decrypted names by project id; a name that fails to verify is left out. */

@@ -596,7 +596,10 @@ export async function handleE2eeProjectEnvelopeRequest(
       (route === 'view-states' && method === 'GET') ||
       (sessionId !== null && method === 'PUT');
     if (!known) refuse(404, 'NOT_FOUND', 'Not found.');
-    await requireOwnedEncryptedProject(db, userId, projectId);
+    // The owner reads a project in the recycle bin, as in plaintext (4-8).
+    await requireOwnedEncryptedProject(db, userId, projectId, {
+      allowDeleted: method === 'GET'
+    });
     if (route === 'measurements') {
       return method === 'GET'
         ? json(

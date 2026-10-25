@@ -646,6 +646,69 @@ describe('verifyAuthoredEnvelope', () => {
     await expect(early).resolves.toMatchObject({ revoked: true });
   });
 
+  it('limits a revoked device by key epoch, with or without a head', async () => {
+    const alice = await author('alice');
+    const chain = await signedChain(alice.signers[0]!, [
+      { keyEpoch: 0 },
+      { keyEpoch: 1 },
+      { keyEpoch: 2 }
+    ]);
+    await revoke(alice, 'dev_0');
+    const lists = [await listOf(alice)];
+    const key = authorCutoffKey('alice', 'dev_0');
+    // Key epoch 2 is the first the device must not know: version 3 is out.
+    const epochOnly = new Map([[key, { keyEpoch: 2 }]]);
+    await expect(
+      verifyAuthoredLogRecord(chain[1]!.record, {
+        deviceLists: lists,
+        cutoffs: epochOnly
+      })
+    ).resolves.toMatchObject({ revoked: true });
+    await authorRefuses(
+      verifyAuthoredLogRecord(chain[2]!.record, {
+        deviceLists: lists,
+        cutoffs: epochOnly
+      }),
+      'outside-cutoff'
+    );
+    // Both: the head admits version 3, the key epoch still refuses it.
+    const both = new Map([
+      [
+        key,
+        {
+          documentVersion: 3,
+          versionHash: chain[2]!.record.versionHash,
+          keyEpoch: 2
+        }
+      ]
+    ]);
+    await authorRefuses(
+      verifyAuthoredEnvelope(chain[2]!.envelope, chain[2]!.signature, {
+        deviceLists: lists,
+        cutoffs: both
+      }),
+      'outside-cutoff'
+    );
+    // And the key epoch admits version 2, the head at version 1 refuses it.
+    const headFirst = new Map([
+      [
+        key,
+        {
+          documentVersion: 1,
+          versionHash: chain[0]!.record.versionHash,
+          keyEpoch: 3
+        }
+      ]
+    ]);
+    await authorRefuses(
+      verifyAuthoredLogRecord(chain[1]!.record, {
+        deviceLists: lists,
+        cutoffs: headFirst
+      }),
+      'outside-cutoff'
+    );
+  });
+
   it('refuses a malformed cutoff before verifying anything', async () => {
     const alice = await author('alice', 1);
     const [signed] = await signedChain(alice.signers[0]!, [{}]);
@@ -653,7 +716,12 @@ describe('verifyAuthoredEnvelope', () => {
     for (const cutoff of [
       { documentVersion: -1, versionHash: new Uint8Array(32) },
       { documentVersion: 1, versionHash: new Uint8Array(31) },
-      { documentVersion: 1, versionHash: 'ab' }
+      { documentVersion: 1, versionHash: 'ab' },
+      { documentVersion: 1 },
+      { versionHash: new Uint8Array(32) },
+      {},
+      { keyEpoch: -1 },
+      { keyEpoch: 1.5 }
     ]) {
       await rejectsWith(
         verifyAuthoredEnvelope(signed!.envelope, signed!.signature, {

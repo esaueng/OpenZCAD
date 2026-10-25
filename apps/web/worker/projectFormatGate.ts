@@ -103,7 +103,13 @@ export async function assertProjectRouteFormat(
   },
   userId: UserId,
   method: string,
-  pathname: string
+  pathname: string,
+  /**
+   * Encrypted projects are open to the caller (E2EE_PROJECTS_ENABLED): the
+   * owner of an encrypted project reaches its room, which relays ciphertext
+   * (ADR-024 slice 4-9). Members stay refused until sharing (Phase 5).
+   */
+  encryptedRoom = false
 ): Promise<void> {
   const route = projectRouteFormatRule(method, pathname);
   if (!db || !route || route.rule === 'metadata') return;
@@ -124,6 +130,9 @@ export async function assertProjectRouteFormat(
     throw error;
   }
   if (route.rule === 'share') assertShareableProject(access);
-  else if (route.rule === 'room') assertPlaintextRoomAccess(access);
-  else assertPlaintextProject(access);
+  else if (route.rule === 'room') {
+    if (!(encryptedRoom && access.role === 'owner')) {
+      assertPlaintextRoomAccess(access);
+    }
+  } else assertPlaintextProject(access);
 }

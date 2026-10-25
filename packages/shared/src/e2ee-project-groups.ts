@@ -10,8 +10,10 @@ export type E2eeProjectKeyPurpose = 'project-key' | 'rejoin-psk';
 
 /**
  * One key wrapped under the caller's account key. `keyEpoch` is the
- * monotonic project-key generation (decision D10); for `rejoin-psk` the MLS
- * epoch the wrap context names is `keyEpoch - keyEpochBase`.
+ * monotonic project-key generation (decision D10), and both purposes' wrap
+ * contexts bind it. For `rejoin-psk` the PSK's MLS epoch is
+ * `keyEpoch - keyEpochBase`; the wrap does not bind that, because MLS epochs
+ * restart at 0 after a group reset.
  */
 export interface E2eeProjectKeyWrap {
   keyEpoch: number;

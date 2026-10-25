@@ -150,7 +150,7 @@ class FleetFixtureTests(unittest.TestCase):
                 env["OPENZCAD_FIXTURE_MISSING_PINS"] = "1"
                 comparison = json.loads((ROOT / "scripts/fleet-test-fixtures.json").read_text())["esaueng/OpenZCAD"]
                 previous_pin = comparison["pin"]
-                for revision, path in ((pin, ".github/workflows/fleet-ci-v2.yml"),
+                for revision, path in ((pin, ".github/workflows/fleet-ci-v5.yml"),
                                        (previous_pin, ".github/workflows/fleet-ci.yml")):
                     absent = subprocess.run(["git", "show", f"{revision}:{path}"],
                                             cwd=ROOT, env=env, capture_output=True)

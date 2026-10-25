@@ -317,11 +317,17 @@ interface ProjectRow {
   member: number;
 }
 
-/** Owner of a live format-2 project; anything else is refused. */
+/**
+ * Owner of a live format-2 project; anything else is refused. With
+ * `allowDeleted` (reads, slice 4-8) the owner also reaches a project in the
+ * recycle bin, as the plaintext routes let an owner read one; writes keep
+ * refusing it.
+ */
 export async function requireOwnedEncryptedProject(
   db: D1Database,
   userId: string,
-  projectId: string
+  projectId: string,
+  options: { allowDeleted?: boolean } = {}
 ): Promise<void> {
   const row = await db
     .prepare(
@@ -334,7 +340,13 @@ export async function requireOwnedEncryptedProject(
     .first<ProjectRow>();
   const notFound = (): never =>
     refuse(404, 'PROJECT_NOT_FOUND', 'Project not found.');
-  if (!row || row.status === 'deleted') return notFound();
+  if (
+    !row ||
+    (row.status === 'deleted' &&
+      (options.allowDeleted !== true || row.user_id !== userId))
+  ) {
+    return notFound();
+  }
   if (row.user_id !== userId) {
     // A member learns only that this is owner-only; anyone else learns nothing.
     if (row.member) {
@@ -692,6 +704,8 @@ async function createGroup(
   const wraps = wrapsField(body.wraps, 0, account);
   const archive = archiveField(body.archive, projectId, 0, deviceId);
   const now = new Date().toISOString();
+  // A device removed meanwhile cannot still create the group.
+  const signerList = deviceListUnchanged(userId, account);
   const results = await runBatch(db, [
     db
       .prepare(
@@ -700,7 +714,8 @@ async function createGroup(
             initial_group_info, group_info, group_info_epoch, updated_at)
          SELECT ?, ?, 0, 0, 0, ?, ?, 0, ?
          WHERE ${authorization.sql} AND ${PROJECT_FENCE}
-           AND NOT EXISTS (SELECT 1 FROM e2ee_project_groups WHERE project_id = ?)`
+           AND NOT EXISTS (SELECT 1 FROM e2ee_project_groups WHERE project_id = ?)
+           AND ${signerList.sql}`
       )
       .bind(
         projectId,
@@ -711,13 +726,15 @@ async function createGroup(
         ...authorization.binds,
         projectId,
         userId,
-        projectId
+        projectId,
+        ...signerList.binds
       ),
     insertLeaf(db, projectId, userId, deviceId, leaf, now),
     ...insertWraps(db, projectId, userId, wraps, now),
     insertArchive(db, projectId, archive, now)
   ]);
   if (!allChanged(results, 5)) {
+    if (await deviceListMoved(db, userId, account)) refuseDeviceListMoved();
     if (await groupRow(db, projectId)) {
       refuse(
         409,
@@ -778,6 +795,10 @@ async function submitCommit(
   const wraps = wrapsField(body.wraps, keyEpoch, account);
   const archive = archiveField(body.archive, projectId, keyEpoch, deviceId);
   const now = new Date().toISOString();
+  // The device was certified in this device-list head; a removal that
+  // lands first makes the Commit refuse, so a removed device cannot move
+  // the group after its revocation.
+  const signerList = deviceListUnchanged(userId, account);
   const statements = [
     // The sequencer: one Commit per epoch, only on top of the current one.
     db
@@ -787,7 +808,8 @@ async function submitCommit(
          SELECT ?, ?, ?, ?, ?, ?, ?
          WHERE ${authorization.sql} AND ${PROJECT_FENCE}
            AND EXISTS (SELECT 1 FROM e2ee_project_groups
-                       WHERE project_id = ? AND epoch = ? AND key_epoch_base = ?)`
+                       WHERE project_id = ? AND epoch = ? AND key_epoch_base = ?)
+           AND ${signerList.sql}`
       )
       .bind(
         projectId,
@@ -802,7 +824,8 @@ async function submitCommit(
         userId,
         projectId,
         epoch,
-        group.key_epoch_base
+        group.key_epoch_base,
+        ...signerList.binds
       ),
     db
       .prepare(
@@ -824,6 +847,7 @@ async function submitCommit(
   );
   if (!allChanged(results, statements.length)) {
     await refuseIfEpochTaken(db, projectId, epoch);
+    if (await deviceListMoved(db, userId, account)) refuseDeviceListMoved();
     const current = await groupRow(db, projectId);
     if (current && current.epoch > epoch)
       await epochTaken(db, projectId, epoch);
@@ -1031,7 +1055,10 @@ export async function handleE2eeProjectRequest(
         ].includes(route)) ||
       (method === 'POST' && ['mls/commits', 'mls/group-info'].includes(route));
     if (!known) refuse(404, 'NOT_FOUND', 'Not found.');
-    await requireOwnedEncryptedProject(db, userId, projectId);
+    // The owner reads a project in the recycle bin, as in plaintext (4-8).
+    await requireOwnedEncryptedProject(db, userId, projectId, {
+      allowDeleted: method === 'GET'
+    });
     if (method === 'POST') {
       const body = await readBody(request);
       return route === 'mls/group-info'

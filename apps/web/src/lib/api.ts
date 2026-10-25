@@ -287,12 +287,12 @@ export function rememberProjectFormats(
 }
 
 /**
- * What encrypted projects keep on this device until later slices of ADR-024
- * Phase 4 encrypt it: copies and adoption (4-8). Their files, thumbnails,
- * exports, measurements and view state (4-6, 4-7) go through the encrypted
- * routes, never the plaintext ones, which refuse here before anything is
- * sent: the Worker would refuse a format-2 project too, but only after
- * receiving its data.
+ * What encrypted projects keep on this device: anything the encrypted
+ * routes do not store. Their files, thumbnails, exports, measurements and
+ * view state (4-6, 4-7), copies, branches and adoption (4-8) go through the
+ * encrypted routes, never the plaintext ones, which refuse here before
+ * anything is sent: the Worker would refuse a format-2 project too, but
+ * only after receiving its data.
  */
 export const E2EE_LOCAL_ONLY_CODE = 'E2EE_LOCAL_ONLY';
 
@@ -645,25 +645,46 @@ export const api = {
         )
       });
     };
-    // A minted id that already names a project is a one-in-2^122 collision:
-    // mint another once rather than failing the save. An account that
-    // encrypts new projects (D2) is never sent the plaintext document.
-    return encryptsNewProjects()
-      .then((encrypts) => {
-        if (encrypts) {
-          throw new ApiError(
-            409,
-            'Saving a device project to an account that encrypts new projects is not available yet. It stays saved on this device.',
-            'E2EE_ADOPTION_UNAVAILABLE'
-          );
-        }
-        return send();
-      })
-      .catch((error: unknown) => {
-        if (error instanceof ApiError && error.code === 'PROJECT_ID_TAKEN')
-          return send();
-        throw error;
+    // An account that encrypts new projects (decision D2) is never sent
+    // the plaintext document: the project is created encrypted (slice 4-8),
+    // and its device-only files follow as encrypted blobs once it exists.
+    const sendEncrypted = async (): Promise<CreateProjectResponse> => {
+      const adopted = adoptProjectDocument(
+        reidentifyProjectDocument(prepared, toProjectId(createId('proj'))),
+        ownerUserId,
+        prepared.name
+      );
+      const created = await (
+        await encryptedProjects()
+      ).createEncryptedProject({
+        name: prepared.name,
+        adoptionProtocolVersion: 2,
+        localProjectId: prepared.projectId,
+        document: withoutDerivedProjection(adopted)
       });
+      rememberProjectFormats([created.project]);
+      return created;
+    };
+    // A minted id that already names a project is a one-in-2^122 collision:
+    // mint another once rather than failing the save.
+    const adopt = async (
+      encrypted: boolean,
+      retried = false
+    ): Promise<CreateProjectResponse> => {
+      try {
+        return encrypted ? await sendEncrypted() : await send();
+      } catch (error) {
+        if (!(error instanceof ApiError)) throw error;
+        if (!encrypted && error.code === ENCRYPTED_PROJECTS_REQUIRED_CODE) {
+          return adopt(true, retried);
+        }
+        if (error.code === 'PROJECT_ID_TAKEN' && !retried) {
+          return adopt(encrypted, true);
+        }
+        throw error;
+      }
+    };
+    return encryptsNewProjects().then((encrypts) => adopt(encrypts));
   },
   loadProject: (projectId: string) =>
     byFormat(
@@ -693,7 +714,27 @@ export const api = {
     projectId: string,
     options: Omit<DuplicateProjectRequest, 'projectId'> = {}
   ) => {
-    if (isEncryptedProject(projectId)) throw encryptedLocalOnly('Copies');
+    if (isEncryptedProject(projectId)) {
+      // The page decrypted the source and built the copy; the account
+      // copies its files byte for byte (slice 4-8). It cannot build one.
+      if (!options.document) {
+        throw new ApiError(
+          400,
+          'An end-to-end encrypted project is copied in the browser.'
+        );
+      }
+      const created = await (
+        await encryptedProjects()
+      ).copyEncryptedProject({
+        sourceProjectId: projectId,
+        document: withoutDerivedProjection(options.document),
+        ...(options.revisionId === undefined
+          ? {}
+          : { revisionId: options.revisionId })
+      });
+      rememberProjectFormats([created.project]);
+      return created;
+    }
     const request = {
       ...(options.name === undefined ? {} : { name: options.name }),
       ...(options.revisionId === undefined

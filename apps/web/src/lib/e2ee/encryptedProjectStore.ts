@@ -42,12 +42,19 @@
  *   device of this account and the binding, kind, project and sequence must
  *   hold before the body is decoded.
  *
+ * - **Copies, branches and adoption** (slice 4-8). `copyProject` stores a
+ *   copy the page built from a verified source: its first version and
+ *   project info carry the source's blob ids and keys (registered under the
+ *   copy's id), and the account copies the blobs byte for byte, so no file
+ *   is encrypted again. `createProject` with an adopted document creates
+ *   it encrypted (decision D2); its device-only files follow as blobs.
+ *
  * Not yet: files embedded in the document itself (the legacy `stepText`
- * and embedded-mesh forms), copies, branches and adoption (4-8), the live
- * room (4-9).
+ * and embedded-mesh forms), the live room (4-9).
  */
 import {
   AuthorshipError,
+  authorCutoffKey,
   EnvelopeKey,
   VersionLogError,
   checkBlobReferences,
@@ -81,11 +88,14 @@ import {
   PROJECT_STORAGE_FORMAT_E2EE_V1,
   type CreateProjectRequest,
   type CreateProjectResponse,
+  type E2eeAdoption,
+  type E2eeCopyFrom,
   type E2eeProjectEnvelopeRecord,
   type E2eeProjectEnvelopeUpload,
   type E2eeProjectState,
   type E2eeReplacedEnvelopeKind,
   type E2eeRevisionsResponse,
+  type E2eeStoredVersion,
   type E2eeVersionLogEntry,
   type ListRevisionsResponse,
   type ProjectDocument,
@@ -102,6 +112,7 @@ import {
   createSavedRevision
 } from '@openzcad/document-core';
 import {
+  importArtifactIds,
   prepareInitialProjectDocument,
   splitProjectStorageUpload
 } from '@openzcad/persistence';
@@ -120,6 +131,7 @@ import {
   type BlobReferenceRegistry
 } from './blobReferences';
 import {
+  E2EE_BLOB_KEY_MISSING_MESSAGE,
   documentBlobReferences,
   rememberDocumentBlobs
 } from './encryptedContentBlobs';
@@ -132,7 +144,9 @@ import type { MlsProjectRef } from './mls/projectSessions';
 import {
   createProjectGroup,
   epochAuthenticatorForEpoch,
+  groupBaseForKeyEpoch,
   joinProjectGroup,
+  projectRevocationCutoffs,
   projectKeyForEpoch,
   type ProjectGroupContext
 } from './projectGroups';
@@ -143,6 +157,7 @@ import {
 } from './versionPins';
 import {
   createProjectInfoAccess,
+  projectInfoReferences,
   type ProjectInfoAccess
 } from './encryptedProjectInfo';
 import type {
@@ -183,8 +198,9 @@ export interface EncryptedProjectContext {
   readonly seal?: DocumentSealer;
   /**
    * This project's cutoffs for revoked devices, keyed by
-   * `authorCutoffKey`. None are recorded yet, so a revoked device's
-   * versions are refused (`revoked-without-cutoff`) unless one is given.
+   * `authorCutoffKey`. By default they come from the identity-signed
+   * revocation cutoffs the groups context verifies (slice 4-10); a revoked
+   * device without one has its versions refused (`revoked-without-cutoff`).
    */
   readonly cutoffs?: (
     projectId: string
@@ -276,8 +292,19 @@ interface HeadState {
   infoSequence: number;
 }
 
+/** A copy or branch the page built from a verified source (slice 4-8). */
+export interface EncryptedCopyRequest {
+  readonly sourceProjectId: string;
+  /** The copy: its own `proj_` id, carrying the source's blob ids. */
+  readonly document: ProjectDocument;
+  /** A branch: the source's named save it starts from. */
+  readonly revisionId?: string;
+}
+
 export interface EncryptedProjectStore {
   createProject(request: CreateProjectRequest): Promise<CreateProjectResponse>;
+  /** Stores a copy or branch of an encrypted project (slice 4-8). */
+  copyProject(request: EncryptedCopyRequest): Promise<CreateProjectResponse>;
   saveProjectDocument(
     payload: SaveProjectDocumentRequest
   ): Promise<SaveProjectDocumentResponse>;
@@ -294,6 +321,58 @@ export interface EncryptedProjectStore {
   readonly info: ProjectInfoAccess;
   /** Seals and opens replaced envelopes: project info, measurements, view state. */
   readonly replaced: ReplacedEnvelopeKit;
+  /** What the live room's codec uses (slice 4-9, `encryptedRoomCodec.ts`). */
+  roomAccess(): EncryptedRoomAccess;
+}
+
+/** A head this page accepted: what a room version is sealed on. */
+export interface EncryptedRoomHeadState {
+  readonly version: number;
+  readonly hash: string;
+  readonly keyEpoch: number;
+  readonly revisionHashes: ReadonlyMap<string, Uint8Array>;
+  readonly document: ProjectDocument;
+}
+
+/** A document version sealed for the room, not yet acknowledged. */
+export interface EncryptedRoomSealed {
+  readonly envelope: Uint8Array;
+  readonly hash: string;
+  readonly keyEpoch: number;
+  readonly version: number;
+  /** As stored: validated, split, at `version`. */
+  readonly document: ProjectDocument;
+  readonly signature: string;
+  readonly wrappedVersionKey: string;
+  readonly signerDeviceId: string;
+}
+
+/**
+ * The store's encrypt/sign and decrypt/verify paths, for the live room.
+ * Every head the room relays is read as a current head (pin moves); a
+ * version the room accepts moves the pin from the head it was sealed on.
+ */
+export interface EncryptedRoomAccess {
+  currentHead(projectId: string): EncryptedRoomHeadState | null;
+  /** Seals `document` on `base`, under the group's current epoch. */
+  seal(
+    projectId: string,
+    document: ProjectDocument,
+    base: EncryptedRoomHeadState
+  ): Promise<EncryptedRoomSealed>;
+  openHead(
+    projectId: string,
+    record: E2eeStoredVersion,
+    envelope: Uint8Array | null
+  ): Promise<EncryptedRoomHeadState>;
+  accepted(
+    projectId: string,
+    sealed: EncryptedRoomSealed,
+    base: EncryptedRoomHeadState,
+    record: E2eeStoredVersion
+  ): Promise<EncryptedRoomHeadState>;
+  /** Processes the group's newer Commits (or rejoins). */
+  catchUp(projectId: string): Promise<void>;
 }
 
 const b64 = toBase64Url;
@@ -311,6 +390,32 @@ function signingKeyOf(
     (r) => r.kind === 'device' && r.id === deviceId
   );
   return revoked?.device?.signingKey ?? null;
+}
+
+/**
+ * Version cutoffs from the verified revocation cutoffs: a revoked device's
+ * versions are accepted only below its cutoff key epoch and, when the
+ * revoking browser named one, up to its cutoff head.
+ */
+async function groupCutoffs(
+  groups: ProjectGroupContext,
+  projectId: string
+): Promise<ReadonlyMap<string, VersionCutoff>> {
+  const out = new Map<string, VersionCutoff>();
+  if (!groups.account.list.revoked.some((r) => r.kind === 'device')) return out;
+  const cutoffs = await projectRevocationCutoffs(groups, projectId);
+  for (const [deviceId, cutoff] of cutoffs) {
+    out.set(authorCutoffKey(groups.account.userId, deviceId), {
+      keyEpoch: cutoff.keyEpoch,
+      ...(cutoff.head
+        ? {
+            documentVersion: cutoff.head.documentVersion,
+            versionHash: cutoff.head.versionHash
+          }
+        : {})
+    });
+  }
+  return out;
 }
 
 /** Group and key-store refusals become ApiErrors the sync paths understand. */
@@ -415,7 +520,9 @@ export function createEncryptedProjectStore(
 
   const list = () => groups.account.list;
   const cutoffsFor = async (projectId: string) =>
-    (await ctx.cutoffs?.(projectId)) ?? new Map<string, VersionCutoff>();
+    ctx.cutoffs
+      ? await ctx.cutoffs(projectId)
+      : await groupCutoffs(groups, projectId);
 
   function writableDevice(): CertifyingDevice {
     const device = groups.device;
@@ -494,8 +601,14 @@ export function createEncryptedProjectStore(
       );
     };
     if (author.userId !== userId) refuse();
-    const { group } = await groups.api.group(projectId);
-    const epoch = author.header.keyEpoch - group.keyEpochBase;
+    // Before a group reset (decision D9) the version names an epoch of an
+    // earlier group generation.
+    const { keyEpochBase, current } = await groupBaseForKeyEpoch(
+      groups,
+      projectId,
+      author.header.keyEpoch
+    );
+    const epoch = author.header.keyEpoch - keyEpochBase;
     if (epoch < 0) refuse();
     const signingKey = signingKeyOf(list(), author.deviceId);
     if (!signingKey) refuse();
@@ -503,7 +616,9 @@ export function createEncryptedProjectStore(
       const status = await groups.sessions
         .status(refOf(groups.device, projectId))
         .catch(() => null);
-      const role = status?.roles?.users.find((r) => r.userId === author.userId);
+      const role = current
+        ? status?.roles?.users.find((r) => r.userId === author.userId)
+        : undefined;
       if (
         role &&
         (!['owner', 'editor'].includes(role.role) || role.since > epoch)
@@ -1080,7 +1195,7 @@ export function createEncryptedProjectStore(
     device: CertifyingDevice,
     material: Material,
     projectId: string,
-    name: string,
+    body: ProjectInfoBody,
     sequence: number
   ): Promise<E2eeProjectEnvelopeUpload> {
     const init: ProjectEnvelopeHeaderInit = {
@@ -1094,9 +1209,10 @@ export function createEncryptedProjectStore(
         material.epochAuthenticator
       ),
       schemaVersion: SCHEMA_VERSION,
-      keyEpoch: material.keyEpoch
+      keyEpoch: material.keyEpoch,
+      // A copy's first info names the thumbnail and exports it carries.
+      blobIds: projectInfoReferences(body).map((ref) => ref.blobId)
     };
-    const body: ProjectInfoBody = { name, exports: [] };
     const sealed = await sealEnvelope(
       device,
       material,
@@ -1232,8 +1348,47 @@ export function createEncryptedProjectStore(
   }
 
   /**
+   * The key a replaced envelope's signer signs with: a device this account
+   * lists, or a removed one (slice 4-10) for an envelope under a key epoch
+   * below its cutoff, which it could know. Version cutoffs' heads order
+   * document versions only, so a replaced envelope is held to the key
+   * epoch alone.
+   */
+  async function replacedSigningKey(
+    record: E2eeProjectEnvelopeRecord
+  ): Promise<Uint8Array> {
+    const live = list().devices.find(
+      (d) => d.deviceId === record.signerDeviceId
+    );
+    if (live) return live.signingKey;
+    const removed = signingKeyOf(list(), record.signerDeviceId);
+    if (removed) {
+      let cutoff: VersionCutoff | undefined;
+      try {
+        cutoff = (await cutoffsFor(record.projectId)).get(
+          authorCutoffKey(userId, record.signerDeviceId)
+        );
+      } catch {
+        cutoff = undefined;
+      }
+      if (cutoff?.keyEpoch !== undefined && record.keyEpoch < cutoff.keyEpoch) {
+        return removed;
+      }
+      throw integrity(
+        'author',
+        'This envelope was signed by a removed device after it was removed.'
+      );
+    }
+    throw integrity(
+      'author',
+      'This envelope is not signed by a device this account lists.'
+    );
+  }
+
+  /**
    * Opens a replaced envelope (project info, measurements, view state):
-   * signed by a device this account lists, bound to its key epoch, of the
+   * signed by a device this account lists (or a removed one inside its
+   * cutoff), bound to its key epoch, of the
    * kind, project, sequence and epoch the account named, then decoded by
    * its body codec.
    */
@@ -1242,17 +1397,9 @@ export function createEncryptedProjectStore(
     kind: E2eeReplacedEnvelopeKind
   ): Promise<OpenedReplaced> {
     const envelope = bytes(record.envelope);
-    const signer = list().devices.find(
-      (d) => d.deviceId === record.signerDeviceId
-    );
-    if (!signer) {
-      throw integrity(
-        'author',
-        'This envelope is not signed by a device this account lists.'
-      );
-    }
+    const signingKey = await replacedSigningKey(record);
     const signed = await verifyProjectEnvelopeSignature(
-      signer.signingKey,
+      signingKey,
       envelope,
       bytes(record.signature)
     ).catch(() => null);
@@ -1379,6 +1526,249 @@ export function createEncryptedProjectStore(
     }
   }
 
+  // --- The live room (slice 4-9) ---------------------------------------------
+
+  /** Room versions this page sealed, until their ack. */
+  const roomSealed = new WeakSet<EncryptedRoomSealed>();
+
+  /**
+   * The account's log from `since` through the room's head, which the room
+   * wrote to the account before it relayed it.
+   */
+  async function roomLog(
+    projectId: string,
+    since: number,
+    head: E2eeVersionLogEntry
+  ): Promise<E2eeVersionLogEntry[]> {
+    const entries: E2eeVersionLogEntry[] = [];
+    for (let from = since; ;) {
+      const page = await api.versions(projectId, from);
+      const last = entries.at(-1);
+      if (last && page.log[0]?.versionHash !== last.versionHash) {
+        throw integrity(
+          'fork',
+          'The account’s version history pages do not join.'
+        );
+      }
+      entries.push(...(last ? page.log.slice(1) : page.log));
+      const at = entries.findIndex(
+        (entry) => entry.documentVersion >= head.documentVersion
+      );
+      if (at >= 0) {
+        if (entries[at]!.versionHash !== head.versionHash) {
+          throw integrity(
+            'fork',
+            'The room relayed a version the account’s history does not hold.'
+          );
+        }
+        return entries.slice(0, at + 1);
+      }
+      if (
+        !page.more ||
+        page.log.length < 2 ||
+        entries.length > MAX_LOG_RECORDS
+      ) {
+        throw integrity(
+          'fork',
+          'The account’s version history does not reach the room’s head.'
+        );
+      }
+      from = entries.at(-1)!.documentVersion;
+    }
+  }
+
+  /**
+   * A head the room relays, read as a current head (ADR-024, current head):
+   * the log from the pin through it verifies, its author and authority hold,
+   * it decrypts in the decode worker and validates, and the pin moves.
+   */
+  async function openRoomHead(
+    projectId: string,
+    record: E2eeStoredVersion,
+    envelope: Uint8Array | null
+  ): Promise<EncryptedRoomHeadState> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const known = heads.get(projectId);
+      if (known?.hash === record.versionHash) return known;
+      // Too large for the room: the account serves it, verified the same way.
+      if (!envelope) return readHead(projectId);
+      const pin = await pins.read(userId, projectId);
+      const pinHash = pin?.headHash ?? null;
+      if (pin && pinHash && record.documentVersion < pin.documentVersion) {
+        throw integrity(
+          'rollback',
+          `The room offered version ${record.documentVersion} of this project, older than version ${pin.documentVersion} this browser already accepted. Your work stays on this device.`
+        );
+      }
+      const entries = await roomLog(
+        projectId,
+        pin && pinHash ? pin.documentVersion : record.documentVersion,
+        record
+      );
+      await verifyLog(projectId, pinHash, entries);
+      const author = await authorOf(
+        projectId,
+        envelope,
+        bytes(record.signature)
+      );
+      const header = author.header;
+      const hash = toHex(author.versionHash);
+      if (
+        hash !== record.versionHash ||
+        header.documentVersion !== record.documentVersion ||
+        header.kind !== 'document' ||
+        header.projectId !== projectId
+      ) {
+        throw integrity(
+          'content',
+          'The version the room relayed is not the one its record names.'
+        );
+      }
+      if (author.deviceId !== record.signerDeviceId) {
+        throw integrity(
+          'author',
+          'The room’s head names another device than the one that signed it.'
+        );
+      }
+      const { group } = await groups.api.group(projectId);
+      if (header.keyEpoch > group.keyEpochBase + group.epoch) {
+        throw integrity(
+          'epoch',
+          'The room’s head names a key epoch the project does not have yet.'
+        );
+      }
+      if (pin && pinHash && header.keyEpoch < pin.keyEpoch) {
+        throw integrity(
+          'epoch',
+          'The room’s head was written under an older key epoch than this browser already accepted.'
+        );
+      }
+      await requireAuthority(projectId, author);
+      await requireBinding(header);
+      const { body, document } = await openDocument(
+        projectId,
+        header,
+        hash,
+        record.wrappedVersionKey,
+        envelope
+      );
+      const advanced = await pins.advance(userId, projectId, pinHash, {
+        headHash: hash,
+        documentVersion: header.documentVersion,
+        keyEpoch: header.keyEpoch
+      });
+      if (!advanced) {
+        // Another tab moved the pin meanwhile: verify again from it.
+        const current = await pins.read(userId, projectId);
+        if (current?.headHash !== hash) continue;
+      }
+      const state: HeadState = {
+        version: header.documentVersion,
+        hash,
+        keyEpoch: header.keyEpoch,
+        revisionHashes: new Map(body.revisionVersionHashes),
+        document,
+        infoName: heads.get(projectId)?.infoName ?? null,
+        infoSequence: Math.max(
+          heads.get(projectId)?.infoSequence ?? 0,
+          pin?.infoSequence ?? 0
+        )
+      };
+      heads.set(projectId, state);
+      return state;
+    }
+    throw integrity(
+      'fork',
+      'This project kept changing in another tab while it was checked. Reload to try again.'
+    );
+  }
+
+  const roomAccess: EncryptedRoomAccess = {
+    currentHead: (projectId) => heads.get(projectId) ?? null,
+
+    async seal(projectId, document, base) {
+      const device = writableDevice();
+      if (document.projectId !== projectId) {
+        throw new ApiError(404, 'Project not found.', 'PROJECT_NOT_FOUND');
+      }
+      const material = await currentMaterial(device, projectId);
+      const sealed = await sealDocument(
+        device,
+        material,
+        projectId,
+        document,
+        base.version,
+        base.hash,
+        base.revisionHashes
+      );
+      const result: EncryptedRoomSealed = {
+        envelope: sealed.envelope,
+        hash: sealed.hash,
+        keyEpoch: sealed.keyEpoch,
+        document: sealed.document,
+        version: sealed.document.version,
+        signature: sealed.signature,
+        wrappedVersionKey: sealed.wrappedVersionKey,
+        signerDeviceId: sealed.signerDeviceId
+      };
+      roomSealed.add(result);
+      return result;
+    },
+
+    openHead: (projectId, record, envelope) =>
+      openRoomHead(projectId, record, envelope),
+
+    async accepted(projectId, sealed, base, record) {
+      if (
+        record.versionHash !== sealed.hash ||
+        record.documentVersion !== sealed.version
+      ) {
+        throw integrity(
+          'content',
+          'The room stored another version than this browser sent.'
+        );
+      }
+      const advanced = await pins.advance(userId, projectId, base.hash, {
+        headHash: sealed.hash,
+        documentVersion: sealed.version,
+        keyEpoch: sealed.keyEpoch
+      });
+      if (!advanced) {
+        const current = await pins.read(userId, projectId);
+        if (
+          current?.headHash !== sealed.hash &&
+          (current?.documentVersion ?? 0) >= sealed.version
+        ) {
+          throw integrity(
+            'fork',
+            'This browser accepted another version while the room stored this one. Reload to check.'
+          );
+        }
+      }
+      const previous = heads.get(projectId);
+      const state: HeadState = {
+        version: sealed.version,
+        hash: sealed.hash,
+        keyEpoch: sealed.keyEpoch,
+        revisionHashes: retainedHashes(base.revisionHashes, sealed.document),
+        document: sealed.document,
+        infoName: previous?.infoName ?? null,
+        infoSequence: previous?.infoSequence ?? 0
+      };
+      heads.set(projectId, state);
+      const ours = roomSealed.delete(sealed);
+      // The shelf's name follows the document, as after an account save:
+      // through the project info's own chain (slice 4-7), keeping its
+      // thumbnail and archived exports.
+      if (ours) await syncInfo(projectId, state);
+      return state;
+    },
+
+    async catchUp(projectId) {
+      if (groups.device) await joinProjectGroup(groups, projectId);
+    }
+  };
+
   const guarded =
     <A extends unknown[], R>(run: (...args: A) => Promise<R>) =>
     async (...args: A): Promise<R> => {
@@ -1402,146 +1792,231 @@ export function createEncryptedProjectStore(
     storageFormat: PROJECT_STORAGE_FORMAT_E2EE_V1
   });
 
+  /**
+   * A new project from a prepared document: its MLS group at epoch 0, its
+   * first version and its first project info, in one write. A copy names
+   * its source and the blobs the account copies for it; an adoption, the
+   * device project it binds (slice 4-8).
+   */
+  async function createFrom(
+    document: ProjectDocument,
+    extra: {
+      readonly info: ProjectInfoBody;
+      readonly copyFrom?: E2eeCopyFrom;
+      readonly adoption?: E2eeAdoption;
+    }
+  ): Promise<CreateProjectResponse> {
+    const device = writableDevice();
+    const projectId = document.projectId;
+    let created:
+      | {
+          sealed: Sealed;
+          state: E2eeProjectState;
+          infoHash: string;
+        }
+      | undefined;
+    const creating: ProjectGroupContext = {
+      ...groups,
+      api: {
+        ...groups.api,
+        // The project row is written together with its group, so until
+        // that write lands the Worker knows no such project. To
+        // createProjectGroup, which asks for an existing group before
+        // building one and again after a failed upload, that is a project
+        // without a group yet.
+        group: async (id) => {
+          try {
+            return await groups.api.group(id);
+          } catch (error) {
+            if (
+              error instanceof E2eeApiError &&
+              error.status === 404 &&
+              error.code === 'PROJECT_NOT_FOUND'
+            ) {
+              throw new E2eeApiError(
+                404,
+                error.message,
+                'E2EE_GROUP_NOT_FOUND'
+              );
+            }
+            throw error;
+          }
+        },
+        // The group's epoch 0 travels with the project row, its first
+        // version and its project info, in one write.
+        createGroup: async (id, groupRequest) => {
+          const material = await groups.sessions.epochMaterial(
+            refOf(device, id)
+          );
+          const epoch0: Material = {
+            keyEpoch: 0,
+            projectKey: material.projectKey,
+            epochAuthenticator: material.epochAuthenticator
+          };
+          const sealed = await sealDocument(
+            device,
+            epoch0,
+            id,
+            document,
+            0,
+            null,
+            new Map()
+          );
+          const firstInfo = await sealInfo(device, epoch0, id, extra.info, 1);
+          const metadata = {
+            projectId: id,
+            group: groupRequest,
+            version: {
+              expectedVersion: 0,
+              signature: sealed.signature,
+              wrappedVersionKey: sealed.wrappedVersionKey,
+              signerDeviceId: device.deviceId
+            },
+            info: firstInfo,
+            ...(extra.copyFrom ? { copyFrom: extra.copyFrom } : {}),
+            ...(extra.adoption ? { adoption: extra.adoption } : {})
+          };
+          let response;
+          try {
+            response = await api.create(metadata, sealed.envelope);
+          } catch (error) {
+            // The request may have landed and its answer been lost: the
+            // same bytes again are answered as created (slice 4-8).
+            if (error instanceof ApiError) throw error;
+            response = await api.create(metadata, sealed.envelope);
+          }
+          if (response.versionHash !== sealed.hash) {
+            throw integrity(
+              'content',
+              'The account stored another version than this browser sent.'
+            );
+          }
+          created = {
+            sealed,
+            state: response.project,
+            infoHash: toHex(await versionHash(bytes(firstInfo.envelope)))
+          };
+          return groups.api.group(id);
+        }
+      }
+    };
+    await createProjectGroup(creating, projectId);
+    if (!created) throw new Error('The encrypted project was not created.');
+    const { sealed, state, infoHash } = created;
+    await pins.advance(userId, projectId, null, {
+      headHash: sealed.hash,
+      documentVersion: sealed.document.version,
+      keyEpoch: 0
+    });
+    await pins.advanceInfo(userId, projectId, 1, infoHash);
+    heads.set(projectId, {
+      version: sealed.document.version,
+      hash: sealed.hash,
+      keyEpoch: 0,
+      revisionHashes: new Map(),
+      document: sealed.document,
+      infoName: extra.info.name,
+      infoSequence: 1
+    });
+    return {
+      project: summaryOf(state, sealed.document.name),
+      document: sealed.document
+    };
+  }
+
+  /** The browser's checks of a new project's document (ADR-024 Phase 1). */
+  function prepared(source: ProjectDocument, name: string): ProjectDocument {
+    try {
+      return prepareInitialProjectDocument(userId as UserId, source, name);
+    } catch (error) {
+      throw new ApiError(
+        400,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  }
+
   return {
     createProject: guarded(async (request) => {
-      if (request.document || request.adoptionProtocolVersion) {
-        throw new ApiError(
-          409,
-          'Saving a device project to an account that encrypts new projects is not available yet. It stays saved on this device.',
-          'E2EE_ADOPTION_UNAVAILABLE'
-        );
-      }
-      const device = writableDevice();
+      writableDevice();
       const ownerUserId = userId as UserId;
+      // A device project saved to the account (decision D2): stored as the
+      // page re-homed it; its device-only files follow as blobs.
+      if (request.document || request.adoptionProtocolVersion) {
+        if (
+          request.adoptionProtocolVersion !== 2 ||
+          !request.document ||
+          !request.localProjectId
+        ) {
+          throw new ApiError(
+            400,
+            'This device project cannot be saved to the account as sent.'
+          );
+        }
+        const document = prepared(request.document, request.name);
+        return createFrom(document, {
+          info: { name: document.name, exports: [] },
+          adoption: { localProjectId: request.localProjectId }
+        });
+      }
       const initial =
         request.initialDocument ??
         createProjectDocument(request.name, ownerUserId, request.units);
-      let document: ProjectDocument;
-      try {
-        document = prepareInitialProjectDocument(
-          ownerUserId,
-          initial,
-          request.name
-        );
-      } catch (error) {
-        throw new ApiError(
-          400,
-          error instanceof Error ? error.message : String(error)
-        );
+      const document = prepared(initial, request.name);
+      return createFrom(document, {
+        info: { name: document.name, exports: [] }
+      });
+    }),
+
+    copyProject: guarded(async (request) => {
+      writableDevice();
+      const sourceProjectId = request.sourceProjectId;
+      if (request.document.projectId === sourceProjectId) {
+        throw new ApiError(400, 'A copy is a new project.');
       }
+      const document = prepared(request.document, request.document.name);
       const projectId = document.projectId;
-      let created:
-        | {
-            sealed: Sealed;
-            state: E2eeProjectState;
-            infoHash: string;
-          }
-        | undefined;
-      const creating: ProjectGroupContext = {
-        ...groups,
-        api: {
-          ...groups.api,
-          // The project row is written together with its group, so until
-          // that write lands the Worker knows no such project. To
-          // createProjectGroup, which asks for an existing group before
-          // building one and again after a failed upload, that is a project
-          // without a group yet.
-          group: async (id) => {
-            try {
-              return await groups.api.group(id);
-            } catch (error) {
-              if (
-                error instanceof E2eeApiError &&
-                error.status === 404 &&
-                error.code === 'PROJECT_NOT_FOUND'
-              ) {
-                throw new E2eeApiError(
-                  404,
-                  error.message,
-                  'E2EE_GROUP_NOT_FOUND'
-                );
-              }
-              throw error;
-            }
-          },
-          // The group's epoch 0 travels with the project row, its first
-          // version and its project info, in one write.
-          createGroup: async (id, groupRequest) => {
-            const material = await groups.sessions.epochMaterial(
-              refOf(device, id)
-            );
-            const epoch0: Material = {
-              keyEpoch: 0,
-              projectKey: material.projectKey,
-              epochAuthenticator: material.epochAuthenticator
-            };
-            const sealed = await sealDocument(
-              device,
-              epoch0,
-              id,
-              document,
-              0,
-              null,
-              new Map()
-            );
-            const firstInfo = await sealInfo(
-              device,
-              epoch0,
-              id,
-              document.name,
-              1
-            );
-            const response = await api.create(
-              {
-                projectId: id,
-                group: groupRequest,
-                version: {
-                  expectedVersion: 0,
-                  signature: sealed.signature,
-                  wrappedVersionKey: sealed.wrappedVersionKey,
-                  signerDeviceId: device.deviceId
-                },
-                info: firstInfo
-              },
-              sealed.envelope
-            );
-            if (response.versionHash !== sealed.hash) {
-              throw integrity(
-                'content',
-                'The account stored another version than this browser sent.'
-              );
-            }
-            created = {
-              sealed,
-              state: response.project,
-              infoHash: toHex(await versionHash(bytes(firstInfo.envelope)))
-            };
-            return groups.api.group(id);
-          }
+      // The copy names the source's blobs: the references this page holds
+      // from the verified source become the copy's own, keys and all.
+      const blobIds = new Set<string>();
+      for (const id of importArtifactIds(document)) {
+        if (id.startsWith('artifact_local_')) continue;
+        const held = blobReferences.get(sourceProjectId, id);
+        if (!held) {
+          throw new UnstorableDocumentError(E2EE_BLOB_KEY_MISSING_MESSAGE);
         }
+        blobReferences.remember(projectId, held.reference, held.checksumSha256);
+        blobIds.add(id);
+      }
+      // A duplicate carries the shelf picture and archived exports; a
+      // branch starts from an older save, which neither shows.
+      let carried: ProjectInfoBody | null = null;
+      if (request.revisionId === undefined) {
+        try {
+          carried = (await info.read(sourceProjectId)).body;
+        } catch {
+          carried = null;
+        }
+      }
+      const firstInfo: ProjectInfoBody = {
+        name: document.name,
+        ...(carried?.thumbnail ? { thumbnail: carried.thumbnail } : {}),
+        exports: carried?.exports ?? []
       };
-      await createProjectGroup(creating, projectId);
-      if (!created) throw new Error('The encrypted project was not created.');
-      const { sealed, state, infoHash } = created;
-      await pins.advance(userId, projectId, null, {
-        headHash: sealed.hash,
-        documentVersion: sealed.document.version,
-        keyEpoch: 0
+      for (const reference of projectInfoReferences(firstInfo)) {
+        blobReferences.remember(projectId, reference);
+        blobIds.add(reference.blobId);
+      }
+      return createFrom(document, {
+        info: firstInfo,
+        copyFrom: {
+          projectId: sourceProjectId,
+          blobIds: [...blobIds].sort(),
+          ...(request.revisionId === undefined
+            ? {}
+            : { revisionId: request.revisionId })
+        }
       });
-      await pins.advanceInfo(userId, projectId, 1, infoHash);
-      heads.set(projectId, {
-        version: sealed.document.version,
-        hash: sealed.hash,
-        keyEpoch: 0,
-        revisionHashes: new Map(),
-        document: sealed.document,
-        infoName: sealed.document.name,
-        infoSequence: 1
-      });
-      return {
-        project: summaryOf(state, sealed.document.name),
-        document: sealed.document
-      };
     }),
 
     saveProjectDocument: guarded(async (payload) => {
@@ -1646,7 +2121,8 @@ export function createEncryptedProjectStore(
 
     projectName,
     info,
-    replaced
+    replaced,
+    roomAccess: () => roomAccess
   };
 }
 
