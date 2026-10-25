@@ -139,7 +139,6 @@ for (const [width, height] of [
     await stubApi(page);
     await page.goto('/');
     await create(page, 'QA pattern cancel');
-    const inspector = page.getByRole('region', { name: 'Feature inspector' });
     // Off the Z axis, so three copies about it stay apart: a world axis
     // through the corner-origin box would run along an edge they all share,
     // which exact union refuses.
