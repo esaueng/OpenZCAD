@@ -226,3 +226,42 @@ test('Save-Data loads neither Settings nor the keypad speculatively', async ({
   await page.waitForTimeout(6_000);
   expect(fetched).toEqual([]);
 });
+
+test('a Move held for its panel is dropped when the project is replaced', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  await page.route(/MoveOverlay[^/]*\.(js|tsx)(\?|$)/, async (route) => {
+    await released;
+    await route.continue();
+  });
+  const createBoxProject = async (name: string) => {
+    await page.getByLabel('Project name').fill(name);
+    await page.getByRole('button', { name: 'Create project' }).click();
+    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+    await page
+      .getByRole('region', { name: 'Feature inspector' })
+      .getByRole('button', { name: /^Create/ })
+      .click();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.selection-card')).toHaveCount(0);
+  };
+  await page.goto('/');
+  await createBoxProject('First held');
+  await page.getByTitle('Back to projects').click();
+  await createBoxProject('Second held');
+  // Move with nothing selected: its source is the project alone.
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  // Opening another project launches no tool, so only the source can tell
+  // the held launch it no longer applies.
+  await page.getByTitle('Back to projects').click();
+  await page.locator('.start-tile-open', { hasText: 'First held' }).click();
+  await expect(page.getByRole('button', { name: /^Move \(M\)/ })).toBeVisible();
+  release();
+  await page.waitForTimeout(1_000);
+  await expect(page.locator('form[aria-label="Move controls"]')).toHaveCount(0);
+});

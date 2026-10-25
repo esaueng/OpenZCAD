@@ -6756,9 +6756,11 @@ export function App() {
     }
     return findSketch(doc, selectedFeature.data.sketchId) ?? null;
   }, [doc, selectedFeature]);
-  /** What a Move launched now would target, read live by a held launch. */
+  /** What a Move launched now would target, read live by a held launch:
+   * the project as well as the selection, since a replaced project can have
+   * the same (empty) selection. */
   const moveSourceRef = useRef('');
-  moveSourceRef.current = `${selectedBodyIds.join(',')}|${selectedSketch?.sketchId ?? ''}`;
+  moveSourceRef.current = `${doc?.projectId ?? ''}|${selectedBodyIds.join(',')}|${selectedSketch?.sketchId ?? ''}`;
 
   const selectedSketchObject = useMemo<SketchObjectData | null>(() => {
     if (!doc || !selectedSketch) {
