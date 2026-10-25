@@ -14,10 +14,12 @@ import {
   type InPlaceSlots,
   type InPlaceToolId,
   type InPlaceToolSpec,
+  type OptionSpec,
   type PlanePick,
   type ProfilePick
 } from '../lib/inPlace/tools';
 import type { RevolveAxisCandidate } from '../lib/inPlace/revolve';
+import type { InPlaceEditSeed } from '../lib/inPlace/edit';
 
 /**
  * Runs whichever in-place command (U09) is active.
@@ -47,11 +49,20 @@ export interface UseInPlaceCommandOptions extends InPlaceContext {
   derive(document: ProjectDocument): Promise<ProjectDocument['derived']>;
   /**
    * Builds the same command the commit runs, named for the tool so a kernel
-   * refusal names it as the commit would.
+   * refusal names it as the commit would. With `edit`, that is the feature's
+   * `updateFeature`, not a new feature.
    */
-  buildCommand(request: InPlaceRequest, title: string): InPlaceBuiltCommand;
+  buildCommand(
+    request: InPlaceRequest,
+    title: string,
+    edit: InPlaceEditSeed | null
+  ): InPlaceBuiltCommand;
   /** Commits a request through the validated-feature path. */
-  commit(request: InPlaceRequest, title: string): void;
+  commit(
+    request: InPlaceRequest,
+    title: string,
+    edit: InPlaceEditSeed | null
+  ): void;
   publishPreview(preview: ProjectDocument | null): void;
   onStatus(message: string): void;
 }
@@ -73,6 +84,8 @@ interface Session {
   raws: Record<string, string>;
   /** Values the user has set, which the picks' defaults leave alone. */
   touched: string[];
+  /** The stored feature this command edits; null while creating one. */
+  edit: InPlaceEditSeed | null;
 }
 
 export interface InPlaceCommand {
@@ -86,9 +99,15 @@ export interface InPlaceCommand {
   /** Values held as typed expressions, by id. */
   raws: Record<string, string>;
   options: Record<string, string>;
+  /** The Options menu: the spec's, with an edit's own choices, unlocked. */
+  optionSpecs: OptionSpec[];
+  /** The feature being edited, or null while creating. */
+  editing: InPlaceEditSeed | null;
   hint: string;
   refusal: string | null;
   canFinish: boolean;
+  /** Re-arms the command that made a stored feature, seeded from it. */
+  edit(tool: InPlaceToolId, seed: InPlaceEditSeed): void;
   start(
     tool: InPlaceToolId,
     profiles?: ProfilePick[],
@@ -149,29 +168,36 @@ export function useInPlaceCommand(
   const spec = session ? IN_PLACE_TOOL_SPECS[session.tool] : null;
   const specRef = useRef(spec);
   specRef.current = spec;
+  const editSeed = session?.edit ?? null;
+  const editRef = useRef(editSeed);
+  editRef.current = editSeed;
   const ctx: InPlaceContext = useMemo(
     () => ({
       sketchViews: options.sketchViews,
       datumAxes: options.datumAxes,
       datumLabel: (featureId) => optionsRef.current.datumLabel(featureId),
       linearSnap: options.linearSnap ?? null,
-      bodyBounds: (bodyId) => optionsRef.current.bodyBounds?.(bodyId) ?? null
+      bodyBounds: (bodyId) => optionsRef.current.bodyBounds?.(bodyId) ?? null,
+      evaluate: (value) => optionsRef.current.evaluate?.(value) ?? null,
+      ...(editSeed ? { saved: editSeed.data } : {})
     }),
-    [options.sketchViews, options.datumAxes, options.linearSnap]
+    [options.sketchViews, options.datumAxes, options.linearSnap, editSeed]
   );
 
   const profiles = session?.slots.profiles;
   const bodyCount = session?.slots.bodies.length ?? 0;
   const axisCandidates = useMemo(() => {
     if (!spec?.wantsAxis || !profiles) return [];
+    // An edited feature's own axis line (a helix's typed one) comes first.
+    const own = editSeed?.axes ?? [];
     if (spec.axisSource === 'datum' || spec.axisSource === 'world') {
       // A body's turn: its axis lines, once the body is picked.
       return bodyCount > 0
-        ? axisCandidatesFor(EMPTY_SLOTS, ctx, spec.axisSource)
+        ? [...own, ...axisCandidatesFor(EMPTY_SLOTS, ctx, spec.axisSource)]
         : [];
     }
-    return axisCandidatesFor({ ...EMPTY_SLOTS, profiles }, ctx);
-  }, [spec, profiles, bodyCount, ctx]);
+    return [...own, ...axisCandidatesFor({ ...EMPTY_SLOTS, profiles }, ctx)];
+  }, [spec, profiles, bodyCount, ctx, editSeed]);
   const slots: InPlaceSlots = useMemo(
     () =>
       session
@@ -262,7 +288,11 @@ export function useInPlaceCommand(
         const title =
           specRef.current?.featureName ?? specRef.current?.title ?? 'Preview';
         if (!current || !base) return null;
-        const command = optionsRef.current.buildCommand(current, title);
+        const command = optionsRef.current.buildCommand(
+          current,
+          title,
+          editRef.current
+        );
         command.validate(base);
         const built = command.apply(base);
         builtFrames.set(built, {
@@ -358,6 +388,7 @@ export function useInPlaceCommand(
       setPreviewValid(false);
       setSession({
         tool,
+        edit: null,
         slots: {
           profiles:
             toolSpec.profileMode === 'none'
@@ -388,6 +419,33 @@ export function useInPlaceCommand(
         ),
         raws: {},
         touched: []
+      });
+    },
+    [preview]
+  );
+
+  const edit = useCallback(
+    (tool: InPlaceToolId, seed: InPlaceEditSeed) => {
+      preview.clear();
+      optionsRef.current.publishPreview(null);
+      setRefusal(null);
+      setPreviewValid(false);
+      setSession({
+        tool,
+        edit: seed,
+        slots: {
+          profiles: seed.slots.profiles,
+          axisId: seed.slots.axisId,
+          path: seed.slots.path,
+          guide: seed.slots.guide,
+          faces: seed.slots.faces,
+          bodies: seed.slots.bodies,
+          plane: seed.slots.plane
+        },
+        options: { ...seed.options },
+        values: { ...seed.values },
+        raws: { ...seed.raws },
+        touched: [...seed.touched]
       });
     },
     [preview]
@@ -567,6 +625,14 @@ export function useInPlaceCommand(
       if (!current) return current;
       const specs = IN_PLACE_TOOL_SPECS[current.tool].options ?? [];
       const optionSpec = specs.find((candidate) => candidate.id === optionId);
+      // The operation of a boolean is its tool: the bodies stay picked.
+      if (optionSpec?.switchesTool && value in IN_PLACE_TOOL_SPECS) {
+        return {
+          ...current,
+          tool: value as InPlaceToolId,
+          options: { ...current.options, [optionId]: value }
+        };
+      }
       const options = { ...current.options, [optionId]: value };
       // Two options that may not match (a grid's directions) trade places
       // rather than leave a pair the kernel refuses.
@@ -657,18 +723,26 @@ export function useInPlaceCommand(
     const current = requestRef.current;
     if (!current || !spec || !canFinish) return false;
     if (requestKeyRef.current !== previewedKey) return false;
+    const editing = editRef.current;
     end();
-    optionsRef.current.commit(current, spec.featureName ?? spec.title);
+    optionsRef.current.commit(
+      current,
+      editing?.name ?? spec.featureName ?? spec.title,
+      editing
+    );
     return true;
   }, [spec, canFinish, previewedKey, end]);
 
   const cancel = useCallback(
     (quiet = false) => {
       if (!spec) return;
+      const editing = editRef.current;
       end();
       if (!quiet) {
         optionsRef.current.onStatus(
-          `${spec.title} canceled; nothing was added.`
+          editing
+            ? `Edit canceled; ${editing.name} is unchanged.`
+            : `${spec.title} canceled; nothing was added.`
         );
       }
     },
@@ -678,6 +752,18 @@ export function useInPlaceCommand(
   const handles = useMemo(
     () => (spec ? spec.handles(slots, values, ctx, chosen) : []),
     [spec, slots, values, ctx, chosen]
+  );
+  const optionSpecs = useMemo(
+    () =>
+      (spec?.options ?? [])
+        .filter((option) => !editSeed?.lockedOptions.includes(option.id))
+        .map((option) => {
+          const own = editSeed?.choices[option.id];
+          return own
+            ? { ...option, choices: [...option.choices, ...own] }
+            : option;
+        }),
+    [spec, editSeed]
   );
 
   return {
@@ -690,9 +776,12 @@ export function useInPlaceCommand(
     values,
     raws: session?.raws ?? EMPTY_RAWS,
     options: chosen,
+    optionSpecs,
+    editing: editSeed,
     hint: spec ? spec.hint(slots, chosen) : '',
     refusal,
     canFinish,
+    edit,
     start,
     pickProfile,
     pickAxis,

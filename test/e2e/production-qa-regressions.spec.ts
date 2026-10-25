@@ -185,13 +185,20 @@ for (const [width, height] of [
     const patterned = await bodiesNow();
     // Editing it to fifty copies is the long exact rebuild.
     await revealModelPanel(page, 'History');
+    // U09 phase 7: the row re-arms the pattern in place; its count chip
+    // takes the new count, and Done runs the commit through the pattern
+    // runner, which can be stopped.
     await page
       .locator('.feature-row-main', { hasText: 'Circular pattern' })
       .click();
-    await inspector
-      .getByRole('textbox', { name: 'Count', exact: true })
-      .fill('50');
-    await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
+    await expect(
+      page.getByRole('group', { name: 'Edit Circular pattern command' })
+    ).toBeVisible();
+    await enterCommandValue(page, 'count', '50');
+    await page
+      .getByRole('group', { name: 'Edit Circular pattern command' })
+      .getByRole('button', { name: /Done/ })
+      .click({ timeout: 90_000 });
     await expect(
       page.getByRole('region', { name: 'Pattern rebuild' })
     ).toBeVisible();

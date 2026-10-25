@@ -5,7 +5,9 @@ import {
   expectBodyCount,
   modelPanel,
   railPanelButton,
-  createShellInPlace
+  createShellInPlace,
+  enterCommandValue,
+  finishInPlaceCommand
 } from './openzcad-fixtures';
 
 test('explains a failed downstream edit and opens the exact feature for repair', async ({
@@ -412,18 +414,17 @@ test('renaming a modeling feature closes its stale editor and keeps the new name
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
   await inspector.getByRole('button', { name: /^Create/ }).click();
-  // U09: a new shell is made in place; editing it still opens its card.
   await createShellInPlace(page, {
     normals: [{ x: 0, y: 0, z: 1 }],
     thickness: '2'
   });
   const row = page.locator('.feature-row', { hasText: 'Shell' }).first();
   await row.locator('.feature-row-main').click();
-  await expect(
-    page.getByRole('textbox', { name: 'Wall thickness', exact: true })
-  ).toBeVisible();
-  // Reach the history action through the keyboard while the floating editor
-  // occupies the same pointer lane as the row.
+  // U09 phase 7: the row re-arms the Shell command in place.
+  const editBar = page.getByRole('group', { name: /^Edit .* command$/ });
+  await expect(editBar).toHaveAccessibleName('Edit Shell command');
+  // Reach the history action through the keyboard while the command holds
+  // the viewport.
   const actions = row.getByRole('button', { name: 'More actions for Shell' });
   await actions.focus();
   await actions.press('Enter');
@@ -431,20 +432,15 @@ test('renaming a modeling feature closes its stale editor and keeps the new name
   const rename = page.getByRole('textbox', { name: 'Rename Shell' });
   await rename.fill('Renamed wall');
   await rename.press('Enter');
-  await expect(
-    page.getByRole('textbox', { name: 'Wall thickness', exact: true })
-  ).toHaveCount(0);
+  // The edit was armed with the old name, so the rename ends it.
+  await expect(editBar).toHaveCount(0);
   const renamed = page
     .locator('.feature-row', { hasText: 'Renamed wall' })
     .first();
   await renamed.locator('.feature-row-main').click();
-  await page
-    .getByRole('textbox', { name: 'Wall thickness', exact: true })
-    .fill('1.5');
-  await page.getByRole('button', { name: 'Apply shell' }).click();
-  await expect(
-    page.getByRole('textbox', { name: 'Wall thickness', exact: true })
-  ).toHaveCount(0);
+  await expect(editBar).toHaveAccessibleName('Edit Renamed wall command');
+  await enterCommandValue(page, 'thickness', '1.5');
+  await finishInPlaceCommand(page, 'Edit Renamed wall');
   await expect(renamed.locator('.feature-name')).toHaveText('Renamed wall');
 });
 

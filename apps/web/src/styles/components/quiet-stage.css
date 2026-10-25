@@ -372,6 +372,15 @@
   overflow: hidden;
 }
 
+/* A narrow window floats the inspector over the stage: while a feature it
+   reads out is edited in place, the stage belongs to the edit's handles and
+   chips, and the readout comes back when the edit ends. */
+@media (max-width: 960px) {
+  .viewer-area.inspector-yields .inspector-float {
+    display: none;
+  }
+}
+
 /* shell.css draws the inspector as its own overlay; in the lane it follows
    the command card, shrinking (and scrolling) before a panel does. */
 .stage-right > .inspector-float {
@@ -3366,6 +3375,16 @@ button.model-panel-grip[aria-expanded='true'] {
   flex: 0 0 100%;
   color: var(--color-text-muted);
   font-size: var(--fs-xs);
+}
+
+/* What the chosen choice does, where a card had its explanation. */
+.in-place-option-note {
+  flex: 0 0 100%;
+  max-width: 36ch;
+  margin: 2px 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
 }
 
 .in-place-option-choice {

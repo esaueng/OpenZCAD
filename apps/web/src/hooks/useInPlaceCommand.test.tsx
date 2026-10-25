@@ -1,7 +1,13 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { PlaneBasis } from '@openzcad/geometry';
-import type { BodyId, ProjectDocument, SketchId } from '@openzcad/shared';
+import type {
+  BodyId,
+  FeatureId,
+  ProjectDocument,
+  SketchId
+} from '@openzcad/shared';
+import type { InPlaceEditSeed } from '../lib/inPlace/edit';
 import {
   mergeSweptFaces,
   useInPlaceCommand,
@@ -152,7 +158,7 @@ describe('useInPlaceCommand: revolve', () => {
     act(() => {
       hook.result.current.done();
     });
-    expect(commit).toHaveBeenCalledWith(full, 'Revolve');
+    expect(commit).toHaveBeenCalledWith(full, 'Revolve', null);
     expect(hook.result.current.active).toBe(false);
     expect(publishPreview).toHaveBeenLastCalledWith(null);
   });
@@ -568,5 +574,99 @@ describe('review: a sweep guide rail', () => {
       'g1'
     ]);
     expect(hook.result.current.hint).toMatch(/Guide rail of 1/);
+  });
+});
+
+describe('useInPlaceCommand: editing a stored feature', () => {
+  const SEED: InPlaceEditSeed = {
+    featureId: 'feat_1' as FeatureId,
+    nodeId: 'node_1',
+    name: 'Cut 2',
+    data: {
+      featureKind: 'boolean',
+      operation: 'subtract',
+      targetBodyIds: ['body_a' as BodyId, 'body_b' as BodyId]
+    },
+    resultBodyId: BODY,
+    ownBodyIds: [BODY],
+    slots: {
+      profiles: [],
+      axisId: null,
+      path: [],
+      guide: [],
+      faces: [],
+      bodies: [
+        {
+          bodyId: 'body_a' as BodyId,
+          min: { x: 0, y: 0, z: 0 },
+          max: { x: 1, y: 1, z: 1 }
+        },
+        {
+          bodyId: 'body_b' as BodyId,
+          min: { x: 0, y: 0, z: 0 },
+          max: { x: 1, y: 1, z: 1 }
+        }
+      ],
+      plane: null
+    },
+    values: {},
+    raws: {},
+    touched: [],
+    options: { operation: 'subtract', keepOriginals: 'none' },
+    axes: [],
+    choices: {},
+    lockedOptions: ['keepOriginals'],
+    notice: null
+  };
+
+  it('previews and commits the edit, under its own name', async () => {
+    const buildCommand = vi.fn<UseInPlaceCommandOptions['buildCommand']>(
+      () => ({
+        validate: () => undefined,
+        apply: (document) => document,
+        resultBodyId: BODY
+      })
+    );
+    const { hook, commit } = setup({ buildCommand });
+    act(() => hook.result.current.edit('subtract', SEED));
+    expect(hook.result.current.editing).toBe(SEED);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(buildCommand).toHaveBeenLastCalledWith(
+      {
+        tool: 'boolean',
+        operation: 'subtract',
+        targetBodyIds: ['body_a', 'body_b']
+      },
+      'Subtract',
+      SEED
+    );
+    act(() => {
+      hook.result.current.done();
+    });
+    expect(commit).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: 'subtract' }),
+      'Cut 2',
+      SEED
+    );
+  });
+
+  it('switches operation with its bodies, and hides a locked option', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.edit('subtract', SEED));
+    expect(hook.result.current.optionSpecs.map((option) => option.id)).toEqual([
+      'operation'
+    ]);
+    act(() => hook.result.current.setOption('operation', 'union'));
+    expect(hook.result.current.tool).toBe('union');
+    expect(hook.result.current.slots.bodies).toHaveLength(2);
+  });
+
+  it('says the feature is unchanged when canceled', () => {
+    const onStatus = vi.fn();
+    const { hook } = setup({ onStatus });
+    act(() => hook.result.current.edit('subtract', SEED));
+    act(() => hook.result.current.cancel());
+    expect(onStatus).toHaveBeenCalledWith('Edit canceled; Cut 2 is unchanged.');
+    expect(hook.result.current.editing).toBeNull();
   });
 });

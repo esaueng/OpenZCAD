@@ -300,7 +300,11 @@ import {
   sketchGeometryDeleteRefusal,
   sketchSolveEvidenceKey
 } from './lib/sketch/solveEvidence';
-import type { SketchDimensionIdentity } from '@openzcad/shared';
+import type {
+  SketchDimensionIdentity,
+  SketchProfileReference,
+  Vector3
+} from '@openzcad/shared';
 import { constraintInspectionTargets } from './lib/sketch/constraintInspection';
 import {
   solveStatusLabel,
@@ -1431,6 +1435,13 @@ import {
   parseCurveCandidateId,
   sketchCurveCandidates
 } from './lib/inPlace/curves';
+import { datumAxisChoices } from './lib/datumAxisChoices';
+import {
+  inPlaceEditSeed,
+  inPlaceFeatureUpdate,
+  inPlaceToolForFeature,
+  type InPlaceEditSeed
+} from './lib/inPlace/edit';
 import { PreviewRebuilds } from './lib/previewRebuilds';
 import {
   blendPreviewSelectionKey,
@@ -8172,6 +8183,177 @@ export function App() {
     );
   }
 
+  /**
+   * U09 phase 7: re-arms the in-place command that made a stored feature,
+   * seeded from it, instead of opening its card. The feature stays pinned,
+   * so its History row and its readout stay on screen while it is edited.
+   * False when the feature has no in-place editor or cannot be edited now.
+   */
+  function startInPlaceEdit(feature: FeatureNode): boolean {
+    const current = managerRef.current?.document;
+    const tool = inPlaceToolForFeature(feature.data);
+    if (!current || !tool) return false;
+    // What a new feature needs on screen (two live bodies for a boolean,
+    // closed profiles for a loft) the stored feature already has, consumed.
+    const reason = toolDisabledReason(tool, {
+      ...availability,
+      liveBodyCount: Number.POSITIVE_INFINITY,
+      sketchCount: Number.POSITIVE_INFINITY,
+      closedProfileSketchCount: Number.POSITIVE_INFINITY
+    });
+    if (reason) {
+      setStatus(`${TOOL_META[tool].label}: ${reason}.`);
+      return false;
+    }
+    const armed = inPlaceEditSeed(feature, {
+      evaluate: (value) =>
+        evalParamValue(value, parameterScope.scope, current.units),
+      profile: (sketchId, reference) => {
+        // A section in a sketch made after the feature is a forward
+        // reference: it is not restored, and the slot asks for another.
+        if (
+          !featurePrecedes(producingFeatureOf({ sketchId }), feature.featureId)
+        ) {
+          return null;
+        }
+        const view = availableSketchViews.find(
+          (candidate) => candidate.sketchId === sketchId
+        );
+        if (!view) {
+          // A consumed sketch is hidden, so not drawn yet: the edit shows it
+          // once armed, and the stored reference stands until then.
+          return {
+            sketchId,
+            reference,
+            regionFingerprint:
+              reference.all === true ? 0 : reference.regionFingerprint
+          };
+        }
+        const [region] = regionsForReference(view, reference);
+        return region
+          ? { sketchId, reference, regionFingerprint: region.regionFingerprint }
+          : null;
+      },
+      firstRegion: (sketchId) =>
+        availableSketchViews.find((view) => view.sketchId === sketchId)
+          ?.regions[0]?.regionFingerprint ?? null,
+      face: (bodyId, hash) =>
+        inPlaceFacePick(bodyId, undefined, hash, undefined),
+      anyFace: (bodyId) => {
+        const face = representations[bodyId]?.topology?.faces.find(
+          (candidate) => candidate.geometry?.surfaceType === 'plane'
+        );
+        return face
+          ? inPlaceFacePick(bodyId, face.topologyId, face.hash, undefined)
+          : null;
+      },
+      body: (bodyId) => inPlaceBodyPick(bodyId)
+    });
+    if (!armed) return false;
+    // A running command (another edit, a create) gives way quietly.
+    inPlaceRef.current.cancel(true);
+    retireStatusMessage();
+    inPlaceRef.current.edit(armed.tool, armed.seed);
+    if (armed.seed.notice) setStatus(armed.seed.notice);
+    return true;
+  }
+
+  /** Done on an in-place edit: the feature's update, validated as the card's was. */
+  function commitInPlaceEdit(request: InPlaceRequest, edit: InPlaceEditSeed) {
+    const current = managerRef.current?.document;
+    const feature = current ? findFeature(current, edit.featureId) : null;
+    if (!feature) {
+      setStatus('This history feature is no longer available to edit.');
+      return;
+    }
+    // The feature's name as it is now: a rename since the edit armed (from
+    // another device, say) must not be written back over.
+    const named = { ...edit, name: feature.name };
+    let command: AnyCommand;
+    try {
+      command = inPlaceEditCommand(request, named);
+    } catch (error) {
+      setStatus(errorMessage(error, `${feature.name} could not be edited.`));
+      return;
+    }
+    applyValidatedFeature(command, feature, feature.name, edit.resultBodyId);
+  }
+
+  /**
+   * Esc or the bar's Cancel: an edit leaves its feature as it was and
+   * returns to nothing selected, in one press, as an edit card's did.
+   */
+  function cancelInPlaceCommand() {
+    const editing = inPlaceRef.current.editing;
+    inPlaceRef.current.cancel();
+    if (editing) {
+      setSelectedFeatureNode(null);
+      setSelectedBodyIds([]);
+      setSelectedProfiles([]);
+    }
+  }
+
+  /**
+   * Whether an edit may take what a feature built: only what exists before
+   * it in history. A later sketch or body would be a forward reference.
+   */
+  function inPlaceEditMayUse(
+    producer: FeatureId | undefined,
+    edit: InPlaceEditSeed | null
+  ): boolean {
+    return !edit || featurePrecedes(producer, edit.featureId);
+  }
+
+  /** Whether `producer` comes before `featureId` in history. */
+  function featurePrecedes(
+    producer: FeatureId | undefined,
+    featureId: FeatureId
+  ): boolean {
+    const current = managerRef.current?.document;
+    if (!current) return true;
+    const order = current.featureOrder;
+    const at = order.indexOf(featureId);
+    const from = producer ? order.indexOf(producer) : -1;
+    return at < 0 || (from >= 0 && from < at);
+  }
+
+  /**
+   * Whether an edit's body slot takes a clicked body. The feature's own
+   * result (what is on screen where its input was) keeps the input it has;
+   * a body made later is refused by name.
+   */
+  function inPlaceEditTakesBody(bodyId: BodyId): boolean {
+    const editing = inPlaceRef.current.editing;
+    if (!editing || inPlaceEditMayUse(producingFeatureOf({ bodyId }), editing))
+      return true;
+    if (!editing.ownBodyIds.includes(bodyId)) {
+      setStatus(
+        `${editing.name} can only use bodies made before it in History.`
+      );
+    }
+    return false;
+  }
+
+  /** The feature that made a body, or a sketch, for {@link inPlaceEditMayUse}. */
+  function producingFeatureOf(
+    target: { bodyId: BodyId } | { sketchId: SketchId }
+  ): FeatureId | undefined {
+    const current = managerRef.current?.document;
+    if (!current) return undefined;
+    if ('bodyId' in target) {
+      const node = Object.values(current.nodes).find(
+        (candidate) =>
+          candidate.kind === 'body' && candidate.bodyId === target.bodyId
+      );
+      return node?.kind === 'body' ? node.featureId : undefined;
+    }
+    return listNodesByKind(current, 'feature').find(
+      (feature) =>
+        feature.data.featureKind === 'sketch' &&
+        feature.data.sketchId === target.sketchId
+    )?.featureId;
+  }
+
   /** Swept faces as an in-place command's face slot holds them. */
   function inPlaceFacesFor(selections: readonly TopologySelection[]) {
     return selections.flatMap((selection) => {
@@ -8197,29 +8379,49 @@ export function App() {
       (hash !== undefined && candidate.hash === hash);
     let resolvedBodyId = bodyId as BodyId;
     let face = representations[resolvedBodyId]?.topology?.faces.find(matches);
-    if (!face) {
+    // An edit's faces belong to the body it took: a click on what the
+    // feature (or a later one) built from that body means the input's face.
+    const editing = inPlaceRef.current.editing;
+    const editTarget =
+      editing && 'targetBodyId' in editing.data
+        ? editing.data.targetBodyId
+        : null;
+    const remap =
+      face !== undefined &&
+      editTarget !== null &&
+      resolvedBodyId !== editTarget &&
+      !inPlaceEditMayUse(
+        producingFeatureOf({ bodyId: resolvedBodyId }),
+        editing
+      );
+    if (remap && editTarget) {
+      const clicked = face?.geometry;
+      face =
+        representations[editTarget]?.topology?.faces.find(
+          (candidate) => hash !== undefined && candidate.hash === hash
+        ) ??
+        coplanarFace(
+          editTarget,
+          clicked?.normal,
+          clicked?.centroid ?? clicked?.center
+        );
+      if (face) resolvedBodyId = editTarget;
+    }
+    if (!face && !remap) {
       // While a preview shows, a click lands on the preview's body, which the
       // document does not have. The face meant is the edited body's face in
       // the same plane: clicking the face again is how a hole moves.
-      const shown = previewDoc?.derived.bodyRepresentations[
-        resolvedBodyId
-      ]?.topology?.faces.find(matches)?.geometry;
-      const target = inPlaceRef.current.slots.faces[0]?.bodyId;
-      const normal = shown?.normal;
-      const on = shown?.centroid ?? shown?.center;
-      if (target && normal && on) {
-        face = representations[target]?.topology?.faces.find((candidate) => {
-          const g = candidate.geometry;
-          const at = g?.centroid ?? g?.center;
-          if (!g?.normal || !at) return false;
-          const aligned =
-            g.normal.x * normal.x + g.normal.y * normal.y + g.normal.z * normal.z;
-          const apart =
-            (at.x - on.x) * normal.x +
-            (at.y - on.y) * normal.y +
-            (at.z - on.z) * normal.z;
-          return aligned > 1 - 1e-6 && Math.abs(apart) < 1e-6;
-        });
+      const shown =
+        previewDoc?.derived.bodyRepresentations[
+          resolvedBodyId
+        ]?.topology?.faces.find(matches)?.geometry;
+      const target = editTarget ?? inPlaceRef.current.slots.faces[0]?.bodyId;
+      if (target) {
+        face = coplanarFace(
+          target,
+          shown?.normal,
+          shown?.centroid ?? shown?.center
+        );
         if (face) resolvedBodyId = target;
       }
     }
@@ -8235,6 +8437,27 @@ export function App() {
       ...(geometry?.center ? { center: geometry.center } : {}),
       ...(point ? { point } : {})
     };
+  }
+
+  /** A body's face in the plane through `on` facing `normal`, if it has one. */
+  function coplanarFace(
+    bodyId: BodyId,
+    normal: Vector3 | undefined,
+    on: Vector3 | undefined
+  ) {
+    if (!normal || !on) return undefined;
+    return representations[bodyId]?.topology?.faces.find((candidate) => {
+      const g = candidate.geometry;
+      const at = g?.centroid ?? g?.center;
+      if (!g?.normal || !at) return false;
+      const aligned =
+        g.normal.x * normal.x + g.normal.y * normal.y + g.normal.z * normal.z;
+      const apart =
+        (at.x - on.x) * normal.x +
+        (at.y - on.y) * normal.y +
+        (at.z - on.z) * normal.z;
+      return aligned > 1 - 1e-6 && Math.abs(apart) < 1e-6;
+    });
   }
 
   /** A picked region as the in-place command's profile slot holds it. */
@@ -8412,9 +8635,13 @@ export function App() {
     if (applyMove && !confirmMove()) return;
     // U09: a new feature from an in-place tool runs with no card, once any
     // unapplied Move has been applied or discarded above. Editing an
-    // existing one still opens its card until history edits re-arm handles.
+    // existing one re-arms the same command from its pinned History row.
     if (isInPlaceTool(nextTool) && !feature) {
       startInPlaceCommand(nextTool);
+      return;
+    }
+    if (feature && inPlaceToolForFeature(feature.data)) {
+      applyHistorySelection(feature.id, managerRef.current!.document);
       return;
     }
     // Any other tool takes over from a running in-place command, quietly.
@@ -8626,6 +8853,12 @@ export function App() {
    */
   /** Opens a history feature in the modeling form it was created with. */
   function openModelingFeatureEditor(feature: FeatureNode) {
+    // An in-place command's feature re-arms that command from its row, as a
+    // click on the row does (an unapplied Move is asked about first).
+    if (inPlaceToolForFeature(feature.data)) {
+      handleSelectFeatureFromTree(feature.id, false);
+      return;
+    }
     if (!featureOpensEditCard(feature.data.featureKind)) return;
     const data = feature.data as EditableModelingFeatureData;
     const reason = toolDisabledReason(data.featureKind, availability);
@@ -14482,6 +14715,7 @@ export function App() {
         const shown = representations[selection.bodyId]
           ? selection.bodyId
           : (command.slots.bodies[0]?.bodyId ?? null);
+        if (shown && !inPlaceEditTakesBody(shown)) return true;
         const body = shown ? inPlaceBodyPick(shown) : null;
         if (body) return command.pickBody(body);
       }
@@ -18170,6 +18404,12 @@ export function App() {
    * detected closed regions, lifted by the shared plane resolution. The
    * sketch being edited in-session is skipped (its rig renders live).
    */
+  /**
+   * The feature an in-place command is editing, mirrored from the hook so
+   * what is computed before it (the sketch views, the datum axes) can read it.
+   */
+  const [inPlaceEditFeatureId, setInPlaceEditFeatureId] =
+    useState<FeatureId | null>(null);
   const availableSketchViews = useMemo(() => {
     if (!doc) {
       return [];
@@ -18185,7 +18425,8 @@ export function App() {
       if (
         !sketchViewShown(sketch.sketchId, hiddenSketchIds, movingSketch) &&
         !active &&
-        !modelingEditFeature
+        !modelingEditFeature &&
+        !inPlaceEditFeatureId
       ) {
         return [];
       }
@@ -18309,10 +18550,14 @@ export function App() {
     hiddenSketchIds,
     movingSketch,
     modelingEditFeature,
+    inPlaceEditFeatureId,
     sketchReadDocument
   ]);
   /** U09: an in-place request as the command its commit would run. */
-  function inPlaceCommandFor(request: InPlaceRequest, name: string): AnyCommand {
+  function inPlaceCommandFor(
+    request: InPlaceRequest,
+    name: string
+  ): AnyCommand {
     const bodyName = newBodyName(name);
     switch (request.tool) {
       case 'revolve':
@@ -18422,7 +18667,9 @@ export function App() {
           patternKind: request.patternKind,
           count: request.count,
           axis: request.axis,
-          ...(request.spacing !== undefined ? { spacing: request.spacing } : {}),
+          ...(request.spacing !== undefined
+            ? { spacing: request.spacing }
+            : {}),
           ...(request.angleDeg !== undefined
             ? { angleDeg: request.angleDeg }
             : {}),
@@ -18467,19 +18714,72 @@ export function App() {
     }
     return { bodyId, min, max };
   }
+  /**
+   * U09 phase 7: an edit's request as the `updateFeature` its Done commits.
+   * A face operation goes through the card's own submission builder and
+   * `modelingFeatureUpdate`, exactly as the card's Apply did.
+   */
+  function inPlaceEditCommand(
+    request: InPlaceRequest,
+    edit: InPlaceEditSeed
+  ): AnyCommand {
+    if (request.tool === 'modeling') {
+      const targetBodyId =
+        'targetBodyId' in request.state.value
+          ? request.state.value.targetBodyId
+          : '';
+      const body = targetBodyId ? representations[targetBodyId] : undefined;
+      const submission = buildModelingOperationSubmission(
+        {
+          ...request.state,
+          value: { ...request.state.value, name: edit.name }
+        } as ModelingOperationFormState,
+        modelingFaceOptions(body?.topology, body)
+      );
+      const update = modelingFeatureUpdate(edit.featureId, submission);
+      if (!update) throw new Error(`${edit.name} cannot be edited this way.`);
+      return commandFactories.updateFeature(update, `Edit ${edit.name}`);
+    }
+    const update = inPlaceFeatureUpdate(edit, request);
+    if (!update) throw new Error(`${edit.name} cannot be edited this way.`);
+    return commandFactories.updateFeature(update, `Edit ${edit.name}`);
+  }
+  /** Datum axes an edit may use: those built before the edited feature. */
+  const inPlaceDatumAxes = useMemo(() => {
+    const axes = doc?.derived.datumAxes;
+    if (!axes || !inPlaceEditFeatureId) return axes;
+    const allowed = new Set(
+      datumAxisChoices(doc, inPlaceEditFeatureId).map((axis) => axis.featureId)
+    );
+    return Object.fromEntries(
+      Object.entries(axes).filter(([featureId]) =>
+        allowed.has(featureId as FeatureId)
+      )
+    );
+  }, [doc, inPlaceEditFeatureId]);
   const inPlace = useInPlaceCommand({
     sketchViews: availableSketchViews,
-    datumAxes: doc?.derived.datumAxes,
+    datumAxes: inPlaceDatumAxes,
     linearSnap: appSettings.sketching.snapEnabled
       ? appSettings.sketching.linearSnap
       : null,
     datumLabel: (featureId) =>
       (doc && findFeature(doc, featureId)?.name) ?? 'Datum axis',
     bodyBounds: (bodyId) => inPlaceBodyPick(bodyId),
+    evaluate: (value) =>
+      evalParamValue(value, parameterScope.scope, doc?.units),
     baseDocument: () => managerRef.current?.document ?? null,
     baseVersion: doc?.version ?? null,
     derive: (document) => geometry.syncOnce(document),
-    buildCommand: (request, title) => {
+    buildCommand: (request, title, edit) => {
+      if (edit) {
+        const command = inPlaceEditCommand(request, edit);
+        return {
+          validate: (document) => command.validate(document),
+          apply: (document) => command.apply(document),
+          resultBodyId: edit.resultBodyId
+        };
+      }
       const command = inPlaceCommandFor(request, title);
       return {
         validate: (document) => command.validate(document),
@@ -18487,7 +18787,11 @@ export function App() {
         resultBodyId: inPlaceResultBodyId(request, command)
       };
     },
-    commit: (request, title) => {
+    commit: (request, title, edit) => {
+      if (edit) {
+        commitInPlaceEdit(request, edit);
+        return;
+      }
       const name = newFeatureName(title);
       const command = inPlaceCommandFor(request, name);
       const resultBodyId = inPlaceResultBodyId(request, command);
@@ -18509,6 +18813,10 @@ export function App() {
   });
   const inPlaceRef = useRef(inPlace);
   inPlaceRef.current = inPlace;
+  const inPlaceEditing = inPlace.editing;
+  useEffect(() => {
+    setInPlaceEditFeatureId(inPlaceEditing?.featureId ?? null);
+  }, [inPlaceEditing]);
   /** The keypad moves a command handle through this, without a render. */
   const commandSetterRef = useRef<
     ((valueId: string, value: number) => void) | null
@@ -18543,9 +18851,10 @@ export function App() {
             : valueSpec?.label === '×'
               ? (value: number) => `× ${round(value)}`
               : valueSpec?.unit === 'count'
-              ? (value: number) => `${round(value)} ${valueSpec.label.toLowerCase()}`
-              : (value: number) =>
-                  `${valueSpec?.label ?? ''} ${round(value)} ${inPlaceUnits}`.trim();
+                ? (value: number) =>
+                    `${round(value)} ${valueSpec.label.toLowerCase()}`
+                : (value: number) =>
+                    `${valueSpec?.label ?? ''} ${round(value)} ${inPlaceUnits}`.trim();
         return {
           ...handle,
           value: inPlace.values[handle.valueId] ?? valueSpec?.initial ?? 0,
@@ -18603,16 +18912,43 @@ export function App() {
     [inPlaceCurveCandidates, inPlace.slots.path, inPlace.slots.guide]
   );
 
+  // An edit shows the sketches its feature was built from, consumed and
+  // hidden as they usually are, so a profile can be clicked again.
+  const inPlaceEditSketchIds = useMemo(
+    () =>
+      new Set(
+        inPlaceEditing
+          ? [
+              ...inPlaceEditing.slots.profiles,
+              ...inPlaceEditing.slots.path,
+              ...inPlaceEditing.slots.guide
+            ].map((pick) => pick.sketchId as string)
+          : []
+      ),
+    [inPlaceEditing]
+  );
   // Editing needs hidden source profiles; visibility remains a viewport concern.
   const sketchViews = useMemo(
     () =>
       availableSketchViews.filter(
         (view) =>
           view.active ||
+          inPlaceEditSketchIds.has(view.sketchId) ||
           sketchViewShown(view.sketchId, hiddenSketchIds, movingSketch)
       ),
-    [availableSketchViews, hiddenSketchIds, movingSketch]
+    [availableSketchViews, hiddenSketchIds, movingSketch, inPlaceEditSketchIds]
   );
+  // An edit whose feature an undo, a remote change or a delete removed has
+  // nothing left to edit.
+  const inPlaceEditGone =
+    inPlaceEditing !== null &&
+    doc !== null &&
+    !findFeature(doc, inPlaceEditing.featureId);
+  useEffect(() => {
+    if (!inPlaceEditGone) return;
+    inPlaceRef.current.cancel(true);
+    setStatus('This history feature is no longer available to edit.');
+  }, [inPlaceEditGone, setStatus]);
 
   useEffect(() => {
     setSelectedProfiles((current) => {
@@ -18715,6 +19051,19 @@ export function App() {
     modifiers: { additive: boolean; toggle: boolean }
   ) {
     if (inPlaceRef.current.active) {
+      const editing = inPlaceRef.current.editing;
+      if (
+        editing &&
+        !inPlaceEditMayUse(
+          producingFeatureOf({ sketchId: region.sketchId as SketchId }),
+          editing
+        )
+      ) {
+        setStatus(
+          `${editing.name} can only use sketches made before it in History.`
+        );
+        return;
+      }
       const pick = inPlaceProfilePick(region);
       if (pick) inPlaceRef.current.pickProfile(pick);
       return;
@@ -21012,11 +21361,74 @@ export function App() {
     applyHistorySelection(next, current);
   }
 
+  /**
+   * The regions of a sketch view a stored profile reference names. Mirrors
+   * resolveRegionProfiles: an `all: true` reference covers every region its
+   * entities bound, so it can legitimately name many regions — or, after a
+   * text edit, a different number than last time.
+   */
+  function regionsForReference(
+    view: (typeof availableSketchViews)[number] | undefined,
+    reference: SketchProfileReference
+  ): (typeof availableSketchViews)[number]['regions'] {
+    if (reference.all === true) {
+      const referenced = new Set(reference.sourceEntityIds);
+      return (
+        view?.regions.filter(
+          (candidate) =>
+            candidate.sourceEntityIds.length > 0 &&
+            candidate.sourceEntityIds.every((entityId) =>
+              referenced.has(entityId)
+            )
+        ) ?? []
+      );
+    }
+    if (reference.sourceBoundaryLoops !== undefined) {
+      try {
+        return view
+          ? [
+              resolveBoundaryRegionReference(
+                {
+                  ...reference,
+                  sourceBoundaryLoops: reference.sourceBoundaryLoops
+                },
+                view.regions
+              )
+            ]
+          : [];
+      } catch {
+        return [];
+      }
+    }
+    const sourceMatches = reference.sourceEntityIds
+      ? (view?.regions.filter(
+          (candidate) =>
+            candidate.sourceEntityIds.slice().sort().join('|') ===
+            reference.sourceEntityIds!.slice().sort().join('|')
+        ) ?? [])
+      : [];
+    const region =
+      view?.regions.find(
+        (candidate) =>
+          reference.profileId && candidate.profileId === reference.profileId
+      ) ??
+      view?.regions.find(
+        (candidate) =>
+          candidate.regionFingerprint === reference.regionFingerprint &&
+          Math.abs(candidate.area - reference.sourceArea) <=
+            Math.max(reference.sourceArea * 0.01, 1e-9)
+      ) ??
+      (sourceMatches.length === 1 ? sourceMatches[0] : undefined);
+    return region ? [region] : [];
+  }
+
   function applyHistorySelection(
     next: string | null,
     current: ProjectDocument
   ) {
     extrudeEditRequest.current += 1;
+    // A new selection replaces a running in-place command, edit or create.
+    inPlaceRef.current.cancel(true);
     setFeatureFormError(null);
     setSketchEditError(null);
     setMovePreview(null);
@@ -21051,60 +21463,9 @@ export function App() {
       const view = sketchViews.find(
         (candidate) => candidate.sketchId === extrudeData.sketchId
       );
-      // Mirrors resolveRegionProfiles: an `all: true` reference covers every
-      // region its entities bound, so it can legitimately light up many
-      // regions — or, after a text edit, a different number than last time.
-      const perReference = references.map((reference) => {
-        if (reference.all === true) {
-          const referenced = new Set(reference.sourceEntityIds);
-          return (
-            view?.regions.filter(
-              (candidate) =>
-                candidate.sourceEntityIds.length > 0 &&
-                candidate.sourceEntityIds.every((entityId) =>
-                  referenced.has(entityId)
-                )
-            ) ?? []
-          );
-        }
-        if (reference.sourceBoundaryLoops !== undefined) {
-          try {
-            return view
-              ? [
-                  resolveBoundaryRegionReference(
-                    {
-                      ...reference,
-                      sourceBoundaryLoops: reference.sourceBoundaryLoops
-                    },
-                    view.regions
-                  )
-                ]
-              : [];
-          } catch {
-            return [];
-          }
-        }
-        const sourceMatches = reference.sourceEntityIds
-          ? (view?.regions.filter(
-              (candidate) =>
-                candidate.sourceEntityIds.slice().sort().join('|') ===
-                reference.sourceEntityIds!.slice().sort().join('|')
-            ) ?? [])
-          : [];
-        const region =
-          view?.regions.find(
-            (candidate) =>
-              reference.profileId && candidate.profileId === reference.profileId
-          ) ??
-          view?.regions.find(
-            (candidate) =>
-              candidate.regionFingerprint === reference.regionFingerprint &&
-              Math.abs(candidate.area - reference.sourceArea) <=
-                Math.max(reference.sourceArea * 0.01, 1e-9)
-          ) ??
-          (sourceMatches.length === 1 ? sourceMatches[0] : undefined);
-        return region ? [region] : [];
-      });
+      const perReference = references.map((reference) =>
+        regionsForReference(view, reference)
+      );
       const highlighted = perReference.flat().map((region) => ({
         sketchId: extrudeData.sketchId,
         profileId: region.profileId,
@@ -21142,6 +21503,12 @@ export function App() {
         ? historyFeatureFocus(current, node, visible)
         : null;
     setSelectedBodyIds(focus?.kind === 'bodies' ? focus.bodyIds : []);
+    // U09 phase 7: a feature an in-place command made re-arms that command,
+    // seeded from it, with its handles on the model; the row stays pinned.
+    if (node?.kind === 'feature' && inPlaceToolForFeature(node.data)) {
+      startInPlaceEdit(node);
+      return;
+    }
     // F19: an edit card opens already editable. The Inspector's own forms do;
     // a modeling feature's card is its creation form, so selecting the
     // feature opens that form rather than a panel with an "Edit hole" button
@@ -21165,6 +21532,7 @@ export function App() {
   function handleSelectBodyFromTree(bodyId: BodyId, additive: boolean) {
     // An in-place command that takes bodies takes them from the list too.
     if (inPlaceRef.current.active && inPlaceRef.current.spec?.bodyMode) {
+      if (!inPlaceEditTakesBody(bodyId)) return;
       const body = inPlaceBodyPick(bodyId);
       if (body) inPlaceRef.current.pickBody(body);
       return;
@@ -21355,7 +21723,12 @@ export function App() {
     ]);
     // A modeling card owns a draft snapshot, including its name. Close it
     // after the rename so applying that snapshot cannot restore the old name.
-    if (renamed && modelingEditFeature?.featureId === featureId) {
+    // An in-place edit holds the name it was armed with, too.
+    if (
+      renamed &&
+      (modelingEditFeature?.featureId === featureId ||
+        inPlaceRef.current.editing?.featureId === featureId)
+    ) {
       closeFeaturePanel();
     }
   }
@@ -22701,10 +23074,17 @@ export function App() {
       if (inPlace.active) {
         if (event.key === 'Escape') {
           event.preventDefault();
-          if (!cancelOpenKeypad()) inPlace.cancel();
+          if (!cancelOpenKeypad()) cancelInPlaceCommand();
           return;
         }
-        if (event.key === 'Enter' && !typing) {
+        // Enter on a focused menu trigger or menu item (a History row's
+        // actions, reached by keyboard while an edit is armed from that row)
+        // opens or runs it, not Done. Any other focused button, such as the
+        // rail tool just clicked, still leaves Enter to the command (U01).
+        const control =
+          target instanceof Element &&
+          target.closest('[aria-haspopup], [role="menu"]') !== null;
+        if (event.key === 'Enter' && !typing && !control) {
           event.preventDefault();
           inPlace.done();
           return;
@@ -25550,17 +25930,17 @@ export function App() {
                       featureId: featureId as FeatureId
                     })
                 : faceRepair ||
-              datumRepair ||
-              toFacePick ||
-              measuring ||
-              tool !== null ||
-              interaction.mode === 'sketch'
-                ? undefined
-                : (featureId) => {
-                    const node =
-                      doc && findFeature(doc, featureId as FeatureId);
-                    if (node) handleSelectFeatureFromTree(node.id, false);
-                  }
+                    datumRepair ||
+                    toFacePick ||
+                    measuring ||
+                    tool !== null ||
+                    interaction.mode === 'sketch'
+                  ? undefined
+                  : (featureId) => {
+                      const node =
+                        doc && findFeature(doc, featureId as FeatureId);
+                      if (node) handleSelectFeatureFromTree(node.id, false);
+                    }
             }
             // A selected datum opens its Plane card; the handle feeds the
             // card's Offset field, and the card's own Apply commits it. Only
@@ -25672,7 +26052,11 @@ export function App() {
                         // tapped, undoing any in-range keystroke previews.
                         commandSetterRef.current?.(valueId, baseline);
                         if (keypad.baselineRaw !== undefined) {
-                          inPlace.setValue(valueId, baseline, keypad.baselineRaw);
+                          inPlace.setValue(
+                            valueId,
+                            baseline,
+                            keypad.baselineRaw
+                          );
                         } else {
                           inPlace.previewValue(valueId, baseline);
                         }
@@ -26135,6 +26519,7 @@ export function App() {
         ) : null
       }
       inspectorOwnsLane={tool !== null && tool !== 'sketch'}
+      inspectorYields={inPlace.editing !== null}
       inspector={
         inspectorActive ? (
           <ErrorBoundary
@@ -26643,6 +27028,7 @@ export function App() {
                   );
                 }}
                 onEditModelingFeature={openModelingFeatureEditor}
+                inPlaceEditFeatureId={inPlace.editing?.featureId ?? null}
                 onEditSketchInViewport={(feature) => {
                   if (feature.data.featureKind !== 'sketch' || !doc) {
                     return;
@@ -26936,17 +27322,21 @@ export function App() {
             commandRow={
               inPlace.active && inPlaceSpec ? (
                 <InPlaceCommandBar
-                  title={inPlaceSpec.title}
+                  title={
+                    inPlace.editing
+                      ? `Edit ${inPlace.editing.name}`
+                      : inPlaceSpec.title
+                  }
                   hint={inPlace.hint}
                   refusal={inPlace.refusal}
                   canFinish={inPlace.canFinish}
-                  options={(inPlaceSpec.options ?? []).map((option) => ({
+                  options={inPlace.optionSpecs.map((option) => ({
                     ...option,
                     value: inPlace.options[option.id] ?? option.initial
                   }))}
                   onOption={inPlace.setOption}
                   onDone={() => inPlace.done()}
-                  onCancel={() => inPlace.cancel()}
+                  onCancel={cancelInPlaceCommand}
                 />
               ) : null
             }

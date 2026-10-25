@@ -24,12 +24,14 @@ export interface RevolveAxisCandidate {
   direction: Vector3;
   /**
    * The stored choice: an in-sketch axis, a datum axis reference, or a world
-   * axis through the origin (a circular pattern's).
+   * axis through the origin (a circular pattern's), or the axis an edited
+   * feature already stores (a helical sweep's typed one), kept as stored.
    */
   choice:
     | { axis: RevolveAxis }
     | { datumFeatureId: FeatureId }
-    | { world: 'x' | 'y' | 'z' };
+    | { world: 'x' | 'y' | 'z' }
+    | { saved: true };
 }
 
 /** What the command has picked so far. */
