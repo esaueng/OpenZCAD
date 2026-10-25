@@ -1694,6 +1694,8 @@ const E2E_SLOW_FRAME_MS =
 const FRESHNESS_POLL_INTERVAL_MS = 60_000;
 /** How long the model panels wait before calling the model "preparing". */
 const PANEL_PENDING_DELAY_MS = 400;
+/** How long a rebuild runs before the tool palette reads it as waiting. */
+const TOOLS_WAITING_DELAY_MS = 400;
 /**
  * What an unnamed save is called. Ctrl+S stays a reflex and takes this; naming
  * one is its own gesture (Ctrl+Shift+S).
@@ -3483,6 +3485,11 @@ export function App() {
     projectId: string;
     version: number;
   } | null>(null);
+  /** The same commit, as state, for what renders from it. */
+  const [completeCommit, setCompleteCommit] = useState<{
+    projectId: string;
+    version: number;
+  } | null>(null);
   const geometry = useGeometryWorker({
     onGeometryReady: (geometry, projectId, version) => {
       const committed = committedDerivedRef.current;
@@ -3559,6 +3566,42 @@ export function App() {
     parameterCandidate.base.projectId === doc?.projectId &&
     parameterCandidate.base.version === doc?.version;
   const exactGeometryReady = !parameterDraftActive && geometry.isReadyFor(doc);
+  // What is drawn is complete when the worker has caught up, or when a
+  // validated commit attached its own complete rebuild to this version: the
+  // broadcast rebuild that follows only re-derives it for the worker's live
+  // state. Reading readiness from the worker alone made every commit look
+  // unfinished for a rebuild's length: tools greyed out, the History
+  // selection dropped, a fillet's blend face was re-picked a beat late.
+  const displayedGeometryComplete =
+    exactGeometryReady ||
+    (!parameterDraftActive &&
+      doc !== null &&
+      completeCommit?.projectId === doc.projectId &&
+      completeCommit.version === doc.version);
+  // A rebuild the user did ask for (undo, redo, a rename) still has to finish,
+  // but most do so within a frame or two; greying every tool for that blinked
+  // the whole palette.
+  const toolsWaiting = useSettledFlag(
+    !displayedGeometryComplete,
+    TOOLS_WAITING_DELAY_MS
+  );
+  /**
+   * {@link requireExactGeometryReady} for a direct edit, which plans from the
+   * model on screen and validates with its own full rebuild: a commit's
+   * complete result is enough to build the next one from.
+   */
+  function requireDisplayedGeometryComplete(): boolean {
+    const document = managerRef.current?.document;
+    const committed = committedDerivedRef.current;
+    if (
+      !parameterDraftActive &&
+      document &&
+      committed?.projectId === document.projectId &&
+      committed.version === document.version
+    )
+      return true;
+    return requireExactGeometryReady();
+  }
   function requireExactGeometryReady(): boolean {
     const ready =
       !parameterDraftActive &&
@@ -6440,6 +6483,11 @@ export function App() {
     () => partBodies.filter((body) => !hiddenBodyIds.has(body.bodyId)),
     [partBodies, hiddenBodyIds]
   );
+  // Only whether a face offset is in progress matters to the bodies: keyed on
+  // the whole interaction, every drag, keypad or selection event handed the
+  // viewer a new bodies array and re-ran each of its bodies effects.
+  const faceOffsetInteraction =
+    interaction.mode === 'face' && interaction.op === 'offset-face';
   const viewerBodies = useMemo<GeometryBodyRepresentation[]>(() => {
     const bodies = (
       currentFaceGeometryPreview
@@ -6454,9 +6502,7 @@ export function App() {
     // a ghost of the part as it was, and a hue change mid-drag would read as
     // a different part.
     const faceOffsetPreview =
-      currentFaceGeometryPreview &&
-      interaction.mode === 'face' &&
-      interaction.op === 'offset-face';
+      currentFaceGeometryPreview && faceOffsetInteraction;
     return !faceOffsetPreview &&
       (currentFaceGeometryPreview || (previewDoc && !currentGeometrySnapshot))
       ? tintPreviewResultBodies(bodies, representations)
@@ -6466,7 +6512,7 @@ export function App() {
     hiddenBodyIds,
     currentGeometrySnapshot,
     currentFaceGeometryPreview,
-    interaction,
+    faceOffsetInteraction,
     previewDoc,
     representations
   ]);
@@ -6551,7 +6597,7 @@ export function App() {
   const selectedFeature = useMemo<FeatureNode | null>(() => {
     if (!doc || !requestedFeatureNodeId) return null;
     if (featureSelectionSource === 'inferred') {
-      if (!exactGeometryReady) return null;
+      if (!displayedGeometryComplete) return null;
       return selectionSetFeature(
         doc,
         representations,
@@ -6568,7 +6614,7 @@ export function App() {
     doc,
     requestedFeatureNodeId,
     featureSelectionSource,
-    exactGeometryReady,
+    displayedGeometryComplete,
     representations,
     selectedEdges,
     selectedTopology
@@ -7218,9 +7264,16 @@ export function App() {
     sketchCount: sketchOptions.length,
     closedProfileSketchCount,
     liveBodyCount: committedBodyCount,
-    exactGeometryReady,
+    exactGeometryReady: displayedGeometryComplete,
     hasEdgeSelected: selectedEdges.length > 0
   };
+  // What the palette, the selection card and the command bar show. Launching
+  // a tool still reads `availability`, so a tool that needs the finished
+  // model cannot open from the one a short rebuild is replacing; it only
+  // stops the buttons greying out and back for that rebuild's length.
+  const shownAvailability: ToolAvailability = toolsWaiting
+    ? availability
+    : { ...availability, exactGeometryReady: true };
 
   /**
    * A History row whose feature a later one consumed, brought into focus:
@@ -7375,7 +7428,7 @@ export function App() {
               interaction.mode === 'face' &&
               Boolean(interaction.target.resizeBodyFeatureId),
             pressedAction: calloutPressedAction,
-            availability
+            availability: shownAvailability
           }),
           ...(calloutImportedFace === 'edit'
             ? [editFaceVerb(editFaceOpen, editDisabledReason)]
@@ -7510,6 +7563,9 @@ export function App() {
       normalized,
       session?.userId ?? normalized.ownerUserId
     );
+    // A replacement can share the project and version of the document a
+    // commit completed (an adopted conflict copy) without sharing its model.
+    forgetCompleteCommit();
     // Sessions and numeric drafts refer to ids in the previous document.
     // Hydration may preserve the camera, never an armed sketch or handle.
     cancelDirectManipulationRef.current?.();
@@ -7638,15 +7694,23 @@ export function App() {
     );
   }
 
+  /** Drops the commit witness when the document it described is replaced. */
+  function forgetCompleteCommit(): void {
+    committedDerivedRef.current = null;
+    setCompleteCommit(null);
+  }
+
   /** Notes a commit that attached a complete (analysed) rebuild. */
   function recordCompleteCommit(
     document: ProjectDocument,
     derived: ProjectDocument['derived']
   ): void {
-    committedDerivedRef.current =
+    const complete =
       'analysis' in derived
         ? null
         : { projectId: document.projectId, version: document.version };
+    committedDerivedRef.current = complete;
+    setCompleteCommit(complete);
   }
 
   /**
@@ -11172,6 +11236,7 @@ export function App() {
     clearActiveProject();
     forgetProjectView();
     managerRef.current = null;
+    forgetCompleteCommit();
     clearAutoFrame();
     setDoc(null);
     setArtifacts([]);
@@ -14321,9 +14386,11 @@ export function App() {
 
   // The blend face a drag-committed fillet produced is picked as soon as the
   // rebuilt topology arrives, which re-arms the radius handle on it.
-  useEffect(() => {
+  // A layout effect, so the commit's whole-body selection is never painted
+  // between the fillet and its blend face.
+  useLayoutEffect(() => {
     const pending = pendingBlendRearmRef.current;
-    if (!pending || !exactGeometryReady) return;
+    if (!pending || !displayedGeometryComplete) return;
     const faces = representations[pending.bodyId]?.topology?.faces;
     if (!faces || faces === pending.before) return;
     pendingBlendRearmRef.current = null;
@@ -14344,7 +14411,7 @@ export function App() {
     // selectTopologyFromViewer is a per-render closure over the same
     // state this effect already lists.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [representations, exactGeometryReady]);
+  }, [representations, displayedGeometryComplete]);
 
   /** The open edit's stored hole anchor; null when no hole is being edited. */
   function editedHoleAnchor(): { positionAnchor?: 'centroid' } | null {
@@ -19325,10 +19392,11 @@ export function App() {
   }, [doc, interaction, renderedOffsetPreview, representations]);
 
   const cylinderRadiusHandleTarget = useMemo(() => {
+    // Validation keeps the handle, locked where it was let go, as the offset
+    // handle does: retiring it there faded it out and back in on a refusal.
     if (
       interaction.mode !== 'face' ||
-      interaction.op !== 'resize-cylinder-radius' ||
-      interaction.phase === 'validating'
+      interaction.op !== 'resize-cylinder-radius'
     ) {
       return null;
     }
@@ -19397,7 +19465,8 @@ export function App() {
             y: target.axisEnd[1],
             z: target.axisEnd[2]
           }
-        )
+        ),
+      ...(interaction.phase === 'validating' ? { locked: true } : {})
     };
   }, [doc, interaction, representations]);
   const cylinderSelectionKey =
@@ -19556,11 +19625,16 @@ export function App() {
   }
 
   function handleCylinderRadiusCommit(radius: number, exact?: ParamValue) {
-    if (!requireExactGeometryReady()) {
+    if (!requireDisplayedGeometryComplete()) {
       return false;
     }
     const current = interactionRef.current;
-    if (current.mode !== 'face' || current.op !== 'resize-cylinder-radius') {
+    if (
+      current.mode !== 'face' ||
+      current.op !== 'resize-cylinder-radius' ||
+      // One edit at a time: the held handle is locked while it validates.
+      current.phase === 'validating'
+    ) {
       return false;
     }
     const sourceRadius = current.target.radius;
@@ -19888,7 +19962,7 @@ export function App() {
 
   /** Edge-radius drag released (or exact entry): commit fillet/chamfer. */
   function handleEdgeCommit(size: number, exact?: ParamValue) {
-    if (!requireExactGeometryReady()) {
+    if (!requireDisplayedGeometryComplete()) {
       return;
     }
     if (interaction.mode === 'face' && interaction.op === 'edit-fillet') {
@@ -20019,7 +20093,7 @@ export function App() {
 
   /** Commit a native history fillet or an exact imported-band direct edit. */
   function handleFilletFaceCommit(size: number, exact?: ParamValue) {
-    if (!requireExactGeometryReady()) {
+    if (!requireDisplayedGeometryComplete()) {
       return;
     }
     const current = interactionRef.current;
@@ -20642,7 +20716,7 @@ export function App() {
     ) {
       return false;
     }
-    if (!requireExactGeometryReady()) {
+    if (!requireDisplayedGeometryComplete()) {
       return false;
     }
     // A refused value is not committed from a failed card; the value the
@@ -23662,7 +23736,7 @@ export function App() {
               group: group.label,
               shortcut: keymap.label(toolCommandId(toolId)),
               icon: meta.icon,
-              disabledReason: toolDisabledReason(toolId, availability),
+              disabledReason: toolDisabledReason(toolId, shownAvailability),
               offPick: !toolApplies(commandContext, toolId),
               run: () => launchTool(toolId)
             };
@@ -24998,7 +25072,7 @@ export function App() {
             : undefined
         }
         activeTool={tool ?? inPlace.tool}
-        availability={availability}
+        availability={shownAvailability}
         onLaunchTool={launchTool}
         moreOpen={panels.commandFoldOpen}
         onToggleMore={() => {
