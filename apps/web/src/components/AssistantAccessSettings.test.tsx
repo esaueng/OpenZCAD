@@ -21,12 +21,36 @@ import {
 import { E2eeApiError } from '../lib/e2ee/e2eeApi';
 import { lockAccount, rememberUnlockedAccount } from '../lib/e2ee/unlockedKeys';
 import { api as appApi } from '../lib/api';
-import { AssistantAccessSettings } from './AssistantAccessSettings';
+import { assistantConsentRoute } from '../lib/assistant/consentCopy';
+import { AssistantAccessSettings, routeWords } from './AssistantAccessSettings';
 import { AssistantConsentSummary } from './assistant/AssistantConsentSummary';
 
 const USER = 'user_alice';
 const ACCOUNT_KEY = new Uint8Array(32).fill(5);
-const ROUTE = 'deployment|openrouter|test-model';
+const ROUTE = assistantConsentRoute({
+  source: 'deployment',
+  provider: 'openrouter',
+  model: 'test-model',
+  endpoint: 'https://openrouter.ai/api/v1/responses'
+});
+
+describe('routeWords', () => {
+  it('names the key, provider and model of a stored route', () => {
+    expect(routeWords(ROUTE)).toBe('OpenZCAD’s key · openrouter · test-model');
+    expect(
+      routeWords(
+        assistantConsentRoute({
+          source: 'personal',
+          provider: 'openai',
+          model: 'gpt-5'
+        })
+      )
+    ).toBe('Your key · openai · gpt-5');
+    expect(routeWords('deployment|openrouter|test-model')).toBe(
+      'Unknown provider'
+    );
+  });
+});
 
 function unlock() {
   rememberUnlockedAccount(USER, {

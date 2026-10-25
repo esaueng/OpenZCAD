@@ -24,10 +24,13 @@ interface Listed {
   readonly state: AssistantConsentState;
 }
 
-/** "deployment|openrouter|model" → "OpenZCAD’s key · openrouter · model". */
-function routeWords(route: string): string {
-  const [source, provider, model] = route.split('|');
-  if (!provider) return 'Unknown provider';
+/**
+ * "v2|deployment|openrouter|model|<digest>" → "OpenZCAD’s key · openrouter ·
+ * model". The readable parts may be cut short; the digest is not shown.
+ */
+export function routeWords(route: string): string {
+  const [version, source, provider, model] = route.split('|');
+  if (version !== 'v2' || !provider) return 'Unknown provider';
   return `${source === 'personal' ? 'Your key' : 'OpenZCAD’s key'} · ${provider} · ${model ?? ''}`;
 }
 
