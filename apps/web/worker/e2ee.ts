@@ -79,7 +79,8 @@ import {
   MAX_APPEND_CUTOFFS_CHARS,
   appendedRevocationCutoffs,
   handleE2eeDeviceRemovalRequest,
-  isE2eeDeviceRemovalPath
+  isE2eeDeviceRemovalPath,
+  refuseCutoffsIncomplete
 } from './e2eeDeviceRemoval';
 import {
   blobBucket,
@@ -1194,6 +1195,9 @@ async function handleAppend(
     ]
   };
   const revokedIds = list.head.revoked.map((r) => r.id);
+  // The projects its cutoffs were checked against must not move before
+  // the batch runs; nothing lands if they did.
+  const projectsFence = cutoffs?.fence ?? { sql: '1', binds: [] };
   const statements: D1PreparedStatement[] = [
     db
       .prepare(
@@ -1202,7 +1206,8 @@ async function handleAppend(
          SELECT ?, ?, ?, ?, ?, ?, ?
          WHERE ${auth.sql} AND (SELECT MAX(sequence) FROM e2ee_device_list_entries
                 WHERE user_id = ? AND generation = ?) = ?
-           AND (SELECT MAX(generation) FROM e2ee_identities WHERE user_id = ?) = ?`
+           AND (SELECT MAX(generation) FROM e2ee_identities WHERE user_id = ?) = ?
+           AND ${projectsFence.sql}`
       )
       .bind(
         userId,
@@ -1217,7 +1222,8 @@ async function handleAppend(
         current.generation,
         before.sequence,
         userId,
-        current.generation
+        current.generation,
+        ...projectsFence.binds
       ),
     ...(rotation
       ? [
@@ -1263,10 +1269,13 @@ async function handleAppend(
       )
     ),
     ...(history ? [insertHistory(db, userId, history, now, guard)] : []),
-    ...(cutoffs ? [cutoffs(guard, now)] : [])
+    ...(cutoffs ? [cutoffs.insert(guard, now)] : [])
   ];
   const results = await db.batch(statements);
   if ((results[0]?.meta?.changes ?? 0) !== 1) {
+    // A project created, shared, committed to or saved to since the
+    // cutoffs were checked: the browser signs them again.
+    if (await cutoffs?.moved()) refuseCutoffsIncomplete();
     refuse(
       409,
       'E2EE_DEVICE_LIST_CONFLICT',

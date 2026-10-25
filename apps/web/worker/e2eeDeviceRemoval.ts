@@ -386,39 +386,64 @@ interface RemovalProjectRow {
   head_hash: string | null;
   trashed: number;
   member: number;
+  /** The row's part of `REMOVAL_FINGERPRINT`: id, key epoch and head. */
+  k: string;
 }
 
 /**
  * The encrypted projects a removal names cutoffs for: each one the account
- * owns or is a member of, with its group state and newest head.
+ * owns or is a member of, with its group state and newest head. Binds the
+ * account's id three times, then the project limit (`removalBinds`).
  */
+const REMOVAL_PROJECTS = `
+  SELECT project_id, generation, key_epoch_base, epoch, head_version,
+         head_hash, trashed, member,
+         project_id || '/' || (key_epoch_base + epoch) || '/' ||
+           COALESCE(head_version, '') || '/' || COALESCE(head_hash, '') AS k
+  FROM (
+    SELECT g.project_id, g.generation, g.key_epoch_base, g.epoch,
+           (SELECT v.document_version FROM e2ee_project_versions v
+            WHERE v.project_id = g.project_id
+            ORDER BY v.document_version DESC LIMIT 1) AS head_version,
+           (SELECT v.version_hash FROM e2ee_project_versions v
+            WHERE v.project_id = g.project_id
+            ORDER BY v.document_version DESC LIMIT 1) AS head_hash,
+           p.status = 'deleted' AS trashed,
+           p.user_id <> ? AS member
+    FROM e2ee_project_groups g JOIN projects p ON p.id = g.project_id
+    -- A project in the recycle bin (slice 4-8) is named too: it can be
+    -- restored, and its removed device's versions must stay readable.
+    -- So are shared projects (slice 5-7): the removed device held their
+    -- keys too, and their other members read its versions.
+    WHERE p.storage_format = 2
+      AND p.id IN (SELECT id FROM projects WHERE user_id = ?
+                   UNION
+                   SELECT project_id FROM project_members WHERE user_id = ?)
+    ORDER BY g.project_id LIMIT ?
+  )
+  ORDER BY project_id`;
+
+const removalBinds = (userId: string) =>
+  [userId, userId, userId, MAX_PROJECTS] as const;
+
+/**
+ * The whole set `removalProjects` reads as one string, its rows' keys in
+ * project order (`removalFingerprint` for rows read): adding or dropping a
+ * project, moving its key epoch or saving a version changes it. Binds as
+ * `REMOVAL_PROJECTS`.
+ */
+const REMOVAL_FINGERPRINT = `COALESCE((SELECT group_concat(k, ',') FROM (${REMOVAL_PROJECTS})), '')`;
+
+const removalFingerprint = (rows: readonly RemovalProjectRow[]) =>
+  rows.map((row) => row.k).join(',');
+
 async function removalProjects(
   db: D1Database,
   userId: string
 ): Promise<RemovalProjectRow[]> {
   const { results } = await db
-    .prepare(
-      `SELECT g.project_id, g.generation, g.key_epoch_base, g.epoch,
-              (SELECT v.document_version FROM e2ee_project_versions v
-               WHERE v.project_id = g.project_id
-               ORDER BY v.document_version DESC LIMIT 1) AS head_version,
-              (SELECT v.version_hash FROM e2ee_project_versions v
-               WHERE v.project_id = g.project_id
-               ORDER BY v.document_version DESC LIMIT 1) AS head_hash,
-              p.status = 'deleted' AS trashed,
-              p.user_id <> ? AS member
-       FROM e2ee_project_groups g JOIN projects p ON p.id = g.project_id
-       -- A project in the recycle bin (slice 4-8) is named too: it can be
-       -- restored, and its removed device's versions must stay readable.
-       -- So are shared projects (slice 5-7): the removed device held their
-       -- keys too, and their other members read its versions.
-       WHERE p.storage_format = 2
-         AND p.id IN (SELECT id FROM projects WHERE user_id = ?
-                      UNION
-                      SELECT project_id FROM project_members WHERE user_id = ?)
-       ORDER BY g.project_id LIMIT ?`
-    )
-    .bind(userId, userId, userId, MAX_PROJECTS)
+    .prepare(REMOVAL_PROJECTS)
+    .bind(...removalBinds(userId))
     .all<RemovalProjectRow>();
   return results ?? [];
 }
@@ -579,11 +604,14 @@ export const MAX_APPEND_CUTOFFS_CHARS = MAX_STATEMENT_CHARS + 256;
  * lands exactly when the entry does. The statement names the entry being
  * appended, verifies against the list that includes it, and names every
  * one of those projects at its next key epoch, the one the removal's
- * rotation lands in. One named at an earlier epoch was signed before a
- * Commit that landed meanwhile; a missing one was created or shared
- * meanwhile. Both are refused as E2EE_CUTOFFS_INCOMPLETE, for the browser
- * to sign again; `PUT /api/e2ee/revocation-cutoffs` may later raise the
- * cutoffs once the rotation landed.
+ * rotation lands in, and at its newest head. One named at an earlier epoch
+ * was signed before a Commit that landed meanwhile; one at an older head,
+ * before a version saved meanwhile (perhaps by the device being removed);
+ * a missing one was created or shared meanwhile. All are refused as
+ * E2EE_CUTOFFS_INCOMPLETE, for the browser to sign again, and so is a
+ * batch whose projects moved after this check (`AppendedCutoffs.fence`);
+ * `PUT /api/e2ee/revocation-cutoffs` may later raise the cutoffs once the
+ * rotation landed.
  *
  * Nothing is required while encrypted projects are off for the account
  * (`projectsEnabled`: the browser cannot list them to sign) or before
@@ -596,13 +624,7 @@ export async function appendedRevocationCutoffs(
   list: VerifiedDeviceList,
   value: unknown,
   projectsEnabled: boolean
-): Promise<
-  | ((
-      guard: { sql: string; binds: readonly unknown[] },
-      now: string
-    ) => D1PreparedStatement)
-  | null
-> {
+): Promise<AppendedCutoffs | null> {
   if (!list.head.revoked.some((revocation) => revocation.kind === 'device')) {
     if (value !== undefined) {
       invalid('Only an entry that revokes a device carries cutoffs');
@@ -641,40 +663,90 @@ export async function appendedRevocationCutoffs(
   }
   await requirePlausibleCutoffs(db, cutoffs.cutoffs);
   const named = new Map(
-    cutoffs.cutoffs.map((cutoff) => [cutoff.projectId, cutoff.cutoffEpoch])
+    cutoffs.cutoffs.map((cutoff) => [cutoff.projectId, cutoff])
   );
   for (const project of projects) {
     const next = project.key_epoch_base + project.epoch + 1;
-    if ((named.get(project.project_id) ?? -1) < next) {
-      refuse(
-        409,
-        'E2EE_CUTOFFS_INCOMPLETE',
-        'Your encrypted projects changed while this device was being removed. Nothing was changed. Try again.',
-        { projectId: project.project_id }
-      );
+    const cutoff = named.get(project.project_id);
+    if (
+      !cutoff ||
+      cutoff.cutoffEpoch < next ||
+      // The removed device, not revoked yet, may have saved a version
+      // after the listing this statement was signed from. A cutoff at the
+      // version before would leave that newest version failing its
+      // revoked-author check, so the head must be the current newest one,
+      // as an honest browser names it from a fresh listing (`cutoffHead`).
+      (project.head_version !== null &&
+        project.head_hash !== null &&
+        (cutoff.head?.documentVersion !== project.head_version ||
+          toHex(cutoff.head.versionHash) !== project.head_hash))
+    ) {
+      refuseCutoffsIncomplete(project.project_id);
     }
   }
-  // No ON CONFLICT: the entry is new, so is its statement; a stray row
-  // aborts the whole batch rather than land the entry without its own.
-  return (guard, now) =>
-    db
-      .prepare(
-        `INSERT INTO e2ee_revocation_cutoffs
-           (user_id, generation, entry_sequence, entry_hash, statement, signature,
-            created_at, updated_at)
-         SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE ${guard.sql}`
-      )
-      .bind(
-        userId,
-        generation,
-        cutoffs.entrySequence,
-        toHex(cutoffs.entryHash),
-        statement.text,
-        signature.text,
-        now,
-        now,
-        ...guard.binds
-      );
+  return {
+    // The set checked here must still be the account's when the batch
+    // runs: a project created, shared, committed to or saved to in between
+    // would otherwise land the entry with a statement that misses it.
+    // (None while encrypted projects are off: nothing was listed.)
+    fence: projectsEnabled
+      ? {
+          sql: `${REMOVAL_FINGERPRINT} = ?`,
+          binds: [...removalBinds(userId), removalFingerprint(projects)]
+        }
+      : { sql: '1', binds: [] },
+    moved: async () =>
+      projectsEnabled &&
+      removalFingerprint(await removalProjects(db, userId)) !==
+        removalFingerprint(projects),
+    // No ON CONFLICT: the entry is new, so is its statement; a stray row
+    // aborts the whole batch rather than land the entry without its own.
+    insert: (guard, now) =>
+      db
+        .prepare(
+          `INSERT INTO e2ee_revocation_cutoffs
+             (user_id, generation, entry_sequence, entry_hash, statement, signature,
+              created_at, updated_at)
+           SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE ${guard.sql}`
+        )
+        .bind(
+          userId,
+          generation,
+          cutoffs.entrySequence,
+          toHex(cutoffs.entryHash),
+          statement.text,
+          signature.text,
+          now,
+          now,
+          ...guard.binds
+        )
+  };
+}
+
+/** What `appendedRevocationCutoffs` hands the append's batch. */
+export interface AppendedCutoffs {
+  /**
+   * For the device-list entry's insert: holds only while the account's
+   * encrypted projects, their key epochs and heads are the ones the
+   * statement was checked against. Without it nothing in the batch lands.
+   */
+  readonly fence: { sql: string; binds: readonly unknown[] };
+  /** After a batch that changed nothing: whether the fence was why. */
+  moved(): Promise<boolean>;
+  /** The statement's insert, under the append's guard. */
+  insert(
+    guard: { sql: string; binds: readonly unknown[] },
+    now: string
+  ): D1PreparedStatement;
+}
+
+export function refuseCutoffsIncomplete(projectId?: string): never {
+  refuse(
+    409,
+    'E2EE_CUTOFFS_INCOMPLETE',
+    'Your encrypted projects changed while this device was being removed. Nothing was changed. Try again.',
+    projectId === undefined ? undefined : { projectId }
+  );
 }
 
 // --- Group resets ------------------------------------------------------------

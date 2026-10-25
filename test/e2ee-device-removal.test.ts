@@ -1915,6 +1915,333 @@ describe('a device revocation and its cutoffs in one write', () => {
     );
   });
 
+  it('refuses cutoffs at a head older than the newest version, or at none (#911 review)', async () => {
+    const { srv, recovery, laptop, phone, projects } = await threeDevices(1);
+    const projectId = projects[0]!;
+    await saveEdit(phone, projectId, 'Phone edit');
+    const newest = headRow(srv, projectId);
+    const older = srv.db
+      .prepare(
+        `SELECT document_version, version_hash FROM e2ee_project_versions
+         WHERE project_id = ? ORDER BY document_version DESC LIMIT 1 OFFSET 1`
+      )
+      .get(projectId) as { document_version: number; version_hash: string };
+    let step: WrittenRemovalStep | null = null;
+    const { participant } = participantFor(laptop);
+    const capturing: RemovalParticipant = {
+      ...participant,
+      cutoffsFor: async (s) => {
+        step = s;
+        return participant.cutoffsFor!(s);
+      }
+    };
+    const refusals: Record<string, unknown> = {};
+    const real = laptop.fetcher;
+    let tried = false;
+    laptop.fetcher = async (path, init = {}) => {
+      if (!tried && isDeviceListPost(path, init)) {
+        tried = true;
+        const body = JSON.parse(init.body as string) as {
+          cutoffs: { statement: string; signature: string };
+        };
+        const good = decodeRevocationCutoffs(
+          fromBase64Url(body.cutoffs.statement)
+        );
+        // The honest statement names the newest head.
+        expect(
+          good.cutoffs.map((c) => [
+            c.projectId,
+            c.head?.documentVersion,
+            c.head && toHex(c.head.versionHash)
+          ])
+        ).toEqual([[projectId, newest.document_version, newest.version_hash]]);
+        const at = (head?: { documentVersion: number; versionHash: string }) =>
+          signRevocationCutoffs(step!.identityPrivateKey, {
+            ...good,
+            cutoffs: good.cutoffs.map((c) => ({
+              projectId: c.projectId,
+              cutoffEpoch: c.cutoffEpoch,
+              ...(head
+                ? {
+                    head: {
+                      documentVersion: head.documentVersion,
+                      versionHash: fromHexString(head.versionHash)
+                    }
+                  }
+                : {})
+            }))
+          });
+        const variants = {
+          olderHead: await at({
+            documentVersion: older.document_version,
+            versionHash: older.version_hash
+          }),
+          forkedHead: await at({
+            documentVersion: newest.document_version,
+            versionHash: 'ab'.repeat(32)
+          }),
+          noHead: await at()
+        };
+        const before = keyState(srv);
+        for (const [name, signed] of Object.entries(variants)) {
+          const response = await real(path, {
+            ...init,
+            body: JSON.stringify({
+              ...body,
+              cutoffs: {
+                statement: toBase64Url(signed.statement),
+                signature: toBase64Url(signed.signature)
+              }
+            })
+          });
+          const answer = (await response.json()) as {
+            code: string;
+            projectId?: string;
+          };
+          refusals[name] = {
+            status: response.status,
+            code: answer.code,
+            projectId: answer.projectId
+          };
+          expect(keyState(srv)).toEqual(before);
+        }
+      }
+      return real(path, init);
+    };
+    use(
+      laptop,
+      ready(
+        await removeDevice(
+          laptop.e2ee,
+          laptop.account,
+          deviceIdOf(phone),
+          recovery.secret,
+          capturing
+        )
+      )
+    );
+    const incomplete = {
+      status: 409,
+      code: 'E2EE_CUTOFFS_INCOMPLETE',
+      projectId
+    };
+    expect(refusals).toEqual({
+      olderHead: incomplete,
+      forkedHead: incomplete,
+      noHead: incomplete
+    });
+    // The honest one landed with the entry.
+    const rows = cutoffRows(srv);
+    expect(rows.map((row) => row.entry_sequence)).toEqual([
+      laptop.account.list.head.sequence
+    ]);
+  });
+
+  it('signs again when the removed device saves between the listing and the append (#911 review)', async () => {
+    const { srv, recovery, laptop, desktop, phone, projects } =
+      await threeDevices(1);
+    const projectId = projects[0]!;
+    await saveEdit(phone, projectId, 'Phone joins');
+    const keyEpoch = keyEpochOf(srv, projectId);
+    const answers: { status: number; code?: string }[] = [];
+    let late: ReturnType<typeof headRow> | null = null;
+    let atAppend: ReturnType<typeof cutoffRows> | null = null;
+    const real = laptop.fetcher;
+    laptop.fetcher = async (path, init = {}) => {
+      if (late === null && isDeviceListPost(path, init)) {
+        // The phone, not revoked yet, saves once more: a new head under
+        // the same key epoch.
+        await saveEdit(phone, projectId, 'Phone late edit');
+        late = headRow(srv, projectId);
+        expect(keyEpochOf(srv, projectId)).toBe(keyEpoch);
+      }
+      const response = await real(path, init);
+      if (isDeviceListPost(path, init)) {
+        const copy = response.clone();
+        answers.push({
+          status: copy.status,
+          code: ((await copy.json()) as { code?: string }).code
+        });
+        if (response.ok) atAppend = cutoffRows(srv);
+      }
+      return response;
+    };
+    use(
+      laptop,
+      ready(
+        await removeDevice(
+          laptop.e2ee,
+          laptop.account,
+          deviceIdOf(phone),
+          recovery.secret,
+          participantFor(laptop).participant
+        )
+      )
+    );
+    expect(answers).toEqual([
+      { status: 409, code: 'E2EE_CUTOFFS_INCOMPLETE' },
+      { status: 200, code: undefined }
+    ]);
+    // The statement that landed with the entry names the phone's late
+    // version, so that version stays readable.
+    expect(atAppend).toHaveLength(1);
+    const statement = decodeRevocationCutoffs(
+      fromBase64Url(atAppend![0]!.statement)
+    );
+    expect(
+      statement.cutoffs.map((c) => [
+        c.projectId,
+        c.cutoffEpoch,
+        c.head?.documentVersion,
+        c.head && toHex(c.head.versionHash)
+      ])
+    ).toEqual([
+      [projectId, keyEpoch + 1, late!.document_version, late!.version_hash]
+    ]);
+    await refresh(desktop);
+    expect((await desktop.store.loadProject(projectId)).name).toBe(
+      'Phone late edit'
+    );
+  });
+
+  /**
+   * Runs `change` after the Worker checked an append's cutoffs, right
+   * before its batch, once; keeps each device-list POST's answer and the
+   * key tables just before and after that batch.
+   */
+  function changeBeforeAppendBatch(
+    srv: Server,
+    laptop: Device,
+    change: () => Promise<void>
+  ) {
+    const raw = srv.env.DB as D1Database;
+    const seen = {
+      answers: [] as { status: number; code?: string }[],
+      before: null as ReturnType<typeof keyState> | null,
+      after: null as ReturnType<typeof keyState> | null,
+      atAppend: null as ReturnType<typeof cutoffRows> | null
+    };
+    let pending = true;
+    srv.env.DB = {
+      prepare: (sql: string) => raw.prepare(sql),
+      batch: async (statements: Parameters<D1Database['batch']>[0]) => {
+        const first = statements[0] as unknown as { sql?: string };
+        if (
+          pending &&
+          /INSERT INTO e2ee_device_list_entries/.test(first.sql ?? '')
+        ) {
+          pending = false;
+          await change();
+          seen.before = keyState(srv);
+          const results = await raw.batch(statements);
+          seen.after = keyState(srv);
+          return results;
+        }
+        return raw.batch(statements);
+      }
+    };
+    const real = laptop.fetcher;
+    laptop.fetcher = async (path, init = {}) => {
+      const response = await real(path, init);
+      if (isDeviceListPost(path, init)) {
+        const copy = response.clone();
+        seen.answers.push({
+          status: copy.status,
+          code: ((await copy.json()) as { code?: string }).code
+        });
+        if (response.ok) seen.atAppend = cutoffRows(srv);
+      }
+      return response;
+    };
+    return seen;
+  }
+
+  it('changes nothing when a project is created after the cutoffs were checked, then signs again (#911 review)', async () => {
+    const { srv, recovery, laptop, desktop, phone, projects } =
+      await threeDevices(1);
+    let created: string | null = null;
+    const seen = changeBeforeAppendBatch(srv, laptop, async () => {
+      created = await createEncrypted(desktop, 'Meanwhile');
+    });
+    use(
+      laptop,
+      ready(
+        await removeDevice(
+          laptop.e2ee,
+          laptop.account,
+          deviceIdOf(phone),
+          recovery.secret,
+          participantFor(laptop).participant
+        )
+      )
+    );
+    expect(seen.answers).toEqual([
+      { status: 409, code: 'E2EE_CUTOFFS_INCOMPLETE' },
+      { status: 200, code: undefined }
+    ]);
+    expect(seen.after).toEqual(seen.before);
+    expect(seen.atAppend).toHaveLength(1);
+    const statement = decodeRevocationCutoffs(
+      fromBase64Url(seen.atAppend![0]!.statement)
+    );
+    expect(statement.cutoffs.map((c) => c.projectId).sort()).toEqual(
+      [...projects, created!].sort()
+    );
+  });
+
+  it('changes nothing when a project’s epoch and head move after the cutoffs were checked, then signs again (#911 review)', async () => {
+    const { srv, recovery, laptop, desktop, phone, projects } =
+      await threeDevices(1);
+    const projectId = projects[0]!;
+    const keyEpoch = keyEpochOf(srv, projectId);
+    let moved: { keyEpoch: number; head: ReturnType<typeof headRow> } | null =
+      null;
+    const seen = changeBeforeAppendBatch(srv, laptop, async () => {
+      // The desktop joins by external Commit and saves.
+      await saveEdit(desktop, projectId, 'Desktop edit');
+      moved = {
+        keyEpoch: keyEpochOf(srv, projectId),
+        head: headRow(srv, projectId)
+      };
+    });
+    use(
+      laptop,
+      ready(
+        await removeDevice(
+          laptop.e2ee,
+          laptop.account,
+          deviceIdOf(phone),
+          recovery.secret,
+          participantFor(laptop).participant
+        )
+      )
+    );
+    expect(moved!.keyEpoch).toBe(keyEpoch + 1);
+    expect(seen.answers).toEqual([
+      { status: 409, code: 'E2EE_CUTOFFS_INCOMPLETE' },
+      { status: 200, code: undefined }
+    ]);
+    expect(seen.after).toEqual(seen.before);
+    const statement = decodeRevocationCutoffs(
+      fromBase64Url(seen.atAppend![0]!.statement)
+    );
+    expect(
+      statement.cutoffs.map((c) => [
+        c.projectId,
+        c.cutoffEpoch,
+        c.head?.documentVersion,
+        c.head && toHex(c.head.versionHash)
+      ])
+    ).toEqual([
+      [
+        projectId,
+        moved!.keyEpoch + 1,
+        moved!.head.document_version,
+        moved!.head.version_hash
+      ]
+    ]);
+  });
+
   it('leaves passkey removals and accounts without encrypted projects as they were', async () => {
     // A passkey removal needs no statement, encrypted projects or not.
     const { srv, recovery, laptop } = await threeDevices(1);
