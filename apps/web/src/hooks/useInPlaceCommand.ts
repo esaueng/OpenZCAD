@@ -249,7 +249,7 @@ export function useInPlaceCommand(
     // An edited feature's own axis line (a helix's typed one) comes first,
     // read again from what it stores whenever the model changes under the
     // edit (an undo, a collaborator's parameter edit).
-    const saved = editSeed?.data;
+    const saved = savedData;
     const read = (vector: ParametricVector3) => {
       const parts = [vector.x, vector.y, vector.z].map((part) =>
         typeof part === 'number'
@@ -277,10 +277,19 @@ export function useInPlaceCommand(
         : [];
     }
     return [...own, ...axisCandidatesFor({ ...EMPTY_SLOTS, profiles }, ctx)];
-    // The base version re-reads the saved axis, as the effect below does
-    // for typed values.
+    // The base version re-reads the saved axis's expressions, as the effect
+    // below does for typed values: a parameter can change with no change
+    // to the feature itself.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [spec, profiles, bodyCount, ctx, editSeed, options.baseVersion]);
+  }, [
+    spec,
+    profiles,
+    bodyCount,
+    ctx,
+    editSeed,
+    savedData,
+    options.baseVersion
+  ]);
   const slots: InPlaceSlots = useMemo(
     () =>
       session
