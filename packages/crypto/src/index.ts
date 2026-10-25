@@ -228,6 +228,29 @@ export {
   type VerifiedDeviceList
 } from './devices';
 export {
+  CONTACT_ACTIONS,
+  CONTACTS_ENTRY_VERSION_1,
+  MAX_CONTACTS_ENTRIES,
+  MAX_CONTACTS_ENTRY_BYTES,
+  contactDeviceListPin,
+  contactsEntryHash,
+  decodeContactsEntry,
+  encodeContactsEntry,
+  nextContactsEntry,
+  signContactsEntry,
+  verifyContactsList,
+  type ContactAction,
+  type ContactDeviceListHead,
+  type ContactRecord,
+  type ContactRecordStatus,
+  type ContactsChange,
+  type ContactsEntry,
+  type ContactsListPin,
+  type SignedContactsEntry,
+  type VerifiedContactsList,
+  type VerifyContactsListOptions
+} from './contacts';
+export {
   MAX_VERSION_LOG_BYTES,
   MAX_VERSION_LOG_RECORDS,
   VERSION_LOG_RECORD_VERSION_1,

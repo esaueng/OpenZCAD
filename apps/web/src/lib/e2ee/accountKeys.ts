@@ -904,6 +904,30 @@ async function openIdentity(
   }
 }
 
+/**
+ * Opens the identity key with the recovery key or a fresh passkey ceremony
+ * for one signature outside the device list (a contacts entry, ADR-024
+ * Phase 5), hands it to `sign`, and forgets it. The account key opened
+ * alongside is zeroed at once: a contacts entry needs only the identity.
+ */
+export async function withIdentityKey<T>(
+  ctx: E2eeContext,
+  account: AccountView,
+  authorization: UnlockAuthorization,
+  sign: (identityPrivateKey: CryptoKey) => Promise<T>
+): Promise<T> {
+  const scoped = authorization === 'passkey' ? passkeyContext(ctx) : ctx;
+  requireActiveKeyContext(scoped);
+  const { identityPrivateKey, accountKey } = await openIdentity(
+    scoped,
+    account,
+    authorization
+  );
+  accountKey.fill(0);
+  requireActiveKeyContext(scoped);
+  return sign(identityPrivateKey);
+}
+
 /** Opens identity material for one operation; the target wrap binds its hash. */
 async function openTargetIdentity(
   ctx: E2eeContext,

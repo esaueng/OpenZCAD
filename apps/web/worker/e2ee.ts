@@ -60,6 +60,7 @@ import {
   isE2eeProjectPreferenceStorageReady
 } from './e2eeProjectPreferences';
 import { handleE2eeProjectRequest, isE2eeProjectPath } from './e2eeProjects';
+import { handleE2eeContactsRequest, isE2eeContactsPath } from './e2eeContacts';
 import {
   handleE2eeDeviceRemovalRequest,
   isE2eeDeviceRemovalPath
@@ -1899,6 +1900,16 @@ export async function handleE2eeRequest(
         userId,
         projectsEnabled,
         db.authorization
+      );
+    }
+    if (isE2eeContactsPath(pathname)) {
+      // Contacts lists and other people's device lists (e2eeContacts.ts).
+      return await handleE2eeContactsRequest(
+        request,
+        rawDb,
+        userId,
+        db.authorization,
+        () => readBody(request)
       );
     }
     if (isE2eeContentBlobPath(pathname)) {

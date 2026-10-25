@@ -76,6 +76,11 @@ export interface InPlaceEditContext {
   /** Whether a sketch still has this curve, as a path can take it. */
   curve(sketchId: SketchId, entityId: string): boolean;
   body(bodyId: BodyId): BodyPick | null;
+  /**
+   * Later in-place steps on the edited feature's body, in history order:
+   * the model shows the body after them too.
+   */
+  laterTransforms?: readonly FeatureData[];
 }
 
 export interface InPlaceEditSeed {
@@ -431,13 +436,11 @@ export function inPlaceEditSeed(
         // The box shown is the body's after the scale: the handle works on
         // the body before it, about the pivot the feature stores.
         const factor = seed.values.factor ?? 1;
-        const pivot = (data.transform.pivot &&
-          evaluated(data.transform.pivot, ctx)) ?? { x: 0, y: 0, z: 0 };
         // A copy leaves its source as it was: only an in-place scale's
-        // body is shown scaled.
+        // body is shown scaled (and moved by any later in-place step).
         seed.slots.bodies.push(
           picked && factor > 0 && !data.copy
-            ? unscaled(picked, pivot, factor)
+            ? inPlaceEditBodyBox(picked, data, ctx, ctx.laterTransforms ?? [])
             : (picked ?? {
                 bodyId: data.targetBodyId,
                 min: { x: 0, y: 0, z: 0 },
@@ -946,12 +949,16 @@ export function keepAbsentHoleSteps(
 /**
  * The box an edit's body slot holds for `box`, the body as the model shows
  * it: as it is, except under an in-place scale, whose handle works on the
- * body before the stored scale (a copy's source is shown as it was).
+ * body before the stored scale (a copy's source is shown as it was). Later
+ * in-place moves and scales of the same body (`later`, in history order)
+ * are taken back first, since the model shows the body after them too; one
+ * that turns the body cannot be taken back from a box and is left in.
  */
 export function inPlaceEditBodyBox(
   box: BodyPick,
   data: FeatureData,
-  ctx: Pick<InPlaceEditContext, 'evaluate'>
+  ctx: Pick<InPlaceEditContext, 'evaluate'>,
+  later: readonly FeatureData[] = []
 ): BodyPick {
   if (
     data.featureKind !== 'transform' ||
@@ -960,13 +967,51 @@ export function inPlaceEditBodyBox(
   ) {
     return box;
   }
+  let before = box;
+  for (const step of [...later].reverse()) {
+    before = undoLaterTransform(before, step, ctx) ?? before;
+  }
   const factor = ctx.evaluate(data.transform.scale);
-  if (factor === null || !(factor > 0)) return box;
+  if (factor === null || !(factor > 0)) return before;
   const pivot = (data.transform.pivot &&
     evaluated(data.transform.pivot, ctx as InPlaceEditContext)) ?? {
     x: 0,
     y: 0,
     z: 0
   };
-  return unscaled(box, pivot, factor);
+  return unscaled(before, pivot, factor);
+}
+
+/**
+ * A box before an in-place move or scale (x ↦ s(x − p) + p + t), or null
+ * when the step turns the body or cannot be read.
+ */
+function undoLaterTransform(
+  box: BodyPick,
+  step: FeatureData,
+  ctx: Pick<InPlaceEditContext, 'evaluate'>
+): BodyPick | null {
+  if (step.featureKind !== 'transform' || step.copy || step.axisRotation) {
+    return null;
+  }
+  const turn = evaluated(step.transform.rotationDeg, ctx as InPlaceEditContext);
+  const move = evaluated(step.transform.translation, ctx as InPlaceEditContext);
+  if (!turn || !move || turn.x !== 0 || turn.y !== 0 || turn.z !== 0) {
+    return null;
+  }
+  const factor =
+    step.transform.scale === undefined ? 1 : ctx.evaluate(step.transform.scale);
+  if (factor === null || !(factor > 0)) return null;
+  const pivot = (step.transform.pivot &&
+    evaluated(step.transform.pivot, ctx as InPlaceEditContext)) ?? {
+    x: 0,
+    y: 0,
+    z: 0
+  };
+  const back = (point: Vector3): Vector3 => ({
+    x: (point.x - pivot.x - move.x) / factor + pivot.x,
+    y: (point.y - pivot.y - move.y) / factor + pivot.y,
+    z: (point.z - pivot.z - move.z) / factor + pivot.z
+  });
+  return { bodyId: box.bodyId, min: back(box.min), max: back(box.max) };
 }

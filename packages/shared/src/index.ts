@@ -31,6 +31,7 @@ export * from './e2ee-project-documents';
 export * from './e2ee-content-blobs';
 export * from './e2ee-collaboration';
 export * from './e2ee-device-removal';
+export * from './e2ee-contacts';
 import type { ReferenceImageSet } from './reference-images';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
