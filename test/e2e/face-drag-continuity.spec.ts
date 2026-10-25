@@ -19,7 +19,13 @@ declare global {
     __faceDragLog?: { t: number; name: string; value: string | null }[];
     __holdFinal?: { hold: boolean; held: number; release(): void };
     __openzcadE2EExactFaceDrag?: boolean;
-    __slowAnalysis?: { armed: boolean; held: number };
+    __slowAnalysis?: {
+      armed: boolean;
+      held: number;
+      /** Hold until `release()` instead of for 700 ms. */
+      manual?: boolean;
+      release?: () => void;
+    };
     __cardlessFrames?: number;
     __afterCommit?: { waiting: number; unselectedRows: number };
     __bodyCardFrames?: number;
@@ -376,7 +382,15 @@ test('the face an exact preview redrew can still be grabbed after a refusal', as
  */
 async function slowAnalysis(page: Page) {
   await page.addInitScript(() => {
-    window.__slowAnalysis = { armed: false, held: 0 };
+    const flushes: (() => void)[] = [];
+    window.__slowAnalysis = {
+      armed: false,
+      held: 0,
+      release() {
+        this.manual = false;
+        for (const flush of flushes.splice(0)) flush();
+      }
+    };
     const descriptor = Object.getOwnPropertyDescriptor(
       Worker.prototype,
       'onmessage'
@@ -410,7 +424,8 @@ async function slowAnalysis(page: Page) {
           ) {
             gate.held += 1;
             holdingUntil = performance.now() + 700;
-            setTimeout(flush, 700);
+            if (gate.manual) flushes.push(flush);
+            else setTimeout(flush, 700);
           }
         });
       }
@@ -610,8 +625,11 @@ test('a tool that needs the finished model waits for a genuine rebuild', async (
   ).toHaveCount(1, { timeout: 30_000 });
   await page.keyboard.press('Escape');
   // A rename is a real rebuild: the model on screen is the one it replaces.
+  // Held until released: CI runners are slow enough that a timed hold can
+  // end before the tool button is pressed.
   await page.evaluate(() => {
     window.__slowAnalysis!.armed = true;
+    window.__slowAnalysis!.manual = true;
   });
   const objects = page.getByRole('list', { name: 'Objects' });
   await objects.getByRole('button', { name: 'Rename body Box 1' }).click();
@@ -626,4 +644,5 @@ test('a tool that needs the finished model waits for a genuine rebuild', async (
     'Waiting for exact geometry'
   );
   await expect(page.getByRole('region', { name: /^Hole/ })).toHaveCount(0);
+  await page.evaluate(() => window.__slowAnalysis!.release!());
 });
