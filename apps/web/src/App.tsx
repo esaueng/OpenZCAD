@@ -1421,6 +1421,7 @@ import {
   IN_PLACE_TOOL_SPECS,
   clampValue,
   isInPlaceTool,
+  valueInRange,
   type InPlaceRequest,
   type BodyPick,
   type FacePick,
@@ -25648,7 +25649,7 @@ export function App() {
                       // A value outside the command's range never moves the
                       // handle: Enter refuses it as an expression, and the
                       // value must still be the one it was.
-                      if (valueSpec && clampValue(valueSpec, value) !== value) {
+                      if (valueSpec && !valueInRange(valueSpec, value)) {
                         return;
                       }
                       commandSetterRef.current?.(valueId, value);

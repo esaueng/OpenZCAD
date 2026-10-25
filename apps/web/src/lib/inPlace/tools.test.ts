@@ -5,6 +5,7 @@ import {
   axisCandidatesFor,
   clampValue,
   isInPlaceTool,
+  valueInRange,
   type BodyPick,
   type FacePick,
   type InPlaceContext,
@@ -55,6 +56,25 @@ describe('the in-place tool table', () => {
     expect(isInPlaceTool('grid-pattern')).toBe(true);
     expect(isInPlaceTool('box')).toBe(false);
     expect(isInPlaceTool('fillet')).toBe(false);
+  });
+
+  it('takes a typed value inside its range, strictly for an open one', () => {
+    const angle = IN_PLACE_TOOL_SPECS.hole.values.find(
+      (value) => value.id === 'countersinkAngleDeg'
+    )!;
+    expect(valueInRange(angle, 0)).toBe(false);
+    expect(valueInRange(angle, 0.0000005)).toBe(true);
+    expect(valueInRange(angle, 180)).toBe(false);
+    const depth = IN_PLACE_TOOL_SPECS.hole.values.find(
+      (value) => value.id === 'counterboreDepth'
+    )!;
+    expect(valueInRange(depth, 0.005)).toBe(true);
+    expect(valueInRange(depth, 0)).toBe(false);
+    const count = IN_PLACE_TOOL_SPECS['linear-pattern'].values.find(
+      (value) => value.id === 'count'
+    )!;
+    expect(valueInRange(count, 3.5)).toBe(false);
+    expect(valueInRange(count, Number.NaN)).toBe(false);
   });
 
   it('clamps a value to its range and falls back when not finite', () => {
