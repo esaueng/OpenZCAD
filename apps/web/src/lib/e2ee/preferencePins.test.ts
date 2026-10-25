@@ -39,6 +39,19 @@ describe.each<[string, () => PreferencePinStore]>([
     // Per account.
     expect(await pins.optedIn('user_2')).toBe(false);
   });
+
+  it('keeps the first value pinned at a sequence when another arrives (#869 review)', async () => {
+    const pins = create();
+    await pins.write('user_1', 5, true);
+    await pins.write('user_1', 5, false);
+    expect(await pins.optedIn('user_1')).toBe(true);
+    expect(await pins.pinnedValue('user_1')).toBe(true);
+    // A newer record replaces it; a pin moved on without a value has none.
+    await pins.write('user_1', 6, false);
+    expect(await pins.pinnedValue('user_1')).toBe(false);
+    await pins.write('user_1', 7);
+    expect(await pins.pinnedValue('user_1')).toBeNull();
+  });
 });
 
 it('reads as not opted in when storage is blocked', async () => {

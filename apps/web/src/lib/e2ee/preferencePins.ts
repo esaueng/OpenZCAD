@@ -20,6 +20,12 @@ export interface PreferencePinStore {
   ): Promise<void>;
   /** Whether the newest record this device verified opts the account in. */
   optedIn(userId: string): Promise<boolean>;
+  /**
+   * The value pinned with the current sequence, or null when none was. A
+   * record at the same sequence never replaces it: two at one sequence are
+   * a fork, not an update.
+   */
+  pinnedValue(userId: string): Promise<boolean | null>;
 }
 
 const PIN_KEY = (userId: string) =>
@@ -55,6 +61,21 @@ export function localStoragePreferencePins(
       return null;
     }
   };
+  /** The pinned value and the sequence it came with, stored as `seq:0|1`. */
+  const readValue = (
+    userId: string
+  ): { sequence: number; value: boolean } | null => {
+    try {
+      const match = /^(\d+):([01])$/.exec(
+        storage?.getItem(OPT_IN_KEY(userId)) ?? ''
+      );
+      return match
+        ? { sequence: Number(match[1]), value: match[2] === '1' }
+        : null;
+    } catch {
+      return null;
+    }
+  };
   const writePin = (
     userId: string,
     sequence: number,
@@ -62,16 +83,22 @@ export function localStoragePreferencePins(
   ) => {
     try {
       const current = readPin(userId);
-      // A pin only moves forward, whichever tab writes it; the value
-      // follows the record that set it.
+      // A pin only moves forward, whichever tab writes it.
       if (current === null || sequence > current) {
         storage?.setItem(PIN_KEY(userId), String(sequence));
       }
+      // The value follows the record that set it; another record at the
+      // same sequence is a fork and leaves it.
+      const stored = readValue(userId);
       if (
         encryptNewProjects !== undefined &&
-        (current === null || sequence >= current)
+        (current === null || sequence >= current) &&
+        (stored === null || sequence > stored.sequence)
       ) {
-        storage?.setItem(OPT_IN_KEY(userId), encryptNewProjects ? '1' : '0');
+        storage?.setItem(
+          OPT_IN_KEY(userId),
+          `${sequence}:${encryptNewProjects ? '1' : '0'}`
+        );
       }
     } catch {
       /* Best effort: see above. */
@@ -87,28 +114,39 @@ export function localStoragePreferencePins(
         async () => writePin(userId, sequence, encryptNewProjects)
       );
     },
-    async optedIn(userId) {
-      try {
-        return storage?.getItem(OPT_IN_KEY(userId)) === '1';
-      } catch {
-        return false;
-      }
+    optedIn: async (userId) => readValue(userId)?.value === true,
+    async pinnedValue(userId) {
+      const stored = readValue(userId);
+      return stored !== null && stored.sequence === readPin(userId)
+        ? stored.value
+        : null;
     }
   };
 }
 
 export function memoryPreferencePins(): PreferencePinStore {
   const pins = new Map<string, number>();
-  const optIns = new Map<string, boolean>();
+  const values = new Map<string, { sequence: number; value: boolean }>();
   return {
     read: async (userId) => pins.get(userId) ?? null,
     write: async (userId, sequence, encryptNewProjects) => {
       const current = pins.get(userId) ?? 0;
       if (sequence > current) pins.set(userId, sequence);
-      if (encryptNewProjects !== undefined && sequence >= current) {
-        optIns.set(userId, encryptNewProjects);
+      const stored = values.get(userId);
+      if (
+        encryptNewProjects !== undefined &&
+        sequence >= current &&
+        (!stored || sequence > stored.sequence)
+      ) {
+        values.set(userId, { sequence, value: encryptNewProjects });
       }
     },
-    optedIn: async (userId) => optIns.get(userId) === true
+    optedIn: async (userId) => values.get(userId)?.value === true,
+    pinnedValue: async (userId) => {
+      const stored = values.get(userId);
+      return stored && stored.sequence === pins.get(userId)
+        ? stored.value
+        : null;
+    }
   };
 }

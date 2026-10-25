@@ -6,6 +6,7 @@ import {
 } from '@openzcad/crypto';
 import {
   loadProjectPreference,
+  memoryPreferencePins,
   type PreferencePinStore,
   type ProjectPreferenceApi
 } from './projectPreferences';
@@ -42,7 +43,8 @@ describe('a preference record older than another tab’s pin (#869 review)', () 
       write: async (_, sequence) => {
         pinned = Math.max(pinned, 5, sequence);
       },
-      optedIn: async () => true
+      optedIn: async () => true,
+      pinnedValue: async () => null
     };
     const state = await loadProjectPreference({
       userId: USER,
@@ -72,7 +74,8 @@ describe('a preference record older than another tab’s pin (#869 review)', () 
         write: async (_, sequence) => {
           pinned = Math.max(pinned ?? 0, sequence);
         },
-        optedIn: async () => true
+        optedIn: async () => true,
+        pinnedValue: async () => null
       }
     });
     expect(state).toEqual({
@@ -80,5 +83,26 @@ describe('a preference record older than another tab’s pin (#869 review)', () 
       encryptNewProjects: true,
       sequence: 3
     });
+  });
+});
+
+describe('two preference records at one sequence (#869 review)', () => {
+  it('refuses the one this device did not pin as a fork', async () => {
+    const accountKey = crypto.getRandomValues(new Uint8Array(32));
+    // This device pinned sequence 3 opting in; the account now serves an
+    // authentic opt-out another tab wrote at the same sequence.
+    const pins = memoryPreferencePins();
+    await pins.write(USER, 3, true);
+    const preference = await stored(accountKey, 3, false);
+    const state = await loadProjectPreference({
+      userId: USER,
+      accountKey,
+      api: {
+        load: async () => ({ preference })
+      } as unknown as ProjectPreferenceApi,
+      pins
+    });
+    expect(state).toMatchObject({ kind: 'refused', reason: 'rollback' });
+    expect(await pins.optedIn(USER)).toBe(true);
   });
 });

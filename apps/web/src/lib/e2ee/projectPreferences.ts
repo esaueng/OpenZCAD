@@ -113,6 +113,8 @@ export type ProjectPreferenceState =
 
 const UNVERIFIED_MESSAGE =
   'The account’s copy of this setting did not verify with your keys, so it is not trusted. Choose the setting again to replace it.';
+const FORK_MESSAGE =
+  'The account returned a different copy of this setting than this device has already seen at the same point, so it is not trusted. Choose the setting again to replace it.';
 const ROLLBACK_MESSAGE =
   'The account returned an older copy of this setting than this device has already seen, so it is not trusted. Choose the setting again to replace it.';
 
@@ -172,6 +174,21 @@ async function verify(
       kind: 'refused',
       reason: 'rollback',
       message: ROLLBACK_MESSAGE,
+      floor: Math.max(floor, after)
+    };
+  }
+  // Two authentic records at one sequence (two tabs wrote at once): the
+  // one this device pinned first stands, and the other is not an update.
+  const pinnedValue = await ctx.pins.pinnedValue(ctx.userId);
+  if (
+    after === opened.sequence &&
+    pinnedValue !== null &&
+    pinnedValue !== opened.encryptNewProjects
+  ) {
+    return {
+      kind: 'refused',
+      reason: 'rollback',
+      message: FORK_MESSAGE,
       floor: Math.max(floor, after)
     };
   }
