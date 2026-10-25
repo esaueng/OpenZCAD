@@ -17,10 +17,8 @@ import { prefersSavingData } from './saveData';
  * a static import, which would pull the card back into the entry chunk.
  */
 export const COMMAND_CARD_CHUNKS: readonly (() => Promise<unknown>)[] = [
-  // Box, Union, Fillet and every other create or edit card.
+  // Box and every other create or edit card.
   () => import('../components/Inspector'),
-  // Hole, Shell, Pattern and the other modeling operations.
-  () => import('../components/forms/ModelingOperationsForm'),
   // The region Extrude editor and the selection's direct edits.
   () => import('../components/ToolCard'),
   () => import('../components/MoveOverlay'),

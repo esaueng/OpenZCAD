@@ -9,7 +9,8 @@ import {
   createPrimitiveInPlace,
   expect,
   test,
-  stubApi
+  stubApi,
+  blendEdgesInPlace
 } from './openzcad-fixtures';
 
 /**
@@ -172,16 +173,17 @@ test('cap height under chamfers: Enter commits the chip value, Escape leaves his
   page
 }) => {
   test.setTimeout(180_000);
-  const { canvas, inspector, consoleErrors } = await createCylinder(
+  const { canvas, consoleErrors } = await createCylinder(
     page,
     'Contract offset'
   );
   // Chamfers put the cap edit on the exact-preview path: every value must
   // survive a real rebuild rather than a proxy scale.
-  await page.getByRole('button', { name: /^Chamfer/ }).click();
-  await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
-  await inspector.getByLabel('Distance', { exact: true }).fill('1');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await blendEdgesInPlace(page, {
+    tool: 'Chamfer',
+    allEdges: 2,
+    size: '1'
+  });
   await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   const { select, axisLength } = cylinderHooks(canvas);
   const arm = async () => {
@@ -414,14 +416,15 @@ test('one Escape clears a refused offset: card, preview, handle and selection', 
   await page.addInitScript(() => {
     window.__openzcadE2EExactFaceDrag = true;
   });
-  const { canvas, inspector, consoleErrors } = await createCylinder(
+  const { canvas, consoleErrors } = await createCylinder(
     page,
     'Contract refused offset'
   );
-  await page.getByRole('button', { name: /^Chamfer/ }).click();
-  await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
-  await inspector.getByLabel('Distance', { exact: true }).fill('1');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await blendEdgesInPlace(page, {
+    tool: 'Chamfer',
+    allEdges: 2,
+    size: '1'
+  });
   await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   const { select, axisLength } = cylinderHooks(canvas);
   const height = async () => {
@@ -464,7 +467,8 @@ test('one Escape clears a refused offset: card, preview, handle and selection', 
   // Nothing stands over the arrow: the press reaches the canvas.
   expect(
     await canvas.evaluate(
-      (element, point) => document.elementFromPoint(point.x, point.y) === element,
+      (element, point) =>
+        document.elementFromPoint(point.x, point.y) === element,
       start
     )
   ).toBe(true);

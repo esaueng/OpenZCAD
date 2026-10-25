@@ -153,8 +153,8 @@ export function holePositionFromPoint(
 
 /**
  * `holePositionFromPoint` for a picked entry face's measured geometry,
- * measured from the anchor the hole is drilled against (see
- * `holePositionAnchor`). Null when the face lacks a normal or that anchor.
+ * measured from the anchor the hole is drilled against. Null when the face
+ * lacks a normal or that anchor.
  */
 export function holePositionFromPick(
   face: { normal?: Vector3; centroid?: Vector3; center?: Vector3 },

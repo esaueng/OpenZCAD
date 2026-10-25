@@ -13,6 +13,7 @@ import {
   valueInRange,
   type BodyPick,
   type CurvePick,
+  type EdgePick,
   type FacePick,
   type HandleSpec,
   type ImagePlacement,
@@ -116,7 +117,8 @@ const SLOT_KEYS = [
   'guide',
   'faces',
   'bodies',
-  'plane'
+  'plane',
+  'edges'
 ] as const;
 
 /** Where a pick stands or what it measures, not what it references. */
@@ -178,6 +180,7 @@ function sessionFromSeed(
       faces: seed.slots.faces,
       bodies: seed.slots.bodies,
       plane: seed.slots.plane,
+      edges: seed.slots.edges,
       // A datum, a picture or a primitive is never edited here: no sources,
       // no image, no placement.
       placement: null,
@@ -203,6 +206,7 @@ interface Session {
     faces: FacePick[];
     bodies: BodyPick[];
     plane: PlanePick | null;
+    edges: EdgePick[];
     placement: PlacementPick | null;
     refs: RefPick[];
     image: ImageSlot | null;
@@ -254,7 +258,7 @@ export interface InPlaceCommand {
     profiles?: ProfilePick[],
     faces?: FacePick[],
     bodies?: BodyPick[],
-    extra?: { refs?: RefPick[]; image?: ImageSlot }
+    extra?: { refs?: RefPick[]; image?: ImageSlot; edges?: EdgePick[] }
   ): void;
   pickProfile(pick: ProfilePick, additive?: boolean): void;
   /**
@@ -276,8 +280,9 @@ export interface InPlaceCommand {
       guide?: readonly CurvePick[];
       faces?: readonly FacePick[];
       bodies?: readonly BodyPick[];
+      edges?: readonly EdgePick[];
     },
-    from?: Pick<InPlaceSlots, 'path' | 'guide' | 'faces' | 'bodies'>
+    from?: Pick<InPlaceSlots, 'path' | 'guide' | 'faces' | 'bodies' | 'edges'>
   ): void;
   pickAxis(axisId: string): void;
   pickCurve(curve: CurvePick, additive?: boolean): void;
@@ -292,6 +297,14 @@ export interface InPlaceCommand {
   addFaces(faces: readonly FacePick[]): number | null;
   /** A body click (any of its faces): refused when the tool takes none. */
   pickBody(body: BodyPick): boolean;
+  /**
+   * An edge click: it joins the command's edges, or a picked one comes back
+   * out; an edge of another body starts the set over. Refused (false) when
+   * the tool takes no edges.
+   */
+  pickEdge(edge: EdgePick): boolean;
+  /** Replaces the command's edges (Select all, Clear); false without any. */
+  setEdges(edges: readonly EdgePick[]): boolean;
   pickPlane(plane: PlanePick): boolean;
   /**
    * A primitive's footprint drag: where it was drawn, and the values it set
@@ -345,6 +358,7 @@ const EMPTY_SLOTS: InPlaceSlots = {
   faces: [],
   bodies: [],
   plane: null,
+  edges: [],
   placement: null,
   refs: [],
   image: null
@@ -530,6 +544,7 @@ export function useInPlaceCommand(
             faces: session.slots.faces,
             bodies: session.slots.bodies,
             plane: session.slots.plane,
+            edges: session.slots.edges,
             placement: session.slots.placement,
             refs: session.slots.refs,
             image: session.slots.image
@@ -706,6 +721,9 @@ export function useInPlaceCommand(
             derived: result.derived
           });
         } else {
+          // The last frame that built is not this request: left on screen
+          // under the refusal, it reads as the value that was refused.
+          optionsRef.current.publishPreview(null);
           setRefusal(
             fresh ??
               unresolved ??
@@ -716,6 +734,7 @@ export function useInPlaceCommand(
       },
       onFailure: ({ error }) => {
         setPreviewValid(false);
+        optionsRef.current.publishPreview(null);
         setRefusal(
           error instanceof Error ? error.message : 'Unable to preview this.'
         );
@@ -1017,7 +1036,7 @@ export function useInPlaceCommand(
       initial: ProfilePick[] = [],
       initialFaces: FacePick[] = [],
       initialBodies: BodyPick[] = [],
-      extra: { refs?: RefPick[]; image?: ImageSlot } = {}
+      extra: { refs?: RefPick[]; image?: ImageSlot; edges?: EdgePick[] } = {}
     ) => {
       const toolSpec = IN_PLACE_TOOL_SPECS[tool];
       commitToken.current += 1;
@@ -1053,6 +1072,7 @@ export function useInPlaceCommand(
               : initialBodies
             : [],
           plane: null,
+          edges: toolSpec.edgeMode ? sameBodyEdges(extra.edges ?? []) : [],
           placement: null,
           refs: toolSpec.takeRef
             ? (extra.refs ?? []).reduce<RefPick[]>(
@@ -1148,14 +1168,17 @@ export function useInPlaceCommand(
         guide?: readonly CurvePick[];
         faces?: readonly FacePick[];
         bodies?: readonly BodyPick[];
+        edges?: readonly EdgePick[];
       },
-      from?: Pick<InPlaceSlots, 'path' | 'guide' | 'faces' | 'bodies'>
+      from?: Pick<InPlaceSlots, 'path' | 'guide' | 'faces' | 'bodies' | 'edges'>
     ) => {
       setSession((current) => {
         if (!current) return current;
         // A slot the live reseed replaced since the re-check read it keeps
         // the newer picks; the next re-check reads those.
-        const take = <K extends 'path' | 'guide' | 'faces' | 'bodies'>(
+        const take = <
+          K extends 'path' | 'guide' | 'faces' | 'bodies' | 'edges'
+        >(
           key: K
         ) =>
           picks[key] !== undefined &&
@@ -1167,7 +1190,8 @@ export function useInPlaceCommand(
             ...(take('path') ? { path: [...picks.path!] } : {}),
             ...(take('guide') ? { guide: [...picks.guide!] } : {}),
             ...(take('faces') ? { faces: [...picks.faces!] } : {}),
-            ...(take('bodies') ? { bodies: [...picks.bodies!] } : {})
+            ...(take('bodies') ? { bodies: [...picks.bodies!] } : {}),
+            ...(take('edges') ? { edges: [...picks.edges!] } : {})
           }
         };
       });
@@ -1304,6 +1328,44 @@ export function useInPlaceCommand(
         }
       };
     });
+    return true;
+  }, []);
+
+  const pickEdge = useCallback((edge: EdgePick) => {
+    if (committingRef.current) return false;
+    const current = sessionRef.current;
+    const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
+    if (!current || !toolSpec?.edgeMode) return false;
+    setSession((latest) => {
+      if (!latest) return latest;
+      const edges = latest.slots.edges;
+      const sameBody = edges[0]?.bodyId === edge.bodyId;
+      const picked = edges.some((other) => other.hash === edge.hash);
+      // Edges of one body, in pick order: an edge of another starts the set
+      // over, and a picked one clicked again comes back out.
+      const next = !sameBody
+        ? [edge]
+        : picked
+          ? edges.filter((other) => other.hash !== edge.hash)
+          : [...edges, edge];
+      return { ...latest, slots: { ...latest.slots, edges: next } };
+    });
+    return true;
+  }, []);
+
+  const setEdges = useCallback((edges: readonly EdgePick[]) => {
+    if (committingRef.current) return false;
+    const current = sessionRef.current;
+    const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
+    if (!current || !toolSpec?.edgeMode) return false;
+    setSession((latest) =>
+      latest
+        ? {
+            ...latest,
+            slots: { ...latest.slots, edges: sameBodyEdges(edges) }
+          }
+        : latest
+    );
     return true;
   }, []);
 
@@ -1811,6 +1873,8 @@ export function useInPlaceCommand(
     pickFace,
     addFaces,
     pickBody,
+    pickEdge,
+    setEdges,
     pickPlane,
     placeFootprint,
     pickRef,
@@ -1824,6 +1888,17 @@ export function useInPlaceCommand(
     settleEdit,
     cancel
   };
+}
+
+/** Edges as a command holds them: the first one's body only, once each. */
+function sameBodyEdges(edges: readonly EdgePick[]): EdgePick[] {
+  const body = edges[0]?.bodyId;
+  const seen = new Set<number>();
+  return edges.filter((edge) => {
+    if (edge.bodyId !== body || seen.has(edge.hash)) return false;
+    seen.add(edge.hash);
+    return true;
+  });
 }
 
 /**
@@ -1885,7 +1960,8 @@ function slotsOf(session: Session): InPlaceSlots {
     bodies: session.slots.bodies,
     plane: session.slots.plane,
     refs: session.slots.refs,
-    image: session.slots.image
+    image: session.slots.image,
+    edges: session.slots.edges
   };
 }
 

@@ -11,7 +11,8 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import {
   createPrimitiveInPlace,
   expectBodyCount,
-  stubApi
+  stubApi,
+  blendEdgesInPlace
 } from './openzcad-fixtures';
 import { createNativeHolderStages } from '../fixtures/hammer-holder/native-document';
 import type { FaceDragTraceEvent } from '../../apps/web/src/lib/faceDragTrace';
@@ -351,14 +352,14 @@ test.setTimeout(Number(process.env.OZ_FACE_DRAG_TIMEOUT_MS ?? 600_000));
 
 test('traces a chamfered cylinder top-cap drag', async ({ page }) => {
   await startPage(page);
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await createPrimitiveInPlace(page, 'cylinder', {
     sizes: { radius: '14', height: '28' }
   });
-  await page.getByRole('button', { name: /^Chamfer/ }).click();
-  await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
-  await inspector.getByLabel('Distance', { exact: true }).fill('1');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await blendEdgesInPlace(page, {
+    tool: 'Chamfer',
+    allEdges: 2,
+    size: '1'
+  });
   await expectBodyCount(page, 1);
   const { canvas, handle } = await armPlanarFace(page, { x: 0, y: 0, z: 1 });
   const summary = record(
@@ -371,14 +372,14 @@ test('traces a chamfered cylinder top-cap drag', async ({ page }) => {
 
 test('traces a rounded box top-face drag', async ({ page }) => {
   await startPage(page);
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await createPrimitiveInPlace(page, 'box', {
     sizes: { width: '40', depth: '24', height: '10' }
   });
-  await page.getByRole('button', { name: /^Fillet/ }).click();
-  await inspector.getByRole('button', { name: 'Select all 12 edges' }).click();
-  await inspector.getByLabel('Radius', { exact: true }).fill('1.5');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await blendEdgesInPlace(page, {
+    tool: 'Fillet',
+    allEdges: 12,
+    size: '1.5'
+  });
   await expectBodyCount(page, 1);
   const { canvas, handle } = await armPlanarFace(page, { x: 0, y: 0, z: 1 });
   // A box cap keeps its primitive-height proxy, so this case measures the

@@ -280,17 +280,6 @@ fieldset.field > legend {
   font-size: var(--fs-mini);
 }
 
-.edge-selection-action {
-  width: 100%;
-  justify-content: center;
-  margin-bottom: 7px;
-}
-
-.edge-selection-hint {
-  margin: 0 0 10px;
-  font-size: var(--fs-mini);
-}
-
 /* A blend's edges by name under the count, each with its remove button:
    the rows of a pick list, drawn as picked, but not toggles themselves. */
 .edge-pick-list {
@@ -577,14 +566,6 @@ fieldset.field > legend {
   color: var(--color-accent);
   font-size: var(--fs-mini);
   text-align: center;
-}
-
-.pick-row .body-name {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .pick-row small {
@@ -969,15 +950,6 @@ fieldset.field > legend {
 
 .panel-overflow-item.danger {
   color: var(--color-error-text);
-}
-
-.edge-size-slider {
-  width: 100%;
-  min-height: 28px;
-  margin: 0 0 8px;
-  padding: 0;
-  accent-color: var(--color-accent);
-  cursor: ew-resize;
 }
 
 /* I05 two-point scale: the picture at card width, clicked to place two
