@@ -471,7 +471,7 @@ describe('an untouched edit writes the feature back as stored', () => {
         rotationDeg: { x: 0, y: 0, z: 0 }
       },
       axisRotation: {
-        axis: { datumFeatureId: 'axis_1' as FeatureId },
+        axis: { type: 'datum-axis', datumFeatureId: 'axis_1' as FeatureId },
         angleDeg: 90
       }
     };
