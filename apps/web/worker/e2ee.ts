@@ -919,7 +919,14 @@ async function handleReplaceIdentity(
   const signerFence = await projectSignerFence(
     db,
     userId,
-    removedDevices(oldList.devices, list.head.devices)
+    [
+      ...removedDevices(oldList.devices, list.head.devices),
+      // Devices already revoked in this generation: their cutoffs name this
+      // generation's list, which the new genesis no longer carries.
+      ...oldList.revoked
+        .filter((revoked) => revoked.kind === 'device')
+        .map((revoked) => revoked.id)
+    ]
   );
   const written = await writeGeneration(db, userId, {
     generation: generation,
