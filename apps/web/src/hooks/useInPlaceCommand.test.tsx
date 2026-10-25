@@ -1015,7 +1015,10 @@ describe('useInPlaceCommand: editing a stored feature', () => {
   });
 
   it('follows whether the feature stores a value at all', () => {
-    let live = { values: { depth: 8 }, touched: ['depth'] };
+    let live: { values: Record<string, number>; touched: string[] } = {
+      values: { depth: 8 },
+      touched: ['depth']
+    };
     const options: UseInPlaceCommandOptions = {
       ...setupOptions([], vi.fn()),
       baseVersion: 1,
