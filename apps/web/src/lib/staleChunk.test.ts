@@ -113,6 +113,40 @@ describe('preloadableLazy', () => {
     expect(screen.queryByText('loading')).toBeNull();
   });
 
+  it('keeps a surface mounted when its chunk lands after a first render', async () => {
+    const { act, render, screen } = await import('@testing-library/react');
+    const { Suspense, createElement, useState } = await import('react');
+    const { preloadableLazy } = await import('./staleChunk');
+    let mounts = 0;
+    function Keypad({ label }: { label: string }) {
+      useState(() => (mounts += 1));
+      return createElement('p', null, label);
+    }
+    let finish!: (module: { default: typeof Keypad }) => void;
+    const Surface = preloadableLazy(
+      () =>
+        new Promise<{ default: typeof Keypad }>((resolve) => (finish = resolve))
+    );
+    const tree = (label: string) =>
+      createElement(
+        Suspense,
+        { fallback: createElement('p', null, 'loading') },
+        createElement(Surface, { label })
+      );
+    const { rerender } = render(tree('1'));
+    await act(async () => {
+      finish({ default: Keypad });
+      await Promise.resolve();
+    });
+    expect(screen.getByText('1')).toBeTruthy();
+    // The parent re-renders (a keystroke's preview): same instance, no
+    // remount. The lazy element never commits — the boundary shows its
+    // fallback, and the retry already renders the loaded component.
+    rerender(tree('12'));
+    expect(screen.getByText('12')).toBeTruthy();
+    expect(mounts).toBe(1);
+  });
+
   it('does not report a stale chunk when only a preload fails', async () => {
     const { preloadableLazy } = await import('./staleChunk');
     const listener = vi.fn();

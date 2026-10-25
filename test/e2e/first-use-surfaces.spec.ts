@@ -106,3 +106,50 @@ test('Settings opened before the warm-up never shows an empty overlay', async ({
   ).toBeVisible();
   expect(await page.evaluate(() => window.__firstUse?.settingsBlank)).toBe(0);
 });
+
+test('Move launched before its panel loads keeps the selection card up', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // Hold the Move panel's chunk until the launch is under way.
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  await page.route(/MoveOverlay[^/]*\.(js|tsx)(\?|$)/, async (route) => {
+    await released;
+    await route.continue();
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Early move');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await selectBodyFromObjects(page);
+  const move = page.getByRole('button', {
+    name: 'Selection: Move',
+    exact: true
+  });
+  await expect(move).toBeVisible();
+  await page.evaluate(() => {
+    window.__firstUse = { settingsBlank: 0, moveGap: 0, moving: true };
+    const sample = () => {
+      if (
+        !document.querySelector('.selection-card') &&
+        !document.querySelector('form[aria-label="Move controls"]')
+      )
+        window.__firstUse!.moveGap += 1;
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+  await move.click();
+  await page.waitForTimeout(500);
+  release();
+  await expect(page.locator('form[aria-label="Move controls"]')).toBeVisible();
+  await page.waitForTimeout(300);
+  expect(await page.evaluate(() => window.__firstUse?.moveGap)).toBe(0);
+});

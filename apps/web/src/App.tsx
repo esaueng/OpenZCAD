@@ -1183,7 +1183,11 @@ const LazySettingsPage = preloadableLazy(() =>
  * used to show an empty frame or two while the chunk evaluated, even with
  * the chunk already prefetched.
  */
-const FIRST_USE_SURFACES = [LazySettingsPage, LazyMoveOverlay, LazyNumericKeypad];
+const FIRST_USE_SURFACES = [
+  LazySettingsPage,
+  LazyMoveOverlay,
+  LazyNumericKeypad
+];
 const LazyProjectSharingDialog = lazyWithStaleChunkNotice(() =>
   import('./components/ProjectSharingDialog').then((module) => ({
     default: module.ProjectSharingDialog
@@ -3379,6 +3383,9 @@ export function App() {
   /** Opens exact entry for the armed handle, as tapping its chip would. */
   const openExactEntryRef = useRef<(() => boolean) | null>(null);
   const contextMenuActionsRef = useRef<Record<string, () => void>>({});
+  /** Counts tool launches, so a launch held for its panel's chunk can tell
+   * whether another has superseded it. */
+  const toolLaunchRef = useRef(0);
   const viewportMenuHandlersRef = useRef({
     launchTool,
     validateSelectionEdit,
@@ -8190,7 +8197,32 @@ export function App() {
    * values were never applied is not left open under the new tool's card
    * (F15) — the user is asked once whether to apply or discard it.
    */
-  function launchTool(nextTool: ToolId, modelingFeature?: FeatureNode) {
+  function launchTool(
+    nextTool: ToolId,
+    modelingFeature?: FeatureNode,
+    panelLoadSettled = false
+  ) {
+    const launch = ++toolLaunchRef.current;
+    // Move's panel takes the selection card's place. Before its chunk has
+    // loaded (a launch that beats the idle warm-up, or Save-Data, which skips
+    // it) the swap left neither on screen, so the card stays up until the
+    // panel can render. A failed load launches anyway, to report it.
+    if (
+      nextTool === 'transform' &&
+      !panelLoadSettled &&
+      !LazyMoveOverlay.isLoaded()
+    ) {
+      const relaunch = () => {
+        if (toolLaunchRef.current !== launch) return;
+        viewportMenuHandlersRef.current.launchTool(
+          nextTool,
+          modelingFeature,
+          true
+        );
+      };
+      LazyMoveOverlay.preload().then(relaunch, relaunch);
+      return;
+    }
     const current = managerRef.current?.document;
     if (modelingFeature && !current) return;
     const request = {
@@ -18607,6 +18639,17 @@ export function App() {
     publishPreview: setPreviewDoc,
     onStatus: setStatus
   });
+  // A value keypad opens from an armed handle, a running command or a tool
+  // card. Load it once one is up, so a keypad that beats the idle warm-up (or
+  // runs under Save-Data, which skips it) does not appear late.
+  const keypadWithinReach =
+    tool !== null ||
+    inPlace.active ||
+    interaction.mode !== 'idle' ||
+    movePreview !== null;
+  useEffect(() => {
+    if (keypadWithinReach) LazyNumericKeypad.preload().catch(() => undefined);
+  }, [keypadWithinReach]);
   const inPlaceRef = useRef(inPlace);
   inPlaceRef.current = inPlace;
   /** The keypad moves a command handle through this, without a render. */
