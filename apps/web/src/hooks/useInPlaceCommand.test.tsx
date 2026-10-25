@@ -1229,6 +1229,45 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     );
   });
 
+  it('a face found again under a new hash is still the seeded pick', () => {
+    const face = (hash: number, faceHash: number) => ({
+      bodyId: 'body_a' as BodyId,
+      hash,
+      topologyId: `f${hash}`,
+      reference: { kind: 'lineage', name: 'top' } as never,
+      centroid: { x: 0, y: 0, z: faceHash }
+    });
+    let faces = [face(1, 1)];
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      baseVersion: 1,
+      reseed: (edit) => ({
+        tool: 'shell',
+        seed: { ...edit, slots: { ...edit.slots, faces } }
+      })
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('shell', {
+        ...SEED,
+        options: {},
+        slots: { ...SEED.slots, bodies: [], faces: [face(1, 1)] }
+      })
+    );
+    // An upstream rebuild renames the face's hash (the live re-check).
+    act(() => hook.result.current.setPicks({ faces: [face(7, 1)] }));
+    // A collaborator then changes the faces: the untouched slot follows.
+    faces = [
+      face(7, 1),
+      { ...face(9, 2), reference: { kind: 'lineage', name: 'side' } as never }
+    ];
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.slots.faces.map((f) => f.hash)).toEqual([7, 9]);
+  });
+
   it('a re-armed edit drops a refusal typed in the edit before it', () => {
     let live: {
       tool: 'linear-pattern' | 'grid-pattern';
