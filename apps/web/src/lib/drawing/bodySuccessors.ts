@@ -25,8 +25,7 @@ export function drawingBodyReplacements(
       case 'hole':
       case 'shell':
       case 'solid-offset':
-      case 'draft':
-      case 'thicken': {
+      case 'draft': {
         const targets = successors.get(data.targetBodyId) ?? [];
         targets.push(node.bodyId);
         successors.set(data.targetBodyId, targets);

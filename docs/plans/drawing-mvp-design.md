@@ -352,7 +352,8 @@ notes to D01 sheets:
 
 When a finishing feature consumes a drawing's body, the sheet offers the
 existing explicit Update action for an unambiguous chain of one-to-one
-hole, fillet, chamfer, shell, solid-offset, draft or thicken results. This
+hole, fillet, chamfer, shell, solid-offset or draft results. Additive Thicken
+results leave their source live and are excluded from replacement paths. This
 updates all affected views and their annotation body references in one
 undoable command, together with the source fingerprint. The stored edge
 hashes and witnesses, view positions and annotation formatting are kept.

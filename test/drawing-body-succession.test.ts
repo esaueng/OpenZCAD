@@ -189,7 +189,7 @@ describe('drawing body succession', () => {
     ).toThrow(/explicit source Update/);
   });
 
-  it('follows a unique finishing chain but refuses competing successors', async () => {
+  it('ignores additive results, follows a unique finishing chain and refuses competing replacements', async () => {
     let document = addPrimitiveFeature(
       createProjectDocument('Chain', toUserId('test')),
       {
@@ -201,6 +201,30 @@ describe('drawing body succession', () => {
     document = { ...document, derived: await adapter.syncDocument(document) };
     const source = document.bodyOrder[0]!;
     const body = document.derived.bodyRepresentations[source]!;
+    document = commandFactories
+      .thickenFace({
+        name: 'Thicken',
+        targetBodyId: source,
+        faceHash: body.topology!.faces[0]!.hash,
+        thickness: 1
+      })
+      .apply(document);
+    const additive = document.bodyOrder.at(-1)!;
+    const additiveBodies = {
+      [source]: body,
+      [additive]: { ...body, bodyId: additive }
+    };
+    expect(drawingBodyReplacements(document, additiveBodies, [source])).toEqual(
+      []
+    );
+    // An additive result cannot stand in for a genuinely missing source.
+    expect(
+      drawingBodyReplacements(
+        document,
+        { [additive]: additiveBodies[additive]! },
+        [source]
+      )
+    ).toBeNull();
     const fillet = (targetBodyId: typeof source) =>
       commandFactories.filletEdges({
         name: 'Fillet',
@@ -213,6 +237,7 @@ describe('drawing body succession', () => {
     document = fillet(middle).apply(document);
     const target = document.bodyOrder.at(-1)!;
     const bodies = {
+      ...additiveBodies,
       [source]: { ...body, consumed: true },
       [middle]: { ...body, bodyId: middle, consumed: true },
       [target]: { ...body, bodyId: target }
