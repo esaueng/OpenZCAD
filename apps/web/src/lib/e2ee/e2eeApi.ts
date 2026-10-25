@@ -135,3 +135,6 @@ export function createE2eeApi(fetcher: Fetch = desktopFetch): E2eeApi {
       call(fetcher, `/api/e2ee/approvals/${id(approvalId)}`, 'DELETE')
   };
 }
+
+/** One `/api/e2ee/*` call with this module's error handling, for sibling APIs. */
+export { call as callE2eeRoute, type Fetch as E2eeFetch };
