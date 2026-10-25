@@ -15073,6 +15073,20 @@ export function App() {
         producingFeatureOf({ bodyId: selection.bodyId }),
         editing
       );
+    // An edit keeps the body it blends: its stored edges are named on that
+    // body alone, so an edge of another earlier body is refused rather than
+    // stored where it names nothing (or the wrong edge).
+    if (
+      editing &&
+      target !== null &&
+      selection.bodyId !== target &&
+      !remap
+    ) {
+      setStatus(
+        `${editing.name} rounds edges of one body: pick an edge of the body it was made on.`
+      );
+      return null;
+    }
     // Only what the edited blend's result became stands for its input;
     // an edge of another later body is refused.
     const descendants =
@@ -19727,16 +19741,43 @@ export function App() {
               ))
         )
       : inPlaceEditPicks.bodies;
+    // A blend's edges, the same way: by lineage first, taking a moved hash.
+    let edgesMoved = false;
+    const edges = inPlaceEditPicks.edges.flatMap((pick) => {
+      const body = representations[pick.bodyId];
+      if (!body?.topology) return [pick];
+      const found = resolveEdge(body, {
+        hash: pick.hash,
+        ...(pick.reference ? { reference: pick.reference } : {})
+      });
+      if (!found.ok) return [];
+      if (
+        found.entry.hash === pick.hash &&
+        found.entry.topologyId === pick.topologyId
+      ) {
+        return [pick];
+      }
+      edgesMoved = true;
+      return [
+        { ...pick, hash: found.entry.hash, topologyId: found.entry.topologyId }
+      ];
+    });
     if (
       path.length === inPlaceEditPicks.path.length &&
       guide.length === inPlaceEditPicks.guide.length &&
       faces.length === inPlaceEditPicks.faces.length &&
-      bodies.length === inPlaceEditPicks.bodies.length
+      bodies.length === inPlaceEditPicks.bodies.length &&
+      edges.length === inPlaceEditPicks.edges.length
     ) {
-      if (facesMoved) inPlaceRef.current.setPicks({ faces });
+      if (facesMoved || edgesMoved) {
+        inPlaceRef.current.setPicks({
+          ...(facesMoved ? { faces } : {}),
+          ...(edgesMoved ? { edges } : {})
+        });
+      }
       return;
     }
-    inPlaceRef.current.setPicks({ path, guide, faces, bodies });
+    inPlaceRef.current.setPicks({ path, guide, faces, bodies, edges });
     setStatus(
       `${editing.name}: a saved pick no longer exists in the model · pick it again.`
     );
