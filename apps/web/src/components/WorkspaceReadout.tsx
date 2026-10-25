@@ -162,12 +162,13 @@ export function WorkspaceReadout({
     raised.toastId === actionToastId &&
     statusAt !== undefined &&
     raised.statusAt === statusAt;
+  // Recorded while the toast is up, whatever the tone: after a delete the
+  // model is still rebuilding when the toast is raised, and a toast dismissed
+  // before the rebuild settled left nothing to retire the repeat later.
   const [spentAt, setSpentAt] = useState<number | null>(null);
   useEffect(() => {
-    if (repeated && tone === 'ready' && statusAt !== undefined) {
-      setSpentAt(statusAt);
-    }
-  }, [repeated, tone, statusAt]);
+    if (repeated && statusAt !== undefined) setSpentAt(statusAt);
+  }, [repeated, statusAt]);
   const expired =
     statusAt !== undefined &&
     !sticky &&

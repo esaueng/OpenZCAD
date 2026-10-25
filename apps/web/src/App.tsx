@@ -3432,10 +3432,11 @@ export function App() {
     if (feedback.state === 'pending') return;
     suppressionNoticeRef.current = null;
     if (feedback.state !== 'ready') return;
-    announce(feedback.message, {
-      label: 'Undo',
-      run: handleUndo
-    });
+    announce(
+      feedback.message,
+      { label: 'Undo', run: handleUndo },
+      { repeatsStatus: true }
+    );
   };
   const pendingPartCountRef = useRef<Pick<
     ProjectDocument,

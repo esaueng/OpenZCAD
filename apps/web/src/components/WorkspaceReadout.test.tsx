@@ -343,6 +343,41 @@ describe('WorkspaceReadout message lifetime', () => {
     }
   });
 
+  it('retires a repeated message even when its toast leaves before the rebuild settles', () => {
+    vi.useFakeTimers();
+    try {
+      const at = Date.now();
+      const view = (
+        tone: 'running' | 'ready',
+        actionToastId: number | null
+      ) => (
+        <WorkspaceReadout
+          status="Deleted Boss bore."
+          statusAt={at}
+          tone={tone}
+          logOpen={false}
+          onToggleLog={vi.fn()}
+          actionToastId={actionToastId}
+          {...SUMMARY}
+        />
+      );
+      // The delete's toast goes up while the model is still rebuilding...
+      const { rerender } = render(view('running', 1));
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      // ...and is dismissed before the rebuild settles.
+      rerender(view('running', null));
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      rerender(view('ready', null));
+      expect(screen.getByRole('contentinfo')).toHaveClass('hidden');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps a message set after the toast was raised, which it does not repeat', () => {
     vi.useFakeTimers();
     try {
