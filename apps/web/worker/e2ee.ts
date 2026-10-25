@@ -973,13 +973,15 @@ function removedDevices(
 }
 
 /**
- * Until device removal records revocation cutoffs (ADR-024 slice 4-10), a
- * device that signed a version or envelope of one of the account's
- * encrypted projects stays: once removed, browsers would refuse what it
- * signed, and those projects would stop opening. A device that signed
- * nothing is removed as before. Nothing to check before migration 0033.
+ * A recovery-key replacement starts a new device list whose genesis lists
+ * only the devices it keeps. Revocation cutoffs (device removal) name
+ * devices revoked within one list, so a device the new genesis drops that
+ * signed a version or envelope of one of the account's encrypted projects
+ * keeps the replacement from landing: browsers could no longer resolve
+ * what it signed. A device that signed nothing is dropped as before.
+ * Nothing to check before migration 0033.
  *
- * Returns a fence for the device-list write itself, so a version a removed
+ * Returns a fence for the identity write itself, so a version such a
  * device signs meanwhile makes the write refuse; encrypted writes are
  * fenced on the device list in turn (`deviceListUnchanged`).
  */
@@ -1022,7 +1024,7 @@ async function refuseIfSigned(
     refuse(
       409,
       E2EE_DEVICE_SIGNED_PROJECTS_CODE,
-      'This device saved encrypted projects, and removing it is not available yet: those projects would stop opening. It will be in a coming update.'
+      'A device this change leaves out saved encrypted projects, and those projects would stop opening. This will be possible in a coming update.'
     );
   }
 }
@@ -1068,11 +1070,6 @@ async function handleAppend(
     signed
   ]);
   const previous = list.entries.at(-2)!.entry;
-  const signerFence = await projectSignerFence(
-    db,
-    userId,
-    removedDevices(previous.devices, list.head.devices)
-  );
   const rotation =
     toHex(previous.accountKeyCommitment) !==
     toHex(list.head.accountKeyCommitment);
@@ -1158,8 +1155,7 @@ async function handleAppend(
          SELECT ?, ?, ?, ?, ?, ?, ?
          WHERE ${auth.sql} AND (SELECT MAX(sequence) FROM e2ee_device_list_entries
                 WHERE user_id = ? AND generation = ?) = ?
-           AND (SELECT MAX(generation) FROM e2ee_identities WHERE user_id = ?) = ?
-           AND ${signerFence.sql}`
+           AND (SELECT MAX(generation) FROM e2ee_identities WHERE user_id = ?) = ?`
       )
       .bind(
         userId,
@@ -1174,8 +1170,7 @@ async function handleAppend(
         current.generation,
         before.sequence,
         userId,
-        current.generation,
-        ...signerFence.binds
+        current.generation
       ),
     ...(rotation
       ? [
@@ -1224,7 +1219,6 @@ async function handleAppend(
   ];
   const results = await db.batch(statements);
   if ((results[0]?.meta?.changes ?? 0) !== 1) {
-    await refuseIfSigned(db, signerFence);
     refuse(
       409,
       'E2EE_DEVICE_LIST_CONFLICT',
