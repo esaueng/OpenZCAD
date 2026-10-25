@@ -1,84 +1,78 @@
 import { useEffect, useRef, useState } from 'react';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 
-/** How long a save must run before the indicators say it is running. */
-export const SAVE_STATE_SETTLE_MS = 700;
+/** The least time a "Saving" or "Syncing" label stays up once shown. */
+export const SAVE_STATE_MIN_BUSY_MS = 600;
 
 function inFlight(state: WorkspaceSaveState): boolean {
   return state === 'saving' || state === 'syncing';
 }
 
-/** Marks which opening a piece of state belongs to. */
-interface Opening {
-  projectId: string | null;
+/** Settled states a busy label may linger over; anything else shows at once. */
+function quiet(state: WorkspaceSaveState): boolean {
+  return state === 'synced' || state === 'local' || state === 'local-source';
 }
 
 /**
  * The save state the indicators show. Every edit writes this device's copy
  * and then the account's, so read raw the chip flipped Saved → Saving →
- * Syncing → Saving on each drag and settled only when the hand stopped.
+ * Syncing → Saving on each drag, and a quick save blinked its label for a
+ * frame or two.
  *
- * - A save that finishes quickly is never announced: the last settled state
- *   stays up until one has run for `delayMs`.
+ * - A save is announced as soon as it starts: the chip never says "Saved"
+ *   for work that is not.
  * - Once "Syncing" is up, a newer device write does not turn it back to
  *   "Saving": the account copy is still behind either way.
- * - Anything else (offline, a conflict, a failed write) shows at once, and so
- *   does the first state of a newly opened project, which has no settled
- *   state of its own to hold.
+ * - A busy label stays up for at least `minBusyMs` before a quiet settled
+ *   state replaces it. Failures, conflicts and the like replace it at once.
  *
- * Everything held belongs to one opening of one project: a reveal or a
- * "Syncing" from the project before must not describe the one after.
+ * All of it belongs to one project: another project's save is not this
+ * one's.
  */
 export function useSteadySaveState(
   state: WorkspaceSaveState,
   projectId: string | null,
-  delayMs = SAVE_STATE_SETTLE_MS
+  minBusyMs = SAVE_STATE_MIN_BUSY_MS
 ): WorkspaceSaveState {
   const busy = inFlight(state);
-  const settled = useRef<(Opening & { state: WorkspaceSaveState }) | null>(
-    null
-  );
-  const syncingShown = useRef<Opening | null>(null);
-  const [revealedFor, setRevealedFor] = useState<Opening | null>(null);
-  const revealed = revealedFor !== null && revealedFor.projectId === projectId;
-
-  // Closing a project and opening it again is a new opening too: its last
-  // "Saved" is not this opening's to show.
-  useEffect(() => {
-    settled.current = null;
-    syncingShown.current = null;
-    setRevealedFor(null);
-  }, [projectId]);
-
-  useEffect(() => {
-    if (busy) return;
-    settled.current = { projectId, state };
-    syncingShown.current = null;
-    setRevealedFor(null);
-  }, [busy, projectId, state]);
+  const streak = useRef<{
+    projectId: string | null;
+    since: number;
+    label: WorkspaceSaveState;
+  } | null>(null);
+  const [, setExpired] = useState(0);
+  const current =
+    streak.current?.projectId === projectId ? streak.current : null;
+  const shown: WorkspaceSaveState = busy
+    ? state === 'saving' && current?.label === 'syncing'
+      ? 'syncing'
+      : state
+    : current && quiet(state) && Date.now() - current.since < minBusyMs
+      ? current.label
+      : state;
 
   useEffect(() => {
-    if (!busy || revealed) return;
+    const started = streak.current;
+    if (busy) {
+      streak.current =
+        started?.projectId === projectId
+          ? { ...started, label: shown }
+          : { projectId, since: Date.now(), label: shown };
+      return;
+    }
+    if (!started || started.projectId !== projectId || shown === state) {
+      streak.current = null;
+      return;
+    }
     const timer = window.setTimeout(
-      () => setRevealedFor({ projectId }),
-      delayMs
+      () => {
+        streak.current = null;
+        setExpired((count) => count + 1);
+      },
+      Math.max(0, started.since + minBusyMs - Date.now())
     );
     return () => window.clearTimeout(timer);
-  }, [busy, revealed, delayMs, projectId]);
-
-  const held =
-    settled.current?.projectId === projectId ? settled.current.state : null;
-  const shown: WorkspaceSaveState = !busy
-    ? state
-    : !revealed && held !== null
-      ? held
-      : state === 'saving' && syncingShown.current?.projectId === projectId
-        ? 'syncing'
-        : state;
-
-  useEffect(() => {
-    if (shown === 'syncing') syncingShown.current = { projectId };
-  }, [shown, projectId]);
+  }, [busy, projectId, shown, state, minBusyMs]);
 
   return shown;
 }
