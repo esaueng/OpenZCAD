@@ -1419,6 +1419,7 @@ import {
 } from './lib/inPlace/curves';
 import { datumAxisChoices } from './lib/datumAxisChoices';
 import {
+  holeWorldPosition,
   inPlaceEditLineage,
   inPlaceEditMovedBodies,
   inPlaceEditSeed,
@@ -14700,6 +14701,20 @@ export function App() {
         producingFeatureOf({ bodyId: selection.bodyId }),
         editing
       );
+    // An edit keeps the body it blends: its stored edges are named on that
+    // body alone, so an edge of another earlier body is refused rather than
+    // stored where it names nothing (or the wrong edge).
+    if (
+      editing &&
+      target !== null &&
+      selection.bodyId !== target &&
+      !remap
+    ) {
+      setStatus(
+        `${editing.name} rounds edges of one body: pick an edge of the body it was made on.`
+      );
+      return null;
+    }
     // Only what the edited blend's result became stands for its input;
     // an edge of another later body is refused.
     const descendants =
@@ -14770,23 +14785,28 @@ export function App() {
           command.slots.bodies.length > 0 &&
           selection.kind === 'face'
         ) {
-          const face = inPlaceFacePick(
-            selection.bodyId,
-            selection.topologyId,
-            selection.hash,
-            detail?.point
-          );
-          const on = face?.centroid ?? face?.center ?? face?.point;
+          // The plane is the face as clicked, where it stands on screen: a
+          // plane is stored by its numbers, so unlike a face operation's
+          // face it is not mapped back onto an edited feature's input.
+          const matches = (candidate: { topologyId: string; hash: number }) =>
+            candidate.topologyId === selection.topologyId ||
+            (selection.hash !== undefined && candidate.hash === selection.hash);
+          // The preview's body first: while one shows, it is the one on
+          // screen, under the same id as the committed body it replaces.
+          const geometry = (
+            previewDoc?.derived.bodyRepresentations[selection.bodyId] ??
+            representations[selection.bodyId]
+          )?.topology?.faces.find(matches)?.geometry;
+          const on = geometry?.centroid ?? geometry?.center ?? detail?.point;
           if (
-            face?.normal &&
+            geometry?.normal &&
             on &&
-            (face.surfaceType === undefined ||
-              face.surfaceType.toLowerCase() === 'plane')
+            geometry.surfaceType.toLowerCase() === 'plane'
           ) {
             return command.pickPlane({
               kind: 'face',
               origin: on,
-              normal: face.normal
+              normal: geometry.normal
             });
           }
           return false;
@@ -19154,6 +19174,8 @@ export function App() {
   // longer has is dropped and said, since nothing on screen could click it
   // back out of the list.
   const inPlaceEditPicks = inPlace.slots;
+  const inPlaceFacePickRef = useRef(inPlaceFacePick);
+  inPlaceFacePickRef.current = inPlaceFacePick;
   useEffect(() => {
     const editing = inPlaceEditing;
     if (!editing || !doc) return;
@@ -19163,8 +19185,19 @@ export function App() {
       );
     // Only against a body whose topology is published: one still being
     // analysed says nothing yet. A face is found as the feature rebuilds
-    // it, by lineage first, and follows its hash if that moved.
+    // it, by lineage first, and is read afresh where it stands now (its
+    // hash, its plane, a saved hole's place on it), so its handles follow
+    // a face an update moved.
     let facesMoved = false;
+    const placed = (pick: FacePick) =>
+      JSON.stringify([
+        pick.hash,
+        pick.topologyId,
+        pick.normal,
+        pick.centroid,
+        pick.center,
+        pick.point
+      ]);
     const faces = inPlaceEditPicks.faces.flatMap((pick) => {
       const body = representations[pick.bodyId];
       if (!body?.topology) return [pick];
@@ -19173,11 +19206,30 @@ export function App() {
         ...(pick.reference ? { reference: pick.reference } : {})
       });
       if (!found.ok) return [];
-      if (found.entry.hash === pick.hash) return [pick];
+      const fresh = inPlaceFacePickRef.current(
+        pick.bodyId,
+        found.entry.topologyId,
+        found.entry.hash,
+        undefined,
+        true
+      );
+      if (!fresh) return [pick];
+      const point =
+        pick.savedPosition && editing.data.featureKind === 'hole'
+          ? (holeWorldPosition(fresh, editing.data, {
+              evaluate: (value) =>
+                evalParamValue(value, parameterScope.scope, doc.units)
+            }) ?? undefined)
+          : pick.point;
+      const next: FacePick = {
+        ...fresh,
+        ...(pick.reference ? { reference: pick.reference } : {}),
+        ...(pick.savedPosition ? { savedPosition: true as const } : {}),
+        ...(point ? { point } : {})
+      };
+      if (placed(next) === placed(pick)) return [pick];
       facesMoved = true;
-      return [
-        { ...pick, hash: found.entry.hash, topologyId: found.entry.topologyId }
-      ];
+      return [next];
     });
     const path = curves(inPlaceEditPicks.path);
     const guide = curves(inPlaceEditPicks.guide);
@@ -19186,19 +19238,55 @@ export function App() {
     const listsBodies =
       inPlace.tool !== null &&
       IN_PLACE_TOOL_SPECS[inPlace.tool].bodyMode === 'many';
+    // Gone means gone from the document, or still without a shape once the
+    // exact rebuild has finished: a body between rebuilds keeps its place.
     const bodies = listsBodies
-      ? inPlaceEditPicks.bodies.filter((pick) => representations[pick.bodyId])
+      ? inPlaceEditPicks.bodies.filter(
+          (pick) =>
+            representations[pick.bodyId] ||
+            (!exactGeometryReady &&
+              Object.values(doc.nodes).some(
+                (node) => node.kind === 'body' && node.bodyId === pick.bodyId
+              ))
+        )
       : inPlaceEditPicks.bodies;
+    // A blend's edges, the same way: by lineage first, taking a moved hash.
+    let edgesMoved = false;
+    const edges = inPlaceEditPicks.edges.flatMap((pick) => {
+      const body = representations[pick.bodyId];
+      if (!body?.topology) return [pick];
+      const found = resolveEdge(body, {
+        hash: pick.hash,
+        ...(pick.reference ? { reference: pick.reference } : {})
+      });
+      if (!found.ok) return [];
+      if (
+        found.entry.hash === pick.hash &&
+        found.entry.topologyId === pick.topologyId
+      ) {
+        return [pick];
+      }
+      edgesMoved = true;
+      return [
+        { ...pick, hash: found.entry.hash, topologyId: found.entry.topologyId }
+      ];
+    });
     if (
       path.length === inPlaceEditPicks.path.length &&
       guide.length === inPlaceEditPicks.guide.length &&
       faces.length === inPlaceEditPicks.faces.length &&
-      bodies.length === inPlaceEditPicks.bodies.length
+      bodies.length === inPlaceEditPicks.bodies.length &&
+      edges.length === inPlaceEditPicks.edges.length
     ) {
-      if (facesMoved) inPlaceRef.current.setPicks({ faces });
+      if (facesMoved || edgesMoved) {
+        inPlaceRef.current.setPicks({
+          ...(facesMoved ? { faces } : {}),
+          ...(edgesMoved ? { edges } : {})
+        });
+      }
       return;
     }
-    inPlaceRef.current.setPicks({ path, guide, faces, bodies });
+    inPlaceRef.current.setPicks({ path, guide, faces, bodies, edges });
     setStatus(
       `${editing.name}: a saved pick no longer exists in the model · pick it again.`
     );
@@ -19208,6 +19296,8 @@ export function App() {
     inPlace.tool,
     doc,
     representations,
+    exactGeometryReady,
+    parameterScope.scope,
     setStatus
   ]);
 

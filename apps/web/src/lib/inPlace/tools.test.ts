@@ -93,6 +93,9 @@ describe('the in-place tool table', () => {
     )!;
     expect(displayedValue(angle, 82.3456)).toBe(82.35);
     expect(displayedValue(angle, 179.9999995)).toBe(179.9999995);
+    // Past ten places too: what ten would round onto the refused end is
+    // shown as it is.
+    expect(displayedValue(angle, 179.9999999999)).toBe(179.9999999999);
     expect(displayedValue(angle, 0.0000005)).toBe(0.0000005);
     // A small value keeps its digits: 0.005 mm is not shown as 0.01.
     const depth = IN_PLACE_TOOL_SPECS.hole.values.find(
@@ -279,6 +282,36 @@ describe('body tools', () => {
     );
     expect(fromPivot).toMatchObject({
       params: { origin: { x: 20, y: 10, z: 4 }, scale: Math.hypot(20, 10, 4) }
+    });
+  });
+
+  it('solid offset: a curved-only body still gets its offset handle', () => {
+    const spec = IN_PLACE_TOOL_SPECS['solid-offset'];
+    // A sphere's face publishes no normal.
+    const round: FacePick = {
+      bodyId: 'body_a' as BodyId,
+      hash: 5,
+      topologyId: 'f5',
+      surfaceType: 'sphere',
+      center: { x: 0, y: 0, z: 10 }
+    };
+    const slots = { ...EMPTY, faces: [round] };
+    expect(spec.handles(slots, {}, CTX, {})).toEqual([]);
+    const [handle] = spec.handles(
+      slots,
+      {},
+      {
+        ...CTX,
+        bodyBounds: () => ({
+          min: { x: -5, y: -5, z: -5 },
+          max: { x: 5, y: 5, z: 5 }
+        })
+      },
+      {}
+    );
+    expect(handle).toMatchObject({
+      valueId: 'distance',
+      params: { origin: { x: 0, y: 0, z: 5 }, direction: { x: 0, y: 0, z: 1 } }
     });
   });
 

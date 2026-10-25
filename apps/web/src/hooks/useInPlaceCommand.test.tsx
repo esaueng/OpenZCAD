@@ -528,6 +528,20 @@ describe('useInPlaceCommand: hole step chips', () => {
     await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
   });
 
+  it('a style that hides the refused value lets Done go', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('hole', [], [FACE]));
+    act(() => hook.result.current.setOption('style', 'countersink'));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.setValue('countersinkAngleDeg', 180);
+    });
+    expect(hook.result.current.canFinish).toBe(false);
+    act(() => hook.result.current.setOption('style', 'simple'));
+    expect(hook.result.current.refusal).toBeNull();
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+  });
+
   it('a countersink shows its diameter and angle chips', () => {
     const { hook } = setup();
     act(() => hook.result.current.start('hole', [], [FACE]));

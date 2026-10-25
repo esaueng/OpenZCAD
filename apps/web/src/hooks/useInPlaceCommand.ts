@@ -127,6 +127,7 @@ export interface InPlaceCommand {
     guide?: readonly CurvePick[];
     faces?: readonly FacePick[];
     bodies?: readonly BodyPick[];
+    edges?: readonly EdgePick[];
   }): void;
   pickAxis(axisId: string): void;
   pickCurve(curve: CurvePick, additive?: boolean): void;
@@ -559,6 +560,7 @@ export function useInPlaceCommand(
       guide?: readonly CurvePick[];
       faces?: readonly FacePick[];
       bodies?: readonly BodyPick[];
+      edges?: readonly EdgePick[];
     }) => {
       setSession((current) =>
         current
@@ -569,7 +571,8 @@ export function useInPlaceCommand(
                 ...(picks.path ? { path: [...picks.path] } : {}),
                 ...(picks.guide ? { guide: [...picks.guide] } : {}),
                 ...(picks.faces ? { faces: [...picks.faces] } : {}),
-                ...(picks.bodies ? { bodies: [...picks.bodies] } : {})
+                ...(picks.bodies ? { bodies: [...picks.bodies] } : {}),
+                ...(picks.edges ? { edges: [...picks.edges] } : {})
               }
             }
           : current
@@ -754,6 +757,9 @@ export function useInPlaceCommand(
   }, []);
 
   const setOption = useCallback((optionId: string, value: string) => {
+    // A refused entry was never applied, and a new choice (a hole's style)
+    // may not even show its value: the refusal no longer holds Done.
+    setEntryRefusal(null);
     setSession((current) => {
       if (!current) return current;
       const specs = IN_PLACE_TOOL_SPECS[current.tool].options ?? [];
