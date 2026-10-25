@@ -53,21 +53,25 @@ describe('useSteadySaveState', () => {
     expect(result.current).toBe('synced');
   });
 
-  it('keeps Syncing up through newer device writes', () => {
+  it('never hides a device write behind Syncing', () => {
     const { result, rerender } = render('synced');
     rerender({ state: 'syncing', projectId: 'p1' });
     rerender({ state: 'saving', projectId: 'p1' });
-    expect(result.current).toBe('syncing');
-    rerender({ state: 'syncing', projectId: 'p1' });
-    expect(result.current).toBe('syncing');
-    act(() => {
-      vi.advanceTimersByTime(1000);
-    });
-    rerender({ state: 'synced', projectId: 'p1' });
-    expect(result.current).toBe('synced');
-    // The next save starts a new streak, from Saving.
-    rerender({ state: 'saving', projectId: 'p1' });
     expect(result.current).toBe('saving');
+  });
+
+  it('holds Saving over a quick hand-off to Syncing', () => {
+    const { result, rerender } = render('synced');
+    rerender({ state: 'saving', projectId: 'p1' });
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    rerender({ state: 'syncing', projectId: 'p1' });
+    expect(result.current).toBe('saving');
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(result.current).toBe('syncing');
   });
 
   it('shows failures and conflicts at once', () => {
@@ -77,14 +81,6 @@ describe('useSteadySaveState', () => {
     expect(result.current).toBe('device-failed');
     rerender({ state: 'conflict', projectId: 'p1' });
     expect(result.current).toBe('conflict');
-  });
-
-  it("does not carry one project's Syncing into the next project's save", () => {
-    const { result, rerender } = render('synced', 'p1');
-    rerender({ state: 'syncing', projectId: 'p1' });
-    // Still in flight as the next project opens with its own device save.
-    rerender({ state: 'saving', projectId: 'p2' });
-    expect(result.current).toBe('saving');
   });
 
   it("does not hold one project's busy label over the next project", () => {
