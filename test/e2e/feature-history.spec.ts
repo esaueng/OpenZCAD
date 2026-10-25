@@ -4,7 +4,8 @@ import {
   stubApi,
   expectBodyCount,
   modelPanel,
-  railPanelButton
+  railPanelButton,
+  createShellInPlace
 } from './openzcad-fixtures';
 
 test('explains a failed downstream edit and opens the exact feature for repair', async ({
@@ -411,12 +412,11 @@ test('renaming a modeling feature closes its stale editor and keeps the new name
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
   await inspector.getByRole('button', { name: /^Create/ }).click();
-  await page.getByRole('button', { name: /^Shell/ }).click();
-  await page
-    .getByRole('group', { name: 'Opening faces' })
-    .getByRole('button', { name: /Box 1 · Top face/ })
-    .click();
-  await page.getByRole('button', { name: 'Create shell' }).click();
+  // U09: a new shell is made in place; editing it still opens its card.
+  await createShellInPlace(page, {
+    normals: [{ x: 0, y: 0, z: 1 }],
+    thickness: '2'
+  });
   const row = page.locator('.feature-row', { hasText: 'Shell' }).first();
   await row.locator('.feature-row-main').click();
   await expect(

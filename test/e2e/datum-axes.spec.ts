@@ -1,7 +1,11 @@
 import type { Locator, Page } from '@playwright/test';
 import {
+  clickWorldPoint,
+  enterCommandValue,
   expect,
   expectBodyCount,
+  finishInPlaceCommand,
+  pickObjectsBody,
   stubApi,
   test,
   waitForStillViewport
@@ -270,13 +274,16 @@ test('datum axes drive a revolve, a rotate about axis and a circular pattern', a
   await inspector.getByLabel('Height (Z)').fill('2');
   await inspector.getByRole('button', { name: /^Create/ }).click();
   await expectBodyCount(page, 2);
+  // U09: Rotate about axis runs in place: the body, then a click on the
+  // Axis 2 line (x = 10, vertical), then the angle on its chip's keypad.
   await page.getByRole('button', { name: /^Rotate about axis — / }).click();
-  await inspector.getByLabel('Body').selectOption({ label: 'Box 1' });
-  await inspector
-    .getByLabel('Rotate about axis')
-    .selectOption({ label: 'Axis 2' });
-  await inspector.getByLabel('Angle about axis in degrees').fill('180');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await pickObjectsBody(page, 'Box 1');
+  const rotateBar = page.getByRole('group', { name: 'Rotate about axis command' });
+  await expect(rotateBar).toContainText('datum axis');
+  await clickWorldPoint(page, [10, 0, 6]);
+  await expect(rotateBar).toContainText('Drag the angle');
+  await enterCommandValue(page, 'angle', '180');
+  await finishInPlaceCommand(page, 'Rotate about axis');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Rotate' })
   ).toBeVisible({ timeout: 20_000 });
@@ -298,13 +305,16 @@ test('datum axes drive a revolve, a rotate about axis and a circular pattern', a
     .toEqual([18, 20]);
 
   // Four copies about Axis 2 ring it: x 0..20, y −10..10.
+  // U09: Circular pattern runs in place: the body, a click on Axis 2, the
+  // count on its chip's keypad.
   await page.getByRole('button', { name: /^Circular pattern/ }).click();
-  await inspector.getByLabel('Body').selectOption({ label: 'Box 1' });
-  await inspector.getByLabel('Count').fill('4');
-  await inspector
-    .getByRole('combobox', { name: 'Axis', exact: true })
-    .selectOption({ label: 'Axis 2' });
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await pickObjectsBody(page, 'Box 1');
+  const patternBar = page.getByRole('group', { name: 'Circular pattern command' });
+  await expect(patternBar).toContainText('Pick the axis');
+  await clickWorldPoint(page, [10, 0, 6]);
+  await expect(patternBar).toContainText('Drag the total angle');
+  await enterCommandValue(page, 'count', '4');
+  await finishInPlaceCommand(page, 'Circular pattern');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Circular pattern' })
   ).toBeVisible({ timeout: 20_000 });

@@ -88,12 +88,13 @@ async function commandHandle(
   canvas: Locator
 ): Promise<{ x: number; y: number; value: number } | null> {
   return canvas.evaluate((element) =>
-    element.dataset.e2eCommandHandle
-      ? (JSON.parse(element.dataset.e2eCommandHandle) as {
-          x: number;
-          y: number;
-          value: number;
-        })
+    element.dataset.e2eCommandHandles
+      ? ((
+          JSON.parse(element.dataset.e2eCommandHandles) as Record<
+            string,
+            { x: number; y: number; value: number }
+          >
+        ).angle ?? null)
       : null
   );
 }
@@ -187,7 +188,7 @@ test('Revolve runs in place: region, axis line, angle drag, keypad, Done', async
   await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
     timeout: 30_000
   });
-  const chip = page.getByTestId('command-handle-value');
+  const chip = page.getByTestId('command-handle-angle');
   await expect(chip).toHaveText('360°');
 
   // Drag the ball a quarter turn round the circle: centred on the axis at the

@@ -1,5 +1,10 @@
 import type { Locator, Page } from '@playwright/test';
-import { test, expect, stubApi } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  stubApi,
+  finishInPlaceCommand
+} from './openzcad-fixtures';
 
 /**
  * A face push/pull must not flash intermediate states: the unmoved part
@@ -57,7 +62,9 @@ async function armedBox(page: Page, options: { hole?: boolean } = {}) {
       .locator('.selection-card')
       .getByRole('button', { name: 'Selection: Hole', exact: true })
       .click();
-    await page.getByRole('button', { name: /^Create hole/ }).click();
+    // U09: Hole runs in place from the face just picked, at the point it
+    // was picked: the Ø6 through default, then Done.
+    await finishInPlaceCommand(page, 'Hole');
     await expect(
       page.locator('.feature-row-main', { hasText: 'Hole' })
     ).toBeVisible();

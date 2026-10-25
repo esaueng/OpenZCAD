@@ -23,6 +23,8 @@ import { MODEL_PANEL_OBSTACLES } from '../lib/selectionCalloutView';
 import { formatNumber } from '../lib/model';
 
 export interface KeypadRequest {
+  /** U09: which in-place command value a `command` entry edits. */
+  commandValueId?: string;
   /** Which commit path the value feeds (routing is the opener's concern). */
   kind:
     | 'offset'

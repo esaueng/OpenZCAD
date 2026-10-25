@@ -1,4 +1,3 @@
-import type { ReactNode } from 'react';
 import { Check, MoreHorizontal, X } from 'lucide-react';
 
 /**
@@ -10,6 +9,13 @@ import { Check, MoreHorizontal, X } from 'lucide-react';
  * numbers live on handle chips; anything rare enough to need a control of
  * its own goes behind `options`.
  */
+export interface InPlaceOption {
+  id: string;
+  label: string;
+  value: string;
+  choices: readonly { value: string; label: string }[];
+}
+
 export interface InPlaceCommandBarProps {
   title: string;
   hint: string;
@@ -17,8 +23,12 @@ export interface InPlaceCommandBarProps {
   canFinish: boolean;
   /** Shown instead of the hint while a refusal stands, in the warning tone. */
   refusal?: string | null;
-  /** Rarely used options, behind a disclosure. */
-  options?: ReactNode;
+  /**
+   * Rarely used choices (a hole's style, a draft's pull direction), behind
+   * a disclosure: each a short row of mutually exclusive buttons.
+   */
+  options?: readonly InPlaceOption[];
+  onOption?(optionId: string, value: string): void;
   onDone(): void;
   onCancel(): void;
 }
@@ -28,7 +38,8 @@ export function InPlaceCommandBar({
   hint,
   canFinish,
   refusal = null,
-  options,
+  options = [],
+  onOption,
   onDone,
   onCancel
 }: InPlaceCommandBarProps) {
@@ -42,12 +53,35 @@ export function InPlaceCommandBar({
       <span className="in-place-command-hint" role="status" aria-live="polite">
         {refusal ?? hint}
       </span>
-      {options ? (
+      {options.length > 0 ? (
         <details className="in-place-command-options">
           <summary aria-label={`${title} options`}>
             <MoreHorizontal size={14} aria-hidden="true" />
           </summary>
-          <div className="in-place-command-options-panel">{options}</div>
+          <div className="in-place-command-options-panel">
+            {options.map((option) => (
+              <div
+                key={option.id}
+                className="in-place-option"
+                role="radiogroup"
+                aria-label={option.label}
+              >
+                <span className="in-place-option-label">{option.label}</span>
+                {option.choices.map((choice) => (
+                  <button
+                    key={choice.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={choice.value === option.value}
+                    className="in-place-option-choice"
+                    onClick={() => onOption?.(option.id, choice.value)}
+                  >
+                    {choice.label}
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
         </details>
       ) : null}
       <button

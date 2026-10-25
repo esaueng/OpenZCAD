@@ -1,5 +1,11 @@
 import type { Page } from '@playwright/test';
-import { expect, stubApi, test } from './openzcad-fixtures';
+import {
+  expect,
+  modelPanel,
+  revealModelPanel,
+  stubApi,
+  test
+} from './openzcad-fixtures';
 
 /**
  * The 1 October 2026 design review (F23) heard every Create and Apply
@@ -32,15 +38,24 @@ test('commands, export formats and body rows are named by what they do', async (
     page.locator('.feature-row-main', { hasText: 'Upper' })
   ).toBeVisible();
 
+  // Union runs in place (U09): its bar is a named group whose two buttons say
+  // what they do and carry their keys.
   await page.getByRole('button', { name: /^Union \(U\)/ }).click();
-  await inspector.getByRole('button', { name: 'Lower 1', exact: true }).click();
+  const unionBar = page.getByRole('group', { name: 'Union command' });
+  await expect(unionBar.getByRole('button', { name: /^Done/ })).toHaveAttribute(
+    'aria-keyshortcuts',
+    'Enter'
+  );
   await expect(
-    inspector.getByRole('button', { name: 'Lower 1, pick 1', exact: true })
-  ).toHaveAttribute('aria-pressed', 'true');
-  await expect(
-    inspector.getByRole('button', { name: 'Upper 1', exact: true })
-  ).toHaveAttribute('aria-pressed', 'false');
-  await inspector.getByRole('button', { name: 'Cancel', exact: true }).click();
+    unionBar.getByRole('button', { name: /^Cancel/ })
+  ).toHaveAttribute('aria-keyshortcuts', 'Escape');
+  await revealModelPanel(page, 'Objects');
+  await modelPanel(page, 'Objects')
+    .locator('.body-row-main', { hasText: 'Lower 1' })
+    .click();
+  await expect(unionBar).toContainText('Click the next body');
+  await unionBar.getByRole('button', { name: /^Cancel/ }).click();
+  await expect(unionBar).toHaveCount(0);
 
   const fileMenu = page.locator('details.file-menu');
   await fileMenu.locator('summary').click();

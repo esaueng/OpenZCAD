@@ -3,6 +3,9 @@ import {
   expect,
   expectBodyCount,
   expectConsumedBodyCount,
+  finishInPlaceCommand,
+  pickDatumRow,
+  pickObjectsBody,
   stubApi,
   test,
   waitForStillViewport
@@ -173,14 +176,14 @@ test('a datum plane drives a sketch, a Split and a Mirror, and an edit moves the
   const [drawn] = await drawnDatums(canvas);
   expect(drawn!.normal).toEqual({ x: 0, y: 0, z: 1 });
 
-  // Split on the datum, by id.
+  // Split on the datum, by id. U09: Split runs in place: the body, then
+  // the plane (here Plane 1's row, since the box hides most of its quad).
   await page.getByRole('button', { name: /^Split — / }).click();
-  await inspector
-    .getByRole('group', { name: 'Datum planes' })
-    .getByRole('button', { name: 'Plane 1' })
-    .click();
-  await expect(inspector.getByText('Plane origin')).toHaveCount(0);
-  await inspector.getByRole('button', { name: 'Create split body' }).click();
+  await pickObjectsBody(page, 'Box 1');
+  const splitBar = page.getByRole('group', { name: 'Split command' });
+  await expect(splitBar).toContainText('Pick the plane');
+  await pickDatumRow(page, 'Plane 1');
+  await finishInPlaceCommand(page, 'Split');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Split' })
   ).toBeVisible({ timeout: 20_000 });
@@ -189,11 +192,10 @@ test('a datum plane drives a sketch, a Split and a Mirror, and an edit moves the
 
   // Mirror across the same datum.
   await page.getByRole('button', { name: /^Mirror — / }).click();
-  await inspector
-    .getByRole('group', { name: 'Datum planes' })
-    .getByRole('button', { name: 'Plane 1' })
-    .click();
-  await inspector.getByRole('button', { name: 'Create mirror' }).click();
+  // Either half: the first live body listed.
+  await pickObjectsBody(page, /./);
+  await pickDatumRow(page, 'Plane 1');
+  await finishInPlaceCommand(page, 'Mirror');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Mirror' })
   ).toBeVisible({ timeout: 20_000 });
