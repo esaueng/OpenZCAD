@@ -304,8 +304,15 @@ export interface InPlaceToolSpec {
   wantsAxis: boolean;
   wantsPath: boolean;
   values: readonly ValueSpec[];
-  /** Values the picks suggest, applied to any the user has not set. */
-  defaults?(slots: InPlaceSlots, ctx: InPlaceContext): Record<string, number>;
+  /**
+   * Values the picks (or other values) suggest, applied to any the user has
+   * not set. `numbers` holds every value as a number.
+   */
+  defaults?(
+    slots: InPlaceSlots,
+    ctx: InPlaceContext,
+    numbers: Record<string, number>
+  ): Record<string, number>;
   hint(slots: InPlaceSlots, options?: Record<string, string>): string;
   ready(slots: InPlaceSlots): boolean;
   /**
@@ -822,7 +829,39 @@ const hole: InPlaceToolSpec = {
   wantsPath: false,
   values: [
     { id: 'diameter', label: '⌀', unit: 'length', initial: 6, min: 0.1 },
-    { id: 'depth', label: 'Depth', unit: 'length', initial: 10, min: 0.1 }
+    { id: 'depth', label: 'Depth', unit: 'length', initial: 10, min: 0.1 },
+    // The step's sizes, on chips while its style is chosen. Until one is
+    // set it follows the bore, as the card's defaults did.
+    {
+      id: 'counterboreDiameter',
+      label: 'Counterbore ⌀',
+      unit: 'length',
+      initial: 10.8,
+      min: 0.1
+    },
+    {
+      id: 'counterboreDepth',
+      label: 'Counterbore depth',
+      unit: 'length',
+      initial: 3,
+      min: 0.01
+    },
+    {
+      id: 'countersinkDiameter',
+      label: 'Countersink ⌀',
+      unit: 'length',
+      initial: 12,
+      min: 0.1
+    },
+    {
+      // The full included angle, strictly between 0° and 180°.
+      id: 'countersinkAngleDeg',
+      label: 'Countersink angle',
+      unit: 'angle',
+      initial: 90,
+      min: 1,
+      max: 179
+    }
   ],
   options: [
     {
@@ -845,10 +884,15 @@ const hole: InPlaceToolSpec = {
       initial: 'simple'
     }
   ],
-  hint(slots) {
+  defaults: (_slots, _ctx, numbers) => holeStepSizes(numbers.diameter ?? 6),
+  hint(slots, options) {
     if (slots.faces.length === 0)
       return 'Click a flat face where the hole goes';
-    return `Click again to move it · drag the diameter · ${FINISH}`;
+    const step =
+      options?.style === 'counterbore' || options?.style === 'countersink'
+        ? ` · tap the ${options.style} chips to size it`
+        : '';
+    return `Click again to move it · drag the diameter${step} · ${FINISH}`;
   },
   ready: (slots) => slots.faces.length > 0,
   request(slots, values, options, ctx, numbers) {
@@ -859,10 +903,13 @@ const hole: InPlaceToolSpec = {
     const position = face.point
       ? holePositionFromPick(face, anchor, face.point, ctx.linearSnap ?? null)
       : null;
-    // The step sizes derive from the bore's value, a typed expression's too.
-    const diameter =
+    // Unset step sizes derive from the bore's value, a typed expression's
+    // too; a chip's value, typed or derived, is stored as it stands.
+    const derived = holeStepSizes(
       numbers?.diameter ??
-      (typeof values.diameter === 'number' ? values.diameter : 6);
+        (typeof values.diameter === 'number' ? values.diameter : 6)
+    );
+    const step = (id: keyof typeof derived) => text(values[id], derived[id]);
     return {
       tool: 'modeling',
       state: {
@@ -876,17 +923,16 @@ const hole: InPlaceToolSpec = {
           diameter: text(values.diameter, 6),
           depthMode: (options.depthMode ?? 'through') as 'blind' | 'through',
           depth: text(values.depth, 10),
-          // The card's own defaults for the step, scaled to the bore.
-          counterboreDiameter: String(Math.round(diameter * 1.8 * 100) / 100),
-          counterboreDepth: String(Math.round(diameter * 0.5 * 100) / 100),
-          countersinkDiameter: String(Math.round(diameter * 2 * 100) / 100),
-          countersinkAngleDeg: '90',
+          counterboreDiameter: step('counterboreDiameter'),
+          counterboreDepth: step('counterboreDepth'),
+          countersinkDiameter: step('countersinkDiameter'),
+          countersinkAngleDeg: text(values.countersinkAngleDeg, 90),
           position: position ?? { u: '0', v: '0' }
         }
       }
     };
   },
-  handles(slots, _values, _ctx, options) {
+  handles(slots, values, _ctx, options) {
     const face = slots.faces[0];
     const entry = face ? faceAnchor(face) : null;
     if (!face || !entry || !face.normal) return [];
@@ -910,9 +956,52 @@ const hole: InPlaceToolSpec = {
         params: { origin: entry, direction: scaled(unit(face.normal), -1) }
       });
     }
+    const style = options.style;
+    if (style === 'counterbore' || style === 'countersink') {
+      // Two chips across the step's rim, clear of the diameter handle: its
+      // size on one side, its depth or angle on the other.
+      const ids =
+        style === 'counterbore'
+          ? (['counterboreDiameter', 'counterboreDepth'] as const)
+          : (['countersinkDiameter', 'countersinkAngleDeg'] as const);
+      const rim = Math.max((values[ids[0]] ?? 0) / 2, 0);
+      const at = (side: 1 | -1): Vector3 => ({
+        x: entry.x + axes.v.x * rim * side,
+        y: entry.y + axes.v.y * rim * side,
+        z: entry.z + axes.v.z * rim * side
+      });
+      handles.push(
+        {
+          valueId: ids[0],
+          kind: 'chip',
+          key: `${key}:${ids[0]}`,
+          params: { anchor: at(1) }
+        },
+        {
+          valueId: ids[1],
+          kind: 'chip',
+          key: `${key}:${ids[1]}`,
+          params: { anchor: at(-1) }
+        }
+      );
+    }
     return handles;
   }
 };
+
+/** The card's own step sizes for a bore, rounded as it rounded them. */
+function holeStepSizes(diameter: number): {
+  counterboreDiameter: number;
+  counterboreDepth: number;
+  countersinkDiameter: number;
+} {
+  const round = (value: number) => Math.round(value * 100) / 100;
+  return {
+    counterboreDiameter: round(diameter * 1.8),
+    counterboreDepth: round(diameter * 0.5),
+    countersinkDiameter: round(diameter * 2)
+  };
+}
 
 const shell: InPlaceToolSpec = {
   id: 'shell',

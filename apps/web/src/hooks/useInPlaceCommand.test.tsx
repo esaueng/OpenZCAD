@@ -404,6 +404,76 @@ describe('useInPlaceCommand: helical sweep', () => {
   });
 });
 
+describe('useInPlaceCommand: hole step chips', () => {
+  const FACE: FacePick = {
+    bodyId: 'body_a' as BodyId,
+    hash: 11,
+    topologyId: 'f11',
+    surfaceType: 'plane',
+    normal: { x: 0, y: 0, z: 1 },
+    centroid: { x: 10, y: 5, z: 4 },
+    point: { x: 12, y: 6, z: 4 }
+  };
+
+  it('sizes an unset step from the bore and keeps one the user set', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('hole', [], [FACE]));
+    act(() => hook.result.current.setOption('style', 'counterbore'));
+    expect(hook.result.current.handles.map((handle) => handle.valueId)).toEqual(
+      ['diameter', 'counterboreDiameter', 'counterboreDepth']
+    );
+    act(() => {
+      hook.result.current.setValue('diameter', 4);
+    });
+    await waitFor(() =>
+      expect(hook.result.current.values.counterboreDiameter).toBe(7.2)
+    );
+    expect(hook.result.current.values.counterboreDepth).toBe(2);
+    act(() => {
+      hook.result.current.setValue('counterboreDepth', 3, 'cb_depth');
+    });
+    act(() => {
+      hook.result.current.setValue('diameter', 5);
+    });
+    await waitFor(() =>
+      expect(hook.result.current.values.counterboreDiameter).toBe(9)
+    );
+    expect(hook.result.current.raws.counterboreDepth).toBe('cb_depth');
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        state: {
+          value: {
+            style: 'counterbore',
+            diameter: '5',
+            counterboreDiameter: '9',
+            counterboreDepth: 'cb_depth'
+          }
+        }
+      })
+    );
+  });
+
+  it('a countersink shows its diameter and angle chips', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('hole', [], [FACE]));
+    act(() => hook.result.current.setOption('style', 'countersink'));
+    expect(hook.result.current.handles.map((handle) => handle.valueId)).toEqual(
+      ['diameter', 'countersinkDiameter', 'countersinkAngleDeg']
+    );
+    // The angle is the full included angle, strictly inside 0°–180°.
+    let accepted = true;
+    act(() => {
+      accepted = hook.result.current.setValue(
+        'countersinkAngleDeg',
+        180,
+        '180'
+      );
+    });
+    expect(accepted).toBe(false);
+    expect(hook.result.current.refusal).toMatch(/1 to 179/);
+  });
+});
+
 describe('a box sweep into a face-list command', () => {
   const face = (bodyId: string, hash: number) =>
     ({ bodyId: bodyId as BodyId, hash, topologyId: `f${hash}` }) as FacePick;
