@@ -187,7 +187,8 @@ describe('encryption status reports from the encrypted store', () => {
       seal: outcome(sealed),
       openHead: outcome(head),
       accepted: outcome(head),
-      catchUp: outcome(undefined)
+      catchUp: outcome(undefined),
+      restoreBlobs: outcome(undefined)
     };
     const created = { project: { projectId: 'proj_new' } };
     const store = {
@@ -258,6 +259,11 @@ describe('encryption status reports from the encrypted store', () => {
     expect(encryptionStatusOf('proj_b').state).toBe('problem');
     await expect(reporting.loadRevision('proj_c', 'rev_1')).rejects.toBe(error);
     expect(encryptionStatusOf('proj_c').state).toBe('problem');
+    // The room's blob repair (slice 5-6) goes through the same report.
+    await expect(
+      reporting.roomAccess().restoreBlobs('proj_d', ['blob_1'])
+    ).rejects.toBe(error);
+    expect(encryptionStatusOf('proj_d').state).toBe('problem');
   });
 
   it('reports nothing once the key session that opened the store ended', async () => {
