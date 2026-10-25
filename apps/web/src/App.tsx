@@ -8881,6 +8881,22 @@ export function App() {
   }
 
   /**
+   * The body an edited feature works on, as the feature stores it now: an
+   * undo or a collaborator may have retargeted it since the edit armed.
+   */
+  function inPlaceEditTarget(edit: InPlaceEditSeed | null): BodyId | null {
+    if (!edit) return null;
+    const live = managerRef.current
+      ? findFeature(managerRef.current.document, edit.featureId)
+      : null;
+    const data =
+      live && live.data.featureKind === edit.data.featureKind
+        ? live.data
+        : edit.data;
+    return 'targetBodyId' in data ? (data.targetBodyId ?? null) : null;
+  }
+
+  /**
    * Whether an edit may take what a feature built: only what exists before
    * it in history. A later sketch or body would be a forward reference.
    */
@@ -9019,10 +9035,7 @@ export function App() {
     // feature (or a later one built from it) made of that body means the
     // input's face. A later body of another lineage is refused outright.
     const editing = stored ? null : inPlaceRef.current.editing;
-    const editTarget =
-      editing && 'targetBodyId' in editing.data
-        ? editing.data.targetBodyId
-        : null;
+    const editTarget = inPlaceEditTarget(editing);
     const later =
       face !== undefined &&
       editTarget !== null &&
