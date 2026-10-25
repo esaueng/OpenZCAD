@@ -8819,7 +8819,7 @@ export function App() {
       command,
       feature,
       feature.name,
-      edit.resultBodyId,
+      inPlaceEditResultBodyId(request, edit),
       (committed) => inPlaceRef.current.settleEdit(edit, committed)
     );
   }
@@ -8886,6 +8886,12 @@ export function App() {
    */
   function inPlaceEditTarget(edit: InPlaceEditSeed | null): BodyId | null {
     if (!edit) return null;
+    // A body picked in this edit (a Hole moved onto another face, a Scale
+    // retargeted) is the target until Done; the feature still stores the
+    // old one meanwhile. Untouched, the slots follow the live feature.
+    const slots = inPlaceRef.current.slots;
+    const picked = slots.faces[0]?.bodyId ?? slots.bodies[0]?.bodyId;
+    if (picked) return picked;
     const live = managerRef.current
       ? findFeature(managerRef.current.document, edit.featureId)
       : null;
@@ -19556,6 +19562,21 @@ export function App() {
     if (ids?.bodyId) return ids.bodyId;
     return request.tool === 'transform' ? request.targetBodyId : undefined;
   }
+  /**
+   * The body an edit's preview and commit must build: an in-place Scale or
+   * turn republishes the body it now targets (retargeted, a new one), a copy
+   * and every other feature its own result.
+   */
+  function inPlaceEditResultBodyId(
+    request: InPlaceRequest,
+    edit: InPlaceEditSeed
+  ): BodyId | undefined {
+    return request.tool === 'transform' &&
+      edit.data.featureKind === 'transform' &&
+      !edit.data.copy
+      ? request.targetBodyId
+      : edit.resultBodyId;
+  }
   /** A body as an in-place command's body slot holds it, with its box. */
   function inPlaceBodyPick(bodyId: BodyId): BodyPick | null {
     const vertices = representations[bodyId]?.mesh.vertices;
@@ -19678,7 +19699,7 @@ export function App() {
           // the same rebuild that would refuse it once turned back on.
           apply: (document) =>
             withFeatureBuilt(command.apply(document), edit.featureId),
-          resultBodyId: edit.resultBodyId
+          resultBodyId: inPlaceEditResultBodyId(request, edit)
         };
       }
       const command = inPlaceCommandFor(request, title);
