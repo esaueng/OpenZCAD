@@ -892,6 +892,124 @@ describe('staging beside the plaintext', () => {
     ).toBe(200);
   });
 
+  it('lets only the lease that opened a staged encrypted upload advance it (#914 review)', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    const laptop = await startStaging(srv, plain.projectId);
+    const blobId = 'b'.repeat(32);
+    const openUpload = async (s: Staging) => {
+      const opened = await s.d.fetcher(
+        `/api/e2ee/projects/${plain.projectId}/blobs/uploads`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ blobId, kind: 'import-source' })
+        }
+      );
+      expect(opened.status).toBe(201);
+      return ((await opened.json()) as { session: { uploadSessionId: string } })
+        .session.uploadSessionId;
+    };
+    const startMultipart = async (s: Staging, session: string) => {
+      const started = await s.d.fetcher(`/api/uploads/${session}/multipart`, {
+        method: 'POST'
+      });
+      expect(started.status).toBe(201);
+      return ((await started.json()) as { uploadId: string }).uploadId;
+    };
+    const putPart = (
+      s: Staging,
+      session: string,
+      uploadId: string,
+      part: number
+    ) =>
+      s.d.fetcher(
+        `/api/uploads/${session}/parts/${part}?uploadId=${uploadId}`,
+        {
+          method: 'PUT',
+          headers: { 'content-type': 'application/octet-stream' },
+          body: text(`ciphertext part ${part}`)
+        }
+      );
+    const parts = (session: string) =>
+      srv.db
+        .prepare(
+          `SELECT part_number, etag FROM artifact_upload_parts
+           WHERE upload_session_id = ? ORDER BY part_number`
+        )
+        .all(session) as { part_number: number; etag: string | null }[];
+
+    const stale = await openUpload(laptop);
+    const staleUpload = await startMultipart(laptop, stale);
+    expect((await putPart(laptop, stale, staleUpload, 1)).status).toBe(200);
+
+    // The desktop takes the lease over while the laptop's part is in R2:
+    // the part's record lands nothing.
+    let desktop: Staging | undefined;
+    const resume = srv.bucket.resumeMultipartUpload;
+    srv.bucket.resumeMultipartUpload = vi.fn((key: string, id: string) => {
+      const upload = resume(key, id);
+      return {
+        ...upload,
+        uploadPart: async (part: number, body: ArrayBuffer) => {
+          const uploaded = await upload.uploadPart(part, body);
+          srv.db
+            .prepare('UPDATE e2ee_project_migrations SET lease_expires_at = 1')
+            .run();
+          desktop = await startStaging(srv, plain.projectId, 'owner_desktop');
+          return uploaded;
+        }
+      };
+    }) as typeof resume;
+    const raced = await putPart(laptop, stale, staleUpload, 2);
+    srv.bucket.resumeMultipartUpload = resume;
+    expect(desktop).toBeDefined();
+    expect(raced.status).toBe(409);
+    expect(await codeOf(raced)).toBe('E2EE_MIGRATION_LEASE_LOST');
+    expect(parts(stale)).toEqual([
+      { part_number: 1, etag: expect.any(String) },
+      { part_number: 2, etag: null }
+    ]);
+
+    // After the takeover the laptop reserves, records and completes nothing.
+    const late = await putPart(laptop, stale, staleUpload, 3);
+    expect(late.status).toBe(409);
+    expect(await codeOf(late)).toBe('E2EE_MIGRATION_LEASE_LOST');
+    const completed = await laptop.d.fetcher(
+      `/api/uploads/${stale}/multipart/complete`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          uploadId: staleUpload,
+          parts: [{ partNumber: 1, etag: parts(stale)[0]!.etag }]
+        })
+      }
+    );
+    expect(completed.status).toBe(409);
+    expect(await codeOf(completed)).toBe('E2EE_MIGRATION_LEASE_LOST');
+    expect(parts(stale)).toHaveLength(2);
+    expect(
+      srv.db
+        .prepare('SELECT reservation_state FROM upload_sessions WHERE id = ?')
+        .get(stale)
+    ).toEqual({ reservation_state: 'uploading' });
+
+    // The new holder opening the same blob drops the stale session and
+    // uploads under a fresh one.
+    const fresh = await openUpload(desktop!);
+    expect(fresh).not.toBe(stale);
+    expect(
+      srv.db.prepare('SELECT id FROM upload_sessions WHERE id = ?').get(stale)
+    ).toBeUndefined();
+    expect(srv.bucket.multipart.has(staleUpload)).toBe(false);
+    const freshUpload = await startMultipart(desktop!, fresh);
+    expect((await putPart(desktop!, fresh, freshUpload, 1)).status).toBe(200);
+    expect(parts(fresh)).toEqual([
+      { part_number: 1, etag: expect.any(String) }
+    ]);
+  });
+
   it('lands nothing from a plaintext upload session opened before staging began (#914 review)', async () => {
     const srv = server();
     const plain = await plaintextProject(srv);

@@ -29,6 +29,7 @@ import {
 } from './workspaceSessions';
 import type { ProjectCollaborationRoom } from '@openzcad/cloudflare-adapters';
 import {
+  EncryptedBlobError,
   ProjectObjectStorageError,
   createPersistenceService,
   isCloudflareFeatureEnabled,
@@ -2337,6 +2338,10 @@ async function dispatchApiRequest(
       error instanceof ProjectMigratingError
     ) {
       return json({ error: error.message, code: error.code }, 409);
+    }
+    // Slice 7-1: a staged encrypted-blob upload whose lease moved on.
+    if (error instanceof EncryptedBlobError) {
+      return json({ error: error.message, code: error.code }, error.status);
     }
     if (error instanceof RevisionNotFoundError) {
       return json({ error: error.message, code: 'REVISION_NOT_FOUND' }, 404);
