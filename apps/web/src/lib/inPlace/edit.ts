@@ -452,11 +452,9 @@ export function inPlaceEditSeed(
         value('angle', data.axisRotation.angleDeg);
         // The model shows the body turned: the angle's rig works from the
         // body before the turn (a copy's source was never turned).
-        const line = ctx.datumAxis?.(data.axisRotation.axis.datumFeatureId);
-        const angle = seed.values.angle;
         seed.slots.bodies.push(
-          picked && line && angle !== undefined && !data.copy
-            ? unturned(picked, line, angle)
+          picked && !data.copy
+            ? inPlaceEditBodyBox(picked, data, ctx, ctx.laterTransforms ?? [])
             : (picked ?? {
                 bodyId: data.targetBodyId,
                 min: { x: 0, y: 0, z: 0 },
@@ -617,22 +615,6 @@ export function holeWorldPosition(
   };
 }
 
-/**
- * A body's box before a turn of `angleDeg` about `line`: its corners turned
- * back, boxed again (exact for quarter turns about a box's own axes, a box
- * that holds the body otherwise).
- */
-function unturned(
-  body: BodyPick,
-  line: { origin: Vector3; direction: Vector3 },
-  angleDeg: number
-): BodyPick {
-  return boxOf(
-    body.bodyId,
-    boxCorners(body).map((corner) => turnPoint(corner, line, -angleDeg))
-  );
-}
-
 /** `point` turned `angleDeg` about `line` (Rodrigues). */
 function turnPoint(
   point: Vector3,
@@ -699,16 +681,6 @@ function boxOf(bodyId: BodyId, points: readonly Vector3[]): BodyPick {
       z: extreme('z', Math.max)
     }
   };
-}
-
-/** A body's box before a scale of `factor` about `pivot`. */
-function unscaled(body: BodyPick, pivot: Vector3, factor: number): BodyPick {
-  const back = (point: Vector3): Vector3 => ({
-    x: pivot.x + (point.x - pivot.x) / factor,
-    y: pivot.y + (point.y - pivot.y) / factor,
-    z: pivot.z + (point.z - pivot.z) / factor
-  });
-  return { bodyId: body.bodyId, min: back(body.min), max: back(body.max) };
 }
 
 const AXIS_DIRECTIONS = {
@@ -1044,11 +1016,12 @@ export function keepAbsentHoleSteps(
 
 /**
  * The box an edit's body slot holds for `box`, the body as the model shows
- * it: as it is, except under an in-place scale, whose handle works on the
- * body before the stored scale (a copy's source is shown as it was). Later
- * in-place transforms of the same body (`later`, in history order) are
- * taken back first, since the model shows the body after them too; a turn
- * taken back from a box gives a box that still holds the body.
+ * it: as it is, except under an in-place transform (a scale, a turn about an
+ * axis), whose handle works on the body before it (a copy's source is shown
+ * as it was). Later in-place transforms of the same body (`later`, in
+ * history order) are taken back first, since the model shows the body after
+ * them too; a turn taken back from a box gives a box that still holds the
+ * body (exact for quarter turns about its own axes).
  */
 export function inPlaceEditBodyBox(
   box: BodyPick,
@@ -1056,26 +1029,13 @@ export function inPlaceEditBodyBox(
   ctx: Pick<InPlaceEditContext, 'evaluate' | 'datumAxis'>,
   later: readonly FeatureData[] = []
 ): BodyPick {
-  if (
-    data.featureKind !== 'transform' ||
-    data.copy ||
-    data.transform.scale === undefined
-  ) {
-    return box;
-  }
+  if (data.featureKind !== 'transform' || data.copy) return box;
   let before = box;
-  for (const step of [...later].reverse()) {
+  // Newest first: the later steps, then the feature's own.
+  for (const step of [...[...later].reverse(), data]) {
     before = undoLaterTransform(before, step, ctx) ?? before;
   }
-  const factor = ctx.evaluate(data.transform.scale);
-  if (factor === null || !(factor > 0)) return before;
-  const pivot = (data.transform.pivot &&
-    evaluated(data.transform.pivot, ctx as InPlaceEditContext)) ?? {
-    x: 0,
-    y: 0,
-    z: 0
-  };
-  return unscaled(before, pivot, factor);
+  return before;
 }
 
 /**
