@@ -1091,15 +1091,19 @@ function buildRegionRevolve(
       `Sketch "${sketch.name}" plane did not resolve at its history position.`
     );
   }
-  const face = sectionFace(
-    kernel,
-    document,
-    { sketchId: data.sketchId, profile },
-    scope,
-    sketchBases,
-    warn,
-    'Revolve profile'
-  );
+  // Every region the reference names, joined into connected groups the way
+  // a region extrude joins them: an entity-wide pick of multi-glyph text is
+  // several closed profiles, each turned on its own.
+  const regions = resolveRegionProfiles(document, sketch, { profile }, scope);
+  if (regions.length === 0) {
+    throw new Error('Revolve profile must resolve to a closed profile.');
+  }
+  const flattenedOutlines = regions.filter(
+    (region) => region.outline?.fidelity === 'flattened'
+  ).length;
+  if (flattenedOutlines > 0) {
+    warn(flattenedOutlineWarning(flattenedOutlines));
+  }
   if (data.axisRef && !revolveAxis) {
     throw new Error('Revolve datum axis did not resolve.');
   }
@@ -1112,18 +1116,21 @@ function buildRegionRevolve(
   const point = revolveAxis
     ? revolveAxis.origin
     : pointOnPlane(basis, { x: 0, y: 0 }, 0);
-  const solid = kernel.revolve(
-    face,
-    point.x,
-    point.y,
-    point.z,
-    direction.x,
-    direction.y,
-    direction.z,
-    resolveRevolveAngleDeg(data.angleDeg, scope)
+  const angleDeg = resolveRevolveAngleDeg(data.angleDeg, scope);
+  const solids = connectedRegionGroups(regions).map((group) =>
+    kernel.revolve(
+      makeRegionFace(kernel, mergeAdjacentProfiles(group), basis, warn),
+      point.x,
+      point.y,
+      point.z,
+      direction.x,
+      direction.y,
+      direction.z,
+      angleDeg
+    )
   );
   return {
-    solids: [solid],
+    solids,
     lineage: remusHashOnlyLineage('sweep', REGION_REVOLVE_HASH_ONLY_REASON)
   };
 }

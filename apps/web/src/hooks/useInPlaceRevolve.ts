@@ -135,7 +135,12 @@ export function useInPlaceRevolve(
    * a solid nobody has seen, and a refusal would arrive after it closed.
    */
   const [previewedAngle, setPreviewedAngle] = useState<number | null>(null);
-  const buildingAngleRef = useRef<number | null>(null);
+  /**
+   * The angle each built document was built for. A frame LivePreview
+   * republishes from its cache is that same document, so its angle travels
+   * with it rather than being read from whichever build started last.
+   */
+  const builtAngles = useRef(new WeakMap<ProjectDocument, number>()).current;
   const optionsRef = useRef(options);
   optionsRef.current = options;
   const sessionRef = useRef(session);
@@ -199,14 +204,15 @@ export function useInPlaceRevolve(
   const preview = useRef(
     new LivePreview<ProjectDocument, ProjectDocument['derived']>({
       build: (value: number) => {
-        buildingAngleRef.current = value;
         const request = requestRef.current(value);
         const base = optionsRef.current.baseDocument();
         if (!request || !base) return null;
         const command = optionsRef.current.buildCommand(request);
         command.validate(base);
         previewBodyRef.current = command.resultBodyId;
-        return command.apply(base);
+        const built = command.apply(base);
+        builtAngles.set(built, value);
+        return built;
       },
       derive: (document) => optionsRef.current.derive(document),
       publish: (result) => {
@@ -215,7 +221,9 @@ export function useInPlaceRevolve(
           result && bodyId && result.derived.bodyRepresentations[bodyId]
         );
         setPreviewValid(valid);
-        setPreviewedAngle(buildingAngleRef.current);
+        setPreviewedAngle(
+          result ? (builtAngles.get(result.document) ?? null) : null
+        );
         if (!result) return;
         if (valid) {
           setRefusal(null);

@@ -238,6 +238,28 @@ describe('useInPlaceRevolve', () => {
     await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
   });
 
+  it('finishes on a cached frame shown again by a drag back', async () => {
+    const releases: (() => void)[] = [];
+    const { hook } = setup({
+      derive: (document) =>
+        new Promise((resolve) => {
+          releases.push(() => resolve(document.derived));
+        })
+    });
+    act(() => hook.result.current.start(PICK));
+    act(() => hook.result.current.pickAxis('sketch-vertical'));
+    await waitFor(() => expect(releases).toHaveLength(1));
+    act(() => releases[0]!());
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    // 180° starts building; the hand comes back to 360° before it lands.
+    act(() => hook.result.current.previewAngle(180));
+    await waitFor(() => expect(releases).toHaveLength(2));
+    act(() => hook.result.current.previewAngle(360));
+    act(() => releases[1]!());
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(hook.result.current.angle).toBe(360);
+  });
+
   it('cannot finish while the preview is refused, and says why', async () => {
     const { hook, commit } = setup({ baseDocument: () => fakeDocument(false) });
     act(() => hook.result.current.start(PICK));

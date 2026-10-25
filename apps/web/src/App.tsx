@@ -18058,6 +18058,11 @@ export function App() {
         startDirection.x,
         startDirection.y,
         startDirection.z,
+        // An undo can reverse a datum axis under the same id: the sweep turns
+        // the other way, so the rig is rebuilt about the new direction.
+        axis.x,
+        axis.y,
+        axis.z,
         radius
       ].join(':'),
       params: {

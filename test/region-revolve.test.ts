@@ -134,6 +134,43 @@ describe('region revolve', () => {
     expect(Math.abs(body!.volume - pappus(180))).toBeLessThan(1e-6);
   }, 120_000);
 
+  it('turns every region of an entity-wide multi-region reference', async () => {
+    // Two separate annuli, as multi-glyph text resolves to several closed
+    // profiles: each is turned on its own, and the volumes add up.
+    const OFFSET = 4;
+    const second: SketchObjectData[] = EDGES.map((edge) =>
+      edge.objectKind === 'line'
+        ? {
+            ...edge,
+            x1: Number(edge.x1) + OFFSET,
+            x2: Number(edge.x2) + OFFSET
+          }
+        : edge
+    );
+    const sketched = addSketchFeature(
+      createProjectDocument('U09', toUserId('user_test')),
+      {
+        name: 'Two rings',
+        plane: 'XZ',
+        offset: 0,
+        objects: [...EDGES, ...second]
+      }
+    ).document;
+    const sketch = findSketch(sketched, getLatestSketchId(sketched)!)!;
+    const document = revolveSketch(sketched, {
+      name: 'Revolve',
+      sketchId: sketch.sketchId,
+      axis: 'vertical',
+      angleDeg: 90,
+      profile: { all: true, sourceEntityIds: [...sketch.objectIds] }
+    }).document;
+    const derived = await kernel.syncDocument(document);
+    expect(derived.warnings).toEqual([]);
+    const body = derived.bodyRepresentations[getLatestBodyId(document)!];
+    const outer = (Math.PI / 2) * (OFFSET + (INNER + OUTER) / 2) * HEIGHT;
+    expect(Math.abs(body!.volume - (pappus(90) + outer))).toBeLessThan(1e-6);
+  }, 120_000);
+
   it('stores the profile only when one is given', () => {
     const sketched = edgeSketch();
     const sketchId = getLatestSketchId(sketched)!;
