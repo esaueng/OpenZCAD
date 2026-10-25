@@ -16,6 +16,8 @@ declare global {
     __openzcadE2EExactFaceDrag?: boolean;
     __slowAnalysis?: { armed: boolean; held: number };
     __cardlessFrames?: number;
+    __afterCommit?: { waiting: number; unselectedRows: number };
+    __bodyCardFrames?: number;
   }
 }
 
@@ -441,4 +443,136 @@ test('the committed face stays selected while the follow-up rebuild analyses', a
     'Box 1 · Front face'
   );
   expect(await page.evaluate(() => window.__cardlessFrames)).toBe(0);
+});
+
+test('a commit reads as complete while its follow-up rebuild analyses', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  await slowAnalysis(page);
+  const { canvas, handle } = await armedBox(page);
+  const drag = async (value: number) => {
+    const x = Number(await canvas.getAttribute('data-e2e-handle-x'));
+    const y = Number(await canvas.getAttribute('data-e2e-handle-y'));
+    const bounds = (await canvas.boundingBox())!;
+    await page.mouse.move(bounds.x + x, bounds.y + y);
+    await page.mouse.down();
+    await page.mouse.move(
+      bounds.x + x + handle.dx * handle.pixels * value,
+      bounds.y + y + handle.dy * handle.pixels * value,
+      { steps: 8 }
+    );
+    await page.mouse.up();
+  };
+  await drag(3);
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Offset face' })
+  ).toHaveCount(1, { timeout: 30_000 });
+  // From here the follow-up rebuild's analysis is held for 700 ms.
+  await page.evaluate(() => {
+    window.__slowAnalysis!.armed = true;
+    window.__afterCommit = { waiting: 0, unselectedRows: 0 };
+    const sample = () => {
+      const tally = window.__afterCommit!;
+      if (
+        [...document.querySelectorAll('button')].some((button) =>
+          /Waiting for exact geometry/.test(
+            `${button.getAttribute('aria-label') ?? ''} ${button.title}`
+          )
+        )
+      )
+        tally.waiting += 1;
+      if (!document.querySelector('.feature-row.selected'))
+        tally.unselectedRows += 1;
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+  await drag(2);
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Offset face' })
+  ).toHaveCount(2, { timeout: 30_000 });
+  await expect
+    .poll(() => page.evaluate(() => window.__slowAnalysis!.held))
+    .toBeGreaterThan(0);
+  // Through the held analysis: no tool waits, the History row stays picked.
+  await page.waitForTimeout(900);
+  expect(await page.evaluate(() => window.__afterCommit)).toEqual({
+    waiting: 0,
+    unselectedRows: 0
+  });
+  // A drag released inside a held window is not refused either.
+  const held = await page.evaluate(() => window.__slowAnalysis!.held);
+  await drag(1);
+  await expect
+    .poll(() => page.evaluate(() => window.__slowAnalysis!.held))
+    .toBeGreaterThan(held);
+  await drag(-1);
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Offset face' })
+  ).toHaveCount(3, { timeout: 30_000 });
+  await expect(
+    page.getByText('still rebuilding', { exact: false })
+  ).toHaveCount(0);
+});
+
+test('applying a fillet goes straight from its preview to the blend face', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  await slowAnalysis(page);
+  await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Fillet continuity');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  const canvas = page.locator('.viewer-host canvas');
+  await expect
+    .poll(
+      () =>
+        canvas.evaluate(
+          (element) =>
+            new Promise<boolean>((resolve) => {
+              setTimeout(() => resolve(false), 1500);
+              element.dispatchEvent(
+                new CustomEvent('openzcad:e2e-select-edge', {
+                  detail: {
+                    resolve: (selection: unknown) => resolve(selection !== null)
+                  }
+                })
+              );
+            })
+        ),
+      { timeout: 30_000 }
+    )
+    .toBe(true);
+  await page.getByTestId('direct-manipulation-value').click();
+  const keypad = page.getByRole('dialog', { name: 'Radius value' });
+  await keypad.getByRole('textbox').fill('2');
+  await page.evaluate(() => {
+    window.__slowAnalysis!.armed = true;
+    window.__bodyCardFrames = 0;
+    const sample = () => {
+      // The whole-body card offers Move; a face's card never does.
+      if (document.querySelector('[aria-label="Selection: Move"]'))
+        window.__bodyCardFrames! += 1;
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+  await keypad.getByRole('button', { name: 'Apply radius' }).click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Fillet' })
+  ).toHaveCount(1, { timeout: 30_000 });
+  await expect
+    .poll(() => page.evaluate(() => window.__slowAnalysis!.held))
+    .toBeGreaterThan(0);
+  await page.waitForTimeout(1200);
+  await expect(page.locator('.selection-card')).toContainText('Blend face');
+  expect(await page.evaluate(() => window.__bodyCardFrames)).toBe(0);
 });
