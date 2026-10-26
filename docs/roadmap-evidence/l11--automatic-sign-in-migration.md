@@ -2,6 +2,8 @@
 row: L11
 ---
 
+Automatic runs use the controller's own run history to leave manually paused/failed projects stopped. The check runs after acquiring the Web Lock and refreshing, including a stop made while the automatic caller waits. Rows merely discovered after reload still resume staging and unfinished purges, even when Settings already listed them; explicit manual retries retain their normal behavior. Both paused and failed manual-run regressions reproduce against the preceding code.
+
 The automatic setup/unlock attention path opens the rendered Settings dialog as well as selecting and persisting its Encryption section. A rendered browser regression starts with Settings closed, confirms default-on setup appears immediately, and fails against the preceding implementation.
 
 Preference-key lifetime follow-up: public preference reads/writes own and finally zero a key copy before their first await; automatic migration additionally owns a copy across its complete load-to-save prerequisite. The upload policy reacquires the cache after importing the preference module. Cache replacement still zeroes its old entry but cannot turn these in-flight operations into zero-key signing or authentication. Nine new regressions fail on the preceding code, then pass with the fix; coverage includes authentic and zero-key-forged records, cache replacement during pin/API I/O, migration continuity and cleanup on success/refusal/error.

@@ -90,7 +90,8 @@ describe('default-on automatic migration', () => {
     await migration.check();
     expect(f.controller.run).toHaveBeenCalledWith(
       ['unfinished-purge'],
-      expect.any(AbortSignal)
+      expect.any(AbortSignal),
+      { resumeStopped: false }
     );
     encryptionStateChanged('account');
     await migration.check();

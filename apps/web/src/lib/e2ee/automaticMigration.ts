@@ -157,7 +157,7 @@ export function automaticProjectMigration(
         'Encrypting existing cloud projects. You can follow progress or pause here; projects waiting for other members remain listed.'
       );
       // Explicit ids also resume an unfinished purge discovered after reload.
-      await prepared.run(ids, stop.signal);
+      await prepared.run(ids, stop.signal, { resumeStopped: false });
     } catch (error) {
       if (required && current())
         attention(
