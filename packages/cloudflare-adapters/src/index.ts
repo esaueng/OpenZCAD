@@ -646,6 +646,28 @@ export const isE2eeMlsProposalStorageReady = cachedSchemaProbe(
   (row) => row?.ready === 10
 );
 
+/** The tables migration 0040 adds, children before the links. */
+export const E2EE_SHARE_LINK_TABLES = Object.freeze([
+  'e2ee_share_snapshots',
+  'e2ee_share_keys',
+  'e2ee_share_links'
+] as const);
+
+/**
+ * Whether migration 0040 is installed: share links of encrypted projects
+ * (ADR-024 Phase 5, slice 5-10): links, share-key wraps, snapshots and
+ * share delegations. Only the encrypted share-link routes, the anonymous
+ * encrypted share route, project purge and account erasure name its
+ * tables, each after asking this; a failed probe answers "missing", so
+ * ordinary traffic and plaintext share links keep working without it.
+ */
+export const isE2eeShareLinkStorageReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM sqlite_master WHERE type = 'table' AND name IN
+   ('e2ee_share_links', 'e2ee_share_keys', 'e2ee_share_snapshots',
+    'e2ee_share_delegations')`,
+  (row) => row?.ready === E2EE_SHARE_LINK_TABLES.length + 1
+);
+
 /**
  * Whether migration 0042 is installed: the per-project migration state of
  * moving plaintext projects to encrypted storage (ADR-024 Phase 7). Only
@@ -6388,6 +6410,32 @@ export class D1R2PersistenceService implements PersistenceService {
     // Stored MLS proposals (migration 0039).
     if (await isE2eeMlsProposalStorageReady(this.env.DB)) {
       groupTables.push('DELETE FROM e2ee_mls_proposals WHERE project_id IN');
+    }
+    // Encrypted share links (migration 0040): their R2 snapshot bodies
+    // first, kept like every other object above so a failed delete stays
+    // retryable, then the rows, children first.
+    if (await isE2eeShareLinkStorageReady(this.env.DB)) {
+      const snapshots = await this.env
+        .DB!.prepare(
+          `SELECT envelope_key FROM e2ee_share_snapshots
+           WHERE project_id IN (${placeholders}) AND envelope_key IS NOT NULL`
+        )
+        .bind(...projectIds)
+        .all<{ envelope_key: string }>();
+      const bucket = this.projectStorageBucket();
+      if ((snapshots.results ?? []).length && !bucket) {
+        throw new ProjectObjectStorageError(
+          'Encrypted project storage is unavailable.'
+        );
+      }
+      await Promise.all(
+        (snapshots.results ?? []).map((row) => bucket!.delete(row.envelope_key))
+      );
+      groupTables.unshift(
+        ...E2EE_SHARE_LINK_TABLES.map(
+          (table) => `DELETE FROM ${table} WHERE project_id IN`
+        )
+      );
     }
     // Encrypted invitations, KeyPackages and Welcomes (migration 0038).
     if (await isE2eeInvitationStorageReady(this.env.DB)) {

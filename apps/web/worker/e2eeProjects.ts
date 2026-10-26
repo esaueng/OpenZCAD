@@ -26,7 +26,8 @@
 import {
   decodeDeviceListEntry,
   fromBase64Url,
-  parseEnvelope
+  parseEnvelope,
+  publicKeyHash
 } from '@openzcad/crypto';
 import type {
   E2eeDeviceListHead,
@@ -619,6 +620,40 @@ export async function requireCertifiedDevice(
   userId: string,
   deviceId: string
 ): Promise<CurrentAccountKey> {
+  return certifiedDevice(
+    db,
+    userId,
+    async (device) => device.deviceId === deviceId
+  );
+}
+
+/**
+ * Like `requireCertifiedDevice`, for a statement that names its signer
+ * only by the hash of its signing key: a device the newest list no longer
+ * certifies cannot sign for the account.
+ */
+export async function requireCertifiedSigner(
+  db: D1Database,
+  userId: string,
+  signingKeyHash: Uint8Array
+): Promise<CurrentAccountKey> {
+  return certifiedDevice(db, userId, async (device) => {
+    const hash = await publicKeyHash(device.signingKey);
+    return (
+      hash.length === signingKeyHash.length &&
+      hash.every((byte, index) => byte === signingKeyHash[index])
+    );
+  });
+}
+
+async function certifiedDevice(
+  db: D1Database,
+  userId: string,
+  matches: (device: {
+    deviceId: string;
+    signingKey: Uint8Array;
+  }) => Promise<boolean>
+): Promise<CurrentAccountKey> {
   const head = await db
     .prepare(
       `SELECT e.generation, e.sequence, e.entry
@@ -632,10 +667,13 @@ export async function requireCertifiedDevice(
   let listed: Uint8Array | null = null;
   if (head) {
     try {
-      listed =
-        decodeDeviceListEntry(fromBase64Url(head.entry)).devices.find(
-          (device) => device.deviceId === deviceId
-        )?.signingKey ?? null;
+      for (const device of decodeDeviceListEntry(fromBase64Url(head.entry))
+        .devices) {
+        if (await matches(device)) {
+          listed = device.signingKey;
+          break;
+        }
+      }
     } catch {
       listed = null;
     }

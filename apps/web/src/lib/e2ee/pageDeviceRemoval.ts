@@ -30,6 +30,8 @@ import {
 import { versionPins } from './versionPins';
 import { contactsContext } from './contacts';
 import { contactMemberLists } from './memberLists';
+import { createE2eeShareLinksApi } from '@openzcad/shared';
+import { desktopFetch } from '../desktopBridge';
 
 export { GROUP_RESET_CONFIRMATION };
 
@@ -92,11 +94,44 @@ export function pageRemovalParticipant(
     written: async (step) => {
       if (await projectsOpen()) await participant.written?.(step);
     },
-    complete: async (step) =>
-      (await projectsOpen())
-        ? participant.complete(step)
-        : { rotated: [], left: [], cutoffsStored: false }
+    complete: async (step) => {
+      if (!(await projectsOpen())) {
+        return { rotated: [], left: [], cutoffsStored: false };
+      }
+      const outcome = await participant.complete(step);
+      if (step.kind === 'device') {
+        await renewShareDelegationAfterRemoval(e2ee, step).catch(
+          () => undefined
+        );
+      }
+      return outcome;
+    }
   };
+}
+
+/**
+ * A removed owner device must stop signing share-authority statements at
+ * once (ADR-024, share links): the removal has the identity key open, so a
+ * new share delegation without it is signed now, when the account has one
+ * (slice 5-10). Best effort; the sharing dialog asks again otherwise.
+ */
+export async function renewShareDelegationAfterRemoval(
+  e2ee: E2eeContext,
+  step: {
+    readonly identityPrivateKey: CryptoKey;
+    readonly account: AccountView;
+  },
+  api = createE2eeShareLinksApi(desktopFetch)
+): Promise<boolean> {
+  const { delegation } = await api.delegation();
+  if (!delegation) return false;
+  const { renewShareDelegation, signWithIdentityKey } =
+    await import('./shareLinks');
+  await renewShareDelegation(
+    { groups: pageGroups(e2ee, step.account), api },
+    signWithIdentityKey(step.identityPrivateKey)
+  );
+  return true;
 }
 
 export interface RecoverableProject {

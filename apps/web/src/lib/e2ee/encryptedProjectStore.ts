@@ -56,6 +56,7 @@
  */
 import {
   AuthorshipError,
+  ShareLinkError,
   authorCutoffKey,
   EnvelopeKey,
   VersionLogError,
@@ -81,7 +82,9 @@ import {
   type ProjectEnvelopeHeader,
   type ProjectEnvelopeHeaderInit,
   type ProjectInfoBody,
+  type ShareLinkSet,
   type VerifiedAuthor,
+  type VerifiedShareLinkSet,
   type VerifiedDeviceList,
   type VersionCutoff,
   type VersionLogRecord
@@ -163,6 +166,7 @@ import {
   type ProjectCutoff,
   type ProjectGroupContext
 } from './projectGroups';
+import { verifyHeadShareLinks } from './shareLinkSet';
 import { forgetProjectKeys } from './unlockedProjectKeys';
 import {
   versionPins,
@@ -242,6 +246,15 @@ export interface EncryptedProjectContext {
     projectId: string,
     blobIds: readonly string[]
   ) => Promise<void>;
+  /**
+   * Told after this page wrote a document version (slice 5-10): an editor's
+   * page republishes the snapshot of every active share link. Best effort;
+   * a throw is ignored.
+   */
+  readonly onVersionWritten?: (
+    projectId: string,
+    head: EncryptedShareHead
+  ) => void | Promise<void>;
 }
 
 /** How far a fresh browser lets a head's signature trail account activity. */
@@ -265,7 +278,13 @@ export type EncryptedIntegrityReason =
   /** The envelope or its document does not match what was asked for. */
   | 'content'
   /** A revision is not part of the pinned history. */
-  | 'history';
+  | 'history'
+  /**
+   * The head's share-link set did not hold (slice 5-10): an entry not
+   * signed by the owner, a revoked link listed as active, a dropped
+   * tombstone or an editor's change.
+   */
+  | 'share-links';
 
 /**
  * A version that did not verify. It reads as an unreadable account copy
@@ -302,9 +321,30 @@ interface HeadState {
   readonly keyEpoch: number;
   readonly revisionHashes: Map<string, Uint8Array>;
   readonly document: ProjectDocument;
+  /** The verified share-link set its body carries (slice 5-10). */
+  readonly shareLinks: VerifiedShareLinkSet | null;
   infoName: string | null;
   infoSequence: number;
 }
+
+/** A verified head with its share-link set (slice 5-10). */
+export interface EncryptedShareHead {
+  readonly version: number;
+  readonly hash: string;
+  readonly keyEpoch: number;
+  readonly document: ProjectDocument;
+  readonly shareLinks: VerifiedShareLinkSet | null;
+}
+
+/**
+ * The owner's change of a project's active link set (slice 5-10): given the
+ * head's verified set and the key epoch the version is written in, the new
+ * signed set.
+ */
+export type ShareLinkSetChange = (
+  current: VerifiedShareLinkSet | null,
+  keyEpoch: number
+) => Promise<ShareLinkSet>;
 
 /** A copy or branch the page built from a verified source (slice 4-8). */
 export interface EncryptedCopyRequest {
@@ -337,6 +377,17 @@ export interface EncryptedProjectStore {
   readonly replaced: ReplacedEnvelopeKit;
   /** What the live room's codec uses (slice 4-9, `encryptedRoomCodec.ts`). */
   roomAccess(): EncryptedRoomAccess;
+  /** The verified current head and its share-link set (slice 5-10). */
+  shareHead(projectId: string): Promise<EncryptedShareHead>;
+  /**
+   * Writes one version on the current head that changes only the active
+   * share-link set (slice 5-10; the owner creates or revokes a link). A
+   * page save that still names the head it replaced lands on top of it.
+   */
+  writeShareLinks(
+    projectId: string,
+    change: ShareLinkSetChange
+  ): Promise<EncryptedShareHead>;
   /**
    * Stages a plaintext project's first encrypted version beside its
    * plaintext (ADR-024 Phase 7, slice 7-2): the MLS group, the version and
@@ -378,6 +429,8 @@ export interface EncryptedRoomHeadState {
   readonly keyEpoch: number;
   readonly revisionHashes: ReadonlyMap<string, Uint8Array>;
   readonly document: ProjectDocument;
+  /** Its share-link set, carried by a version sealed on it (slice 5-10). */
+  readonly shareLinks?: VerifiedShareLinkSet | null;
 }
 
 /** A document version sealed for the room, not yet acknowledged. */
@@ -569,6 +622,12 @@ export function createEncryptedProjectStore(
     ctx.seal ?? ((job) => sealDocumentJob({ type: 'seal-document', ...job }));
   const now = ctx.now ?? Date.now;
   const heads = new Map<string, HeadState>();
+  /**
+   * Versions this page wrote that changed only the share-link set (slice
+   * 5-10), from the head the page's document named to the one they left:
+   * a save naming any of them lands on the newest.
+   */
+  const linkOnly = new Map<string, { from: number; to: number }>();
   const authenticators = new Map<string, Uint8Array>();
   const blobReferences = ctx.blobReferences ?? pageBlobReferences;
 
@@ -1026,6 +1085,51 @@ export function createEncryptedProjectStore(
     }
   }
 
+  /**
+   * A head's verified share-link set (slice 5-10), against the head this
+   * page held before it; a set that does not hold is an integrity error.
+   */
+  async function acceptShareLinks(
+    projectId: string,
+    header: ProjectEnvelopeHeader,
+    authorUserId: string,
+    set: ShareLinkSet | undefined
+  ): Promise<VerifiedShareLinkSet | null> {
+    const known = heads.get(projectId);
+    const direct =
+      !!known &&
+      header.previousVersionHash !== null &&
+      toHex(header.previousVersionHash) === known.hash;
+    try {
+      return await verifyHeadShareLinks(groups, pins, {
+        projectId,
+        keyEpoch: header.keyEpoch,
+        authorUserId,
+        set,
+        ...(known && known.version < header.documentVersion
+          ? { previous: { set: known.shareLinks, direct } }
+          : {}),
+        cutoffs: await cutoffsFor(projectId)
+      });
+    } catch (error) {
+      if (error instanceof ShareLinkError) {
+        throw integrity(
+          'share-links',
+          `This project’s share links do not hold together (${error.reason}).`
+        );
+      }
+      throw error;
+    }
+  }
+
+  const shareHeadOf = (state: HeadState): EncryptedShareHead => ({
+    version: state.version,
+    hash: state.hash,
+    keyEpoch: state.keyEpoch,
+    document: state.document,
+    shareLinks: state.shareLinks
+  });
+
   /** Reads, verifies and pins the current head (ADR-024, current head). */
   async function readHead(projectId: string): Promise<HeadState> {
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -1090,6 +1194,12 @@ export function createEncryptedProjectStore(
         head.wrappedVersionKey,
         envelope
       );
+      const shareLinks = await acceptShareLinks(
+        projectId,
+        header,
+        author.userId,
+        body.shareLinks
+      );
       const updatedAt = Date.parse(metadata.project.updatedAt);
       if (
         !pinHash &&
@@ -1124,6 +1234,7 @@ export function createEncryptedProjectStore(
         keyEpoch: header.keyEpoch,
         revisionHashes,
         document,
+        shareLinks,
         infoName: heads.get(projectId)?.infoName ?? null,
         infoSequence: Math.max(
           heads.get(projectId)?.infoSequence ?? 0,
@@ -1146,6 +1257,17 @@ export function createEncryptedProjectStore(
   ): Promise<HeadState> {
     const known = heads.get(projectId);
     if (known?.version === expectedVersion) return known;
+    // The page's document still names a head this page replaced with
+    // share-link versions only (slice 5-10): same document, newer version.
+    const alias = linkOnly.get(projectId);
+    if (
+      known &&
+      alias?.to === known.version &&
+      expectedVersion >= alias.from &&
+      expectedVersion < alias.to
+    ) {
+      return known;
+    }
     const head = await readHead(projectId);
     if (head.version !== expectedVersion) {
       throw new ApiError(
@@ -1304,7 +1426,9 @@ export function createEncryptedProjectStore(
     document: ProjectDocument,
     expectedVersion: number,
     previousHash: string | null,
-    revisionHashes: ReadonlyMap<string, Uint8Array>
+    revisionHashes: ReadonlyMap<string, Uint8Array>,
+    /** The share-link set the version carries (slice 5-10). */
+    shareLinks?: ShareLinkSet
   ): Promise<Sealed> {
     // The checks every account write gets (ADR-024 Phase 1).
     const split = await splitProjectStorageUpload(document);
@@ -1337,7 +1461,8 @@ export function createEncryptedProjectStore(
       header: init,
       document: stored as unknown as Record<string, unknown>,
       blobs,
-      revisionVersionHashes: retainedHashes(revisionHashes, stored)
+      revisionVersionHashes: retainedHashes(revisionHashes, stored),
+      ...(shareLinks ? { shareLinks } : {})
     });
     // On every write, whoever sealed it: the header lists exactly the
     // references the body carries.
@@ -1422,12 +1547,29 @@ export function createEncryptedProjectStore(
     }
   }
 
-  /** One version on top of `expectedVersion`, retried once on a new epoch. */
+  /** Tells the page a version this page wrote landed (slice 5-10). */
+  function written(projectId: string, state: HeadState): void {
+    if (!ctx.onVersionWritten) return;
+    try {
+      void Promise.resolve(
+        ctx.onVersionWritten(projectId, shareHeadOf(state))
+      ).catch(() => undefined);
+    } catch {
+      // Best effort: the version is stored either way.
+    }
+  }
+
+  /**
+   * One version on top of `expectedVersion`, retried once on a new epoch.
+   * It carries the head's share-link set unchanged, or with `change` (the
+   * owner, slice 5-10) the new set, checked before it is sent.
+   */
   async function writeVersion(
     projectId: string,
     document: ProjectDocument,
     expectedVersion: number,
-    revisionId: string | null
+    revisionId: string | null,
+    change?: ShareLinkSetChange
   ) {
     const device = writableDevice();
     if (document.projectId !== projectId) {
@@ -1438,17 +1580,32 @@ export function createEncryptedProjectStore(
     for (let attempt = 0; ; attempt++) {
       const material = await currentMaterial(device, projectId);
       await requireOwnEditingRole(projectId, material);
+      let links = head.shareLinks?.set;
+      let verifiedLinks = head.shareLinks;
+      if (change) {
+        links = await change(head.shareLinks, material.keyEpoch);
+        verifiedLinks = await verifyHeadShareLinks(groups, pins, {
+          projectId,
+          keyEpoch: material.keyEpoch,
+          authorUserId: userId,
+          set: links,
+          previous: { set: head.shareLinks, direct: true },
+          cutoffs: await cutoffsFor(projectId),
+          remember: false
+        });
+      }
       const sealed = await sealDocument(
         device,
         material,
         projectId,
         document,
-        expectedVersion,
+        head.version,
         head.hash,
-        head.revisionHashes
+        head.revisionHashes,
+        links
       );
       const upload = {
-        expectedVersion,
+        expectedVersion: head.version,
         signature: sealed.signature,
         wrappedVersionKey: sealed.wrappedVersionKey,
         signerDeviceId: sealed.signerDeviceId
@@ -1504,17 +1661,35 @@ export function createEncryptedProjectStore(
       if (revisionId !== null) {
         revisionHashes.set(revisionId, fromHex(sealed.hash));
       }
+      if (change && verifiedLinks?.tombstones.length) {
+        await pins.addTombstones?.(
+          userId,
+          projectId,
+          verifiedLinks.tombstones.map((tombstone) => tombstone.shareId)
+        );
+      }
+      const alias = linkOnly.get(projectId);
+      if (change && document === head.document) {
+        linkOnly.set(projectId, {
+          from: alias?.to === head.version ? alias.from : head.version,
+          to: response.version
+        });
+      } else {
+        linkOnly.delete(projectId);
+      }
       const state: HeadState = {
         version: response.version,
         hash: sealed.hash,
         keyEpoch: sealed.keyEpoch,
         revisionHashes,
         document: sealed.document,
+        shareLinks: verifiedLinks,
         infoName: head.infoName,
         infoSequence: head.infoSequence
       };
       heads.set(projectId, state);
       await syncInfo(projectId, state);
+      written(projectId, state);
       return { response, document: sealed.document };
     }
   }
@@ -1862,6 +2037,12 @@ export function createEncryptedProjectStore(
         record.wrappedVersionKey,
         envelope
       );
+      const shareLinks = await acceptShareLinks(
+        projectId,
+        header,
+        author.userId,
+        body.shareLinks
+      );
       const advanced = await pins.advance(userId, projectId, pinHash, {
         headHash: hash,
         documentVersion: header.documentVersion,
@@ -1878,6 +2059,7 @@ export function createEncryptedProjectStore(
         keyEpoch: header.keyEpoch,
         revisionHashes: new Map(body.revisionVersionHashes),
         document,
+        shareLinks,
         infoName: heads.get(projectId)?.infoName ?? null,
         infoSequence: Math.max(
           heads.get(projectId)?.infoSequence ?? 0,
@@ -1910,7 +2092,8 @@ export function createEncryptedProjectStore(
         document,
         base.version,
         base.hash,
-        base.revisionHashes
+        base.revisionHashes,
+        base.shareLinks?.set
       );
       const result: EncryptedRoomSealed = {
         envelope: sealed.envelope,
@@ -1963,6 +2146,7 @@ export function createEncryptedProjectStore(
         keyEpoch: sealed.keyEpoch,
         revisionHashes: retainedHashes(base.revisionHashes, sealed.document),
         document: sealed.document,
+        shareLinks: base.shareLinks ?? null,
         infoName: previous?.infoName ?? null,
         infoSequence: previous?.infoSequence ?? 0
       };
@@ -1972,6 +2156,7 @@ export function createEncryptedProjectStore(
       // through the project info's own chain (slice 4-7), keeping its
       // thumbnail and archived exports.
       if (ours) await syncInfo(projectId, state);
+      if (ours) written(projectId, state);
       return state;
     },
 
@@ -2186,6 +2371,7 @@ export function createEncryptedProjectStore(
       keyEpoch: 0,
       revisionHashes: new Map(),
       document: sealed.document,
+      shareLinks: null,
       infoName: extra.info.name,
       infoSequence: 1
     });
@@ -2421,6 +2607,16 @@ export function createEncryptedProjectStore(
     replaced,
 
     roomAccess: () => roomAccess,
+
+    shareHead: guarded(async (projectId) =>
+      shareHeadOf(await readHead(projectId))
+    ),
+
+    writeShareLinks: guarded(async (projectId, change) => {
+      const head = await readHead(projectId);
+      await writeVersion(projectId, head.document, head.version, null, change);
+      return shareHeadOf(heads.get(projectId)!);
+    }),
 
     stageMigratedProject: guarded(
       async ({ document: source, info: body, prepare }) => {

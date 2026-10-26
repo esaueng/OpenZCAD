@@ -30,6 +30,8 @@ import {
   decodeShareLinkTombstone,
   encodeShareAuthority,
   encodeShareDelegation,
+  encodeShareKeyWrap,
+  encodeShareLinkForget,
   encodeShareLinkGrant,
   encodeShareLinkTombstone,
   openShareKey,
@@ -37,10 +39,14 @@ import {
   shareKeyHash,
   signShareAuthority,
   signShareDelegation,
+  signShareKeyWrap,
+  signShareLinkForget,
   signShareLinkGrant,
   signShareLinkTombstone,
   verifyShareAuthority,
   verifyShareDelegation,
+  verifyShareKeyWrap,
+  verifyShareLinkForget,
   verifyShareLinkSet,
   verifySharedSnapshot,
   type ShareAuthorityStatement,
@@ -937,6 +943,139 @@ describe('share keys', () => {
     );
     await expect(shareKeyHash(patternBytes(31))).rejects.toBeInstanceOf(
       E2eeError
+    );
+  });
+
+  it('signs a stored wrap for one device, link, epoch and exact bytes', async () => {
+    const w = await world();
+    const value = {
+      projectId: 'proj_1',
+      shareId: 'share_1',
+      keyEpoch: 4,
+      wrapped: patternBytes(41)
+    };
+    // "OZW" | 1 | u8 6 "proj_1" | u8 7 "share_1" | u32 4 | u8 41 + wrap
+    const encoded = encodeShareKeyWrap(value);
+    expect(encoded.subarray(0, 4)).toEqual(Uint8Array.of(0x4f, 0x5a, 0x57, 1));
+    expect(encoded.byteLength).toBe(4 + 7 + 8 + 4 + 42);
+    const signature = await signShareKeyWrap(
+      w.editorDevice.pair.privateKey,
+      value
+    );
+    expect(signature.byteLength).toBe(65);
+    expect(await verifyShareKeyWrap(w.editorDevice.raw, value, signature)).toBe(
+      true
+    );
+    // Another device, link, epoch or wrap: not this signature.
+    expect(await verifyShareKeyWrap(w.stranger.raw, value, signature)).toBe(
+      false
+    );
+    for (const changed of [
+      { ...value, shareId: 'share_2' },
+      { ...value, projectId: 'proj_2' },
+      { ...value, keyEpoch: 5 },
+      { ...value, wrapped: patternBytes(41, 7) }
+    ]) {
+      expect(
+        await verifyShareKeyWrap(w.editorDevice.raw, changed, signature)
+      ).toBe(false);
+    }
+    // Another statement kind's signature does not count.
+    const grant = await signShareLinkGrant(w.editorDevice.pair.privateKey, {
+      projectId: 'proj_1',
+      shareId: 'share_1',
+      shareKeyHash: w.shareKeyHash,
+      mode: 'view',
+      keyEpoch: 4,
+      issuedAt: T0,
+      signerKeyHash: w.editorDevice.hash
+    });
+    expect(
+      await verifyShareKeyWrap(w.editorDevice.raw, value, grant.signature)
+    ).toBe(false);
+    throwsCode(
+      () => encodeShareKeyWrap({ ...value, wrapped: new Uint8Array(0) }),
+      'invalid-argument'
+    );
+    throwsCode(
+      () => encodeShareKeyWrap({ ...value, keyEpoch: -1 }),
+      'invalid-argument'
+    );
+  });
+});
+
+describe('link forgets', () => {
+  it('signs a forget for one device, link and key epoch', async () => {
+    const w = await world();
+    const value = { projectId: 'proj_1', shareId: 'share_1', keyEpoch: 4 };
+    // "OZF" | 1 | u8 6 "proj_1" | u8 7 "share_1" | u32 4
+    const ascii = (text: string) => [...new TextEncoder().encode(text)];
+    expect(encodeShareLinkForget(value)).toEqual(
+      Uint8Array.from([
+        0x4f,
+        0x5a,
+        0x46,
+        1,
+        6,
+        ...ascii('proj_1'),
+        7,
+        ...ascii('share_1'),
+        0,
+        0,
+        0,
+        4
+      ])
+    );
+    const signature = await signShareLinkForget(
+      w.ownerDevice.pair.privateKey,
+      value
+    );
+    expect(signature.byteLength).toBe(65);
+    expect(
+      await verifyShareLinkForget(w.ownerDevice.raw, value, signature)
+    ).toBe(true);
+    // Another device, link, project or epoch: not this signature.
+    expect(await verifyShareLinkForget(w.stranger.raw, value, signature)).toBe(
+      false
+    );
+    for (const changed of [
+      { ...value, shareId: 'share_2' },
+      { ...value, projectId: 'proj_2' },
+      { ...value, keyEpoch: 3 },
+      { ...value, keyEpoch: 5 }
+    ]) {
+      expect(
+        await verifyShareLinkForget(w.ownerDevice.raw, changed, signature)
+      ).toBe(false);
+    }
+    // A tombstone or a key-wrap signature over the same link does not count.
+    const tombstone = await signShareLinkTombstone(
+      w.ownerDevice.pair.privateKey,
+      {
+        projectId: 'proj_1',
+        shareId: 'share_1',
+        keyEpoch: 4,
+        issuedAt: T0,
+        signerKeyHash: w.ownerDevice.hash
+      }
+    );
+    expect(
+      await verifyShareLinkForget(w.ownerDevice.raw, value, tombstone.signature)
+    ).toBe(false);
+    const wrap = await signShareKeyWrap(w.ownerDevice.pair.privateKey, {
+      ...value,
+      wrapped: patternBytes(41)
+    });
+    expect(await verifyShareLinkForget(w.ownerDevice.raw, value, wrap)).toBe(
+      false
+    );
+    throwsCode(
+      () => encodeShareLinkForget({ ...value, keyEpoch: -1 }),
+      'invalid-argument'
+    );
+    throwsCode(
+      () => encodeShareLinkForget({ ...value, shareId: '' }),
+      'invalid-argument'
     );
   });
 });
