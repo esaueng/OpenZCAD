@@ -92,6 +92,44 @@
   gap: var(--sp-1);
 }
 
+/* Slice 7-4: a shared project's members, and what replaces its links. */
+.encryption-migration-members,
+.encryption-migration-links {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+}
+
+.encryption-migration-members li,
+.encryption-migration-links li {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.encryption-migration-member {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.encryption-migration-member-action {
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+}
+
+.encryption-migration-followups {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.encryption-migration-links code {
+  overflow-wrap: anywhere;
+}
+
 .encryption-migration-error {
   margin: 0;
   font-size: var(--fs-sm);

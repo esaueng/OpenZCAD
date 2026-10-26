@@ -12,12 +12,22 @@
  *   resumes from its journal (`projectMigrationEngine.ts`), in this tab or
  *   after a reload: the lease is kept in this browser's storage, so a
  *   reloaded page resumes at once instead of waiting for it to lapse.
+ * - **Shared projects** (slice 7-4): a project whose members are not all
+ *   ready waits (phase `members`, with the list) and the run moves on;
+ *   running again checks once more. After a shared project's cutover, the
+ *   page offers encrypted links and invitations in place of the plaintext
+ *   ones it revoked (`reissueLinks`, `reinvite`).
  */
 import type { ProjectSummary } from '@openzcad/shared';
 import { rememberProjectFormats } from '../api';
 import { desktopFetch } from '../desktopBridge';
 import { flushProjectEdits, setMigratingProjects } from '../migrationStatus';
+import type { InvitationContext } from './invitations';
 import { getKeySessionRevision } from './keySession';
+import {
+  reinviteToEncryptedProject,
+  reissuePlaintextShareLinks
+} from './migrationMembers';
 import {
   createMigrationPlaintextSource,
   type MigrationPlaintextSource
@@ -36,6 +46,7 @@ import {
   createProjectMigrationsApi,
   type ProjectMigrationsApi
 } from './projectMigrationsApi';
+import type { CreatedShareLink, ShareLinksContext } from './shareLinks';
 
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -74,6 +85,15 @@ export interface MigrationControllerDeps {
   readonly locks?: MigrationLocks | null;
   readonly leases?: MigrationLeaseStore;
   readonly renewEveryMs?: number;
+  /**
+   * Slice 7-4: the page's share links and invitations of encrypted
+   * projects, with which a migrated project's revoked plaintext links and
+   * invitations are reissued.
+   */
+  readonly followUps?: {
+    shareLinks(): Promise<ShareLinksContext>;
+    invitations(): Promise<InvitationContext>;
+  };
   /** Builds the engine to drive instead of the page's own (tests). */
   createEngine?(
     onProgress: (progress: MigrationProgress) => void
@@ -90,6 +110,19 @@ export interface MigrationController {
   pause(): void;
   /** Drops a project's staging and unlocks its plaintext. */
   cancel(projectId: string): Promise<void>;
+  /**
+   * Slice 7-4 (decision M8): new encrypted links, of the same modes, for
+   * the plaintext links a migrated project's cutover revoked.
+   */
+  reissueLinks(projectId: string): Promise<CreatedShareLink[]>;
+  /**
+   * Slice 7-4: encrypted invitations, with the same roles, to the people
+   * whose plaintext invitations the cutover revoked.
+   */
+  reinvite(projectId: string): Promise<{
+    invited: string[];
+    failed: { email: string; error: unknown }[];
+  }>;
 }
 
 /** Leases kept in this browser's storage, per account and project. */
@@ -123,6 +156,7 @@ export function localStorageLeases(userId: string): MigrationLeaseStore {
 
 const ACTIVE = new Set([
   'starting',
+  'readding',
   'revisions',
   'head',
   'details',
@@ -145,6 +179,14 @@ function lockedForEditing(progress: MigrationProgress): boolean {
       progress.cutOver === true)
   );
 }
+
+/**
+ * Encrypted projects one refresh asks about, and how many at once, when
+ * this page has no record of them (judgment: a shelf of hundreds settles
+ * over a few refreshes without a burst of requests).
+ */
+const DISCOVERY_CAP = 24;
+const DISCOVERY_CONCURRENCY = 4;
 
 function waiting(project: ProjectSummary): MigrationProgress {
   return {
@@ -230,10 +272,48 @@ export function createMigrationController(
   }
 
   /**
-   * Projects this page worked on that left the plaintext listing (cut
-   * over, so no longer format 1) while their migration is unfinished: the
-   * plaintext copy stays until the purge completes, so they stay listed
-   * and a retry resumes the purge instead of reading as encrypted.
+   * Format-2 projects whose migration is known to be finished, or absent,
+   * or not this account's to ask about: no later refresh asks again.
+   */
+  const settled = new Set<string>();
+
+  /**
+   * Whether a project's migration is cut over with its purge unfinished;
+   * null when that could not be found out for one this page never worked
+   * on (asked again on the next refresh).
+   */
+  async function cutOverUnpurged(
+    projectId: string,
+    known: MigrationProgress | undefined
+  ): Promise<boolean | null> {
+    try {
+      const { migration } = await migrations.status(projectId);
+      const unfinished =
+        migration?.state === 'cutover' || migration?.state === 'purging';
+      if (!unfinished) settled.add(projectId);
+      return unfinished;
+    } catch (error) {
+      const status = (error as { status?: unknown } | null)?.status;
+      if (known === undefined && (status === 404 || status === 403)) {
+        // Someone else's project (a share), or gone: nothing to finish.
+        settled.add(projectId);
+        return false;
+      }
+      // Kept while it may be unfinished: a retry finds out.
+      return known === undefined ? null : known.cutOver === true;
+    }
+  }
+
+  /**
+   * Projects that left the plaintext listing (cut over, so no longer
+   * format 1) while their migration is unfinished: the plaintext copy
+   * stays until the purge completes, so they stay listed and a retry
+   * resumes the purge instead of reading as encrypted. Those this page
+   * worked on are known. Any other encrypted project of the account may be
+   * one a reloaded or crashed page, or another device, left cut over, so
+   * those are asked about too: newest first, {@link DISCOVERY_CONCURRENCY}
+   * at a time and at most {@link DISCOVERY_CAP} per refresh, each until
+   * its answer settles.
    */
   async function unfinishedCutovers(
     listed: readonly ProjectSummary[],
@@ -241,7 +321,7 @@ export function createMigrationController(
     known: ReadonlyMap<string, MigrationProgress>
   ): Promise<ProjectSummary[]> {
     const plaintextIds = new Set(migratable.map((p) => p.projectId));
-    const candidates = listed.filter((project) => {
+    const worked = listed.filter((project) => {
       const progress = known.get(project.projectId);
       return (
         !plaintextIds.has(project.projectId) &&
@@ -250,20 +330,39 @@ export function createMigrationController(
         progress.phase !== 'waiting'
       );
     });
-    const unfinished = await Promise.all(
-      candidates.map(async (project) => {
-        try {
-          const { migration } = await migrations.status(project.projectId);
-          return (
-            migration?.state === 'cutover' || migration?.state === 'purging'
-          );
-        } catch {
-          // Kept while it may be unfinished: a retry finds out.
-          return known.get(project.projectId)?.cutOver === true;
+    const unrecorded = listed
+      .filter(
+        (project) =>
+          project.storageFormat === 2 &&
+          (project.organization?.status ?? 'active') !== 'deleted' &&
+          !known.has(project.projectId) &&
+          !settled.has(project.projectId)
+      )
+      .sort(
+        (a, b) =>
+          b.updatedAt.localeCompare(a.updatedAt) ||
+          a.projectId.localeCompare(b.projectId)
+      )
+      .slice(0, DISCOVERY_CAP);
+    const candidates = [...worked, ...unrecorded];
+    const unfinished: (boolean | null)[] = [];
+    let next = 0;
+    await Promise.all(
+      Array.from(
+        { length: Math.min(DISCOVERY_CONCURRENCY, candidates.length) },
+        async () => {
+          while (next < candidates.length) {
+            const index = next++;
+            const { projectId } = candidates[index]!;
+            unfinished[index] = await cutOverUnpurged(
+              projectId,
+              known.get(projectId)
+            );
+          }
         }
-      })
+      )
     );
-    return candidates.filter((_project, index) => unfinished[index]);
+    return candidates.filter((_project, index) => unfinished[index] === true);
   }
 
   async function refresh() {
@@ -293,7 +392,13 @@ export function createMigrationController(
         error: null,
         projects: [
           ...finishing.map((project) => ({
-            ...(known.get(project.projectId) ?? waiting(project)),
+            // One this page has no record of stopped before its purge
+            // finished (a reload, a crash, another device): it is retried,
+            // as a stop this page saw is.
+            ...(known.get(project.projectId) ?? {
+              ...waiting(project),
+              phase: 'error' as const
+            }),
             cutOver: true
           })),
           ...migratable.map(
@@ -306,6 +411,15 @@ export function createMigrationController(
                     plaintextLocked: true
                   }
                 : waiting(project))
+          ),
+          // Slice 7-4: an encrypted project keeps its row while it still
+          // offers encrypted links or invitations in place of revoked ones.
+          ...state.projects.filter(
+            (progress) =>
+              progress.phase === 'done' &&
+              !summaries.some((p) => p.projectId === progress.projectId) &&
+              ((progress.revoked?.shareLinks.length ?? 0) > 0 ||
+                (progress.revoked?.invitations.length ?? 0) > 0)
           )
         ]
       });
@@ -327,17 +441,19 @@ export function createMigrationController(
           (p) => p.projectId === project.projectId
         );
         if (progress?.phase === 'done') continue;
-        // A project that failed waits for its own retry.
+        // A project that failed waits for its own retry (one waiting for
+        // its members is checked again on every run).
         if (!wanted && progress?.phase === 'error') continue;
         try {
           await (await engineFor()).migrate(project, signal);
         } catch (error) {
           if (error instanceof MigrationPausedError) break;
-          // Reported on the project by the engine; or, before it ran:
-          if (
-            state.projects.find((p) => p.projectId === project.projectId)
-              ?.phase !== 'error'
-          ) {
+          // Reported on the project by the engine (an error, or members
+          // not ready yet); or, before it ran:
+          const reported = state.projects.find(
+            (p) => p.projectId === project.projectId
+          )?.phase;
+          if (reported !== 'error' && reported !== 'members') {
             update({
               ...waiting(project),
               phase: 'error',
@@ -350,6 +466,23 @@ export function createMigrationController(
       pause = null;
       set({ running: false, pausing: false });
     }
+  }
+
+  const followUps = deps.followUps ?? {
+    shareLinks: async () =>
+      (await (await import('./encryptedProjects')).encryptedShareLinks()).ctx,
+    invitations: async () =>
+      (await import('./encryptedProjects')).encryptedInvitations()
+  };
+
+  /** The project's revoked lists, after a change to one of them. */
+  function setRevoked(
+    projectId: string,
+    change: Partial<NonNullable<MigrationProgress['revoked']>>
+  ) {
+    const progress = state.projects.find((p) => p.projectId === projectId);
+    if (!progress?.revoked) return;
+    update({ ...progress, revoked: { ...progress.revoked, ...change } });
   }
 
   return {
@@ -378,6 +511,37 @@ export function createMigrationController(
       if (!pause) return;
       set({ pausing: true });
       pause.abort();
+    },
+    async reissueLinks(projectId) {
+      const revoked = state.projects.find(
+        (p) => p.projectId === projectId
+      )?.revoked;
+      if (!revoked?.shareLinks.length) return [];
+      const created = await reissuePlaintextShareLinks(
+        await followUps.shareLinks(),
+        projectId,
+        revoked.shareLinks
+      );
+      setRevoked(projectId, { shareLinks: [] });
+      return created;
+    },
+    async reinvite(projectId) {
+      const revoked = state.projects.find(
+        (p) => p.projectId === projectId
+      )?.revoked;
+      if (!revoked?.invitations.length) return { invited: [], failed: [] };
+      const result = await reinviteToEncryptedProject(
+        await followUps.invitations(),
+        projectId,
+        revoked.invitations
+      );
+      const failed = new Set(result.failed.map((failure) => failure.email));
+      setRevoked(projectId, {
+        invitations: revoked.invitations.filter((invitation) =>
+          failed.has(invitation.email)
+        )
+      });
+      return result;
     },
     async cancel(projectId) {
       if (state.running) return;

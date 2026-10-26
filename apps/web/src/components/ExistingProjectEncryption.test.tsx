@@ -25,7 +25,42 @@ import {
   migrationLockedProjects,
   setMigratingProjects
 } from '../lib/migrationStatus';
+import type * as MigrationMembersModule from '../lib/e2ee/migrationMembers';
+import type { MigrationMember } from '../lib/e2ee/migrationMembers';
 import { ExistingProjectEncryption } from './ExistingProjectEncryption';
+
+const followUps = vi.hoisted(() => ({
+  reissued: [] as unknown[],
+  reinvited: [] as unknown[]
+}));
+
+// Slice 7-4: the follow-ups' real work (5-10 links, 5-3b invitations) has
+// its own tests; here they only record what the page asked for.
+vi.mock('../lib/e2ee/migrationMembers', async (importOriginal) => ({
+  ...(await importOriginal<typeof MigrationMembersModule>()),
+  reissuePlaintextShareLinks: vi.fn(
+    async (_ctx: unknown, projectId: string, links: { mode: string }[]) => {
+      followUps.reissued.push({ projectId, links });
+      return links.map((link, index) => ({
+        shareId: `shr_${index}`,
+        mode: link.mode,
+        url: `https://app.example/#share=new${index}`,
+        fragment: {},
+        pending: []
+      }));
+    }
+  ),
+  reinviteToEncryptedProject: vi.fn(
+    async (
+      _ctx: unknown,
+      projectId: string,
+      invitations: { email: string }[]
+    ) => {
+      followUps.reinvited.push({ projectId, invitations });
+      return { invited: invitations.map((i) => i.email), failed: [] };
+    }
+  )
+}));
 
 afterEach(() => setMigratingProjects([]));
 
@@ -106,6 +141,10 @@ function controllerWith(
   } = {}
 ) {
   const controller = createMigrationController({
+    followUps: {
+      shareLinks: async () => ({}) as never,
+      invitations: async () => ({}) as never
+    },
     userId: 'user_alice',
     plaintext: sources.plaintext ?? plaintextSource(),
     migrations: sources.migrations ?? ({} as never),
@@ -318,6 +357,123 @@ describe('a project cut over before its purge finished', () => {
   });
 });
 
+describe('a cut-over project this page has no record of', () => {
+  it('is found after a reload, listed as finishing, and retried', async () => {
+    // A fresh page (a reload or a crash after the cutover): no in-memory
+    // record, only the listing, where the project already reads as
+    // encrypted.
+    const plaintext = {
+      listProjects: async () => [
+        project('proj_cut', 'Cut bracket', '2026-10-02T00:00:00.000Z', {
+          storageFormat: 2
+        }),
+        project('proj_enc', 'Already encrypted', '2026-09-01T00:00:00.000Z', {
+          storageFormat: 2
+        }),
+        project('proj_shared', 'Shared with me', '2026-09-02T00:00:00.000Z', {
+          storageFormat: 2
+        })
+      ]
+    } as unknown as MigrationPlaintextSource;
+    let purged = false;
+    const status = vi.fn(async (projectId: string) => {
+      if (projectId === 'proj_shared') {
+        throw Object.assign(new Error('Project not found.'), { status: 404 });
+      }
+      return {
+        migration:
+          projectId === 'proj_cut'
+            ? { state: purged ? 'done' : 'purging' }
+            : { state: 'done' }
+      };
+    });
+    const migrations = { status } as unknown as ProjectMigrationsApi;
+    const fake = fakeEngine(async (summary, report) => {
+      expect(summary.projectId).toBe('proj_cut');
+      report({ phase: 'purging', cutOver: true });
+      purged = true;
+      report({ phase: 'done' });
+    });
+    const controller = controllerWith(fake, null, { plaintext, migrations });
+    render(
+      <ExistingProjectEncryption
+        userId="user_alice"
+        unlocked
+        controller={controller}
+        isOpen={async () => true}
+      />
+    );
+    const row = await screen.findByRole('listitem', { name: 'Cut bracket' });
+    expect(
+      within(row).getByText('Stopped before the plaintext copy was deleted')
+    ).toBeTruthy();
+    expect(controller.getState().projects).toMatchObject([
+      { projectId: 'proj_cut', phase: 'error', cutOver: true }
+    ]);
+    expect(
+      screen.getByText('1 project still finishing encryption')
+    ).toBeTruthy();
+    expect(screen.queryByText('All your projects are encrypted')).toBeNull();
+    expect(within(row).queryByRole('button', { name: 'Cancel' })).toBeNull();
+    // Read-only meanwhile, as a stop this page saw is.
+    expect([...migrationLockedProjects()]).toEqual(['proj_cut']);
+    // The finished one and the share are not asked about again.
+    status.mockClear();
+    await act(() => controller.refresh());
+    expect(status.mock.calls.map(([id]) => id)).toEqual(['proj_cut']);
+
+    fireEvent.click(within(row).getByRole('button', { name: 'Retry' }));
+    await waitFor(() =>
+      expect(within(row).getByText('Encrypted')).toBeTruthy()
+    );
+    expect(fake.migrated).toEqual(['proj_cut']);
+    expect(screen.getByText('All your projects are encrypted')).toBeTruthy();
+    expect([...migrationLockedProjects()]).toEqual([]);
+  });
+
+  it('asks about a large shelf a few at a time, a bounded number per refresh', async () => {
+    const shelf = Array.from({ length: 30 }, (_, index) =>
+      project(
+        `proj_${String(index).padStart(2, '0')}`,
+        `Encrypted ${index}`,
+        `2026-09-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
+        { storageFormat: 2 }
+      )
+    );
+    const plaintext = {
+      listProjects: async () => shelf
+    } as unknown as MigrationPlaintextSource;
+    let inFlight = 0;
+    let most = 0;
+    const status = vi.fn(async (_projectId: string) => {
+      inFlight += 1;
+      most = Math.max(most, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      inFlight -= 1;
+      return { migration: { state: 'done' } };
+    });
+    const migrations = { status } as unknown as ProjectMigrationsApi;
+    const controller = controllerWith(
+      fakeEngine(async () => undefined),
+      null,
+      { plaintext, migrations }
+    );
+    await controller.refresh();
+    expect(status).toHaveBeenCalledTimes(24);
+    expect(most).toBe(4);
+    // Newest first; the rest on the next refresh, the settled ones never
+    // again.
+    expect(status.mock.calls[0]).toEqual(['proj_29']);
+    status.mockClear();
+    await controller.refresh();
+    expect(status).toHaveBeenCalledTimes(6);
+    status.mockClear();
+    await controller.refresh();
+    expect(status).not.toHaveBeenCalled();
+    expect(controller.getState().projects).toEqual([]);
+  });
+});
+
 describe('Settings › Encryption › Encrypt existing projects', () => {
   it('stays hidden until migration is open to the account', async () => {
     const fake = fakeEngine(async () => undefined);
@@ -364,7 +520,7 @@ describe('Settings › Encryption › Encrypt existing projects', () => {
     expect(screen.getByText(/cannot be recovered/)).toBeTruthy();
     expect(screen.getByText(/up to 30 days in backups/)).toBeTruthy();
     expect(
-      screen.getByText(/Shared projects cannot be encrypted yet/)
+      screen.getByText(/added back with their current roles/)
     ).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Encrypt projects' }));
@@ -418,6 +574,188 @@ describe('Settings › Encryption › Encrypt existing projects', () => {
     );
     await waitFor(() =>
       expect(within(older).getByText('Not encrypted')).toBeTruthy()
+    );
+  });
+});
+
+describe('a shared project (slice 7-4)', () => {
+  const member = (
+    email: string,
+    role: MigrationMember['role'],
+    state: MigrationMember['state']
+  ): MigrationMember => ({
+    userId: `user_${email}`,
+    email,
+    role,
+    state,
+    invitation: null
+  });
+
+  it('lists who is not ready and what they need to do, then offers encrypted links and invitations', async () => {
+    let ready = false;
+    const fake = fakeEngine(async (summary, report) => {
+      if (summary.projectId !== 'proj_old') {
+        report({ phase: 'done' });
+        return;
+      }
+      if (!ready) {
+        report({
+          phase: 'members',
+          members: [
+            member('editor@example.com', 'editor', 'verify'),
+            member('viewer@example.com', 'viewer', 'needs-encryption')
+          ],
+          error: {
+            code: 'E2EE_MIGRATION_MEMBERS_NOT_READY',
+            message: '2 members are not ready to be added yet.',
+            retryable: true
+          }
+        });
+        throw new Error('not ready');
+      }
+      report({
+        phase: 'done',
+        error: undefined,
+        members: [
+          member('editor@example.com', 'editor', 'readded'),
+          member('viewer@example.com', 'viewer', 'readded')
+        ],
+        revoked: {
+          shareLinks: [{ shareLinkId: 'link_1', mode: 'view' }],
+          invitations: [
+            {
+              invitationId: 'inv_1',
+              email: 'friend@example.com',
+              role: 'editor'
+            }
+          ]
+        }
+      });
+    });
+    const controller = controllerWith(fake);
+    render(
+      <ExistingProjectEncryption
+        userId="user_alice"
+        unlocked
+        controller={controller}
+        isOpen={async () => true}
+      />
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Encrypt projects' })
+    );
+    const older = await screen.findByRole('listitem', {
+      name: 'Older bracket'
+    });
+    expect(await within(older).findByText('Waiting for members')).toBeTruthy();
+    const members = within(older).getByRole('list', {
+      name: 'Members of Older bracket'
+    });
+    expect(within(members).getByText('editor@example.com')).toBeTruthy();
+    expect(
+      within(members).getByText(/Compare codes with editor@example\.com/)
+    ).toBeTruthy();
+    expect(
+      within(members).getByText(
+        /viewer@example\.com needs to set up encryption/
+      )
+    ).toBeTruthy();
+    // Nothing was staged: there is nothing to cancel, only to check again.
+    expect(within(older).queryByRole('button', { name: 'Cancel' })).toBeNull();
+
+    ready = true;
+    fireEvent.click(within(older).getByRole('button', { name: 'Check again' }));
+    await waitFor(() =>
+      expect(within(older).getByText('Encrypted')).toBeTruthy()
+    );
+    expect(within(older).getByText(/share link stopped working/)).toBeTruthy();
+    expect(
+      within(older).getByText(/invitation to friend@example\.com was revoked/)
+    ).toBeTruthy();
+
+    fireEvent.click(
+      within(older).getByRole('button', { name: 'Create encrypted link' })
+    );
+    expect(
+      await within(older).findByText('https://app.example/#share=new0')
+    ).toBeTruthy();
+    expect(followUps.reissued).toEqual([
+      {
+        projectId: 'proj_old',
+        links: [{ shareLinkId: 'link_1', mode: 'view' }]
+      }
+    ]);
+
+    fireEvent.click(
+      within(older).getByRole('button', { name: 'Invite again' })
+    );
+    expect(
+      await within(older).findByText(
+        'Invited friend@example.com to the encrypted project.'
+      )
+    ).toBeTruthy();
+    expect(followUps.reinvited).toEqual([
+      {
+        projectId: 'proj_old',
+        invitations: [
+          { invitationId: 'inv_1', email: 'friend@example.com', role: 'editor' }
+        ]
+      }
+    ]);
+    // Both offers are used up.
+    expect(
+      within(older).queryByRole('button', { name: 'Invite again' })
+    ).toBeNull();
+  });
+
+  it('keeps a resumed staging that waits for a member read-only, and cancellable', async () => {
+    const fake = fakeEngine(async (summary, report) => {
+      if (summary.projectId !== 'proj_old') {
+        report({ phase: 'done' });
+        return;
+      }
+      // A staging left over (main's #922 lock) whose re-add waits for a
+      // member who is no longer ready.
+      report({
+        plaintextLocked: true,
+        phase: 'members',
+        members: [member('editor@example.com', 'editor', 'waiting-for-keys')],
+        error: {
+          code: 'E2EE_MIGRATION_MEMBERS_NOT_READY',
+          message: 'editor@example.com is not ready to be added yet.',
+          retryable: true
+        }
+      });
+      throw new Error('not ready');
+    });
+    const controller = controllerWith(fake);
+    render(
+      <ExistingProjectEncryption
+        userId="user_alice"
+        unlocked
+        controller={controller}
+        isOpen={async () => true}
+      />
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Encrypt projects' })
+    );
+    const older = await screen.findByRole('listitem', {
+      name: 'Older bracket'
+    });
+    expect(await within(older).findByText('Waiting for members')).toBeTruthy();
+    // The Worker still holds its plaintext: read-only, not badged as
+    // being encrypted right now.
+    await waitFor(() =>
+      expect(migrationLockedProjects().has('proj_old')).toBe(true)
+    );
+    expect(migratingProjects().has('proj_old')).toBe(false);
+    // Something is staged, so it can be dropped.
+    fireEvent.click(
+      await within(older).findByRole('button', { name: 'Cancel' })
+    );
+    await waitFor(() =>
+      expect(fake.engine.cancel).toHaveBeenCalledWith('proj_old')
     );
   });
 });

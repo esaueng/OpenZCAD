@@ -403,7 +403,7 @@ export async function openMigrationStaging(): Promise<{
   deviceId: string;
   open: (fetcher: Fetch) => MigrationStagingClients;
 }> {
-  const { userId } = await pageSession();
+  const { userId, email } = await pageSession();
   const e2ee: E2eeContext = {
     userId,
     api: createE2eeApi(),
@@ -426,17 +426,26 @@ export async function openMigrationStaging(): Promise<{
   };
   decoder ??= createE2eeDecoder();
   const pageDecoder = decoder;
+  const contacts = contactsContext(e2ee);
   return {
     deviceId: device.deviceId,
     open(fetcher) {
+      const groupsApi = createProjectGroupsApi(fetcher);
       const groups = {
-        api: createProjectGroupsApi(fetcher),
+        api: groupsApi,
         sessions: mlsProjectSessions(),
         account: projectGroupAccount(e2ee, account),
         device,
         revocations: revocationStatements(createRevocationCutoffsApi(fetcher), {
           list: account.list,
           generation: account.generation
+        }),
+        // Slice 7-4: the members a shared project's staging re-adds, from
+        // the contacts module, as the page's own store has them.
+        members: contactMemberLists({
+          contacts,
+          account,
+          leaves: (projectId) => groupsApi.leaves(projectId)
         })
       };
       const references = createBlobReferenceRegistry();
@@ -464,6 +473,15 @@ export async function openMigrationStaging(): Promise<{
         references,
         groups,
         documents,
+        // Slice 7-4: re-add invitations and Adds of a shared project's
+        // members, under the lease.
+        invitations: {
+          groups,
+          api: createE2eeInvitationsApi(fetcher),
+          people: contactInvitationPeople(contacts, account),
+          store: invitationStore(),
+          email
+        },
         measurements: createEncryptedMeasurements({
           userId,
           kit: store.replaced,

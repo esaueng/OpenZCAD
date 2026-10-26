@@ -1084,13 +1084,18 @@ const STAGED_FOR_ENCRYPTION_SQL = `EXISTS (SELECT 1 FROM e2ee_project_migrations
 
 /**
  * Holds while no project `p` of the user matching `projects` has a
- * version, envelope or key archive signed by one of `deviceIds`, nor,
- * among those also matching `leavesIn`, an MLS leaf of one of them.
+ * version, envelope or key archive signed by one of `deviceIds`, nor any
+ * project `p` matching `leavesIn` an MLS leaf of one of them, the user's
+ * own projects or not.
  *
  * A leaf matters only for a project staged for encryption: a device that
  * joined the staged group holds its key without signing anything, and no
  * cutoff or rotation can reach the project before the cutover (format-2
- * projects get both, so their leaves hold nothing up).
+ * projects get both, so their leaves hold nothing up). Since slice 7-4 a
+ * staged group also holds the leaves of the members the owner re-added
+ * there, so a member's leaf in someone else's staged project counts too:
+ * only the owner's lease holder commits to a staged group, so nothing
+ * else could drop it before the cutover exposes the key.
  */
 function signedProjectsFence(
   userId: string,
@@ -1101,13 +1106,13 @@ function signedProjectsFence(
   const marks = deviceIds.map(() => '?').join(', ');
   const leaves = leavesIn
     ? `
-           OR ((${leavesIn})
-               AND EXISTS (SELECT 1 FROM e2ee_project_leaves l
-                           WHERE l.project_id = p.id AND l.user_id = p.user_id
-                             AND l.device_id IN (${marks})))`
+     AND NOT EXISTS (SELECT 1 FROM e2ee_project_leaves l
+                     JOIN projects p ON p.id = l.project_id
+                     WHERE l.user_id = ? AND l.device_id IN (${marks})
+                       AND (${leavesIn}))`
     : '';
   return {
-    sql: `NOT EXISTS (SELECT 1 FROM projects p
+    sql: `(NOT EXISTS (SELECT 1 FROM projects p
        WHERE p.user_id = ? AND (${projects})
          AND (EXISTS (SELECT 1 FROM e2ee_project_versions v
                       WHERE v.project_id = p.id
@@ -1117,13 +1122,13 @@ function signedProjectsFence(
                         AND e.signer_device_id IN (${marks}))
            OR EXISTS (SELECT 1 FROM e2ee_key_archives a
                       WHERE a.project_id = p.id
-                        AND a.signer_device_id IN (${marks}))${leaves}))`,
+                        AND a.signer_device_id IN (${marks}))))${leaves})`,
     binds: [
       userId,
       ...deviceIds,
       ...deviceIds,
       ...deviceIds,
-      ...(leavesIn ? deviceIds : [])
+      ...(leavesIn ? [userId, ...deviceIds] : [])
     ]
   };
 }
@@ -1196,7 +1201,7 @@ async function stagedSignerFence(
 }
 
 const STAGED_SIGNER_MESSAGE =
-  'This device holds keys to a project that is still being encrypted. Finish or cancel that encryption, then remove the device. Nothing was changed.';
+  'This device holds keys to a project that is still being encrypted. Remove it once that encryption is finished or cancelled. Nothing was changed.';
 
 async function refuseIfSigned(
   db: D1Database,
@@ -2272,7 +2277,9 @@ export async function handleE2eeRequest(
         projectsEnabled,
         db.authorization,
         invitations,
-        () => readBody(request)
+        () => readBody(request),
+        // Slice 7-4: re-adding a shared plaintext project's members.
+        { open: migrationEnabled, lease: migrationLease }
       );
     }
     if (isE2eeProjectPath(pathname)) {

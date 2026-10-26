@@ -37,6 +37,8 @@ function phaseLabel(progress: MigrationProgress): string {
     case 'details':
       return 'Decrypting files and details…';
     case 'checking':
+    case 'members':
+    case 'readding':
       return 'Checking…';
     case 'cutover':
       return 'Switching to plaintext storage…';
@@ -128,8 +130,8 @@ function StopPanel({
         OpenZCAD server again: this browser decrypts its current version, every
         save state, its files, name, measurements and view state, uploads them
         unencrypted, and then deletes the encrypted copy. Anyone who can read
-        the server’s storage could read the project from then on. This is a
-        tool for beta testers and will be removed.
+        the server’s storage could read the project from then on. This is a tool
+        for beta testers and will be removed.
       </Notice>
       <div className="encryption-migration-notes">
         <ul>

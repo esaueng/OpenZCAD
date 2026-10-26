@@ -128,9 +128,18 @@ import {
   type Authorization
 } from './e2eeProjects';
 import { ENCRYPTED_DOCUMENT_MARKER } from './e2eeProjectDocuments';
+import {
+  NEVER,
+  abandonedReaddStatements,
+  createMigrationInvitation,
+  cutoverMirrorStatements,
+  listMigrationMembers,
+  membersNotReadySql,
+  requireMembersReady
+} from './e2eeMigrationMembers';
 
 const ROUTE =
-  /^\/api\/e2ee\/projects\/([^/]+)\/migration(?:\/(lease|cutover|abandon|purge|plaintext|plaintext\/details))?$/;
+  /^\/api\/e2ee\/projects\/([^/]+)\/migration(?:\/(lease|cutover|abandon|purge|plaintext|plaintext\/details|members|invitations))?$/;
 
 /** The migration routes this module serves. */
 export function isE2eeProjectMigrationPath(pathname: string): boolean {
@@ -358,14 +367,28 @@ async function sharingTables(db: D1Database): Promise<SharingTables> {
  * `OR` terms of a shared check (aliases prefixed with `alias`). Binds:
  * the project id and the time in milliseconds for invitations, then the
  * project id for links.
+ *
+ * `unboundOnly` (the encrypt direction, slice 7-4) leaves out re-add
+ * invitations, which are bound to an existing member at once
+ * (`accepted_by_user_id` set) and which {@link membersNotReadySql} reads
+ * instead.
  */
-function encryptedSharingSql(alias: string, tables: SharingTables): string {
+function encryptedSharingSql(
+  alias: string,
+  tables: SharingTables,
+  options: { readonly unboundOnly?: boolean } = {}
+): string {
   return `${
     tables.invitations
       ? `
     OR EXISTS (SELECT 1 FROM e2ee_invitations ${alias}ei
                WHERE ${alias}ei.project_id = ? AND ${alias}ei.completed_at IS NULL
-                 AND ${alias}ei.revoked_at IS NULL AND ${alias}ei.expires_at > ?)`
+                 AND ${alias}ei.revoked_at IS NULL AND ${alias}ei.expires_at > ?${
+                   options.unboundOnly
+                     ? `
+                 AND ${alias}ei.accepted_by_user_id IS NULL`
+                     : ''
+                 })`
       : ''
   }${
     tables.shareLinks
@@ -388,32 +411,25 @@ function encryptedSharingBinds(
 }
 
 /**
- * Decision M7: members and pending invitations (plaintext, and encrypted
- * ones where installed), plus live encrypted share links, by the same SQL
- * in the checks and the fences. Live plaintext share links do not block:
- * the cutover revokes them (decision M8).
+ * What an encrypt migration cannot carry over, by the same SQL in the checks
+ * and the fences: a pending encrypted invitation nobody accepted (slice
+ * 5-3a; a re-add invitation of slice 7-4 is bound to a member at once), and
+ * whatever else {@link encryptedSharingSql} counts as sharing where its
+ * table is installed. Members are re-added (slice 7-4, decision M7(a):
+ * {@link membersNotReadySql}); live plaintext share links and pending
+ * plaintext invitations are revoked at the cutover (decision M8), and the
+ * owner's browser offers encrypted ones after. Before slice 7-4, members
+ * and pending plaintext invitations refused a start.
  */
 function sharedSql(tables: SharingTables): string {
-  return `(EXISTS (SELECT 1 FROM project_members sm
-                     WHERE sm.project_id = ?)
-  OR EXISTS (SELECT 1 FROM project_invitations si
-             WHERE si.project_id = ? AND si.accepted_at IS NULL
-               AND si.revoked_at IS NULL AND si.expires_at >= ?)${encryptedSharingSql(
-                 's',
-                 tables
-               )})`;
+  return `(0${encryptedSharingSql('s', tables, { unboundOnly: true })})`;
 }
 
 const sharedBinds = (
   projectId: string,
   now: number,
   tables: SharingTables
-): unknown[] => [
-  projectId,
-  projectId,
-  Math.floor(now / 1000),
-  ...encryptedSharingBinds(projectId, now, tables)
-];
+): unknown[] => encryptedSharingBinds(projectId, now, tables);
 
 async function requireUnshared(
   db: D1Database,
@@ -429,7 +445,7 @@ async function requireUnshared(
     refuse(
       409,
       E2EE_MIGRATION_CODES.shared,
-      'A shared project cannot be encrypted yet. Remove its members and pending invitations first.'
+      'This project is shared in a way encrypting it cannot carry over, such as a pending encrypted invitation or a live encrypted share link. Revoke that first.'
     );
   }
 }
@@ -637,6 +653,17 @@ async function start(
   const nowIso = new Date(now).toISOString();
   const sharing = await sharingTables(ctx.db);
   await requireUnshared(ctx.db, projectId, now, sharing);
+  // Slice 7-4: every member ready to be re-added (or, on a resume,
+  // re-added already), so the project is never locked while people are
+  // waited for.
+  await requireMembersReady(
+    ctx.db,
+    projectId,
+    now,
+    existing?.state === 'staging' ? existing.started_at : NEVER,
+    'start'
+  );
+  const members = membersNotReadySql(sharing.invitations, 'start');
   const leaseId = newLeaseId();
   const expiresAt = now + E2EE_MIGRATION_LEASE_TTL_MS;
   if (existing?.state === 'staging') {
@@ -723,7 +750,8 @@ async function start(
            FROM projects p
            WHERE p.id = ? AND p.user_id = ? AND p.storage_format = 1
              AND p.status <> 'deleted' AND ${ctx.authorization.sql}
-             AND NOT ${sharedSql(sharing)} AND NOT ${STAGED_ROWS_SQL}
+             AND NOT ${sharedSql(sharing)} AND NOT ${members.sql}
+             AND NOT ${STAGED_ROWS_SQL}
            ON CONFLICT (project_id) DO UPDATE SET
              direction = excluded.direction, state = 'staging',
              device_id = excluded.device_id, lease_id = excluded.lease_id,
@@ -750,6 +778,7 @@ async function start(
           ctx.userId,
           ...ctx.authorization.binds,
           ...sharedBinds(projectId, now, sharing),
+          ...members.binds(projectId, now, NEVER),
           ...stagedRowsBinds(projectId)
         )
     ]);
@@ -763,6 +792,7 @@ async function start(
         );
       }
       await requireUnshared(ctx.db, projectId, now, sharing);
+      await requireMembersReady(ctx.db, projectId, now, NEVER, 'start');
       refuse(
         401,
         'E2EE_SESSION_REQUIRED',
@@ -936,6 +966,9 @@ async function cutover(
   const nowSeconds = Math.floor(now / 1000);
   const sharing = await sharingTables(ctx.db);
   await requireUnshared(ctx.db, projectId, now, sharing);
+  // Slice 7-4: every member re-added by an Add Commit of this staging.
+  await requireMembersReady(ctx.db, projectId, now, row.started_at, 'cutover');
+  const members = membersNotReadySql(sharing.invitations, 'cutover');
   const stagedBinds = [
     projectId,
     row.staged_version,
@@ -1012,6 +1045,7 @@ async function cutover(
                          WHERE project_id = ?), 0)
                = e2ee_project_migrations.source_measurement_revision
            AND NOT ${sharedSql(sharing)}
+           AND NOT ${members.sql}
            AND ${STAGED_SQL}
            AND NOT EXISTS (${UNCOVERED_SQL})`
       )
@@ -1032,6 +1066,7 @@ async function cutover(
         ctx.userId,
         projectId,
         ...sharedBinds(projectId, now, sharing),
+        ...members.binds(projectId, now, row.started_at),
         ...stagedBinds,
         projectId,
         row.staged_version
@@ -1084,7 +1119,19 @@ async function cutover(
            WHERE project_id = ?)
          WHERE owner_user_id = ? AND ${cut.sql}`
       )
-      .bind(projectId, ctx.userId, ...cut.binds)
+      .bind(projectId, ctx.userId, ...cut.binds),
+    // Slice 7-4: the members the Add Commits re-added, mirrored with the
+    // format flip; re-add invitations nobody used end here.
+    ...(sharing.invitations
+      ? cutoverMirrorStatements(ctx.db, {
+          projectId,
+          ownerUserId: ctx.userId,
+          stagedSince: row.started_at,
+          nowIso,
+          nowSeconds,
+          cut
+        })
+      : [])
   ];
   const results = await runBatch(ctx.db, statements);
   if (
@@ -1260,14 +1307,18 @@ async function dropStaged(
       : []),
     'e2ee_project_groups'
   ];
-  await runBatch(
-    db,
-    tables.map((table) =>
+  await runBatch(db, [
+    // Slice 7-4: an abandoned staging's re-adds of members go with its
+    // group, so a new staging adds them again.
+    ...(fence === ABANDONED_FENCE
+      ? await abandonedReaddStatements(db, projectId, fence)
+      : []),
+    ...tables.map((table) =>
       db
         .prepare(`DELETE FROM ${table} WHERE project_id = ? AND ${fence}`)
         .bind(projectId, projectId)
     )
-  );
+  ]);
   return { complete: true, objects };
 }
 
@@ -2977,6 +3028,37 @@ export async function handleE2eeProjectMigrationRequest(
       return json({
         migration: row ? await recordOf(db, row, lease) : null
       } satisfies E2eeProjectMigrationResponse);
+    }
+    if (action === 'members' || action === 'invitations') {
+      // Slice 7-4: re-adding a shared plaintext project's members.
+      const project = await requireOwnedProject(db, userId, projectId);
+      if (project.storage_format !== 1 || project.status === 'deleted') {
+        refuse(
+          409,
+          E2EE_MIGRATION_CODES.state,
+          'Only a live plaintext project’s members are prepared for encryption.'
+        );
+      }
+      if (action === 'members' && method === 'GET') {
+        const row = await migrationRow(db, projectId);
+        return await listMigrationMembers(
+          db,
+          projectId,
+          row?.state === 'staging' && row.direction === 'encrypt'
+            ? row.started_at
+            : null
+        );
+      }
+      if (action === 'invitations' && method === 'POST') {
+        return await createMigrationInvitation(
+          db,
+          userId,
+          projectId,
+          authorization,
+          await readBody(request)
+        );
+      }
+      refuse(404, 'NOT_FOUND', 'Not found.');
     }
     if (method !== 'POST') refuse(404, 'NOT_FOUND', 'Not found.');
     switch (action) {

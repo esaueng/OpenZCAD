@@ -3,9 +3,12 @@ import { accountConsent, publishCensus } from './glimpseCensus';
 import { handleGlimpseUsage, countApi, type GlimpseEnv } from './glimpse';
 import { handleE2eeRequest, projectBucket } from './e2ee';
 import {
+  handleEncryptedSharedBlob,
   handleEncryptedSharedSnapshot,
+  isEncryptedSharedBlobPath,
   isEncryptedSharedSnapshotPath
 } from './e2eeShareLinks';
+import { blobBucket } from './e2eeContentBlobs';
 import type { E2eeInvitationHost } from './e2eeInvitations';
 import { withEncryptedProjectInfo } from './e2eeProjectDocuments';
 import { accountRequiresEncryptedProjects } from './e2eeProjectPreferences';
@@ -278,6 +281,13 @@ const PROJECT_SHARE_LINK_ROUTE =
 const SHARED_PROJECT_ROUTE = /^\/api\/share\/([^/]+)$/;
 const SHARED_PROJECT_ASSET_ROUTE = /^\/api\/share\/([^/]+)\/assets\/([^/]+)$/;
 const SHARED_PROJECT_SOURCE_ROUTE = /^\/api\/share\/([^/]+)\/sources\/([^/]+)$/;
+/**
+ * Anonymous encrypted share-link reads per client address and minute
+ * (ADR-024 slice 5-11; judgment): a visitor opens a snapshot once per load,
+ * then fetches each content blob it names once.
+ */
+const ENCRYPTED_SHARED_SNAPSHOT_RATE_LIMIT = 60;
+const ENCRYPTED_SHARED_BLOB_RATE_LIMIT = 300;
 const INVITATION_ACCEPT_ROUTE = '/api/project-invitations/accept';
 const PROJECT_ARTIFACTS_ROUTE = /^\/api\/projects\/([^/]+)\/artifacts$/;
 const UPLOAD_CONTENT_ROUTE = /^\/api\/uploads\/([^/]+)\/content$/;
@@ -924,14 +934,48 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   // it with, never a plaintext project. It needs the deployment-wide
   // E2EE_PROJECTS_ENABLED flag and sharing rollout (an anonymous caller has
   // no email for the canaries); everything else is one opaque 404.
-  if (request.method === 'GET' && isEncryptedSharedSnapshotPath(pathname)) {
-    return handleEncryptedSharedSnapshot(
-      pathname,
-      env.DB,
-      projectBucket(env),
+  //
+  // Its content blobs (slice 5-11) are served the same way, only those the
+  // link's current snapshot names. Both are rate limited per client address
+  // once the deployment serves them, like the other public routes; while
+  // the flags are off they answer the opaque 404 without touching the
+  // limiter's table.
+  const encryptedSharedBlob =
+    request.method === 'GET' && isEncryptedSharedBlobPath(pathname);
+  if (
+    encryptedSharedBlob ||
+    (request.method === 'GET' && isEncryptedSharedSnapshotPath(pathname))
+  ) {
+    const open =
       isCloudflareFeatureEnabled(env, 'E2EE_PROJECTS_ENABLED') &&
-        projectCollaborationRollout(env).sharingEnabled
-    );
+      projectCollaborationRollout(env).sharingEnabled;
+    if (open && env.ENVIRONMENT !== 'development') {
+      await enforceApiRateLimit(
+        env,
+        await publicRequestBucket(
+          request,
+          env,
+          encryptedSharedBlob ? 'e2ee-share-blob' : 'e2ee-share'
+        ),
+        encryptedSharedBlob
+          ? ENCRYPTED_SHARED_BLOB_RATE_LIMIT
+          : ENCRYPTED_SHARED_SNAPSHOT_RATE_LIMIT
+      );
+    }
+    return encryptedSharedBlob
+      ? handleEncryptedSharedBlob(
+          pathname,
+          env.DB,
+          projectBucket(env),
+          blobBucket(env),
+          open
+        )
+      : handleEncryptedSharedSnapshot(
+          pathname,
+          env.DB,
+          projectBucket(env),
+          open
+        );
   }
 
   const collaborationMatch = PROJECT_COLLABORATION_ROUTE.exec(pathname);
