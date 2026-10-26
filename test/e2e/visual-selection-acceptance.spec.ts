@@ -571,9 +571,13 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
     .locator('.feature-row', { hasText: 'Lower rim fillet' })
     .locator('.feature-row-main')
     .click();
-  await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
-    'fillet_r'
-  );
+  // U09 phase 7: the row re-arms the fillet in place; its radius is still
+  // the parameter, which its chip's keypad opens on.
+  await page.getByTestId('command-handle-radius').click();
+  const keypad = page.locator('.numeric-keypad');
+  await expect(keypad.locator('input')).toHaveValue('fillet_r');
+  await keypad.locator('input').press('Escape');
+  await expect(keypad).toHaveCount(0);
   await inspector.getByLabel('More actions').click();
   await inspector.getByRole('button', { name: 'Delete feature' }).click();
   await expect(status).not.toContainText(REBUILDING, { timeout: 60_000 });

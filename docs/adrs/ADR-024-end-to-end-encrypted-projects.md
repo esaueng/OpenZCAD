@@ -791,6 +791,22 @@ per project, stating exactly what leaves the device (the compact model digest,
 the active selection, and any attached drawings or images) before the first
 request.
 
+Phase 6 (slice 6-1) found the request carries more than that list: the
+prompt, up to 12 earlier conversation turns, the digest (the project id,
+name, units and version, every parameter, every feature's full definition
+including sketch text, each body's name, volume, bounding box and measured
+faces and edges, the editable dimensions the app measured, warnings and the
+selection), attached images with their file names, the list of operations the
+client can apply and a retry flag. The Worker adds its own instructions, any
+custom instructions from the user's settings and an identifier derived from
+the account. The consent copy lists all of it, names the provider route (the
+user's own key, or the deployment's provider and model) and says that what
+was sent cannot be recalled. Consent is per user and per project, in a record
+MAC'd under the account key and pinned by sequence in each browser, so a
+server-forged consent never makes a browser send; the Worker keeps a live row
+as defence in depth. It is asked again when the copy version or the provider
+route changes.
+
 ### Settled product decisions
 
 | Question                           | Decision                                                                                                                                                               |
@@ -1086,8 +1102,11 @@ this decision rests on is
   omitted or fabricated history is refused before admission; a failed join
   restores the previous session and KeyPackages. This keeps the existing
   role, credential, PSK and removal rules and the V1 archive format.
-  Callers must retain the initial GroupInfo and supply the
-  complete archive; checkpoints are not yet supported by this verifier.
+  Callers supply either the initial GroupInfo and the complete archive,
+  or an owner checkpoint (a GroupInfo of epoch K signed by a leaf its own
+  roles list as owner and that a currently certified device certifies)
+  and exactly the records after K; the app does not produce checkpoints
+  yet (slice 8-C5b).
 
   Encrypted archives use provisional admission: a Welcome join can export
   only the key needed to decrypt its archive until verification completes.
@@ -1134,6 +1153,9 @@ Estimates are judgment, not measurement.
 | 8     | Default on; delete the server document pipeline and the off switch; keep a browser read path for legacy plaintext projects; update `docs/SELF_HOSTING.md`; outside review of the crypto and key flows. The review explicitly covers the MLS integration and the exact pinned `mls-rs` version.                                                                                                                                                                                                                                                                                                                                                                                                                              | 1 PR, review |
 
 Total: 18–23 PRs.
+
+Phase 8's outside review starts from the
+[review packet](../reviews/adr-024-e2ee-review-packet.md).
 
 ## Consequences
 

@@ -335,11 +335,12 @@ test('measures an applied edit through worker response and viewport frame', asyn
   await page.getByRole('button', { name: 'Create project' }).click();
 
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  // A new box runs in place (U09): its Done creates it.
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  const createButton = inspector.getByRole('button', {
-    name: 'Create',
-    exact: true
-  });
+  const createButton = page
+    .getByRole('group', { name: 'Box command' })
+    .getByRole('button', { name: /^Done/ });
+  await expect(createButton).toBeEnabled({ timeout: 30_000 });
   const beforeCreate = await armAction(createButton, 'Create');
   await createButton.click();
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();

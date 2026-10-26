@@ -428,6 +428,67 @@ describe('device directory', () => {
     ]);
   });
 
+  it('counts a revoked device as active only where the caller places a Commit before its rotation', async () => {
+    const erin = await testAccount('user_erin', ['erin_a', 'erin_b']);
+    const { certification } = await leaf(erin, 'erin_b');
+    await erin.revoke('erin_b');
+    const cutoffs = new Map([['user_erin', new Map([['erin_b', 5]])]]);
+    // Today's directory: revoked, its verified leaf kept under it.
+    const today = await buildDeviceDirectory(mls, PROJECT, {
+      lists: [erin.list],
+      certifications: [certification],
+      revocationCutoffs: cutoffs
+    });
+    expect(today.users[0]!.devices[1]).toMatchObject({
+      deviceId: 'erin_b',
+      status: 'revoked',
+      revocationCutoffEpoch: 5
+    });
+    // For a Commit made before the rotation (slice 5-7): active, with the
+    // same verified leaf and no cutoff.
+    const history = await buildDeviceDirectory(mls, PROJECT, {
+      lists: [erin.list],
+      certifications: [certification],
+      revocationCutoffs: new Map([['user_erin', new Map()]]),
+      activeAt: new Map([['user_erin', new Set(['erin_b'])]])
+    });
+    expect(history.users[0]!.devices[1]).toEqual({
+      deviceId: 'erin_b',
+      status: 'active',
+      leafKeys: [{ key: certification.leafKey, certifiedEpoch: 0 }]
+    });
+    // Another user's entry never reactivates it.
+    expect(
+      await refusal(
+        buildDeviceDirectory(mls, PROJECT, {
+          lists: [erin.list],
+          certifications: [certification],
+          activeAt: new Map([['user_alice', new Set(['erin_b'])]])
+        })
+      )
+    ).toBe('revocation-cutoff-missing');
+  });
+
+  it('passes on the replacement a revocation names', async () => {
+    const dave = await testAccount('user_dave', ['dave_a', 'dave_b']);
+    await dave.revoke('dave_b', 'dave_a');
+    const directory = await buildDeviceDirectory(mls, PROJECT, {
+      lists: [dave.list],
+      certifications: [],
+      revocationCutoffs: new Map([['user_dave', new Map([['dave_b', 0]])]])
+    });
+    expect(directory.users[0]!.devices).toEqual([
+      { deviceId: 'dave_a', status: 'active', leafKeys: [] },
+      {
+        deviceId: 'dave_b',
+        status: 'revoked',
+        leafKeys: [],
+        replacedBy: 'dave_a',
+        revocationCutoffEpoch: 0
+      }
+    ]);
+  });
+
   describe('as the policy reads it', () => {
     async function owner() {
       const a = await leaf(alice, 'alice_laptop');

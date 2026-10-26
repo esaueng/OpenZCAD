@@ -2,11 +2,13 @@ import type { Page } from '@playwright/test';
 import { steppedCylinderDocument } from '../support/stepped-cylinder';
 import { splitRimCylinderDocument } from '../support/split-rim-cylinder';
 import {
+  createPrimitiveInPlace,
   test,
   expect,
   stubApi,
   expectConsumedBodyCount,
-  waitForStillViewport
+  waitForStillViewport,
+  blendEdgesInPlace
 } from './openzcad-fixtures';
 
 for (const dimension of ['radius', 'height', 'bottom-height'] as const) {
@@ -262,15 +264,14 @@ async function setupRoundedCylinder(page: Page, bottomView: boolean) {
   await page.goto('/');
   await page.getByLabel('Project name').fill('Rounded cylinder preview');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByLabel('Radius', { exact: true }).fill('70');
-  await inspector.getByLabel('Height', { exact: true }).fill('22');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
-  await page.getByRole('button', { name: /^Fillet/ }).click();
-  await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
-  await inspector.getByLabel('Radius', { exact: true }).fill('2');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '70', height: '22' }
+  });
+  await blendEdgesInPlace(page, {
+    tool: 'Fillet',
+    allEdges: 2,
+    size: '2'
+  });
   await expect(page.locator('.feature-row')).toHaveCount(2);
   await expectConsumedBodyCount(page, 1);
   // The body keeps its own name through the fillet; only History says Fillet.

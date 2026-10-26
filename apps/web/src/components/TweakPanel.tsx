@@ -15,6 +15,8 @@ interface TweakPanelProps {
   modelError?: string | null;
   /** Name of the body the export will target, or null for "all bodies". */
   exportScope: string | null;
+  /** Recovery guidance when no bodies are available in the export scope. */
+  exportUnavailableReason?: string | null;
   /** As TopBar's: why export is holding bodies back. */
   exportWithheld?: string | null;
   onPreviewParameter?(name: string, expression: string | null): void;
@@ -62,6 +64,7 @@ export function TweakPanel({
   modelError,
   exportScope,
   exportWithheld = null,
+  exportUnavailableReason = null,
   onSetParameter,
   onViewActivityLog,
   onPreviewParameter,
@@ -77,7 +80,9 @@ export function TweakPanel({
       ? `Export ${exportScope ?? 'all bodies'} as ${format}${exportWithheld ? `. ${exportWithheld}` : ''}`
       : modelError
         ? 'Enter a valid parameter value before exporting'
-        : (exportWithheld ?? 'The model has no body to export');
+        : (exportWithheld ??
+          exportUnavailableReason ??
+          'The model has no body to export');
   const table = parameterTable(parameters);
   return (
     <>

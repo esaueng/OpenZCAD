@@ -19,18 +19,26 @@
  * rather than left out, so a forged or unattributable record is visible
  * instead of silently weakening or narrowing the directory.
  *
- * Not supplied yet, and so never defaulted (later slices must fill them):
- *
  * - **Revocation cutoffs.** For a revoked device the policy needs the first
  *   epoch of this project's group whose rejoin PSK that device must not
  *   know. The device list records revocations by entry sequence, not by
  *   group epoch, so a cutoff can only come from trusted per-project state
- *   the caller passes in `revocationCutoffs`. Without one the directory is
- *   refused (`revocation-cutoff-missing`): dropping the device would drop
- *   its cutoff and let a sibling rejoin with an older PSK, and guessing 0
- *   would be a silent default.
- * - **`replacedBy`.** Device-list revocations do not name a replacement
- *   device, so the last-leaf rejoin exception is unavailable.
+ *   the caller passes in `revocationCutoffs` (slice 4-10: the identity-
+ *   signed cutoff statement, `projectGroups.ts`). Without one the
+ *   directory is refused (`revocation-cutoff-missing`): dropping the device
+ *   would drop its cutoff and let a sibling rejoin with an older PSK, and
+ *   guessing 0 would be a silent default. (In a shared project the caller
+ *   passes the highest cutoff for such a device instead, slice 5-7: see
+ *   `UNSIGNED_SHARED_CUTOFF`.)
+ * - **`replacedBy`.** A device revocation may name the device replacing it
+ *   (identity-signed, in the verified list); it is passed on, so the named
+ *   replacement can use the last-leaf rejoin exception.
+ * - **History** (slice 5-7). A Commit a device sent before its removal's
+ *   rotation was valid when it was made. To process such a Commit late,
+ *   the caller lists that device in `activeAt` (it decides from the
+ *   identity-signed cutoff that the Commit came before the rotation): the
+ *   device then counts as active for that one Commit, with its verified
+ *   leaf certifications, instead of revoked.
  */
 import type { VerifiedDeviceList } from '@openzcad/crypto';
 import type {
@@ -57,10 +65,16 @@ export interface DirectoryInput {
   /**
    * Per user, per revoked device id: the first epoch of this project's
    * group whose rejoin PSK the device must not know (0 when the group never
-   * had an epoch it could know). Required for every revoked device; nothing
-   * verified supplies it yet (see the module comment).
+   * had an epoch it could know). Required for every revoked device (see
+   * the module comment).
    */
   readonly revocationCutoffs?: ReadonlyMap<string, ReadonlyMap<string, number>>;
+  /**
+   * Per user, revoked devices to count as active, for processing a Commit
+   * made before their removal's rotation (see the module comment). They
+   * need no revocation cutoff.
+   */
+  readonly activeAt?: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 export type MlsDirectoryRefusal =
@@ -87,6 +101,7 @@ interface DeviceDraft {
   /** The key that certifies this device's leaves; absent if unknown. */
   readonly signingKey: Uint8Array | undefined;
   readonly revocationCutoffEpoch?: number;
+  readonly replacedBy?: string;
   readonly leafKeys: LeafKeyCertification[];
 }
 
@@ -95,7 +110,8 @@ const sameBytes = (a: Uint8Array, b: Uint8Array) =>
 
 function devicesOf(
   list: VerifiedDeviceList,
-  cutoffs: ReadonlyMap<string, number> | undefined
+  cutoffs: ReadonlyMap<string, number> | undefined,
+  activeAt: ReadonlySet<string> | undefined
 ): Map<string, DeviceDraft> {
   const devices = new Map<string, DeviceDraft>();
   for (const device of list.devices) {
@@ -108,6 +124,15 @@ function devicesOf(
   }
   for (const revoked of list.revoked) {
     if (revoked.kind !== 'device') continue;
+    if (activeAt?.has(revoked.id) && revoked.device) {
+      devices.set(revoked.id, {
+        deviceId: revoked.id,
+        status: 'active',
+        signingKey: revoked.device.signingKey,
+        leafKeys: []
+      });
+      continue;
+    }
     const cutoff = cutoffs?.get(revoked.id);
     if (cutoff === undefined) {
       throw new MlsDirectoryError(
@@ -127,6 +152,9 @@ function devicesOf(
       status: 'revoked',
       signingKey: revoked.device?.signingKey,
       revocationCutoffEpoch: cutoff,
+      ...(revoked.replacedBy === undefined
+        ? {}
+        : { replacedBy: revoked.replacedBy }),
       leafKeys: []
     });
   }
@@ -153,7 +181,11 @@ export async function buildDeviceDirectory(
     }
     users.set(
       list.userId,
-      devicesOf(list, input.revocationCutoffs?.get(list.userId))
+      devicesOf(
+        list,
+        input.revocationCutoffs?.get(list.userId),
+        input.activeAt?.get(list.userId)
+      )
     );
   }
   for (const claim of input.certifications) {
@@ -209,6 +241,9 @@ export async function buildDeviceDirectory(
         deviceId: device.deviceId,
         status: device.status,
         leafKeys: device.leafKeys,
+        ...(device.replacedBy === undefined
+          ? {}
+          : { replacedBy: device.replacedBy }),
         ...(device.revocationCutoffEpoch === undefined
           ? {}
           : { revocationCutoffEpoch: device.revocationCutoffEpoch })

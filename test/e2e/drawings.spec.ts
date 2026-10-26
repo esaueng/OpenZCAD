@@ -1,5 +1,6 @@
 import type { Download, Locator, Page } from '@playwright/test';
 import {
+  createPrimitiveInPlace,
   test,
   expect,
   stubApi,
@@ -43,11 +44,9 @@ test('lays out, places, exports and fences a drawing sheet', async ({
   await page.getByRole('button', { name: 'Create project' }).click();
 
   const inspector = inspectorOf(page);
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Width (X)').fill('30');
-  await inspector.getByLabel('Depth (Y)').fill('20');
-  await inspector.getByLabel('Height (Z)').fill('10');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '30', depth: '20', height: '10' }
+  });
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
@@ -216,10 +215,9 @@ test('exports the same bytes after a reload re-meshes the model', async ({
   // A broad, thin disc: its rim is faceted by the chordal deflection, not
   // the angular limit, so a different deflection samples it differently.
   const inspector = inspectorOf(page);
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  await inspector.getByLabel('Radius', { exact: true }).fill('20');
-  await inspector.getByLabel('Height', { exact: true }).fill('4');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '20', height: '4' }
+  });
   await expect(
     page.locator('.feature-row-main', { hasText: 'Cylinder' })
   ).toBeVisible();
@@ -315,10 +313,7 @@ test('refuses a drawing-only undo in the View workspace', async ({ page }) => {
   await page.goto('/');
   await page.getByLabel('Project name').fill('View undo guard');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspectorOf(page)
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
@@ -346,17 +341,14 @@ test('starts a sheet from the bodies on screen, not the export scope', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Drawing scope');
   await page.getByRole('button', { name: 'Create project' }).click();
-  const inspector = inspectorOf(page);
   for (const name of ['Lower', 'Upper']) {
-    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-    await inspector.getByLabel('Name').fill(name);
-    await inspector.getByRole('button', { name: /^Create/ }).click();
+    await createPrimitiveInPlace(page, 'box', { name: name });
     await expect(
       page.locator('.feature-row-main', { hasText: name })
     ).toBeVisible();
   }
-  // Hide Upper. The export scope still includes hidden bodies by default
-  // (the mesh dialog's choice); a new drawing shows what is on screen.
+  // Hide Upper. A new drawing shows the visible bodies regardless of the
+  // selected body used by model exports.
   await selectBodyFromObjects(page, 'Upper');
   await page
     .locator('.body-row', { hasText: 'Upper' })

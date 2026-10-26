@@ -19,15 +19,18 @@ import {
   ProjectNotFoundError,
   type ProjectAccess
 } from '@openzcad/persistence';
-import type { UserId } from '@openzcad/shared';
+import { PROJECT_MIGRATING_CODE, type UserId } from '@openzcad/shared';
 import { isProjectStorageFormatReady } from '@openzcad/cloudflare-adapters';
+import { isProjectMigrating } from './e2eeMigrationLease';
+import { SharingRequestError } from './sharing';
 
 /**
  * - `metadata`: never touches document content (shelf state, deletion, and
  *   revoking or listing access) and works on any format.
- * - `share`: creates new access; refused on an encrypted project as sharing.
- * - `room`: the collaboration room; members refused as sharing, the owner
- *   as unreadable.
+ * - `share`: creates or changes access (inviting, share links, a member's
+ *   role or removal); refused on an encrypted project as sharing.
+ * - `room`: the collaboration room; while encrypted projects are closed,
+ *   members refused as sharing, the owner as unreadable.
  * - `document`: everything else, refused as unreadable.
  */
 export type ProjectRouteFormatRule = 'metadata' | 'share' | 'room' | 'document';
@@ -44,18 +47,23 @@ const METADATA_ROUTES: ReadonlyArray<{ method: string; rest: RegExp }> = [
   { method: 'GET', rest: /^\/sharing$/ },
   { method: 'GET', rest: /^\/share-links$/ },
   { method: 'DELETE', rest: /^\/share-links\/[^/]+$/ },
-  { method: 'DELETE', rest: /^\/invitations\/[^/]+$/ },
-  { method: 'DELETE', rest: /^\/members\/[^/]+$/ }
+  { method: 'DELETE', rest: /^\/invitations\/[^/]+$/ }
 ];
 
 const SHARE_ROUTES: ReadonlyArray<{ method: string; rest: RegExp }> = [
   { method: 'POST', rest: /^\/invitations$/ },
   { method: 'POST', rest: /^\/share-links$/ },
-  // A role change can grant stronger access, so it is sharing too.
-  { method: 'PATCH', rest: /^\/members\/[^/]+$/ }
+  // A role change can grant stronger access, so it is sharing too. Slice
+  // 5-2: on an encrypted project a role is what the MLS group's roles say,
+  // so it changes only by a Commit (slices 5-4 and 5-5), never by the
+  // server's row alone.
+  { method: 'PATCH', rest: /^\/members\/[^/]+$/ },
+  { method: 'DELETE', rest: /^\/members\/[^/]+$/ }
 ];
 
 const ROOM_ROUTE = /^\/collaboration(?:\/ticket)?$/;
+/** Requests that only read; they keep working while a project migrates. */
+const READ_METHODS = new Set(['GET', 'HEAD']);
 
 /** The rule for one request, or null when it names no single project. */
 export function projectRouteFormatRule(
@@ -77,6 +85,34 @@ export function projectRouteFormatRule(
         ? 'room'
         : 'document';
   return { projectId, rule };
+}
+
+/**
+ * Slice 7-1: refuses a plaintext write to a project staged for encryption
+ * with 409 PROJECT_MIGRATING, for a caller who can read it (anyone else
+ * gets the handler's usual 404). Only while E2EE_MIGRATION_ENABLED is on.
+ */
+export async function assertProjectNotMigrating(
+  db: D1Database | undefined,
+  persistence: {
+    requireProjectRead(
+      userId: UserId,
+      projectId: string
+    ): Promise<ProjectAccess>;
+  },
+  userId: UserId,
+  projectId: string,
+  migrationEnabled: boolean,
+  message = 'This project is being moved to encrypted storage. It opens read-only until that finishes.'
+): Promise<void> {
+  if (!(await isProjectMigrating(db, projectId, migrationEnabled))) return;
+  try {
+    await persistence.requireProjectRead(userId, projectId);
+  } catch (error) {
+    if (error instanceof ProjectNotFoundError) return;
+    throw error;
+  }
+  throw new SharingRequestError(409, PROJECT_MIGRATING_CODE, message);
 }
 
 /** Room access on a project that is not plaintext. */
@@ -103,7 +139,20 @@ export async function assertProjectRouteFormat(
   },
   userId: UserId,
   method: string,
-  pathname: string
+  pathname: string,
+  /**
+   * Encrypted projects are open to the caller (E2EE_PROJECTS_ENABLED): the
+   * owner of an encrypted project reaches its room, which relays ciphertext
+   * (ADR-024 slice 4-9), and so do its members (slice 5-6).
+   */
+  encryptedRoom = false,
+  /**
+   * Moving plaintext projects to encrypted storage is on
+   * (E2EE_MIGRATION_ENABLED, ADR-024 slice 7-1): while a project is staged,
+   * its plaintext writes, named saves, sharing and room refuse with 409
+   * PROJECT_MIGRATING, and its reads keep working. Off, nothing is asked.
+   */
+  migrationEnabled = false
 ): Promise<void> {
   const route = projectRouteFormatRule(method, pathname);
   if (!db || !route || route.rule === 'metadata') return;
@@ -114,7 +163,32 @@ export async function assertProjectRouteFormat(
     .prepare('SELECT storage_format FROM projects WHERE id = ?')
     .bind(route.projectId)
     .first<{ storage_format?: number | null }>();
-  if (!row || isPlaintextStorageFormat(row.storage_format)) return;
+  if (!row) return;
+  if (isPlaintextStorageFormat(row.storage_format)) {
+    const reads = route.rule === 'document' && READ_METHODS.has(method);
+    if (!reads) {
+      await assertProjectNotMigrating(
+        db,
+        persistence,
+        userId,
+        route.projectId,
+        migrationEnabled
+      );
+    }
+    return;
+  }
+  // Slice 7-3: an encrypted project being turned back into plaintext keeps
+  // its room closed (409 PROJECT_MIGRATING) while its plaintext is staged.
+  if (route.rule === 'room') {
+    await assertProjectNotMigrating(
+      db,
+      persistence,
+      userId,
+      route.projectId,
+      migrationEnabled,
+      'This project is leaving encrypted storage. It opens read-only until that finishes.'
+    );
+  }
   let access: ProjectAccess;
   try {
     access = await persistence.requireProjectRead(userId, route.projectId);
@@ -124,6 +198,7 @@ export async function assertProjectRouteFormat(
     throw error;
   }
   if (route.rule === 'share') assertShareableProject(access);
-  else if (route.rule === 'room') assertPlaintextRoomAccess(access);
-  else assertPlaintextProject(access);
+  else if (route.rule === 'room') {
+    if (!encryptedRoom) assertPlaintextRoomAccess(access);
+  } else assertPlaintextProject(access);
 }

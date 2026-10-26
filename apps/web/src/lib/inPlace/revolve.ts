@@ -1,5 +1,6 @@
 import type { PlaneBasis } from '@openzcad/geometry';
 import type {
+  DatumAxisDefinition,
   DatumAxisLine,
   FeatureId,
   RevolveAxis,
@@ -24,12 +25,17 @@ export interface RevolveAxisCandidate {
   direction: Vector3;
   /**
    * The stored choice: an in-sketch axis, a datum axis reference, or a world
-   * axis through the origin (a circular pattern's).
+   * axis through the origin (a circular pattern's), or the axis an edited
+   * feature already stores (a helical sweep's typed one), kept as stored.
+   * `define` is a line picked in the model (a straight edge, a cylinder's
+   * axis): the command adds it as a datum axis and turns about that.
    */
   choice:
     | { axis: RevolveAxis }
     | { datumFeatureId: FeatureId }
-    | { world: 'x' | 'y' | 'z' };
+    | { world: 'x' | 'y' | 'z' }
+    | { saved: true }
+    | { define: DatumAxisDefinition };
 }
 
 /** What the command has picked so far. */
@@ -72,7 +78,8 @@ function length(a: Vector3): number {
 export function revolveAxisCandidates(
   basis: PlaneBasis,
   datumAxes: Record<FeatureId, DatumAxisLine> | undefined,
-  datumLabel: (featureId: FeatureId) => string
+  datumLabel: (featureId: FeatureId) => string,
+  keep?: string | null
 ): RevolveAxisCandidate[] {
   const candidates: RevolveAxisCandidate[] = [
     {
@@ -94,11 +101,7 @@ export function revolveAxisCandidates(
     FeatureId,
     DatumAxisLine
   ][]) {
-    const offPlane = Math.abs(
-      dot(sub(line.origin, basis.origin), basis.normal)
-    );
-    const tilt = Math.abs(dot(line.direction, basis.normal));
-    if (offPlane > IN_PLANE_TOLERANCE || tilt > IN_PLANE_TOLERANCE) continue;
+    if (!lineInPlane(line, basis)) continue;
     candidates.push({
       id: `datum:${featureId}`,
       label: datumLabel(featureId),
@@ -109,19 +112,37 @@ export function revolveAxisCandidates(
   }
   // A datum axis lying along a sketch axis would draw over it, and a click
   // could not say which was meant. The datum is the user's own construction
-  // (and follows its sources), so it stands in for the sketch axis.
-  return candidates.filter(
-    (candidate) =>
-      !('axis' in candidate.choice) ||
-      !candidates.some(
-        (other) =>
-          'datumFeatureId' in other.choice && collinear(candidate, other)
-      )
+  // (and follows its sources), so it stands in for the sketch axis, unless
+  // the sketch axis is the one an edited revolve stores: then it stays, and
+  // the datum along it is the one left out.
+  const kept = candidates.find(
+    (candidate) => candidate.id === keep && 'axis' in candidate.choice
+  );
+  return candidates.filter((candidate) =>
+    kept
+      ? !('datumFeatureId' in candidate.choice) || !collinear(candidate, kept)
+      : !('axis' in candidate.choice) ||
+        !candidates.some(
+          (other) =>
+            'datumFeatureId' in other.choice && collinear(candidate, other)
+        )
   );
 }
 
+/** Whether a line lies in a sketch's plane, as a revolve axis must. */
+export function lineInPlane(
+  line: Pick<RevolveAxisCandidate, 'origin' | 'direction'>,
+  basis: PlaneBasis
+): boolean {
+  const offPlane = Math.abs(dot(sub(line.origin, basis.origin), basis.normal));
+  const tilt = Math.abs(
+    dot(scaled(line.direction, 1 / length(line.direction)), basis.normal)
+  );
+  return offPlane <= IN_PLANE_TOLERANCE && tilt <= IN_PLANE_TOLERANCE;
+}
+
 /** Whether two lines are the same line, either way round. */
-function collinear(
+export function collinear(
   a: Pick<RevolveAxisCandidate, 'origin' | 'direction'>,
   b: Pick<RevolveAxisCandidate, 'origin' | 'direction'>
 ): boolean {

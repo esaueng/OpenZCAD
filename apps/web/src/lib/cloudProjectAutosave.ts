@@ -4,6 +4,7 @@ import {
   documentStructureError,
   MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
   persistedDocumentBytes,
+  PROJECT_MIGRATING_CODE,
   type ProjectDocument,
   type SaveProjectDocumentResponse
 } from '@openzcad/shared';
@@ -233,6 +234,12 @@ export class CloudProjectAutosave {
    * `adoptAccountVersion` (the resolution) or `closeProject`.
    */
   #conflictProjectId: string | null = null;
+  /**
+   * The halt is the project being moved to encrypted storage (ADR-024
+   * Phase 7): lifted once that staging is abandoned
+   * ({@link CloudProjectAutosave.resumeAfterMigration}).
+   */
+  #migrationHalt = false;
   #disposed = false;
   /**
    * Set while a page-teardown drain is running so `#persist` asks the fetch
@@ -339,6 +346,7 @@ export class CloudProjectAutosave {
       epoch: ++this.#projectEpoch
     };
     this.#halted = this.#conflictProjectId === projectId ? 'conflict' : null;
+    this.#migrationHalt = false;
     this.#sizeRefusal = null;
     this.#contentRefusal = null;
     this.#automaticRetries = 0;
@@ -367,6 +375,7 @@ export class CloudProjectAutosave {
     this.#conflictProjectId = projectId;
     if (!this.#project || this.#project.projectId === projectId) {
       this.#halted = 'conflict';
+      this.#migrationHalt = false;
       this.#emit('conflict');
     }
   }
@@ -381,7 +390,61 @@ export class CloudProjectAutosave {
     if (this.#project?.projectId !== projectId) return;
     this.#clearTimer();
     this.#halted = 'repair';
+    this.#migrationHalt = false;
     this.#emit('repair', error);
+  }
+
+  /**
+   * Halts writes while the project is moved to encrypted storage (ADR-024
+   * Phase 7), learned before a write was refused: another tab or device
+   * began staging it (its room closed for the move, or its migration
+   * status said so). Its plaintext takes no writes meanwhile, and none is
+   * sent: a queued edit stays queued on the device, reported as refused,
+   * until the staging is abandoned or the project closes. A conflict or
+   * repair halt keeps its own state.
+   */
+  haltForMigration(projectId: string): void {
+    this.#assertUsable();
+    if (this.#project?.projectId !== projectId) return;
+    if (this.#halted && !this.#migrationHalt) return;
+    this.#clearTimer();
+    const already = this.#migrationHalt;
+    this.#halted = 'refused';
+    this.#migrationHalt = true;
+    if (this.#pending && !already) {
+      this.#emit(
+        'refused',
+        new ApiError(
+          409,
+          'This project is being end-to-end encrypted, so it takes no edits until that finishes.',
+          PROJECT_MIGRATING_CODE
+        )
+      );
+    }
+  }
+
+  /**
+   * Lifts a halt for a move to encrypted storage once the account says the
+   * staging was abandoned: the plaintext takes writes again, so a queued
+   * edit is sent.
+   */
+  resumeAfterMigration(projectId: string): void {
+    this.#assertUsable();
+    if (!this.#migrationHalt || this.#project?.projectId !== projectId) return;
+    this.#migrationHalt = false;
+    this.#halted = null;
+    this.#automaticRetries = 0;
+    if (!this.#pending) {
+      this.#emit('synced');
+    } else if (!this.#enabled) {
+      this.#emit('paused');
+    } else if (!this.#connectivity.isOnline()) {
+      this.#emit('offline');
+    } else {
+      this.#pendingSince ??= this.#now();
+      this.#emit('syncing');
+      this.#armTimer(0);
+    }
   }
 
   /**
@@ -396,6 +459,7 @@ export class CloudProjectAutosave {
     this.#pending = null;
     this.#pendingSince = null;
     this.#halted = null;
+    this.#migrationHalt = false;
     this.#sizeRefusal = null;
     this.#contentRefusal = null;
     this.#conflictProjectId = null;
@@ -426,6 +490,7 @@ export class CloudProjectAutosave {
     this.#pending = null;
     this.#pendingSince = null;
     this.#halted = null;
+    this.#migrationHalt = false;
     this.#sizeRefusal = null;
     this.#contentRefusal = null;
     this.#conflictProjectId = null;
@@ -703,6 +768,7 @@ export class CloudProjectAutosave {
     if (error instanceof UnstorableDocumentError) {
       this.#requeue(next);
       this.#halted = 'refused';
+      this.#migrationHalt = false;
       this.#contentRefusal = { editEpoch: next.editEpoch };
       this.#emit('refused', error);
       if (this.#pending && this.#pending.editEpoch > next.editEpoch) {
@@ -711,11 +777,28 @@ export class CloudProjectAutosave {
       return { state: 'halted' };
     }
 
+    // The project is being moved to encrypted storage (ADR-024 Phase 7): its
+    // plaintext takes no writes until that finishes or is cancelled, and no
+    // copy diverged, so this is no conflict to resolve. The edit stays queued
+    // on the device; the workspace locks editing (`onStatus`).
+    if (
+      status === 409 &&
+      error instanceof ApiError &&
+      error.code === PROJECT_MIGRATING_CODE
+    ) {
+      this.#requeue(next);
+      this.#halted = 'refused';
+      this.#migrationHalt = true;
+      this.#emit('refused', error);
+      return { state: 'halted' };
+    }
+
     // Divergence. Hand the decision up and stop writing — a retry would either
     // fail identically or, worse, succeed against a version the user never saw.
     if (status === 409) {
       this.#requeue(next);
       this.#halted = 'conflict';
+      this.#migrationHalt = false;
       const accountVersion =
         error instanceof ApiError ? currentVersionOf(error) : null;
       this.#emit('conflict');
@@ -734,6 +817,7 @@ export class CloudProjectAutosave {
     if (isProjectDocumentUnavailableError(error)) {
       this.#requeue(next);
       this.#halted = 'repair';
+      this.#migrationHalt = false;
       this.#emit('repair', error);
       return { state: 'halted' };
     }
@@ -747,6 +831,7 @@ export class CloudProjectAutosave {
     if (status === 413 || status === 403 || overValueCeiling) {
       this.#requeue(next);
       this.#halted = 'refused';
+      this.#migrationHalt = false;
       const complexity =
         status === 413 &&
         error instanceof ApiError &&

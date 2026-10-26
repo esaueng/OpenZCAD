@@ -1,0 +1,5 @@
+---
+row: L11
+---
+
+Phase 8 browser prerequisite: when `/api/e2ee/config` reports `defaultOn: true`, project creation and adoption choose the encrypted store before sending any plaintext request, independently of an unset, off or unavailable beta preference. Locked keys and inconsistent availability fail through that encrypted path without plaintext fallback. Plaintext-source duplicates and branches into an account requiring encryption report the existing `ENCRYPTED_PROJECTS_REQUIRED` refusal before sending their document; encrypted-source copies retain their existing path, and a device copy can be adopted encrypted. Settings shows required encryption as checked and unavailable for opt-out, with an explanation, while the flag-off preference flow and its MAC/pin verification remain intact. Regressions in `projectFormatLoads.test.ts` and `ProjectEncryptionPreference.test.tsx` fail before the change and cover those cases. This does not implement automatic sign-in migration or activate the rollout; those remain separate Phase 8 requirements.

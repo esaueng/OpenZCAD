@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AuthSession } from '@openzcad/shared';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { TopBar } from './TopBar';
+import type { EncryptionIndicatorProps } from './EncryptionIndicator';
 
 function renderTopBar(
   options: {
@@ -14,7 +15,9 @@ function renderTopBar(
     geometryFailed?: boolean;
     canExport?: boolean;
     exportWithheld?: string | null;
+    exportUnavailableReason?: string | null;
     projectName?: string;
+    encryption?: EncryptionIndicatorProps | null;
   } = {}
 ) {
   const handlers = {
@@ -33,6 +36,7 @@ function renderTopBar(
       canExport={options.canExport ?? false}
       exportScope={null}
       exportWithheld={options.exportWithheld ?? null}
+      exportUnavailableReason={options.exportUnavailableReason ?? null}
       saveState={options.saveState ?? 'local'}
       geometryPending={options.geometryPending}
       geometryFailed={options.geometryFailed}
@@ -60,6 +64,7 @@ function renderTopBar(
       onExportInteractionLog={vi.fn()}
       onGoHome={vi.fn()}
       onOpenSettings={vi.fn()}
+      encryption={options.encryption ?? null}
       {...handlers}
     />
   );
@@ -248,6 +253,16 @@ describe('TopBar File menu', () => {
     expect(exportStep).toHaveAttribute('title', reason);
   });
 
+  it('tells users to show a hidden body before exporting', () => {
+    renderTopBar({ exportUnavailableReason: 'Show a body before exporting.' });
+    fileMenu().open = true;
+    for (const name of [/Export STEP/, /Export mesh/]) {
+      const button = screen.getByRole('button', { name });
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute('title', 'Show a body before exporting.');
+    }
+  });
+
   it('keeps a partial export available and says what it leaves out', () => {
     const reason = 'Duct 1 not exported: “Duct wall” failed to rebuild.';
     renderTopBar({ canExport: true, exportWithheld: reason });
@@ -357,5 +372,163 @@ describe('TopBar project title', () => {
     settings.focus();
     fireEvent.blur(input, { relatedTarget: settings });
     expect(settings).toHaveFocus();
+  });
+});
+
+describe('TopBar encryption indicator', () => {
+  const indicator = (
+    status: EncryptionIndicatorProps['status'],
+    extra: Partial<EncryptionIndicatorProps> = {}
+  ): EncryptionIndicatorProps => ({
+    status,
+    onOpenEncryptionSettings: vi.fn(),
+    ...extra
+  });
+
+  it('shows nothing new for a plaintext project', () => {
+    renderTopBar({ signedIn: true, saveState: 'synced' });
+    expect(screen.queryByText('End-to-end encrypted')).toBeNull();
+    expect(screen.queryByLabelText(/End-to-end encrypted/)).toBeNull();
+    expect(document.querySelector('.encryption-menu')).toBeNull();
+  });
+
+  it('names a verified project by the shelf badge’s words', () => {
+    renderTopBar({ encryption: indicator({ state: 'verified' }) });
+    const lock = screen.getByLabelText('End-to-end encrypted');
+    expect(lock.tagName).toBe('SUMMARY');
+    expect(lock).toHaveAttribute(
+      'title',
+      'End-to-end encrypted. This project’s contents are encrypted on this device, and the version this page last opened or saved passed verification.'
+    );
+    expect(lock.closest('details')).toHaveAttribute(
+      'data-encryption-state',
+      'verified'
+    );
+    fireEvent.click(lock);
+    expect(lock.closest('details')).toHaveAttribute('open');
+    expect(screen.getByText('Verified')).toBeVisible();
+    // No claim the account cannot fork or roll back (ADR-024).
+    expect(
+      document.querySelector('.encryption-menu-panel')
+    ).not.toHaveTextContent(/cannot (fork|roll back)|zero.knowledge|military/i);
+  });
+
+  it('shows a warning-styled lock while a verification warning is active', () => {
+    renderTopBar({
+      encryption: indicator({
+        state: 'warning',
+        warning: {
+          kind: 'stale-head',
+          signedAt: Date.UTC(2026, 9, 1, 9),
+          updatedAt: Date.UTC(2026, 9, 2, 9)
+        }
+      })
+    });
+    const lock = screen.getByLabelText(
+      'End-to-end encrypted · verification warning'
+    );
+    expect(lock.closest('details')).toHaveClass('is-warning');
+    fireEvent.click(lock);
+    expect(screen.getByText('Verification warning')).toBeVisible();
+    expect(
+      screen.getByText(/cannot tell whether a newer version was left out/)
+    ).toBeVisible();
+    expect(screen.getByText(/^Signed .* · last activity .*\.$/)).toBeVisible();
+  });
+
+  it('prompts to unlock in Settings › Encryption when keys are locked', () => {
+    const onOpenEncryptionSettings = vi.fn();
+    renderTopBar({
+      encryption: indicator({ state: 'locked' }, { onOpenEncryptionSettings })
+    });
+    const lock = screen.getByLabelText(
+      'End-to-end encrypted · encryption locked'
+    );
+    expect(lock).toHaveAttribute(
+      'title',
+      'End-to-end encrypted. Unlock encryption on this device (Settings › Encryption) to open or save encrypted projects.'
+    );
+    fireEvent.click(lock);
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open Settings › Encryption' })
+    );
+    expect(onOpenEncryptionSettings).toHaveBeenCalledTimes(1);
+    expect(lock.closest('details')).not.toHaveAttribute('open');
+  });
+
+  it('reports a failed verification in its own words', () => {
+    renderTopBar({
+      encryption: indicator({
+        state: 'problem',
+        problem:
+          'The head was written under an older key epoch than this browser already accepted.'
+      })
+    });
+    const lock = screen.getByLabelText(
+      'End-to-end encrypted · verification failed'
+    );
+    expect(lock.closest('details')).toHaveClass('is-problem');
+    fireEvent.click(lock);
+    expect(screen.getByText('Verification failed')).toBeVisible();
+    expect(
+      screen.getByText(/older key epoch than this browser already accepted/)
+    ).toBeVisible();
+    expect(screen.queryByText(/needs repair/)).toBeNull();
+  });
+
+  it('shows a problem while the account copy needs repair and autosave waits', () => {
+    renderTopBar({
+      saveState: 'repair',
+      encryption: indicator({ state: 'verified' }, { needsRepair: true })
+    });
+    const lock = screen.getByLabelText('End-to-end encrypted · repair needed');
+    expect(lock.closest('details')).toHaveAttribute(
+      'data-encryption-state',
+      'problem'
+    );
+    fireEvent.click(lock);
+    expect(
+      screen.getByText(
+        'The account copy needs repair. Your work remains saved on this device; click Repair needed to retry.'
+      )
+    ).toBeVisible();
+  });
+
+  it('says nothing is verified before this page opens or saves a version', () => {
+    renderTopBar({ encryption: indicator({ state: 'unverified' }) });
+    const lock = screen.getByLabelText(
+      'End-to-end encrypted · not verified yet'
+    );
+    fireEvent.click(lock);
+    expect(screen.getByText('Not verified yet')).toBeVisible();
+  });
+
+  it('shows the project state code in full only when one is given', () => {
+    renderTopBar({ encryption: indicator({ state: 'verified' }) });
+    fireEvent.click(screen.getByLabelText('End-to-end encrypted'));
+    expect(screen.queryByText('Project state code')).toBeNull();
+  });
+
+  it('carries a slot for the project state code', () => {
+    const code = '0123 4567 89ab cdef 0123 4567 89ab cdef';
+    renderTopBar({
+      encryption: indicator({ state: 'verified' }, { projectStateCode: code })
+    });
+    fireEvent.click(screen.getByLabelText('End-to-end encrypted'));
+    expect(screen.getByText('Project state code')).toBeVisible();
+    expect(screen.getByText(code).tagName).toBe('CODE');
+  });
+
+  it('closes on Escape and hands focus back to the lock', () => {
+    renderTopBar({ encryption: indicator({ state: 'verified' }) });
+    const lock = screen.getByLabelText('End-to-end encrypted');
+    fireEvent.click(lock);
+    const settings = screen.getByRole('button', {
+      name: 'Open Settings › Encryption'
+    });
+    settings.focus();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(lock.closest('details')).not.toHaveAttribute('open');
+    expect(lock).toHaveFocus();
   });
 });

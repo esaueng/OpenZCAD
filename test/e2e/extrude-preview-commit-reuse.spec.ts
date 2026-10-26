@@ -4,7 +4,15 @@ import {
   createProjectDocument
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
-import { expect, expectBodyCount, stubApi, test } from './openzcad-fixtures';
+import {
+  expect,
+  expectBodyCount,
+  stubApi,
+  test,
+  chooseInPlaceOption,
+  extrudeBar,
+  setInPlaceOptionValues
+} from './openzcad-fixtures';
 
 interface ExtrudeSync {
   requestId: string | null;
@@ -151,13 +159,8 @@ test('commits a finished extrude preview with its exact IDs and geometry, withou
   await expectBodyCount(page, 1);
   await page.locator('.feature-row-main', { hasText: 'Bore layout' }).click();
   await page.keyboard.press('e');
-  const editor = page.getByRole('form', { name: 'Extrude settings' });
-  await editor
-    .getByLabel('Extrude operation', { exact: true })
-    .selectOption('cut');
-  await editor
-    .getByRole('textbox', { name: 'Distance', exact: true })
-    .fill('-8');
+  await chooseInPlaceOption(page, 'Extrude', 'Operation', 'Cut');
+  await setInPlaceOptionValues(page, 'Extrude', { Distance: '-8' });
 
   await expect
     .poll(async () => {
@@ -192,9 +195,7 @@ test('commits a finished extrude preview with its exact IDs and geometry, withou
     (entry) => entry.requestId !== null
   ).length;
 
-  await editor
-    .getByRole('textbox', { name: 'Distance', exact: true })
-    .press('Enter');
+  await extrudeBar(page).getByRole('button', { name: 'Done' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
     'Extruded region by -8 mm, cut into the body.',
     { timeout: 30_000 }

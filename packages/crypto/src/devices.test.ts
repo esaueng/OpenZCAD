@@ -6,24 +6,32 @@ import {
   accountKeySequences,
   decodeDeviceApprovalGrant,
   decodeDeviceListEntry,
+  DEVICE_APPROVAL_GRANT_VERSION_1,
+  DEVICE_APPROVAL_GRANT_VERSION_2,
+  decodeGroupReset,
   decodeRevocationCutoffs,
   deviceListEntryHash,
   encodeDeviceListEntry,
+  encodeGroupReset,
   encodeRevocationCutoffs,
   MAX_REVOCATION_CUTOFFS,
   MAX_REVOCATION_CUTOFFS_BYTES,
+  MAX_REVOCATION_CUTOFFS_V1_BYTES,
   nextDeviceListEntry,
   publicKeyOfPrivateKey,
   recoveryTarget,
   signDeviceApprovalGrant,
   signDeviceListEntry,
   signIdentityTransition,
+  signGroupReset,
   signRevocationCutoffs,
   verifyDeviceApprovalGrant,
   verifyDeviceList,
   verifyIdentityTransition,
+  verifyGroupReset,
   verifyRevocationCutoffs,
   type DeviceListEntry,
+  type GroupReset,
   type ListedDevice,
   type RevocationCutoffs,
   type SignedDeviceListEntry
@@ -536,6 +544,96 @@ describe('identity transitions and approval grants', () => {
       'authentication-failed'
     );
   });
+
+  it('carries the approver’s contacts head in a version 2 grant and still reads version 1', async () => {
+    const f = await fixture();
+    const list = await verifyDeviceList(f.identityRaw, f.chain);
+    const approver = await generateSigningKeyPair(false);
+    const approverRaw = await exportPublicKey(approver.publicKey);
+    const newDevice = await device('dev_new');
+    const v1 = {
+      userId: USER,
+      deviceKeysHash: await deviceKeysHash(
+        newDevice.signingKey,
+        newDevice.unlockKey
+      ),
+      deviceId: 'dev_new',
+      identityKeyHash: list.identityKeyHash,
+      headSequence: list.head.sequence,
+      headHash: list.headHash,
+      certified: false,
+      approverKeyHash: await publicKeyHash(approverRaw),
+      issuedAt: 99
+    };
+    // An older build's grant: version 1, no contacts head.
+    const old = await signDeviceApprovalGrant(approver.privateKey, v1);
+    expect(old.statement[3]).toBe(DEVICE_APPROVAL_GRANT_VERSION_1);
+    const readOld = await verifyDeviceApprovalGrant(old, approverRaw);
+    expect(readOld).toEqual(v1);
+    expect(readOld.contacts).toBeUndefined();
+
+    const entryHash = new Uint8Array(32).fill(7);
+    for (const contacts of [
+      { head: { sequence: 4, entryHash }, confirmed: true },
+      { head: { sequence: 0, entryHash }, confirmed: false },
+      { head: null, confirmed: true },
+      { head: null, confirmed: false }
+    ]) {
+      const grant = { ...v1, contacts };
+      const signed = await signDeviceApprovalGrant(approver.privateKey, grant);
+      expect(signed.statement[3]).toBe(DEVICE_APPROVAL_GRANT_VERSION_2);
+      expect(signed.statement.byteLength).toBe(
+        old.statement.byteLength + 1 + (contacts.head ? 36 : 0)
+      );
+      expect(decodeDeviceApprovalGrant(signed.statement)).toEqual(grant);
+      expect(await verifyDeviceApprovalGrant(signed, approverRaw)).toEqual(
+        grant
+      );
+    }
+
+    // The head is signed: a server swapping in an older one breaks it.
+    const signed = await signDeviceApprovalGrant(approver.privateKey, {
+      ...v1,
+      contacts: { head: { sequence: 4, entryHash }, confirmed: true }
+    });
+    const older = new Uint8Array(signed.statement);
+    older[older.byteLength - 33] = 3; // big-endian u32 sequence 4 -> 3
+    expect(decodeDeviceApprovalGrant(older).contacts?.head?.sequence).toBe(3);
+    await rejectsWith(
+      verifyDeviceApprovalGrant(
+        { statement: older, signature: signed.signature },
+        approverRaw
+      ),
+      'authentication-failed'
+    );
+    // Nor can it drop the head by relabelling the grant as version 1.
+    const relabelled = new Uint8Array(signed.statement.slice(0, -37));
+    relabelled[3] = DEVICE_APPROVAL_GRANT_VERSION_1;
+    expect(decodeDeviceApprovalGrant(relabelled).contacts).toBeUndefined();
+    await rejectsWith(
+      verifyDeviceApprovalGrant(
+        { statement: relabelled, signature: signed.signature },
+        approverRaw
+      ),
+      'authentication-failed'
+    );
+    // Unknown flags, a truncated head and an unknown version are refused.
+    const flags = new Uint8Array(signed.statement);
+    flags[flags.byteLength - 37] = 4 | 1;
+    expect(() => decodeDeviceApprovalGrant(flags)).toThrow(/contacts flags/);
+    expect(() =>
+      decodeDeviceApprovalGrant(signed.statement.slice(0, -1))
+    ).toThrow(E2eeError);
+    const future = new Uint8Array(signed.statement);
+    future[3] = 3;
+    expect(() => decodeDeviceApprovalGrant(future)).toThrow(/version 3/);
+    await expect(
+      signDeviceApprovalGrant(approver.privateKey, {
+        ...v1,
+        contacts: { head: { sequence: -1, entryHash }, confirmed: true }
+      })
+    ).rejects.toThrow(/Not a device approval grant/);
+  });
 });
 
 describe('account key commitments and key pairs', () => {
@@ -995,7 +1093,7 @@ describe('revocation cutoffs', () => {
     trailing.set(bytes);
     throwsWith(() => decodeRevocationCutoffs(trailing), 'malformed');
     const future = new Uint8Array(bytes);
-    future[3] = 2;
+    future[3] = 3;
     throwsWith(() => decodeRevocationCutoffs(future), 'unsupported-version');
     const magic = new Uint8Array(bytes);
     magic[2] = 0x44;
@@ -1022,9 +1120,189 @@ describe('revocation cutoffs', () => {
         cutoffEpoch: Number.MAX_SAFE_INTEGER
       }))
     });
-    expect(largest.byteLength).toBe(MAX_REVOCATION_CUTOFFS_BYTES);
+    expect(largest.byteLength).toBe(MAX_REVOCATION_CUTOFFS_V1_BYTES);
     expect(decodeRevocationCutoffs(largest).cutoffs).toHaveLength(
       MAX_REVOCATION_CUTOFFS
+    );
+  });
+});
+
+describe('revocation cutoff heads (version 2)', () => {
+  async function revokedList() {
+    const f = await fixture(2);
+    const keys = await rotated();
+    f.chain = await append(f, (list) =>
+      nextDeviceListEntry(list, {
+        issuedAt: 2,
+        removeDeviceIds: ['dev_1'],
+        ...keys
+      })
+    );
+    return { f, list: await verifyDeviceList(f.identityRaw, f.chain) };
+  }
+
+  it('signs heads in version 2 and keeps version 1 byte for byte', async () => {
+    const { f, list } = await revokedList();
+    const base: RevocationCutoffs = {
+      userId: USER,
+      generation: 1,
+      entrySequence: 1,
+      entryHash: list.headHash,
+      issuedAt: 3,
+      cutoffs: [
+        { projectId: 'prj_a', cutoffEpoch: 4 },
+        { projectId: 'prj_b', cutoffEpoch: 2 }
+      ]
+    };
+    expect(encodeRevocationCutoffs(base)[3]).toBe(1);
+    const head = {
+      documentVersion: 7,
+      versionHash: new Uint8Array(32).fill(9)
+    };
+    const withHead: RevocationCutoffs = {
+      ...base,
+      cutoffs: [
+        { projectId: 'prj_a', cutoffEpoch: 4, head },
+        { projectId: 'prj_b', cutoffEpoch: 2 }
+      ]
+    };
+    const signed = await signRevocationCutoffs(f.identity.privateKey, withHead);
+    expect(signed.statement[3]).toBe(2);
+    const verified = await verifyRevocationCutoffs(signed, list, {
+      generation: 1
+    });
+    expect(verified.cutoffs).toEqual([
+      { projectId: 'prj_a', cutoffEpoch: 4, head },
+      { projectId: 'prj_b', cutoffEpoch: 2 }
+    ]);
+    expect(encodeRevocationCutoffs(verified)).toEqual(signed.statement);
+    // An empty head slot must be all zero.
+    const bytes = new Uint8Array(signed.statement);
+    bytes[bytes.byteLength - 1] = 1;
+    throwsWith(() => decodeRevocationCutoffs(bytes), 'malformed');
+    // Version 2 with no head at all is not canonical: it is version 1.
+    const v2 = encodeRevocationCutoffs(withHead);
+    const noHeads = new Uint8Array(v2);
+    const first = noHeads.byteLength - 2 * (1 + 5 + 8 + 8 + 32);
+    noHeads.fill(0, first + 1 + 5 + 8, first + 1 + 5 + 8 + 40);
+    throwsWith(() => decodeRevocationCutoffs(noHeads), 'malformed');
+    for (const bad of [
+      { documentVersion: 0, versionHash: new Uint8Array(32) },
+      { documentVersion: 1, versionHash: new Uint8Array(31) },
+      { documentVersion: 1.5, versionHash: new Uint8Array(32) }
+    ]) {
+      throwsWith(
+        () =>
+          encodeRevocationCutoffs({
+            ...base,
+            cutoffs: [{ projectId: 'prj_a', cutoffEpoch: 1, head: bad }]
+          }),
+        'invalid-argument'
+      );
+    }
+    // The largest version 2 statement is the format's largest.
+    const largest = encodeRevocationCutoffs({
+      ...base,
+      userId: 'u'.repeat(128),
+      cutoffs: Array.from({ length: MAX_REVOCATION_CUTOFFS }, (_, i) => ({
+        projectId: `${String(i).padStart(4, '0')}${'p'.repeat(124)}`,
+        cutoffEpoch: Number.MAX_SAFE_INTEGER,
+        head: {
+          documentVersion: Number.MAX_SAFE_INTEGER,
+          versionHash: new Uint8Array(32).fill(1)
+        }
+      }))
+    });
+    expect(largest.byteLength).toBe(MAX_REVOCATION_CUTOFFS_BYTES);
+  });
+});
+
+describe('group resets', () => {
+  async function resetFixture() {
+    const f = await fixture(2);
+    const list = await verifyDeviceList(f.identityRaw, f.chain);
+    const value: GroupReset = {
+      userId: USER,
+      generation: 1,
+      entrySequence: 0,
+      entryHash: list.headHash,
+      projectId: 'prj_a',
+      priorGroupGeneration: 0,
+      priorKeyEpoch: 5,
+      issuedAt: 1_700_000_000_000
+    };
+    return { f, list, value };
+  }
+
+  it('signs and verifies a reset bound to the signer’s device list', async () => {
+    const { f, list, value } = await resetFixture();
+    const signed = await signGroupReset(f.identity.privateKey, value);
+    expect([...signed.statement.subarray(0, 4)]).toEqual([0x4f, 0x5a, 0x58, 1]);
+    const verified = await verifyGroupReset(signed, list, { generation: 1 });
+    expect(verified).toEqual(value);
+    expect(encodeGroupReset(verified)).toEqual(signed.statement);
+  });
+
+  it('refuses another signer, user, generation, entry or malformed bytes', async () => {
+    const { f, list, value } = await resetFixture();
+    const other = await generateSigningKeyPair(false);
+    await rejectsWith(
+      verifyGroupReset(await signGroupReset(other.privateKey, value), list, {
+        generation: 1
+      }),
+      'authentication-failed'
+    );
+    const signed = await signGroupReset(f.identity.privateKey, value);
+    await rejectsWith(
+      verifyGroupReset(signed, list, { generation: 2 }),
+      'context-mismatch'
+    );
+    for (const change of [
+      { userId: 'user_2' },
+      { entrySequence: 1 },
+      { entryHash: new Uint8Array(32) }
+    ]) {
+      await rejectsWith(
+        verifyGroupReset(
+          await signGroupReset(f.identity.privateKey, { ...value, ...change }),
+          list,
+          { generation: 1 }
+        ),
+        'context-mismatch'
+      );
+    }
+    for (const change of [
+      { generation: 0 },
+      { projectId: 'prj a' },
+      { priorKeyEpoch: 2 ** 32 - 1 },
+      { priorGroupGeneration: -1 },
+      { issuedAt: 1.5 }
+    ]) {
+      throwsWith(
+        () => encodeGroupReset({ ...value, ...change }),
+        'invalid-argument'
+      );
+    }
+    const trailing = new Uint8Array(signed.statement.byteLength + 1);
+    trailing.set(signed.statement);
+    throwsWith(() => decodeGroupReset(trailing), 'malformed');
+    const future = new Uint8Array(signed.statement);
+    future[3] = 2;
+    throwsWith(() => decodeGroupReset(future), 'unsupported-version');
+    // A cutoff statement is not a reset, whatever its signature.
+    throwsWith(
+      () =>
+        decodeGroupReset(
+          encodeRevocationCutoffs({
+            userId: USER,
+            generation: 1,
+            entrySequence: 1,
+            entryHash: new Uint8Array(32),
+            issuedAt: 1,
+            cutoffs: []
+          })
+        ),
+      'malformed'
     );
   });
 });

@@ -280,17 +280,6 @@ fieldset.field > legend {
   font-size: var(--fs-mini);
 }
 
-.edge-selection-action {
-  width: 100%;
-  justify-content: center;
-  margin-bottom: 7px;
-}
-
-.edge-selection-hint {
-  margin: 0 0 10px;
-  font-size: var(--fs-mini);
-}
-
 /* A blend's edges by name under the count, each with its remove button:
    the rows of a pick list, drawn as picked, but not toggles themselves. */
 .edge-pick-list {
@@ -580,121 +569,10 @@ fieldset.field > legend {
   text-align: center;
 }
 
-.pick-row .body-name {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .pick-row small {
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
-}
-
-/* ── Body appearance ─────────────────────────────────────── */
-
-.appearance-controls {
-  display: grid;
-  gap: 8px;
-  margin: 8px 0;
-}
-
-.appearance-field {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-3);
-  color: var(--color-text-muted);
-  font-size: var(--fs-sm);
-}
-
-.appearance-inputs {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.appearance-swatch {
-  width: 42px;
-  height: 26px;
-  padding: 0;
-  border: var(--border-thin);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-
-.appearance-swatch:hover {
-  border-color: var(--color-border-strong);
-}
-
-.appearance-swatch[aria-expanded='true'] {
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 2px var(--color-accent-dim);
-}
-
-.appearance-inputs input[type='range'] {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 130px;
-  height: 26px;
-  padding: 0;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-}
-
-.appearance-inputs input[type='range']::-webkit-slider-runnable-track {
-  height: 4px;
-  border-radius: var(--radius-sm);
-  background: var(--color-border);
-}
-
-.appearance-inputs input[type='range']::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 13px;
-  height: 13px;
-  margin-top: -4.5px;
-  border-radius: 50%;
-  background: var(--color-text);
-  border: 2px solid var(--color-accent);
-}
-
-.appearance-inputs input[type='range']::-moz-range-track {
-  height: 4px;
-  border-radius: var(--radius-sm);
-  background: var(--color-border);
-}
-
-.appearance-inputs input[type='range']::-moz-range-thumb {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--color-text);
-  border: 2px solid var(--color-accent);
-}
-
-.appearance-value {
-  min-width: 44px;
-  color: var(--color-text);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  text-align: right;
-}
-
-.appearance-reset {
-  justify-self: start;
-  padding: 0;
-  color: var(--color-text-muted);
-  font-size: var(--fs-xs);
-}
-
-.appearance-reset:hover {
-  color: var(--color-accent-hi);
 }
 
 /* ── Key-value stats ─────────────────────────────────────── */
@@ -970,15 +848,6 @@ fieldset.field > legend {
 
 .panel-overflow-item.danger {
   color: var(--color-error-text);
-}
-
-.edge-size-slider {
-  width: 100%;
-  min-height: 28px;
-  margin: 0 0 8px;
-  padding: 0;
-  accent-color: var(--color-accent);
-  cursor: ew-resize;
 }
 
 /* I05 two-point scale: the picture at card width, clicked to place two

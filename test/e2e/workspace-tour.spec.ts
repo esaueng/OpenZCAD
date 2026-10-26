@@ -1,4 +1,5 @@
 import {
+  createPrimitiveInPlace,
   test,
   expect,
   createProject,
@@ -24,11 +25,7 @@ test('first-model tour rides the real workflow and never returns', async ({
   await expect(modelPanel(page, 'History')).toHaveCount(0);
 
   // Creating the first feature advances the tour by itself.
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(tour).toContainText('Select to edit');
 
   // So does selecting geometry once the exact build is ready.
@@ -94,11 +91,7 @@ test('manual tour advance reveals the History control without moving keyboard fo
   });
   await createProject(page, 'Tour Keyboard Part');
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
 
   const tour = page.locator('.workspace-tour');
   await expect(tour).toContainText('Select to edit');
@@ -137,11 +130,7 @@ test('a project that opens with history never shows the tour', async ({
 }) => {
   await stubApi(page, { workspaceTour: true });
   await createProject(page, 'Veteran Part');
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
   // Leave WITHOUT skipping — the exit through the project list flushes the

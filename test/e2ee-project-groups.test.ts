@@ -182,9 +182,16 @@ function objectBucket() {
       const body = objects.get(key);
       return body ? { size: body.byteLength } : null;
     }),
-    delete: vi.fn(async (key: string) => {
-      objects.delete(key);
-    })
+    delete: vi.fn(async (key: string | string[]) => {
+      for (const item of typeof key === 'string' ? [key] : key)
+        objects.delete(item);
+    }),
+    list: vi.fn(async ({ prefix = '' }: { prefix?: string } = {}) => ({
+      objects: [...objects.keys()]
+        .filter((key) => key.startsWith(prefix))
+        .map((key) => ({ key })),
+      truncated: false
+    }))
   };
 }
 
@@ -611,7 +618,13 @@ describe('solo MLS groups', () => {
           message: 'AAAA',
           groupInfo: 'AAAA',
           wraps: [],
-          archive: {}
+          archive: {},
+          // The head the desktop built from (#913): only the epoch is taken.
+          deviceList: srv.db
+            .prepare(
+              'SELECT generation, MAX(sequence) AS headSequence FROM e2ee_device_list_entries WHERE user_id = ? AND generation = (SELECT MAX(generation) FROM e2ee_identities WHERE user_id = ?)'
+            )
+            .get(OWNER, OWNER) as { generation: number; headSequence: number }
         }
       }
     );
@@ -969,7 +982,7 @@ describe('solo MLS groups', () => {
       const text = await outsider.text();
       for (const wrapped of ownWrapped) expect(text).not.toContain(wrapped);
     }
-    // A member learns only that it is owner-only, and still gets no wraps.
+    // A member (slice 5-2) reads the group, but gets only its own wraps.
     srv.db
       .prepare(
         `INSERT INTO project_members (project_id, user_id, role, added_by_user_id, created_at, updated_at)
@@ -983,10 +996,11 @@ describe('solo MLS groups', () => {
         user: OTHER
       }
     );
-    expect(member.status).toBe(403);
-    expect(await member.json()).toMatchObject({
-      code: 'E2EE_PROJECT_OWNER_ONLY'
-    });
+    expect(member.status).toBe(200);
+    const memberWraps = (await member.json()) as {
+      wraps: { wrapped: string }[];
+    };
+    expect(memberWraps.wraps.map((w) => w.wrapped)).toEqual(['B'.repeat(55)]);
     // The other user's own project lists only their own wraps.
     const theirs = seedProject(srv, OTHER);
     const otherLaptop = device(srv, other, 'other_laptop');

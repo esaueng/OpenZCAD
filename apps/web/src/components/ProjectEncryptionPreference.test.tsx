@@ -109,6 +109,53 @@ function renderToggle(
 }
 
 describe('Settings › Encryption › Encrypt new projects (ADR-024 D2)', () => {
+  it('lets required encryption repair an untrusted preference with a fresh true-only record', async () => {
+    unlock();
+    const { api, current } = fakeApi(
+      { ...OPEN, defaultOn: true },
+      await stored(7, false, new Uint8Array(32).fill(1))
+    );
+    renderToggle(api);
+    const confirm = await screen.findByRole('button', {
+      name: 'Confirm encryption'
+    });
+    expect(
+      screen.getByRole('checkbox', { name: 'Encrypt new projects' })
+    ).toBeDisabled();
+    fireEvent.click(confirm);
+    await waitFor(() => expect(current()?.sequence).toBe(8));
+    expect(current()?.encryptNewProjects).toBe(true);
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', { name: 'Confirm encryption' })
+      ).toBeNull()
+    );
+  });
+
+  it.each(['unset', 'off'] as const)(
+    'shows required encryption instead of an opt-out for an %s beta preference',
+    async (preference) => {
+      unlock();
+      const { api } = fakeApi(
+        { ...OPEN, defaultOn: true },
+        preference === 'unset' ? null : await stored(4, false)
+      );
+      renderToggle(api);
+      const toggle = await screen.findByRole('checkbox', {
+        name: 'Encrypt new projects'
+      });
+      await waitFor(() => expect(toggle).toBeChecked());
+      expect(toggle).toBeDisabled();
+      expect(
+        screen.getByText(
+          'Encryption is required for new cloud projects on this server.'
+        )
+      ).toBeTruthy();
+      fireEvent.click(toggle);
+      expect(api.save).not.toHaveBeenCalled();
+    }
+  );
+
   it('is hidden while encrypted projects are off for the account', async () => {
     unlock();
     const { api } = fakeApi({ enabled: true, projectsEnabled: false });

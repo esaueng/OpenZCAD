@@ -1,5 +1,12 @@
 import { e2eeErasureTables } from './e2ee';
+import { contactErasureStatements } from './e2eeContacts';
+import { invitationErasureStatements } from './e2eeInvitations';
+import { proposalErasureStatements } from './e2eeProposals';
+import { shareLinkErasureStatements } from './e2eeShareLinks';
 import { projectGroupErasureStatements } from './e2eeProjects';
+import { assistantConsentErasureStatements } from './e2eeAssistantConsents';
+import { deviceRemovalErasureStatements } from './e2eeDeviceRemoval';
+import { projectMigrationErasureStatements } from './e2eeProjectMigrations';
 import {
   encryptedProjectUsage,
   projectVersionErasureStatements
@@ -447,6 +454,9 @@ export async function deleteAccountData(
       email && env.AUTH_OTP_PEPPER
         ? await authEmailRateLimitBucket(email, env.AUTH_OTP_PEPPER)
         : undefined;
+    // Before migration 0029 the tables do not exist, and before 0030 the
+    // history table does not; deletion must keep working either way.
+    const e2eeTables = await e2eeErasureTables(db);
     await db.batch(
       profileCleanupStatements(
         db,
@@ -454,9 +464,7 @@ export async function deleteAccountData(
         email,
         authRateBucket,
         input.scope,
-        // Before migration 0029 the tables do not exist, and before 0030 the
-        // history table does not; deletion must keep working either way.
-        await e2eeErasureTables(db),
+        e2eeTables,
         // Before migration 0031 there is no opt-in table.
         await isE2eeProjectPreferenceStorageReady(db),
         // Before migration 0032 there are no MLS group tables, and before
@@ -468,6 +476,34 @@ export async function deleteAccountData(
             input.scope
           )),
           ...(await projectVersionErasureStatements(
+            db,
+            session.userId,
+            input.scope
+          )),
+          // Before migration 0036 there are no revocation cutoffs.
+          ...(await deviceRemovalErasureStatements(db, session.userId)),
+          // Before migration 0037 there is no contacts table; its rows go
+          // before the identities they reference, and only beside them.
+          ...(e2eeTables.length > 0
+            ? await contactErasureStatements(db, session.userId)
+            : []),
+          // Assistant consents (migration 0041), when the table exists.
+          ...(await assistantConsentErasureStatements(db, session.userId)),
+          // Encrypted invitations this account received, its KeyPackages
+          // and Welcomes (migration 0038), when the tables exist.
+          ...(await invitationErasureStatements(db, session.userId, email)),
+          // Proposals it sent in other owners' projects lose their sender
+          // (migration 0039), when the table exists.
+          ...(await proposalErasureStatements(db, session.userId, input.scope)),
+          // The account's share delegation, and with `all` its user id on
+          // share-link rows in other owners' projects (migration 0040).
+          ...(await shareLinkErasureStatements(
+            db,
+            session.userId,
+            input.scope
+          )),
+          // Before migration 0042 there is no migration state.
+          ...(await projectMigrationErasureStatements(
             db,
             session.userId,
             input.scope

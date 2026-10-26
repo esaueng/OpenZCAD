@@ -53,7 +53,8 @@ import {
 import {
   createEncryptedProjectStore,
   type EncryptedProjectStore,
-  type EncryptedProjectWarning
+  type EncryptedProjectWarning,
+  type EncryptedShareHead
 } from '../../apps/web/src/lib/e2ee/encryptedProjectStore';
 import {
   memoryVersionPins,
@@ -78,6 +79,8 @@ import {
   type EncryptedViewStates
 } from '../../apps/web/src/lib/e2ee/replacedEnvelopes';
 import { migratedDatabase, sqliteD1 } from './sqlite-d1';
+import { createE2eeShareLinksApi } from '@openzcad/shared';
+import type { ShareLinksContext } from '../../apps/web/src/lib/e2ee/shareLinks';
 
 export const OWNER = 'user_owner';
 export const OTHER = 'user_other';
@@ -91,15 +94,12 @@ export interface Account {
   list: VerifiedDeviceList;
   devices: Map<string, CertifyingDevice>;
   accountKey: Uint8Array;
+  /** The identity's private key (share delegations, slice 5-10). */
+  identityPrivateKey: CryptoKey;
   /** Rows the Worker reads the device list from. */
   seed(db: DatabaseSync): void;
   /** Revokes a device in a new identity-signed entry, seeded into `db`. */
   revoke(db: DatabaseSync, deviceId: string): Promise<void>;
-  /**
-   * The body of a POST /api/e2ee/device-list that removes `deviceId`, with
-   * the rotated keys but none of their wraps; nothing is seeded or remembered.
-   */
-  removalRequest(deviceId: string): Promise<Record<string, unknown>>;
 }
 
 const ecdhPublic = async () =>
@@ -170,6 +170,7 @@ export async function makeAccount(
     list: await verifyDeviceList(identityRaw, chain),
     devices,
     accountKey,
+    identityPrivateKey: identity.privateKey,
     seed(db) {
       db.prepare(
         `INSERT INTO e2ee_identities (user_id, generation, identity_key, created_at)
@@ -193,21 +194,6 @@ export async function makeAccount(
       hashes.push(toHex(await deviceListEntryHash(signed.entry)));
       insertEntry(db, chain.length - 1);
       account.list = await verifyDeviceList(identityRaw, chain);
-    },
-    async removalRequest(deviceId) {
-      const entry = nextDeviceListEntry(account.list, {
-        issuedAt: ADDED_AT + chain.length * 1000,
-        removeDeviceIds: [deviceId],
-        encryptionKey: await ecdhPublic(),
-        accountKeyCommitment: await accountKeyCommitment(generateSymmetricKey())
-      });
-      const signed = await signDeviceListEntry(identity.privateKey, entry);
-      return {
-        generation: 1,
-        entry: toBase64Url(signed.entry),
-        signature: toBase64Url(signed.signature),
-        wraps: []
-      };
     }
   };
   return account;
@@ -223,6 +209,7 @@ export interface Bucket {
   get: ReturnType<typeof vi.fn>;
   head: ReturnType<typeof vi.fn>;
   delete: ReturnType<typeof vi.fn>;
+  list: ReturnType<typeof vi.fn>;
   createMultipartUpload: ReturnType<typeof vi.fn>;
   resumeMultipartUpload: ReturnType<typeof vi.fn>;
 }
@@ -306,9 +293,33 @@ export function objectBucket(): Bucket {
       const body = objects.get(key);
       return body ? { size: body.byteLength } : null;
     }),
-    delete: vi.fn(async (key: string) => {
-      objects.delete(key);
-    })
+    delete: vi.fn(async (key: string | string[]) => {
+      for (const item of typeof key === 'string' ? [key] : key)
+        objects.delete(item);
+    }),
+    // R2's listing, in key order, a page of `limit` (at most 1000) keys.
+    list: vi.fn(
+      async (
+        options: { prefix?: string; cursor?: string; limit?: number } = {}
+      ) => {
+        const keys = [...objects.keys()]
+          .filter((key) => key.startsWith(options.prefix ?? ''))
+          .sort();
+        const start = options.cursor ? Number(options.cursor) : 0;
+        const limit = Math.min(options.limit ?? 1000, 1000);
+        const page = keys.slice(start, start + limit);
+        const truncated = start + limit < keys.length;
+        return {
+          objects: page.map((key) => ({
+            key,
+            size: objects.get(key)!.byteLength,
+            uploaded: new Date(0)
+          })),
+          truncated,
+          ...(truncated ? { cursor: String(start + limit) } : {})
+        };
+      }
+    )
   };
 }
 
@@ -343,7 +354,11 @@ export function newServer(
   const statements: string[] = [];
   const bucket = objectBucket();
   const room = vi.fn(
-    async () => new Response(JSON.stringify({ ok: true }), { status: 200 })
+    // A plaintext room holding nothing: it confirms a migration lock.
+    async () =>
+      new Response(JSON.stringify({ ok: true, latestVersion: null }), {
+        status: 200
+      })
   );
   const env: Record<string, unknown> = {
     ENVIRONMENT: 'development',
@@ -420,6 +435,13 @@ export interface Device {
   files: ProjectFilesDeps;
   measurements: EncryptedMeasurements;
   viewStates: EncryptedViewStates;
+  /** Share links (slice 5-10), over this device's store and groups. */
+  shareLinks: ShareLinksContext;
+  /**
+   * What the page does after each write it made (slice 5-10: republishing
+   * share snapshots), when `DeviceOptions.onVersionWritten` asks for it.
+   */
+  shareWork: Promise<unknown>[];
   fetcher(path: string, init?: RequestInit): Promise<Response>;
   /** Runs before a request reaches the Worker. */
   before?: Hook;
@@ -447,6 +469,20 @@ export interface DeviceOptions {
    * naming a lost blob fails as before.
    */
   localSources?: Map<string, Uint8Array>;
+  /**
+   * The project's other members (slice 5-2): their current verified device
+   * lists, as contacts and pins (slice 5-1) will supply them.
+   */
+  members?: readonly Account[];
+  /**
+   * Runs after each version this device wrote (the page republishes share
+   * snapshots there, slice 5-10); its promise is kept in `shareWork`.
+   */
+  onVersionWritten?: (
+    d: Device,
+    projectId: string,
+    head: EncryptedShareHead
+  ) => Promise<unknown>;
 }
 
 /** One device: its own engine, MLS store and pins over the shared server. */
@@ -468,7 +504,8 @@ export function device(
     sessions,
     mls,
     pins,
-    warnings: []
+    warnings: [],
+    shareWork: []
   } as unknown as Device;
   result.fetcher = async (path: string, init: RequestInit = {}) => {
     await result.before?.(path, init);
@@ -503,7 +540,14 @@ export function device(
         throw new Error('no older account key in this test');
       }
     },
-    device: deviceId ? account.devices.get(deviceId)! : null
+    device: deviceId ? account.devices.get(deviceId)! : null,
+    ...(options.members
+      ? {
+          members: {
+            lists: async () => options.members!.map((member) => member.list)
+          }
+        }
+      : {})
   };
   result.documents = createEncryptedDocumentsApi(fetcher);
   result.references = options.references ?? createBlobReferenceRegistry();
@@ -534,8 +578,25 @@ export function device(
       : {}),
     ...(options.cutoffs ? { cutoffs: async () => options.cutoffs! } : {}),
     ...(options.now ? { now: options.now } : {}),
-    onWarning: (warning) => result.warnings.push(warning)
+    onWarning: (warning) => result.warnings.push(warning),
+    ...(options.onVersionWritten
+      ? {
+          onVersionWritten: (projectId: string, head: EncryptedShareHead) => {
+            const work = options.onVersionWritten!(result, projectId, head);
+            result.shareWork.push(work);
+            return work.then(() => undefined);
+          }
+        }
+      : {})
   });
+  result.shareLinks = {
+    groups: result.groups,
+    store: result.store,
+    api: createE2eeShareLinksApi(fetcher),
+    blobReferences: result.references,
+    origin: 'https://app.example',
+    ...(options.now ? { now: options.now } : {})
+  };
   result.files = {
     info: result.store.info,
     references: result.references,

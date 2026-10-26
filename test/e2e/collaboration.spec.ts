@@ -1,4 +1,5 @@
 import {
+  createPrimitiveInPlace,
   test,
   expect,
   WORKSPACE_SESSION_STORAGE_KEY,
@@ -1738,11 +1739,7 @@ test('renders saved part geometry in the project thumbnail', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Thumbnail Box');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
   await expect.poll(() => hasCachedProjectThumbnail(page)).toBe(true);
 

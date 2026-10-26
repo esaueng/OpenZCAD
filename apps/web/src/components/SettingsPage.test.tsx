@@ -1,4 +1,10 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState, type ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -18,9 +24,17 @@ import {
   type AppSettingsResponse,
   type HealthResponse
 } from '@openzcad/shared';
+import { openExternalUrl } from '../lib/desktopBridge';
+import type * as DesktopBridge from '../lib/desktopBridge';
 import { SettingsPage } from './SettingsPage';
 import { POINTER_CONTROL_GROUPS } from '../lib/controlReference';
 import { api } from '../lib/api';
+
+// The desktop app opens external links through native code.
+vi.mock('../lib/desktopBridge', async (importOriginal) => ({
+  ...(await importOriginal<typeof DesktopBridge>()),
+  openExternalUrl: vi.fn()
+}));
 
 // Account loads storage usage for a signed-in profile; no test reaches a server.
 const storageUsage = {
@@ -1116,6 +1130,43 @@ describe('settings desktop account section', () => {
     }
   });
 
+  it('links the privacy policy from the email sign-in form', () => {
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      value: {
+        render: vi.fn(() => 'widget-1'),
+        remove: vi.fn(),
+        reset: vi.fn()
+      }
+    });
+    // Stands in for the loaded Turnstile script so the widget does not fetch it.
+    const script = document.createElement('script');
+    script.dataset.openzcadTurnstile = 'true';
+    document.head.append(script);
+    try {
+      renderSettings(null, {
+        initialSection: 'account',
+        authConfig: {
+          mode: 'email-code',
+          emailCodeEnabled: true,
+          turnstileSiteKey: 'site-key'
+        },
+        authConfigStatus: 'ready'
+      });
+      const form = screen
+        .getByRole('button', { name: 'Email me a code' })
+        .closest('form')!;
+      const link = within(form).getByRole('link', { name: 'Privacy policy' });
+      expect(link).toHaveAttribute('href', '/privacy');
+      // A new tab: following it must not drop an unsaved workspace.
+      expect(link).toHaveAttribute('target', '_blank');
+      expect(link).toHaveAttribute('rel', 'noreferrer');
+    } finally {
+      script.remove();
+      delete (window as Window & { turnstile?: unknown }).turnstile;
+    }
+  });
+
   it('requires an explicit approval before connecting the desktop app', async () => {
     const onApproveDesktopLogin = vi.fn().mockResolvedValue(undefined);
 
@@ -1159,6 +1210,50 @@ describe('settings privacy and data section', () => {
     accountErasureReady: true,
     projectErasureReady: true
   };
+
+  it('links the privacy policy while signed out', () => {
+    renderSettings(null, { initialSection: 'privacy' });
+    const link = screen.getByRole('link', { name: 'Read the policy' });
+    expect(link).toHaveAttribute('href', '/privacy');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noreferrer');
+    // In a browser the anchor itself opens the new tab; no native call.
+    link.addEventListener('click', (event) => event.preventDefault(), {
+      once: true
+    });
+    fireEvent.click(link);
+    expect(openExternalUrl).not.toHaveBeenCalled();
+    expect(screen.getByText('Privacy policy')).toBeInTheDocument();
+  });
+
+  it('opens the hosted privacy policy in the system browser from the desktop app', async () => {
+    vi.mocked(openExternalUrl).mockResolvedValue(true);
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ =
+      {};
+    try {
+      renderSettings(null, { initialSection: 'privacy', session });
+      const link = screen.getByRole('link', { name: 'Read the policy' });
+      expect(link).toHaveAttribute('href', 'https://zcad.app/privacy');
+      // WKWebView ignores target="_blank"; the native shell opens the page.
+      expect(fireEvent.click(link)).toBe(false);
+      await waitFor(() =>
+        expect(openExternalUrl).toHaveBeenCalledWith('https://zcad.app/privacy')
+      );
+    } finally {
+      vi.mocked(openExternalUrl).mockReset();
+      delete (window as Window & { __TAURI_INTERNALS__?: unknown })
+        .__TAURI_INTERNALS__;
+    }
+  });
+
+  it('finds the privacy policy from the settings search', async () => {
+    const user = userEvent.setup();
+    renderSettings(null, { initialSection: 'general' });
+    await user.type(screen.getByLabelText('Find a setting'), 'privacy policy');
+    expect(
+      await screen.findByRole('link', { name: 'Read the policy' })
+    ).toHaveAttribute('href', '/privacy');
+  });
 
   it('starts profile details hidden and keeps the choice when settings reopen', async () => {
     const user = userEvent.setup();

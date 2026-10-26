@@ -16,7 +16,8 @@ import {
   selectBodyFromObjects,
   revealModelPanel,
   MODEL_ONLY,
-  bodyCardFromHistory
+  bodyCardFromHistory,
+  extrudeBar
 } from './openzcad-fixtures';
 
 interface RegionHandle {
@@ -153,20 +154,21 @@ test('Shift-picked regions extrude together from any one of their arrows', async
   });
   await expectBodyCount(page, 1);
 
-  const editor = page.getByRole('form', { name: 'Extrude settings' });
+  const editor = extrudeBar(page);
   await pickProfile(canvas, 0);
-  await expect(editor).toContainText('1 selected profile');
+  await expect(editor).toBeVisible();
+  await expect(editor).not.toContainText('profiles');
   await expect.poll(async () => (await regionHandles(canvas)).length).toBe(1);
   // Shift adds the second region: two profiles, two arrows.
   await pickProfile(canvas, 1, true);
-  await expect(editor).toContainText('2 selected profiles');
+  await expect(editor).toContainText('2 profiles');
   await expect.poll(async () => (await regionHandles(canvas)).length).toBe(2);
   // Shift on a selected region takes it back out, and adds it again.
   await pickProfile(canvas, 0, true);
-  await expect(editor).toContainText('1 selected profile');
+  await expect(editor).not.toContainText('profiles');
   await expect.poll(async () => (await regionHandles(canvas)).length).toBe(1);
   await pickProfile(canvas, 0, true);
-  await expect(editor).toContainText('2 selected profiles');
+  await expect(editor).toContainText('2 profiles');
   await expect.poll(async () => (await regionHandles(canvas)).length).toBe(2);
 
   // The newest pick anchors the chip; grabbing the other arrow moves it.
@@ -197,10 +199,10 @@ test('Shift-picked regions extrude together from any one of their arrows', async
   expect(during[1]!.value).toBeCloseTo(during[0]!.value, 9);
   await page.mouse.up();
   await expect(page.getByRole('contentinfo')).toContainText(
-    'Extrude preview · adjust the settings, then Create to save.'
+    'Extrude preview · Enter to finish, or adjust it under Options.'
   );
 
-  await editor.getByRole('button', { name: 'Create', exact: true }).click();
+  await editor.getByRole('button', { name: 'Done' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
     /Extruded region by -[\d.]+ mm, cut into the body\./,
     { timeout: 30_000 }
@@ -274,15 +276,16 @@ test('refuses regions that would not extrude the same way', async ({
   await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
     timeout: 30_000
   });
-  const editor = page.getByRole('form', { name: 'Extrude settings' });
+  const editor = extrudeBar(page);
   await pickProfile(canvas, 0);
   await pickProfile(canvas, 1, true);
-  await expect(editor).toContainText('2 selected profiles');
+  await expect(editor).toContainText('2 profiles');
 
   await page.getByTestId('direct-manipulation-value').click();
-  const keypad = page.getByRole('dialog', { name: 'Height value' });
+  const keypad = page.getByRole('dialog', { name: 'Distance value' });
   await keypad.getByRole('textbox').fill('-4');
-  await keypad.getByRole('button', { name: 'Apply height' }).click();
+  await keypad.getByRole('button', { name: 'Apply distance' }).click();
+  await extrudeBar(page).getByRole('button', { name: 'Done' }).click();
   // Together they would measure as one add and lose the pocket; apart one
   // cuts and one makes a new body, so the command refuses in one sentence.
   await expect(page.getByRole('contentinfo')).toContainText(
@@ -338,15 +341,16 @@ test('refuses regions over two different bodies', async ({ page }) => {
   await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '2', {
     timeout: 30_000
   });
-  const editor = page.getByRole('form', { name: 'Extrude settings' });
+  const editor = extrudeBar(page);
   await pickProfile(canvas, 0);
   await pickProfile(canvas, 1, true);
-  await expect(editor).toContainText('2 selected profiles');
+  await expect(editor).toContainText('2 profiles');
 
   await page.getByTestId('direct-manipulation-value').click();
-  const keypad = page.getByRole('dialog', { name: 'Height value' });
+  const keypad = page.getByRole('dialog', { name: 'Distance value' });
   await keypad.getByRole('textbox').fill('-4');
-  await keypad.getByRole('button', { name: 'Apply height' }).click();
+  await keypad.getByRole('button', { name: 'Apply distance' }).click();
+  await extrudeBar(page).getByRole('button', { name: 'Done' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
     'The selected profiles sit over different bodies; extrude them separately.',
     { timeout: 30_000 }
@@ -381,7 +385,7 @@ test('a glyph pick selects, arms and builds the whole word', async ({
   }).document;
   await openDocument(page, document);
   const canvas = page.locator('.viewer-host canvas');
-  const editor = page.getByRole('form', { name: 'Extrude settings' });
+  const editor = extrudeBar(page);
   // Glyph regions exist once the font has parsed; until then the pick finds
   // nothing to select.
   await expect
@@ -394,18 +398,19 @@ test('a glyph pick selects, arms and builds the whole word', async ({
     )
     .toBe(true);
   // One glyph picked; three regions selected and armed.
-  await expect(editor).toContainText('3 selected profiles');
+  await expect(editor).toContainText('3 profiles');
   await expect.poll(async () => (await regionHandles(canvas)).length).toBe(3);
   // Shift on another glyph of the same word drops the whole word.
   await pickProfile(canvas, 2, true);
   await expect(editor).toHaveCount(0);
   await pickProfile(canvas, 0);
-  await expect(editor).toContainText('3 selected profiles');
+  await expect(editor).toContainText('3 profiles');
 
   await page.getByTestId('direct-manipulation-value').click();
-  const keypad = page.getByRole('dialog', { name: 'Height value' });
+  const keypad = page.getByRole('dialog', { name: 'Distance value' });
   await keypad.getByRole('textbox').fill('2');
-  await keypad.getByRole('button', { name: 'Apply height' }).click();
+  await keypad.getByRole('button', { name: 'Apply distance' }).click();
+  await extrudeBar(page).getByRole('button', { name: 'Done' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
     'Extruded region by 2 mm as a new body.',
     { timeout: 30_000 }

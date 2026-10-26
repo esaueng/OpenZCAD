@@ -1,4 +1,10 @@
-import { test, expect, stubApi } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  test,
+  expect,
+  stubApi,
+  openMoveOptions
+} from './openzcad-fixtures';
 
 /**
  * M10: a Move made with the gizmo stores the body's centre as its pivot, the
@@ -13,19 +19,18 @@ test('a gizmo rotation stores its pivot, and editing the angle keeps it', async 
   await page.getByLabel('Project name').fill('Pivot');
   await page.getByRole('button', { name: 'Create project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Width (X)').fill('40');
-  await inspector.getByLabel('Depth (Y)').fill('20');
-  await inspector.getByLabel('Height (Z)').fill('10');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '40', depth: '20', height: '10' }
+  });
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
   await page.keyboard.press('m');
   const overlay = page.getByRole('form', { name: 'Move controls' });
   await expect(overlay).toBeVisible();
+  await openMoveOptions(overlay);
   await overlay.getByLabel('Move X in mm').fill('12');
   await overlay.getByLabel('Rotate Z in degrees').fill('45');
-  await overlay.getByRole('button', { name: /Apply move/ }).click();
+  await overlay.getByRole('button', { name: 'Done' }).click();
   await expect(overlay).toBeHidden();
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
@@ -65,17 +70,16 @@ test('a translation-only gizmo Move still stores its pivot', async ({
   await page.getByLabel('Project name').fill('Pivot slide');
   await page.getByRole('button', { name: 'Create project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Width (X)').fill('40');
-  await inspector.getByLabel('Depth (Y)').fill('20');
-  await inspector.getByLabel('Height (Z)').fill('10');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '40', depth: '20', height: '10' }
+  });
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
   await page.keyboard.press('m');
   const overlay = page.getByRole('form', { name: 'Move controls' });
+  await openMoveOptions(overlay);
   await overlay.getByLabel('Move X in mm').fill('12');
-  await overlay.getByRole('button', { name: /Apply move/ }).click();
+  await overlay.getByRole('button', { name: 'Done' }).click();
   await expect(overlay).toBeHidden();
 
   // A turn added later in the edit card stays about the body's centre.

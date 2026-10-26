@@ -1,4 +1,5 @@
 import {
+  createPrimitiveInPlace,
   expect,
   test,
   MODEL_ONLY,
@@ -27,11 +28,9 @@ test('round-trips diameter entry and edits a cylinder cap by total height', asyn
   await page.goto('/');
   await page.getByLabel('Project name').fill('Dimension Labels');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByLabel('Radius', { exact: true }).fill('14');
-  await inspector.getByLabel('Height', { exact: true }).fill('28');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '14', height: '28' }
+  });
 
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toBeVisible({ timeout: 120_000 });

@@ -59,7 +59,33 @@ import {
   handleProjectPreferenceRequest,
   isE2eeProjectPreferenceStorageReady
 } from './e2eeProjectPreferences';
-import { handleE2eeProjectRequest, isE2eeProjectPath } from './e2eeProjects';
+import {
+  handleAssistantConsentRequest,
+  isAssistantConsentPath,
+  isE2eeAssistantConsentStorageReady
+} from './e2eeAssistantConsents';
+import {
+  RouteError,
+  handleE2eeProjectRequest,
+  isE2eeProjectPath
+} from './e2eeProjects';
+import {
+  handleE2eeShareLinkRequest,
+  isE2eeShareLinkPath
+} from './e2eeShareLinks';
+import { handleE2eeContactsRequest, isE2eeContactsPath } from './e2eeContacts';
+import {
+  handleE2eeInvitationRequest,
+  isE2eeInvitationPath,
+  type E2eeInvitationHost
+} from './e2eeInvitations';
+import {
+  MAX_APPEND_CUTOFFS_CHARS,
+  appendedRevocationCutoffs,
+  handleE2eeDeviceRemovalRequest,
+  isE2eeDeviceRemovalPath,
+  refuseCutoffsIncomplete
+} from './e2eeDeviceRemoval';
 import {
   blobBucket,
   handleE2eeContentBlobRequest,
@@ -75,9 +101,39 @@ import {
   isE2eeProjectEnvelopePath
 } from './e2eeProjectEnvelopes';
 import {
+  handleE2eeProjectMigrationRequest,
+  isE2eeProjectMigrationPath
+} from './e2eeProjectMigrations';
+import {
+  isProjectDecryptStaging,
+  migrationLeaseOf
+} from './e2eeMigrationLease';
+import { PROJECT_MIGRATING_CODE } from '@openzcad/shared';
+import {
   isE2eeProjectGroupStorageReady,
-  isE2eeProjectVersionStorageReady
+  isE2eeProjectMigrationStorageReady,
+  isE2eeProjectVersionStorageReady,
+  isE2eeReverseStorageReady
 } from '@openzcad/cloudflare-adapters';
+
+/**
+ * Slice 7-3: the encrypted content routes (documents, versions, revisions,
+ * project info, measurements, view state and blobs) a project being turned
+ * back into plaintext refuses writes on. Its MLS key management (Commits,
+ * wraps, resets) keeps working: it changes no content.
+ */
+const ENCRYPTED_CONTENT_WRITE_ROUTE =
+  /^\/api\/e2ee\/projects\/([^/]+)\/(?:document|versions|revisions(?:\/[^/]+)?|info|measurements|view-states(?:\/[^/]+)?|blobs(?:\/.*)?)$/;
+/**
+ * Writes that would share an encrypted project, or settle a member's
+ * departure, while its plaintext is staged (slice 7-3 with Phase 5): share
+ * links and their keys, authority and snapshots (5-10; matched before that
+ * slice's routes exist, so they arrive covered), proposals (5-5), new
+ * invitations and KeyPackages (5-3a). Revoking an invitation stays open. The reverse cutover refuses a shared project anyway; this keeps a
+ * staging from being undone by a write it cannot see.
+ */
+const ENCRYPTED_SHARING_WRITE_ROUTE =
+  /^\/api\/e2ee\/projects\/([^/]+)\/(?:share-links(?:\/.*)?|mls\/proposals|invitations|key-packages(?:\/claim)?)$/;
 
 interface WriteDatabase extends D1Database {
   authorization: E2eeWriteAuthorization;
@@ -105,10 +161,12 @@ export interface E2eeRouteEnv {
   /** Where encrypted document bodies above the inline size live. */
   PROJECT_STORAGE?: unknown;
   ARTIFACTS?: unknown;
+  /** Project rooms, which a migration locks and purges (slice 7-1). */
+  PROJECT_ROOM?: unknown;
 }
 
 /** The project-storage bucket, as the persistence layer picks it. */
-function projectBucket(env: E2eeRouteEnv): E2eeObjectBucket | null {
+export function projectBucket(env: E2eeRouteEnv): E2eeObjectBucket | null {
   const bucket = (env.PROJECT_STORAGE ?? env.ARTIFACTS) as
     Partial<E2eeObjectBucket> | undefined;
   return bucket &&
@@ -189,8 +247,11 @@ function record(value: unknown, what: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-async function readBody(request: Request): Promise<Record<string, unknown>> {
-  if (Number(request.headers.get('content-length') ?? '0') > MAX_BODY_BYTES) {
+async function readBody(
+  request: Request,
+  maxBytes = MAX_BODY_BYTES
+): Promise<Record<string, unknown>> {
+  if (Number(request.headers.get('content-length') ?? '0') > maxBytes) {
     refuse(413, 'E2EE_REQUEST_TOO_LARGE', 'Request body is too large.');
   }
   const reader = request.body?.getReader();
@@ -201,7 +262,7 @@ async function readBody(request: Request): Promise<Record<string, unknown>> {
     const { done, value } = await reader.read();
     if (done) break;
     size += value.byteLength;
-    if (size > MAX_BODY_BYTES) {
+    if (size > maxBytes) {
       await reader.cancel();
       refuse(413, 'E2EE_REQUEST_TOO_LARGE', 'Request body is too large.');
     }
@@ -912,11 +973,14 @@ async function handleReplaceIdentity(
     }
     throw error;
   }
-  const signerFence = await projectSignerFence(
-    db,
-    userId,
-    removedDevices(oldList.devices, list.head.devices)
-  );
+  const signerFence = await projectSignerFence(db, userId, [
+    ...removedDevices(oldList.devices, list.head.devices),
+    // Devices already revoked in this generation: their cutoffs name this
+    // generation's list, which the new genesis no longer carries.
+    ...oldList.revoked
+      .filter((revoked) => revoked.kind === 'device')
+      .map((revoked) => revoked.id)
+  ]);
   const written = await writeGeneration(db, userId, {
     generation: generation,
     identityKeyText: body.identityKey as string,
@@ -969,15 +1033,27 @@ function removedDevices(
 }
 
 /**
- * Until device removal records revocation cutoffs (ADR-024 slice 4-10), a
- * device that signed a version or envelope of one of the account's
- * encrypted projects stays: once removed, browsers would refuse what it
- * signed, and those projects would stop opening. A device that signed
- * nothing is removed as before. Nothing to check before migration 0033.
+ * A recovery-key replacement starts a new device list whose genesis lists
+ * only the devices it keeps. Revocation cutoffs (device removal) name
+ * devices revoked within one list, so a device the new genesis drops that
+ * signed a version, envelope or key archive of one of the account's
+ * encrypted projects keeps the replacement from landing: browsers could no
+ * longer resolve what it signed. A device that signed nothing is dropped as
+ * before.
+ * Nothing to check before migration 0033.
  *
- * Returns a fence for the device-list write itself, so a version a removed
- * device signs meanwhile makes the write refuse; encrypted writes are
- * fenced on the device list in turn (`deviceListUnchanged`).
+ * A plaintext project staged for encryption (slice 7-1, migration 0042)
+ * counts as encrypted here: its staged versions, project info and key
+ * archives become the encrypted project at the cutover, which checks no
+ * signer itself, so a replacement that drops their signer would leave the
+ * migrated project unreadable. Nor may it drop a device that joined the
+ * staged group (an MLS leaf), which signs nothing yet holds the key the
+ * cutover exposes ciphertext under. An abandoned staging is never cut over.
+ *
+ * Returns a fence for the identity write itself, so a version such a
+ * device signs meanwhile makes the write refuse; encrypted writes, staged
+ * ones included, are fenced on the device list in turn
+ * (`deviceListUnchanged`).
  */
 async function projectSignerFence(
   db: D1Database,
@@ -990,43 +1066,162 @@ async function projectSignerFence(
   ) {
     return { sql: '1 = 1', binds: [] };
   }
-  const marks = removedDeviceIds.map(() => '?').join(', ');
-  const fence = {
-    sql: `NOT EXISTS (SELECT 1 FROM projects p
-       WHERE p.user_id = ? AND p.storage_format = 2
+  const migrations = await isE2eeProjectMigrationStorageReady(db);
+  const fence = signedProjectsFence(
+    userId,
+    `p.storage_format = 2${migrations ? ` OR ${STAGED_FOR_ENCRYPTION_SQL}` : ''}`,
+    removedDeviceIds,
+    migrations ? STAGED_FOR_ENCRYPTION_SQL : undefined
+  );
+  await refuseIfSigned(db, fence);
+  return fence;
+}
+
+/** A project `p` with a live 'encrypt' staging (migration 0042). */
+const STAGED_FOR_ENCRYPTION_SQL = `EXISTS (SELECT 1 FROM e2ee_project_migrations m
+                   WHERE m.project_id = p.id AND m.direction = 'encrypt'
+                     AND m.state = 'staging')`;
+
+/**
+ * Holds while no project `p` of the user matching `projects` has a
+ * version, envelope or key archive signed by one of `deviceIds`, nor any
+ * project `p` matching `leavesIn` an MLS leaf of one of them, the user's
+ * own projects or not.
+ *
+ * A leaf matters only for a project staged for encryption: a device that
+ * joined the staged group holds its key without signing anything, and no
+ * cutoff or rotation can reach the project before the cutover (format-2
+ * projects get both, so their leaves hold nothing up). Since slice 7-4 a
+ * staged group also holds the leaves of the members the owner re-added
+ * there, so a member's leaf in someone else's staged project counts too:
+ * only the owner's lease holder commits to a staged group, so nothing
+ * else could drop it before the cutover exposes the key.
+ */
+function signedProjectsFence(
+  userId: string,
+  projects: string,
+  deviceIds: readonly string[],
+  leavesIn?: string
+): { sql: string; binds: string[] } {
+  const marks = deviceIds.map(() => '?').join(', ');
+  const leaves = leavesIn
+    ? `
+     AND NOT EXISTS (SELECT 1 FROM e2ee_project_leaves l
+                     JOIN projects p ON p.id = l.project_id
+                     WHERE l.user_id = ? AND l.device_id IN (${marks})
+                       AND (${leavesIn}))`
+    : '';
+  return {
+    sql: `(NOT EXISTS (SELECT 1 FROM projects p
+       WHERE p.user_id = ? AND (${projects})
          AND (EXISTS (SELECT 1 FROM e2ee_project_versions v
                       WHERE v.project_id = p.id
                         AND v.signer_device_id IN (${marks}))
            OR EXISTS (SELECT 1 FROM e2ee_project_envelopes e
                       WHERE e.project_id = p.id
-                        AND e.signer_device_id IN (${marks}))))`,
-    binds: [userId, ...removedDeviceIds, ...removedDeviceIds]
+                        AND e.signer_device_id IN (${marks}))
+           OR EXISTS (SELECT 1 FROM e2ee_key_archives a
+                      WHERE a.project_id = p.id
+                        AND a.signer_device_id IN (${marks}))))${leaves})`,
+    binds: [
+      userId,
+      ...deviceIds,
+      ...deviceIds,
+      ...deviceIds,
+      ...(leavesIn ? [userId, ...deviceIds] : [])
+    ]
   };
-  await refuseIfSigned(db, fence);
-  return fence;
 }
+
+/**
+ * An ordinary device revocation lands with a cutoff statement naming every
+ * encrypted (format-2) project (`appendedRevocationCutoffs`), but a
+ * plaintext project staged for encryption is not one yet, so no cutoff can
+ * name it, and the cutover checks no signer: a device revoked after it
+ * signed a staged version, project info or key archive would leave the
+ * migrated project holding records by a revoked signer without a cutoff,
+ * which browsers refuse. So such a revocation waits until the staging is
+ * cut over (its project is then format 2 and gets a cutoff) or abandoned.
+ * The same holds for a device that joined a staged group (an MLS leaf):
+ * it signs nothing, but holds the key the cutover exposes ciphertext
+ * under, and only a format-2 project gets the rotation that would drop it.
+ * A device that signed nothing staged and holds no staged leaf is revoked
+ * as before.
+ *
+ * Returns a fence for the device-list entry's insert. `signed` refuses a
+ * record the device stages, or a leaf it adds, meanwhile; staged writes and
+ * group joins are fenced on the device list in turn
+ * (`deviceListUnchanged`). `encrypted` holds while the account owns as
+ * many format-2 projects as when checked, so a cutover landing in between,
+ * which the cutoffs' own fence misses when there were none to name, makes
+ * the append refuse and the browser sign cutoffs again. Nothing to check
+ * before migration 0042.
+ */
+async function stagedSignerFence(
+  db: D1Database,
+  userId: string,
+  revokedDeviceIds: readonly string[]
+): Promise<{
+  sql: string;
+  binds: (string | number)[];
+  signed: { sql: string; binds: string[] };
+  moved(): Promise<boolean>;
+}> {
+  if (
+    revokedDeviceIds.length === 0 ||
+    !(await isE2eeProjectVersionStorageReady(db)) ||
+    !(await isE2eeProjectMigrationStorageReady(db))
+  ) {
+    const clear = { sql: '1 = 1', binds: [] };
+    return { ...clear, signed: clear, moved: async () => false };
+  }
+  const signed = signedProjectsFence(
+    userId,
+    STAGED_FOR_ENCRYPTION_SQL,
+    revokedDeviceIds,
+    STAGED_FOR_ENCRYPTION_SQL
+  );
+  await refuseIfSigned(db, signed, STAGED_SIGNER_MESSAGE);
+  const countEncrypted = `(SELECT COUNT(*) FROM projects
+                           WHERE user_id = ? AND storage_format = 2)`;
+  const encrypted = async () =>
+    (
+      await db
+        .prepare(`SELECT ${countEncrypted} AS n`)
+        .bind(userId)
+        .first<{ n: number }>()
+    )?.n ?? 0;
+  const checked = await encrypted();
+  return {
+    sql: `${signed.sql} AND ${countEncrypted} = ?`,
+    binds: [...signed.binds, userId, checked],
+    signed,
+    moved: async () => (await encrypted()) !== checked
+  };
+}
+
+const STAGED_SIGNER_MESSAGE =
+  'This device holds keys to a project that is still being encrypted. Remove it once that encryption is finished or cancelled. Nothing was changed.';
 
 async function refuseIfSigned(
   db: D1Database,
-  fence: { sql: string; binds: string[] }
+  fence: { sql: string; binds: string[] },
+  message = 'A device this change leaves out saved encrypted projects, and those projects would stop opening. This will be possible in a coming update.'
 ): Promise<void> {
   const clear = await db
     .prepare(`SELECT (${fence.sql}) AS clear`)
     .bind(...fence.binds)
     .first<{ clear: number }>();
   if (clear?.clear !== 1) {
-    refuse(
-      409,
-      E2EE_DEVICE_SIGNED_PROJECTS_CODE,
-      'This device saved encrypted projects, and removing it is not available yet: those projects would stop opening. It will be in a coming update.'
-    );
+    refuse(409, E2EE_DEVICE_SIGNED_PROJECTS_CODE, message);
   }
 }
 
 async function handleAppend(
   db: WriteDatabase,
   userId: string,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  projectsEnabled: boolean
 ): Promise<E2eeAccountResponse> {
   const { signed, entryText, signatureText } = signedEntryOf(body);
   const wraps = parseWraps(body.wraps);
@@ -1064,11 +1259,6 @@ async function handleAppend(
     signed
   ]);
   const previous = list.entries.at(-2)!.entry;
-  const signerFence = await projectSignerFence(
-    db,
-    userId,
-    removedDevices(previous.devices, list.head.devices)
-  );
   const rotation =
     toHex(previous.accountKeyCommitment) !==
     toHex(list.head.accountKeyCommitment);
@@ -1130,6 +1320,25 @@ async function handleAppend(
       invalid(`The account key is not sealed to ${device.deviceId}`);
     }
   }
+  // A device revocation lands with its signed cutoff statement, or not at
+  // all, for an account with encrypted projects (e2eeDeviceRemoval.ts).
+  const cutoffs = await appendedRevocationCutoffs(
+    db,
+    userId,
+    current.generation,
+    list,
+    body.cutoffs,
+    projectsEnabled
+  );
+  // Nor while a device it revokes signed a project staged for encryption,
+  // which no cutoff can name yet (`stagedSignerFence`).
+  const stagedFence = await stagedSignerFence(
+    db,
+    userId,
+    list.head.revoked
+      .filter((revocation) => revocation.kind === 'device')
+      .map((revocation) => revocation.id)
+  );
   const now = new Date().toISOString();
   const entryHash = toHex(list.headHash);
   const auth = db.authorization;
@@ -1146,6 +1355,9 @@ async function handleAppend(
     ]
   };
   const revokedIds = list.head.revoked.map((r) => r.id);
+  // The projects its cutoffs were checked against must not move before
+  // the batch runs; nothing lands if they did.
+  const projectsFence = cutoffs?.fence ?? { sql: '1', binds: [] };
   const statements: D1PreparedStatement[] = [
     db
       .prepare(
@@ -1155,7 +1367,7 @@ async function handleAppend(
          WHERE ${auth.sql} AND (SELECT MAX(sequence) FROM e2ee_device_list_entries
                 WHERE user_id = ? AND generation = ?) = ?
            AND (SELECT MAX(generation) FROM e2ee_identities WHERE user_id = ?) = ?
-           AND ${signerFence.sql}`
+           AND ${projectsFence.sql} AND ${stagedFence.sql}`
       )
       .bind(
         userId,
@@ -1171,7 +1383,8 @@ async function handleAppend(
         before.sequence,
         userId,
         current.generation,
-        ...signerFence.binds
+        ...projectsFence.binds,
+        ...stagedFence.binds
       ),
     ...(rotation
       ? [
@@ -1216,11 +1429,19 @@ async function handleAppend(
         guard
       )
     ),
-    ...(history ? [insertHistory(db, userId, history, now, guard)] : [])
+    ...(history ? [insertHistory(db, userId, history, now, guard)] : []),
+    ...(cutoffs ? [cutoffs.insert(guard, now)] : [])
   ];
   const results = await db.batch(statements);
   if ((results[0]?.meta?.changes ?? 0) !== 1) {
-    await refuseIfSigned(db, signerFence);
+    // A project created, shared, committed to or saved to since the
+    // cutoffs were checked, or one cut over to encrypted storage: the
+    // browser signs them again.
+    if ((await cutoffs?.moved()) || (await stagedFence.moved())) {
+      refuseCutoffsIncomplete();
+    }
+    // Or a record the revoked device staged since the check.
+    await refuseIfSigned(db, stagedFence.signed, STAGED_SIGNER_MESSAGE);
     refuse(
       409,
       'E2EE_DEVICE_LIST_CONFLICT',
@@ -1788,14 +2009,50 @@ export async function e2eeErasureTables(
  * rollout decision for this account; `config` answers either way so the
  * browser can tell "off" from "unreachable". `projectsEnabled` is the
  * encrypted-projects decision (E2EE_PROJECTS_ENABLED, ADR-024 Phase 4),
- * reported disabled while migration 0031 is missing.
+ * reported disabled while migration 0031 is missing. `migrationEnabled`
+ * is the decision to move plaintext projects to encrypted storage
+ * (E2EE_MIGRATION_ENABLED, ADR-024 Phase 7), reported disabled while
+ * migration 0042 is missing.
  */
+/** Without a host, the invitation routes stay closed. */
+const CLOSED_INVITATIONS: E2eeInvitationHost = {
+  email: null,
+  inviterLabel: '',
+  sharingEnabled: false,
+  emailConfigured: false,
+  sendInvitationEmail: () =>
+    Promise.reject(new Error('Invitation email is not configured.'))
+};
+
 export async function handleE2eeRequest(
   request: Request,
   env: E2eeRouteEnv,
   session: E2eeRouteSession,
   enabled: boolean,
-  projectsEnabled = false
+  projectsEnabled = false,
+  /** The invitation routes' email, sender and sharing rollout (5-3a). */
+  invitations: E2eeInvitationHost = CLOSED_INVITATIONS,
+  /** Moving plaintext projects to encrypted storage (slice 7-1). */
+  migrationEnabled = false,
+  /**
+   * Slice 7-3: the beta-only reverse path is open to this account
+   * (E2EE_REVERSE_ENABLED with migration), reported once migration 0043 is
+   * installed.
+   */
+  reverseEnabled = false,
+  /**
+   * Slice 7-3: whether encrypted content writes ask if their project is
+   * being turned back into plaintext (refused with 409 PROJECT_MIGRATING).
+   * The global flags decide, not the account's, as for plaintext writes.
+   */
+  reverseWritesGated = false,
+  /**
+   * Phase 8, slice 8-1: end-to-end encryption is the default for this
+   * account (`isE2eeDefaultOn`, E2EE_DEFAULT_ON with migration open):
+   * reported once migration is, and the "Encrypt new projects" opt-out is
+   * refused.
+   */
+  defaultOn = false
 ): Promise<Response> {
   const { pathname } = new URL(request.url);
   const method = request.method;
@@ -1804,16 +2061,29 @@ export async function handleE2eeRequest(
     if (pathname === '/api/e2ee/config' && method === 'GET') {
       const keysReady =
         enabled && Boolean(env.DB) && (await isE2eeKeyStorageReady(env.DB!));
+      const projectsReady =
+        keysReady &&
+        projectsEnabled &&
+        (await isE2eeProjectPreferenceStorageReady(env.DB)) &&
+        // Encrypted projects need their MLS group tables (migration 0032)
+        // and their version tables (migration 0033).
+        (await isE2eeProjectGroupStorageReady(env.DB)) &&
+        (await isE2eeProjectVersionStorageReady(env.DB));
+      // Reported only once open, so a closed deployment answers as before.
+      const migrationReady =
+        projectsReady &&
+        migrationEnabled &&
+        (await isE2eeProjectMigrationStorageReady(env.DB));
+      const reverseReady =
+        migrationReady &&
+        reverseEnabled &&
+        (await isE2eeReverseStorageReady(env.DB));
       return json({
         enabled: keysReady,
-        projectsEnabled:
-          keysReady &&
-          projectsEnabled &&
-          (await isE2eeProjectPreferenceStorageReady(env.DB)) &&
-          // Encrypted projects need their MLS group tables (migration 0032)
-          // and their version tables (migration 0033).
-          (await isE2eeProjectGroupStorageReady(env.DB)) &&
-          (await isE2eeProjectVersionStorageReady(env.DB))
+        projectsEnabled: projectsReady,
+        ...(migrationReady ? { migrationEnabled: true } : {}),
+        ...(reverseReady ? { reverseEnabled: true } : {}),
+        ...(migrationReady && defaultOn ? { defaultOn: true } : {})
       });
     }
     if (!enabled) {
@@ -1874,6 +2144,88 @@ export async function handleE2eeRequest(
         rawDb,
         userId,
         db.authorization,
+        () => readBody(request),
+        defaultOn
+      );
+    }
+    // Slice 7-1: the staging lease, only while migration is open.
+    const migrationLease = migrationLeaseOf(request, migrationEnabled);
+    if (isE2eeProjectMigrationPath(pathname)) {
+      // Moving a plaintext project to encrypted storage.
+      return await handleE2eeProjectMigrationRequest(
+        request,
+        env,
+        userId,
+        migrationEnabled,
+        db.authorization,
+        migrationLease,
+        reverseEnabled
+      );
+    }
+    // Slice 7-3: while its plaintext is staged, an encrypted project's
+    // content and sharing stay as the staging read them.
+    if (reverseWritesGated && !['GET', 'HEAD'].includes(method)) {
+      const content =
+        ENCRYPTED_CONTENT_WRITE_ROUTE.exec(pathname) ??
+        ENCRYPTED_SHARING_WRITE_ROUTE.exec(pathname);
+      let projectId: string | null = null;
+      try {
+        projectId = content ? decodeURIComponent(content[1]!) : null;
+      } catch {
+        projectId = null;
+      }
+      if (
+        projectId &&
+        (await isProjectDecryptStaging(rawDb, projectId, true))
+      ) {
+        refuse(
+          409,
+          PROJECT_MIGRATING_CODE,
+          'This project is leaving encrypted storage. It opens read-only until that finishes.'
+        );
+      }
+    }
+    if (isE2eeDeviceRemovalPath(pathname)) {
+      // Revocation cutoffs and solo group resets (e2eeDeviceRemoval.ts).
+      return await handleE2eeDeviceRemovalRequest(
+        request,
+        rawDb,
+        userId,
+        projectsEnabled,
+        db.authorization
+      );
+    }
+    if (isE2eeContactsPath(pathname)) {
+      // Contacts lists and other people's device lists (e2eeContacts.ts).
+      return await handleE2eeContactsRequest(
+        request,
+        rawDb,
+        userId,
+        db.authorization,
+        () => readBody(request)
+      );
+    }
+    if (isAssistantConsentPath(pathname)) {
+      // Per-project assistant consent (e2eeAssistantConsents.ts, 6-1).
+      if (!projectsEnabled) {
+        refuse(
+          501,
+          'FEATURE_DISABLED',
+          'Encrypted projects are not available for this account yet.'
+        );
+      }
+      if (!(await isE2eeAssistantConsentStorageReady(rawDb))) {
+        refuse(
+          503,
+          'E2EE_UNAVAILABLE',
+          'The assistant on encrypted projects is unavailable until the database is updated.'
+        );
+      }
+      return await handleAssistantConsentRequest(
+        request,
+        rawDb,
+        userId,
+        db.authorization,
         () => readBody(request)
       );
     }
@@ -1884,7 +2236,8 @@ export async function handleE2eeRequest(
         env,
         userId,
         projectsEnabled,
-        db.authorization
+        db.authorization,
+        migrationLease
       );
     }
     if (isE2eeProjectDocumentPath(pathname)) {
@@ -1896,7 +2249,8 @@ export async function handleE2eeRequest(
         userId,
         projectsEnabled,
         db.authorization,
-        blobBucket(env)
+        blobBucket(env),
+        migrationLease
       );
     }
     if (isE2eeProjectEnvelopePath(pathname)) {
@@ -1906,7 +2260,35 @@ export async function handleE2eeRequest(
         rawDb,
         userId,
         projectsEnabled,
+        db.authorization,
+        migrationLease
+      );
+    }
+    if (isE2eeShareLinkPath(pathname)) {
+      // Share links of encrypted projects and share delegations
+      // (e2eeShareLinks.ts, slice 5-10).
+      return await handleE2eeShareLinkRequest(
+        request,
+        rawDb,
+        projectBucket(env),
+        userId,
+        projectsEnabled,
+        invitations.sharingEnabled,
         db.authorization
+      );
+    }
+    if (isE2eeInvitationPath(pathname)) {
+      // Invitations, KeyPackages and Welcomes (e2eeInvitations.ts, 5-3a).
+      return await handleE2eeInvitationRequest(
+        request,
+        rawDb,
+        userId,
+        projectsEnabled,
+        db.authorization,
+        invitations,
+        () => readBody(request),
+        // Slice 7-4: re-adding a shared plaintext project's members.
+        { open: migrationEnabled, lease: migrationLease }
       );
     }
     if (isE2eeProjectPath(pathname)) {
@@ -1916,7 +2298,8 @@ export async function handleE2eeRequest(
         rawDb,
         userId,
         projectsEnabled,
-        db.authorization
+        db.authorization,
+        migrationLease
       );
     }
     if (pathname === '/api/e2ee/account' && method === 'GET') {
@@ -1951,7 +2334,15 @@ export async function handleE2eeRequest(
       return json(await handleSetup(db, userId, await readBody(request)), 201);
     }
     if (pathname === '/api/e2ee/device-list' && method === 'POST') {
-      return json(await handleAppend(db, userId, await readBody(request)));
+      return json(
+        await handleAppend(
+          db,
+          userId,
+          // Room for a revocation's cutoff statement next to the entry.
+          await readBody(request, MAX_BODY_BYTES + MAX_APPEND_CUTOFFS_CHARS),
+          projectsEnabled
+        )
+      );
     }
     if (pathname === '/api/e2ee/identity' && method === 'POST') {
       return json(
@@ -2041,6 +2432,14 @@ export async function handleE2eeRequest(
   } catch (error) {
     if (error instanceof E2eeRouteError) {
       return json({ error: error.message, code: error.code }, error.status);
+    }
+    if (error instanceof RouteError) {
+      // A refusal of the shared project-route helpers (the cutoffs a
+      // device-list append carries).
+      return json(
+        { error: error.message, code: error.code, ...error.extra },
+        error.status
+      );
     }
     throw error;
   } finally {

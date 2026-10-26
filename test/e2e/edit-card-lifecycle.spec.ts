@@ -1,10 +1,14 @@
 import type { Page } from '@playwright/test';
 import {
+  createPrimitiveInPlace,
   test,
   expect,
   stubApi,
   createHoleInPlace,
-  revealModelPanel
+  enterCommandValue,
+  finishInPlaceCommand,
+  blendEdgesInPlace,
+  openMoveOptions
 } from './openzcad-fixtures';
 
 /**
@@ -27,10 +31,7 @@ function inspectorOf(page: Page) {
 }
 
 async function createBox(page: Page) {
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspectorOf(page)
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
@@ -78,32 +79,27 @@ test('Box: the edit card closes after Apply, and Escape cancels without a histor
   await expect(width).toHaveValue('40');
 });
 
-test('Hole: selecting the feature opens its form, and Apply closes it', async ({
+test('Hole: selecting the feature re-arms it in place, and Done closes it', async ({
   page
 }) => {
   test.setTimeout(90_000);
   await createProject(page, 'Hole edit card');
   await createBox(page);
-  // U09: a new hole is drilled in place; editing it still opens its card.
   await createHoleInPlace(page, { diameter: '5' });
   await expect(row(page, /^Hole/)).toBeVisible({ timeout: 20_000 });
-  const entry = page.getByRole('group', { name: 'Entry face' });
   const inspector = inspectorOf(page);
   await expect(inspector).toHaveCount(0);
 
-  // One click on the row, and the card is the editable form — there is no
-  // "Edit hole" button in front of it.
+  // U09 phase 7: one click on the row re-arms the Hole command on the model,
+  // its chips holding the stored values. No form opens.
   await row(page, /^Hole/).click();
-  const diameter = page.getByRole('textbox', { name: 'Diameter', exact: true });
-  await expect(diameter).toHaveValue('5');
-  await expect(
-    inspector.getByRole('button', { name: 'Edit hole' })
-  ).toHaveCount(0);
-  await expect(
-    entry.getByRole('button', { name: /Box 1 · Top face/ })
-  ).toHaveAttribute('aria-pressed', 'true');
-  await diameter.fill('8');
-  await page.getByRole('button', { name: 'Apply hole' }).click();
+  const bar = page.getByRole('group', { name: 'Edit Hole command' });
+  await expect(bar).toBeVisible();
+  await expect(page.locator('form.feature-form')).toHaveCount(0);
+  const chip = page.getByTestId('command-handle-diameter');
+  await expect(chip).toHaveText('⌀ 5 mm');
+  await enterCommandValue(page, 'diameter', '8');
+  await finishInPlaceCommand(page, 'Edit Hole');
   await expect(page.getByRole('contentinfo')).toContainText('Edited Hole.', {
     timeout: 20_000
   });
@@ -112,24 +108,26 @@ test('Hole: selecting the feature opens its form, and Apply closes it', async ({
     1
   );
 
-  // Escape cancels the reopened form, and the stored diameter is the
-  // applied one.
+  // Escape cancels a re-armed edit, and the stored diameter is the one Done
+  // committed.
   await row(page, /^Hole/).click();
-  await expect(diameter).toHaveValue('8');
-  await diameter.fill('3');
-  await diameter.press('Escape');
+  await expect(chip).toHaveText('⌀ 8 mm');
+  await enterCommandValue(page, 'diameter', '3');
+  await page.keyboard.press('Escape');
+  await expect(bar).toHaveCount(0);
   await expect(inspector).toHaveCount(0);
   await row(page, /^Hole/).click();
-  await expect(diameter).toHaveValue('8');
+  await expect(chip).toHaveText('⌀ 8 mm');
 
-  // The card keeps the overflow every edit card has.
+  // The pinned feature keeps the overflow every edit card has.
   await inspector.getByLabel('More actions').click();
   await inspector.getByRole('button', { name: 'Delete feature' }).click();
   await expect(page.locator('.feature-row', { hasText: /^Hole/ })).toHaveCount(
     0,
     { timeout: 20_000 }
   );
-  // …and the card goes with the feature it was editing.
+  // …and the command goes with the feature it was editing.
+  await expect(bar).toHaveCount(0);
   await expect(inspector).toHaveCount(0);
 });
 
@@ -140,9 +138,27 @@ test('Move: the edit card uses the gizmo card labels and closes after Apply', as
   await createBox(page);
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
   const gizmo = page.getByRole('form', { name: 'Move controls' });
+  // The numbers sit behind the bar's Options (U09), under the same names.
+  // Enter on the Options button opens them; it does not apply the Move.
+  const options = gizmo.locator('details.in-place-command-options');
+  await options.locator('summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(options).toHaveAttribute('open', '');
+  await expect(gizmo).toBeVisible();
+  await expect(row(page, /^Move/)).toHaveCount(0);
+  // Nor does Enter from anywhere else commit the untouched Move its Done
+  // refuses.
+  await page.evaluate(() => (document.activeElement as HTMLElement)?.blur());
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Nothing to apply yet'
+  );
+  await expect(gizmo).toBeVisible();
+  await expect(row(page, /^Move/)).toHaveCount(0);
+  await openMoveOptions(gizmo);
   await expect(gizmo.getByText('dX', { exact: true })).toBeVisible();
   await gizmo.getByLabel('Move X in mm').fill('10');
-  await gizmo.getByRole('button', { name: /Apply move/ }).click();
+  await gizmo.getByRole('button', { name: 'Done' }).click();
   await expect(row(page, /^Move/)).toBeVisible();
 
   await row(page, /^Move/).click();
@@ -170,87 +186,66 @@ test('Move: the edit card uses the gizmo card labels and closes after Apply', as
   await expect(moveX).toHaveValue('20');
 });
 
-test('Fillet: Apply closes the card, a refused Apply keeps it open with the reason', async ({
+test('Fillet: Done closes the edit, a refused size keeps it armed with the reason', async ({
   page
 }) => {
   test.setTimeout(90_000);
   await createProject(page, 'Fillet edit card');
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
   const inspector = inspectorOf(page);
-  await inspector.getByLabel('Radius', { exact: true }).fill('14');
-  await inspector.getByLabel('Height', { exact: true }).fill('28');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
-  await page.getByRole('button', { name: /^Fillet/ }).click();
-  await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
-  const radius = inspector.getByLabel('Radius', { exact: true });
-  await radius.fill('1');
-  // The edge pick demands lineage, and that rebuild drops the card's target
-  // and restores it while the radius is being typed. Wait for both edges to
-  // be listed again: the typed radius must still be the one Create sends.
-  await expect(
-    inspector
-      .getByRole('list', { name: 'Filleted edges' })
-      .getByRole('listitem')
-  ).toHaveCount(2);
-  await expect(radius).toHaveValue('1');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '14', height: '28' }
+  });
+  // U09 phase 7: no card. Every edge from Options, the radius on its chip.
+  await blendEdgesInPlace(page, { tool: 'Fillet', allEdges: 2, size: '1' });
   await expect(row(page, /^Fillet/)).toBeVisible({ timeout: 20_000 });
   await expect(inspector).toHaveCount(0);
 
+  const edit = page.getByRole('group', { name: 'Edit Fillet command' });
+  const chip = page.getByTestId('command-handle-radius');
   await row(page, /^Fillet/).click();
-  await expect(radius).toHaveValue('1');
-  await radius.fill('2');
-  await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
-  await expect(page.getByRole('contentinfo')).toContainText('Fillet applied.', {
+  await expect(chip).toHaveText('R 1 mm');
+  await enterCommandValue(page, 'radius', '2');
+  await finishInPlaceCommand(page, 'Edit Fillet');
+  await expect(page.getByRole('contentinfo')).toContainText('Edited Fillet', {
     timeout: 20_000
   });
   await expect(inspector).toHaveCount(0);
 
-  // A radius the cylinder cannot take is refused: the card stays, with the
-  // typed value and the reason, and nothing is added to history.
+  // A radius the cylinder cannot take is refused: the edit stays armed with
+  // the reason, Done waits, and nothing is added to history.
   await row(page, /^Fillet/).click();
-  await expect(radius).toHaveValue('2');
-  await radius.fill('1000');
-  await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
-  await expect(inspector.locator('.inspector-commit-error')).toBeVisible({
-    timeout: 20_000
+  await expect(chip).toHaveText('R 2 mm');
+  await enterCommandValue(page, 'radius', '1000');
+  await expect(page.locator('.in-place-command.refused')).toBeVisible({
+    timeout: 30_000
   });
-  await expect(inspector).toBeVisible();
-  await expect(radius).toHaveValue('1000');
-  await radius.press('Escape');
-  await expect(inspector).toHaveCount(0);
+  await expect(edit.getByRole('button', { name: /Done/ })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(edit).toHaveCount(0);
   await row(page, /^Fillet/).click();
-  await expect(radius).toHaveValue('2');
-  await revealModelPanel(page, 'History');
+  await expect(chip).toHaveText('R 2 mm');
   await expect(page.locator('.feature-row')).toHaveCount(2);
 });
 
-test('Fillet: a radius typed before the edges are picked is the one created', async ({
+test('Fillet: a radius typed while the edges settle is the one created', async ({
   page
 }) => {
   // QA 11 October 2026: an all-edges fillet typed as 99 was saved with the
   // default radius 2, overwritten while the edge selection initialised.
   test.setTimeout(90_000);
   await createProject(page, 'Fillet typed first');
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
   const inspector = inspectorOf(page);
-  await inspector.getByLabel('Radius', { exact: true }).fill('14');
-  await inspector.getByLabel('Height', { exact: true }).fill('28');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
-  await page.getByRole('button', { name: /^Fillet/ }).click();
-  const radius = inspector.getByLabel('Radius', { exact: true });
-  await radius.fill('1.5');
-  await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
-  await expect(
-    inspector
-      .getByRole('list', { name: 'Filleted edges' })
-      .getByRole('listitem')
-  ).toHaveCount(2);
-  await expect(radius).toHaveValue('1.5');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '14', height: '28' }
+  });
+  // The edge pick demands lineage, and that rebuild lands while the radius
+  // is typed: the typed radius must still be the one Done sends.
+  await blendEdgesInPlace(page, { tool: 'Fillet', allEdges: 2, size: '1.5' });
   await expect(row(page, /^Fillet/)).toBeVisible({ timeout: 20_000 });
   await expect(inspector).toHaveCount(0);
 
   await row(page, /^Fillet/).click();
-  await expect(radius).toHaveValue('1.5');
+  await expect(page.getByTestId('command-handle-radius')).toHaveText(
+    'R 1.5 mm'
+  );
 });

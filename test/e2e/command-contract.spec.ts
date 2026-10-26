@@ -5,7 +5,13 @@ import {
   createProjectDocument
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
-import { expect, test, stubApi } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  expect,
+  test,
+  stubApi,
+  blendEdgesInPlace
+} from './openzcad-fixtures';
 
 /**
  * ROADMAP U01, coherence plan phase 2 gate: one value, one commit gesture.
@@ -114,11 +120,10 @@ async function createCylinder(page: Page, project: string) {
   await page.goto('/');
   await page.getByLabel('Project name').fill(project);
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByLabel('Radius', { exact: true }).fill('14');
-  await inspector.getByLabel('Height', { exact: true }).fill('28');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '14', height: '28' }
+  });
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toBeVisible({ timeout: 120_000 });
   await expect(page.getByRole('contentinfo')).not.toContainText(
@@ -168,16 +173,17 @@ test('cap height under chamfers: Enter commits the chip value, Escape leaves his
   page
 }) => {
   test.setTimeout(180_000);
-  const { canvas, inspector, consoleErrors } = await createCylinder(
+  const { canvas, consoleErrors } = await createCylinder(
     page,
     'Contract offset'
   );
   // Chamfers put the cap edit on the exact-preview path: every value must
   // survive a real rebuild rather than a proxy scale.
-  await page.getByRole('button', { name: /^Chamfer/ }).click();
-  await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
-  await inspector.getByLabel('Distance', { exact: true }).fill('1');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await blendEdgesInPlace(page, {
+    tool: 'Chamfer',
+    allEdges: 2,
+    size: '1'
+  });
   await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   const { select, axisLength } = cylinderHooks(canvas);
   const arm = async () => {
@@ -327,11 +333,7 @@ test('resize hole: Enter commits the chip value, Escape leaves history alone', a
   await page.goto('/');
   await page.getByLabel('Project name').fill('Contract hole');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   // One 5 mm hole through the top face: the bore is the body's only
   // cylindrical face, so the cylinder hook's wall read measures it.
   // U09: Hole runs in place. Click the face, set the diameter on its chip's
@@ -414,14 +416,15 @@ test('one Escape clears a refused offset: card, preview, handle and selection', 
   await page.addInitScript(() => {
     window.__openzcadE2EExactFaceDrag = true;
   });
-  const { canvas, inspector, consoleErrors } = await createCylinder(
+  const { canvas, consoleErrors } = await createCylinder(
     page,
     'Contract refused offset'
   );
-  await page.getByRole('button', { name: /^Chamfer/ }).click();
-  await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
-  await inspector.getByLabel('Distance', { exact: true }).fill('1');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await blendEdgesInPlace(page, {
+    tool: 'Chamfer',
+    allEdges: 2,
+    size: '1'
+  });
   await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   const { select, axisLength } = cylinderHooks(canvas);
   const height = async () => {
@@ -464,7 +467,8 @@ test('one Escape clears a refused offset: card, preview, handle and selection', 
   // Nothing stands over the arrow: the press reaches the canvas.
   expect(
     await canvas.evaluate(
-      (element, point) => document.elementFromPoint(point.x, point.y) === element,
+      (element, point) =>
+        document.elementFromPoint(point.x, point.y) === element,
       start
     )
   ).toBe(true);

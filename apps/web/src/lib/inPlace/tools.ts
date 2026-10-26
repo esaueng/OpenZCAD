@@ -1,28 +1,58 @@
-import type { PlaneBasis } from '@openzcad/geometry';
+import {
+  canonicalPlaneBasis,
+  newCanonicalPlaneRef,
+  planeIntersectionDatumAxis,
+  requireRevolveAxisInPlane,
+  type PlaneBasis
+} from '@openzcad/geometry';
 import {
   MAX_HELICAL_SWEEP_TURNS,
   type BodyId,
   type BooleanKeepOriginals,
   type BooleanOperation,
+  type DatumAxisDefinition,
   type DatumAxisLine,
+  type DatumAxisRef,
+  type EdgeTopologyReferenceV5,
+  type FaceTopologyReferenceV5,
+  type FeatureData,
+  type DatumPlaneDefinition,
   type FeatureId,
   type ParamValue,
   type ParametricVector3,
+  type PrimitiveKind,
+  type ReferenceImage,
+  type ReferenceImagePlane,
   type RevolveAxis,
   type SketchId,
   type SketchProfileReference,
   type SketchSectionReference,
+  type VariableFilletLaw,
   type Vector3
 } from '@openzcad/shared';
 import {
-  MIN_REVOLVE_ANGLE,
+  collinear,
+  lineInPlane,
   revolveAxisCandidates,
   revolveProfileRegions,
   revolveRigPlacement,
-  type RevolveAxisCandidate
+  type RevolveAxisCandidate,
+  type RevolveRigPlacement
 } from './revolve';
 import type { ModelingOperationFormState } from '../modelingOperations';
 import { holePositionAxes, holePositionFromPick } from '../holePositionAxes';
+import { PRIMITIVE_ANCHORS, PRIMITIVE_FIELDS } from '../primitivePlacement';
+import {
+  GROUND_FRAME,
+  footprintShape,
+  primitiveBuild,
+  type PlacementPick
+} from './primitives';
+import { datumAxis, datumPlane, type RefKind, type RefPick } from './datums';
+import { referenceImage, type ImageSlot } from './image';
+
+export type { RefPick } from './datums';
+export type { ImagePlacement, ImageSlot } from './image';
 
 /**
  * The in-place commands (U09), as data.
@@ -53,7 +83,13 @@ export type InPlaceToolId =
   | 'intersect'
   | 'linear-pattern'
   | 'circular-pattern'
-  | 'grid-pattern';
+  | 'grid-pattern'
+  | 'fillet'
+  | 'chamfer'
+  | PrimitiveKind
+  | 'datum-plane'
+  | 'datum-axis'
+  | 'reference-image';
 
 export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'revolve',
@@ -74,7 +110,17 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'intersect',
   'linear-pattern',
   'circular-pattern',
-  'grid-pattern'
+  'grid-pattern',
+  'fillet',
+  'chamfer',
+  'box',
+  'cylinder',
+  'cone',
+  'sphere',
+  'torus',
+  'datum-plane',
+  'datum-axis',
+  'reference-image'
 ];
 
 export function isInPlaceTool(tool: string): tool is InPlaceToolId {
@@ -86,6 +132,11 @@ export interface ProfilePick {
   sketchId: SketchId;
   reference: SketchProfileReference;
   regionFingerprint: number;
+  /**
+   * An edited revolve that stores no profile (its sketch's first object, as
+   * before profiles were stored): kept that way until another is picked.
+   */
+  implicit?: true;
 }
 
 /** A picked sketch curve, named by its authored entity. */
@@ -105,6 +156,30 @@ export interface FacePick {
   center?: Vector3;
   /** Where the click landed on it (a hole goes there). */
   point?: Vector3;
+  /**
+   * `point` is where an edited hole already stands, not a click: its stored
+   * position is kept, expressions and all, until the face is clicked again.
+   */
+  savedPosition?: true;
+  /**
+   * The lineage reference an edit found a stored face by, so a later
+   * re-check finds it the same way when its hash moves.
+   */
+  reference?: FaceTopologyReferenceV5;
+}
+
+/** A picked model edge, with where its handles stand. */
+export interface EdgePick {
+  bodyId: BodyId;
+  hash: number;
+  topologyId: string;
+  /** Its lineage name, when the body publishes one. */
+  reference?: EdgeTopologyReferenceV5;
+  /** The middle of its drawn polyline, and the way out of the body there. */
+  middle?: Vector3;
+  outward?: Vector3;
+  /** Its far end, where a variable fillet reaches its end radius. */
+  end?: Vector3;
 }
 
 /** A picked body, with the box its handles are placed from. */
@@ -112,13 +187,31 @@ export interface BodyPick {
   bodyId: BodyId;
   min: Vector3;
   max: Vector3;
+  /**
+   * A later direct edit reshapes this body (one an edit was retargeted
+   * to): its box is only approximate, as `InPlaceContext.reshapedLater`.
+   */
+  reshapedLater?: true;
+}
+
+/** The text of a plane's stored fields, expressions as written. */
+export interface PlaneFieldsText {
+  origin: { x: string; y: string; z: string };
+  normal: { x: string; y: string; z: string };
 }
 
 /** A plane to mirror or split across. */
 export type PlanePick =
   | { kind: 'principal'; plane: string; origin: Vector3; normal: Vector3 }
   | { kind: 'face'; origin: Vector3; normal: Vector3 }
-  | { kind: 'datum'; featureId: FeatureId };
+  | { kind: 'datum'; featureId: FeatureId }
+  /** An edited feature's own plane, stored back as written until slid. */
+  | {
+      kind: 'saved';
+      origin: Vector3;
+      normal: Vector3;
+      fields: PlaneFieldsText;
+    };
 
 /** What the picks have filled. Order matters: a loft's sections run in it. */
 export interface InPlaceSlots {
@@ -131,19 +224,33 @@ export interface InPlaceSlots {
   /** In pick order: a boolean's first is its base. */
   bodies: BodyPick[];
   plane: PlanePick | null;
+  /** In pick order, all on one body: a fillet's or chamfer's. */
+  edges: EdgePick[];
+  /** Where a primitive's footprint was drawn; absent, it stands on the ground. */
+  placement?: PlacementPick | null;
+  /** A datum's sources, in pick order: planes, edge ends, an edge, a face. */
+  refs: RefPick[];
+  /** The picture an Image command is placing. */
+  image: ImageSlot | null;
 }
 
 /** A choice too rare for a handle: it lives in the bar's Options menu. */
 export interface OptionSpec {
   id: string;
   label: string;
-  choices: readonly { value: string; label: string }[];
+  /** A choice's `note` explains it under the row while it is chosen. */
+  choices: readonly { value: string; label: string; note?: string }[];
   initial: string;
   /**
    * Another option this one may never equal (a grid's two directions):
    * choosing that option's value swaps the two instead.
    */
   distinctFrom?: string;
+  /**
+   * Its values are tool ids that share this tool's slots (a boolean's
+   * operation): choosing one switches the command to that tool.
+   */
+  switchesTool?: boolean;
 }
 
 export type ValueUnit = 'angle' | 'length' | 'count';
@@ -157,6 +264,14 @@ export interface ValueSpec {
   max?: number;
   /** Whole numbers only (a pattern's counts): a fraction rounds, or is refused when typed. */
   integer?: boolean;
+  /** No handle: an exact number typed from the bar's Options (a position). */
+  inOptions?: boolean;
+  /**
+   * `min` and `max` are themselves refused (a countersink's angle, strictly
+   * between 0° and 180°): a value is kept just inside them. `'min'` refuses
+   * only `min` (a revolve: more than 0°, up to 360°).
+   */
+  exclusive?: boolean | 'min';
 }
 
 /** A sketch as the commands read it: its plane and its region outlines. */
@@ -166,12 +281,19 @@ export interface InPlaceSketchView {
   regions: readonly {
     regionFingerprint: number;
     outer: readonly { x: number; y: number }[];
+    /** Its inner loops (a washer's bore), when the view carries them. */
+    holes?: readonly (readonly { x: number; y: number }[])[];
     /** The authored entities bounding it, which survive a renumbering. */
     sourceEntityIds?: readonly string[];
   }[];
 }
 
 export interface InPlaceContext {
+  /**
+   * An edited body's box is only approximate (a later direct edit reshapes
+   * it): handles measured from it are typed chips instead.
+   */
+  reshapedLater?: boolean;
   sketchViews: readonly InPlaceSketchView[];
   datumAxes: Record<FeatureId, DatumAxisLine> | undefined;
   datumLabel(featureId: FeatureId): string;
@@ -179,15 +301,44 @@ export interface InPlaceContext {
   linearSnap?: number | null;
   /** A body's bounding box, for references measured on it (a draft's base). */
   bodyBounds?(bodyId: BodyId): { min: Vector3; max: Vector3 } | null;
+  /**
+   * The stored data of the feature being edited, for whatever the command
+   * keeps as stored rather than showing (a hole's position until it is
+   * clicked again, a draft's typed pull direction). Absent when creating.
+   */
+  saved?: FeatureData;
+  /** A stored value as a number, or null when it does not resolve. */
+  evaluate?(value: ParamValue): number | null;
+  /** The values the user has set (typed or dragged) in this session. */
+  touched?: readonly string[];
+  /** Where a reference image's plane lies now; null while it is unresolved. */
+  imagePlaneBasis?(plane: ReferenceImagePlane): PlaneBasis | null;
 }
+
+/**
+ * The datum axis a turn or a ring is about: one already in History, or a
+ * line picked in the model that Done adds as a datum axis first (the stored
+ * features only name datum axes), in the same step.
+ */
+export type InPlaceAxisRef =
+  | { type: 'datum-axis'; datumFeatureId: FeatureId }
+  | { type: 'new-axis'; definition: DatumAxisDefinition };
 
 /** What to build, without names or ids; App turns it into the command. */
 export type InPlaceRequest =
   | {
       tool: 'revolve';
       sketchId: SketchId;
-      profile: SketchProfileReference;
-      axis: { axis: RevolveAxis } | { datumFeatureId: FeatureId };
+      /** Absent only for an edited revolve that never stored one. */
+      profile?: SketchProfileReference;
+      /**
+       * `newAxis` is a line picked in the model (an edge, a cylinder, a
+       * principal axis): App adds it as a datum axis and turns about that.
+       */
+      axis:
+        | { axis: RevolveAxis }
+        | { datumFeatureId: FeatureId }
+        | { newAxis: DatumAxisDefinition };
       /** Absent is a full turn, stored exactly as before partial revolves. */
       angleDeg?: ParamValue;
     }
@@ -234,11 +385,25 @@ export type InPlaceRequest =
       translation: ParametricVector3;
       scale?: ParamValue;
       pivot?: ParametricVector3;
-      axisRotation?: {
-        axis: { type: 'datum-axis'; datumFeatureId: FeatureId };
-        angleDeg: ParamValue;
-      };
+      axisRotation?: { axis: InPlaceAxisRef; angleDeg: ParamValue };
       copy?: boolean;
+    }
+  | {
+      /**
+       * A fillet or chamfer, as the value its card submitted: App builds it
+       * through the card's own command (`edgeModifierCommand`).
+       */
+      tool: 'edge-modifier';
+      kind: 'fillet' | 'chamfer';
+      targetBodyId: BodyId;
+      edgeHashes: number[];
+      /** All or nothing: one for every edge, in the same order. */
+      edgeReferences?: EdgeTopologyReferenceV5[];
+      size: ParamValue;
+      endRadius?: ParamValue;
+      radiusLaw?: VariableFilletLaw;
+      angleDeg?: ParamValue;
+      distance2?: ParamValue;
     }
   | {
       tool: 'pattern';
@@ -251,8 +416,98 @@ export type InPlaceRequest =
       axis2?: 'x' | 'y' | 'z';
       spacing2?: ParamValue;
       count2?: ParamValue;
-      axisRef?: { type: 'datum-axis'; datumFeatureId: FeatureId };
+      axisRef?: InPlaceAxisRef;
+      /** A linear pattern's own repeat vector, replacing `axis`. */
+      direction?: ParametricVector3;
+    }
+  | {
+      /** A primitive and its placement, as the card's Create built them. */
+      tool: 'primitive';
+      kind: PrimitiveKind;
+      dimensions: Record<string, ParamValue>;
+      position: ParametricVector3;
+      rotationDeg?: Vector3;
+    }
+  | { tool: 'datum-plane'; definition: DatumPlaneDefinition }
+  | { tool: 'datum-axis'; definition: DatumAxisDefinition }
+  | {
+      /** The picture as Done adds it: placed, scaled, turned. */
+      tool: 'reference-image';
+      image: ReferenceImage;
     };
+
+type ResolvedAxis<R> = R extends { tool: 'revolve' }
+  ? Omit<R, 'axis'> & {
+      axis: { axis: RevolveAxis } | { datumFeatureId: FeatureId };
+    }
+  : R extends { tool: 'transform' }
+    ? Omit<R, 'axisRotation'> & {
+        axisRotation?: { axis: DatumAxisRef; angleDeg: ParamValue };
+      }
+    : R extends { tool: 'pattern' }
+      ? Omit<R, 'axisRef'> & { axisRef?: DatumAxisRef }
+      : R;
+
+/** A request whose axis, if any, is a datum axis already in the document. */
+export type ResolvedInPlaceRequest = ResolvedAxis<InPlaceRequest>;
+
+/** The datum axis a request adds before it (a picked line), else null. */
+export function requestNewAxis(
+  request: InPlaceRequest
+): DatumAxisDefinition | null {
+  if (request.tool === 'revolve') {
+    return 'newAxis' in request.axis ? request.axis.newAxis : null;
+  }
+  const ref =
+    request.tool === 'transform'
+      ? request.axisRotation?.axis
+      : request.tool === 'pattern'
+        ? request.axisRef
+        : undefined;
+  return ref?.type === 'new-axis' ? ref.definition : null;
+}
+
+/**
+ * The request turning about the datum `featureId` names where it asked for
+ * a new axis; a request that asks for none comes back as it is. Null when it
+ * asks for one and no datum is given.
+ */
+export function resolveNewAxis<R extends InPlaceRequest>(
+  request: R,
+  featureId: FeatureId | null
+): ResolvedAxis<R> | null {
+  return resolveAxisOf(request, featureId) as ResolvedAxis<R> | null;
+}
+
+function resolveAxisOf(
+  request: InPlaceRequest,
+  featureId: FeatureId | null
+): ResolvedInPlaceRequest | null {
+  const datum = (): DatumAxisRef | null =>
+    featureId ? { type: 'datum-axis', datumFeatureId: featureId } : null;
+  if (request.tool === 'revolve') {
+    if (!('newAxis' in request.axis)) {
+      return { ...request, axis: request.axis };
+    }
+    return featureId
+      ? { ...request, axis: { datumFeatureId: featureId } }
+      : null;
+  }
+  if (request.tool === 'transform') {
+    const { axisRotation, ...rest } = request;
+    if (!axisRotation) return rest;
+    const axis =
+      axisRotation.axis.type === 'new-axis' ? datum() : axisRotation.axis;
+    return axis ? { ...rest, axisRotation: { ...axisRotation, axis } } : null;
+  }
+  if (request.tool === 'pattern') {
+    const { axisRef, ...rest } = request;
+    if (!axisRef) return rest;
+    const axis = axisRef.type === 'new-axis' ? datum() : axisRef;
+    return axis ? { ...rest, axisRef: axis } : null;
+  }
+  return request;
+}
 
 /** A handle the viewport draws for one value. */
 export type HandleSpec =
@@ -292,22 +547,122 @@ export interface InPlaceToolSpec {
   faceMode?: 'one' | 'many';
   /** Whole bodies it takes, named by a click on any of their faces. */
   bodyMode?: 'one' | 'many';
+  /** Model edges it takes, all on one body (Shift is not needed). */
+  edgeMode?: 'many';
   /** Takes a plane: a ghost principal plane, a datum plane or a flat face. */
   wantsPlane?: boolean;
+  /** The datum sources its picks may be, and how a pick joins the others. */
+  refKinds?: readonly RefKind[];
+  takeRef?(refs: readonly RefPick[], ref: RefPick): RefPick[];
+  /**
+   * Nothing for the kernel to build (a reference image): the request is
+   * drawn as it stands, and Done adds it once it is ready.
+   */
+  instant?: boolean;
+  /**
+   * Values read from and written into others rather than held: a picture's
+   * real distance between two picks is its width, measured. `write` returns
+   * the values to set, or null to refuse the value.
+   */
+  linked?: Record<
+    string,
+    {
+      read(slots: InPlaceSlots, numbers: Record<string, number>): number | null;
+      write(
+        slots: InPlaceSlots,
+        numbers: Record<string, number>,
+        value: number
+      ): Record<string, number> | null;
+    }
+  >;
+  /**
+   * Placed by a press-drag on the ground or a flat face (a primitive): the
+   * footprint the drag draws.
+   */
+  footprint?: 'rectangle' | 'circle';
   /**
    * Where its axis lines come from: the profile's sketch, datum axes, or the
    * world axes through the origin as well as datum axes.
    */
   axisSource?: 'sketch' | 'datum' | 'world';
+  /**
+   * A straight model edge or a cylinder's (or cone's) face may be the axis,
+   * as well as the listed lines: the command adds it as a datum axis.
+   */
+  axisPicks?: boolean;
+  /**
+   * Why a picked line cannot be this command's axis (a revolve's must lie in
+   * its profile's plane), else null.
+   */
+  refuseAxis?(
+    slots: InPlaceSlots,
+    axis: Pick<RevolveAxisCandidate, 'origin' | 'direction'>,
+    ctx: InPlaceContext
+  ): string | null;
+  /**
+   * A direction picked in the model (a straight edge, a flat face's normal,
+   * an axis line) as the options and values it sets: a linear pattern's
+   * repeat vector. Its axis lines are then directions, not an axis slot.
+   */
+  takeDirection?(direction: Vector3): {
+    options: Record<string, string>;
+    values: Record<string, number>;
+  };
   faceFilter?: 'planar';
+  /**
+   * While this option has this value, a click places a point (a draft's
+   * clicked hinge): a picked face clicked again keeps its place in the set
+   * and takes the point, rather than coming back out, and only the latest
+   * click carries one.
+   */
+  clickPlacesPoint?: { optionId: string; value: string };
   options?: readonly OptionSpec[];
   wantsAxis: boolean;
   wantsPath: boolean;
   values: readonly ValueSpec[];
-  /** Values the picks suggest, applied to any the user has not set. */
-  defaults?(slots: InPlaceSlots, ctx: InPlaceContext): Record<string, number>;
-  hint(slots: InPlaceSlots, options?: Record<string, string>): string;
-  ready(slots: InPlaceSlots): boolean;
+  /**
+   * Values the picks (or other values) suggest, applied to any the user has
+   * not set. `numbers` holds every value as a number.
+   */
+  defaults?(
+    slots: InPlaceSlots,
+    ctx: InPlaceContext,
+    numbers: Record<string, number>
+  ): Record<string, number>;
+  /**
+   * Other values a value's change carries with it (a box hung under a face
+   * keeps its top there, so its corner follows its height), from the
+   * values as they were. Values held as typed expressions are left alone.
+   */
+  carries?(
+    valueId: string,
+    value: number,
+    values: Readonly<Record<string, number>>,
+    slots: InPlaceSlots
+  ): Record<string, number> | null;
+  /**
+   * Why `value` cannot stand beside the other values, when each alone is in
+   * range (a cone's second zero radius), else null.
+   */
+  refuseValue?(
+    valueId: string,
+    value: number,
+    values: Readonly<Record<string, number>>
+  ): string | null;
+  hint(
+    slots: InPlaceSlots,
+    options?: Record<string, string>,
+    ctx?: InPlaceContext
+  ): string;
+  /**
+   * Whether the picks (and, for a typed plane or axis, the options) suffice.
+   * `ctx` lets a slot that names a plane require it to have resolved.
+   */
+  ready(
+    slots: InPlaceSlots,
+    options?: Record<string, string>,
+    ctx?: InPlaceContext
+  ): boolean;
   /**
    * `values` holds what is stored: a typed expression as typed, else the
    * number. `numbers` holds every value as a number, for whatever the
@@ -356,17 +711,57 @@ export function profileOutline(
 ): Vector3[] {
   const view = viewFor(ctx, pick.sketchId);
   if (!view) return [];
-  // Found again by its entities when an undo or redo renumbered it.
-  return revolveProfileRegions(view.regions, pick).flatMap((region) =>
+  // Found again by its entities when an undo or redo renumbered it. An
+  // implicit pick (a revolve stored before profiles) builds the sketch's
+  // first object only, so only that region places its handles: the one
+  // seeded, else the sketch's first as it is now (hidden when seeded, or
+  // renumbered since).
+  const regions = pick.implicit
+    ? (() => {
+        const seeded = view.regions.filter(
+          (region) => region.regionFingerprint === pick.regionFingerprint
+        );
+        return seeded.length > 0 ? seeded : view.regions.slice(0, 1);
+      })()
+    : revolveProfileRegions(view.regions, pick);
+  return regions.flatMap((region) =>
     region.outer.map((point) => toWorld(view.basis, point))
   );
+}
+
+/**
+ * The picked region's first cell in world space: its outline and its inner
+ * loops (a washer's bore), each its own polyline. One cell, unlike
+ * `profileOutline`: a pick naming several (a word's glyphs) has handles on
+ * its first. An implicit pick (an extrude or revolve stored before profiles)
+ * is the sketch's first region.
+ */
+export function profileRegionLoops(
+  ctx: Pick<InPlaceContext, 'sketchViews'>,
+  pick: ProfilePick
+): { outline: Vector3[]; holes: Vector3[][] } | null {
+  const view = ctx.sketchViews.find(
+    (candidate) => candidate.sketchId === pick.sketchId
+  );
+  if (!view) return null;
+  const region = pick.implicit
+    ? view.regions[0]
+    : revolveProfileRegions(view.regions, pick)[0];
+  if (!region) return null;
+  return {
+    outline: region.outer.map((point) => toWorld(view.basis, point)),
+    holes: (region.holes ?? []).map((loop) =>
+      loop.map((point) => toWorld(view.basis, point))
+    )
+  };
 }
 
 /** The axes a profile's sketch offers: its own two, and in-plane datums. */
 export function axisCandidatesFor(
   slots: InPlaceSlots,
   ctx: InPlaceContext,
-  source: 'sketch' | 'datum' | 'world' = 'sketch'
+  source: 'sketch' | 'datum' | 'world' = 'sketch',
+  keep?: string | null
 ): RevolveAxisCandidate[] {
   if (source === 'datum' || source === 'world') {
     // Every resolved datum axis, wherever it runs.
@@ -394,9 +789,95 @@ export function axisCandidatesFor(
   }
   const first = slots.profiles[0];
   const view = first ? viewFor(ctx, first.sketchId) : null;
-  return view
-    ? revolveAxisCandidates(view.basis, ctx.datumAxes, ctx.datumLabel)
-    : [];
+  if (!view) return [];
+  const own = revolveAxisCandidates(
+    view.basis,
+    ctx.datumAxes,
+    ctx.datumLabel,
+    keep
+  );
+  // A world axis in the sketch's plane that is not already one of its own
+  // (a sketch on an offset or face plane through the origin).
+  return [...own, ...principalAxesInPlane(view.basis, own)];
+}
+
+/**
+ * The two principal planes each world axis is where they meet, in the order
+ * whose normals' cross product runs along it.
+ */
+const PRINCIPAL_AXIS_PLANES = {
+  x: ['XY', 'XZ'],
+  y: ['XY', 'YZ'],
+  z: ['XZ', 'YZ']
+} as const;
+
+/**
+ * A world axis through the origin as a datum axis definition: the line two
+ * principal planes meet in, turned to run along the axis. A turn about it
+ * then needs no datum of the user's own.
+ */
+export function principalAxisDefinition(
+  world: 'x' | 'y' | 'z'
+): DatumAxisDefinition {
+  const [a, b] = PRINCIPAL_AXIS_PLANES[world].map((plane) =>
+    newCanonicalPlaneRef(plane, 0)
+  ) as [
+    ReturnType<typeof newCanonicalPlaneRef>,
+    ReturnType<typeof newCanonicalPlaneRef>
+  ];
+  const line = planeIntersectionDatumAxis(
+    canonicalPlaneBasis(a.plane, a.basisRevision),
+    canonicalPlaneBasis(b.plane, b.basisRevision)
+  );
+  const reversed = dot(line.direction, AXIS_VECTORS[world]!) < 0;
+  return {
+    kind: 'plane-intersection',
+    sources: [a, b],
+    ...(reversed ? { reverseDirection: true } : {})
+  };
+}
+
+/**
+ * A turn's axis as the request names it: a datum axis by id, or a picked
+ * line or world axis that Done adds as a datum axis first. Null for a
+ * choice no turn stores (a sketch axis, a typed helix axis).
+ */
+function turnAxisRef(
+  choice: RevolveAxisCandidate['choice']
+): InPlaceAxisRef | null {
+  if ('datumFeatureId' in choice) {
+    return { type: 'datum-axis', datumFeatureId: choice.datumFeatureId };
+  }
+  if ('define' in choice)
+    return { type: 'new-axis', definition: choice.define };
+  if ('world' in choice) {
+    return {
+      type: 'new-axis',
+      definition: principalAxisDefinition(choice.world)
+    };
+  }
+  return null;
+}
+
+/** World axes lying in a sketch's plane that no other candidate runs along. */
+function principalAxesInPlane(
+  basis: PlaneBasis,
+  others: readonly RevolveAxisCandidate[]
+): RevolveAxisCandidate[] {
+  const origin = { x: 0, y: 0, z: 0 };
+  return (['x', 'y', 'z'] as const).flatMap((world) => {
+    const line = { origin, direction: AXIS_VECTORS[world]! };
+    if (!lineInPlane(line, basis)) return [];
+    if (others.some((other) => collinear(other, line))) return [];
+    return [
+      {
+        id: `world-${world}`,
+        label: `${world.toUpperCase()} axis`,
+        ...line,
+        choice: { world }
+      }
+    ];
+  });
 }
 
 function unit(vector: Vector3): Vector3 {
@@ -419,6 +900,7 @@ const revolve: InPlaceToolSpec = {
   title: 'Revolve',
   profileMode: 'one',
   wantsAxis: true,
+  axisPicks: true,
   wantsPath: false,
   values: [
     {
@@ -426,39 +908,73 @@ const revolve: InPlaceToolSpec = {
       label: 'Angle',
       unit: 'angle',
       initial: 360,
-      min: MIN_REVOLVE_ANGLE,
+      // Every angle the stored feature takes: more than 0°, up to a turn.
+      min: 0,
+      exclusive: 'min',
       max: 360
     }
   ],
   hint(slots) {
     if (slots.profiles.length === 0) return 'Pick a sketch profile to revolve';
-    if (!slots.axis) return 'Pick the axis to turn around';
+    if (!slots.axis)
+      return 'Pick the axis to turn around: a sketch line, an edge, a cylinder or a datum axis';
     return `Drag the angle, or type a value · ${FINISH}`;
   },
   ready: (slots) => slots.profiles.length > 0 && slots.axis !== null,
+  refuseAxis(slots, axis, ctx) {
+    const pick = slots.profiles[0];
+    const view = pick ? viewFor(ctx, pick.sketchId) : null;
+    if (!view) return 'Pick the profile first, then its axis';
+    // The kernel's own test, so a line the preview takes the build takes.
+    try {
+      requireRevolveAxisInPlane(axis, view.basis, '');
+      return null;
+    } catch {
+      return "That line leaves the profile's sketch plane; a revolve turns about a line in its plane";
+    }
+  },
   request(slots, values) {
     const pick = slots.profiles[0];
     const choice = slots.axis?.choice;
-    // A revolve turns about a sketch or datum axis; it never offers a world
-    // axis, which its feature could not store.
-    if (!pick || !choice || 'world' in choice) return null;
+    if (!pick || !choice || 'saved' in choice) return null;
+    // A sketch axis or a datum is stored as it is; a picked line or a world
+    // axis becomes a datum axis Done adds first.
+    let axis: Extract<InPlaceRequest, { tool: 'revolve' }>['axis'];
+    if ('axis' in choice) axis = { axis: choice.axis };
+    else {
+      const ref = turnAxisRef(choice);
+      if (!ref) return null;
+      axis =
+        ref.type === 'datum-axis'
+          ? { datumFeatureId: ref.datumFeatureId }
+          : { newAxis: ref.definition };
+    }
     const angle = values.angle ?? 360;
     return {
       tool: 'revolve',
       sketchId: pick.sketchId,
-      profile: pick.reference,
-      axis: choice,
+      // An edited revolve that stores no profile keeps none.
+      ...(pick.implicit ? {} : { profile: pick.reference }),
+      axis,
       ...(angle === 360 ? {} : { angleDeg: angle })
     };
   },
   handles(slots, _values, ctx) {
     const pick = slots.profiles[0];
     if (!pick || !slots.axis) return [];
-    const placement = revolveRigPlacement(
-      profileOutline(ctx, pick),
-      slots.axis
-    );
-    if (!placement) return [];
+    const outline = profileOutline(ctx, pick);
+    const placement = profileTurnRig(outline, slots.axis);
+    if (!placement) {
+      // A profile with nothing off its axis has no rig: its angle is typed.
+      return [
+        {
+          valueId: 'angle',
+          kind: 'chip',
+          key: keyOf(pick.sketchId, pick.regionFingerprint, slots.axis.id),
+          params: { anchor: outline[0] ?? slots.axis.origin }
+        }
+      ];
+    }
     return [
       {
         valueId: 'angle',
@@ -494,7 +1010,11 @@ const loft: InPlaceToolSpec = {
   wantsPath: false,
   values: [
     // How far the apex stands off the last section, along its normal.
-    { id: 'apex', label: 'Apex', unit: 'length', initial: 10 }
+    { id: 'apex', label: 'Apex', unit: 'length', initial: 10 },
+    // Or the apex anywhere, as the card's X, Y and Z fields placed it.
+    { id: 'apexX', label: 'X', unit: 'length', initial: 0 },
+    { id: 'apexY', label: 'Y', unit: 'length', initial: 0 },
+    { id: 'apexZ', label: 'Z', unit: 'length', initial: 0 }
   ],
   options: [
     {
@@ -502,7 +1022,8 @@ const loft: InPlaceToolSpec = {
       label: 'Ends',
       choices: [
         { value: 'section', label: 'On the last section' },
-        { value: 'apex', label: 'At an apex point' }
+        { value: 'apex', label: 'At an apex point' },
+        { value: 'point', label: 'At a point (X, Y, Z)' }
       ],
       initial: 'section'
     },
@@ -522,31 +1043,72 @@ const loft: InPlaceToolSpec = {
     if (slots.profiles.length === 1) return 'Pick the next section profile';
     return `${slots.profiles.length} sections · pick another, or ${FINISH}`;
   },
+  // A point apex not yet set starts where the apex off the last section
+  // stands.
+  defaults(slots, ctx, numbers): Record<string, number> {
+    const apex = loftApex(slots, ctx, numbers.apex ?? 10);
+    return apex
+      ? { apexX: apex.point.x, apexY: apex.point.y, apexZ: apex.point.z }
+      : {};
+  },
   ready: (slots) => slots.profiles.length >= 2,
-  request(slots, _values, options, ctx, numbers) {
+  request(slots, values, options, ctx, numbers) {
     if (slots.profiles.length < 2) return null;
     const apex =
       options.end === 'apex' ? loftApex(slots, ctx, numbers?.apex ?? 10) : null;
+    // A point apex is stored as given, expressions and all.
+    const point =
+      options.end === 'point'
+        ? {
+            x: values.apexX ?? 0,
+            y: values.apexY ?? 0,
+            z: values.apexZ ?? 0
+          }
+        : undefined;
     return {
       tool: 'loft',
       sections: slots.profiles.map(section),
       mode: options.shape === 'smooth' ? 'smooth' : 'ruled',
-      ...(apex
-        ? {
-            endPoint: {
-              x: String(apex.point.x),
-              y: String(apex.point.y),
-              z: String(apex.point.z)
+      ...(point
+        ? { endPoint: point }
+        : apex
+          ? {
+              endPoint: {
+                x: String(apex.point.x),
+                y: String(apex.point.y),
+                z: String(apex.point.z)
+              }
             }
-          }
-        : {})
+          : {})
     };
   },
-  handles(slots, _values, ctx, options) {
+  handles(slots, values, ctx, options) {
+    const last = slots.profiles.at(-1);
+    if (options.end === 'point' && last) {
+      // Typed, each on its chip by the point (spread so none hides
+      // another), as the card's three fields were.
+      const point = {
+        x: values.apexX ?? 0,
+        y: values.apexY ?? 0,
+        z: values.apexZ ?? 0
+      };
+      const spread = Math.max(profileSpan(ctx, last) / 4, 1e-3);
+      return (['apexX', 'apexY', 'apexZ'] as const).map((valueId, index) => ({
+        valueId,
+        kind: 'chip' as const,
+        key: `${last.sketchId}:${last.regionFingerprint}:${valueId}`,
+        params: {
+          anchor: {
+            x: point.x + (index - 1) * spread,
+            y: point.y,
+            z: point.z + spread
+          }
+        }
+      }));
+    }
     if (options.end !== 'apex') return [];
     const apex = loftApex(slots, ctx, 0);
-    if (!apex) return [];
-    const last = slots.profiles.at(-1)!;
+    if (!apex || !last) return [];
     return [
       {
         valueId: 'apex',
@@ -557,6 +1119,16 @@ const loft: InPlaceToolSpec = {
     ];
   }
 };
+
+/** The widest extent of a picked section's outline. */
+function profileSpan(ctx: InPlaceContext, pick: ProfilePick): number {
+  const outline = profileOutline(ctx, pick);
+  if (outline.length === 0) return 0;
+  const extent = (axis: 'x' | 'y' | 'z') =>
+    Math.max(...outline.map((point) => point[axis])) -
+    Math.min(...outline.map((point) => point[axis]));
+  return Math.max(extent('x'), extent('y'), extent('z'));
+}
 
 /**
  * The apex `distance` off the last section: from the middle of its outline,
@@ -603,7 +1175,12 @@ const sweep: InPlaceToolSpec = {
       label: 'Mode',
       choices: [
         { value: 'standard', label: 'Standard' },
-        { value: 'smooth', label: 'Smooth' }
+        {
+          value: 'smooth',
+          label: 'Smooth',
+          // The card's own explanation, so Smooth is not taken for exact.
+          note: 'Smooth samples a path of one line, or one arc of up to a quarter turn, more finely. It does not make exact curved surfaces, and a longer path builds the same body as Standard.'
+        }
       ],
       initial: 'standard'
     },
@@ -614,7 +1191,11 @@ const sweep: InPlaceToolSpec = {
       // it instead of the path while this is chosen.
       choices: [
         { value: 'path', label: 'Path' },
-        { value: 'guide', label: 'Guide rail' }
+        {
+          value: 'guide',
+          label: 'Guide rail',
+          note: 'The profile turns to keep facing the rail instead of holding a rotation-minimizing frame. Both the path and the rail must be one curve: a line, or an arc of at most a quarter turn.'
+        }
       ],
       initial: 'path'
     }
@@ -660,6 +1241,22 @@ const sweep: InPlaceToolSpec = {
   handles: () => []
 };
 
+/** Choose between a picked axis and one typed by its origin and direction. */
+const AXIS_MODE_OPTION: OptionSpec = {
+  id: 'axisMode',
+  label: 'Axis',
+  choices: [
+    { value: 'picked', label: 'A picked axis' },
+    { value: 'typed', label: 'Typed (origin and direction)' }
+  ],
+  initial: 'picked'
+};
+
+const TYPED_AXIS_VALUES: ValueSpec[] = [
+  ...vectorValues('axisO', 'length', { x: 0, y: 0, z: 0 }),
+  ...vectorValues('axisD', 'count', { x: 0, y: 0, z: 1 })
+];
+
 const helicalSweep: InPlaceToolSpec = {
   id: 'helical-sweep',
   title: 'Helical sweep',
@@ -667,17 +1264,29 @@ const helicalSweep: InPlaceToolSpec = {
   wantsAxis: true,
   wantsPath: false,
   values: [
-    { id: 'radius', label: 'Radius', unit: 'length', initial: 10, min: 0.001 },
+    // Ranges here are what the stored feature takes, no narrower: a value
+    // made elsewhere (an import, an older card) stays editable.
+    {
+      id: 'radius',
+      label: 'Radius',
+      unit: 'length',
+      initial: 10,
+      min: 0,
+      exclusive: true
+    },
     { id: 'pitch', label: 'Pitch', unit: 'length', initial: 5 },
     {
       id: 'turns',
       label: 'Turns',
       unit: 'count',
       initial: 3,
-      min: 0.1,
+      min: 0,
+      exclusive: true,
       max: MAX_HELICAL_SWEEP_TURNS
-    }
+    },
+    ...TYPED_AXIS_VALUES
   ],
+  options: [AXIS_MODE_OPTION],
   defaults(slots, ctx): Record<string, number> {
     const pick = slots.profiles[0];
     if (!pick || !slots.axis) return {};
@@ -716,38 +1325,71 @@ const helicalSweep: InPlaceToolSpec = {
       pitch: Math.max(tall * 1.25, 0.001)
     };
   },
-  hint(slots) {
+  hint(slots, options) {
     if (slots.profiles.length === 0) return 'Pick the profile to coil';
+    if (options?.axisMode === 'typed') {
+      return `Type the axis origin and direction on their chips · ${FINISH}`;
+    }
     if (!slots.axis) return 'Pick the helix axis';
     return `Drag radius and pitch, tap turns to type · ${FINISH}`;
   },
-  ready: (slots) => slots.profiles.length > 0 && slots.axis !== null,
-  request(slots, values) {
+  ready: (slots, options) =>
+    slots.profiles.length > 0 &&
+    (slots.axis !== null || options?.axisMode === 'typed'),
+  request(slots, values, options, ctx, numbers) {
     const pick = slots.profiles[0];
-    if (!pick || !slots.axis) return null;
+    if (!pick) return null;
+    if (options.axisMode === 'typed') {
+      // A typed axis goes out as typed, expressions and all.
+      if (!commandAxis(slots, numbers ?? {}, options)) return null;
+      return {
+        tool: 'helical-sweep',
+        profile: section(pick),
+        axisOrigin: typedVector(values, 'axisO', { x: 0, y: 0, z: 0 }),
+        axisDirection: typedVector(values, 'axisD', { x: 0, y: 0, z: 1 }),
+        radius: values.radius ?? 10,
+        pitch: values.pitch ?? 5,
+        turns: values.turns ?? 3
+      };
+    }
+    if (!slots.axis) return null;
     const direction = unit(slots.axis.direction);
+    // An edited helix's own axis goes back as stored, expressions and all.
+    const saved =
+      'saved' in slots.axis.choice && ctx.saved?.featureKind === 'helical-sweep'
+        ? ctx.saved
+        : null;
     return {
       tool: 'helical-sweep',
       profile: section(pick),
-      axisOrigin: { ...slots.axis.origin },
-      axisDirection: { ...direction },
+      axisOrigin: saved ? { ...saved.axisOrigin } : { ...slots.axis.origin },
+      axisDirection: saved ? { ...saved.axisDirection } : { ...direction },
       radius: values.radius ?? 10,
       pitch: values.pitch ?? 5,
       turns: values.turns ?? 3
     };
   },
-  handles(slots, values, ctx) {
+  handles(slots, values, ctx, options) {
     const pick = slots.profiles[0];
-    if (!pick || !slots.axis) return [];
-    const placement = revolveRigPlacement(
-      profileOutline(ctx, pick),
-      slots.axis
-    );
-    if (!placement) return [];
+    if (!pick) return [];
+    const outline = profileOutline(ctx, pick);
+    const chips =
+      options.axisMode === 'typed' ? typedAxisChips(pick, outline) : [];
+    const axisLine = commandAxis(slots, values, options);
+    if (!axisLine) return chips;
+    const placement = helixRigPlacement(outline, axisLine);
+    if (!placement) return chips;
     const { center, axis, startDirection } = placement;
-    const base = keyOf(pick.sketchId, pick.regionFingerprint, slots.axis.id);
+    const base = keyOf(
+      pick.sketchId,
+      pick.regionFingerprint,
+      axisLine.id === 'typed'
+        ? `typed:${[axisLine.origin, axisLine.direction].map((v) => `${v.x},${v.y},${v.z}`).join(':')}`
+        : axisLine.id
+    );
     const radius = values.radius ?? 10;
     return [
+      ...chips,
       {
         valueId: 'radius',
         kind: 'linear',
@@ -777,9 +1419,182 @@ const helicalSweep: InPlaceToolSpec = {
   }
 };
 
+/** The axis a helix coils about: the picked one, or the typed one. */
+function commandAxis(
+  slots: InPlaceSlots,
+  numbers: Record<string, number>,
+  options: Record<string, string>
+): RevolveAxisCandidate | null {
+  if (options.axisMode !== 'typed') return slots.axis;
+  const direction = typedNumbers(numbers, 'axisD', { x: 0, y: 0, z: 1 });
+  if (Math.hypot(direction.x, direction.y, direction.z) === 0) return null;
+  return {
+    id: 'typed',
+    label: 'Typed axis',
+    origin: typedNumbers(numbers, 'axisO', { x: 0, y: 0, z: 0 }),
+    direction,
+    choice: { saved: true }
+  };
+}
+
+/** A typed axis's six numbers, each on its chip beside the profile. */
+function typedAxisChips(
+  pick: ProfilePick,
+  outline: readonly Vector3[]
+): HandleSpec[] {
+  if (outline.length === 0) return [];
+  const min = boxOfPoints(outline, Math.min);
+  const max = boxOfPoints(outline, Math.max);
+  const centre = { x: (min.x + max.x) / 2, y: (min.y + max.y) / 2, z: max.z };
+  const spread = Math.max((max.x - min.x) / 4, (max.y - min.y) / 4, 1);
+  const key = keyOf(pick.sketchId, pick.regionFingerprint, 'axis');
+  return [
+    ...vectorChips('axisO', key, centre, spread),
+    ...vectorChips('axisD', key, { ...centre, z: centre.z + spread }, spread)
+  ];
+}
+
+function boxOfPoints(
+  points: readonly Vector3[],
+  pick: (...values: number[]) => number
+): Vector3 {
+  return {
+    x: pick(...points.map((point) => point.x)),
+    y: pick(...points.map((point) => point.y)),
+    z: pick(...points.map((point) => point.z))
+  };
+}
+
+/**
+ * Where a helix's handles stand: as a revolve's, or — for a profile centred
+ * on its axis, which a stored helix may be (its radius then sets it off) —
+ * level with the profile, pointing any way square to the axis.
+ */
+function helixRigPlacement(
+  outline: readonly Vector3[],
+  axisLine: RevolveAxisCandidate
+): { center: Vector3; axis: Vector3; startDirection: Vector3 } | null {
+  const placement = revolveRigPlacement(outline, axisLine);
+  if (placement) return placement;
+  if (outline.length === 0) return null;
+  const axis = unit(axisLine.direction);
+  const middle = outline.reduce(
+    (sum, point) => ({
+      x: sum.x + point.x / outline.length,
+      y: sum.y + point.y / outline.length,
+      z: sum.z + point.z / outline.length
+    }),
+    { x: 0, y: 0, z: 0 }
+  );
+  const along = dot(
+    {
+      x: middle.x - axisLine.origin.x,
+      y: middle.y - axisLine.origin.y,
+      z: middle.z - axisLine.origin.z
+    },
+    axis
+  );
+  const reference =
+    Math.abs(axis.x) < 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+  return {
+    center: {
+      x: axisLine.origin.x + axis.x * along,
+      y: axisLine.origin.y + axis.y * along,
+      z: axisLine.origin.z + axis.z * along
+    },
+    axis,
+    startDirection: unit({
+      x: axis.y * reference.z - axis.z * reference.y,
+      y: axis.z * reference.x - axis.x * reference.z,
+      z: axis.x * reference.y - axis.y * reference.x
+    })
+  };
+}
+
+/**
+ * The rig a body turns on about an axis (a turn, a circular pattern). An
+ * axis through the body's middle has no side for the rig to start from: it
+ * then starts square to the axis, out to the farthest corner. Null only for
+ * a body with no extent off the axis.
+ */
+function bodyTurnRig(
+  body: BodyPick,
+  axis: RevolveAxisCandidate
+): RevolveRigPlacement | null {
+  const placement = revolveRigPlacement(
+    [body.min, body.max, centre(body)],
+    axis
+  );
+  if (placement) return placement;
+  const corners = boxCornersOf(body);
+  const centred = helixRigPlacement(corners, axis);
+  const reach = Math.max(
+    ...corners.map((corner) => radialDistance(corner, axis))
+  );
+  return centred && reach > 1e-9 ? { ...centred, radius: reach * 1.15 } : null;
+}
+
+/**
+ * The rig a profile turns on about an axis: as `revolveRigPlacement` places
+ * it, or, for a profile whose middle is on the axis (a symmetric pair of
+ * regions), square to the axis out to its farthest point.
+ */
+function profileTurnRig(
+  outline: readonly Vector3[],
+  axis: RevolveAxisCandidate
+): RevolveRigPlacement | null {
+  const placement = revolveRigPlacement(outline, axis);
+  if (placement) return placement;
+  const centred = helixRigPlacement(outline, axis);
+  const reach = Math.max(
+    0,
+    ...outline.map((point) => radialDistance(point, axis))
+  );
+  return centred && reach > 1e-9 ? { ...centred, radius: reach * 1.15 } : null;
+}
+
+/** A box's eight corners. */
+function boxCornersOf(box: { min: Vector3; max: Vector3 }): Vector3[] {
+  const corners: Vector3[] = [];
+  for (const x of [box.min.x, box.max.x]) {
+    for (const y of [box.min.y, box.max.y]) {
+      for (const z of [box.min.z, box.max.z]) corners.push({ x, y, z });
+    }
+  }
+  return corners;
+}
+
+/** How far a point stands from an axis line. */
+function radialDistance(
+  point: Vector3,
+  axis: Pick<RevolveAxisCandidate, 'origin' | 'direction'>
+): number {
+  const direction = unit(axis.direction);
+  const offset = {
+    x: point.x - axis.origin.x,
+    y: point.y - axis.origin.y,
+    z: point.z - axis.origin.z
+  };
+  const along = dot(offset, direction);
+  return Math.hypot(
+    offset.x - direction.x * along,
+    offset.y - direction.y * along,
+    offset.z - direction.z * along
+  );
+}
+
 /** A value as the card's text field would hold it. */
 function text(value: ParamValue | undefined, fallback: number): string {
   return value === undefined ? String(fallback) : String(value);
+}
+
+/** A stored vector as the card's three text fields. */
+function vectorText(vector: ParametricVector3): {
+  x: string;
+  y: string;
+  z: string;
+} {
+  return { x: String(vector.x), y: String(vector.y), z: String(vector.z) };
 }
 
 function scaled(vector: Vector3, by: number): Vector3 {
@@ -821,10 +1636,75 @@ const hole: InPlaceToolSpec = {
   wantsAxis: false,
   wantsPath: false,
   values: [
-    { id: 'diameter', label: '⌀', unit: 'length', initial: 6, min: 0.1 },
-    { id: 'depth', label: 'Depth', unit: 'length', initial: 10, min: 0.1 }
+    {
+      id: 'diameter',
+      label: '⌀',
+      unit: 'length',
+      initial: 6,
+      min: 0,
+      exclusive: true
+    },
+    {
+      id: 'depth',
+      label: 'Depth',
+      unit: 'length',
+      initial: 10,
+      min: 0,
+      exclusive: true
+    },
+    // The step's sizes, on chips while its style is chosen. Until one is
+    // set it follows the bore, as the card's defaults did.
+    // Any positive size, as the card's validation takes it (a step's
+    // diameter must also clear the bore, which the preview refuses by name).
+    {
+      id: 'counterboreDiameter',
+      label: 'Counterbore ⌀',
+      unit: 'length',
+      initial: 10.8,
+      min: 0,
+      exclusive: true
+    },
+    {
+      id: 'counterboreDepth',
+      label: 'Counterbore depth',
+      unit: 'length',
+      initial: 3,
+      min: 0,
+      exclusive: true
+    },
+    {
+      id: 'countersinkDiameter',
+      label: 'Countersink ⌀',
+      unit: 'length',
+      initial: 12,
+      min: 0,
+      exclusive: true
+    },
+    {
+      // The full included angle, strictly between 0° and 180°, as the
+      // card's validation takes it.
+      id: 'countersinkAngleDeg',
+      label: 'Countersink angle',
+      unit: 'angle',
+      initial: 90,
+      min: 0,
+      max: 180,
+      exclusive: true
+    },
+    // A typed position, measured on the face from its anchor.
+    { id: 'positionU', label: 'U', unit: 'length', initial: 0 },
+    { id: 'positionV', label: 'V', unit: 'length', initial: 0 }
   ],
   options: [
+    {
+      id: 'place',
+      label: 'Position',
+      choices: [
+        { value: 'clicked', label: 'Where clicked' },
+        { value: 'typed', label: 'Typed (U, V)' }
+      ],
+      initial: 'clicked'
+    },
     {
       id: 'depthMode',
       label: 'Depth',
@@ -845,24 +1725,58 @@ const hole: InPlaceToolSpec = {
       initial: 'simple'
     }
   ],
-  hint(slots) {
+  defaults: (_slots, _ctx, numbers) => holeStepSizes(numbers.diameter ?? 6),
+  hint(slots, options) {
     if (slots.faces.length === 0)
       return 'Click a flat face where the hole goes';
-    return `Click again to move it · drag the diameter · ${FINISH}`;
+    const step =
+      options?.style === 'counterbore' || options?.style === 'countersink'
+        ? ` · tap the ${options.style} chips to size it`
+        : '';
+    if (options?.place === 'typed') {
+      return `Type its U and V on their chips · drag the diameter${step} · ${FINISH}`;
+    }
+    return `Click again to move it · drag the diameter${step} · ${FINISH}`;
   },
   ready: (slots) => slots.faces.length > 0,
   request(slots, values, options, ctx, numbers) {
     const face = slots.faces[0];
     if (!face || !face.normal) return null;
-    const anchor = face.centroid ? 'centroid' : 'center';
-    // Rounded to the sketch snap, exactly as the card placed a clicked hole.
-    const position = face.point
-      ? holePositionFromPick(face, anchor, face.point, ctx.linearSnap ?? null)
-      : null;
-    // The step sizes derive from the bore's value, a typed expression's too.
-    const diameter =
+    const saved = ctx.saved?.featureKind === 'hole' ? ctx.saved : null;
+    // A new hole measures from the face's centroid; an edited one keeps the
+    // anchor it was drilled against, which no edit may change.
+    const anchor = saved
+      ? saved.positionAnchor === 'centroid'
+        ? 'centroid'
+        : 'center'
+      : face.centroid
+        ? 'centroid'
+        : 'center';
+    // Rounded to the sketch snap, exactly as the card placed a clicked hole;
+    // a typed one as typed, expressions and all.
+    const position =
+      options.place === 'typed'
+        ? { u: text(values.positionU, 0), v: text(values.positionV, 0) }
+        : face.savedPosition && saved
+          ? {
+              u: String(saved.position.u),
+              v: String(saved.position.v)
+            }
+          : face.point
+            ? holePositionFromPick(
+                face,
+                anchor,
+                face.point,
+                ctx.linearSnap ?? null
+              )
+            : null;
+    // Unset step sizes derive from the bore's value, a typed expression's
+    // too; a chip's value, typed or derived, is stored as it stands.
+    const derived = holeStepSizes(
       numbers?.diameter ??
-      (typeof values.diameter === 'number' ? values.diameter : 6);
+        (typeof values.diameter === 'number' ? values.diameter : 6)
+    );
+    const step = (id: keyof typeof derived) => text(values[id], derived[id]);
     return {
       tool: 'modeling',
       state: {
@@ -876,22 +1790,25 @@ const hole: InPlaceToolSpec = {
           diameter: text(values.diameter, 6),
           depthMode: (options.depthMode ?? 'through') as 'blind' | 'through',
           depth: text(values.depth, 10),
-          // The card's own defaults for the step, scaled to the bore.
-          counterboreDiameter: String(Math.round(diameter * 1.8 * 100) / 100),
-          counterboreDepth: String(Math.round(diameter * 0.5 * 100) / 100),
-          countersinkDiameter: String(Math.round(diameter * 2 * 100) / 100),
-          countersinkAngleDeg: '90',
+          counterboreDiameter: step('counterboreDiameter'),
+          counterboreDepth: step('counterboreDepth'),
+          countersinkDiameter: step('countersinkDiameter'),
+          countersinkAngleDeg: text(values.countersinkAngleDeg, 90),
           position: position ?? { u: '0', v: '0' }
         }
       }
     };
   },
-  handles(slots, _values, _ctx, options) {
+  handles(slots, values, ctx, options) {
     const face = slots.faces[0];
-    const entry = face ? faceAnchor(face) : null;
-    if (!face || !entry || !face.normal) return [];
+    const clicked = face ? faceAnchor(face) : null;
+    if (!face || !clicked || !face.normal) return [];
     const axes = holePositionAxes(face.normal);
     if (!axes) return [];
+    const typed = options.place === 'typed';
+    // A typed hole's handles stand where its U and V put it.
+    const entry = typed ? typedHoleEntry(face, axes, values, ctx) : clicked;
+    if (!entry) return [];
     const key = `${faceKey(face)}:${entry.x}:${entry.y}:${entry.z}`;
     const handles: HandleSpec[] = [
       {
@@ -910,9 +1827,97 @@ const hole: InPlaceToolSpec = {
         params: { origin: entry, direction: scaled(unit(face.normal), -1) }
       });
     }
+    const style = options.style;
+    if (style === 'counterbore' || style === 'countersink') {
+      // Two chips across the step's rim, clear of the diameter handle: its
+      // size on one side, its depth or angle on the other.
+      const ids =
+        style === 'counterbore'
+          ? (['counterboreDiameter', 'counterboreDepth'] as const)
+          : (['countersinkDiameter', 'countersinkAngleDeg'] as const);
+      const rim = Math.max((values[ids[0]] ?? 0) / 2, 0);
+      const at = (side: 1 | -1): Vector3 => ({
+        x: entry.x + axes.v.x * rim * side,
+        y: entry.y + axes.v.y * rim * side,
+        z: entry.z + axes.v.z * rim * side
+      });
+      handles.push(
+        {
+          valueId: ids[0],
+          kind: 'chip',
+          key: `${key}:${ids[0]}`,
+          params: { anchor: at(1) }
+        },
+        {
+          valueId: ids[1],
+          kind: 'chip',
+          key: `${key}:${ids[1]}`,
+          params: { anchor: at(-1) }
+        }
+      );
+    }
+    if (typed) {
+      // Its U and V across the hole, clear of the step's chips.
+      const reach = Math.max((values.diameter ?? 6) * 1.5, 1e-3);
+      for (const [valueId, side] of [
+        ['positionU', -1],
+        ['positionV', 1]
+      ] as const) {
+        handles.push({
+          valueId,
+          kind: 'chip',
+          key: `${faceKey(face)}:${valueId}`,
+          params: {
+            anchor: {
+              x: entry.x + axes.u.x * reach * side,
+              y: entry.y + axes.u.y * reach * side,
+              z: entry.z + axes.u.z * reach * side
+            }
+          }
+        });
+      }
+    }
     return handles;
   }
 };
+
+/** Where a typed U and V put a hole on its face; null with no anchor. */
+function typedHoleEntry(
+  face: FacePick,
+  axes: { u: Vector3; v: Vector3 },
+  values: Record<string, number>,
+  ctx: InPlaceContext
+): Vector3 | null {
+  const saved = ctx.saved?.featureKind === 'hole' ? ctx.saved : null;
+  // The anchor it is measured from, as the request stores it.
+  const anchor = saved
+    ? saved.positionAnchor === 'centroid'
+      ? (face.centroid ?? face.center)
+      : (face.center ?? face.centroid)
+    : (face.centroid ?? face.center);
+  if (!anchor) return null;
+  const u = values.positionU ?? 0;
+  const v = values.positionV ?? 0;
+  return {
+    x: anchor.x + axes.u.x * u + axes.v.x * v,
+    y: anchor.y + axes.u.y * u + axes.v.y * v,
+    z: anchor.z + axes.u.z * u + axes.v.z * v
+  };
+}
+
+/** The card's own step sizes for a bore, rounded as it rounded them. */
+function holeStepSizes(diameter: number): {
+  counterboreDiameter: number;
+  counterboreDepth: number;
+  countersinkDiameter: number;
+} {
+  const round = (value: number) => Math.round(value * 100) / 100;
+  return {
+    counterboreDiameter: round(diameter * 1.8),
+    counterboreDepth: round(diameter * 0.5),
+    countersinkDiameter: round(diameter * 2)
+  };
+}
 
 const shell: InPlaceToolSpec = {
   id: 'shell',
@@ -922,7 +1927,14 @@ const shell: InPlaceToolSpec = {
   wantsAxis: false,
   wantsPath: false,
   values: [
-    { id: 'thickness', label: 'Wall', unit: 'length', initial: 2, min: 0.01 }
+    {
+      id: 'thickness',
+      label: 'Wall',
+      unit: 'length',
+      initial: 2,
+      min: 0,
+      exclusive: true
+    }
   ],
   hint(slots) {
     if (slots.faces.length === 0) return 'Click the faces to open';
@@ -989,7 +2001,14 @@ const solidOffset: InPlaceToolSpec = {
   wantsAxis: false,
   wantsPath: false,
   values: [
-    { id: 'distance', label: 'Offset', unit: 'length', initial: 1, min: 0.01 }
+    {
+      id: 'distance',
+      label: 'Offset',
+      unit: 'length',
+      initial: 1,
+      min: 0,
+      exclusive: true
+    }
   ],
   hint(slots) {
     if (slots.faces.length === 0) return 'Click any face of the body to offset';
@@ -1011,7 +2030,31 @@ const solidOffset: InPlaceToolSpec = {
       }
     };
   },
-  handles: (slots) => normalHandle('distance', slots.faces[0], 1)
+  handles(slots, _values, ctx) {
+    const face = slots.faces[0];
+    const onFace = normalHandle('distance', face, 1);
+    if (onFace.length > 0 || !face) return onFace;
+    // A curved-only body (a sphere) publishes no face normal: the offset
+    // still has a handle, rising from the top of the body's box, since
+    // every face moves outward by the same distance.
+    const box = ctx.bodyBounds?.(face.bodyId);
+    if (!box) return [];
+    return [
+      {
+        valueId: 'distance',
+        kind: 'linear',
+        key: `${face.bodyId}:distance:box`,
+        params: {
+          origin: {
+            x: (box.min.x + box.max.x) / 2,
+            y: (box.min.y + box.max.y) / 2,
+            z: box.max.z
+          },
+          direction: { x: 0, y: 0, z: 1 }
+        }
+      }
+    ];
+  }
 };
 
 const PULL_DIRECTIONS: Record<string, Vector3> = {
@@ -1052,11 +2095,116 @@ function draftNeutralPoint(
   return { x: side('x'), y: side('y'), z: side('z') };
 }
 
+/**
+ * The picked face whose click places the hinge: the only one carrying a
+ * point while the hinge is clicked (an edited draft's seeded faces carry
+ * none).
+ */
+function clickedFace(slots: InPlaceSlots): FacePick | undefined {
+  return slots.faces.find((face) => face.point !== undefined);
+}
+
+/** A draft's pull and the point its neutral plane passes through. */
+function draftFrame(
+  slots: InPlaceSlots,
+  numbers: Record<string, number>,
+  options: Record<string, string>,
+  ctx: InPlaceContext
+): { pull: Vector3; neutral: Vector3 } | null {
+  const first = slots.faces[0];
+  if (!first) return null;
+  const clicked = clickedFace(slots);
+  const pull =
+    options.pull === 'custom'
+      ? typedNumbers(numbers, 'pull', { x: 0, y: 0, z: 1 })
+      : (PULL_DIRECTIONS[options.pull ?? '+Z'] ?? PULL_DIRECTIONS['+Z']!);
+  if (Math.hypot(pull.x, pull.y, pull.z) === 0) return null;
+  const neutral =
+    options.neutral === 'custom'
+      ? typedNumbers(numbers, 'neutral', { x: 0, y: 0, z: 0 })
+      : draftNeutralPoint(
+          options.neutral,
+          pull,
+          options.neutral === 'point' && clicked ? clicked : first,
+          ctx
+        );
+  return { pull, neutral };
+}
+
+/**
+ * The angle rig a drafted face turns on: hinged where the face meets the
+ * neutral plane, its arm running up the face from there toward the face's
+ * middle. Zero is the face as it stands; a positive drag leans the face out
+ * of the body away from the neutral plane, as a positive draft angle does.
+ * Null for a face with no normal to tilt (a curved one) or one square to the
+ * pull, which a draft cannot lean.
+ */
+export function draftHingeRig(
+  face: FacePick,
+  pull: Vector3,
+  neutral: Vector3,
+  size: number
+): {
+  center: Vector3;
+  axis: Vector3;
+  startDirection: Vector3;
+  radius: number;
+} | null {
+  const middle = face.centroid ?? face.center ?? face.point;
+  if (!face.normal || !middle) return null;
+  const normal = unit(face.normal);
+  const along = unit(pull);
+  // The pull's part in the face: the way up the face from its hinge.
+  const across = dot(along, normal);
+  const up = {
+    x: along.x - normal.x * across,
+    y: along.y - normal.y * across,
+    z: along.z - normal.z * across
+  };
+  const climb = dot(up, along);
+  if (climb < 1e-6) return null;
+  // Slide the face's middle down (or up) the face onto the neutral plane.
+  const rise =
+    dot(
+      {
+        x: middle.x - neutral.x,
+        y: middle.y - neutral.y,
+        z: middle.z - neutral.z
+      },
+      along
+    ) / climb;
+  const center = {
+    x: middle.x - up.x * rise,
+    y: middle.y - up.y * rise,
+    z: middle.z - up.z * rise
+  };
+  const upward = unit(up);
+  const reach = Math.hypot(
+    middle.x - center.x,
+    middle.y - center.y,
+    middle.z - center.z
+  );
+  // Below the hinge the arm runs down the face: the same turn leans that
+  // part of it inward, as the kernel's draft does.
+  const startDirection = reach > 1e-9 && rise < 0 ? scaled(upward, -1) : upward;
+  return {
+    center,
+    axis: unit({
+      x: upward.y * normal.z - upward.z * normal.y,
+      y: upward.z * normal.x - upward.x * normal.z,
+      z: upward.x * normal.y - upward.y * normal.x
+    }),
+    startDirection,
+    radius: Math.max(reach, size / 2, 1e-3)
+  };
+}
+
 const draft: InPlaceToolSpec = {
   id: 'draft',
   title: 'Draft',
   profileMode: 'none',
   faceMode: 'many',
+  clickPlacesPoint: { optionId: 'neutral', value: 'point' },
   wantsAxis: false,
   wantsPath: false,
   values: [
@@ -1065,18 +2213,26 @@ const draft: InPlaceToolSpec = {
       label: 'Draft',
       unit: 'angle',
       initial: 3,
-      min: 0.1,
-      max: 45
-    }
+      // Either way and up to a right angle, as the kernel takes it: an
+      // edited draft keeps the range it was made with.
+      min: -90,
+      max: 90,
+      exclusive: true
+    },
+    ...vectorValues('pull', 'count', { x: 0, y: 0, z: 1 }),
+    ...vectorValues('neutral', 'length', { x: 0, y: 0, z: 0 })
   ],
   options: [
     {
       id: 'pull',
       label: 'Pull',
-      choices: Object.keys(PULL_DIRECTIONS).map((value) => ({
-        value,
-        label: value
-      })),
+      choices: [
+        ...Object.keys(PULL_DIRECTIONS).map((value) => ({
+          value,
+          label: value
+        })),
+        { value: 'custom', label: 'Custom (X, Y, Z)' }
+      ],
       initial: '+Z'
     },
     {
@@ -1086,23 +2242,41 @@ const draft: InPlaceToolSpec = {
         { value: 'base', label: 'Base' },
         { value: 'top', label: 'Top' },
         { value: 'point', label: 'Clicked point' },
-        { value: 'origin', label: 'Origin' }
+        { value: 'origin', label: 'Origin' },
+        { value: 'custom', label: 'At a point (X, Y, Z)' }
       ],
       initial: 'base'
     }
   ],
-  hint(slots) {
+  hint(slots, options) {
     if (slots.faces.length === 0) return 'Click the faces to draft';
+    if (options?.neutral === 'point' && !clickedFace(slots)) {
+      return 'Click a face where the hinge goes';
+    }
     const count = slots.faces.length;
     return `${count} ${count === 1 ? 'face' : 'faces'} · tap the angle to type · ${FINISH}`;
   },
-  ready: (slots) => slots.faces.length > 0,
-  request(slots, values, options, ctx) {
+  ready: (slots, options) =>
+    slots.faces.length > 0 &&
+    // A clicked hinge needs its click: an edited draft's faces carry none.
+    (options?.neutral !== 'point' || clickedFace(slots) !== undefined),
+  request(slots, values, options, ctx, numbers) {
     const first = slots.faces[0];
     if (!first) return null;
-    const pull =
-      PULL_DIRECTIONS[options.pull ?? '+Z'] ?? PULL_DIRECTIONS['+Z']!;
-    const neutral = draftNeutralPoint(options.neutral, pull, first, ctx);
+    const clicked = clickedFace(slots);
+    if (options.neutral === 'point' && !clicked) return null;
+    // A typed pull and hinge go out as typed, expressions and all.
+    const customPull = options.pull === 'custom';
+    const pull = customPull
+      ? typedNumbers(numbers ?? {}, 'pull', { x: 0, y: 0, z: 1 })
+      : (PULL_DIRECTIONS[options.pull ?? '+Z'] ?? PULL_DIRECTIONS['+Z']!);
+    if (Math.hypot(pull.x, pull.y, pull.z) === 0) return null;
+    const neutral = draftNeutralPoint(
+      options.neutral,
+      pull,
+      options.neutral === 'point' && clicked ? clicked : first,
+      ctx
+    );
     return {
       tool: 'modeling',
       state: {
@@ -1111,32 +2285,72 @@ const draft: InPlaceToolSpec = {
           name: 'Draft',
           targetBodyId: first.bodyId,
           faceHashes: slots.faces.map((face) => face.hash),
-          pullDirection: {
-            x: String(pull.x),
-            y: String(pull.y),
-            z: String(pull.z)
-          },
-          neutralPoint: {
-            x: String(neutral.x),
-            y: String(neutral.y),
-            z: String(neutral.z)
-          },
+          pullDirection: vectorText(
+            customPull ? typedVector(values, 'pull', pull) : pull
+          ),
+          neutralPoint: vectorText(
+            options.neutral === 'custom'
+              ? typedVector(values, 'neutral', neutral)
+              : neutral
+          ),
           angleDeg: text(values.angle, 3)
         }
       }
     };
   },
-  handles(slots) {
+  handles(slots, values, ctx, options) {
     const face = slots.faces[0];
     const anchor = face ? (face.centroid ?? face.center ?? face.point) : null;
     if (!face || !anchor) return [];
+    // A typed pull's and hinge's numbers, a row of chips each above the
+    // angle's.
+    const bounds = ctx.bodyBounds?.(face.bodyId);
+    const spread = bounds
+      ? Math.max((bounds.max.x - bounds.min.x) / 4, 1e-3)
+      : 5;
+    const row = (index: number) => ({
+      ...anchor,
+      z: anchor.z + spread * index
+    });
+    // The angle turns the face on its hinge; a face it cannot lean (curved,
+    // or square to the pull) keeps a typed chip.
+    const frame = draftFrame(slots, values, options, ctx);
+    const rig = frame
+      ? draftHingeRig(face, frame.pull, frame.neutral, spread * 2)
+      : null;
     return [
-      {
-        valueId: 'angle',
-        kind: 'chip',
-        key: `${faceKey(face)}:angle`,
-        params: { anchor }
-      }
+      rig
+        ? {
+            valueId: 'angle',
+            kind: 'angle',
+            key: keyOf(
+              faceKey(face),
+              'angle',
+              rig.center.x,
+              rig.center.y,
+              rig.center.z,
+              rig.axis.x,
+              rig.axis.y,
+              rig.axis.z,
+              rig.startDirection.x,
+              rig.startDirection.y,
+              rig.startDirection.z,
+              rig.radius
+            ),
+            params: rig
+          }
+        : {
+            valueId: 'angle',
+            kind: 'chip',
+            key: `${faceKey(face)}:angle`,
+            params: { anchor }
+          },
+      ...(options.pull === 'custom'
+        ? vectorChips('pull', faceKey(face), row(1), spread)
+        : []),
+      ...(options.neutral === 'custom'
+        ? vectorChips('neutral', faceKey(face), row(2), spread)
+        : [])
     ];
   }
 };
@@ -1181,13 +2395,41 @@ function planeHandleOrigin(
 }
 
 /** The plane handle every plane-taking tool shares. */
-function planeHandles(slots: InPlaceSlots): HandleSpec[] {
-  const plane = slots.plane;
+function planeHandles(
+  slots: InPlaceSlots,
+  values: Record<string, number>,
+  _ctx: InPlaceContext,
+  options: Record<string, string>
+): HandleSpec[] {
   const body = slots.bodies[0];
-  if (!plane || plane.kind === 'datum' || !body) return [];
+  const typed = options.planeMode === 'typed';
+  // A typed plane's six numbers, each on its chip above the body.
+  const chips =
+    typed && body
+      ? (() => {
+          const centre = {
+            x: (body.min.x + body.max.x) / 2,
+            y: (body.min.y + body.max.y) / 2,
+            z: body.max.z
+          };
+          const spread = Math.max((body.max.x - body.min.x) / 4, 1e-3);
+          return [
+            ...vectorChips('planeO', bodyKey(body), centre, spread),
+            ...vectorChips(
+              'planeN',
+              bodyKey(body),
+              { ...centre, z: centre.z + spread },
+              spread
+            )
+          ];
+        })()
+      : [];
+  const plane = commandPlane(slots, values, values, options);
+  if (!plane || plane.kind === 'datum' || !body) return chips;
   const origin = planeHandleOrigin(plane, body);
-  if (!origin) return [];
+  if (!origin) return chips;
   return [
+    ...chips,
     {
       valueId: 'offset',
       kind: 'linear',
@@ -1201,46 +2443,64 @@ function planeHandles(slots: InPlaceSlots): HandleSpec[] {
 function offsetPlane(plane: PlanePick, offset: number): PlanePick {
   if (plane.kind === 'datum' || offset === 0) return plane;
   const normal = unit(plane.normal);
-  return {
-    ...plane,
-    origin: {
-      x: plane.origin.x + normal.x * offset,
-      y: plane.origin.y + normal.y * offset,
-      z: plane.origin.z + normal.z * offset
-    }
+  const origin = {
+    x: plane.origin.x + normal.x * offset,
+    y: plane.origin.y + normal.y * offset,
+    z: plane.origin.z + normal.z * offset
   };
+  // A slid stored plane is a new plane: its numbers, not its old text.
+  return plane.kind === 'principal'
+    ? { ...plane, origin }
+    : { kind: 'face', origin, normal: plane.normal };
 }
 
 /**
  * A picked plane slid `offset` along its normal, as the card's plane fields.
- * A typed expression stays an expression in each coordinate it moves.
+ * A typed offset stays an expression in each coordinate it moves; a plane
+ * stored by its fields keeps them as written, each coordinate the slide
+ * does not move untouched and each it moves composed from its own text.
  */
 function offsetPlaneFields(
   plane: PlanePick,
   offset: ParamValue | undefined
 ): ReturnType<typeof planeFields> {
-  if (offset === undefined || typeof offset === 'number') {
-    return planeFields(offsetPlane(plane, offset ?? 0));
-  }
   if (plane.kind === 'datum') return planeFields(plane);
+  const amount = offset ?? 0;
+  if (amount === 0) return planeFields(plane);
+  if (plane.kind !== 'saved' && typeof amount === 'number') {
+    return planeFields(offsetPlane(plane, amount));
+  }
   const normal = unit(plane.normal);
-  const along = (origin: number, n: number): string => {
-    if (Math.abs(n) < 1e-12) return String(origin);
-    const term =
-      Math.abs(n - 1) < 1e-12
-        ? `(${offset})`
-        : Math.abs(n + 1) < 1e-12
-          ? `-(${offset})`
-          : `(${offset}) * ${n}`;
-    return origin === 0 ? term : `${origin} + ${term}`;
+  const base = (axis: 'x' | 'y' | 'z') =>
+    plane.kind === 'saved'
+      ? plane.fields.origin[axis]
+      : String(plane.origin[axis]);
+  const term = (n: number): string => {
+    if (typeof amount === 'number') return String(amount * n);
+    return Math.abs(n - 1) < 1e-12
+      ? `(${amount})`
+      : Math.abs(n + 1) < 1e-12
+        ? `-(${amount})`
+        : `(${amount}) * ${n}`;
+  };
+  const along = (axis: 'x' | 'y' | 'z'): string => {
+    const n = normal[axis];
+    const from = base(axis);
+    if (Math.abs(n) < 1e-12) return from;
+    // Plain numbers on both sides add up; text is kept and added to.
+    const literal = Number(from);
+    if (
+      typeof amount === 'number' &&
+      from.trim() !== '' &&
+      Number.isFinite(literal)
+    ) {
+      return String(literal + amount * n);
+    }
+    return from.trim() === '0' ? term(n) : `${from} + ${term(n)}`;
   };
   return {
     ...planeFields(plane),
-    origin: {
-      x: along(plane.origin.x, normal.x),
-      y: along(plane.origin.y, normal.y),
-      z: along(plane.origin.z, normal.z)
-    }
+    origin: { x: along('x'), y: along('y'), z: along('z') }
   };
 }
 
@@ -1250,6 +2510,115 @@ const PLANE_OFFSET: ValueSpec = {
   unit: 'length',
   initial: 0
 };
+
+/**
+ * Three values for a typed point or vector, `prefix`X, Y and Z: what the
+ * retired cards took as three fields, a chip each in place.
+ */
+function vectorValues(
+  prefix: string,
+  unit: ValueSpec['unit'],
+  initial: Vector3
+): ValueSpec[] {
+  return (['x', 'y', 'z'] as const).map((axis) => ({
+    id: `${prefix}${axis.toUpperCase()}`,
+    label: `${axis.toUpperCase()}`,
+    unit,
+    initial: initial[axis]
+  }));
+}
+
+/** A typed vector as stored: each part as typed, expressions and all. */
+function typedVector(
+  values: Record<string, ParamValue>,
+  prefix: string,
+  fallback: Vector3
+): ParametricVector3 {
+  return {
+    x: values[`${prefix}X`] ?? fallback.x,
+    y: values[`${prefix}Y`] ?? fallback.y,
+    z: values[`${prefix}Z`] ?? fallback.z
+  };
+}
+
+/** A typed vector as numbers. */
+function typedNumbers(
+  values: Record<string, number>,
+  prefix: string,
+  fallback: Vector3
+): Vector3 {
+  return {
+    x: values[`${prefix}X`] ?? fallback.x,
+    y: values[`${prefix}Y`] ?? fallback.y,
+    z: values[`${prefix}Z`] ?? fallback.z
+  };
+}
+
+/** A typed vector's three chips, side by side at `anchor`. */
+function vectorChips(
+  prefix: string,
+  key: string,
+  anchor: Vector3,
+  spread: number
+): HandleSpec[] {
+  return (['X', 'Y', 'Z'] as const).map((axis, index) => ({
+    valueId: `${prefix}${axis}`,
+    kind: 'chip' as const,
+    key: `${key}:${prefix}${axis}`,
+    params: {
+      anchor: {
+        x: anchor.x + (index - 1) * spread,
+        y: anchor.y,
+        z: anchor.z
+      }
+    }
+  }));
+}
+
+/** Choose between a picked plane and one typed by its origin and normal. */
+const PLANE_MODE_OPTION: OptionSpec = {
+  id: 'planeMode',
+  label: 'Plane',
+  choices: [
+    { value: 'picked', label: 'A picked plane' },
+    { value: 'typed', label: 'Typed (origin and normal)' }
+  ],
+  initial: 'picked'
+};
+
+const TYPED_PLANE_VALUES: ValueSpec[] = [
+  ...vectorValues('planeO', 'length', { x: 0, y: 0, z: 0 }),
+  ...vectorValues('planeN', 'count', { x: 0, y: 0, z: 1 })
+];
+
+/**
+ * The plane a Mirror or Split stands on: the picked one, or the typed one
+ * (kept as typed, a `saved` plane, so it slides like any other).
+ */
+function commandPlane(
+  slots: InPlaceSlots,
+  values: Record<string, ParamValue>,
+  numbers: Record<string, number>,
+  options: Record<string, string>
+): PlanePick | null {
+  if (options.planeMode !== 'typed') return slots.plane;
+  const text = (vector: ParametricVector3) => ({
+    x: String(vector.x),
+    y: String(vector.y),
+    z: String(vector.z)
+  });
+  const normal = typedNumbers(numbers, 'planeN', { x: 0, y: 0, z: 1 });
+  if (Math.hypot(normal.x, normal.y, normal.z) === 0) return null;
+  return {
+    kind: 'saved',
+    origin: typedNumbers(numbers, 'planeO', { x: 0, y: 0, z: 0 }),
+    normal,
+    fields: {
+      origin: text(typedVector(values, 'planeO', { x: 0, y: 0, z: 0 })),
+      normal: text(typedVector(values, 'planeN', { x: 0, y: 0, z: 1 }))
+    }
+  };
+}
 
 /** The card's plane fields for a picked plane. */
 function planeFields(plane: PlanePick): {
@@ -1269,11 +2638,24 @@ function planeFields(plane: PlanePick): {
       datumFeatureId: plane.featureId
     };
   }
+  if (plane.kind === 'saved') {
+    return {
+      origin: { ...plane.fields.origin },
+      normal: { ...plane.fields.normal }
+    };
+  }
   return { origin: strings(plane.origin), normal: strings(plane.normal) };
 }
 
-function planeHint(slots: InPlaceSlots, what: string): string | null {
+function planeHint(
+  slots: InPlaceSlots,
+  what: string,
+  options?: Record<string, string>
+): string | null {
   if (slots.bodies.length === 0) return `Click the body to ${what}`;
+  if (options?.planeMode === 'typed') {
+    return `Slide the plane, or type its origin and normal on their chips · ${FINISH}`;
+  }
   if (!slots.plane) {
     return 'Pick the plane: a ghost plane, a datum plane or a flat face';
   }
@@ -1288,15 +2670,19 @@ const mirror: InPlaceToolSpec = {
   wantsPlane: true,
   wantsAxis: false,
   wantsPath: false,
-  values: [PLANE_OFFSET],
-  hint: (slots) =>
-    planeHint(slots, 'mirror') ??
+  values: [PLANE_OFFSET, ...TYPED_PLANE_VALUES],
+  options: [PLANE_MODE_OPTION],
+  hint: (slots, options) =>
+    planeHint(slots, 'mirror', options) ??
     `Slide the plane, or pick another · ${FINISH}`,
-  ready: (slots) => slots.bodies.length > 0 && slots.plane !== null,
-  request(slots, values) {
+  ready: (slots, options) =>
+    slots.bodies.length > 0 &&
+    (slots.plane !== null || options?.planeMode === 'typed'),
+  request(slots, values, options, _ctx, numbers) {
     const body = slots.bodies[0];
-    if (!body || !slots.plane) return null;
-    const fields = offsetPlaneFields(slots.plane, values.offset);
+    const plane = commandPlane(slots, values, numbers ?? {}, options);
+    if (!body || !plane) return null;
+    const fields = offsetPlaneFields(plane, values.offset);
     return {
       tool: 'modeling',
       state: {
@@ -1320,8 +2706,9 @@ const split: InPlaceToolSpec = {
   wantsPlane: true,
   wantsAxis: false,
   wantsPath: false,
-  values: [PLANE_OFFSET],
+  values: [PLANE_OFFSET, ...TYPED_PLANE_VALUES],
   options: [
+    PLANE_MODE_OPTION,
     {
       id: 'keepOriginal',
       label: 'Original',
@@ -1332,13 +2719,17 @@ const split: InPlaceToolSpec = {
       initial: 'no'
     }
   ],
-  hint: (slots) =>
-    planeHint(slots, 'split') ?? `Slide the plane, or pick another · ${FINISH}`,
-  ready: (slots) => slots.bodies.length > 0 && slots.plane !== null,
-  request(slots, values, options) {
+  hint: (slots, options) =>
+    planeHint(slots, 'split', options) ??
+    `Slide the plane, or pick another · ${FINISH}`,
+  ready: (slots, options) =>
+    slots.bodies.length > 0 &&
+    (slots.plane !== null || options?.planeMode === 'typed'),
+  request(slots, values, options, _ctx, numbers) {
     const body = slots.bodies[0];
-    if (!body || !slots.plane) return null;
-    const fields = offsetPlaneFields(slots.plane, values.offset);
+    const plane = commandPlane(slots, values, numbers ?? {}, options);
+    if (!body || !plane) return null;
+    const fields = offsetPlaneFields(plane, values.offset);
     return {
       tool: 'modeling',
       state: {
@@ -1373,45 +2764,114 @@ const scale: InPlaceToolSpec = {
   wantsAxis: false,
   wantsPath: false,
   values: [
-    { id: 'factor', label: '×', unit: 'count', initial: 1, min: 0.01, max: 100 }
+    // Any positive factor, as the kernel takes it (a unit conversion's
+    // 0.001 or 1000 included).
+    {
+      id: 'factor',
+      label: '×',
+      unit: 'count',
+      initial: 1,
+      min: 0,
+      exclusive: true
+    },
+    ...vectorValues('pivot', 'length', { x: 0, y: 0, z: 0 })
   ],
-  options: [COPY_OPTION],
-  hint: (slots) =>
+  options: [
+    {
+      id: 'pivot',
+      label: 'About',
+      choices: [
+        { value: 'centre', label: 'Body centre' },
+        { value: 'origin', label: 'Origin' },
+        { value: 'typed', label: 'A point (X, Y, Z)' }
+      ],
+      // About the body's own centre, not the world origin, so it grows in
+      // place rather than drifting away.
+      initial: 'centre'
+    },
+    COPY_OPTION
+  ],
+  hint: (slots, options) =>
     slots.bodies.length === 0
       ? 'Click the body to scale'
-      : `Drag the corner handle, or tap × to type · ${FINISH}`,
+      : options?.pivot === 'typed'
+        ? `Type the point it scales about on its chips · drag the corner handle · ${FINISH}`
+        : `Drag the corner handle, or tap × to type · ${FINISH}`,
   ready: (slots) => slots.bodies.length > 0,
   request(slots, values, options) {
     const body = slots.bodies[0];
     if (!body) return null;
-    // About the body's own centre, not the world origin, so it grows in
-    // place rather than drifting away.
-    const pivot = centre(body);
+    // The origin is the absent pivot, as a scale has always stored it; a
+    // typed one goes out as typed, expressions and all.
+    const pivot =
+      options.pivot === 'origin'
+        ? undefined
+        : options.pivot === 'typed'
+          ? typedVector(values, 'pivot', { x: 0, y: 0, z: 0 })
+          : centre(body);
     return {
       tool: 'transform',
       targetBodyId: body.bodyId,
       translation: { x: 0, y: 0, z: 0 },
       scale: values.factor ?? 1,
-      pivot,
+      ...(pivot ? { pivot } : {}),
       ...(options.copy === 'yes' ? { copy: true } : {})
     };
   },
-  handles(slots) {
+  handles(slots, values, ctx, options) {
     const body = slots.bodies[0];
     if (!body) return [];
-    const origin = centre(body);
-    const corner = {
-      x: body.max.x - origin.x,
-      y: body.max.y - origin.y,
-      z: body.max.z - origin.z
-    };
+    // From the pivot the result scales about, so the handle rides a corner
+    // of the preview.
+    const origin =
+      options.pivot === 'origin'
+        ? { x: 0, y: 0, z: 0 }
+        : options.pivot === 'typed'
+          ? typedNumbers(values, 'pivot', { x: 0, y: 0, z: 0 })
+          : centre(body);
+    const chips =
+      options.pivot === 'typed'
+        ? vectorChips(
+            'pivot',
+            bodyKey(body),
+            {
+              x: (body.min.x + body.max.x) / 2,
+              y: (body.min.y + body.max.y) / 2,
+              z: body.max.z
+            },
+            Math.max((body.max.x - body.min.x) / 4, 1e-3)
+          )
+        : [];
+    const toCorner = (point: Vector3) => ({
+      x: point.x - origin.x,
+      y: point.y - origin.y,
+      z: point.z - origin.z
+    });
+    const [far, near] = [toCorner(body.max), toCorner(body.min)];
+    const corner =
+      Math.hypot(far.x, far.y, far.z) >= Math.hypot(near.x, near.y, near.z)
+        ? far
+        : near;
     const reach = Math.hypot(corner.x, corner.y, corner.z);
-    if (reach <= 1e-9) return [];
+    if (ctx.reshapedLater || body.reshapedLater) {
+      // A box that is only approximate would mismeasure a drag.
+      return [
+        ...chips,
+        {
+          valueId: 'factor',
+          kind: 'chip',
+          key: `${bodyKey(body)}:factor-chip`,
+          params: { anchor: body.max }
+        }
+      ];
+    }
+    if (reach <= 1e-9) return chips;
     return [
+      ...chips,
       {
         valueId: 'factor',
         kind: 'linear',
-        key: `${bodyKey(body)}:factor`,
+        key: `${bodyKey(body)}:factor:${origin.x}:${origin.y}:${origin.z}`,
         // One unit of value is the centre-to-corner reach: 1 sits on the
         // corner, 2 twice as far out.
         params: { origin, direction: unit(corner), scale: reach }
@@ -1427,61 +2887,52 @@ const axisRotate: InPlaceToolSpec = {
   profileMode: 'none',
   bodyMode: 'one',
   wantsAxis: true,
-  axisSource: 'datum',
+  axisSource: 'world',
+  axisPicks: true,
   wantsPath: false,
   values: [
     {
       id: 'angle',
       label: 'Angle',
       unit: 'angle',
-      initial: 90,
-      // Signed: a negative angle turns the body the other way about the
-      // axis, as the Transform card allowed.
-      min: -360,
-      max: 360
+      initial: 90
+      // Signed and unbounded, as the Transform card allowed: a negative
+      // angle turns the body the other way, and more than a turn is kept.
     }
   ],
   options: [COPY_OPTION],
   hint(slots) {
     if (slots.bodies.length === 0) return 'Click the body to rotate';
-    if (!slots.axis) return 'Pick a datum axis to turn about';
+    if (!slots.axis)
+      return 'Pick the axis to turn about: an edge, a cylinder, X, Y, Z or a datum axis';
     return `Drag the angle, or type a value · ${FINISH}`;
   },
   ready: (slots) => slots.bodies.length > 0 && slots.axis !== null,
   request(slots, values, options) {
     const body = slots.bodies[0];
-    const axis = slots.axis;
-    if (!body || !axis || !('datumFeatureId' in axis.choice)) return null;
+    const axis = slots.axis ? turnAxisRef(slots.axis.choice) : null;
+    if (!body || !axis) return null;
     return {
       tool: 'transform',
       targetBodyId: body.bodyId,
       translation: { x: 0, y: 0, z: 0 },
-      axisRotation: {
-        axis: {
-          type: 'datum-axis',
-          datumFeatureId: axis.choice.datumFeatureId
-        },
-        angleDeg: values.angle ?? 90
-      },
+      axisRotation: { axis, angleDeg: values.angle ?? 90 },
       ...(options.copy === 'yes' ? { copy: true } : {})
     };
   },
   handles(slots) {
     const body = slots.bodies[0];
     if (!body || !slots.axis) return [];
-    const placement = revolveRigPlacement(
-      [body.min, body.max, centre(body)],
-      slots.axis
-    );
-    if (!placement) return [];
-    return [
-      {
-        valueId: 'angle',
-        kind: 'angle',
-        key: `${bodyKey(body)}:${slots.axis.id}`,
-        params: placement
-      }
-    ];
+    const key = `${bodyKey(body)}:${slots.axis.id}`;
+    const placement = bodyTurnRig(body, slots.axis);
+    if (!placement) {
+      // Nothing to turn a rig around (a body with no extent): the angle is
+      // typed on its chip.
+      return [
+        { valueId: 'angle', kind: 'chip', key, params: { anchor: body.max } }
+      ];
+    }
+    return [{ valueId: 'angle', kind: 'angle', key, params: placement }];
   }
 };
 
@@ -1498,6 +2949,19 @@ function booleanSpec(
     wantsPath: false,
     values: [],
     options: [
+      {
+        // The operation, as a choice that keeps the picked bodies: the
+        // command becomes that tool.
+        id: 'operation',
+        label: 'Operation',
+        choices: [
+          { value: 'union', label: 'Union' },
+          { value: 'subtract', label: 'Subtract' },
+          { value: 'intersect', label: 'Intersect' }
+        ],
+        initial: id,
+        switchesTool: true
+      },
       {
         id: 'keepOriginals',
         label: 'Keep',
@@ -1565,12 +3029,40 @@ function axisOf(value: string | undefined): 'x' | 'y' | 'z' {
   return value === 'y' || value === 'z' ? value : 'x';
 }
 
+/** Float noise a picked direction drops, so an edge along X reads as X. */
+const DIRECTION_QUANTUM = 1e-9;
+
 const linearPattern: InPlaceToolSpec = {
   id: 'linear-pattern',
   title: 'Linear pattern',
   profileMode: 'none',
   bodyMode: 'one',
-  wantsAxis: false,
+  // Datum axes are drawn to pick as a direction, as an edge or a flat face
+  // is; none is an axis slot the pattern needs.
+  wantsAxis: true,
+  axisSource: 'datum',
+  takeDirection(direction): {
+    options: Record<string, string>;
+    values: Record<string, number>;
+  } {
+    const length = Math.hypot(direction.x, direction.y, direction.z);
+    const parts = (['x', 'y', 'z'] as const).map((part) => {
+      const value = direction[part] / (length || 1);
+      return Math.abs(value) <= DIRECTION_QUANTUM ? 0 : value;
+    });
+    // Along a world axis, it is that axis, as the card would have stored it:
+    // only when nothing is left across it (a slight tilt is still a tilt).
+    const world = (['x', 'y', 'z'] as const).find(
+      (_axis, index) =>
+        Math.abs(parts[index]! - 1) <= DIRECTION_QUANTUM &&
+        parts.every((part, other) => other === index || part === 0)
+    );
+    if (world) return { options: { axis: world }, values: {} };
+    return {
+      options: { axis: 'custom' },
+      values: { dirX: parts[0]!, dirY: parts[1]!, dirZ: parts[2]! }
+    };
+  },
   wantsPath: false,
   values: [
     // Signed: a negative spacing repeats the other way, as the card allowed.
@@ -1584,44 +3076,95 @@ const linearPattern: InPlaceToolSpec = {
       min: 2,
       max: 100,
       integer: true
+    },
+    // A custom repeat direction, as the card's X, Y and Z fields gave it.
+    { id: 'dirX', label: 'X', unit: 'count', initial: 1 },
+    { id: 'dirY', label: 'Y', unit: 'count', initial: 0 },
+    { id: 'dirZ', label: 'Z', unit: 'count', initial: 0 }
+  ],
+  options: [
+    {
+      ...AXIS_OPTION('x'),
+      choices: [
+        ...AXIS_OPTION('x').choices,
+        { value: 'custom', label: 'Custom vector' }
+      ]
     }
   ],
-  options: [AXIS_OPTION('x')],
   hint: (slots) =>
     slots.bodies.length === 0
       ? 'Click the body to repeat'
-      : `Drag the spacing, tap the count · ${FINISH}`,
+      : `Drag the spacing, tap the count · an edge, a flat face or an axis sets the direction · ${FINISH}`,
   ready: (slots) => slots.bodies.length > 0,
-  request(slots, values, options) {
+  request(slots, values, options, ctx) {
     const body = slots.bodies[0];
     if (!body) return null;
+    // A custom vector is stored as given, expressions and all; a picked
+    // direction is one too, as its numbers.
+    const direction =
+      options.axis === 'custom'
+        ? {
+            x: values.dirX ?? 1,
+            y: values.dirY ?? 0,
+            z: values.dirZ ?? 0
+          }
+        : null;
     return {
       tool: 'pattern',
       targetBodyId: body.bodyId,
       patternKind: 'linear',
       count: values.count ?? 3,
-      axis: axisOf(options.axis),
-      spacing: values.spacing ?? 20
+      axis:
+        direction && ctx.saved?.featureKind === 'pattern'
+          ? ctx.saved.axis
+          : axisOf(options.axis),
+      spacing: values.spacing ?? 20,
+      ...(direction ? { direction } : {})
     };
   },
-  handles(slots, _values, _ctx, options) {
+  handles(slots, values, _ctx, options) {
     const body = slots.bodies[0];
     if (!body) return [];
-    const axis = axisOf(options.axis);
+    const custom = options.axis === 'custom';
+    const typed = {
+      x: values.dirX ?? 1,
+      y: values.dirY ?? 0,
+      z: values.dirZ ?? 0
+    };
+    const vector =
+      custom && Math.hypot(typed.x, typed.y, typed.z) > 0
+        ? unit(typed)
+        : AXIS_VECTORS[axisOf(options.axis)]!;
     const origin = centre(body);
+    const width = Math.max(body.max.x - body.min.x, 1e-3);
     return [
       {
         valueId: 'spacing',
         kind: 'linear',
-        key: `${bodyKey(body)}:spacing:${axis}`,
-        params: { origin, direction: AXIS_VECTORS[axis]! }
+        key: `${bodyKey(body)}:spacing:${custom ? 'custom' : axisOf(options.axis)}`,
+        params: { origin, direction: vector }
       },
       {
         valueId: 'count',
         kind: 'chip',
         key: `${bodyKey(body)}:count`,
         params: { anchor: { x: origin.x, y: origin.y, z: body.max.z } }
-      }
+      },
+      // The vector's parts under the body, side by side.
+      ...(custom
+        ? (['dirX', 'dirY', 'dirZ'] as const).map((valueId, index) => ({
+            valueId,
+            kind: 'chip' as const,
+            key: `${bodyKey(body)}:${valueId}`,
+            params: {
+              anchor: {
+                x: origin.x + (index - 1) * (width / 3),
+                y: origin.y,
+                z: body.min.z
+              }
+            }
+          }))
+        : [])
     ];
   }
 };
@@ -1633,17 +3176,20 @@ const circularPattern: InPlaceToolSpec = {
   bodyMode: 'one',
   wantsAxis: true,
   axisSource: 'world',
+  axisPicks: true,
   wantsPath: false,
   values: [
     {
       id: 'angle',
       label: 'Total',
       unit: 'angle',
-      initial: 360,
-      // Signed: a negative total turns the copies the other way.
-      min: -360,
-      max: 360
+      initial: 360
+      // Signed and unbounded, as the pattern itself takes it: a negative
+      // total turns the copies the other way.
     },
+    // Fixed step: the turn from each copy to the next, which a count change
+    // keeps (the total follows).
+    { id: 'step', label: 'Step', unit: 'angle', initial: 60 },
     {
       id: 'count',
       label: 'Count',
@@ -1654,50 +3200,72 @@ const circularPattern: InPlaceToolSpec = {
       integer: true
     }
   ],
-  hint(slots) {
+  options: [
+    {
+      id: 'spacing',
+      label: 'Spacing',
+      choices: [
+        {
+          value: 'equal',
+          label: 'Equal spacing',
+          note: 'The copies share the total angle.'
+        },
+        {
+          value: 'step',
+          label: 'Fixed step',
+          note: 'Each copy turns the step from the one before; a new count keeps it.'
+        }
+      ],
+      initial: 'equal'
+    }
+  ],
+  hint(slots, options) {
     if (slots.bodies.length === 0) return 'Click the body to repeat';
     if (!slots.axis)
-      return 'Pick the axis to repeat about: X, Y, Z or a datum axis';
-    return `Drag the total angle, tap the count · ${FINISH}`;
+      return 'Pick the axis to repeat about: an edge, a cylinder, X, Y, Z or a datum axis';
+    return options?.spacing === 'step'
+      ? `Drag the step, tap the count · ${FINISH}`
+      : `Drag the total angle, tap the count · ${FINISH}`;
   },
   ready: (slots) => slots.bodies.length > 0 && slots.axis !== null,
-  request(slots, values) {
+  request(slots, values, options) {
     const body = slots.bodies[0];
     const choice = slots.axis?.choice;
     if (!body || !choice) return null;
+    // A datum axis, or a picked line Done adds as one, replaces the world
+    // axis the card stores beside it.
+    const axisRef = 'world' in choice ? null : turnAxisRef(choice);
+    if (!('world' in choice) && !axisRef) return null;
+    const count = values.count ?? 6;
     return {
       tool: 'pattern',
       targetBodyId: body.bodyId,
       patternKind: 'circular',
-      count: values.count ?? 6,
-      // A datum axis replaces the world axis the card stores beside it.
+      count,
       axis: 'world' in choice ? choice.world : 'z',
-      ...('datumFeatureId' in choice
-        ? {
-            axisRef: {
-              type: 'datum-axis' as const,
-              datumFeatureId: choice.datumFeatureId
-            }
-          }
-        : {}),
-      angleDeg: values.angle ?? 360
+      ...(axisRef ? { axisRef } : {}),
+      angleDeg:
+        options.spacing === 'step'
+          ? stepTotal(values.step ?? 60, count)
+          : (values.angle ?? 360)
     };
   },
-  handles(slots) {
+  handles(slots, _values, _ctx, options) {
     const body = slots.bodies[0];
     if (!body || !slots.axis) return [];
-    const placement = revolveRigPlacement(
-      [body.min, body.max, centre(body)],
-      slots.axis
-    );
-    if (!placement) return [];
+    const placement = bodyTurnRig(body, slots.axis);
+    const valueId = options.spacing === 'step' ? 'step' : 'angle';
+    const key = `${bodyKey(body)}:${valueId}:${slots.axis.id}`;
     return [
-      {
-        valueId: 'angle',
-        kind: 'angle',
-        key: `${bodyKey(body)}:angle:${slots.axis.id}`,
-        params: placement
-      },
+      // A body with no extent to turn a rig around types its angle.
+      placement
+        ? { valueId, kind: 'angle', key, params: placement }
+        : {
+            valueId,
+            kind: 'chip',
+            key,
+            params: { anchor: body.max }
+          },
       {
         valueId: 'count',
         kind: 'chip',
@@ -1707,6 +3275,23 @@ const circularPattern: InPlaceToolSpec = {
     ];
   }
 };
+
+/**
+ * The total a fixed step stores. A pattern spreads `count` copies over its
+ * total (a whole turn's step is total ÷ count, any other's total ÷ (count −
+ * 1)), so a step that closes the ring stores the whole turn and any other
+ * step × (count − 1). Typed expressions stay expressions.
+ */
+export function stepTotal(step: ParamValue, count: ParamValue): ParamValue {
+  if (typeof step === 'number' && typeof count === 'number') {
+    const ring = step * count;
+    if (Math.abs(Math.abs(ring) - 360) <= 1e-9) return Math.sign(ring) * 360;
+    return step * (count - 1);
+  }
+  // An expression's step × (count − 1) lands its copies where a whole
+  // turn's would when the step closes the ring, so it needs no case.
+  return `(${String(step)}) * ((${String(count)}) - 1)`;
+}
 
 const gridPattern: InPlaceToolSpec = {
   id: 'grid-pattern',
@@ -1750,10 +3335,35 @@ const gridPattern: InPlaceToolSpec = {
     slots.bodies.length === 0
       ? 'Click the body to repeat'
       : `Drag both spacings, tap the counts · ${FINISH}`,
+  // An edited grid whose second spacing or count is absent took the first's:
+  // until the user sets it, it still follows the first.
+  defaults(_slots, ctx, numbers) {
+    const saved = ctx.saved;
+    if (saved?.featureKind !== 'pattern' || saved.patternKind !== 'grid') {
+      return {};
+    }
+    return {
+      ...(saved.spacing2 === undefined && numbers.spacing !== undefined
+        ? { spacing2: numbers.spacing }
+        : {}),
+      ...(saved.count2 === undefined && numbers.count !== undefined
+        ? { count2: numbers.count }
+        : {})
+    };
+  },
   ready: (slots) => slots.bodies.length > 0,
-  request(slots, values, options) {
+  request(slots, values, options, ctx, numbers) {
     const body = slots.bodies[0];
     if (!body) return null;
+    // A second value still following the first (an edit's absent one, not
+    // set since) is left out, so the edit keeps it absent.
+    const saved = ctx.saved?.featureKind === 'pattern' ? ctx.saved : undefined;
+    const follows = (second: 'spacing2' | 'count2', first: string) =>
+      saved !== undefined &&
+      saved[second] === undefined &&
+      !ctx.touched?.includes(second) &&
+      numbers?.[second] !== undefined &&
+      numbers[second] === numbers[first];
     return {
       tool: 'pattern',
       targetBodyId: body.bodyId,
@@ -1762,8 +3372,10 @@ const gridPattern: InPlaceToolSpec = {
       axis: axisOf(options.axis),
       spacing: values.spacing ?? 20,
       axis2: axisOf(options.axis2 ?? 'y'),
-      spacing2: values.spacing2 ?? 20,
-      count2: values.count2 ?? 3
+      ...(follows('spacing2', 'spacing')
+        ? {}
+        : { spacing2: values.spacing2 ?? 20 }),
+      ...(follows('count2', 'count') ? {} : { count2: values.count2 ?? 3 })
     };
   },
   handles(slots, _values, _ctx, options) {
@@ -1801,6 +3413,420 @@ const gridPattern: InPlaceToolSpec = {
   }
 };
 
+/** Every picked edge's lineage name, or none: a set is named all or nothing. */
+function edgeReferences(
+  edges: readonly EdgePick[]
+): EdgeTopologyReferenceV5[] | undefined {
+  return edges.length > 0 && edges.every((edge) => edge.reference)
+    ? edges.map((edge) => edge.reference!)
+    : undefined;
+}
+
+function edgeHint(slots: InPlaceSlots, what: string, drag: string): string {
+  const count = slots.edges.length;
+  if (count === 0) return `Click the edges to ${what}`;
+  return `${count} ${count === 1 ? 'edge' : 'edges'} · click more, drag the ${drag} · ${FINISH}`;
+}
+
+/**
+ * The size handle on the first picked edge: from its middle, into the body,
+ * so the arrow is as long as the blend is wide.
+ */
+function edgeSizeHandle(valueId: string, slots: InPlaceSlots): HandleSpec[] {
+  const edge = slots.edges[0];
+  if (!edge?.middle || !edge.outward) return [];
+  return [
+    {
+      valueId,
+      kind: 'linear',
+      key: `${edge.bodyId}:${edge.hash}:${valueId}`,
+      params: { origin: edge.middle, direction: scaled(unit(edge.outward), -1) }
+    }
+  ];
+}
+
+/** A second value's chip, at the far end of the last picked edge. */
+function edgeEndChip(valueId: string, slots: InPlaceSlots): HandleSpec[] {
+  const edge = slots.edges.at(-1);
+  const anchor = edge?.end ?? edge?.middle;
+  if (!edge || !anchor) return [];
+  return [
+    {
+      valueId,
+      kind: 'chip',
+      key: `${edge.bodyId}:${edge.hash}:${valueId}`,
+      params: { anchor }
+    }
+  ];
+}
+
+const VARIABLE_RADIUS_NOTE =
+  "Variable radius runs the kernel's experimental blend and is offered only for these two laws. The radius runs from Radius at each edge's start to End radius at its far end.";
+
+const fillet: InPlaceToolSpec = {
+  id: 'fillet',
+  title: 'Fillet',
+  profileMode: 'none',
+  edgeMode: 'many',
+  wantsAxis: false,
+  wantsPath: false,
+  values: [
+    {
+      id: 'radius',
+      label: 'R',
+      unit: 'length',
+      initial: 2,
+      min: 0,
+      exclusive: true
+    },
+    {
+      id: 'endRadius',
+      label: 'End R',
+      unit: 'length',
+      initial: 2,
+      min: 0,
+      exclusive: true
+    }
+  ],
+  options: [
+    {
+      id: 'law',
+      label: 'Radius change',
+      // Constant by default, as a blank End radius was on the card.
+      choices: [
+        { value: 'constant', label: 'Constant' },
+        { value: 'linear', label: 'Linear', note: VARIABLE_RADIUS_NOTE },
+        {
+          value: 'scurve',
+          label: 'Eased at both ends',
+          note: VARIABLE_RADIUS_NOTE
+        }
+      ],
+      initial: 'constant'
+    }
+  ],
+  // A variable fillet starts with its end radius at the radius until set.
+  defaults: (_slots, _ctx, numbers) => ({ endRadius: numbers.radius ?? 2 }),
+  hint: (slots) => edgeHint(slots, 'fillet', 'radius'),
+  ready: (slots) => slots.edges.length > 0,
+  request(slots, values, options) {
+    const first = slots.edges[0];
+    if (!first) return null;
+    const law = options.law;
+    const variable = law === 'linear' || law === 'scurve';
+    const references = edgeReferences(slots.edges);
+    return {
+      tool: 'edge-modifier',
+      kind: 'fillet',
+      targetBodyId: first.bodyId,
+      edgeHashes: slots.edges.map((edge) => edge.hash),
+      ...(references ? { edgeReferences: references } : {}),
+      size: values.radius ?? 2,
+      ...(variable
+        ? {
+            endRadius: values.endRadius ?? values.radius ?? 2,
+            radiusLaw: law
+          }
+        : {})
+    };
+  },
+  handles: (slots, _values, _ctx, options) => [
+    ...edgeSizeHandle('radius', slots),
+    ...(options.law === 'linear' || options.law === 'scurve'
+      ? edgeEndChip('endRadius', slots)
+      : [])
+  ]
+};
+
+const chamfer: InPlaceToolSpec = {
+  id: 'chamfer',
+  title: 'Chamfer',
+  profileMode: 'none',
+  edgeMode: 'many',
+  wantsAxis: false,
+  wantsPath: false,
+  values: [
+    {
+      id: 'distance',
+      label: 'Distance',
+      unit: 'length',
+      initial: 2,
+      min: 0,
+      exclusive: true
+    },
+    {
+      // The bevel's angle off the first face, strictly between 0° and 90°.
+      id: 'angle',
+      label: 'Angle',
+      unit: 'angle',
+      initial: 45,
+      min: 0,
+      max: 90,
+      exclusive: true
+    },
+    {
+      id: 'distance2',
+      label: 'Second distance',
+      unit: 'length',
+      initial: 2,
+      min: 0,
+      exclusive: true
+    }
+  ],
+  options: [
+    {
+      id: 'shape',
+      label: 'Shape',
+      // Equal setbacks by default, as blank Angle and Second distance were.
+      choices: [
+        { value: 'equal', label: 'Equal' },
+        { value: 'angle', label: 'Distance and angle' },
+        {
+          value: 'two',
+          label: 'Two distances',
+          note: 'Distance and Second distance land on the two faces the edge separates. The preview shows which is which; swap them if it is the wrong way round.'
+        }
+      ],
+      initial: 'equal'
+    }
+  ],
+  // A second distance starts at the first until set.
+  defaults: (_slots, _ctx, numbers) => ({
+    distance2: numbers.distance ?? 2
+  }),
+  hint: (slots) => edgeHint(slots, 'chamfer', 'distance'),
+  ready: (slots) => slots.edges.length > 0,
+  request(slots, values, options) {
+    const first = slots.edges[0];
+    if (!first) return null;
+    const references = edgeReferences(slots.edges);
+    return {
+      tool: 'edge-modifier',
+      kind: 'chamfer',
+      targetBodyId: first.bodyId,
+      edgeHashes: slots.edges.map((edge) => edge.hash),
+      ...(references ? { edgeReferences: references } : {}),
+      size: values.distance ?? 2,
+      // An angle and a second distance are exclusive: only the chosen
+      // shape's is stored.
+      ...(options.shape === 'angle' ? { angleDeg: values.angle ?? 45 } : {}),
+      ...(options.shape === 'two'
+        ? { distance2: values.distance2 ?? values.distance ?? 2 }
+        : {})
+    };
+  },
+  handles: (slots, _values, _ctx, options) => [
+    ...edgeSizeHandle('distance', slots),
+    ...(options.shape === 'angle' ? edgeEndChip('angle', slots) : []),
+    ...(options.shape === 'two' ? edgeEndChip('distance2', slots) : [])
+  ]
+};
+
+const PRIMITIVE_TITLES: Record<PrimitiveKind, string> = {
+  box: 'Box',
+  cylinder: 'Cylinder',
+  cone: 'Cone',
+  sphere: 'Sphere',
+  torus: 'Torus'
+};
+
+/**
+ * Each primitive's sizes, in the plane it stands on: a box's width and depth
+ * run along the footprint and its height off the plane, so on the ground
+ * they are the card's X, Y and Z. Starting values are the card's.
+ */
+const PRIMITIVE_SIZES: Record<
+  PrimitiveKind,
+  readonly { id: string; label: string; key: string; zero?: boolean }[]
+> = {
+  box: [
+    { id: 'width', label: 'Width', key: 'width' },
+    { id: 'depth', label: 'Depth', key: 'height' },
+    { id: 'height', label: 'Height', key: 'depth' }
+  ],
+  cylinder: [
+    { id: 'radius', label: 'Radius', key: 'radius' },
+    { id: 'height', label: 'Height', key: 'height' }
+  ],
+  cone: [
+    // Either end may come to a point, as the card allowed (never both).
+    {
+      id: 'bottomRadius',
+      label: 'Bottom radius',
+      key: 'bottomRadius',
+      zero: true
+    },
+    { id: 'topRadius', label: 'Top radius', key: 'topRadius', zero: true },
+    { id: 'height', label: 'Height', key: 'height' }
+  ],
+  sphere: [{ id: 'radius', label: 'Radius', key: 'radius' }],
+  torus: [
+    { id: 'majorRadius', label: 'Ring radius', key: 'majorRadius' },
+    { id: 'minorRadius', label: 'Tube radius', key: 'minorRadius' }
+  ]
+};
+
+function primitiveSpec(kind: PrimitiveKind): InPlaceToolSpec {
+  const anchor = PRIMITIVE_ANCHORS[kind].label;
+  const initial = (key: string) =>
+    Number(PRIMITIVE_FIELDS[kind].find((field) => field.key === key)?.initial);
+  return {
+    id: kind,
+    title: PRIMITIVE_TITLES[kind],
+    profileMode: 'none',
+    footprint: footprintShape(kind),
+    wantsAxis: false,
+    wantsPath: false,
+    values: [
+      ...PRIMITIVE_SIZES[kind].map((size): ValueSpec => ({
+        id: size.id,
+        label: size.label,
+        unit: 'length',
+        initial: initial(size.key),
+        min: size.zero ? 0 : 0.001
+      })),
+      // The point the kernel builds from (a box's corner, a cylinder's base
+      // centre), where the press landed; typed exactly from Options.
+      ...(['x', 'y', 'z'] as const).map((axis): ValueSpec => ({
+        id: axis,
+        label: `${anchor} ${axis.toUpperCase()}`,
+        unit: 'length',
+        initial: 0,
+        inOptions: true
+      }))
+    ],
+    hint(slots) {
+      return slots.placement
+        ? `Drag the arrows, or tap a size to type · ${FINISH}`
+        : `Drag a footprint on the ground or a face · ${FINISH}`;
+    },
+    // It stands on the ground at the origin until a drag places it, so
+    // Enter alone makes the card's default primitive.
+    ready: () => true,
+    request(slots, values) {
+      const build = primitiveBuild(kind, slots.placement, values, {
+        x: values.x ?? 0,
+        y: values.y ?? 0,
+        z: values.z ?? 0
+      });
+      return {
+        tool: 'primitive',
+        kind,
+        dimensions: build.dimensions,
+        position: build.position,
+        ...(build.rotationDeg ? { rotationDeg: build.rotationDeg } : {})
+      };
+    },
+    refuseValue(valueId, value, values) {
+      // One end of a cone may come to a point, never both: the edit card's
+      // own rule.
+      if (kind !== 'cone' || value !== 0) return null;
+      const other = valueId === 'bottomRadius' ? 'topRadius' : 'bottomRadius';
+      if (valueId !== 'bottomRadius' && valueId !== 'topRadius') return null;
+      return values[other] === 0
+        ? 'At least one radius must be greater than zero.'
+        : null;
+    },
+    carries(valueId, value, values, slots) {
+      // Under a face the box hangs from it: a new height moves its lowest
+      // corner, so its top stays on the face.
+      const hangs = slots.placement?.hangs;
+      if (kind !== 'box' || !hangs || valueId !== 'height') return null;
+      const was = values.height ?? value;
+      return { [hangs]: (values[hangs] ?? 0) + was - value };
+    },
+    handles(slots, values) {
+      return primitiveHandles(kind, slots.placement ?? null, values);
+    }
+  };
+}
+
+/**
+ * A primitive's arrows: each from the middle of the face or edge it pushes,
+ * so the tip rides the side it sizes. A rig is rebuilt only when its key
+ * changes, and its key is the line it stands on. A box hung under a face
+ * measures from the face, its height arrow pointing away from it.
+ */
+function primitiveHandles(
+  kind: PrimitiveKind,
+  placement: PlacementPick | null,
+  values: Record<string, number>
+): HandleSpec[] {
+  const { u, v, normal } = placement?.frame ?? GROUND_FRAME;
+  const along = scaled(u, placement?.signU ?? 1);
+  const across = scaled(v, placement?.signV ?? 1);
+  const corner = { x: values.x ?? 0, y: values.y ?? 0, z: values.z ?? 0 };
+  const hangs = kind === 'box' ? placement?.hangs : undefined;
+  // The footprint's plane: the face a box hangs from is its top.
+  const at = hangs
+    ? { ...corner, [hangs]: corner[hangs] + (values.height ?? 0) }
+    : corner;
+  const offset = (...steps: [Vector3, number][]): Vector3 =>
+    steps.reduce(
+      (point, [direction, distance]) => ({
+        x: point.x + direction.x * distance,
+        y: point.y + direction.y * distance,
+        z: point.z + direction.z * distance
+      }),
+      at
+    );
+  const linear = (
+    valueId: string,
+    origin: Vector3,
+    direction: Vector3
+  ): HandleSpec => ({
+    valueId,
+    kind: 'linear',
+    key: keyOf(
+      kind,
+      valueId,
+      origin.x,
+      origin.y,
+      origin.z,
+      direction.x,
+      direction.y,
+      direction.z
+    ),
+    params: { origin, direction }
+  });
+  switch (kind) {
+    case 'box': {
+      const width = values.width ?? 0;
+      const depth = values.depth ?? 0;
+      return [
+        linear('width', offset([across, depth / 2]), along),
+        linear('depth', offset([along, width / 2]), across),
+        linear(
+          'height',
+          offset([along, width / 2], [across, depth / 2]),
+          hangs
+            ? { x: -normal.x || 0, y: -normal.y || 0, z: -normal.z || 0 }
+            : normal
+        )
+      ];
+    }
+    case 'cylinder':
+      return [linear('radius', at, u), linear('height', at, normal)];
+    case 'cone': {
+      const height = values.height ?? 0;
+      return [
+        linear('bottomRadius', at, u),
+        linear('height', at, normal),
+        linear('topRadius', offset([normal, height]), u)
+      ];
+    }
+    case 'sphere':
+      return [linear('radius', at, u)];
+    case 'torus': {
+      const ring = values.majorRadius ?? 0;
+      return [
+        linear('majorRadius', at, u),
+        linear('minorRadius', offset([u, ring]), normal)
+      ];
+    }
+  }
+}
+
 export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   revolve,
   loft,
@@ -1820,12 +3846,84 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   intersect: booleanSpec('intersect', 'Intersect'),
   'linear-pattern': linearPattern,
   'circular-pattern': circularPattern,
-  'grid-pattern': gridPattern
+  'grid-pattern': gridPattern,
+  fillet,
+  chamfer,
+  box: primitiveSpec('box'),
+  cylinder: primitiveSpec('cylinder'),
+  cone: primitiveSpec('cone'),
+  sphere: primitiveSpec('sphere'),
+  torus: primitiveSpec('torus'),
+  'datum-plane': datumPlane,
+  'datum-axis': datumAxis,
+  'reference-image': referenceImage
 };
 
-/** Values a value spec accepts: clamped to its range, finite. */
+/**
+ * Whether a typed value is one the spec takes as it is: finite, whole if it
+ * must be, and inside its range (strictly, for an open range).
+ */
+export function valueInRange(spec: ValueSpec, value: number): boolean {
+  if (!Number.isFinite(value)) return false;
+  if (spec.integer && !Number.isInteger(value)) return false;
+  const { min, max } = spec;
+  const openMax = spec.exclusive === true;
+  const aboveMin =
+    min === undefined || (spec.exclusive ? value > min : value >= min);
+  const belowMax = max === undefined || (openMax ? value < max : value <= max);
+  return aboveMin && belowMax;
+}
+
+/**
+ * A value as a chip or the keypad shows it: to two places, unless that
+ * would show a value the spec refuses (179.9999995° is not 180°), when it
+ * is shown in full.
+ */
+export function displayedValue(
+  spec: ValueSpec | undefined,
+  value: number
+): number {
+  const rounded = Math.round(value * 100) / 100;
+  // Two places only where they keep the value: a typed 0.005 is not 0.01,
+  // and a valid 179.9999995° is not the refused 180°.
+  const close = Math.abs(rounded - value) <= Math.abs(value) * 1e-3;
+  const valid =
+    !spec || valueInRange(spec, rounded) || !valueInRange(spec, value);
+  if (close && valid) return rounded;
+  // Ten places, unless even they would cross into what the spec refuses
+  // (179.9999999999° rounds to 180°): then the value as it is.
+  const shortened = Number(value.toPrecision(10));
+  return !spec || valueInRange(spec, shortened) || !valueInRange(spec, value)
+    ? shortened
+    : value;
+}
+
+/**
+ * A value as the keypad opens on it: exactly, so reopening it and pressing
+ * Enter never changes what is stored.
+ */
+export function keypadText(value: number): string {
+  // The shortest text that reads back as the same number: a short form only
+  // where it is exact, never a truncation (1.0000000000004 is not 1).
+  const short = Number(value.toPrecision(12));
+  return String(short === value ? short : value);
+}
+
+/**
+ * A dragged value brought inside its spec's range, finite. An open range's
+ * ends are kept just inside it; a typed value is checked with
+ * {@link valueInRange} instead, so no valid entry is nudged.
+ */
 export function clampValue(spec: ValueSpec, value: number): number {
   if (!Number.isFinite(value)) return spec.initial;
   const whole = spec.integer ? Math.round(value) : value;
-  return Math.min(spec.max ?? Infinity, Math.max(spec.min ?? -Infinity, whole));
+  const minInset = spec.exclusive ? EXCLUSIVE_INSET : 0;
+  const maxInset = spec.exclusive === true ? EXCLUSIVE_INSET : 0;
+  return Math.min(
+    (spec.max ?? Infinity) - maxInset,
+    Math.max((spec.min ?? -Infinity) + minInset, whole)
+  );
 }
+
+/** How far inside an exclusive range's ends a clamped value is kept. */
+const EXCLUSIVE_INSET = 1e-6;

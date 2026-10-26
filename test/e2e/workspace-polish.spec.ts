@@ -1,10 +1,12 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import {
+  createPrimitiveInPlace,
   seedDismissedWorkspaceTour,
   revealModelPanel,
   modelPanel,
   seedOpenCommandFold,
-  seedPanelLayout
+  seedPanelLayout,
+  finishInPlaceCommand
 } from './openzcad-fixtures';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId, type SketchObjectData } from '@openzcad/shared';
@@ -110,11 +112,7 @@ async function createBoxProject(page: Page, name: string) {
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 }
 
@@ -923,11 +921,7 @@ test('empty-state copy points at the tool rail beside the history', async ({
 
   // Selecting an edge points at the same place, and neither tool it names has
   // a keyboard shortcut, so the rail is the only route.
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expect(hint).toHaveCount(0);
 });
 
@@ -991,9 +985,10 @@ test('shows profile readiness and preserves exact entity edits through extrude a
   await expect(editor.getByLabel('Width', { exact: true })).toHaveValue('50');
   await rail.getByRole('button', { name: 'Extrude', exact: true }).click();
   await page.getByTestId('direct-manipulation-value').click();
-  const keypad = page.getByRole('dialog', { name: 'Height value' });
+  const keypad = page.getByRole('dialog', { name: 'Distance value' });
   await keypad.getByRole('textbox').fill('4');
-  await keypad.getByRole('button', { name: 'Apply height' }).click();
+  await keypad.getByRole('button', { name: 'Apply distance' }).click();
+  await finishInPlaceCommand(page, 'Extrude');
   await expect(page.getByRole('contentinfo')).toContainText(
     'Extruded region by 4 mm'
   );
@@ -1088,7 +1083,8 @@ test('a face click raises one selection chip with verbs and no other surface', a
   );
   const verbs = chip.locator('.selection-callout-verb');
   expect(await verbs.count()).toBeGreaterThanOrEqual(1);
-  expect(await verbs.count()).toBeLessThanOrEqual(3);
+  // Four at most as buttons; a face's other tools wait behind More.
+  expect(await verbs.count()).toBeLessThanOrEqual(4);
   await expect(
     chip.getByRole('button', { name: 'Deselect all' })
   ).toBeVisible();

@@ -6,7 +6,12 @@ import {
 } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import { toUserId } from '@openzcad/shared';
-import { expect, test, stubApi } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  expect,
+  test,
+  stubApi
+} from './openzcad-fixtures';
 
 type BlendResult = {
   topologyId: string;
@@ -83,11 +88,9 @@ test('creates, re-edits twice, and removes a selected history fillet', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Fillet Select To Edit');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByLabel('Radius', { exact: true }).fill('10');
-  await inspector.getByLabel('Height', { exact: true }).fill('20');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '10', height: '20' }
+  });
 
   const canvas = page.locator('.viewer-host canvas');
   const status = page.getByRole('contentinfo');
@@ -225,6 +228,87 @@ test('creates, re-edits twice, and removes a selected history fillet', async ({
   expect(consoleErrors).toEqual([]);
 });
 
+test('Delete removes the fillet whose face is picked in the viewport', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const consoleErrors: string[] = [];
+  page.on('pageerror', (error) => consoleErrors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Fillet Delete Key');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '10', height: '20' }
+  });
+
+  const canvas = page.locator('.viewer-host canvas');
+  const status = page.getByRole('contentinfo');
+  const rebuilding =
+    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i;
+  await expect(canvas).toBeVisible({ timeout: 120_000 });
+  await expect(status).not.toContainText(rebuilding, { timeout: 30_000 });
+  await expect
+    .poll(
+      () =>
+        canvas.evaluate(
+          (element) =>
+            new Promise<boolean>((resolve) => {
+              element.dispatchEvent(
+                new CustomEvent('openzcad:e2e-select-edge', {
+                  detail: {
+                    curve: 'circle',
+                    resolve: (selection: unknown) => resolve(selection !== null)
+                  }
+                })
+              );
+            })
+        ),
+      { timeout: 30_000 }
+    )
+    .toBe(true);
+  const chip = page.getByTestId('direct-manipulation-value');
+  await chip.click();
+  const keypad = page.getByRole('dialog', { name: 'Radius value' });
+  await keypad.getByRole('textbox').fill('1');
+  await keypad.getByRole('button', { name: 'Apply radius' }).click();
+  await expect(status).toContainText('Filleted 1 edge at 1 mm.');
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
+  await expect(status).not.toContainText(rebuilding, { timeout: 30_000 });
+  await expect
+    .poll(async () => (await readBlend(canvas))?.blendRadius ?? null, {
+      timeout: 30_000
+    })
+    .toBeCloseTo(1, 6);
+
+  // The pick alone names the fillet; Delete removes it, not the cylinder.
+  expect(await readBlend(canvas, true)).not.toBeNull();
+  await expect(chip).toHaveText('Edit Fillet · R 1 mm');
+  await page.keyboard.press('Delete');
+  const toast = page.locator('.toast');
+  await expect(toast).toContainText('Deleted Fillet edges');
+  await expect(page.getByRole('heading', { name: 'History 1' })).toBeVisible();
+  await expect(
+    page.locator('.feature-row', { hasText: /^Fillet edges/ })
+  ).toHaveCount(0);
+  await expect.poll(() => readBlend(canvas), { timeout: 30_000 }).toBeNull();
+
+  await toast.getByRole('button', { name: 'Undo' }).click();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
+  await expect
+    .poll(async () => (await readBlend(canvas))?.blendRadius ?? null, {
+      timeout: 30_000
+    })
+    .toBeCloseTo(1, 6);
+  expect(consoleErrors).toEqual([]);
+});
+
 test('previews and reverses a box fillet backed by verified evolution lineage', async ({
   page
 }) => {
@@ -240,11 +324,7 @@ test('previews and reverses a box fillet backed by verified evolution lineage', 
   await page.goto('/');
   await page.getByLabel('Project name').fill('Box Fillet Evolution');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
 
   const canvas = page.locator('.viewer-host canvas');
   const status = page.getByRole('contentinfo');
@@ -470,11 +550,7 @@ test('still refuses an oversize radius after a slow blend preview', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Slow blend refusal');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   const canvas = page.locator('.viewer-host canvas');
   await expect
     .poll(

@@ -1,6 +1,7 @@
 import { DEFAULT_APP_SETTINGS } from '@openzcad/shared';
 import {
   ALL_PANELS_DOCKED,
+  createPrimitiveInPlace,
   createProject,
   expect,
   expectBodyCount,
@@ -91,11 +92,7 @@ async function openWorkspace(
 }
 
 async function addBox(page: Page) {
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 }
@@ -541,10 +538,9 @@ test('the inspector and the right lane stay clear of the dock, inside the rail',
     width: 1280,
     height: 720
   });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  // Feature forms suspend the panels; explicitly reopen them to check the
-  // user-requested simultaneous layout.
-  await revealModelPanel(page, 'History');
+  // A new box runs in place (U09); its History edit card takes the lane.
+  await createPrimitiveInPlace(page, 'box');
+  await page.locator('.feature-row-main', { hasText: /^Box/ }).click();
   const inspector = page.locator('.stage-right > .inspector-float');
   await expect(inspector).toBeVisible();
   const lane = await box(inspector);
@@ -572,8 +568,9 @@ test('on a stage too narrow for both, an unpinned panel covers the lane instead 
     width: 900,
     height: 720
   });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await revealModelPanel(page, 'History');
+  // A new box runs in place (U09); its History edit card takes the lane.
+  await createPrimitiveInPlace(page, 'box');
+  await page.locator('.feature-row-main', { hasText: /^Box/ }).click();
   const inspector = page.locator('.stage-right > .inspector-float');
   await expect(inspector).toBeVisible();
   const full = await box(inspector);
@@ -1168,12 +1165,12 @@ test('a command card heads the right lane, and a tool card keeps its actions in 
   });
   await expect(page.locator('.panel-column')).toBeVisible();
 
-  // A tall tool card: Hole now runs in place (U09) and opens none, so the
-  // Fillet card, with its edge list and radius rows, stands in.
-  await page.getByRole('button', { name: /^Fillet/ }).click();
-  await revealModelPanel(page, 'History');
+  // A tool card: every Build tool now runs in place (U09) and opens none,
+  // so a Box's edit card, opened from its History row, stands in.
+  await createPrimitiveInPlace(page, 'box');
+  await page.locator('.feature-row-main', { hasText: /^Box/ }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  const submit = inspector.getByRole('button', { name: /^Create/ });
+  const submit = inspector.getByRole('button', { name: 'Apply', exact: true });
   await expect(submit).toBeVisible();
   const layout = await page.evaluate(() => {
     const rect = (selector: string) =>
@@ -1185,6 +1182,8 @@ test('a command card heads the right lane, and a tool card keeps its actions in 
     const cube = rect('.viewer-rail-stack');
     const column = rect('.panel-column');
     return {
+      laneTop: lane.top,
+      cardTop: card.top,
       laneHeight: lane.height,
       cardHeight: card.height,
       cardBottom: card.bottom,
@@ -1198,15 +1197,17 @@ test('a command card heads the right lane, and a tool card keeps its actions in 
       actionsInside: actions.top >= body.top && actions.bottom <= body.bottom
     };
   });
-  // The card has the lane to itself; the dock is never in it.
-  expect(layout.cardHeight).toBeGreaterThan(layout.laneHeight - 40);
-  expect(layout.actionsInside, JSON.stringify(layout)).toBe(true);
+  // The card heads the lane and fits in it; the dock is never in it.
+  expect(layout.cardTop - layout.laneTop).toBeLessThanOrEqual(8);
+  expect(layout.cardHeight).toBeLessThanOrEqual(layout.laneHeight);
+  expect(layout.actionsInside).toBe(true);
   expect(layout.cardBottom).toBeLessThanOrEqual(layout.cubeTop);
   expect(layout.cardRight).toBeLessThanOrEqual(layout.columnLeft);
   await expect(submit).toBeInViewport();
   await inspector.getByRole('button', { name: 'Cancel' }).click();
 
-  // The Move panel is a command card too: it heads the lane.
+  // A Move is no card (U09): its bar takes the command row over the search
+  // bar, as every in-place command's does, and the lane holds nothing.
   await page.locator('.body-row:not(.consumed) .body-row-main').first().click();
   await page.keyboard.press('Escape');
   await page.locator('.body-row:not(.consumed) .body-row-main').first().click();
@@ -1216,13 +1217,15 @@ test('a command card heads the right lane, and a tool card keeps its actions in 
   await revealModelPanel(page, 'History');
   await expect(
     page
-      .locator('.stage-right > .command-float')
+      .locator('.command-bar-lane')
       .getByRole('form', { name: 'Move controls' })
   ).toBeVisible();
-  const card = await box(page.locator('.stage-right > .command-float'));
-  expect(overlaps(card, await box(page.locator('.panel-column')))).toBe(false);
-  await move.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(page.locator('.stage-right > .command-float')).toHaveCount(0);
+  expect(
+    overlaps(await box(move), await box(page.locator('.panel-column')))
+  ).toBe(false);
+  await move.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(move).toHaveCount(0);
 });
 
 // EDGE-02's successor: the header controls are real 24px targets that own

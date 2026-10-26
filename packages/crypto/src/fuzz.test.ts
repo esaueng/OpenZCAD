@@ -2,7 +2,9 @@
  * Seeded fuzzing of every parser that reads bytes the server hands back:
  * both envelope classes (structure and decryption, one-shot and
  * incremental), wrapped and sealed keys, version signatures, version log
- * records, device-list entries, revocation cutoffs and the document,
+ * records, device-list entries, revocation cutoffs, contacts entries,
+ * share delegations, share-authority statements, link grants and
+ * tombstones, and the document (versions 1 and 2),
  * project-info and key-archive bodies. Whatever
  * the input, each call either succeeds or throws an `E2eeError`; never a
  * TypeError, RangeError or a DOMException leaking out of WebCrypto.
@@ -25,7 +27,33 @@ import {
   verifyDeviceList,
   verifyRevocationCutoffs
 } from './devices';
+import {
+  nextContactsEntry,
+  signContactsEntry,
+  verifyContactsList
+} from './contacts';
 import { E2eeError } from './errors';
+import {
+  decodeProjectInvitation,
+  invitationEmailHash,
+  signProjectInvitation,
+  verifyProjectInvitation
+} from './invitations';
+import { publicKeyHash } from './codes';
+import {
+  decodeShareAuthority,
+  decodeShareDelegation,
+  decodeShareLinkGrant,
+  decodeShareLinkTombstone,
+  shareKeyHash,
+  signShareAuthority,
+  signShareDelegation,
+  signShareLinkGrant,
+  signShareLinkTombstone,
+  verifyShareAuthority,
+  verifyShareDelegation,
+  verifyShareLinkSet
+} from './share-links';
 import {
   exportPublicKey,
   generateEncryptionKeyPair,
@@ -452,6 +480,70 @@ describe('parser fuzzing', () => {
     }
   });
 
+  it('contacts entries only throw E2eeError', async () => {
+    const identity = await generateSigningKeyPair(false);
+    const identityRaw = await exportPublicKey(identity.publicKey);
+    const verify = await signContactsEntry(
+      identity.privateKey,
+      nextContactsEntry(null, 'u1', {
+        issuedAt: 1,
+        action: 'verify',
+        contactUserId: 'u2',
+        identityKeyHash: patternBytes(32, 1),
+        deviceListHead: { sequence: 3, entryHash: patternBytes(32, 2) }
+      })
+    );
+    const list = await verifyContactsList(identityRaw, [verify]);
+    const outcomes = new Map<string, number>();
+    const count = (outcome: string) =>
+      outcomes.set(outcome, (outcomes.get(outcome) ?? 0) + 1);
+    for (const action of ['advance', 'key-changed'] as const) {
+      const next = await signContactsEntry(
+        identity.privateKey,
+        nextContactsEntry(list, 'u1', {
+          issuedAt: 2,
+          action,
+          contactUserId: 'u2',
+          identityKeyHash: patternBytes(32, 1),
+          deviceListHead:
+            action === 'advance'
+              ? { sequence: 4, entryHash: patternBytes(32, 3) }
+              : null
+        })
+      );
+      for (let seed = 1; seed <= 300; seed += 1) {
+        count(
+          await onlyTypedErrors(() =>
+            verifyContactsList(
+              identityRaw,
+              [
+                verify,
+                {
+                  entry: mutate(seed, new Uint8Array(next.entry)),
+                  signature: next.signature
+                }
+              ],
+              { pin: list.pin }
+            )
+          )
+        );
+        count(
+          await onlyTypedErrors(() =>
+            verifyContactsList(identityRaw, [
+              {
+                entry: verify.entry,
+                signature: mutate(seed, new Uint8Array(verify.signature))
+              }
+            ])
+          )
+        );
+      }
+    }
+    for (const code of ['malformed', 'authentication-failed']) {
+      expect(outcomes.get(code) ?? 0).toBeGreaterThan(0);
+    }
+  });
+
   it('key and signature parsing only throw E2eeError', async () => {
     const kek = patternBytes(32, 0x01);
     const recipient = await generateEncryptionKeyPair();
@@ -509,6 +601,224 @@ describe('parser fuzzing', () => {
           signature
         )
       );
+    }
+  });
+});
+
+describe('share-link parser fuzzing', () => {
+  it('delegations, statements, grants, tombstones and v2 bodies only throw E2eeError', async () => {
+    const identity = await generateSigningKeyPair(false);
+    const device = await generateSigningKeyPair(false);
+    const identityRaw = await exportPublicKey(identity.publicKey);
+    const deviceRaw = await exportPublicKey(device.publicKey);
+    const identityHash = await publicKeyHash(identityRaw);
+    const deviceHash = await publicKeyHash(deviceRaw);
+    const shareKey = patternBytes(32, 9);
+    const keyHash = await shareKeyHash(shareKey);
+    const T = 1_760_000_000_000;
+    const delegation = await signShareDelegation(identity.privateKey, {
+      identityKeyHash: identityHash,
+      sequence: 1,
+      issuedAt: T,
+      expiresAt: T + 20 * 86_400_000,
+      deviceKeys: [deviceRaw]
+    });
+    const authority = await signShareAuthority(device.privateKey, {
+      projectId: 'p',
+      shareId: 's1',
+      shareKeyHash: keyHash,
+      mode: 'view',
+      ownerIdentityKeyHash: identityHash,
+      sequence: 1,
+      issuedAt: T,
+      expiresAt: T + 5 * 86_400_000,
+      signerKeyHash: deviceHash,
+      authorKeyHashes: [deviceHash]
+    });
+    const grant = await signShareLinkGrant(device.privateKey, {
+      projectId: 'p',
+      shareId: 's1',
+      shareKeyHash: keyHash,
+      mode: 'tweak',
+      keyEpoch: 1,
+      issuedAt: T,
+      signerKeyHash: deviceHash
+    });
+    const tombstone = await signShareLinkTombstone(device.privateKey, {
+      projectId: 'p',
+      shareId: 's0',
+      keyEpoch: 1,
+      issuedAt: T,
+      signerKeyHash: deviceHash
+    });
+    const header = { kind: 'document' as const, keyEpoch: 1, blobIds: [] };
+    const body = encodeEncryptedDocumentBody(
+      {
+        document: {},
+        blobs: [],
+        revisionVersionHashes: new Map(),
+        shareLinks: { grants: [grant], tombstones: [tombstone] }
+      },
+      header
+    );
+    const now = T + 86_400_000;
+    const verifiedDelegation = await verifyShareDelegation(
+      delegation,
+      identityRaw,
+      { now }
+    );
+    const outcomes = new Map<string, number>();
+    const count = (outcome: string) =>
+      outcomes.set(outcome, (outcomes.get(outcome) ?? 0) + 1);
+    const resolveOwnerKey = () => deviceRaw;
+    for (let seed = 1; seed <= 250; seed += 1) {
+      const m = (bytes: Uint8Array) => mutate(seed, new Uint8Array(bytes));
+      count(
+        await onlyTypedErrors(() =>
+          decodeShareDelegation(m(delegation.statement))
+        )
+      );
+      count(
+        await onlyTypedErrors(() =>
+          decodeShareAuthority(m(authority.statement))
+        )
+      );
+      count(
+        await onlyTypedErrors(() => decodeShareLinkGrant(m(grant.statement)))
+      );
+      count(
+        await onlyTypedErrors(() =>
+          decodeShareLinkTombstone(m(tombstone.statement))
+        )
+      );
+      count(
+        await onlyTypedErrors(() =>
+          verifyShareDelegation(
+            {
+              statement: m(delegation.statement),
+              signature: delegation.signature
+            },
+            identityRaw,
+            { now }
+          )
+        )
+      );
+      count(
+        await onlyTypedErrors(() =>
+          verifyShareDelegation(
+            {
+              statement: delegation.statement,
+              signature: m(delegation.signature)
+            },
+            identityRaw,
+            { now }
+          )
+        )
+      );
+      count(
+        await onlyTypedErrors(() =>
+          verifyShareAuthority(
+            {
+              statement: m(authority.statement),
+              signature: authority.signature
+            },
+            verifiedDelegation,
+            { now }
+          )
+        )
+      );
+      count(
+        await onlyTypedErrors(() =>
+          verifyShareAuthority(
+            {
+              statement: authority.statement,
+              signature: m(authority.signature)
+            },
+            verifiedDelegation,
+            { now }
+          )
+        )
+      );
+      count(
+        await onlyTypedErrors(() =>
+          verifyShareLinkSet(
+            {
+              grants: [
+                { statement: m(grant.statement), signature: grant.signature }
+              ],
+              tombstones: [tombstone]
+            },
+            { projectId: 'p', keyEpoch: 1, resolveOwnerKey }
+          )
+        )
+      );
+      count(
+        await onlyTypedErrors(async () => {
+          const decoded = decodeEncryptedDocumentBody(m(body), header);
+          if (decoded.shareLinks) {
+            await verifyShareLinkSet(decoded.shareLinks, {
+              projectId: 'p',
+              keyEpoch: 1,
+              resolveOwnerKey
+            });
+          }
+        })
+      );
+    }
+    for (const code of ['malformed', 'authentication-failed', 'ok']) {
+      expect(outcomes.get(code) ?? 0).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe('invitation parser fuzzing', () => {
+  it('invitation statements only throw E2eeError', async () => {
+    const device = await generateSigningKeyPair(false);
+    const deviceRaw = await exportPublicKey(device.publicKey);
+    const T = 1_760_000_000_000;
+    const signed = await signProjectInvitation(device.privateKey, {
+      projectId: 'p',
+      invitationId: 'inv_1',
+      inviterUserId: 'u_owner',
+      inviteeEmailHash: await invitationEmailHash('bob@example.com'),
+      role: 'editor',
+      issuedAt: T,
+      expiresAt: T + 3 * 86_400_000,
+      signerDeviceId: 'd1',
+      signerKeyHash: await publicKeyHash(deviceRaw)
+    });
+    const now = T + 86_400_000;
+    const outcomes = new Map<string, number>();
+    const count = (outcome: string) =>
+      outcomes.set(outcome, (outcomes.get(outcome) ?? 0) + 1);
+    for (let seed = 1; seed <= 300; seed += 1) {
+      const m = (bytes: Uint8Array) => mutate(seed, new Uint8Array(bytes));
+      count(
+        await onlyTypedErrors(() =>
+          decodeProjectInvitation(m(signed.statement))
+        )
+      );
+      count(
+        await onlyTypedErrors(() =>
+          verifyProjectInvitation(
+            { statement: m(signed.statement), signature: signed.signature },
+            deviceRaw,
+            { now }
+          )
+        )
+      );
+      count(
+        await onlyTypedErrors(() =>
+          verifyProjectInvitation(
+            { statement: signed.statement, signature: m(signed.signature) },
+            deviceRaw,
+            { now }
+          )
+        )
+      );
+    }
+    for (const code of ['malformed', 'authentication-failed', 'ok']) {
+      expect(outcomes.get(code) ?? 0).toBeGreaterThan(0);
     }
   });
 });

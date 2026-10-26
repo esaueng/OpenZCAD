@@ -29,6 +29,13 @@ export * from './reference-images';
 export * from './e2ee-project-groups';
 export * from './e2ee-project-documents';
 export * from './e2ee-content-blobs';
+export * from './e2ee-collaboration';
+export * from './e2ee-device-removal';
+export * from './e2ee-contacts';
+export * from './e2ee-assistant-consents';
+export * from './e2ee-invitations';
+export * from './e2ee-share-links';
+export * from './e2ee-project-migrations';
 import type { ReferenceImageSet } from './reference-images';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
@@ -3308,6 +3315,12 @@ export const ENCRYPTED_PROJECT_SHARING_UNAVAILABLE_CODE =
   'ENCRYPTED_PROJECT_SHARING_UNAVAILABLE';
 /** An account that opted in to encryption may not store new plaintext projects. */
 export const ENCRYPTED_PROJECTS_REQUIRED_CODE = 'ENCRYPTED_PROJECTS_REQUIRED';
+/**
+ * End-to-end encryption is the default for this account (E2EE_DEFAULT_ON,
+ * ADR-024 Phase 8): a plaintext share link or invitation, or turning
+ * "Encrypt new projects" off, is refused with 409 and this code.
+ */
+export const E2EE_DEFAULT_ON_CODE = 'E2EE_DEFAULT_ON';
 /** The assistant is off on encrypted projects until per-project consent (D7). */
 export const ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE_CODE =
   'ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE';
@@ -3831,6 +3844,28 @@ export interface E2eeConfigResponse {
    * this account and their storage is installed. Absent from older Workers.
    */
   projectsEnabled?: boolean;
+  /**
+   * Moving existing plaintext projects to encrypted storage
+   * (E2EE_MIGRATION_ENABLED, ADR-024 Phase 7) is open to this account and
+   * its storage (migration 0042) is installed. Present (true) only then;
+   * absent while closed and from older Workers.
+   */
+  migrationEnabled?: boolean;
+  /**
+   * The beta-only reverse path (E2EE_REVERSE_ENABLED with migration open,
+   * ADR-024 Phase 7, slice 7-3): an encrypted project may be turned back
+   * into plaintext, and its storage (migration 0043) is installed. Present
+   * (true) only then.
+   */
+  reverseEnabled?: boolean;
+  /**
+   * End-to-end encryption is the default (E2EE_DEFAULT_ON with migration
+   * open, ADR-024 Phase 8, slice 8-1): the Worker stores no new plaintext
+   * project, plaintext share link or plaintext invitation for this account,
+   * the "Encrypt new projects" opt-out and the reverse path are closed.
+   * Present (true) only then, and only with `migrationEnabled`.
+   */
+  defaultOn?: boolean;
 }
 
 /**
@@ -3897,6 +3932,13 @@ export interface E2eeAppendDeviceListRequest {
   wraps: E2eeWrapInput[];
   /** Required exactly when the entry rotates the account key. */
   history?: E2eeAccountKeyHistoryInput;
+  /**
+   * The identity-signed revocation cutoff statement for this entry (device
+   * removal, ADR-024 slice 4-10). Required when the entry revokes a device
+   * of an account with encrypted projects: the Worker stores it in the same
+   * batch as the entry, so no revoked device is ever left without one.
+   */
+  cutoffs?: E2eeSignedStatementRecord;
 }
 
 export interface E2eeReplaceIdentityRequest extends E2eeSetupRequest {
@@ -4265,6 +4307,11 @@ export interface EffectiveAssistantSettings {
   provider: AssistantProvider;
   model: string;
   reasoningEffort: string;
+  /**
+   * The upstream URL a request goes to, which an encrypted project's
+   * assistant consent binds (ADR-024 6-1). Empty when none is usable.
+   */
+  endpoint?: string;
 }
 
 export interface AppSettingsResponse {
@@ -4460,7 +4507,16 @@ export type CollaborationServerMessage =
    * sender keeps its own document rather than reporting itself synced against
    * state the room never took.
    */
-  | { type: 'error'; code: CollaborationErrorCode; message: string };
+  | {
+      type: 'error';
+      code: CollaborationErrorCode;
+      message: string;
+      /**
+       * With `blob-unknown` (an encrypted room, ADR-024 slice 5-6): the
+       * content blobs the account no longer holds for the project.
+       */
+      blobIds?: string[];
+    };
 
 export type CollaborationErrorCode =
   /** Larger than a single durable-storage value can hold. */
@@ -4474,7 +4530,20 @@ export type CollaborationErrorCode =
   /** Lease enforcement is enabled and no matching live lease was supplied. */
   | 'lease-required'
   /** The room failed while handling an otherwise well-formed message. */
-  | 'internal';
+  | 'internal'
+  /**
+   * A plaintext frame to an end-to-end encrypted room, or an envelope to a
+   * plaintext one (ADR-024 slice 4-9).
+   */
+  | 'format-mismatch'
+  /** An encrypted version written under an older key epoch than the group's. */
+  | 'epoch-stale'
+  /**
+   * An encrypted version names content blobs the account lost or collected
+   * (409 `E2EE_BLOB_UNKNOWN` on the account's write, slice 5-6): the
+   * browser stores them again from its own copy and resubmits.
+   */
+  | 'blob-unknown';
 
 /**
  * Longest accepted project name, measured after trimming. Shared so the client

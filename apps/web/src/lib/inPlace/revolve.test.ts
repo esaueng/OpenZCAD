@@ -76,6 +76,24 @@ describe('a datum axis along a sketch axis', () => {
       'datum:z'
     ]);
   });
+
+  it('keeps the sketch axis an edited revolve stores, and leaves the datum out', () => {
+    const candidates = revolveAxisCandidates(
+      FRONT,
+      {
+        ['z' as FeatureId]: {
+          origin: { x: 0, y: 0, z: 5 },
+          direction: { x: 0, y: 0, z: -1 }
+        }
+      },
+      () => 'Axis 1',
+      'sketch-vertical'
+    );
+    expect(candidates.map((c) => c.id)).toEqual([
+      'sketch-horizontal',
+      'sketch-vertical'
+    ]);
+  });
 });
 
 describe('a picked sketch line', () => {

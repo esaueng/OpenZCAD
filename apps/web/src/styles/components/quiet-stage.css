@@ -333,8 +333,7 @@
   pointer-events: auto;
 }
 
-.command-float > .tool-card:has(.extrude-form),
-.command-float > .move-controller {
+.command-float > .tool-card:has(.extrude-form) {
   flex-shrink: 1;
   min-height: 0;
 }
@@ -348,13 +347,6 @@
   max-height: 100%;
   flex-shrink: 1;
   min-height: 0;
-}
-
-/* The Move panel is as tall as its axis grids; in a short window it scrolls
-   inside the slot, like the Extrude editor, instead of running off it. */
-.command-float > .move-controller {
-  max-height: 100%;
-  overflow-y: auto;
 }
 
 /* A phone lane's panel yields to a command card all the way down, rather
@@ -914,6 +906,13 @@
    lanes, whose rows sit where the list opens. */
 .command-bar-lane:has(.command-bar.open) {
   z-index: var(--z-popover);
+}
+
+/* A running command's Done and Cancel stay on top: in a short narrow window
+   with a panel docked (768 × 650 with History open) the instrument rail
+   runs down into the bottom lane and covered Done. */
+.command-bar-lane:has(.in-place-command) {
+  z-index: calc(var(--z-inspector-float) + 2);
 }
 
 /* The list takes the conversation's place rather than floating over it: a
@@ -3271,6 +3270,9 @@ button.model-panel-grip[aria-expanded='true'] {
   /* The lane passes the pointer through to the viewport; the bar's own
      buttons must take it back, as the search bar does. */
   pointer-events: auto;
+  /* Options open above the bar from its own left edge: grown leftward from
+     the ⋯ button they ran under the tool rail on a narrow window. */
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -3336,7 +3338,6 @@ button.model-panel-grip[aria-expanded='true'] {
 }
 
 .in-place-command-options {
-  position: relative;
   flex: none;
 }
 
@@ -3357,14 +3358,33 @@ button.model-panel-grip[aria-expanded='true'] {
 
 .in-place-command-options-panel {
   position: absolute;
-  right: 0;
+  left: 0;
   bottom: calc(100% + 8px);
   min-width: 220px;
+  max-width: 100%;
   padding: 10px;
   background: var(--color-surface);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   box-shadow: 0 6px 18px rgb(0 0 0 / 24%);
+}
+
+/* A Move's Options hold its exact numbers: three fields a row wants the
+   bar's whole width, and a short window scrolls them rather than running
+   off the top of the stage. */
+.in-place-command-options-panel.move-options {
+  width: min(340px, 100%);
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+}
+
+.move-command .in-place-command-hint {
+  max-width: 34ch;
+}
+
+/* What the Move turns, named in its hint: the body (or sketch) itself. */
+.move-target-name {
+  color: var(--color-text);
 }
 
 .in-place-option {
@@ -3384,6 +3404,16 @@ button.model-panel-grip[aria-expanded='true'] {
   font-size: var(--fs-xs);
 }
 
+/* What the chosen choice does, where a card had its explanation. */
+.in-place-option-note {
+  flex: 0 0 100%;
+  max-width: 36ch;
+  margin: 2px 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
 .in-place-option-choice {
   min-height: 28px;
   padding: 0 8px;
@@ -3393,6 +3423,10 @@ button.model-panel-grip[aria-expanded='true'] {
   border-radius: var(--radius-sm);
   font: inherit;
   cursor: pointer;
+}
+
+.in-place-option-value {
+  font-variant-numeric: tabular-nums;
 }
 
 .in-place-option-choice[aria-checked='true'] {

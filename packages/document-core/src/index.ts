@@ -1,6 +1,7 @@
 import { listFeaturesInOrder } from './feature-order';
 export { listFeaturesInOrder } from './feature-order';
 export { withoutDerivedProjection } from './document-projection';
+export { sharedProjectSnapshotDocument } from './shared-snapshot';
 import { repairLegacyBracketModel } from './legacy-bracket';
 export {
   repairLegacyBracketModel,

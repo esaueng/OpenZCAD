@@ -1,23 +1,39 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { BodyId, ParamValue, ProjectDocument } from '@openzcad/shared';
+import type {
+  BodyId,
+  ParamValue,
+  ParametricVector3,
+  ProjectDocument,
+  Vector3
+} from '@openzcad/shared';
 import { GEOMETRY_PREVIEW_SCHEDULING, LivePreview } from '../lib/livePreview';
 import {
   IN_PLACE_TOOL_SPECS,
   axisCandidatesFor,
   clampValue,
+  valueInRange,
   type BodyPick,
   type CurvePick,
+  type EdgePick,
   type FacePick,
   type HandleSpec,
+  type ImagePlacement,
+  type ImageSlot,
   type InPlaceContext,
   type InPlaceRequest,
   type InPlaceSlots,
   type InPlaceToolId,
   type InPlaceToolSpec,
+  type OptionSpec,
   type PlanePick,
-  type ProfilePick
+  type ProfilePick,
+  type RefPick
 } from '../lib/inPlace/tools';
+import { placeImage as placedImage } from '../lib/inPlace/image';
 import type { RevolveAxisCandidate } from '../lib/inPlace/revolve';
+import type { InPlaceEditSeed } from '../lib/inPlace/edit';
+import { findFeature } from '@openzcad/document-core';
+import type { PlacementPick } from '../lib/inPlace/primitives';
 
 /**
  * Runs whichever in-place command (U09) is active.
@@ -34,6 +50,11 @@ export interface InPlaceBuiltCommand {
   validate(document: ProjectDocument): void;
   apply(document: ProjectDocument): ProjectDocument;
   resultBodyId: BodyId | undefined;
+  /**
+   * Proves a result that adds no body (a datum) built: throws the refusal
+   * when it did not. A command with it is judged by it, not by a body.
+   */
+  check?(derived: ProjectDocument['derived']): void;
 }
 
 export interface UseInPlaceCommandOptions extends InPlaceContext {
@@ -44,28 +65,158 @@ export interface UseInPlaceCommandOptions extends InPlaceContext {
    * built on the old one must not stand for what Done would now commit.
    */
   baseVersion?: number | null;
+  /**
+   * Whether the model's geometry for this version has settled: a reseed
+   * read before it (a face's new lineage against the old topology) is read
+   * again once it has.
+   */
+  geometrySettled?: boolean;
+  /**
+   * An edit's seed read again from the feature as the model has it now, so
+   * a value the user has not changed follows a change made to it since (an
+   * undo, a collaborator), with the command that now edits it; null once
+   * no in-place command edits it (it was deleted, or made into a Move),
+   * undefined when there is nothing to read it from.
+   */
+  reseed?(
+    edit: InPlaceEditSeed
+  ): { tool: InPlaceToolId; seed: InPlaceEditSeed } | null | undefined;
   derive(document: ProjectDocument): Promise<ProjectDocument['derived']>;
   /**
    * Builds the same command the commit runs, named for the tool so a kernel
-   * refusal names it as the commit would.
+   * refusal names it as the commit would. With `edit`, that is the feature's
+   * `updateFeature`, not a new feature.
    */
-  buildCommand(request: InPlaceRequest, title: string): InPlaceBuiltCommand;
-  /** Commits a request through the validated-feature path. */
-  commit(request: InPlaceRequest, title: string): void;
+  buildCommand(
+    request: InPlaceRequest,
+    title: string,
+    edit: InPlaceEditSeed | null
+  ): InPlaceBuiltCommand;
+  /**
+   * Commits a request through the validated-feature path. An edit reports
+   * back through `settleEdit`; a new feature may return whether it landed,
+   * and the command stays open until then (nothing returned: it has).
+   */
+  commit(
+    request: InPlaceRequest,
+    title: string,
+    edit: InPlaceEditSeed | null,
+    /**
+     * True once the command is closed or replaced while this commit still
+     * validates: the host withdraws the candidate rather than land it.
+     */
+    withdrawn: () => boolean
+  ): Promise<boolean> | void;
   publishPreview(preview: ProjectDocument | null): void;
   onStatus(message: string): void;
 }
 
+const SLOT_KEYS = [
+  'profiles',
+  'axisId',
+  'path',
+  'guide',
+  'faces',
+  'bodies',
+  'plane',
+  'edges'
+] as const;
+
+/** Where a pick stands or what it measures, not what it references. */
+const PLACEMENT_KEYS = new Set([
+  'min',
+  'max',
+  'point',
+  'centroid',
+  'center',
+  'normal',
+  'origin',
+  'direction',
+  'middle',
+  'outward',
+  'end',
+  'fields',
+  'regionFingerprint',
+  'surfaceType'
+]);
+
+/**
+ * What a slot references, for telling a user's repick from the same picks
+ * read again (a re-measured box, a renumbered region).
+ */
+function slotIdentity(slot: unknown): string {
+  return JSON.stringify(
+    slot ?? null,
+    function (this: unknown, key: string, value: unknown) {
+      if (PLACEMENT_KEYS.has(key)) return undefined;
+      // A face or edge named by its lineage is that lineage: the hash it
+      // resolves to now changes with every upstream rebuild.
+      const holder = this as { reference?: unknown } | null;
+      if (
+        (key === 'hash' || key === 'topologyId') &&
+        holder?.reference !== undefined
+      ) {
+        return undefined;
+      }
+      return value;
+    }
+  );
+}
+
+/** An edit's session, armed from its seed. */
+function sessionFromSeed(
+  tool: InPlaceToolId,
+  seed: InPlaceEditSeed,
+  id: number
+): Session {
+  return {
+    id,
+    tool,
+    edit: seed,
+    slots: {
+      profiles: seed.slots.profiles,
+      axisId: seed.slots.axisId,
+      path: seed.slots.path,
+      guide: seed.slots.guide,
+      faces: seed.slots.faces,
+      bodies: seed.slots.bodies,
+      plane: seed.slots.plane,
+      edges: seed.slots.edges,
+      axisLine: null,
+      // A datum, a picture or a primitive is never edited here: no sources,
+      // no image, no placement.
+      placement: null,
+      refs: [],
+      image: null
+    },
+    options: { ...seed.options },
+    values: { ...seed.values },
+    raws: { ...seed.raws },
+    touched: [...seed.touched]
+  };
+}
+
 interface Session {
+  /** Which start this is: a new one each time a command starts. */
+  id: number;
   tool: InPlaceToolId;
   slots: {
     profiles: ProfilePick[];
     axisId: string | null;
+    /**
+     * A line picked in the model as the axis (a straight edge, a cylinder),
+     * offered beside the listed ones until the slot it fills empties.
+     */
+    axisLine: RevolveAxisCandidate | null;
     path: CurvePick[];
     guide: CurvePick[];
     faces: FacePick[];
     bodies: BodyPick[];
     plane: PlanePick | null;
+    edges: EdgePick[];
+    placement: PlacementPick | null;
+    refs: RefPick[];
+    image: ImageSlot | null;
   };
   options: Record<string, string>;
   values: Record<string, number>;
@@ -73,14 +224,24 @@ interface Session {
   raws: Record<string, string>;
   /** Values the user has set, which the picks' defaults leave alone. */
   touched: string[];
+  /** The stored feature this command edits; null while creating one. */
+  edit: InPlaceEditSeed | null;
+  /**
+   * Whether a later direct edit reshapes the edited body, as the feature
+   * stands now (its seed said so when armed; an undo may change it).
+   */
+  reshapedLater?: boolean;
 }
 
 export interface InPlaceCommand {
   active: boolean;
+  /**
+   * The running command's identity, new on every start (even of the same
+   * tool), so a gesture begun under one is never finished by the next.
+   */
+  sessionId: number | null;
   tool: InPlaceToolId | null;
   spec: InPlaceToolSpec | null;
-  /** The same draft the preview and Done use; a numeric form can take it over. */
-  request: InPlaceRequest | null;
   slots: InPlaceSlots;
   axisCandidates: RevolveAxisCandidate[];
   handles: HandleSpec[];
@@ -88,17 +249,57 @@ export interface InPlaceCommand {
   /** Values held as typed expressions, by id. */
   raws: Record<string, string>;
   options: Record<string, string>;
+  /** The Options menu: the spec's, with an edit's own choices, unlocked. */
+  optionSpecs: OptionSpec[];
+  /** The feature being edited, or null while creating. */
+  editing: InPlaceEditSeed | null;
+  /** What Done would build now, or null while a slot is still empty. */
+  request: InPlaceRequest | null;
   hint: string;
   refusal: string | null;
   canFinish: boolean;
+  /** Re-arms the command that made a stored feature, seeded from it. */
+  edit(tool: InPlaceToolId, seed: InPlaceEditSeed): void;
   start(
     tool: InPlaceToolId,
     profiles?: ProfilePick[],
     faces?: FacePick[],
-    bodies?: BodyPick[]
+    bodies?: BodyPick[],
+    extra?: { refs?: RefPick[]; image?: ImageSlot; edges?: EdgePick[] }
   ): void;
   pickProfile(pick: ProfilePick, additive?: boolean): void;
+  /**
+   * Replaces the profiles (an edit's that no longer resolve, dropped). With
+   * `from`, only while the slot still holds those picks: one the live reseed
+   * replaced meanwhile is newer than what the re-check read.
+   */
+  setProfiles(
+    profiles: readonly ProfilePick[],
+    from?: readonly ProfilePick[]
+  ): void;
+  /**
+   * Replaces the path, guide or face picks, as a re-check leaves them; with
+   * `from`, each only while its slot still holds what the re-check read.
+   */
+  setPicks(
+    picks: {
+      path?: readonly CurvePick[];
+      guide?: readonly CurvePick[];
+      faces?: readonly FacePick[];
+      bodies?: readonly BodyPick[];
+      edges?: readonly EdgePick[];
+    },
+    from?: Pick<InPlaceSlots, 'path' | 'guide' | 'faces' | 'bodies' | 'edges'>
+  ): void;
   pickAxis(axisId: string): void;
+  /**
+   * A line picked in the model (a straight edge, a cylinder's axis) as the
+   * axis, or as the direction of a command that takes one; a picked line
+   * clicked again comes back out. Refused (false) when the tool takes none.
+   */
+  pickAxisLine(line: RevolveAxisCandidate): boolean;
+  /** A direction picked in the model (a flat face's normal); false if none is taken. */
+  pickDirection(direction: Vector3): boolean;
   pickCurve(curve: CurvePick, additive?: boolean): void;
   /** A face click: refused (false) when the tool takes no such face. */
   pickFace(face: FacePick): boolean;
@@ -111,17 +312,58 @@ export interface InPlaceCommand {
   addFaces(faces: readonly FacePick[]): number | null;
   /** A body click (any of its faces): refused when the tool takes none. */
   pickBody(body: BodyPick): boolean;
+  /**
+   * An edge click: it joins the command's edges, or a picked one comes back
+   * out; an edge of another body starts the set over. Refused (false) when
+   * the tool takes no edges.
+   */
+  pickEdge(edge: EdgePick): boolean;
+  /** Replaces the command's edges (Select all, Clear); false without any. */
+  setEdges(edges: readonly EdgePick[]): boolean;
   pickPlane(plane: PlanePick): boolean;
+  /**
+   * A primitive's footprint drag: where it was drawn, and the values it set
+   * (the pressed point and the footprint's sizes). Refused (false) when the
+   * command is placed some other way.
+   */
+  placeFootprint(
+    placement: PlacementPick,
+    values: Record<string, number>
+  ): boolean;
+  /** A datum source: refused (false) when the tool takes no such source. */
+  pickRef(ref: RefPick): boolean;
+  /** A plane or a point for the picture being placed. */
+  placeImage(placement: ImagePlacement): boolean;
   setOption(optionId: string, value: string): void;
   previewValue(valueId: string, value: number): void;
   /** False when a typed expression is refused, leaving the value as it was. */
   setValue(valueId: string, value: number, raw?: string): boolean;
+  /** Values the user has set, which the picks' or values' defaults leave alone. */
+  touched: readonly string[];
+  /**
+   * A value put back as it was before an entry was canceled: its number,
+   * its expression, and whether it was set, so a default it followed still
+   * applies to it.
+   */
+  restoreValue(
+    valueId: string,
+    value: number,
+    raw: string | undefined,
+    touched: boolean
+  ): void;
   done(): boolean;
+  /**
+   * An edit's Done waits on its validated commit: `true` ends the edit,
+   * `false` (refused) leaves it open to correct and retry.
+   */
+  settleEdit(edit: InPlaceEditSeed, committed: boolean): void;
   /** Ends the command; `quiet` when another action already says why. */
-  cancel(quiet?: boolean): void;
+  /** Ends the command; false while a Done is still validating (not quiet). */
+  cancel(quiet?: boolean): boolean;
 }
 
 const EMPTY_RAWS: Record<string, string> = {};
+const EMPTY_TOUCHED: readonly string[] = [];
 
 const EMPTY_SLOTS: InPlaceSlots = {
   profiles: [],
@@ -130,7 +372,11 @@ const EMPTY_SLOTS: InPlaceSlots = {
   guide: [],
   faces: [],
   bodies: [],
-  plane: null
+  plane: null,
+  edges: [],
+  placement: null,
+  refs: [],
+  image: null
 };
 
 function sameProfile(a: ProfilePick, b: ProfilePick): boolean {
@@ -144,6 +390,33 @@ export function useInPlaceCommand(
 ): InPlaceCommand {
   const [session, setSession] = useState<Session | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
+  // A typed value the tool refused: it stands until the next accepted
+  // value, and Done waits with it, since the chip went back to the value
+  // before and finishing would commit that instead of what was typed.
+  const [committing, setCommittingState] = useState(false);
+  // While an edit's Done is validating, its inputs hold still: a change made
+  // meanwhile would be closed away unseen by that commit's success.
+  const committingRef = useRef(false);
+  /** Which Done is committing: a command started or ended since is not it. */
+  const commitToken = useRef(0);
+  const setCommitting = useCallback((value: boolean) => {
+    committingRef.current = value;
+    setCommittingState(value);
+  }, []);
+  /**
+   * What an edit's values and options were seeded from, kept for each one
+   * the user has not changed: the user's own changes differ from it.
+   */
+  const seededRef = useRef<{
+    values: Record<string, number>;
+    raws: Record<string, string>;
+    options: Record<string, string>;
+    slots: InPlaceEditSeed['slots'];
+  } | null>(null);
+  const [entryRefusal, setEntryRefusal] = useState<{
+    valueId: string;
+    message: string;
+  } | null>(null);
   const [previewValid, setPreviewValid] = useState(false);
   const optionsRef = useRef(options);
   optionsRef.current = options;
@@ -151,29 +424,131 @@ export function useInPlaceCommand(
   const spec = session ? IN_PLACE_TOOL_SPECS[session.tool] : null;
   const specRef = useRef(spec);
   specRef.current = spec;
+  const editSeed = session?.edit ?? null;
+  const editRef = useRef(editSeed);
+  editRef.current = editSeed;
+  const sessionTouched = session?.touched ?? EMPTY_TOUCHED;
+  // The edited feature's data in the model now, else as it armed: what the
+  // command passes through unchanged (a hole's position, a draft's pull)
+  // follows a change made to it since (an undo, a collaborator).
+  const baseNow = options.baseDocument();
+  const savedData = useMemo(() => {
+    if (!editSeed) return undefined;
+    const live = baseNow?.nodes
+      ? findFeature(baseNow, editSeed.featureId)
+      : undefined;
+    return live && live.data.featureKind === editSeed.data.featureKind
+      ? live.data
+      : editSeed.data;
+  }, [editSeed, baseNow]);
+  const savedDataRef = useRef(savedData);
+  savedDataRef.current = savedData;
   const ctx: InPlaceContext = useMemo(
     () => ({
       sketchViews: options.sketchViews,
       datumAxes: options.datumAxes,
       datumLabel: (featureId) => optionsRef.current.datumLabel(featureId),
       linearSnap: options.linearSnap ?? null,
-      bodyBounds: (bodyId) => optionsRef.current.bodyBounds?.(bodyId) ?? null
+      bodyBounds: (bodyId) => optionsRef.current.bodyBounds?.(bodyId) ?? null,
+      evaluate: (value) => optionsRef.current.evaluate?.(value) ?? null,
+      touched: sessionTouched,
+      ...(savedData ? { saved: savedData } : {}),
+      ...((session?.reshapedLater ?? editSeed?.reshapedLater)
+        ? { reshapedLater: true }
+        : {}),
+      imagePlaneBasis: (plane) =>
+        optionsRef.current.imagePlaneBasis?.(plane) ?? null
     }),
-    [options.sketchViews, options.datumAxes, options.linearSnap]
+    [
+      options.sketchViews,
+      options.datumAxes,
+      options.linearSnap,
+      sessionTouched,
+      savedData,
+      editSeed,
+      session?.reshapedLater
+    ]
   );
 
   const profiles = session?.slots.profiles;
+  const axisLine = session?.slots.axisLine ?? null;
   const bodyCount = session?.slots.bodies.length ?? 0;
   const axisCandidates = useMemo(() => {
     if (!spec?.wantsAxis || !profiles) return [];
+    // An edited feature's own axis line (a helix's typed one) comes first,
+    // read again from what it stores whenever the model changes under the
+    // edit (an undo, a collaborator's parameter edit).
+    const saved = savedData;
+    const read = (vector: ParametricVector3) => {
+      const parts = [vector.x, vector.y, vector.z].map((part) =>
+        typeof part === 'number'
+          ? part
+          : (optionsRef.current.evaluate?.(part) ?? null)
+      );
+      return parts.some((part) => part === null)
+        ? null
+        : { x: parts[0]!, y: parts[1]!, z: parts[2]! };
+    };
+    const own = (editSeed?.axes ?? []).map((candidate) => {
+      if (candidate.id !== 'saved' || saved?.featureKind !== 'helical-sweep') {
+        return candidate;
+      }
+      const origin = read(saved.axisOrigin);
+      const direction = read(saved.axisDirection);
+      return origin && direction
+        ? { ...candidate, origin, direction }
+        : candidate;
+    });
+    // A helix whose stored axis did not read when the edit armed (its
+    // parameter unresolved) gets its saved axis once it reads now.
+    if (
+      editSeed &&
+      saved?.featureKind === 'helical-sweep' &&
+      !own.some((candidate) => candidate.id === 'saved')
+    ) {
+      const origin = read(saved.axisOrigin);
+      const direction = read(saved.axisDirection);
+      if (origin && direction) {
+        own.push({
+          id: 'saved',
+          label: 'Its saved axis',
+          origin,
+          direction,
+          choice: { saved: true }
+        });
+      }
+    }
+    // A line picked in the model stands first, beside the listed ones.
+    if (axisLine) own.unshift(axisLine);
     if (spec.axisSource === 'datum' || spec.axisSource === 'world') {
       // A body's turn: its axis lines, once the body is picked.
       return bodyCount > 0
-        ? axisCandidatesFor(EMPTY_SLOTS, ctx, spec.axisSource)
+        ? [...own, ...axisCandidatesFor(EMPTY_SLOTS, ctx, spec.axisSource)]
         : [];
     }
-    return axisCandidatesFor({ ...EMPTY_SLOTS, profiles }, ctx);
-  }, [spec, profiles, bodyCount, ctx]);
+    return [
+      ...own,
+      ...axisCandidatesFor(
+        { ...EMPTY_SLOTS, profiles },
+        ctx,
+        'sketch',
+        editSeed?.slots.axisId
+      )
+    ];
+    // The base version re-reads the saved axis's expressions, as the effect
+    // below does for typed values: a parameter can change with no change
+    // to the feature itself.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    spec,
+    profiles,
+    axisLine,
+    bodyCount,
+    ctx,
+    editSeed,
+    savedData,
+    options.baseVersion
+  ]);
   const slots: InPlaceSlots = useMemo(
     () =>
       session
@@ -187,17 +562,54 @@ export function useInPlaceCommand(
             guide: session.slots.guide,
             faces: session.slots.faces,
             bodies: session.slots.bodies,
-            plane: session.slots.plane
+            plane: session.slots.plane,
+            edges: session.slots.edges,
+            placement: session.slots.placement,
+            refs: session.slots.refs,
+            image: session.slots.image
           }
         : EMPTY_SLOTS,
     [session, axisCandidates]
   );
+  // Read by the pick callbacks, which outlive a render.
+  const slotsRef = useRef(slots);
+  slotsRef.current = slots;
+  const ctxRef = useRef(ctx);
+  ctxRef.current = ctx;
+  const axisCandidatesRef = useRef(axisCandidates);
+  axisCandidatesRef.current = axisCandidates;
 
-  // Defaults the picks suggest (a helix radius through the profile) land on
-  // every value the user has not set, each time the slots change.
+  const heldValues = useMemo(() => session?.values ?? {}, [session?.values]);
+  /** Every value as a number, its initial one where none is set. */
+  const numbers = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const valueSpec of spec?.values ?? []) {
+      out[valueSpec.id] = heldValues[valueSpec.id] ?? valueSpec.initial;
+    }
+    return out;
+  }, [spec, heldValues]);
+  // A linked value is read from the others each time, never held.
+  const values = useMemo(() => {
+    if (!spec?.linked) return heldValues;
+    const out = { ...heldValues };
+    for (const [id, link] of Object.entries(spec.linked)) {
+      const read = link.read(slots, numbers);
+      if (read !== null) out[id] = read;
+    }
+    return out;
+  }, [spec, heldValues, slots, numbers]);
+
+  // Defaults the picks suggest (a helix radius through the profile), or
+  // another value does (a hole step from its bore), land on every value the
+  // user has not set, each time they change.
   const defaultsKey = spec?.defaults
-    ? JSON.stringify(spec.defaults(slots, ctx))
+    ? JSON.stringify(spec.defaults(slots, ctx, numbers))
     : '';
+  /** The defaults as they stand now, for a value put back unset. */
+  const defaultsRef = useRef<Record<string, number>>({});
+  defaultsRef.current = defaultsKey
+    ? (JSON.parse(defaultsKey) as Record<string, number>)
+    : {};
   useEffect(() => {
     if (!defaultsKey) return;
     const defaults = JSON.parse(defaultsKey) as Record<string, number>;
@@ -209,30 +621,30 @@ export function useInPlaceCommand(
         if (!current.touched.includes(id) && next[id] !== value) {
           next[id] = value;
           changed = true;
+          // A default is not the user's: the reseed's baseline takes it, so
+          // a value the feature comes to store still lands over it.
+          const baseline = seededRef.current;
+          if (baseline && baseline.raws[id] === undefined) {
+            seededRef.current = {
+              ...baseline,
+              values: { ...baseline.values, [id]: value }
+            };
+          }
         }
       }
       return changed ? { ...current, values: next } : current;
     });
   }, [defaultsKey]);
 
-  const values = useMemo(() => session?.values ?? {}, [session?.values]);
   const paramValues = useMemo(() => {
-    const out: Record<string, ParamValue> = { ...values };
+    const out: Record<string, ParamValue> = { ...heldValues };
     for (const [id, raw] of Object.entries(session?.raws ?? {})) out[id] = raw;
     return out;
-  }, [values, session?.raws]);
+  }, [heldValues, session?.raws]);
   const chosen = useMemo(() => session?.options ?? {}, [session?.options]);
-  /** Every value as a number, its initial one where none is set. */
-  const numbers = useMemo(() => {
-    const out: Record<string, number> = {};
-    for (const valueSpec of spec?.values ?? []) {
-      out[valueSpec.id] = values[valueSpec.id] ?? valueSpec.initial;
-    }
-    return out;
-  }, [spec, values]);
   const request = useMemo(
     () =>
-      spec && spec.ready(slots)
+      spec && spec.ready(slots, chosen, ctx)
         ? spec.request(slots, paramValues, chosen, ctx, numbers)
         : null,
     [spec, slots, paramValues, chosen, ctx, numbers]
@@ -251,7 +663,16 @@ export function useInPlaceCommand(
    * last.
    */
   const builtFrames = useRef(
-    new WeakMap<ProjectDocument, { key: string; bodyId: BodyId | undefined }>()
+    new WeakMap<
+      ProjectDocument,
+      {
+        key: string;
+        bodyId: BodyId | undefined;
+        /** The base version the frame was built on. */
+        base: number | null | undefined;
+        check?: InPlaceBuiltCommand['check'];
+      }
+    >()
   ).current;
 
   const preview = useRef(
@@ -262,18 +683,32 @@ export function useInPlaceCommand(
         const title =
           specRef.current?.featureName ?? specRef.current?.title ?? 'Preview';
         if (!current || !base) return null;
-        const command = optionsRef.current.buildCommand(current, title);
+        const command = optionsRef.current.buildCommand(
+          current,
+          title,
+          editRef.current
+        );
         command.validate(base);
         const built = command.apply(base);
         builtFrames.set(built, {
+          base: optionsRef.current.baseVersion,
           key: JSON.stringify(current),
-          bodyId: command.resultBodyId
+          bodyId: command.resultBodyId,
+          ...(command.check ? { check: command.check } : {})
         });
         return built;
       },
       derive: (document) => optionsRef.current.derive(document),
       publish: (result) => {
-        const frame = result ? builtFrames.get(result.document) : undefined;
+        const built = result ? builtFrames.get(result.document) : undefined;
+        // A frame built on a base the model has since moved past (an undo,
+        // a collaborator's edit landing mid-build) is not what Done would
+        // commit now: it is not shown, and the frame on the new base is.
+        const frame =
+          built && built.base === optionsRef.current.baseVersion
+            ? built
+            : undefined;
+        if (built && !frame) return;
         const bodyId = frame?.bodyId;
         // As strict as the card's preflight: a warning the base model did
         // not already carry refuses the preview, even with a body built.
@@ -283,10 +718,23 @@ export function useInPlaceCommand(
         const fresh = result?.derived.warnings.find(
           (warning) => !known.has(warning)
         );
+        // A datum adds no body: its own check proves it resolved.
+        let unresolved: string | null = null;
+        if (result && frame?.check) {
+          try {
+            frame.check(result.derived);
+          } catch (error) {
+            unresolved =
+              error instanceof Error ? error.message : 'This did not resolve.';
+          }
+        }
+        // An edit of a suppressed feature previews it built (the host's
+        // command does so), so its body is looked for like any other.
         const valid = Boolean(
           result &&
-          bodyId &&
-          result.derived.bodyRepresentations[bodyId] &&
+          (frame?.check
+            ? unresolved === null
+            : bodyId && result.derived.bodyRepresentations[bodyId]) &&
           !fresh
         );
         setPreviewValid(valid);
@@ -299,8 +747,12 @@ export function useInPlaceCommand(
             derived: result.derived
           });
         } else {
+          // The last frame that built is not this request: left on screen
+          // under the refusal, it reads as the value that was refused.
+          optionsRef.current.publishPreview(null);
           setRefusal(
             fresh ??
+              unresolved ??
               result.derived.warnings.at(-1) ??
               'This did not produce a valid body.'
           );
@@ -308,6 +760,7 @@ export function useInPlaceCommand(
       },
       onFailure: ({ error }) => {
         setPreviewValid(false);
+        optionsRef.current.publishPreview(null);
         setRefusal(
           error instanceof Error ? error.message : 'Unable to preview this.'
         );
@@ -319,8 +772,15 @@ export function useInPlaceCommand(
   // Every change of what would be built previews at once: the solid is on
   // screen the frame after the pick that completes it.
   const generation = useRef(0);
+  const editIdentity = session?.edit ?? null;
+  // A refused entry belongs to the edit it was typed in: one re-armed from
+  // a changed feature (a Linear pattern made Grid) starts without it.
   useEffect(() => {
-    if (!requestKey) {
+    setEntryRefusal(null);
+  }, [editIdentity]);
+  const instant = spec?.instant === true;
+  useEffect(() => {
+    if (!requestKey || instant) {
       // Nothing to build (a pick taken back out): no frame, and no refusal
       // left over from the request that was.
       preview.clear();
@@ -334,30 +794,289 @@ export function useInPlaceCommand(
     setPreviewValid(false);
     generation.current += 1;
     preview.request(generation.current);
-  }, [requestKey, options.baseVersion, preview]);
+    // A re-armed edit is a new request even when it builds the same thing
+    // (two like Scales of one body): its own frame, so Done is not held.
+  }, [requestKey, instant, options.baseVersion, preview, editIdentity]);
+
+  // A typed expression is stored as typed and evaluated against the model:
+  // when the model changes under the command (an undo, a collaborator's
+  // parameter edit), its number is read again, so the chip and the handle
+  // stand where the preview builds.
+  useEffect(() => {
+    setSession((current) => {
+      if (!current) return current;
+      // A Done still validating commits the request it took: the session
+      // holds still until it settles, so what lands is what was shown.
+      if (committingRef.current) return current;
+      let changed = false;
+      // An edited feature's own plane, stored as written, likewise: the
+      // numbers a slide starts from are its fields read again.
+      const plane = current.slots.plane;
+      let slots = current.slots;
+      if (plane?.kind === 'saved') {
+        // Its fields as the feature stores them now: a collaborator may
+        // have retyped the plane itself.
+        const stored = savedDataRef.current;
+        const storedPlane =
+          stored &&
+          (stored.featureKind === 'mirror' || stored.featureKind === 'split') &&
+          'origin' in stored.plane
+            ? stored.plane
+            : null;
+        const text = (vector: ParametricVector3) => ({
+          x: String(vector.x),
+          y: String(vector.y),
+          z: String(vector.z)
+        });
+        const fields = storedPlane
+          ? {
+              origin: text(storedPlane.origin),
+              normal: text(storedPlane.normal)
+            }
+          : plane.fields;
+        const read = (text: { x: string; y: string; z: string }) => {
+          const [x, y, z] = [text.x, text.y, text.z].map(
+            (part) => optionsRef.current.evaluate?.(part) ?? null
+          );
+          return x == null || y == null || z == null ? null : { x, y, z };
+        };
+        const origin = read(fields.origin);
+        const normal = read(fields.normal);
+        if (
+          origin &&
+          normal &&
+          JSON.stringify([origin, normal, fields]) !==
+            JSON.stringify([plane.origin, plane.normal, plane.fields])
+        ) {
+          slots = { ...slots, plane: { ...plane, origin, normal, fields } };
+          changed = true;
+        }
+      }
+      const values = { ...current.values };
+      let raws = current.raws;
+      let tool = current.tool;
+      let chosen = current.options;
+      let touched = current.touched;
+      let reshapedLater = current.reshapedLater;
+      // A stored value or option the user has not changed since it was
+      // seeded takes the feature's as it is now. One the user changed keeps
+      // its old baseline, so it stays theirs even if the feature later comes
+      // to match it.
+      const baseline = seededRef.current;
+      const reseeded =
+        current.edit && baseline
+          ? optionsRef.current.reseed?.(current.edit)
+          : null;
+      // A feature now made by another command (a linear pattern turned
+      // circular, a scale turned into a turn) is edited by that command:
+      // the edit re-arms from it. A Boolean's operations are one command's
+      // choices, followed below like any option.
+      if (
+        reseeded &&
+        reseeded.tool !== current.tool &&
+        !committingRef.current &&
+        !(IN_PLACE_TOOL_SPECS[current.tool].options ?? []).some(
+          (option) =>
+            option.switchesTool &&
+            option.choices.some((choice) => choice.value === reseeded.tool)
+        )
+      ) {
+        seededRef.current = {
+          values: reseeded.seed.values,
+          raws: reseeded.seed.raws,
+          options: reseeded.seed.options,
+          slots: reseeded.seed.slots
+        };
+        // A start of its own, as a new command's is.
+        sessionCount.current += 1;
+        return sessionFromSeed(
+          reseeded.tool,
+          reseeded.seed,
+          sessionCount.current
+        );
+      }
+      const live = reseeded?.seed ?? null;
+      if (live && baseline) {
+        const nextBaseline = {
+          values: { ...baseline.values },
+          raws: { ...baseline.raws },
+          options: { ...baseline.options },
+          slots: baseline.slots
+        };
+        const ids = new Set([
+          ...Object.keys(live.values),
+          ...Object.keys(live.raws),
+          ...Object.keys(baseline.values),
+          ...Object.keys(baseline.raws)
+        ]);
+        const nextRaws = { ...raws };
+        const take = <T>(
+          target: Record<string, T>,
+          id: string,
+          value: T | undefined
+        ) => {
+          if (value === undefined) delete target[id];
+          else target[id] = value;
+        };
+        for (const id of ids) {
+          // A written value is the user's own until its text changes; its
+          // number moves with the model.
+          const untouched =
+            baseline.raws[id] !== undefined
+              ? raws[id] === baseline.raws[id]
+              : raws[id] === undefined && values[id] === baseline.values[id];
+          if (!untouched) continue;
+          // Whether the feature stores it at all follows the feature too: a
+          // size it now stores is no default to replace, and one it dropped
+          // is left absent again.
+          const stored = live.touched.includes(id);
+          if (stored !== touched.includes(id)) {
+            touched = stored
+              ? [...touched, id]
+              : touched.filter((other) => other !== id);
+            changed = true;
+          }
+          take(nextBaseline.values, id, live.values[id]);
+          take(nextBaseline.raws, id, live.raws[id]);
+          if (live.values[id] === values[id] && live.raws[id] === raws[id]) {
+            continue;
+          }
+          take(values, id, live.values[id]);
+          take(nextRaws, id, live.raws[id]);
+          changed = true;
+        }
+        raws = nextRaws;
+        const optionSpecs = IN_PLACE_TOOL_SPECS[current.tool].options ?? [];
+        for (const [id, value] of Object.entries(live.options)) {
+          if (chosen[id] !== baseline.options[id]) continue;
+          nextBaseline.options[id] = value;
+          if (chosen[id] === value) continue;
+          chosen = { ...chosen, [id]: value };
+          // A Boolean's operation is its tool.
+          const optionSpec = optionSpecs.find((spec) => spec.id === id);
+          if (optionSpec?.switchesTool && value in IN_PLACE_TOOL_SPECS) {
+            tool = value as InPlaceToolId;
+          }
+          changed = true;
+        }
+        // So do its picks: an untouched slot takes what the feature
+        // references now (an undo may have re-pointed its path or bodies).
+        // A point a click placed (a draft's clicked hinge) is the user's own,
+        // though a point is otherwise only where a face stands: the faces
+        // still follow the feature, and the point stays on its face while
+        // that face is still drafted (gone, the hinge asks for a click).
+        const placing = IN_PLACE_TOOL_SPECS[current.tool].clickPlacesPoint;
+        const placed =
+          placing !== undefined && chosen[placing.optionId] === placing.value
+            ? slots.faces.find((face) => face.point !== undefined)
+            : undefined;
+        const sameFace = (a: FacePick, b: FacePick) =>
+          a.bodyId === b.bodyId &&
+          (a.reference !== undefined && b.reference !== undefined
+            ? slotIdentity(a.reference) === slotIdentity(b.reference)
+            : a.hash === b.hash);
+        const takeSlot = <K extends (typeof SLOT_KEYS)[number]>(key: K) => {
+          const now = slotIdentity(slots[key]);
+          if (now !== slotIdentity(baseline.slots[key])) return;
+          nextBaseline.slots = {
+            ...nextBaseline.slots,
+            [key]: live.slots[key]
+          };
+          if (slotIdentity(live.slots[key]) === now) return;
+          let next = live.slots[key];
+          if (key === 'faces' && placed?.point) {
+            const point = placed.point;
+            next = live.slots.faces.map((face) =>
+              sameFace(face, placed) ? { ...face, point } : face
+            ) as typeof next;
+          }
+          slots = { ...slots, [key]: next };
+          changed = true;
+        };
+        for (const key of SLOT_KEYS) takeSlot(key);
+        // Whether a later edit reshapes the body is the feature's now too.
+        const reshaped = live.reshapedLater === true;
+        if (
+          reshaped !==
+          (current.reshapedLater ?? current.edit?.reshapedLater === true)
+        ) {
+          reshapedLater = reshaped;
+          changed = true;
+        }
+        seededRef.current = nextBaseline;
+      }
+      for (const [valueId, raw] of Object.entries(raws)) {
+        const number = optionsRef.current.evaluate?.(raw);
+        if (
+          number !== null &&
+          number !== undefined &&
+          Number.isFinite(number) &&
+          number !== values[valueId]
+        ) {
+          values[valueId] = number;
+          changed = true;
+        }
+      }
+      return changed
+        ? {
+            ...current,
+            tool,
+            options: chosen,
+            slots,
+            values,
+            raws,
+            touched,
+            ...(reshapedLater !== undefined ? { reshapedLater } : {})
+          }
+        : current;
+    });
+  }, [options.baseVersion, options.geometrySettled]);
 
   const end = useCallback(() => {
+    commitToken.current += 1;
     preview.clear();
     setSession(null);
+    setCommitting(false);
     setRefusal(null);
+    setEntryRefusal(null);
     setPreviewValid(false);
     optionsRef.current.publishPreview(null);
-  }, [preview]);
+  }, [preview, setCommitting]);
 
+  // An edit of a feature no in-place command edits any more (an undo made
+  // its Scale a Move) ends: its old request would be written back over it.
+  useEffect(() => {
+    const armed = sessionRef.current?.edit;
+    if (!armed || committingRef.current || !optionsRef.current.reseed) return;
+    if (optionsRef.current.reseed(armed) !== null) return;
+    end();
+    optionsRef.current.onStatus(
+      `${armed.name}: it is no longer edited here · its edit closed.`
+    );
+  }, [options.baseVersion, options.geometrySettled, end]);
+
+  const sessionCount = useRef(0);
   const start = useCallback(
     (
       tool: InPlaceToolId,
       initial: ProfilePick[] = [],
       initialFaces: FacePick[] = [],
-      initialBodies: BodyPick[] = []
+      initialBodies: BodyPick[] = [],
+      extra: { refs?: RefPick[]; image?: ImageSlot; edges?: EdgePick[] } = {}
     ) => {
       const toolSpec = IN_PLACE_TOOL_SPECS[tool];
+      commitToken.current += 1;
       preview.clear();
       optionsRef.current.publishPreview(null);
       setRefusal(null);
+      setEntryRefusal(null);
+      setCommitting(false);
       setPreviewValid(false);
+      sessionCount.current += 1;
       setSession({
+        id: sessionCount.current,
         tool,
+        edit: null,
         slots: {
           profiles:
             toolSpec.profileMode === 'none'
@@ -366,6 +1085,7 @@ export function useInPlaceCommand(
                 ? initial.slice(0, 1)
                 : initial,
           axisId: null,
+          axisLine: null,
           path: [],
           guide: [],
           faces: toolSpec.faceMode
@@ -378,7 +1098,16 @@ export function useInPlaceCommand(
               ? initialBodies.slice(0, 1)
               : initialBodies
             : [],
-          plane: null
+          plane: null,
+          edges: toolSpec.edgeMode ? sameBodyEdges(extra.edges ?? []) : [],
+          placement: null,
+          refs: toolSpec.takeRef
+            ? (extra.refs ?? []).reduce<RefPick[]>(
+                (refs, ref) => toolSpec.takeRef!(refs, ref),
+                []
+              )
+            : [],
+          image: extra.image ?? null
         },
         options: Object.fromEntries(
           (toolSpec.options ?? []).map((option) => [option.id, option.initial])
@@ -390,10 +1119,32 @@ export function useInPlaceCommand(
         touched: []
       });
     },
-    [preview]
+    [preview, setCommitting]
+  );
+
+  const edit = useCallback(
+    (tool: InPlaceToolId, seed: InPlaceEditSeed) => {
+      seededRef.current = {
+        values: seed.values,
+        raws: seed.raws,
+        options: seed.options,
+        slots: seed.slots
+      };
+      commitToken.current += 1;
+      preview.clear();
+      optionsRef.current.publishPreview(null);
+      setRefusal(null);
+      setEntryRefusal(null);
+      setCommitting(false);
+      setPreviewValid(false);
+      sessionCount.current += 1;
+      setSession(sessionFromSeed(tool, seed, sessionCount.current));
+    },
+    [preview, setCommitting]
   );
 
   const pickProfile = useCallback((pick: ProfilePick) => {
+    if (committingRef.current) return;
     setSession((current) => {
       if (!current) return current;
       const toolSpec = IN_PLACE_TOOL_SPECS[current.tool];
@@ -417,19 +1168,141 @@ export function useInPlaceCommand(
         slots: {
           ...current.slots,
           profiles: [pick],
-          axisId: sameSketch ? current.slots.axisId : null
+          axisId: sameSketch ? current.slots.axisId : null,
+          axisLine: sameSketch ? current.slots.axisLine : null
         }
       };
     });
   }, []);
 
-  const pickAxis = useCallback((axisId: string) => {
-    setSession((current) =>
-      current ? { ...current, slots: { ...current.slots, axisId } } : current
-    );
+  const setProfiles = useCallback(
+    (profiles: readonly ProfilePick[], from?: readonly ProfilePick[]) => {
+      setSession((current) =>
+        current && (!from || current.slots.profiles === from)
+          ? {
+              ...current,
+              slots: { ...current.slots, profiles: [...profiles] }
+            }
+          : current
+      );
+    },
+    []
+  );
+
+  const setPicks = useCallback(
+    (
+      picks: {
+        path?: readonly CurvePick[];
+        guide?: readonly CurvePick[];
+        faces?: readonly FacePick[];
+        bodies?: readonly BodyPick[];
+        edges?: readonly EdgePick[];
+      },
+      from?: Pick<InPlaceSlots, 'path' | 'guide' | 'faces' | 'bodies' | 'edges'>
+    ) => {
+      setSession((current) => {
+        if (!current) return current;
+        // A slot the live reseed replaced since the re-check read it keeps
+        // the newer picks; the next re-check reads those.
+        const take = <
+          K extends 'path' | 'guide' | 'faces' | 'bodies' | 'edges'
+        >(
+          key: K
+        ) =>
+          picks[key] !== undefined &&
+          (!from || current.slots[key] === from[key]);
+        return {
+          ...current,
+          slots: {
+            ...current.slots,
+            ...(take('path') ? { path: [...picks.path!] } : {}),
+            ...(take('guide') ? { guide: [...picks.guide!] } : {}),
+            ...(take('faces') ? { faces: [...picks.faces!] } : {}),
+            ...(take('bodies') ? { bodies: [...picks.bodies!] } : {}),
+            ...(take('edges') ? { edges: [...picks.edges!] } : {})
+          }
+        };
+      });
+    },
+    []
+  );
+
+  /** A picked direction as the options and values its tool sets from it. */
+  const takeDirection = useCallback((direction: Vector3) => {
+    if (committingRef.current) return false;
+    const current = sessionRef.current;
+    const taken = current
+      ? IN_PLACE_TOOL_SPECS[current.tool].takeDirection?.(direction)
+      : undefined;
+    if (!current || !taken) return false;
+    setSession((latest) => {
+      if (!latest || latest.tool !== current.tool) return latest;
+      const ids = Object.keys(taken.values);
+      return {
+        ...latest,
+        options: { ...latest.options, ...taken.options },
+        values: { ...latest.values, ...taken.values },
+        // Set as picked, they replace any expression typed for them.
+        raws: Object.fromEntries(
+          Object.entries(latest.raws).filter(([id]) => !ids.includes(id))
+        ),
+        touched: [...latest.touched.filter((id) => !ids.includes(id)), ...ids]
+      };
+    });
+    return true;
   }, []);
 
+  const pickAxis = useCallback(
+    (axisId: string) => {
+      if (committingRef.current) return;
+      // A command taking a direction reads a listed line as one.
+      const line = axisCandidatesRef.current.find(
+        (candidate) => candidate.id === axisId
+      );
+      if (line && takeDirection(line.direction)) return;
+      setSession((current) =>
+        current ? { ...current, slots: { ...current.slots, axisId } } : current
+      );
+    },
+    [takeDirection]
+  );
+
+  const pickAxisLine = useCallback(
+    (line: RevolveAxisCandidate) => {
+      if (committingRef.current) return false;
+      const current = sessionRef.current;
+      const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
+      if (!current || !toolSpec) return false;
+      if (toolSpec.takeDirection) return takeDirection(line.direction);
+      if (!toolSpec.axisPicks) return false;
+      const reason = toolSpec.refuseAxis?.(
+        slotsRef.current,
+        line,
+        ctxRef.current
+      );
+      if (reason) {
+        optionsRef.current.onStatus(reason);
+        return true;
+      }
+      setSession((latest) => {
+        if (!latest || latest.tool !== current.tool) return latest;
+        const again = latest.slots.axisId === line.id;
+        return {
+          ...latest,
+          slots: {
+            ...latest.slots,
+            axisLine: again ? null : line,
+            axisId: again ? null : line.id
+          }
+        };
+      });
+      return true;
+    },
+    [takeDirection]
+  );
+
   const pickCurve = useCallback((curve: CurvePick, additive = true) => {
+    if (committingRef.current) return;
     setSession((current) => {
       if (!current) return current;
       // While Options say so, clicks build a sweep's guide rail instead.
@@ -453,6 +1326,7 @@ export function useInPlaceCommand(
   const sessionRef = useRef(session);
   sessionRef.current = session;
   const pickFace = useCallback((face: FacePick) => {
+    if (committingRef.current) return false;
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
     if (!current || !toolSpec?.faceMode) return false;
@@ -474,13 +1348,31 @@ export function useInPlaceCommand(
         next = [face];
       } else {
         const picked = faces.some((other) => other.hash === face.hash);
-        // Faces of one body: a face of another starts the set over, and a
-        // picked face clicked again comes back out.
-        next = !sameBody
-          ? [face]
-          : picked
-            ? faces.filter((other) => other.hash !== face.hash)
-            : [...faces, face];
+        const placing =
+          toolSpec.clickPlacesPoint !== undefined &&
+          latest.options[toolSpec.clickPlacesPoint.optionId] ===
+            toolSpec.clickPlacesPoint.value;
+        if (placing && sameBody) {
+          // The click places the point: a picked face keeps its place and
+          // takes it, another joins with it, and no other face keeps one.
+          const unplaced = faces.map((other) => {
+            const { point: _point, ...rest } = other;
+            return rest;
+          });
+          next = picked
+            ? unplaced.map((other) =>
+                other.hash === face.hash ? { ...other, ...face } : other
+              )
+            : [...unplaced, face];
+        } else {
+          // Faces of one body: a face of another starts the set over, and
+          // a picked face clicked again comes back out.
+          next = !sameBody
+            ? [face]
+            : picked
+              ? faces.filter((other) => other.hash !== face.hash)
+              : [...faces, face];
+        }
       }
       return { ...latest, slots: { ...latest.slots, faces: next } };
     });
@@ -488,6 +1380,7 @@ export function useInPlaceCommand(
   }, []);
 
   const addFaces = useCallback((faces: readonly FacePick[]) => {
+    if (committingRef.current) return null;
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
     if (!current || toolSpec?.faceMode !== 'many') return null;
@@ -505,6 +1398,7 @@ export function useInPlaceCommand(
   }, []);
 
   const pickBody = useCallback((body: BodyPick) => {
+    if (committingRef.current) return false;
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
     if (!current || !toolSpec?.bodyMode) return false;
@@ -525,14 +1419,54 @@ export function useInPlaceCommand(
         slots: {
           ...latest.slots,
           bodies: next,
-          axisId: sameFirst ? latest.slots.axisId : null
+          axisId: sameFirst ? latest.slots.axisId : null,
+          axisLine: sameFirst ? latest.slots.axisLine : null
         }
       };
     });
     return true;
   }, []);
 
+  const pickEdge = useCallback((edge: EdgePick) => {
+    if (committingRef.current) return false;
+    const current = sessionRef.current;
+    const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
+    if (!current || !toolSpec?.edgeMode) return false;
+    setSession((latest) => {
+      if (!latest) return latest;
+      const edges = latest.slots.edges;
+      const sameBody = edges[0]?.bodyId === edge.bodyId;
+      const picked = edges.some((other) => other.hash === edge.hash);
+      // Edges of one body, in pick order: an edge of another starts the set
+      // over, and a picked one clicked again comes back out.
+      const next = !sameBody
+        ? [edge]
+        : picked
+          ? edges.filter((other) => other.hash !== edge.hash)
+          : [...edges, edge];
+      return { ...latest, slots: { ...latest.slots, edges: next } };
+    });
+    return true;
+  }, []);
+
+  const setEdges = useCallback((edges: readonly EdgePick[]) => {
+    if (committingRef.current) return false;
+    const current = sessionRef.current;
+    const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
+    if (!current || !toolSpec?.edgeMode) return false;
+    setSession((latest) =>
+      latest
+        ? {
+            ...latest,
+            slots: { ...latest.slots, edges: sameBodyEdges(edges) }
+          }
+        : latest
+    );
+    return true;
+  }, []);
+
   const pickPlane = useCallback((plane: PlanePick) => {
+    if (committingRef.current) return false;
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
     if (!current || !toolSpec?.wantsPlane) return false;
@@ -562,11 +1496,133 @@ export function useInPlaceCommand(
     return true;
   }, []);
 
+  const placeFootprint = useCallback(
+    (placement: PlacementPick, placed: Record<string, number>) => {
+      const current = sessionRef.current;
+      const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
+      if (!current || !toolSpec?.footprint) return false;
+      // A drawn value replaces a refused typed one, and its refusal with it.
+      setEntryRefusal((refused) =>
+        refused && refused.valueId in placed ? null : refused
+      );
+      setSession((latest) => {
+        if (!latest) return latest;
+        const specs = IN_PLACE_TOOL_SPECS[latest.tool].values;
+        const values = { ...latest.values };
+        const raws = { ...latest.raws };
+        const touched = [...latest.touched];
+        for (const [id, value] of Object.entries(placed)) {
+          const valueSpec = specs.find((candidate) => candidate.id === id);
+          if (!valueSpec) continue;
+          // A drawn size replaces a typed one: the drag is the newer word.
+          values[id] = clampValue(valueSpec, value);
+          delete raws[id];
+          if (!touched.includes(id)) touched.push(id);
+        }
+        return {
+          ...latest,
+          slots: { ...latest.slots, placement },
+          values,
+          raws,
+          touched
+        };
+      });
+      return true;
+    },
+    []
+  );
+
+  const pickRef = useCallback((ref: RefPick) => {
+    if (committingRef.current) return false;
+    const current = sessionRef.current;
+    const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
+    if (
+      !current ||
+      !toolSpec?.takeRef ||
+      !toolSpec.refKinds?.includes(ref.kind)
+    )
+      return false;
+    setSession((latest) =>
+      latest
+        ? {
+            ...latest,
+            slots: {
+              ...latest.slots,
+              refs: toolSpec.takeRef!(latest.slots.refs, ref)
+            }
+          }
+        : latest
+    );
+    return true;
+  }, []);
+
+  const placeImage = useCallback(
+    (placement: ImagePlacement) => {
+      if (committingRef.current) return false;
+      const current = sessionRef.current;
+      if (!current?.slots.image) return false;
+      // A plane that has not resolved has nowhere to put the picture.
+      if (placement.plane && !ctx.imagePlaneBasis?.(placement.plane)) {
+        setRefusal(
+          'This plane has not resolved, so the picture cannot lie on it. Pick another.'
+        );
+        return true;
+      }
+      setRefusal(null);
+      // New picks are measured afresh: a distance refused for the old
+      // pair no longer stands.
+      const linked = IN_PLACE_TOOL_SPECS[current.tool].linked ?? {};
+      setEntryRefusal((refused) =>
+        refused && refused.valueId in linked ? null : refused
+      );
+      setSession((latest) => {
+        const image = latest?.slots.image;
+        if (!latest || !image) return latest;
+        const next = placedImage(image, placement, latest.options.clicks, ctx, {
+          ...numbersFor(latest)
+        });
+        // A plane picked (even the same one) means clicks place again.
+        const options =
+          placement.plane && latest.options.clicks === 'plane'
+            ? { ...latest.options, clicks: 'place' }
+            : latest.options;
+        if (next === image && options === latest.options) return latest;
+        const replaned = next.plane !== image.plane;
+        return {
+          ...latest,
+          options,
+          slots: { ...latest.slots, image: next },
+          ...(replaned
+            ? {
+                // A new plane starts unslid.
+                values: { ...latest.values, offset: 0 },
+                raws: Object.fromEntries(
+                  Object.entries(latest.raws).filter(([id]) => id !== 'offset')
+                ),
+                touched: latest.touched.filter((id) => id !== 'offset')
+              }
+            : {})
+        };
+      });
+      return true;
+    },
+    [ctx]
+  );
+
   const setOption = useCallback((optionId: string, value: string) => {
+    if (committingRef.current) return;
     setSession((current) => {
       if (!current) return current;
       const specs = IN_PLACE_TOOL_SPECS[current.tool].options ?? [];
       const optionSpec = specs.find((candidate) => candidate.id === optionId);
+      // The operation of a boolean is its tool: the bodies stay picked.
+      if (optionSpec?.switchesTool && value in IN_PLACE_TOOL_SPECS) {
+        return {
+          ...current,
+          tool: value as InPlaceToolId,
+          options: { ...current.options, [optionId]: value }
+        };
+      }
       const options = { ...current.options, [optionId]: value };
       // Two options that may not match (a grid's directions) trade places
       // rather than leave a pair the kernel refuses.
@@ -583,32 +1639,116 @@ export function useInPlaceCommand(
   }, []);
 
   const writeValue = useCallback(
-    (valueId: string, value: number, raw: string | undefined) => {
+    (
+      valueId: string,
+      value: number,
+      raw: string | undefined,
+      typed: boolean
+    ) => {
+      if (committingRef.current) return false;
       const current = sessionRef.current;
       const valueSpec = current
         ? IN_PLACE_TOOL_SPECS[current.tool].values.find(
             (candidate) => candidate.id === valueId
           )
         : undefined;
-      // An expression is stored as typed, so it must already be a value the
-      // tool accepts: clamping it for the preview would show one value and
-      // commit another.
-      if (
-        current &&
-        valueSpec &&
-        raw !== undefined &&
-        clampValue(valueSpec, value) !== value
-      ) {
+      const link = current
+        ? IN_PLACE_TOOL_SPECS[current.tool].linked?.[valueId]
+        : undefined;
+      if (current && link) {
+        // Written into the values it is read from, as numbers: what it
+        // measures is not parametric.
+        const latest = sessionRef.current!;
+        const slotsNow = slotsOf(latest);
+        const written =
+          valueSpec && clampValue(valueSpec, value) === value
+            ? link.write(slotsNow, numbersFor(latest), value)
+            : null;
+        if (!written) {
+          // An entry refusal, so Done waits: the value shown was refused,
+          // and the width it would have set is not what was asked for.
+          setEntryRefusal({
+            valueId,
+            message: `${IN_PLACE_TOOL_SPECS[current.tool].title} cannot take ${raw ?? value} for its ${valueSpec?.label.toLowerCase() ?? 'value'}.`
+          });
+          return false;
+        }
+        setEntryRefusal((refused) =>
+          refused?.valueId === valueId ? null : refused
+        );
+        setSession((latestSession) => {
+          if (!latestSession) return latestSession;
+          const specs = IN_PLACE_TOOL_SPECS[latestSession.tool].values;
+          const next = { ...latestSession.values };
+          const raws = { ...latestSession.raws };
+          for (const [id, number] of Object.entries(written)) {
+            const target = specs.find((candidate) => candidate.id === id);
+            next[id] = target ? clampValue(target, number) : number;
+            delete raws[id];
+          }
+          return {
+            ...latestSession,
+            values: next,
+            raws,
+            touched: [
+              ...latestSession.touched,
+              ...Object.keys(written).filter(
+                (id) => !latestSession.touched.includes(id)
+              )
+            ]
+          };
+        });
+        return true;
+      }
+      // A typed value must already be one the tool accepts. An expression
+      // is stored as typed, so clamping it for the preview would show one
+      // value and commit another; a typed number clamped would build what
+      // was not asked for (a −5 width as a sliver), and a typed end of an
+      // open range nudged inside it would leave its chip reading as the
+      // refused end. Only a drag clamps.
+      if (current && valueSpec && typed && !valueInRange(valueSpec, value)) {
         const whole = valueSpec.integer ? 'whole numbers ' : '';
-        const range =
-          valueSpec.max === undefined
+        const range = valueSpec.exclusive
+          ? `more than ${valueSpec.min ?? 0}${
+              valueSpec.max === undefined
+                ? ''
+                : valueSpec.exclusive === 'min'
+                  ? ` and at most ${valueSpec.max}`
+                  : ` and less than ${valueSpec.max}`
+            }`
+          : valueSpec.max === undefined
             ? `${whole ? `${whole}of ` : ''}at least ${valueSpec.min ?? 0}`
             : `${whole}${valueSpec.min ?? 0} to ${valueSpec.max}`;
-        setRefusal(
-          `${raw} is ${value}; ${IN_PLACE_TOOL_SPECS[current.tool].title} ${valueSpec.label.toLowerCase()} takes ${range}.`
-        );
+        setEntryRefusal({
+          valueId,
+          message: `${raw === undefined ? value : `${raw} is ${value}`}; ${IN_PLACE_TOOL_SPECS[current.tool].title} ${valueSpec.label.toLowerCase()} takes ${range}.`
+        });
         return false;
       }
+      // In range alone, a value may still not stand beside the others (a
+      // cone's second zero radius): typed, it is refused; dragged, it stays.
+      const crossed =
+        current && valueSpec
+          ? (IN_PLACE_TOOL_SPECS[current.tool].refuseValue?.(
+              valueId,
+              value,
+              current.values
+            ) ?? null)
+          : null;
+      if (crossed) {
+        if (typed) {
+          setEntryRefusal({
+            valueId,
+            message: `${raw === undefined ? value : `${raw} is ${value}`}; ${crossed}`
+          });
+        }
+        return false;
+      }
+      // Only the refused value, taken now, lifts its refusal: another value
+      // changing leaves the refused one still not what was typed.
+      setEntryRefusal((refused) =>
+        refused?.valueId === valueId ? null : refused
+      );
       setSession((current) => {
         if (!current) return current;
         const valueSpec = IN_PLACE_TOOL_SPECS[current.tool].values.find(
@@ -618,11 +1758,17 @@ export function useInPlaceCommand(
         const raws = { ...current.raws };
         if (raw === undefined) delete raws[valueId];
         else raws[valueId] = raw;
+        // In range, a value stands as given: only one outside it (a drag
+        // past an end) is brought back inside.
+        const next = valueInRange(valueSpec, value)
+          ? value
+          : clampValue(valueSpec, value);
         return {
           ...current,
           values: {
             ...current.values,
-            [valueId]: clampValue(valueSpec, value)
+            ...carriedValues(current, valueId, next),
+            [valueId]: next
           },
           raws,
           touched: current.touched.includes(valueId)
@@ -635,42 +1781,136 @@ export function useInPlaceCommand(
     []
   );
   const previewValue = useCallback(
-    (valueId: string, value: number) => writeValue(valueId, value, undefined),
+    (valueId: string, value: number) =>
+      writeValue(valueId, value, undefined, false),
     [writeValue]
   );
   const setValue = useCallback(
     (valueId: string, value: number, raw?: string) =>
-      writeValue(valueId, value, raw),
+      writeValue(valueId, value, raw, true),
     [writeValue]
+  );
+  const restoreValue = useCallback(
+    (
+      valueId: string,
+      value: number,
+      raw: string | undefined,
+      wasTouched: boolean
+    ) => {
+      // Unset, it takes its default as the default stands now: the value
+      // it followed may have moved while the entry was open (a bore dragged
+      // under an open step chip).
+      const restored =
+        !wasTouched && valueId in defaultsRef.current
+          ? defaultsRef.current[valueId]!
+          : value;
+      setSession((current) => {
+        if (!current) return current;
+        const raws = { ...current.raws };
+        if (raw === undefined) delete raws[valueId];
+        else raws[valueId] = raw;
+        const others = current.touched.filter((id) => id !== valueId);
+        return {
+          ...current,
+          // What moved with the entry's previews goes back with it (a hung
+          // box's corner, with its height).
+          values: {
+            ...current.values,
+            ...carriedValues(current, valueId, restored),
+            [valueId]: restored
+          },
+          raws,
+          touched: wasTouched ? [...others, valueId] : others
+        };
+      });
+    },
+    []
   );
 
   // Done waits for a valid preview of exactly what it would commit: a pick
   // that changed the request since the last frame has not been shown yet.
   const canFinish = Boolean(
+    !committing &&
+    !entryRefusal &&
     request &&
-    previewValid &&
-    previewedKey !== null &&
-    previewedKey === requestKey
+    (instant ||
+      (previewValid && previewedKey !== null && previewedKey === requestKey))
   );
 
   const done = useCallback(() => {
     const current = requestRef.current;
     if (!current || !spec || !canFinish) return false;
-    if (requestKeyRef.current !== previewedKey) return false;
-    end();
-    optionsRef.current.commit(current, spec.featureName ?? spec.title);
+    if (!spec.instant && requestKeyRef.current !== previewedKey) return false;
+    const editing = editRef.current;
+    // A command stays open until its commit is validated, so a refusal (the
+    // model moved meanwhile, another exact operation held the lock) leaves
+    // it there to correct or retry rather than gone with its picks.
+    setCommitting(true);
+    commitToken.current += 1;
+    const token = commitToken.current;
+    const landed = optionsRef.current.commit(
+      current,
+      editing?.name ?? spec.featureName ?? spec.title,
+      editing,
+      () => commitToken.current !== token
+    );
+    if (!editing) {
+      if (!landed) {
+        end();
+      } else {
+        void landed.then(
+          (committed) => {
+            // Only the command that was committing: one started since is
+            // its own.
+            if (commitToken.current !== token) return;
+            if (committed) end();
+            else setCommitting(false);
+          },
+          () => {
+            if (commitToken.current === token) setCommitting(false);
+          }
+        );
+      }
+    }
     return true;
-  }, [spec, canFinish, previewedKey, end]);
+  }, [spec, canFinish, previewedKey, end, setCommitting]);
+
+  const settleEdit = useCallback(
+    (edit: InPlaceEditSeed, committed: boolean) => {
+      // Only the edit that was committing: one armed since is its own.
+      if (editRef.current !== edit) return;
+      setCommitting(false);
+      if (committed) end();
+    },
+    [end, setCommitting]
+  );
 
   const cancel = useCallback(
     (quiet = false) => {
-      if (!spec) return;
+      if (!spec) return true;
+      const editing = editRef.current;
+      // A Done still validating is not taken back by Cancel, which would say
+      // nothing was added (or changed) while the commit could still land:
+      // it waits for the outcome. A quiet close (another command, a new
+      // selection, a replaced document) withdraws the candidate instead,
+      // which the host's validated run checks before it commits.
+      if (committingRef.current && !quiet) {
+        optionsRef.current.onStatus(
+          editing
+            ? `${editing.name} is still being saved · wait for it to finish.`
+            : `${spec.title} is still being added · wait for it to finish.`
+        );
+        return false;
+      }
       end();
       if (!quiet) {
         optionsRef.current.onStatus(
-          `${spec.title} canceled; nothing was added.`
+          editing
+            ? `Edit canceled; ${editing.name} is unchanged.`
+            : `${spec.title} canceled; nothing was added.`
         );
       }
+      return true;
     },
     [spec, end]
   );
@@ -679,35 +1919,105 @@ export function useInPlaceCommand(
     () => (spec ? spec.handles(slots, values, ctx, chosen) : []),
     [spec, slots, values, ctx, chosen]
   );
+  // A refused entry holds Done until its value is taken, or until the value
+  // no longer applies: a choice (a hole's style) that hides its chip.
+  useEffect(() => {
+    if (
+      entryRefusal &&
+      !handles.some((handle) => handle.valueId === entryRefusal.valueId)
+    ) {
+      setEntryRefusal(null);
+    }
+  }, [entryRefusal, handles]);
+  const optionSpecs = useMemo(
+    () =>
+      (spec?.options ?? [])
+        .filter((option) => !editSeed?.lockedOptions.includes(option.id))
+        .map((option) => {
+          const own = editSeed?.choices[option.id];
+          return own
+            ? { ...option, choices: [...option.choices, ...own] }
+            : option;
+        }),
+    [spec, editSeed]
+  );
 
   return {
     active: session !== null,
+    sessionId: session?.id ?? null,
     tool: session?.tool ?? null,
     spec,
-    request,
     slots,
     axisCandidates,
     handles,
     values,
     raws: session?.raws ?? EMPTY_RAWS,
     options: chosen,
-    hint: spec ? spec.hint(slots, chosen) : '',
-    refusal,
+    optionSpecs,
+    editing: editSeed,
+    request,
+    hint: spec ? spec.hint(slots, chosen, ctx) : '',
+    refusal: entryRefusal?.message ?? refusal,
     canFinish,
+    edit,
     start,
     pickProfile,
+    setProfiles,
+    setPicks,
     pickAxis,
+    pickAxisLine,
+    pickDirection: takeDirection,
     pickCurve,
     pickFace,
     addFaces,
     pickBody,
+    pickEdge,
+    setEdges,
     pickPlane,
+    placeFootprint,
+    pickRef,
+    placeImage,
     setOption,
     previewValue,
     setValue,
+    touched: session?.touched ?? EMPTY_TOUCHED,
+    restoreValue,
     done,
+    settleEdit,
     cancel
   };
+}
+
+/** Edges as a command holds them: the first one's body only, once each. */
+function sameBodyEdges(edges: readonly EdgePick[]): EdgePick[] {
+  const body = edges[0]?.bodyId;
+  const seen = new Set<number>();
+  return edges.filter((edge) => {
+    if (edge.bodyId !== body || seen.has(edge.hash)) return false;
+    seen.add(edge.hash);
+    return true;
+  });
+}
+
+/**
+ * The values that move with `valueId` becoming `value` (a spec's `carries`),
+ * leaving any held as a typed expression alone.
+ */
+function carriedValues(
+  session: Session,
+  valueId: string,
+  value: number
+): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(
+      IN_PLACE_TOOL_SPECS[session.tool].carries?.(
+        valueId,
+        value,
+        session.values,
+        { ...EMPTY_SLOTS, placement: session.slots.placement }
+      ) ?? {}
+    ).filter(([id]) => session.raws[id] === undefined)
+  );
 }
 
 /**
@@ -735,4 +2045,29 @@ export function mergeSweptFaces(
     next.push(face);
   }
   return next;
+}
+
+/** A session's slots as the specs read them (its axis left unresolved). */
+function slotsOf(session: Session): InPlaceSlots {
+  return {
+    profiles: session.slots.profiles,
+    axis: null,
+    path: session.slots.path,
+    guide: session.slots.guide,
+    faces: session.slots.faces,
+    bodies: session.slots.bodies,
+    plane: session.slots.plane,
+    refs: session.slots.refs,
+    image: session.slots.image,
+    edges: session.slots.edges
+  };
+}
+
+/** A session's values as numbers, its initial one where none is set. */
+function numbersFor(session: Session): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const valueSpec of IN_PLACE_TOOL_SPECS[session.tool].values) {
+    out[valueSpec.id] = session.values[valueSpec.id] ?? valueSpec.initial;
+  }
+  return out;
 }

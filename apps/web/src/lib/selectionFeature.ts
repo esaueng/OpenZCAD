@@ -9,6 +9,7 @@ import {
   isInPlaceTransform
 } from '@openzcad/shared';
 import { editableFilletFeature } from './interaction/filletFaceEdit';
+import type { FeatureSelectionSource } from './inspectorHeading';
 import {
   primitiveBoxFaceAncestor,
   primitiveCylinderCapAncestor,
@@ -181,4 +182,25 @@ export function selectionSetFeature(
   return first && owners.every((owner) => owner?.featureId === first.featureId)
     ? first
     : null;
+}
+
+/**
+ * Whether Delete removes the feature a selection resolves to. A History row
+ * names its feature outright. A viewport face or edge pick deletes the
+ * feature that defines it — the one its readout names and Edit opens, so a
+ * picked fillet band removes that Fillet. A body pick does not: its feature
+ * is only the body's latest publisher, which is not what Delete on a body
+ * would mean.
+ */
+export function deleteKeyRemovesFeature(selection: {
+  source: FeatureSelectionSource | null;
+  topology: TopologySelection | null;
+  edgeCount: number;
+}): boolean {
+  if (selection.source === 'pinned') return true;
+  return (
+    selection.source === 'inferred' &&
+    (selection.edgeCount > 0 ||
+      (selection.topology !== null && selection.topology.kind !== 'body'))
+  );
 }

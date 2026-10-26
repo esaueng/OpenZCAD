@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { setMigratingProjects } from './migrationStatus';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -185,5 +186,41 @@ describe('storage formats on the shelf', () => {
     };
     const [merged] = mergeProjectSummaries([device], [encrypted]);
     expect(merged).toMatchObject({ name: 'Bracket', storageFormat: 2 });
+  });
+});
+
+/**
+ * ADR-024 Phase 7, slice 7-2: a plaintext project this tab is encrypting
+ * carries a lock badge until the engine is done with it.
+ */
+describe('a project being encrypted', () => {
+  it('shows a lock badge while it migrates, and none once it stopped', () => {
+    setMigratingProjects([plaintext.projectId]);
+    const { unmount } = render(<StartScreen {...props()} />);
+    const card = screen
+      .getByText(plaintext.name)
+      .closest('.start-tile-project') as HTMLElement;
+    expect(within(card).getByRole('img', { name: 'Encrypting' })).toBeTruthy();
+    // The encrypted card is not marked as migrating.
+    const other = screen
+      .getByText('Encrypted project')
+      .closest('.start-tile-project') as HTMLElement;
+    expect(within(other).queryByRole('img', { name: 'Encrypting' })).toBeNull();
+    act(() => setMigratingProjects([]));
+    expect(within(card).queryByRole('img', { name: 'Encrypting' })).toBeNull();
+    unmount();
+  });
+
+  it('keeps the badge while a paused or stopped staging locks it', () => {
+    // Not in progress, but its plaintext stays locked: it opens read-only.
+    setMigratingProjects([], [plaintext.projectId]);
+    const { unmount } = render(<StartScreen {...props()} />);
+    const card = screen
+      .getByText(plaintext.name)
+      .closest('.start-tile-project') as HTMLElement;
+    expect(within(card).getByRole('img', { name: 'Encrypting' })).toBeTruthy();
+    act(() => setMigratingProjects([]));
+    expect(within(card).queryByRole('img', { name: 'Encrypting' })).toBeNull();
+    unmount();
   });
 });

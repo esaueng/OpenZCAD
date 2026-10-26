@@ -14,6 +14,7 @@ import {
   formatComparisonCode,
   fromBase32,
   fromBase64Url,
+  fromHex,
   generateEncryptionKeyPair,
   generateSigningKeyPair,
   generateSymmetricKey,
@@ -28,6 +29,7 @@ import {
   sealKey,
   signDeviceApprovalGrant,
   signDeviceListEntry,
+  signGroupReset,
   signIdentityTransition,
   toBase32,
   toBase64Url,
@@ -39,10 +41,13 @@ import {
   verifyScannedDeviceKey,
   wrapKey,
   type Bytes,
+  type DeviceApprovalContactsHead,
   type DeviceListEntry,
   type DeviceListPin,
   type ListedDevice,
   type SigningPrivateKey,
+  type GroupReset,
+  type SignedStatement,
   type UnlockTarget,
   type VerifiedDeviceList
 } from '@openzcad/crypto';
@@ -53,12 +58,19 @@ import type {
   E2eeApprovedDeviceRecord,
   E2eeApprovalRecord,
   E2eeIdentityRecord,
+  E2eeSignedStatementRecord,
   E2eeWrapInput,
   E2eeWrapPurpose,
   E2eeWrapRecord
 } from '@openzcad/shared';
 import type { E2eeApi } from './e2eeApi';
 import { confirmApprovalCancellation } from './approvalCancellation';
+import {
+  EMPTY_CONTACTS_HASH,
+  EMPTY_CONTACTS_SEQUENCE,
+  contactPins,
+  type ContactPinStore
+} from './contactPins';
 import {
   browserPasskeys,
   failedPasskeyEnrollment,
@@ -131,6 +143,8 @@ export interface DeviceKeyPairs {
 
 export interface E2eeContext {
   readonly userId: string;
+  /** Cancelling one settings view leaves independent migration reads alive. */
+  readonly readScope?: object;
   readonly api: E2eeApi;
   readonly store: DeviceKeyStore;
   readonly now?: () => number;
@@ -145,6 +159,30 @@ export interface E2eeContext {
    * Playwright fixtures inject extractable pairs to seed a browser.
    */
   readonly createDeviceKeys?: () => Promise<DeviceKeyPairs>;
+  /**
+   * This browser's contact pins (`contactPins()` by default): setup and
+   * device approval write where its contacts-list trust starts.
+   */
+  readonly contactPins?: ContactPinStore;
+}
+
+const contactPinsOf = (ctx: E2eeContext): ContactPinStore =>
+  ctx.contactPins ?? contactPins();
+
+/**
+ * A browser that creates an identity saw its contacts list empty, so its
+ * contacts pin starts confirmed: nothing could have been signed before.
+ */
+async function pinEmptyContacts(
+  ctx: E2eeContext,
+  list: VerifiedDeviceList
+): Promise<void> {
+  await contactPinsOf(ctx).advanceList(ctx.userId, {
+    identityKeyHash: toHex(list.identityKeyHash),
+    sequence: EMPTY_CONTACTS_SEQUENCE,
+    entryHash: EMPTY_CONTACTS_HASH,
+    confirmed: true
+  });
 }
 
 export type DeviceStatus =
@@ -707,7 +745,7 @@ async function persistDeviceList(
 export async function loadEncryption(
   ctx: E2eeContext
 ): Promise<EncryptionState> {
-  const readCurrent = captureAccountKeyRead(ctx.userId);
+  const readCurrent = captureAccountKeyRead(ctx.userId, ctx.readScope);
   const isCurrent = () => readCurrent() && ctx.isCurrent?.() !== false;
   const requireCurrent = () => {
     ctx.assertActive?.();
@@ -842,7 +880,7 @@ export async function loadEncryption(
 export type UnlockAuthorization = Uint8Array | 'passkey';
 
 function passkeyContext(ctx: E2eeContext): E2eeContext {
-  const guard = keyOperationGuard(ctx.userId);
+  const guard = keyOperationGuard(ctx.userId, ctx.readScope);
   return {
     ...ctx,
     assertActive: () => {
@@ -899,6 +937,30 @@ async function openIdentity(
   } finally {
     selected.secret.fill(0);
   }
+}
+
+/**
+ * Opens the identity key with the recovery key or a fresh passkey ceremony
+ * for one signature outside the device list (a contacts entry, ADR-024
+ * Phase 5), hands it to `sign`, and forgets it. The account key opened
+ * alongside is zeroed at once: a contacts entry needs only the identity.
+ */
+export async function withIdentityKey<T>(
+  ctx: E2eeContext,
+  account: AccountView,
+  authorization: UnlockAuthorization,
+  sign: (identityPrivateKey: CryptoKey) => Promise<T>
+): Promise<T> {
+  const scoped = authorization === 'passkey' ? passkeyContext(ctx) : ctx;
+  requireActiveKeyContext(scoped);
+  const { identityPrivateKey, accountKey } = await openIdentity(
+    scoped,
+    account,
+    authorization
+  );
+  accountKey.fill(0);
+  requireActiveKeyContext(scoped);
+  return sign(identityPrivateKey);
 }
 
 /** Opens identity material for one operation; the target wrap binds its hash. */
@@ -1120,11 +1182,12 @@ async function setUpEncryptionLocked(
     signature: b64(created.signed.signature),
     wraps: created.wraps
   });
-  await acceptWrite(ctx, response, {
+  const list = await acceptWrite(ctx, response, {
     identityKey: created.identityKey,
     replaceIdentityFrom: persistedPin,
     written: created.signed.entry
   });
+  await pinEmptyContacts(ctx, list);
   return loadEncryption(ctx);
 }
 
@@ -1398,20 +1461,26 @@ async function enrollWithUnlockMethodLocked(
  * account-key history), and when this device is certified the revocation
  * names it as the removed device's replacement.
  *
- * Project-key epochs follow in Phases 4 and 5; no project is encrypted yet.
+ * Encrypted projects (ADR-024 Phase 4, slice 4-10): a `participant`
+ * (`deviceRemoval.ts`) first refuses a removal it could not finish, then,
+ * with the identity key this removal opened, signs each project's
+ * revocation cutoff, which the revoking entry's append carries, and
+ * rotates every project past the removal.
  */
 export function removeDevice(
   ctx: E2eeContext,
   account: AccountView,
   deviceId: string,
-  authorization: UnlockAuthorization
+  authorization: UnlockAuthorization,
+  participant?: RemovalParticipantStep
 ): Promise<EncryptionState> {
   return rotateAccountKeys(
     authorization === 'passkey' ? passkeyContext(ctx) : ctx,
     account,
     deviceId,
     'device',
-    authorization
+    authorization,
+    participant
   );
 }
 
@@ -1419,14 +1488,16 @@ export function removePasskey(
   ctx: E2eeContext,
   account: AccountView,
   targetId: string,
-  authorization: UnlockAuthorization
+  authorization: UnlockAuthorization,
+  participant?: RemovalParticipantStep
 ): Promise<EncryptionState> {
   return rotateAccountKeys(
     authorization === 'passkey' ? passkeyContext(ctx) : ctx,
     account,
     targetId,
     'passkey',
-    authorization
+    authorization,
+    participant
   );
 }
 
@@ -1434,15 +1505,59 @@ export function removePasskey(
 export function revokeReadOnlyDevices(
   ctx: E2eeContext,
   account: AccountView,
-  authorization: UnlockAuthorization
+  authorization: UnlockAuthorization,
+  participant?: RemovalParticipantStep
 ): Promise<EncryptionState> {
   return rotateAccountKeys(
     authorization === 'passkey' ? passkeyContext(ctx) : ctx,
     account,
     '', // Aggregate rotation does not remove a certified id.
     'read-only',
-    authorization
+    authorization,
+    participant
   );
+}
+
+/** A removal's signed device-list entry, before and after it is appended. */
+export interface SignedRemovalStep {
+  readonly kind: 'device' | 'passkey' | 'read-only';
+  readonly identityPrivateKey: CryptoKey;
+  readonly userId: string;
+  readonly generation: number;
+  readonly written: { readonly sequence: number; readonly hash: Bytes };
+}
+
+/**
+ * What a removal asks of encrypted projects (`removalParticipant` in
+ * `deviceRemoval.ts`, loaded lazily by the caller): `prepare` runs before
+ * the identity key is opened and may refuse; `complete` runs once the new
+ * device list is accepted, with the identity key still open, and reports
+ * rather than throws.
+ */
+export interface RemovalParticipantStep {
+  prepare(account: AccountView): Promise<void>;
+  /**
+   * Right before the new device list is written: the signed cutoff
+   * statement of the entry about to be appended, which the append carries
+   * so the Worker stores the revocation and its statement together.
+   * Undefined when there is none to sign. Never throws.
+   */
+  cutoffsFor?(
+    step: SignedRemovalStep
+  ): Promise<E2eeSignedStatementRecord | undefined>;
+  /**
+   * Right after the new device list is written, before the account is
+   * read again: signs and keeps what can be signed without a request, so
+   * a failed reload loses nothing. Never throws.
+   */
+  written?(step: SignedRemovalStep): Promise<void>;
+  complete(step: {
+    readonly kind: 'device' | 'passkey' | 'read-only';
+    readonly identityPrivateKey: CryptoKey;
+    readonly account: AccountView;
+    /** The device-list entry this removal signed and appended. */
+    readonly written: { readonly sequence: number; readonly hash: Bytes };
+  }): Promise<unknown>;
 }
 
 async function rotateAccountKeys(
@@ -1450,11 +1565,19 @@ async function rotateAccountKeys(
   account: AccountView,
   id: string,
   kind: 'device' | 'passkey' | 'read-only',
-  authorization: UnlockAuthorization
+  authorization: UnlockAuthorization,
+  participant?: RemovalParticipantStep
 ): Promise<EncryptionState> {
   return ctx.store.withDeviceLock(ctx.userId, async () => {
     requireActiveKeyContext(ctx);
-    return rotateAccountKeysLocked(ctx, account, id, kind, authorization);
+    return rotateAccountKeysLocked(
+      ctx,
+      account,
+      id,
+      kind,
+      authorization,
+      participant
+    );
   });
 }
 
@@ -1463,7 +1586,8 @@ async function rotateAccountKeysLocked(
   account: AccountView,
   id: string,
   kind: 'device' | 'passkey' | 'read-only',
-  authorization: UnlockAuthorization
+  authorization: UnlockAuthorization,
+  participant?: RemovalParticipantStep
 ): Promise<EncryptionState> {
   if (kind === 'device' && id === account.device?.deviceId) {
     throw new EncryptionFlowError(
@@ -1471,6 +1595,8 @@ async function rotateAccountKeysLocked(
       'Remove this device by signing out and removing its keys.'
     );
   }
+  await participant?.prepare(account);
+  requireActiveKeyContext(ctx);
   const { identityPrivateKey, accountKey: oldAccountKey } = await openIdentity(
     ctx,
     account,
@@ -1526,20 +1652,63 @@ async function rotateAccountKeysLocked(
     );
     oldAccountKey.fill(0);
     accountKey.fill(0);
-    requireActiveKeyContext(ctx);
-    const response = await ctx.api.appendDeviceList({
+    // Known before the append: the cutoffs name this entry, and the Worker
+    // stores a device revocation only together with them.
+    const written = {
+      sequence: entry.sequence,
+      hash: await deviceListEntryHash(signed.entry)
+    };
+    const step: SignedRemovalStep = {
+      kind,
+      identityPrivateKey,
+      userId: ctx.userId,
       generation: account.generation,
-      entry: b64(signed.entry),
-      signature: b64(signed.signature),
-      wraps,
-      history
+      written
+    };
+    const append = async () => {
+      const cutoffs =
+        kind === 'device'
+          ? await participant?.cutoffsFor?.(step).catch(() => undefined)
+          : undefined;
+      requireActiveKeyContext(ctx);
+      return ctx.api.appendDeviceList({
+        generation: account.generation,
+        entry: b64(signed.entry),
+        signature: b64(signed.signature),
+        wraps,
+        history,
+        ...(cutoffs ? { cutoffs } : {})
+      });
+    };
+    const response = await append().catch((error: unknown) => {
+      // A project was created, shared or committed to between the listing
+      // and the append, and nothing was written: sign once more.
+      if (
+        (error as { code?: string } | null)?.code ===
+          'E2EE_CUTOFFS_INCOMPLETE' &&
+        participant?.cutoffsFor
+      ) {
+        return append();
+      }
+      throw error;
     });
     await acceptWrite(ctx, response, {
       identityKey: account.list.identityKey,
       pin: account.list.pin,
       written: signed.entry
     });
-    return loadEncryption(ctx);
+    await participant?.written?.(step).catch(() => undefined);
+    const state = await loadEncryption(ctx);
+    if (participant && state.kind === 'ready' && state.account.unlocked) {
+      await participant.complete({
+        kind,
+        identityPrivateKey,
+        account: state.account,
+        // Not the reloaded head: another device may have appended since.
+        written
+      });
+    }
+    return state;
   } finally {
     oldAccountKey.fill(0);
     accountKey.fill(0);
@@ -1582,6 +1751,36 @@ async function openDeviceAccountKey(
     );
   }
   return accountKey;
+}
+
+/**
+ * Signs one solo group reset (decision D9) with the identity key, opened by
+ * the recovery key or a passkey for this signature alone and then dropped.
+ * The caller (`resetProjectGroup`) has checked the group and the owner's
+ * plain-words confirmation; this only binds the reset to the current
+ * device-list head the account view verified.
+ */
+export async function signGroupResetWithIdentity(
+  ctx: E2eeContext,
+  account: AccountView,
+  authorization: UnlockAuthorization,
+  reset: GroupReset
+): Promise<SignedStatement> {
+  const opContext = authorization === 'passkey' ? passkeyContext(ctx) : ctx;
+  return opContext.store.withDeviceLock(ctx.userId, async () => {
+    requireActiveKeyContext(opContext);
+    const { identityPrivateKey, accountKey } = await openIdentity(
+      opContext,
+      account,
+      authorization
+    );
+    accountKey.fill(0);
+    requireActiveKeyContext(opContext);
+    return signGroupReset(identityPrivateKey, {
+      ...reset,
+      generation: account.generation
+    });
+  });
 }
 
 /**
@@ -1689,11 +1888,13 @@ async function replaceRecoveryKeyLocked(
     },
     history: created.history!
   });
-  await acceptWrite(ctx, response, {
+  const list = await acceptWrite(ctx, response, {
     identityKey: created.identityKey,
     replaceIdentityFrom: account.persistedPin,
     written: created.signed.entry
   });
+  // The new identity starts a new, empty contacts list.
+  await pinEmptyContacts(ctx, list);
   return loadEncryption(ctx);
 }
 
@@ -2230,6 +2431,29 @@ async function finishApproval(
   await persistDeviceList(ctx, list, {
     replaceIdentityFrom: device.approval?.pinAtRequest
   });
+  // ADR-024: the approver's newest contacts head arrives inside the
+  // authenticated exchange, so this device cannot be shown an older list.
+  // A version 1 grant (an older build) carries none: this device then
+  // starts from the server's list, unconfirmed, like a passkey enrolment.
+  if (grant.contacts) {
+    const head = grant.contacts.head;
+    const accepted = await contactPinsOf(ctx).advanceList(
+      ctx.userId,
+      {
+        identityKeyHash: toHex(grant.identityKeyHash),
+        sequence: head ? head.sequence : EMPTY_CONTACTS_SEQUENCE,
+        entryHash: head ? toHex(head.entryHash) : EMPTY_CONTACTS_HASH,
+        confirmed: grant.contacts.confirmed
+      },
+      { fromApproval: true }
+    );
+    if (!accepted) {
+      throw new EncryptionFlowError(
+        'grant-invalid',
+        'This device and the approving device have conflicting contacts lists. Approval could not be completed. Keep your existing keys and compare contacts on both devices.'
+      );
+    }
+  }
   await ctx.store.clearApprovalIfCurrent(ctx.userId, device.approval!.id);
   await ctx.api.cancelApproval(approval.id).catch(() => undefined);
   return loadEncryption(ctx);
@@ -2402,6 +2626,21 @@ export async function approveDevice(
   let list = account.list;
   let certified = false;
   let sealedAccountKey: string | undefined;
+  // A device already certified with exactly these keys asks again to have
+  // its contacts head confirmed (ADR-024, verified pins): approve it as
+  // certified, with no new certification and no sealed account key. (With
+  // the recovery key the branch below finds it in the current list.)
+  if (
+    !recoverySecret &&
+    list.devices.some(
+      (d) =>
+        d.deviceId === approval.deviceId &&
+        sameBytes(d.signingKey, signingKey) &&
+        sameBytes(d.unlockKey, unlockKey)
+    )
+  ) {
+    certified = true;
+  }
   if (recoverySecret) {
     // An earlier attempt may have certified the device and then failed
     // before `completeApproval` reached the Worker. Resume from the current
@@ -2494,7 +2733,8 @@ export async function approveDevice(
     headHash: list.headHash,
     certified,
     approverKeyHash: await publicKeyHash(device.signingPublicKey),
-    issuedAt: now(ctx)
+    issuedAt: now(ctx),
+    contacts: await approverContactsHead(ctx, list)
   });
   await ctx.api.completeApproval(approval.id, {
     grant: { statement: b64(grant.statement), signature: b64(grant.signature) },
@@ -2502,6 +2742,35 @@ export async function approveDevice(
   });
   approverNonces.delete(approval.id);
   return loadEncryption(ctx);
+}
+
+/**
+ * The newest contacts head this approving browser accepted under `list`'s
+ * identity, for the grant. With none (it never loaded the list under this
+ * identity) the grant says so, unconfirmed: the approved device then
+ * starts from the server's list, as a passkey enrolment does.
+ */
+async function approverContactsHead(
+  ctx: E2eeContext,
+  list: VerifiedDeviceList
+): Promise<DeviceApprovalContactsHead> {
+  const stored = await contactPinsOf(ctx).readList(ctx.userId);
+  if (!stored || stored.identityKeyHash !== toHex(list.identityKeyHash)) {
+    return { head: null, confirmed: false };
+  }
+  if (stored.pendingApproval) {
+    throw new EncryptionFlowError(
+      'grant-invalid',
+      'Check the newest contacts list in Settings › Encryption › Contacts before approving another device. An earlier approval head is still unresolved.'
+    );
+  }
+  return {
+    head:
+      stored.sequence === EMPTY_CONTACTS_SEQUENCE
+        ? null
+        : { sequence: stored.sequence, entryHash: fromHex(stored.entryHash) },
+    confirmed: stored.confirmed
+  };
 }
 
 /** Refuses a pending request from the approving side. */

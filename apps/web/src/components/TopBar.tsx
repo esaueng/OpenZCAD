@@ -19,6 +19,10 @@ import {
 } from 'lucide-react';
 import type { ArtifactRecord, AuthSession, UnitSystem } from '@openzcad/shared';
 import { BrandMark } from './BrandMark';
+import {
+  EncryptionIndicator,
+  type EncryptionIndicatorProps
+} from './EncryptionIndicator';
 import { isEncryptedProject } from '../lib/api';
 import type { WorkspaceMode } from '../lib/panelState';
 import type { CollaborationStatus } from '../lib/useCollaboration';
@@ -55,6 +59,8 @@ interface TopBarProps {
   canExport: boolean;
   /** Name of the body the export will target, or null for "all bodies". */
   exportScope: string | null;
+  /** Recovery guidance when no bodies are available in the export scope. */
+  exportUnavailableReason?: string | null;
   /**
    * Why export is holding bodies back: they stand in for a feature that
    * failed to rebuild. Shown in the File menu beside the export items.
@@ -125,6 +131,11 @@ interface TopBarProps {
    */
   onSignIn?(): void;
   onOpenSettings(): void;
+  /**
+   * The open project's encryption status, only for an end-to-end encrypted
+   * project (ADR-024 Phase 4). Absent or null, nothing is shown.
+   */
+  encryption?: EncryptionIndicatorProps | null;
 }
 
 export function TopBar({
@@ -133,6 +144,7 @@ export function TopBar({
   canExport,
   exportScope,
   exportWithheld = null,
+  exportUnavailableReason = null,
   saveState,
   geometryPending = false,
   geometryFailed = false,
@@ -169,7 +181,8 @@ export function TopBar({
   onGoHome,
   onOpenSharing,
   onSignIn,
-  onOpenSettings
+  onOpenSettings,
+  encryption = null
 }: TopBarProps) {
   const keymap = useKeymap();
   const saveKey = keymap.label('file-save');
@@ -366,7 +379,9 @@ export function TopBar({
   const exportTitle = (format: string) =>
     canExport
       ? `Export ${exportScope ?? 'all bodies'} as ${format}${exportWithheld ? `. ${exportWithheld}` : ''}`
-      : (exportWithheld ?? 'Create a body before exporting');
+      : (exportWithheld ??
+        exportUnavailableReason ??
+        'Create a body before exporting');
   // A project that is not in the account has no room to join, so its room
   // status is `offline` — which, beside "Save to my account", read as a
   // connection problem rather than the plain fact that nothing is shared yet.
@@ -454,6 +469,11 @@ export function TopBar({
         </button>
         <div className="topbar-divider" />
         {breadcrumb}
+        {/* Beside the breadcrumb, not in it: the breadcrumb clips overflow
+            for the name's ellipsis, and would clip the popover too. */}
+        {encryption && projectName ? (
+          <EncryptionIndicator {...encryption} />
+        ) : null}
       </div>
       <div
         className="mode-switch topbar-island"
@@ -665,7 +685,9 @@ export function TopBar({
               >
                 <Upload size={13} aria-hidden="true" />
                 <span>Import CAD files…</span>
-                <small>FreeCAD · STEP · STL · 3MF · OBJ · GLB · PLY · DXF</small>
+                <small>
+                  FreeCAD · STEP · STL · 3MF · OBJ · GLB · PLY · DXF
+                </small>
               </button>
               <input
                 ref={importInputRef}

@@ -629,48 +629,6 @@ describe('version integrity', () => {
     expect(headOf(srv, v1.projectId).document_version).toBe(v1.version);
   });
 
-  it('keeps a device that signed encrypted projects until cutoffs exist (4-10)', async () => {
-    const account = await makeAccount('user_removing', [
-      'dev_a',
-      'dev_b',
-      'dev_c'
-    ]);
-    const srv = newServer([account]);
-    const b = device(srv, account, 'dev_b');
-    const { document: v1 } = await createEncrypted(b);
-    const entries = () =>
-      rows(
-        srv,
-        'SELECT sequence FROM e2ee_device_list_entries WHERE user_id = ?',
-        account.userId
-      ).length;
-    const before = entries();
-
-    // Removing the signer would leave its versions without a cutoff.
-    const refused = await srv.call('POST', '/api/e2ee/device-list', {
-      user: account.userId,
-      body: await account.removalRequest('dev_b')
-    });
-    expect(refused.status).toBe(409);
-    expect(await refused.json()).toMatchObject({
-      code: 'E2EE_DEVICE_SIGNED_PROJECTS'
-    });
-    expect(entries()).toBe(before);
-    await expect(
-      device(srv, account, 'dev_a').store.loadProject(v1.projectId)
-    ).resolves.toMatchObject({ name: 'Bracket' });
-
-    // A device that signed nothing passes on to the ordinary checks (this
-    // request carries none of the rotated wraps, so those refuse it).
-    const unsigned = await srv.call('POST', '/api/e2ee/device-list', {
-      user: account.userId,
-      body: await account.removalRequest('dev_c')
-    });
-    expect(await unsigned.json()).not.toMatchObject({
-      code: 'E2EE_DEVICE_SIGNED_PROJECTS'
-    });
-  });
-
   it('warns a fresh browser that the head trails the account activity', async () => {
     const srv = server();
     const laptop = device(srv, owner, 'owner_laptop', {
@@ -1088,7 +1046,7 @@ describe('writes', () => {
 // --- Access, retention, cleanup ---------------------------------------------
 
 describe('access', () => {
-  it('serves only the owner of a format-2 project with the flag on', async () => {
+  it('serves only the owner and members of a format-2 project with the flag on', async () => {
     const srv = server();
     const laptop = device(srv, owner, 'owner_laptop');
     const { document } = await createEncrypted(laptop);
@@ -1111,17 +1069,30 @@ describe('access', () => {
         code: 'PROJECT_NOT_FOUND'
       });
     }
-    // A member learns only that it is owner-only.
+    // A member reads (slice 5-2); a viewer's write is refused.
     srv.db
       .prepare(
         `INSERT INTO project_members
            (project_id, user_id, role, added_by_user_id, created_at, updated_at)
-         VALUES (?, ?, 'editor', ?, 1, 1)`
+         VALUES (?, ?, 'viewer', ?, 1, 1)`
       )
       .run(projectId, OTHER, OWNER);
     expect((await srv.call('GET', paths[0][1], { user: OTHER })).status).toBe(
-      403
+      200
     );
+    const viewerWrite = await srv.call(
+      'PUT',
+      `/api/e2ee/projects/${projectId}/document`,
+      {
+        user: OTHER,
+        raw: new Uint8Array(8),
+        contentType: 'application/octet-stream'
+      }
+    );
+    expect(viewerWrite.status).toBe(403);
+    expect(await viewerWrite.json()).toMatchObject({
+      code: 'E2EE_PROJECT_READ_ONLY'
+    });
     // Plaintext projects are not served here, and plaintext routes keep
     // refusing this one.
     const created = await srv.call('POST', '/api/projects', {

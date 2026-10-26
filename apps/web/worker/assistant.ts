@@ -399,6 +399,30 @@ function upstreamUrlForRuntime(
   return raw ? validatedUpstreamUrl(raw, provider) : undefined;
 }
 
+/**
+ * Where a request with these settings goes, as an encrypted project's
+ * consent route names it (ADR-024 6-1): the URL upstreamUrlForRuntime would
+ * use, or empty when none is configured or it is invalid (such a request
+ * fails before anything is sent).
+ */
+export function assistantEndpointIdentity(
+  env: CloudflareEnv,
+  provider: string,
+  baseUrl?: string
+): string {
+  try {
+    return (
+      upstreamUrlForRuntime(
+        env,
+        baseUrl ? ({ baseUrl } as AssistantRuntimeConfig) : undefined,
+        provider
+      ) ?? ''
+    );
+  } catch {
+    return '';
+  }
+}
+
 const ROLLOUT_OPERATION_FLAGS = [
   ['add_direct_edit', 'AI_PATCH_DIRECT_EDIT_ENABLED'],
   ['add_growing_holder_recipe', 'AI_PATCH_GROWING_HOLDER_ENABLED'],

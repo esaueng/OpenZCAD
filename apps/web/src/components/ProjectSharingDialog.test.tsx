@@ -13,7 +13,12 @@ import {
 import type { ProjectSharingClient } from '../lib/projectSharing';
 import type { ProjectShareLinkClient } from '../lib/projectShareClient';
 import { setPersonalInfoVisible } from './PersonalInfoToggle';
-import { ProjectSharingDialog } from './ProjectSharingDialog';
+import {
+  ProjectSharingDialog,
+  type EncryptedSharingClient
+} from './ProjectSharingDialog';
+import type { OwnerInvitation } from '../lib/e2ee/invitations';
+import type { EncryptedShareLinkClient } from './EncryptedShareLinks';
 
 const owner = toUserId('user_sharing_owner');
 const member = toUserId('user_sharing_member');
@@ -775,4 +780,284 @@ it('shows an account save failure inside the local project dialog and allows ret
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   );
   expect(save).toHaveBeenCalledTimes(2);
+});
+
+describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
+  const invitee = toUserId('user_encrypted_invitee');
+
+  function encryptedRecord(
+    invitationId: string,
+    overrides: Partial<OwnerInvitation['record']> = {}
+  ): OwnerInvitation['record'] {
+    return {
+      invitationId,
+      projectId: 'proj_encrypted',
+      inviterUserId: owner,
+      role: 'editor',
+      emailHash: 'ab'.repeat(32),
+      statement: 'AA',
+      signature: 'AA',
+      signerDeviceId: 'dev_owner',
+      createdAt: '2026-10-24T00:00:00.000Z',
+      expiresAt: Date.now() + 3 * 86_400_000,
+      acceptedByUserId: null,
+      acceptedAt: null,
+      completedAt: null,
+      completedEpoch: null,
+      revokedAt: null,
+      ...overrides
+    };
+  }
+
+  function encryptedShareLinkClient(): EncryptedShareLinkClient {
+    return {
+      list: vi.fn(async () => ({
+        links: [],
+        needsConfirmation: false,
+        retired: []
+      })),
+      create: vi.fn(async () => ({ url: 'https://app.example/#share=x' })),
+      revoke: vi.fn(async () => undefined),
+      confirm: vi.fn(async () => undefined),
+      reissue: vi.fn(async () => undefined),
+      subscribeRemovals: vi.fn(() => () => undefined)
+    };
+  }
+
+  function encryptedClient(
+    invitations: OwnerInvitation[]
+  ): EncryptedSharingClient {
+    return {
+      list: vi.fn(async () => invitations),
+      invite: vi.fn(async () => undefined),
+      revoke: vi.fn(async () => undefined),
+      changeRole: vi.fn(async () => undefined),
+      remove: vi.fn(async () => undefined),
+      leave: vi.fn(async () => undefined)
+    };
+  }
+
+  it('lists invitations by where they stand, verifies, revokes and invites through MLS', async () => {
+    setPersonalInfoVisible(true);
+    const sharingClient = client();
+    const encrypted = encryptedClient([
+      {
+        record: encryptedRecord('inv_keys', { acceptedByUserId: invitee }),
+        state: 'waiting-for-keys',
+        email: 'keys@example.com'
+      },
+      {
+        record: encryptedRecord('inv_verify', {
+          acceptedByUserId: invitee,
+          role: 'viewer'
+        }),
+        state: 'waiting-for-verification',
+        email: 'verify@example.com'
+      },
+      {
+        record: encryptedRecord('inv_done', {
+          acceptedByUserId: member,
+          completedAt: '2026-10-24T01:00:00.000Z'
+        }),
+        state: 'completed',
+        email: 'member@example.com'
+      }
+    ]);
+    const onVerifyContact = vi.fn();
+    const links = shareLinkClient();
+    const encryptedLinks = encryptedShareLinkClient();
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId="proj_encrypted"
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={sharingClient}
+        shareLinkClient={links}
+        encrypted
+        encryptedClient={encrypted}
+        encryptedShareLinkClient={encryptedLinks}
+        editorInvitationsEnabled={false}
+        onVerifyContact={onVerifyContact}
+        onClose={vi.fn()}
+      />
+    );
+    expect(await screen.findByText('keys@example.com')).toBeVisible();
+    expect(
+      screen.getByText(/^Waiting for keys · Editor · \d+d$/)
+    ).toBeVisible();
+    expect(
+      screen.getByText(/^Waiting for you to verify · Viewer · \d+d$/)
+    ).toBeVisible();
+    // Completed ones are members now, not pending rows.
+    expect(screen.queryByText(/^Added/)).not.toBeInTheDocument();
+    // Share links are the encrypted ones (slice 5-10), never the plaintext
+    // routes'; what the metadata route lists is still shown.
+    expect(
+      screen.getByRole('region', { name: 'Encrypted share links' })
+    ).toBeVisible();
+    await waitFor(() =>
+      expect(encryptedLinks.list).toHaveBeenCalledWith('proj_encrypted')
+    );
+    expect(screen.getAllByRole('button', { name: 'Create link' })).toHaveLength(
+      1
+    );
+    expect(screen.queryByText('pending@example.com')).toBeVisible();
+    expect(sharingClient.getProjectSharing).toHaveBeenCalled();
+    expect(links.listProjectShareLinks).not.toHaveBeenCalled();
+    expect(links.createProjectShareLink).not.toHaveBeenCalled();
+
+    // Roles change by the owner's MLS Commit (slice 5-4), never through the
+    // plaintext route, and editors need no edit-lease rollout.
+    const roleSelect = screen.getByRole('combobox', {
+      name: 'Role for member@example.com'
+    });
+    expect(roleSelect).toHaveValue('viewer');
+    await user.selectOptions(roleSelect, 'editor');
+    await waitFor(() =>
+      expect(encrypted.changeRole).toHaveBeenCalledWith(
+        'proj_encrypted',
+        member,
+        'editor'
+      )
+    );
+    expect(sharingClient.updateMemberRole).not.toHaveBeenCalled();
+    for (const option of screen.getAllByRole('option', { name: 'Editor' })) {
+      expect(option).not.toBeDisabled();
+    }
+    // Removal is the owner's MLS Commit too (slice 5-5).
+    await user.click(
+      screen.getByRole('button', { name: 'Remove member@example.com' })
+    );
+    await waitFor(() =>
+      expect(encrypted.remove).toHaveBeenCalledWith('proj_encrypted', member)
+    );
+    expect(sharingClient.removeMember).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(/Removing someone keeps them out of every later version/)
+    ).toBeVisible();
+    // The owner cannot leave.
+    expect(
+      screen.queryByRole('button', { name: /Leave project/ })
+    ).not.toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole('button', { name: 'Verify verify@example.com' })
+    );
+    expect(onVerifyContact).toHaveBeenCalledWith(invitee);
+    // Only an invitation waiting for verification offers it.
+    expect(
+      screen.queryByRole('button', { name: 'Verify keys@example.com' })
+    ).not.toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Revoke invitation for keys@example.com'
+      })
+    );
+    await waitFor(() =>
+      expect(encrypted.revoke).toHaveBeenCalledWith(
+        'proj_encrypted',
+        'inv_keys'
+      )
+    );
+
+    await user.type(screen.getByLabelText('Email'), 'New@Example.com');
+    await user.click(screen.getByRole('button', { name: 'Invite' }));
+    await waitFor(() =>
+      expect(encrypted.invite).toHaveBeenCalledWith(
+        'proj_encrypted',
+        'New@Example.com',
+        'viewer'
+      )
+    );
+    expect(sharingClient.createInvitation).not.toHaveBeenCalled();
+    expect(
+      await screen.findByText('Invitation sent to new@example.com.')
+    ).toBeVisible();
+    setPersonalInfoVisible(false);
+  });
+
+  it('lets a member leave after saying what that means (slice 5-5)', async () => {
+    const sharingClient = client();
+    const encrypted = encryptedClient([]);
+    const onLeft = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId="proj_encrypted"
+        role="viewer"
+        collaborationStatus="offline"
+        lease={null}
+        client={sharingClient}
+        encrypted
+        encryptedClient={encrypted}
+        onLeft={onLeft}
+        onClose={vi.fn()}
+      />
+    );
+    // Only the owner manages share links.
+    expect(
+      screen.queryByRole('region', { name: 'Encrypted share links' })
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Leave project…' }));
+    const confirm = screen.getByRole('group', { name: 'Leave this project' });
+    expect(confirm).toHaveTextContent(
+      'You lose access to this project at once'
+    );
+    expect(encrypted.leave).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Leave project' }));
+    await waitFor(() => expect(onLeft).toHaveBeenCalled());
+    expect(encrypted.leave).toHaveBeenCalledWith('proj_encrypted');
+    expect(sharingClient.removeMember).not.toHaveBeenCalled();
+  });
+
+  it('offers no leaving on a plaintext project', async () => {
+    render(
+      <ProjectSharingDialog
+        projectId="proj_plain"
+        role="viewer"
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        encryptedClient={encryptedClient([])}
+        onClose={vi.fn()}
+      />
+    );
+    expect(
+      screen.getByText(
+        'Only the project owner can manage members and invitations.'
+      )
+    ).toBeVisible();
+    expect(
+      screen.queryByRole('button', { name: /Leave project/ })
+    ).not.toBeInTheDocument();
+  });
+
+  it('leaves plaintext sharing exactly as it was', async () => {
+    const sharingClient = client();
+    const encrypted = encryptedClient([]);
+    const links = shareLinkClient();
+    render(
+      <ProjectSharingDialog
+        projectId="proj_plain"
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={sharingClient}
+        shareLinkClient={links}
+        encryptedClient={encrypted}
+        onClose={vi.fn()}
+      />
+    );
+    expect(
+      await screen.findByRole('button', { name: 'Create link' })
+    ).toBeVisible();
+    await waitFor(() => expect(links.listProjectShareLinks).toHaveBeenCalled());
+    expect(encrypted.list).not.toHaveBeenCalled();
+    expect(
+      await screen.findByRole('combobox', { name: /Role for/ })
+    ).toBeVisible();
+  });
 });

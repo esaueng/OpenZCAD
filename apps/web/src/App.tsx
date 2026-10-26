@@ -3,6 +3,12 @@ import {
   repairLegacyBracketRecipe
 } from '@openzcad/document-core';
 import {
+  noteProjectMigrating,
+  registerProjectFlush,
+  useMigrationLockedProjects
+} from './lib/migrationStatus';
+import { useOpenProjectMigrationWatch } from './lib/projectMigrationWatch';
+import {
   repairLegacyBracketDemo,
   repairLegacyBracketSaveState
 } from './lib/bracketDemoCompatibility';
@@ -15,11 +21,13 @@ import {
   isAnalyticsEnabled,
   durationBucket
 } from './lib/analytics';
-import type {
-  GeometryBodyRepresentation,
-  GeometryReadyState,
-  ParameterKind,
-  UserId
+import {
+  PROJECT_MIGRATING_CODE,
+  type GeometryBodyRepresentation,
+  type GeometryReadyState,
+  type ParameterKind,
+  type PrimitiveKind,
+  type UserId
 } from '@openzcad/shared';
 import { clearAssistantHistory } from './lib/assistant/historyStorage';
 import { exactWarningBaseline } from './lib/exactWarnings';
@@ -34,7 +42,8 @@ import {
 import type { DatumVertexRepairSession } from './lib/datumVertexRepair';
 import {
   referenceImageDisplays,
-  referenceImageInsertPlane
+  referenceImageInsertPlane,
+  referenceImagePlaneBasis
 } from './lib/referenceImageDisplay';
 import { referenceImagesWithHistory } from '@openzcad/shared';
 import type {
@@ -65,6 +74,7 @@ import { toggleBodyIsolation, type BodyIsolation } from './lib/bodyIsolation';
 import { failedFeatureIds } from './lib/featureRepair';
 import { featureHistory, relatedFeatureIds } from './lib/featureHistory';
 import {
+  emptyExportMessage,
   exportScope,
   exportScopeLabel,
   type ExportScope
@@ -75,9 +85,10 @@ import {
   viewImageScope
 } from './lib/imageExport';
 import { FeatureBuildError } from './lib/featureValidation';
-import { edgeModifierCommand } from './lib/edgeModifierEdit';
-import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
-import type { FaceNamer } from './lib/faceProducerName';
+import {
+  edgeModifierCommand,
+  type EdgeModifierFormValue
+} from './lib/edgeModifierEdit';
 import {
   datumPlaneSources,
   documentNodesWithHistory,
@@ -97,7 +108,6 @@ import {
   saveImportedProject
 } from './lib/localProjectStore';
 import {
-  Fragment,
   Suspense,
   useCallback,
   useEffect,
@@ -149,6 +159,7 @@ import {
 import {
   CommandManager,
   commandFactories,
+  composeCommands,
   prepareLegacySketchConversion,
   duplicateFeatureCommands,
   duplicateFeatureRefusal,
@@ -165,6 +176,7 @@ import type {
 import {
   appendRevision,
   createCheckpoint,
+  createFeatureOnlyIds,
   createSavePoint,
   createSavedRevision,
   createProjectDocument,
@@ -263,6 +275,7 @@ import type {
   ProjectCollaborationCapabilitiesResponse
 } from '@openzcad/shared';
 import {
+  PROJECT_STORAGE_FORMAT_E2EE_V1,
   toShaprImportId,
   toSketchConstraintId,
   toUserId
@@ -300,7 +313,11 @@ import {
   sketchGeometryDeleteRefusal,
   sketchSolveEvidenceKey
 } from './lib/sketch/solveEvidence';
-import type { SketchDimensionIdentity } from '@openzcad/shared';
+import type {
+  SketchDimensionIdentity,
+  SketchProfileReference,
+  Vector3
+} from '@openzcad/shared';
 import { constraintInspectionTargets } from './lib/sketch/constraintInspection';
 import {
   solveStatusLabel,
@@ -318,18 +335,12 @@ import {
   sketchUsesProjectionGeometry
 } from './lib/sketch/releaseGeometry';
 import { textPlacementBudgetError } from './lib/sketch/textPlacement';
-import {
-  modelingOperationNeedsPlanarFaces,
-  modelingOperationPicksFaces,
-  resolveFormFaceBox,
-  resolveFormFacePick,
-  formFaceListOperation,
-  type FacePickOperation,
-  type FormFacePick
-} from './lib/holeFacePick';
+import { prefersSavingData } from './lib/saveData';
+import { useSurfaceReady } from './hooks/useSurfaceReady';
 import {
   lazyWithStaleChunkNotice,
   loadWhenOnline,
+  preloadableLazy,
   onStaleChunk,
   watchPreloadErrors,
   STALE_CHUNK_MESSAGE
@@ -344,6 +355,12 @@ import {
   type KeySessionEvent
 } from './lib/e2ee/keySession';
 import type { DeviceKeySignOutChoice } from './lib/e2ee/signOut';
+import {
+  captureEncryptedInvitationLink,
+  isEncryptedInvitationHash,
+  pendingEncryptedInvitation
+} from './lib/e2ee/encryptedInvitationLink';
+import { requestContactVerification } from './lib/e2ee/contactFocus';
 import { watchBuildVersion } from './lib/buildVersionWatch';
 import { commandOutcomeMessage } from './lib/commandOutcome';
 import { tintPreviewResultBodies } from './lib/previewBodyTint';
@@ -355,14 +372,25 @@ import { newBlendFacePick } from './lib/blendRearm';
 import { exactEntryShortcut, isTypingTarget } from './lib/exactEntryShortcut';
 import { DeferredExactEntry } from './lib/deferredExactEntry';
 import type { SketchSolveStatus } from './components/SketchToolRail';
+import type { SharedLinkCopyDestination } from './components/SharedLinkCopyDialog';
 import {
   ApiError,
   api,
+  encryptsNewProjects,
   isEncryptedProject,
   isProjectDocumentUnavailableError,
   isProjectFormatUnsupportedError
 } from './lib/api';
 import { assistantDisabledReason } from './lib/assistant/encryptedProject';
+import {
+  refreshEncryptedMemberRole,
+  useEncryptedMemberRole
+} from './lib/e2ee/useEncryptedMemberRole';
+import { useAssistantConsentGate } from './lib/assistant/consentGate';
+import {
+  retainEncryptionStatus,
+  useEncryptionStatus
+} from './lib/e2ee/encryptionStatus';
 import {
   loadAccountProjectResult,
   type AccountProjectLoadResult
@@ -472,7 +500,6 @@ import {
   useKeymap
 } from './lib/keymap';
 import {
-  PRIMITIVE_TOOLS,
   TOOL_GROUPS,
   TOOL_META,
   toolDisabledReason,
@@ -543,7 +570,8 @@ import {
   clearPendingProjectInvitation
 } from './lib/projectInvitationLink';
 import {
-  captureProjectShareToken,
+  captureProjectShareLink,
+  isEncryptedShareLink,
   projectLinkPath,
   clearProjectShareFragment
 } from './lib/projectShareLink';
@@ -630,6 +658,7 @@ import {
 import { effectiveSelectionFilter } from './lib/selectionFilter';
 import {
   bodyFeature,
+  deleteKeyRemovesFeature,
   resolveSelectionTopology,
   selectionFeature,
   selectionSetFeature
@@ -721,6 +750,7 @@ import {
   selectionCalloutVerbs,
   type SelectionCalloutContent,
   type SelectionCalloutKind,
+  type SelectionCalloutVerbInput,
   type SelectionCalloutOperation,
   type SelectionCalloutVerbId
 } from './lib/selectionCallout';
@@ -731,6 +761,7 @@ import {
   fixedPlaneRefForLegacyAttachment
 } from './lib/faceSketchAttachment';
 import {
+  edgeLabel,
   edgeLengthMeasurement,
   faceLabel,
   textLabelSegments,
@@ -739,13 +770,13 @@ import {
   type LabelSegment
 } from './lib/topologyLabels';
 import type { FeatureSelectionSource } from './lib/inspectorHeading';
-import { CARD_EYEBROWS } from './lib/cardEyebrows';
 import type {
   CommandDiagnostic,
   InteractionState
 } from './lib/interaction/machine';
 import {
   refreshEdgeFormReferencesForCommit,
+  resolveEdge,
   resolveFace
 } from './lib/topologyResolution';
 import { useLineageDemand } from './lib/lineageDemand';
@@ -775,11 +806,21 @@ import {
   reuseRunningExtrudePreview,
   type ResolvedExtrudePreview
 } from './lib/resolvedExtrudePreview';
+import type {
+  ExtrudeFormValue,
+  ExtrudeToFacePicking
+} from './lib/extrudeDraft';
 import {
-  ExtrudeForm,
-  type ExtrudeFormValue,
-  type ExtrudeToFacePicking
-} from './components/forms/ExtrudeForm';
+  ExtrudeCommand,
+  extrudeShownValues,
+  type ExtrudeCommandHandle,
+  type ExtrudeCommandState,
+  type ExtrudeValueId
+} from './components/ExtrudeCommand';
+import {
+  DRAFT_DRAG_LIMIT_DEG,
+  extrudeHandles
+} from './lib/inPlace/extrude';
 import {
   extrudeToFaceRepair,
   extrudeHistoryDocument,
@@ -789,6 +830,7 @@ import {
 } from './lib/extrudeToFace';
 import {
   extrudeEditCommand,
+  extrudeEditInitial,
   extrudePreviewMagnitude,
   extrudeEditTargets,
   extrudePreviewError
@@ -913,7 +955,7 @@ function withSuspense<P extends object>(Lazy: JSXElementConstructor<P>) {
   };
 }
 
-const LazyNumericKeypad = lazyWithStaleChunkNotice(() =>
+const LazyNumericKeypad = preloadableLazy(() =>
   import('./components/NumericKeypad').then((module) => ({
     default: module.NumericKeypad
   }))
@@ -948,7 +990,7 @@ const ViewModeBar = createLazyPanel<
 // off the entry chunk, which runs at its budget. Its own boundary keeps a
 // chunk that fails to load (a tab left open across a deploy) to the panel
 // slot, with the Reload notice, instead of taking the workspace down.
-const LazyMoveOverlay = lazyWithStaleChunkNotice(() =>
+const LazyMoveOverlay = preloadableLazy(() =>
   import('./components/MoveOverlay').then((module) => ({
     default: module.MoveOverlay
   }))
@@ -1071,13 +1113,6 @@ const LazySelectionCard = lazyWithStaleChunkNotice(() =>
     default: module.SelectionCard
   }))
 );
-// A modeling feature's History card reads out its body, as every other
-// feature's card does; the readout lives in the Inspector's chunk.
-const LazyBodyMeasurements = lazyWithStaleChunkNotice(() =>
-  import('./components/Inspector').then((module) => ({
-    default: module.BodyStats
-  }))
-);
 const LazySelectionRefusal = lazyWithStaleChunkNotice(() =>
   import('./components/SelectionCard').then((module) => ({
     default: module.SelectionRefusal
@@ -1110,6 +1145,13 @@ const LazySketchRelationsRail = lazyWithStaleChunkNotice(() =>
 const LazyResumeSessionDialog = lazyWithStaleChunkNotice(() =>
   import('./components/ResumeSessionDialog').then((module) => ({
     default: module.ResumeSessionDialog
+  }))
+);
+// Make a copy's choice of destination for an encrypted share link's
+// signed-in visitor (ADR-024 slice 5-11).
+const LazySharedLinkCopyDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/SharedLinkCopyDialog').then((module) => ({
+    default: module.SharedLinkCopyDialog
   }))
 );
 const LazySaveRevisionDialog = lazyWithStaleChunkNotice(() =>
@@ -1170,11 +1212,21 @@ const LazyAssistantPanel = lazyWithStaleChunkNotice(() =>
  * weight in the launcher chunk — before a project is even open — for the sake
  * of a click that may never come.
  */
-const LazySettingsPage = lazyWithStaleChunkNotice(() =>
+const LazySettingsPage = preloadableLazy(() =>
   import('./components/SettingsPage').then((module) => ({
     default: module.SettingsPage
   }))
 );
+/**
+ * Surfaces a click opens, loaded while the page is idle: their first open
+ * used to show an empty frame or two while the chunk evaluated, even with
+ * the chunk already prefetched.
+ */
+const FIRST_USE_SURFACES = [
+  LazySettingsPage,
+  LazyMoveOverlay,
+  LazyNumericKeypad
+];
 const LazyProjectSharingDialog = lazyWithStaleChunkNotice(() =>
   import('./components/ProjectSharingDialog').then((module) => ({
     default: module.ProjectSharingDialog
@@ -1227,11 +1279,6 @@ const LazyInspector = lazyWithStaleChunkNotice(() =>
     default: module.Inspector
   }))
 );
-const LazyModelingOperationsForm = lazyWithStaleChunkNotice(() =>
-  import('./components/forms/ModelingOperationsForm').then((module) => ({
-    default: module.ModelingOperationsForm
-  }))
-);
 const LazySketchPlanePrompt = lazyWithStaleChunkNotice(() =>
   import('./components/SketchPlanePrompt').then((module) => ({
     default: module.SketchPlanePrompt
@@ -1273,8 +1320,6 @@ const SelectionCard = withSuspense(LazySelectionCard);
 
 const SelectionRefusal = withSuspense(LazySelectionRefusal);
 
-const BodyMeasurements = withSuspense(LazyBodyMeasurements);
-
 const WorkspaceTour = withSuspense(LazyWorkspaceTour);
 
 const SketchToolRail = withSuspense(LazySketchToolRail);
@@ -1284,6 +1329,8 @@ const SketchReferenceDimensions = withSuspense(LazySketchReferenceDimensions);
 const SketchRelationsRail = withSuspense(LazySketchRelationsRail);
 
 const ResumeSessionDialog = withSuspense(LazyResumeSessionDialog);
+
+const SharedLinkCopyDialog = withSuspense(LazySharedLinkCopyDialog);
 
 const SaveRevisionDialog = withSuspense(LazySaveRevisionDialog);
 
@@ -1350,8 +1397,6 @@ function Inspector(props: ComponentProps<typeof LazyInspector>) {
   );
 }
 
-const ModelingOperationsForm = withSuspense(LazyModelingOperationsForm);
-
 const SketchPlanePrompt = withSuspense(LazySketchPlanePrompt);
 
 const DatumPlaneCard = withSuspense(LazyDatumPlaneCard);
@@ -1417,20 +1462,57 @@ import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
 import { useThumbnailCaptureActivity } from './hooks/useThumbnailCaptureActivity';
 import { GEOMETRY_PREVIEW_SCHEDULING, LivePreview } from './lib/livePreview';
 import { mergeSweptFaces, useInPlaceCommand } from './hooks/useInPlaceCommand';
+import { useMediaQuery } from './hooks/useMediaQuery';
+import { createPrimitiveCommand } from './lib/primitivePlacement';
+import { footprintPlacement } from './lib/inPlace/primitives';
 import {
   IN_PLACE_TOOL_SPECS,
   clampValue,
+  displayedValue,
   isInPlaceTool,
+  keypadText,
+  profileRegionLoops,
+  requestNewAxis,
+  resolveNewAxis,
+  valueInRange,
   type InPlaceRequest,
+  type ResolvedInPlaceRequest,
   type BodyPick,
+  type CurvePick,
+  type EdgePick,
   type FacePick,
+  type ImageSlot,
+  type InPlaceContext,
   type InPlaceToolId,
-  type ProfilePick
+  type ProfilePick,
+  type RefPick
 } from './lib/inPlace/tools';
+import { imagePlacementPlane, placeImage } from './lib/inPlace/image';
+import type * as DatumPicks from './lib/inPlace/datumPicks';
+import type { PreparedReferenceImage } from './lib/referenceImageInsert';
 import {
   parseCurveCandidateId,
   sketchCurveCandidates
 } from './lib/inPlace/curves';
+import { datumAxisChoices } from './lib/datumAxisChoices';
+import {
+  withFeatureBuilt,
+  holeWorldPosition,
+  inPlaceEditBodyBox,
+  keptInOrder,
+  laterDirectEdit,
+  laterDirectEditOnBody,
+  laterInPlaceSteps,
+  laterStepsOnBody,
+  keepAbsentHoleSteps,
+  inPlaceEditLineage,
+  inPlaceEditMovedBodies,
+  inPlaceEditSeed,
+  inPlaceEditSourceSketchIds,
+  inPlaceFeatureUpdate,
+  inPlaceToolForFeature,
+  type InPlaceEditSeed
+} from './lib/inPlace/edit';
 import { PreviewRebuilds } from './lib/previewRebuilds';
 import {
   blendPreviewSelectionKey,
@@ -1447,6 +1529,7 @@ import { useSteadySaveState } from './hooks/useSteadySaveState';
 import { useMeasurementWorkbench } from './hooks/useMeasurementWorkbench';
 import {
   useValidatedFeatureCommit,
+  type ValidatedFeatureOutcome,
   type ValidatedFeatureRunOptions
 } from './hooks/useValidatedFeatureCommit';
 import { PatternProgress } from './components/PatternProgress';
@@ -1459,18 +1542,10 @@ import {
   type AffectedFeatureTarget
 } from './lib/affectedFeatureTargets';
 import {
-  holePositionAnchor,
-  holePreview,
-  type HolePreview
-} from './lib/holeGhost';
-import { holePositionFromPick } from './lib/holePositionAxes';
-import type { PrimitiveGhost } from './lib/primitiveGhost';
-import {
   failedHistoryExportBodies,
   withheldExportMessage,
   type WithheldExportBody
 } from './lib/failedHistoryExport';
-import type { HoleDraft } from './components/forms/ModelingOperationsForm';
 import { extrudeSketchGuidance } from './lib/extrudeGuidance';
 import {
   settleSuppressionNotice,
@@ -1538,25 +1613,17 @@ import {
   buildModelingOperationSubmission,
   modelingFaceOptions,
   type EditableModelingFeatureData,
-  modelingFeatureIsEditable,
-  modelingFeatureEditReferences,
   modelingFeatureUpdate,
-  modelingFormStateFromFeature,
-  modelingOperationDisabledReason,
-  type ModelingOperationKind,
   type ModelingOperationFormState,
-  type ModelingOperationSubmission,
-  type ModelingPathOption,
-  type ModelingProfileOption
+  type ModelingOperationSubmission
 } from './lib/modelingOperations';
 import {
   advanceEditCardSession,
   editCardSessionMatches,
   type EditCardSession
 } from './lib/editCardLifecycle';
-import { CardHeader, CardSkeleton } from './components/CardHeader';
+import { CardSkeleton } from './components/CardHeader';
 import { useCommandCardPrefetch } from './lib/cardChunkPrefetch';
-import { PanelOverflow } from './components/PanelOverflow';
 import {
   clearActiveProject,
   rememberActiveProject,
@@ -1697,10 +1764,22 @@ const PANEL_PENDING_DELAY_MS = 400;
 /** How long a rebuild runs before the tool palette reads it as waiting. */
 const TOOLS_WAITING_DELAY_MS = 400;
 /**
+ * Where the inspector floats over the stage rather than beside it (the
+ * phone and narrow-tablet lanes in quiet-stage.css).
+ */
+const NARROW_WINDOW_QUERY = '(max-width: 960px)';
+/**
  * What an unnamed save is called. Ctrl+S stays a reflex and takes this; naming
  * one is its own gesture (Ctrl+Shift+S).
  */
 const DEFAULT_SAVE_REASON = 'Manual save';
+/**
+ * The lane's notice while the open project is moved to encrypted storage
+ * (ADR-024 Phase 7): its plaintext takes no writes meanwhile, and an edit
+ * made here would be missing from the encrypted copy that replaces it.
+ */
+const PROJECT_MIGRATING_NOTICE =
+  'Editing is locked: this project is being end-to-end encrypted. It opens read-only until that finishes.';
 /** The lane's one notice for a tab that opened a project another tab owns. */
 const PROJECT_OPEN_ELSEWHERE_NOTICE =
   'Editing is locked: this project is open in another tab.';
@@ -2010,6 +2089,66 @@ class ParameterCheckStale extends Error {
   }
 }
 
+/**
+ * A blend command's edges read again from the model as it is now: by
+ * lineage first, and afresh where they stand (the handle's middle and way
+ * out, a variable fillet's far end), so the chips and the highlight follow
+ * an edge an update moved or renamed. An edge the model no longer has is
+ * dropped.
+ */
+function refreshedEdgePicks(
+  picks: readonly EdgePick[],
+  representations: Readonly<Record<string, BodyRepresentation>>,
+  edgePick: (
+    bodyId: string,
+    topologyId: string | undefined,
+    hash: number | undefined
+  ) => EdgePick | null
+): { edges: EdgePick[]; moved: boolean } {
+  let moved = false;
+  const placed = (pick: EdgePick) =>
+    JSON.stringify([
+      pick.hash,
+      pick.topologyId,
+      pick.middle,
+      pick.outward,
+      pick.end
+    ]);
+  const edges = picks.flatMap((pick) => {
+    const body = representations[pick.bodyId];
+    if (!body?.topology) return [pick];
+    const found = resolveEdge(body, {
+      hash: pick.hash,
+      ...(pick.reference ? { reference: pick.reference } : {})
+    });
+    if (!found.ok) return [];
+    const fresh = edgePick(
+      pick.bodyId,
+      found.entry.topologyId,
+      found.entry.hash
+    );
+    // An input that publishes no drawn edge keeps the blend face anchor
+    // its seed placed the handle on.
+    const next: EdgePick = fresh
+      ? {
+          ...pick,
+          ...(Object.fromEntries(
+            Object.entries(fresh).filter(([, part]) => part !== undefined)
+          ) as EdgePick),
+          ...(pick.reference ? { reference: pick.reference } : {})
+        }
+      : {
+          ...pick,
+          hash: found.entry.hash,
+          topologyId: found.entry.topologyId
+        };
+    if (placed(next) === placed(pick)) return [pick];
+    moved = true;
+    return [next];
+  });
+  return { edges, moved };
+}
+
 export function App() {
   // Counts this component's commits for the interaction probes. Deliberately
   // dependency-free so it runs after every commit, and deliberately inside
@@ -2025,7 +2164,7 @@ export function App() {
   );
   const [pendingInvitationToken, setPendingInvitationToken] = useState(() => {
     // An explicit public link supersedes an invitation retained for sign-in.
-    if (captureProjectShareToken()) {
+    if (captureProjectShareLink()) {
       clearPendingProjectInvitation();
       return null;
     }
@@ -2042,13 +2181,19 @@ export function App() {
    * turns this into a shared-link session: the shared document is fetched
    * anonymously, pinned to the Tweak workspace, and never written to this
    * device's storage — Make a copy is the one road out.
+   *
+   * The value is what the fragment carries: a plaintext link's token, or an
+   * end-to-end encrypted link's `<token>.<key>.<owner>` (ADR-024 slice
+   * 5-11, `isEncryptedShareLink`). An encrypted session also records its
+   * verified statement's mode: a view-only link pins the visitor to View.
    */
   const [pendingShareToken, setPendingShareToken] = useState(
-    captureProjectShareToken
+    captureProjectShareLink
   );
-  const [shareSession, setShareSession] = useState<{ token: string } | null>(
-    null
-  );
+  const [shareSession, setShareSession] = useState<{
+    token: string;
+    encryptedMode?: 'view' | 'tweak';
+  } | null>(null);
   const shareSessionRef = useRef(shareSession);
   shareSessionRef.current = shareSession;
   const shareOpenAttemptRef = useRef<string | null>(null);
@@ -2110,6 +2255,13 @@ export function App() {
   }, []);
   useEffect(() => {
     const openFragment = () => {
+      if (isEncryptedInvitationHash(window.location.hash)) {
+        if (captureEncryptedInvitationLink()) {
+          updateSettingsViewState({ open: true, activeSection: 'encryption' });
+          setSettingsOpen(true);
+        }
+        return;
+      }
       const repeatedInvitation = projectInvitationTokenFromHash(
         window.location.hash
       );
@@ -2144,7 +2296,7 @@ export function App() {
       pendingInvitationAttemptRef.current = null;
       setPendingInvitationToken(null);
       setPendingInvitationError(null);
-      const token = captureProjectShareToken();
+      const token = captureProjectShareLink();
       shareOpenAttemptRef.current = null;
       setPendingShareToken(token);
       if (!token) {
@@ -2318,12 +2470,20 @@ export function App() {
     },
     []
   );
+  // An invitation to an encrypted project (slice 5-3b) is taken off the
+  // address bar at once; Settings › Encryption opens on it once the session
+  // is known (below), where it is accepted after encryption is set up.
+  useState(captureEncryptedInvitationLink);
   const [settingsOpen, setSettingsOpen] = useState(
     () =>
       pendingInvitationToken !== null ||
       desktopAuthorizationAttempt !== null ||
       loadSettingsViewState().open
   );
+  // An open that beats the idle warm-up waits for the chunk instead of
+  // showing an empty overlay; the workspace still holds its keys meanwhile.
+  const settingsShown =
+    useSurfaceReady(LazySettingsPage, settingsOpen) && settingsOpen;
   const settingsDialogRef = useRef<HTMLDivElement | null>(null);
   useModalFocus(settingsDialogRef, {
     enabled: settingsOpen,
@@ -2365,6 +2525,8 @@ export function App() {
   /** The export dialog has been opened this session — the tour's last signal. */
   const [tourExportSeen, setTourExportSeen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
+  const [automaticMigrationLoadError, setAutomaticMigrationLoadError] =
+    useState<string | null>(null);
   const [settingsMessage, setSettingsMessage] = useState(
     pendingInvitationToken
       ? 'Sign in to open the shared project automatically.'
@@ -2504,13 +2666,6 @@ export function App() {
     /** Requested vertex roles are staged without touching the document. */
     vertices?: DatumVertexRepairSession;
   } | null>(null);
-  const [formFacePickTarget, setFormFacePickTarget] = useState<BodyId | null>(
-    null
-  );
-  const [viewportFormFacePick, setViewportFormFacePick] =
-    useState<FormFacePick | null>(null);
-  /** The in-card sweep waiting for the form's complete accepted face list. */
-  const pendingFormFaceSweepRef = useRef<FormFacePick | null>(null);
   /** Null means the active tool decides what picking is narrowed to. */
   const [manualSelectionFilter, setManualSelectionFilter] =
     useState<SelectionFilter | null>(null);
@@ -2579,41 +2734,14 @@ export function App() {
     useState<BodyAppearancePreview | null>(null);
   const [moveSnap, setMoveSnap] = useState<MoveSnap | null>(null);
   const [tool, setTool] = useState<ToolId | null>(null);
-  const [modelingTargetBodyId, setModelingTargetBodyId] =
-    useState<BodyId | null>(null);
+  /** A primitive's footprint is being drawn: its arrows wait for the release. */
+  const [footprintDragging, setFootprintDragging] = useState(false);
   /**
-   * The feature a modeling form is editing, when it was opened from a
-   * history row rather than a tool tile. Null while creating. The form is
-   * the same one; only the command it commits differs.
+   * The datum plane or axis its card is editing, when it was opened from a
+   * history row rather than a tool tile. Null while creating.
    */
-  /** The open Hole card's values, for the bore the viewport draws. */
-  const [holeDraft, setHoleDraft] = useState<HoleDraft | null>(null);
-  /** The open primitive card's solid, for the ghost the viewport draws. */
-  const [primitiveGhost, setPrimitiveGhost] = useState<PrimitiveGhost | null>(
-    null
-  );
-  /**
-   * The last ghost and what it was computed from. A through hole scans the
-   * body's mesh for its depth, which is not work to redo on every render.
-   */
-  const holeGhostCache = useRef<{
-    key: string;
-    body: unknown;
-    preview: HolePreview;
-  } | null>(null);
   const [modelingEditFeature, setModelingEditFeature] =
     useState<FeatureNode | null>(null);
-  const [modelingCreateInitial, setModelingCreateInitial] =
-    useState<ModelingOperationFormState | null>(null);
-  /** The fillet/chamfer form's current size, mirrored onto the edge handle. */
-  const [edgeFormSize, setEdgeFormSize] = useState<number | null>(null);
-  /**
-   * The card's typed fillet/chamfer size did not build in preview. The handle
-   * on the edge kept showing "R 5 mm" like any good value while the only word
-   * of the refusal was in the lane, so it is carried to the handle's warning
-   * state and to the card.
-   */
-  const [edgeFormPreviewRefused, setEdgeFormPreviewRefused] = useState(false);
   /**
    * A fillet that just landed from an edge drag: its new blend face is picked
    * on the next topology so the radius stays live instead of the gesture
@@ -2622,19 +2750,6 @@ export function App() {
   const pendingBlendRearmRef = useRef<{
     bodyId: BodyId;
     before: BodyTopology['faces'] | undefined;
-  } | null>(null);
-  useEffect(() => {
-    if (!modelingOperationPicksFaces(tool)) {
-      setFormFacePickTarget(null);
-      setViewportFormFacePick(null);
-    }
-  }, [tool]);
-  const modelingPreflightRef = useRef<{
-    signature: string;
-    command: AnyCommand;
-    resultBodyId: BodyId;
-    featureName: string;
-    baseVersion: number;
   } | null>(null);
   const [sketchConstruction, setSketchConstruction] = useState(false);
   /**
@@ -2652,6 +2767,10 @@ export function App() {
   const [sketchDiagnosticPoints, setSketchDiagnosticPoints] = useState<
     { x: number; y: number }[]
   >([]);
+  /** The in-place Fillet or Chamfer running, mirrored for the filter below. */
+  const [inPlaceEdgeTool, setInPlaceEdgeTool] = useState<
+    'fillet' | 'chamfer' | null
+  >(null);
   /**
    * What picking is narrowed to right now. A manual choice outranks the tool's
    * so that arming Fillet does not silently undo a filter set on purpose.
@@ -2664,7 +2783,7 @@ export function App() {
     ? 'edge'
     : tool === 'sketch'
       ? 'face'
-      : effectiveSelectionFilter(manualSelectionFilter, tool);
+      : effectiveSelectionFilter(manualSelectionFilter, tool ?? inPlaceEdgeTool);
   const [statusEntry, setStatusEntry] = useState<StatusEntry>(() => ({
     text: cloudFunctionsEnabled
       ? LIBRARY_MODE_STATUS.checking
@@ -2766,6 +2885,26 @@ export function App() {
       stopPreload();
     };
   }, [announce]);
+  // Load what a click opens while the page is idle, so its first open is not
+  // an empty frame. A failure here is left to the surface's own load, which
+  // reports a stale chunk where the user is looking.
+  useEffect(() => {
+    // Save-Data asks for nothing speculative, as the chunk prefetch honours.
+    if (prefersSavingData()) return;
+    // Offline, a failed module download can stay cached until navigation,
+    // so wait for the connection rather than poison the surfaces' own loads.
+    const warm = () =>
+      void loadWhenOnline(async () => {
+        for (const surface of FIRST_USE_SURFACES)
+          surface.preload().catch(() => undefined);
+      });
+    if (typeof window.requestIdleCallback === 'function') {
+      const idle = window.requestIdleCallback(warm, { timeout: 5_000 });
+      return () => window.cancelIdleCallback(idle);
+    }
+    const timer = window.setTimeout(warm, 2_000);
+    return () => window.clearTimeout(timer);
+  }, []);
   /** A change of selection or command retires the message it interrupts. */
   const retireStatusMessage = useCallback(() => {
     setStatusEntry((current) => retireStatus(current, Date.now()));
@@ -2915,8 +3054,7 @@ export function App() {
     [localHiddenBodyIds, parameterHiddenBodyIds]
   );
   // D01: a new drawing sheet shows the live bodies on screen. Deliberately
-  // not the export scope, which follows the Build selection and the mesh
-  // dialog's include-hidden choice.
+  // not the export scope, which follows the Build selection.
   const drawingDefaultBodyIds = useMemo(
     () =>
       doc
@@ -2959,6 +3097,16 @@ export function App() {
     DISABLED_COLLABORATION_ROLLOUT
   );
   const [session, setSession] = useState<AuthSession | null>(null);
+  const encryptedInvitationSessionRef = useRef<string | null>(null);
+  useEffect(() => {
+    const userId = session?.userId ?? null;
+    if (!userId || encryptedInvitationSessionRef.current === userId) return;
+    encryptedInvitationSessionRef.current = userId;
+    if (pendingEncryptedInvitation()) {
+      updateSettingsViewState({ open: true, activeSection: 'encryption' });
+      setSettingsOpen(true);
+    }
+  }, [session?.userId]);
   const [resumeViewGeneration, setResumeViewGeneration] = useState(0);
   const workspaceResume = useWorkspaceResume({
     projectId: doc?.projectId ?? null,
@@ -3103,6 +3251,35 @@ export function App() {
   useEffect(() => {
     lockAccountsExcept(sessionUserId);
   }, [sessionUserId]);
+  useEffect(() => {
+    setAutomaticMigrationLoadError(null);
+    if (!sessionUserId || !cloudFunctionsEnabled) return;
+    let stopped = false;
+    let migration: { dispose(): void } | undefined;
+    void import('./lib/e2ee/automaticMigration')
+      .then(({ automaticProjectMigration }) => {
+        if (stopped) return;
+        const current = automaticProjectMigration(sessionUserId, (message) => {
+          if (stopped || sessionRef.current?.userId !== sessionUserId) return;
+          setSettingsMessage(message);
+          updateSettingsViewState({ open: true, activeSection: 'encryption' });
+          setSettingsOpen(true);
+        });
+        migration = current;
+        void current.check();
+      })
+      .catch(() => {
+        if (stopped || sessionRef.current?.userId !== sessionUserId) return;
+        setAutomaticMigrationLoadError(
+          'Automatic encryption could not load. Reload to try again.'
+        );
+        setSettingsOpen(true);
+      });
+    return () => {
+      stopped = true;
+      migration?.dispose();
+    };
+  }, [sessionUserId, cloudFunctionsEnabled]);
   useEffect(() => {
     const online = () => organizationBackground.resume();
     const changed = (event: StorageEvent) => {
@@ -3364,9 +3541,14 @@ export function App() {
   const moveSnapSetterRef = useRef<((snap: MoveSnap) => void) | null>(null);
   /** Cancels the viewport's captured pointer session on keyboard Escape. */
   const cancelDirectManipulationRef = useRef<(() => boolean) | null>(null);
+  /** Ends a running in-place command quietly (it is set once that exists). */
+  const cancelInPlaceRef = useRef<(() => void) | null>(null);
   /** Opens exact entry for the armed handle, as tapping its chip would. */
   const openExactEntryRef = useRef<(() => boolean) | null>(null);
   const contextMenuActionsRef = useRef<Record<string, () => void>>({});
+  /** Counts tool launches, so a launch held for its panel's chunk can tell
+   * whether another has superseded it. */
+  const toolLaunchRef = useRef(0);
   const viewportMenuHandlersRef = useRef({
     launchTool,
     validateSelectionEdit,
@@ -3588,6 +3770,8 @@ export function App() {
     parameterCandidate.base.projectId === doc?.projectId &&
     parameterCandidate.base.version === doc?.version;
   const exactGeometryReady = !parameterDraftActive && geometry.isReadyFor(doc);
+  const exactGeometryReadyRef = useRef(exactGeometryReady);
+  exactGeometryReadyRef.current = exactGeometryReady;
   // What is drawn is complete when the worker has caught up, or when a
   // validated commit attached its own complete rebuild to this version: the
   // broadcast rebuild that follows only re-derives it for the worker's live
@@ -3762,6 +3946,12 @@ export function App() {
    * to check it is not a render.
    */
   const [projectOpenElsewhere, setProjectOpenElsewhere] = useState(false);
+  // Read-only while being encrypted: this tab's own runs (encrypting, or a
+  // paused or stopped staging that keeps the plaintext locked), and a
+  // migration this page learned of from another tab or device (its room
+  // closed for the move, a save was refused with PROJECT_MIGRATING, or the
+  // migration watch below asked), until the account says it was abandoned.
+  const migrationLockedProjectIds = useMigrationLockedProjects();
   const projectOpenElsewhereRef = useRef(projectOpenElsewhere);
   projectOpenElsewhereRef.current = projectOpenElsewhere;
   /**
@@ -3804,6 +3994,16 @@ export function App() {
     return localAutosave.flush();
   }, [localAutosave]);
   flushPendingLocalSaveRef.current = flushPendingLocalSave;
+  // Encrypting an existing project (ADR-024 Phase 7, slice 7-2) first
+  // saves this page's pending edits to it, here and to the account.
+  useEffect(() => {
+    registerProjectFlush(async (projectId) => {
+      if (managerRef.current?.document.projectId !== projectId) return;
+      await flushPendingLocalSaveRef.current();
+      await cloudProjectAutosaveRef.current?.flushPending();
+    });
+    return () => registerProjectFlush(null);
+  }, []);
   const previewPresentationMs = useRef(0);
   const reusableRadiusPreview = useRef<{
     candidate: RadiusPreviewCandidate;
@@ -4030,12 +4230,55 @@ export function App() {
   const regionDistanceSetter = useRef<((value: ParamValue) => void) | null>(
     null
   );
+  /** U09: the in-place Extrude's bar, for Enter, its keypad and handles. */
+  const regionExtrudeCommandRef = useRef<ExtrudeCommandHandle | null>(null);
   /**
-   * The profiles the Extrude command selected. While they are still the
-   * selection, the region card asks for its Distance field to hold the
-   * keyboard; a canvas pick replaces them and leaves it with the workspace.
+   * U09: the extrude a History row re-armed the in-place Extrude on, by its
+   * feature; each arming is its own session (`generation`).
    */
-  const extrudeCommandProfiles = useRef<RegionPickData[]>([]);
+  const [extrudeEdit, setExtrudeEdit] = useState<{
+    featureId: FeatureId;
+    generation: number;
+  } | null>(null);
+  const extrudeEditRef = useRef(extrudeEdit);
+  extrudeEditRef.current = extrudeEdit;
+  /**
+   * The in-place Extrude session running now: a new extrude (by its sketch)
+   * or an edit (by its feature and arming), whichever bar is up.
+   */
+  const extrudeSessionKey = extrudeEdit
+    ? `edit:${extrudeEdit.featureId}:${extrudeEdit.generation}`
+    : interaction.mode === 'region'
+      ? `create:${interaction.target.sketchId}`
+      : null;
+  /**
+   * The bar's settings as numbers, for the back arrow and the draft rig,
+   * owned by the session that published them: one session's leftovers are
+   * never another's, and no effect clearing them on a switch can wipe what
+   * the next session's bar has just published.
+   */
+  const [extrudeDraftState, setExtrudeDraftState] = useState<{
+    session: string;
+    state: ExtrudeCommandState;
+  } | null>(null);
+  const regionExtrudeState =
+    extrudeDraftState && extrudeDraftState.session === extrudeSessionKey
+      ? extrudeDraftState.state
+      : null;
+  /**
+   * The bar's distance as a number, for the region arrow to stand at when
+   * it is rebuilt (a new choice), rather than back at its last drag.
+   */
+  const regionDraftDistance = useRef<number | null>(null);
+  /** The text the open Extrude keypad last left its value at. */
+  const regionKeypadText = useRef<{
+    valueId: ExtrudeValueId;
+    text: string;
+  } | null>(null);
+  /** Why the open Extrude keypad's entry does not evaluate (Done waits). */
+  const [regionExtrudeEntryError, setRegionExtrudeEntryError] = useState<
+    string | null
+  >(null);
   const extrudeEditRequest = useRef(0);
   const reusableRegionExtrudePreview = useRef<ResolvedExtrudePreview | null>(
     null
@@ -4340,18 +4583,18 @@ export function App() {
   function runPattern(
     command: AnyCommand,
     options: ValidatedFeatureRunOptions
-  ): void {
+  ): Promise<ValidatedFeatureOutcome> {
     const reservation = validatedFeature.reserve();
     if (!reservation) {
       setStatus(
         'Another exact operation is still finishing. Try again once it completes.'
       );
-      return;
+      return Promise.resolve('busy');
     }
     const abort = new AbortController();
     patternAbortRef.current = abort;
     setPatternProgress({ name: options.featureName });
-    void executeValidatedFeature(command, {
+    return executeValidatedFeature(command, {
       ...options,
       reservation,
       signal: abort.signal,
@@ -4406,13 +4649,6 @@ export function App() {
               warning ??
                 (valid ? null : 'This extrusion did not produce a valid body.')
             );
-          } else if (edgeFormCandidate.current) {
-            setEdgeFormPreviewRefused(!valid);
-            setFeatureFormError(
-              valid
-                ? null
-                : (warning ?? 'This size did not produce a valid body.')
-            );
           }
           // In the card's own verb: with a tool open this is its create
           // card, whose button says Create; an edit card's says Apply.
@@ -4429,9 +4665,6 @@ export function App() {
         const message = errorMessage(error, 'Unable to preview this size.');
         if (edgeFormCandidate.current?.extrude) {
           setFeatureFormError(message);
-        } else if (edgeFormCandidate.current) {
-          setEdgeFormPreviewRefused(true);
-          setFeatureFormError(message);
         }
         setStatus(message);
       },
@@ -4443,7 +4676,6 @@ export function App() {
   useEffect(() => {
     edgeFormPreview.clear();
     edgeFormCandidate.current = null;
-    setEdgeFormPreviewRefused(false);
     return () => edgeFormPreview.clear();
   }, [
     edgeFormPreview,
@@ -4452,38 +4684,6 @@ export function App() {
     tool,
     requestedFeatureNodeId
   ]);
-
-  function previewEdgeForm(
-    feature: FeatureNode | null,
-    kind: 'fillet' | 'chamfer',
-    value: EdgeModifierFormValue | null
-  ) {
-    // A new value has not been refused yet.
-    setEdgeFormPreviewRefused(false);
-    if (!value || geometryBusy) {
-      edgeFormPreview.clear();
-      setEdgeFormSize(null);
-      return;
-    }
-    try {
-      const command = edgeModifierCommand(feature, kind, value);
-      const bodyId =
-        feature?.bodyId ??
-        ('ids' in command.payload ? command.payload.ids?.bodyId : undefined);
-      if (!bodyId || !managerRef.current) return;
-      command.validate(managerRef.current.document);
-      edgeFormCandidate.current = { command, bodyId };
-      const size = resolveParamValue(
-        value.size,
-        getParameterScope(managerRef.current.document).scope
-      );
-      setEdgeFormSize(size);
-      edgeFormPreview.request(size);
-    } catch (error) {
-      edgeFormPreview.clear();
-      setStatus(errorMessage(error, 'Unable to preview this size.'));
-    }
-  }
 
   function previewExtrudeForm(
     feature: FeatureNode,
@@ -4543,67 +4743,6 @@ export function App() {
     });
   }
 
-  function applyEdgeForm(
-    feature: FeatureNode | null,
-    kind: 'fillet' | 'chamfer',
-    value: EdgeModifierFormValue
-  ) {
-    if (geometryBusy) return;
-    const editSession = editCardSessionRef.current;
-    // K05 on-demand probe: a pick made before the demanded rebuild arrived
-    // carries no lineage name, so the form holds no `edgeReferences` at all
-    // (they are all-or-nothing). Re-read CURRENT lineage by hash at commit
-    // time and use it only when every picked edge resolves to a named
-    // reference for that same hash; otherwise commit exactly what the form
-    // holds.
-    const formBody =
-      representations[value.targetBodyId] ??
-      renderedRepresentations[value.targetBodyId];
-    const namedReferences = refreshEdgeFormReferencesForCommit(
-      formBody,
-      value.edgeHashes,
-      value.edgeReferences
-    );
-    const refreshedValue = {
-      ...(namedReferences
-        ? { ...value, edgeReferences: namedReferences }
-        : value),
-      // Edits keep their name; a new fillet is numbered past any other.
-      name: feature ? value.name : newFeatureName(value.name)
-    };
-    const command = edgeModifierCommand(feature, kind, refreshedValue);
-    const bodyId =
-      feature?.bodyId ??
-      ('ids' in command.payload ? command.payload.ids?.bodyId : undefined);
-    if (!bodyId || !doc) return;
-    // As for Extrude: the preview stays until the commit or a refusal.
-    edgeFormPreview.stop();
-    setEdgeFormSize(null);
-    void executeValidatedFeature(command, {
-      featureName: refreshedValue.name,
-      resultBodyId: bodyId,
-      ...(feature
-        ? {
-            targets: affectedFeatureTargets(doc, feature.featureId).map(
-              (target, index) =>
-                index === 0 ? { ...target, featureName: value.name } : target
-            )
-          }
-        : {}),
-      successMessage: `${refreshedValue.name} applied.`,
-      onSuccess: () => {
-        edgeFormPreview.clear();
-        if (feature) finishFeatureEdit(feature, editSession);
-        else finishFeatureCreation();
-      },
-      ...(feature
-        ? { cancelled: () => !editSessionIsCurrent(feature, editSession) }
-        : {})
-    }).then((outcome) => {
-      if (outcome !== 'committed') edgeFormPreview.clear();
-    });
-  }
-
   /**
    * Checksums of imports between their blob write and their commit decision.
    * Content addressing puts a re-import of the same file on the same key, so
@@ -4637,15 +4776,71 @@ export function App() {
     (cloudProjectIds.has(doc.projectId) ||
       remoteVersionsRef.current.has(doc.projectId))
   );
+  // A member's copy of someone else's end-to-end encrypted project (ADR-024
+  // slice 5-4): its edits go through the encrypted store, which writes only
+  // on top of the head it read, not through the plaintext room. What the
+  // member may do comes from the project's MLS roles, not the room.
+  const encryptedMemberProject = Boolean(
+    !shareSession &&
+    activeProjectIsCloud &&
+    session &&
+    doc &&
+    doc.ownerUserId !== session.userId &&
+    isEncryptedProject(doc.projectId)
+  );
+  const encryptedMemberRole = useEncryptedMemberRole(
+    encryptedMemberProject ? (doc?.projectId ?? null) : null,
+    encryptedMemberProject
+  );
+  const encryptedMemberRoleRef = useRef(encryptedMemberRole);
+  encryptedMemberRoleRef.current = encryptedMemberRole;
+  // Why an encrypted member cannot edit, if it cannot: a viewer, or a role
+  // not known yet.
+  const encryptedMemberEditReason = !encryptedMemberProject
+    ? null
+    : encryptedMemberRole === 'viewer'
+      ? 'This shared project is read-only'
+      : encryptedMemberRole === null
+        ? 'Waiting for project access'
+        : null;
   // Member edits use the lease-checked room. The account document endpoint
-  // deliberately refuses editor writes while leases are enforced.
+  // deliberately refuses editor writes while leases are enforced. An
+  // encrypted member's are the account's own writes (above).
   const sharedAccountProject = Boolean(
     !shareSession &&
     activeProjectIsCloud &&
     session &&
-    doc?.ownerUserId !== session.userId
+    doc?.ownerUserId !== session.userId &&
+    !encryptedMemberProject
   );
 
+  // An end-to-end encrypted project's room relays ciphertext (ADR-024
+  // slice 4-9), and every version the room accepts is already the account's.
+  // Its owner's devices join under personal sync or sharing; its members
+  // (slice 5-6) under sharing, as a plaintext project's members do: editors
+  // submit, viewers receive.
+  const encryptedRoomProject = isEncryptedProject(doc?.projectId);
+  // The top bar's encryption indicator (ADR-024 Phase 4): the page's own
+  // marker, or the listed summary, since a project opened directly may
+  // have no summary and one listed may not have been loaded through the
+  // encrypted store yet.
+  const encryptedProjectOpen = Boolean(
+    doc &&
+    (encryptedRoomProject ||
+      projects.some(
+        (project) =>
+          project.projectId === doc.projectId &&
+          project.storageFormat === PROJECT_STORAGE_FORMAT_E2EE_V1
+      ))
+  );
+  const encryptionStatus = useEncryptionStatus(
+    encryptedProjectOpen ? (doc?.projectId ?? null) : null
+  );
+  const openProjectId = doc?.projectId ?? null;
+  // Another project's outcome is forgotten once it is no longer open.
+  useEffect(() => {
+    retainEncryptionStatus(openProjectId);
+  }, [openProjectId]);
   const collaboration = useCollaboration({
     enabled: cloudFunctionsEnabled,
     document: doc,
@@ -4653,15 +4848,23 @@ export function App() {
     // account credentials to a collaboration room after this exact project has
     // been resolved as a cloud-backed document. Desktop exchanges its native
     // bearer credential for a short-lived, one-use WebSocket ticket.
-    // The live room comes to encrypted projects with ADR-024 slice 4-9;
-    // until then the browser does not connect for format 2.
     session:
       activeProjectIsCloud &&
       cloudAvailable &&
       liveCollaborationEnabled &&
-      !isEncryptedProject(doc?.projectId)
+      (!encryptedMemberProject || projectSharingEnabled)
         ? session
         : null,
+    encrypted: encryptedRoomProject,
+    onAccountVersion(projectId, version) {
+      // The room wrote this browser's version to the account: that is the
+      // fence the next account write (should the room drop) builds on.
+      remoteVersionsRef.current.set(projectId, version);
+      cloudProjectAutosaveRef.current?.adoptAccountVersion(projectId, version);
+      if (managerRef.current?.document.version === version) {
+        setSaveState('synced');
+      }
+    },
     onRemoteDocument(incomingDocument, context) {
       const current = managerRef.current?.document;
       // An unsolicited broadcast at or behind the local version is this
@@ -4705,14 +4908,30 @@ export function App() {
         }
       })();
       const controller = cloudProjectAutosaveRef.current;
-      const accountVersion =
-        controller?.syncedVersion ??
-        remoteVersionsRef.current.get(remoteDocument.projectId) ??
-        null;
+      // An encrypted room's version is the account's: the room wrote it
+      // there before relaying it (ADR-024 slice 4-9). A local merge the room
+      // has not acknowledged yet is not: the account still holds the head it
+      // builds on, so a refused or lost resubmission falls back to autosave.
+      const encryptedAccountVersion =
+        context?.accountVersion ?? remoteDocument.version;
+      if (encryptedRoomProject) {
+        remoteVersionsRef.current.set(
+          remoteDocument.projectId,
+          encryptedAccountVersion
+        );
+      }
+      const accountVersion = encryptedRoomProject
+        ? encryptedAccountVersion
+        : (controller?.syncedVersion ??
+          remoteVersionsRef.current.get(remoteDocument.projectId) ??
+          null);
       if (
         controller &&
         accountVersion !== null &&
-        remoteDocument.ownerUserId === sessionRef.current?.userId
+        // An encrypted member's autosave writes the account too (slice
+        // 5-4), so it follows the account's version the room relays.
+        (encryptedRoomProject ||
+          remoteDocument.ownerUserId === sessionRef.current?.userId)
       ) {
         controller.adoptAccountVersion(
           remoteDocument.projectId,
@@ -4736,6 +4955,20 @@ export function App() {
     }
   });
 
+  // The room's role notice (slice 5-6) or this browser's own refusal to
+  // seal moved an encrypted member's role: the page guard reads the MLS
+  // roles again rather than wait for its next poll (a removal closes the
+  // socket, which clears the room's role).
+  const encryptedRoomRole = encryptedMemberProject ? collaboration.role : null;
+  const encryptedRoomRoleProjectId = encryptedMemberProject
+    ? (doc?.projectId ?? null)
+    : null;
+  useEffect(() => {
+    if (encryptedRoomRoleProjectId) {
+      refreshEncryptedMemberRole(encryptedRoomRoleProjectId);
+    }
+  }, [encryptedRoomRole, encryptedRoomRoleProjectId]);
+
   const activeCollaborationLease = Boolean(
     collaboration.lease &&
     collaboration.lease.projectId === doc?.projectId &&
@@ -4747,24 +4980,85 @@ export function App() {
     session &&
     doc.ownerUserId !== session.userId
   );
+  // Being moved to encrypted storage (ADR-024 Phase 7): held in View like a
+  // read-only seat, since the account refuses its writes meanwhile and the
+  // encrypted copy that replaces it would not carry them.
+  const projectMigrating = Boolean(
+    doc && migrationLockedProjectIds.has(doc.projectId)
+  );
+  // An open plaintext cloud project this account owns learns at once when
+  // another tab or device starts encrypting it, not only once a save is
+  // refused (none is, with cloud autosave off, and one is only after the
+  // debounce with it on): its room closing for the move, and its migration
+  // status asked on open, on focus and now and then; meanwhile its cloud
+  // autosave sends nothing (`projectMigrationWatch.ts`). Whether it is
+  // plaintext is the document the workspace loaded, not the format cache:
+  // a listing that learned of a finished cutover leaves the stale plaintext
+  // locked until the project is closed or reopened (#924 review).
+  useOpenProjectMigrationWatch({
+    projectId: openProjectId,
+    ownedCloudProject: Boolean(
+      doc &&
+      session &&
+      !shareSession &&
+      activeProjectIsCloud &&
+      doc.ownerUserId === session.userId
+    ),
+    encryptedNow: encryptedProjectOpen,
+    userId: session?.userId ?? null,
+    autosave: cloudProjectAutosaveRef
+  });
+  const migrationEditReason = projectMigrating
+    ? 'This project is being end-to-end encrypted'
+    : null;
+  // Said once, where the eye goes, and kept for as long as it lasts, as the
+  // second tab's notice is.
+  const migrationNoticeShownRef = useRef(false);
+  useEffect(() => {
+    if (projectMigrating && !projectOpenElsewhere) {
+      migrationNoticeShownRef.current = true;
+      setStatus(PROJECT_MIGRATING_NOTICE, { sticky: true });
+    } else if (!projectMigrating && migrationNoticeShownRef.current) {
+      migrationNoticeShownRef.current = false;
+      setStatus(
+        'Editing is unlocked: this project is no longer being encrypted.'
+      );
+    }
+  }, [projectMigrating, projectOpenElsewhere, setStatus]);
   // A read-only share has no build workspace to offer, so the mode switch is
   // pinned to View rather than presenting a Build mode that refuses every
   // edit. A shared-link session locks Build for its own reason: the visitor's
   // workspace is the parameters, and Make a copy is the road to Build.
-  const buildModeDisabledReason = shareSession
+  const seatBuildModeDisabledReason = shareSession
     ? 'This is a shared link — Make a copy to open Build mode'
-    : !sharedProjectDisabled &&
-        cloudAvailable &&
-        session &&
-        projectSharingEnabled &&
-        (collaboration.role === 'viewer' ||
-          collaboration.status === 'read-only')
-      ? 'This shared project is read-only'
-      : null;
+    : !sharedProjectDisabled && encryptedMemberEditReason
+      ? // An encrypted member who may not edit (a viewer, or one whose role
+        // is not known, or no longer exists) is held in View, as a
+        // read-only collaborator is (slice 5-4).
+        encryptedMemberEditReason
+      : !sharedProjectDisabled &&
+          cloudAvailable &&
+          session &&
+          projectSharingEnabled &&
+          (collaboration.role === 'viewer' ||
+            collaboration.status === 'read-only')
+        ? 'This shared project is read-only'
+        : null;
+  const buildModeDisabledReason =
+    !shareSession && migrationEditReason
+      ? migrationEditReason
+      : seatBuildModeDisabledReason;
   // A parameter change is still a document edit, so a read-only seat locks
   // Tweak exactly as it locks Build. A shared link is the opposite: Tweak is
   // the whole point of the visit.
-  const tweakModeDisabledReason = shareSession ? null : buildModeDisabledReason;
+  // An encrypted link's verified statement says view or tweak (slice 5-11):
+  // a view-only link locks Tweak too. A plaintext link's visitor chooses.
+  const shareLinkViewOnly = shareSession?.encryptedMode === 'view';
+  const tweakModeDisabledReason = shareSession
+    ? shareLinkViewOnly
+      ? 'This link is view only — Make a copy to change its parameters'
+      : null
+    : buildModeDisabledReason;
   // The stored preference resolves against what the project allows: a
   // read-only share pins the workspace to View whatever this device prefers,
   // and a shared link lands in Tweak unless the visitor chose View.
@@ -4775,7 +5069,7 @@ export function App() {
     ? 'Drawings are not available on a shared link'
     : null;
   const resolvedWorkspaceMode: WorkspaceMode = shareSession
-    ? panelState.workspaceMode === 'view'
+    ? panelState.workspaceMode === 'view' || shareLinkViewOnly
       ? 'view'
       : 'tweak'
     : buildModeDisabledReason !== null
@@ -4836,7 +5130,7 @@ export function App() {
   // Conditions that lock the document whatever workspace is showing. Tweak's
   // parameter edits answer to these too: a second tab or a read-only
   // collaboration seat locks parameters as firmly as features.
-  const projectEditDisabledReason = projectOpenElsewhere
+  const seatEditDisabledReason = projectOpenElsewhere
     ? 'This project is open in another tab'
     : shareSession
       ? // A shared-link session has no account seat, no lease and no second
@@ -4844,24 +5138,32 @@ export function App() {
         null
       : sharedProjectDisabled
         ? 'Project sharing is disabled in Settings'
-        : !activeProjectIsCloud ||
-            !cloudAvailable ||
-            !session ||
-            !projectSharingEnabled
-          ? null
-          : collaboration.conflict
-            ? 'Resolve the collaboration conflict before editing'
-            : collaboration.role === 'viewer' ||
-                collaboration.status === 'read-only'
-              ? 'This shared project is read-only'
-              : collaboration.role === null
-                ? 'Waiting for project access'
-                : collaborationRollout.editLeasesEnforced &&
-                    !activeCollaborationLease
-                  ? collaboration.status === 'lease-denied'
-                    ? 'Another collaborator holds the edit lease'
-                    : 'Waiting for the project edit lease'
-                  : null;
+        : encryptedMemberProject
+          ? encryptedMemberEditReason
+          : !activeProjectIsCloud ||
+              !cloudAvailable ||
+              !session ||
+              !projectSharingEnabled
+            ? null
+            : collaboration.conflict
+              ? 'Resolve the collaboration conflict before editing'
+              : collaboration.role === 'viewer' ||
+                  collaboration.status === 'read-only'
+                ? 'This shared project is read-only'
+                : collaboration.role === null
+                  ? 'Waiting for project access'
+                  : collaborationRollout.editLeasesEnforced &&
+                      !activeCollaborationLease
+                    ? collaboration.status === 'lease-denied'
+                      ? 'Another collaborator holds the edit lease'
+                      : 'Waiting for the project edit lease'
+                    : null;
+  // Being encrypted locks the document as firmly as a second tab does; the
+  // second tab keeps its own notice.
+  const projectEditDisabledReason =
+    !projectOpenElsewhere && !shareSession && migrationEditReason
+      ? migrationEditReason
+      : seatEditDisabledReason;
   // View mode joins the same guard every other modeling edit uses. Project
   // rename has its own mode-aware guard below because it is workspace metadata:
   // owners may change it from either mode, while editors remain Build-only.
@@ -5243,8 +5545,30 @@ export function App() {
           setStatus(
             'The account copy needs repair. Your work remains saved on this device; click Repair needed to retry.'
           );
+        } else if (
+          status.state === 'refused' &&
+          status.projectId &&
+          status.error instanceof ApiError &&
+          status.error.code === PROJECT_MIGRATING_CODE
+        ) {
+          // Being encrypted (ADR-024 Phase 7): the workspace locks editing
+          // until the account says the staging was abandoned, and keeps
+          // the lock's own notice.
+          noteProjectMigrating(status.projectId);
+          if (!projectOpenElsewhereRef.current) {
+            setStatus(PROJECT_MIGRATING_NOTICE, { sticky: true });
+          }
         } else if (status.state === 'refused') {
           setStatus(errorMessage(status.error, PROJECT_TOO_LARGE_FOR_ACCOUNT));
+          // A write refused as read-only: an encrypted member was demoted
+          // (slice 5-4). Its page re-reads the role and locks editing.
+          if (
+            status.projectId &&
+            status.error instanceof ApiError &&
+            status.error.code === 'E2EE_PROJECT_READ_ONLY'
+          ) {
+            refreshEncryptedMemberRole(status.projectId);
+          }
         }
       },
       onSynced({ projectId, version }) {
@@ -5317,6 +5641,45 @@ export function App() {
     session,
     shareSession,
     sharedAccountProject
+  ]);
+
+  // An encrypted room that stops relaying (offline, refused, too large, no
+  // lease) after it carried this project's edits leaves the account to
+  // autosave, which picks up the open version the room did not store
+  // (ADR-024 slice 4-9). A room that never went live changes nothing.
+  const encryptedRoomCarriedRef = useRef<string | null>(null);
+  useEffect(() => {
+    const projectId = doc?.projectId ?? null;
+    if (!encryptedRoomProject || sharedAccountProject || !projectId) {
+      encryptedRoomCarriedRef.current = null;
+      return;
+    }
+    if (collaboration.status === 'live') {
+      encryptedRoomCarriedRef.current = projectId;
+      return;
+    }
+    if (
+      encryptedRoomCarriedRef.current !== projectId ||
+      ['connecting', 'conflict', 'read-only'].includes(collaboration.status)
+    ) {
+      return;
+    }
+    encryptedRoomCarriedRef.current = null;
+    const controller = cloudProjectAutosaveRef.current;
+    const current = managerRef.current?.document;
+    if (
+      controller &&
+      controller.syncedVersion !== null &&
+      current?.projectId === projectId &&
+      !controller.holdsDocument(current)
+    ) {
+      controller.schedule(current);
+    }
+  }, [
+    doc?.projectId,
+    encryptedRoomProject,
+    sharedAccountProject,
+    collaboration.status
   ]);
 
   useEffect(() => {
@@ -6134,31 +6497,6 @@ export function App() {
   // worker, so the faces this document names have to be parsed here too.
   const textFontsVersion = useDocumentFonts(doc ?? null);
 
-  /**
-   * Face lists name a face after the feature that made it ("Box 2 · top").
-   * The namer is its own chunk, kept out of the entry: it starts loading as
-   * the app comes up, long before any face list opens, and until it lands
-   * (or if it never does) a list keeps the viewport's names.
-   */
-  const [faceNamerFor, setFaceNamerFor] = useState<
-    ((document: ProjectDocument) => FaceNamer) | null
-  >(null);
-  useEffect(() => {
-    let live = true;
-    import('./lib/faceProducerName')
-      .then((module) => {
-        if (live) setFaceNamerFor(() => module.faceNamerFor);
-      })
-      .catch(() => undefined);
-    return () => {
-      live = false;
-    };
-  }, []);
-  const faceNamer = useMemo(
-    () => (doc && faceNamerFor ? faceNamerFor(doc) : undefined),
-    [doc, faceNamerFor]
-  );
-
   const representations = useMemo(
     () => doc?.derived.bodyRepresentations ?? {},
     [doc?.derived.bodyRepresentations]
@@ -6728,10 +7066,24 @@ export function App() {
     return true;
   }
 
+  /** The extrude being edited in place, as the document has it now. */
+  const extrudeEditFeature = useMemo(() => {
+    const feature = doc && extrudeEdit ? findFeature(doc, extrudeEdit.featureId) : null;
+    return feature?.data.featureKind === 'extrude' ? feature : null;
+  }, [doc, extrudeEdit]);
+  /** What it opens on: memoized, so its to-face target keeps its identity. */
+  const extrudeEditInitialDraft = useMemo(
+    () => (extrudeEditFeature ? extrudeEditInitial(extrudeEditFeature) : null),
+    // Opened once per arming; a later change to the feature is the edit's.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [extrudeEdit]
+  );
   const availableExtrudeTargets = useMemo(
     () =>
-      doc && selectedFeature ? extrudeEditTargets(doc, selectedFeature) : [],
-    [doc, selectedFeature]
+      doc && extrudeEditFeature
+        ? extrudeEditTargets(doc, extrudeEditFeature)
+        : [],
+    [doc, extrudeEditFeature]
   );
 
   const selectedSketch = useMemo<SketchNode | null>(() => {
@@ -6804,6 +7156,27 @@ export function App() {
     }),
     [selectedBodyIds, selectedEdges, selectedFeature, selectedTopology]
   );
+  // ADR-024 Phase 6: an encrypted project's assistant reads it only with this
+  // account's per-project consent. Null (no gate) for a plaintext project.
+  // A project opened directly while the listing is unavailable has no
+  // summary; this page's own marker still says it is encrypted (#869).
+  const assistantProject:
+    | Pick<ProjectSummary, 'projectId' | 'storageFormat'>
+    | undefined = doc
+    ? (projects.find((project) => project.projectId === doc.projectId) ??
+      (isEncryptedProject(doc.projectId)
+        ? {
+            projectId: doc.projectId,
+            storageFormat: PROJECT_STORAGE_FORMAT_E2EE_V1
+          }
+        : undefined))
+    : undefined;
+  const assistantConsent = useAssistantConsentGate(
+    session?.userId ?? null,
+    cloudFunctionsEnabled && appSettings.assistant.enabled
+      ? assistantProject
+      : undefined
+  );
 
   const edgeModifierBody = useMemo<BodyRepresentation | null>(() => {
     const candidateId =
@@ -6857,9 +7230,6 @@ export function App() {
         : new Set<FeatureId>(),
     [doc, featureAttribution]
   );
-  // Viewport-hidden bodies export unless this is switched off; the dialog
-  // reports the count either way, so the choice is never silent.
-  const [exportIncludesHidden, setExportIncludesHidden] = useState(true);
   const { exportBodyIds, exportWithheldMessage, exportScopeInfo } = useMemo<{
     exportBodyIds: BodyId[];
     exportWithheldMessage: string | null;
@@ -6882,15 +7252,11 @@ export function App() {
     const scope = exportScope(
       Object.values(doc.derived.bodyRepresentations).map((body) => ({
         bodyId: body.bodyId,
-        exportable:
-          body.exportableStep &&
-          !body.consumed &&
-          !parameterHiddenBodyIds.has(body.bodyId),
-        hidden: localHiddenBodyIds.has(body.bodyId),
+        exportable: body.exportableStep && !body.consumed,
+        hidden: hiddenBodyIds.has(body.bodyId),
         withheld: failedHistoryBodies.has(body.bodyId)
       })),
-      selectedBody?.bodyId ?? null,
-      exportIncludesHidden
+      selectedBody?.bodyId ?? null
     );
     const withheld = scope.withheldIds.flatMap((bodyId) => {
       const entry = failedHistoryBodies.get(bodyId as BodyId);
@@ -6905,24 +7271,21 @@ export function App() {
     failedHistoryBodies,
     doc,
     selectedBody,
-    parameterHiddenBodyIds,
-    localHiddenBodyIds,
-    exportIncludesHidden,
+    hiddenBodyIds,
     tweakMode,
     parameterModelError,
     currentGeometrySnapshot,
     currentFaceGeometryPreview
   ]);
   // What the one-click STEP controls name: the selected body, or the
-  // all-bodies scope whenever hidden bodies are in it or left out of it.
+  // visible-body scope whenever hidden bodies are left out of it.
   const exportControlScope =
     exportScopeInfo?.selection && selectedBody
       ? selectedBody.name
-      : exportScopeInfo &&
-          (exportScopeInfo.hiddenIncluded > 0 ||
-            exportScopeInfo.hiddenExcluded > 0)
+      : exportScopeInfo && exportScopeInfo.hiddenExcluded > 0
         ? exportScopeLabel(exportScopeInfo)
         : null;
+  const emptyExportReason = emptyExportMessage(exportScopeInfo);
 
   /**
    * What the current selection is, and the figure that goes with it.
@@ -7127,6 +7490,19 @@ export function App() {
     viewerBodies: completedViewerBodies,
     setStatus
   });
+  /** What a Move launched now would act on, read live by a held launch: the
+   * project and selection (a replaced project can share an empty one), and
+   * which command holds the lane, so Measure, a tool or a sketch taken up
+   * meanwhile drops it as surely as another launch would. */
+  const moveSourceRef = useRef('');
+  moveSourceRef.current = [
+    doc?.projectId ?? '',
+    selectedBodyIds.join(','),
+    selectedSketch?.sketchId ?? '',
+    tool ?? '',
+    measuring ? 'measuring' : '',
+    interaction.mode
+  ].join('|');
 
   // Sketch profiles lifted onto their 3D planes for the viewport overlay.
   const sketchOverlays = useMemo<SketchOverlay[]>(() => {
@@ -7446,6 +7822,67 @@ export function App() {
       ? 'edit'
       : 'details';
   })();
+  // Why the pick cannot seed a datum, by the rules the Plane and Axis cards
+  // apply to it (datumFaceSourceFromPick, datumAxisEdgeFromPick,
+  // datumAxisFaceFromPick): a rebuildable identity, and a straight edge.
+  const calloutDatumRefusal = ((): string | null => {
+    const lost = (what: string, datum: string) =>
+      `This ${what} has no identity a rebuild can find again, so ${datum} cannot follow it.`;
+    if (calloutKind === 'face' && renderedSelectedTopology) {
+      const face = representations[
+        renderedSelectedTopology.bodyId
+      ]?.topology?.faces.find(
+        (candidate) => candidate.hash === renderedSelectedTopology.hash
+      );
+      const surface = face?.geometry?.surfaceType.toLowerCase();
+      if (surface === 'cylinder' || surface === 'cone') {
+        return face?.reference ? null : lost('face', 'an axis');
+      }
+      const attachment = faceSketchAttachment({
+        bodyId: renderedSelectedTopology.bodyId,
+        pickedHash: renderedSelectedTopology.hash,
+        face
+      });
+      return attachment.ok &&
+        attachment.planeRef.type === 'face' &&
+        attachment.planeRef.sourceCentroid
+        ? null
+        : lost('face', 'a plane');
+    }
+    if (calloutKind === 'edges') {
+      // The edge the Axis card takes: the last one picked.
+      const picked =
+        renderedSelectedTopology?.kind === 'edge'
+          ? renderedSelectedTopology
+          : selectedEdges.at(-1);
+      const edge = picked
+        ? representations[picked.bodyId]?.topology?.edges.find(
+            (candidate) => candidate.hash === picked.hash
+          )
+        : undefined;
+      const reference = edge?.reference;
+      if (!reference) return lost('edge', 'an axis');
+      return reference.witness.closed ||
+        !/^line$/i.test(reference.witness.curveType)
+        ? 'An axis runs along a straight edge; this edge is curved.'
+        : null;
+    }
+    return null;
+  })();
+  // The picked face's kind, for the verbs when the machine does not hold it.
+  const calloutFaceSurface = ((): SelectionCalloutVerbInput['faceSurface'] => {
+    if (calloutKind !== 'face' || !renderedSelectedTopology) return undefined;
+    const surface = representations[renderedSelectedTopology.bodyId]?.topology
+      ?.faces.find(
+        (candidate) => candidate.hash === renderedSelectedTopology.hash
+      )
+      ?.geometry?.surfaceType.toLowerCase();
+    if (!surface) return undefined;
+    if (surface === 'plane') return 'planar';
+    return surface === 'cylinder' || surface === 'cone'
+      ? 'cylindrical'
+      : 'other';
+  })();
   const calloutVerbsKey =
     calloutKind && calloutInteractive
       ? JSON.stringify([
@@ -7457,6 +7894,8 @@ export function App() {
               interaction.mode === 'face' &&
               Boolean(interaction.target.resizeBodyFeatureId),
             pressedAction: calloutPressedAction,
+            datumRefusal: calloutDatumRefusal,
+            faceSurface: calloutFaceSurface,
             availability: shownAvailability
           }),
           ...(calloutImportedFace === 'edit'
@@ -7466,6 +7905,18 @@ export function App() {
               : [])
         ])
       : '[]';
+  // The pick as an identity, for the card's per-pick state (its More fold).
+  const calloutPickKey = JSON.stringify([
+    renderedSelectedTopology
+      ? [
+          renderedSelectedTopology.kind,
+          renderedSelectedTopology.bodyId,
+          renderedSelectedTopology.topologyId ?? renderedSelectedTopology.hash
+        ]
+      : null,
+    selectedEdges.map((edge) => [edge.bodyId, edge.topologyId ?? edge.hash]),
+    selectedBodyIds
+  ]);
   const selectionCallout = useMemo<SelectionCalloutContent | null>(() => {
     const onVerb = (id: SelectionCalloutVerbId) =>
       selectionCalloutVerbRef.current(id);
@@ -7508,6 +7959,7 @@ export function App() {
         ? { detail: selectionSummary.detail }
         : {}),
       verbs,
+      pickKey: calloutPickKey,
       anchor: 'selection',
       onVerb,
       onClear: () => clearSelectionRef.current()
@@ -7518,6 +7970,7 @@ export function App() {
     selectionSummary,
     selectedBodyIds,
     calloutVerbsKey,
+    calloutPickKey,
     calloutInteractive
   ]);
 
@@ -7598,6 +8051,9 @@ export function App() {
     // Sessions and numeric drafts refer to ids in the previous document.
     // Hydration may preserve the camera, never an armed sketch or handle.
     cancelDirectManipulationRef.current?.();
+    // So does an in-place command: a frame it built on the old document
+    // may carry the same version as the new one.
+    cancelInPlaceRef.current?.();
     patternAbortRef.current?.abort();
     setImportRun((current) => (current?.outcome ? null : current));
     exactEntryQueue.cancel();
@@ -7607,7 +8063,6 @@ export function App() {
     setSketchDimensionDraft(null);
     setSketchEditDraft(null);
     setModelingEditFeature(null);
-    setModelingCreateInitial(null);
     setFeatureFormError(null);
     clearAutoFrame();
     if (!geometry.retainReadyGeometry(normalized)) geometry.invalidate();
@@ -7682,6 +8137,14 @@ export function App() {
       return;
     }
     if (sharedAccountProject) return;
+    // Only an editor's copy of an encrypted project goes to the account; a
+    // viewer's never would be accepted (slice 5-4).
+    if (
+      encryptedMemberProject &&
+      encryptedMemberRoleRef.current !== 'editor'
+    ) {
+      return;
+    }
     // Nothing reaches the account until its device transaction has committed.
     // The displayed state stays Saving while any newer device write is pending.
     const controller = cloudProjectAutosaveRef.current;
@@ -7689,6 +8152,11 @@ export function App() {
       if (!newerQueued) setSaveState(cloudAvailable ? 'synced' : 'local');
     } else if (controller.holdsDocument(pending)) {
       if (!newerQueued) setSaveState('synced');
+    } else if (encryptedRoomProject && collaboration.status === 'live') {
+      // The encrypted room writes this version to the account itself
+      // (ADR-024 slice 4-9); a second, separately sealed copy would only
+      // race it. Should the room drop, the effect below hands it to autosave.
+      if (!newerQueued) setSaveState('syncing');
     } else {
       controller.schedule(pending);
     }
@@ -8038,17 +8506,20 @@ export function App() {
   function createValidatedFeature(
     command: AnyCommand,
     featureName: string,
-    resultBodyId: BodyId | undefined
-  ): void {
+    resultBodyId: BodyId | undefined,
+    /** True once the caller no longer wants it (its command closed). */
+    cancelled?: () => boolean
+  ): Promise<ValidatedFeatureOutcome> | undefined {
     if (!resultBodyId) {
       createFeature(command);
-      return;
+      return undefined;
     }
-    void executeValidatedFeature(command, {
+    return executeValidatedFeature(command, {
       featureName,
       resultBodyId,
       successMessage: commandOutcomeMessage(command.label),
-      onSuccess: finishFeatureCreation
+      onSuccess: finishFeatureCreation,
+      ...(cancelled ? { cancelled } : {})
     });
   }
 
@@ -8060,11 +8531,17 @@ export function App() {
     command: AnyCommand,
     feature: FeatureNode,
     featureName: string,
-    resultBodyId: BodyId | undefined = feature.bodyId
+    resultBodyId: BodyId | undefined = feature.bodyId,
+    /** Told whether the edit landed; an in-place edit waits on it. */
+    settled?: (committed: boolean) => void,
+    /** True once the caller no longer wants it (its command closed). */
+    withdrawn?: () => boolean
   ): void {
     const editSession = editCardSessionRef.current;
     if (!doc || !resultBodyId) {
-      if (executeCommand(command)) finishFeatureEdit(feature, editSession);
+      const committed = executeCommand(command);
+      if (committed) finishFeatureEdit(feature, editSession);
+      settled?.(Boolean(committed));
       return;
     }
     const run =
@@ -8086,8 +8563,13 @@ export function App() {
       ),
       successMessage: commandOutcomeMessage(command.label),
       onSuccess: () => finishFeatureEdit(feature, editSession),
-      cancelled: () => !editSessionIsCurrent(feature, editSession)
-    });
+      cancelled: () =>
+        !editSessionIsCurrent(feature, editSession) ||
+        Boolean(withdrawn?.())
+    }).then(
+      (outcome) => settled?.(outcome === 'committed'),
+      () => settled?.(false)
+    );
   }
 
   /**
@@ -8161,7 +8643,6 @@ export function App() {
     setSelectedEdges([]);
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(sketchId);
-    extrudeCommandProfiles.current = chosen;
     setSelectedProfiles(chosen);
     setTool(null);
     if (activeSketch) {
@@ -8186,7 +8667,36 @@ export function App() {
    * values were never applied is not left open under the new tool's card
    * (F15) — the user is asked once whether to apply or discard it.
    */
-  function launchTool(nextTool: ToolId, modelingFeature?: FeatureNode) {
+  function launchTool(
+    nextTool: ToolId,
+    modelingFeature?: FeatureNode,
+    panelLoadSettled = false
+  ) {
+    const launch = ++toolLaunchRef.current;
+    // Move's panel takes the selection card's place. Before its chunk has
+    // loaded (a launch that beats the idle warm-up, or Save-Data, which skips
+    // it) the swap left neither on screen, so the card stays up until the
+    // panel can render. A failed load launches anyway, to report it.
+    if (
+      nextTool === 'transform' &&
+      !panelLoadSettled &&
+      !LazyMoveOverlay.isLoaded()
+    ) {
+      // The launch belongs to the selection it was made from: one cleared or
+      // replaced while the panel loaded abandons it.
+      const source = moveSourceRef.current;
+      const relaunch = () => {
+        if (toolLaunchRef.current !== launch) return;
+        if (moveSourceRef.current !== source) return;
+        viewportMenuHandlersRef.current.launchTool(
+          nextTool,
+          modelingFeature,
+          true
+        );
+      };
+      LazyMoveOverlay.preload().then(relaunch, relaunch);
+      return;
+    }
     const current = managerRef.current?.document;
     if (modelingFeature && !current) return;
     const request = {
@@ -8234,7 +8744,17 @@ export function App() {
               z: current.target.point[2]
             }
           )
-        : null;
+        : // A face picked with direct manipulation off never arms the
+          // machine: the selection itself names it (a hole then starts at
+          // the face's middle, there being no click point to keep).
+          selectedTopology?.kind === 'face'
+          ? inPlaceFacePick(
+              selectedTopology.bodyId,
+              selectedTopology.topologyId,
+              selectedTopology.hash,
+              undefined
+            )
+          : null;
     // Faces a box swept first are a face-list command's faces, on one body;
     // the wider sweep is dropped so its highlights promise nothing more.
     const sweptFaces =
@@ -8253,16 +8773,687 @@ export function App() {
       const body = inPlaceBodyPick(bodyId);
       return body ? [body] : [];
     });
+    // Edges selected first (the selection card's Fillet, the edge's own
+    // context menu) are a fillet's or chamfer's edges, in pick order.
+    const initialEdges = IN_PLACE_TOOL_SPECS[tool].edgeMode
+      ? (current.mode === 'edges' ? current.edges : selectedEdges).flatMap(
+          (selection) => {
+            const edge = inPlaceEdgePick(
+              selection.bodyId,
+              selection.topologyId,
+              selection.hash
+            );
+            return edge ? [edge] : [];
+          }
+        )
+      : [];
+    // A solid offset takes a body, named by any of its faces: a body picked
+    // first (its Selection card's Solid offset) is that body, its handle on
+    // a flat face where it has one.
+    const bodyFace =
+      tool === 'solid-offset' && !selectedFace && initialBodies[0]
+        ? anyInPlaceFaceOf(initialBodies[0].bodyId)
+        : null;
     cancelPanel();
+    // A command takes the command slot alone: Measure ends as it would for
+    // any other tool, so the two never stack.
+    if (measuring && !modelingLocked) {
+      setMeasuring(false);
+      clearMeasurementPicks();
+    }
     // The command bar names each step; a status toast would say it twice,
     // on the same row.
     retireStatusMessage();
     inPlaceRef.current.start(
       tool,
       initial,
-      selectedFace ? [selectedFace] : sweptFaces,
-      initialBodies
+      selectedFace
+        ? [selectedFace]
+        : bodyFace
+          ? [bodyFace]
+          : sweptFaces,
+      initialBodies,
+      { edges: initialEdges }
     );
+    // A datum's sources: the face or edge selected first is its first.
+    const kinds = IN_PLACE_TOOL_SPECS[tool].refKinds;
+    if (kinds) {
+      const seed =
+        selectedTopology?.kind === 'face' || selectedTopology?.kind === 'edge'
+          ? { ...selectedTopology }
+          : null;
+      const at = lastPickDetailRef.current?.point ?? null;
+      void loadDatumPicks().then((picks) => {
+        const document = managerRef.current?.document;
+        if (!seed || !document || inPlaceRef.current.tool !== tool) return;
+        const ref =
+          seed.kind === 'face'
+            ? picks.faceRef(document, seed, kinds)
+            : picks.edgeRef(document, seed, at, kinds, 0);
+        if (!('reason' in ref)) inPlaceRef.current.pickRef(ref);
+      });
+    }
+  }
+
+  /** U09: the lazy datum pick module, loaded when a datum command starts. */
+  const datumPicksRef = useRef<typeof DatumPicks | null>(null);
+  function loadDatumPicks() {
+    return import('./lib/inPlace/datumPicks').then((module) => {
+      datumPicksRef.current = module;
+      return module;
+    });
+  }
+
+  /**
+   * Hands a datum pick to the running Plane or Axis, through the lazy pick
+   * module; a pick that cannot be a source says why in the status bar.
+   */
+  function pickDatumRef(
+    make: (
+      picks: typeof DatumPicks,
+      document: ProjectDocument
+    ) => RefPick | { reason: string }
+  ): boolean {
+    const command = inPlaceRef.current;
+    if (!command.active || !command.spec?.refKinds) return false;
+    const tool = command.tool;
+    void loadDatumPicks().then((picks) => {
+      const document = managerRef.current?.document;
+      if (!document || inPlaceRef.current.tool !== tool) return;
+      const ref = make(picks, document);
+      if ('reason' in ref) {
+        setStatus(ref.reason);
+        return;
+      }
+      inPlaceRef.current.pickRef(ref);
+    });
+    return true;
+  }
+
+  /**
+   * U09: a straight edge or a cylinder (or cone) clicked as the axis of a
+   * running turn or ring, or an edge or a flat face's normal as a linear
+   * pattern's direction, once what it acts on is picked. False leaves the
+   * click to name a body as before.
+   */
+  /** Why an edit's picked line is refused: it is built after the feature. */
+  function refusedLine(editing: InPlaceEditSeed): string {
+    return `${editing.name} can only turn about a line on what is built before it in History.`;
+  }
+  function pickInPlaceLine(selection: TopologySelection): boolean {
+    const command = inPlaceRef.current;
+    const spec = command.spec;
+    if (!spec || !(spec.axisPicks || spec.takeDirection)) return false;
+    if (
+      command.slots.bodies.length === 0 &&
+      command.slots.profiles.length === 0
+    ) {
+      return false;
+    }
+    // An edit's new axis is a datum just before the feature: a body made by
+    // it or later is not there yet (its result is on screen where its input
+    // was). A direction is numbers and reads anything shown.
+    if (
+      command.editing &&
+      !spec.takeDirection &&
+      !inPlaceEditMayUse(
+        producingFeatureOf({ bodyId: selection.bodyId }),
+        command.editing
+      )
+    ) {
+      setStatus(refusedLine(command.editing));
+      return true;
+    }
+    // A direction is stored as its numbers, so it may be read off the
+    // preview (a pattern's copies stand over the body); an axis is a datum
+    // on the body as History has it.
+    const committed = managerRef.current?.document ?? null;
+    const shown =
+      spec.takeDirection &&
+      previewDoc?.derived.bodyRepresentations[selection.bodyId]
+        ? previewDoc
+        : committed;
+    const topology =
+      shown?.derived.bodyRepresentations[selection.bodyId]?.topology;
+    if (selection.kind === 'edge') {
+      const edge = topology?.edges.find((edge) => edge.hash === selection.hash);
+      const witness = edge?.reference?.witness;
+      // Only a straight edge is a line; a curved one still names its body.
+      if (
+        !edge ||
+        (witness && (witness.closed || !/^line$/i.test(witness.curveType)))
+      ) {
+        return false;
+      }
+    } else {
+      const type = topology?.faces
+        .find((face) => face.hash === selection.hash)
+        ?.geometry?.surfaceType.toLowerCase();
+      const planar = type === 'plane';
+      const turns = type === 'cylinder' || type === 'cone';
+      if (!(turns && spec.axisPicks) && !(planar && spec.takeDirection)) {
+        return false;
+      }
+    }
+    // Its topology must be built by then too: a later feature's reshaping of
+    // an earlier body is not.
+    const editing = command.editing;
+    const reference =
+      selection.kind === 'edge'
+        ? topology?.edges.find((edge) => edge.hash === selection.hash)
+            ?.reference
+        : topology?.faces.find((face) => face.hash === selection.hash)
+            ?.reference;
+    if (
+      editing &&
+      !spec.takeDirection &&
+      reference &&
+      !inPlaceEditMayUse(reference.producingFeatureId, editing)
+    ) {
+      setStatus(refusedLine(editing));
+      return true;
+    }
+    const picked = { ...selection };
+    const tool = command.tool;
+    void loadDatumPicks().then((picks) => {
+      const current = inPlaceRef.current;
+      if (!shown || current.tool !== tool) return;
+      if (current.spec?.takeDirection) {
+        const direction =
+          picked.kind === 'edge'
+            ? picks.edgeDirection(shown, picked)
+            : picks.faceNormal(shown, picked);
+        if ('reason' in direction) setStatus(direction.reason);
+        else current.pickDirection(direction);
+        return;
+      }
+      const line =
+        picked.kind === 'edge'
+          ? picks.edgeAxisLine(shown, picked)
+          : picks.faceAxisLine(shown, picked);
+      if ('reason' in line) setStatus(line.reason);
+      else current.pickAxisLine(line);
+    });
+    return true;
+  }
+
+  /**
+   * Proves a datum the preview or commit built resolved: through the datum
+   * library once it has loaded, else by its published frame or line alone.
+   */
+  function checkNewDatum(
+    base: ProjectDocument | null | undefined,
+    derived: ProjectDocument['derived'],
+    featureId: FeatureId,
+    name: string,
+    kind: 'datum-plane' | 'datum-axis'
+  ): void {
+    const picks = datumPicksRef.current;
+    if (picks && base) {
+      picks.requireNewDatum(base, derived, featureId, name, kind);
+      return;
+    }
+    const resolved =
+      kind === 'datum-plane'
+        ? derived.datumFrames?.[featureId]
+        : derived.datumAxes?.[featureId];
+    if (!resolved) throw new Error(`${name} did not resolve.`);
+  }
+
+  /** Where a stored blend's handle stands: on its first lit blend face. */
+  function inPlaceBlendAnchor(
+    current: ProjectDocument,
+    feature: FeatureNode
+  ): { middle: Vector3; outward: Vector3 } | null {
+    const focus = historyFeatureFocus(current, feature, (bodyId) => {
+      const body = current.derived.bodyRepresentations[bodyId];
+      return Boolean(body && !body.consumed && !hiddenBodyIds.has(bodyId));
+    });
+    if (focus.kind !== 'focus') return null;
+    for (const selection of focus.faces) {
+      const geometry = current.derived.bodyRepresentations[
+        selection.bodyId
+      ]?.topology?.faces.find(
+        (face) =>
+          face.topologyId === selection.topologyId ||
+          face.hash === selection.hash
+      )?.geometry;
+      const middle = geometry?.centroid ?? geometry?.center;
+      if (middle && geometry?.normal) {
+        return { middle, outward: geometry.normal };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * A model edge as a fillet's or chamfer's edge slot holds it: its lineage
+   * name, and where its handles stand (the middle of its drawn polyline,
+   * pointing out of the body, and its far end).
+   */
+  function inPlaceEdgePick(
+    bodyId: string,
+    topologyId: string | undefined,
+    hash: number | undefined
+  ): EdgePick | null {
+    const body = representations[bodyId as BodyId];
+    const edge = body?.topology?.edges.find(
+      (candidate) =>
+        (topologyId !== undefined && candidate.topologyId === topologyId) ||
+        (hash !== undefined && candidate.hash === hash)
+    );
+    if (!body || !edge) return null;
+    const points = edge.points ?? [];
+    const box = inPlaceBodyPick(bodyId as BodyId);
+    const centre = box
+      ? {
+          x: (box.min.x + box.max.x) / 2,
+          y: (box.min.y + box.max.y) / 2,
+          z: (box.min.z + box.max.z) / 2
+        }
+      : { x: 0, y: 0, z: 0 };
+    // As the edge's own blend handle stands (`edgeHandlePlacement`): the
+    // polyline's middle sample, pointing away from the body's middle.
+    const at = Math.floor(points.length / 3 / 2) * 3;
+    const middle =
+      points.length >= 6
+        ? { x: points[at]!, y: points[at + 1]!, z: points[at + 2]! }
+        : null;
+    const away = middle
+      ? { x: middle.x - centre.x, y: middle.y - centre.y, z: middle.z - centre.z }
+      : null;
+    const reach = away ? Math.hypot(away.x, away.y, away.z) : 0;
+    const last = points.length >= 3 ? points.length - 3 : -1;
+    return {
+      bodyId: bodyId as BodyId,
+      hash: edge.hash,
+      topologyId: edge.topologyId,
+      ...(edge.reference ? { reference: edge.reference } : {}),
+      ...(middle && away
+        ? {
+            middle,
+            outward:
+              reach > 1e-9
+                ? { x: away.x / reach, y: away.y / reach, z: away.z / reach }
+                : { x: 0, y: 0, z: 1 }
+          }
+        : {}),
+      ...(last >= 0
+        ? {
+            end: { x: points[last]!, y: points[last + 1]!, z: points[last + 2]! }
+          }
+        : {})
+    };
+  }
+
+  /** The in-place command and seed for a stored feature, from `current`. */
+  function inPlaceEditSeedFor(current: ProjectDocument, feature: FeatureNode) {
+    return inPlaceEditSeed(feature, {
+      evaluate: (value) =>
+        evalParamValue(value, parameterScope.scope, current.units),
+      profile: (sketchId, reference) => {
+        // A section in a sketch made after the feature is a forward
+        // reference: it is not restored, and the slot asks for another.
+        if (
+          !featurePrecedes(producingFeatureOf({ sketchId }), feature.featureId)
+        ) {
+          return null;
+        }
+        const view = availableSketchViews.find(
+          (candidate) => candidate.sketchId === sketchId
+        );
+        if (!view) {
+          // A consumed sketch is hidden, so not drawn yet: the edit shows it
+          // once armed, and the stored reference stands until then.
+          return {
+            sketchId,
+            reference,
+            regionFingerprint:
+              reference.all === true ? 0 : reference.regionFingerprint
+          };
+        }
+        const [region] = regionsForReference(view, reference);
+        return region
+          ? { sketchId, reference, regionFingerprint: region.regionFingerprint }
+          : null;
+      },
+      firstRegion: (sketchId) =>
+        availableSketchViews.find((view) => view.sketchId === sketchId)
+          ?.regions[0]?.regionFingerprint ?? null,
+      face: (bodyId, hash, reference) => {
+        // As the feature rebuilds it: by lineage first, then the hash.
+        const found = resolveFace(representations[bodyId], { hash, reference });
+        const pick = found.ok
+          ? inPlaceFacePick(
+              bodyId,
+              found.entry.topologyId,
+              found.entry.hash,
+              undefined,
+              true
+            )
+          : null;
+        return pick && reference ? { ...pick, reference } : pick;
+      },
+      edge: (bodyId, hash, reference) => {
+        const found = resolveEdge(representations[bodyId], {
+          hash,
+          ...(reference ? { reference } : {})
+        });
+        const pick = found.ok
+          ? inPlaceEdgePick(bodyId, found.entry.topologyId, found.entry.hash)
+          : null;
+        if (pick?.middle) return pick;
+        // A consumed input may publish its edges without a drawn polyline:
+        // the handle then stands on the feature's own blend face, the one
+        // its History row lights, pointing into the body.
+        const blend = inPlaceBlendAnchor(current, feature);
+        return pick ? { ...pick, ...(blend ?? {}) } : null;
+      },
+      anyFace: (bodyId) => {
+        // A flat face carries the handle best; a body with none (a sphere)
+        // still names itself by any face it has.
+        const faces = representations[bodyId]?.topology?.faces ?? [];
+        const face =
+          faces.find((candidate) => candidate.geometry?.surfaceType === 'plane') ??
+          faces[0];
+        return face
+          ? inPlaceFacePick(bodyId, face.topologyId, face.hash, undefined, true)
+          : null;
+      },
+      curve: (sketchId, entityId) =>
+        sweepCurveExists(current, sketchId, entityId),
+      body: (bodyId) => inPlaceBodyPick(bodyId),
+      laterTransforms: laterInPlaceSteps(current, feature),
+      laterReshapes: laterDirectEdit(current, feature),
+      datumPlaneUsable: (featureId) =>
+        earlierDatumPlanes(current, feature.featureId).some(
+          (datum) => datum.featureId === featureId
+        ),
+      datumAxis: (featureId) => current.derived.datumAxes?.[featureId] ?? null,
+      bodyVertices: (bodyId) =>
+        representations[bodyId]?.mesh.vertices ?? null
+    });
+  }
+
+  /**
+   * U09 phase 7: re-arms the in-place command that made a stored feature,
+   * seeded from it, instead of opening its card. The feature stays pinned,
+   * so its History row and its readout stay on screen while it is edited.
+   * False when the feature has no in-place editor or cannot be edited now.
+   */
+  function startInPlaceEdit(feature: FeatureNode): boolean {
+    const current = managerRef.current?.document;
+    const tool = inPlaceToolForFeature(feature.data);
+    if (!current || !tool) return false;
+    // What a new feature needs on screen (two live bodies for a boolean,
+    // closed profiles for a loft) the stored feature already has, consumed.
+    const reason = toolDisabledReason(tool, {
+      ...availability,
+      liveBodyCount: Number.POSITIVE_INFINITY,
+      sketchCount: Number.POSITIVE_INFINITY,
+      closedProfileSketchCount: Number.POSITIVE_INFINITY
+    });
+    if (reason) {
+      setStatus(`${TOOL_META[tool].label}: ${reason}.`);
+      return false;
+    }
+    const armed = inPlaceEditSeedFor(current, feature);
+    if (!armed) return false;
+    // A running command (another edit, a create) gives way quietly.
+    inPlaceRef.current.cancel(true);
+    retireStatusMessage();
+    // Each arming is its own edit session, even of the same row: a Done
+    // still validating from the last one must not finish this one.
+    if (editCardSessionRef.current) {
+      editCardSessionRef.current = {
+        ...editCardSessionRef.current,
+        generation: editCardSessionRef.current.generation + 1
+      };
+    }
+    inPlaceRef.current.edit(armed.tool, armed.seed);
+    if (armed.seed.notice) setStatus(armed.seed.notice);
+    return true;
+  }
+
+  /**
+   * U09: re-arms the in-place Extrude on a stored extrude, seeded from it,
+   * instead of opening its card; the feature stays pinned, as other edits'.
+   */
+  function startExtrudeEdit(feature: FeatureNode): boolean {
+    if (feature.data.featureKind !== 'extrude') return false;
+    const reason = toolDisabledReason('extrude', {
+      ...availability,
+      sketchCount: Number.POSITIVE_INFINITY,
+      closedProfileSketchCount: Number.POSITIVE_INFINITY
+    });
+    if (reason) {
+      setStatus(`${TOOL_META.extrude.label}: ${reason}.`);
+      return false;
+    }
+    inPlaceRef.current.cancel(true);
+    retireStatusMessage();
+    if (editCardSessionRef.current) {
+      editCardSessionRef.current = {
+        ...editCardSessionRef.current,
+        generation: editCardSessionRef.current.generation + 1
+      };
+    }
+    edgeFormPreview.clear();
+    setFeatureFormError(null);
+    setExtrudeEdit((current) => ({
+      featureId: feature.featureId,
+      generation: (current?.generation ?? 0) + 1
+    }));
+    return true;
+  }
+
+  /** Ends an extrude edit, its preview with it. */
+  function endExtrudeEdit() {
+    if (!extrudeEditRef.current) return;
+    extrudeEditRequest.current += 1;
+    edgeFormPreview.clear();
+    setFeatureFormError(null);
+    setKeypad((current) => (current?.kind === 'extrude' ? null : current));
+    setExtrudeEdit(null);
+  }
+
+  const endExtrudeEditRef = useRef(endExtrudeEdit);
+  endExtrudeEditRef.current = endExtrudeEdit;
+
+  /** Esc or the bar's Cancel: the extrude stays as it was, nothing selected. */
+  function cancelExtrudeEdit() {
+    endExtrudeEdit();
+    setSelectedFeatureNode(null);
+    setSelectedBodyIds([]);
+    // The profiles its History row lit go too, as an in-place edit's do.
+    setSelectedProfiles([]);
+    setSelectedSketchProfileId(null);
+  }
+
+  /** Done on an in-place edit: the feature's update, validated as the card's was. */
+  function commitInPlaceEdit(
+    request: InPlaceRequest,
+    edit: InPlaceEditSeed,
+    withdrawn?: () => boolean
+  ) {
+    const current = managerRef.current?.document;
+    const feature = current ? findFeature(current, edit.featureId) : null;
+    if (!feature) {
+      setStatus('This history feature is no longer available to edit.');
+      // Done is settled, not left holding the edit frozen.
+      inPlaceRef.current.settleEdit(edit, false);
+      return;
+    }
+    // The feature's name as it is now: a rename since the edit armed (from
+    // another device, say) must not be written back over.
+    const named = { ...edit, name: feature.name };
+    let command: AnyCommand;
+    try {
+      command = inPlaceEditCommand(request, named);
+    } catch (error) {
+      setStatus(errorMessage(error, `${feature.name} could not be edited.`));
+      inPlaceRef.current.settleEdit(edit, false);
+      return;
+    }
+    // The edit stays open until this lands: refused, it is still there to
+    // correct and try again.
+    applyValidatedFeature(
+      command,
+      feature,
+      feature.name,
+      inPlaceEditResultBodyId(request, edit),
+      (committed) => inPlaceRef.current.settleEdit(edit, committed),
+      withdrawn
+    );
+  }
+
+  /**
+   * Esc or the bar's Cancel: an edit leaves its feature as it was and
+   * returns to nothing selected, in one press, as an edit card's did.
+   */
+  function cancelInPlaceCommand() {
+    const editing = inPlaceRef.current.editing;
+    // A Done still validating keeps the command, and its selection, open.
+    if (!inPlaceRef.current.cancel()) return;
+    if (editing) {
+      setSelectedFeatureNode(null);
+      setSelectedBodyIds([]);
+      setSelectedProfiles([]);
+    }
+  }
+
+  /**
+   * The body an edited feature works on, as the feature stores it now: an
+   * undo or a collaborator may have retargeted it since the edit armed.
+   */
+  function inPlaceEditTarget(edit: InPlaceEditSeed | null): BodyId | null {
+    if (!edit) return null;
+    // A body picked in this edit (a blend's edges, a Hole moved onto another
+    // face, a Scale retargeted) is the target until Done; the feature still
+    // stores the old one meanwhile. Untouched, the slots follow the live
+    // feature.
+    const slots = inPlaceRef.current.slots;
+    const picked =
+      slots.edges[0]?.bodyId ??
+      slots.faces[0]?.bodyId ??
+      slots.bodies[0]?.bodyId;
+    if (picked) return picked;
+    const live = managerRef.current
+      ? findFeature(managerRef.current.document, edit.featureId)
+      : null;
+    const data =
+      live && live.data.featureKind === edit.data.featureKind
+        ? live.data
+        : edit.data;
+    return 'targetBodyId' in data ? (data.targetBodyId ?? null) : null;
+  }
+
+  /**
+   * Whether an edit may take what a feature built: only what exists before
+   * it in history. A later sketch or body would be a forward reference.
+   */
+  function inPlaceEditMayUse(
+    producer: FeatureId | undefined,
+    edit: InPlaceEditSeed | null
+  ): boolean {
+    return !edit || featurePrecedes(producer, edit.featureId);
+  }
+
+  /** Whether `producer` comes before `featureId` in history. */
+  function featurePrecedes(
+    producer: FeatureId | undefined,
+    featureId: FeatureId
+  ): boolean {
+    const current = managerRef.current?.document;
+    if (!current) return true;
+    const order = current.featureOrder;
+    const at = order.indexOf(featureId);
+    const from = producer ? order.indexOf(producer) : -1;
+    return at < 0 || (from >= 0 && from < at);
+  }
+
+  /**
+   * Whether an edit's body slot takes a clicked body. The feature's own
+   * result (what is on screen where its input was) keeps the input it has;
+   * a body made later is refused by name.
+   */
+  function inPlaceEditTakesBody(bodyId: BodyId): boolean {
+    const editing = inPlaceRef.current.editing;
+    if (!editing || inPlaceEditMayUse(producingFeatureOf({ bodyId }), editing))
+      return true;
+    if (!editing.ownBodyIds.includes(bodyId)) {
+      setStatus(
+        `${editing.name} can only use bodies made before it in History.`
+      );
+    }
+    return false;
+  }
+
+  /**
+   * A datum plane for the in-place Mirror or Split: an edit takes only one
+   * made before the feature, as it does a sketch or a body.
+   */
+  function pickInPlaceDatumPlane(featureId: FeatureId) {
+    const editing = inPlaceRef.current.editing;
+    if (!inPlaceEditMayUse(featureId, editing)) {
+      setStatus(
+        `${editing!.name} can only use datum planes made before it in History.`
+      );
+      return;
+    }
+    inPlaceRef.current.pickPlane({ kind: 'datum', featureId });
+  }
+
+  /**
+   * Whether a sketch still has a curve a path can take: a drawn line or arc
+   * of that sketch, not construction, as the card's path options were.
+   */
+  function sweepCurveExists(
+    current: ProjectDocument,
+    sketchId: SketchId,
+    entityId: string
+  ): boolean {
+    const node = current.nodes[entityId as EntityId];
+    return (
+      node?.kind === 'sketch-object' &&
+      !node.data.construction &&
+      (node.data.objectKind === 'line' || node.data.objectKind === 'arc') &&
+      (findSketch(current, sketchId)?.objectIds.includes(
+        entityId as EntityId
+      ) ??
+        false)
+    );
+  }
+
+  /** The feature that made a body, or a sketch, for {@link inPlaceEditMayUse}. */
+  function producingFeatureOf(
+    target: { bodyId: BodyId } | { sketchId: SketchId }
+  ): FeatureId | undefined {
+    const current = managerRef.current?.document;
+    if (!current) return undefined;
+    if ('bodyId' in target) {
+      const node = Object.values(current.nodes).find(
+        (candidate) =>
+          candidate.kind === 'body' && candidate.bodyId === target.bodyId
+      );
+      return node?.kind === 'body' ? node.featureId : undefined;
+    }
+    return listNodesByKind(current, 'feature').find(
+      (feature) =>
+        feature.data.featureKind === 'sketch' &&
+        feature.data.sketchId === target.sketchId
+    )?.featureId;
+  }
+
+  /** A body's face for a command that takes the body: a flat one first. */
+  function anyInPlaceFaceOf(bodyId: BodyId): FacePick | null {
+    const faces = representations[bodyId]?.topology?.faces ?? [];
+    const face =
+      faces.find((candidate) => candidate.geometry?.surfaceType === 'plane') ??
+      faces[0];
+    return face
+      ? inPlaceFacePick(bodyId, face.topologyId, face.hash, undefined)
+      : null;
   }
 
   /** Swept faces as an in-place command's face slot holds them. */
@@ -8283,36 +9474,99 @@ export function App() {
     bodyId: string,
     topologyId: string | undefined,
     hash: number | undefined,
-    point: { x: number; y: number; z: number } | undefined
+    point: { x: number; y: number; z: number } | undefined,
+    /** A stored face being resolved, not a click: no edit maps it. */
+    stored = false
   ): FacePick | null {
     const matches = (candidate: { topologyId: string; hash: number }) =>
       (topologyId !== undefined && candidate.topologyId === topologyId) ||
       (hash !== undefined && candidate.hash === hash);
     let resolvedBodyId = bodyId as BodyId;
     let face = representations[resolvedBodyId]?.topology?.faces.find(matches);
-    if (!face) {
+    // An edit's faces belong to the body it took: a click on what the
+    // feature (or a later one built from it) made of that body means the
+    // input's face. A later body of another lineage is refused outright.
+    const editing = stored ? null : inPlaceRef.current.editing;
+    const editTarget = inPlaceEditTarget(editing);
+    const later =
+      face !== undefined &&
+      editTarget !== null &&
+      resolvedBodyId !== editTarget &&
+      !inPlaceEditMayUse(
+        producingFeatureOf({ bodyId: resolvedBodyId }),
+        editing
+      );
+    const descendants =
+      later && editing ? inPlaceEditDescendants(editing) : null;
+    if (later && editing && !descendants?.has(resolvedBodyId)) {
+      setStatus(
+        `${editing.name} can only use faces of bodies made before it in History.`
+      );
+      return null;
+    }
+    // Another body's material joined this one later (a union, say): only a
+    // face the edited body still has unchanged is surely one of its own.
+    const joined = descendants?.mixed.has(resolvedBodyId) ?? false;
+    // A hole goes where the click lands, and on a body a later feature moved
+    // (a copy, a mirror, a pattern) that is not where the hole's own face is.
+    // So does a draft's clicked-point hinge, which can be chosen after the
+    // click.
+    const usesPoint =
+      inPlaceRef.current.tool === 'hole' ||
+      inPlaceRef.current.tool === 'draft';
+    if (
+      later &&
+      editing &&
+      usesPoint &&
+      managerRef.current &&
+      inPlaceEditMovedBodies(
+        managerRef.current.document,
+        editing.featureId
+      ).has(resolvedBodyId)
+    ) {
+      setStatus(
+        `A later feature moved this body: click ${editing.name}'s face where it was made, or drag its position.`
+      );
+      return null;
+    }
+    const remap = later;
+    if (remap && editTarget) {
+      const clicked = face;
+      const clickedHash = hash ?? clicked?.hash;
+      face =
+        representations[editTarget]?.topology?.faces.find(
+          (candidate) =>
+            clickedHash !== undefined && candidate.hash === clickedHash
+        ) ??
+        (joined
+          ? undefined
+          : coplanarFace(
+              editTarget,
+              clicked?.geometry?.normal,
+              clicked?.geometry?.centroid ?? clicked?.geometry?.center
+            ));
+      if (face) resolvedBodyId = editTarget;
+      else if (joined && editing) {
+        setStatus(
+          `That face may come from a body joined after ${editing.name} · pick a face of the body ${editing.name} was made on.`
+        );
+        return null;
+      }
+    }
+    if (!face && !remap) {
       // While a preview shows, a click lands on the preview's body, which the
       // document does not have. The face meant is the edited body's face in
       // the same plane: clicking the face again is how a hole moves.
       const shown = previewDoc?.derived.bodyRepresentations[
         resolvedBodyId
       ]?.topology?.faces.find(matches)?.geometry;
-      const target = inPlaceRef.current.slots.faces[0]?.bodyId;
-      const normal = shown?.normal;
-      const on = shown?.centroid ?? shown?.center;
-      if (target && normal && on) {
-        face = representations[target]?.topology?.faces.find((candidate) => {
-          const g = candidate.geometry;
-          const at = g?.centroid ?? g?.center;
-          if (!g?.normal || !at) return false;
-          const aligned =
-            g.normal.x * normal.x + g.normal.y * normal.y + g.normal.z * normal.z;
-          const apart =
-            (at.x - on.x) * normal.x +
-            (at.y - on.y) * normal.y +
-            (at.z - on.z) * normal.z;
-          return aligned > 1 - 1e-6 && Math.abs(apart) < 1e-6;
-        });
+      const target = editTarget ?? inPlaceRef.current.slots.faces[0]?.bodyId;
+      if (target) {
+        face = coplanarFace(
+          target,
+          shown?.normal,
+          shown?.centroid ?? shown?.center
+        );
         if (face) resolvedBodyId = target;
       }
     }
@@ -8322,12 +9576,55 @@ export function App() {
       bodyId: resolvedBodyId,
       hash: face.hash,
       topologyId: face.topologyId,
+      // Its lineage, so a rebuild that renames its hash still finds it.
+      ...(face.reference ? { reference: face.reference } : {}),
       ...(geometry?.surfaceType ? { surfaceType: geometry.surfaceType } : {}),
       ...(geometry?.normal ? { normal: geometry.normal } : {}),
       ...(geometry?.centroid ? { centroid: geometry.centroid } : {}),
       ...(geometry?.center ? { center: geometry.center } : {}),
       ...(point ? { point } : {})
     };
+  }
+
+  /**
+   * The bodies an edited feature's result became: its own, and every body a
+   * feature after it built from them. Only a click on one of these stands
+   * for the edit's input.
+   */
+  function inPlaceEditDescendants(edit: InPlaceEditSeed): {
+    pure: Set<BodyId>;
+    mixed: Set<BodyId>;
+    has(bodyId: BodyId): boolean;
+  } {
+    const current = managerRef.current?.document;
+    const lineage = current
+      ? inPlaceEditLineage(current, edit.featureId, edit.ownBodyIds)
+      : { pure: new Set<BodyId>(edit.ownBodyIds), mixed: new Set<BodyId>() };
+    return {
+      ...lineage,
+      has: (bodyId) => lineage.pure.has(bodyId) || lineage.mixed.has(bodyId)
+    };
+  }
+
+  /** A body's face in the plane through `on` facing `normal`, if it has one. */
+  function coplanarFace(
+    bodyId: BodyId,
+    normal: Vector3 | undefined,
+    on: Vector3 | undefined
+  ) {
+    if (!normal || !on) return undefined;
+    return representations[bodyId]?.topology?.faces.find((candidate) => {
+      const g = candidate.geometry;
+      const at = g?.centroid ?? g?.center;
+      if (!g?.normal || !at) return false;
+      const aligned =
+        g.normal.x * normal.x + g.normal.y * normal.y + g.normal.z * normal.z;
+      const apart =
+        (at.x - on.x) * normal.x +
+        (at.y - on.y) * normal.y +
+        (at.z - on.z) * normal.z;
+      return aligned > 1 - 1e-6 && Math.abs(apart) < 1e-6;
+    });
   }
 
   /** A picked region as the in-place command's profile slot holds it. */
@@ -8505,9 +9802,15 @@ export function App() {
     if (applyMove && !confirmMove()) return;
     // U09: a new feature from an in-place tool runs with no card, once any
     // unapplied Move has been applied or discarded above. Editing an
-    // existing one still opens its card until history edits re-arm handles.
-    if (isInPlaceTool(nextTool) && !feature) {
+    // existing one re-arms the same command from its pinned History row.
+    // The Image command waits for its picture: openTool asks for the file,
+    // and the command starts once it is read.
+    if (isInPlaceTool(nextTool) && nextTool !== 'reference-image' && !feature) {
       startInPlaceCommand(nextTool);
+      return;
+    }
+    if (feature && inPlaceToolForFeature(feature.data)) {
+      applyHistorySelection(feature.id, managerRef.current!.document);
       return;
     }
     // Any other tool takes over from a running in-place command, quietly.
@@ -8516,9 +9819,6 @@ export function App() {
     // Only after Apply/Discard: Cancel must leave the Move's target and the
     // current editor untouched. The edit uses its own consumed source body.
     const targetBodyId = 'targetBodyId' in data ? data.targetBodyId : null;
-    setModelingTargetBodyId(targetBodyId);
-    setViewportFormFacePick(null);
-    setFormFacePickTarget(null);
     setSelectedBodyIds(targetBodyId ? [targetBodyId] : []);
     setModelingEditFeature(feature);
   }
@@ -8538,9 +9838,6 @@ export function App() {
     // A tool opens its create card; openModelingFeatureEditor sets the
     // feature back afterwards when it is reopening one instead.
     setModelingEditFeature(null);
-    setModelingCreateInitial(null);
-    setFormFacePickTarget(null);
-    setViewportFormFacePick(null);
     setRevertPill(null);
     exactEntryQueue.cancel();
     // Through the ref, not the render's variable: this function is invoked
@@ -8564,14 +9861,17 @@ export function App() {
       // on the selected flat face, or on Top (XY) with nothing picked. A
       // selected face it cannot lie on refuses, rather than quietly placing
       // the picture on Top, far from what the user picked.
-      const placement = referenceImageInsertPlane(selectedFaceImagePlane());
+      const selected = selectedFaceImagePlane();
+      const placement = referenceImageInsertPlane(selected);
       if ('refusal' in placement) {
         setStatus(
           `${TOOL_META['reference-image'].label}: ${placement.refusal}`
         );
         return false;
       }
-      referenceImagePlaneRef.current = placement.plane;
+      // U09: with no face selected, the command asks for a plane once the
+      // picture is read, rather than dropping it on Top.
+      referenceImagePlaneRef.current = selected ? placement.plane : null;
       referenceImageInputRef.current?.click();
       return true;
     }
@@ -8664,62 +9964,22 @@ export function App() {
         return true;
       }
     }
-    if (
-      nextTool === 'mirror' ||
-      nextTool === 'split' ||
-      nextTool === 'hole' ||
-      nextTool === 'shell' ||
-      nextTool === 'solid-offset' ||
-      nextTool === 'draft' ||
-      nextTool === 'thicken'
-    ) {
-      const targetBodyId = defaultModelingTargetBody(nextTool);
-      setModelingTargetBodyId(targetBodyId);
-      // A face already picked on that body is the answer to the form's first
-      // question, so it lands in the face field instead of being thrown away.
-      // So are the faces a box swept, for the cards that list faces.
-      const seeded =
-        modelingOperationPicksFaces(nextTool) && targetBodyId
-          ? boxSelectedFaces && formFaceListOperation(nextTool)
-            ? resolveFormFaceBox(
-                nextTool,
-                targetBodyId,
-                boxSelectedFaces,
-                representations[targetBodyId]?.topology
-              )
-            : selectedTopology?.kind === 'face'
-              ? resolveFormFacePick(
-                  nextTool,
-                  targetBodyId,
-                  selectedTopology,
-                  representations[targetBodyId]?.topology
-                )
-              : null
-          : null;
-      setViewportFormFacePick(seeded?.ok ? seeded.pick : null);
-      if (seeded?.ok && boxSelectedFaces && targetBodyId) {
-        // The card accepts one target body. Drop the wider sweep so its
-        // highlights cannot promise faces the operation will never receive.
-        setBoxFaces(null);
-        setSelectedBodyIds([targetBodyId]);
-      }
-      setFormFacePickTarget(null);
-    }
-    // Selection is kept on purpose: booleans/move/fillet pre-fill from it.
+    // Selection is kept on purpose.
     setTool(nextTool);
     return true;
   }
 
-  /**
-   * Which body a modeling form opens on: the body under the current
-   * selection, else the newest live body that can actually take the
-   * operation (a planar face for hole and draft). Bodies are listed in
-   * document order, so "first" was whichever body happened to be oldest —
-   * on a box-plus-sphere model that opened Hole on the sphere with a refusal
-   * already showing.
-   */
   /** Opens a history feature in the modeling form it was created with. */
   function openModelingFeatureEditor(feature: FeatureNode) {
+    // An in-place command's feature re-arms that command from its row, as a
+    // click on the row does (an unapplied Move is asked about first).
+    if (
+      inPlaceToolForFeature(feature.data) ||
+      feature.data.featureKind === 'extrude'
+    ) {
+      handleSelectFeatureFromTree(feature.id, false);
+      return;
+    }
     if (!featureOpensEditCard(feature.data.featureKind)) return;
     const data = feature.data as EditableModelingFeatureData;
     const reason = toolDisabledReason(data.featureKind, availability);
@@ -8731,19 +9991,6 @@ export function App() {
       return;
     }
     launchTool(data.featureKind, feature);
-  }
-
-  function defaultModelingTargetBody(operation: ToolId): BodyId | null {
-    const preferred = selectedTopology?.bodyId ?? selectedBodyIds.at(-1);
-    if (preferred && !representations[preferred]?.consumed) return preferred;
-    const live = viewerBodies.map((body) => body.bodyId);
-    const suits = (bodyId: BodyId) =>
-      !modelingOperationPicksFaces(operation) ||
-      !modelingOperationNeedsPlanarFaces(operation) ||
-      (representations[bodyId]?.topology?.faces ?? []).some(
-        (face) => face.geometry?.surfaceType === 'plane'
-      );
-    return [...live].reverse().find(suits) ?? live.at(-1) ?? null;
   }
 
   /**
@@ -8769,17 +10016,15 @@ export function App() {
     // (another tool, a workspace switch, Measure) ends it too, quietly,
     // since the action that closed it says what happened.
     inPlaceRef.current.cancel(true);
+    endExtrudeEdit();
     extrudeEditRequest.current += 1;
     // The mode hint the panel set ("Move/Rotate: drag the arrows…") describes
     // a state the user has just left; it must not outlive the panel.
     retireStatusMessage();
     edgeFormPreview.clear();
-    setEdgeFormSize(null);
     exactEntryQueue.cancel();
     setFeatureFormError(null);
     setModelingEditFeature(null);
-    setFormFacePickTarget(null);
-    setViewportFormFacePick(null);
     setPreviewDoc(null);
     // A cancelled extrude releases its profiles rather than restoring the
     // selection it started from: Escape lands on nothing selected, not on a
@@ -8975,6 +10220,14 @@ export function App() {
     // here. Refuse before clearing the draft or changing document/history.
     if (!moveHasFiniteValues(preview)) {
       setStatus('Could not apply Move: enter finite values before applying.');
+      return false;
+    }
+    // The bar's Done is off until something changed; Enter from anywhere
+    // else must not commit the empty Move it refuses either.
+    if (!moveHasUnappliedChange(preview)) {
+      setStatus(
+        'Nothing to apply yet: drag the gizmo, or type a value under Options.'
+      );
       return false;
     }
     if (preview.target === 'sketch') {
@@ -9392,6 +10645,17 @@ export function App() {
   const referenceImageInputRef = useRef<HTMLInputElement | null>(null);
   /** The plane a picture chosen in the file dialog will lie on. */
   const referenceImagePlaneRef = useRef<ReferenceImagePlane | null>(null);
+  /** Counts Image file choices, so only the newest one is placed. */
+  const referenceImageInvocationRef = useRef(0);
+  /** Image file choices still being read, and older ones set aside. */
+  const referenceImagesInFlightRef = useRef(0);
+  const staleReferenceImagesRef = useRef<PreparedReferenceImage[]>([]);
+  /** Image byte releases, run one after another. */
+  const referenceImageReleasesRef = useRef<Promise<void>>(Promise.resolve());
+  /** The picture an in-place Image is placing, until Done or Cancel. */
+  const pendingReferenceImageRef = useRef<PreparedReferenceImage | null>(
+    null
+  );
 
   /**
    * The plane of the selected face, when an image can lie on it: associative
@@ -9399,14 +10663,21 @@ export function App() {
    */
   function selectedFaceImagePlane():
     ReferenceImagePlane | { reason: string } | null {
+    return faceImagePlane(selectedTopology);
+  }
+
+  /** The plane of a face, when an image can lie on it, as above. */
+  function faceImagePlane(
+    selection: TopologySelection | null
+  ): ReferenceImagePlane | { reason: string } | null {
     const current = managerRef.current?.document;
-    if (!current || selectedTopology?.kind !== 'face') return null;
+    if (!current || selection?.kind !== 'face') return null;
     const attachment = faceSketchAttachment({
-      bodyId: selectedTopology.bodyId,
-      pickedHash: selectedTopology.hash,
+      bodyId: selection.bodyId,
+      pickedHash: selection.hash,
       face: current.derived.bodyRepresentations[
-        selectedTopology.bodyId
-      ]?.topology?.faces.find((face) => face.hash === selectedTopology.hash)
+        selection.bodyId
+      ]?.topology?.faces.find((face) => face.hash === selection.hash)
     });
     return attachment.ok ? attachment.planeRef : { reason: attachment.reason };
   }
@@ -9426,14 +10697,25 @@ export function App() {
   async function insertReferenceImage(file: File) {
     const current = managerRef.current?.document;
     if (!current || !ensureCanEdit('insert an image')) return;
+    // Only the newest file chosen is placed: an older one that finishes
+    // reading later is set aside, and its bytes are let go (or handed to
+    // the placed picture, when it is the same file) once every choice in
+    // flight has settled.
+    const invocation = ++referenceImageInvocationRef.current;
+    referenceImagesInFlightRef.current += 1;
+    const seeded = referenceImagePlaneRef.current;
     const plane =
-      referenceImagePlaneRef.current ??
-      ({ type: 'canonical', plane: 'XY', offset: 0 } as const);
+      seeded ?? ({ type: 'canonical', plane: 'XY', offset: 0 } as const);
     referenceImagePlaneRef.current = null;
     setStatus(`Placing ${file.name}…`);
     try {
-      const { discardReferenceImageBytes, prepareReferenceImage } =
-        await import('./lib/referenceImageInsert');
+      const { prepareReferenceImage } = await import(
+        './lib/referenceImageInsert'
+      );
+      // A release still running (an earlier picture let go) finishes first,
+      // so reading the same file again stores its bytes afresh rather than
+      // finding bytes about to be deleted.
+      await referenceImageReleasesRef.current;
       const prepared = await prepareReferenceImage({
         file,
         document: current,
@@ -9441,22 +10723,140 @@ export function App() {
         archive: archiveArtifact
       });
       const { image } = prepared;
-      if (
-        managerRef.current?.document.projectId === current.projectId &&
-        executeCommand(commandFactories.addReferenceImage({ image }))
-      ) {
-        openReferenceImage(image.imageId);
-        setStatus(
-          `${image.name} placed. Scale it from two points, or set its width.`
-        );
+      if (invocation !== referenceImageInvocationRef.current) {
+        staleReferenceImagesRef.current.push(prepared);
+        return;
+      }
+      if (managerRef.current?.document.projectId === current.projectId) {
+        // U09: placed in place. Nothing is added until Done; Cancel lets
+        // the stored bytes go again.
+        const unplaced: ImageSlot = {
+          record: image,
+          plane: null,
+          center: { u: 0, v: 0 },
+          calibration: []
+        };
+        // A face selected first takes it, centred on the face as the card
+        // placed it; a click then moves it.
+        const slot = seeded
+          ? placeImage(
+              unplaced,
+              { plane: seeded },
+              'place',
+              imagePlacementContext,
+              {}
+            )
+          : unplaced;
+        // A picture still being placed gives way to this one, its stored
+        // bytes released in the background (nothing below waits on it, so
+        // the project checked above is still the one this starts in). The
+        // same file again reads those bytes, so it inherits the duty to
+        // release them on Cancel instead.
+        const previous = pendingReferenceImageRef.current;
+        const sameFile =
+          previous?.image.source.checksumSha256 === image.source.checksumSha256;
+        pendingReferenceImageRef.current =
+          previous && sameFile && previous.bytesCreated
+            ? { ...prepared, bytesCreated: true }
+            : prepared;
+        if (previous && !sameFile) releaseReferenceImageBytes(previous);
+        inPlaceRef.current.cancel(true);
+        cancelPanel();
+        retireStatusMessage();
+        inPlaceRef.current.start('reference-image', [], [], [], {
+          image: slot
+        });
       } else {
-        await discardReferenceImageBytes(prepared, [
-          managerRef.current?.document
-        ]);
+        releaseReferenceImageBytes(prepared);
       }
     } catch (error) {
       setStatus(errorMessage(error, 'The image could not be placed.'));
+    } finally {
+      referenceImagesInFlightRef.current -= 1;
+      if (referenceImagesInFlightRef.current === 0) releaseStaleReferenceImages();
     }
+  }
+
+  /**
+   * Lets go of the bytes superseded image choices stored, now that none is
+   * in flight. One that is the picture being placed hands its duty to
+   * release them to that picture instead, which reads the same bytes.
+   */
+  function releaseStaleReferenceImages() {
+    const stale = staleReferenceImagesRef.current;
+    staleReferenceImagesRef.current = [];
+    for (const prepared of stale) releaseReferenceImageBytes(prepared);
+  }
+
+  /**
+   * Lets one picture's stored bytes go, in order with every other release,
+   * unless a record or the picture being placed still reads them; the
+   * picture being placed, when it is the same file, takes over the duty to
+   * release them instead.
+   */
+  function releaseReferenceImageBytes(prepared: PreparedReferenceImage) {
+    const checksum = prepared.image.source.checksumSha256;
+    referenceImageReleasesRef.current = referenceImageReleasesRef.current
+      .then(async () => {
+        const pending = pendingReferenceImageRef.current;
+        if (pending?.image.source.checksumSha256 === checksum) {
+          if (prepared.bytesCreated && !pending.bytesCreated) {
+            pendingReferenceImageRef.current = {
+              ...pending,
+              bytesCreated: true
+            };
+          }
+          return;
+        }
+        const { discardReferenceImageBytes } = await import(
+          './lib/referenceImageInsert'
+        );
+        await discardReferenceImageBytes(prepared, [
+          managerRef.current?.document
+        ]);
+      })
+      .catch(() => undefined);
+  }
+
+  /** Where an image's plane lies in the live document, for placing one. */
+  function imagePlaneBasis(plane: ReferenceImagePlane) {
+    const current = managerRef.current?.document;
+    return current ? referenceImagePlaneBasis(current, plane, 'Image') : null;
+  }
+  const imagePlacementContext: InPlaceContext = {
+    sketchViews: [],
+    datumAxes: undefined,
+    datumLabel: () => '',
+    linearSnap: appSettings.sketching.snapEnabled
+      ? appSettings.sketching.linearSnap
+      : null,
+    imagePlaneBasis
+  };
+
+  /**
+   * Whether the picture being placed is waiting for a plane: none picked,
+   * Options asking for another, or its plane no longer resolving.
+   */
+  function imageNeedsPlane(
+    image: ImageSlot,
+    options: Record<string, string>
+  ): boolean {
+    return (
+      !image.plane ||
+      options.clicks === 'plane' ||
+      !imagePlaneBasis(image.plane)
+    );
+  }
+
+  /** Adds the picture an in-place Image placed, as one undoable step. */
+  function commitInPlaceImage(image: ReferenceImage) {
+    const prepared = pendingReferenceImageRef.current;
+    pendingReferenceImageRef.current = null;
+    if (executeCommand(commandFactories.addReferenceImage({ image }))) {
+      setStatus(`${image.name} placed.`);
+      return;
+    }
+    if (prepared) releaseReferenceImageBytes(prepared);
   }
 
   function applyReferenceImage(update: ReferenceImageUpdateInput): boolean {
@@ -9491,9 +10891,12 @@ export function App() {
    */
   const loadReferenceImage = useCallback(
     async (checksumSha256: string): Promise<Blob | null> => {
-      const images = (
-        managerRef.current?.document.referenceImages?.images ?? []
-      ).filter(
+      // The picture an in-place Image is still placing is offered too.
+      const pending = pendingReferenceImageRef.current?.image;
+      const images = [
+        ...(managerRef.current?.document.referenceImages?.images ?? []),
+        ...(pending ? [pending] : [])
+      ].filter(
         (candidate) => candidate.source.checksumSha256 === checksumSha256
       );
       if (images.length === 0) return null;
@@ -9587,6 +10990,7 @@ export function App() {
     if (!doc) {
       return;
     }
+    if (!ensureCanEdit('change body appearance')) return;
     const bodyNode = findBodyNode(doc, bodyId);
     if (!bodyNode) {
       return;
@@ -11054,11 +12458,43 @@ export function App() {
     updateSettingsViewState({ open: false });
     setSettingsOpen(false);
     setSharingOpen(false);
+    // An encrypted link's failures are worded by its loader (slice 5-11).
+    let describeFailure: ((error: unknown) => string) | null = null;
     void (async () => {
       try {
-        const { loadSharedProject } = await import('./lib/sharedProjectLoader');
-        if (!isCurrent()) return;
-        const shared = await loadSharedProject(pendingShareToken, isCurrent);
+        let shared: {
+          name: string;
+          document: ProjectDocument;
+          encryptedMode?: 'view' | 'tweak';
+        } | null;
+        if (isEncryptedShareLink(pendingShareToken)) {
+          // End to end encrypted (ADR-024 slice 5-11): verified in the ADR's
+          // order and decrypted in this browser; the server sees the token.
+          const loader = await import('./lib/e2ee/sharedSnapshotLoader');
+          if (!isCurrent()) return;
+          describeFailure = (error) => loader.sharedLinkRefusalMessage(error);
+          const opened = await loader.loadEncryptedSharedProject(
+            pendingShareToken,
+            isCurrent
+          );
+          shared = opened && {
+            name: opened.name,
+            document: opened.document,
+            encryptedMode: opened.mode
+          };
+        } else {
+          const { loadSharedProject } =
+            await import('./lib/sharedProjectLoader');
+          if (!isCurrent()) return;
+          const plaintext = await loadSharedProject(
+            pendingShareToken,
+            isCurrent
+          );
+          shared = plaintext && {
+            name: plaintext.project.name,
+            document: plaintext.document
+          };
+        }
         if (!isCurrent()) return;
         if (!shared) {
           restoreActiveShare();
@@ -11081,20 +12517,28 @@ export function App() {
         // autosave controller must treat this project as not account-backed,
         // whatever this browser knew about the account before.
         setCloudAvailable(false);
-        setShareSession({ token: pendingShareToken });
-        shareSessionRef.current = { token: pendingShareToken };
+        const opened = shared.encryptedMode
+          ? { token: pendingShareToken, encryptedMode: shared.encryptedMode }
+          : { token: pendingShareToken };
+        setShareSession(opened);
+        shareSessionRef.current = opened;
         hydrateSharedDocumentRef.current(shared.document, {
           rememberProject: false
         });
         setStatus(
-          `Opened shared model ${shared.project.name} · adjust its parameters and export. Make a copy to build on it.`
+          shared.encryptedMode === 'view'
+            ? `Opened shared model ${shared.name} · view only. Make a copy to build on it.`
+            : `Opened shared model ${shared.name} · adjust its parameters and export. Make a copy to build on it.`
         );
       } catch (error) {
         if (isCurrent()) {
           restoreActiveShare();
-          setStatus(errorMessage(error, 'Could not open the share link.'), {
-            sticky: true
-          });
+          setStatus(
+            describeFailure
+              ? describeFailure(error)
+              : errorMessage(error, 'Could not open the share link.'),
+            { sticky: true }
+          );
         }
       } finally {
         finishBusy();
@@ -11119,7 +12563,9 @@ export function App() {
    * device, Build unlocked. From here every existing flow (cloud adoption,
    * sync, export) treats it like any other local project.
    */
-  async function handleMakeShareCopy() {
+  async function handleMakeShareCopy(
+    destination: SharedLinkCopyDestination = 'device'
+  ) {
     const source = managerRef.current?.document;
     if (!source || !shareSessionRef.current) {
       return;
@@ -11127,6 +12573,7 @@ export function App() {
     const activeProjectSince = snapshotActiveProject();
     const isCurrent = beginProjectNavigation(false);
     const finishBusy = startNavigationBusy();
+    let copied: ProjectSummary | null = null;
     try {
       const copy = duplicateProjectDocument(
         source,
@@ -11141,23 +12588,79 @@ export function App() {
       setShareSession(null);
       shareSessionRef.current = null;
       clearProjectShareFragment();
+      const summary = summarizeLocalDocument(
+        copy,
+        DEFAULT_PROJECT_ORGANIZATION
+      );
       setProjects((current) =>
-        [
-          ...current,
-          summarizeLocalDocument(copy, DEFAULT_PROJECT_ORGANIZATION)
-        ].sort(compareProjectSummaries)
+        [...current, summary].sort(compareProjectSummaries)
       );
       hydrateDocument(copy, { activeProjectSince });
       handleWorkspaceMode('build');
       setStatus(
         `${copy.name} is yours now — saved on this device. Build mode is open.`
       );
+      copied = summary;
     } catch (error) {
       if (isCurrent())
         setStatus(errorMessage(error, 'Could not copy the shared model.'));
     } finally {
       finishBusy();
     }
+    // Into the visitor's account (an encrypted link's choice, slice 5-11):
+    // the device copy above is saved as any device project is, encrypted
+    // under the visitor's keys when the account encrypts new projects
+    // (decision D2, slice 4-8's adoption) and as an ordinary project
+    // otherwise. A failure leaves the device copy, with the reason.
+    if (copied && destination === 'account' && isCurrent()) {
+      await handleSaveToAccount(copied);
+    }
+  }
+
+  /**
+   * Make a copy, from Tweak's rail or (for an encrypted link) View's: an
+   * encrypted link's signed-in visitor chooses between the account and this
+   * device (slice 5-11); every other visitor gets the device copy, as before.
+   */
+  const [shareCopyChoice, setShareCopyChoice] = useState<{
+    accountEncrypts: boolean | null;
+    error: string | null;
+  } | null>(null);
+  function requestShareCopy() {
+    const active = shareSessionRef.current;
+    if (!active) return;
+    if (!active.encryptedMode || !session) {
+      void handleMakeShareCopy();
+      return;
+    }
+    const choice = { accountEncrypts: null, error: null };
+    const userId = session.userId;
+    const revision = getKeySessionRevision();
+    const currentSession = () =>
+      sessionRef.current?.userId === userId &&
+      shareSessionRef.current === active &&
+      getKeySessionRevision() === revision;
+    setShareCopyChoice(choice);
+    void encryptsNewProjects()
+      .then((accountEncrypts) =>
+        setShareCopyChoice((current) => {
+          if (current !== choice) return current;
+          return currentSession() ? { accountEncrypts, error: null } : null;
+        })
+      )
+      .catch((error: unknown) =>
+        setShareCopyChoice((current) => {
+          if (current !== choice) return current;
+          if (!currentSession()) return null;
+          return {
+            accountEncrypts: null,
+            error: errorMessage(
+              error,
+              'Your account encryption setting could not be checked. Retry, or keep a copy on this device.'
+            )
+          };
+        })
+      );
   }
 
   useEffect(() => {
@@ -13936,7 +15439,7 @@ export function App() {
     }): Promise<{ body: Blob; save(): Promise<boolean>; warnings: number }>;
   }) {
     if (!doc || exportBodyIds.length === 0) {
-      setStatus('Create a body before exporting.');
+      setStatus(emptyExportReason);
       return;
     }
     const sink = createImportProgressSink();
@@ -14013,11 +15516,9 @@ export function App() {
         });
         return;
       }
-      const hiddenNote = exportScopeInfo?.hiddenIncluded
-        ? ` (${exportScopeInfo.hiddenIncluded} hidden)`
-        : exportScopeInfo?.hiddenExcluded
-          ? ` (${exportScopeInfo.hiddenExcluded} hidden left out)`
-          : '';
+      const hiddenNote = exportScopeInfo?.hiddenExcluded
+        ? ` (${exportScopeInfo.hiddenExcluded} hidden left out)`
+        : '';
       const bodies = `${countLabel(exportBodyIds.length, 'body', 'bodies')}${hiddenNote}`;
       const outcome =
         produced.warnings > 0
@@ -14063,7 +15564,7 @@ export function App() {
       return;
     }
     if (!doc || exportBodyIds.length === 0) {
-      setStatus('Create a body before exporting.');
+      setStatus(emptyExportReason);
       return;
     }
     const fileName = `${exportFileStem(doc.name)}.step`;
@@ -14115,7 +15616,7 @@ export function App() {
       return;
     }
     if (!doc || exportBodyIds.length === 0) {
-      setStatus('Create a body before exporting.');
+      setStatus(emptyExportReason);
       return;
     }
     const info = MESH_EXPORT_FILE_INFO[format];
@@ -14168,7 +15669,7 @@ export function App() {
   ) {
     if (!doc || exportBodyIds.length === 0) {
       return Promise.reject(
-        new Error('Create a body before checking printability.')
+        new Error(emptyExportMessage(exportScopeInfo, 'checking printability'))
       );
     }
     return geometry.meshQuality(doc, exportBodyIds, deflection, {
@@ -14250,7 +15751,7 @@ export function App() {
         if (exportBodyIds.length > 0) {
           setMeshExportOpen(true);
         } else {
-          setStatus('Create a body before exporting.');
+          setStatus(emptyExportReason);
         }
         break;
       case 'undo':
@@ -14438,92 +15939,90 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [representations, displayedGeometryComplete]);
 
-  /** The open edit's stored hole anchor; null when no hole is being edited. */
-  function editedHoleAnchor(): { positionAnchor?: 'centroid' } | null {
-    if (!modelingEditFeature) return null;
-    return modelingEditFeature.data.featureKind === 'hole'
-      ? modelingEditFeature.data
-      : {};
-  }
-
-  function handleFormFacePick(
-    operation: FacePickOperation,
-    selection: TopologySelection | null,
-    detail?: PickDetail
-  ) {
-    const label = TOOL_META[operation].label;
-    if (!selection) {
-      // Empty canvas: nothing to add, and the form keeps what it has.
-      return;
-    }
-    if (!exactGeometryReady) {
-      setStatus(
-        `${label}: wait for exact geometry to finish rebuilding, then pick the face.`
+  /**
+   * The edge a click names for an in-place Fillet or Chamfer, or null when
+   * the click is refused (and says why).
+   */
+  function inPlaceEdgeForSelection(
+    selection: TopologySelection
+  ): EdgePick | null {
+    // An edit's edges are its input body's: a click on what the blend
+    // built names the input's edge by its fingerprint, which an
+    // unblended edge keeps, and the validated commit refuses one the
+    // kernel cannot find rather than guessing.
+    const editing = inPlaceRef.current.editing;
+    // The body as the feature stores it now: it may have been retargeted.
+    const target = inPlaceEditTarget(editing);
+    const remap =
+      target !== null &&
+      selection.bodyId !== target &&
+      !inPlaceEditMayUse(
+        producingFeatureOf({ bodyId: selection.bodyId }),
+        editing
       );
-      return;
+    // An edit keeps the body it blends: its stored edges are named on that
+    // body alone, so an edge of another earlier body is refused rather than
+    // stored where it names nothing (or the wrong edge).
+    if (
+      editing &&
+      target !== null &&
+      selection.bodyId !== target &&
+      !remap
+    ) {
+      setStatus(
+        `${editing.name} rounds edges of one body: pick an edge of the body it was made on.`
+      );
+      return null;
     }
-    let targetBodyId = modelingTargetBodyId;
-    if (selection.bodyId !== targetBodyId) {
-      // A pick on another live body retargets the form to it rather than
-      // refusing; the face list and picks start over on the new body.
-      if (representations[selection.bodyId]?.consumed) {
-        setStatus(`${label}: that body was combined into a later feature.`);
-        return;
-      }
-      targetBodyId = selection.bodyId;
-      modelingPreflightRef.current = null;
-      setModelingTargetBodyId(targetBodyId);
-      setSelectedBodyIds([targetBodyId]);
-      if (selection.kind !== 'face') {
-        setSelectedTopology(null);
-        setStatus(
-          `${label}: target body changed to ${representations[targetBodyId]?.name ?? 'the picked body'}.`
-        );
-        return;
-      }
+    // Only what the edited blend's result became stands for its input;
+    // an edge of another later body is refused.
+    const descendants =
+      remap && editing ? inPlaceEditDescendants(editing) : null;
+    if (remap && editing && !descendants?.has(selection.bodyId)) {
+      setStatus(
+        `${editing.name} can only use edges of bodies made before it in History.`
+      );
+      return null;
     }
-    if (!targetBodyId) return;
-    const picked = resolveFormFacePick(
-      operation,
-      targetBodyId,
-      selection,
-      representations[targetBodyId]?.topology
-    );
-    if (!picked.ok) {
-      setStatus(picked.reason);
-      return;
-    }
-    modelingPreflightRef.current = null;
-    // A Hole click places the hole where it landed (G7): the point, measured
-    // in the face's U/V frame from the anchor the hole is drilled against.
-    const face =
-      operation === 'hole' && detail
-        ? representations[targetBodyId]?.topology?.faces.find(
-            (candidate) => candidate.hash === picked.pick.hash
-          )?.geometry
-        : undefined;
-    const position =
-      face && detail
-        ? holePositionFromPick(
-            face,
-            holePositionAnchor(editedHoleAnchor(), face),
-            detail.point,
-            appSettings.sketching.snapEnabled
-              ? appSettings.sketching.linearSnap
-              : null
-          )
+    // On a body another one joined later, only an edge the input still
+    // has is surely its own.
+    const joined = descendants?.mixed.has(selection.bodyId);
+    const onInput =
+      remap && target
+        ? inPlaceEdgePick(target, undefined, selection.hash)
         : null;
-    setViewportFormFacePick(
-      position ? { ...picked.pick, position } : picked.pick
-    );
-    setSelectedTopology(picked.selection);
-    setSelectedBodyIds([targetBodyId]);
-    setSelectedEdges([]);
-    setFormFacePickTarget(null);
-    setStatus(
-      operation === 'hole'
-        ? 'Hole entry face selected · adjust the hole and check the result.'
-        : `${label}: face picked · click more faces to add or remove them, then check the result.`
+    if (remap && joined && !onInput && editing) {
+      setStatus(
+        `That edge may come from a body joined after ${editing.name} · pick an edge of the body ${editing.name} was made on.`
+      );
+      return null;
+    }
+    if (remap && target) {
+      return (
+        onInput ??
+        (selection.hash !== undefined
+          ? { bodyId: target, hash: selection.hash, topologyId: '' }
+          : null)
+      );
+    }
+    // A new blend's preview shows the rounded body under its own new id: a
+    // click on it names the held input's edge by its fingerprint, which an
+    // unblended edge keeps, as an edit's click on its result does.
+    const held = inPlaceRef.current.slots.edges[0]?.bodyId;
+    if (
+      !editing &&
+      held !== undefined &&
+      selection.bodyId !== held &&
+      !doc?.derived.bodyRepresentations[selection.bodyId]
+    ) {
+      return selection.hash !== undefined
+        ? inPlaceEdgePick(held, undefined, selection.hash)
+        : null;
+    }
+    return inPlaceEdgePick(
+      selection.bodyId,
+      selection.topologyId,
+      selection.hash
     );
   }
 
@@ -14538,6 +16037,52 @@ export function App() {
       // and the faces a face tool takes. A stray pick must not open a card
       // under it.
       const command = inPlaceRef.current;
+      if (selection?.kind === 'edge' && command.spec?.edgeMode) {
+        const edge = inPlaceEdgeForSelection(selection);
+        return edge ? command.pickEdge(edge) : true;
+      }
+      // A datum's sources: a face is a plane or a cylinder's axis, an edge
+      // is its nearer end or (for an Axis) the edge itself.
+      const kinds = command.spec?.refKinds;
+      if (kinds && (selection?.kind === 'face' || selection?.kind === 'edge')) {
+        const picked = { ...selection };
+        const at = detail?.point ? { ...detail.point } : null;
+        const points =
+          command.tool === 'datum-axis'
+            ? command.slots.refs.filter((ref) => ref.kind === 'point').length
+            : 0;
+        return pickDatumRef((picks, document) =>
+          picked.kind === 'face'
+            ? picks.faceRef(document, picked, kinds)
+            : picks.edgeRef(document, picked, at, kinds, points)
+        );
+      }
+      if (
+        (selection?.kind === 'edge' || selection?.kind === 'face') &&
+        pickInPlaceLine(selection)
+      ) {
+        return true;
+      }
+      // The picture being placed: a flat face takes it while it still needs
+      // a plane (or Options ask for another). Once placed, a click lands on
+      // its own plane, never a face under it.
+      const image = command.slots.image;
+      if (image && !imageNeedsPlane(image, command.options)) {
+        return detail?.point
+          ? command.placeImage({ point: { ...detail.point } })
+          : true;
+      }
+      if (image && selection?.kind === 'face') {
+        const plane = faceImagePlane(selection);
+        if (!plane || 'reason' in plane) {
+          if (plane) setStatus(plane.reason);
+          return true;
+        }
+        return command.placeImage({
+          plane,
+          ...(detail?.point ? { point: { ...detail.point } } : {})
+        });
+      }
       if (selection?.kind === 'face' && command.spec?.faceMode) {
         const face = inPlaceFacePick(
           selection.bodyId,
@@ -14555,23 +16100,28 @@ export function App() {
           command.slots.bodies.length > 0 &&
           selection.kind === 'face'
         ) {
-          const face = inPlaceFacePick(
-            selection.bodyId,
-            selection.topologyId,
-            selection.hash,
-            detail?.point
-          );
-          const on = face?.centroid ?? face?.center ?? face?.point;
+          // The plane is the face as clicked, where it stands on screen: a
+          // plane is stored by its numbers, so unlike a face operation's
+          // face it is not mapped back onto an edited feature's input.
+          const matches = (candidate: { topologyId: string; hash: number }) =>
+            candidate.topologyId === selection.topologyId ||
+            (selection.hash !== undefined && candidate.hash === selection.hash);
+          // The preview's body first: while one shows, it is the one on
+          // screen, under the same id as the committed body it replaces.
+          const geometry = (
+            previewDoc?.derived.bodyRepresentations[selection.bodyId] ??
+            representations[selection.bodyId]
+          )?.topology?.faces.find(matches)?.geometry;
+          const on = geometry?.centroid ?? geometry?.center ?? detail?.point;
           if (
-            face?.normal &&
+            geometry?.normal &&
             on &&
-            (face.surfaceType === undefined ||
-              face.surfaceType.toLowerCase() === 'plane')
+            geometry.surfaceType.toLowerCase() === 'plane'
           ) {
             return command.pickPlane({
               kind: 'face',
               origin: on,
-              normal: face.normal
+              normal: geometry.normal
             });
           }
           return false;
@@ -14579,9 +16129,16 @@ export function App() {
         const shown = representations[selection.bodyId]
           ? selection.bodyId
           : (command.slots.bodies[0]?.bodyId ?? null);
+        if (shown && !inPlaceEditTakesBody(shown)) return true;
         const body = shown ? inPlaceBodyPick(shown) : null;
         if (body) return command.pickBody(body);
       }
+      return false;
+    }
+    // An extrude edit is a running command too: the model's clicks are its
+    // own (its To face pick), and a stray pick never selects under it or
+    // starts another operation on its result.
+    if (extrudeEditRef.current && !toFacePick) {
       return false;
     }
     if (selection && currentGeometrySnapshot !== null) {
@@ -14811,13 +16368,6 @@ export function App() {
           }
         }
       );
-      return;
-    }
-    // A form that collects faces owns every viewport pick while it is open:
-    // the click fills its face field instead of arming a drag handle and
-    // replacing the form with the Offset Face card.
-    if (modelingOperationPicksFaces(tool) && modelingTargetBodyId) {
-      handleFormFacePick(tool, selection, detail);
       return;
     }
     // The pick detail (click point + normal) anchors selection-first drag
@@ -15104,7 +16654,7 @@ export function App() {
       if (!pinnedEdgeFeature) {
         inferFeatureNodeFor(selection.bodyId);
       }
-      if (!additive && tool !== 'fillet' && tool !== 'chamfer') {
+      if (!additive) {
         setTool(null);
       }
       setStatus(
@@ -15115,25 +16665,13 @@ export function App() {
       return;
     }
     setSelectedEdges([]);
-    // With a boolean tool open every body click is a pick-list toggle: the
-    // form is asking for bodies, so a plain click adds the next one (or drops
-    // it) and keeps the tool up, the way fillet keeps its edge picks. Closing
-    // the tool on the click it was waiting for was the old behaviour.
-    const booleanToolOpen =
-      tool === 'union' || tool === 'subtract' || tool === 'intersect';
-    const toggles = additive || booleanToolOpen;
-    const nextIds = toggles
+    const nextIds = additive
       ? selectedBodyIds.includes(selection.bodyId)
         ? selectedBodyIds.filter((id) => id !== selection.bodyId)
         : [...selectedBodyIds, selection.bodyId]
       : [selection.bodyId];
     setSelectedBodyIds(nextIds);
-    if (
-      !additive &&
-      !booleanToolOpen &&
-      tool !== 'fillet' &&
-      tool !== 'chamfer'
-    ) {
+    if (!additive) {
       setTool(null);
     }
     // The edit panel and topology context follow a single-body selection;
@@ -15143,26 +16681,6 @@ export function App() {
         additive ? { bodyId: nextIds[0]!, kind: 'body' } : selection
       );
       inferFeatureNodeFor(nextIds[0]!);
-    } else {
-      setSelectedTopology(null);
-      setSelectedFeatureNode(null);
-    }
-  }
-
-  /**
-   * The boolean form's pick list, in pick order. It is the same selection the
-   * viewport shows, so a row toggled here lights (or clears) its body's
-   * outline and number out in the scene.
-   */
-  function handleSelectBodiesFromPickList(bodyIds: BodyId[]) {
-    if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
-      dispatchInteraction({ type: 'clear' });
-    }
-    setSelectedEdges([]);
-    setSelectedBodyIds(bodyIds);
-    if (bodyIds.length === 1) {
-      setSelectedTopology({ bodyId: bodyIds[0]!, kind: 'body' });
-      inferFeatureNodeFor(bodyIds[0]!);
     } else {
       setSelectedTopology(null);
       setSelectedFeatureNode(null);
@@ -15181,10 +16699,9 @@ export function App() {
       }));
     handleSelectEdgeChainFromViewer(edges);
     if (
-      tool === 'chamfer' ||
-      (tool === null &&
-        interaction.mode === 'edges' &&
-        interaction.op === 'chamfer')
+      tool === null &&
+      interaction.mode === 'edges' &&
+      interaction.op === 'chamfer'
     ) {
       dispatchInteraction({ type: 'set-edge-op', op: 'chamfer' });
     }
@@ -15202,6 +16719,8 @@ export function App() {
    */
   function handleSelectEdgeChainFromViewer(selections: TopologySelection[]) {
     if (selections.length === 0) return;
+    // An open extrude edit owns the model's picks (see the click's gate).
+    if (extrudeEditRef.current) return;
     if (
       deferMoveSelection({
         kind: 'edge-chain',
@@ -15253,6 +16772,7 @@ export function App() {
   const emptyBoxSelectExplainedRef = useRef(false);
 
   function handleBoxSelectFromViewer(bodyIds: string[]) {
+    if (extrudeEditRef.current) return;
     if (
       bodyIds.length > 0 &&
       deferMoveSelection({ kind: 'box', bodyIds: [...bodyIds] as BodyId[] })
@@ -15327,7 +16847,12 @@ export function App() {
     selections: TopologySelection[],
     kind: 'face' | 'edge'
   ) {
+    if (extrudeEditRef.current) return;
     if (selections.length === 0) {
+      // A sweep during an in-place Fillet or Chamfer only adds edges, so
+      // one that caught none leaves its edges, and their highlight, as
+      // they were rather than clearing the selection under them.
+      if (kind === 'edge' && inPlaceRef.current.spec?.edgeMode) return;
       // An empty sweep is an empty sweep, whatever the filter.
       handleBoxSelectFromViewer([]);
       return;
@@ -15348,6 +16873,35 @@ export function App() {
       setStatus(
         'Exact geometry is still rebuilding. Topology actions are temporarily unavailable.'
       );
+      return;
+    }
+    // A box sweep during an in-place Fillet or Chamfer adds to its edges,
+    // each taken as a click would take it, none toggled back out.
+    if (kind === 'edge' && inPlaceRef.current.spec?.edgeMode) {
+      const command = inPlaceRef.current;
+      const swept = selections.flatMap((selection) => {
+        const edge = inPlaceEdgeForSelection(selection);
+        return edge ? [edge] : [];
+      });
+      // The edges stay on one body: the one already held, else the body
+      // the sweep caught most of, as a plain edge sweep chooses.
+      const byBody = new Map<BodyId, EdgePick[]>();
+      for (const edge of swept) {
+        byBody.set(edge.bodyId, [...(byBody.get(edge.bodyId) ?? []), edge]);
+      }
+      const heldBody = command.slots.edges[0]?.bodyId;
+      const taken = heldBody
+        ? (byBody.get(heldBody) ?? [])
+        : ([...byBody.values()].sort(
+            (left, right) => right.length - left.length
+          )[0] ?? []);
+      const held = new Set(
+        command.slots.edges.map((edge) => `${edge.bodyId}:${edge.hash}`)
+      );
+      command.setEdges([
+        ...command.slots.edges,
+        ...taken.filter((edge) => !held.has(`${edge.bodyId}:${edge.hash}`))
+      ]);
       return;
     }
     if (kind === 'edge') {
@@ -15397,10 +16951,6 @@ export function App() {
       const faces = inPlaceFacesFor(selections);
       if (inPlaceRef.current.addFaces(faces) !== null) return;
     }
-    if (modelingOperationPicksFaces(tool) && modelingTargetBodyId) {
-      boxFacesIntoForm(tool, modelingTargetBodyId, selections);
-      return;
-    }
     if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
       dispatchInteraction({ type: 'clear' });
     }
@@ -15414,83 +16964,6 @@ export function App() {
     setStatus(
       `${selections.length} ${selections.length === 1 ? 'face' : 'faces'} selected.`
     );
-  }
-
-  /** A sweep's faces, into the open card that collects faces. */
-  function boxFacesIntoForm(
-    operation: FacePickOperation,
-    targetBodyId: BodyId,
-    selections: TopologySelection[]
-  ) {
-    const label = TOOL_META[operation].label;
-    if (!exactGeometryReady) {
-      setStatus(
-        `${label}: wait for exact geometry to finish rebuilding, then pick the faces.`
-      );
-      return;
-    }
-    const result = resolveFormFaceBox(
-      operation,
-      targetBodyId,
-      selections,
-      representations[targetBodyId]?.topology
-    );
-    if (!result.ok) {
-      setStatus(result.reason);
-      return;
-    }
-    modelingPreflightRef.current = null;
-    const faceList = formFaceListOperation(operation);
-    pendingFormFaceSweepRef.current = faceList ? result.pick : null;
-    setViewportFormFacePick(result.pick);
-    if (faceList) {
-      // The form owns the list: it adds this sweep to earlier selections.
-      // Its committed-state callback below supplies the complete highlight.
-      setSelectedBodyIds([targetBodyId]);
-      setSelectedTopology(null);
-      setBoxFaces(null);
-      setSelectedEdges([]);
-    } else {
-      highlightFormFaces(targetBodyId, [result.pick.hash], false);
-    }
-    setFormFacePickTarget(null);
-    setStatus(
-      `${label}: ${result.added} ${result.added === 1 ? 'face' : 'faces'} from the box${
-        result.skipped > 0 ? ` (${result.skipped} left out)` : ''
-      } · check the result.`
-    );
-  }
-
-  function highlightFormFaces(
-    targetBodyId: BodyId,
-    hashes: readonly number[],
-    multiple: boolean
-  ) {
-    const bodyIds = [targetBodyId];
-    const accepted = new Set(hashes);
-    const faces: TopologySelection[] = (
-      representations[targetBodyId]?.topology?.faces ?? []
-    )
-      .filter((face) => accepted.has(face.hash))
-      .map((face) => ({
-        bodyId: targetBodyId,
-        kind: 'face',
-        topologyId: face.topologyId,
-        hash: face.hash,
-        ...(face.reference ? { reference: face.reference } : {})
-      }));
-    setSelectedBodyIds(bodyIds);
-    setSelectedTopology(multiple ? null : (faces[0] ?? null));
-    setBoxFaces(multiple ? { bodyIds, faces } : null);
-    setSelectedEdges([]);
-  }
-
-  function handleClearSelectedEdges() {
-    setSelectedEdges([]);
-    const bodyId = edgeModifierBody?.bodyId;
-    setSelectedTopology(bodyId ? { bodyId, kind: 'body' } : null);
-    setSelectedBodyIds(bodyId ? [bodyId] : []);
-    setStatus('Edge selection cleared.');
   }
 
   /**
@@ -15508,11 +16981,18 @@ export function App() {
       (interaction.mode !== 'idle' &&
         interaction.mode !== 'sketch' &&
         (interaction.phase === 'exact-entry' ||
-          interaction.phase === 'failed'));
+          interaction.phase === 'failed')) ||
+      // The in-place Extrude's own values: each keystroke previews, which
+      // sets the region's choice again; leaving the region closes it, and so
+      // does a Done being checked, which commits the value it previewed.
+      (keypadRef.current?.kind === 'extrude' &&
+        ((interaction.mode === 'region' &&
+          interaction.phase !== 'validating') ||
+          (extrudeEditRef.current !== null && !geometryBusy)));
     if (!open) {
       setKeypad(null);
     }
-  }, [interaction]);
+  }, [interaction, geometryBusy, extrudeEdit]);
 
   // Leaving either edge creation or face-backed fillet editing abandons its
   // in-flight exact preview document.
@@ -15545,10 +17025,29 @@ export function App() {
     setLastValidPreview(null);
   }, [offsetInteractionKey, offsetPreview]);
 
+  // An Extrude keypad belongs to the value as it left it. Once anything else
+  // changes that value (Reverse, a drag, the arrow) or stops offering it (an
+  // extent or Sides choice), the keypad is closed as it stands: its stale
+  // entry, applied or canceled, would write over the change, and setting
+  // Distance would take the extent back to Distance.
+  useEffect(() => {
+    const open = keypadRef.current;
+    const state = regionExtrudeState;
+    if (open?.kind !== 'extrude' || !open.commandValueId || !state) return;
+    const valueId = open.commandValueId as ExtrudeValueId;
+    const own = regionKeypadText.current;
+    const changedElsewhere =
+      own?.valueId === valueId && state.texts[valueId] !== own.text;
+    if (changedElsewhere || !extrudeShownValues(state).includes(valueId)) {
+      regionKeypadText.current = null;
+      setKeypad(null);
+    }
+  }, [regionExtrudeState]);
   const regionSketchKey =
     interaction.mode === 'region' ? interaction.target.sketchId : null;
   useEffect(() => {
     regionExtrudeSettings.current = null;
+    regionDraftDistance.current = null;
   }, [regionSketchKey]);
   useEffect(() => {
     extrudeEditRequest.current += 1;
@@ -18280,6 +19779,21 @@ export function App() {
    * detected closed regions, lifted by the shared plane resolution. The
    * sketch being edited in-session is skipped (its rig renders live).
    */
+  /**
+   * The feature an in-place command is editing, mirrored from the hook so
+   * what is computed before it (the sketch views, the datum axes) can read it.
+   */
+  const [inPlaceEditFeatureId, setInPlaceEditFeatureId] =
+    useState<FeatureId | null>(null);
+  // The hidden sketches an armed edit reads: its feature's own inputs,
+  // and no others, so arming an edit does not outline every sketch.
+  const inPlaceEditInputSketchIds = useMemo(() => {
+    const feature =
+      doc && inPlaceEditFeatureId ? findFeature(doc, inPlaceEditFeatureId) : null;
+    return new Set<string>(
+      feature ? inPlaceEditSourceSketchIds(feature.data) : []
+    );
+  }, [doc, inPlaceEditFeatureId]);
   const availableSketchViews = useMemo(() => {
     if (!doc) {
       return [];
@@ -18295,7 +19809,8 @@ export function App() {
       if (
         !sketchViewShown(sketch.sketchId, hiddenSketchIds, movingSketch) &&
         !active &&
-        !modelingEditFeature
+        !modelingEditFeature &&
+        !inPlaceEditInputSketchIds.has(sketch.sketchId)
       ) {
         return [];
       }
@@ -18419,10 +19934,36 @@ export function App() {
     hiddenSketchIds,
     movingSketch,
     modelingEditFeature,
+    inPlaceEditInputSketchIds,
     sketchReadDocument
   ]);
-  /** U09: an in-place request as the command its commit would run. */
+  /**
+   * U09: an in-place request as the command its commit would run. A line
+   * picked as its axis (an edge, a cylinder, a world axis) is added as a
+   * datum axis first, in the same undoable step: the stored features only
+   * turn about datum axes.
+   */
   function inPlaceCommandFor(request: InPlaceRequest, name: string): AnyCommand {
+    const definition = requestNewAxis(request);
+    if (!definition) {
+      return inPlaceResolvedCommand(resolveNewAxis(request, null)!, name);
+    }
+    const ids = createFeatureOnlyIds();
+    const datum = commandFactories.addDatumAxis({
+      name: newFeatureName('Axis 1'),
+      definition,
+      ids
+    });
+    const command = inPlaceResolvedCommand(
+      resolveNewAxis(request, ids.featureId)!,
+      name
+    );
+    return composeCommands(command.label, [datum, command]);
+  }
+  function inPlaceResolvedCommand(
+    request: ResolvedInPlaceRequest,
+    name: string
+  ): AnyCommand {
     const bodyName = newBodyName(name);
     switch (request.tool) {
       case 'revolve':
@@ -18541,9 +20082,79 @@ export function App() {
             ? { spacing2: request.spacing2 }
             : {}),
           ...(request.count2 !== undefined ? { count2: request.count2 } : {}),
-          ...(request.axisRef ? { axisRef: request.axisRef } : {})
+          ...(request.axisRef ? { axisRef: request.axisRef } : {}),
+          // A custom repeat vector, which the axis then only stands beside.
+          ...(request.direction ? { direction: request.direction } : {})
         });
+      case 'edge-modifier':
+        // Through the card's own command, so a fillet or chamfer made in
+        // place is stored exactly as the card's was.
+        return edgeModifierCommand(
+          null,
+          request.kind,
+          edgeModifierValue(request, name)
+        );
+      case 'primitive':
+        // The card's own Create, which numbers the feature and its body
+        // from the plain name and adds the placement Move when it moved.
+        return createPrimitiveCommand(
+          request.kind,
+          name,
+          request.dimensions,
+          request.position,
+          managerRef.current?.document,
+          request.rotationDeg
+        );
+      case 'datum-plane':
+        return commandFactories.addDatumPlane({
+          name,
+          definition: request.definition
+        });
+      case 'datum-axis':
+        return commandFactories.addDatumAxis({
+          name,
+          definition: request.definition
+        });
+      case 'reference-image':
+        return commandFactories.addReferenceImage({ image: request.image });
     }
+  }
+  /** The datum a datum request adds, and which kind, or null for others. */
+  function inPlaceDatum(
+    request: InPlaceRequest,
+    command: AnyCommand
+  ): { featureId: FeatureId; kind: 'datum-plane' | 'datum-axis' } | null {
+    if (request.tool !== 'datum-plane' && request.tool !== 'datum-axis')
+      return null;
+    const featureId = (
+      command.payload as { ids?: { featureId?: FeatureId } } | undefined
+    )?.ids?.featureId;
+    return featureId ? { featureId, kind: request.tool } : null;
+  }
+  /**
+   * A fillet or chamfer request as the value its card submitted. A pick made
+   * before its body's lineage arrived carries no name: the set is named again
+   * from the current topology at build time, or stays hash-only.
+   */
+  function edgeModifierValue(
+    request: Extract<InPlaceRequest, { tool: 'edge-modifier' }>,
+    name: string
+  ): EdgeModifierFormValue {
+    const { tool: _tool, kind: _kind, ...value } = request;
+    const body =
+      representations[request.targetBodyId] ??
+      renderedRepresentations[request.targetBodyId];
+    const edgeReferences =
+      refreshEdgeFormReferencesForCommit(
+        body,
+        request.edgeHashes,
+        request.edgeReferences
+      ) ?? request.edgeReferences;
+    return {
+      ...value,
+      name,
+      ...(edgeReferences ? { edgeReferences } : {})
+    };
   }
   /**
    * The body a request's result lands on: a new body for most, the moved
@@ -18553,10 +20164,36 @@ export function App() {
     request: InPlaceRequest,
     command: AnyCommand
   ): BodyId | undefined {
-    const ids = (command.payload as { ids?: { bodyId?: BodyId } } | undefined)
+    // A placed primitive is its Create and its placement Move: the body is
+    // the Create's.
+    const leaf =
+      request.tool === 'primitive'
+        ? (command.commands?.[0] ?? command)
+        : // A turn about a picked line adds its datum axis first.
+          (command.commands?.at(-1) ?? command);
+    const ids = (leaf.payload as { ids?: { bodyId?: BodyId } } | undefined)
       ?.ids;
     if (ids?.bodyId) return ids.bodyId;
     return request.tool === 'transform' ? request.targetBodyId : undefined;
+  }
+  /**
+   * The body an edit's preview and commit must build: an in-place Scale or
+   * turn republishes the body it now targets (retargeted, a new one), a copy
+   * and every other feature its own result.
+   */
+  function inPlaceEditResultBodyId(
+    request: InPlaceRequest,
+    edit: InPlaceEditSeed
+  ): BodyId | undefined {
+    if (request.tool !== 'transform') return edit.resultBodyId;
+    // Whether it copies is the request's, as the reseed left it (an update
+    // may have turned an in-place Scale into a copy, or back): a copy's
+    // result is the feature's own body, as the document has it now.
+    if (!request.copy) return request.targetBodyId;
+    const live = managerRef.current
+      ? findFeature(managerRef.current.document, edit.featureId)
+      : null;
+    return live?.bodyId ?? edit.resultBodyId;
   }
   /** A body as an in-place command's body slot holds it, with its box. */
   function inPlaceBodyPick(bodyId: BodyId): BodyPick | null {
@@ -18577,54 +20214,453 @@ export function App() {
     }
     return { bodyId, min, max };
   }
+  /**
+   * U09 phase 7: an edit's request as the `updateFeature` its Done commits.
+   * A face operation goes through the card's own submission builder and
+   * `modelingFeatureUpdate`, exactly as the card's Apply did.
+   */
+  function inPlaceEditCommand(
+    request: InPlaceRequest,
+    armed: InPlaceEditSeed
+  ): AnyCommand {
+    // What the command does not show is kept from the feature as it is now,
+    // not as it was when the edit armed: a collaborator's change to a field
+    // the edit leaves alone (a scale's translation) must not be written back
+    // over.
+    const live = managerRef.current
+      ? findFeature(managerRef.current.document, armed.featureId)
+      : null;
+    // Its name too: a rename since the edit armed is not written back over.
+    const edit =
+      live && live.data.featureKind === armed.data.featureKind
+        ? { ...armed, name: live.name, data: live.data }
+        : armed;
+    if (request.tool === 'modeling') {
+      const targetBodyId =
+        'targetBodyId' in request.state.value
+          ? request.state.value.targetBodyId
+          : '';
+      const body = targetBodyId ? representations[targetBodyId] : undefined;
+      const submission = buildModelingOperationSubmission(
+        {
+          ...request.state,
+          value: { ...request.state.value, name: edit.name }
+        } as ModelingOperationFormState,
+        modelingFaceOptions(body?.topology, body)
+      );
+      const built = modelingFeatureUpdate(edit.featureId, submission);
+      if (!built) throw new Error(`${edit.name} cannot be edited this way.`);
+      const update = keepAbsentHoleSteps(
+        built,
+        edit.data,
+        inPlaceRef.current.touched
+      );
+      return commandFactories.updateFeature(update, `Edit ${edit.name}`);
+    }
+    if (request.tool === 'edge-modifier') {
+      // The card's own edit command: it names what a patch must delete (an
+      // end radius, an angle) instead of leaving a lookalike behind.
+      const current = managerRef.current?.document;
+      const feature = current ? findFeature(current, edit.featureId) : null;
+      if (!feature) throw new Error(`${edit.name} is no longer in History.`);
+      return edgeModifierCommand(
+        feature,
+        request.kind,
+        edgeModifierValue(request, edit.name)
+      );
+    }
+    const definition = requestNewAxis(request);
+    if (!definition) {
+      const update = inPlaceFeatureUpdate(edit, resolveNewAxis(request, null)!);
+      if (!update) throw new Error(`${edit.name} cannot be edited this way.`);
+      return commandFactories.updateFeature(update, `Edit ${edit.name}`);
+    }
+    // A line picked as the new axis is added as a datum axis just before the
+    // edited feature, which may only turn about what is built before it.
+    const current = managerRef.current?.document;
+    const at = current
+      ? listFeaturesInOrder(current).findIndex(
+          (feature) => feature.featureId === edit.featureId
+        )
+      : -1;
+    if (at < 0) throw new Error(`${edit.name} is no longer in History.`);
+    const ids = createFeatureOnlyIds();
+    const update = inPlaceFeatureUpdate(
+      edit,
+      resolveNewAxis(request, ids.featureId)!
+    );
+    if (!update) throw new Error(`${edit.name} cannot be edited this way.`);
+    const label = `Edit ${edit.name}`;
+    return composeCommands(label, [
+      commandFactories.addDatumAxis({
+        name: newFeatureName('Axis 1'),
+        definition,
+        ids
+      }),
+      commandFactories.moveFeature(
+        { featureId: ids.featureId, toIndex: at },
+        label
+      ),
+      commandFactories.updateFeature(update, label)
+    ]);
+  }
+  /** Datum axes an edit may use: those built before the edited feature. */
+  const inPlaceDatumAxes = useMemo(() => {
+    const axes = doc?.derived.datumAxes;
+    if (!axes || !inPlaceEditFeatureId) return axes;
+    const allowed = new Set(
+      datumAxisChoices(doc, inPlaceEditFeatureId).map((axis) => axis.featureId)
+    );
+    return Object.fromEntries(
+      Object.entries(axes).filter(([featureId]) =>
+        allowed.has(featureId as FeatureId)
+      )
+    );
+  }, [doc, inPlaceEditFeatureId]);
   const inPlace = useInPlaceCommand({
     sketchViews: availableSketchViews,
-    datumAxes: doc?.derived.datumAxes,
+    datumAxes: inPlaceDatumAxes,
     linearSnap: appSettings.sketching.snapEnabled
       ? appSettings.sketching.linearSnap
       : null,
     datumLabel: (featureId) =>
       (doc && findFeature(doc, featureId)?.name) ?? 'Datum axis',
     bodyBounds: (bodyId) => inPlaceBodyPick(bodyId),
+    evaluate: (value) =>
+      evalParamValue(value, parameterScope.scope, doc?.units),
+    imagePlaneBasis,
     baseDocument: () => managerRef.current?.document ?? null,
     baseVersion: doc?.version ?? null,
+    geometrySettled: exactGeometryReady,
+    reseed: (edit) => {
+      const current = managerRef.current?.document;
+      // Picks read against topology still rebuilding would not resolve;
+      // the reseed waits for it (and runs again once it settles).
+      if (!current || !exactGeometryReadyRef.current) return undefined;
+      // Gone, or now made by no in-place command: null ends the edit.
+      const feature = findFeature(current, edit.featureId);
+      return feature && feature.data.featureKind === edit.data.featureKind
+        ? inPlaceEditSeedFor(current, feature)
+        : null;
+    },
     derive: (document) => geometry.syncOnce(document),
-    buildCommand: (request, title) => {
+    buildCommand: (request, title, edit) => {
+      if (edit) {
+        const command = inPlaceEditCommand(request, edit);
+        return {
+          validate: (document) => command.validate(document),
+          // A suppressed feature previews built, so its edit is checked by
+          // the same rebuild that would refuse it once turned back on.
+          apply: (document) =>
+            withFeatureBuilt(command.apply(document), edit.featureId),
+          resultBodyId: inPlaceEditResultBodyId(request, edit)
+        };
+      }
       const command = inPlaceCommandFor(request, title);
+      const datum = inPlaceDatum(request, command);
+      const base = managerRef.current?.document;
       return {
         validate: (document) => command.validate(document),
         apply: (document) => command.apply(document),
-        resultBodyId: inPlaceResultBodyId(request, command)
+        resultBodyId: inPlaceResultBodyId(request, command),
+        ...(datum
+          ? {
+              check: (derived: ProjectDocument['derived']) =>
+                checkNewDatum(base, derived, datum.featureId, title, datum.kind)
+            }
+          : {})
       };
     },
-    commit: (request, title) => {
+    commit: (request, title, edit, withdrawn) => {
+      // A command closed while its Done validates (another tool, a new
+      // selection) withdraws the candidate: nothing lands after it is gone.
+      if (edit) {
+        commitInPlaceEdit(request, edit, withdrawn);
+        return;
+      }
+      if (request.tool === 'primitive') {
+        // Committed as the card's Create was: the preview already built it.
+        createFeature(inPlaceCommandFor(request, title));
+        return;
+      }
+      if (request.tool === 'reference-image') {
+        commitInPlaceImage(request.image);
+        return;
+      }
       const name = newFeatureName(title);
       const command = inPlaceCommandFor(request, name);
+      const datum = inPlaceDatum(request, command);
+      if (datum) {
+        // A datum has no body to validate: its resolved frame or line is
+        // the proof, exactly as the card's Done checked it.
+        const base = managerRef.current?.document;
+        return validatedFeature
+          .runTransaction([command], {
+            label: command.label,
+            targets: [],
+            validateDerived: (derived) =>
+              checkNewDatum(base, derived, datum.featureId, name, datum.kind),
+            successMessage: commandOutcomeMessage(command.label),
+            onSuccess: finishFeatureCreation,
+            cancelled: withdrawn
+          })
+          .then((outcome) => outcome === 'committed');
+      }
       const resultBodyId = inPlaceResultBodyId(request, command);
       if (request.tool === 'pattern' && resultBodyId) {
         // Through the pattern runner, so a large pattern shows its progress
         // and can be stopped, as the card's did.
-        runPattern(command, {
+        return runPattern(command, {
           featureName: name,
           resultBodyId,
           successMessage: commandOutcomeMessage(command.label),
-          onSuccess: finishFeatureCreation
-        });
-        return;
+          onSuccess: finishFeatureCreation,
+          cancelled: withdrawn
+        }).then((outcome) => outcome === 'committed');
       }
-      createValidatedFeature(command, name, resultBodyId);
+      // The command stays open until this lands: refused or held off by
+      // another exact operation, its picks are still there to retry.
+      return createValidatedFeature(
+        command,
+        name,
+        resultBodyId,
+        withdrawn
+      )?.then(
+        (outcome) => outcome === 'committed'
+      );
     },
     publishPreview: setPreviewDoc,
     onStatus: setStatus
   });
+  // A value keypad opens from an armed handle, a running command or a tool
+  // card. Load it once one is up, so a keypad that beats the idle warm-up
+  // does not appear late. Save-Data still asks for nothing speculative: there
+  // the keypad loads when it is actually opened.
+  const keypadWithinReach =
+    tool !== null ||
+    inPlace.active ||
+    interaction.mode !== 'idle' ||
+    movePreview !== null;
+  useEffect(() => {
+    if (!keypadWithinReach || prefersSavingData()) return;
+    LazyNumericKeypad.preload().catch(() => undefined);
+  }, [keypadWithinReach]);
   const inPlaceRef = useRef(inPlace);
   inPlaceRef.current = inPlace;
+  // Every open edit: an in-place command's, and the in-place Extrude's.
+  cancelInPlaceRef.current = () => {
+    inPlaceRef.current.cancel(true);
+    endExtrudeEditRef.current();
+  };
+  // A command's keypad belongs to the command it opened on: another one
+  // taking over (a History row re-arming, a new tool) closes it, or its
+  // value would be entered into the new command.
+  const inPlaceSessionTool = inPlace.tool;
+  const inPlaceSessionEdit = inPlace.editing;
+  useEffect(() => {
+    setKeypad((current) => (current?.kind === 'command' ? null : current));
+  }, [inPlaceSessionTool, inPlaceSessionEdit]);
+  // So does the in-place Extrude's: a new extrude, an edit, another arming
+  // of either is another command, and the keypad goes with the one it was
+  // opened on.
+  useEffect(() => {
+    regionKeypadText.current = null;
+    setKeypad((current) => (current?.kind === 'extrude' ? null : current));
+  }, [extrudeSessionKey]);
+  const narrowWindow = useMediaQuery(NARROW_WINDOW_QUERY);
+  const inPlaceEditing = inPlace.editing;
+  const extrudeEditFeatureId = extrudeEdit?.featureId ?? null;
+  useEffect(() => {
+    setInPlaceEditFeatureId(
+      inPlaceEditing?.featureId ?? extrudeEditFeatureId ?? null
+    );
+  }, [inPlaceEditing, extrudeEditFeatureId]);
+  // The stored extrude changing under an open edit (an undo or redo, a
+  // collaborator) reseeds an untouched edit from it, as an in-place edit's
+  // untouched values follow the live feature; a changed draft stands.
+  const extrudeEditArmedData = useRef<FeatureNode['data'] | null>(null);
+  const extrudeEditData = extrudeEditFeature?.data ?? null;
+  useEffect(() => {
+    if (!extrudeEdit || !extrudeEditData) {
+      extrudeEditArmedData.current = null;
+      return;
+    }
+    const armed = extrudeEditArmedData.current;
+    extrudeEditArmedData.current = extrudeEditData;
+    if (
+      !armed ||
+      armed === extrudeEditData ||
+      JSON.stringify(armed) === JSON.stringify(extrudeEditData)
+    ) {
+      return;
+    }
+    if (regionExtrudeCommandRef.current?.touched()) return;
+    setExtrudeEdit((current) =>
+      current ? { ...current, generation: current.generation + 1 } : current
+    );
+    // A new arming per generation; the data it opens on is this one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [extrudeEditData]);
+  // An extrude edit lasts while its feature is the pinned selection and
+  // nothing else runs: another row, Esc, a tool, a new extrude or the
+  // feature's deletion ends it, its preview with it.
+  const extrudeEditNodeId = extrudeEditFeature?.id ?? null;
+  useEffect(() => {
+    if (!extrudeEdit) return;
+    if (
+      !extrudeEditNodeId ||
+      selectedFeatureNodeId !== extrudeEditNodeId ||
+      inPlace.active ||
+      tool !== null ||
+      interaction.mode === 'region' ||
+      interaction.mode === 'sketch'
+    ) {
+      endExtrudeEdit();
+    }
+    // endExtrudeEdit reads refs only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    extrudeEdit,
+    extrudeEditNodeId,
+    selectedFeatureNodeId,
+    inPlace.active,
+    tool,
+    interaction.mode
+  ]);
+  // An Image canceled (or replaced by another command) lets its stored
+  // bytes go again, unless something else already uses them.
+  useEffect(() => {
+    if (inPlace.tool === 'reference-image') return;
+    const pending = pendingReferenceImageRef.current;
+    if (!pending) return;
+    pendingReferenceImageRef.current = null;
+    releaseReferenceImageBytes(pending);
+  }, [inPlace.tool]);
+  /** Whether the value a command keypad opened on had been set by the user. */
+  const commandKeypadTouchedRef = useRef(false);
   /** The keypad moves a command handle through this, without a render. */
   const commandSetterRef = useRef<
     ((valueId: string, value: number) => void) | null
   >(null);
   const inPlaceSpec = inPlace.spec;
   const inPlaceUnits = doc?.units ?? 'mm';
+  // A command canceled mid-drag never sees the release: the next one must
+  // not start with its arrows still waiting for it.
+  const inPlaceSessionKey = inPlace.sessionId;
+  useEffect(() => setFootprintDragging(false), [inPlaceSessionKey]);
+  /** The bodies a primitive's footprint may stand on: the model's own. */
+  const committedBodyIds = useMemo(
+    () => (doc ? [...doc.bodyOrder] : []),
+    [doc]
+  );
+  /** U09: a dragged or previewed Extrude value as its field's text. */
+  function extrudeValueText(value: number): string {
+    return String(Math.round(value * 1e6) / 1e6);
+  }
+  /**
+   * U09: the keypad for one of the in-place Extrude's values, from its bar
+   * row (`at`, where the row is) or its handle's chip. It opens on the text
+   * the value holds, so an expression is edited as an expression.
+   */
+  function openRegionExtrudeKeypad(
+    valueId: ExtrudeValueId,
+    at?: { x: number; y: number }
+  ): boolean {
+    const command = regionExtrudeCommandRef.current;
+    if (
+      !command ||
+      (interactionRef.current.mode !== 'region' && !extrudeEditRef.current)
+    ) {
+      return false;
+    }
+    const text = command.text(valueId);
+    regionKeypadText.current = { valueId, text };
+    const shown = regionExtrudeState?.[valueId];
+    const value =
+      shown !== undefined && Number.isFinite(shown)
+        ? shown
+        : Number.isFinite(Number(text))
+          ? Number(text)
+          : 0;
+    setKeypad({
+      kind: 'extrude',
+      commandValueId: valueId,
+      label:
+        valueId === 'distance'
+          ? 'Distance'
+          : valueId === 'backDistance'
+            ? 'Back distance'
+            : 'Draft angle',
+      initial: text,
+      selectInitial: true,
+      unitKind: valueId === 'draftAngle' ? 'angle' : 'length',
+      baseline: value,
+      baselineRaw: text,
+      ...(at ? { fixedClientAnchor: at } : {})
+    });
+    return true;
+  }
+  /** Moves the Extrude handle a value drives, without a render. */
+  function moveRegionExtrudeHandle(valueId: string, value: number) {
+    // A new extrude's distance is the region's arrow; an edit's, its own.
+    if (valueId === 'distance' && !extrudeEditRef.current) {
+      offsetSetterRef.current?.(value);
+    } else {
+      commandSetterRef.current?.(valueId, value);
+    }
+  }
+  /**
+   * A value the Extrude's handles or keypad set: typed text kept as typed.
+   * The keypad's own writes are remembered, so only someone else's change
+   * to its value closes it.
+   */
+  function setRegionExtrudeValue(
+    valueId: string,
+    value: number,
+    raw?: string,
+    fromKeypad = false
+  ) {
+    if (
+      valueId !== 'distance' &&
+      valueId !== 'backDistance' &&
+      valueId !== 'draftAngle'
+    ) {
+      return;
+    }
+    const text = raw ?? extrudeValueText(value);
+    if (fromKeypad) regionKeypadText.current = { valueId, text };
+    regionExtrudeCommandRef.current?.setValue(valueId, text);
+  }
+  /**
+   * Opens the keypad on an in-place command's value: from its chip, or from
+   * the bar's Options at `at` (a position, which has no handle).
+   */
+  function openInPlaceKeypad(
+    valueId: string,
+    value: number,
+    at?: { x: number; y: number }
+  ): boolean {
+    const valueSpec = inPlaceSpec?.values.find(
+      (candidate) => candidate.id === valueId
+    );
+    if (!valueSpec) return false;
+    const raw = inPlace.raws[valueId];
+    commandKeypadTouchedRef.current = inPlace.touched.includes(valueId);
+    setKeypad({
+      kind: 'command',
+      commandValueId: valueId,
+      label: valueSpec.label,
+      // A parametric value opens as its expression, and comes back as one
+      // if entry is canceled.
+      initial: raw ?? keypadText(value),
+      selectInitial: true,
+      unitKind: valueSpec.unit,
+      baseline: value,
+      ...(raw !== undefined ? { baselineRaw: raw } : {}),
+      ...(at ? { fixedClientAnchor: at } : {})
+    });
+    return true;
+  }
   /** A face-list command's faces, lit as a sweep's are. */
   const inPlaceFocusFaces = useMemo<TopologySelection[] | null>(
     () =>
@@ -18645,8 +20681,13 @@ export function App() {
         const valueSpec = inPlaceSpec?.values.find(
           (candidate) => candidate.id === handle.valueId
         );
-        const round = (value: number) =>
-          formatNumber(Math.round(value * 100) / 100);
+        // A value two places would show as a refused one is shown in full.
+        const round = (value: number) => {
+          const shown = displayedValue(valueSpec, value);
+          return shown === Math.round(value * 100) / 100
+            ? formatNumber(shown)
+            : String(shown);
+        };
         const format =
           valueSpec?.unit === 'angle'
             ? (value: number) => `${round(value)}°`
@@ -18668,18 +20709,268 @@ export function App() {
     // a chip-only value's text; it never rebuilds a rig.
     [inPlace.handles, inPlace.values, inPlaceSpec, inPlaceUnits]
   );
+  /**
+   * U09: the in-place Extrude's back arrow and draft rig, beside the
+   * region's own arrow, on the region the arrow stands on.
+   */
+  const regionExtrudeTarget =
+    interaction.mode === 'region' && interaction.phase !== 'validating'
+      ? interaction.target
+      : null;
+  const regionExtrudeLastValue =
+    interaction.mode === 'region' ? (interaction.lastValue ?? 0) : 0;
+  const regionExtrudeHandles = useMemo(() => {
+    if (inPlace.active) return [];
+    // An edit's region is its stored profile (the sketch's first region for
+    // one stored before profiles); a new extrude's, the one its arrow is on.
+    const edited = extrudeEditFeature?.data.featureKind === 'extrude'
+      ? extrudeEditFeature.data
+      : null;
+    const stored = edited ? (edited.profiles?.[0] ?? edited.profile) : null;
+    const pick: ProfilePick | null = edited
+      ? stored
+        ? {
+            sketchId: edited.sketchId,
+            reference: stored,
+            regionFingerprint: stored.all === true ? 0 : stored.regionFingerprint
+          }
+        : {
+            sketchId: edited.sketchId,
+            reference: { all: true, sourceEntityIds: [] },
+            regionFingerprint: 0,
+            implicit: true
+          }
+      : regionExtrudeTarget
+        ? {
+            sketchId: regionExtrudeTarget.sketchId as SketchId,
+            regionFingerprint: regionExtrudeTarget.regionFingerprint,
+            reference: {
+              regionFingerprint: regionExtrudeTarget.regionFingerprint,
+              samplePoint: regionExtrudeTarget.samplePoint,
+              sourceArea: regionExtrudeTarget.area,
+              sourceEntityIds: regionExtrudeTarget.sourceEntityIds
+            }
+          }
+        : null;
+    if (!pick) return [];
+    const view = availableSketchViews.find(
+      (candidate) => candidate.sketchId === pick.sketchId
+    );
+    const loops = profileRegionLoops(
+      { sketchViews: availableSketchViews },
+      pick
+    );
+    if (!view || !loops) return [];
+    const finite = (value: number | undefined, fallback: number) =>
+      value !== undefined && Number.isFinite(value) ? value : fallback;
+    const state = {
+      extent: regionExtrudeState?.extent ?? ('blind' as const),
+      symmetric: regionExtrudeState?.symmetric ?? false,
+      distance: finite(regionExtrudeState?.distance, regionExtrudeLastValue),
+      backDistance: finite(regionExtrudeState?.backDistance, 0),
+      draftAngle: finite(regionExtrudeState?.draftAngle, 0)
+    };
+    // An edit has no region arrow: its distance gets one of its own.
+    if (edited && !regionExtrudeState) return [];
+    return extrudeHandles(
+      loops.outline,
+      view.basis.normal,
+      edited
+        ? `edit:${extrudeEditFeature!.featureId}`
+        : `${pick.sketchId}:${pick.regionFingerprint}`,
+      state,
+      loops.holes,
+      edited !== null
+    ).map((handle) =>
+      handle.valueId === 'draftAngle'
+        ? {
+            ...handle,
+            value: state.draftAngle,
+            min: -DRAFT_DRAG_LIMIT_DEG,
+            max: DRAFT_DRAG_LIMIT_DEG,
+            format: (value: number) => `Draft ${formatNumber(value)}°`
+          }
+        : handle.valueId === 'distance'
+          ? {
+              ...handle,
+              value: state.distance,
+              format: (value: number) =>
+                `${formatNumber(value)} ${inPlaceUnits}`
+            }
+          : {
+              ...handle,
+              value: state.backDistance,
+              min: 0,
+              format: (value: number) =>
+                `Back ${formatNumber(value)} ${inPlaceUnits}`
+            }
+    );
+  }, [
+    regionExtrudeTarget,
+    regionExtrudeLastValue,
+    regionExtrudeState,
+    extrudeEditFeature,
+    inPlace.active,
+    availableSketchViews,
+    inPlaceUnits
+  ]);
+  // A new fillet's or chamfer's picked edges are the selection, lit as the
+  // card's list was. An edit leaves the selection alone: History already
+  // lights the feature's blend faces, through its preview as edges change.
+  // The base version: command-owned selections are re-applied after an
+  // undo or redo, which clears the selection while the command keeps them.
+  const inPlaceBaseVersion = doc?.version ?? null;
+  const inPlaceEdgeKey =
+    inPlace.active && inPlaceSpec?.edgeMode && !inPlace.editing
+      ? JSON.stringify(
+          inPlace.slots.edges.map((edge) => [edge.bodyId, edge.hash])
+        )
+      : null;
+  const selectedEdgeKey = JSON.stringify(
+    selectedEdges.map((edge) => [edge.bodyId, edge.hash])
+  );
+  const inPlaceEdgesRef = useRef(inPlace.slots.edges);
+  inPlaceEdgesRef.current = inPlace.slots.edges;
+  const litInPlaceEdges = useRef(false);
+  useEffect(() => {
+    if (inPlaceEdgeKey === null) {
+      // The command is over, done or canceled: its edges are not a
+      // selection left behind for the next gesture to act on.
+      if (litInPlaceEdges.current) {
+        litInPlaceEdges.current = false;
+        setSelectedEdges([]);
+      }
+      return;
+    }
+    litInPlaceEdges.current = true;
+    // Already the selection: nothing to put back.
+    if (selectedEdgeKey === inPlaceEdgeKey) return;
+    setSelectedEdges(
+      inPlaceEdgesRef.current.map((edge) => ({
+        bodyId: edge.bodyId,
+        kind: 'edge',
+        ...(edge.topologyId ? { topologyId: edge.topologyId } : {}),
+        hash: edge.hash,
+        ...(edge.reference ? { reference: edge.reference } : {})
+      }))
+    );
+    // Again after an undo or redo, or a selection elsewhere (the Objects
+    // tree), which clears the selection while the command keeps its edges.
+  }, [inPlaceEdgeKey, inPlaceBaseVersion, selectedEdgeKey]);
+  // Picking narrows to edges while a fillet or chamfer runs, as its tool did.
+  const inPlaceTool = inPlace.tool;
+  useEffect(() => {
+    setInPlaceEdgeTool(
+      inPlaceTool === 'fillet' || inPlaceTool === 'chamfer'
+        ? inPlaceTool
+        : null
+    );
+  }, [inPlaceTool]);
   // A body tool's picked bodies are the selection: each wears its pick
   // number in the viewport, base first, as the boolean card's list did.
   const inPlaceBodyIds =
     inPlace.active && inPlaceSpec?.bodyMode
       ? inPlace.slots.bodies.map((body) => body.bodyId).join(',')
       : null;
+  // Again after an undo or redo, which clears the selection while the
+  // command keeps its bodies.
   useEffect(() => {
     if (inPlaceBodyIds === null) return;
     setSelectedBodyIds(
       inPlaceBodyIds ? (inPlaceBodyIds.split(',') as BodyId[]) : []
     );
-  }, [inPlaceBodyIds]);
+  }, [inPlaceBodyIds, inPlaceBaseVersion]);
+  /**
+   * What a fillet's or chamfer's card offered besides its fields: every
+   * edge of the body at once (or none), and a chamfer's two setbacks
+   * swapped between the faces.
+   */
+  // The body Select all works on: the picked edges' body, else (an edit's
+  // edges all cleared) the body the edited blend rounds, which the model
+  // no longer shows, before any one body on screen.
+  const inPlaceEditedBlendTarget = inPlaceEditTarget(inPlace.editing);
+  // A new blend's body once its edges are cleared: the one it last held,
+  // so Select all can take them all back.
+  const heldBlendBody = inPlace.slots.edges[0]?.bodyId ?? null;
+  const [lastBlendBody, setLastBlendBody] = useState<BodyId | null>(null);
+  // Only within one command: another taking over (even another blend)
+  // starts without it.
+  const blendSessionId = inPlace.sessionId;
+  useEffect(() => {
+    setLastBlendBody(null);
+  }, [blendSessionId]);
+  useEffect(() => {
+    if (heldBlendBody) setLastBlendBody(heldBlendBody);
+  }, [heldBlendBody]);
+  const inPlaceEdgeBody = inPlaceSpec?.edgeMode
+    ? (heldBlendBody ??
+      inPlaceEditedBlendTarget ??
+      (lastBlendBody && representations[lastBlendBody]
+        ? lastBlendBody
+        : null) ??
+      (viewerBodies.length === 1 ? viewerBodies[0]!.bodyId : null))
+    : null;
+  const inPlaceBodyEdges = inPlaceEdgeBody
+    ? (representations[inPlaceEdgeBody]?.topology?.edges.filter(
+        (edge) => edge.displayRole !== 'seam'
+      ) ?? [])
+    : [];
+  const inPlaceActions = [
+    ...(inPlaceBodyEdges.length > 0
+      ? [
+          inPlace.slots.edges.length === inPlaceBodyEdges.length
+            ? { id: 'clear-edges', label: 'Clear edge selection' }
+            : {
+                id: 'all-edges',
+                label: `Select all ${inPlaceBodyEdges.length} edges`
+              }
+        ]
+      : []),
+    ...(inPlace.tool === 'chamfer' && inPlace.options.shape === 'two'
+      ? [{ id: 'swap-distances', label: 'Swap the two faces' }]
+      : [])
+  ];
+  /** A blend's edges by name, as its card listed them. */
+  const inPlacePicks = inPlaceSpec?.edgeMode
+    ? {
+        label:
+          inPlace.tool === 'chamfer' ? 'Chamfered edges' : 'Filleted edges',
+        minimum: 1,
+        items: inPlace.slots.edges.map((edge) => {
+          const owner = representations[edge.bodyId];
+          return {
+            id: String(edge.hash),
+            name: edgeLabel(owner, edge.hash, edge.topologyId || undefined),
+            ...(owner ? { owner: owner.name } : {})
+          };
+        })
+      }
+    : null;
+  function runInPlaceAction(actionId: string) {
+    const command = inPlaceRef.current;
+    if (actionId === 'all-edges' && inPlaceEdgeBody) {
+      command.setEdges(
+        inPlaceBodyEdges.flatMap((edge) => {
+          const pick = inPlaceEdgePick(
+            inPlaceEdgeBody,
+            edge.topologyId,
+            edge.hash
+          );
+          return pick ? [pick] : [];
+        })
+      );
+    } else if (actionId === 'clear-edges') {
+      command.setEdges([]);
+    } else if (actionId === 'swap-distances') {
+      const first = command.values.distance;
+      const second = command.values.distance2;
+      if (first === undefined || second === undefined) return;
+      const firstRaw = command.raws.distance;
+      const secondRaw = command.raws.distance2;
+      command.setValue('distance', second, secondRaw);
+      command.setValue('distance2', first, firstRaw);
+    }
+  }
   const inPlaceAxisPicker = useMemo(
     () =>
       inPlaceSpec?.wantsAxis &&
@@ -18695,11 +20986,18 @@ export function App() {
     if (!doc || !inPlaceSpec?.wantsPath) return null;
     const resolve = sketchValueResolver(parameterScope.scope, doc.units);
     // Every sketch's curves, the profile's own included: one sketch may hold
-    // both a closed profile and the open spine it sweeps along.
-    return sketchCurveCandidates(doc, availableSketchViews, (value) =>
-      resolve(value)
-    );
-  }, [doc, inPlaceSpec, availableSketchViews, parameterScope]);
+    // both a closed profile and the open spine it sweeps along. An edit
+    // offers only sketches made before its feature, as it takes profiles.
+    const views = inPlaceEditing
+      ? availableSketchViews.filter((view) =>
+          featurePrecedes(
+            producingFeatureOf({ sketchId: view.sketchId }),
+            inPlaceEditing.featureId
+          )
+        )
+      : availableSketchViews;
+    return sketchCurveCandidates(doc, views, (value) => resolve(value));
+  }, [doc, inPlaceSpec, availableSketchViews, parameterScope, inPlaceEditing]);
   const inPlaceCurvePicker = useMemo(
     () =>
       inPlaceCurveCandidates
@@ -18713,16 +21011,360 @@ export function App() {
     [inPlaceCurveCandidates, inPlace.slots.path, inPlace.slots.guide]
   );
 
+  // An edit shows the sketches its feature was built from, consumed and
+  // hidden as they usually are, so a profile can be clicked again: every one
+  // it stores, including one whose saved picks no longer resolve.
+  const inPlaceEditSketchIds = useMemo(() => {
+    const feature =
+      inPlaceEditing && managerRef.current
+        ? findFeature(managerRef.current.document, inPlaceEditing.featureId)
+        : null;
+    return new Set<string>(
+      inPlaceEditing
+        ? [
+            ...(feature ? inPlaceEditSourceSketchIds(feature.data) : []),
+            ...[
+              ...inPlaceEditing.slots.profiles,
+              ...inPlaceEditing.slots.path,
+              ...inPlaceEditing.slots.guide
+            ].map((pick) => pick.sketchId)
+          ]
+        : []
+    );
+    // The live feature is read again with the document: an undo or a
+    // collaborator may point it at another sketch while the edit is armed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inPlaceEditing, doc]);
   // Editing needs hidden source profiles; visibility remains a viewport concern.
   const sketchViews = useMemo(
     () =>
       availableSketchViews.filter(
         (view) =>
           view.active ||
+          inPlaceEditSketchIds.has(view.sketchId) ||
           sketchViewShown(view.sketchId, hiddenSketchIds, movingSketch)
       ),
-    [availableSketchViews, hiddenSketchIds, movingSketch]
+    [availableSketchViews, hiddenSketchIds, movingSketch, inPlaceEditSketchIds]
   );
+  // An edit whose feature an undo, a remote change or a delete removed has
+  // nothing left to edit.
+  const inPlaceEditGone =
+    inPlaceEditing !== null &&
+    doc !== null &&
+    !findFeature(doc, inPlaceEditing.featureId);
+  useEffect(() => {
+    if (!inPlaceEditGone) return;
+    inPlaceRef.current.cancel(true);
+    setStatus('This history feature is no longer available to edit.');
+  }, [inPlaceEditGone, setStatus]);
+  // A seeded profile in a consumed (hidden) sketch could not be checked when
+  // the edit armed: the sketch is drawn only once the edit shows it. Checked
+  // then, and again whenever one of its sketches changes under the edit (an
+  // undo, a collaborator), a profile its sketch no longer has is dropped and
+  // said, so the slot asks for a new pick rather than holding one nothing
+  // can build.
+  const checkedEditProfiles = useRef<{
+    /** The edit checked, or a new command's tool. */
+    editing: InPlaceEditSeed | string;
+    views: readonly ((typeof availableSketchViews)[number] | undefined)[];
+  } | null>(null);
+  const regionsForReferenceRef = useRef(regionsForReference);
+  regionsForReferenceRef.current = regionsForReference;
+  const inPlaceProfiles = inPlace.slots.profiles;
+  const inPlaceTitle = inPlace.spec?.title ?? 'This command';
+  useEffect(() => {
+    const editing = inPlaceEditing;
+    // A new command's sections follow the model too (an undo, a
+    // collaborator), so a lost one is said and can be picked again.
+    const owner = editing ?? inPlaceTool;
+    if (!owner || inPlaceProfiles.length === 0) return;
+    const name = editing?.name ?? inPlaceTitle;
+    const views = inPlaceProfiles.map((pick) =>
+      availableSketchViews.find((view) => view.sketchId === pick.sketchId)
+    );
+    // A sketch with no view yet is waiting to be shown (the edit shows its
+    // hidden sources a render after arming) or rebuilt; once the edit has
+    // shown them and the rebuild has settled, a sketch still without a view
+    // (emptied, its plane lost) has nothing a section could stand on.
+    const settled = editing
+      ? inPlaceEditFeatureId === editing.featureId && exactGeometryReady
+      : exactGeometryReady;
+    if (!settled && views.some((view) => !view)) return;
+    const checked = checkedEditProfiles.current;
+    if (
+      checked?.editing === owner &&
+      checked.views.length === views.length &&
+      checked.views.every((view, index) => view === views[index])
+    ) {
+      return;
+    }
+    checkedEditProfiles.current = { editing: owner, views };
+    // Sections are ordered: one lost before a kept one clears the list.
+    const { kept, cleared } = keptInOrder(
+      inPlaceProfiles.map((pick, index) => {
+        if (pick.implicit) return pick;
+        const view = views[index];
+        if (!view) return null;
+        const [region] = regionsForReferenceRef.current(view, pick.reference);
+        return region
+          ? { ...pick, regionFingerprint: region.regionFingerprint }
+          : null;
+      })
+    );
+    if (kept.length < inPlaceProfiles.length) {
+      inPlaceRef.current.setProfiles(kept, inPlaceProfiles);
+      setStatus(
+        cleared
+          ? `${name}: its saved profile no longer resolves · pick its sections again, in order.`
+          : `${name}: its saved profile no longer resolves · pick it again.`
+      );
+    } else if (
+      kept.some(
+        (pick, index) =>
+          pick.regionFingerprint !== inPlaceProfiles[index]?.regionFingerprint
+      )
+    ) {
+      inPlaceRef.current.setProfiles(kept, inPlaceProfiles);
+    }
+  }, [
+    inPlaceEditing,
+    inPlaceTool,
+    inPlaceTitle,
+    inPlaceProfiles,
+    availableSketchViews,
+    inPlaceEditFeatureId,
+    exactGeometryReady,
+    setStatus
+  ]);
+  // The same for its curves and faces while the document changes under the
+  // edit (an undo, a collaborator): a path entity or a face the model no
+  // longer has is dropped and said, since nothing on screen could click it
+  // back out of the list.
+  const inPlaceEditPicks = inPlace.slots;
+  const inPlaceFacePickRef = useRef(inPlaceFacePick);
+  inPlaceFacePickRef.current = inPlaceFacePick;
+  const inPlaceBodyPickRef = useRef(inPlaceBodyPick);
+  inPlaceBodyPickRef.current = inPlaceBodyPick;
+  const inPlaceEdgePickRef = useRef(inPlaceEdgePick);
+  inPlaceEdgePickRef.current = inPlaceEdgePick;
+  useEffect(() => {
+    const editing = inPlaceEditing;
+    // A new command's picks follow the model too (an undo, a collaborator's
+    // rebuild): a Scale's box, a Shell's faces.
+    if (!doc || inPlace.tool === null) return;
+    // The edited feature as it is now: a saved hole's position or a scale's
+    // factor may have changed since the edit armed.
+    const liveFeature = editing ? findFeature(doc, editing.featureId) : null;
+    const liveData = editing
+      ? liveFeature && liveFeature.data.featureKind === editing.data.featureKind
+        ? liveFeature.data
+        : editing.data
+      : null;
+    // A path, a guide and a boolean's inputs are ordered: one lost before a
+    // kept one clears that list to be picked again in order.
+    let reordered = false;
+    const ordered = <T,>(entries: readonly (T | null)[]): T[] => {
+      const result = keptInOrder(entries);
+      if (result.cleared) reordered = true;
+      return result.kept;
+    };
+    const curves = (picks: readonly CurvePick[]) =>
+      ordered(
+        picks.map((pick) =>
+          sweepCurveExists(doc, pick.sketchId, pick.entityId) ? pick : null
+        )
+      );
+    // Only against a body whose topology is published: one still being
+    // analysed says nothing yet. A face is found as the feature rebuilds
+    // it, by lineage first, and is read afresh where it stands now (its
+    // hash, its plane, a saved hole's place on it), so its handles follow
+    // a face an update moved.
+    let facesMoved = false;
+    const placed = (pick: FacePick) =>
+      JSON.stringify([
+        pick.hash,
+        pick.topologyId,
+        pick.normal,
+        pick.centroid,
+        pick.center,
+        pick.point
+      ]);
+    const faces = inPlaceEditPicks.faces.flatMap((pick) => {
+      const body = representations[pick.bodyId];
+      if (!body?.topology) return [pick];
+      const found = resolveFace(body, {
+        hash: pick.hash,
+        ...(pick.reference ? { reference: pick.reference } : {})
+      });
+      if (!found.ok) return [];
+      const fresh = inPlaceFacePickRef.current(
+        pick.bodyId,
+        found.entry.topologyId,
+        found.entry.hash,
+        undefined,
+        true
+      );
+      if (!fresh) return [pick];
+      const point =
+        pick.savedPosition && liveData?.featureKind === 'hole'
+          ? (holeWorldPosition(fresh, liveData, {
+              evaluate: (value) =>
+                evalParamValue(value, parameterScope.scope, doc.units)
+            }) ?? undefined)
+          : pick.point;
+      const next: FacePick = {
+        ...fresh,
+        ...(pick.reference ? { reference: pick.reference } : {}),
+        ...(pick.savedPosition ? { savedPosition: true as const } : {}),
+        ...(point ? { point } : {})
+      };
+      if (placed(next) === placed(pick)) return [pick];
+      facesMoved = true;
+      return [next];
+    });
+    const path = curves(inPlaceEditPicks.path);
+    const guide = curves(inPlaceEditPicks.guide);
+    // A boolean's inputs are a list a missing body could not be clicked out
+    // of; a one-body slot is replaced by the next click, so it stays.
+    const listsBodies =
+      inPlace.tool !== null &&
+      IN_PLACE_TOOL_SPECS[inPlace.tool].bodyMode === 'many';
+    // Gone means gone from the document, or still without a shape once the
+    // exact rebuild has finished: a body between rebuilds keeps its place.
+    const kept = listsBodies
+      ? ordered(
+          inPlaceEditPicks.bodies.map((pick) =>
+            representations[pick.bodyId] ||
+            (!exactGeometryReady &&
+              Object.values(doc.nodes).some(
+                (node) => node.kind === 'body' && node.bodyId === pick.bodyId
+              ))
+              ? pick
+              : null
+          )
+        )
+      : inPlaceEditPicks.bodies;
+    // A body the update reshaped is read again, so the handles placed from
+    // its box (a scale's corner, a pattern's spacing) follow it.
+    let bodiesMoved = false;
+    const bodies = kept.map((pick) => {
+      const fresh = inPlaceBodyPickRef.current(pick.bodyId);
+      if (!fresh) return pick;
+      if (!editing || !liveData) {
+        // A new command works on the body as it is now.
+        const same =
+          JSON.stringify([fresh.min, fresh.max]) ===
+          JSON.stringify([pick.min, pick.max]);
+        if (same) return pick;
+        bodiesMoved = true;
+        return fresh;
+      }
+      const live = findFeature(doc, editing.featureId);
+      const boxContext = {
+        evaluate: (value: ParamValue) =>
+          evalParamValue(value, parameterScope.scope, doc.units),
+        datumAxis: (featureId: FeatureId) =>
+          doc.derived.datumAxes?.[featureId] ?? null,
+        bodyVertices: (bodyId: BodyId) =>
+          representations[bodyId]?.mesh.vertices ?? null
+      };
+      // A body clicked in place of the transform's own target never went
+      // through it, but its later in-place steps did: its box is taken back
+      // through those alone, to where the edited feature acts on it.
+      const retargeted =
+        liveData.featureKind === 'transform' &&
+        liveData.targetBodyId !== pick.bodyId;
+      const box = retargeted
+        ? live
+          ? {
+              ...inPlaceEditBodyBox(
+                fresh,
+                { ...liveData, targetBodyId: pick.bodyId },
+                boxContext,
+                laterStepsOnBody(doc, live, pick.bodyId),
+                false
+              ),
+              // A later direct edit of it: the factor is typed, not dragged.
+              ...(laterDirectEditOnBody(doc, live, pick.bodyId)
+                ? { reshapedLater: true as const }
+                : {})
+            }
+          : fresh
+        : inPlaceEditBodyBox(
+            fresh,
+            liveData,
+            boxContext,
+            live ? laterInPlaceSteps(doc, live) : [],
+            !(live && isFeatureSuppressed(live))
+          );
+      const same =
+        JSON.stringify([box.min, box.max, box.reshapedLater]) ===
+        JSON.stringify([pick.min, pick.max, pick.reshapedLater]);
+      if (same) return pick;
+      bodiesMoved = true;
+      return box;
+    });
+    // A blend's edges, the same way (see `refreshedEdgePicks`).
+    const { edges, moved: edgesMoved } = refreshedEdgePicks(
+      inPlaceEditPicks.edges,
+      representations,
+      inPlaceEdgePickRef.current
+    );
+    if (
+      path.length === inPlaceEditPicks.path.length &&
+      guide.length === inPlaceEditPicks.guide.length &&
+      faces.length === inPlaceEditPicks.faces.length &&
+      bodies.length === inPlaceEditPicks.bodies.length &&
+      edges.length === inPlaceEditPicks.edges.length
+    ) {
+      if (facesMoved || bodiesMoved || edgesMoved) {
+        inPlaceRef.current.setPicks(
+          {
+            ...(facesMoved ? { faces } : {}),
+            ...(bodiesMoved ? { bodies } : {}),
+            ...(edgesMoved ? { edges } : {})
+          },
+          inPlaceEditPicks
+        );
+      }
+      return;
+    }
+    inPlaceRef.current.setPicks(
+      { path, guide, faces, bodies, edges },
+      inPlaceEditPicks
+    );
+    setStatus(
+      reordered
+        ? `${editing?.name ?? inPlaceTitle}: a saved pick no longer exists in the model · pick that list again, in order.`
+        : `${editing?.name ?? inPlaceTitle}: a saved pick no longer exists in the model · pick it again.`
+    );
+  }, [
+    inPlaceEditing,
+    inPlaceEditPicks,
+    inPlace.tool,
+    doc,
+    representations,
+    exactGeometryReady,
+    parameterScope.scope,
+    inPlaceTitle,
+    setStatus
+  ]);
+  // A new Fillet or Chamfer's edges follow the model too (an undo, a
+  // collaborator's rebuild), so a click on the live edge toggles the held
+  // one rather than adding a second reference to it.
+  const inPlaceCreatesBlend =
+    inPlace.active && !inPlaceEditing && Boolean(inPlaceSpec?.edgeMode);
+  useEffect(() => {
+    if (!inPlaceCreatesBlend || inPlaceEditPicks.edges.length === 0) return;
+    const { edges, moved } = refreshedEdgePicks(
+      inPlaceEditPicks.edges,
+      representations,
+      inPlaceEdgePickRef.current
+    );
+    if (moved || edges.length !== inPlaceEditPicks.edges.length) {
+      inPlaceRef.current.setPicks({ edges }, inPlaceEditPicks);
+    }
+  }, [inPlaceCreatesBlend, inPlaceEditPicks, representations]);
 
   useEffect(() => {
     setSelectedProfiles((current) => {
@@ -18825,6 +21467,19 @@ export function App() {
     modifiers: { additive: boolean; toggle: boolean }
   ) {
     if (inPlaceRef.current.active) {
+      const editing = inPlaceRef.current.editing;
+      if (
+        editing &&
+        !inPlaceEditMayUse(
+          producingFeatureOf({ sketchId: region.sketchId as SketchId }),
+          editing
+        )
+      ) {
+        setStatus(
+          `${editing.name} can only use sketches made before it in History.`
+        );
+        return;
+      }
       const pick = inPlaceProfilePick(region);
       if (pick) inPlaceRef.current.pickProfile(pick);
       return;
@@ -18993,7 +21648,7 @@ export function App() {
       regionFingerprint: anchor.regionFingerprint,
       samplePoint: anchor.samplePoint,
       area: anchor.area,
-      initialValue: interaction.lastValue ?? 0,
+      initialValue: regionDraftDistance.current ?? interaction.lastValue ?? 0,
       followers: interaction.targets
         .filter((target) => target !== anchor)
         .map((target) => ({
@@ -19367,7 +22022,10 @@ export function App() {
       ...(total === undefined
         ? {}
         : { totalBaseline: total.total, totalSense: total.sense }),
-      ...(interaction.phase === 'validating' ? { locked: true } : {})
+      ...(interaction.phase === 'validating' ? { locked: true } : {}),
+      // Keypad entry: typed values drive the handle, its ghost and the
+      // preview; landing exact frames must not rebuild them under the hand.
+      ...(interaction.phase === 'exact-entry' ? { entry: true } : {})
     };
   }, [doc, interaction, renderedOffsetPreview, representations]);
 
@@ -20286,18 +22944,18 @@ export function App() {
     ) {
       return false;
     }
+    // U09: the region's arrow is the in-place Extrude's distance, entered
+    // as its other values are: Enter sets it, Done (or Enter) extrudes.
+    if (interaction.mode === 'region') {
+      return openRegionExtrudeKeypad('distance');
+    }
     // Reopened in place by the chip's Total/Offset switch: a refused preview
     // stays refused (`keypad-open` would clear the failure and re-enable
     // Apply for the value the kernel just turned down).
     if (!keypadRef.current) dispatchInteraction({ type: 'keypad-open' });
     setKeypad({
       kind: 'offset',
-      label:
-        totalBaseline === undefined
-          ? interaction.mode === 'region'
-            ? 'Height'
-            : 'Offset'
-          : 'Total',
+      label: totalBaseline === undefined ? 'Offset' : 'Total',
       initial:
         totalBaseline !== undefined || currentOffset !== 0
           ? String(
@@ -20493,11 +23151,23 @@ export function App() {
       const valueId = open.commandValueId;
       const baseline = open.baseline ?? inPlaceRef.current.values[valueId] ?? 0;
       commandSetterRef.current?.(valueId, baseline);
-      if (open.baselineRaw !== undefined) {
-        inPlaceRef.current.setValue(valueId, baseline, open.baselineRaw);
-      } else {
-        inPlaceRef.current.previewValue(valueId, baseline);
-      }
+      // Unset stays unset: a step that followed its bore still follows it.
+      inPlaceRef.current.restoreValue(
+        valueId,
+        baseline,
+        open.baselineRaw,
+        commandKeypadTouchedRef.current
+      );
+    } else if (open.kind === 'extrude' && open.commandValueId) {
+      // Back to what the value held, typed expression and all.
+      const baseline = open.baseline ?? 0;
+      moveRegionExtrudeHandle(open.commandValueId, baseline);
+      setRegionExtrudeValue(
+        open.commandValueId,
+        baseline,
+        open.baselineRaw,
+        true
+      );
     } else if (open.kind === 'sketch-dimension') {
       setSketchDimensionDraft(null);
       setStatus('Dimension entry canceled.');
@@ -21084,16 +23754,42 @@ export function App() {
     // A datum plane's row is a plane an in-place Mirror or Split can take:
     // the way to reach one a body hides in the viewport.
     const clicked = current.nodes[nodeId];
+    // So is it a Plane's or Axis's source, or a plane for a picture.
+    if (
+      inPlaceRef.current.active &&
+      clicked?.kind === 'feature' &&
+      clicked.data.featureKind === 'datum-plane'
+    ) {
+      const featureId = clicked.featureId;
+      if (inPlaceRef.current.spec?.refKinds?.includes('plane')) {
+        pickDatumRef((picks, document) =>
+          picks.datumPlaneRef(document, featureId)
+        );
+        return;
+      }
+      const image = inPlaceRef.current.slots.image;
+      if (image) {
+        // As in the viewport: a placed picture takes another plane only
+        // when Options ask for one.
+        if (imageNeedsPlane(image, inPlaceRef.current.options)) {
+          inPlaceRef.current.placeImage({
+            plane: { type: 'datum', datumFeatureId: featureId }
+          });
+        } else {
+          setStatus(
+            'To put the picture on another plane, choose Pick a plane in its Options first.'
+          );
+        }
+        return;
+      }
+    }
     if (
       inPlaceRef.current.active &&
       inPlaceRef.current.spec?.wantsPlane &&
       clicked?.kind === 'feature' &&
       clicked.data.featureKind === 'datum-plane'
     ) {
-      inPlaceRef.current.pickPlane({
-        kind: 'datum',
-        featureId: clicked.featureId
-      });
+      pickInPlaceDatumPlane(clicked.featureId);
       return;
     }
     const next =
@@ -21129,11 +23825,74 @@ export function App() {
     applyHistorySelection(next, current);
   }
 
+  /**
+   * The regions of a sketch view a stored profile reference names. Mirrors
+   * resolveRegionProfiles: an `all: true` reference covers every region its
+   * entities bound, so it can legitimately name many regions — or, after a
+   * text edit, a different number than last time.
+   */
+  function regionsForReference(
+    view: (typeof availableSketchViews)[number] | undefined,
+    reference: SketchProfileReference
+  ): (typeof availableSketchViews)[number]['regions'] {
+    if (reference.all === true) {
+      const referenced = new Set(reference.sourceEntityIds);
+      return (
+        view?.regions.filter(
+          (candidate) =>
+            candidate.sourceEntityIds.length > 0 &&
+            candidate.sourceEntityIds.every((entityId) =>
+              referenced.has(entityId)
+            )
+        ) ?? []
+      );
+    }
+    if (reference.sourceBoundaryLoops !== undefined) {
+      try {
+        return view
+          ? [
+              resolveBoundaryRegionReference(
+                {
+                  ...reference,
+                  sourceBoundaryLoops: reference.sourceBoundaryLoops
+                },
+                view.regions
+              )
+            ]
+          : [];
+      } catch {
+        return [];
+      }
+    }
+    const sourceMatches = reference.sourceEntityIds
+      ? (view?.regions.filter(
+          (candidate) =>
+            candidate.sourceEntityIds.slice().sort().join('|') ===
+            reference.sourceEntityIds!.slice().sort().join('|')
+        ) ?? [])
+      : [];
+    const region =
+      view?.regions.find(
+        (candidate) =>
+          reference.profileId && candidate.profileId === reference.profileId
+      ) ??
+      view?.regions.find(
+        (candidate) =>
+          candidate.regionFingerprint === reference.regionFingerprint &&
+          Math.abs(candidate.area - reference.sourceArea) <=
+            Math.max(reference.sourceArea * 0.01, 1e-9)
+      ) ??
+      (sourceMatches.length === 1 ? sourceMatches[0] : undefined);
+    return region ? [region] : [];
+  }
+
   function applyHistorySelection(
     next: string | null,
     current: ProjectDocument
   ) {
     extrudeEditRequest.current += 1;
+    // A new selection replaces a running in-place command, edit or create.
+    inPlaceRef.current.cancel(true);
     setFeatureFormError(null);
     setSketchEditError(null);
     setMovePreview(null);
@@ -21168,60 +23927,9 @@ export function App() {
       const view = sketchViews.find(
         (candidate) => candidate.sketchId === extrudeData.sketchId
       );
-      // Mirrors resolveRegionProfiles: an `all: true` reference covers every
-      // region its entities bound, so it can legitimately light up many
-      // regions — or, after a text edit, a different number than last time.
-      const perReference = references.map((reference) => {
-        if (reference.all === true) {
-          const referenced = new Set(reference.sourceEntityIds);
-          return (
-            view?.regions.filter(
-              (candidate) =>
-                candidate.sourceEntityIds.length > 0 &&
-                candidate.sourceEntityIds.every((entityId) =>
-                  referenced.has(entityId)
-                )
-            ) ?? []
-          );
-        }
-        if (reference.sourceBoundaryLoops !== undefined) {
-          try {
-            return view
-              ? [
-                  resolveBoundaryRegionReference(
-                    {
-                      ...reference,
-                      sourceBoundaryLoops: reference.sourceBoundaryLoops
-                    },
-                    view.regions
-                  )
-                ]
-              : [];
-          } catch {
-            return [];
-          }
-        }
-        const sourceMatches = reference.sourceEntityIds
-          ? (view?.regions.filter(
-              (candidate) =>
-                candidate.sourceEntityIds.slice().sort().join('|') ===
-                reference.sourceEntityIds!.slice().sort().join('|')
-            ) ?? [])
-          : [];
-        const region =
-          view?.regions.find(
-            (candidate) =>
-              reference.profileId && candidate.profileId === reference.profileId
-          ) ??
-          view?.regions.find(
-            (candidate) =>
-              candidate.regionFingerprint === reference.regionFingerprint &&
-              Math.abs(candidate.area - reference.sourceArea) <=
-                Math.max(reference.sourceArea * 0.01, 1e-9)
-          ) ??
-          (sourceMatches.length === 1 ? sourceMatches[0] : undefined);
-        return region ? [region] : [];
-      });
+      const perReference = references.map((reference) =>
+        regionsForReference(view, reference)
+      );
       const highlighted = perReference.flat().map((region) => ({
         sketchId: extrudeData.sketchId,
         profileId: region.profileId,
@@ -21259,6 +23967,17 @@ export function App() {
         ? historyFeatureFocus(current, node, visible)
         : null;
     setSelectedBodyIds(focus?.kind === 'bodies' ? focus.bodyIds : []);
+    // U09 phase 7: a feature an in-place command made re-arms that command,
+    // seeded from it, with its handles on the model; the row stays pinned.
+    if (node?.kind === 'feature' && inPlaceToolForFeature(node.data)) {
+      startInPlaceEdit(node);
+      return;
+    }
+    // So does an extrude, on the in-place Extrude.
+    if (node?.kind === 'feature' && node.data.featureKind === 'extrude') {
+      startExtrudeEdit(node);
+      return;
+    }
     // F19: an edit card opens already editable. The Inspector's own forms do;
     // a modeling feature's card is its creation form, so selecting the
     // feature opens that form rather than a panel with an "Edit hole" button
@@ -21282,6 +24001,7 @@ export function App() {
   function handleSelectBodyFromTree(bodyId: BodyId, additive: boolean) {
     // An in-place command that takes bodies takes them from the list too.
     if (inPlaceRef.current.active && inPlaceRef.current.spec?.bodyMode) {
+      if (!inPlaceEditTakesBody(bodyId)) return;
       const body = inPlaceBodyPick(bodyId);
       if (body) inPlaceRef.current.pickBody(body);
       return;
@@ -21442,8 +24162,12 @@ export function App() {
       )
     ) {
       // A reopened modeling form outlives the selection (its tool is still
-      // running), so it has to be closed with the feature it was editing.
+      // running), so it has to be closed with the feature it was editing;
+      // so does an in-place edit of it.
       if (modelingEditFeature?.featureId === featureId) closeFeaturePanel();
+      if (inPlaceRef.current.editing?.featureId === featureId) {
+        inPlaceRef.current.cancel(true);
+      }
       clearSelection();
       announce(
         deleteFeatureToastMessage(name, dependentCount),
@@ -21472,7 +24196,13 @@ export function App() {
     ]);
     // A modeling card owns a draft snapshot, including its name. Close it
     // after the rename so applying that snapshot cannot restore the old name.
-    if (renamed && modelingEditFeature?.featureId === featureId) {
+    // An in-place edit holds the name it was armed with, too.
+    if (
+      renamed &&
+      (modelingEditFeature?.featureId === featureId ||
+        inPlaceRef.current.editing?.featureId === featureId ||
+        extrudeEditRef.current?.featureId === featureId)
+    ) {
       closeFeaturePanel();
     }
   }
@@ -21912,6 +24642,13 @@ export function App() {
     }
     // Actions wait for the clicked selection to land. An unapplied Move
     // owns the question first; a menu here would act on the old selection.
+    // A running in-place command owns the viewport: a right-click is
+    // consumed before it reaches the command's picks (it must neither add
+    // nor drop an edge or face), and opens no menu under the command.
+    if (inPlaceRef.current.active) {
+      setContextMenu(null);
+      return;
+    }
     if (handleSelectTopologyFromViewer(selection, false, undefined, { x, y })) {
       setContextMenu(null);
       return;
@@ -22792,15 +25529,6 @@ export function App() {
         }
         return;
       }
-      if (event.key === 'Escape' && formFacePickTarget) {
-        event.preventDefault();
-        setFormFacePickTarget(null);
-        setStatus(
-          `${TOOL_META[tool ?? 'hole'].label}: face picking canceled · settings preserved.`
-        );
-        return;
-      }
-
       if (tool === 'sketch') {
         // `tool` is only 'sketch' while the plane prompt is up: choosing a
         // plane clears it and hands the keys to the sketch session, which is
@@ -22818,14 +25546,53 @@ export function App() {
       if (inPlace.active) {
         if (event.key === 'Escape') {
           event.preventDefault();
-          if (!cancelOpenKeypad()) inPlace.cancel();
+          if (!cancelOpenKeypad()) cancelInPlaceCommand();
           return;
         }
-        if (event.key === 'Enter' && !typing) {
+        // Enter on a focused menu trigger or menu item (a History row's
+        // actions, reached by keyboard while an edit is armed from that row)
+        // opens or runs it, not Done; so does Enter on the command bar's own
+        // controls (Options, a pick's remove button, Cancel), which act for
+        // themselves. Any other focused button, such as the rail tool just
+        // clicked, still leaves Enter to the command (U01).
+        const control =
+          target instanceof Element &&
+          target.closest(
+            '[aria-haspopup], [role="menu"], .in-place-command'
+          ) !== null;
+        if (event.key === 'Enter' && !typing && !control) {
           event.preventDefault();
           inPlace.done();
           return;
         }
+      }
+      // U09: Enter finishes the in-place Extrude once it can create; until
+      // then it opens the distance's exact entry, as it always has.
+      if (
+        (interaction.mode === 'region' || extrudeEditRef.current) &&
+        event.key === 'Enter' &&
+        !typing &&
+        !(
+          target instanceof Element &&
+          target.closest('[aria-haspopup], [role="menu"], .in-place-command') !==
+            null
+        ) &&
+        regionExtrudeCommandRef.current?.submit() === true
+      ) {
+        event.preventDefault();
+        return;
+      }
+      // An extrude edit: Esc disarms its face pick, then closes an open
+      // entry, then the edit, one press each (as a new extrude does).
+      if (extrudeEditRef.current && event.key === 'Escape') {
+        event.preventDefault();
+        if (toFacePick) {
+          setToFacePick(null);
+          setStatus('Face pick canceled · the feature is unchanged.');
+          return;
+        }
+        if (!cancelOpenKeypad()) cancelExtrudeEdit();
+        return;
       }
       if (movePreview) {
         if (event.key === 'Escape') {
@@ -22833,7 +25600,12 @@ export function App() {
           cancelPanel();
           return;
         }
-        if (event.key === 'Enter' && !typing) {
+        // As for an in-place command: Enter on the Move bar's own controls
+        // (Options, Cancel, Done) acts for that control, not the Move.
+        const moveControl =
+          target instanceof Element &&
+          target.closest('.move-command') !== null;
+        if (event.key === 'Enter' && !typing && !moveControl) {
           event.preventDefault();
           confirmMove();
           return;
@@ -23181,9 +25953,20 @@ export function App() {
             }
             return;
           }
+          // A drag or a commit still in flight owns the selection; Delete
+          // waits for it rather than removing the feature under it.
           if (
             selectedFeature &&
-            featureSelectionSource !== 'inferred' &&
+            deleteKeyRemovesFeature({
+              source: featureSelectionSource,
+              topology: selectedTopology,
+              edgeCount: selectedEdges.length
+            }) &&
+            !(
+              isOperationState(interaction) &&
+              interaction.phase !== 'armed' &&
+              interaction.phase !== 'failed'
+            ) &&
             validateSelectionEdit()
           ) {
             event.preventDefault();
@@ -23352,54 +26135,60 @@ export function App() {
   // Settings layers over whatever is behind it instead of replacing it.
   // Returning it in place of the shell unmounted the whole workspace, and with
   // it the assistant's conversation and any request still streaming.
+  // One dialog from the moment Settings is asked for: modal (focus held, the
+  // background inert) and found by anything looking for it, but drawn only
+  // once its page has loaded, so an early open shows no empty overlay.
   const settingsOverlay = settingsOpen ? (
     <div
       ref={settingsDialogRef}
-      className="settings-overlay"
+      className={settingsShown ? 'settings-overlay' : 'settings-pending'}
       role="dialog"
       aria-modal="true"
       aria-label="Settings"
+      aria-busy={settingsShown ? undefined : true}
       tabIndex={-1}
     >
-      <SettingsPage
-        settings={appSettings}
-        cloudFunctionsEnabled={cloudFunctionsEnabled}
-        accountState={accountSettings}
-        authConfig={authConfig}
-        authConfigStatus={authConfigStatus}
-        health={deploymentHealth}
-        session={session}
-        busy={settingsBusy}
-        message={settingsMessage}
-        initialSection={
-          pendingInvitationToken || desktopAuthorizationAttempt
-            ? 'account'
-            : undefined
-        }
-        projectInvitationPending={pendingInvitationToken !== null}
-        projectInvitationError={pendingInvitationError}
-        desktopAuthorizationAttempt={desktopAuthorizationAttempt}
-        desktopAuthorizationApproved={desktopAuthorizationApproved}
-        desktopAuthorizationCode={desktopAuthorizationCode}
-        workspaceOpen={doc !== null}
-        onDesktopAuthorizationCodeChange={setDesktopAuthorizationCode}
-        onChange={handleAppSettingsChange}
-        onCloudFunctionsEnabledChange={handleCloudFunctionsEnabledChange}
-        onSaveCredential={(token) => void handleSaveAssistantCredential(token)}
-        onDeleteCredential={() => void handleDeleteAssistantCredential()}
-        onTestAssistant={() => void handleTestAssistantConnection()}
-        onRequestLoginCode={handleRequestLoginCode}
-        onVerifyLoginCode={handleVerifyLoginCode}
-        onRefreshAuthConfig={handleRefreshAuthConfig}
-        onStartDesktopLogin={handleStartDesktopLogin}
-        onApproveDesktopLogin={handleApproveDesktopLogin}
-        onLogout={handleLogout}
-        onDeleteCloudData={handleDeleteCloudData}
-        onReset={handleResetAppSettings}
-        onApplyViewportDefaults={applyViewportDefaults}
-        onDismissProjectInvitation={dismissProjectInvitation}
-        onClose={closeSettings}
-      />
+      {settingsShown && (
+        <SettingsPage
+          settings={appSettings}
+          cloudFunctionsEnabled={cloudFunctionsEnabled}
+          accountState={accountSettings}
+          authConfig={authConfig}
+          authConfigStatus={authConfigStatus}
+          health={deploymentHealth}
+          session={session}
+          busy={settingsBusy}
+          message={automaticMigrationLoadError ?? settingsMessage}
+          initialSection={
+            pendingInvitationToken || desktopAuthorizationAttempt
+              ? 'account'
+              : undefined
+          }
+          projectInvitationPending={pendingInvitationToken !== null}
+          projectInvitationError={pendingInvitationError}
+          desktopAuthorizationAttempt={desktopAuthorizationAttempt}
+          desktopAuthorizationApproved={desktopAuthorizationApproved}
+          desktopAuthorizationCode={desktopAuthorizationCode}
+          workspaceOpen={doc !== null}
+          onDesktopAuthorizationCodeChange={setDesktopAuthorizationCode}
+          onChange={handleAppSettingsChange}
+          onCloudFunctionsEnabledChange={handleCloudFunctionsEnabledChange}
+          onSaveCredential={(token) => void handleSaveAssistantCredential(token)}
+          onDeleteCredential={() => void handleDeleteAssistantCredential()}
+          onTestAssistant={() => void handleTestAssistantConnection()}
+          onRequestLoginCode={handleRequestLoginCode}
+          onVerifyLoginCode={handleVerifyLoginCode}
+          onRefreshAuthConfig={handleRefreshAuthConfig}
+          onStartDesktopLogin={handleStartDesktopLogin}
+          onApproveDesktopLogin={handleApproveDesktopLogin}
+          onLogout={handleLogout}
+          onDeleteCloudData={handleDeleteCloudData}
+          onReset={handleResetAppSettings}
+          onApplyViewportDefaults={applyViewportDefaults}
+          onDismissProjectInvitation={dismissProjectInvitation}
+          onClose={closeSettings}
+        />
+      )}
     </div>
   ) : null;
 
@@ -23962,7 +26751,7 @@ export function App() {
         currentGeometrySnapshot !== null
           ? 'Wait for the model to finish updating'
           : exportBodyIds.length === 0
-            ? 'Create a body first'
+            ? emptyExportReason
             : null,
       run: () => void handleExportStep()
     },
@@ -23978,7 +26767,7 @@ export function App() {
         currentGeometrySnapshot !== null
           ? 'Wait for the model to finish updating'
           : exportBodyIds.length === 0
-            ? 'Create a body first'
+            ? emptyExportReason
             : null,
       run: () => setMeshExportOpen(true)
     },
@@ -24138,12 +26927,6 @@ export function App() {
   // dropped: the entity editor, keypad and rail render in the same branch
   // and must stay.
   const hideSketchToolCard = interaction.mode === 'sketch';
-  // An edge picked for the Fillet or Chamfer tool arms the same operation the
-  // tool's own card is creating. Its "Fillet · Ready" chip above that card
-  // said the same thing twice, with a second set of verbs; the card and the
-  // handle on the edge are enough.
-  const toolFormOwnsEdgePick =
-    (tool === 'fillet' || tool === 'chamfer') && interaction.mode === 'edges';
 
   // View mode writes its own hints rather than filtering the build chain below.
   // Selecting a cylinder still arms the radius interaction even with its handle
@@ -24199,29 +26982,21 @@ export function App() {
               ]
                 .filter(Boolean)
                 .join(' · ')
-            : tool === 'fillet' || tool === 'chamfer'
-              ? selectedEdges.length > 0
-                ? `${selectedEdges.length} edge${selectedEdges.length === 1 ? '' : 's'} selected · Shift+Click adjusts · Enter creates`
-                : 'Click an edge (Shift adds more) or choose Select all edges'
-              : tool === 'union' || tool === 'subtract' || tool === 'intersect'
-                ? selectedBodyIds.length >= 2
-                  ? `${selectedBodyIds.length} bodies picked, numbered in the viewport · Click toggles · Enter creates`
-                  : 'Click bodies in the viewport or the list · pick order sets the base'
-                : tool
-                  ? 'Enter creates · Esc cancels'
-                  : selectedBodyIds.length >= 2
-                    ? `${selectedBodyIds.length} bodies picked${booleanKeyHints() ? ` — ${booleanKeyHints()}` : ''}`
-                    : selectedTopology?.kind === 'face'
-                      ? faceSelectedHint
-                      : selectedTopology?.kind === 'edge'
-                        ? // Neither tool has a shortcut, so the rail is the only
-                          // route: name it the way the rail names itself.
-                          'Edge selected — Fillet or Chamfer in Feature tools'
-                        : selectedFeature
-                          ? 'Edit in the panel · Del deletes · Esc closes'
-                          : viewerBodies.length > 0
-                            ? 'Click a body, face, or edge · Shift+Click adds to selection'
-                            : idleHint));
+            : tool
+              ? 'Enter creates · Esc cancels'
+              : selectedBodyIds.length >= 2
+                ? `${selectedBodyIds.length} bodies picked${booleanKeyHints() ? ` — ${booleanKeyHints()}` : ''}`
+                : selectedTopology?.kind === 'face'
+                  ? faceSelectedHint
+                  : selectedTopology?.kind === 'edge'
+                    ? // Neither tool has a shortcut, so the rail is the only
+                      // route: name it the way the rail names itself.
+                      'Edge selected — Fillet or Chamfer in Feature tools'
+                    : selectedFeature
+                      ? 'Edit in the panel · Del deletes · Esc closes'
+                      : viewerBodies.length > 0
+                        ? 'Click a body, face, or edge · Shift+Click adds to selection'
+                        : idleHint));
   const openReferenceImageEntry =
     (openReferenceImageId &&
       doc?.referenceImages?.images.find(
@@ -24232,6 +27007,10 @@ export function App() {
     !modelingLocked &&
     !directMode &&
     movePreview === null &&
+    // A narrow window floats the inspector over the stage: while a feature
+    // it reads out is edited in place, the stage is the edit's handles and
+    // chips, and the readout returns when the edit ends.
+    !(inPlace.editing && narrowWindow) &&
     // A pick alone opens no card (the Inspector draws nothing for it), so
     // the shell must not hold a lane for one: an empty inspector float
     // reads as a full-width card on a phone and hides the viewer rail. The
@@ -24240,218 +27019,6 @@ export function App() {
     (tool !== null ||
       (selectedFeature !== null && featureSelectionSource !== 'inferred') ||
       editFaceOpen);
-  // The body an edited modeling feature built, read out on its History card
-  // as every other feature's body is: a pick opens no card, so History is
-  // where a body's volume is read. A feature that keeps its target's body
-  // (a hole, a shell) names it itself.
-  // Every body the feature produced: a split leaves two, and with no card
-  // for a pick, its History card is the only place either half is read.
-  const modelingEditBodies = (() => {
-    if (!modelingEditFeature) return [];
-    const bodyIds = new Set<BodyId>();
-    for (const node of Object.values(doc.nodes)) {
-      if (
-        node.kind === 'body' &&
-        node.featureId === modelingEditFeature.featureId
-      ) {
-        bodyIds.add(node.bodyId);
-      }
-    }
-    if (bodyIds.size === 0 && modelingEditFeature.bodyId) {
-      bodyIds.add(modelingEditFeature.bodyId);
-    }
-    if (modelingEditFeature.data.featureKind === 'split') {
-      bodyIds.add(modelingEditFeature.data.secondBodyId);
-    }
-    return [...bodyIds].flatMap((bodyId) => {
-      const body = renderedRepresentations[bodyId];
-      return body ? [body] : [];
-    });
-  })();
-  const modelingOperation: ModelingOperationKind | null =
-    tool === 'mirror' ||
-    tool === 'split' ||
-    tool === 'hole' ||
-    tool === 'shell' ||
-    tool === 'solid-offset' ||
-    tool === 'loft' ||
-    tool === 'sweep' ||
-    tool === 'helical-sweep' ||
-    tool === 'draft' ||
-    tool === 'thicken'
-      ? tool
-      : null;
-  const modelingEditSketchIds =
-    doc && modelingEditFeature
-      ? new Set(
-          listNodesByKind(doc, 'feature').flatMap((feature) =>
-            feature.data.featureKind === 'sketch' &&
-            !isFeatureSuppressed(feature) &&
-            doc.featureOrder.indexOf(feature.featureId) >= 0 &&
-            doc.featureOrder.indexOf(feature.featureId) <
-              doc.featureOrder.indexOf(modelingEditFeature.featureId)
-              ? [feature.data.sketchId]
-              : []
-          )
-        )
-      : null;
-  const modelingProfileOptions: ModelingProfileOption[] = availableSketchViews
-    .filter(
-      (view) =>
-        !modelingEditSketchIds || modelingEditSketchIds.has(view.sketchId)
-    )
-    .flatMap((view) =>
-      view.regions.flatMap((region, index) => {
-        const sketchName =
-          sketchOptions.find((option) => option.sketchId === view.sketchId)
-            ?.name ?? 'Sketch';
-        const pick: RegionPickData = {
-          sketchId: view.sketchId,
-          profileId: region.profileId,
-          regionFingerprint: region.regionFingerprint,
-          samplePoint: region.samplePoint,
-          centroid: region.centroid,
-          boundingBox: region.boundingBox,
-          sourceEntityIds: region.sourceEntityIds,
-          sourceBoundaryLoops: region.sourceBoundaryLoops,
-          area: region.area
-        };
-        const [profile] = profileReferencesForSelection(
-          [pick],
-          entityWideProfileSource
-        );
-        return !profile || profile.all === true
-          ? []
-          : [
-              {
-                id: `${view.sketchId}:${region.profileId}`,
-                label: `${sketchName} · Profile ${index + 1}`,
-                section: { sketchId: view.sketchId, profile },
-                region: {
-                  outer: region.outer,
-                  holes: region.holes,
-                  boundingBox: region.boundingBox
-                }
-              }
-            ];
-      })
-    );
-  const modelingPathOptions: ModelingPathOption[] = doc
-    ? sketchOptions.flatMap((option) => {
-        const sketch = findSketch(doc, option.sketchId);
-        if (
-          !sketch ||
-          (modelingEditSketchIds && !modelingEditSketchIds.has(option.sketchId))
-        )
-          return [];
-        const entityIds = sketch.objectIds.filter((entityId) => {
-          const node = doc.nodes[entityId];
-          return (
-            node?.kind === 'sketch-object' &&
-            !node.data.construction &&
-            (node.data.objectKind === 'line' || node.data.objectKind === 'arc')
-          );
-        });
-        return entityIds.length === 0
-          ? []
-          : [
-              {
-                id: option.sketchId,
-                label: `${option.name} · ${entityIds.length} path ${entityIds.length === 1 ? 'entity' : 'entities'}`,
-                path: { sketchId: option.sketchId, entityIds }
-              }
-            ];
-      })
-    : [];
-  let modelingEditInitial: ModelingOperationFormState | undefined;
-  let modelingEditReferenceError: string | undefined;
-  let modelingFormProfiles = modelingProfileOptions;
-  let modelingFormPaths = modelingPathOptions;
-  if (
-    modelingEditFeature &&
-    modelingFeatureIsEditable(modelingEditFeature.data.featureKind)
-  ) {
-    const data = modelingEditFeature.data as EditableModelingFeatureData;
-    try {
-      modelingEditInitial = modelingFormStateFromFeature(
-        modelingEditFeature.name,
-        data,
-        modelingProfileOptions,
-        modelingPathOptions
-      );
-      const references = modelingFeatureEditReferences(
-        data,
-        modelingProfileOptions,
-        modelingPathOptions
-      );
-      modelingFormProfiles = references.profiles;
-      modelingFormPaths = references.paths;
-    } catch (error) {
-      modelingEditReferenceError = errorMessage(
-        error,
-        'Saved sketch references are unavailable.'
-      );
-    }
-  }
-  const modelingTargetBody = modelingTargetBodyId
-    ? representations[modelingTargetBodyId]
-    : undefined;
-  const modelingFaces = modelingFaceOptions(
-    modelingTargetBody?.topology,
-    modelingTargetBody,
-    faceNamer
-  );
-  const holePreviewState = ((): HolePreview | null => {
-    if (modelingOperation !== 'hole' || !holeDraft) return null;
-    const body = representations[holeDraft.targetBodyId];
-    const key = JSON.stringify(holeDraft);
-    const cached = holeGhostCache.current;
-    if (cached && cached.key === key && cached.body === body) {
-      return cached.preview;
-    }
-    const face = body?.topology?.faces.find(
-      (candidate) => candidate.hash === holeDraft.faceHash
-    );
-    // No representation yet (a rebuild in flight) is not a refusal: wait.
-    const preview: HolePreview | null = body
-      ? holePreview({
-          // A face the body no longer has is said so; one without measured
-          // geometry is refused as not a planar entry face.
-          face: face ? (face.geometry ?? {}) : null,
-          // The anchor the submission will carry: a new hole measures from
-          // the area centroid when the face reports one; an edited hole
-          // keeps the anchor it was drilled against.
-          anchor: holePositionAnchor(editedHoleAnchor(), face?.geometry),
-          u: holeDraft.u,
-          v: holeDraft.v,
-          diameter: holeDraft.diameter,
-          outerDiameter: holeDraft.outerDiameter,
-          depth: holeDraft.depth,
-          bodyPositions: body.mesh.vertices
-        })
-      : null;
-    if (preview) holeGhostCache.current = { key, body, preview };
-    return preview;
-  })();
-  const modelingOperationFaces =
-    modelingOperation === 'draft' || modelingOperation === 'hole'
-      ? modelingFaces.filter((face) => face.surfaceType === 'plane')
-      : modelingFaces;
-  const modelingUnsupportedReason = modelingOperation
-    ? (editDisabledReason ??
-      modelingOperationDisabledReason(modelingOperation, {
-        exactState: exactGeometryReady
-          ? 'ready'
-          : geometry.state.phase === 'failed'
-            ? 'failed'
-            : 'pending',
-        exactFailureReason: geometry.state.error,
-        hasTargetBody: Boolean(modelingTargetBody),
-        openingFaceCount: modelingOperationFaces.length,
-        profileCount: modelingProfileOptions.length,
-        pathCount: modelingPathOptions.length
-      }))
-    : null;
 
   function commandForModelingSubmission(
     created: ModelingOperationSubmission
@@ -24493,135 +27060,6 @@ export function App() {
       case 'thicken':
         return commandFactories.thickenFace(submission.input);
     }
-  }
-
-  async function preflightModelingSubmission(
-    submission: ModelingOperationSubmission
-  ): Promise<{ status: 'ready' } | { status: 'refused'; reason: string }> {
-    const manager = managerRef.current;
-    if (!manager || !ensureCanEdit('preflight this modeling operation')) {
-      return {
-        status: 'refused',
-        reason: editDisabledReason ?? 'Project editing is unavailable.'
-      };
-    }
-    const current = manager.document;
-    const signature = JSON.stringify(submission);
-    try {
-      const editUpdate = modelingEditFeature
-        ? modelingFeatureUpdate(modelingEditFeature.featureId, submission)
-        : null;
-      const command = editUpdate
-        ? commandFactories.updateFeature(
-            editUpdate,
-            `Edit ${submission.input.name}`
-          )
-        : commandForModelingSubmission(submission);
-      command.validate(current);
-      const candidate = command.apply(current);
-      const derived = await geometry.syncOnce(candidate);
-      // Deliberately stricter than the judge the commit itself uses, and
-      // deliberately left that way. A modeling operation is appended to the
-      // end of history (`featureOrder.push`), so it has nothing downstream to
-      // break — the "new warning anywhere" rule that looks like a deadlock
-      // waiting to happen cannot actually fire as one here. What it does
-      // catch, and what the feature-scoped judge does not, is
-      // `Body "<name>" failed exact B-rep validation.`, which the kernel
-      // announces on a different channel while still registering the body.
-      //
-      // Making the two agree therefore means making the COMMIT stricter, not
-      // this looser — and that needs the kernel to separate a defect from the
-      // invalidity a STEP import deliberately admits (see
-      // imported-step-validation.ts, which keeps and flags a supplier's open
-      // shell on purpose). Until warnings carry that distinction, relaxing
-      // this would trade a refusal that works for one that does not exist.
-      const existingWarnings = new Set(current.derived.warnings);
-      const warning = derived.warnings.find(
-        (candidateWarning) => !existingWarnings.has(candidateWarning)
-      );
-      if (warning) {
-        throw new Error(warning);
-      }
-      const ids = (
-        command.payload as unknown as {
-          ids?: { bodyId?: BodyId };
-        }
-      ).ids;
-      const resultBodyId = editUpdate
-        ? modelingEditFeature?.bodyId
-        : ids?.bodyId;
-      if (!resultBodyId || !derived.bodyRepresentations[resultBodyId]) {
-        throw new Error(
-          `${submission.input.name} did not produce its expected exact result body.`
-        );
-      }
-      if (
-        managerRef.current !== manager ||
-        manager.document.projectId !== current.projectId ||
-        manager.document.version !== current.version
-      ) {
-        throw new Error(
-          'The model changed while the result was being checked. Try again.'
-        );
-      }
-      modelingPreflightRef.current = {
-        signature,
-        command,
-        resultBodyId,
-        featureName:
-          (command.payload as { name?: string }).name ?? submission.input.name,
-        baseVersion: current.version
-      };
-      return { status: 'ready' };
-    } catch (error) {
-      modelingPreflightRef.current = null;
-      return {
-        status: 'refused',
-        reason: errorMessage(error, 'The result could not be checked.')
-      };
-    }
-  }
-
-  function submitModelingOperation(submission: ModelingOperationSubmission) {
-    const approved = modelingPreflightRef.current;
-    const manager = managerRef.current;
-    if (
-      !approved ||
-      !manager ||
-      approved.signature !== JSON.stringify(submission) ||
-      approved.baseVersion !== manager.document.version
-    ) {
-      setStatus('The model changed after the result was checked. Try again.');
-      return;
-    }
-    const editing = modelingEditFeature;
-    const editSession = editCardSessionRef.current;
-    void executeValidatedFeature(approved.command, {
-      featureName: approved.featureName,
-      resultBodyId: approved.resultBodyId,
-      ...(editing && doc
-        ? {
-            targets: affectedFeatureTargets(doc, editing.featureId).map(
-              (target, index) =>
-                index === 0
-                  ? { ...target, featureName: approved.featureName }
-                  : target
-            )
-          }
-        : {}),
-      successMessage: commandOutcomeMessage(approved.command.label),
-      ...(editing
-        ? { cancelled: () => !editSessionIsCurrent(editing, editSession) }
-        : {}),
-      onSuccess: () => {
-        if (editing) {
-          finishFeatureEdit(editing, editSession);
-          return;
-        }
-        setModelingEditFeature(null);
-        finishFeatureCreation();
-      }
-    });
   }
 
   // The sketch rail floats over the viewport in the classic layout and sits
@@ -24953,6 +27391,9 @@ export function App() {
       selectedBodyIds={selectedBodyIds}
       onToggleBodyVisibility={toggleBodyVisibility}
       onRenameBody={editDisabledReason ? undefined : handleRenameBody}
+      bodyAppearancePreview={bodyAppearancePreview}
+      onPreviewBodyAppearance={previewBodyAppearance}
+      onCommitBodyAppearance={editDisabledReason ? undefined : commitBodyAppearance}
       objectFolderActions={objectFolderActions}
       onToggleSketchVisibility={toggleSketchVisibility}
       onFeatureContextMenu={handleFeatureContextMenu}
@@ -25126,6 +27567,7 @@ export function App() {
           }
           exportScope={exportControlScope}
           exportWithheld={exportWithheldMessage}
+          exportUnavailableReason={emptyExportReason}
           saveState={presentedSaveState}
           saveToAccount={
             cloudFunctionsEnabled && !!session && !activeProjectIsCloud
@@ -25189,6 +27631,15 @@ export function App() {
           onOpenSharing={() => setSharingOpen(true)}
           onSignIn={() => openSettingsAt('account')}
           onOpenSettings={openSettings}
+          encryption={
+            encryptedProjectOpen
+              ? {
+                  status: encryptionStatus,
+                  needsRepair: presentedSaveState === 'repair',
+                  onOpenEncryptionSettings: () => openSettingsAt('encryption')
+                }
+              : null
+          }
         />
       }
       toolBar={
@@ -25241,6 +27692,7 @@ export function App() {
             }
             exportScope={exportControlScope}
             exportWithheld={exportWithheldMessage}
+            exportUnavailableReason={emptyExportReason}
             onPreviewParameter={handlePreviewParameter}
             onSetParameter={(name, expression) =>
               handleSetParameter(name, expression)
@@ -25250,7 +27702,7 @@ export function App() {
             onOpenMeshExport={() => setMeshExportOpen(true)}
             share={
               shareSession
-                ? { onMakeCopy: () => void handleMakeShareCopy() }
+                ? { onMakeCopy: requestShareCopy }
                 : null
             }
             panelOpen={panelState.tweakPanelOpen}
@@ -25504,7 +27956,7 @@ export function App() {
                 regionDistanceSetter.current?.(Math.round(value * 1000) / 1000);
                 dispatchInteraction({ type: 'drag-release' });
                 setStatus(
-                  'Extrude preview · adjust the settings, then Create to save.'
+                  'Extrude preview · Enter to finish, or adjust it under Options.'
                 );
                 return true;
               }
@@ -25512,9 +27964,7 @@ export function App() {
             }}
             onOffsetCancel={handleOffsetCancel}
             offsetPreviewInvalid={
-              (isOperationState(interaction) &&
-                interaction.phase === 'failed') ||
-              edgeFormPreviewRefused
+              isOperationState(interaction) && interaction.phase === 'failed'
             }
             previewDeferred={previewDeferred}
             onOpenOffsetKeypad={handleOpenOffsetKeypad}
@@ -25532,7 +27982,6 @@ export function App() {
             cancelDirectManipulationRef={cancelDirectManipulationRef}
             openExactEntryRef={openExactEntryRef}
             edgeHandle={modelingLocked ? null : edgeHandleTarget}
-            edgeHandleValue={edgeFormSize}
             onEdgeRadiusPreview={(size) => edgePreview.request(size)}
             onEdgeCommit={handleEdgeCommit}
             onEdgeCancel={handleEdgeCancel}
@@ -25616,26 +28065,114 @@ export function App() {
               (tool === 'sketch' ||
                 Boolean(
                   inPlaceSpec?.wantsPlane && inPlace.slots.bodies.length > 0
+                ) ||
+                // Not while edges are filtered for: a ghost plane in front
+                // of an edge would take the click meant for its end.
+                Boolean(
+                  inPlaceSpec?.refKinds?.includes('plane') &&
+                    selectionFilter !== 'edge'
+                ) ||
+                Boolean(
+                  inPlace.slots.image &&
+                    imageNeedsPlane(inPlace.slots.image, inPlace.options)
                 ))
             }
-            datumDocument={doc}
+            // A Plane or Axis in progress shows the datum it would add.
+            datumDocument={
+              inPlace.active && inPlaceSpec?.refKinds && previewDoc
+                ? previewDoc
+                : doc
+            }
+            placementPlane={
+              modelingLocked
+                ? null
+                : imagePlacementPlane(
+                    inPlace.slots,
+                    inPlace.options,
+                    imagePlacementContext,
+                    inPlace.values
+                  )
+            }
+            onPlacementClick={(point) => inPlace.placeImage({ point })}
             hiddenDatumIds={hiddenDatumIds}
-            referenceImages={referenceImageDisplays(
-              doc,
-              hiddenReferenceImageIds,
-              tool === 'reference-image' ? openReferenceImageId : null,
-              tool === 'reference-image' ? referenceImageDraft : null
-            )}
+            referenceImages={
+              inPlace.request?.tool === 'reference-image'
+                ? // The picture being placed, drawn where Done would add it.
+                  referenceImageDisplays(
+                    {
+                      ...doc,
+                      referenceImages: {
+                        ...doc.referenceImages,
+                        images: [
+                          ...(doc.referenceImages?.images ?? []),
+                          inPlace.request.image
+                        ]
+                      }
+                    },
+                    hiddenReferenceImageIds,
+                    inPlace.request.image.imageId
+                  )
+                : referenceImageDisplays(
+                    doc,
+                    hiddenReferenceImageIds,
+                    tool === 'reference-image' ? openReferenceImageId : null,
+                    tool === 'reference-image' ? referenceImageDraft : null
+                  )
+            }
             loadReferenceImage={loadReferenceImage}
             selectedFeatureId={
               (modelingEditFeature ?? selectedFeature)?.featureId ?? null
             }
-            planePickerOffset={sketchPlaneOffset}
-            holeGhost={holePreviewState?.ghost ?? null}
-            primitiveGhost={
-              tool && PRIMITIVE_TOOLS.includes(tool) ? primitiveGhost : null
+            // Only a sketch starts on its offset ghost: an in-place command
+            // stores a principal plane at zero, so it is shown at zero.
+            planePickerOffset={tool === 'sketch' ? sketchPlaneOffset : 0}
+            footprintPicker={
+              !modelingLocked && inPlace.active && inPlaceSpec?.footprint
+                ? {
+                    shape: inPlaceSpec.footprint,
+                    bodyIds: committedBodyIds,
+                    session: inPlace.sessionId ?? 0
+                  }
+                : null
             }
-            onPickPlane={(plane) => {
+            onFootprint={(gesture) => {
+              const kind = inPlaceRef.current.tool;
+              if (!kind || !IN_PLACE_TOOL_SPECS[kind].footprint) return;
+              setFootprintDragging(gesture.phase === 'move');
+              const placed = footprintPlacement(
+                kind as PrimitiveKind,
+                gesture.frame,
+                gesture.start,
+                gesture.end,
+                gesture.moved,
+                appSettings.sketching.snapEnabled
+                  ? appSettings.sketching.linearSnap
+                  : null,
+                inPlaceRef.current.values
+              );
+              inPlaceRef.current.placeFootprint(placed.placement, {
+                ...placed.values,
+                ...placed.anchor
+              });
+            }}
+            onPickPlane={(plane, point) => {
+              // A Plane or Axis takes it as a source, and a picture lies on
+              // it where it was clicked.
+              if (inPlace.active && inPlaceSpec?.refKinds?.includes('plane')) {
+                const { normal } = canonicalPlaneBasis(
+                  plane,
+                  CURRENT_CANONICAL_BASIS_REVISION
+                );
+                pickDatumRef((picks) => picks.canonicalPlaneRef(plane, normal));
+                return;
+              }
+              if (inPlace.active && inPlace.slots.image) {
+                inPlace.placeImage({
+                  plane: { ...newCanonicalPlaneRef(plane, 0), offset: 0 },
+                  ...(point ? { point } : {})
+                });
+                return;
+              }
               // An in-place Mirror or Split takes the ghost plane it waits
               // for; otherwise a ghost plane starts a sketch on it.
               if (inPlace.active && inPlaceSpec?.wantsPlane) {
@@ -25659,12 +28196,24 @@ export function App() {
             // tool or card (Hole, Shell, a Plane draft…), a sketch, a
             // re-pick or Measure owns the click and keeps its draft.
             onPickDatum={
-              inPlace.active && inPlaceSpec?.wantsPlane
+              inPlace.active && inPlaceSpec?.refKinds?.includes('plane')
+                ? (featureId) => {
+                    pickDatumRef((picks, document) =>
+                      picks.datumPlaneRef(document, featureId as FeatureId)
+                    );
+                  }
+                : inPlace.active && inPlace.slots.image
+                  ? (featureId, point) =>
+                      inPlace.placeImage({
+                        plane: {
+                          type: 'datum',
+                          datumFeatureId: featureId as FeatureId
+                        },
+                        ...(point ? { point } : {})
+                      })
+                  : inPlace.active && inPlaceSpec?.wantsPlane
                 ? (featureId) =>
-                    inPlace.pickPlane({
-                      kind: 'datum',
-                      featureId: featureId as FeatureId
-                    })
+                    pickInPlaceDatumPlane(featureId as FeatureId)
                 : faceRepair ||
               datumRepair ||
               toFacePick ||
@@ -25712,35 +28261,57 @@ export function App() {
               void additive;
               if (curve) inPlace.pickCurve(curve);
             }}
-            commandHandles={modelingLocked ? undefined : inPlaceHandles}
-            onCommandHandlePreview={inPlace.previewValue}
-            onCommandHandleRelease={inPlace.previewValue}
-            onOpenCommandKeypad={(valueId, value) => {
-              const valueSpec = inPlaceSpec?.values.find(
-                (candidate) => candidate.id === valueId
-              );
-              if (!valueSpec) return false;
-              const raw = inPlace.raws[valueId];
-              setKeypad({
-                kind: 'command',
-                commandValueId: valueId,
-                label: valueSpec.label,
-                // A parametric value opens as its expression, and comes
-                // back as one if entry is canceled.
-                initial: raw ?? String(Math.round(value * 100) / 100),
-                selectInitial: true,
-                unitKind: valueSpec.unit,
-                baseline: value,
-                ...(raw !== undefined ? { baselineRaw: raw } : {})
-              });
-              return true;
-            }}
+            commandHandles={
+              modelingLocked || footprintDragging
+                ? undefined
+                : inPlace.active
+                  ? inPlaceHandles
+                  : regionExtrudeHandles
+            }
+            onCommandHandlePreview={(valueId, value) =>
+              inPlace.active
+                ? inPlace.previewValue(valueId, value)
+                : setRegionExtrudeValue(valueId, value)
+            }
+            onCommandHandleRelease={(valueId, value) =>
+              inPlace.active
+                ? inPlace.previewValue(valueId, value)
+                : setRegionExtrudeValue(valueId, value)
+            }
+            onOpenCommandKeypad={(valueId, value) =>
+              inPlace.active
+                ? openInPlaceKeypad(valueId, value)
+                : openRegionExtrudeKeypad(valueId as ExtrudeValueId)
+            }
             commandSetterRef={commandSetterRef}
+            // The in-place Extrude's keypad rides the chip it opened from:
+            // the region arrow's, a handle's, or none from its bar.
+            {...((interaction.mode === 'region' || extrudeEditFeature) &&
+            !inPlace.active
+              ? {
+                  keypadAnchorOwner:
+                    keypad?.kind !== 'extrude' || !keypad.commandValueId
+                      ? ('offset' as const)
+                      : keypad.fixedClientAnchor
+                        ? ('none' as const)
+                        : keypad.commandValueId === 'distance' &&
+                            !extrudeEditFeature
+                          ? ('offset' as const)
+                          : { command: keypad.commandValueId }
+                }
+              : {})}
             facePickOnly={toFacePick !== null}
             modeOverlay={
               modelingLocked ? (
                 <>
-                  {viewMode && <ViewModeRail {...partsProps} />}
+                  {viewMode && (
+                    <ViewModeRail
+                      {...partsProps}
+                      {...(shareSession?.encryptedMode
+                        ? { onMakeCopy: requestShareCopy }
+                        : {})}
+                    />
+                  )}
                   {measurementDock}
                 </>
               ) : inPlace.active ? (
@@ -25758,7 +28329,7 @@ export function App() {
                       // A value outside the command's range never moves the
                       // handle: Enter refuses it as an expression, and the
                       // value must still be the one it was.
-                      if (valueSpec && clampValue(valueSpec, value) !== value) {
+                      if (valueSpec && !valueInRange(valueSpec, value)) {
                         return;
                       }
                       commandSetterRef.current?.(valueId, value);
@@ -25786,13 +28357,45 @@ export function App() {
                       } else {
                         // Refused: back to the value shown when the chip was
                         // tapped, undoing any in-range keystroke previews.
+                        // Set or unset as it was, as Escape restores it.
                         commandSetterRef.current?.(valueId, baseline);
-                        if (keypad.baselineRaw !== undefined) {
-                          inPlace.setValue(valueId, baseline, keypad.baselineRaw);
-                        } else {
-                          inPlace.previewValue(valueId, baseline);
-                        }
+                        inPlace.restoreValue(
+                          valueId,
+                          baseline,
+                          keypad.baselineRaw,
+                          commandKeypadTouchedRef.current
+                        );
                       }
+                    }}
+                    onCancel={cancelOpenKeypad}
+                  />
+                ) : null
+              ) : extrudeEditFeature ? (
+                keypad?.kind === 'extrude' && keypad.commandValueId ? (
+                  <NumericKeypad
+                    key={`${keypad.kind}:${keypad.label}`}
+                    request={keypad}
+                    units={doc.units}
+                    scope={parameterScope.scope}
+                    anchorRef={keypadAnchorRef}
+                    onEntryError={setRegionExtrudeEntryError}
+                    onPreview={(value, raw) => {
+                      // An expression previews as itself, so a Done
+                      // pressed with the keypad still open stores it.
+                      const valueId = keypad.commandValueId!;
+                      moveRegionExtrudeHandle(valueId, value);
+                      setRegionExtrudeValue(valueId, value, raw, true);
+                    }}
+                    onCommit={(value, raw) => {
+                      const valueId = keypad.commandValueId!;
+                      setKeypad(null);
+                      moveRegionExtrudeHandle(valueId, value);
+                      setRegionExtrudeValue(
+                        valueId,
+                        value,
+                        Number.isFinite(Number(raw)) ? undefined : raw,
+                        true
+                      );
                     }}
                     onCancel={cancelOpenKeypad}
                   />
@@ -25812,11 +28415,22 @@ export function App() {
                       scope={parameterScope.scope}
                       anchorRef={keypadAnchorRef}
                       onDimensionModeChange={setCylinderDimensionMode}
-                      onPreview={(value) => {
+                      {...(keypad.kind === 'extrude'
+                        ? { onEntryError: setRegionExtrudeEntryError }
+                        : {})}
+                      onPreview={(value, raw) => {
                         if (
                           keypad.kind === 'sketch-dimension' ||
                           keypad.kind === 'sketch-edit'
                         ) {
+                          return;
+                        }
+                        if (keypad.kind === 'extrude') {
+                          // An expression previews as itself, so a Done
+                          // pressed with the keypad still open stores it.
+                          const valueId = keypad.commandValueId ?? '';
+                          moveRegionExtrudeHandle(valueId, value);
+                          setRegionExtrudeValue(valueId, value, raw, true);
                           return;
                         }
                         offsetSetterRef.current?.(value);
@@ -25866,6 +28480,19 @@ export function App() {
                         }
                         // Expressions stay parametric in the stored feature.
                         const isExpression = !Number.isFinite(Number(raw));
+                        if (keypad.kind === 'extrude') {
+                          // A value of the Extrude's bar: Enter sets it, and
+                          // Done (or Enter again) creates the extrusion.
+                          const valueId = keypad.commandValueId ?? '';
+                          moveRegionExtrudeHandle(valueId, value);
+                          setRegionExtrudeValue(
+                            valueId,
+                            value,
+                            isExpression ? raw : undefined,
+                            true
+                          );
+                          return;
+                        }
                         if (keypad.kind === 'edge') {
                           handleEdgeCommit(
                             value,
@@ -26015,27 +28642,18 @@ export function App() {
       }
       // Every command card anchors at the top of the right lane, a panel in
       // the phone lane yielding below it. The same precedence as the viewport's
-      // mode overlays: a live operation first, then the Move panel (unless
-      // the revert pill is up), and the closed-profile quick action only
-      // when no plane prompt, Move or revert pill is up.
+      // mode overlays: a live operation first, then a Move (unless the revert
+      // pill is up), and the closed-profile quick action only when no plane
+      // prompt, Move or revert pill is up. A Move's bar is not a card: it
+      // takes the command row, as every in-place command's does, so here it
+      // only holds the lane empty.
       command={
         modelingLocked ? null : measurementDock ? (
           measurementDock
         ) : contextualToolCard ? (
-          hideSketchToolCard ||
-          toolFormOwnsEdgePick ||
-          calloutOperationModel ? null : (
+          hideSketchToolCard || calloutOperationModel ? null : (
             <ToolCard
               model={contextualToolCard}
-              focusRequest={
-                selectedProfiles === extrudeCommandProfiles.current &&
-                selectedProfiles
-              }
-              focusReady={
-                !geometryBusy &&
-                (interaction.mode !== 'region' ||
-                  interaction.phase !== 'validating')
-              }
               selectAllEdges={
                 interaction.mode === 'edges' &&
                 edgeModifierBody?.topology &&
@@ -26052,75 +28670,16 @@ export function App() {
                   : undefined
               }
               cancelableWhileValidating={interaction.mode === 'region'}
-              children={
-                interaction.mode === 'region' ? (
-                  <ExtrudeForm
-                    key={`extrude-${interaction.target.sketchId}`}
-                    creating
-                    initial={{
-                      name: 'Extrude',
-                      sketchId: interaction.target.sketchId as SketchId,
-                      distance: 0
-                    }}
-                    sketches={sketchOptions}
-                    scope={parameterScope.scope}
-                    units={doc.units}
-                    profileCount={Math.max(1, selectedProfiles.length)}
-                    bodies={doc.bodyOrder.flatMap((bodyId) => {
-                      const body = doc.derived.bodyRepresentations[bodyId];
-                      return body && !body.consumed
-                        ? [{ bodyId, name: body.name }]
-                        : [];
-                    })}
-                    disabled={
-                      geometryBusy || interaction.phase === 'validating'
-                    }
-                    submitLabel="Create"
-                    distanceSetterRef={regionDistanceSetter}
-                    toFacePicking={extrudeToFacePicking(
-                      'create',
-                      interaction.target.sketchId as SketchId
-                    )}
-                    onDraft={(value) => {
-                      regionExtrudeSettings.current = value;
-                      dispatchInteraction({
-                        type: 'set-extrude-choice',
-                        choice: value.choice
-                      });
-                    }}
-                    onPreview={(value) => {
-                      setLastValidPreview(null);
-                      if (!value) {
-                        regionExtrudePreview.clear();
-                        return;
-                      }
-                      const distance = resolveDocumentValue(value.distance);
-                      offsetSetterRef.current?.(distance);
-                      dispatchInteraction({
-                        type: 'set-extrude-choice',
-                        choice: value.choice
-                      });
-                      // The last preview stays up until this one lands:
-                      // clearing first showed the bare sketch for a whole
-                      // rebuild on every keystroke.
-                      regionExtrudePreview.replace(distance);
-                    }}
-                    onSubmit={(value) => {
-                      regionExtrudeSettings.current = value;
-                      handleRegionExtrudeCommit(
-                        resolveDocumentValue(value.distance),
-                        value.distance
-                      );
-                    }}
-                    onCancel={() => {
-                      if (cancelPendingRegionExtrusion()) return;
-                      regionExtrudePreview.clear();
-                      dispatchInteraction({ type: 'clear' });
-                      cancelPanel();
-                    }}
-                  />
-                ) : undefined
+              // A region's other profile tools, which take the same pick.
+              verbs={
+                interaction.mode === 'region' && tool === null
+                  ? selectionCalloutVerbs({
+                      kind: selectedProfiles.length > 1 ? 'regions' : 'region',
+                      availability: shownAvailability
+                    }).filter((verb) => verb.id !== 'tool:extrude')
+                  : undefined
               }
+              onVerb={(id) => launchTool(id.slice('tool:'.length) as ToolId)}
               onAction={handleSelectionAction}
               onEditCulprit={handleEditCulpritFeature}
               onViewDetails={() => setActivityLogOpen(true)}
@@ -26142,77 +28701,7 @@ export function App() {
               }}
             />
           )
-        ) : revertPill ? null : movePreview ? (
-          <MoveOverlay
-            bodyName={
-              movePreview.target === 'sketch'
-                ? (findSketch(doc, movePreview.bodyId as SketchId)?.name ??
-                  'Selected sketch')
-                : (representations[movePreview.bodyId as BodyId]?.name ??
-                  'Selected body')
-            }
-            hideRotation={movePreview.target === 'sketch'}
-            // A sketch move commits as a sketch translation, not a named
-            // feature, so it gets neither a name nor a body picker.
-            name={movePreview.target === 'sketch' ? undefined : moveName}
-            onName={movePreview.target === 'sketch' ? undefined : setMoveName}
-            targets={
-              movePreview.target === 'sketch'
-                ? undefined
-                : viewerBodies.map((body) => ({
-                    bodyId: body.bodyId,
-                    name: representations[body.bodyId]?.name ?? body.bodyId
-                  }))
-            }
-            targetBodyId={movePreview.bodyId}
-            onTargetBody={(bodyId) => {
-              setSelectedBodyIds([bodyId as BodyId]);
-              setMoveSnap(null);
-              setMovePreview((current) =>
-                current
-                  ? {
-                      ...current,
-                      bodyId,
-                      // Values are relative to the body's own centre, so
-                      // carrying them to a different body would apply a
-                      // move nobody asked for.
-                      translation: { x: 0, y: 0, z: 0 },
-                      rotationDeg: { x: 0, y: 0, z: 0 }
-                    }
-                  : current
-              );
-            }}
-            values={{
-              translation: movePreview.translation,
-              rotationDeg: movePreview.rotationDeg
-            }}
-            units={doc.units}
-            snap={moveSnap}
-            onChange={(values) =>
-              setMovePreview((current) =>
-                current
-                  ? {
-                      ...current,
-                      translation: values.translation,
-                      rotationDeg: values.rotationDeg
-                    }
-                  : current
-              )
-            }
-            onConfirm={confirmMove}
-            onCancel={cancelPanel}
-            copy={
-              movePreview.target === 'sketch' ? undefined : !!movePreview.copy
-            }
-            onCopy={(copy) =>
-              setMovePreview((current) =>
-                current ? { ...current, copy } : current
-              )
-            }
-            liveValuesRef={moveValuesSetterRef}
-            liveSnapRef={moveSnapSetterRef}
-          />
-        ) : tool === 'sketch' ? (
+        ) : revertPill ? null : movePreview ? null : tool === 'sketch' ? (
           <SketchPlanePrompt
             document={doc}
             offsetText={sketchPlaneOffsetText}
@@ -26257,173 +28746,7 @@ export function App() {
             label="Inspector"
             resetKey={`${doc.projectId}:${doc.version}`}
           >
-            {modelingOperation ? (
-              // The same panel chrome the Inspector draws for its own forms:
-              // bare in `.inspector-float`, this form sat straight on the
-              // viewport under the orientation widget and the utility rail.
-              <section
-                className="inspector"
-                aria-label="Feature inspector"
-                // One Escape cancels this card from anywhere in it, as it
-                // does every Inspector card (F19). Face picking keeps its own
-                // rung: that press only stops picking (the workspace keys).
-                onKeyDown={(event) => {
-                  if (event.key !== 'Escape' || formFacePickTarget) return;
-                  event.stopPropagation();
-                  cancelPanel();
-                }}
-              >
-                <CardHeader
-                  title={
-                    modelingEditFeature?.name ??
-                    TOOL_META[modelingOperation].label
-                  }
-                  eyebrow={
-                    modelingEditFeature
-                      ? CARD_EYEBROWS.edit
-                      : CARD_EYEBROWS.create
-                  }
-                  actions={
-                    modelingEditFeature ? (
-                      // The same overflow every Inspector edit card has: now
-                      // that selecting the feature opens this form (F19),
-                      // this is where its delete is.
-                      <PanelOverflow>
-                        <button
-                          type="button"
-                          className="panel-overflow-item danger"
-                          title="Delete feature (Del)"
-                          onClick={() => {
-                            if (validateSelectionEdit())
-                              handleDeleteFeature(
-                                modelingEditFeature.featureId,
-                                modelingEditFeature.name
-                              );
-                          }}
-                        >
-                          <Trash2 size={13} aria-hidden="true" />
-                          Delete feature
-                        </button>
-                      </PanelOverflow>
-                    ) : null
-                  }
-                  // Closes the panel and keeps the pick; Escape (and the
-                  // form's Cancel) return to nothing selected.
-                  closeTitle="Close"
-                  closeLabel="Close panel"
-                  onClose={closeFeaturePanel}
-                />
-                <div className="panel-body">
-                  {modelingEditReferenceError ? (
-                    <p role="alert" className="field-error">
-                      {modelingEditReferenceError}
-                    </p>
-                  ) : (
-                    <ModelingOperationsForm
-                      key={`${modelingOperation}:${modelingEditFeature?.featureId ?? 'new'}`}
-                      operation={modelingOperation}
-                      editing={modelingEditFeature !== null}
-                      initial={
-                        modelingEditInitial ??
-                        modelingCreateInitial ??
-                        undefined
-                      }
-                      scope={parameterScope.scope}
-                      bodies={bodyOptions}
-                      faceOptions={modelingOperationFaces}
-                      profileOptions={modelingFormProfiles}
-                      pathOptions={modelingFormPaths}
-                      datumDocument={doc}
-                      datumBefore={modelingEditFeature?.featureId ?? null}
-                      initialTarget={modelingTargetBodyId ?? undefined}
-                      viewportFacePick={viewportFormFacePick}
-                      unsupportedReason={modelingUnsupportedReason ?? undefined}
-                      onPreflight={preflightModelingSubmission}
-                      onSubmit={submitModelingOperation}
-                      onHoleDraftChange={setHoleDraft}
-                      holePreviewNotice={holePreviewState?.notice ?? null}
-                      onCancel={cancelPanel}
-                      onTargetBodyChange={(bodyId) => {
-                        modelingPreflightRef.current = null;
-                        setFormFacePickTarget(null);
-                        setViewportFormFacePick(null);
-                        setModelingTargetBodyId(bodyId);
-                        setSelectedBodyIds([bodyId]);
-                        setSelectedTopology(null);
-                      }}
-                      onFaceListStateChange={(bodyId, hashes) => {
-                        const sweep = pendingFormFaceSweepRef.current;
-                        const accepted = new Set(hashes);
-                        if (
-                          sweep &&
-                          sweep === viewportFormFacePick &&
-                          sweep.bodyId === bodyId &&
-                          (sweep.hashes ?? [sweep.hash]).every((hash) =>
-                            accepted.has(hash)
-                          )
-                        ) {
-                          pendingFormFaceSweepRef.current = null;
-                          highlightFormFaces(bodyId, hashes, true);
-                        }
-                      }}
-                      onOpeningFaceSelectionChange={(hashes) => {
-                        setFormFacePickTarget(null);
-                        setViewportFormFacePick(null);
-                        const selectedHash = hashes.at(-1);
-                        const face = modelingTargetBody?.topology?.faces.find(
-                          (candidate) => candidate.hash === selectedHash
-                        );
-                        setSelectedTopology(
-                          selectedHash !== undefined &&
-                            face &&
-                            modelingTargetBodyId
-                            ? {
-                                kind: 'face',
-                                bodyId: modelingTargetBodyId,
-                                topologyId: face.topologyId,
-                                hash: face.hash,
-                                reference: face.reference
-                              }
-                            : null
-                        );
-                      }}
-                      onRequestOpeningFaceSelection={() => {
-                        setManualSelectionFilter('face');
-                        if (
-                          modelingOperationPicksFaces(modelingOperation) &&
-                          modelingTargetBodyId
-                        ) {
-                          setFormFacePickTarget(modelingTargetBodyId);
-                          setStatus(
-                            modelingOperationNeedsPlanarFaces(modelingOperation)
-                              ? `${TOOL_META[modelingOperation].label}: click a flat face on the target body. Esc cancels face picking.`
-                              : `${TOOL_META[modelingOperation].label}: click faces on the target body to add or remove them. Esc cancels face picking.`
-                          );
-                          return;
-                        }
-                        setStatus(
-                          `${TOOL_META[modelingOperation].label}: pick an exact face, then select it in the face list.`
-                        );
-                      }}
-                    />
-                  )}
-                  {modelingEditBodies.map((body) => (
-                    <Fragment key={body.bodyId}>
-                      {modelingEditBodies.length > 1 && (
-                        <h3 className="section-title">{body.name}</h3>
-                      )}
-                      <BodyMeasurements
-                        body={body}
-                        units={doc.units}
-                        document={doc}
-                        worker={geometry}
-                        lastApplied
-                      />
-                    </Fragment>
-                  ))}
-                </div>
-              </section>
-            ) : tool === 'reference-image' && openReferenceImageEntry ? (
+            {tool === 'reference-image' && openReferenceImageEntry ? (
               <ReferenceImageCard
                 key={openReferenceImageEntry.imageId}
                 document={doc}
@@ -26504,7 +28827,6 @@ export function App() {
             ) : (
               <Inspector
                 tool={tool}
-                onPrimitiveGhostChange={setPrimitiveGhost}
                 commitError={featureFormError}
                 selectedFeature={selectedFeature}
                 documentVersion={editFormVersion(fieldDefinitions.current, doc)}
@@ -26526,18 +28848,10 @@ export function App() {
                     ? []
                     : selectedEdges
                 }
-                edgeModifierBody={
-                  currentGeometrySnapshot || currentFaceGeometryPreview
-                    ? null
-                    : edgeModifierBody
-                }
                 bodyRepresentations={representations}
                 scope={parameterScope.scope}
-                sketches={sketchOptions}
                 bodies={bodyOptions}
                 units={doc.units}
-                selectedBodyIds={selectedBodyIds}
-                preferredSketchId={selectedSketch?.sketchId ?? null}
                 commandSession={commandSession}
                 featureSelectionSource={featureSelectionSource}
                 directPickDetails={editFaceOpen}
@@ -26548,9 +28862,6 @@ export function App() {
                 massPropertiesDocument={previewDoc ?? doc}
                 massPropertiesWorker={geometry}
                 onLaunchTool={launchTool}
-                onSelectBodies={handleSelectBodiesFromPickList}
-                onPreviewBodyAppearance={previewBodyAppearance}
-                onCommitBodyAppearance={commitBodyAppearance}
                 onCancel={cancelPanel}
                 onClose={() => {
                   // Close keeps the pick but drops Edit face's request, or the
@@ -26558,93 +28869,7 @@ export function App() {
                   setEditFaceKey(null);
                   closeFeaturePanel();
                 }}
-                onSelectAllEdges={handleSelectAllEdges}
-                onClearSelectedEdges={handleClearSelectedEdges}
                 document={doc}
-                onCreatePrimitive={createFeature}
-                onRemoveSelectedEdge={(edge) =>
-                  handleSelectTopologyFromViewer(edge, true)
-                }
-                onCreateRevolve={(value) => {
-                  const name = newFeatureName(value.name);
-                  const command = commandFactories.revolveSketch({
-                    ...value,
-                    name,
-                    bodyName: newBodyName(value.name)
-                  });
-                  createValidatedFeature(
-                    command,
-                    name,
-                    command.payload.ids?.bodyId
-                  );
-                }}
-                onCreateBoolean={(value) => {
-                  const name = newFeatureName(value.name);
-                  // A union or intersect result is named for itself
-                  // ("Union 1"); a subtract keeps its base body's name.
-                  const command = commandFactories.booleanBodies({
-                    ...value,
-                    name,
-                    bodyName: newBodyName(value.name)
-                  });
-                  createValidatedFeature(
-                    command,
-                    name,
-                    command.payload.ids?.bodyId
-                  );
-                }}
-                onCreateTransform={(value) => {
-                  const name = newFeatureName(value.name);
-                  const command = commandFactories.transformBody({
-                    name,
-                    targetBodyId: value.targetBodyId,
-                    translation: value.translation,
-                    rotationDeg: value.rotationDeg,
-                    ...(value.scale !== undefined
-                      ? { scale: value.scale }
-                      : {}),
-                    ...(value.pivot !== undefined
-                      ? { pivot: value.pivot }
-                      : {}),
-                    ...(value.copy
-                      ? {
-                          copy: true,
-                          bodyName: newCopyBodyName(value.targetBodyId)
-                        }
-                      : {}),
-                    ...(value.axisRotation
-                      ? { axisRotation: value.axisRotation }
-                      : {})
-                  });
-                  createValidatedFeature(
-                    command,
-                    name,
-                    // A copy's result is its new body; a Move's, its target.
-                    command.payload.ids && 'bodyId' in command.payload.ids
-                      ? command.payload.ids.bodyId
-                      : value.targetBodyId
-                  );
-                }}
-                onPreviewEdgeModifier={previewEdgeForm}
-                onEdgeModifierSize={setEdgeFormSize}
-                onCreateEdgeModifier={(kind, value) =>
-                  applyEdgeForm(null, kind, value)
-                }
-                onCreatePattern={(value) => {
-                  const name = newFeatureName(value.name);
-                  const command = commandFactories.patternBody({
-                    ...value,
-                    name
-                  });
-                  const resultBodyId = command.payload.ids?.bodyId;
-                  if (resultBodyId)
-                    runPattern(command, {
-                      featureName: name,
-                      resultBodyId,
-                      successMessage: commandOutcomeMessage(command.label),
-                      onSuccess: finishFeatureCreation
-                    });
-                }}
                 onApplyPrimitive={(feature, name, command) => {
                   const editSession = editCardSessionRef.current;
                   if (!doc || !feature.bodyId) {
@@ -26764,6 +28989,9 @@ export function App() {
                   );
                 }}
                 onEditModelingFeature={openModelingFeatureEditor}
+                inPlaceEditFeatureId={
+                  inPlace.editing?.featureId ?? extrudeEdit?.featureId ?? null
+                }
                 onEditSketchInViewport={(feature) => {
                   if (feature.data.featureKind !== 'sketch' || !doc) {
                     return;
@@ -26784,92 +29012,6 @@ export function App() {
                       `Editing ${sketch.name} · Finish Sketch when done.`
                     );
                   }
-                }}
-                extrudeBusy={geometryBusy}
-                onApplyExtrude={applyExtrudeForm}
-                onPreviewExtrude={previewExtrudeForm}
-                extrudeTargets={availableExtrudeTargets}
-                extrudeToFacePicking={(feature) =>
-                  extrudeToFacePicking(
-                    'edit',
-                    feature.data.featureKind === 'extrude'
-                      ? feature.data.sketchId
-                      : ('' as SketchId),
-                    extrudeToFaceUnresolved(
-                      feature,
-                      attributedFeatureWarnings()
-                    ),
-                    feature.featureId
-                  )
-                }
-                onApplyRevolve={(feature, value) => {
-                  // R01: the sketch axis is the absent datum axis. U09: a
-                  // region picked in the old sketch names nothing in a new
-                  // one, so a retarget takes the new sketch's first detected
-                  // region (its first object alone is a lone edge in a sketch
-                  // drawn since S04), and only a sketch with no region at all
-                  // clears it.
-                  const retargeted =
-                    feature.data.featureKind === 'revolve' &&
-                    feature.data.profile !== undefined &&
-                    value.sketchId !== feature.data.sketchId;
-                  const region = retargeted
-                    ? availableSketchViews.find(
-                        (view) => view.sketchId === value.sketchId
-                      )?.regions[0]
-                    : undefined;
-                  const [profile] = region
-                    ? profileReferencesForSelection(
-                        [{ ...region, sketchId: value.sketchId }],
-                        entityWideProfileSource
-                      )
-                    : [];
-                  const cleared = [
-                    ...(value.axisRef ? [] : ['axisRef']),
-                    ...(retargeted && !profile ? ['profile'] : [])
-                  ];
-                  return applyValidatedFeature(
-                    commandFactories.updateFeature(
-                      {
-                        featureId: feature.featureId,
-                        name: value.name,
-                        data: {
-                          featureKind: 'revolve',
-                          sketchId: value.sketchId,
-                          axis: value.axis,
-                          angleDeg: value.angleDeg,
-                          ...(value.axisRef ? { axisRef: value.axisRef } : {}),
-                          ...(profile ? { profile } : {})
-                        },
-                        ...(cleared.length ? { clearData: cleared } : {})
-                      },
-                      `Edit ${value.name}`
-                    ),
-                    feature,
-                    value.name
-                  );
-                }}
-                onApplyBoolean={(feature, value) => {
-                  const command = commandFactories.updateFeature(
-                    {
-                      featureId: feature.featureId,
-                      name: value.name,
-                      data: {
-                        featureKind: 'boolean',
-                        operation: value.operation,
-                        targetBodyIds: value.targetBodyIds,
-                        ...(value.keepOriginals !== undefined
-                          ? { keepOriginals: value.keepOriginals }
-                          : {})
-                      },
-                      // M11: consuming every input is the absent field.
-                      ...(value.keepOriginals === undefined
-                        ? { clearData: ['keepOriginals'] }
-                        : {})
-                    },
-                    `Edit ${value.name}`
-                  );
-                  applyValidatedFeature(command, feature, value.name);
                 }}
                 onApplyTransform={(feature, value) =>
                   applyValidatedFeature(
@@ -26911,42 +29053,6 @@ export function App() {
                     feature.bodyId ?? value.targetBodyId
                   )
                 }
-                onApplyEdgeModifier={applyEdgeForm}
-                onApplyPattern={(feature, value) =>
-                  applyValidatedFeature(
-                    commandFactories.updateFeature(
-                      {
-                        featureId: feature.featureId,
-                        name: value.name,
-                        data: {
-                          featureKind: 'pattern',
-                          targetBodyId: value.targetBodyId,
-                          patternKind: value.patternKind,
-                          count: value.count,
-                          axis: value.axis,
-                          spacing: value.spacing,
-                          angleDeg: value.angleDeg,
-                          ...(value.direction
-                            ? { direction: value.direction }
-                            : {}),
-                          ...(value.axis2 ? { axis2: value.axis2 } : {}),
-                          ...(value.spacing2 !== undefined
-                            ? { spacing2: value.spacing2 }
-                            : {}),
-                          ...(value.count2 !== undefined
-                            ? { count2: value.count2 }
-                            : {}),
-                          ...(value.axisRef ? { axisRef: value.axisRef } : {})
-                        },
-                        // R01: the world axis is the absent datum axis.
-                        ...(value.axisRef ? {} : { clearData: ['axisRef'] })
-                      },
-                      `Edit ${value.name}`
-                    ),
-                    feature,
-                    value.name
-                  )
-                }
                 onResizeThroughHole={handleResizeThroughHole}
                 onRemoveFaceFeature={handleRemoveFaceFeature}
                 onPinFeature={(feature) =>
@@ -26983,9 +29089,10 @@ export function App() {
               onDraft={draftPrompt}
               onActivity={setAssistantActivity}
               disabledReason={assistantDisabledReason(
-                projects.find((project) => project.projectId === doc.projectId),
-                isEncryptedProject(doc.projectId)
+                assistantProject,
+                assistantConsent
               )}
+              consent={assistantConsent}
             />
           </ErrorBoundary>
         ) : null
@@ -27057,36 +29164,285 @@ export function App() {
             commandRow={
               inPlace.active && inPlaceSpec ? (
                 <InPlaceCommandBar
-                  title={inPlaceSpec.title}
+                  title={
+                    inPlace.editing
+                      ? `Edit ${inPlace.editing.name}`
+                      : inPlaceSpec.title
+                  }
                   hint={inPlace.hint}
                   refusal={inPlace.refusal}
                   canFinish={inPlace.canFinish}
-                  options={(inPlaceSpec.options ?? []).map((option) => ({
+                  options={inPlace.optionSpecs.map((option) => ({
                     ...option,
                     value: inPlace.options[option.id] ?? option.initial
                   }))}
                   onOption={inPlace.setOption}
                   onPreciseValues={
-                    inPlace.tool === 'hole' &&
-                    inPlace.request?.tool === 'modeling'
+                    inPlace.tool === 'hole'
                       ? () => {
-                          const request = inPlace.request;
-                          if (
-                            request?.tool !== 'modeling' ||
-                            request.state.operation !== 'hole'
-                          )
-                            return;
-                          inPlace.cancel(true);
-                          if (!openTool('hole')) return;
-                          setModelingTargetBodyId(
-                            request.state.value.targetBodyId || null
+                          openInPlaceKeypad(
+                            'diameter',
+                            inPlace.values.diameter ?? 6
                           );
-                          setModelingCreateInitial(request.state);
                         }
                       : undefined
                   }
+                  actions={inPlaceActions}
+                  onAction={runInPlaceAction}
+                  picks={inPlacePicks}
+                  onRemovePick={(id) => {
+                    const edge = inPlace.slots.edges.find(
+                      (candidate) => String(candidate.hash) === id
+                    );
+                    if (edge) inPlace.pickEdge(edge);
+                  }}
+                  values={inPlaceSpec.values
+                    .filter((value) => value.inOptions)
+                    .map((value) => ({
+                      id: value.id,
+                      label: value.label,
+                      text:
+                        inPlace.raws[value.id] ??
+                        `${formatNumber(inPlace.values[value.id] ?? value.initial)} ${inPlaceUnits}`
+                    }))}
+                  onValue={(valueId, at) => {
+                    const valueSpec = inPlaceSpec.values.find(
+                      (candidate) => candidate.id === valueId
+                    );
+                    openInPlaceKeypad(
+                      valueId,
+                      inPlace.values[valueId] ?? valueSpec?.initial ?? 0,
+                      at
+                    );
+                  }}
                   onDone={() => inPlace.done()}
-                  onCancel={() => inPlace.cancel()}
+                  onCancel={cancelInPlaceCommand}
+                />
+              ) : extrudeEditFeature &&
+                extrudeEditInitialDraft &&
+                extrudeEdit &&
+                !modelingLocked ? (
+                <ExtrudeCommand
+                  key={`extrude-edit-${extrudeEdit.featureId}-${extrudeEdit.generation}`}
+                  editing
+                  initial={extrudeEditInitialDraft}
+                  scope={parameterScope.scope}
+                  units={doc.units}
+                  profileCount={Math.max(
+                    1,
+                    extrudeEditFeature.data.featureKind === 'extrude'
+                      ? (extrudeEditFeature.data.profiles?.length ?? 1)
+                      : 1
+                  )}
+                  bodies={availableExtrudeTargets}
+                  disabled={geometryBusy}
+                  note={featureFormError}
+                  entryRefusal={
+                    keypad?.kind === 'extrude' && regionExtrudeEntryError
+                      ? `${keypad.label}: ${regionExtrudeEntryError}.`
+                      : null
+                  }
+                  distanceSetterRef={regionDistanceSetter}
+                  commandRef={regionExtrudeCommandRef}
+                  toFacePicking={extrudeToFacePicking(
+                    'edit',
+                    extrudeEditInitialDraft.sketchId,
+                    extrudeToFaceUnresolved(
+                      extrudeEditFeature,
+                      attributedFeatureWarnings()
+                    ),
+                    extrudeEditFeature.featureId
+                  )}
+                  onOpenValue={(valueId, at) =>
+                    openRegionExtrudeKeypad(valueId, at)
+                  }
+                  onDraft={(state) =>
+                    setExtrudeDraftState({
+                      session: `edit:${extrudeEdit.featureId}:${extrudeEdit.generation}`,
+                      state
+                    })
+                  }
+                  name={extrudeEditFeature.name}
+                  // The feature's name as it is now: a rename since the
+                  // edit opened is never written back over.
+                  onPreview={(value) =>
+                    previewExtrudeForm(
+                      extrudeEditFeature,
+                      value && { ...value, name: extrudeEditFeature.name }
+                    )
+                  }
+                  onSubmit={(value) =>
+                    applyExtrudeForm(extrudeEditFeature, {
+                      ...value,
+                      name: extrudeEditFeature.name
+                    })
+                  }
+                  onCancel={cancelExtrudeEdit}
+                />
+              ) : interaction.mode === 'region' && !modelingLocked ? (
+                <ExtrudeCommand
+                  key={`extrude-${interaction.target.sketchId}`}
+                  initial={{
+                    name: 'Extrude',
+                    sketchId: interaction.target.sketchId as SketchId,
+                    distance: 0
+                  }}
+                  scope={parameterScope.scope}
+                  units={doc.units}
+                  profileCount={Math.max(1, selectedProfiles.length)}
+                  bodies={doc.bodyOrder.flatMap((bodyId) => {
+                    const body = doc.derived.bodyRepresentations[bodyId];
+                    return body && !body.consumed
+                      ? [{ bodyId, name: body.name }]
+                      : [];
+                  })}
+                  disabled={geometryBusy || interaction.phase === 'validating'}
+                  entryRefusal={
+                    keypad?.kind === 'extrude' && regionExtrudeEntryError
+                      ? `${keypad.label}: ${regionExtrudeEntryError}.`
+                      : null
+                  }
+                  distanceSetterRef={regionDistanceSetter}
+                  commandRef={regionExtrudeCommandRef}
+                  toFacePicking={extrudeToFacePicking(
+                    'create',
+                    interaction.target.sketchId as SketchId
+                  )}
+                  onOpenValue={(valueId, at) =>
+                    openRegionExtrudeKeypad(valueId, at)
+                  }
+                  onDraft={(state) => {
+                    regionExtrudeSettings.current = state.value;
+                    regionDraftDistance.current = Number.isFinite(
+                      state.distance
+                    )
+                      ? state.distance
+                      : null;
+                    setExtrudeDraftState({
+                      session: `create:${interaction.target.sketchId}`,
+                      state
+                    });
+                    // A new choice is the region's to infer from, and any
+                    // change clears a refusal; a value alone is neither,
+                    // and must not rebuild the region's arrow under a drag.
+                    const current = interactionRef.current;
+                    if (
+                      current.mode !== 'region' ||
+                      current.phase === 'failed' ||
+                      JSON.stringify(current.extrudeChoice) !==
+                        JSON.stringify(state.value.choice)
+                    ) {
+                      dispatchInteraction({
+                        type: 'set-extrude-choice',
+                        choice: state.value.choice
+                      });
+                    }
+                  }}
+                  onPreview={(value) => {
+                    setLastValidPreview(null);
+                    if (!value) {
+                      regionExtrudePreview.clear();
+                      return;
+                    }
+                    const distance = resolveDocumentValue(value.distance);
+                    offsetSetterRef.current?.(distance);
+                    // The last preview stays up until this one lands:
+                    // clearing first showed the bare sketch for a whole
+                    // rebuild on every keystroke.
+                    regionExtrudePreview.replace(distance);
+                  }}
+                  onSubmit={(value) => {
+                    regionExtrudeSettings.current = value;
+                    handleRegionExtrudeCommit(
+                      resolveDocumentValue(value.distance),
+                      value.distance
+                    );
+                  }}
+                  onCancel={() => {
+                    if (cancelPendingRegionExtrusion()) return;
+                    regionExtrudePreview.clear();
+                    dispatchInteraction({ type: 'clear' });
+                    cancelPanel();
+                  }}
+                />
+              ) : movePreview &&
+                !modelingLocked &&
+                !measurementDock &&
+                !contextualToolCard &&
+                !revertPill ? (
+                <MoveOverlay
+                  bodyName={
+                    movePreview.target === 'sketch'
+                      ? (findSketch(doc, movePreview.bodyId as SketchId)
+                          ?.name ?? 'Selected sketch')
+                      : (representations[movePreview.bodyId as BodyId]
+                          ?.name ?? 'Selected body')
+                  }
+                  hideRotation={movePreview.target === 'sketch'}
+                  // A sketch move commits as a sketch translation, not a named
+                  // feature, so it gets neither a name nor a body picker.
+                  name={movePreview.target === 'sketch' ? undefined : moveName}
+                  onName={
+                    movePreview.target === 'sketch' ? undefined : setMoveName
+                  }
+                  targets={
+                    movePreview.target === 'sketch'
+                      ? undefined
+                      : viewerBodies.map((body) => ({
+                          bodyId: body.bodyId,
+                          name:
+                            representations[body.bodyId]?.name ?? body.bodyId
+                        }))
+                  }
+                  targetBodyId={movePreview.bodyId}
+                  onTargetBody={(bodyId) => {
+                    setSelectedBodyIds([bodyId as BodyId]);
+                    setMoveSnap(null);
+                    setMovePreview((current) =>
+                      current
+                        ? {
+                            ...current,
+                            bodyId,
+                            // Values are relative to the body's own centre, so
+                            // carrying them to a different body would apply a
+                            // move nobody asked for.
+                            translation: { x: 0, y: 0, z: 0 },
+                            rotationDeg: { x: 0, y: 0, z: 0 }
+                          }
+                        : current
+                    );
+                  }}
+                  values={{
+                    translation: movePreview.translation,
+                    rotationDeg: movePreview.rotationDeg
+                  }}
+                  units={doc.units}
+                  snap={moveSnap}
+                  onChange={(values) =>
+                    setMovePreview((current) =>
+                      current
+                        ? {
+                            ...current,
+                            translation: values.translation,
+                            rotationDeg: values.rotationDeg
+                          }
+                        : current
+                    )
+                  }
+                  onConfirm={confirmMove}
+                  onCancel={cancelPanel}
+                  copy={
+                    movePreview.target === 'sketch'
+                      ? undefined
+                      : !!movePreview.copy
+                  }
+                  onCopy={(copy) =>
+                    setMovePreview((current) =>
+                      current ? { ...current, copy } : current
+                    )
+                  }
+                  liveValuesRef={moveValuesSetterRef}
+                  liveSnapRef={moveSnapSetterRef}
                 />
               ) : null
             }
@@ -27153,6 +29509,22 @@ export function App() {
             <div className="toast" role="status">
               Session sync is pending. It will retry while this project is open.
             </div>
+          )}
+
+          {shareCopyChoice && (
+            <SharedLinkCopyDialog
+              accountEncrypts={shareCopyChoice.accountEncrypts}
+              error={shareCopyChoice.error}
+              onRetry={requestShareCopy}
+              onChoose={(destination) => {
+                if (
+                  destination === 'account' &&
+                  shareCopyChoice.accountEncrypts === null
+                ) return;
+                setShareCopyChoice(null);
+                if (destination) void handleMakeShareCopy(destination);
+              }}
+            />
           )}
 
           {workspaceResume.candidate && (
@@ -27247,7 +29619,21 @@ export function App() {
                     );
                   }
                 }}
-                role={collaboration.role}
+                role={
+                  // A member's role in an encrypted project is its MLS
+                  // role (slice 5-4), not the room's.
+                  encryptedMemberProject
+                    ? encryptedMemberRole
+                    : (collaboration.role ??
+                      // An encrypted project's sharing goes through its MLS
+                      // group, not the room (slice 5-3b): its owner manages
+                      // it even while no room confirms the role.
+                      (isEncryptedProject(doc.projectId) &&
+                      session &&
+                      doc.ownerUserId === session.userId
+                        ? 'owner'
+                        : null))
+                }
                 collaborationStatus={collaboration.status}
                 lease={collaboration.lease}
                 liveMembers={collaboration.members}
@@ -27256,6 +29642,22 @@ export function App() {
                 editorInvitationsEnabled={
                   collaborationRollout.editLeasesEnforced
                 }
+                encrypted={isEncryptedProject(doc.projectId)}
+                onVerifyContact={(userId) => {
+                  requestContactVerification(userId);
+                  setSharingOpen(false);
+                  updateSettingsViewState({
+                    open: true,
+                    activeSection: 'encryption'
+                  });
+                  setSettingsOpen(true);
+                }}
+                onLeft={() => {
+                  // Leaving an encrypted project (slice 5-5): its access is
+                  // gone, so go back to the projects that remain.
+                  setSharingOpen(false);
+                  void handleGoHome();
+                }}
                 onClose={() => setSharingOpen(false)}
               />
             )}
@@ -27384,8 +29786,7 @@ export function App() {
           )}
           {meshExportOpen &&
             doc &&
-            // Stays open while hidden bodies are switched off, even when
-            // nothing visible is left, so the choice can be undone here.
+            // Keep the dialog open if the last visible body is hidden.
             (exportBodyIds.length > 0 ||
               (exportScopeInfo?.hiddenExcluded ?? 0) > 0) && (
               <ExportDialog
@@ -27396,25 +29797,12 @@ export function App() {
                       ? exportScopeLabel(exportScopeInfo)
                       : `all bodies (${exportBodyIds.length})`
                 }
-                hiddenBodies={
-                  exportScopeInfo && !exportScopeInfo.selection
-                    ? exportScopeInfo.hiddenIncluded +
-                      exportScopeInfo.hiddenExcluded
-                    : 0
-                }
-                includeHidden={exportIncludesHidden}
-                onIncludeHiddenChange={setExportIncludesHidden}
                 bodies={exportBodyIds.map((bodyId) => ({
                   bodyId,
                   name: doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId
                 }))}
                 revision={doc.version}
-                onClose={() => {
-                  setMeshExportOpen(false);
-                  // Leaving with every body hidden and left out would leave no
-                  // export to reopen this dialog from; hidden bodies come back.
-                  if (exportBodyIds.length === 0) setExportIncludesHidden(true);
-                }}
+                onClose={() => setMeshExportOpen(false)}
                 onExport={handleExportMesh}
                 onCheckQuality={handleCheckMeshQuality}
                 exportUnits={appSettings.files.exportUnits}

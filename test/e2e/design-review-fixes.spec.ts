@@ -1,8 +1,11 @@
 import type { Page } from '@playwright/test';
 import {
   createProject,
+  createPrimitiveInPlace,
+  enterCommandValue,
   expect,
   expectBodyCount,
+  finishInPlaceCommand,
   revealModelPanel,
   stubApi,
   test
@@ -30,13 +33,9 @@ async function plate(page: Page) {
   await stubApi(page);
   await page.route('**/api/session', (route) => route.fulfill({ json: null }));
   await createProject(page, 'Design review regression');
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector(page).getByLabel('Width (X)').fill('60');
-  await inspector(page).getByLabel('Depth (Y)').fill('40');
-  await inspector(page).getByLabel('Height (Z)').fill('10');
-  await inspector(page)
-    .getByRole('button', { name: 'Create', exact: true })
-    .click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '60', depth: '40', height: '10' }
+  });
   await expectBodyCount(page, 1);
 }
 
@@ -66,16 +65,17 @@ async function preciseHole(page: Page) {
     .toBe(true);
   const bar = page.getByRole('group', { name: 'Hole command' });
   await bar.getByRole('button', { name: 'Precise values…' }).click();
-  await expect(bar).toHaveCount(0);
-  await expect(
-    inspector(page).getByLabel('Diameter', { exact: true })
-  ).toHaveValue('6');
-  await expect(inspector(page).getByLabel('U · along −Y')).toHaveValue('2');
-  await expect(inspector(page).getByLabel('V · along +X')).toHaveValue('2');
-  await inspector(page).getByLabel('Diameter', { exact: true }).fill('10');
-  await inspector(page).getByLabel('U · along −Y').fill('0');
-  await inspector(page).getByLabel('V · along +X').fill('0');
-  await inspector(page).getByRole('button', { name: 'Create hole' }).click();
+  const keypad = page.locator('.numeric-keypad');
+  await expect(keypad.locator('input')).toHaveValue('6');
+  await keypad.locator('input').fill('10');
+  await keypad.locator('input').press('Enter');
+  await expect(bar).toBeVisible();
+  await bar.getByLabel('Hole options').click();
+  await bar.getByRole('radio', { name: 'Typed (U, V)', exact: true }).click();
+  await bar.getByLabel('Hole options').click();
+  await enterCommandValue(page, 'positionU', '0');
+  await enterCommandValue(page, 'positionV', '0');
+  await finishInPlaceCommand(page, 'Hole');
   await expect(page.getByRole('contentinfo')).toContainText('Drilled hole', {
     timeout: 30_000
   });
@@ -89,33 +89,42 @@ test('precise hole creation, honest properties, recoverable errors and compact e
   page.on('pageerror', (error) => errors.push(error.message));
   await page.setViewportSize({ width: 1048, height: 720 });
   await plate(page);
-  await preciseHole(page);
   await revealModelPanel(page, 'History');
   const layout = await dockConfiguration(page);
-  await page.locator('.feature-row-main', { hasText: /^Hole/ }).click();
+  await page.locator('.feature-row-main', { hasText: /^Box/ }).click();
   await expect(page.locator('.model-panel')).toHaveCount(0);
   await expect(inspector(page)).toBeVisible();
   const bounds = (await inspector(page).boundingBox())!;
   expect(bounds.x).toBeGreaterThan(1048 / 2);
   await expect(inspector(page)).toContainText('Measurements (last applied)');
-  await expect(inspector(page)).toContainText('23214.6');
-  await inspector(page).getByLabel('Diameter', { exact: true }).fill('100');
-  await expect(inspector(page)).toContainText('23214.6');
+  await expect(inspector(page)).toContainText('24000');
+  await inspector(page).getByLabel('Width (X)').fill('100');
+  await expect(inspector(page)).toContainText('24000');
   await expect(inspector(page)).toContainText('last applied model');
-  await inspector(page).getByRole('button', { name: 'Apply hole' }).click();
-  await expect(inspector(page).getByRole('alert')).toContainText(
+  await inspector(page)
+    .getByRole('button', { name: 'Cancel', exact: true })
+    .click();
+  await preciseHole(page);
+  await revealModelPanel(page, 'History');
+  await page.locator('.feature-row-main', { hasText: /^Hole/ }).click();
+  const edit = page.getByRole('group', {
+    name: 'Edit Hole command',
+    exact: true
+  });
+  await expect(edit).toBeVisible();
+  await enterCommandValue(page, 'diameter', '100');
+  await expect(edit.getByRole('status')).toContainText(
     'This cut would remove the entire target body'
   );
-  const details = inspector(page)
+  await expect(edit.getByRole('button', { name: /Done/ })).toBeDisabled();
+  const details = edit
     .locator('details')
     .filter({ has: page.getByText('Technical details', { exact: true }) });
   await expect(details).not.toHaveAttribute('open');
   await page.screenshot({
     path: testInfo.outputPath('compact-hole-refusal.png')
   });
-  await inspector(page)
-    .getByRole('button', { name: 'Cancel', exact: true })
-    .click();
+  await edit.getByRole('button', { name: /Cancel/ }).click();
   await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   expect(await dockConfiguration(page)).toEqual(layout);
   expect(errors).toEqual([]);
@@ -179,10 +188,8 @@ test('a drawing follows a finishing body on explicit Update and saves from Draw'
       { timeout: 30_000 }
     )
     .toBe(true);
-  await inspector(page).getByLabel('Radius', { exact: true }).fill('2');
-  await inspector(page)
-    .getByRole('button', { name: 'Create', exact: true })
-    .click();
+  await enterCommandValue(page, 'radius', '2');
+  await finishInPlaceCommand(page, 'Fillet');
   await expect(page.getByRole('contentinfo')).toContainText('Fillet applied', {
     timeout: 30_000
   });

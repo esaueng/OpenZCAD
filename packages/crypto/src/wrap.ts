@@ -163,6 +163,8 @@ export type WrapContext =
        */
       readonly purpose: 'share-version-key';
       readonly projectId: string;
+      /** The snapshot header's key epoch, as its member wrap binds it. */
+      readonly keyEpoch: number;
       readonly shareId: string;
       readonly versionId: string;
     }
@@ -175,8 +177,14 @@ export type WrapContext =
       readonly purpose: 'rejoin-psk';
       readonly userId: string;
       readonly projectId: string;
-      /** The MLS group epoch the PSK was exported in. */
-      readonly epoch: number;
+      /**
+       * The key epoch of the MLS epoch the PSK was exported in: the
+       * monotonic project-key generation (decision D10), group key epoch
+       * base plus MLS epoch, not the MLS epoch itself. MLS epochs restart
+       * at 0 after a group reset, so without it a server could present one
+       * group generation's wrap as another's.
+       */
+      readonly keyEpoch: number;
     }
   | {
       /**
@@ -276,10 +284,11 @@ const CONTEXT_FIELDS: Record<WrapPurpose, Record<string, FieldRule>> = {
   'dedupe-secret': { projectId: 'string', keyEpoch: 'uint' },
   'share-version-key': {
     projectId: 'string',
+    keyEpoch: 'uint',
     shareId: 'string',
     versionId: 'string'
   },
-  'rejoin-psk': { userId: 'string', projectId: 'string', epoch: 'uint' },
+  'rejoin-psk': { userId: 'string', projectId: 'string', keyEpoch: 'uint' },
   'archived-project-key': {
     projectId: 'string',
     archivedEpoch: 'uint',
@@ -666,6 +675,7 @@ export async function wrapShareSnapshotKey(
   const forLinkVisitors = await wrapKey(shareKey, versionKey, {
     purpose: 'share-version-key',
     projectId: context.projectId,
+    keyEpoch: context.keyEpoch,
     shareId: context.shareId,
     versionId: context.versionId
   });

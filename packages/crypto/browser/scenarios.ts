@@ -696,6 +696,7 @@ const KW_CONTEXTS: readonly WrapContext[] = [
   {
     purpose: 'share-version-key',
     projectId: 'project-a',
+    keyEpoch: 2,
     shareId: 'share-1',
     versionId: '7'
   },
@@ -703,7 +704,7 @@ const KW_CONTEXTS: readonly WrapContext[] = [
     purpose: 'rejoin-psk',
     userId: 'user-1',
     projectId: 'project-a',
-    epoch: 12
+    keyEpoch: 12
   },
   {
     purpose: 'archived-project-key',
@@ -982,7 +983,7 @@ const kwRefusalSteps: CryptoScenario[] = [
         purpose: 'rejoin-psk',
         userId: 'user-1',
         projectId: 'project-a',
-        epoch: 12
+        keyEpoch: 12
       };
       const archived: WrapContext = {
         purpose: 'archived-project-key',
@@ -1003,7 +1004,7 @@ const kwRefusalSteps: CryptoScenario[] = [
           [
             { ...rejoin, userId: 'user-2' },
             { ...rejoin, projectId: 'project-b' },
-            { ...rejoin, epoch: 13 }
+            { ...rejoin, keyEpoch: 13 }
           ]
         ],
         [
@@ -1190,6 +1191,7 @@ const wrapSteps: CryptoScenario[] = [
         await unwrapKey(shareKey, wraps.forLinkVisitors, {
           purpose: 'share-version-key',
           projectId: 'project-a',
+          keyEpoch: 2,
           shareId: 'share-1',
           versionId: '7'
         }),
@@ -1379,6 +1381,22 @@ const signingSteps: CryptoScenario[] = [
       assert(
         verifiedGrant.deviceId === 'dev_new' && verifiedGrant.certified,
         'grant fields differ'
+      );
+      const withContacts = await verifyDeviceApprovalGrant(
+        await signDeviceApprovalGrant(approver.privateKey, {
+          ...grant,
+          contacts: {
+            head: { sequence: 5, entryHash: patternBytes(32, 6) },
+            confirmed: true
+          }
+        }),
+        approverRaw
+      );
+      assert(
+        withContacts.contacts?.head?.sequence === 5 &&
+          withContacts.contacts.confirmed &&
+          verifiedGrant.contacts === undefined,
+        'grant contacts head differs'
       );
       const old = await generateSigningKeyPair(false);
       const oldRaw = await exportPublicKey(old.publicKey);
@@ -2363,10 +2381,10 @@ const vectorSteps: CryptoScenario[] = [
             purpose: 'rejoin-psk',
             userId: 'usr_1',
             projectId: 'prj_1',
-            epoch: 7
+            keyEpoch: 7
           },
-          '0565706f63680200000000000000070970726f6a656374496401000570726a5f3107707572706f736501000a72656a6f696e2d70736b067573657249640100057573725f31',
-          '02d39acfeeeae0451c37713f2a90e521342404ab5260529e315d0c2453add4f6320986a9ed061cfbb6'
+          '086b657945706f63680200000000000000070970726f6a656374496401000570726a5f3107707572706f736501000a72656a6f696e2d70736b067573657249640100057573725f31',
+          '02e5bdafb70e3f87ac40825cfdf1683742463c197250ef54a277dfd4685f112b4b86be5a3fa2840753'
         ],
         [
           {

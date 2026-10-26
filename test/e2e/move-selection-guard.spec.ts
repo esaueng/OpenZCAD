@@ -13,7 +13,10 @@ import {
   revealModelPanel,
   setSelectionFilter,
   stubApi,
-  test
+  test,
+  createPrimitiveInPlace,
+  finishInPlaceCommand,
+  openMoveOptions
 } from './openzcad-fixtures';
 
 async function makePart(page: Page, name: string) {
@@ -23,11 +26,9 @@ async function makePart(page: Page, name: string) {
   await page.getByLabel('Project name').fill(name);
   await page.getByRole('button', { name: 'Create project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  for (const label of ['Width (X)', 'Depth (Y)', 'Height (Z)']) {
-    await inspector.getByLabel(label).fill('60');
-  }
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '60', depth: '60', height: '60' }
+  });
   await expectBodyCount(page, 1);
   await expect(inspector).toHaveCount(0);
   const canvas = page.locator('.viewer-host canvas');
@@ -44,10 +45,11 @@ async function makePart(page: Page, name: string) {
 async function startMove(page: Page) {
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
   const move = page.getByRole('form', { name: 'Move controls' });
+  await openMoveOptions(move);
   await move.getByLabel('Move X in mm').fill('5');
-  // A single target is named in a paragraph; the selector exists only when
-  // the document offers several bodies. Keep the actual displayed target.
-  const target = move.locator('p').first();
+  // The bar's hint names the target (U09); the Options' Body selector exists
+  // only when the document offers several. Keep the displayed target.
+  const target = move.locator('.move-target-name');
   await expect(target).not.toHaveText('');
   return target.innerText();
 }
@@ -87,9 +89,12 @@ async function backupProject(page: Page): Promise<ProjectDocument> {
 async function watchCardCount(page: Page) {
   await page.evaluate(() => {
     const scope = window as typeof window & { __ozMaxCards?: number };
+    // A Move's bar takes the command row, not the lane (U09), but it is
+    // still the one command surface up: it never stands beside a card.
     const count = () =>
       document.querySelectorAll('.command-float > *').length +
-      document.querySelectorAll('.inspector-float:not(.closing)').length;
+      document.querySelectorAll('.inspector-float:not(.closing)').length +
+      document.querySelectorAll('form[aria-label="Move controls"]').length;
     scope.__ozMaxCards = count();
     new MutationObserver(() => {
       scope.__ozMaxCards = Math.max(scope.__ozMaxCards ?? 0, count());
@@ -137,7 +142,7 @@ test('a viewport body pick settles the typed Move once before changing selection
   await expect(ask).toContainText('before the selection changes');
   await ask.getByRole('button', { name: 'Cancel' }).click();
   await expect(move.getByLabel('Move X in mm')).toHaveValue('5');
-  await expect(move.locator('p').first()).toHaveText(target);
+  await expect(move.locator('.move-target-name')).toHaveText(target);
   await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', selected);
   await expect(canvas).toHaveAttribute('data-e2e-move-gizmo-x', /.+/);
   await expect(inspector).toHaveCount(0);
@@ -184,9 +189,13 @@ test('a connected edge run settles the typed Move before replacing its target', 
     page,
     'Edge run Move guard'
   );
+  // U09 phase 7: in place, every edge from Options, the default radius.
   await page.getByRole('button', { name: /^Fillet/ }).click();
-  await inspector.getByRole('button', { name: 'Select all 12 edges' }).click();
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  const filletBar = page.getByRole('group', { name: 'Fillet command' });
+  await filletBar.locator('summary').click();
+  await filletBar.getByRole('button', { name: 'Select all 12 edges' }).click();
+  await filletBar.locator('summary').click();
+  await finishInPlaceCommand(page, 'Fillet');
   await expect(page.locator('.feature-row')).toHaveCount(2);
   await expect(inspector).toHaveCount(0);
   await page.keyboard.press('Escape');
@@ -215,7 +224,7 @@ test('a connected edge run settles the typed Move before replacing its target', 
   await expect(ask).toBeVisible();
   await ask.getByRole('button', { name: 'Cancel' }).click();
   await expect(move.getByLabel('Move X in mm')).toHaveValue('5');
-  await expect(move.locator('p').first()).toHaveText(target);
+  await expect(move.locator('.move-target-name')).toHaveText(target);
   await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', selected);
   await expect(canvas).toHaveAttribute('data-e2e-move-gizmo-x', /.+/);
   await expect(inspector).toHaveCount(0);
@@ -281,7 +290,7 @@ test('a right-click waits for the Move answer and retains its requested menu', a
   await ask.getByRole('button', { name: 'Cancel' }).click();
   await expect(menu).toHaveCount(0);
   await expect(move.getByLabel('Move X in mm')).toHaveValue('5');
-  await expect(move.locator('p').first()).toHaveText(target);
+  await expect(move.locator('.move-target-name')).toHaveText(target);
   await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', selected);
   await expect(inspector).toHaveCount(0);
 
@@ -373,11 +382,15 @@ test('a deferred edge menu opens Fillet after Discard without asking about the o
   await expect(menu).toBeVisible();
   await expect(moveRows).toHaveCount(0);
 
+  // The menu's Fillet runs in place on the edge it was opened from.
   await menu
     .getByRole('menuitem', { name: 'Fillet edge…', exact: true })
     .click();
-  await expect(inspector).toBeVisible();
-  await expect(inspector.getByLabel('Radius', { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('group', { name: 'Fillet command' })
+  ).toContainText('1 edge');
+  await expect(page.getByTestId('command-handle-radius')).toBeVisible();
+  await expect(inspector).toHaveCount(0);
   await expect(ask).toHaveCount(0);
   await expect(menu).toBeHidden();
   await expect(move).toHaveCount(0);
@@ -440,7 +453,7 @@ test('a nonempty box sweep asks before replacing a typed Move target', async ({
   await expect(ask).toBeVisible();
   await ask.getByRole('button', { name: 'Cancel' }).click();
   await expect(move.getByLabel('Move X in mm')).toHaveValue('5');
-  await expect(move.locator('p').first()).toHaveText(target);
+  await expect(move.locator('.move-target-name')).toHaveText(target);
   await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', selected);
   await expect(canvas).toHaveAttribute('data-e2e-move-gizmo-x', /.+/);
   await expect(inspector).toHaveCount(0);
@@ -582,7 +595,7 @@ test('a manual Sketch-filter profile pick settles the body Move before taking it
   await expect(profileCard).toHaveCount(0);
   await ask.getByRole('button', { name: 'Cancel' }).click();
   await expect(move.getByLabel('Move X in mm')).toHaveValue('5');
-  await expect(move.locator('p').first()).toHaveText(target);
+  await expect(move.locator('.move-target-name')).toHaveText(target);
   await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', bodyId);
   await expect(canvas).toHaveAttribute('data-e2e-move-gizmo-x', /.+/);
   await expect(profileCard).toHaveCount(0);
@@ -634,12 +647,10 @@ test('an Items body pick settles the original Move and preserves Shift selection
     page,
     'Items Move guard'
   );
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Name').fill('Other');
-  for (const label of ['Width (X)', 'Depth (Y)', 'Height (Z)']) {
-    await inspector.getByLabel(label).fill('60');
-  }
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '60', depth: '60', height: '60' },
+    name: 'Other'
+  });
   await expectBodyCount(page, 2);
   await expect(inspector).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
@@ -654,6 +665,7 @@ test('an Items body pick settles the original Move and preserves Shift selection
   const maxCards = await watchCardCount(page);
   const startOriginalMove = async () => {
     await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+    await openMoveOptions(move);
     await expect(
       move.getByRole('combobox', { name: 'Body', exact: true })
     ).toHaveValue(originalId);
@@ -738,7 +750,7 @@ test('a manual Face-filter drag cannot resize the primitive beneath an open Move
   await page.mouse.move(point.x + 72, point.y - 54, { steps: 6 });
   await page.mouse.up();
   await expect(move.getByLabel('Move X in mm')).toHaveValue('5');
-  await expect(move.locator('p').first()).toHaveText(target);
+  await expect(move.locator('.move-target-name')).toHaveText(target);
   await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', selected);
   await expect(canvas).toHaveAttribute('data-e2e-move-gizmo-x', /.+/);
   await expect(ask).toHaveCount(0);
@@ -804,6 +816,7 @@ test('a manual Face-filter drag cannot resize the primitive beneath an open Move
   expect(await worldBounds()).not.toEqual(baseline);
   await page.keyboard.press('m');
   await expect(move).toBeVisible();
+  await openMoveOptions(move);
   await move.getByLabel('Move X in mm').fill('5');
   const movedBounds = [{ min: [5, 0, 0], max: [65, 60, 60] }];
   await expect.poll(worldBounds).toEqual(movedBounds);
@@ -812,7 +825,7 @@ test('a manual Face-filter drag cannot resize the primitive beneath an open Move
   await page.mouse.up();
   await expect.poll(worldBounds).toEqual(movedBounds);
   await expect(move.getByLabel('Move X in mm')).toHaveValue('5');
-  await expect(move.locator('p').first()).toHaveText(target);
+  await expect(move.locator('.move-target-name')).toHaveText(target);
   await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', selected);
   await expect(ask).toHaveCount(0);
   await expect(inspector).toHaveCount(0);

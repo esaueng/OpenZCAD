@@ -9,10 +9,13 @@ import {
 } from 'react';
 import { axisDimensionLabel } from '../lib/primitiveDimensionLabel';
 import * as THREE from 'three';
-import type { HoleGhost } from '../lib/holeGhost';
-import { buildHoleGhostRig } from './viewer/holeGhostRig';
-import type { PrimitiveGhost } from '../lib/primitiveGhost';
-import { buildPrimitiveGhostRig } from './viewer/primitiveGhostRig';
+import {
+  framePlaneHit,
+  meshNormal,
+  placementFrame,
+  principalFrameFor,
+  type PlacementFrame
+} from '../lib/inPlace/primitives';
 import { currentRenderProfile } from './viewer/renderProfile';
 import { createdBodiesToFrame, type AutoFrameRequest } from '../lib/autoFrame';
 import {
@@ -29,7 +32,11 @@ import {
 import { buildSketchRelationGlyphs } from './viewer/sketchRelations';
 import type { SketchRelationGlyphChip } from '../lib/sketch/relationGlyphs';
 import type { SketchDimensionAnnotation } from '../lib/sketch/dimensionAnnotations';
-import type { BoundaryProvenance, SketchComposite, SketchDimensionIdentity } from '@openzcad/shared';
+import type {
+  BoundaryProvenance,
+  SketchComposite,
+  SketchDimensionIdentity
+} from '@openzcad/shared';
 import {
   disposeRetiringOverlays,
   disposeSettledOverlays,
@@ -212,6 +219,7 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
+import { isBehindCamera } from '../lib/cameraDepth';
 import {
   chipPanelDodge,
   edgeChipCenterX,
@@ -221,6 +229,7 @@ import {
   regionChipState,
   type OffsetChipMode
 } from '../lib/offsetChip';
+import { faceDepthBehind, faceLift } from '../lib/faceDepthBehind';
 import { setLiveDiameter } from '../lib/liveLabels';
 import type { SelectionCalloutContent } from '../lib/selectionCallout';
 import {
@@ -334,7 +343,7 @@ type SketchMoveEvent = Extract<
   { type: 'sketch-move-start' | 'sketch-move-commit' | 'sketch-move-cancel' }
 >;
 import type { PlaneBasis } from '@openzcad/geometry';
-import type { PlaneId, SketchObjectData } from '@openzcad/shared';
+import type { PlaneId, SketchObjectData, Vector3 } from '@openzcad/shared';
 import { buildPlanePickerRig } from './viewer/planePickerRig';
 import {
   buildAxisPickerRig,
@@ -431,6 +440,12 @@ export interface OffsetHandleTarget {
    * let go, but cannot be grabbed until the edit commits or is refused.
    */
   locked?: boolean;
+  /**
+   * A value is being typed on the keypad. The typed value drives the handle,
+   * its ghost and the drag preview; exact frames landing meanwhile re-derive
+   * this target without replacing any of them.
+   */
+  entry?: boolean;
 }
 
 /**
@@ -676,6 +691,17 @@ function buildRegionFollowerRig(
   });
 }
 
+/** U09: one frame of a primitive's footprint drag, in world space. */
+export interface FootprintGesture {
+  phase: 'move' | 'end';
+  /** The plane drawn on: a face's, or a principal plane's. */
+  frame: PlacementFrame;
+  start: { x: number; y: number; z: number };
+  end: { x: number; y: number; z: number };
+  /** False for a press that never travelled: a click. */
+  moved: boolean;
+}
+
 /** U09: one value's handle, as the in-place command hands it over. */
 export type CommandHandleView = (
   | {
@@ -698,6 +724,8 @@ export type CommandHandleView = (
 };
 
 const EMPTY_COMMAND_HANDLES: readonly CommandHandleView[] = [];
+/** How far inside the canvas edge a command chip is kept, in CSS pixels. */
+const COMMAND_CHIP_MARGIN_PX = 12;
 
 export interface SketchViewData {
   sketchId: string;
@@ -1001,12 +1029,6 @@ export interface ModelViewerProps {
   openExactEntryRef: MutableRefObject<(() => boolean) | null>;
   /** Armed edge fillet/chamfer handle (selection-first direct manipulation). */
   edgeHandle: EdgeHandleTarget | null;
-  /**
-   * The radius/distance a form is currently proposing for the armed edges.
-   * The handle shows it so the two never disagree: the tile's form said
-   * "Radius 2" while the handle beside it read "R 0 mm".
-   */
-  edgeHandleValue?: number | null;
   /** Streamed while an edge-radius drag is in flight (throttled by App). */
   onEdgeRadiusPreview(size: number): void;
   /** Fired when the radius drag releases (or exact entry commits). */
@@ -1036,8 +1058,8 @@ export interface ModelViewerProps {
   planePickerArmed: boolean;
   /** Distance the ghost quads sit along their normals, as typed in the prompt. */
   planePickerOffset: number;
-  /** A ghost plane was clicked. */
-  onPickPlane(plane: PlaneId): void;
+  /** A ghost plane was clicked, at `point` on it. */
+  onPickPlane(plane: PlaneId, point?: Vector3): void;
   /**
    * U09: an in-place command waiting on (or showing) its axis: the lines
    * that can be picked, drawn long and clickable, and the picked one.
@@ -1060,6 +1082,14 @@ export interface ModelViewerProps {
   onCommandHandleRelease?(valueId: string, value: number): void;
   /** A handle's chip was tapped; true when a keypad opened. */
   onOpenCommandKeypad?(valueId: string, value: number): boolean;
+  /**
+   * Which chip the open keypad rides, where an offset arrow and command
+   * handles stand together (the in-place Extrude): `offset` the arrow's,
+   * `{ command }` that handle's, `none` neither (a keypad opened from the
+   * command bar stays where it opened). Absent: the arrow's chip and the
+   * command chip dragged last (else the first) each anchor it, as before.
+   */
+  keypadAnchorOwner?: 'offset' | 'none' | { command: string };
   /** Filled with a setter the keypad uses to move a command handle. */
   commandSetterRef?: MutableRefObject<
     ((valueId: string, value: number) => void) | null
@@ -1072,14 +1102,28 @@ export interface ModelViewerProps {
   /** A curve was clicked; Shift asks to add rather than start over. */
   onPickCurve?(id: string, additive: boolean): void;
   /** A datum plane was clicked where nothing in the model was under it. */
-  onPickDatum?(featureId: string): void;
+  onPickDatum?(featureId: string, point?: Vector3): void;
   /**
-   * The bore the open Hole card would drill, drawn through the body before
-   * it exists. Null while no hole can be placed.
+   * U09: a plane a click that hits nothing pickable lands on (a picture
+   * being placed): the click is reported at the point on it, not as an
+   * empty selection.
    */
-  holeGhost?: HoleGhost | null;
-  /** The solid the open primitive card would create, drawn before Create. */
-  primitiveGhost?: PrimitiveGhost | null;
+  placementPlane?: { origin: Vector3; normal: Vector3 } | null;
+  onPlacementClick?(point: Vector3): void;
+  /**
+   * U09: a primitive placed by a press-drag. A press on a flat face of one of
+   * `bodyIds` draws on that face's plane, anywhere else on the ground (or
+   * the upright principal plane facing the view, when the ground is
+   * edge-on). The drag's outline is drawn at once; the exact solid follows.
+   */
+  footprintPicker?: {
+    shape: 'rectangle' | 'circle';
+    bodyIds: readonly string[];
+    /** The command it belongs to: a new one retires a drag in progress. */
+    session: number;
+  } | null;
+  /** Each frame of a footprint drag, and its release. */
+  onFootprint?(gesture: FootprintGesture): void;
   /**
    * Committed R01 datum planes, drawn on the frames the exact build resolved.
    * Hidden, suppressed and unresolved datums are simply absent.
@@ -1828,11 +1872,7 @@ function bodyExtentBehind(
   let least = Number.POSITIVE_INFINITY;
   const vertex = new THREE.Vector3();
   object.updateWorldMatrix(true, true);
-  object.traverse((child) => {
-    if (!(child instanceof THREE.Mesh)) {
-      return;
-    }
-    const mesh = child as THREE.Mesh<THREE.BufferGeometry, THREE.Material>;
+  forEachMesh(object, (mesh) => {
     const position = mesh.geometry.getAttribute('position') as
       THREE.BufferAttribute | THREE.InterleavedBufferAttribute | undefined;
     if (!position) {
@@ -1841,7 +1881,7 @@ function bodyExtentBehind(
     for (let index = 0; index < position.count; index += 1) {
       vertex
         .fromBufferAttribute(position, index)
-        .applyMatrix4(child.matrixWorld);
+        .applyMatrix4(mesh.matrixWorld);
       const along = vertex.sub(origin).dot(direction);
       if (along < least) {
         least = along;
@@ -2101,7 +2141,6 @@ export function ModelViewer({
   cancelDirectManipulationRef,
   openExactEntryRef,
   edgeHandle,
-  edgeHandleValue = null,
   onEdgeRadiusPreview,
   onEdgeCommit,
   onEdgeCancel,
@@ -2113,8 +2152,8 @@ export function ModelViewer({
   onSelectRegion,
   onHoverRegion,
   planePickerArmed,
-  holeGhost = null,
-  primitiveGhost = null,
+  footprintPicker = null,
+  onFootprint,
   datumPlanes,
   datumAxes,
   referenceImages,
@@ -2128,9 +2167,12 @@ export function ModelViewer({
   onCommandHandleRelease,
   onOpenCommandKeypad,
   commandSetterRef: commandSetterRefProp,
+  keypadAnchorOwner,
   curvePicker = null,
   onPickCurve,
   onPickDatum,
+  placementPlane = null,
+  onPlacementClick,
   onMeasurePreview,
   regionHandle,
   facePickOnly = false,
@@ -2310,8 +2352,6 @@ export function ModelViewer({
   onOffsetCancelRef.current = onOffsetCancel;
   const offsetPreviewInvalidRef = useRef(offsetPreviewInvalid);
   offsetPreviewInvalidRef.current = offsetPreviewInvalid;
-  const edgeHandleValueRef = useRef(edgeHandleValue);
-  edgeHandleValueRef.current = edgeHandleValue;
   const previewDeferredRef = useRef(previewDeferred);
   previewDeferredRef.current = previewDeferred;
   const onOpenOffsetKeypadRef = useRef(onOpenOffsetKeypad);
@@ -2363,6 +2403,10 @@ export function ModelViewer({
   onPickPlaneRef.current = onPickPlane;
   const onPickDatumRef = useRef(onPickDatum);
   onPickDatumRef.current = onPickDatum;
+  const placementPlaneRef = useRef(placementPlane);
+  placementPlaneRef.current = placementPlane;
+  const onPlacementClickRef = useRef(onPlacementClick);
+  onPlacementClickRef.current = onPlacementClick;
   const planePickerOffsetRef = useRef(planePickerOffset);
   planePickerOffsetRef.current = planePickerOffset;
   const datumPlaneRigRef = useRef<DatumPlaneRig | null>(null);
@@ -2407,6 +2451,12 @@ export function ModelViewer({
   const curvePickerRigRef = useRef<ReturnType<
     typeof buildCurvePickerRig
   > | null>(null);
+  const footprintPickerRef = useRef(footprintPicker);
+  footprintPickerRef.current = footprintPicker;
+  const onFootprintRef = useRef(onFootprint);
+  onFootprintRef.current = onFootprint;
+  /** Drops a footprint drag in progress, as when its command goes away. */
+  const retireFootprintRef = useRef<(() => void) | null>(null);
   const onPickCurveRef = useRef(onPickCurve);
   onPickCurveRef.current = onPickCurve;
   const onCommandHandlePreviewRef = useRef(onCommandHandlePreview);
@@ -2415,6 +2465,8 @@ export function ModelViewer({
   onCommandHandleReleaseRef.current = onCommandHandleRelease;
   const onOpenCommandKeypadRef = useRef(onOpenCommandKeypad);
   onOpenCommandKeypadRef.current = onOpenCommandKeypad;
+  const keypadAnchorOwnerRef = useRef(keypadAnchorOwner);
+  keypadAnchorOwnerRef.current = keypadAnchorOwner;
   const ownCommandSetterRef = useRef<
     ((valueId: string, value: number) => void) | null
   >(null);
@@ -2598,9 +2650,7 @@ export function ModelViewer({
   /** Live offset-handle rig; owned by the offsetHandle effect below. */
   const offsetRigRef = useRef<DragRig | null>(null);
   /** The handle the live offset rig was built from. */
-  const offsetRigBuiltRef = useRef<{ handle: OffsetHandleTarget } | null>(
-    null
-  );
+  const offsetRigBuiltRef = useRef<{ handle: OffsetHandleTarget } | null>(null);
   const offsetDragActiveRef = useRef(false);
   /** How far the body reaches behind the armed face, for the "Total" reading. */
   const offsetExtentRef = useRef<number | null>(null);
@@ -2907,7 +2957,10 @@ export function ModelViewer({
       bodyGroup,
       filter: () => selectionFilterRef.current,
       selectThrough: () => xrayRef.current,
-      clippingPlane: () => sectionViewRef.current ? sectionClippingPlane(sectionViewRef.current) : null,
+      clippingPlane: () =>
+        sectionViewRef.current
+          ? sectionClippingPlane(sectionViewRef.current)
+          : null,
       profiles: () => profilePickTargetsRef.current,
       selectionContext: () =>
         profileSelectionModeRef.current
@@ -2978,17 +3031,21 @@ export function ModelViewer({
           const body = context.renderedBodies?.find(
             (candidate) => candidate.bodyId === preview.bodyId
           );
-          const target = moveCopyPreview.target(object, !!preview.copy && !!body, () => {
-            const resolution = context.fatLineResolution();
-            const copy = new THREE.Group();
-            const mesh = createObjectForBody(body!, resolution);
-            const edges = createBodyEdgeOverlay(body!, resolution);
-            edges.setDisplayMode(displayModeRef.current);
-            mesh.add(edges);
-            copy.add(mesh);
-            applyDisplayMode(copy, displayModeRef.current, xrayRef.current);
-            return copy;
-          });
+          const target = moveCopyPreview.target(
+            object,
+            !!preview.copy && !!body,
+            () => {
+              const resolution = context.fatLineResolution();
+              const copy = new THREE.Group();
+              const mesh = createObjectForBody(body!, resolution);
+              const edges = createBodyEdgeOverlay(body!, resolution);
+              edges.setDisplayMode(displayModeRef.current);
+              mesh.add(edges);
+              copy.add(mesh);
+              applyDisplayMode(copy, displayModeRef.current, xrayRef.current);
+              return copy;
+            }
+          );
           moveCopyPreview.refreshAppearance(
             displayModeRef.current,
             xrayRef.current
@@ -3017,7 +3074,9 @@ export function ModelViewer({
         center.z + translation.z
       );
       if (E2E_CANVAS_HOOKS_ENABLED) {
-        renderer.domElement.dataset.e2eMoveCopyPreview = String(moveCopyPreview.active);
+        renderer.domElement.dataset.e2eMoveCopyPreview = String(
+          moveCopyPreview.active
+        );
       }
     }
 
@@ -4093,18 +4152,33 @@ export function ModelViewer({
     /** Places each command chip at its handle; hides any off screen. */
     function updateCommandChips() {
       const rigs = commandRigsRef.current;
+      const owner = keypadAnchorOwnerRef.current;
+      // A keypad another chip owns (or none does) is never moved from here.
       const activeId =
-        commandDragRef.current?.valueId ??
-        (rigs.size > 0 ? [...rigs.keys()][0]! : null);
+        owner === undefined
+          ? (commandDragRef.current?.valueId ??
+            (rigs.size > 0 ? [...rigs.keys()][0]! : null))
+          : typeof owner === 'object'
+            ? owner.command
+            : null;
       let anchored = false;
-      const e2eHandles: Record<string, { x: number; y: number; value: number }> =
-        {};
+      const e2eHandles: Record<
+        string,
+        { x: number; y: number; value: number }
+      > = {};
       // Reads before the writes below, as `updateOffsetChip` does: the chips
       // keep out from under the right lane (the docked panels, the viewer
       // bar), where a value cannot be tapped.
       const laneLeft = rigs.size > 0 ? rightLaneLeft(true) : null;
+      // And above the bottom lane (the guidance and the search bar, where
+      // the command's Done stands): a chip held on the canvas there sat
+      // under the bar and could not be tapped.
+      const footTop = rigs.size > 0 ? bottomLaneTop() : null;
       const chipWidths = new Map(
         [...rigs].map(([valueId, entry]) => [valueId, entry.chip.offsetWidth])
+      );
+      const chipHeights = new Map(
+        [...rigs].map(([valueId, entry]) => [valueId, entry.chip.offsetHeight])
       );
       for (const [valueId, entry] of rigs) {
         const view = commandHandlesRef.current.find(
@@ -4114,20 +4188,65 @@ export function ModelViewer({
         const value = entry.rig ? entry.rig.value() : view.value;
         const scale =
           (entry.rig?.group.userData.gizmoScale as number | undefined) ?? 1;
+        // A chip-only value's anchor is read live: it may follow another
+        // value (a hole step's rim), which rebuilds no rig.
         const anchor = entry.rig
           ? entry.rig.chipAnchor(scale)
-          : (entry.anchor ?? new THREE.Vector3());
-        const ndc = anchor.clone().project(context.activeCamera);
-        if (ndc.z > 1 || ndc.z < -1) {
+          : view.kind === 'chip'
+            ? new THREE.Vector3(
+                view.params.anchor.x,
+                view.params.anchor.y,
+                view.params.anchor.z
+              )
+            : (entry.anchor ?? new THREE.Vector3());
+        // Hidden only behind the camera. A point past the far plane (a
+        // value typed far beyond the model) still projects where it lies,
+        // and its chip is kept on the canvas so it can be tapped to fix it.
+        // A handle drawn out past the camera (a large value along a direction
+        // that faces the viewer) puts its chip at the handle's base instead.
+        // Behind is nearer than the near plane, in either projection: an
+        // orthographic view draws nothing there either, whatever it projects.
+        const camera = context.activeCamera;
+        const behind = (point: THREE.Vector3) => isBehindCamera(point, camera);
+        const placed =
+          behind(anchor) && entry.rig ? entry.rig.group.position : anchor;
+        if (behind(placed)) {
           entry.chip.hidden = true;
           continue;
         }
-        const x = edgeChipCenterX(
-          ((ndc.x + 1) / 2) * canvasCssWidth,
-          laneLeft,
-          chipWidths.get(valueId) ?? 0
+        const ndc = placed.clone().project(camera);
+        // Kept on the canvas: a value typed far past the model (a radius
+        // the kernel then refuses) must leave its chip where it can be
+        // tapped again to fix it.
+        const halfWidth = (chipWidths.get(valueId) ?? 0) / 2;
+        const x = Math.min(
+          Math.max(
+            edgeChipCenterX(
+              ((ndc.x + 1) / 2) * canvasCssWidth,
+              laneLeft,
+              chipWidths.get(valueId) ?? 0
+            ),
+            COMMAND_CHIP_MARGIN_PX + halfWidth
+          ),
+          Math.max(
+            COMMAND_CHIP_MARGIN_PX + halfWidth,
+            canvasCssWidth - COMMAND_CHIP_MARGIN_PX - halfWidth
+          )
         );
-        const y = ((1 - ndc.y) / 2) * canvasCssHeight;
+        const halfHeight = (chipHeights.get(valueId) ?? 0) / 2;
+        const top = COMMAND_CHIP_MARGIN_PX * 2;
+        const y = Math.min(
+          Math.max(((1 - ndc.y) / 2) * canvasCssHeight, top),
+          Math.max(
+            top,
+            footTop === null
+              ? canvasCssHeight - COMMAND_CHIP_MARGIN_PX * 2
+              : Math.min(
+                  canvasCssHeight - COMMAND_CHIP_MARGIN_PX * 2,
+                  footTop - COMMAND_CHIP_MARGIN_PX - halfHeight
+                )
+          )
+        );
         const text = view.format(value);
         if (entry.chip.textContent !== text) entry.chip.textContent = text;
         hud.showAt(entry.chip, x, y);
@@ -4151,7 +4270,13 @@ export function ModelViewer({
           };
         }
       }
-      if (rigs.size > 0 && !anchored) keypadAnchorRef.current?.(null);
+      if (
+        rigs.size > 0 &&
+        !anchored &&
+        (owner === undefined || typeof owner === 'object')
+      ) {
+        keypadAnchorRef.current?.(null);
+      }
       if (E2E_CANVAS_HOOKS_ENABLED) {
         if (rigs.size > 0) {
           renderer.domElement.dataset.e2eCommandHandles =
@@ -4249,7 +4374,11 @@ export function ModelViewer({
       } else if (offsetRigRef.current) {
         // A typed value previews like a drag: solid over the old part's
         // ghost, taken before the proxy deforms the body.
+        // Back at zero there is no change to show: drop the ghost (typed
+        // entry keeps it across exact frames, so nothing else would), and
+        // take it again for the next nonzero value.
         if (Math.abs(value) > 1e-9) beginOffsetGhost();
+        else clearOffsetGhost();
         offsetRigRef.current.setValue(value);
         queueOffsetBodyProxy(value);
       } else {
@@ -4271,7 +4400,7 @@ export function ModelViewer({
      */
     function pickGhostPlane(
       event: PointerEvent | MouseEvent
-    ): { plane: PlaneId; distance: number } | null {
+    ): { plane: PlaneId; distance: number; point: Vector3 } | null {
       const rig = planePickerRigRef.current;
       if (!rig) {
         return null;
@@ -4279,7 +4408,13 @@ export function ModelViewer({
       picker.setRayFromEvent(event);
       const hit = picker.intersect(rig.targets(), false)[0];
       const plane = hit?.object.userData.pickPlane as PlaneId | undefined;
-      return plane ? { plane, distance: hit!.distance } : null;
+      return plane
+        ? {
+            plane,
+            distance: hit!.distance,
+            point: { x: hit!.point.x, y: hit!.point.y, z: hit!.point.z }
+          }
+        : null;
     }
 
     /**
@@ -5290,12 +5425,18 @@ export function ModelViewer({
       const detail = (
         event as CustomEvent<{
           index?: number;
+          /** Counts `index` within this sketch's regions only. */
+          sketchId?: string;
           additive?: boolean;
           toggle?: boolean;
         }>
       ).detail;
-      const profile =
-        profilePickTargetsRef.current[detail?.index ?? 0]?.pick ?? null;
+      const targets = detail?.sketchId
+        ? profilePickTargetsRef.current.filter(
+            (target) => target.pick.sketchId === detail.sketchId
+          )
+        : profilePickTargetsRef.current;
+      const profile = targets[detail?.index ?? 0]?.pick ?? null;
       if (!profile) {
         return;
       }
@@ -5897,8 +6038,35 @@ export function ModelViewer({
       const ghost = facesOnly ? null : pickGhostPlane(event);
       if (ghost && (!result || ghost.distance < result.distance)) {
         planePickerRigRef.current?.setHover(null);
-        onPickPlaneRef.current(ghost.plane);
+        onPickPlaneRef.current(ghost.plane, ghost.point);
         return;
+      }
+      // A picture being placed takes every click on its own plane, even
+      // over the model: its quad is not pickable, so the face under it
+      // would otherwise take a click meant for the picture.
+      const placing = placementPlaneRef.current;
+      if (placing && onPlacementClickRef.current) {
+        picker.setRayFromEvent(event);
+        const at = new THREE.Vector3();
+        const hit = picker.raycaster.ray.intersectPlane(
+          new THREE.Plane().setFromNormalAndCoplanarPoint(
+            new THREE.Vector3(
+              placing.normal.x,
+              placing.normal.y,
+              placing.normal.z
+            ),
+            new THREE.Vector3(
+              placing.origin.x,
+              placing.origin.y,
+              placing.origin.z
+            )
+          ),
+          at
+        );
+        if (hit) {
+          onPlacementClickRef.current({ x: at.x, y: at.y, z: at.z });
+          return;
+        }
       }
       // A datum plane is chosen only where nothing in the model is under
       // the pointer: its quad is translucent and often passes through the
@@ -5911,7 +6079,11 @@ export function ModelViewer({
           const featureId = hit?.object.userData.datumFeatureId as
             string | undefined;
           if (featureId) {
-            onPickDatumRef.current(featureId);
+            onPickDatumRef.current(featureId, {
+              x: hit!.point.x,
+              y: hit!.point.y,
+              z: hit!.point.z
+            });
             return;
           }
         }
@@ -6463,6 +6635,27 @@ export function ModelViewer({
         : null;
     }
 
+    /**
+     * The top of the stage's bottom lane (the guidance line and the search
+     * bar, or a running command's bar), from the canvas's top. Null when
+     * nothing is drawn there.
+     */
+    function bottomLaneTop(): number | null {
+      const lane = renderer.domElement
+        .closest('.workspace')
+        ?.querySelector<HTMLElement>('.command-bar-lane');
+      if (!lane) return null;
+      const rect = lane.getBoundingClientRect();
+      return rect.height > 0
+        ? rect.top - renderer.domElement.getBoundingClientRect().top
+        : null;
+    }
+
+    /** Whether the arrow's chip places the open keypad (see the prop). */
+    function offsetOwnsKeypad() {
+      const owner = keypadAnchorOwnerRef.current;
+      return owner === undefined || owner === 'offset';
+    }
     function updateOffsetChip() {
       const chip = offsetChipRef.current;
       if (!chip) {
@@ -6476,6 +6669,16 @@ export function ModelViewer({
       const chipWidth = chip.offsetWidth;
       const labelWidth = radiusLabelChip.offsetWidth;
       const laneLeft = rightLaneLeft();
+      // Above the bottom lane, where a command's bar stands (the in-place
+      // Extrude's, under the region arrow it extrudes): a chip held there
+      // sat under the bar and could not be tapped.
+      const footTop = bottomLaneTop();
+      const footLimit = (element: HTMLElement) =>
+        footTop === null
+          ? Infinity
+          : footTop - COMMAND_CHIP_MARGIN_PX - element.offsetHeight / 2;
+      const chipFloor = footLimit(chip);
+      const labelFloor = footLimit(radiusLabelChip);
       // Every other panel over the stage — a floating window, the left dock —
       // the value chip and its tag come out from under as one, measured
       // where they showed last frame less the move made then.
@@ -6495,7 +6698,8 @@ export function ModelViewer({
         pills.length > 0 && otherPanels.length > 0
           ? chipPanelDodge(
               {
-                left: Math.min(...pills.map((rect) => rect.left)) - chipDodge.dx,
+                left:
+                  Math.min(...pills.map((rect) => rect.left)) - chipDodge.dx,
                 right:
                   Math.max(...pills.map((rect) => rect.right)) - chipDodge.dx,
                 top: Math.min(...pills.map((rect) => rect.top)) - chipDodge.dy,
@@ -6511,7 +6715,11 @@ export function ModelViewer({
             )
           : { dx: 0, dy: 0 };
       const place = (element: HTMLElement, x: number, y: number) =>
-        hud.showAt(element, x + chipDodge.dx, y + chipDodge.dy);
+        hud.showAt(
+          element,
+          x + chipDodge.dx,
+          Math.min(y + chipDodge.dy, element === chip ? chipFloor : labelFloor)
+        );
       // Either rig answers the same two questions; only the label differs.
       // In a multi-region extrude the chip rides the arrow last grabbed.
       const regionChipRig =
@@ -6560,7 +6768,7 @@ export function ModelViewer({
         chipLayoutKey = null;
         chip.hidden = true;
         radiusLabelChip.hidden = true;
-        keypadAnchorRef.current?.(null);
+        if (offsetOwnsKeypad()) keypadAnchorRef.current?.(null);
         if (E2E_CANVAS_HOOKS_ENABLED) {
           delete renderer.domElement.dataset.e2eHandleX;
           delete renderer.domElement.dataset.e2eHandleY;
@@ -6587,7 +6795,7 @@ export function ModelViewer({
         chipLayoutKey = null;
         chip.hidden = true;
         radiusLabelChip.hidden = true;
-        keypadAnchorRef.current?.(null);
+        if (offsetOwnsKeypad()) keypadAnchorRef.current?.(null);
         if (E2E_CANVAS_HOOKS_ENABLED) {
           delete renderer.domElement.dataset.e2eChipAnchorX;
           delete renderer.domElement.dataset.e2eChipAnchorY;
@@ -6971,7 +7179,7 @@ export function ModelViewer({
       ].join('|');
       if (layoutKey !== chipLayoutKey) requestRender();
       chipLayoutKey = layoutKey;
-      keypadAnchorRef.current?.(screen);
+      if (offsetOwnsKeypad()) keypadAnchorRef.current?.(screen);
     }
 
     function positionDragHud(
@@ -8674,6 +8882,11 @@ export function ModelViewer({
     }
 
     const handlePointerMove = (event: PointerEvent) => {
+      if (footprintDrag && event.pointerId === footprintDrag.pointerId) {
+        event.preventDefault();
+        moveFootprint(event);
+        return;
+      }
       const commandDrag = commandDragRef.current;
       const draggedRig = commandDrag
         ? commandRigsRef.current.get(commandDrag.valueId)?.rig
@@ -8693,9 +8906,7 @@ export function ModelViewer({
           // Angles in whole degrees and lengths in tenths, unless Shift asks
           // for the free value.
           const step = draggedRig.kind === ANGLE_RIG_KIND ? 1 : 0.1;
-          const value = event.shiftKey
-            ? next
-            : Math.round(next / step) * step;
+          const value = event.shiftKey ? next : Math.round(next / step) * step;
           if (value !== draggedRig.value()) {
             draggedRig.setValue(value);
             onCommandHandlePreviewRef.current?.(
@@ -8799,6 +9010,194 @@ export function ModelViewer({
         cameraRig.pivotOn(result.hit.point);
       }
     }
+
+    // U09 footprint drag: the plane it draws on, where it started, and the
+    // outline drawn while the exact solid catches up.
+    let footprintDrag: {
+      pointerId: number;
+      frame: PlacementFrame;
+      start: THREE.Vector3;
+      end: THREE.Vector3;
+      startX: number;
+      startY: number;
+      moved: boolean;
+    } | null = null;
+    let footprintOutline: THREE.LineLoop | null = null;
+    const drawFootprintOutline = () => {
+      const drag = footprintDrag;
+      const shape = footprintPickerRef.current?.shape;
+      if (!drag || !shape) return;
+      const u = new THREE.Vector3(
+        drag.frame.u.x,
+        drag.frame.u.y,
+        drag.frame.u.z
+      );
+      const v = new THREE.Vector3(
+        drag.frame.v.x,
+        drag.frame.v.y,
+        drag.frame.v.z
+      );
+      const delta = drag.end.clone().sub(drag.start);
+      const along = delta.dot(u);
+      const across = delta.dot(v);
+      const points: THREE.Vector3[] = [];
+      if (shape === 'rectangle') {
+        points.push(
+          drag.start.clone(),
+          drag.start.clone().addScaledVector(u, along),
+          drag.start
+            .clone()
+            .addScaledVector(u, along)
+            .addScaledVector(v, across),
+          drag.start.clone().addScaledVector(v, across)
+        );
+      } else {
+        const radius = Math.hypot(along, across);
+        for (let step = 0; step < 64; step += 1) {
+          const angle = (step / 64) * Math.PI * 2;
+          points.push(
+            drag.start
+              .clone()
+              .addScaledVector(u, Math.cos(angle) * radius)
+              .addScaledVector(v, Math.sin(angle) * radius)
+          );
+        }
+      }
+      if (!footprintOutline) {
+        footprintOutline = new THREE.LineLoop(
+          new THREE.BufferGeometry(),
+          new THREE.LineBasicMaterial({
+            color: SKETCH_COLOR,
+            depthTest: false,
+            transparent: true
+          })
+        );
+        footprintOutline.renderOrder = 999;
+        context.scene.add(footprintOutline);
+      }
+      footprintOutline.geometry.dispose();
+      footprintOutline.geometry = new THREE.BufferGeometry().setFromPoints(
+        points
+      );
+      requestRender();
+    };
+    const clearFootprintOutline = () => {
+      if (!footprintOutline) return;
+      context.scene.remove(footprintOutline);
+      footprintOutline.geometry.dispose();
+      (footprintOutline.material as THREE.Material).dispose();
+      footprintOutline = null;
+      requestRender();
+    };
+    const footprintGesture = (
+      drag: NonNullable<typeof footprintDrag>,
+      phase: FootprintGesture['phase']
+    ): FootprintGesture => ({
+      phase,
+      frame: drag.frame,
+      start: { x: drag.start.x, y: drag.start.y, z: drag.start.z },
+      end: { x: drag.end.x, y: drag.end.y, z: drag.end.z },
+      moved: drag.moved
+    });
+    /**
+     * Starts a footprint where the press lands: on a flat face of a body the
+     * command may stand on, else on the principal plane facing the view.
+     */
+    const beginFootprint = (event: PointerEvent): boolean => {
+      const footprint = footprintPickerRef.current;
+      if (!footprint) return false;
+      // Unfiltered: a Body or Edge filter must not hide the face pressed on.
+      const candidate = picker.pickFace(event, (bodyId) =>
+        footprint.bodyIds.includes(bodyId)
+      );
+      setRayFromEvent(event);
+      const ray = context.raycaster.ray;
+      let frame: PlacementFrame | null = null;
+      let start: THREE.Vector3 | null = null;
+      const selection = candidate?.selection ?? null;
+      if (selection && footprint.bodyIds.includes(selection.bodyId)) {
+        const face = bodiesRef.current
+          .find((body) => body.bodyId === selection.bodyId)
+          ?.topology?.faces.find(
+            (entry) => entry.topologyId === selection.topologyId
+          );
+        const geometry = face?.geometry;
+        if (geometry?.surfaceType === 'plane') {
+          // An imported flat face measured from its NURBS carries no exact
+          // normal: the mesh's, at the point pressed, stands in for it.
+          const meshed = candidate?.faceNormal;
+          const normal =
+            geometry.normal ?? (meshed ? meshNormal(meshed) : undefined);
+          const on =
+            (geometry.normal && (geometry.centroid ?? geometry.center)) ||
+            candidate?.hit.point;
+          if (normal && on) {
+            frame = placementFrame(normal);
+            // On the face's own plane, not the mesh's triangle under it.
+            const hit = framePlaneHit(frame, on, ray.origin, ray.direction);
+            start = hit ? new THREE.Vector3(hit.x, hit.y, hit.z) : null;
+          }
+        }
+      }
+      if (!frame || !start) {
+        frame = principalFrameFor(ray.direction);
+        const hit = framePlaneHit(
+          frame,
+          { x: 0, y: 0, z: 0 },
+          ray.origin,
+          ray.direction
+        );
+        start = hit ? new THREE.Vector3(hit.x, hit.y, hit.z) : null;
+      }
+      if (!start) return false;
+      footprintDrag = {
+        pointerId: event.pointerId,
+        frame,
+        start,
+        end: start.clone(),
+        startX: event.clientX,
+        startY: event.clientY,
+        moved: false
+      };
+      return true;
+    };
+    const moveFootprint = (event: PointerEvent) => {
+      const drag = footprintDrag;
+      if (!drag) return;
+      setRayFromEvent(event);
+      const ray = context.raycaster.ray;
+      const hit = framePlaneHit(
+        drag.frame,
+        drag.start,
+        ray.origin,
+        ray.direction
+      );
+      if (hit) drag.end.set(hit.x, hit.y, hit.z);
+      if (
+        !drag.moved &&
+        Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) > 4
+      ) {
+        drag.moved = true;
+      }
+      if (!drag.moved) return;
+      drawFootprintOutline();
+      onFootprintRef.current?.(footprintGesture(drag, 'move'));
+    };
+    const endFootprint = (event: PointerEvent, report: boolean) => {
+      const drag = footprintDrag;
+      if (!drag) return;
+      footprintDrag = null;
+      clearFootprintOutline();
+      gestures.release(event, null);
+      if (report) onFootprintRef.current?.(footprintGesture(drag, 'end'));
+    };
+    retireFootprintRef.current = () => {
+      const drag = footprintDrag;
+      if (!drag) return;
+      footprintDrag = null;
+      clearFootprintOutline();
+      gestures.release(drag.pointerId, null);
+    };
 
     const handlePointerDown = (event: PointerEvent) => {
       if (
@@ -9069,6 +9468,13 @@ export function ModelViewer({
           return;
         }
       }
+      // U09: a primitive's footprint. Its arrows above take the press first,
+      // so a press anywhere else draws a new footprint.
+      if (event.button === 0 && beginFootprint(event)) {
+        gestures.capture(event, null);
+        event.preventDefault();
+        return;
+      }
       const axisPickerRig = axisPickerRigRef.current;
       if (axisPickerRig && event.button === 0) {
         // A rig armed since the last render has no world matrices yet.
@@ -9080,6 +9486,11 @@ export function ModelViewer({
         )[0];
         const axisId = axisHit?.object.userData.pickAxis as string | undefined;
         if (axisId) {
+          // The press is the line's, as a locked handle's is: its release
+          // must not also pick the edge or face drawn under the line, which
+          // an in-place command would take as another axis (U09).
+          lockedHandlePointerId = event.pointerId;
+          gestures.capture(event, null);
           event.preventDefault();
           onPickAxisRef.current?.(axisId);
           requestRender();
@@ -9299,6 +9710,11 @@ export function ModelViewer({
           onCommandHandleReleaseRef.current?.(commandDrag.valueId, rig.value());
         }
         requestRender();
+        return;
+      }
+      if (footprintDrag && event.pointerId === footprintDrag.pointerId) {
+        moveFootprint(event);
+        endFootprint(event, true);
         return;
       }
       if (event.pointerId === shiftOrbitPointerId) {
@@ -9847,8 +10263,7 @@ export function ModelViewer({
           // A refused release can keep the last value that built on screen,
           // still uncommitted, so its ghost stays too; a restored body
           // clears the ghost when it is installed.
-          if (!onOffsetCommitRef.current(finalOffset))
-            restoreOffsetBodyProxy();
+          if (!onOffsetCommitRef.current(finalOffset)) restoreOffsetBodyProxy();
         } else {
           clearOffsetGhost();
           restoreOffsetBodyProxy();
@@ -9920,6 +10335,10 @@ export function ModelViewer({
         return;
       }
       pendingHoverEvent = null;
+      // An abandoned footprint keeps what it drew, as a release would.
+      if (footprintDrag && event.pointerId === footprintDrag.pointerId) {
+        endFootprint(event, true);
+      }
       if (event.pointerId === lockedHandlePointerId) {
         lockedHandlePointerId = null;
         gestures.release(event, null);
@@ -10919,7 +11338,9 @@ export function ModelViewer({
       offsetBodyProxyControllerRef.current?.discard();
       // Exact frames replace bodies mid-drag; once the drag is over, the
       // next bodies are the committed or restored part.
-      if (!offsetDragActiveRef.current) offsetGhostClearRef.current?.();
+      // Typed entry keeps its ghost the same way while exact frames land.
+      if (!offsetDragActiveRef.current && !offsetHandleRef.current?.entry)
+        offsetGhostClearRef.current?.();
       // The manager owns hover-slot geometry even while the slots are
       // parented under bodies, so it must detach them before body disposal.
       context.selection.resetForRebuild();
@@ -11169,7 +11590,9 @@ export function ModelViewer({
         // while X-ray displays translucent surfaces (see applyDisplayMode).
         fill.userData.ownColourFill = ownColour;
         fill.visible =
-          !ownColour || displayModeRef.current !== 'wireframe' || xrayRef.current;
+          !ownColour ||
+          displayModeRef.current !== 'wireframe' ||
+          xrayRef.current;
         fill.raycast = () => undefined;
         context.fadeIns.add(material);
         return fill;
@@ -12026,7 +12449,7 @@ export function ModelViewer({
     // simply withdrawn for validation.
     if (
       previous &&
-      offsetHandle?.locked &&
+      (offsetHandle?.locked || offsetHandle?.entry) &&
       built &&
       sameOffsetHandleTarget(built.handle, offsetHandle)
     ) {
@@ -12038,7 +12461,7 @@ export function ModelViewer({
     const takesOver =
       previous !== null &&
       offsetHandle !== null &&
-      built?.handle.locked === true &&
+      (built?.handle.locked === true || built?.handle.entry === true) &&
       built.handle.bodyId === offsetHandle.bodyId;
     if (previous) {
       if (takesOver) previous.dispose();
@@ -12063,20 +12486,26 @@ export function ModelViewer({
       offsetHandle.normal
     );
     const body = context.objectsByBodyId.get(offsetHandle.bodyId);
+    const handleOrigin = new THREE.Vector3(
+      placement.origin.x,
+      placement.origin.y,
+      placement.origin.z
+    );
+    const handleDirection = new THREE.Vector3(
+      placement.direction.x,
+      placement.direction.y,
+      placement.direction.z
+    );
+    // Total reads the line from the picked point back through the part to
+    // where it comes out, not the whole body's reach behind the face's plane
+    // (which spanned to an unrelated lobe), so it follows where you click.
     const extentBehind = body
-      ? bodyExtentBehind(
+      ? (faceDepthBehind(
           body,
-          new THREE.Vector3(
-            placement.origin.x,
-            placement.origin.y,
-            placement.origin.z
-          ),
-          new THREE.Vector3(
-            placement.direction.x,
-            placement.direction.y,
-            placement.direction.z
-          )
-        )
+          handleOrigin,
+          handleDirection,
+          faceLift(body, offsetHandle.topologyId, handleOrigin, handleDirection)
+        ) ?? bodyExtentBehind(body, handleOrigin, handleDirection))
       : null;
     const chipState = faceOffsetChipState(
       offsetHandle.totalBaseline,
@@ -12201,9 +12630,9 @@ export function ModelViewer({
       (!placement || sameEdgeRigPlacement(built.placement, placement))
     ) {
       built.handle = edgeHandle;
-      // The value a rebuild would have taken: the card's typed value, else
-      // the target's (restored after a refusal or a cancelled entry).
-      const value = edgeHandleValueRef.current ?? edgeHandle.initialValue ?? 0;
+      // The value a rebuild would have taken: the target's (restored after a
+      // refusal or a cancelled entry).
+      const value = edgeHandle.initialValue ?? 0;
       if (Math.abs(previous.value() - value) > 1e-9) {
         previous.setValue(value);
         context.requestRender();
@@ -12223,10 +12652,7 @@ export function ModelViewer({
       return;
     }
     const rig = buildEdgeRadiusHandle(placement);
-    // A rebuild (the preview body came or went) keeps the value the card has
-    // typed: its effect below only runs when that value changes, so a rig
-    // rebuilt after a refused preview used to read "R 0".
-    rig.setValue(edgeHandleValueRef.current ?? edgeHandle.initialValue ?? 0);
+    rig.setValue(edgeHandle.initialValue ?? 0);
     rig.setWarning?.(offsetPreviewInvalidRef.current);
     if (sameTarget) rig.appear?.();
     if (E2E_CANVAS_HOOKS_ENABLED) {
@@ -12254,16 +12680,6 @@ export function ModelViewer({
     },
     []
   );
-
-  // A typed form value moves the handle; a drag in flight owns it instead.
-  useEffect(() => {
-    const rig = edgeRigRef.current;
-    if (!rig || edgeHandleValue === null || edgeDragActiveRef.current) {
-      return;
-    }
-    rig.setValue(edgeHandleValue);
-    contextRef.current?.requestRender();
-  }, [edgeHandleValue, edgeHandle]);
 
   // Region-detected sketch rendering: curves stay readable while bounded
   // cells get cached fill, boundary, marker, and plane-local pick targets.
@@ -12870,7 +13286,8 @@ export function ModelViewer({
           (candidate) => candidate.valueId === valueId
         );
         const value = entry?.rig ? entry.rig.value() : view?.value;
-        if (value !== undefined) onOpenCommandKeypadRef.current?.(valueId, value);
+        if (value !== undefined)
+          onOpenCommandKeypadRef.current?.(valueId, value);
       });
       rigs.set(handle.valueId, {
         key: handle.key,
@@ -12893,10 +13310,7 @@ export function ModelViewer({
             context.requestRender();
           }
         : null;
-    if (
-      commandDragRef.current &&
-      !rigs.has(commandDragRef.current.valueId)
-    ) {
+    if (commandDragRef.current && !rigs.has(commandDragRef.current.valueId)) {
       // A command canceled mid-drag lets go of the pointer and the drag
       // phase, or the pointer-up that follows finds no drag to end.
       retireCommandDragRef.current?.();
@@ -13106,46 +13520,11 @@ export function ModelViewer({
     };
   }, [datumAxisKey]);
 
-  // The open Hole card's bore (viewer/holeGhostRig): an opening on the entry
-  // face and a barrel that is a faint ghost inside the body, so it reads as a
-  // cut rather than a post. Rebuilt per value change; the viewport renders on
-  // demand, so each change asks for its frame.
-  useEffect(() => {
-    const context = contextRef.current;
-    if (!context || !holeGhost) {
-      return;
-    }
-    const rig = buildHoleGhostRig(holeGhost, SKETCH_COLOR);
-    context.scene.add(rig.group);
-    context.requestRender();
-    return () => {
-      context.scene.remove(rig.group);
-      rig.dispose();
-      context.requestRender();
-    };
-  }, [holeGhost]);
-
-  // The open Box/Cylinder/… card's solid (viewer/primitiveGhostRig), three
-  // geometry rebuilt per value change — no kernel call per keystroke.
-  useEffect(() => {
-    const context = contextRef.current;
-    if (!context || !primitiveGhost) {
-      return;
-    }
-    const rig = buildPrimitiveGhostRig(primitiveGhost, SKETCH_COLOR);
-    context.scene.add(rig.group);
-    const canvas = context.renderer.domElement;
-    if (E2E_CANVAS_HOOKS_ENABLED) {
-      canvas.dataset.e2ePrimitiveGhost = JSON.stringify(primitiveGhost);
-    }
-    context.requestRender();
-    return () => {
-      context.scene.remove(rig.group);
-      rig.dispose();
-      delete canvas.dataset.e2ePrimitiveGhost;
-      context.requestRender();
-    };
-  }, [primitiveGhost]);
+  // A footprint drag outlives no command: one canceled under the pointer,
+  // or replaced by another (even of the same tool, in the same render),
+  // lets go and draws nothing more.
+  const footprintSession = footprintPicker?.session ?? null;
+  useEffect(() => () => retireFootprintRef.current?.(), [footprintSession]);
 
   // The viewport renders on demand, so a typed offset has to ask for the
   // frame that shows it; without this the ghosts only move on the next

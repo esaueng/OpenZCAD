@@ -2,7 +2,13 @@ import type { Page } from '@playwright/test';
 import { assertClientProjectCopy } from '@openzcad/persistence';
 import type { ProjectDocument } from '@openzcad/shared';
 import { parseDuplicateProjectRequest } from '../../apps/web/worker/validation';
-import { expect, expectBodyCount, stubApi, test } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  expect,
+  expectBodyCount,
+  stubApi,
+  test
+} from './openzcad-fixtures';
 
 /**
  * ADR-024 Phase 1: a signed-in Duplicate or Branch builds the copy in the
@@ -12,11 +18,7 @@ import { expect, expectBodyCount, stubApi, test } from './openzcad-fixtures';
  */
 
 async function addBox(page: Page) {
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
 }
 

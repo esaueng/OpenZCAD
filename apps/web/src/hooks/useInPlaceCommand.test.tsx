@@ -1,7 +1,13 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { PlaneBasis } from '@openzcad/geometry';
-import type { BodyId, ProjectDocument, SketchId } from '@openzcad/shared';
+import type {
+  BodyId,
+  FeatureId,
+  ProjectDocument,
+  SketchId
+} from '@openzcad/shared';
+import type { InPlaceEditSeed } from '../lib/inPlace/edit';
 import {
   mergeSweptFaces,
   useInPlaceCommand,
@@ -12,6 +18,7 @@ import type {
   InPlaceRequest,
   ProfilePick
 } from '../lib/inPlace/tools';
+import { GROUND_FRAME, placementFrame } from '../lib/inPlace/primitives';
 
 const FRONT: PlaneBasis = {
   origin: { x: 0, y: 0, z: 0 },
@@ -152,7 +159,12 @@ describe('useInPlaceCommand: revolve', () => {
     act(() => {
       hook.result.current.done();
     });
-    expect(commit).toHaveBeenCalledWith(full, 'Revolve');
+    expect(commit).toHaveBeenCalledWith(
+      full,
+      'Revolve',
+      null,
+      expect.any(Function)
+    );
     expect(hook.result.current.active).toBe(false);
     expect(publishPreview).toHaveBeenLastCalledWith(null);
   });
@@ -175,7 +187,9 @@ describe('useInPlaceCommand: revolve', () => {
     const onStatus = vi.fn();
     const { hook } = setup({ onStatus });
     act(() => hook.result.current.start('revolve', [PICK]));
-    act(() => hook.result.current.cancel(true));
+    act(() => {
+      hook.result.current.cancel(true);
+    });
     expect(hook.result.current.active).toBe(false);
     expect(onStatus).not.toHaveBeenCalled();
   });
@@ -204,13 +218,80 @@ describe('useInPlaceCommand: revolve', () => {
     });
     expect(hook.result.current.refusal).toMatch(/sweep \* 5 is 400/);
     expect(hook.result.current.values.angle ?? 360).toBe(360);
+    // Nothing is committed while the refusal stands, the refused value
+    // least of all.
     act(() => {
-      hook.result.current.done();
+      expect(hook.result.current.done()).toBe(false);
     });
-    const request = commit.mock.calls[0]![0];
-    expect(request.tool === 'revolve' && request.angleDeg).not.toBe(
-      'sweep * 5'
+    expect(commit).not.toHaveBeenCalled();
+  });
+
+  it('reads a typed expression again when the model changes under it', () => {
+    let sweep = 90;
+    const commit = vi.fn();
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], commit),
+      evaluate: (value) => (value === 'sweep * 3' ? sweep * 3 : null),
+      baseVersion: 1
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
     );
+    act(() => hook.result.current.start('revolve', [PICK]));
+    act(() => {
+      hook.result.current.setValue('angle', 270, 'sweep * 3');
+    });
+    expect(hook.result.current.values.angle).toBe(270);
+    // A collaborator sets sweep to 100: the next version reads 300.
+    sweep = 100;
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.values.angle).toBe(300);
+  });
+
+  it('refuses a typed count outside its whole range rather than rounding it', () => {
+    const { hook } = setup();
+    act(() =>
+      hook.result.current.start(
+        'linear-pattern',
+        [],
+        [],
+        [
+          {
+            bodyId: BODY,
+            min: { x: 0, y: 0, z: 0 },
+            max: { x: 10, y: 10, z: 10 }
+          }
+        ]
+      )
+    );
+    let accepted = true;
+    act(() => {
+      accepted = hook.result.current.setValue('count', 4.5, undefined);
+    });
+    expect(accepted).toBe(false);
+    expect(hook.result.current.refusal).toMatch(/takes/);
+    act(() => {
+      accepted = hook.result.current.setValue('count', 101, undefined);
+    });
+    expect(accepted).toBe(false);
+    act(() => {
+      accepted = hook.result.current.setValue('count', 6, undefined);
+    });
+    expect(accepted).toBe(true);
+    expect(hook.result.current.values.count).toBe(6);
+  });
+
+  it('refuses a typed number outside the range instead of clamping it', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('box'));
+    act(() => {
+      expect(hook.result.current.setValue('width', -5)).toBe(false);
+    });
+    expect(hook.result.current.refusal).toBe(
+      '-5; Box width takes at least 0.001.'
+    );
+    expect(hook.result.current.values.width).toBe(30);
   });
 
   it('keeps a sub-degree revolve', () => {
@@ -247,6 +328,34 @@ describe('useInPlaceCommand: revolve', () => {
     act(() => hook.result.current.start('revolve', [PICK]));
     act(() => hook.result.current.previewValue('angle', 999));
     expect(hook.result.current.values.angle).toBe(360);
+  });
+
+  it('does not finish on a frame built before the model moved', async () => {
+    const releases: (() => void)[] = [];
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      baseVersion: 1,
+      derive: (document) =>
+        new Promise((resolve) => {
+          releases.push(() => resolve(document.derived));
+        })
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() => hook.result.current.start('revolve', [PICK]));
+    act(() => hook.result.current.pickAxis('sketch-vertical'));
+    await waitFor(() => expect(releases).toHaveLength(1));
+    // A collaborator's edit lands while the first frame is still building.
+    hook.rerender({ ...options, baseVersion: 2 });
+    act(() => releases[0]!());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(hook.result.current.canFinish).toBe(false);
+    // The frame on the new base is the one Done may finish on.
+    await waitFor(() => expect(releases.length).toBeGreaterThan(1));
+    act(() => releases.at(-1)!());
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
   });
 
   it('finishes on the frame of a value dragged back to', async () => {
@@ -306,6 +415,29 @@ describe('useInPlaceCommand: revolve', () => {
     expect(commit).not.toHaveBeenCalled();
   });
 
+  it('takes the last good frame down when a later value is refused', async () => {
+    let builds = true;
+    const { hook, publishPreview } = setup({
+      buildCommand: () => ({
+        validate: () => undefined,
+        apply: () => fakeDocument(builds),
+        resultBodyId: BODY
+      })
+    });
+    act(() => hook.result.current.start('revolve', [PICK]));
+    act(() => hook.result.current.pickAxis('sketch-vertical'));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(publishPreview).toHaveBeenLastCalledWith(expect.anything());
+    builds = false;
+    act(() => {
+      hook.result.current.setValue('angle', 90);
+    });
+    await waitFor(() =>
+      expect(hook.result.current.refusal).toMatch(/not a closed profile/)
+    );
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+  });
+
   it('keeps the axis for another region of the same sketch', () => {
     const { hook } = setup();
     act(() => hook.result.current.start('revolve', [PICK]));
@@ -321,7 +453,9 @@ describe('useInPlaceCommand: revolve', () => {
   it('cancels without committing and clears the preview', () => {
     const { hook, commit, publishPreview } = setup();
     act(() => hook.result.current.start('revolve', [PICK]));
-    act(() => hook.result.current.cancel());
+    act(() => {
+      hook.result.current.cancel();
+    });
     expect(hook.result.current.active).toBe(false);
     expect(commit).not.toHaveBeenCalled();
     expect(publishPreview).toHaveBeenLastCalledWith(null);
@@ -379,6 +513,27 @@ describe('useInPlaceCommand: sweep', () => {
     );
     expect(hook.result.current.slots.path).toEqual([]);
   });
+
+  it('takes a re-checked path in place of the one it held', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('sweep', [PICK]));
+    act(() =>
+      hook.result.current.pickCurve({ sketchId: OTHER, entityId: 'p1' })
+    );
+    act(() =>
+      hook.result.current.pickCurve({ sketchId: OTHER, entityId: 'p2' })
+    );
+    // p1 left the model: the re-check keeps p2 alone, and the profile stays.
+    act(() =>
+      hook.result.current.setPicks({
+        path: [{ sketchId: OTHER, entityId: 'p2' }]
+      })
+    );
+    expect(hook.result.current.slots.path).toEqual([
+      { sketchId: OTHER, entityId: 'p2' }
+    ]);
+    expect(hook.result.current.slots.profiles).toEqual([PICK]);
+  });
 });
 
 describe('useInPlaceCommand: helical sweep', () => {
@@ -401,6 +556,260 @@ describe('useInPlaceCommand: helical sweep', () => {
       hook.result.current.pickProfile({ ...PICK, regionFingerprint: 8 })
     );
     expect(hook.result.current.values.radius).toBe(25);
+  });
+});
+
+describe('useInPlaceCommand: hole step chips', () => {
+  const FACE: FacePick = {
+    bodyId: 'body_a' as BodyId,
+    hash: 11,
+    topologyId: 'f11',
+    surfaceType: 'plane',
+    normal: { x: 0, y: 0, z: 1 },
+    centroid: { x: 10, y: 5, z: 4 },
+    point: { x: 12, y: 6, z: 4 }
+  };
+
+  it('sizes an unset step from the bore and keeps one the user set', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('hole', [], [FACE]));
+    act(() => hook.result.current.setOption('style', 'counterbore'));
+    expect(hook.result.current.handles.map((handle) => handle.valueId)).toEqual(
+      ['diameter', 'counterboreDiameter', 'counterboreDepth']
+    );
+    act(() => {
+      hook.result.current.setValue('diameter', 4);
+    });
+    await waitFor(() =>
+      expect(hook.result.current.values.counterboreDiameter).toBe(7.2)
+    );
+    expect(hook.result.current.values.counterboreDepth).toBe(2);
+    act(() => {
+      hook.result.current.setValue('counterboreDepth', 3, 'cb_depth');
+    });
+    act(() => {
+      hook.result.current.setValue('diameter', 5);
+    });
+    await waitFor(() =>
+      expect(hook.result.current.values.counterboreDiameter).toBe(9)
+    );
+    expect(hook.result.current.raws.counterboreDepth).toBe('cb_depth');
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        state: {
+          value: {
+            style: 'counterbore',
+            diameter: '5',
+            counterboreDiameter: '9',
+            counterboreDepth: 'cb_depth'
+          }
+        }
+      })
+    );
+  });
+
+  it('a refused entry holds Done until a value is taken, then clears', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('hole', [], [FACE]));
+    act(() => hook.result.current.setOption('style', 'countersink'));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    let accepted = true;
+    act(() => {
+      accepted = hook.result.current.setValue('countersinkAngleDeg', 180);
+    });
+    expect(accepted).toBe(false);
+    // The chip is back on the value before; Done must not commit that as
+    // if it were what was typed.
+    expect(hook.result.current.refusal).toMatch(/takes/);
+    expect(hook.result.current.canFinish).toBe(false);
+    // The value that was there before, typed again, is taken and clears it.
+    act(() => {
+      accepted = hook.result.current.setValue(
+        'countersinkAngleDeg',
+        hook.result.current.values.countersinkAngleDeg ?? 90
+      );
+    });
+    expect(accepted).toBe(true);
+    expect(hook.result.current.refusal).toBeNull();
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+  });
+
+  it('another value changing leaves a refused entry holding Done', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('hole', [], [FACE]));
+    act(() => hook.result.current.setOption('style', 'countersink'));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.setValue('countersinkAngleDeg', 180);
+    });
+    act(() => {
+      hook.result.current.setValue('diameter', 8);
+    });
+    expect(hook.result.current.refusal).toMatch(/countersink angle/);
+    expect(hook.result.current.canFinish).toBe(false);
+  });
+
+  it('an option that leaves the refused value shown keeps Done held', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('hole', [], [FACE]));
+    act(() => hook.result.current.setOption('style', 'countersink'));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.setValue('countersinkAngleDeg', 180);
+    });
+    // Blind depth changes the hole but still shows the refused angle.
+    act(() => hook.result.current.setOption('depthMode', 'blind'));
+    expect(hook.result.current.refusal).toMatch(/countersink angle/);
+    expect(hook.result.current.canFinish).toBe(false);
+  });
+
+  it('a style that hides the refused value lets Done go', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('hole', [], [FACE]));
+    act(() => hook.result.current.setOption('style', 'countersink'));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.setValue('countersinkAngleDeg', 180);
+    });
+    expect(hook.result.current.canFinish).toBe(false);
+    act(() => hook.result.current.setOption('style', 'simple'));
+    expect(hook.result.current.refusal).toBeNull();
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+  });
+
+  it('a countersink shows its diameter and angle chips', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('hole', [], [FACE]));
+    act(() => hook.result.current.setOption('style', 'countersink'));
+    expect(hook.result.current.handles.map((handle) => handle.valueId)).toEqual(
+      ['diameter', 'countersinkDiameter', 'countersinkAngleDeg']
+    );
+    // The angle is the full included angle, strictly inside 0°–180°.
+    let accepted = true;
+    act(() => {
+      accepted = hook.result.current.setValue(
+        'countersinkAngleDeg',
+        180,
+        '180'
+      );
+    });
+    expect(accepted).toBe(false);
+    expect(hook.result.current.refusal).toMatch(
+      /more than 0 and less than 180/
+    );
+    // Any angle inside the open interval is the card's, decimals included.
+    act(() => {
+      accepted = hook.result.current.setValue(
+        'countersinkAngleDeg',
+        0.5,
+        '0.5'
+      );
+    });
+    expect(accepted).toBe(true);
+    // A typed end of the open range is refused too, not nudged inside it.
+    act(() => {
+      accepted = hook.result.current.setValue('countersinkAngleDeg', 180);
+    });
+    expect(accepted).toBe(false);
+    expect(hook.result.current.values.countersinkAngleDeg).toBe(0.5);
+    expect(hook.result.current.refusal).toBe(
+      '180; Hole countersink angle takes more than 0 and less than 180.'
+    );
+    // Every value strictly inside the open range is taken as typed.
+    act(() => {
+      accepted = hook.result.current.setValue(
+        'countersinkAngleDeg',
+        179.9999995
+      );
+    });
+    expect(accepted).toBe(true);
+    expect(hook.result.current.values.countersinkAngleDeg).toBe(179.9999995);
+    // A step's sizes take any positive value, as the card did.
+    act(() => {
+      accepted = hook.result.current.setValue('countersinkDiameter', 0.005);
+    });
+    expect(accepted).toBe(true);
+    expect(hook.result.current.values.countersinkDiameter).toBe(0.005);
+  });
+
+  it('a canceled chip entry leaves the step following the bore', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('hole', [], [FACE]));
+    act(() => hook.result.current.setOption('style', 'counterbore'));
+    // The keypad previews what is typed, then Escape puts the value back.
+    act(() => hook.result.current.previewValue('counterboreDiameter', 14));
+    expect(hook.result.current.touched).toContain('counterboreDiameter');
+    act(() =>
+      hook.result.current.restoreValue(
+        'counterboreDiameter',
+        10.8,
+        undefined,
+        false
+      )
+    );
+    act(() => {
+      hook.result.current.setValue('diameter', 4);
+    });
+    await waitFor(() =>
+      expect(hook.result.current.values.counterboreDiameter).toBe(7.2)
+    );
+
+    // The bore moves while the step's keypad is open, then Escape: the step,
+    // still unset, takes the default as it stands now.
+    act(() => hook.result.current.previewValue('counterboreDiameter', 14));
+    act(() => {
+      hook.result.current.setValue('diameter', 5);
+    });
+    act(() =>
+      hook.result.current.restoreValue(
+        'counterboreDiameter',
+        7.2,
+        undefined,
+        false
+      )
+    );
+    expect(hook.result.current.values.counterboreDiameter).toBe(9);
+  });
+});
+
+describe('a draft hinge placed by a click', () => {
+  const face = (hash: number, point?: { x: number; y: number; z: number }) => ({
+    bodyId: 'body_a' as BodyId,
+    hash,
+    topologyId: `f${hash}`,
+    surfaceType: 'plane',
+    normal: { x: 1, y: 0, z: 0 },
+    centroid: { x: 0, y: 0, z: hash },
+    ...(point ? { point } : {})
+  });
+
+  it('a drafted face clicked again takes the hinge instead of leaving', () => {
+    const { hook } = setup();
+    // As an edit seeds them: the faces, no clicked point.
+    act(() => hook.result.current.start('draft', [], [face(1), face(2)]));
+    act(() => hook.result.current.setOption('neutral', 'point'));
+    act(() => {
+      hook.result.current.pickFace(face(2, { x: 5, y: 6, z: 7 }));
+    });
+    expect(hook.result.current.slots.faces.map((f) => f.hash)).toEqual([1, 2]);
+    expect(hook.result.current.slots.faces[1]?.point).toEqual({
+      x: 5,
+      y: 6,
+      z: 7
+    });
+    // The latest click is the hinge: no other face keeps a point.
+    act(() => {
+      hook.result.current.pickFace(face(1, { x: 1, y: 1, z: 1 }));
+    });
+    expect(hook.result.current.slots.faces.map((f) => f.point ?? null)).toEqual(
+      [{ x: 1, y: 1, z: 1 }, null]
+    );
+    // Without a clicked hinge, a picked face clicked again leaves the set.
+    act(() => hook.result.current.setOption('neutral', 'base'));
+    act(() => {
+      hook.result.current.pickFace(face(1, { x: 1, y: 1, z: 1 }));
+    });
+    expect(hook.result.current.slots.faces.map((f) => f.hash)).toEqual([2]);
   });
 });
 
@@ -498,5 +907,1425 @@ describe('review: a sweep guide rail', () => {
       'g1'
     ]);
     expect(hook.result.current.hint).toMatch(/Guide rail of 1/);
+  });
+});
+
+describe('useInPlaceCommand: primitives', () => {
+  it('previews the card default at once, and Enter commits it', async () => {
+    const { hook, commit, built } = setup();
+    act(() => hook.result.current.start('box'));
+    expect(hook.result.current.hint).toMatch(/footprint/);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(built.at(-1)).toEqual({
+      tool: 'primitive',
+      kind: 'box',
+      dimensions: { width: 30, height: 18, depth: 24 },
+      position: { x: 0, y: 0, z: 0 }
+    });
+    act(() => {
+      hook.result.current.done();
+    });
+    expect(commit).toHaveBeenCalledWith(
+      built.at(-1),
+      'Box',
+      null,
+      expect.any(Function)
+    );
+  });
+
+  it('takes a footprint: its plane, the press and the drawn sizes', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('box'));
+    // A typed width is replaced by the drawn one.
+    act(() => {
+      hook.result.current.setValue('width', 12, 'w');
+    });
+    act(() => {
+      expect(
+        hook.result.current.placeFootprint(
+          { frame: placementFrame({ x: 0, y: 0, z: 1 }), signU: 1, signV: 1 },
+          { width: 20, depth: 15, x: -10, y: 5, z: 6 }
+        )
+      ).toBe(true);
+    });
+    expect(hook.result.current.raws).toEqual({});
+    expect(hook.result.current.hint).toMatch(/arrows/);
+    await waitFor(() =>
+      expect(built.at(-1)).toEqual({
+        tool: 'primitive',
+        kind: 'box',
+        dimensions: { width: 20, height: 15, depth: 24 },
+        position: { x: -10, y: 5, z: 6 }
+      })
+    );
+    expect(hook.result.current.handles.map((handle) => handle.valueId)).toEqual(
+      ['width', 'depth', 'height']
+    );
+  });
+
+  it('moves a hung box corner with its height, unless typed', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('box'));
+    act(() => {
+      hook.result.current.placeFootprint(
+        {
+          frame: placementFrame({ x: 0, y: 0, z: 1 }),
+          signU: 1,
+          signV: 1,
+          hangs: 'z'
+        },
+        { width: 10, depth: 6, x: 0, y: 0, z: -4 }
+      );
+    });
+    act(() => {
+      hook.result.current.previewValue('height', 10);
+    });
+    expect(hook.result.current.values.z).toBe(10);
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        dimensions: { depth: 10 },
+        position: { z: 10 }
+      })
+    );
+    // A canceled entry puts the corner back with the height.
+    act(() => {
+      hook.result.current.restoreValue('height', 24, undefined, true);
+    });
+    expect(hook.result.current.values.z).toBe(-4);
+    act(() => {
+      hook.result.current.previewValue('height', 10);
+    });
+    // A typed Corner Z is the user's: a height change leaves it.
+    act(() => {
+      hook.result.current.setValue('z', 3, 'floor');
+    });
+    act(() => {
+      hook.result.current.previewValue('height', 12);
+    });
+    expect(hook.result.current.raws.z).toBe('floor');
+    expect(hook.result.current.values.z).toBe(3);
+  });
+
+  it('lets a drawn footprint lift the refusal of the size it replaces', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('cylinder'));
+    act(() => {
+      hook.result.current.setValue('radius', -2);
+    });
+    expect(hook.result.current.refusal).toMatch(/radius takes/);
+    act(() => {
+      hook.result.current.placeFootprint(
+        { frame: GROUND_FRAME, signU: 1, signV: 1 },
+        { radius: 4, x: 0, y: 0, z: 0 }
+      );
+    });
+    expect(hook.result.current.refusal).toBeNull();
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+  });
+
+  it('lets one cone end come to a point, never both', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('cone'));
+    let accepted = false;
+    act(() => {
+      accepted = hook.result.current.setValue('topRadius', 0);
+    });
+    expect(accepted).toBe(true);
+    act(() => {
+      accepted = hook.result.current.setValue('bottomRadius', 0);
+    });
+    expect(accepted).toBe(false);
+    expect(hook.result.current.refusal).toBe(
+      '0; At least one radius must be greater than zero.'
+    );
+    expect(hook.result.current.values.bottomRadius).toBe(6);
+    expect(hook.result.current.canFinish).toBe(false);
+    // A drag to zero beside it simply does not take.
+    act(() => {
+      hook.result.current.previewValue('bottomRadius', 0);
+    });
+    expect(hook.result.current.values.bottomRadius).toBe(6);
+  });
+
+  it('keeps a typed position parametric', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('cylinder'));
+    act(() => {
+      hook.result.current.setValue('x', 15, 'gap');
+    });
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        kind: 'cylinder',
+        position: { x: 'gap', y: 0, z: 0 }
+      })
+    );
+  });
+
+  it('names each start anew, even of the same tool', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('box'));
+    const first = hook.result.current.sessionId;
+    act(() => hook.result.current.start('box'));
+    expect(hook.result.current.sessionId).not.toBe(first);
+    act(() => {
+      hook.result.current.cancel(true);
+    });
+    expect(hook.result.current.sessionId).toBeNull();
+  });
+
+  it('refuses a footprint for a command placed some other way', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('revolve'));
+    expect(
+      hook.result.current.placeFootprint(
+        { frame: GROUND_FRAME, signU: 1, signV: 1 },
+        { radius: 4 }
+      )
+    ).toBe(false);
+  });
+});
+
+describe('U09 phase 6: datums and a picture', () => {
+  const PLANE_A = {
+    kind: 'plane' as const,
+    key: 'canonical:XY',
+    source: { type: 'canonical' as const, plane: 'XY' as const, offset: 0 },
+    origin: { x: 0, y: 0, z: 0 },
+    normal: { x: 0, y: 0, z: 1 }
+  };
+
+  it('judges a datum by its check, not by a body', async () => {
+    let resolved = false;
+    const { hook, commit } = setup({
+      buildCommand: () => ({
+        validate: () => undefined,
+        apply: (document) => document,
+        resultBodyId: undefined,
+        check: () => {
+          if (!resolved) throw new Error('Plane 1 did not resolve.');
+        }
+      })
+    });
+    act(() => hook.result.current.start('datum-plane'));
+    expect(hook.result.current.pickRef(PLANE_A)).toBe(true);
+    await waitFor(() =>
+      expect(hook.result.current.refusal).toBe('Plane 1 did not resolve.')
+    );
+    expect(hook.result.current.canFinish).toBe(false);
+    resolved = true;
+    act(() => hook.result.current.previewValue('offset', 4));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.done();
+    });
+    expect(commit).toHaveBeenCalledWith(
+      {
+        tool: 'datum-plane',
+        definition: { kind: 'offset', source: PLANE_A.source, offset: 4 }
+      },
+      'Plane 1',
+      null,
+      expect.any(Function)
+    );
+  });
+
+  it('refuses a source kind the tool does not take', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('revolve'));
+    expect(hook.result.current.pickRef(PLANE_A)).toBe(false);
+  });
+
+  it('refuses a plane for a picture that has not resolved', () => {
+    const { hook } = setup({
+      imagePlaneBasis: (plane) => (plane.type === 'datum' ? null : TOP)
+    });
+    const record = {
+      imageId: 'image_1',
+      name: 'Drawing',
+      pixelWidth: 200,
+      pixelHeight: 100,
+      width: 100,
+      opacity: 0.6
+    } as never;
+    act(() =>
+      hook.result.current.start('reference-image', [], [], [], {
+        image: { record, plane: null, center: { u: 0, v: 0 }, calibration: [] }
+      })
+    );
+    act(() => {
+      hook.result.current.placeImage({
+        plane: { type: 'datum', datumFeatureId: 'datum_1' as never }
+      });
+    });
+    expect(hook.result.current.slots.image?.plane).toBeNull();
+    expect(hook.result.current.refusal).toMatch(/has not resolved/);
+    expect(hook.result.current.canFinish).toBe(false);
+  });
+
+  it('places a picture with no kernel build, and writes the real distance into its width', () => {
+    const basis: PlaneBasis = TOP;
+    const { hook, commit, built } = setup({ imagePlaneBasis: () => basis });
+    const record = {
+      imageId: 'image_1',
+      name: 'Drawing',
+      pixelWidth: 200,
+      pixelHeight: 100,
+      width: 100,
+      opacity: 0.6,
+      center: { u: 0, v: 0 },
+      rotationDeg: 0
+    } as never;
+    act(() =>
+      hook.result.current.start('reference-image', [], [], [], {
+        image: { record, plane: null, center: { u: 0, v: 0 }, calibration: [] }
+      })
+    );
+    expect(hook.result.current.canFinish).toBe(false);
+    act(() => {
+      hook.result.current.placeImage({
+        plane: { type: 'canonical', plane: 'XY', offset: 0 },
+        point: { x: 0, y: 0, z: 30 }
+      });
+    });
+    expect(hook.result.current.canFinish).toBe(true);
+    act(() => hook.result.current.setOption('clicks', 'scale'));
+    act(() => {
+      hook.result.current.placeImage({ point: { x: -50, y: 25, z: 30 } });
+    });
+    act(() => {
+      hook.result.current.placeImage({ point: { x: 0, y: 25, z: 30 } });
+    });
+    // 100 of 200 pixels at width 100: 50 apart.
+    expect(hook.result.current.values.span).toBeCloseTo(50);
+    let accepted = false;
+    act(() => {
+      accepted = hook.result.current.setValue('span', 10);
+    });
+    expect(accepted).toBe(true);
+    expect(hook.result.current.values.width).toBeCloseTo(20);
+    // A distance that would make it wider than a picture can be is refused,
+    // and Done waits until a distance is taken.
+    act(() => {
+      accepted = hook.result.current.setValue('span', 1e7);
+    });
+    expect(accepted).toBe(false);
+    expect(hook.result.current.refusal).toMatch(/cannot take/);
+    expect(hook.result.current.canFinish).toBe(false);
+    // An unrelated option leaves it refused.
+    act(() => hook.result.current.setOption('opacity', '0.4'));
+    expect(hook.result.current.canFinish).toBe(false);
+    act(() => {
+      accepted = hook.result.current.setValue('span', 10);
+    });
+    expect(hook.result.current.canFinish).toBe(true);
+    act(() => {
+      hook.result.current.done();
+    });
+    expect(built).toEqual([]);
+    const [request, title] = commit.mock.calls[0]!;
+    expect(title).toBe('Image');
+    expect(request).toMatchObject({
+      tool: 'reference-image',
+      image: { width: 20, opacity: 0.4 }
+    });
+  });
+});
+
+describe('useInPlaceCommand: editing a stored feature', () => {
+  const SEED: InPlaceEditSeed = {
+    featureId: 'feat_1' as FeatureId,
+    nodeId: 'node_1',
+    name: 'Cut 2',
+    data: {
+      featureKind: 'boolean',
+      operation: 'subtract',
+      targetBodyIds: ['body_a' as BodyId, 'body_b' as BodyId]
+    },
+    resultBodyId: BODY,
+    ownBodyIds: [BODY],
+    slots: {
+      profiles: [],
+      axisId: null,
+      path: [],
+      guide: [],
+      faces: [],
+      bodies: [
+        {
+          bodyId: 'body_a' as BodyId,
+          min: { x: 0, y: 0, z: 0 },
+          max: { x: 1, y: 1, z: 1 }
+        },
+        {
+          bodyId: 'body_b' as BodyId,
+          min: { x: 0, y: 0, z: 0 },
+          max: { x: 1, y: 1, z: 1 }
+        }
+      ],
+      plane: null,
+      edges: []
+    },
+    values: {},
+    raws: {},
+    touched: [],
+    options: { operation: 'subtract', keepOriginals: 'none' },
+    axes: [],
+    choices: {},
+    lockedOptions: ['keepOriginals'],
+    notice: null
+  };
+
+  it('previews and commits the edit, under its own name', async () => {
+    const buildCommand = vi.fn<UseInPlaceCommandOptions['buildCommand']>(
+      () => ({
+        validate: () => undefined,
+        apply: (document) => document,
+        resultBodyId: BODY
+      })
+    );
+    const { hook, commit } = setup({ buildCommand });
+    act(() => hook.result.current.edit('subtract', SEED));
+    expect(hook.result.current.editing).toBe(SEED);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(buildCommand).toHaveBeenLastCalledWith(
+      {
+        tool: 'boolean',
+        operation: 'subtract',
+        targetBodyIds: ['body_a', 'body_b']
+      },
+      'Subtract',
+      SEED
+    );
+    act(() => {
+      hook.result.current.done();
+    });
+    expect(commit).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: 'subtract' }),
+      'Cut 2',
+      SEED,
+      expect.any(Function)
+    );
+  });
+
+  it("reads an edited plane's written fields again when the model changes", () => {
+    let offset = 5;
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      evaluate: (value) =>
+        value === 'gap'
+          ? offset
+          : typeof value === 'number'
+            ? value
+            : Number(value),
+      baseVersion: 1
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('mirror', {
+        ...SEED,
+        data: {
+          featureKind: 'mirror',
+          targetBodyId: 'body_a' as BodyId,
+          plane: {
+            origin: { x: 'gap', y: 0, z: 0 },
+            normal: { x: 1, y: 0, z: 0 }
+          }
+        } as never,
+        slots: {
+          ...SEED.slots,
+          bodies: [],
+          plane: {
+            kind: 'saved',
+            origin: { x: 5, y: 0, z: 0 },
+            normal: { x: 1, y: 0, z: 0 },
+            fields: {
+              origin: { x: 'gap', y: '0', z: '0' },
+              normal: { x: '1', y: '0', z: '0' }
+            }
+          }
+        }
+      })
+    );
+    offset = 8;
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.slots.plane).toMatchObject({
+      kind: 'saved',
+      origin: { x: 8, y: 0, z: 0 }
+    });
+  });
+
+  it('takes an edited plane retyped by someone else as the feature stores it now', () => {
+    const mirror = (x: number) => ({
+      featureKind: 'mirror',
+      targetBodyId: 'body_a' as BodyId,
+      plane: { origin: { x, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } }
+    });
+    let stored = mirror(5);
+    const base = () =>
+      ({
+        nodes: {
+          node_1: {
+            id: 'node_1',
+            kind: 'feature',
+            featureId: SEED.featureId,
+            name: 'Mirror',
+            data: stored
+          }
+        },
+        derived: { bodyRepresentations: { [BODY]: {} }, warnings: [] }
+      }) as unknown as ProjectDocument;
+    let document = base();
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      baseDocument: () => document,
+      evaluate: (value) => Number(value),
+      baseVersion: 1
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('mirror', {
+        ...SEED,
+        data: stored as never,
+        slots: {
+          ...SEED.slots,
+          bodies: [],
+          plane: {
+            kind: 'saved',
+            origin: { x: 5, y: 0, z: 0 },
+            normal: { x: 1, y: 0, z: 0 },
+            fields: {
+              origin: { x: '5', y: '0', z: '0' },
+              normal: { x: '1', y: '0', z: '0' }
+            }
+          }
+        }
+      })
+    );
+    stored = mirror(12);
+    document = base();
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.slots.plane).toMatchObject({
+      kind: 'saved',
+      origin: { x: 12, y: 0, z: 0 },
+      fields: { origin: { x: '12' } }
+    });
+  });
+
+  it('takes a value changed by someone else unless the user changed it', () => {
+    let live: Record<string, number> = { planeOX: 5, planeOY: 0 };
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      evaluate: (value) => Number(value),
+      baseVersion: 1,
+      reseed: (edit) => ({
+        tool: 'mirror',
+        seed: { ...edit, values: { ...live }, raws: {} }
+      })
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('mirror', {
+        ...SEED,
+        values: { planeOX: 5, planeOY: 0 },
+        options: { planeMode: 'typed' }
+      })
+    );
+    act(() => {
+      hook.result.current.setValue('planeOY', 3);
+    });
+    live = { planeOX: 12, planeOY: 9 };
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.values).toMatchObject({
+      planeOX: 12,
+      planeOY: 3
+    });
+    // The feature coming to match the user's value does not make it the
+    // feature's again.
+    live = { planeOX: 12, planeOY: 3 };
+    hook.rerender({ ...options, baseVersion: 3 });
+    live = { planeOX: 12, planeOY: 7 };
+    hook.rerender({ ...options, baseVersion: 4 });
+    expect(hook.result.current.values.planeOY).toBe(3);
+  });
+
+  it('follows whether the feature stores a value at all', () => {
+    let live: { values: Record<string, number>; touched: string[] } = {
+      values: { depth: 8 },
+      touched: ['depth']
+    };
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      baseVersion: 1,
+      reseed: (edit) => ({
+        tool: 'subtract',
+        seed: { ...edit, values: live.values, raws: {}, touched: live.touched }
+      })
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('subtract', {
+        ...SEED,
+        values: { depth: 8 },
+        touched: ['depth']
+      })
+    );
+    // A collaborator stores a size that was absent: it is the feature's own.
+    live = { values: { depth: 8, step: 3 }, touched: ['depth', 'step'] };
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.touched).toContain('step');
+    // And drops it again: absent once more, for its default to follow.
+    live = { values: { depth: 8 }, touched: ['depth'] };
+    hook.rerender({ ...options, baseVersion: 3 });
+    expect(hook.result.current.touched).not.toContain('step');
+    expect(hook.result.current.values).not.toHaveProperty('step');
+  });
+
+  it('takes an option changed by someone else unless the user changed it', () => {
+    let live: Record<string, string> = {
+      planeMode: 'typed',
+      keepOriginal: 'no'
+    };
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      baseVersion: 1,
+      reseed: (edit) => ({
+        tool: 'split',
+        seed: { ...edit, options: { ...live } }
+      })
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('split', {
+        ...SEED,
+        values: {},
+        options: { planeMode: 'typed', keepOriginal: 'no' }
+      })
+    );
+    act(() => {
+      hook.result.current.setOption('planeMode', 'picked');
+    });
+    live = { planeMode: 'typed', keepOriginal: 'yes' };
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.options).toMatchObject({
+      planeMode: 'picked',
+      keepOriginal: 'yes'
+    });
+  });
+
+  it('takes picks re-pointed by someone else unless the user repicked them', () => {
+    const body = (bodyId: string, size = 1) => ({
+      bodyId: bodyId as BodyId,
+      min: { x: 0, y: 0, z: 0 },
+      max: { x: size, y: size, z: size }
+    });
+    let bodies = [body('body_a'), body('body_b')];
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      baseVersion: 1,
+      reseed: (edit) => ({
+        tool: 'subtract',
+        seed: { ...edit, slots: { ...edit.slots, bodies } }
+      })
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('subtract', {
+        ...SEED,
+        slots: { ...SEED.slots, bodies: [body('body_a'), body('body_b')] }
+      })
+    );
+    // The same bodies measured again are not a change.
+    bodies = [body('body_a', 2), body('body_b')];
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.slots.bodies[0]?.max.x).toBe(1);
+    // An undo re-points the cutter: the untouched list follows.
+    bodies = [body('body_a'), body('body_c')];
+    hook.rerender({ ...options, baseVersion: 3 });
+    expect(hook.result.current.slots.bodies.map((b) => b.bodyId)).toEqual([
+      'body_a',
+      'body_c'
+    ]);
+    // Once the user picks, the list is theirs.
+    act(() => {
+      hook.result.current.pickBody(body('body_d'));
+    });
+    bodies = [body('body_a'), body('body_e')];
+    hook.rerender({ ...options, baseVersion: 4 });
+    expect(hook.result.current.slots.bodies.map((b) => b.bodyId)).toContain(
+      'body_d'
+    );
+  });
+
+  it('re-arms with the command that now makes the feature', () => {
+    let live: { tool: 'subtract' | 'union' | 'scale'; seed: InPlaceEditSeed } =
+      {
+        tool: 'subtract',
+        seed: SEED
+      };
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      baseVersion: 1,
+      reseed: () => live
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() => hook.result.current.edit('subtract', SEED));
+    // Another Boolean operation is this command's option, not a new one.
+    live = {
+      tool: 'union',
+      seed: { ...SEED, options: { ...SEED.options, operation: 'union' } }
+    };
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.tool).toBe('union');
+    expect(hook.result.current.editing).toBe(SEED);
+    // A feature another command makes now re-arms that command.
+    const scaled = { ...SEED, options: { pivot: 'origin', copy: 'no' } };
+    live = { tool: 'scale', seed: scaled };
+    hook.rerender({ ...options, baseVersion: 3 });
+    expect(hook.result.current.tool).toBe('scale');
+    expect(hook.result.current.editing).toBe(scaled);
+  });
+
+  it('ends an edit of a feature no in-place command edits any more', () => {
+    let live: { tool: 'subtract'; seed: InPlaceEditSeed } | null = {
+      tool: 'subtract',
+      seed: SEED
+    };
+    const onStatus = vi.fn();
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      onStatus,
+      baseVersion: 1,
+      reseed: () => live
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() => hook.result.current.edit('subtract', SEED));
+    live = null;
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.editing).toBeNull();
+    expect(onStatus).toHaveBeenCalledWith(
+      expect.stringMatching(/no longer edited here/)
+    );
+  });
+
+  it('a face found again under a new hash is still the seeded pick', () => {
+    const face = (hash: number, faceHash: number) => ({
+      bodyId: 'body_a' as BodyId,
+      hash,
+      topologyId: `f${hash}`,
+      reference: { kind: 'lineage', name: 'top' } as never,
+      centroid: { x: 0, y: 0, z: faceHash }
+    });
+    let faces = [face(1, 1)];
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      baseVersion: 1,
+      reseed: (edit) => ({
+        tool: 'shell',
+        seed: { ...edit, slots: { ...edit.slots, faces } }
+      })
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('shell', {
+        ...SEED,
+        options: {},
+        slots: { ...SEED.slots, bodies: [], faces: [face(1, 1)] }
+      })
+    );
+    // An upstream rebuild renames the face's hash (the live re-check).
+    act(() => hook.result.current.setPicks({ faces: [face(7, 1)] }));
+    // A collaborator then changes the faces: the untouched slot follows.
+    faces = [
+      face(7, 1),
+      { ...face(9, 2), reference: { kind: 'lineage', name: 'side' } as never }
+    ];
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.slots.faces.map((f) => f.hash)).toEqual([7, 9]);
+  });
+
+  it('a re-armed edit drops a refusal typed in the edit before it', () => {
+    let live: {
+      tool: 'linear-pattern' | 'grid-pattern';
+      seed: InPlaceEditSeed;
+    } = {
+      tool: 'linear-pattern',
+      seed: SEED
+    };
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      baseVersion: 1,
+      reseed: () => live
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('linear-pattern', { ...SEED, options: {} })
+    );
+    act(() => {
+      hook.result.current.setValue('count', 0.5, '0.5');
+    });
+    expect(hook.result.current.refusal).toMatch(/takes/);
+    live = { tool: 'grid-pattern', seed: { ...SEED, options: {} } };
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.tool).toBe('grid-pattern');
+    expect(hook.result.current.refusal ?? '').not.toMatch(/takes/);
+  });
+
+  it('keeps a clicked draft hinge on its face as the faces follow the feature', () => {
+    const face = (
+      hash: number,
+      point?: { x: number; y: number; z: number }
+    ) => ({
+      bodyId: 'body_a' as BodyId,
+      hash,
+      topologyId: `f${hash}`,
+      surfaceType: 'plane',
+      normal: { x: 1, y: 0, z: 0 },
+      centroid: { x: 0, y: 0, z: hash },
+      ...(point ? { point } : {})
+    });
+    let stored = [face(1), face(2)];
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      baseVersion: 1,
+      reseed: (edit) => ({
+        tool: 'draft',
+        seed: { ...edit, slots: { ...edit.slots, faces: stored } }
+      })
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('draft', {
+        ...SEED,
+        options: { neutral: 'point' },
+        slots: { ...SEED.slots, bodies: [], faces: [face(1), face(2)] }
+      })
+    );
+    act(() => {
+      hook.result.current.pickFace(face(2, { x: 5, y: 6, z: 7 }));
+    });
+    // A collaborator drafts another face: it joins, the hinge stays put.
+    stored = [face(1), face(2), face(4)];
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.slots.faces.map((f) => f.hash)).toEqual([
+      1, 2, 4
+    ]);
+    expect(hook.result.current.slots.faces[1]?.point).toEqual({
+      x: 5,
+      y: 6,
+      z: 7
+    });
+    // And takes the hinge's face out: the hinge asks for a click again.
+    stored = [face(1), face(4)];
+    hook.rerender({ ...options, baseVersion: 3 });
+    expect(hook.result.current.slots.faces.map((f) => f.hash)).toEqual([1, 4]);
+    expect(hook.result.current.slots.faces.some((f) => f.point)).toBe(false);
+  });
+
+  it('builds a helix saved axis that only reads once the model changes', () => {
+    let rise: number | null = null;
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      evaluate: (value) => (value === 'rise' ? rise : Number(value)),
+      baseVersion: 1,
+      reseed: (edit) => ({
+        tool: 'helical-sweep',
+        seed: { ...edit, slots: { ...edit.slots, axisId: 'saved' } }
+      })
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    const data = {
+      featureKind: 'helical-sweep',
+      profile: { sketchId: SKETCH },
+      axisOrigin: { x: 0, y: 0, z: 'rise' },
+      axisDirection: { x: 0, y: 0, z: 1 }
+    } as never;
+    // Armed while its parameter does not resolve: no saved axis yet.
+    act(() =>
+      hook.result.current.edit('helical-sweep', {
+        ...SEED,
+        data,
+        axes: [],
+        options: {},
+        slots: { ...SEED.slots, bodies: [], profiles: [PICK], axisId: null }
+      })
+    );
+    expect(hook.result.current.slots.axis).toBeNull();
+    rise = 10;
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.slots.axis?.origin).toEqual({
+      x: 0,
+      y: 0,
+      z: 10
+    });
+  });
+
+  it('keeps a hole moved by a click when the feature is read again', () => {
+    const face = {
+      bodyId: 'body_a' as BodyId,
+      hash: 11,
+      topologyId: 'f11',
+      surfaceType: 'plane',
+      normal: { x: 0, y: 0, z: 1 },
+      centroid: { x: 10, y: 5, z: 4 }
+    };
+    const stored = {
+      ...face,
+      point: { x: 10, y: 5, z: 4 },
+      savedPosition: true as const
+    };
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      baseVersion: 1,
+      reseed: (edit) => ({
+        tool: 'hole',
+        seed: { ...edit, slots: { ...edit.slots, faces: [{ ...stored }] } }
+      })
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('hole', {
+        ...SEED,
+        options: { place: 'clicked', depthMode: 'through', style: 'simple' },
+        slots: { ...SEED.slots, bodies: [], faces: [stored] }
+      })
+    );
+    // Clicked elsewhere on the same face: the hole moves there.
+    act(() => {
+      hook.result.current.pickFace({ ...face, point: { x: 14, y: 7, z: 4 } });
+    });
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.slots.faces[0]?.point).toEqual({
+      x: 14,
+      y: 7,
+      z: 4
+    });
+    expect(hook.result.current.slots.faces[0]?.savedPosition).toBeUndefined();
+  });
+
+  it('a re-check read before the live reseed does not undo it', () => {
+    const curve = (entityId: string) => ({ sketchId: SKETCH, entityId });
+    let path = [curve('a')];
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      baseVersion: 1,
+      reseed: (edit) => ({
+        tool: 'sweep',
+        seed: { ...edit, slots: { ...edit.slots, path } }
+      })
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('sweep', {
+        ...SEED,
+        options: {},
+        slots: { ...SEED.slots, bodies: [], profiles: [PICK], path }
+      })
+    );
+    const read = hook.result.current.slots;
+    // One update re-points the path to b and deletes a: the reseed takes b,
+    // then the re-check, which read a, reports a gone.
+    path = [curve('b')];
+    hook.rerender({ ...options, baseVersion: 2 });
+    act(() => hook.result.current.setPicks({ path: [] }, read));
+    expect(hook.result.current.slots.path.map((c) => c.entityId)).toEqual([
+      'b'
+    ]);
+    // Read from the slots as they are now, it applies.
+    act(() =>
+      hook.result.current.setPicks({ path: [] }, hook.result.current.slots)
+    );
+    expect(hook.result.current.slots.path).toEqual([]);
+  });
+
+  it('a derived step size still takes the size the feature comes to store', () => {
+    const face = {
+      bodyId: 'body_a' as BodyId,
+      hash: 11,
+      topologyId: 'f11',
+      surfaceType: 'plane',
+      normal: { x: 0, y: 0, z: 1 },
+      centroid: { x: 10, y: 5, z: 4 },
+      point: { x: 10, y: 5, z: 4 },
+      savedPosition: true as const
+    };
+    let live: { values: Record<string, number>; touched: string[] } = {
+      values: { diameter: 10 },
+      touched: ['diameter']
+    };
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      baseVersion: 1,
+      reseed: (edit) => ({
+        tool: 'hole',
+        seed: { ...edit, values: live.values, raws: {}, touched: live.touched }
+      })
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('hole', {
+        ...SEED,
+        values: { diameter: 10 },
+        touched: ['diameter'],
+        options: {
+          place: 'clicked',
+          depthMode: 'through',
+          style: 'counterbore'
+        },
+        slots: { ...SEED.slots, bodies: [], faces: [face] }
+      })
+    );
+    // Unset, the counterbore follows the bore: 1.8 × 10.
+    expect(hook.result.current.values.counterboreDiameter).toBe(18);
+    // A collaborator stores one: it is the feature's own now.
+    live = {
+      values: { diameter: 10, counterboreDiameter: 11 },
+      touched: ['diameter', 'counterboreDiameter']
+    };
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.values.counterboreDiameter).toBe(11);
+    expect(hook.result.current.touched).toContain('counterboreDiameter');
+  });
+
+  it('previews a re-armed edit that builds the same thing', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.edit('subtract', SEED));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.cancel();
+      hook.result.current.edit('subtract', { ...SEED });
+    });
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+  });
+
+  it("reads a helix's saved axis again when the model changes", () => {
+    let rise = 10;
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], vi.fn()),
+      evaluate: (value) => (value === 'rise' ? rise : null),
+      baseVersion: 1
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() =>
+      hook.result.current.edit('helical-sweep', {
+        ...SEED,
+        data: {
+          featureKind: 'helical-sweep',
+          profile: { sketchId: SKETCH },
+          axisOrigin: { x: 0, y: 0, z: 'rise' },
+          axisDirection: { x: 0, y: 0, z: 1 }
+        } as never,
+        axes: [
+          {
+            id: 'saved',
+            label: 'Its saved axis',
+            origin: { x: 0, y: 0, z: 10 },
+            direction: { x: 0, y: 0, z: 1 },
+            choice: { saved: true }
+          }
+        ],
+        slots: {
+          ...SEED.slots,
+          bodies: [],
+          profiles: [PICK],
+          axisId: 'saved'
+        }
+      })
+    );
+    rise = 25;
+    hook.rerender({ ...options, baseVersion: 2 });
+    expect(hook.result.current.slots.axis?.origin).toEqual({
+      x: 0,
+      y: 0,
+      z: 25
+    });
+  });
+
+  it('keeps a new feature open until its commit lands, and open to retry if refused', async () => {
+    let settle: (committed: boolean) => void = () => undefined;
+    const commit = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          settle = resolve;
+        })
+    );
+    const { hook } = setup({ commit });
+    act(() => hook.result.current.start('revolve', [PICK]));
+    act(() => hook.result.current.pickAxis('sketch-vertical'));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.done();
+    });
+    // Validating: still open, its picks kept, no second Done, and no
+    // Cancel that would claim nothing was added.
+    expect(hook.result.current.active).toBe(true);
+    expect(hook.result.current.canFinish).toBe(false);
+    let closed = true;
+    act(() => {
+      closed = hook.result.current.cancel();
+    });
+    expect(closed).toBe(false);
+    expect(hook.result.current.active).toBe(true);
+    // Refused (or held off by another exact operation): there to retry.
+    await act(async () => {
+      settle(false);
+      await Promise.resolve();
+    });
+    expect(hook.result.current.active).toBe(true);
+    expect(hook.result.current.slots.profiles).toHaveLength(1);
+    expect(hook.result.current.canFinish).toBe(true);
+    act(() => {
+      hook.result.current.done();
+    });
+    // Landed: the command ends.
+    await act(async () => {
+      settle(true);
+      await Promise.resolve();
+    });
+    expect(hook.result.current.active).toBe(false);
+  });
+
+  it('withdraws a validating commit when another command takes over', async () => {
+    let withdrawn: () => boolean = () => false;
+    const commit = vi.fn(
+      (
+        _request: InPlaceRequest,
+        _title: string,
+        _edit: InPlaceEditSeed | null,
+        isWithdrawn: () => boolean
+      ) => {
+        withdrawn = isWithdrawn;
+        return new Promise<boolean>(() => undefined);
+      }
+    );
+    const { hook } = setup({ commit });
+    act(() => hook.result.current.start('revolve', [PICK]));
+    act(() => hook.result.current.pickAxis('sketch-vertical'));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.done();
+    });
+    expect(withdrawn()).toBe(false);
+    // A tool switch closes it quietly: the candidate is no longer wanted.
+    act(() => {
+      hook.result.current.cancel(true);
+    });
+    expect(hook.result.current.active).toBe(false);
+    expect(withdrawn()).toBe(true);
+  });
+
+  it('keeps an edit open until its commit lands, and open to retry if refused', async () => {
+    const { hook, commit } = setup();
+    act(() => hook.result.current.edit('subtract', SEED));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.done();
+    });
+    expect(commit).toHaveBeenCalledTimes(1);
+    // Validating: still the edit, and no second Done; its inputs hold
+    // still, so what lands is what is shown.
+    expect(hook.result.current.editing).toBe(SEED);
+    expect(hook.result.current.canFinish).toBe(false);
+    act(() => {
+      hook.result.current.setOption('operation', 'union');
+      hook.result.current.pickBody({
+        bodyId: 'body_c' as BodyId,
+        min: { x: 0, y: 0, z: 0 },
+        max: { x: 1, y: 1, z: 1 }
+      });
+    });
+    expect(hook.result.current.options.operation).toBe('subtract');
+    expect(hook.result.current.slots.bodies).toHaveLength(2);
+    // Refused: the edit is there to correct, and Done can go again.
+    act(() => hook.result.current.settleEdit(SEED, false));
+    expect(hook.result.current.editing).toBe(SEED);
+    expect(hook.result.current.canFinish).toBe(true);
+    act(() => {
+      hook.result.current.done();
+    });
+    // Landed: the edit ends.
+    act(() => hook.result.current.settleEdit(SEED, true));
+    expect(hook.result.current.editing).toBeNull();
+  });
+
+  it('switches operation with its bodies, and hides a locked option', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.edit('subtract', SEED));
+    expect(hook.result.current.optionSpecs.map((option) => option.id)).toEqual([
+      'operation'
+    ]);
+    act(() => hook.result.current.setOption('operation', 'union'));
+    expect(hook.result.current.tool).toBe('union');
+    expect(hook.result.current.slots.bodies).toHaveLength(2);
+  });
+
+  it('says the feature is unchanged when canceled', () => {
+    const onStatus = vi.fn();
+    const { hook } = setup({ onStatus });
+    act(() => hook.result.current.edit('subtract', SEED));
+    act(() => {
+      hook.result.current.cancel();
+    });
+    expect(onStatus).toHaveBeenCalledWith('Edit canceled; Cut 2 is unchanged.');
+    expect(hook.result.current.editing).toBeNull();
+  });
+});
+
+describe('useInPlaceCommand: fillet edges', () => {
+  const edge = (bodyId: string, hash: number) => ({
+    bodyId: bodyId as BodyId,
+    hash,
+    topologyId: `e${hash}`
+  });
+
+  it("collects one body's edges in pick order and toggles a repeat off", () => {
+    const { hook } = setup();
+    act(() =>
+      hook.result.current.start('fillet', [], [], [], { edges: [edge('a', 1)] })
+    );
+    act(() => {
+      hook.result.current.pickEdge(edge('a', 2));
+    });
+    expect(hook.result.current.slots.edges.map((e) => e.hash)).toEqual([1, 2]);
+    act(() => {
+      hook.result.current.pickEdge(edge('a', 1));
+    });
+    expect(hook.result.current.slots.edges.map((e) => e.hash)).toEqual([2]);
+    // Another body's edge starts the set over.
+    act(() => {
+      hook.result.current.pickEdge(edge('b', 7));
+    });
+    expect(hook.result.current.slots.edges).toEqual([edge('b', 7)]);
+    // Select all replaces the set, keeping one body.
+    act(() => {
+      hook.result.current.setEdges([edge('a', 1), edge('a', 2), edge('b', 3)]);
+    });
+    expect(hook.result.current.slots.edges.map((e) => e.hash)).toEqual([1, 2]);
+  });
+
+  it('refuses an edge while a command takes none', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('shell'));
+    let taken = true;
+    act(() => {
+      taken = hook.result.current.pickEdge(edge('a', 1));
+    });
+    expect(taken).toBe(false);
+  });
+});
+
+describe("useInPlaceCommand: editing a fillet's edge set", () => {
+  const named = (hash: number) => ({
+    bodyId: 'body_a' as BodyId,
+    hash,
+    topologyId: `e${hash}`,
+    reference: { kind: 'edge', currentHash: hash } as never
+  });
+
+  it('goes hash-only with an added edge, and names the set again once it is dropped', async () => {
+    const seed: InPlaceEditSeed = {
+      featureId: 'feat_f' as FeatureId,
+      nodeId: 'node_f',
+      name: 'Rim',
+      data: {
+        featureKind: 'fillet',
+        targetBodyId: 'body_a' as BodyId,
+        edgeHashes: [1, 2],
+        radius: 2
+      },
+      resultBodyId: BODY,
+      ownBodyIds: [BODY],
+      slots: {
+        profiles: [],
+        axisId: null,
+        path: [],
+        guide: [],
+        faces: [],
+        bodies: [],
+        plane: null,
+        edges: [named(1), named(2)]
+      },
+      values: { radius: 2 },
+      raws: {},
+      touched: ['radius'],
+      options: { law: 'constant' },
+      axes: [],
+      choices: {},
+      lockedOptions: [],
+      notice: null
+    };
+    const { hook, built } = setup();
+    act(() => hook.result.current.edit('fillet', seed));
+    const added = { bodyId: 'body_a' as BodyId, hash: 3, topologyId: 'e3' };
+    act(() => {
+      hook.result.current.pickEdge(added);
+    });
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({ edgeHashes: [1, 2, 3] })
+    );
+    expect(built.at(-1)).not.toHaveProperty('edgeReferences');
+    act(() => {
+      hook.result.current.pickEdge(added);
+    });
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        edgeHashes: [1, 2],
+        edgeReferences: [named(1).reference, named(2).reference]
+      })
+    );
+  });
+});
+
+describe('useInPlaceCommand: axes and directions picked in the model', () => {
+  const EDGE_AXIS = {
+    kind: 'edge' as const,
+    source: {
+      type: 'edge' as const,
+      bodyId: 'body_a' as BodyId,
+      edgeReference: {} as never
+    }
+  };
+  /** A model edge along Z at x = 40, in the FRONT sketch's plane (y = 0). */
+  const line = (y = 0) => ({
+    id: `edge:body_a:${y}`,
+    label: 'The picked edge',
+    origin: { x: 40, y, z: 0 },
+    direction: { x: 0, y: 0, z: 1 },
+    choice: { define: EDGE_AXIS }
+  });
+  const BOX = {
+    bodyId: 'body_a' as BodyId,
+    min: { x: 0, y: 0, z: 0 },
+    max: { x: 10, y: 10, z: 10 }
+  };
+
+  it('a revolve takes a picked edge in its plane, and lets it go again', () => {
+    const onStatus = vi.fn();
+    const { hook } = setup({ onStatus });
+    act(() => hook.result.current.start('revolve', [PICK]));
+    act(() => {
+      hook.result.current.pickAxisLine(line());
+    });
+    expect(hook.result.current.axisCandidates[0]?.id).toBe('edge:body_a:0');
+    expect(hook.result.current.slots.axis?.id).toBe('edge:body_a:0');
+    expect(hook.result.current.request).toMatchObject({
+      tool: 'revolve',
+      axis: { newAxis: EDGE_AXIS }
+    });
+    // Clicked again, it comes back out.
+    act(() => {
+      hook.result.current.pickAxisLine(line());
+    });
+    expect(hook.result.current.slots.axis).toBeNull();
+    expect(hook.result.current.axisCandidates.map((c) => c.id)).not.toContain(
+      'edge:body_a:0'
+    );
+    // Off the profile's plane, it is refused in words.
+    act(() => {
+      hook.result.current.pickAxisLine(line(5));
+    });
+    expect(hook.result.current.slots.axis).toBeNull();
+    expect(onStatus).toHaveBeenCalledWith(
+      expect.stringMatching(/leaves the profile's sketch plane/)
+    );
+  });
+
+  it('a new profile on another sketch lets the picked line go', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('revolve', [PICK]));
+    act(() => {
+      hook.result.current.pickAxisLine(line());
+    });
+    act(() => hook.result.current.pickProfile(SECOND));
+    expect(hook.result.current.slots.axis).toBeNull();
+    expect(hook.result.current.axisCandidates.map((c) => c.id)).not.toContain(
+      'edge:body_a:0'
+    );
+  });
+
+  it('a linear pattern reads a picked line or face normal as its direction', () => {
+    const { hook } = setup({
+      datumAxes: {
+        ['axis_1' as FeatureId]: {
+          origin: { x: 0, y: 0, z: 0 },
+          direction: { x: 0, y: 1, z: 1 }
+        }
+      }
+    });
+    act(() => hook.result.current.start('linear-pattern', [], [], [BOX]));
+    act(() => {
+      hook.result.current.pickDirection({ x: 0, y: 0, z: -2 });
+    });
+    expect(hook.result.current.options.axis).toBe('custom');
+    expect(hook.result.current.values).toMatchObject({
+      dirX: 0,
+      dirY: 0,
+      dirZ: -1
+    });
+    expect(hook.result.current.touched).toEqual(
+      expect.arrayContaining(['dirX', 'dirY', 'dirZ'])
+    );
+    // A drawn datum axis is a direction too, not an axis slot.
+    expect(hook.result.current.axisCandidates.map((c) => c.id)).toEqual([
+      'datum:axis_1'
+    ]);
+    act(() => hook.result.current.pickAxis('datum:axis_1'));
+    expect(hook.result.current.slots.axis).toBeNull();
+    expect(hook.result.current.values.dirY).toBeCloseTo(Math.SQRT1_2);
+    // Along a world axis, it is that axis.
+    act(() => {
+      hook.result.current.pickAxisLine({
+        ...line(),
+        direction: { x: 1, y: 0, z: 0 }
+      });
+    });
+    expect(hook.result.current.options.axis).toBe('x');
+    expect(hook.result.current.request).toMatchObject({ axis: 'x' });
   });
 });

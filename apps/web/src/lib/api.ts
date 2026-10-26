@@ -357,6 +357,10 @@ export async function encryptsNewProjects(): Promise<boolean> {
   const pins = localStoragePreferencePins();
   const pinnedOptIn = userId !== null && (await pins.optedIn(userId));
   const config = await readOptionalJson('/api/e2ee/config');
+  // A deployment-wide requirement overrides the beta opt-in. Choose the
+  // encrypted path before any plaintext request; locked keys or inconsistent
+  // availability must fail there instead of sending a document first.
+  if (config?.defaultOn === true) return true;
   if (config?.enabled !== true || config.projectsEnabled !== true) {
     if (pinnedOptIn) throw preferenceUnverified();
     return false;
@@ -366,9 +370,11 @@ export async function encryptsNewProjects(): Promise<boolean> {
     let verified: boolean | null = null;
     try {
       const preferences = await import('./e2ee/projectPreferences');
+      const currentAccount = unlockedAccount(userId);
+      if (!currentAccount) throw preferenceUnverified();
       const state = await preferences.loadProjectPreference({
         userId,
-        accountKey: account.accountKey,
+        accountKey: currentAccount.accountKey,
         api: preferences.createProjectPreferenceApi(),
         pins
       });
@@ -385,12 +391,9 @@ export async function encryptsNewProjects(): Promise<boolean> {
   const stored = await readOptionalJson('/api/e2ee/project-preferences');
   if (!stored) throw preferenceUnverified();
   const preference = stored.preference as
-    | { encryptNewProjects?: unknown }
-    | null
-    | undefined;
+    { encryptNewProjects?: unknown } | null | undefined;
   return preference?.encryptNewProjects === true;
 }
-
 
 /**
  * Runs `plaintext` unless the project is known to be encrypted; a
@@ -734,6 +737,13 @@ export const api = {
       });
       rememberProjectFormats([created.project]);
       return created;
+    }
+    if (await encryptsNewProjects()) {
+      throw new ApiError(
+        409,
+        'This account requires encrypted copies. Encrypt the source project first, or save a device copy to your account.',
+        ENCRYPTED_PROJECTS_REQUIRED_CODE
+      );
     }
     const request = {
       ...(options.name === undefined ? {} : { name: options.name }),

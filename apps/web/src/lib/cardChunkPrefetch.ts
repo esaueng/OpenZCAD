@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { prefersSavingData } from './saveData';
 
 /**
  * The lazily loaded command cards, fetched ahead of their first use.
@@ -16,10 +17,8 @@ import { useEffect } from 'react';
  * a static import, which would pull the card back into the entry chunk.
  */
 export const COMMAND_CARD_CHUNKS: readonly (() => Promise<unknown>)[] = [
-  // Box, Union, Fillet and every other create or edit card.
+  // Box and every other create or edit card.
   () => import('../components/Inspector'),
-  // Hole, Shell, Pattern and the other modeling operations.
-  () => import('../components/forms/ModelingOperationsForm'),
   // The region Extrude editor and the selection's direct edits.
   () => import('../components/ToolCard'),
   () => import('../components/MoveOverlay'),
@@ -94,6 +93,9 @@ export function useCommandCardPrefetch(ready: boolean): void {
     // Unit tests render the workspace in a DOM shim with no chunks to warm;
     // an idle import there would outlive the test that started it.
     if (!ready || import.meta.env.MODE === 'test') return;
+    // Save-Data asks for nothing speculative, as the chunk prefetch and the
+    // first-use warm-up honour: a card's chunk loads when the card opens.
+    if (prefersSavingData()) return;
     return prefetchWhenIdle(COMMAND_CARD_CHUNKS, window);
   }, [ready]);
 }

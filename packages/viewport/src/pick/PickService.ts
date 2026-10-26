@@ -636,6 +636,31 @@ export class PickService {
   }
 
   /**
+   * The nearest model face under the pointer, whatever the selection filter
+   * says and whatever is drawn over it: a primitive's footprint (U09)
+   * stands on the face, not on the body, edge or sketch a filter would take.
+   * `accepts` passes over the faces of other bodies (a preview's) to the
+   * face behind them.
+   */
+  pickFace(
+    event: PointerEvent | MouseEvent,
+    accepts: (bodyId: string) => boolean = () => true
+  ): PickCandidate | null {
+    this.setRayFromEvent(event);
+    for (const hit of this.bodyIntersections()) {
+      const candidate = this.topologyCandidate(hit);
+      if (
+        candidate?.kind === 'face' &&
+        candidate.selection &&
+        accepts(candidate.selection.bodyId)
+      ) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  /**
    * Everything under the pointer, in the order depth cycling should step
    * through it. The first entry always matches `pick`.
    *

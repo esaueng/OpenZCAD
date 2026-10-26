@@ -1,4 +1,5 @@
 import {
+  createPrimitiveInPlace,
   test,
   expect,
   createProject,
@@ -45,11 +46,7 @@ for (const viewport of [
     page.on('pageerror', (error) => errors.push(error.message));
     await stubApi(page);
     await createProject(page, 'Properties bracket');
-    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-    await page
-      .getByRole('region', { name: 'Feature inspector' })
-      .getByRole('button', { name: /^Create/ })
-      .click();
+    await createPrimitiveInPlace(page, 'box');
     await expectBodyCount(page, 1);
     await page.getByTitle('Back to projects').click();
     await page.setViewportSize(viewport);

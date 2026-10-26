@@ -1,5 +1,11 @@
 import type { Locator, Page } from '@playwright/test';
-import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  test,
+  expect,
+  stubApi,
+  expectBodyCount
+} from './openzcad-fixtures';
 
 /**
  * Viewer state must not replay or blink when something unrelated changes:
@@ -44,11 +50,7 @@ async function newProject(page: Page, name: string) {
 }
 
 async function addBox(page: Page) {
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
 }
 
@@ -259,11 +261,7 @@ test('the cylinder radius handle stays on screen while its release validates', a
   test.setTimeout(process.env.CI ? 240_000 : 120_000);
   await holdValidation(page);
   await newProject(page, 'Cylinder handle steady');
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'cylinder');
   await expectBodyCount(page, 1);
   const canvas = page.locator('.viewer-host canvas');
   await expect

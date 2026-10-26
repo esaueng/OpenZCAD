@@ -58,6 +58,15 @@ interface KeepLocalControls {
   settleKeepMine(error?: Error): void;
   reconcileMatchingRoomDocument(document: ProjectDocument): boolean;
   clientId(): string;
+  /**
+   * An encrypted room (ADR-024 slice 4-9): the kept document sealed on the
+   * room version it replaces, as the frame to send.
+   */
+  sealKept?(
+    kept: ProjectDocument,
+    baseVersion: number,
+    leaseId: string
+  ): Promise<string>;
 }
 
 const MAX_MESSAGE_BYTES = 900_000;
@@ -147,7 +156,18 @@ export async function keepLocalRoomVersion(
     conflictResolution: 'keep-local' as const,
     savedRevisionId: kept.revisions.at(-1)!.revisionId
   };
-  const payload = JSON.stringify(body);
+  const payload = controls.sealKept
+    ? await controls.sealKept(kept, expectedRemoteVersion, activeLease.leaseId)
+    : JSON.stringify(body);
+  if (!isCurrentRoom()) throw new Error(ROOM_CHANGED_MESSAGE);
+  if (
+    controls.sealKept &&
+    new TextEncoder().encode(payload).byteLength > MAX_MESSAGE_BYTES
+  ) {
+    throw new Error(
+      'This version is too large for the encrypted room. Save it to your account instead.'
+    );
+  }
   keepMinePendingRef.current = true;
   lastSentVersionRef.current = current.version;
   setStatus('connecting');

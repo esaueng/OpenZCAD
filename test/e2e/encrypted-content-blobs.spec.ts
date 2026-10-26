@@ -4,7 +4,13 @@ import type { Page } from '@playwright/test';
 import { fromBase64Url, parseEnvelope } from '@openzcad/crypto';
 import { withEncryptedProjectInfo } from '../../apps/web/worker/e2eeProjectDocuments';
 import { d1Database } from '../d1-sqlite';
-import { expect, expectBodyCount, stubApi, test } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  expect,
+  expectBodyCount,
+  stubApi,
+  test
+} from './openzcad-fixtures';
 import {
   createE2eeServer,
   E2E_USER_ID,
@@ -395,11 +401,7 @@ test('decrypts shelf names and thumbnails of an encrypted project in a fresh bro
 
   await page.getByLabel('Project name').fill('Secret shelf part');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await expect(
     page.getByRole('status', { name: 'Saved', exact: true })

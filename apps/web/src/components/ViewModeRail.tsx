@@ -1,4 +1,4 @@
-import { Eye, EyeOff, Layers3, Scan } from 'lucide-react';
+import { Copy, Eye, EyeOff, Layers3, Scan } from 'lucide-react';
 import { createContext, useContext, type ReactNode } from 'react';
 import type { BodyRepresentation } from '@openzcad/shared';
 import { Tooltip } from './Tooltip';
@@ -218,11 +218,34 @@ export function PartsList({
  * leaves a single-body model with the bare viewport it deserves. Tweak
  * puts the same button on its own rail instead (TweakPanel's `parts`).
  */
-export function ViewModeRail(props: PartsProps) {
+export function ViewModeRail({
+  onMakeCopy,
+  ...props
+}: PartsProps & {
+  /**
+   * An encrypted share link's visitor in View (slice 5-11), where Tweak's
+   * rail and its Make a copy are not shown: a view-only link pins the
+   * workspace here.
+   */
+  onMakeCopy?: () => void;
+}) {
   const flyout: ReactNode = props.open ? <PartsList {...props} /> : null;
   return (
     <div className="view-rail" role="toolbar" aria-label="Parts tools">
       <PartsRailButtons {...props} />
+      {onMakeCopy && (
+        <>
+          <span className="tweak-rail-divider" aria-hidden="true" />
+          <Tooltip
+            label="Make a copy"
+            description="Copy this shared model into a project of your own and edit it in Build mode"
+          >
+            <button type="button" aria-label="Make a copy" onClick={onMakeCopy}>
+              <Copy size={16} aria-hidden="true" />
+            </button>
+          </Tooltip>
+        </>
+      )}
       <div className="view-flyouts" data-rail-flyouts="">
         {flyout}
       </div>

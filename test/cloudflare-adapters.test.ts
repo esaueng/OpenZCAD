@@ -3,11 +3,21 @@ import {
   createPersistenceService,
   CLOUDFLARE_BOOLEAN_FLAGS,
   D1R2PersistenceService,
+  E2eeRoomLedger,
   isCloudflareFeatureEnabled,
+  isE2eeDefaultOn,
+  isE2eeReverseEnabled,
+  MAX_E2EE_ROOM_RETAINED,
+  orderE2eeSubmission,
   projectCollaborationRollout,
   resolveCollaborationDocument,
   type CloudflareEnv
 } from '@openzcad/cloudflare-adapters';
+import {
+  createEncryptedRoom,
+  fakeE2eeAccount,
+  submission
+} from './support/e2ee-room-fakes';
 import {
   MAX_PROJECT_REVISION_RECORDS,
   toArtifactId,
@@ -74,6 +84,9 @@ describe('cloudflare adapters', () => {
       'PROJECT_PERSONAL_SYNC_ENABLED',
       'E2EE_KEYS_ENABLED',
       'E2EE_PROJECTS_ENABLED',
+      'E2EE_MIGRATION_ENABLED',
+      'E2EE_REVERSE_ENABLED',
+      'E2EE_DEFAULT_ON',
       'AI_PATCH_DIRECT_EDIT_ENABLED',
       'AI_PATCH_GROWING_HOLDER_ENABLED',
       'AI_PATCH_HOLE_CONTROL_ENABLED',
@@ -111,6 +124,40 @@ describe('cloudflare adapters', () => {
         )
       ).toBe(false);
     }
+  });
+
+  it('makes encryption the default only with E2EE_DEFAULT_ON and migration open (ADR-024 8-1)', () => {
+    const open = {
+      E2EE_KEYS_ENABLED: 'true',
+      E2EE_PROJECTS_ENABLED: 'true',
+      E2EE_MIGRATION_ENABLED: 'true',
+      E2EE_REVERSE_ENABLED: 'true'
+    };
+    expect(isE2eeDefaultOn(open, 'a@example.com')).toBe(false);
+    expect(isE2eeReverseEnabled(open, 'a@example.com')).toBe(true);
+    const on = { ...open, E2EE_DEFAULT_ON: 'true' };
+    expect(isE2eeDefaultOn(on, 'a@example.com')).toBe(true);
+    // Default-on closes the reverse path, as if its flag were off.
+    expect(isE2eeReverseEnabled(on, 'a@example.com')).toBe(false);
+    // Each dependency missing keeps it off, and the reverse path as it was.
+    for (const missing of [
+      'E2EE_KEYS_ENABLED',
+      'E2EE_PROJECTS_ENABLED',
+      'E2EE_MIGRATION_ENABLED'
+    ] as const) {
+      const env = { ...on, [missing]: 'false' };
+      expect(isE2eeDefaultOn(env, 'a@example.com'), missing).toBe(false);
+      expect(isE2eeReverseEnabled(env, 'a@example.com'), missing).toBe(false);
+    }
+    // The key canary scopes it like the other E2EE gates.
+    const canary = {
+      ...on,
+      E2EE_KEYS_ENABLED: 'false',
+      E2EE_CANARY_EMAILS: 'canary@example.com'
+    };
+    expect(isE2eeDefaultOn(canary, 'Canary@example.com')).toBe(true);
+    expect(isE2eeDefaultOn(canary, 'other@example.com')).toBe(false);
+    expect(isE2eeDefaultOn(canary)).toBe(false);
   });
 
   it('resolves collaboration canaries by normalized authenticated email', () => {
@@ -960,7 +1007,14 @@ describe('cloudflare adapters', () => {
     const prepare = vi.fn((query: string) => {
       statements.push(query);
       // first() answers the schema probes for later tables: not installed.
-      return { bind: () => ({ all, query, first: async () => null }) };
+      return {
+        bind: () => ({
+          all,
+          query,
+          first: async () => null,
+          run: async () => ({ success: true })
+        })
+      };
     });
     const roomFetch = vi.fn(
       async (_request: Request) => new Response(null, { status: 204 })
@@ -1010,6 +1064,7 @@ describe('cloudflare adapters', () => {
     const batch = vi.fn(async () => []);
     const prepare = vi.fn((query: string) => ({
       bind: () => ({
+        run: async () => ({ success: true }),
         first: async () => null,
         all: async () => ({
           results: query.includes('SELECT object_key')
@@ -1040,6 +1095,7 @@ describe('cloudflare adapters', () => {
     });
     const prepare = vi.fn((query: string) => ({
       bind: () => ({
+        run: async () => ({ success: true }),
         first: async () => null,
         all: async () => ({
           results: query.includes('SELECT object_key')
@@ -1184,7 +1240,8 @@ describe('cloudflare adapters', () => {
         ARTIFACTS: {
           get: async () => null,
           put: async () => null,
-          delete: async () => undefined
+          delete: async () => undefined,
+          list: async () => ({ objects: [], truncated: false })
         } as unknown as R2Bucket
       });
 
@@ -1759,5 +1816,250 @@ describe('cloudflare adapters', () => {
       expect(values.has(`room:history:${version}`)).toBe(true);
     }
     expect(meta.historyVersions).toHaveLength(historyKeys.length);
+  });
+});
+
+// --- End-to-end encrypted projects (ADR-024 slice 4-9) ---------------------
+
+describe('encrypted collaboration room ordering (ADR-024 slice 4-9)', () => {
+  const PROJECT = 'proj_encrypted_http';
+
+  function encryptedPost(body: unknown, headers: Record<string, string> = {}) {
+    return new Request(`https://room.test/?projectId=${PROJECT}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-openzcad-user-id': 'user_room',
+        'x-openzcad-display-name': 'Room user',
+        'x-openzcad-project-role': 'owner',
+        'x-openzcad-project-format': '2',
+        'x-openzcad-write-credential': `desktop_access_tokens:${'b'.repeat(64)}`,
+        ...headers
+      },
+      body: JSON.stringify(body)
+    });
+  }
+
+  it('names a checkpoint through the encrypted revision path', async () => {
+    const stored = vi.spyOn(
+      D1R2PersistenceService.prototype,
+      'storeCollaborationCheckpoint'
+    );
+    try {
+      const { context } = createRoomContext();
+      const account = fakeE2eeAccount(PROJECT);
+      const room = createEncryptedRoom(context, account);
+      const first = account.headRecord;
+      const response = await room.fetch(
+        encryptedPost({
+          clientId: 'client_laptop',
+          revisionId: 'rev_named',
+          version: submission({
+            projectId: PROJECT,
+            documentVersion: 2,
+            keyEpoch: 0,
+            previousVersionHash: first.versionHash,
+            body: 'named'
+          })
+        })
+      );
+      expect(response.status).toBe(200);
+      const named = account.headRecord;
+      expect(await response.json()).toEqual({
+        type: 'e2ee-ack',
+        record: named
+      });
+      expect(account.writes).toEqual([
+        {
+          userId: 'user_room',
+          credential: {
+            table: 'desktop_access_tokens',
+            tokenHash: 'b'.repeat(64)
+          },
+          expectedVersion: 1,
+          revisionId: 'rev_named',
+          versionHash: named.versionHash
+        }
+      ]);
+      expect(stored).not.toHaveBeenCalled();
+
+      // A stale named save is a conflict carrying its base, never a write.
+      const stale = await room.fetch(
+        encryptedPost({
+          clientId: 'client_desktop',
+          revisionId: 'rev_stale',
+          version: submission({
+            projectId: PROJECT,
+            documentVersion: 2,
+            keyEpoch: 0,
+            previousVersionHash: first.versionHash,
+            body: 'stale named'
+          })
+        })
+      );
+      expect(stale.status).toBe(409);
+      expect(await stale.json()).toMatchObject({
+        type: 'e2ee-conflict',
+        latest: { record: named },
+        base: { record: first }
+      });
+      expect(account.writes).toHaveLength(1);
+      expect(stored).not.toHaveBeenCalled();
+    } finally {
+      stored.mockRestore();
+    }
+  });
+
+  it('refuses plaintext snapshots to an encrypted room and envelopes to a plaintext one', async () => {
+    const account = fakeE2eeAccount(PROJECT);
+    const encrypted = createEncryptedRoom(createRoomContext().context, account);
+    await encrypted.fetch(
+      encryptedPost({
+        clientId: 'client_laptop',
+        version: submission({
+          projectId: PROJECT,
+          documentVersion: 2,
+          keyEpoch: 0,
+          previousVersionHash: account.headRecord.versionHash,
+          body: 'second'
+        })
+      })
+    );
+    const document = {
+      ...createProjectDocument('Leak', toUserId('user_room')),
+      projectId: PROJECT
+    } as ProjectDocument;
+    const plaintext = await encrypted.fetch(
+      roomRequest(document, { clientId: 'client_old', document })
+    );
+    expect(plaintext.status).toBe(409);
+    expect(await plaintext.json()).toMatchObject({ code: 'format-mismatch' });
+
+    const { context, values } = createRoomContext();
+    const plain = createEncryptedRoom(context, account);
+    expect(
+      (
+        await plain.fetch(
+          roomRequest(document, { clientId: 'client_plain', document })
+        )
+      ).status
+    ).toBe(200);
+    const envelope = await plain.fetch(
+      encryptedPost({
+        clientId: 'client_laptop',
+        version: submission({
+          projectId: PROJECT,
+          documentVersion: 2,
+          keyEpoch: 0,
+          previousVersionHash: account.headRecord.versionHash,
+          body: 'into plaintext'
+        })
+      })
+    );
+    expect(envelope.status).toBe(409);
+    expect(values.get('room:meta')).not.toHaveProperty('format');
+    expect(account.writes).toHaveLength(1);
+  });
+
+  it('orders by previous-version hash, version and key epoch', () => {
+    const latest = {
+      documentVersion: 4,
+      keyEpoch: 2,
+      versionHash: '4'.repeat(64),
+      prefix: '',
+      signature: '',
+      signerUserId: 'user_room',
+      signerDeviceId: 'device',
+      createdAt: '',
+      wrappedVersionKey: '',
+      envelopeBytes: 1
+    };
+    const retained = ['3'.repeat(64)];
+    const order = (
+      submission: Partial<Parameters<typeof orderE2eeSubmission>[4]>
+    ) =>
+      orderE2eeSubmission(PROJECT, latest, 2, retained, {
+        projectId: PROJECT,
+        kind: 'document',
+        documentVersion: 5,
+        keyEpoch: 2,
+        previousVersionHash: latest.versionHash,
+        versionHash: '5'.repeat(64),
+        ...submission
+      });
+    expect(order({})).toEqual({ kind: 'advance' });
+    expect(order({ versionHash: latest.versionHash })).toEqual({
+      kind: 'same'
+    });
+    expect(
+      order({ previousVersionHash: '3'.repeat(64), documentVersion: 99 })
+    ).toEqual({
+      kind: 'conflict',
+      baseHash: '3'.repeat(64)
+    });
+    expect(order({ previousVersionHash: null })).toEqual({
+      kind: 'conflict',
+      baseHash: null
+    });
+    expect(order({ keyEpoch: 1 })).toEqual({ kind: 'epoch-stale' });
+    expect(order({ keyEpoch: 3 }).kind).toBe('invalid');
+    expect(order({ documentVersion: 4 }).kind).toBe('invalid');
+    expect(order({ projectId: 'proj_other' }).kind).toBe('invalid');
+    expect(order({ kind: 'project-info' }).kind).toBe('invalid');
+  });
+
+  it('keeps a bounded set of merge bases under their own keys', async () => {
+    const values = new Map<string, unknown>();
+    const ledger = new E2eeRoomLedger({
+      get: async (key) => values.get(key) as never,
+      put: async (entries) => {
+        for (const [key, value] of Object.entries(entries))
+          values.set(key, value);
+      },
+      delete: async (keys) => {
+        for (const key of keys) values.delete(key);
+        return keys.length;
+      }
+    });
+    await ledger.load();
+    const hashes: string[] = [];
+    for (let version = 1; version <= MAX_E2EE_ROOM_RETAINED + 5; version++) {
+      const hash = version.toString(16).padStart(64, '0');
+      hashes.push(hash);
+      await ledger.advance({
+        record: {
+          documentVersion: version,
+          keyEpoch: 0,
+          versionHash: hash,
+          prefix: '',
+          signature: '',
+          signerUserId: null,
+          signerDeviceId: 'device',
+          createdAt: '',
+          wrappedVersionKey: '',
+          envelopeBytes: 1
+        },
+        envelope: new Uint8Array([version])
+      });
+    }
+    expect(ledger.retained).toEqual(hashes.slice(4, -1));
+    expect(ledger.latest?.record.versionHash).toBe(hashes.at(-1));
+    const keys = [...values.keys()].filter((key) =>
+      key.startsWith('room:e2ee:v:')
+    );
+    expect(keys).toHaveLength(MAX_E2EE_ROOM_RETAINED + 1);
+    expect(await ledger.version(hashes[0]!)).toBeNull();
+    expect((await ledger.version(hashes[4]!))?.envelope).toEqual(
+      new Uint8Array([5])
+    );
+    // A restarted room reads the same ledger back.
+    const again = new E2eeRoomLedger({
+      get: async (key) => values.get(key) as never,
+      put: async () => {},
+      delete: async () => 0
+    });
+    await again.load();
+    expect(again.latest?.record.versionHash).toBe(hashes.at(-1));
+    expect(again.retained).toEqual(ledger.retained);
   });
 });

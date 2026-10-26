@@ -115,40 +115,26 @@ describe('Move pivot (M10)', () => {
         scope={{}}
         bodies={bodies}
         units="mm"
-        submitLabel="Create"
+        initial={{
+          name: 'Move',
+          targetBodyId: 'body-1' as BodyId,
+          translation: zero,
+          rotationDeg: zero
+        }}
+        submitLabel="Apply"
         onSubmit={onSubmit}
       />
     );
     fireEvent.change(screen.getByRole('textbox', { name: 'Move X in mm' }), {
       target: { value: '4' }
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
     expect(onSubmit.mock.calls[0]![0]).not.toHaveProperty('pivot');
   });
 });
 
 describe('Move copy (M10)', () => {
   const bodies = [{ bodyId: 'body-1' as BodyId, name: 'Box', consumed: false }];
-
-  it('creates a copy when the box is ticked, and a plain Move otherwise', () => {
-    const onSubmit = vi.fn();
-    render(
-      <TransformForm
-        scope={{}}
-        bodies={bodies}
-        units="mm"
-        submitLabel="Create"
-        onSubmit={onSubmit}
-      />
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
-    expect(onSubmit.mock.calls[0]![0]).not.toHaveProperty('copy');
-    fireEvent.click(
-      screen.getByRole('checkbox', { name: 'Copy (keep the original)' })
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
-    expect(onSubmit.mock.calls[1]![0]).toMatchObject({ copy: true });
-  });
 
   it('names an existing copy instead of offering the toggle', () => {
     render(
@@ -192,7 +178,7 @@ describe('Move gizmo card copy (M10)', () => {
       />
     );
     // Nothing to move yet: a plain Move cannot apply.
-    expect(screen.getByRole('button', { name: 'Apply move' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Done' })).toBeDisabled();
     fireEvent.click(
       screen.getByRole('checkbox', { name: 'Copy (keep the original)' })
     );
@@ -211,7 +197,10 @@ describe('Move gizmo card copy (M10)', () => {
       />
     );
     // A copy in place is a coincident duplicate, which is a real result.
-    fireEvent.click(screen.getByRole('button', { name: 'Apply copy' }));
+    expect(
+      screen.getByRole('form', { name: 'Move controls' })
+    ).toHaveTextContent('A copy of Box');
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     expect(onConfirm).toHaveBeenCalledOnce();
     rerender(
       <MoveOverlay

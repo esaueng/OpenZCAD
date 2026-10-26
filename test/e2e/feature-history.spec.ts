@@ -1,4 +1,6 @@
+import { revealModelPanel } from './openzcad-fixtures';
 import {
+  createPrimitiveInPlace,
   test,
   expect,
   stubApi,
@@ -6,7 +8,10 @@ import {
   modelPanel,
   railPanelButton,
   createShellInPlace,
-  revealModelPanel
+  enterCommandValue,
+  finishInPlaceCommand,
+  editExtrudeFromHistory,
+  setBarValues
 } from './openzcad-fixtures';
 
 test('explains a failed downstream edit and opens the exact feature for repair', async ({
@@ -20,21 +25,22 @@ test('explains a failed downstream edit and opens the exact feature for repair',
   await expect(page).toHaveTitle(/OpenZCAD/);
   await page.getByRole('button', { name: /Heat Sink/ }).click();
   await expectBodyCount(page, 1);
-  await page.locator('.feature-row-main', { hasText: 'Extrude base' }).click();
-  await revealModelPanel(page, 'History');
+  // The extrude's edit runs in place; its refusals are said in its bar.
+  const extrudeEdit = await editExtrudeFromHistory(
+    page,
+    page.locator('.feature-row-main', { hasText: 'Extrude base' }),
+    'Extrude base'
+  );
   const details = page.getByRole('region', { name: 'History details' });
   await expect(
     details.getByRole('button', { name: 'Inspect Base corner fillets' })
   ).toBeVisible();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector
-    .getByRole('textbox', { name: 'Distance', exact: true })
-    .fill('base_t + 1');
-  await expect(inspector.getByRole('alert')).toContainText(
-    'Base corner fillets',
-    { timeout: 30_000 }
-  );
-  await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
+  await setBarValues(page, extrudeEdit, { Distance: 'base_t + 1' });
+  await expect(extrudeEdit).toContainText('Base corner fillets', {
+    timeout: 30_000
+  });
+  await extrudeEdit.getByRole('button', { name: 'Done' }).click();
   await expect(details.getByRole('alert')).toContainText(
     'The previous model is intact',
     { timeout: 30_000 }
@@ -67,17 +73,23 @@ test('explains a failed downstream edit and opens the exact feature for repair',
   await expect(
     details.getByText('Edit not saved', { exact: false })
   ).toHaveCount(0);
-  const radius = inspector.getByLabel('Radius', { exact: true });
-  const originalRadius = await radius.inputValue();
-  await radius.fill('1000');
-  await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
-  await expect(details.getByRole('alert')).toContainText('Edit not saved', {
+  // U09 phase 7: the fillet's edit runs in place. A radius its edges cannot
+  // take is refused in the bar, and Done waits; its stored radius commits.
+  const edit = page.getByRole('group', {
+    name: 'Edit Base corner fillets command'
+  });
+  const chip = page.getByTestId('command-handle-radius');
+  await expect(edit).toBeVisible();
+  const originalRadius = (await chip.textContent())!.replace(/[^\d.]/g, '');
+  await enterCommandValue(page, 'radius', '1000');
+  await expect(page.locator('.in-place-command.refused')).toBeVisible({
     timeout: 30_000
   });
-  await radius.fill(originalRadius);
-  await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect(edit.getByRole('button', { name: /Done/ })).toBeDisabled();
+  await enterCommandValue(page, 'radius', originalRadius);
+  await finishInPlaceCommand(page, 'Edit Base corner fillets');
   await expect(page.getByRole('contentinfo')).toContainText(
-    'Base corner fillets applied.',
+    'Edited Base corner fillets',
     { timeout: 30_000 }
   );
   await expect(
@@ -88,7 +100,7 @@ test('explains a failed downstream edit and opens the exact feature for repair',
   await page
     .locator('.feature-row-main', { hasText: 'Base corner fillets' })
     .click();
-  await expect(radius).toHaveValue(originalRadius);
+  await expect(chip).toHaveText(`R ${originalRadius} mm`);
   expect(errors).toEqual([]);
 });
 
@@ -99,12 +111,8 @@ test('resumes rollback without resuming manually suppressed features and support
   await page.goto('/');
   await page.getByLabel('Project name').fill('History recovery');
   await page.getByRole('button', { name: 'Create project' }).click();
-  for (const tool of [/^Box \(B\)/, /^Cylinder \(C\)/, /^Sphere/]) {
-    await page.getByRole('button', { name: tool }).click();
-    await page
-      .getByRole('region', { name: 'Feature inspector' })
-      .getByRole('button', { name: /^Create/ })
-      .click();
+  for (const kind of ['box', 'cylinder', 'sphere'] as const) {
+    await createPrimitiveInPlace(page, kind);
   }
   await expectBodyCount(page, 3);
   await page
@@ -290,11 +298,7 @@ test.describe('on a touch screen', () => {
     await page.goto('/');
     await page.getByLabel('Project name').fill('Touch history');
     await page.getByRole('button', { name: 'Create project' }).click();
-    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-    await page
-      .getByRole('region', { name: 'Feature inspector' })
-      .getByRole('button', { name: /^Create/ })
-      .click();
+    await createPrimitiveInPlace(page, 'box');
     await expectBodyCount(page, 1);
     expect(
       await page.evaluate(() => window.matchMedia('(hover: none)').matches)
@@ -414,9 +418,7 @@ test('renaming a modeling feature closes its stale editor and keeps the new name
   await page.goto('/');
   await page.getByLabel('Project name').fill('Rename open shell');
   await page.getByRole('button', { name: 'Create project' }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box');
   // U09: a new shell is made in place; editing it still opens its card.
   await createShellInPlace(page, {
     normals: [{ x: 0, y: 0, z: 1 }],
@@ -424,12 +426,11 @@ test('renaming a modeling feature closes its stale editor and keeps the new name
   });
   const row = page.locator('.feature-row', { hasText: 'Shell' }).first();
   await row.locator('.feature-row-main').click();
-  await expect(
-    page.getByRole('textbox', { name: 'Wall thickness', exact: true })
-  ).toBeVisible();
-  // Reach the history action through the keyboard while the floating editor
-  // occupies the same pointer lane as the row.
-  await revealModelPanel(page, 'History');
+  // U09 phase 7: the row re-arms the Shell command in place.
+  const editBar = page.getByRole('group', { name: /^Edit .* command$/ });
+  await expect(editBar).toHaveAccessibleName('Edit Shell command');
+  // Reach the history action through the keyboard while the command holds
+  // the viewport.
   const actions = row.getByRole('button', { name: 'More actions for Shell' });
   await actions.focus();
   await actions.press('Enter');
@@ -437,20 +438,15 @@ test('renaming a modeling feature closes its stale editor and keeps the new name
   const rename = page.getByRole('textbox', { name: 'Rename Shell' });
   await rename.fill('Renamed wall');
   await rename.press('Enter');
-  await expect(
-    page.getByRole('textbox', { name: 'Wall thickness', exact: true })
-  ).toHaveCount(0);
+  // The edit was armed with the old name, so the rename ends it.
+  await expect(editBar).toHaveCount(0);
   const renamed = page
     .locator('.feature-row', { hasText: 'Renamed wall' })
     .first();
   await renamed.locator('.feature-row-main').click();
-  await page
-    .getByRole('textbox', { name: 'Wall thickness', exact: true })
-    .fill('1.5');
-  await page.getByRole('button', { name: 'Apply shell' }).click();
-  await expect(
-    page.getByRole('textbox', { name: 'Wall thickness', exact: true })
-  ).toHaveCount(0);
+  await expect(editBar).toHaveAccessibleName('Edit Renamed wall command');
+  await enterCommandValue(page, 'thickness', '1.5');
+  await finishInPlaceCommand(page, 'Edit Renamed wall');
   await expect(renamed.locator('.feature-name')).toHaveText('Renamed wall');
 });
 
@@ -462,9 +458,11 @@ test('a failed edit brings a closed History panel forward with its record', asyn
   await page.goto('/');
   await page.getByRole('button', { name: /Heat Sink/ }).click();
   await expectBodyCount(page, 1);
-  await page.locator('.feature-row-main', { hasText: 'Extrude base' }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await expect(inspector).toBeVisible();
+  const edit = await editExtrudeFromHistory(
+    page,
+    page.locator('.feature-row-main', { hasText: 'Extrude base' }),
+    'Extrude base'
+  );
   // The record and its dismiss control live only in History.
   await revealModelPanel(page, 'History');
   await page.getByRole('button', { name: 'Close History' }).click();
@@ -472,14 +470,11 @@ test('a failed edit brings a closed History panel forward with its record', asyn
     'aria-pressed',
     'false'
   );
-  await inspector
-    .getByRole('textbox', { name: 'Distance', exact: true })
-    .fill('base_t + 1');
-  await expect(inspector.getByRole('alert')).toContainText(
-    'Base corner fillets',
-    { timeout: 30_000 }
-  );
-  await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
+  await setBarValues(page, edit, { Distance: 'base_t + 1' });
+  await expect(edit).toContainText('Base corner fillets', {
+    timeout: 30_000
+  });
+  await edit.getByRole('button', { name: 'Done' }).click();
   await expect(railPanelButton(page, 'History')).toHaveAttribute(
     'aria-pressed',
     'true',

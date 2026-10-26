@@ -16,8 +16,10 @@
  * - **Current head.** The version log from the pinned head up to the
  *   offered head must verify (`verifyVersionLog`: chain, rising versions
  *   and epochs, every signature, the pin present); the head's author must
- *   be a certified device of this account (`verifyAuthoredEnvelope`, with
- *   revocation cutoffs) holding a leaf it certified in the head's epoch;
+ *   be a certified device of a member (this account, or since slice 5-2 a
+ *   co-member: `verifyAuthoredEnvelope`, with revocation cutoffs) holding a
+ *   leaf it certified in the head's epoch, whose user the MLS roles of that
+ *   very epoch list as owner or editor (`epochRoles`);
  *   the epoch binding must match that epoch's authenticator. Only then is
  *   the head decrypted, validated and the pin moved forward.
  * - **Historical read.** A revision is opened only if the pinned head's
@@ -54,6 +56,8 @@
  */
 import {
   AuthorshipError,
+  ShareLinkError,
+  authorCutoffKey,
   EnvelopeKey,
   VersionLogError,
   checkBlobReferences,
@@ -78,7 +82,9 @@ import {
   type ProjectEnvelopeHeader,
   type ProjectEnvelopeHeaderInit,
   type ProjectInfoBody,
+  type ShareLinkSet,
   type VerifiedAuthor,
+  type VerifiedShareLinkSet,
   type VerifiedDeviceList,
   type VersionCutoff,
   type VersionLogRecord
@@ -89,11 +95,14 @@ import {
   type CreateProjectResponse,
   type E2eeAdoption,
   type E2eeCopyFrom,
+  type E2eeCreateProjectResponse,
+  type E2eeVersionUpload,
   type E2eeProjectEnvelopeRecord,
   type E2eeProjectEnvelopeUpload,
   type E2eeProjectState,
   type E2eeReplacedEnvelopeKind,
   type E2eeRevisionsResponse,
+  type E2eeStoredVersion,
   type E2eeVersionLogEntry,
   type ListRevisionsResponse,
   type ProjectDocument,
@@ -107,9 +116,11 @@ import {
   UnstorableDocumentError,
   assertStorableDocument,
   createProjectDocument,
-  createSavedRevision
+  createSavedRevision,
+  withoutDerivedProjection
 } from '@openzcad/document-core';
 import {
+  assertPersistableDocument,
   importArtifactIds,
   prepareInitialProjectDocument,
   splitProjectStorageUpload
@@ -142,10 +153,21 @@ import type { MlsProjectRef } from './mls/projectSessions';
 import {
   createProjectGroup,
   epochAuthenticatorForEpoch,
+  epochRoles,
+  forgetEpochRoles,
+  groupBaseForKeyEpoch,
   joinProjectGroup,
+  memberRevocationCutoffs,
+  pendingMemberRotation,
+  projectDeviceLists,
+  projectRevocationCutoffs,
   projectKeyForEpoch,
+  ProjectGroupError,
+  type ProjectCutoff,
   type ProjectGroupContext
 } from './projectGroups';
+import { verifyHeadShareLinks } from './shareLinkSet';
+import { forgetProjectKeys } from './unlockedProjectKeys';
 import {
   versionPins,
   type ProjectVersionPin,
@@ -194,8 +216,9 @@ export interface EncryptedProjectContext {
   readonly seal?: DocumentSealer;
   /**
    * This project's cutoffs for revoked devices, keyed by
-   * `authorCutoffKey`. None are recorded yet, so a revoked device's
-   * versions are refused (`revoked-without-cutoff`) unless one is given.
+   * `authorCutoffKey`. By default they come from the identity-signed
+   * revocation cutoffs the groups context verifies (slice 4-10); a revoked
+   * device without one has its versions refused (`revoked-without-cutoff`).
    */
   readonly cutoffs?: (
     projectId: string
@@ -223,6 +246,15 @@ export interface EncryptedProjectContext {
     projectId: string,
     blobIds: readonly string[]
   ) => Promise<void>;
+  /**
+   * Told after this page wrote a document version (slice 5-10): an editor's
+   * page republishes the snapshot of every active share link. Best effort;
+   * a throw is ignored.
+   */
+  readonly onVersionWritten?: (
+    projectId: string,
+    head: EncryptedShareHead
+  ) => void | Promise<void>;
 }
 
 /** How far a fresh browser lets a head's signature trail account activity. */
@@ -246,7 +278,13 @@ export type EncryptedIntegrityReason =
   /** The envelope or its document does not match what was asked for. */
   | 'content'
   /** A revision is not part of the pinned history. */
-  | 'history';
+  | 'history'
+  /**
+   * The head's share-link set did not hold (slice 5-10): an entry not
+   * signed by the owner, a revoked link listed as active, a dropped
+   * tombstone or an editor's change.
+   */
+  | 'share-links';
 
 /**
  * A version that did not verify. It reads as an unreadable account copy
@@ -283,9 +321,30 @@ interface HeadState {
   readonly keyEpoch: number;
   readonly revisionHashes: Map<string, Uint8Array>;
   readonly document: ProjectDocument;
+  /** The verified share-link set its body carries (slice 5-10). */
+  readonly shareLinks: VerifiedShareLinkSet | null;
   infoName: string | null;
   infoSequence: number;
 }
+
+/** A verified head with its share-link set (slice 5-10). */
+export interface EncryptedShareHead {
+  readonly version: number;
+  readonly hash: string;
+  readonly keyEpoch: number;
+  readonly document: ProjectDocument;
+  readonly shareLinks: VerifiedShareLinkSet | null;
+}
+
+/**
+ * The owner's change of a project's active link set (slice 5-10): given the
+ * head's verified set and the key epoch the version is written in, the new
+ * signed set.
+ */
+export type ShareLinkSetChange = (
+  current: VerifiedShareLinkSet | null,
+  keyEpoch: number
+) => Promise<ShareLinkSet>;
 
 /** A copy or branch the page built from a verified source (slice 4-8). */
 export interface EncryptedCopyRequest {
@@ -316,6 +375,109 @@ export interface EncryptedProjectStore {
   readonly info: ProjectInfoAccess;
   /** Seals and opens replaced envelopes: project info, measurements, view state. */
   readonly replaced: ReplacedEnvelopeKit;
+  /** What the live room's codec uses (slice 4-9, `encryptedRoomCodec.ts`). */
+  roomAccess(): EncryptedRoomAccess;
+  /** The verified current head and its share-link set (slice 5-10). */
+  shareHead(projectId: string): Promise<EncryptedShareHead>;
+  /**
+   * Writes one version on the current head that changes only the active
+   * share-link set (slice 5-10; the owner creates or revokes a link). A
+   * page save that still names the head it replaced lands on top of it.
+   */
+  writeShareLinks(
+    projectId: string,
+    change: ShareLinkSetChange
+  ): Promise<EncryptedShareHead>;
+  /**
+   * Stages a plaintext project's first encrypted version beside its
+   * plaintext (ADR-024 Phase 7, slice 7-2): the MLS group, the version and
+   * the project info, each through its own route, as the migration lease
+   * requires. The fetcher this store was built with carries the lease.
+   */
+  stageMigratedProject(
+    request: StageMigratedProjectRequest
+  ): Promise<CreateProjectResponse>;
+  /**
+   * The verified head's signed map of retained save states: revision id to
+   * lowercase hex version hash. A staged migration's journal (slice 7-2).
+   */
+  revisionMap(projectId: string): Promise<ReadonlyMap<string, string>>;
+  /**
+   * Forgets what this browser accepted of a staged migration the account
+   * dropped (slice 7-2): its head, pins and cached project keys. The
+   * project is still plaintext; the next staging starts from nothing.
+   */
+  forgetStagedProject(projectId: string): Promise<void>;
+}
+
+/** The first staged version of a migrated project and its project info. */
+export interface StageMigratedProjectRequest {
+  readonly document: ProjectDocument;
+  readonly info: ProjectInfoBody;
+  /**
+   * Runs once the staged group exists, before the first version is
+   * sealed: the files the document names become content blobs, which need
+   * the group's dedupe secret, and the document names their blob ids.
+   */
+  readonly prepare?: (document: ProjectDocument) => Promise<ProjectDocument>;
+}
+
+/** A head this page accepted: what a room version is sealed on. */
+export interface EncryptedRoomHeadState {
+  readonly version: number;
+  readonly hash: string;
+  readonly keyEpoch: number;
+  readonly revisionHashes: ReadonlyMap<string, Uint8Array>;
+  readonly document: ProjectDocument;
+  /** Its share-link set, carried by a version sealed on it (slice 5-10). */
+  readonly shareLinks?: VerifiedShareLinkSet | null;
+}
+
+/** A document version sealed for the room, not yet acknowledged. */
+export interface EncryptedRoomSealed {
+  readonly envelope: Uint8Array;
+  readonly hash: string;
+  readonly keyEpoch: number;
+  readonly version: number;
+  /** As stored: validated, split, at `version`. */
+  readonly document: ProjectDocument;
+  readonly signature: string;
+  readonly wrappedVersionKey: string;
+  readonly signerDeviceId: string;
+}
+
+/**
+ * The store's encrypt/sign and decrypt/verify paths, for the live room.
+ * Every head the room relays is read as a current head (pin moves); a
+ * version the room accepts moves the pin from the head it was sealed on.
+ */
+export interface EncryptedRoomAccess {
+  currentHead(projectId: string): EncryptedRoomHeadState | null;
+  /** Seals `document` on `base`, under the group's current epoch. */
+  seal(
+    projectId: string,
+    document: ProjectDocument,
+    base: EncryptedRoomHeadState
+  ): Promise<EncryptedRoomSealed>;
+  openHead(
+    projectId: string,
+    record: E2eeStoredVersion,
+    envelope: Uint8Array | null
+  ): Promise<EncryptedRoomHeadState>;
+  accepted(
+    projectId: string,
+    sealed: EncryptedRoomSealed,
+    base: EncryptedRoomHeadState,
+    record: E2eeStoredVersion
+  ): Promise<EncryptedRoomHeadState>;
+  /** Processes the group's newer Commits (or rejoins). */
+  catchUp(projectId: string): Promise<void>;
+  /**
+   * Stores again, from this device's copy, blobs the account lost or
+   * collected (the room's `blob-unknown`, slice 5-6), as an account save
+   * does on 409 `E2EE_BLOB_UNKNOWN`. Rejects when this page cannot.
+   */
+  restoreBlobs(projectId: string, blobIds: readonly string[]): Promise<void>;
 }
 
 const b64 = toBase64Url;
@@ -333,6 +495,47 @@ function signingKeyOf(
     (r) => r.kind === 'device' && r.id === deviceId
   );
   return revoked?.device?.signingKey ?? null;
+}
+
+/**
+ * Version cutoffs from the verified revocation cutoffs: a revoked device's
+ * versions are accepted only below its cutoff key epoch and, when the
+ * revoking browser named one, up to its cutoff head.
+ */
+async function groupCutoffs(
+  groups: ProjectGroupContext,
+  projectId: string
+): Promise<ReadonlyMap<string, VersionCutoff>> {
+  const out = new Map<string, VersionCutoff>();
+  const add = (userId: string, cutoffs: ReadonlyMap<string, ProjectCutoff>) => {
+    for (const [deviceId, cutoff] of cutoffs) {
+      out.set(authorCutoffKey(userId, deviceId), {
+        keyEpoch: cutoff.keyEpoch,
+        ...(cutoff.head
+          ? {
+              documentVersion: cutoff.head.documentVersion,
+              versionHash: cutoff.head.versionHash
+            }
+          : {})
+      });
+    }
+  };
+  if (groups.account.list.revoked.some((r) => r.kind === 'device')) {
+    add(
+      groups.account.userId,
+      await projectRevocationCutoffs(groups, projectId)
+    );
+  }
+  // Co-members' removed devices (slice 5-2), from their own statements.
+  if (groups.members) {
+    for (const [memberId, cutoffs] of await memberRevocationCutoffs(
+      groups,
+      projectId
+    )) {
+      add(memberId, cutoffs);
+    }
+  }
+  return out;
 }
 
 /** Group and key-store refusals become ApiErrors the sync paths understand. */
@@ -419,6 +622,12 @@ export function createEncryptedProjectStore(
     ctx.seal ?? ((job) => sealDocumentJob({ type: 'seal-document', ...job }));
   const now = ctx.now ?? Date.now;
   const heads = new Map<string, HeadState>();
+  /**
+   * Versions this page wrote that changed only the share-link set (slice
+   * 5-10), from the head the page's document named to the one they left:
+   * a save naming any of them lands on the newest.
+   */
+  const linkOnly = new Map<string, { from: number; to: number }>();
   const authenticators = new Map<string, Uint8Array>();
   const blobReferences = ctx.blobReferences ?? pageBlobReferences;
 
@@ -437,7 +646,9 @@ export function createEncryptedProjectStore(
 
   const list = () => groups.account.list;
   const cutoffsFor = async (projectId: string) =>
-    (await ctx.cutoffs?.(projectId)) ?? new Map<string, VersionCutoff>();
+    ctx.cutoffs
+      ? await ctx.cutoffs(projectId)
+      : await groupCutoffs(groups, projectId);
 
   function writableDevice(): CertifyingDevice {
     const device = groups.device;
@@ -502,8 +713,11 @@ export function createEncryptedProjectStore(
 
   /**
    * The author's device held a leaf it certified, with an editing role, in
-   * the version's epoch. Solo groups: the owner is the only member, with
-   * the owner role.
+   * the version's epoch. The role is the one the group's MLS roles gave the
+   * author in that very epoch (slice 5-2: `epochRoles`, from the epoch's
+   * archived record or this device's own session), so a demoted editor's
+   * earlier versions keep verifying, and a viewer's, or one by an author
+   * the roles do not list at all, never do.
    */
   async function requireAuthority(
     projectId: string,
@@ -515,23 +729,30 @@ export function createEncryptedProjectStore(
         `Device ${author.deviceId} held no editing leaf in this project when it signed version ${author.header.documentVersion}.`
       );
     };
-    if (author.userId !== userId) refuse();
-    const { group } = await groups.api.group(projectId);
-    const epoch = author.header.keyEpoch - group.keyEpochBase;
+    const authorList = (await projectDeviceLists(groups, projectId)).find(
+      (candidate) => candidate.userId === author.userId
+    );
+    if (!authorList) refuse();
+    // Before a group reset (decision D9) the version names an epoch of an
+    // earlier group generation.
+    const { keyEpochBase } = await groupBaseForKeyEpoch(
+      groups,
+      projectId,
+      author.header.keyEpoch
+    );
+    const epoch = author.header.keyEpoch - keyEpochBase;
     if (epoch < 0) refuse();
-    const signingKey = signingKeyOf(list(), author.deviceId);
+    const signingKey = signingKeyOf(authorList!, author.deviceId);
     if (!signingKey) refuse();
-    if (groups.device) {
-      const status = await groups.sessions
-        .status(refOf(groups.device, projectId))
-        .catch(() => null);
-      const role = status?.roles?.users.find((r) => r.userId === author.userId);
-      if (
-        role &&
-        (!['owner', 'editor'].includes(role.role) || role.since > epoch)
-      ) {
-        refuse();
-      }
+    if (
+      !(await heldEditingRole(
+        projectId,
+        author.userId,
+        author.header.keyEpoch,
+        epoch
+      ))
+    ) {
+      refuse();
     }
     const { leaves } = await groups.api.leaves(projectId);
     for (const leaf of leaves) {
@@ -553,6 +774,34 @@ export function createEncryptedProjectStore(
     refuse();
   }
 
+  /**
+   * Whether `authorId` held the owner or editor role in `keyEpoch` (MLS
+   * epoch `epoch` of its group), by the roles of that epoch. An epoch whose
+   * key this account does not hold yet (no device of it has processed that
+   * epoch, slice 5-3b) is that error, not a missing role: the roles are in
+   * the epoch's key archive.
+   */
+  async function heldEditingRole(
+    projectId: string,
+    authorId: string,
+    keyEpoch: number,
+    epoch: number
+  ): Promise<boolean> {
+    const roles = await epochRoles(groups, projectId, keyEpoch).catch(
+      (error: unknown) => {
+        if (error instanceof ProjectGroupError && error.code === 'key-missing')
+          throw error;
+        return null;
+      }
+    );
+    const role = roles?.users.find((r) => r.userId === authorId);
+    return (
+      !!role &&
+      (role.role === 'owner' || role.role === 'editor') &&
+      role.since <= epoch
+    );
+  }
+
   async function authorOf(
     projectId: string,
     envelope: Uint8Array,
@@ -560,7 +809,7 @@ export function createEncryptedProjectStore(
   ): Promise<VerifiedAuthor> {
     try {
       return await verifyAuthoredEnvelope(envelope, signature, {
-        deviceLists: [list()],
+        deviceLists: await projectDeviceLists(groups, projectId),
         cutoffs: await cutoffsFor(projectId)
       });
     } catch (error) {
@@ -569,7 +818,7 @@ export function createEncryptedProjectStore(
           'author',
           error.reason === 'outside-cutoff'
             ? 'A version was signed by a removed device after it was removed.'
-            : `A version is not signed by one of your devices (${error.reason}).`
+            : `A version is not signed by a member’s device (${error.reason}).`
         );
       }
       throw error;
@@ -626,7 +875,10 @@ export function createEncryptedProjectStore(
     entries: readonly E2eeVersionLogEntry[]
   ): Promise<void> {
     const cutoffs = await cutoffsFor(projectId);
+    const lists = await projectDeviceLists(groups, projectId);
     let pinned = pinHash;
+    let unauthorized: number | null = null;
+    let missingKey: ProjectGroupError | null = null;
     for (let start = 0; ; start += LOG_WINDOW - 1) {
       const window = entries.slice(start, start + LOG_WINDOW);
       let authorship: AuthorshipError | null = null;
@@ -645,18 +897,41 @@ export function createEncryptedProjectStore(
             }
             try {
               const author = await verifyAuthoredLogRecord(record, {
-                deviceLists: [list()],
+                deviceLists: lists,
                 cutoffs
               });
               if (
-                author.userId !== userId ||
+                (entry.signerUserId !== null &&
+                  author.userId !== entry.signerUserId) ||
                 author.deviceId !== entry.signerDeviceId
               ) {
                 return null;
               }
-              return signingKeyOf(list(), author.deviceId);
+              // Every logged version's author held an editing role in its
+              // own epoch (slice 5-2).
+              const { keyEpochBase } = await groupBaseForKeyEpoch(
+                groups,
+                projectId,
+                header.keyEpoch
+              );
+              if (
+                !(await heldEditingRole(
+                  projectId,
+                  author.userId,
+                  header.keyEpoch,
+                  header.keyEpoch - keyEpochBase
+                ))
+              ) {
+                unauthorized = entry.documentVersion;
+                return null;
+              }
+              const authorList = lists.find((l) => l.userId === author.userId);
+              return authorList
+                ? signingKeyOf(authorList, author.deviceId)
+                : null;
             } catch (error) {
               if (error instanceof AuthorshipError) authorship = error;
+              if (error instanceof ProjectGroupError) missingKey = error;
               return null;
             }
           }
@@ -669,7 +944,16 @@ export function createEncryptedProjectStore(
             'author',
             refused.reason === 'outside-cutoff'
               ? 'A version was signed by a removed device after it was removed.'
-              : `A version is not signed by one of your devices (${refused.reason}).`
+              : `A version is not signed by a member’s device (${refused.reason}).`
+          );
+        }
+        const missing = missingKey as ProjectGroupError | null;
+        if (missing) throw missing;
+        const unlisted = unauthorized as number | null;
+        if (unlisted !== null) {
+          throw integrity(
+            'authority',
+            `Version ${unlisted} of this project was signed by someone without an editing role in its epoch.`
           );
         }
         if (error instanceof VersionLogError) throw logFailure(error);
@@ -770,8 +1054,9 @@ export function createEncryptedProjectStore(
    * the head's document names that revision last, and the account lists
    * it at the head's version and hash. Without it the next version, built
    * on a head read back after a reload, would drop that save state from
-   * the signed history. It adds no trust: a historical read already
-   * accepts a revision the account places at the verified head.
+   * the signed history (found by slice 7-2, whose resumed staging builds
+   * on such a head). It adds no trust: a historical read already accepts
+   * a revision the account places at the verified head.
    */
   async function withOwnNamedSave(
     projectId: string,
@@ -799,6 +1084,51 @@ export function createEncryptedProjectStore(
       revisionHashes.set(own, fromHex(head.hash));
     }
   }
+
+  /**
+   * A head's verified share-link set (slice 5-10), against the head this
+   * page held before it; a set that does not hold is an integrity error.
+   */
+  async function acceptShareLinks(
+    projectId: string,
+    header: ProjectEnvelopeHeader,
+    authorUserId: string,
+    set: ShareLinkSet | undefined
+  ): Promise<VerifiedShareLinkSet | null> {
+    const known = heads.get(projectId);
+    const direct =
+      !!known &&
+      header.previousVersionHash !== null &&
+      toHex(header.previousVersionHash) === known.hash;
+    try {
+      return await verifyHeadShareLinks(groups, pins, {
+        projectId,
+        keyEpoch: header.keyEpoch,
+        authorUserId,
+        set,
+        ...(known && known.version < header.documentVersion
+          ? { previous: { set: known.shareLinks, direct } }
+          : {}),
+        cutoffs: await cutoffsFor(projectId)
+      });
+    } catch (error) {
+      if (error instanceof ShareLinkError) {
+        throw integrity(
+          'share-links',
+          `This project’s share links do not hold together (${error.reason}).`
+        );
+      }
+      throw error;
+    }
+  }
+
+  const shareHeadOf = (state: HeadState): EncryptedShareHead => ({
+    version: state.version,
+    hash: state.hash,
+    keyEpoch: state.keyEpoch,
+    document: state.document,
+    shareLinks: state.shareLinks
+  });
 
   /** Reads, verifies and pins the current head (ADR-024, current head). */
   async function readHead(projectId: string): Promise<HeadState> {
@@ -864,6 +1194,12 @@ export function createEncryptedProjectStore(
         head.wrappedVersionKey,
         envelope
       );
+      const shareLinks = await acceptShareLinks(
+        projectId,
+        header,
+        author.userId,
+        body.shareLinks
+      );
       const updatedAt = Date.parse(metadata.project.updatedAt);
       if (
         !pinHash &&
@@ -898,6 +1234,7 @@ export function createEncryptedProjectStore(
         keyEpoch: header.keyEpoch,
         revisionHashes,
         document,
+        shareLinks,
         infoName: heads.get(projectId)?.infoName ?? null,
         infoSequence: Math.max(
           heads.get(projectId)?.infoSequence ?? 0,
@@ -920,6 +1257,17 @@ export function createEncryptedProjectStore(
   ): Promise<HeadState> {
     const known = heads.get(projectId);
     if (known?.version === expectedVersion) return known;
+    // The page's document still names a head this page replaced with
+    // share-link versions only (slice 5-10): same document, newer version.
+    const alias = linkOnly.get(projectId);
+    if (
+      known &&
+      alias?.to === known.version &&
+      expectedVersion >= alias.from &&
+      expectedVersion < alias.to
+    ) {
+      return known;
+    }
     const head = await readHead(projectId);
     if (head.version !== expectedVersion) {
       throw new ApiError(
@@ -955,11 +1303,49 @@ export function createEncryptedProjectStore(
         'E2EE_EPOCH_STALE'
       );
     }
+    // A co-member's removed device may still hold this key (slice 5-7).
+    if (await pendingMemberRotation(groups, projectId, state.keyEpoch)) {
+      throw new ApiError(
+        409,
+        'Another member of this project removed one of their devices, which may still hold its current key. Saving resumes once one of their other devices has opened the project.',
+        'E2EE_MEMBER_ROTATION_PENDING'
+      );
+    }
     return {
       keyEpoch: state.keyEpoch,
       projectKey: material.projectKey,
       epochAuthenticator: material.epochAuthenticator
     };
+  }
+
+  /**
+   * This account holds the owner or editor role in the epoch it is about to
+   * write in (slice 5-2): a viewer's browser does not send what every other
+   * browser would refuse, and what the server refuses as well.
+   */
+  async function requireOwnEditingRole(
+    projectId: string,
+    material: Material
+  ): Promise<void> {
+    const { keyEpochBase } = await groupBaseForKeyEpoch(
+      groups,
+      projectId,
+      material.keyEpoch
+    );
+    if (
+      !(await heldEditingRole(
+        projectId,
+        userId,
+        material.keyEpoch,
+        material.keyEpoch - keyEpochBase
+      ))
+    ) {
+      throw new ApiError(
+        403,
+        'Viewers can read this encrypted project but cannot change it.',
+        'E2EE_PROJECT_READ_ONLY'
+      );
+    }
   }
 
   /** Revisions the next head still names: those the document still records. */
@@ -1040,7 +1426,9 @@ export function createEncryptedProjectStore(
     document: ProjectDocument,
     expectedVersion: number,
     previousHash: string | null,
-    revisionHashes: ReadonlyMap<string, Uint8Array>
+    revisionHashes: ReadonlyMap<string, Uint8Array>,
+    /** The share-link set the version carries (slice 5-10). */
+    shareLinks?: ShareLinkSet
   ): Promise<Sealed> {
     // The checks every account write gets (ADR-024 Phase 1).
     const split = await splitProjectStorageUpload(document);
@@ -1073,7 +1461,8 @@ export function createEncryptedProjectStore(
       header: init,
       document: stored as unknown as Record<string, unknown>,
       blobs,
-      revisionVersionHashes: retainedHashes(revisionHashes, stored)
+      revisionVersionHashes: retainedHashes(revisionHashes, stored),
+      ...(shareLinks ? { shareLinks } : {})
     });
     // On every write, whoever sealed it: the header lists exactly the
     // references the body carries.
@@ -1158,12 +1547,29 @@ export function createEncryptedProjectStore(
     }
   }
 
-  /** One version on top of `expectedVersion`, retried once on a new epoch. */
+  /** Tells the page a version this page wrote landed (slice 5-10). */
+  function written(projectId: string, state: HeadState): void {
+    if (!ctx.onVersionWritten) return;
+    try {
+      void Promise.resolve(
+        ctx.onVersionWritten(projectId, shareHeadOf(state))
+      ).catch(() => undefined);
+    } catch {
+      // Best effort: the version is stored either way.
+    }
+  }
+
+  /**
+   * One version on top of `expectedVersion`, retried once on a new epoch.
+   * It carries the head's share-link set unchanged, or with `change` (the
+   * owner, slice 5-10) the new set, checked before it is sent.
+   */
   async function writeVersion(
     projectId: string,
     document: ProjectDocument,
     expectedVersion: number,
-    revisionId: string | null
+    revisionId: string | null,
+    change?: ShareLinkSetChange
   ) {
     const device = writableDevice();
     if (document.projectId !== projectId) {
@@ -1173,17 +1579,33 @@ export function createEncryptedProjectStore(
     let restored = false;
     for (let attempt = 0; ; attempt++) {
       const material = await currentMaterial(device, projectId);
+      await requireOwnEditingRole(projectId, material);
+      let links = head.shareLinks?.set;
+      let verifiedLinks = head.shareLinks;
+      if (change) {
+        links = await change(head.shareLinks, material.keyEpoch);
+        verifiedLinks = await verifyHeadShareLinks(groups, pins, {
+          projectId,
+          keyEpoch: material.keyEpoch,
+          authorUserId: userId,
+          set: links,
+          previous: { set: head.shareLinks, direct: true },
+          cutoffs: await cutoffsFor(projectId),
+          remember: false
+        });
+      }
       const sealed = await sealDocument(
         device,
         material,
         projectId,
         document,
-        expectedVersion,
+        head.version,
         head.hash,
-        head.revisionHashes
+        head.revisionHashes,
+        links
       );
       const upload = {
-        expectedVersion,
+        expectedVersion: head.version,
         signature: sealed.signature,
         wrappedVersionKey: sealed.wrappedVersionKey,
         signerDeviceId: sealed.signerDeviceId
@@ -1239,24 +1661,123 @@ export function createEncryptedProjectStore(
       if (revisionId !== null) {
         revisionHashes.set(revisionId, fromHex(sealed.hash));
       }
+      if (change && verifiedLinks?.tombstones.length) {
+        await pins.addTombstones?.(
+          userId,
+          projectId,
+          verifiedLinks.tombstones.map((tombstone) => tombstone.shareId)
+        );
+      }
+      const alias = linkOnly.get(projectId);
+      if (change && document === head.document) {
+        linkOnly.set(projectId, {
+          from: alias?.to === head.version ? alias.from : head.version,
+          to: response.version
+        });
+      } else {
+        linkOnly.delete(projectId);
+      }
       const state: HeadState = {
         version: response.version,
         hash: sealed.hash,
         keyEpoch: sealed.keyEpoch,
         revisionHashes,
         document: sealed.document,
+        shareLinks: verifiedLinks,
         infoName: head.infoName,
         infoSequence: head.infoSequence
       };
       heads.set(projectId, state);
       await syncInfo(projectId, state);
+      written(projectId, state);
       return { response, document: sealed.document };
     }
   }
 
   /**
+   * Who signed a replaced envelope, checked: a device of this account, or
+   * (slice 5-2) of a co-member for the project info and measurements,
+   * which any editor writes; view state is only ever the caller's own. A
+   * removed device (slice 4-10) counts only under a key epoch below its
+   * cutoff, which it could know (version cutoffs' heads order document
+   * versions only, so a replaced envelope is held to the key epoch alone),
+   * and a co-member's envelope only when they held an editing role in its
+   * epoch. Returns the signer's user id and the signed time.
+   */
+  async function replacedSigner(
+    record: E2eeProjectEnvelopeRecord,
+    kind: E2eeReplacedEnvelopeKind,
+    envelope: Uint8Array
+  ): Promise<{ userId: string; signedAt: number }> {
+    const lists =
+      kind === 'view-state'
+        ? [list()]
+        : await projectDeviceLists(groups, record.projectId);
+    let refusal = 'This envelope is not signed by a device this account lists.';
+    for (const candidate of lists) {
+      const live = candidate.devices.find(
+        (d) => d.deviceId === record.signerDeviceId
+      );
+      let key = live?.signingKey ?? null;
+      if (!key) {
+        const removed = signingKeyOf(candidate, record.signerDeviceId);
+        if (!removed) continue;
+        let cutoff: VersionCutoff | undefined;
+        try {
+          cutoff = (await cutoffsFor(record.projectId)).get(
+            authorCutoffKey(candidate.userId, record.signerDeviceId)
+          );
+        } catch {
+          cutoff = undefined;
+        }
+        if (
+          cutoff?.keyEpoch === undefined ||
+          record.keyEpoch >= cutoff.keyEpoch
+        ) {
+          refusal =
+            'This envelope was signed by a removed device after it was removed.';
+          continue;
+        }
+        key = removed;
+      }
+      const signed = await verifyProjectEnvelopeSignature(
+        key,
+        envelope,
+        bytes(record.signature)
+      ).catch(() => null);
+      if (!signed) {
+        refusal = 'This envelope’s signature does not verify.';
+        continue;
+      }
+      if (candidate.userId !== userId) {
+        const { keyEpochBase } = await groupBaseForKeyEpoch(
+          groups,
+          record.projectId,
+          record.keyEpoch
+        );
+        if (
+          !(await heldEditingRole(
+            record.projectId,
+            candidate.userId,
+            record.keyEpoch,
+            record.keyEpoch - keyEpochBase
+          ))
+        ) {
+          throw integrity(
+            'authority',
+            'This envelope was signed by someone without an editing role in its epoch.'
+          );
+        }
+      }
+      return { userId: candidate.userId, signedAt: signed.signedAt };
+    }
+    throw integrity('author', refusal);
+  }
+
+  /**
    * Opens a replaced envelope (project info, measurements, view state):
-   * signed by a device this account lists, bound to its key epoch, of the
+   * signed by a member's device (`replacedSigner`), bound to its key epoch,
+   * of the
    * kind, project, sequence and epoch the account named, then decoded by
    * its body codec.
    */
@@ -1265,23 +1786,7 @@ export function createEncryptedProjectStore(
     kind: E2eeReplacedEnvelopeKind
   ): Promise<OpenedReplaced> {
     const envelope = bytes(record.envelope);
-    const signer = list().devices.find(
-      (d) => d.deviceId === record.signerDeviceId
-    );
-    if (!signer) {
-      throw integrity(
-        'author',
-        'This envelope is not signed by a device this account lists.'
-      );
-    }
-    const signed = await verifyProjectEnvelopeSignature(
-      signer.signingKey,
-      envelope,
-      bytes(record.signature)
-    ).catch(() => null);
-    if (!signed) {
-      throw integrity('author', 'This envelope’s signature does not verify.');
-    }
+    const signed = await replacedSigner(record, kind, envelope);
     let header: ProjectEnvelopeHeader;
     try {
       const parsed = parseEnvelope(envelope).header;
@@ -1350,6 +1855,10 @@ export function createEncryptedProjectStore(
   ): Promise<SealedReplaced> {
     const device = writableDevice();
     const material = await currentMaterial(device, projectId);
+    // Any member keeps its own view state; the rest is an editor's.
+    if (init.kind !== 'view-state') {
+      await requireOwnEditingRole(projectId, material);
+    }
     const header: ProjectEnvelopeHeaderInit = {
       kind: init.kind,
       projectId,
@@ -1402,6 +1911,271 @@ export function createEncryptedProjectStore(
     }
   }
 
+  // --- The live room (slice 4-9) ---------------------------------------------
+
+  /** Room versions this page sealed, until their ack. */
+  const roomSealed = new WeakSet<EncryptedRoomSealed>();
+
+  /**
+   * The account's log from `since` through the room's head, which the room
+   * wrote to the account before it relayed it.
+   */
+  async function roomLog(
+    projectId: string,
+    since: number,
+    head: E2eeVersionLogEntry
+  ): Promise<E2eeVersionLogEntry[]> {
+    const entries: E2eeVersionLogEntry[] = [];
+    for (let from = since; ;) {
+      const page = await api.versions(projectId, from);
+      const last = entries.at(-1);
+      if (last && page.log[0]?.versionHash !== last.versionHash) {
+        throw integrity(
+          'fork',
+          'The account’s version history pages do not join.'
+        );
+      }
+      entries.push(...(last ? page.log.slice(1) : page.log));
+      const at = entries.findIndex(
+        (entry) => entry.documentVersion >= head.documentVersion
+      );
+      if (at >= 0) {
+        if (entries[at]!.versionHash !== head.versionHash) {
+          throw integrity(
+            'fork',
+            'The room relayed a version the account’s history does not hold.'
+          );
+        }
+        return entries.slice(0, at + 1);
+      }
+      if (
+        !page.more ||
+        page.log.length < 2 ||
+        entries.length > MAX_LOG_RECORDS
+      ) {
+        throw integrity(
+          'fork',
+          'The account’s version history does not reach the room’s head.'
+        );
+      }
+      from = entries.at(-1)!.documentVersion;
+    }
+  }
+
+  /**
+   * A head the room relays, read as a current head (ADR-024, current head):
+   * the log from the pin through it verifies, its author and authority hold,
+   * it decrypts in the decode worker and validates, and the pin moves.
+   */
+  async function openRoomHead(
+    projectId: string,
+    record: E2eeStoredVersion,
+    envelope: Uint8Array | null
+  ): Promise<EncryptedRoomHeadState> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const known = heads.get(projectId);
+      if (known?.hash === record.versionHash) return known;
+      // Too large for the room: the account serves it, verified the same way.
+      if (!envelope) return readHead(projectId);
+      const pin = await pins.read(userId, projectId);
+      const pinHash = pin?.headHash ?? null;
+      if (pin && pinHash && record.documentVersion < pin.documentVersion) {
+        throw integrity(
+          'rollback',
+          `The room offered version ${record.documentVersion} of this project, older than version ${pin.documentVersion} this browser already accepted. Your work stays on this device.`
+        );
+      }
+      const entries = await roomLog(
+        projectId,
+        pin && pinHash ? pin.documentVersion : record.documentVersion,
+        record
+      );
+      await verifyLog(projectId, pinHash, entries);
+      const author = await authorOf(
+        projectId,
+        envelope,
+        bytes(record.signature)
+      );
+      const header = author.header;
+      const hash = toHex(author.versionHash);
+      if (
+        hash !== record.versionHash ||
+        header.documentVersion !== record.documentVersion ||
+        header.kind !== 'document' ||
+        header.projectId !== projectId
+      ) {
+        throw integrity(
+          'content',
+          'The version the room relayed is not the one its record names.'
+        );
+      }
+      if (author.deviceId !== record.signerDeviceId) {
+        throw integrity(
+          'author',
+          'The room’s head names another device than the one that signed it.'
+        );
+      }
+      const { group } = await groups.api.group(projectId);
+      if (header.keyEpoch > group.keyEpochBase + group.epoch) {
+        throw integrity(
+          'epoch',
+          'The room’s head names a key epoch the project does not have yet.'
+        );
+      }
+      if (pin && pinHash && header.keyEpoch < pin.keyEpoch) {
+        throw integrity(
+          'epoch',
+          'The room’s head was written under an older key epoch than this browser already accepted.'
+        );
+      }
+      await requireAuthority(projectId, author);
+      await requireBinding(header);
+      const { body, document } = await openDocument(
+        projectId,
+        header,
+        hash,
+        record.wrappedVersionKey,
+        envelope
+      );
+      const shareLinks = await acceptShareLinks(
+        projectId,
+        header,
+        author.userId,
+        body.shareLinks
+      );
+      const advanced = await pins.advance(userId, projectId, pinHash, {
+        headHash: hash,
+        documentVersion: header.documentVersion,
+        keyEpoch: header.keyEpoch
+      });
+      if (!advanced) {
+        // Another tab moved the pin meanwhile: verify again from it.
+        const current = await pins.read(userId, projectId);
+        if (current?.headHash !== hash) continue;
+      }
+      const state: HeadState = {
+        version: header.documentVersion,
+        hash,
+        keyEpoch: header.keyEpoch,
+        revisionHashes: new Map(body.revisionVersionHashes),
+        document,
+        shareLinks,
+        infoName: heads.get(projectId)?.infoName ?? null,
+        infoSequence: Math.max(
+          heads.get(projectId)?.infoSequence ?? 0,
+          pin?.infoSequence ?? 0
+        )
+      };
+      heads.set(projectId, state);
+      return state;
+    }
+    throw integrity(
+      'fork',
+      'This project kept changing in another tab while it was checked. Reload to try again.'
+    );
+  }
+
+  const roomAccess: EncryptedRoomAccess = {
+    currentHead: (projectId) => heads.get(projectId) ?? null,
+
+    async seal(projectId, document, base) {
+      const device = writableDevice();
+      if (document.projectId !== projectId) {
+        throw new ApiError(404, 'Project not found.', 'PROJECT_NOT_FOUND');
+      }
+      const material = await currentMaterial(device, projectId);
+      await requireOwnEditingRole(projectId, material);
+      const sealed = await sealDocument(
+        device,
+        material,
+        projectId,
+        document,
+        base.version,
+        base.hash,
+        base.revisionHashes,
+        base.shareLinks?.set
+      );
+      const result: EncryptedRoomSealed = {
+        envelope: sealed.envelope,
+        hash: sealed.hash,
+        keyEpoch: sealed.keyEpoch,
+        document: sealed.document,
+        version: sealed.document.version,
+        signature: sealed.signature,
+        wrappedVersionKey: sealed.wrappedVersionKey,
+        signerDeviceId: sealed.signerDeviceId
+      };
+      roomSealed.add(result);
+      return result;
+    },
+
+    openHead: (projectId, record, envelope) =>
+      openRoomHead(projectId, record, envelope),
+
+    async accepted(projectId, sealed, base, record) {
+      if (
+        record.versionHash !== sealed.hash ||
+        record.documentVersion !== sealed.version
+      ) {
+        throw integrity(
+          'content',
+          'The room stored another version than this browser sent.'
+        );
+      }
+      const advanced = await pins.advance(userId, projectId, base.hash, {
+        headHash: sealed.hash,
+        documentVersion: sealed.version,
+        keyEpoch: sealed.keyEpoch
+      });
+      if (!advanced) {
+        const current = await pins.read(userId, projectId);
+        if (
+          current?.headHash !== sealed.hash &&
+          (current?.documentVersion ?? 0) >= sealed.version
+        ) {
+          throw integrity(
+            'fork',
+            'This browser accepted another version while the room stored this one. Reload to check.'
+          );
+        }
+      }
+      const previous = heads.get(projectId);
+      const state: HeadState = {
+        version: sealed.version,
+        hash: sealed.hash,
+        keyEpoch: sealed.keyEpoch,
+        revisionHashes: retainedHashes(base.revisionHashes, sealed.document),
+        document: sealed.document,
+        shareLinks: base.shareLinks ?? null,
+        infoName: previous?.infoName ?? null,
+        infoSequence: previous?.infoSequence ?? 0
+      };
+      heads.set(projectId, state);
+      const ours = roomSealed.delete(sealed);
+      // The shelf's name follows the document, as after an account save:
+      // through the project info's own chain (slice 4-7), keeping its
+      // thumbnail and archived exports.
+      if (ours) await syncInfo(projectId, state);
+      if (ours) written(projectId, state);
+      return state;
+    },
+
+    async catchUp(projectId) {
+      if (groups.device) await joinProjectGroup(groups, projectId);
+    },
+
+    async restoreBlobs(projectId, blobIds) {
+      if (!ctx.restoreBlobs) {
+        throw new ApiError(
+          409,
+          'This version names files the account does not hold, and this browser has no copy to store again.',
+          'E2EE_BLOB_UNKNOWN'
+        );
+      }
+      await ctx.restoreBlobs(projectId, blobIds);
+    }
+  };
+
   const guarded =
     <A extends unknown[], R>(run: (...args: A) => Promise<R>) =>
     async (...args: A): Promise<R> => {
@@ -1437,6 +2211,13 @@ export function createEncryptedProjectStore(
       readonly info: ProjectInfoBody;
       readonly copyFrom?: E2eeCopyFrom;
       readonly adoption?: E2eeAdoption;
+      /**
+       * A plaintext project's staging (slice 7-2): the group, the first
+       * version and the project info go through their own routes, which
+       * take ciphertext for a format-1 project from the lease holder.
+       */
+      readonly staged?: boolean;
+      readonly prepare?: StageMigratedProjectRequest['prepare'];
     }
   ): Promise<CreateProjectResponse> {
     const device = writableDevice();
@@ -1486,11 +2267,18 @@ export function createEncryptedProjectStore(
             projectKey: material.projectKey,
             epochAuthenticator: material.epochAuthenticator
           };
+          // A staged project's group goes first, on its own route: its
+          // files are stored under it before the first version names them.
+          let first = document;
+          if (extra.staged) {
+            await groups.api.createGroup(id, groupRequest);
+            if (extra.prepare) first = await extra.prepare(document);
+          }
           const sealed = await sealDocument(
             device,
             epoch0,
             id,
-            document,
+            first,
             0,
             null,
             new Map()
@@ -1510,13 +2298,20 @@ export function createEncryptedProjectStore(
             ...(extra.adoption ? { adoption: extra.adoption } : {})
           };
           let response;
-          try {
-            response = await api.create(metadata, sealed.envelope);
-          } catch (error) {
-            // The request may have landed and its answer been lost: the
-            // same bytes again are answered as created (slice 4-8).
-            if (error instanceof ApiError) throw error;
-            response = await api.create(metadata, sealed.envelope);
+          if (extra.staged) {
+            response = await stagedCreate(id, metadata.version, {
+              envelope: sealed.envelope,
+              info: firstInfo
+            });
+          } else {
+            try {
+              response = await api.create(metadata, sealed.envelope);
+            } catch (error) {
+              // The request may have landed and its answer been lost: the
+              // same bytes again are answered as created (slice 4-8).
+              if (error instanceof ApiError) throw error;
+              response = await api.create(metadata, sealed.envelope);
+            }
           }
           if (response.versionHash !== sealed.hash) {
             throw integrity(
@@ -1533,8 +2328,36 @@ export function createEncryptedProjectStore(
         }
       }
     };
-    await createProjectGroup(creating, projectId);
-    if (!created) throw new Error('The encrypted project was not created.');
+    // A staged project's group lands on its own, before its files and first
+    // version. When one of those fails (a pause, a lost lease, a missing
+    // file), createProjectGroup finds this very group on the server and
+    // counts the creation as landed; the engine still needs the failure
+    // itself, to pause, resume or explain.
+    const stagedFailure: { error?: unknown; failed?: true } = {};
+    const createWithProject = creating.api.createGroup;
+    const staging: ProjectGroupContext = extra.staged
+      ? {
+          ...creating,
+          api: {
+            ...creating.api,
+            createGroup: (id, groupRequest) =>
+              createWithProject(id, groupRequest).catch((error: unknown) => {
+                stagedFailure.error = error;
+                stagedFailure.failed = true;
+                throw error;
+              })
+          }
+        }
+      : creating;
+    await createProjectGroup(
+      staging,
+      projectId,
+      extra.staged ? { replace: true } : {}
+    );
+    if (!created) {
+      if (stagedFailure.failed) throw stagedFailure.error;
+      throw new Error('The encrypted project was not created.');
+    }
     const { sealed, state, infoHash } = created;
     await pins.advance(userId, projectId, null, {
       headHash: sealed.hash,
@@ -1548,12 +2371,39 @@ export function createEncryptedProjectStore(
       keyEpoch: 0,
       revisionHashes: new Map(),
       document: sealed.document,
+      shareLinks: null,
       infoName: extra.info.name,
       infoSequence: 1
     });
     return {
       project: summaryOf(state, sealed.document.name),
       document: sealed.document
+    };
+  }
+
+  /**
+   * The rest of a staged project's epoch 0 (slice 7-2), once its group is
+   * stored: the first version on nothing, then the project info, through
+   * the routes the migration lease opens for a format-1 project. Answered
+   * as a create.
+   */
+  async function stagedCreate(
+    projectId: string,
+    version: E2eeVersionUpload,
+    sealed: { envelope: Uint8Array; info: E2eeProjectEnvelopeUpload }
+  ): Promise<E2eeCreateProjectResponse> {
+    const saved = await api.saveDocument(projectId, version, sealed.envelope);
+    await api.saveInfo(projectId, sealed.info);
+    return {
+      ...saved,
+      project: {
+        projectId,
+        documentVersion: saved.version,
+        revisionCount: 0,
+        lastRevisionId: null,
+        updatedAt: saved.updatedAt,
+        organization: { status: 'active', pinned: false, sortOrder: 0 }
+      }
     };
   }
 
@@ -1754,7 +2604,61 @@ export function createEncryptedProjectStore(
 
     projectName,
     info,
-    replaced
+    replaced,
+
+    roomAccess: () => roomAccess,
+
+    shareHead: guarded(async (projectId) =>
+      shareHeadOf(await readHead(projectId))
+    ),
+
+    writeShareLinks: guarded(async (projectId, change) => {
+      const head = await readHead(projectId);
+      await writeVersion(projectId, head.document, head.version, null, change);
+      return shareHeadOf(heads.get(projectId)!);
+    }),
+
+    stageMigratedProject: guarded(
+      async ({ document: source, info: body, prepare }) => {
+        writableDevice();
+        if (source.ownerUserId !== userId) {
+          throw new ApiError(400, 'Only the owner can encrypt this project.');
+        }
+        // A migrated project keeps its id, which an older build minted on the
+        // server: the account checks, not `prepareInitialProjectDocument`.
+        const document = withoutDerivedProjection(source);
+        try {
+          assertPersistableDocument(document);
+        } catch (error) {
+          throw new ApiError(
+            413,
+            error instanceof Error ? error.message : String(error)
+          );
+        }
+        return createFrom(document, {
+          info: body,
+          staged: true,
+          ...(prepare ? { prepare } : {})
+        });
+      }
+    ),
+
+    forgetStagedProject: async (projectId) => {
+      heads.delete(projectId);
+      for (const id of [...authenticators.keys()]) {
+        if (id.startsWith(`${projectId} `)) authenticators.delete(id);
+      }
+      forgetEpochRoles(userId, projectId);
+      forgetProjectKeys(userId, projectId);
+      await pins.forget?.(userId, projectId);
+    },
+
+    revisionMap: guarded(async (projectId) => {
+      const head = await readHead(projectId);
+      return new Map(
+        [...head.revisionHashes].map(([id, hash]) => [id, toHex(hash)])
+      );
+    })
   };
 }
 

@@ -138,6 +138,9 @@ test('deleting a history feature raises an undoable toast that counts its depend
       .getByRole('region', { name: 'Feature inspector' })
       .getByRole('textbox', { name: /^Width/ })
   ).toHaveCount(0);
+  await expect(page.getByRole('group', { name: 'Box command' })).toHaveCount(
+    0
+  );
   await expect(
     summary.getByLabel(/ · 17 features · 1 body\. Sync /)
   ).toBeVisible();

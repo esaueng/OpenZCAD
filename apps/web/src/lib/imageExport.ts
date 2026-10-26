@@ -62,14 +62,10 @@ export function viewImageScope(
     };
   }
   if (!scope) return { label: 'the current view' };
-  const hidden = scope.hiddenIncluded + scope.hiddenExcluded;
+  const hidden = scope.hiddenExcluded;
   // Bodies whose history step failed are withheld from mesh files, but the
   // view still draws the visible ones, so the picture counts them.
-  const visible =
-    scope.bodyIds.length -
-    scope.hiddenIncluded +
-    scope.withheldIds.length -
-    scope.withheldHidden;
+  const visible = scope.bodyIds.length + scope.withheldIds.length;
   if (visible === 0 && hidden === 0) return { label: 'the current view' };
   return {
     label:

@@ -266,6 +266,12 @@
   min-width: 0;
 }
 
+.tool-card-verbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
 .tool-card-actions > .tool-card-recovery {
   flex: 0 0 auto;
   align-self: center;

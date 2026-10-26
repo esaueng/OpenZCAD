@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import {
+  createPrimitiveInPlace,
   seedDismissedWorkspaceTour,
   seedOpenCommandFold
 } from './openzcad-fixtures';
@@ -314,11 +315,9 @@ test('cylinder radius proxy probe', async ({ page }) => {
   await page.goto('/');
   await page.getByLabel('Project name').fill('Cylinder Radius Proxy Probe');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByLabel('Radius', { exact: true }).fill('14');
-  await inspector.getByLabel('Height', { exact: true }).fill('28');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '14', height: '28' }
+  });
   await expect(page.getByRole('heading', { name: 'Objects 1' })).toBeVisible();
 
   const canvas = page.locator('.viewer-host canvas');
@@ -526,11 +525,7 @@ test('move drag probe', async ({ page }) => {
  */
 test('move drag snap collection probe', async ({ page }) => {
   const { bounds } = await openHeatSink(page);
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await createPrimitiveInPlace(page, 'box');
   await page.waitForTimeout(600);
   const moveButton = page.getByRole('button', { name: /^Move/ });
   if (!(await moveButton.isEnabled().catch(() => false))) {

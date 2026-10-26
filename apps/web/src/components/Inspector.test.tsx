@@ -11,7 +11,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   BodyId,
   BodyRepresentation,
-  EdgeTopologyReferenceV5,
   EdgeWitnessV1,
   FeatureNode,
   ProjectDocument,
@@ -57,6 +56,21 @@ const feature: FeatureNode = {
     targetBodyId: bodyId,
     edgeHashes: [11],
     radius: 2
+  }
+};
+
+/** A Move still edits in its card (U09 phase 7 leaves it to its gizmo). */
+const moveFeature: FeatureNode = {
+  ...feature,
+  featureKind: 'transform',
+  name: 'Lift bracket',
+  data: {
+    featureKind: 'transform',
+    targetBodyId: bodyId,
+    transform: {
+      translation: { x: 2, y: 0, z: 0 },
+      rotationDeg: { x: 0, y: 0, z: 0 }
+    }
   }
 };
 
@@ -125,13 +139,9 @@ function makeProps(
     selectedBody: body,
     selectedTopology: frontFace,
     selectedEdges: [],
-    edgeModifierBody: null,
     scope: {},
-    sketches: [],
     bodies: [{ bodyId, name: body.name, consumed: false }],
     units: 'mm',
-    selectedBodyIds: [bodyId],
-    preferredSketchId: null,
     commandSession: {
       id: 'fillet',
       title: 'Fillet',
@@ -144,37 +154,18 @@ function makeProps(
     // 'direct pick details' below pins that it stays closed until then.
     directPickDetails: true,
     onLaunchTool: vi.fn(),
-    onSelectBodies: vi.fn(),
     onCancel: vi.fn(),
-    onCreatePrimitive: vi.fn(),
-    onCreateRevolve: vi.fn(),
-    onCreateBoolean: vi.fn(),
-    onCreateTransform: vi.fn(),
-    onCreateEdgeModifier: vi.fn(),
-    onSelectAllEdges: vi.fn(),
-    onClearSelectedEdges: vi.fn(),
-    onCreatePattern: vi.fn(),
     onApplyPrimitive: vi.fn(),
     onApplySketch: vi.fn(),
     onConvertSketchToFixedPlane: vi.fn(),
     onApplyTextSketch: vi.fn(),
     onEditSketchInViewport: vi.fn(),
-    onApplyExtrude: vi.fn(),
-    onPreviewExtrude: vi.fn(),
-    extrudeTargets: [],
-    onApplyRevolve: vi.fn(),
-    onApplyBoolean: vi.fn(),
     onApplyTransform: vi.fn(),
-    onApplyEdgeModifier: vi.fn(),
-    onPreviewEdgeModifier: vi.fn(),
-    onApplyPattern: vi.fn(),
     onResizeThroughHole: vi.fn(),
     onRemoveFaceFeature: vi.fn(),
     onPinFeature: vi.fn(),
     onDeleteFeature: vi.fn(),
     onToggleImportedSolid: vi.fn(),
-    onPreviewBodyAppearance: vi.fn(),
-    onCommitBodyAppearance: vi.fn(),
     ...overrides
   };
 }
@@ -267,16 +258,17 @@ describe('Inspector feature provenance', () => {
 
   it('rejects stale Apply and Delete actions', () => {
     const props = makeProps({
+      selectedFeature: moveFeature,
       commandSession: null,
       featureSelectionSource: 'pinned',
       onValidateSelection: () => false
     });
     render(<Inspector {...props} />);
-    fireEvent.change(screen.getByLabelText('Radius'), {
+    fireEvent.change(screen.getByLabelText('Move X in mm'), {
       target: { value: '3' }
     });
     fireEvent.click(screen.getByRole('button', { name: /Apply/ }));
-    expect(props.onApplyEdgeModifier).not.toHaveBeenCalled();
+    expect(props.onApplyTransform).not.toHaveBeenCalled();
     fireEvent.click(screen.getByLabelText('More actions'));
     fireEvent.click(screen.getByRole('button', { name: /Delete feature/ }));
     expect(props.onDeleteFeature).not.toHaveBeenCalled();
@@ -284,16 +276,17 @@ describe('Inspector feature provenance', () => {
 
   it('resets a form to committed values after undo, redo or a document update', () => {
     const props = makeProps({
+      selectedFeature: moveFeature,
       commandSession: null,
       featureSelectionSource: 'pinned',
       documentVersion: 1
     });
     const { rerender } = render(<Inspector {...props} />);
-    fireEvent.change(screen.getByLabelText('Radius'), {
+    fireEvent.change(screen.getByLabelText('Move X in mm'), {
       target: { value: '9' }
     });
     rerender(<Inspector {...props} documentVersion={2} />);
-    expect(screen.getByLabelText('Radius')).toHaveValue('2');
+    expect(screen.getByLabelText('Move X in mm')).toHaveValue('2');
   });
 
   it('renders a demoted inferred feature as a read-only object panel', () => {
@@ -330,6 +323,7 @@ describe('Inspector feature provenance', () => {
     render(
       <Inspector
         {...makeProps({
+          selectedFeature: moveFeature,
           featureSelectionSource: 'pinned'
         })}
       />
@@ -339,7 +333,7 @@ describe('Inspector feature provenance', () => {
       name: 'Feature inspector'
     });
     expect(inspector).not.toHaveClass('object-readout');
-    expect(within(inspector).getByLabelText('Radius')).toHaveValue('2');
+    expect(within(inspector).getByLabelText('Move X in mm')).toHaveValue('2');
     fireEvent.click(within(inspector).getByLabelText('More actions'));
     expect(
       within(inspector).getByRole('button', { name: /Delete feature/ })
@@ -395,6 +389,7 @@ describe('Inspector feature provenance', () => {
       return (
         <Inspector
           {...makeProps({
+            selectedFeature: moveFeature,
             featureSelectionSource: pinned ? 'pinned' : 'inferred',
             commandSession: null,
             onPinFeature: () => setPinned(true)
@@ -409,63 +404,81 @@ describe('Inspector feature provenance', () => {
     expect(
       screen.getByRole('region', { name: 'Feature inspector' })
     ).toHaveFocus();
-    expect(screen.getByLabelText('Radius')).toHaveValue('2');
+    expect(screen.getByLabelText('Move X in mm')).toHaveValue('2');
     expect(screen.getByLabelText('More actions')).toBeVisible();
+  });
+
+  it("keeps a fillet's readout and Delete but no form: it edits in place", () => {
+    const onEditModelingFeature = vi.fn();
+    const props = makeProps({
+      commandSession: null,
+      featureSelectionSource: 'pinned',
+      onEditModelingFeature
+    });
+    const { rerender } = render(<Inspector {...props} />);
+    const inspector = screen.getByRole('region', {
+      name: 'Feature inspector'
+    });
+    expect(
+      within(inspector).queryByLabelText('Radius')
+    ).not.toBeInTheDocument();
+    expect(within(inspector).getByText('120 mm³')).toBeVisible();
+    fireEvent.click(
+      within(inspector).getByRole('button', { name: 'Edit fillet' })
+    );
+    expect(onEditModelingFeature).toHaveBeenCalledWith(feature);
+    // While its in-place command edits it, there is nothing to re-arm.
+    rerender(<Inspector {...props} inPlaceEditFeatureId={feature.featureId} />);
+    expect(
+      screen.queryByRole('button', { name: 'Edit fillet' })
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('More actions'));
+    expect(
+      screen.getByRole('button', { name: /Delete feature/ })
+    ).toBeVisible();
+  });
+});
+
+describe('a split readout', () => {
+  it('reads the second half from the document on screen, as the first', () => {
+    const secondBodyId = 'body-2' as BodyId;
+    const split: FeatureNode = {
+      ...feature,
+      featureKind: 'split',
+      name: 'Split 1',
+      data: {
+        featureKind: 'split',
+        targetBodyId: bodyId,
+        plane: { origin: { x: 5, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } },
+        secondBodyId
+      }
+    };
+    const half = (name: string): BodyRepresentation => ({
+      ...body,
+      bodyId: secondBodyId,
+      name
+    });
+    render(
+      <Inspector
+        {...makeProps({
+          selectedFeature: split,
+          featureSelectionSource: 'pinned',
+          commandSession: null,
+          bodyRepresentations: { [secondBodyId]: half('Half as committed') },
+          massPropertiesDocument: {
+            derived: {
+              bodyRepresentations: { [secondBodyId]: half('Half as previewed') }
+            }
+          } as unknown as ProjectDocument
+        })}
+      />
+    );
+    expect(screen.getByText('Half as previewed')).toBeInTheDocument();
+    expect(screen.queryByText('Half as committed')).toBeNull();
   });
 });
 
 describe('primitive card position', () => {
-  it.each([0, 10])(
-    'numbers a body from the document when creating at X=%s',
-    (x) => {
-      const manager = new CommandManager(
-        createProjectDocument('Numbered', toUserId('user_inspector_number'))
-      );
-      manager.execute(
-        createPrimitiveCommand(
-          'box',
-          'Box',
-          { width: 30, height: 18, depth: 24 },
-          { x: 0, y: 0, z: 0 },
-          manager.document
-        )
-      );
-      const onCreatePrimitive = vi.fn<(command: AnyCommand) => void>();
-      render(
-        <Inspector
-          {...makeProps({
-            tool: 'box',
-            selectedFeature: null,
-            selectedBody: null,
-            selectedTopology: null,
-            commandSession: null,
-            document: manager.document,
-            onCreatePrimitive
-          })}
-        />
-      );
-      fireEvent.change(screen.getByRole('textbox', { name: 'Corner X' }), {
-        target: { value: String(x) }
-      });
-      fireEvent.click(screen.getByRole('button', { name: 'Create' }));
-      expect(onCreatePrimitive).toHaveBeenCalledTimes(1);
-      const command = onCreatePrimitive.mock.calls[0]![0];
-      expect(command.commands?.[0] ?? command).toMatchObject({
-        kind: 'primitive.add',
-        payload: { bodyName: 'Box 2' }
-      });
-      manager.execute(command);
-      expect(
-        Object.values(manager.document.nodes)
-          .filter((node) => node.kind === 'body')
-          .map((node) => node.name)
-      ).toEqual(['Box 1', 'Box 2']);
-      expect(listFeaturesInOrder(manager.document)).toHaveLength(
-        x === 0 ? 2 : 3
-      );
-    }
-  );
-
   it('reads a placed box from the document and applies a move with its dimensions', () => {
     const manager = new CommandManager(
       createProjectDocument('Placed', toUserId('user_inspector_place'))
@@ -509,405 +522,6 @@ describe('primitive card position', () => {
       z: 0
     });
     expect(listFeaturesInOrder(manager.document)).toHaveLength(2);
-  });
-});
-
-describe('fillet radius slider', () => {
-  it('previews the latest size without applying until submitted', () => {
-    const props = makeProps({
-      selectedFeature: feature,
-      featureSelectionSource: 'pinned'
-    });
-    render(<Inspector {...props} />);
-    const slider = screen.getByRole('slider', { name: 'Fillet radius slider' });
-    fireEvent.change(slider, { target: { value: '3' } });
-    fireEvent.change(slider, { target: { value: '4' } });
-    expect(screen.getByRole('textbox', { name: 'Radius' })).toHaveValue('4');
-    expect(props.onPreviewEdgeModifier).toHaveBeenLastCalledWith(
-      feature,
-      'fillet',
-      expect.objectContaining({ size: 4, edgeHashes: [11] })
-    );
-    expect(props.onApplyEdgeModifier).not.toHaveBeenCalled();
-    fireEvent.submit(
-      screen.getByRole('button', { name: /Apply/ }).closest('form')!
-    );
-    expect(props.onApplyEdgeModifier).toHaveBeenCalledExactlyOnceWith(
-      feature,
-      'fillet',
-      expect.objectContaining({ size: 4 })
-    );
-  });
-
-  it('keeps expressions until the user moves the slider and cancels without saving', () => {
-    const props = makeProps({
-      selectedFeature: feature,
-      featureSelectionSource: 'pinned',
-      scope: { r: 2 }
-    });
-    render(<Inspector {...props} />);
-    fireEvent.change(screen.getByRole('textbox', { name: 'Radius' }), {
-      target: { value: 'r * 2' }
-    });
-    expect(
-      screen.getByRole('slider', { name: 'Fillet radius slider' })
-    ).toHaveValue('4');
-    expect(props.onPreviewEdgeModifier).toHaveBeenLastCalledWith(
-      feature,
-      'fillet',
-      expect.objectContaining({ size: 'r * 2' })
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(props.onCancel).toHaveBeenCalledOnce();
-    expect(props.onApplyEdgeModifier).not.toHaveBeenCalled();
-  });
-
-  it('clears a preview and disables Apply for a nonpositive radius', () => {
-    const props = makeProps({
-      selectedFeature: feature,
-      featureSelectionSource: 'pinned'
-    });
-    render(<Inspector {...props} />);
-    fireEvent.change(screen.getByRole('textbox', { name: 'Radius' }), {
-      target: { value: '0' }
-    });
-    expect(props.onPreviewEdgeModifier).toHaveBeenLastCalledWith(
-      feature,
-      'fillet',
-      null
-    );
-    expect(screen.getByRole('button', { name: /Apply/ })).toBeDisabled();
-  });
-});
-
-describe('creating an edge modifier while the target settles', () => {
-  // While a rebuild's analysis is pending — arming the tool or picking edges
-  // demands lineage, which starts one — App hands the card no target body and
-  // no edges, then restores both. A card keyed by its body remounted on each
-  // flip and replaced a typed size with the default: an all-edges fillet
-  // typed as 99 was created with radius 2.
-  const rimEdges: TopologySelection[] = [11, 12].map((hash) => ({
-    bodyId,
-    kind: 'edge',
-    topologyId: `edge:${hash}`,
-    hash
-  }));
-  const cylinder: BodyRepresentation = {
-    ...body,
-    source: 'primitive',
-    topology: {
-      faces: body.topology!.faces,
-      edges: [11, 12].map((hash) => ({
-        topologyId: `edge:${hash}`,
-        hash,
-        points: []
-      }))
-    }
-  };
-  const settling = (kind: 'fillet' | 'chamfer') =>
-    makeProps({
-      tool: kind,
-      selectedFeature: null,
-      selectedTopology: null,
-      commandSession: null,
-      edgeModifierBody: null,
-      selectedEdges: []
-    });
-  const settled = { edgeModifierBody: cylinder, selectedEdges: rimEdges };
-
-  it.each(['fillet', 'chamfer'] as const)(
-    'keeps a %s size typed before the edge selection arrives',
-    (kind) => {
-      const props = settling(kind);
-      const { rerender } = render(<Inspector {...props} />);
-      const size = screen.getByRole('textbox', {
-        name: kind === 'fillet' ? 'Radius' : 'Distance'
-      });
-      fireEvent.change(size, { target: { value: '99' } });
-
-      rerender(<Inspector {...props} {...settled} />);
-      expect(size).toBeInTheDocument();
-      expect(size).toHaveValue('99');
-      // A later pending snapshot drops the target again and restores it.
-      rerender(<Inspector {...props} />);
-      rerender(<Inspector {...props} {...settled} />);
-      expect(size).toHaveValue('99');
-      expect(props.onPreviewEdgeModifier).toHaveBeenLastCalledWith(
-        null,
-        kind,
-        expect.objectContaining({ size: 99, edgeHashes: [11, 12] })
-      );
-
-      fireEvent.submit(
-        screen.getByRole('button', { name: /Create/ }).closest('form')!
-      );
-      expect(props.onCreateEdgeModifier).toHaveBeenCalledExactlyOnceWith(
-        kind,
-        expect.objectContaining({ size: 99, edgeHashes: [11, 12] })
-      );
-    }
-  );
-
-  it('keeps the default size when the user typed nothing', () => {
-    const props = settling('fillet');
-    const { rerender } = render(<Inspector {...props} />);
-    rerender(<Inspector {...props} {...settled} />);
-    rerender(<Inspector {...props} />);
-    rerender(<Inspector {...props} {...settled} />);
-    expect(screen.getByRole('textbox', { name: 'Radius' })).toHaveValue('2');
-    fireEvent.submit(
-      screen.getByRole('button', { name: /Create/ }).closest('form')!
-    );
-    expect(props.onCreateEdgeModifier).toHaveBeenCalledExactlyOnceWith(
-      'fillet',
-      expect.objectContaining({ size: 2, edgeHashes: [11, 12] })
-    );
-  });
-});
-
-describe('editing an edge modifier set', () => {
-  const references: EdgeTopologyReferenceV5[] = [11, 12].map((hash) => ({
-    kind: 'edge',
-    producingFeatureId: feature.featureId,
-    lineageName: `primitive.edge.${hash}`,
-    currentHash: hash,
-    witnessVersion: 1,
-    witness: {
-      curveType: 'LINE',
-      length: 10,
-      closed: false,
-      endpoints: [
-        [0, 0, 0],
-        [10, 0, 0]
-      ],
-      midpoint: [5, 0, 0]
-    }
-  }));
-  const picked = (hash: number): TopologySelection => ({
-    bodyId,
-    kind: 'edge',
-    topologyId: `edge:${hash}`,
-    hash
-  });
-  const editFeature = (kind: 'fillet' | 'chamfer'): FeatureNode => ({
-    ...feature,
-    featureKind: kind,
-    data:
-      kind === 'fillet'
-        ? {
-            featureKind: kind,
-            targetBodyId: bodyId,
-            edgeHashes: [11, 12],
-            edgeReferences: references,
-            radius: 2
-          }
-        : {
-            featureKind: kind,
-            targetBodyId: bodyId,
-            edgeHashes: [11, 12],
-            edgeReferences: references,
-            distance: 2
-          }
-  });
-
-  it.each([
-    ['fillet', 'another feature'],
-    ['fillet', 'deselection'],
-    ['fillet', 'a create tool'],
-    ['chamfer', 'another feature'],
-    ['chamfer', 'deselection'],
-    ['chamfer', 'a create tool']
-  ] as const)(
-    'forgets a removed %s edge after %s ends its edit session',
-    (kind, ending) => {
-      const selectedFeature = editFeature(kind);
-      const props = makeProps({
-        selectedFeature,
-        featureSelectionSource: 'pinned',
-        commandSession: null
-      });
-      const { rerender } = render(<Inspector {...props} />);
-      fireEvent.click(screen.getByRole('button', { name: /^Remove 2 / }));
-      const listName = kind === 'fillet' ? 'Filleted edges' : 'Chamfered edges';
-      expect(
-        within(screen.getByRole('list', { name: listName })).getAllByRole(
-          'listitem'
-        )
-      ).toHaveLength(1);
-
-      if (ending === 'another feature') {
-        const other: FeatureNode = {
-          ...selectedFeature,
-          id: 'other-feature-node' as FeatureNode['id'],
-          featureId: 'other-feature' as FeatureNode['featureId'],
-          name: 'Other blend'
-        };
-        rerender(<Inspector {...props} selectedFeature={other} />);
-      } else if (ending === 'deselection') {
-        rerender(<Inspector {...props} selectedFeature={null} />);
-      } else {
-        rerender(<Inspector {...props} tool="box" />);
-      }
-      // The same feature/version may be reopened without a document edit.
-      // Its restored list and subsequent Apply must both use the stored set.
-      rerender(<Inspector {...props} />);
-      expect(
-        within(screen.getByRole('list', { name: listName })).getAllByRole(
-          'listitem'
-        )
-      ).toHaveLength(2);
-      expect(props.onApplyEdgeModifier).not.toHaveBeenCalled();
-      fireEvent.submit(
-        screen.getByRole('button', { name: /Apply/ }).closest('form')!
-      );
-      expect(props.onApplyEdgeModifier).toHaveBeenCalledExactlyOnceWith(
-        selectedFeature,
-        kind,
-        expect.objectContaining({
-          edgeHashes: [11, 12],
-          edgeReferences: references
-        })
-      );
-    }
-  );
-
-  it.each(['fillet', 'chamfer'] as const)(
-    'restores a removed stored %s edge on a new pick, preserving values and references',
-    (kind) => {
-      const selectedFeature = editFeature(kind);
-      const props = makeProps({
-        selectedFeature,
-        featureSelectionSource: 'pinned',
-        commandSession: null
-      });
-      const { rerender } = render(<Inspector {...props} />);
-      const size = screen.getByRole('textbox', {
-        name: kind === 'fillet' ? 'Radius' : 'Distance'
-      });
-      fireEvent.change(size, { target: { value: '4' } });
-      fireEvent.click(screen.getByRole('button', { name: /^Remove 2 / }));
-      const list = screen.getByRole('list', {
-        name: kind === 'fillet' ? 'Filleted edges' : 'Chamfered edges'
-      });
-      expect(within(list).getAllByRole('listitem')).toHaveLength(1);
-      expect(props.onPreviewEdgeModifier).toHaveBeenLastCalledWith(
-        selectedFeature,
-        kind,
-        expect.objectContaining({
-          size: 4,
-          edgeHashes: [11],
-          edgeReferences: [references[0]]
-        })
-      );
-
-      rerender(<Inspector {...props} selectedEdges={[picked(12)]} />);
-      expect(within(list).getAllByRole('listitem')).toHaveLength(2);
-      expect(size).toHaveValue('4');
-      expect(props.onPreviewEdgeModifier).toHaveBeenLastCalledWith(
-        selectedFeature,
-        kind,
-        expect.objectContaining({
-          size: 4,
-          edgeHashes: [11, 12],
-          edgeReferences: references
-        })
-      );
-      fireEvent.submit(
-        screen.getByRole('button', { name: /Apply/ }).closest('form')!
-      );
-      expect(props.onApplyEdgeModifier).toHaveBeenLastCalledWith(
-        selectedFeature,
-        kind,
-        expect.objectContaining({
-          size: 4,
-          edgeHashes: [11, 12],
-          edgeReferences: references
-        })
-      );
-    }
-  );
-
-  it('retains stored references after dropping an added edge, and lets it be picked again', () => {
-    const selectedFeature = editFeature('fillet');
-    const props = makeProps({
-      selectedFeature,
-      featureSelectionSource: 'pinned',
-      commandSession: null
-    });
-    const onRemoveSelectedEdge = vi.fn();
-    function EditHarness() {
-      const [selectedEdges, setSelectedEdges] = useState([picked(13)]);
-      return (
-        <>
-          <Inspector
-            {...props}
-            selectedEdges={selectedEdges}
-            onRemoveSelectedEdge={(edge) => {
-              onRemoveSelectedEdge(edge);
-              setSelectedEdges((current) =>
-                current.filter((pick) => pick.hash !== edge.hash)
-              );
-            }}
-          />
-          <button
-            type="button"
-            onClick={() =>
-              setSelectedEdges((current) =>
-                current.some((edge) => edge.hash === 13)
-                  ? current.filter((edge) => edge.hash !== 13)
-                  : [...current, picked(13)]
-              )
-            }
-          >
-            Shift pick extra edge
-          </button>
-        </>
-      );
-    }
-    render(<EditHarness />);
-    const radius = screen.getByRole('textbox', { name: 'Radius' });
-    fireEvent.change(radius, { target: { value: '4' } });
-    const list = screen.getByRole('list', { name: 'Filleted edges' });
-    fireEvent.click(screen.getByRole('button', { name: /^Remove 3 / }));
-    expect(onRemoveSelectedEdge).toHaveBeenCalledExactlyOnceWith(picked(13));
-    expect(within(list).getAllByRole('listitem')).toHaveLength(2);
-    expect(props.onPreviewEdgeModifier).toHaveBeenLastCalledWith(
-      selectedFeature,
-      'fillet',
-      expect.objectContaining({
-        size: 4,
-        edgeHashes: [11, 12],
-        edgeReferences: references
-      })
-    );
-    fireEvent.submit(
-      screen.getByRole('button', { name: /Apply/ }).closest('form')!
-    );
-    expect(props.onApplyEdgeModifier).toHaveBeenLastCalledWith(
-      selectedFeature,
-      'fillet',
-      expect.objectContaining({
-        edgeHashes: [11, 12],
-        edgeReferences: references
-      })
-    );
-
-    // Removing from the list released the viewport pick. The very next
-    // Shift+Click restores the edge, without a separate deselection first.
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Shift pick extra edge' })
-    );
-    expect(within(list).getAllByRole('listitem')).toHaveLength(3);
-    expect(radius).toHaveValue('4');
-    expect(props.onPreviewEdgeModifier).toHaveBeenLastCalledWith(
-      selectedFeature,
-      'fillet',
-      expect.objectContaining({ size: 4, edgeHashes: [11, 12, 13] })
-    );
-    const preview = vi
-      .mocked(props.onPreviewEdgeModifier)
-      .mock.calls.at(-1)?.[2];
-    expect(preview?.edgeReferences).toBeUndefined();
   });
 });
 
@@ -1059,53 +673,6 @@ describe('imported face recognition display', () => {
       />
     );
     expect(screen.getByText(/worker gone/)).toBeVisible();
-  });
-});
-
-describe('body appearance color picker', () => {
-  it('closes only the color picker on Escape, leaving the inspector open', () => {
-    const props = makeProps({
-      selectedFeature: feature,
-      featureSelectionSource: 'pinned',
-      commandSession: null
-    });
-    render(<Inspector {...props} />);
-    const swatch = screen.getByRole('button', { name: 'Pick body color' });
-    fireEvent.click(swatch);
-    expect(swatch).toHaveAttribute('aria-expanded', 'true');
-    fireEvent.keyDown(swatch, { key: 'Escape' });
-    expect(swatch).toHaveAttribute('aria-expanded', 'false');
-    expect(props.onCancel).not.toHaveBeenCalled();
-    fireEvent.keyDown(swatch, { key: 'Escape' });
-    expect(props.onCancel).toHaveBeenCalledOnce();
-  });
-
-  it('resets a chosen colour by clearing it, back to the one default (G2)', () => {
-    const props = makeProps({
-      selectedBody: { ...body, color: '#a78bfa' },
-      selectedFeature: feature,
-      featureSelectionSource: 'pinned',
-      commandSession: null
-    });
-    render(<Inspector {...props} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Reset to default' }));
-    expect(props.onCommitBodyAppearance).toHaveBeenCalledWith(body.bodyId, {
-      color: null,
-      opacity: null
-    });
-  });
-
-  it('offers no reset for a body already in the default colour', () => {
-    const props = makeProps({
-      selectedBody: { ...body, color: DEFAULT_BODY_COLOR },
-      selectedFeature: feature,
-      featureSelectionSource: 'pinned',
-      commandSession: null
-    });
-    render(<Inspector {...props} />);
-    expect(
-      screen.queryByRole('button', { name: 'Reset to default' })
-    ).not.toBeInTheDocument();
   });
 });
 
@@ -1539,7 +1106,6 @@ describe('Inspector sketch editing (S04)', () => {
       selectedSketchObject: first?.kind === 'sketch-object' ? first.data : null,
       selectedBody: null,
       selectedTopology: null,
-      selectedBodyIds: [],
       commandSession: null,
       featureSelectionSource: 'pinned'
     });

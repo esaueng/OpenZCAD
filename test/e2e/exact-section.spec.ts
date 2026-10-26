@@ -1,9 +1,11 @@
 import {
+  createPrimitiveInPlace,
   test,
   expect,
   stubApi,
   finishInPlaceCommand,
-  pickObjectsBody
+  pickObjectsBody,
+  openMoveOptions
 } from './openzcad-fixtures';
 import type { Download, Page } from '@playwright/test';
 
@@ -147,13 +149,14 @@ async function createBox(
   dimensions: { width: string; depth: string; height: string },
   name: string
 ) {
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByLabel('Name').fill(name);
-  await inspector.getByLabel('Width (X)').fill(dimensions.width);
-  await inspector.getByLabel('Depth (Y)').fill(dimensions.depth);
-  await inspector.getByLabel('Height (Z)').fill(dimensions.height);
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: {
+      width: dimensions.width,
+      depth: dimensions.depth,
+      height: dimensions.height
+    },
+    name: name
+  });
   await expect(
     page.locator('.feature-row-main', { hasText: name })
   ).toBeVisible();
@@ -188,11 +191,12 @@ test('exports the exact section of a transformed body as a measured DXF', async 
 
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
   const move = page.getByRole('form', { name: 'Move controls' });
+  await openMoveOptions(move);
   await move.getByLabel('Move X in mm').fill('12');
   await move.getByLabel('Move Y in mm').fill('7');
   await move.getByLabel('Move Z in mm').fill('4');
   await move.getByLabel('Rotate Z in degrees').fill('30');
-  await move.getByRole('button', { name: /Apply move/ }).click();
+  await move.getByRole('button', { name: 'Done' }).click();
   await expect(page.locator('.feature-row', { hasText: 'Move' })).toBeVisible();
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
@@ -253,23 +257,22 @@ test('keeps a section hole in the exact DXF and shuts export during a posed prev
   test.setTimeout(90_000);
   await stubApi(page);
   await createProject(page, 'Section Hole');
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await createBox(page, { width: '40', depth: '30', height: '30' }, 'Plate');
 
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
-  await inspector.getByLabel('Name').fill('Bore tool');
-  await inspector.getByLabel('Radius', { exact: true }).fill('6');
-  await inspector.getByLabel('Height', { exact: true }).fill('30');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '6', height: '30' },
+    name: 'Bore tool'
+  });
   await expect(
     page.locator('.feature-row-main', { hasText: 'Bore tool' })
   ).toBeVisible();
 
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
   const move = page.getByRole('form', { name: 'Move controls' });
+  await openMoveOptions(move);
   await move.getByLabel('Move X in mm').fill('20');
   await move.getByLabel('Move Y in mm').fill('15');
-  await move.getByRole('button', { name: /Apply move/ }).click();
+  await move.getByRole('button', { name: 'Done' }).click();
   await expect(page.locator('.feature-row', { hasText: 'Move' })).toBeVisible();
 
   // U09: Subtract runs in place: the base, then the tool, then Done.
@@ -324,13 +327,14 @@ test('keeps a section hole in the exact DXF and shuts export during a posed prev
   // the exact body the DXF exporter would section.
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
   await expect(page.getByRole('form', { name: 'Move controls' })).toBeVisible();
+  await openMoveOptions(move);
   await move.getByLabel('Move X in mm').fill('2');
   await expect(page.locator('.rail-section-state-kind')).toContainText(
     'Clipping preview'
   );
-  // The section controls step aside while the Move panel holds the lane, and
-  // the export under them is disabled all the same.
-  await expect(page.locator('.rail-section-panel')).toBeHidden();
+  // A Move's bar holds the command row, not the lane (U09), so the section
+  // controls stay up; the export under them is disabled while it poses.
+  await expect(page.locator('.rail-section-panel')).toBeVisible();
   await expect(page.locator('.rail-section-export')).toBeDisabled();
 
   await page.keyboard.press('Escape');

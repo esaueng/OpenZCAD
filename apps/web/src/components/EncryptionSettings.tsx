@@ -47,8 +47,11 @@ import {
   type EncryptionState,
   type NewDeviceApprovalStep
 } from '../lib/e2ee/accountKeys';
+import type { RemovalOutcome } from '../lib/e2ee/deviceRemoval';
 import { createE2eeApi, E2eeApiError } from '../lib/e2ee/e2eeApi';
+import { projectRemovalStep } from '../lib/e2ee/projectRemovalStep';
 import { DeviceListPinConflict } from '../lib/e2ee/deviceStore';
+import { notifyContactsChanged } from '../lib/e2ee/contactFocus';
 import {
   deviceKeyFactory,
   deviceKeyStore
@@ -60,6 +63,7 @@ import {
 } from '../lib/e2ee/passkeys';
 import { encodeQr, qrSvgPath } from '../lib/e2ee/qrCode';
 import { invalidateAccountKeyReads } from '../lib/e2ee/unlockedKeys';
+import { encryptionStateChanged } from '../lib/e2ee/encryptionStateEvents';
 import {
   getKeySessionRevision,
   getKeySessionVersion,
@@ -70,6 +74,12 @@ import {
 } from '../lib/e2ee/keySession';
 import { Group, Notice, SettingRow, Status } from './settingsControls';
 import { ProjectEncryptionPreference } from './ProjectEncryptionPreference';
+import { ExistingProjectEncryption } from './ExistingProjectEncryption';
+import { StopProjectEncryption } from './StopProjectEncryption';
+import { EncryptedProjectRecovery } from './EncryptedProjectRecovery';
+import { EncryptionContacts } from './EncryptionContacts';
+import { EncryptedInvitations } from './EncryptedInvitations';
+import { AssistantAccessSettings } from './AssistantAccessSettings';
 import '../styles/components/encryption.css';
 
 /**
@@ -112,6 +122,7 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
     const revision = getKeySessionRevision();
     return {
       userId,
+      readScope: lifetime,
       api: createE2eeApi(),
       store: deviceKeyStore(),
       createDeviceKeys: deviceKeyFactory(),
@@ -134,7 +145,10 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
       try {
         const next = await work();
         if (!isCurrent()) return false;
-        if (next) setState(next);
+        if (next) {
+          setState(next);
+          encryptionStateChanged(userId);
+        }
         return true;
       } catch (caught) {
         if (!isCurrent()) return false;
@@ -145,7 +159,7 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
         if (isCurrent()) setBusy(false);
       }
     },
-    [lifetime]
+    [lifetime, userId]
   );
 
   const reload = useCallback(() => run(() => loadEncryption(ctx)), [ctx, run]);
@@ -157,7 +171,7 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
     return () => {
       lifetime.active = false;
       lifetime.generation++;
-      invalidateAccountKeyReads(userId);
+      invalidateAccountKeyReads(userId, lifetime);
     };
   }, [reload, lifetime, userId]);
 
@@ -201,45 +215,90 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
           </Notice>
         </Group>
       ) : state.kind === 'not-set-up' ? (
-        flow?.kind === 'setup' ? (
-          <RecoveryKeyFlow
-            {...shared}
-            title="Save your recovery key"
-            finishLabel="Finish setup"
-            onFinish={(secret) =>
-              setUpEncryption(ctx, {
-                recoverySecret: secret,
-                label: defaultDeviceLabel(navigator.userAgent)
-              })
-            }
-          />
-        ) : (
-          <Group title="Set up">
-            <SettingRow
-              title="End-to-end encryption"
-              hint="Not set up. This creates your keys and a recovery key. Projects are not encrypted yet: that comes in a later beta step."
-            >
-              <button
-                className="primary"
-                type="button"
-                disabled={busy}
-                onClick={() => setFlow({ kind: 'setup' })}
+        <>
+          <EncryptedInvitations ready={false} />
+          {flow?.kind === 'setup' ? (
+            <RecoveryKeyFlow
+              {...shared}
+              title="Save your recovery key"
+              finishLabel="Finish setup"
+              onFinish={(secret) =>
+                setUpEncryption(ctx, {
+                  recoverySecret: secret,
+                  label: defaultDeviceLabel(navigator.userAgent)
+                })
+              }
+            />
+          ) : (
+            <Group title="Set up">
+              <SettingRow
+                title="End-to-end encryption"
+                hint="Not set up. This creates your keys and a recovery key. Projects are not encrypted yet: that comes in a later beta step."
               >
-                <ShieldCheck size={14} aria-hidden="true" />
-                Set up encryption
-              </button>
-            </SettingRow>
-          </Group>
-        )
+                <button
+                  className="primary"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setFlow({ kind: 'setup' })}
+                >
+                  <ShieldCheck size={14} aria-hidden="true" />
+                  Set up encryption
+                </button>
+              </SettingRow>
+            </Group>
+          )}
+        </>
       ) : (
-        <AccountPanel
-          {...shared}
-          account={state.account}
-          identityChanged={state.kind === 'identity-changed'}
-          onReload={reload}
-        />
+        <>
+          <AccountPanel
+            {...shared}
+            account={state.account}
+            identityChanged={state.kind === 'identity-changed'}
+            onReload={reload}
+          />
+          {state.kind === 'ready' ? (
+            <EncryptedInvitations ready={state.account.unlocked} />
+          ) : null}
+          {state.kind === 'ready' ? (
+            <EncryptionContacts
+              keys={ctx}
+              account={state.account}
+              Scanner={QrScanner}
+              onConfirmFromDevice={
+                state.account.device &&
+                (state.account.deviceStatus === 'certified' ||
+                  state.account.deviceStatus === 'approved')
+                  ? () =>
+                      void run(async () => {
+                        // The approval exchange hands this device the
+                        // approver's contacts head (ADR-024).
+                        const next = await requestApproval(
+                          ctx,
+                          state.account,
+                          state.account.device?.label ??
+                            defaultDeviceLabel(navigator.userAgent)
+                        );
+                        setFlow({ kind: 'request', step: next });
+                      })
+                  : undefined
+              }
+            />
+          ) : null}
+        </>
       )}
       <ProjectEncryptionPreference
+        userId={userId}
+        unlocked={state.kind === 'ready' && state.account.unlocked}
+      />
+      <ExistingProjectEncryption
+        userId={userId}
+        unlocked={state.kind === 'ready' && state.account.unlocked}
+      />
+      <StopProjectEncryption
+        userId={userId}
+        unlocked={state.kind === 'ready' && state.account.unlocked}
+      />
+      <AssistantAccessSettings
         userId={userId}
         unlocked={state.kind === 'ready' && state.account.unlocked}
       />
@@ -279,6 +338,12 @@ function messageFor(error: unknown): string {
   if (error instanceof Error && error.name === 'E2eeError') {
     return `The keys did not verify: ${error.message}`;
   }
+  if (
+    error instanceof Error &&
+    (error.name === 'DeviceRemovalError' || error.name === 'ProjectGroupError')
+  ) {
+    return error.message;
+  }
   return 'Encryption keys are unavailable right now. Check your connection and try again.';
 }
 
@@ -297,6 +362,15 @@ function formatDate(value: number | string): string {
     month: 'short',
     day: 'numeric'
   });
+}
+
+/** What a removal left for the other devices, in plain words. */
+function removalNotice(outcome: RemovalOutcome): string | null {
+  const left = outcome.left.filter((item) => item.projectId !== '*').length;
+  if (outcome.left.length === 0) return null;
+  if (left === 0)
+    return 'The device was removed, but its encrypted projects could not be updated yet. Your other devices update each one before their next save.';
+  return `The device was removed. ${left} encrypted ${left === 1 ? 'project gets' : 'projects get'} new keys the next time another of your devices saves ${left === 1 ? 'it' : 'them'}.`;
 }
 
 async function readRecoveryKey(text: string): Promise<Bytes> {
@@ -328,8 +402,14 @@ function AccountPanel({
   );
   const canUsePasskey =
     passkeysAvailable() && !identityChanged && passkeys.length > 0;
+  const [removalLeft, setRemovalLeft] = useState<string | null>(null);
+  const projectStep = () =>
+    projectRemovalStep(ctx, (outcome) =>
+      setRemovalLeft(removalNotice(outcome))
+    );
   return (
     <>
+      {removalLeft ? <Notice tone="warning">{removalLeft}</Notice> : null}
       {identityChanged ? (
         <Notice tone="warning" role="alert">
           Your encryption keys were replaced on another device, so this device
@@ -364,6 +444,11 @@ function AccountPanel({
       </Group>
 
       {!identityChanged &&
+      // A certified device asking another to confirm its contacts list.
+      !(
+        flow?.kind === 'request' &&
+        (flow.step.step === 'waiting' || flow.step.step === 'compare')
+      ) &&
       (account.deviceStatus === 'certified' ||
         account.deviceStatus === 'approved') ? null : (
         <EnrollPanel {...shared} account={account} />
@@ -426,6 +511,13 @@ function AccountPanel({
             </button>
           </SettingRow>
         </Group>
+      ) : null}
+      {certified ? (
+        <EncryptedProjectRecovery
+          ctx={ctx}
+          account={account}
+          canUsePasskey={canUsePasskey}
+        />
       ) : null}
       <Group title="Devices" note={`${account.list.devices.length} certified`}>
         {account.list.devices.map((device) => (
@@ -493,10 +585,13 @@ function AccountPanel({
           intro="All read-only devices will need approval again. Certified devices keep working."
           actionLabel="Revoke read-only access"
           danger
-          onSubmit={(secret) => revokeReadOnlyDevices(ctx, account, secret)}
+          onSubmit={(secret) =>
+            revokeReadOnlyDevices(ctx, account, secret, projectStep())
+          }
           onPasskey={
             canUsePasskey
-              ? () => revokeReadOnlyDevices(ctx, account, 'passkey')
+              ? () =>
+                  revokeReadOnlyDevices(ctx, account, 'passkey', projectStep())
               : undefined
           }
         />
@@ -509,11 +604,18 @@ function AccountPanel({
           actionLabel="Remove device"
           danger
           onSubmit={(secret) =>
-            removeDevice(ctx, account, flow.deviceId, secret)
+            removeDevice(ctx, account, flow.deviceId, secret, projectStep())
           }
           onPasskey={
             canUsePasskey
-              ? () => removeDevice(ctx, account, flow.deviceId, 'passkey')
+              ? () =>
+                  removeDevice(
+                    ctx,
+                    account,
+                    flow.deviceId,
+                    'passkey',
+                    projectStep()
+                  )
               : undefined
           }
         />
@@ -588,11 +690,18 @@ function AccountPanel({
           danger
           intro="This replaces your account and encryption keys. The removed passkey cannot open future keys. Delete it from your passkey provider separately."
           onSubmit={(secret) =>
-            removePasskey(ctx, account, flow.targetId, secret)
+            removePasskey(ctx, account, flow.targetId, secret, projectStep())
           }
           onPasskey={
             canUsePasskey
-              ? () => removePasskey(ctx, account, flow.targetId, 'passkey')
+              ? () =>
+                  removePasskey(
+                    ctx,
+                    account,
+                    flow.targetId,
+                    'passkey',
+                    projectStep()
+                  )
               : undefined
           }
         />
@@ -698,11 +807,24 @@ function EnrollPanel({
           if (next.step === 'done') {
             setFlow(null);
             void run(async () => next.state);
+            // The grant may have confirmed this device's contacts list.
+            notifyContactsChanged();
           } else {
             setFlow({ kind: 'request', step: next });
           }
         })
-        .catch(() => undefined);
+        .catch((caught: unknown) => {
+          if (stopped) return;
+          if (
+            caught instanceof EncryptionFlowError &&
+            caught.code === 'grant-invalid'
+          ) {
+            window.clearInterval(timer);
+          }
+          void run(async () => {
+            throw caught;
+          });
+        });
     }, 2000);
     return () => {
       stopped = true;
@@ -743,6 +865,7 @@ function EnrollPanel({
                       const next = await confirmApprovalCode(ctx);
                       if (next.step === 'done') {
                         setFlow(null);
+                        notifyContactsChanged();
                         return next.state;
                       }
                       setFlow({ kind: 'request', step: next });
@@ -817,6 +940,8 @@ function EnrollPanel({
     </Group>
   );
 }
+
+export { EnrollPanel };
 
 function ScanCodeDisplay({ code }: { code: string }) {
   const { path, size } = useMemo(() => qrSvgPath(encodeQr(code)), [code]);

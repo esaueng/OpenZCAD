@@ -10,7 +10,8 @@ import {
   expect,
   enableFullRender,
   stubApi,
-  expectBodyCount
+  expectBodyCount,
+  finishExtrude
 } from './openzcad-fixtures';
 
 /**
@@ -129,11 +130,7 @@ test('exports the view as a sized, transparent PNG and a sketch as exact SVG', a
   const row = page.locator('.feature-row-main', { hasText: 'slot' });
   await row.click();
   await page.keyboard.press('e');
-  const distance = page
-    .getByRole('region', { name: 'Extrude operation' })
-    .getByRole('textbox', { name: 'Distance', exact: true });
-  await distance.fill('5');
-  await distance.press('Enter');
+  await finishExtrude(page, '5');
   await expectBodyCount(page, 1);
   // Nothing selected: the image is the whole view.
   await page.keyboard.press('Escape');

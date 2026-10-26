@@ -1,4 +1,9 @@
-import { expect, stubApi, test } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  expect,
+  stubApi,
+  test
+} from './openzcad-fixtures';
 import { STATUS_LIFETIME_MS } from '../../apps/web/src/lib/statusLifetime';
 
 /**
@@ -15,9 +20,7 @@ test('status messages are retired by the next selection and expire on their own'
   await page.goto('/');
   await page.getByLabel('Project name').fill('Quiet Part');
   await page.getByRole('button', { name: 'Create project' }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await createPrimitiveInPlace(page, 'box');
 
   const statusButton = page.locator('.workspace-toast-body');
   await expect(statusButton).toContainText('Added box.');

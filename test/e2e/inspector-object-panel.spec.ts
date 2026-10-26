@@ -1,5 +1,11 @@
 import { DEFAULT_APP_SETTINGS } from '@openzcad/shared';
-import { createProject, expect, stubApi, test } from './openzcad-fixtures';
+import {
+  createProject,
+  expect,
+  stubApi,
+  test,
+  createPrimitiveInPlace
+} from './openzcad-fixtures';
 
 for (const directManipulation of [true, false]) {
   test(`a pick opens no card and History opens the feature with direct manipulation ${directManipulation ? 'on' : 'off'}`, async ({
@@ -29,12 +35,12 @@ for (const directManipulation of [true, false]) {
     });
     await createProject(page, 'Object inspector');
     await expect(page).toHaveTitle(/OpenZCAD/);
-    await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
     const inspector = page.getByRole('region', { name: 'Feature inspector' });
-    await inspector.getByLabel('Radius', { exact: true }).fill('14');
     const featureName = 'CylinderDefinition'.repeat(16);
-    await inspector.getByLabel('Name', { exact: true }).fill(featureName);
-    await inspector.getByRole('button', { name: /^Create/ }).click();
+    await createPrimitiveInPlace(page, 'cylinder', {
+      sizes: { radius: '14' },
+      name: featureName
+    });
     await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
     // An Objects row pick opens no card: the Selection card names the body.
     await page.locator('.body-row-main').first().click();
@@ -67,9 +73,13 @@ for (const directManipulation of [true, false]) {
     });
     if (directManipulation) await expect(operation).toBeVisible();
     else await expect(operation).toHaveCount(0);
-    // An inferred feature is never deleted from a pick.
+    // Delete removes the feature that defines the picked face, and Undo
+    // brings it back.
     await page.keyboard.press('Delete');
-    await page.keyboard.press('Backspace');
+    await expect(page.locator('.feature-row')).toHaveCount(0);
+    const toast = page.locator('.toast');
+    await expect(toast).toContainText(`Deleted ${featureName}`);
+    await toast.getByRole('button', { name: 'Undo' }).click();
     await expect(page.locator('.feature-row')).toHaveCount(1);
 
     // The feature's details and form open from its History row.

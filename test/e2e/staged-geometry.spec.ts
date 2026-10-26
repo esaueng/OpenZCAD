@@ -1,13 +1,32 @@
+import { revealModelPanel } from './openzcad-fixtures';
 import { readFile } from 'node:fs/promises';
 import type { Page } from '@playwright/test';
 import {
+  createPrimitiveInPlace,
   test,
   expect,
   stubApi,
   expectBodyCount,
   locateEdge,
-  revealModelPanel
+  finishInPlaceCommand
 } from './openzcad-fixtures';
+
+/**
+ * Opens a primitive in place (U09) and waits for its preview, so a gate
+ * armed next holds the committed build's analysis, not the preview's.
+ */
+async function openPrimitiveReady(page: Page, title: 'Box' | 'Cylinder') {
+  await page
+    .getByRole('button', {
+      name: title === 'Box' ? /^Box \(B\)/ : /^Cylinder \(C\)/
+    })
+    .click();
+  await expect(
+    page
+      .getByRole('group', { name: `${title} command` })
+      .getByRole('button', { name: /^Done/ })
+  ).toBeEnabled({ timeout: 30_000 });
+}
 
 async function installAnalysisGate(page: Page) {
   await page.addInitScript(() => {
@@ -67,9 +86,8 @@ test('suspends saved measurements while a resized body waits for analysis', asyn
   await page.goto('/');
   await page.getByLabel('Project name').fill('Staged saved measurement');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   const modes = page.getByRole('group', { name: 'Workspace mode' });
   await modes.getByRole('button', { name: 'View', exact: true }).click();
@@ -149,16 +167,13 @@ test('draws accepted geometry before analysis, then completes without reinstalli
   await page.getByLabel('Project name').fill('Staged geometry');
   await page.getByRole('button', { name: 'Create project' }).click();
   await expectBodyCount(page, 0);
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await openPrimitiveReady(page, 'Box');
   await page.evaluate(() => {
     (window as typeof window & { holdAnalysis: boolean }).holdAnalysis = true;
     performance.clearMeasures('oz:edit.frame');
     performance.clearMeasures('oz:edit.analysis-ready');
   });
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: 'Create', exact: true })
-    .click();
+  await finishInPlaceCommand(page, 'Box');
   await expect
     .poll(() =>
       page.evaluate(() =>
@@ -261,14 +276,11 @@ test('an edge hook pick refused before analysis reports no selection, then lands
   await page.getByLabel('Project name').fill('Staged edge pick');
   await page.getByRole('button', { name: 'Create project' }).click();
   await expectBodyCount(page, 0);
-  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  await openPrimitiveReady(page, 'Cylinder');
   await page.evaluate(() => {
     (window as typeof window & { holdAnalysis: boolean }).holdAnalysis = true;
   });
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
+  await finishInPlaceCommand(page, 'Cylinder');
   await expect
     .poll(() =>
       page.evaluate(
@@ -320,15 +332,10 @@ test('acknowledges appearance edits without reinstalling on later selection', as
   await page.getByLabel('Project name').fill('Retained appearance');
   await page.getByRole('button', { name: 'Create project' }).click();
   await expectBodyCount(page, 0);
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
-  await page.locator('.feature-row').first().dblclick();
-  const appearance = inspector.getByText('Appearance', { exact: true });
-  await appearance.focus();
-  await appearance.press('Enter');
-  const opacity = inspector.getByLabel('Body opacity');
+  await page.getByRole('button', { name: /^Change color of/ }).click();
+  const opacity = page.getByRole('slider', { name: /^Opacity of/ });
   await expect(opacity).toBeVisible();
   await opacity.focus();
   await opacity.press('ArrowLeft');
@@ -368,18 +375,16 @@ test('blocks staged context actions and exports, then exports both completed bod
   await page.getByLabel('Project name').fill('Staged export');
   await page.getByRole('button', { name: 'Create project' }).click();
   await expectBodyCount(page, 0);
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await page.locator('.body-row-main').first().click();
   await expect(page.locator('.selection-callout-chip')).toBeVisible();
 
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await openPrimitiveReady(page, 'Box');
   await page.evaluate(() => {
     (window as typeof window & { holdAnalysis: boolean }).holdAnalysis = true;
   });
-  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await finishInPlaceCommand(page, 'Box');
   await expect(page.getByText('Preparing model details…')).toBeVisible();
   await expect
     .poll(() =>
@@ -460,7 +465,6 @@ test('shows current staged advisories and clears resolved diagnostics before ana
   await page.getByLabel('Project name').fill('Staged diagnostics');
   await page.getByRole('button', { name: 'Create project' }).click();
   await expectBodyCount(page, 0);
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
   const diagnosticRows = page.locator('.diagnostic-row');
   const warningCount = page
     .getByRole('group', { name: 'Workspace status' })
@@ -471,14 +475,13 @@ test('shows current staged advisories and clears resolved diagnostics before ana
     (window as typeof window & { warningOverride: string[] }).warningOverride =
       ['Previous geometry advisory.'];
   });
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
   await expect(diagnosticRows).toHaveText(['Previous geometry advisory.']);
   await expect(warningCount).toHaveText('warnings1');
 
   for (const warnings of [['Current geometry advisory.'], []]) {
-    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+    await openPrimitiveReady(page, 'Box');
     await page.evaluate((warnings) => {
       const scope = window as typeof window & {
         warningOverride: string[];
@@ -489,9 +492,7 @@ test('shows current staged advisories and clears resolved diagnostics before ana
       scope.holdAnalysis = true;
       scope.heldAnalysis = 0;
     }, warnings);
-    await inspector
-      .getByRole('button', { name: 'Create', exact: true })
-      .click();
+    await finishInPlaceCommand(page, 'Box');
     await expect(page.getByText('Preparing model details…')).toBeVisible();
     await expect
       .poll(() =>
