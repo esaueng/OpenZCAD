@@ -4192,9 +4192,29 @@ export function App() {
   } | null>(null);
   const extrudeEditRef = useRef(extrudeEdit);
   extrudeEditRef.current = extrudeEdit;
-  /** The bar's settings as numbers, for the back arrow and the draft rig. */
-  const [regionExtrudeState, setRegionExtrudeState] =
-    useState<ExtrudeCommandState | null>(null);
+  /**
+   * The in-place Extrude session running now: a new extrude (by its sketch)
+   * or an edit (by its feature and arming), whichever bar is up.
+   */
+  const extrudeSessionKey = extrudeEdit
+    ? `edit:${extrudeEdit.featureId}:${extrudeEdit.generation}`
+    : interaction.mode === 'region'
+      ? `create:${interaction.target.sketchId}`
+      : null;
+  /**
+   * The bar's settings as numbers, for the back arrow and the draft rig,
+   * owned by the session that published them: one session's leftovers are
+   * never another's, and no effect clearing them on a switch can wipe what
+   * the next session's bar has just published.
+   */
+  const [extrudeDraftState, setExtrudeDraftState] = useState<{
+    session: string;
+    state: ExtrudeCommandState;
+  } | null>(null);
+  const regionExtrudeState =
+    extrudeDraftState && extrudeDraftState.session === extrudeSessionKey
+      ? extrudeDraftState.state
+      : null;
   /**
    * The bar's distance as a number, for the region arrow to stand at when
    * it is rebuilt (a new choice), rather than back at its last drag.
@@ -9187,7 +9207,6 @@ export function App() {
     edgeFormPreview.clear();
     setFeatureFormError(null);
     setKeypad((current) => (current?.kind === 'extrude' ? null : current));
-    setRegionExtrudeState(null);
     setExtrudeEdit(null);
   }
 
@@ -16941,7 +16960,6 @@ export function App() {
   useEffect(() => {
     regionExtrudeSettings.current = null;
     regionDraftDistance.current = null;
-    setRegionExtrudeState(null);
   }, [regionSketchKey]);
   useEffect(() => {
     extrudeEditRequest.current += 1;
@@ -29087,7 +29105,12 @@ export function App() {
                   onOpenValue={(valueId, at) =>
                     openRegionExtrudeKeypad(valueId, at)
                   }
-                  onDraft={(state) => setRegionExtrudeState(state)}
+                  onDraft={(state) =>
+                    setExtrudeDraftState({
+                      session: `edit:${extrudeEdit.featureId}:${extrudeEdit.generation}`,
+                      state
+                    })
+                  }
                   onPreview={(value) =>
                     previewExtrudeForm(extrudeEditFeature, value)
                   }
@@ -29135,7 +29158,10 @@ export function App() {
                     )
                       ? state.distance
                       : null;
-                    setRegionExtrudeState(state);
+                    setExtrudeDraftState({
+                      session: `create:${interaction.target.sketchId}`,
+                      state
+                    });
                     // A new choice is the region's to infer from, and any
                     // change clears a refusal; a value alone is neither,
                     // and must not rebuild the region's arrow under a drag.

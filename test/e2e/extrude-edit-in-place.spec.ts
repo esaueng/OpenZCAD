@@ -20,6 +20,7 @@ import {
   chooseInPlaceOption,
   editExtrudeFromHistory,
   enterCommandValue,
+  setBarValues,
   revealModelPanel,
   waitForStillViewport
 } from './openzcad-fixtures';
@@ -301,3 +302,52 @@ for (const command of ['an edit', 'a new extrude'] as const) {
     await expect(bar).toHaveCount(0);
   });
 }
+
+test('an edit armed over a new extrude stands its handles at once', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await stubApi(page);
+  // A spare sketch beside the post, for a new extrude to start on.
+  const document = addSketchFeature(postDocument('Extrude edit over create'), {
+    name: 'Spare sketch',
+    plane: 'XY',
+    offset: 0,
+    objects: [{ objectKind: 'circle', radius: 3, centerX: -30, centerY: 0 }]
+  }).document;
+  await openDocument(page, document);
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '2', {
+    timeout: 30_000
+  });
+  const create = page.getByRole('group', { name: 'Extrude command' });
+  await expect
+    .poll(async () => {
+      await canvas.evaluate((element) =>
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-select-profile', {
+            detail: { index: 0, additive: false }
+          })
+        )
+      );
+      return create.count();
+    })
+    .toBe(1);
+  await setBarValues(page, create, { Distance: '6' });
+
+  // Straight from the new extrude to the post's History row.
+  await revealModelPanel(page, 'History');
+  const edit = await editExtrudeFromHistory(
+    page,
+    page.locator('.feature-row-main[title^="Post — "]'),
+    'Post'
+  );
+  await expect(create).toHaveCount(0);
+  await expect
+    .poll(async () => (await handles(canvas)).distance?.value, {
+      timeout: 30_000
+    })
+    .toBe(10);
+  await expect(page.getByTestId('command-handle-distance')).toHaveText('10 mm');
+  await edit.getByRole('button', { name: 'Cancel' }).click();
+});
