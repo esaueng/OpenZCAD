@@ -22,10 +22,13 @@ import {
   expect,
   stubApi,
   expectBodyCount,
-  chooseInPlaceOption,
-  extrudeBar,
   setInPlaceOptionValues,
-  waitForStillViewport
+  waitForStillViewport,
+  barChoice,
+  chooseBarOption,
+  editExtrudeFromHistory,
+  chooseInPlaceOption,
+  extrudeBar
 } from './openzcad-fixtures';
 
 /**
@@ -176,15 +179,18 @@ for (const action of ['Cancel', 'Close panel']) {
     const top = await faceOf(document, ceiling.bodyId, 1);
     const canvas = await open(page, document);
     const point = await pointOverFace(page, canvas, top.topologyId);
-    await page.locator('.feature-row-main', { hasText: /^Post$/ }).click();
-    const form = page.getByRole('form', { name: 'Extrude settings' });
-    await form.getByLabel('Extent').selectOption('to-face');
-    await form.getByRole('button', { name: 'Pick face', exact: true }).click();
-    await expect(
-      form.getByRole('button', { name: 'Pick face', exact: true })
-    ).toHaveAttribute('aria-pressed', 'true');
+    const edit = await editExtrudeFromHistory(
+      page,
+      page.locator('.feature-row-main', { hasText: /^Post$/ }),
+      'Post'
+    );
+    // To face arms the face pick at once.
+    await chooseBarOption(edit, 'Extent', 'To face');
+    await expect(edit).toContainText(
+      'Click a planar face parallel to the sketch'
+    );
     await page.getByRole('button', { name: action, exact: true }).click();
-    await expect(form).toHaveCount(0);
+    await expect(edit).toHaveCount(0);
     const bounds = (await canvas.boundingBox())!;
     await page.mouse.click(bounds.x + 10, bounds.y + 10);
     await page.mouse.click(point.x, point.y);
@@ -247,18 +253,23 @@ test('creates a drafted extrude up to a face picked in the viewport', async ({
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   await expectBodyCount(page, 2);
 
-  // The history row names the extent and the draft; the card reopens on
+  // The history row names the extent and the draft; the edit reopens on
   // what was stored, not the dormant distance.
   const post = page.locator('.feature-row', { hasText: 'Extrude' }).last();
   await expect(post).toContainText('To face · 2° draft');
-  await post.locator('.feature-row-main').click();
-  await expect(page.getByLabel('Extent')).toHaveValue('to-face');
-  await expect(page.locator('.panel-body')).toContainText(
-    'Up to Ceiling Body · face'
+  const edit = await editExtrudeFromHistory(
+    page,
+    post.locator('.feature-row-main')
   );
-  await expect(page.getByRole('textbox', { name: 'Draft angle' })).toHaveValue(
-    '2'
+  await expect(barChoice(edit, 'Extent', 'To face')).toHaveAttribute(
+    'aria-checked',
+    'true'
   );
+  await expect(edit).toContainText('Up to Ceiling Body · face');
+  await edit.locator('details.in-place-command-options summary').click();
+  await expect(
+    edit.getByRole('button', { name: 'Draft angle', exact: true })
+  ).toHaveText('2°');
 });
 
 test('shows an unresolved to-face extrude and repairs it by re-picking a face', async ({
@@ -299,11 +310,16 @@ test('shows an unresolved to-face extrude and repairs it by re-picking a face', 
   // Only the roof is drawn: the post is unresolved, said by name.
   await expectBodyCount(page, 1);
   const row = page.locator('.feature-row', { hasText: 'Post' }).last();
-  await row.locator('.feature-row-main').click();
-  await expect(page.locator('.panel-body')).toContainText(
-    'Target face is unresolved'
+  const unresolved = await editExtrudeFromHistory(
+    page,
+    row.locator('.feature-row-main'),
+    'Post'
   );
-  await page.getByRole('button', { name: 'Close panel' }).click();
+  await expect(unresolved).toContainText(
+    'The target face no longer exists here; pick a face again.'
+  );
+  await expect(unresolved.getByRole('button', { name: 'Done' })).toBeDisabled();
+  await unresolved.getByRole('button', { name: 'Cancel' }).click();
   const point = await pointOverFace(page, canvas, roofTop.topologyId);
 
   await row.locator('.feature-row-main').click({ button: 'right' });
@@ -317,11 +333,13 @@ test('shows an unresolved to-face extrude and repairs it by re-picking a face', 
     { timeout: 60_000 }
   );
   await expectBodyCount(page, 2);
-  await row.locator('.feature-row-main').click();
-  await expect(page.locator('.panel-body')).toContainText(
-    'Up to Roof Body · face'
+  const repaired = await editExtrudeFromHistory(
+    page,
+    row.locator('.feature-row-main'),
+    'Post'
   );
-  await expect(page.locator('.panel-body')).not.toContainText('unresolved');
+  await expect(repaired).toContainText('Up to Roof Body · face');
+  await expect(repaired).not.toContainText('no longer exists');
 });
 
 test('editing an unchanged to-face extrude ignores later target transforms', async ({
@@ -355,13 +373,14 @@ test('editing an unchanged to-face extrude ignores later target transforms', asy
   });
   await open(page, later.document);
   await expectBodyCount(page, 2);
-  await page.locator('.feature-row-main', { hasText: /^Post$/ }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await expect(
-    inspector.getByRole('button', { name: 'Apply', exact: true })
-  ).toBeEnabled();
-  await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
+  const edit = await editExtrudeFromHistory(
+    page,
+    page.locator('.feature-row-main', { hasText: /^Post$/ }),
+    'Post'
+  );
+  await expect(edit.getByRole('button', { name: 'Done' })).toBeEnabled();
+  await edit.getByRole('button', { name: 'Done' }).click();
   await expect(page.getByRole('contentinfo')).toContainText('Edit Post');
-  await expect(inspector).toBeHidden();
+  await expect(edit).toHaveCount(0);
   await expectBodyCount(page, 2);
 });

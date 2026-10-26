@@ -993,6 +993,9 @@ export function inPlaceEditSourceSketchIds(data: FeatureData): SketchId[] {
       ];
     case 'helical-sweep':
       return [data.profile.sketchId];
+    // The in-place Extrude edits an extrude (U09): its profile's sketch.
+    case 'extrude':
+      return [data.sketchId];
     default:
       return [];
   }

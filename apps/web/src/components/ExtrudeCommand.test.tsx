@@ -11,7 +11,8 @@ import {
 import {
   ExtrudeCommand,
   extrudeShownValues,
-  type ExtrudeCommandHandle
+  type ExtrudeCommandHandle,
+  type ExtrudeCommandState
 } from './ExtrudeCommand';
 import type { ExtrudeToFacePicking } from '../lib/extrudeDraft';
 
@@ -250,6 +251,53 @@ describe('in-place Extrude bar', () => {
     expect(
       extrudeShownValues({ extent: 'through-all', symmetric: false })
     ).toEqual([]);
+  });
+
+  it('edits a stored extrude: titled for it, its operation kept, its draft published as it opens', async () => {
+    const user = userEvent.setup();
+    const { onDraft, onSubmit } = setup({
+      editing: true,
+      note: 'Base corner fillets: a selected edge no longer exists.',
+      initial: {
+        name: 'Post',
+        sketchId,
+        distance: 'thickness',
+        operation: 'cut',
+        targetBodyId: plate
+      }
+    });
+    expect(
+      screen.getByRole('group', { name: 'Edit Post command' })
+    ).toBeVisible();
+    // The handles stand on what is stored before anything changes.
+    expect(onDraft).toHaveBeenCalledOnce();
+    const [opened] = vi.mocked(onDraft).mock.calls[0] as [ExtrudeCommandState];
+    expect(opened.distance).toBe(8);
+    expect(opened.texts.distance).toBe('thickness');
+    expect(opened.value.choice).toEqual({
+      operation: 'cut',
+      targetBodyId: plate
+    });
+    // A refusal from the last preview or Done is said in the bar.
+    expect(
+      screen.getByText('Base corner fillets: a selected edge no longer exists.')
+    ).toBeVisible();
+    await user.click(screen.getByLabelText('Edit Post options'));
+    expect(choice('Operation', 'Cut')).toHaveAttribute('aria-checked', 'true');
+    expect(
+      within(screen.getByRole('radiogroup', { name: 'Operation' })).queryByRole(
+        'radio',
+        { name: 'Automatic' }
+      )
+    ).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Post',
+        distance: 'thickness',
+        choice: { operation: 'cut', targetBodyId: plate }
+      })
+    );
   });
 
   it('cancels from its Cancel button', async () => {
