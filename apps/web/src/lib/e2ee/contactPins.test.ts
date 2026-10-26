@@ -25,13 +25,19 @@ const seen = (overrides: Partial<ContactPin> = {}): ContactPin => ({
   entryHash: H('1'),
   keyChanged: false,
   seenAt: 100,
+  verifiedHere: null,
   ...overrides
 });
 
 describe('contact pins', () => {
   it('move the own list pin forward only, and restart for a new identity', async () => {
     for (const [name, pins] of await stores()) {
-      const pin = { identityKeyHash: H('a'), sequence: 3, entryHash: H('3') };
+      const pin = {
+        identityKeyHash: H('a'),
+        sequence: 3,
+        entryHash: H('3'),
+        confirmed: false
+      };
       expect(await pins.readList('me'), name).toBeNull();
       expect(await pins.advanceList('me', pin), name).toBe(true);
       // Older, or the same height with another entry: a rollback or fork.
@@ -52,7 +58,12 @@ describe('contact pins', () => {
         name
       ).toBe(true);
       // A replaced identity starts a fresh list.
-      const fresh = { identityKeyHash: H('b'), sequence: 0, entryHash: H('0') };
+      const fresh = {
+        identityKeyHash: H('b'),
+        sequence: 0,
+        entryHash: H('0'),
+        confirmed: false
+      };
       expect(await pins.advanceList('me', fresh), name).toBe(true);
       expect(await pins.readList('me'), name).toEqual(fresh);
       expect(await pins.readList('someone-else'), name).toBeNull();
@@ -104,6 +115,135 @@ describe('contact pins', () => {
         (await pins.listContacts('me')).map((pin) => pin.contactUserId),
         name
       ).toEqual(['bob', 'carol']);
+    }
+  });
+
+  it('keep a confirmed list pin confirmed, and let only an approval confirm one', async () => {
+    for (const [name, pins] of await stores()) {
+      const {
+        EMPTY_CONTACTS_HASH: emptyHash,
+        EMPTY_CONTACTS_SEQUENCE: emptySequence
+      } = await import('./contactPins');
+      // Setup: the list was empty when this browser created the identity.
+      const empty = {
+        identityKeyHash: H('a'),
+        sequence: emptySequence,
+        entryHash: emptyHash,
+        confirmed: true
+      };
+      expect(await pins.advanceList('me', empty), name).toBe(true);
+      expect(await pins.readList('me'), name).toEqual(empty);
+      // What the server shows moves it forward and never unconfirms it.
+      const shown = {
+        identityKeyHash: H('a'),
+        sequence: 0,
+        entryHash: H('0'),
+        confirmed: false
+      };
+      expect(await pins.advanceList('me', shown), name).toBe(true);
+      expect(await pins.readList('me'), name).toEqual({
+        ...shown,
+        confirmed: true
+      });
+      // An empty list is not a valid move back.
+      expect(await pins.advanceList('me', empty), name).toBe(false);
+
+      // A passkey enrolment starts from the server's list, unconfirmed.
+      const passkey = { ...shown, sequence: 5, entryHash: H('5') };
+      expect(await pins.advanceList('pk', passkey), name).toBe(true);
+      expect((await pins.readList('pk'))?.confirmed, name).toBe(false);
+      // Claiming confirmation on the server's word does nothing special.
+      const claimed = { ...passkey, sequence: 3, entryHash: H('3') };
+      expect(
+        await pins.advanceList('pk', { ...claimed, confirmed: true }),
+        name
+      ).toBe(false);
+      // An approving device's signed head replaces it, even an older one:
+      // the next list must then contain that head.
+      expect(
+        await pins.advanceList(
+          'pk',
+          { ...claimed, confirmed: true },
+          { fromApproval: true }
+        ),
+        name
+      ).toBe(true);
+      expect(await pins.readList('pk'), name).toEqual({
+        ...claimed,
+        confirmed: true
+      });
+      // But never rolls a confirmed pin back, and an unconfirmed approver
+      // confirms nothing.
+      expect(
+        await pins.advanceList(
+          'pk',
+          { ...claimed, sequence: 2, entryHash: H('2'), confirmed: true },
+          { fromApproval: true }
+        ),
+        name
+      ).toBe(false);
+      expect(
+        await pins.advanceList(
+          'other',
+          { ...passkey, confirmed: false },
+          { fromApproval: true }
+        ),
+        name
+      ).toBe(true);
+      expect((await pins.readList('other'))?.confirmed, name).toBe(false);
+      // A malformed empty marker is refused.
+      expect(
+        await pins.advanceList('me', { ...empty, entryHash: H('1') }),
+        name
+      ).toBe(false);
+    }
+  });
+
+  it('read a list pin stored before confirmation existed as confirmed', async () => {
+    const legacy = { identityKeyHash: H('a'), sequence: 2, entryHash: H('2') };
+    const { indexedDbContactPins, CONTACT_PIN_DATABASE } =
+      await import('./contactPins');
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.open(CONTACT_PIN_DATABASE, 1);
+      request.onupgradeneeded = () => {
+        request.result.createObjectStore('lists');
+        request.result.createObjectStore('contacts');
+      };
+      request.onsuccess = () => {
+        const tx = request.result.transaction('lists', 'readwrite');
+        tx.objectStore('lists').put(legacy, 'me');
+        tx.oncomplete = () => {
+          request.result.close();
+          resolve();
+        };
+        tx.onerror = () => reject(tx.error ?? new Error('put failed'));
+      };
+      request.onerror = () => reject(request.error ?? new Error('open failed'));
+    });
+    const pins = indexedDbContactPins();
+    expect(await pins.readList('me')).toEqual({ ...legacy, confirmed: true });
+  });
+
+  it('keep a comparison made here until the contact’s identity changes', async () => {
+    for (const [name, pins] of await stores()) {
+      await pins.advanceContact('me', seen({ verifiedHere: H('a') }));
+      // Inspecting again (no comparison) keeps it.
+      await pins.advanceContact(
+        'me',
+        seen({ sequence: 3, entryHash: H('3'), verifiedHere: null })
+      );
+      expect((await pins.readContact('me', 'bob'))?.verifiedHere, name).toBe(
+        H('a')
+      );
+      await pins.advanceContact(
+        'me',
+        seen({ identityKeyHash: H('c'), keyChanged: true }),
+        { replaceIdentity: true }
+      );
+      expect(
+        (await pins.readContact('me', 'bob'))?.verifiedHere,
+        name
+      ).toBeNull();
     }
   });
 });

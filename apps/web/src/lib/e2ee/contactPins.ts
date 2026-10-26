@@ -7,6 +7,16 @@
  * A verified pin comes from the signed contacts list; the seen pin of a
  * verified contact moves its accepted head forward between signatures.
  *
+ * The list pin also records where this browser's trust in the list starts
+ * (ADR-024, verified pins). It is confirmed when it descends from a trusted
+ * start: this browser set up the identity (the list was empty), or another
+ * of the user's devices handed it its newest contacts head inside the
+ * authenticated approval exchange. A browser enrolled with only a passkey
+ * or the recovery key starts from whatever list the server shows, so its
+ * pin is unconfirmed, and it treats every verified pin as seen until
+ * another device confirms the head or the user compares codes again here
+ * (`verifiedHere`).
+ *
  * Kept in their own small IndexedDB database, `openzcad-e2ee-contacts`, as
  * the version pins and the MLS session store keep theirs: upgrading
  * `openzcad-e2ee` (device keys and device-list pins) would block on every
@@ -16,13 +26,25 @@
 const HASH = /^[0-9a-f]{64}$/;
 const MAX_U32 = 0xffffffff;
 
+/** `ContactsListPinRecord.sequence` of a list this browser saw empty. */
+export const EMPTY_CONTACTS_SEQUENCE = -1;
+/** `ContactsListPinRecord.entryHash` of a list this browser saw empty. */
+export const EMPTY_CONTACTS_HASH = '0'.repeat(64);
+
 /** The newest own contacts entry this browser accepted. */
 export interface ContactsListPinRecord {
   /** Lowercase hex identity key hash of the list's owner. */
   readonly identityKeyHash: string;
+  /** `EMPTY_CONTACTS_SEQUENCE` while the list was empty when trusted. */
   readonly sequence: number;
-  /** Lowercase hex `contactsEntryHash`. */
+  /** Lowercase hex `contactsEntryHash`; `EMPTY_CONTACTS_HASH` when empty. */
   readonly entryHash: string;
+  /**
+   * The pin descends from a trusted start (setup, or an approving device's
+   * grant) rather than only from the server's word. Records written before
+   * this existed read as confirmed.
+   */
+  readonly confirmed: boolean;
 }
 
 /** What this browser has been shown of one contact's keys. */
@@ -41,6 +63,12 @@ export interface ContactPin {
   readonly keyChanged: boolean;
   /** Unix milliseconds this identity was first seen. */
   readonly seenAt: number;
+  /**
+   * The identity key hash the user verified on this browser by comparing
+   * codes, or null. On a browser whose list pin is unconfirmed, only this
+   * makes a verified contact count as verified.
+   */
+  readonly verifiedHere?: string | null;
 }
 
 export interface ContactPinStore {
@@ -49,9 +77,17 @@ export interface ContactPinStore {
    * Moves the list pin forward: never to a lower sequence, nor to the same
    * sequence with another hash, under the same identity. Another identity
    * replaces it (the caller already accepted the account's new identity).
-   * False, writing nothing, when the stored pin is newer.
+   * False, writing nothing, when the stored pin is newer. A confirmed pin
+   * stays confirmed as it moves forward. With `fromApproval` (a head an
+   * approving device signed) a confirmed head also replaces an unconfirmed
+   * pin under the same identity, newer or not: the next list accepted must
+   * then contain the approver's head.
    */
-  advanceList(userId: string, next: ContactsListPinRecord): Promise<boolean>;
+  advanceList(
+    userId: string,
+    next: ContactsListPinRecord,
+    options?: { readonly fromApproval?: boolean }
+  ): Promise<boolean>;
   readContact(
     userId: string,
     contactUserId: string
@@ -73,21 +109,37 @@ const isSequence = (value: unknown): value is number =>
   (value as number) >= 0 &&
   (value as number) <= MAX_U32;
 
-function readListPin(value: unknown): ContactsListPinRecord | null {
+/**
+ * A list pin as stored, or as a caller proposes it. A stored record from
+ * before `confirmed` existed reads as confirmed (`legacyConfirmed`); a
+ * proposed one is confirmed only when it says so.
+ */
+function readListPin(
+  value: unknown,
+  legacyConfirmed = true
+): ContactsListPinRecord | null {
   const pin = value as Partial<ContactsListPinRecord> | null;
-  return typeof pin === 'object' &&
-    pin !== null &&
-    typeof pin.identityKeyHash === 'string' &&
-    HASH.test(pin.identityKeyHash) &&
-    typeof pin.entryHash === 'string' &&
-    HASH.test(pin.entryHash) &&
-    isSequence(pin.sequence)
-    ? {
-        identityKeyHash: pin.identityKeyHash,
-        sequence: pin.sequence,
-        entryHash: pin.entryHash
-      }
-    : null;
+  if (
+    typeof pin !== 'object' ||
+    pin === null ||
+    typeof pin.identityKeyHash !== 'string' ||
+    !HASH.test(pin.identityKeyHash) ||
+    typeof pin.entryHash !== 'string' ||
+    !HASH.test(pin.entryHash)
+  ) {
+    return null;
+  }
+  const empty =
+    pin.sequence === EMPTY_CONTACTS_SEQUENCE &&
+    pin.entryHash === EMPTY_CONTACTS_HASH;
+  if (!empty && !isSequence(pin.sequence)) return null;
+  return {
+    identityKeyHash: pin.identityKeyHash,
+    sequence: pin.sequence,
+    entryHash: pin.entryHash,
+    confirmed:
+      pin.confirmed === undefined ? legacyConfirmed : pin.confirmed === true
+  };
 }
 
 function readContactPin(value: unknown): ContactPin | null {
@@ -108,7 +160,11 @@ function readContactPin(value: unknown): ContactPin | null {
         sequence: pin.sequence,
         entryHash: pin.entryHash,
         keyChanged: pin.keyChanged === true,
-        seenAt: pin.seenAt!
+        seenAt: pin.seenAt!,
+        verifiedHere:
+          typeof pin.verifiedHere === 'string' && HASH.test(pin.verifiedHere)
+            ? pin.verifiedHere
+            : null
       }
     : null;
 }
@@ -127,18 +183,21 @@ function follows(
 /** The list pin to store, or null to refuse. */
 export function advancedListPin(
   current: ContactsListPinRecord | null,
-  next: ContactsListPinRecord
+  next: ContactsListPinRecord,
+  options: { readonly fromApproval?: boolean } = {}
 ): ContactsListPinRecord | null {
-  const valid = readListPin(next);
+  const valid = readListPin(next, false);
   if (!valid) return null;
-  if (
-    current &&
-    current.identityKeyHash === valid.identityKeyHash &&
-    !follows(current, valid)
-  ) {
-    return null;
+  if (!current || current.identityKeyHash !== valid.identityKeyHash) {
+    return valid;
   }
-  return valid;
+  // An approving device's signed head outranks what the server alone
+  // showed this browser: the next accepted list must contain it.
+  if (options.fromApproval && valid.confirmed && !current.confirmed) {
+    return valid;
+  }
+  if (!follows(current, valid)) return null;
+  return { ...valid, confirmed: current.confirmed || valid.confirmed };
 }
 
 /** The contact pin to store, or null to refuse. */
@@ -154,8 +213,13 @@ export function advancedContactPin(
     return replaceIdentity ? valid : null;
   }
   if (!follows(current, valid)) return null;
-  // The first sighting of an identity stays its first sighting.
-  return { ...valid, seenAt: Math.min(current.seenAt, valid.seenAt) };
+  // The first sighting of an identity stays its first sighting, and a
+  // comparison made here stays until the identity changes.
+  return {
+    ...valid,
+    seenAt: Math.min(current.seenAt, valid.seenAt),
+    verifiedHere: valid.verifiedHere ?? current.verifiedHere ?? null
+  };
 }
 
 export function memoryContactPins(): ContactPinStore {
@@ -165,8 +229,8 @@ export function memoryContactPins(): ContactPinStore {
     JSON.stringify([userId, contactUserId]);
   return {
     readList: async (userId) => lists.get(userId) ?? null,
-    advanceList: async (userId, next) => {
-      const stored = advancedListPin(lists.get(userId) ?? null, next);
+    advanceList: async (userId, next, options) => {
+      const stored = advancedListPin(lists.get(userId) ?? null, next, options);
       if (stored) lists.set(userId, stored);
       return stored !== null;
     },
@@ -251,11 +315,15 @@ async function transact<T>(
 export function indexedDbContactPins(): ContactPinStore {
   return {
     readList: async (userId) =>
-      (await transact(LISTS, userId, readListPin, null)).current,
-    advanceList: async (userId, next) =>
+      (await transact(LISTS, userId, (value) => readListPin(value), null))
+        .current,
+    advanceList: async (userId, next, options) =>
       (
-        await transact(LISTS, userId, readListPin, (current) =>
-          advancedListPin(current, next)
+        await transact(
+          LISTS,
+          userId,
+          (value) => readListPin(value),
+          (current) => advancedListPin(current, next, options)
         )
       ).changed,
     readContact: async (userId, contactUserId) =>

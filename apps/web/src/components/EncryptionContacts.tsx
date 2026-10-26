@@ -46,16 +46,23 @@ import { Group, Notice, SettingRow, Status } from './settingsControls';
  * Both people read their own 40-digit code (or scan each other's QR code);
  * each side checks the other's against what OpenZCAD shows, then signs the
  * verification into their contacts list with a passkey or the recovery key.
+ *
+ * On a device whose contacts list no other device confirmed (enrolled with
+ * only a passkey or the recovery key), contacts verified elsewhere show as
+ * seen, with a way to have another device confirm the list.
  */
 export function EncryptionContacts({
   keys,
   account,
-  Scanner
+  Scanner,
+  onConfirmFromDevice
 }: {
   keys: E2eeContext;
   account: AccountView;
   /** The camera QR scanner of Settings › Encryption, where available. */
   Scanner?: ComponentType<{ onCode(code: string): void }>;
+  /** Asks another device to confirm this one's contacts list. */
+  onConfirmFromDevice?: () => void;
 }) {
   const ctx = useMemo(() => contactsContext(keys), [keys]);
   const [book, setBook] = useState<ContactsBook | null>(null);
@@ -133,6 +140,12 @@ export function EncryptionContacts({
   const verified =
     book?.contacts.filter((contact) => contact.standing === 'verified')
       .length ?? 0;
+  const unconfirmed =
+    book !== null &&
+    !book.listConfirmed &&
+    [...(book.list?.contacts.values() ?? [])].some(
+      (record) => record.status === 'verified'
+    );
 
   return (
     <>
@@ -153,6 +166,28 @@ export function EncryptionContacts({
             }
           >
             {error}
+          </Notice>
+        ) : null}
+        {unconfirmed ? (
+          <Notice
+            tone="info"
+            action={
+              onConfirmFromDevice ? (
+                <button
+                  className="secondary"
+                  type="button"
+                  disabled={busy}
+                  onClick={onConfirmFromDevice}
+                >
+                  <ShieldCheck size={14} aria-hidden="true" />
+                  Confirm from another device
+                </button>
+              ) : undefined
+            }
+          >
+            No other device of yours has confirmed this device’s contacts list,
+            so people you verified elsewhere show as seen here. Confirm it from
+            another of your devices, or compare codes with them again.
           </Notice>
         ) : null}
         <SettingRow

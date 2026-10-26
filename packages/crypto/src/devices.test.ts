@@ -6,6 +6,8 @@ import {
   accountKeySequences,
   decodeDeviceApprovalGrant,
   decodeDeviceListEntry,
+  DEVICE_APPROVAL_GRANT_VERSION_1,
+  DEVICE_APPROVAL_GRANT_VERSION_2,
   decodeGroupReset,
   decodeRevocationCutoffs,
   deviceListEntryHash,
@@ -541,6 +543,96 @@ describe('identity transitions and approval grants', () => {
       ),
       'authentication-failed'
     );
+  });
+
+  it('carries the approver’s contacts head in a version 2 grant and still reads version 1', async () => {
+    const f = await fixture();
+    const list = await verifyDeviceList(f.identityRaw, f.chain);
+    const approver = await generateSigningKeyPair(false);
+    const approverRaw = await exportPublicKey(approver.publicKey);
+    const newDevice = await device('dev_new');
+    const v1 = {
+      userId: USER,
+      deviceKeysHash: await deviceKeysHash(
+        newDevice.signingKey,
+        newDevice.unlockKey
+      ),
+      deviceId: 'dev_new',
+      identityKeyHash: list.identityKeyHash,
+      headSequence: list.head.sequence,
+      headHash: list.headHash,
+      certified: false,
+      approverKeyHash: await publicKeyHash(approverRaw),
+      issuedAt: 99
+    };
+    // An older build's grant: version 1, no contacts head.
+    const old = await signDeviceApprovalGrant(approver.privateKey, v1);
+    expect(old.statement[3]).toBe(DEVICE_APPROVAL_GRANT_VERSION_1);
+    const readOld = await verifyDeviceApprovalGrant(old, approverRaw);
+    expect(readOld).toEqual(v1);
+    expect(readOld.contacts).toBeUndefined();
+
+    const entryHash = new Uint8Array(32).fill(7);
+    for (const contacts of [
+      { head: { sequence: 4, entryHash }, confirmed: true },
+      { head: { sequence: 0, entryHash }, confirmed: false },
+      { head: null, confirmed: true },
+      { head: null, confirmed: false }
+    ]) {
+      const grant = { ...v1, contacts };
+      const signed = await signDeviceApprovalGrant(approver.privateKey, grant);
+      expect(signed.statement[3]).toBe(DEVICE_APPROVAL_GRANT_VERSION_2);
+      expect(signed.statement.byteLength).toBe(
+        old.statement.byteLength + 1 + (contacts.head ? 36 : 0)
+      );
+      expect(decodeDeviceApprovalGrant(signed.statement)).toEqual(grant);
+      expect(await verifyDeviceApprovalGrant(signed, approverRaw)).toEqual(
+        grant
+      );
+    }
+
+    // The head is signed: a server swapping in an older one breaks it.
+    const signed = await signDeviceApprovalGrant(approver.privateKey, {
+      ...v1,
+      contacts: { head: { sequence: 4, entryHash }, confirmed: true }
+    });
+    const older = new Uint8Array(signed.statement);
+    older[older.byteLength - 33] = 3; // big-endian u32 sequence 4 -> 3
+    expect(decodeDeviceApprovalGrant(older).contacts?.head?.sequence).toBe(3);
+    await rejectsWith(
+      verifyDeviceApprovalGrant(
+        { statement: older, signature: signed.signature },
+        approverRaw
+      ),
+      'authentication-failed'
+    );
+    // Nor can it drop the head by relabelling the grant as version 1.
+    const relabelled = new Uint8Array(signed.statement.slice(0, -37));
+    relabelled[3] = DEVICE_APPROVAL_GRANT_VERSION_1;
+    expect(decodeDeviceApprovalGrant(relabelled).contacts).toBeUndefined();
+    await rejectsWith(
+      verifyDeviceApprovalGrant(
+        { statement: relabelled, signature: signed.signature },
+        approverRaw
+      ),
+      'authentication-failed'
+    );
+    // Unknown flags, a truncated head and an unknown version are refused.
+    const flags = new Uint8Array(signed.statement);
+    flags[flags.byteLength - 37] = 4 | 1;
+    expect(() => decodeDeviceApprovalGrant(flags)).toThrow(/contacts flags/);
+    expect(() =>
+      decodeDeviceApprovalGrant(signed.statement.slice(0, -1))
+    ).toThrow(E2eeError);
+    const future = new Uint8Array(signed.statement);
+    future[3] = 3;
+    expect(() => decodeDeviceApprovalGrant(future)).toThrow(/version 3/);
+    await expect(
+      signDeviceApprovalGrant(approver.privateKey, {
+        ...v1,
+        contacts: { head: { sequence: -1, entryHash }, confirmed: true }
+      })
+    ).rejects.toThrow(/Not a device approval grant/);
   });
 });
 
