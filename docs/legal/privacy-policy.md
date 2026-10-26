@@ -16,9 +16,10 @@ the legal particulars on 2026-10-26: operator Esau Engineering LLC, contact
 help@zcad.app (email only, no postal address), and governing law the State of
 Michigan, United States (one sentence in section 1, the only place to edit).
 
-## The one placeholder left
+## Placeholders
 
-`[EFFECTIVE DATE]`, at the top of the page, is set to the merge date.
+None left. The effective date (October 26, 2026) is at the top of the page;
+update it whenever the policy changes.
 `apps/web/src/lib/privacyPolicyPlaceholders.test.ts` ("FILL IN BEFORE MERGE")
 fails in `pnpm test:web` while any placeholder in square brackets and capitals
 remains in the page, and passes once none do.
@@ -29,12 +30,13 @@ Where the draft left a question open, the page uses wording that is true
 without a new commitment. Review these before merge:
 
 - The lawful-bases sentence and the EU/UK representative or DPO line are
-  removed, since the governing law is Michigan's. Restore them if GDPR or UK
-  GDPR is meant to apply.
+  removed: the maintainer confirmed the service is US-focused (2026-10-26).
+  Restore them if the service targets EU or UK users.
 - Cloudflare Web Analytics: the page says the security policy allows it and
   that Cloudflare can add it, not that it is on. The CSP in
   `apps/web/public/_headers` allows it; the app's own code never loads it.
-  Say plainly whether it is enabled on the zone.
+  The maintainer was not sure whether it is enabled on the zone (2026-10-26):
+  check the Cloudflare dashboard and say plainly either way.
 - Signed-out assistant counters: "kept without a set expiry". The code has no
   deletion path for them.
 - Analytics totals: "may be kept indefinitely". Glimpse's retention is set in
