@@ -16,7 +16,9 @@ import {
  */
 async function openPrimitiveReady(page: Page, title: 'Box' | 'Cylinder') {
   await page
-    .getByRole('button', { name: title === 'Box' ? /^Box \(B\)/ : /^Cylinder \(C\)/ })
+    .getByRole('button', {
+      name: title === 'Box' ? /^Box \(B\)/ : /^Cylinder \(C\)/
+    })
     .click();
   await expect(
     page
@@ -329,14 +331,10 @@ test('acknowledges appearance edits without reinstalling on later selection', as
   await page.getByLabel('Project name').fill('Retained appearance');
   await page.getByRole('button', { name: 'Create project' }).click();
   await expectBodyCount(page, 0);
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
-  await page.locator('.feature-row').first().dblclick();
-  const appearance = inspector.getByText('Appearance', { exact: true });
-  await appearance.focus();
-  await appearance.press('Enter');
-  const opacity = inspector.getByLabel('Body opacity');
+  await page.getByRole('button', { name: /^Change color of/ }).click();
+  const opacity = page.getByRole('slider', { name: /^Opacity of/ });
   await expect(opacity).toBeVisible();
   await opacity.focus();
   await opacity.press('ArrowLeft');

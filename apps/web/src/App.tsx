@@ -10964,6 +10964,7 @@ export function App() {
     if (!doc) {
       return;
     }
+    if (!ensureCanEdit('change body appearance')) return;
     const bodyNode = findBodyNode(doc, bodyId);
     if (!bodyNode) {
       return;
@@ -27352,6 +27353,9 @@ export function App() {
       selectedBodyIds={selectedBodyIds}
       onToggleBodyVisibility={toggleBodyVisibility}
       onRenameBody={editDisabledReason ? undefined : handleRenameBody}
+      bodyAppearancePreview={bodyAppearancePreview}
+      onPreviewBodyAppearance={previewBodyAppearance}
+      onCommitBodyAppearance={editDisabledReason ? undefined : commitBodyAppearance}
       objectFolderActions={objectFolderActions}
       onToggleSketchVisibility={toggleSketchVisibility}
       onFeatureContextMenu={handleFeatureContextMenu}
@@ -28820,8 +28824,6 @@ export function App() {
                 massPropertiesDocument={previewDoc ?? doc}
                 massPropertiesWorker={geometry}
                 onLaunchTool={launchTool}
-                onPreviewBodyAppearance={previewBodyAppearance}
-                onCommitBodyAppearance={commitBodyAppearance}
                 onCancel={cancelPanel}
                 onClose={() => {
                   // Close keeps the pick but drops Edit face's request, or the

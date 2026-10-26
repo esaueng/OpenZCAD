@@ -27,11 +27,7 @@ import {
   commandFactories,
   type AnyCommand
 } from '@openzcad/command-system';
-import {
-  DEFAULT_BODY_COLOR,
-  edgeTopologyWitnessHash,
-  toUserId
-} from '@openzcad/shared';
+import { edgeTopologyWitnessHash, toUserId } from '@openzcad/shared';
 import type { MassPropertiesRead } from '@openzcad/kernel-adapter/exact';
 import { MASS_DENSITY_STORAGE_KEY } from '../lib/massDensityPreference';
 import { Inspector } from './Inspector';
@@ -166,8 +162,6 @@ function makeProps(
     onPinFeature: vi.fn(),
     onDeleteFeature: vi.fn(),
     onToggleImportedSolid: vi.fn(),
-    onPreviewBodyAppearance: vi.fn(),
-    onCommitBodyAppearance: vi.fn(),
     ...overrides
   };
 }
@@ -669,53 +663,6 @@ describe('imported face recognition display', () => {
       />
     );
     expect(screen.getByText(/worker gone/)).toBeVisible();
-  });
-});
-
-describe('body appearance color picker', () => {
-  it('closes only the color picker on Escape, leaving the inspector open', () => {
-    const props = makeProps({
-      selectedFeature: feature,
-      featureSelectionSource: 'pinned',
-      commandSession: null
-    });
-    render(<Inspector {...props} />);
-    const swatch = screen.getByRole('button', { name: 'Pick body color' });
-    fireEvent.click(swatch);
-    expect(swatch).toHaveAttribute('aria-expanded', 'true');
-    fireEvent.keyDown(swatch, { key: 'Escape' });
-    expect(swatch).toHaveAttribute('aria-expanded', 'false');
-    expect(props.onCancel).not.toHaveBeenCalled();
-    fireEvent.keyDown(swatch, { key: 'Escape' });
-    expect(props.onCancel).toHaveBeenCalledOnce();
-  });
-
-  it('resets a chosen colour by clearing it, back to the one default (G2)', () => {
-    const props = makeProps({
-      selectedBody: { ...body, color: '#a78bfa' },
-      selectedFeature: feature,
-      featureSelectionSource: 'pinned',
-      commandSession: null
-    });
-    render(<Inspector {...props} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Reset to default' }));
-    expect(props.onCommitBodyAppearance).toHaveBeenCalledWith(body.bodyId, {
-      color: null,
-      opacity: null
-    });
-  });
-
-  it('offers no reset for a body already in the default colour', () => {
-    const props = makeProps({
-      selectedBody: { ...body, color: DEFAULT_BODY_COLOR },
-      selectedFeature: feature,
-      featureSelectionSource: 'pinned',
-      commandSession: null
-    });
-    render(<Inspector {...props} />);
-    expect(
-      screen.queryByRole('button', { name: 'Reset to default' })
-    ).not.toBeInTheDocument();
   });
 });
 
