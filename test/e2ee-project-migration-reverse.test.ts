@@ -1774,6 +1774,135 @@ describe('staged upload sessions', () => {
     expect(leaseOf(fresh.uploadSessionId)).toBe(taken.leaseId);
   });
 
+  it('complete nothing when the decrypt lease moves during R2’s own completion (#918 follow-up)', async () => {
+    const srv = roomServer();
+    const { projectId } = await encryptedProject(srv, { revisions: 1 });
+    const desktop = reverseOn(srv, owner, 'owner_desktop', {
+      beforeStep: (step) => {
+        if (step === 'cutover') throw new Error('Stop here.');
+      }
+    });
+    await expect(decryptFully(desktop, projectId)).rejects.toThrow('Stop');
+    const session = await openStagedUpload(desktop, srv, projectId);
+    const { object_key: objectKey } = srv.db
+      .prepare('SELECT object_key FROM upload_sessions WHERE id = ?')
+      .get(session.uploadSessionId) as { object_key: string };
+    // The lease lapses and another start takes the staging over while R2
+    // completes the single-part object.
+    let taken: string | undefined;
+    interface ResumedUpload {
+      complete(parts: unknown[]): Promise<unknown>;
+    }
+    const original = srv.bucket.resumeMultipartUpload;
+    const resume = original as unknown as (
+      key: string,
+      id: string
+    ) => ResumedUpload;
+    srv.bucket.resumeMultipartUpload = vi.fn((key: string, id: string) => {
+      const upload = resume(key, id);
+      return {
+        ...upload,
+        complete: async (parts: unknown[]) => {
+          const completed = await upload.complete(parts);
+          srv.db
+            .prepare(
+              'UPDATE e2ee_project_migrations SET lease_expires_at = 1 WHERE project_id = ?'
+            )
+            .run(projectId);
+          taken = (
+            await createProjectMigrationsApi(desktop.d.fetcher).start(
+              projectId,
+              { direction: 'decrypt', deviceId: 'owner_laptop' },
+              null
+            )
+          ).leaseId;
+          return completed;
+        }
+      };
+    });
+    const put = await desktop.d.fetcher(session.uploadUrl, {
+      method: 'PUT',
+      body: text('Staged file')
+    });
+    srv.bucket.resumeMultipartUpload = original;
+    expect(taken).toBeDefined();
+    expect(put.status).toBe(409);
+    expect(await codeOf(put)).toBe(E2EE_MIGRATION_CODES.leaseLost);
+    // The stale session is released at once: no reservation, no object.
+    expect(
+      srv.db
+        .prepare('SELECT id FROM upload_sessions WHERE id = ?')
+        .get(session.uploadSessionId)
+    ).toBeUndefined();
+    expect(srv.bucket.objects.has(objectKey)).toBe(false);
+  });
+
+  it('reserve no part once the decrypt lease moved after the session check (#925 follow-up)', async () => {
+    const srv = roomServer();
+    const { projectId } = await encryptedProject(srv, { revisions: 1 });
+    const desktop = reverseOn(srv, owner, 'owner_desktop', {
+      beforeStep: (step) => {
+        if (step === 'cutover') throw new Error('Stop here.');
+      }
+    });
+    await expect(decryptFully(desktop, projectId)).rejects.toThrow('Stop');
+    const session = await openStagedUpload(desktop, srv, projectId);
+    // Another device takes the staging over between the part's session
+    // check and its reservation.
+    // (The Worker keeps the env it first saw, so the D1 binding is patched
+    // in place.)
+    const d1 = srv.env.DB as { prepare(sql: string): unknown };
+    const prepare = d1.prepare.bind(d1);
+    let tookOver = false;
+    d1.prepare = (sql: string) => {
+      if (!tookOver && sql.includes('INSERT INTO artifact_upload_parts')) {
+        tookOver = true;
+        srv.db
+          .prepare(
+            `UPDATE e2ee_project_migrations
+             SET lease_id = ?, lease_expires_at = ?
+             WHERE project_id = ?`
+          )
+          .run('T'.repeat(43), Date.now() + 60_000, projectId);
+      }
+      return prepare(sql);
+    };
+    const uploadPart = vi.fn();
+    const original = srv.bucket.resumeMultipartUpload;
+    const resume = original as unknown as (
+      key: string,
+      id: string
+    ) => { uploadPart(part: number, body: ArrayBuffer): Promise<unknown> };
+    srv.bucket.resumeMultipartUpload = vi.fn((key: string, id: string) => {
+      const upload = resume(key, id);
+      return {
+        ...upload,
+        uploadPart: (part: number, body: ArrayBuffer) => {
+          uploadPart(part);
+          return upload.uploadPart(part, body);
+        }
+      };
+    });
+    const put = await desktop.d.fetcher(session.uploadUrl, {
+      method: 'PUT',
+      body: text('Stale staged file')
+    });
+    d1.prepare = prepare;
+    srv.bucket.resumeMultipartUpload = original;
+    expect(tookOver).toBe(true);
+    expect(put.status).toBe(409);
+    expect(await codeOf(put)).toBe(E2EE_MIGRATION_CODES.leaseLost);
+    // Nothing reserved, nothing sent to R2.
+    expect(
+      srv.db
+        .prepare(
+          'SELECT COUNT(*) AS n FROM artifact_upload_parts WHERE upload_session_id = ?'
+        )
+        .get(session.uploadSessionId)
+    ).toEqual({ n: 0 });
+    expect(uploadPart).not.toHaveBeenCalled();
+  });
+
   it('do not carry on as ordinary plaintext uploads after the cutover', async () => {
     const srv = roomServer();
     const { projectId } = await encryptedProject(srv, { revisions: 1 });

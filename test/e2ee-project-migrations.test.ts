@@ -29,6 +29,7 @@ import {
   type ProjectMigrationsApi
 } from '../apps/web/src/lib/e2ee/projectMigrationsApi';
 import worker from '../apps/web/worker/index';
+import { sweepProjectMigrations } from '../apps/web/worker/e2eeProjectMigrations';
 import { ProjectCollaborationRoom } from '../apps/web/worker/e2eeRoom';
 import { createRoomContext } from './collaboration-room-harness';
 import {
@@ -1071,6 +1072,282 @@ describe('staging beside the plaintext', () => {
     expect(recorded(fresh)).toEqual([[1, true]]);
   });
 
+  it('completes nothing for the stale holder when the lease moves during R2’s own completion (#918 follow-up)', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    const laptop = await startStaging(srv, plain.projectId);
+    const blobId = 'c'.repeat(32);
+    const objectKey = `e2ee/${plain.projectId}/${blobId}`;
+    const openUpload = async (s: Staging) => {
+      const opened = await s.d.fetcher(
+        `/api/e2ee/projects/${plain.projectId}/blobs/uploads`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ blobId, kind: 'import-source' })
+        }
+      );
+      expect(opened.status).toBe(201);
+      return ((await opened.json()) as { session: { uploadSessionId: string } })
+        .session.uploadSessionId;
+    };
+    const stale = await openUpload(laptop);
+    const started = await laptop.d.fetcher(`/api/uploads/${stale}/multipart`, {
+      method: 'POST'
+    });
+    const staleUpload = ((await started.json()) as { uploadId: string })
+      .uploadId;
+    const part = await laptop.d.fetcher(
+      `/api/uploads/${stale}/parts/1?uploadId=${staleUpload}`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/octet-stream' },
+        body: text('ciphertext')
+      }
+    );
+    expect(part.status).toBe(200);
+    const { etag } = srv.db
+      .prepare(
+        'SELECT etag FROM artifact_upload_parts WHERE upload_session_id = ?'
+      )
+      .get(stale) as { etag: string };
+
+    // The desktop takes the lease over while R2 completes the laptop's
+    // object.
+    let desktop: Staging | undefined;
+    interface ResumedUpload {
+      complete(parts: unknown[]): Promise<unknown>;
+    }
+    const original = srv.bucket.resumeMultipartUpload;
+    const resume = original as unknown as (
+      key: string,
+      id: string
+    ) => ResumedUpload;
+    srv.bucket.resumeMultipartUpload = vi.fn((key: string, id: string) => {
+      const upload = resume(key, id);
+      return {
+        ...upload,
+        complete: async (parts: unknown[]) => {
+          const completed = await upload.complete(parts);
+          srv.db
+            .prepare('UPDATE e2ee_project_migrations SET lease_expires_at = 1')
+            .run();
+          desktop = await startStaging(srv, plain.projectId, 'owner_desktop');
+          return completed;
+        }
+      };
+    });
+    const raced = await laptop.d.fetcher(
+      `/api/uploads/${stale}/multipart/complete`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          uploadId: staleUpload,
+          parts: [{ partNumber: 1, etag }]
+        })
+      }
+    );
+    srv.bucket.resumeMultipartUpload = original;
+    expect(desktop).toBeDefined();
+    expect(raced.status).toBe(409);
+    expect(await codeOf(raced)).toBe('E2EE_MIGRATION_LEASE_LOST');
+    // The stale session is released at once: no reservation, no object.
+    expect(
+      srv.db.prepare('SELECT id FROM upload_sessions WHERE id = ?').get(stale)
+    ).toBeUndefined();
+    expect(srv.bucket.objects.has(objectKey)).toBe(false);
+
+    // The new holder uploads the same blob under a fresh session.
+    const fresh = await openUpload(desktop!);
+    expect(fresh).not.toBe(stale);
+    const freshStarted = await desktop!.d.fetcher(
+      `/api/uploads/${fresh}/multipart`,
+      { method: 'POST' }
+    );
+    expect(freshStarted.status).toBe(201);
+  });
+
+  it('keeps a completed upload when only the lease check fails, not the lease (#933 review)', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    const laptop = await startStaging(srv, plain.projectId);
+    const blobId = 'd'.repeat(32);
+    const objectKey = `e2ee/${plain.projectId}/${blobId}`;
+    const opened = await laptop.d.fetcher(
+      `/api/e2ee/projects/${plain.projectId}/blobs/uploads`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ blobId, kind: 'import-source' })
+      }
+    );
+    const session = (
+      (await opened.json()) as { session: { uploadSessionId: string } }
+    ).session.uploadSessionId;
+    const started = await laptop.d.fetcher(
+      `/api/uploads/${session}/multipart`,
+      { method: 'POST' }
+    );
+    const uploadId = ((await started.json()) as { uploadId: string }).uploadId;
+    await laptop.d.fetcher(
+      `/api/uploads/${session}/parts/1?uploadId=${uploadId}`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/octet-stream' },
+        body: text('ciphertext')
+      }
+    );
+    const { etag } = srv.db
+      .prepare(
+        'SELECT etag FROM artifact_upload_parts WHERE upload_session_id = ?'
+      )
+      .get(session) as { etag: string };
+
+    // A concurrent retry finished the session while R2 completed, so this
+    // request's move to `completed` lands nothing; its lease check then
+    // fails on the database, not on the lease, which is still live.
+    interface ResumedUpload {
+      complete(parts: unknown[]): Promise<unknown>;
+    }
+    const original = srv.bucket.resumeMultipartUpload;
+    const resume = original as unknown as (
+      key: string,
+      id: string
+    ) => ResumedUpload;
+    const prepare = srv.db.prepare.bind(srv.db);
+    let failLeaseCheck = false;
+    srv.db.prepare = ((sql: string) => {
+      if (failLeaseCheck && /m\.lease_expires_at > \?/.test(sql)) {
+        throw new Error('D1 is briefly unavailable');
+      }
+      return prepare(sql);
+    });
+    srv.bucket.resumeMultipartUpload = vi.fn((key: string, id: string) => {
+      const upload = resume(key, id);
+      return {
+        ...upload,
+        complete: async (parts: unknown[]) => {
+          const completed = await upload.complete(parts);
+          prepare(
+            "UPDATE upload_sessions SET reservation_state = 'completed' WHERE id = ?"
+          ).run(session);
+          failLeaseCheck = true;
+          return completed;
+        }
+      };
+    });
+    const answer = await laptop.d.fetcher(
+      `/api/uploads/${session}/multipart/complete`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ uploadId, parts: [{ partNumber: 1, etag }] })
+      }
+    );
+    srv.bucket.resumeMultipartUpload = original;
+    srv.db.prepare = prepare;
+    expect(answer.status).not.toBe(409);
+    expect(answer.status).toBeGreaterThanOrEqual(500);
+    // Nothing destructive happened: the session and its object remain.
+    expect(
+      srv.db
+        .prepare('SELECT reservation_state FROM upload_sessions WHERE id = ?')
+        .get(session)
+    ).toEqual({ reservation_state: 'completed' });
+    expect(srv.bucket.objects.has(objectKey)).toBe(true);
+  });
+
+  it('reconciles no completion for the stale holder once the lease moved (#918 follow-up)', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    const laptop = await startStaging(srv, plain.projectId);
+    const blobId = 'd'.repeat(32);
+    const objectKey = `e2ee/${plain.projectId}/${blobId}`;
+    const opened = await laptop.d.fetcher(
+      `/api/e2ee/projects/${plain.projectId}/blobs/uploads`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ blobId, kind: 'import-source' })
+      }
+    );
+    const stale = (
+      (await opened.json()) as { session: { uploadSessionId: string } }
+    ).session.uploadSessionId;
+    const started = await laptop.d.fetcher(`/api/uploads/${stale}/multipart`, {
+      method: 'POST'
+    });
+    const staleUpload = ((await started.json()) as { uploadId: string })
+      .uploadId;
+    expect(
+      (
+        await laptop.d.fetcher(
+          `/api/uploads/${stale}/parts/1?uploadId=${staleUpload}`,
+          {
+            method: 'PUT',
+            headers: { 'content-type': 'application/octet-stream' },
+            body: text('ciphertext')
+          }
+        )
+      ).status
+    ).toBe(200);
+    const { etag } = srv.db
+      .prepare(
+        'SELECT etag FROM artifact_upload_parts WHERE upload_session_id = ?'
+      )
+      .get(stale) as { etag: string };
+    // R2 completed the object, but the response that would have recorded
+    // it was lost: the session is still completing.
+    await (
+      srv.bucket.resumeMultipartUpload as unknown as (
+        key: string,
+        id: string
+      ) => { complete(parts: unknown[]): Promise<unknown> }
+    )(objectKey, staleUpload).complete([{ partNumber: 1, etag }]);
+    srv.db
+      .prepare(
+        `UPDATE upload_sessions
+         SET reservation_state = 'completing', completion_started_at = ?
+         WHERE id = ?`
+      )
+      .run(Date.now(), stale);
+    // The laptop retries; the desktop takes the lease over while the
+    // retry reads the object back.
+    let desktop: Staging | undefined;
+    const originalHead = srv.bucket.head;
+    const head = originalHead as unknown as (key: string) => Promise<unknown>;
+    srv.bucket.head = vi.fn(async (key: string) => {
+      const stored = await head(key);
+      if (key === objectKey && !desktop) {
+        srv.db
+          .prepare('UPDATE e2ee_project_migrations SET lease_expires_at = 1')
+          .run();
+        desktop = await startStaging(srv, plain.projectId, 'owner_desktop');
+      }
+      return stored;
+    });
+    const retried = await laptop.d.fetcher(
+      `/api/uploads/${stale}/multipart/complete`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          uploadId: staleUpload,
+          parts: [{ partNumber: 1, etag }]
+        })
+      }
+    );
+    srv.bucket.head = originalHead;
+    expect(desktop).toBeDefined();
+    expect(retried.status).toBe(409);
+    expect(await codeOf(retried)).toBe('E2EE_MIGRATION_LEASE_LOST');
+    expect(
+      srv.db.prepare('SELECT id FROM upload_sessions WHERE id = ?').get(stale)
+    ).toBeUndefined();
+    expect(srv.bucket.objects.has(objectKey)).toBe(false);
+  });
+
   it('lands nothing from a plaintext upload session opened before staging began (#914 review)', async () => {
     const srv = server();
     const plain = await plaintextProject(srv);
@@ -1927,6 +2204,66 @@ describe('erasure, deletion and the sweep', () => {
     expect((await autosave(srv, plain)).status).toBe(200);
     expect(migrationRow(srv, done.projectId)!.state).toBe('cutover');
     expect(formatOf(srv, done.projectId).storage_format).toBe(2);
+  });
+
+  it('pages the sweep past lapsed stagings whose owners may still migrate (#914 follow-up)', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    // Copies of the project row, so many staging rows can exist.
+    const columns = (
+      srv.db.prepare('PRAGMA table_info(projects)').all() as { name: string }[]
+    )
+      .map(({ name }) => name)
+      .filter((name) => name !== 'id');
+    const copy = (id: string, ownerId: string) =>
+      srv.db
+        .prepare(
+          `INSERT INTO projects (id, ${columns.join(', ')})
+           SELECT ?, ${columns
+             .map((name) => (name === 'owner_user_id' ? '?' : name))
+             .join(', ')} FROM projects WHERE id = ?`
+        )
+        .run(
+          id,
+          ...(columns.includes('owner_user_id') ? [ownerId] : []),
+          plain.projectId
+        );
+    const staging = (id: string, ownerId: string, updatedAt: string) =>
+      srv.db
+        .prepare(
+          `INSERT INTO e2ee_project_migrations
+             (project_id, direction, state, owner_user_id, source_version,
+              started_at, updated_at)
+           VALUES (?, 'encrypt', 'staging', ?, 0, ?, ?)`
+        )
+        .run(id, ownerId, updatedAt, updatedAt);
+    // Sixty lapsed stagings, older than any other, whose owner may still
+    // migrate: more than one page of candidates.
+    for (let i = 0; i < 60; i++) {
+      const id = `${plain.projectId}_eligible_${String(i).padStart(2, '0')}`;
+      copy(id, OWNER);
+      staging(id, OWNER, '2000-01-01T00:00:00.000Z');
+    }
+    // And one, newer, whose owner left the rollout.
+    const withdrawn = `${plain.projectId}_withdrawn`;
+    copy(withdrawn, OTHER);
+    staging(withdrawn, OTHER, '2001-01-01T00:00:00.000Z');
+    const otherEmail = 'withdrawn@example.com';
+    srv.db
+      .prepare('UPDATE users SET email = ? WHERE id = ?')
+      .run(otherEmail, OTHER);
+    await sweepProjectMigrations(
+      srv.env,
+      true,
+      (email) => email !== otherEmail
+    );
+    expect(migrationRow(srv, withdrawn)!.state).toBe('abandoned');
+    expect(
+      rows(
+        srv,
+        "SELECT project_id FROM e2ee_project_migrations WHERE state = 'staging'"
+      )
+    ).toHaveLength(60);
   });
 });
 
