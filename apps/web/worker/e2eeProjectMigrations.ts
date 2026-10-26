@@ -3200,8 +3200,22 @@ export async function sweepProjectMigrations(
   }
 }
 
-/** Staging rows with a lapsed lease one sweep weighs for eligibility. */
+/** Staging rows with a lapsed lease one page of the sweep weighs. */
 const MIGRATION_SWEEP_CANDIDATES = 50;
+/**
+ * Pages of {@link MIGRATION_SWEEP_CANDIDATES} one sweep reads at most
+ * (#914 follow-up). A staging whose owner may still migrate stays lapsed
+ * until the owner's browser returns, so a full page of those must not
+ * hide a withdrawn one behind it: the sweep pages past them.
+ */
+const MIGRATION_SWEEP_CANDIDATE_PAGES = 10;
+
+type SweepCandidate = {
+  project_id: string;
+  direction: string;
+  updated_at: string;
+  email: string | null;
+};
 
 /**
  * Abandons, a few per sweep, the stagings with a lapsed lease whose owner
@@ -3209,24 +3223,64 @@ const MIGRATION_SWEEP_CANDIDATES = 50;
  * the route's own move, fenced on the row still staging with its lease
  * lapsed, so an owner admitted again who took a fresh lease meanwhile
  * keeps it. Returns the rows it abandoned, for the sweep to clean up.
+ *
+ * Candidates are read oldest first, keyset-paged on (`updated_at`,
+ * `project_id`) for at most {@link MIGRATION_SWEEP_CANDIDATE_PAGES} pages,
+ * until {@link MIGRATION_SWEEP_ROWS} are abandoned or none are left.
  */
 async function abandonWithdrawnStagings(
   db: D1Database,
   eligible: (email: string | undefined, direction: string) => boolean,
   now: number
 ): Promise<{ project_id: string; state: string; direction: string }[]> {
-  const { results } = await db
-    .prepare(
-      `SELECT m.project_id, m.direction, u.email FROM e2ee_project_migrations m
+  const select = `SELECT m.project_id, m.direction, m.updated_at, u.email
+       FROM e2ee_project_migrations m
        LEFT JOIN users u ON u.id = m.owner_user_id
-       WHERE m.state = 'staging' AND COALESCE(m.lease_expires_at, 0) <= ?
-       ORDER BY m.updated_at LIMIT ?`
-    )
-    .bind(now, MIGRATION_SWEEP_CANDIDATES)
-    .all<{ project_id: string; direction: string; email: string | null }>();
+       WHERE m.state = 'staging' AND COALESCE(m.lease_expires_at, 0) <= ?`;
+  const order = 'ORDER BY m.updated_at, m.project_id LIMIT ?';
   const abandoned: { project_id: string; state: string; direction: string }[] =
     [];
-  for (const row of results ?? []) {
+  let after: SweepCandidate | undefined;
+  for (
+    let page = 0;
+    page < MIGRATION_SWEEP_CANDIDATE_PAGES &&
+    abandoned.length < MIGRATION_SWEEP_ROWS;
+    page++
+  ) {
+    const { results } = await (
+      after
+        ? db
+            .prepare(
+              `${select}
+         AND (m.updated_at > ? OR (m.updated_at = ? AND m.project_id > ?))
+       ${order}`
+            )
+            .bind(
+              now,
+              after.updated_at,
+              after.updated_at,
+              after.project_id,
+              MIGRATION_SWEEP_CANDIDATES
+            )
+        : db.prepare(`${select} ${order}`).bind(now, MIGRATION_SWEEP_CANDIDATES)
+    ).all<SweepCandidate>();
+    const candidates = results ?? [];
+    await abandonIneligible(db, candidates, eligible, now, abandoned);
+    if (candidates.length < MIGRATION_SWEEP_CANDIDATES) break;
+    after = candidates[candidates.length - 1];
+  }
+  return abandoned;
+}
+
+/** One page of {@link abandonWithdrawnStagings}: appends to `abandoned`. */
+async function abandonIneligible(
+  db: D1Database,
+  candidates: SweepCandidate[],
+  eligible: (email: string | undefined, direction: string) => boolean,
+  now: number,
+  abandoned: { project_id: string; state: string; direction: string }[]
+): Promise<void> {
+  for (const row of candidates) {
     if (abandoned.length >= MIGRATION_SWEEP_ROWS) break;
     if (eligible(row.email ?? undefined, row.direction)) continue;
     try {
@@ -3251,5 +3305,4 @@ async function abandonWithdrawnStagings(
       // An account being erased, say: its erasure abandons it instead.
     }
   }
-  return abandoned;
 }

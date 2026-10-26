@@ -29,6 +29,7 @@ import {
   type ProjectMigrationsApi
 } from '../apps/web/src/lib/e2ee/projectMigrationsApi';
 import worker from '../apps/web/worker/index';
+import { sweepProjectMigrations } from '../apps/web/worker/e2eeProjectMigrations';
 import { ProjectCollaborationRoom } from '../apps/web/worker/e2eeRoom';
 import { createRoomContext } from './collaboration-room-harness';
 import {
@@ -1927,6 +1928,66 @@ describe('erasure, deletion and the sweep', () => {
     expect((await autosave(srv, plain)).status).toBe(200);
     expect(migrationRow(srv, done.projectId)!.state).toBe('cutover');
     expect(formatOf(srv, done.projectId).storage_format).toBe(2);
+  });
+
+  it('pages the sweep past lapsed stagings whose owners may still migrate (#914 follow-up)', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    // Copies of the project row, so many staging rows can exist.
+    const columns = (
+      srv.db.prepare('PRAGMA table_info(projects)').all() as { name: string }[]
+    )
+      .map(({ name }) => name)
+      .filter((name) => name !== 'id');
+    const copy = (id: string, ownerId: string) =>
+      srv.db
+        .prepare(
+          `INSERT INTO projects (id, ${columns.join(', ')})
+           SELECT ?, ${columns
+             .map((name) => (name === 'owner_user_id' ? '?' : name))
+             .join(', ')} FROM projects WHERE id = ?`
+        )
+        .run(
+          id,
+          ...(columns.includes('owner_user_id') ? [ownerId] : []),
+          plain.projectId
+        );
+    const staging = (id: string, ownerId: string, updatedAt: string) =>
+      srv.db
+        .prepare(
+          `INSERT INTO e2ee_project_migrations
+             (project_id, direction, state, owner_user_id, source_version,
+              started_at, updated_at)
+           VALUES (?, 'encrypt', 'staging', ?, 0, ?, ?)`
+        )
+        .run(id, ownerId, updatedAt, updatedAt);
+    // Sixty lapsed stagings, older than any other, whose owner may still
+    // migrate: more than one page of candidates.
+    for (let i = 0; i < 60; i++) {
+      const id = `${plain.projectId}_eligible_${String(i).padStart(2, '0')}`;
+      copy(id, OWNER);
+      staging(id, OWNER, '2000-01-01T00:00:00.000Z');
+    }
+    // And one, newer, whose owner left the rollout.
+    const withdrawn = `${plain.projectId}_withdrawn`;
+    copy(withdrawn, OTHER);
+    staging(withdrawn, OTHER, '2001-01-01T00:00:00.000Z');
+    const otherEmail = 'withdrawn@example.com';
+    srv.db
+      .prepare('UPDATE users SET email = ? WHERE id = ?')
+      .run(otherEmail, OTHER);
+    await sweepProjectMigrations(
+      srv.env,
+      true,
+      (email) => email !== otherEmail
+    );
+    expect(migrationRow(srv, withdrawn)!.state).toBe('abandoned');
+    expect(
+      rows(
+        srv,
+        "SELECT project_id FROM e2ee_project_migrations WHERE state = 'staging'"
+      )
+    ).toHaveLength(60);
   });
 });
 
