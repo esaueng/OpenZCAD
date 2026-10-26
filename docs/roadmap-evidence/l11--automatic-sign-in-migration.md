@@ -2,6 +2,8 @@
 row: L11
 ---
 
+The automatic setup/unlock attention path opens the rendered Settings dialog as well as selecting and persisting its Encryption section. A rendered browser regression starts with Settings closed, confirms default-on setup appears immediately, and fails against the preceding implementation.
+
 Preference-key lifetime follow-up: public preference reads/writes own and finally zero a key copy before their first await; automatic migration additionally owns a copy across its complete load-to-save prerequisite. The upload policy reacquires the cache after importing the preference module. Cache replacement still zeroes its old entry but cannot turn these in-flight operations into zero-key signing or authentication. Nine new regressions fail on the preceding code, then pass with the fix; coverage includes authentic and zero-key-forged records, cache replacement during pin/API I/O, migration continuity and cleanup on success/refusal/error.
 
 ADR-024 Phase 8, automatic sign-in migration: the authenticated browser checks all four availability gates before loading key or migration code. With default-on, it opens the existing mandatory recovery-key setup/unlock/certification UI when necessary, verifies and pins the MAC-protected new-project preference as enabled, then runs the existing journaled migration controller once per signed-in page session. An untrusted preference requires explicit true-only repair in Settings. Unfinished cutover purges are included after reload. Existing member-readiness, journal resume, Web Locks, progress, errors and pause controls remain in use; readiness notifications never restart a manual run or paused automatic run in the same session.

@@ -6,6 +6,34 @@ import {
   seedE2eeDevice
 } from './e2ee-fixtures';
 
+test('default-on opens Encryption setup immediately when Settings was closed', async ({
+  page,
+  context
+}) => {
+  await stubApi(page);
+  await installE2eeServer(
+    context,
+    createE2eeServer({ projectsEnabled: true, migrationEnabled: true })
+  );
+  await page.route('**/api/e2ee/config', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        enabled: true,
+        projectsEnabled: true,
+        migrationEnabled: true,
+        defaultOn: true
+      })
+    })
+  );
+  await page.goto('/');
+  const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+  await expect(settings).toBeVisible({ timeout: 15_000 });
+  await expect(
+    settings.getByRole('button', { name: 'Set up encryption', exact: true })
+  ).toBeVisible();
+});
+
 test('hides Encryption while the server keeps the beta closed', async ({
   page,
   context

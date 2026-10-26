@@ -3259,6 +3259,7 @@ export function App() {
           if (stopped || sessionRef.current?.userId !== sessionUserId) return;
           setSettingsMessage(message);
           updateSettingsViewState({ open: true, activeSection: 'encryption' });
+          setSettingsOpen(true);
         });
         migration = current;
         void current.check();
