@@ -482,6 +482,76 @@ describe('the migration lease', () => {
     ).toMatchObject({ status: 409, code: 'E2EE_MIGRATION_LEASE_LOST' });
   });
 
+  it('hands out no lease unless the room confirmed its lock (#914 review)', async () => {
+    let room: 'down' | 'throws' | 'up' = 'down';
+    const locks: string[] = [];
+    const srv = server({
+      PROJECT_ROOM: {
+        getByName: (name: string) => ({
+          fetch: async (request: Request) => {
+            if (room === 'throws') throw new Error('room unreachable');
+            const { action } = (await request.json()) as { action: string };
+            locks.push(`${name}:${action}:${room}`);
+            return new Response(null, { status: room === 'up' ? 204 : 500 });
+          }
+        })
+      }
+    });
+    const plain = await plaintextProject(srv);
+    const api = createProjectMigrationsApi(
+      device(srv, owner, 'owner_laptop').fetcher
+    );
+    const startEncrypt = () =>
+      api.start(plain.projectId, {
+        direction: 'encrypt',
+        deviceId: 'owner_laptop'
+      });
+
+    // A fresh start whose lock fails, or cannot reach the room, issues
+    // nothing and leaves the plaintext writable.
+    for (const mode of ['down', 'throws'] as const) {
+      room = mode;
+      expect(await errorOf(startEncrypt())).toMatchObject({
+        status: 503,
+        code: 'PROJECT_ROOM_UNAVAILABLE'
+      });
+      expect(migrationRow(srv, plain.projectId)).toMatchObject({
+        state: 'abandoned',
+        lease_id: null,
+        lease_expires_at: null,
+        purge_cursor: null
+      });
+    }
+    expect(locks).toEqual([`${plain.projectId}:lock:down`]);
+    const saved = await autosave(srv, plain);
+    expect(saved.status).toBe(200);
+    const head = (await saved.json()) as ProjectDocument;
+
+    // The room answers again: the retry stages from the new head.
+    room = 'up';
+    const started = await startEncrypt();
+    expect(started.migration).toMatchObject({
+      leaseHeld: true,
+      sourceVersion: head.version
+    });
+
+    // A resumed staging whose lock fails keeps its rows, but no live lease.
+    srv.db
+      .prepare('UPDATE e2ee_project_migrations SET lease_expires_at = 1')
+      .run();
+    room = 'down';
+    expect(await errorOf(startEncrypt())).toMatchObject({
+      status: 503,
+      code: 'PROJECT_ROOM_UNAVAILABLE'
+    });
+    const resumed = migrationRow(srv, plain.projectId)!;
+    expect(resumed.state).toBe('staging');
+    expect(resumed.lease_id).not.toBe(started.leaseId);
+    expect(resumed.lease_expires_at as number).toBeLessThanOrEqual(Date.now());
+    room = 'up';
+    expect((await startEncrypt()).migration.leaseHeld).toBe(true);
+  });
+
   it('starts only for the owner of a live, unshared plaintext project', async () => {
     const srv = server();
     const plain = await plaintextProject(srv);
@@ -820,6 +890,131 @@ describe('staging beside the plaintext', () => {
         })
       ).status
     ).toBe(200);
+  });
+
+  it('lets only the lease that opened a staged encrypted upload advance it (#914 review)', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    const laptop = await startStaging(srv, plain.projectId);
+    const blobId = 'b'.repeat(32);
+    const openUpload = async (s: Staging) => {
+      const opened = await s.d.fetcher(
+        `/api/e2ee/projects/${plain.projectId}/blobs/uploads`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ blobId, kind: 'import-source' })
+        }
+      );
+      expect(opened.status).toBe(201);
+      return ((await opened.json()) as { session: { uploadSessionId: string } })
+        .session.uploadSessionId;
+    };
+    const startMultipart = async (s: Staging, session: string) => {
+      const started = await s.d.fetcher(`/api/uploads/${session}/multipart`, {
+        method: 'POST'
+      });
+      expect(started.status).toBe(201);
+      return ((await started.json()) as { uploadId: string }).uploadId;
+    };
+    const putPart = (
+      s: Staging,
+      session: string,
+      uploadId: string,
+      part: number
+    ) =>
+      s.d.fetcher(
+        `/api/uploads/${session}/parts/${part}?uploadId=${uploadId}`,
+        {
+          method: 'PUT',
+          headers: { 'content-type': 'application/octet-stream' },
+          body: text(`ciphertext part ${part}`)
+        }
+      );
+    const parts = (session: string) =>
+      srv.db
+        .prepare(
+          `SELECT part_number, etag FROM artifact_upload_parts
+           WHERE upload_session_id = ? ORDER BY part_number`
+        )
+        .all(session) as { part_number: number; etag: string | null }[];
+    const recorded = (session: string) =>
+      parts(session).map((part) => [part.part_number, part.etag !== null]);
+
+    const stale = await openUpload(laptop);
+    const staleUpload = await startMultipart(laptop, stale);
+    expect((await putPart(laptop, stale, staleUpload, 1)).status).toBe(200);
+
+    // The desktop takes the lease over while the laptop's part is in R2:
+    // the part's record lands nothing.
+    let desktop: Staging | undefined;
+    interface ResumedUpload {
+      uploadPart(part: number, body: ArrayBuffer): Promise<unknown>;
+    }
+    const original = srv.bucket.resumeMultipartUpload;
+    const resume = original as unknown as (
+      key: string,
+      id: string
+    ) => ResumedUpload;
+    srv.bucket.resumeMultipartUpload = vi.fn((key: string, id: string) => {
+      const upload = resume(key, id);
+      return {
+        ...upload,
+        uploadPart: async (part: number, body: ArrayBuffer) => {
+          const uploaded = await upload.uploadPart(part, body);
+          srv.db
+            .prepare('UPDATE e2ee_project_migrations SET lease_expires_at = 1')
+            .run();
+          desktop = await startStaging(srv, plain.projectId, 'owner_desktop');
+          return uploaded;
+        }
+      };
+    });
+    const raced = await putPart(laptop, stale, staleUpload, 2);
+    srv.bucket.resumeMultipartUpload = original;
+    expect(desktop).toBeDefined();
+    expect(raced.status).toBe(409);
+    expect(await codeOf(raced)).toBe('E2EE_MIGRATION_LEASE_LOST');
+    expect(recorded(stale)).toEqual([
+      [1, true],
+      [2, false]
+    ]);
+
+    // After the takeover the laptop reserves, records and completes nothing.
+    const late = await putPart(laptop, stale, staleUpload, 3);
+    expect(late.status).toBe(409);
+    expect(await codeOf(late)).toBe('E2EE_MIGRATION_LEASE_LOST');
+    const completed = await laptop.d.fetcher(
+      `/api/uploads/${stale}/multipart/complete`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          uploadId: staleUpload,
+          parts: [{ partNumber: 1, etag: parts(stale)[0]!.etag }]
+        })
+      }
+    );
+    expect(completed.status).toBe(409);
+    expect(await codeOf(completed)).toBe('E2EE_MIGRATION_LEASE_LOST');
+    expect(parts(stale)).toHaveLength(2);
+    expect(
+      srv.db
+        .prepare('SELECT reservation_state FROM upload_sessions WHERE id = ?')
+        .get(stale)
+    ).toEqual({ reservation_state: 'uploading' });
+
+    // The new holder opening the same blob drops the stale session and
+    // uploads under a fresh one.
+    const fresh = await openUpload(desktop!);
+    expect(fresh).not.toBe(stale);
+    expect(
+      srv.db.prepare('SELECT id FROM upload_sessions WHERE id = ?').get(stale)
+    ).toBeUndefined();
+    expect(srv.bucket.multipart.has(staleUpload)).toBe(false);
+    const freshUpload = await startMultipart(desktop!, fresh);
+    expect((await putPart(desktop!, fresh, freshUpload, 1)).status).toBe(200);
+    expect(recorded(fresh)).toEqual([[1, true]]);
   });
 
   it('lands nothing from a plaintext upload session opened before staging began (#914 review)', async () => {

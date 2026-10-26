@@ -337,11 +337,11 @@ async function readBody(request: Request): Promise<Record<string, unknown>> {
   }
 }
 
-/** Tells the project's room to lock or purge; true when there is none. */
+/** Tells the project's room to purge; true when there is none. */
 async function tellRoom(
   env: MigrationEnv,
   projectId: string,
-  action: 'lock' | 'purge'
+  action: 'purge'
 ): Promise<boolean> {
   const rooms = env.PROJECT_ROOM as RoomNamespace | undefined;
   if (!rooms || typeof rooms.getByName !== 'function') return true;
@@ -367,6 +367,47 @@ async function tellRoom(
  */
 type RoomLock =
   { confirmed: true; version: number | null } | { confirmed: false };
+
+/**
+ * Takes back a lease the start issued but never handed out, because the
+ * room did not confirm its lock. A fresh staging with nothing staged goes
+ * back to `abandoned` with no cleanup due, so the plaintext unlocks and a
+ * retry starts afresh; a resumed one keeps its staged rows under a lease
+ * that lapses at once, which the retry takes over.
+ */
+async function withdrawLease(
+  db: D1Database,
+  projectId: string,
+  leaseId: string,
+  fresh: boolean
+): Promise<void> {
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const statements: D1PreparedStatement[] = [];
+  if (fresh) {
+    statements.push(
+      db
+        .prepare(
+          `UPDATE e2ee_project_migrations
+           SET state = 'abandoned', device_id = NULL, lease_id = NULL,
+               lease_expires_at = NULL, updated_at = ?, finished_at = ?
+           WHERE project_id = ? AND state = 'staging' AND lease_id = ?
+             AND NOT ${STAGED_ROWS_SQL}`
+        )
+        .bind(nowIso, nowIso, projectId, leaseId, ...stagedRowsBinds(projectId))
+    );
+  }
+  statements.push(
+    db
+      .prepare(
+        `UPDATE e2ee_project_migrations
+         SET lease_expires_at = ?, updated_at = ?
+         WHERE project_id = ? AND state = 'staging' AND lease_id = ?`
+      )
+      .bind(now, nowIso, projectId, leaseId)
+  );
+  await runBatch(db, statements);
+}
 
 /**
  * Locks the project's room and answers the plaintext version it holds.
@@ -595,49 +636,55 @@ async function start(
       );
     }
   }
-  // Nothing the room holds may move on while the browser stages.
+  // Nothing the room holds may move on while the browser stages. The
+  // cutover checks D1's head and measurements, not the room's, so a room
+  // that kept its sockets could persist plaintext edits only it holds,
+  // which the purge then deletes. Only an explicit answer confirms the
+  // lock: no lease leaves here otherwise (#914 and #916 review).
   const room = await lockRoom(ctx.env, projectId);
-  // A resumed staging locked the room (confirmed) when it began, and the
-  // room has refused every write since (PROJECT_MIGRATING): only a fresh
-  // start asks what the room holds.
-  if (existing?.state !== 'staging') {
-    // A fresh start that must stage nothing is undone at once, and the
-    // plaintext is writable again.
-    const undoFreshStart = () =>
-      runBatch(ctx.db, [
-        ctx.db
-          .prepare(
-            `UPDATE e2ee_project_migrations
-             SET state = 'abandoned', device_id = NULL, lease_id = NULL,
-                 lease_expires_at = NULL, updated_at = ?, finished_at = ?
-             WHERE project_id = ? AND state = 'staging' AND lease_id = ?
-               AND staged_version = 0`
-          )
-          .bind(nowIso, nowIso, projectId, leaseId)
-      ]);
-    // A room that confirmed neither its version nor that it holds none
-    // may keep edits no checkpoint saved: the cutover checks only D1 and
-    // the purge would delete them. Fail closed; the owner retries.
-    if (!room.confirmed) {
-      await undoFreshStart();
-      refuse(
-        503,
-        'PROJECT_ROOM_UNAVAILABLE',
-        'The project’s live session could not be locked right now, so nothing was staged. Try again in a moment.'
+  if (!room.confirmed) {
+    try {
+      await withdrawLease(
+        ctx.db,
+        projectId,
+        leaseId,
+        existing?.state !== 'staging'
       );
+    } catch {
+      // The lease still never leaves here, and lapses on its own.
     }
-    // Slice 7-2: a room holding edits no checkpoint saved yet (its
-    // version is ahead of the account's head) would lose them to the
-    // purge. Nothing is staged then; the owner saves the project first.
-    if (room.version !== null && room.version > project.document_version) {
-      await undoFreshStart();
-      refuse(
-        409,
-        E2EE_MIGRATION_CODES.roomAhead,
-        'This project has edits from a live session that your account has not saved yet. Open it and save it, then try again.',
-        { roomVersion: room.version, accountVersion: project.document_version }
-      );
-    }
+    refuse(
+      503,
+      'PROJECT_ROOM_UNAVAILABLE',
+      'The project’s live session could not be locked right now, so nothing was staged. Try again in a moment.'
+    );
+  }
+  // Slice 7-2: a room holding edits no checkpoint saved yet (its version
+  // is ahead of the account's head) would lose them to the purge. A fresh
+  // start stages nothing then: it is undone at once, and the owner saves
+  // the project first. A resumed staging locked the room when it began.
+  if (
+    existing?.state !== 'staging' &&
+    room.version !== null &&
+    room.version > project.document_version
+  ) {
+    await runBatch(ctx.db, [
+      ctx.db
+        .prepare(
+          `UPDATE e2ee_project_migrations
+           SET state = 'abandoned', device_id = NULL, lease_id = NULL,
+               lease_expires_at = NULL, updated_at = ?, finished_at = ?
+           WHERE project_id = ? AND state = 'staging' AND lease_id = ?
+             AND staged_version = 0`
+        )
+        .bind(nowIso, nowIso, projectId, leaseId)
+    ]);
+    refuse(
+      409,
+      E2EE_MIGRATION_CODES.roomAhead,
+      'This project has edits from a live session that your account has not saved yet. Open it and save it, then try again.',
+      { roomVersion: room.version, accountVersion: project.document_version }
+    );
   }
   return json(
     {

@@ -31,7 +31,7 @@ import {
   type CurvePick,
   type EdgePick,
   type FacePick,
-  type InPlaceRequest,
+  type ResolvedInPlaceRequest,
   type InPlaceToolId,
   type PlanePick,
   type ProfilePick
@@ -613,6 +613,19 @@ export function inPlaceEditSeed(
         }
       } else if (data.patternKind === 'circular') {
         value('angle', data.angleDeg);
+        // Stored as a total: a switch to Fixed step starts from the step the
+        // copies stand at now.
+        const total = seed.values.angle;
+        const count =
+          typeof data.count === 'number'
+            ? data.count
+            : ctx.evaluate(data.count);
+        if (total !== undefined && count !== null && count >= 2) {
+          seed.values.step =
+            Math.abs(Math.abs(total) - 360) <= 1e-9
+              ? total / count
+              : total / (count - 1);
+        }
         seed.slots.axisId = data.axisRef
           ? `datum:${data.axisRef.datumFeatureId}`
           : `world-${data.axis}`;
@@ -774,11 +787,15 @@ const AXIS_DIRECTIONS = {
  * The `updateFeature` patch an edit's request writes, for every request but
  * a face operation's and a fillet's or chamfer's (App runs those through the
  * cards' own builders, `modelingFeatureUpdate` and `edgeModifierCommand`). Keys the command does not show are left out, so
- * the patch keeps them as stored.
+ * the patch keeps them as stored. A picked axis is the datum App adds for it
+ * first (`resolveNewAxis`).
  */
 export function inPlaceFeatureUpdate(
   seed: Pick<InPlaceEditSeed, 'featureId' | 'name' | 'data'>,
-  request: Exclude<InPlaceRequest, { tool: 'modeling' | 'edge-modifier' }>
+  request: Exclude<
+    ResolvedInPlaceRequest,
+    { tool: 'modeling' | 'edge-modifier' }
+  >
 ): FeatureUpdateInput | null {
   const { featureId, name, data: saved } = seed;
   switch (request.tool) {

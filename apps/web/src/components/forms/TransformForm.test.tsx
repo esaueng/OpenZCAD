@@ -178,7 +178,7 @@ describe('Move gizmo card copy (M10)', () => {
       />
     );
     // Nothing to move yet: a plain Move cannot apply.
-    expect(screen.getByRole('button', { name: 'Apply move' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Done' })).toBeDisabled();
     fireEvent.click(
       screen.getByRole('checkbox', { name: 'Copy (keep the original)' })
     );
@@ -197,7 +197,10 @@ describe('Move gizmo card copy (M10)', () => {
       />
     );
     // A copy in place is a coincident duplicate, which is a real result.
-    fireEvent.click(screen.getByRole('button', { name: 'Apply copy' }));
+    expect(
+      screen.getByRole('form', { name: 'Move controls' })
+    ).toHaveTextContent('A copy of Box');
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     expect(onConfirm).toHaveBeenCalledOnce();
     rerender(
       <MoveOverlay

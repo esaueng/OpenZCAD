@@ -1,5 +1,6 @@
 import type { PlaneBasis } from '@openzcad/geometry';
 import type {
+  DatumAxisDefinition,
   DatumAxisLine,
   FeatureId,
   RevolveAxis,
@@ -26,12 +27,15 @@ export interface RevolveAxisCandidate {
    * The stored choice: an in-sketch axis, a datum axis reference, or a world
    * axis through the origin (a circular pattern's), or the axis an edited
    * feature already stores (a helical sweep's typed one), kept as stored.
+   * `define` is a line picked in the model (a straight edge, a cylinder's
+   * axis): the command adds it as a datum axis and turns about that.
    */
   choice:
     | { axis: RevolveAxis }
     | { datumFeatureId: FeatureId }
     | { world: 'x' | 'y' | 'z' }
-    | { saved: true };
+    | { saved: true }
+    | { define: DatumAxisDefinition };
 }
 
 /** What the command has picked so far. */
@@ -97,11 +101,7 @@ export function revolveAxisCandidates(
     FeatureId,
     DatumAxisLine
   ][]) {
-    const offPlane = Math.abs(
-      dot(sub(line.origin, basis.origin), basis.normal)
-    );
-    const tilt = Math.abs(dot(line.direction, basis.normal));
-    if (offPlane > IN_PLANE_TOLERANCE || tilt > IN_PLANE_TOLERANCE) continue;
+    if (!lineInPlane(line, basis)) continue;
     candidates.push({
       id: `datum:${featureId}`,
       label: datumLabel(featureId),
@@ -129,8 +129,20 @@ export function revolveAxisCandidates(
   );
 }
 
+/** Whether a line lies in a sketch's plane, as a revolve axis must. */
+export function lineInPlane(
+  line: Pick<RevolveAxisCandidate, 'origin' | 'direction'>,
+  basis: PlaneBasis
+): boolean {
+  const offPlane = Math.abs(dot(sub(line.origin, basis.origin), basis.normal));
+  const tilt = Math.abs(
+    dot(scaled(line.direction, 1 / length(line.direction)), basis.normal)
+  );
+  return offPlane <= IN_PLANE_TOLERANCE && tilt <= IN_PLANE_TOLERANCE;
+}
+
 /** Whether two lines are the same line, either way round. */
-function collinear(
+export function collinear(
   a: Pick<RevolveAxisCandidate, 'origin' | 'direction'>,
   b: Pick<RevolveAxisCandidate, 'origin' | 'direction'>
 ): boolean {
