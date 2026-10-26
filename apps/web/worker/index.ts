@@ -29,7 +29,12 @@ import {
   stageDecryptedRevision
 } from './e2eeReverseStaging';
 import { encryptedRoomHeaders, notifyEncryptedRoom } from './e2eeRoom';
-import { enforceApiRateLimit, publicRequestBucket } from './apiRateLimit';
+import {
+  enforceApiRateLimit,
+  isApiRateLimitSpent,
+  markApiRateLimitSpent,
+  publicRequestBucket
+} from './apiRateLimit';
 import {
   FREECAD_WORKER_PATH,
   serveFreecadWorkerAsset
@@ -972,9 +977,19 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       : null;
     const perAddress = () =>
       enforceApiRateLimit(env, address!, ENCRYPTED_SHARED_BLOB_RATE_LIMIT);
+    // A load over its budget is marked so later requests skip the snapshot
+    // read that sizes it (#935 review): they go to the address's budget.
+    const spentMark = (linkKey: string) => `${address}:${linkKey}:spent`;
     const blobGuard: SharedBlobGuard | null = address
       ? {
           unbudgeted: perAddress,
+          spent: async (linkKey) => {
+            if (!(await isApiRateLimitSpent(env, spentMark(linkKey)))) {
+              return false;
+            }
+            await perAddress();
+            return true;
+          },
           load: async (linkKey, blobs) => {
             try {
               await enforceApiRateLimit(
@@ -987,6 +1002,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
               if (!(error instanceof HttpError) || error.status !== 429) {
                 throw error;
               }
+              await markApiRateLimitSpent(env, spentMark(linkKey));
               await perAddress();
             }
           }

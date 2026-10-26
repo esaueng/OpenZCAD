@@ -83,6 +83,7 @@ import {
 import { sharedProject } from './support/e2ee-members';
 import {
   putRawSnapshot,
+  R2_PADDING,
   sealRawSnapshot
 } from './support/e2ee-share-snapshots';
 
@@ -647,6 +648,70 @@ describe('the anonymous blob route (slice 5-11)', { timeout: 120_000 }, () => {
         })
       ).status
     ).toBe(404);
+  });
+
+  it('refuses a request past both budgets before reading the snapshot from R2 (#935 review)', async () => {
+    const { srv, laptop, projectId, document, blobId } =
+      await sharedWithImport();
+    const link = await createShareLink(laptop.shareLinks, projectId, 'view');
+    // An R2-backed snapshot naming the one import: a load budget of 34.
+    const sealed = await sealRawSnapshot(srv, laptop, projectId, link.shareId, {
+      document,
+      padding: R2_PADDING,
+      blobs: [
+        {
+          blobId,
+          kind: 'import-source',
+          key: new Uint8Array(randomBytes(32)),
+          ciphertextHash: new Uint8Array(randomBytes(32)),
+          plaintextLength: 1
+        }
+      ]
+    });
+    expect(
+      (await putRawSnapshot(srv, laptop, projectId, link.shareId, sealed))
+        .status
+    ).toBe(200);
+    const { envelope_key: envelopeKey } = srv.db
+      .prepare(
+        `SELECT envelope_key FROM e2ee_share_snapshots
+         WHERE project_id = ? AND share_id = ?`
+      )
+      .get(projectId, link.shareId) as { envelope_key: string | null };
+    expect(envelopeKey).not.toBe(null);
+    const snapshotReads = () =>
+      srv.bucket.get.mock.calls.filter(([key]) => key === envelopeKey).length;
+    const env = {
+      ...srv.env,
+      ENVIRONMENT: 'beta',
+      AUTH_MODE: 'email-code',
+      AUTH_OTP_PEPPER: 'pepper-for-tests'
+    };
+    const now = Date.now();
+    const minute = vi.spyOn(Date, 'now').mockReturnValue(now);
+    onTestFinished(() => minute.mockRestore());
+    const from = { 'cf-connecting-ip': '203.0.113.11' };
+    const fetchBlob = async () =>
+      (
+        await anonymous(
+          srv,
+          sharedBlobUrl(link.fragment.token, blobId),
+          env,
+          from
+        )
+      ).status;
+    // The load's 34, then the address's own 300: each reads the snapshot.
+    const before = snapshotReads();
+    for (let i = 0; i < 334; i += 1) expect(await fetchBlob()).toBe(200);
+    expect(snapshotReads() - before).toBe(334);
+    // Past both: refused, and nothing more is read from R2.
+    const spent = snapshotReads();
+    for (let i = 0; i < 20; i += 1) expect(await fetchBlob()).toBe(429);
+    expect(snapshotReads()).toBe(spent);
+    // The next minute the link loads again.
+    minute.mockReturnValue(now + 60_000);
+    expect(await fetchBlob()).toBe(200);
+    expect(snapshotReads()).toBe(spent + 1);
   });
 });
 

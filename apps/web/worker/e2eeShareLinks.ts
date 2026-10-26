@@ -1724,7 +1724,17 @@ export async function handleEncryptedSharedSnapshot(
 export interface SharedBlobGuard {
   /** A request that names no link the route serves. */
   unbudgeted(): Promise<void>;
-  /** A request within a load of the link `linkKey` names, of `blobs` blobs. */
+  /**
+   * Before the link's snapshot is read (#935 review): true when this
+   * address already went over its load budget for `linkKey` this minute.
+   * The request is then charged to the address's own budget here, which
+   * throws its 429 once that is spent too, and `load` is not called.
+   */
+  spent(linkKey: string): Promise<boolean>;
+  /**
+   * A request within a load of the link `linkKey` names, of `blobs` blobs;
+   * going over that load's budget is what `spent` reports afterwards.
+   */
   load(linkKey: string, blobs: number): Promise<void>;
 }
 
@@ -1753,6 +1763,9 @@ export interface SharedBlobBucket {
  * (`unbudgeted`); one that does counts as part of a load of that link
  * (`load`), whose budget is sized to the blobs its snapshot names, so a
  * model with more imports than the address budget still loads at once.
+ * Once that load budget is spent (`spent`, checked before the snapshot is
+ * read), requests count against the address's budget without reading the
+ * snapshot first, so past both budgets a request costs no R2 read or parse.
  */
 export async function handleEncryptedSharedBlob(
   pathname: string,
@@ -1763,8 +1776,10 @@ export async function handleEncryptedSharedBlob(
   guard: SharedBlobGuard | null = null
 ): Promise<Response> {
   if (!open || !db || !blobs) return anonymousNotFound();
+  // Set once `spent` has charged this request to the address's budget.
+  let charged = false;
   const notServed = async () => {
-    await guard?.unbudgeted();
+    if (!charged) await guard?.unbudgeted();
     return anonymousNotFound();
   };
   const match = SHARED_BLOB_ROUTE.exec(pathname);
@@ -1772,6 +1787,17 @@ export async function handleEncryptedSharedBlob(
   if (!match || !E2EE_BLOB_ID_PATTERN.test(blobId)) return notServed();
   const row = await servedLink(db, match[1] ?? '');
   if (!row || !(await isE2eeContentBlobStorageReady(db))) return notServed();
+  // Opaque: neither the project nor the link id reaches the limiter.
+  const linkKey = (
+    await sha256Hex(
+      new TextEncoder().encode(`${row.project_id}
+${row.share_id}`)
+    )
+  ).slice(0, 32);
+  // The link's budget is sized from its snapshot, but a spent one is known
+  // without it (#935 review): once this address is past both budgets, a
+  // request reads nothing from R2 and parses no envelope.
+  charged = (await guard?.spent(linkKey)) ?? false;
   const envelope = await servedEnvelope(row, snapshots);
   if (!envelope) return notServed();
   let named: readonly string[];
@@ -1784,16 +1810,7 @@ export async function handleEncryptedSharedBlob(
   } catch {
     return notServed();
   }
-  // Opaque: neither the project nor the link id reaches the limiter.
-  await guard?.load(
-    (
-      await sha256Hex(
-        new TextEncoder().encode(`${row.project_id}
-${row.share_id}`)
-      )
-    ).slice(0, 32),
-    named.length
-  );
+  if (!charged) await guard?.load(linkKey, named.length);
   if (!named.includes(blobId)) return anonymousNotFound();
   const blob = await db
     .prepare(

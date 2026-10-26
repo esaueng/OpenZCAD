@@ -11,7 +11,7 @@ export async function enforceApiRateLimit(
   if (env.ENVIRONMENT === 'development' && env.PRODUCTION_GUARD === undefined)
     return;
   if (!env.DB) throw new HttpError(503, 'API request guard is unavailable.');
-  const windowStart = Math.floor(Date.now() / 60_000) * 60;
+  const windowStart = currentWindowStart();
   const usage = await env.DB.prepare(
     `
     INSERT INTO auth_rate_limits (bucket, window_start, request_count)
@@ -39,6 +39,51 @@ export async function enforceApiRateLimit(
     .run();
   if (usage.request_count > limit)
     throw new HttpError(429, 'API request limit reached. Try again later.');
+}
+
+/**
+ * A bucket whose limit is known only after the work it should spare (the
+ * anonymous share-link blob route sizes a link's budget from its snapshot):
+ * `markApiRateLimitSpent` records, in the same table and window, that the
+ * bucket went over its limit this minute, and `isApiRateLimitSpent` answers
+ * that with one keyed read before any of that work. Both expire with the
+ * window.
+ */
+export async function markApiRateLimitSpent(
+  env: CloudflareEnv,
+  bucket: string
+): Promise<void> {
+  if (env.ENVIRONMENT === 'development' && env.PRODUCTION_GUARD === undefined)
+    return;
+  if (!env.DB) throw new HttpError(503, 'API request guard is unavailable.');
+  await env.DB.prepare(
+    `INSERT INTO auth_rate_limits (bucket, window_start, request_count)
+     VALUES (?, ?, 1)
+     ON CONFLICT(bucket) DO UPDATE SET
+       window_start = excluded.window_start, request_count = 1`
+  )
+    .bind(bucket, currentWindowStart())
+    .run();
+}
+
+export async function isApiRateLimitSpent(
+  env: CloudflareEnv,
+  bucket: string
+): Promise<boolean> {
+  if (env.ENVIRONMENT === 'development' && env.PRODUCTION_GUARD === undefined)
+    return false;
+  if (!env.DB) throw new HttpError(503, 'API request guard is unavailable.');
+  const row = await env.DB.prepare(
+    `SELECT 1 AS spent FROM auth_rate_limits
+     WHERE bucket = ? AND window_start = ?`
+  )
+    .bind(bucket, currentWindowStart())
+    .first<{ spent: number }>();
+  return row !== null;
+}
+
+function currentWindowStart(): number {
+  return Math.floor(Date.now() / 60_000) * 60;
 }
 
 export async function publicRequestBucket(
