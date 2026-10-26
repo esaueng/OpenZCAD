@@ -18,6 +18,15 @@ type LiveSnap = MutableRefObject<
 
 const zero = { x: 0, y: 0, z: 0 };
 
+/** The Move bar's title, where a card had its heading. */
+function moveTitle(): string | null {
+  return (
+    screen
+      .getByRole('form', { name: 'Move controls' })
+      .querySelector('.in-place-command-title')?.textContent ?? null
+  );
+}
+
 describe('Move overlay', () => {
   it('keeps streamed values when a parent recreates unchanged committed props', () => {
     const liveValuesRef: LiveValues = { current: null };
@@ -132,7 +141,7 @@ describe('Move overlay', () => {
     const lane = container.querySelector('.lane')!;
     expect(lane.querySelector('.extrude-instruction')).toBeNull();
     expect(
-      lane.querySelector('form.extrude-controller.move-controller')
+      lane.querySelector('form.in-place-command.move-command')
     ).not.toBeNull();
     expect(screen.getByRole('status').textContent).toContain('whole steps');
 
@@ -178,7 +187,7 @@ describe('Move overlay', () => {
     expect(screen.queryByRole('group', { name: 'Rotation' })).toBeNull();
     expect(screen.queryByLabelText('Rotate X in degrees')).toBeNull();
     expect(screen.getByRole('group', { name: 'Translation' })).toBeTruthy();
-    expect(screen.getByRole('heading', { level: 2 }).textContent).toBe('Move');
+    expect(moveTitle()).toBe('Move');
 
     act(() => {
       liveValuesRef.current?.({ x: 5, y: 0, z: 0 }, zero, {
@@ -204,9 +213,58 @@ describe('Move overlay', () => {
       />
     );
     expect(screen.getByRole('group', { name: 'Rotation' })).toBeTruthy();
-    expect(screen.getByRole('heading', { level: 2 }).textContent).toBe(
-      'Move / Rotate'
+    expect(moveTitle()).toBe('Move / Rotate');
+  });
+
+  // U09: the gizmo is the Move, so its bar is the in-place Cancel / Done
+  // pill and the exact numbers, name, body and copy sit behind Options.
+  it('keeps every field behind the bar’s Options, closed at first', () => {
+    const confirm = vi.fn();
+    render(
+      <MoveOverlay
+        bodyName="Box"
+        values={{ translation: { x: 4, y: 0, z: 0 }, rotationDeg: zero }}
+        units="mm"
+        snap={null}
+        name="Move 1"
+        onName={() => {}}
+        targets={[
+          { bodyId: 'a', name: 'Box' },
+          { bodyId: 'b', name: 'Lid' }
+        ]}
+        targetBodyId="a"
+        onTargetBody={() => {}}
+        copy={false}
+        onCopy={() => {}}
+        onChange={() => {}}
+        onConfirm={confirm}
+        onCancel={() => {}}
+      />
     );
+    const options = screen
+      .getByRole('form', { name: 'Move controls' })
+      .querySelector('details.in-place-command-options')!;
+    expect(options).not.toBeNull();
+    expect((options as HTMLDetailsElement).open).toBe(false);
+    for (const label of [
+      'Name',
+      'Body',
+      'Move X in mm',
+      'Move Y in mm',
+      'Move Z in mm',
+      'Rotate X in degrees',
+      'Rotate Y in degrees',
+      'Rotate Z in degrees',
+      'Copy (keep the original)'
+    ]) {
+      expect(options.contains(screen.getByLabelText(label))).toBe(true);
+    }
+    expect(screen.getByLabelText('Move / Rotate options').tagName).toBe(
+      'SUMMARY'
+    );
+    // Done submits the form, so Enter in a field still applies the Move.
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(confirm).toHaveBeenCalledTimes(1);
   });
 
   it('prints inch as in and drops float noise from live values', () => {
@@ -364,7 +422,7 @@ describe('Move overlay invalid values', () => {
           onCancel={() => {}}
         />
       );
-      expect(screen.getByRole('button', { name: 'Apply move' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Done' })).toBeDisabled();
       fireEvent.submit(screen.getByRole('form', { name: 'Move controls' }));
       expect(onConfirm).not.toHaveBeenCalled();
     }
@@ -387,7 +445,7 @@ describe('Move overlay invalid values', () => {
         hideRotation
       />
     );
-    const apply = screen.getByRole('button', { name: 'Apply move' });
+    const apply = screen.getByRole('button', { name: 'Done' });
     expect(apply).toBeEnabled();
     fireEvent.click(apply);
     expect(onConfirm).toHaveBeenCalledOnce();
@@ -407,7 +465,7 @@ describe('Move overlay invalid values', () => {
         liveValuesRef={liveValuesRef}
       />
     );
-    const apply = screen.getByRole('button', { name: 'Apply move' });
+    const apply = screen.getByRole('button', { name: 'Done' });
     act(() => {
       liveValuesRef.current?.(
         { x: 5, y: 0, z: 0 },

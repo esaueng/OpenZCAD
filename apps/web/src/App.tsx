@@ -152,6 +152,7 @@ import {
 import {
   CommandManager,
   commandFactories,
+  composeCommands,
   prepareLegacySketchConversion,
   duplicateFeatureCommands,
   duplicateFeatureRefusal,
@@ -168,6 +169,7 @@ import type {
 import {
   appendRevision,
   createCheckpoint,
+  createFeatureOnlyIds,
   createSavePoint,
   createSavedRevision,
   createProjectDocument,
@@ -1439,8 +1441,11 @@ import {
   displayedValue,
   isInPlaceTool,
   keypadText,
+  requestNewAxis,
+  resolveNewAxis,
   valueInRange,
   type InPlaceRequest,
+  type ResolvedInPlaceRequest,
   type BodyPick,
   type CurvePick,
   type EdgePick,
@@ -8639,6 +8644,113 @@ export function App() {
   }
 
   /**
+   * U09: a straight edge or a cylinder (or cone) clicked as the axis of a
+   * running turn or ring, or an edge or a flat face's normal as a linear
+   * pattern's direction, once what it acts on is picked. False leaves the
+   * click to name a body as before.
+   */
+  /** Why an edit's picked line is refused: it is built after the feature. */
+  function refusedLine(editing: InPlaceEditSeed): string {
+    return `${editing.name} can only turn about a line on what is built before it in History.`;
+  }
+  function pickInPlaceLine(selection: TopologySelection): boolean {
+    const command = inPlaceRef.current;
+    const spec = command.spec;
+    if (!spec || !(spec.axisPicks || spec.takeDirection)) return false;
+    if (
+      command.slots.bodies.length === 0 &&
+      command.slots.profiles.length === 0
+    ) {
+      return false;
+    }
+    // An edit's new axis is a datum just before the feature: a body made by
+    // it or later is not there yet (its result is on screen where its input
+    // was). A direction is numbers and reads anything shown.
+    if (
+      command.editing &&
+      !spec.takeDirection &&
+      !inPlaceEditMayUse(
+        producingFeatureOf({ bodyId: selection.bodyId }),
+        command.editing
+      )
+    ) {
+      setStatus(refusedLine(command.editing));
+      return true;
+    }
+    // A direction is stored as its numbers, so it may be read off the
+    // preview (a pattern's copies stand over the body); an axis is a datum
+    // on the body as History has it.
+    const committed = managerRef.current?.document ?? null;
+    const shown =
+      spec.takeDirection &&
+      previewDoc?.derived.bodyRepresentations[selection.bodyId]
+        ? previewDoc
+        : committed;
+    const topology =
+      shown?.derived.bodyRepresentations[selection.bodyId]?.topology;
+    if (selection.kind === 'edge') {
+      const edge = topology?.edges.find((edge) => edge.hash === selection.hash);
+      const witness = edge?.reference?.witness;
+      // Only a straight edge is a line; a curved one still names its body.
+      if (
+        !edge ||
+        (witness && (witness.closed || !/^line$/i.test(witness.curveType)))
+      ) {
+        return false;
+      }
+    } else {
+      const type = topology?.faces
+        .find((face) => face.hash === selection.hash)
+        ?.geometry?.surfaceType.toLowerCase();
+      const planar = type === 'plane';
+      const turns = type === 'cylinder' || type === 'cone';
+      if (!(turns && spec.axisPicks) && !(planar && spec.takeDirection)) {
+        return false;
+      }
+    }
+    // Its topology must be built by then too: a later feature's reshaping of
+    // an earlier body is not.
+    const editing = command.editing;
+    const reference =
+      selection.kind === 'edge'
+        ? topology?.edges.find((edge) => edge.hash === selection.hash)
+            ?.reference
+        : topology?.faces.find((face) => face.hash === selection.hash)
+            ?.reference;
+    if (
+      editing &&
+      !spec.takeDirection &&
+      reference &&
+      !inPlaceEditMayUse(reference.producingFeatureId, editing)
+    ) {
+      setStatus(refusedLine(editing));
+      return true;
+    }
+    const picked = { ...selection };
+    const tool = command.tool;
+    void loadDatumPicks().then((picks) => {
+      const current = inPlaceRef.current;
+      if (!shown || current.tool !== tool) return;
+      if (current.spec?.takeDirection) {
+        const direction =
+          picked.kind === 'edge'
+            ? picks.edgeDirection(shown, picked)
+            : picks.faceNormal(shown, picked);
+        if ('reason' in direction) setStatus(direction.reason);
+        else current.pickDirection(direction);
+        return;
+      }
+      const line =
+        picked.kind === 'edge'
+          ? picks.edgeAxisLine(shown, picked)
+          : picks.faceAxisLine(shown, picked);
+      if ('reason' in line) setStatus(line.reason);
+      else current.pickAxisLine(line);
+    });
+    return true;
+  }
+
+  /**
    * Proves a datum the preview or commit built resolved: through the datum
    * library once it has loaded, else by its published frame or line alone.
    */
@@ -9822,6 +9934,14 @@ export function App() {
     // here. Refuse before clearing the draft or changing document/history.
     if (!moveHasFiniteValues(preview)) {
       setStatus('Could not apply Move: enter finite values before applying.');
+      return false;
+    }
+    // The bar's Done is off until something changed; Enter from anywhere
+    // else must not commit the empty Move it refuses either.
+    if (!moveHasUnappliedChange(preview)) {
+      setStatus(
+        'Nothing to apply yet: drag the gizmo, or type a value under Options.'
+      );
       return false;
     }
     if (preview.target === 'sketch') {
@@ -15553,6 +15673,12 @@ export function App() {
             : picks.edgeRef(document, picked, at, kinds, points)
         );
       }
+      if (
+        (selection?.kind === 'edge' || selection?.kind === 'face') &&
+        pickInPlaceLine(selection)
+      ) {
+        return true;
+      }
       // The picture being placed: a flat face takes it while it still needs
       // a plane (or Options ask for another). Once placed, a click lands on
       // its own plane, never a face under it.
@@ -19378,8 +19504,33 @@ export function App() {
     inPlaceEditInputSketchIds,
     sketchReadDocument
   ]);
-  /** U09: an in-place request as the command its commit would run. */
+  /**
+   * U09: an in-place request as the command its commit would run. A line
+   * picked as its axis (an edge, a cylinder, a world axis) is added as a
+   * datum axis first, in the same undoable step: the stored features only
+   * turn about datum axes.
+   */
   function inPlaceCommandFor(request: InPlaceRequest, name: string): AnyCommand {
+    const definition = requestNewAxis(request);
+    if (!definition) {
+      return inPlaceResolvedCommand(resolveNewAxis(request, null)!, name);
+    }
+    const ids = createFeatureOnlyIds();
+    const datum = commandFactories.addDatumAxis({
+      name: newFeatureName('Axis 1'),
+      definition,
+      ids
+    });
+    const command = inPlaceResolvedCommand(
+      resolveNewAxis(request, ids.featureId)!,
+      name
+    );
+    return composeCommands(command.label, [datum, command]);
+  }
+  function inPlaceResolvedCommand(
+    request: ResolvedInPlaceRequest,
+    name: string
+  ): AnyCommand {
     const bodyName = newBodyName(name);
     switch (request.tool) {
       case 'revolve':
@@ -19583,7 +19734,10 @@ export function App() {
     // A placed primitive is its Create and its placement Move: the body is
     // the Create's.
     const leaf =
-      request.tool === 'primitive' ? (command.commands?.[0] ?? command) : command;
+      request.tool === 'primitive'
+        ? (command.commands?.[0] ?? command)
+        : // A turn about a picked line adds its datum axis first.
+          (command.commands?.at(-1) ?? command);
     const ids = (leaf.payload as { ids?: { bodyId?: BodyId } } | undefined)
       ?.ids;
     if (ids?.bodyId) return ids.bodyId;
@@ -19682,9 +19836,40 @@ export function App() {
         edgeModifierValue(request, edit.name)
       );
     }
-    const update = inPlaceFeatureUpdate(edit, request);
+    const definition = requestNewAxis(request);
+    if (!definition) {
+      const update = inPlaceFeatureUpdate(edit, resolveNewAxis(request, null)!);
+      if (!update) throw new Error(`${edit.name} cannot be edited this way.`);
+      return commandFactories.updateFeature(update, `Edit ${edit.name}`);
+    }
+    // A line picked as the new axis is added as a datum axis just before the
+    // edited feature, which may only turn about what is built before it.
+    const current = managerRef.current?.document;
+    const at = current
+      ? listFeaturesInOrder(current).findIndex(
+          (feature) => feature.featureId === edit.featureId
+        )
+      : -1;
+    if (at < 0) throw new Error(`${edit.name} is no longer in History.`);
+    const ids = createFeatureOnlyIds();
+    const update = inPlaceFeatureUpdate(
+      edit,
+      resolveNewAxis(request, ids.featureId)!
+    );
     if (!update) throw new Error(`${edit.name} cannot be edited this way.`);
-    return commandFactories.updateFeature(update, `Edit ${edit.name}`);
+    const label = `Edit ${edit.name}`;
+    return composeCommands(label, [
+      commandFactories.addDatumAxis({
+        name: newFeatureName('Axis 1'),
+        definition,
+        ids
+      }),
+      commandFactories.moveFeature(
+        { featureId: ids.featureId, toIndex: at },
+        label
+      ),
+      commandFactories.updateFeature(update, label)
+    ]);
   }
   /** Datum axes an edit may use: those built before the edited feature. */
   const inPlaceDatumAxes = useMemo(() => {
@@ -24689,7 +24874,12 @@ export function App() {
           cancelPanel();
           return;
         }
-        if (event.key === 'Enter' && !typing) {
+        // As for an in-place command: Enter on the Move bar's own controls
+        // (Options, Cancel, Done) acts for that control, not the Move.
+        const moveControl =
+          target instanceof Element &&
+          target.closest('.move-command') !== null;
+        if (event.key === 'Enter' && !typing && !moveControl) {
           event.preventDefault();
           confirmMove();
           return;
@@ -27631,9 +27821,11 @@ export function App() {
       }
       // Every command card anchors at the top of the right lane, a panel in
       // the phone lane yielding below it. The same precedence as the viewport's
-      // mode overlays: a live operation first, then the Move panel (unless
-      // the revert pill is up), and the closed-profile quick action only
-      // when no plane prompt, Move or revert pill is up.
+      // mode overlays: a live operation first, then a Move (unless the revert
+      // pill is up), and the closed-profile quick action only when no plane
+      // prompt, Move or revert pill is up. A Move's bar is not a card: it
+      // takes the command row, as every in-place command's does, so here it
+      // only holds the lane empty.
       command={
         modelingLocked ? null : measurementDock ? (
           measurementDock
@@ -27766,77 +27958,7 @@ export function App() {
               }}
             />
           )
-        ) : revertPill ? null : movePreview ? (
-          <MoveOverlay
-            bodyName={
-              movePreview.target === 'sketch'
-                ? (findSketch(doc, movePreview.bodyId as SketchId)?.name ??
-                  'Selected sketch')
-                : (representations[movePreview.bodyId as BodyId]?.name ??
-                  'Selected body')
-            }
-            hideRotation={movePreview.target === 'sketch'}
-            // A sketch move commits as a sketch translation, not a named
-            // feature, so it gets neither a name nor a body picker.
-            name={movePreview.target === 'sketch' ? undefined : moveName}
-            onName={movePreview.target === 'sketch' ? undefined : setMoveName}
-            targets={
-              movePreview.target === 'sketch'
-                ? undefined
-                : viewerBodies.map((body) => ({
-                    bodyId: body.bodyId,
-                    name: representations[body.bodyId]?.name ?? body.bodyId
-                  }))
-            }
-            targetBodyId={movePreview.bodyId}
-            onTargetBody={(bodyId) => {
-              setSelectedBodyIds([bodyId as BodyId]);
-              setMoveSnap(null);
-              setMovePreview((current) =>
-                current
-                  ? {
-                      ...current,
-                      bodyId,
-                      // Values are relative to the body's own centre, so
-                      // carrying them to a different body would apply a
-                      // move nobody asked for.
-                      translation: { x: 0, y: 0, z: 0 },
-                      rotationDeg: { x: 0, y: 0, z: 0 }
-                    }
-                  : current
-              );
-            }}
-            values={{
-              translation: movePreview.translation,
-              rotationDeg: movePreview.rotationDeg
-            }}
-            units={doc.units}
-            snap={moveSnap}
-            onChange={(values) =>
-              setMovePreview((current) =>
-                current
-                  ? {
-                      ...current,
-                      translation: values.translation,
-                      rotationDeg: values.rotationDeg
-                    }
-                  : current
-              )
-            }
-            onConfirm={confirmMove}
-            onCancel={cancelPanel}
-            copy={
-              movePreview.target === 'sketch' ? undefined : !!movePreview.copy
-            }
-            onCopy={(copy) =>
-              setMovePreview((current) =>
-                current ? { ...current, copy } : current
-              )
-            }
-            liveValuesRef={moveValuesSetterRef}
-            liveSnapRef={moveSnapSetterRef}
-          />
-        ) : tool === 'sketch' ? (
+        ) : revertPill ? null : movePreview ? null : tool === 'sketch' ? (
           <SketchPlanePrompt
             document={doc}
             offsetText={sketchPlaneOffsetText}
@@ -28360,6 +28482,85 @@ export function App() {
                   }}
                   onDone={() => inPlace.done()}
                   onCancel={cancelInPlaceCommand}
+                />
+              ) : movePreview &&
+                !modelingLocked &&
+                !measurementDock &&
+                !contextualToolCard &&
+                !revertPill ? (
+                <MoveOverlay
+                  bodyName={
+                    movePreview.target === 'sketch'
+                      ? (findSketch(doc, movePreview.bodyId as SketchId)
+                          ?.name ?? 'Selected sketch')
+                      : (representations[movePreview.bodyId as BodyId]
+                          ?.name ?? 'Selected body')
+                  }
+                  hideRotation={movePreview.target === 'sketch'}
+                  // A sketch move commits as a sketch translation, not a named
+                  // feature, so it gets neither a name nor a body picker.
+                  name={movePreview.target === 'sketch' ? undefined : moveName}
+                  onName={
+                    movePreview.target === 'sketch' ? undefined : setMoveName
+                  }
+                  targets={
+                    movePreview.target === 'sketch'
+                      ? undefined
+                      : viewerBodies.map((body) => ({
+                          bodyId: body.bodyId,
+                          name:
+                            representations[body.bodyId]?.name ?? body.bodyId
+                        }))
+                  }
+                  targetBodyId={movePreview.bodyId}
+                  onTargetBody={(bodyId) => {
+                    setSelectedBodyIds([bodyId as BodyId]);
+                    setMoveSnap(null);
+                    setMovePreview((current) =>
+                      current
+                        ? {
+                            ...current,
+                            bodyId,
+                            // Values are relative to the body's own centre, so
+                            // carrying them to a different body would apply a
+                            // move nobody asked for.
+                            translation: { x: 0, y: 0, z: 0 },
+                            rotationDeg: { x: 0, y: 0, z: 0 }
+                          }
+                        : current
+                    );
+                  }}
+                  values={{
+                    translation: movePreview.translation,
+                    rotationDeg: movePreview.rotationDeg
+                  }}
+                  units={doc.units}
+                  snap={moveSnap}
+                  onChange={(values) =>
+                    setMovePreview((current) =>
+                      current
+                        ? {
+                            ...current,
+                            translation: values.translation,
+                            rotationDeg: values.rotationDeg
+                          }
+                        : current
+                    )
+                  }
+                  onConfirm={confirmMove}
+                  onCancel={cancelPanel}
+                  copy={
+                    movePreview.target === 'sketch'
+                      ? undefined
+                      : !!movePreview.copy
+                  }
+                  onCopy={(copy) =>
+                    setMovePreview((current) =>
+                      current ? { ...current, copy } : current
+                    )
+                  }
+                  liveValuesRef={moveValuesSetterRef}
+                  liveSnapRef={moveSnapSetterRef}
                 />
               ) : null
             }
