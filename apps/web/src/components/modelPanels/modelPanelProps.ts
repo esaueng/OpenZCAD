@@ -13,6 +13,8 @@ import type {
 import type { DiagnosticRow } from '../../lib/diagnosticsRows';
 import type { HistoryRowActions } from '../HistoryTimeline';
 import type { ObjectFolderActions } from './ObjectsPanel';
+import type { BodyAppearancePreview } from '../ModelViewer';
+import type { BodyAppearancePatch } from './BodyAppearanceEditor';
 
 /**
  * Everything the five model panels read from the open document and the
@@ -70,6 +72,10 @@ export interface ModelPanelSource {
   onToggleBodyVisibility(bodyId: string): void;
   /** Renames a body in place from Objects (ZC-127): one undoable step. */
   onRenameBody?(bodyId: BodyId, name: string): void;
+  bodyAppearancePreview?: BodyAppearancePreview | null;
+  onPreviewBodyAppearance?(preview: BodyAppearancePreview | null): void;
+  /** Absent when model edits are unavailable; swatches still show the colors. */
+  onCommitBodyAppearance?(bodyId: BodyId, patch: BodyAppearancePatch): void;
   /** Objects folders (ZC-128); absent, folders list but cannot be edited. */
   objectFolderActions?: ObjectFolderActions;
   onToggleSketchVisibility(sketchId: string): void;

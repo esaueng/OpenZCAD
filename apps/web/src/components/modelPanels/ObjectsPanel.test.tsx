@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -7,6 +7,7 @@ import type {
   FeatureId,
   FeatureNode
 } from '@openzcad/shared';
+import { DEFAULT_BODY_COLOR } from '@openzcad/shared';
 import { modelBodies, ObjectsPanel, objectCount } from './ObjectsPanel';
 import { useObjectsView } from './panelViews';
 
@@ -63,6 +64,155 @@ function renderPanel(overrides: Partial<PanelProps> = {}) {
 }
 
 describe('ObjectsPanel', () => {
+  it('edits a body color from its row without changing selection; Escape returns focus', async () => {
+    const user = userEvent.setup();
+    const plate = { ...body('body-1', 'Plate'), color: DEFAULT_BODY_COLOR };
+    const onPreviewBodyAppearance = vi.fn();
+    const onCommitBodyAppearance = vi.fn();
+    const { props } = renderPanel({
+      features: [feature(1, { bodyId: plate.bodyId })],
+      representations: { [plate.bodyId]: plate },
+      onPreviewBodyAppearance,
+      onCommitBodyAppearance
+    });
+    const swatch = screen.getByRole('button', {
+      name: 'Change color of Plate'
+    });
+    await user.click(swatch);
+    const editor = screen.getByRole('group', { name: 'Appearance of Plate' });
+    const hex = within(editor).getByRole('textbox');
+    expect(hex).toHaveFocus();
+    expect(swatch).toHaveAttribute('aria-expanded', 'true');
+    expect(props.onSelectBody).not.toHaveBeenCalled();
+    fireEvent.change(hex, { target: { value: '#ff7452' } });
+    expect(onPreviewBodyAppearance).toHaveBeenLastCalledWith({
+      bodyId: plate.bodyId,
+      color: '#ff7452'
+    });
+    expect(onCommitBodyAppearance).not.toHaveBeenCalled();
+    await user.keyboard('{Enter}');
+    expect(onCommitBodyAppearance).toHaveBeenCalledExactlyOnceWith(
+      plate.bodyId,
+      { color: '#ff7452' }
+    );
+    await user.keyboard('{Escape}');
+    expect(
+      screen.queryByRole('group', { name: 'Appearance of Plate' })
+    ).toBeNull();
+    expect(onCommitBodyAppearance).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(swatch).toHaveFocus());
+    // Picking the body closes appearance so the next Escape clears selection.
+    await user.click(swatch);
+    await user.click(screen.getByRole('button', { name: 'Plate' }));
+    expect(
+      screen.queryByRole('group', { name: 'Appearance of Plate' })
+    ).toBeNull();
+    expect(props.onSelectBody).toHaveBeenCalledExactlyOnceWith(
+      plate.bodyId,
+      false
+    );
+  });
+
+  it('previews opacity, commits once on release, and resets both properties', async () => {
+    const user = userEvent.setup();
+    const plate = { ...body('body-1', 'Plate'), color: '#4da3ff' };
+    const onPreviewBodyAppearance = vi.fn();
+    const onCommitBodyAppearance = vi.fn();
+    renderPanel({
+      features: [feature(1, { bodyId: plate.bodyId })],
+      representations: { [plate.bodyId]: plate },
+      onPreviewBodyAppearance,
+      onCommitBodyAppearance
+    });
+    await user.click(
+      screen.getByRole('button', { name: 'Change color of Plate' })
+    );
+    const opacity = screen.getByRole('slider', { name: 'Opacity of Plate' });
+    fireEvent.change(opacity, { target: { value: '0.5' } });
+    expect(onPreviewBodyAppearance).toHaveBeenLastCalledWith({
+      bodyId: plate.bodyId,
+      opacity: 0.5
+    });
+    expect(onCommitBodyAppearance).not.toHaveBeenCalled();
+    fireEvent.pointerUp(opacity);
+    fireEvent.blur(opacity);
+    expect(onCommitBodyAppearance).toHaveBeenCalledExactlyOnceWith(
+      plate.bodyId,
+      { opacity: 0.5 }
+    );
+    await user.click(screen.getByRole('button', { name: 'Reset to default' }));
+    expect(onCommitBodyAppearance).toHaveBeenLastCalledWith(plate.bodyId, {
+      color: null,
+      opacity: null
+    });
+    expect(screen.getByRole('textbox')).toHaveValue(DEFAULT_BODY_COLOR);
+    expect(
+      screen.getByRole('button', { name: 'Reset to default' })
+    ).toBeDisabled();
+  });
+
+  it('keeps one editor open, cleans previews on filtering, and excludes source bodies', async () => {
+    const user = userEvent.setup();
+    const plate = { ...body('body-1', 'Plate'), color: '#4da3ff' };
+    const lid = { ...body('body-2', 'Lid'), color: '#ff7452' };
+    const source = {
+      ...body('body-0', 'Source', true),
+      color: DEFAULT_BODY_COLOR
+    };
+    const onPreviewBodyAppearance = vi.fn();
+    renderPanel({
+      features: [
+        feature(1, { bodyId: plate.bodyId }),
+        feature(2, { bodyId: lid.bodyId })
+      ],
+      representations: {
+        [plate.bodyId]: plate,
+        [lid.bodyId]: lid,
+        [source.bodyId]: source
+      },
+      onPreviewBodyAppearance,
+      onCommitBodyAppearance: vi.fn()
+    });
+    await user.click(
+      screen.getByRole('button', { name: 'Change color of Plate' })
+    );
+    await user.click(
+      screen.getByRole('button', { name: 'Change color of Lid' })
+    );
+    expect(
+      screen.queryByRole('group', { name: 'Appearance of Plate' })
+    ).toBeNull();
+    expect(
+      screen.getByRole('group', { name: 'Appearance of Lid' })
+    ).toBeVisible();
+    fireEvent.change(screen.getByRole('textbox'), {
+      target: { value: '#112233' }
+    });
+    fireEvent.change(screen.getByRole('searchbox'), {
+      target: { value: 'Plate' }
+    });
+    expect(onPreviewBodyAppearance).toHaveBeenLastCalledWith(null);
+    expect(
+      screen.queryByRole('group', { name: 'Appearance of Lid' })
+    ).toBeNull();
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: '' } });
+    await user.click(screen.getByRole('button', { name: /1 source body/ }));
+    expect(
+      screen.queryByRole('button', { name: 'Change color of Source' })
+    ).toBeNull();
+  });
+
+  it('shows swatches but prevents appearance edits when editing is unavailable', () => {
+    const plate = { ...body('body-1', 'Plate'), color: '#4da3ff' };
+    renderPanel({
+      features: [feature(1, { bodyId: plate.bodyId })],
+      representations: { [plate.bodyId]: plate }
+    });
+    expect(
+      screen.getByRole('button', { name: 'Change color of Plate' })
+    ).toBeDisabled();
+  });
+
   it('renames a body in place: double-click or F2, Enter keeps, Escape cancels (ZC-127)', async () => {
     const user = userEvent.setup();
     const onRenameBody = vi.fn();
