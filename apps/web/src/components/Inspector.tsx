@@ -8,7 +8,6 @@ import {
 import { Trash2 } from 'lucide-react';
 import { coerceParamValue } from '@openzcad/document-core';
 import { findFontFace } from '@openzcad/geometry';
-import { BODY_COLOR_PRESETS, DEFAULT_BODY_COLOR } from '@openzcad/shared';
 import {
   MATERIAL_DENSITY_PRESETS,
   MAX_CUSTOM_DENSITY_KG_PER_M3,
@@ -73,11 +72,9 @@ import {
 } from '../lib/inspectorHeading';
 import { CARD_EYEBROWS } from '../lib/cardEyebrows';
 import { ExprInput } from './ExprInput';
-import { ColorPicker } from './ColorPicker';
 import { CardHeader } from './CardHeader';
 import { PanelOverflow } from './PanelOverflow';
 import { FieldAutoFocusProvider } from './forms/fieldAutoFocus';
-import type { BodyAppearancePreview } from './ModelViewer';
 import {
   canRemoveImportedBlendFace,
   importedBlendEditNotice
@@ -181,16 +178,6 @@ export interface InspectorCallbacks {
   recognitionError?: string | null;
   /** Include/exclude one declared solid of an imported-step feature. */
   onToggleImportedSolid(featureId: FeatureId, solidIndex: number): void;
-  /** Drag-phase body appearance patch; null restores the committed look. */
-  onPreviewBodyAppearance(preview: BodyAppearancePreview | null): void;
-  /**
-   * Commits body appearance through node metadata. A null colour returns the
-   * body to the default; a null opacity returns it to fully opaque.
-   */
-  onCommitBodyAppearance(
-    bodyId: BodyId,
-    appearance: { color?: string | null; opacity?: number | null }
-  ): void;
 }
 
 interface InspectorProps extends InspectorCallbacks {
@@ -768,187 +755,6 @@ function CollapsibleSection({
       <summary className="section-title">{title}</summary>
       {children}
     </details>
-  );
-}
-
-/**
- * Per-body display color and opacity. Edits stream to the viewport as a
- * material-level preview on every change and commit through node metadata on
- * release/blur, so a picker drag never waits on a kernel rebuild.
- */
-function BodyAppearance({
-  body,
-  onPreview,
-  onCommit
-}: {
-  body: BodyRepresentation;
-  onPreview: InspectorCallbacks['onPreviewBodyAppearance'];
-  onCommit: (appearance: {
-    color?: string | null;
-    opacity?: number | null;
-  }) => void;
-}) {
-  // G2: every body has one default colour, whatever feature last made it.
-  const defaultColor = DEFAULT_BODY_COLOR;
-  const [draftColor, setDraftColor] = useState(body.color);
-  const [draftOpacity, setDraftOpacity] = useState(body.opacity ?? 1);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const committedRef = useRef({
-    color: body.color,
-    opacity: body.opacity ?? 1
-  });
-  const controlsRef = useRef<HTMLDivElement | null>(null);
-
-  // Resync drafts when the committed representation changes: another body
-  // selected, an undo, or this commit's rebuild landing.
-  useEffect(() => {
-    const committed = { color: body.color, opacity: body.opacity ?? 1 };
-    committedRef.current = committed;
-    setDraftColor(committed.color);
-    setDraftOpacity(committed.opacity);
-  }, [body.bodyId, body.color, body.opacity]);
-
-  function commitDraft(overrideColor?: string) {
-    onPreview(null);
-    const committed = committedRef.current;
-    const color = overrideColor ?? draftColor;
-    const patch: { color?: string; opacity?: number | null } = {};
-    if (color.toLowerCase() !== committed.color.toLowerCase()) {
-      patch.color = color;
-    }
-    if (draftOpacity !== committed.opacity) {
-      patch.opacity = draftOpacity >= 1 ? null : draftOpacity;
-    }
-    if (patch.color === undefined && patch.opacity === undefined) {
-      return;
-    }
-    committedRef.current = {
-      color: patch.color ?? committed.color,
-      opacity: draftOpacity
-    };
-    onCommit(patch);
-  }
-
-  const commitDraftRef = useRef(commitDraft);
-  commitDraftRef.current = commitDraft;
-
-  // Clicking outside or pressing Escape closes the picker and commits the
-  // last previewed value (a no-op when the picker already committed it).
-  useEffect(() => {
-    if (!pickerOpen) {
-      return;
-    }
-    const onPointerDown = (event: PointerEvent) => {
-      if (
-        controlsRef.current &&
-        event.target instanceof Node &&
-        !controlsRef.current.contains(event.target)
-      ) {
-        setPickerOpen(false);
-        commitDraftRef.current();
-      }
-    };
-    // Capture phase, and stop there: the panel's own Escape handler closes
-    // the whole panel, and it sits on an element, so a bubble-phase document
-    // listener would never even see the key. Escape unwinds one layer.
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.stopPropagation();
-        setPickerOpen(false);
-        commitDraftRef.current();
-      }
-    };
-    document.addEventListener('pointerdown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown, true);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown, true);
-    };
-  }, [pickerOpen]);
-
-  const isDefault =
-    draftColor.toLowerCase() === defaultColor.toLowerCase() &&
-    draftOpacity >= 1;
-
-  return (
-    <CollapsibleSection title="Appearance">
-      <div className="appearance-controls" ref={controlsRef}>
-        <div className="appearance-field">
-          <span>Color</span>
-          <span className="appearance-inputs">
-            <button
-              type="button"
-              className="appearance-swatch"
-              aria-label="Pick body color"
-              aria-expanded={pickerOpen}
-              style={{ background: draftColor }}
-              onClick={() => {
-                if (pickerOpen) {
-                  commitDraft();
-                }
-                setPickerOpen((open) => !open);
-              }}
-            />
-            <span className="appearance-value">{draftColor}</span>
-          </span>
-        </div>
-        {pickerOpen && (
-          <ColorPicker
-            color={draftColor}
-            presets={BODY_COLOR_PRESETS}
-            onChange={(color) => {
-              setDraftColor(color);
-              onPreview({ bodyId: body.bodyId, color });
-            }}
-            onCommit={(color) => {
-              setDraftColor(color);
-              commitDraft(color);
-            }}
-          />
-        )}
-        <label className="appearance-field">
-          <span>Opacity</span>
-          <span className="appearance-inputs">
-            <input
-              type="range"
-              aria-label="Body opacity"
-              min={0.05}
-              max={1}
-              step={0.05}
-              value={draftOpacity}
-              onChange={(event) => {
-                const opacity = Number(event.target.value);
-                setDraftOpacity(opacity);
-                onPreview({ bodyId: body.bodyId, opacity });
-              }}
-              onPointerUp={() => commitDraft()}
-              onKeyUp={() => commitDraft()}
-              onBlur={() => commitDraft()}
-            />
-            <span className="appearance-value">
-              {Math.round(draftOpacity * 100)}%
-            </span>
-          </span>
-        </label>
-        {!isDefault && (
-          <button
-            type="button"
-            className="appearance-reset"
-            onClick={() => {
-              onPreview(null);
-              committedRef.current = { color: defaultColor, opacity: 1 };
-              setDraftColor(defaultColor);
-              setDraftOpacity(1);
-              // Clear the colour rather than store the default as a choice,
-              // so the body follows the default if it ever changes.
-              onCommit({ color: null, opacity: null });
-            }}
-          >
-            Reset to default
-          </button>
-        )}
-      </div>
-    </CollapsibleSection>
   );
 }
 
@@ -1796,15 +1602,6 @@ export function Inspector(props: InspectorProps) {
               recognitionWorker={props.recognitionWorker}
             />
           )}
-        {selectedBody && !selectedBody.consumed && (
-          <BodyAppearance
-            body={selectedBody}
-            onPreview={props.onPreviewBodyAppearance}
-            onCommit={(appearance) =>
-              props.onCommitBodyAppearance(selectedBody.bodyId, appearance)
-            }
-          />
-        )}
         {selectedBody && (
           <>
             {splitHalf && (
