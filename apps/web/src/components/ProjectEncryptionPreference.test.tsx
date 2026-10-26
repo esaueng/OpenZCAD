@@ -109,6 +109,30 @@ function renderToggle(
 }
 
 describe('Settings › Encryption › Encrypt new projects (ADR-024 D2)', () => {
+  it.each(['unset', 'off'] as const)(
+    'shows required encryption instead of an opt-out for an %s beta preference',
+    async (preference) => {
+      unlock();
+      const { api } = fakeApi(
+        { ...OPEN, defaultOn: true },
+        preference === 'unset' ? null : await stored(4, false)
+      );
+      renderToggle(api);
+      const toggle = await screen.findByRole('checkbox', {
+        name: 'Encrypt new projects'
+      });
+      await waitFor(() => expect(toggle).toBeChecked());
+      expect(toggle).toBeDisabled();
+      expect(
+        screen.getByText(
+          'Encryption is required for new cloud projects on this server.'
+        )
+      ).toBeTruthy();
+      fireEvent.click(toggle);
+      expect(api.save).not.toHaveBeenCalled();
+    }
+  );
+
   it('is hidden while encrypted projects are off for the account', async () => {
     unlock();
     const { api } = fakeApi({ enabled: true, projectsEnabled: false });

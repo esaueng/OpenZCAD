@@ -50,6 +50,7 @@ export function ProjectEncryptionPreference({
     [injectedPins]
   );
   const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [required, setRequired] = useState(false);
   const [state, setState] = useState<ProjectPreferenceState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -67,6 +68,7 @@ export function ProjectEncryptionPreference({
       const config = await api.config();
       const open = config.enabled && config.projectsEnabled === true;
       setEnabled(open);
+      setRequired(config.defaultOn === true);
       const ctx = context();
       if (!open || !ctx) return;
       setState(await loadProjectPreference(ctx));
@@ -87,7 +89,7 @@ export function ProjectEncryptionPreference({
 
   const choose = async (encryptNewProjects: boolean) => {
     const ctx = context();
-    if (!ctx || !state) return;
+    if (!ctx || !state || required) return;
     setBusy(true);
     setError(null);
     try {
@@ -111,7 +113,8 @@ export function ProjectEncryptionPreference({
     }
   };
 
-  const checked = state?.kind === 'verified' && state.encryptNewProjects;
+  const checked =
+    required || (state?.kind === 'verified' && state.encryptNewProjects);
   return (
     <Group title="Projects">
       {error ? (
@@ -140,17 +143,19 @@ export function ProjectEncryptionPreference({
       <SettingRow
         title="Encrypt new projects"
         hint={
-          state?.kind === 'refused'
-            ? 'Unknown: the stored setting was not trusted.'
-            : CAN_CREATE_ENCRYPTED
-              ? 'New cloud projects are end-to-end encrypted. Existing projects stay as they are; the assistant is off on encrypted projects for now.'
-              : 'While this is on, your account accepts only end-to-end encrypted new projects, which this version of OpenZCAD cannot create yet. Existing projects stay as they are.'
+          required
+            ? 'Encryption is required for new cloud projects on this server.'
+            : state?.kind === 'refused'
+              ? 'Unknown: the stored setting was not trusted.'
+              : CAN_CREATE_ENCRYPTED
+                ? 'New cloud projects are end-to-end encrypted. Existing projects stay as they are; the assistant is off on encrypted projects for now.'
+                : 'While this is on, your account accepts only end-to-end encrypted new projects, which this version of OpenZCAD cannot create yet. Existing projects stay as they are.'
         }
       >
         <Toggle
           label="Encrypt new projects"
           checked={checked}
-          disabled={busy || state === null}
+          disabled={required || busy || state === null}
           onChange={(next) => void choose(next)}
         />
       </SettingRow>
