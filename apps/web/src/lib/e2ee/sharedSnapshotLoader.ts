@@ -58,6 +58,7 @@ import {
   type E2eeDecoder
 } from './decodeWorker';
 import { openSharedSnapshot } from './sharedSnapshot';
+import { desktopFetch } from '../desktopBridge';
 
 /** Why a visitor's link did not open. */
 export type SharedLinkRefusalReason =
@@ -329,7 +330,9 @@ export async function loadEncryptedSharedProject(
       SHARED_LINK_MESSAGES['wrong-link']
     );
   }
-  const fetcher = deps.fetch ?? ((input, init) => fetch(input, init));
+  // Through the desktop bridge in the packaged app, whose WebView origin is
+  // not the API's; a plain `fetch` in the browser (#923 review).
+  const fetcher = deps.fetch ?? desktopFetch;
   const api = deps.api ?? createE2eeShareLinksApi(fetcher);
   // The decode worker, started on first use and stopped when done.
   const held: { decoder: E2eeDecoder | null } = { decoder: null };

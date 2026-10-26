@@ -178,6 +178,28 @@ fn renderer_lifecycle_path(path: &str) -> bool {
         )
 }
 
+/// An encrypted share link's anonymous reads (`/api/e2ee/share/{token}` and
+/// `/api/e2ee/share/{token}/blobs/{blob_id}`): a signed-out visitor opens
+/// them, and they never carry the account's credentials. Anything else under the
+/// prefix, or an escaped segment, stays an ordinary authenticated request.
+fn anonymous_share_read(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("/api/e2ee/share/") else {
+        return false;
+    };
+    let plain = |segment: &str| {
+        !segment.is_empty()
+            && segment.len() <= 256
+            && segment
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    };
+    match rest.split('/').collect::<Vec<_>>().as_slice() {
+        [token] => plain(token),
+        [token, "blobs", blob_id] => plain(token) && plain(blob_id),
+        _ => false,
+    }
+}
+
 fn renderer_api_destination(path: &str) -> Result<RendererApiDestination, String> {
     let mut url = api_url(path)?;
     // Classify the parsed destination before reading or refreshing native credentials.
@@ -214,7 +236,8 @@ fn renderer_api_destination(path: &str) -> Result<RendererApiDestination, String
         _ => {}
     }
     Ok(RendererApiDestination {
-        public: matches!(url.path(), "/api/health" | "/api/auth/desktop/config"),
+        public: matches!(url.path(), "/api/health" | "/api/auth/desktop/config")
+            || anonymous_share_read(url.path()),
         logout: url.path() == "/api/auth/desktop/logout",
         url,
     })
@@ -839,6 +862,32 @@ mod tests {
             assert!(!destination.public);
             assert_eq!(destination.url.query(), Some("query=1"));
             assert_eq!(destination.url.fragment(), Some("fragment"));
+        }
+    }
+
+    #[test]
+    fn classifies_encrypted_share_reads_as_public() {
+        for path in [
+            "/api/e2ee/share/AbC-12_x",
+            "/api/e2ee/share/AbC-12_x/blobs/blob_1",
+            "/api/e2ee/share/AbC-12_x/blobs/blob_1?download=1",
+        ] {
+            let destination = renderer_api_destination(path).unwrap();
+            assert!(destination.public, "{path}");
+            assert!(!destination.logout);
+        }
+        for path in [
+            "/api/e2ee/share/",
+            "/api/e2ee/share/AbC/keys",
+            "/api/e2ee/share/AbC/blobs",
+            "/api/e2ee/share/AbC/blobs/blob_1/extra",
+            "/api/e2ee/share/A%2FbC",
+            "/api/e2ee/share-delegation",
+            "/api/e2ee/projects/proj_1/share-links",
+            "/api/e2ee/share/../projects/proj_1/share-links",
+        ] {
+            let destination = renderer_api_destination(path).unwrap();
+            assert!(!destination.public, "{path}");
         }
     }
 
