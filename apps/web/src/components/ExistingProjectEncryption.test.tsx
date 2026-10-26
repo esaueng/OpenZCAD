@@ -318,6 +318,123 @@ describe('a project cut over before its purge finished', () => {
   });
 });
 
+describe('a cut-over project this page has no record of', () => {
+  it('is found after a reload, listed as finishing, and retried', async () => {
+    // A fresh page (a reload or a crash after the cutover): no in-memory
+    // record, only the listing, where the project already reads as
+    // encrypted.
+    const plaintext = {
+      listProjects: async () => [
+        project('proj_cut', 'Cut bracket', '2026-10-02T00:00:00.000Z', {
+          storageFormat: 2
+        }),
+        project('proj_enc', 'Already encrypted', '2026-09-01T00:00:00.000Z', {
+          storageFormat: 2
+        }),
+        project('proj_shared', 'Shared with me', '2026-09-02T00:00:00.000Z', {
+          storageFormat: 2
+        })
+      ]
+    } as unknown as MigrationPlaintextSource;
+    let purged = false;
+    const status = vi.fn(async (projectId: string) => {
+      if (projectId === 'proj_shared') {
+        throw Object.assign(new Error('Project not found.'), { status: 404 });
+      }
+      return {
+        migration:
+          projectId === 'proj_cut'
+            ? { state: purged ? 'done' : 'purging' }
+            : { state: 'done' }
+      };
+    });
+    const migrations = { status } as unknown as ProjectMigrationsApi;
+    const fake = fakeEngine(async (summary, report) => {
+      expect(summary.projectId).toBe('proj_cut');
+      report({ phase: 'purging', cutOver: true });
+      purged = true;
+      report({ phase: 'done' });
+    });
+    const controller = controllerWith(fake, null, { plaintext, migrations });
+    render(
+      <ExistingProjectEncryption
+        userId="user_alice"
+        unlocked
+        controller={controller}
+        isOpen={async () => true}
+      />
+    );
+    const row = await screen.findByRole('listitem', { name: 'Cut bracket' });
+    expect(
+      within(row).getByText('Stopped before the plaintext copy was deleted')
+    ).toBeTruthy();
+    expect(controller.getState().projects).toMatchObject([
+      { projectId: 'proj_cut', phase: 'error', cutOver: true }
+    ]);
+    expect(
+      screen.getByText('1 project still finishing encryption')
+    ).toBeTruthy();
+    expect(screen.queryByText('All your projects are encrypted')).toBeNull();
+    expect(within(row).queryByRole('button', { name: 'Cancel' })).toBeNull();
+    // Read-only meanwhile, as a stop this page saw is.
+    expect([...migrationLockedProjects()]).toEqual(['proj_cut']);
+    // The finished one and the share are not asked about again.
+    status.mockClear();
+    await act(() => controller.refresh());
+    expect(status.mock.calls.map(([id]) => id)).toEqual(['proj_cut']);
+
+    fireEvent.click(within(row).getByRole('button', { name: 'Retry' }));
+    await waitFor(() =>
+      expect(within(row).getByText('Encrypted')).toBeTruthy()
+    );
+    expect(fake.migrated).toEqual(['proj_cut']);
+    expect(screen.getByText('All your projects are encrypted')).toBeTruthy();
+    expect([...migrationLockedProjects()]).toEqual([]);
+  });
+
+  it('asks about a large shelf a few at a time, a bounded number per refresh', async () => {
+    const shelf = Array.from({ length: 30 }, (_, index) =>
+      project(
+        `proj_${String(index).padStart(2, '0')}`,
+        `Encrypted ${index}`,
+        `2026-09-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
+        { storageFormat: 2 }
+      )
+    );
+    const plaintext = {
+      listProjects: async () => shelf
+    } as unknown as MigrationPlaintextSource;
+    let inFlight = 0;
+    let most = 0;
+    const status = vi.fn(async (_projectId: string) => {
+      inFlight += 1;
+      most = Math.max(most, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      inFlight -= 1;
+      return { migration: { state: 'done' } };
+    });
+    const migrations = { status } as unknown as ProjectMigrationsApi;
+    const controller = controllerWith(
+      fakeEngine(async () => undefined),
+      null,
+      { plaintext, migrations }
+    );
+    await controller.refresh();
+    expect(status).toHaveBeenCalledTimes(24);
+    expect(most).toBe(4);
+    // Newest first; the rest on the next refresh, the settled ones never
+    // again.
+    expect(status.mock.calls[0]).toEqual(['proj_29']);
+    status.mockClear();
+    await controller.refresh();
+    expect(status).toHaveBeenCalledTimes(6);
+    status.mockClear();
+    await controller.refresh();
+    expect(status).not.toHaveBeenCalled();
+    expect(controller.getState().projects).toEqual([]);
+  });
+});
+
 describe('Settings › Encryption › Encrypt existing projects', () => {
   it('stays hidden until migration is open to the account', async () => {
     const fake = fakeEngine(async () => undefined);

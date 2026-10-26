@@ -146,6 +146,14 @@ function lockedForEditing(progress: MigrationProgress): boolean {
   );
 }
 
+/**
+ * Encrypted projects one refresh asks about, and how many at once, when
+ * this page has no record of them (judgment: a shelf of hundreds settles
+ * over a few refreshes without a burst of requests).
+ */
+const DISCOVERY_CAP = 24;
+const DISCOVERY_CONCURRENCY = 4;
+
 function waiting(project: ProjectSummary): MigrationProgress {
   return {
     projectId: project.projectId,
@@ -230,10 +238,48 @@ export function createMigrationController(
   }
 
   /**
-   * Projects this page worked on that left the plaintext listing (cut
-   * over, so no longer format 1) while their migration is unfinished: the
-   * plaintext copy stays until the purge completes, so they stay listed
-   * and a retry resumes the purge instead of reading as encrypted.
+   * Format-2 projects whose migration is known to be finished, or absent,
+   * or not this account's to ask about: no later refresh asks again.
+   */
+  const settled = new Set<string>();
+
+  /**
+   * Whether a project's migration is cut over with its purge unfinished;
+   * null when that could not be found out for one this page never worked
+   * on (asked again on the next refresh).
+   */
+  async function cutOverUnpurged(
+    projectId: string,
+    known: MigrationProgress | undefined
+  ): Promise<boolean | null> {
+    try {
+      const { migration } = await migrations.status(projectId);
+      const unfinished =
+        migration?.state === 'cutover' || migration?.state === 'purging';
+      if (!unfinished) settled.add(projectId);
+      return unfinished;
+    } catch (error) {
+      const status = (error as { status?: unknown } | null)?.status;
+      if (known === undefined && (status === 404 || status === 403)) {
+        // Someone else's project (a share), or gone: nothing to finish.
+        settled.add(projectId);
+        return false;
+      }
+      // Kept while it may be unfinished: a retry finds out.
+      return known === undefined ? null : known.cutOver === true;
+    }
+  }
+
+  /**
+   * Projects that left the plaintext listing (cut over, so no longer
+   * format 1) while their migration is unfinished: the plaintext copy
+   * stays until the purge completes, so they stay listed and a retry
+   * resumes the purge instead of reading as encrypted. Those this page
+   * worked on are known. Any other encrypted project of the account may be
+   * one a reloaded or crashed page, or another device, left cut over, so
+   * those are asked about too: newest first, {@link DISCOVERY_CONCURRENCY}
+   * at a time and at most {@link DISCOVERY_CAP} per refresh, each until
+   * its answer settles.
    */
   async function unfinishedCutovers(
     listed: readonly ProjectSummary[],
@@ -241,7 +287,7 @@ export function createMigrationController(
     known: ReadonlyMap<string, MigrationProgress>
   ): Promise<ProjectSummary[]> {
     const plaintextIds = new Set(migratable.map((p) => p.projectId));
-    const candidates = listed.filter((project) => {
+    const worked = listed.filter((project) => {
       const progress = known.get(project.projectId);
       return (
         !plaintextIds.has(project.projectId) &&
@@ -250,20 +296,39 @@ export function createMigrationController(
         progress.phase !== 'waiting'
       );
     });
-    const unfinished = await Promise.all(
-      candidates.map(async (project) => {
-        try {
-          const { migration } = await migrations.status(project.projectId);
-          return (
-            migration?.state === 'cutover' || migration?.state === 'purging'
-          );
-        } catch {
-          // Kept while it may be unfinished: a retry finds out.
-          return known.get(project.projectId)?.cutOver === true;
+    const unrecorded = listed
+      .filter(
+        (project) =>
+          project.storageFormat === 2 &&
+          (project.organization?.status ?? 'active') !== 'deleted' &&
+          !known.has(project.projectId) &&
+          !settled.has(project.projectId)
+      )
+      .sort(
+        (a, b) =>
+          b.updatedAt.localeCompare(a.updatedAt) ||
+          a.projectId.localeCompare(b.projectId)
+      )
+      .slice(0, DISCOVERY_CAP);
+    const candidates = [...worked, ...unrecorded];
+    const unfinished: (boolean | null)[] = [];
+    let next = 0;
+    await Promise.all(
+      Array.from(
+        { length: Math.min(DISCOVERY_CONCURRENCY, candidates.length) },
+        async () => {
+          while (next < candidates.length) {
+            const index = next++;
+            const { projectId } = candidates[index]!;
+            unfinished[index] = await cutOverUnpurged(
+              projectId,
+              known.get(projectId)
+            );
+          }
         }
-      })
+      )
     );
-    return candidates.filter((_project, index) => unfinished[index]);
+    return candidates.filter((_project, index) => unfinished[index] === true);
   }
 
   async function refresh() {
@@ -293,7 +358,13 @@ export function createMigrationController(
         error: null,
         projects: [
           ...finishing.map((project) => ({
-            ...(known.get(project.projectId) ?? waiting(project)),
+            // One this page has no record of stopped before its purge
+            // finished (a reload, a crash, another device): it is retried,
+            // as a stop this page saw is.
+            ...(known.get(project.projectId) ?? {
+              ...waiting(project),
+              phase: 'error' as const
+            }),
             cutOver: true
           })),
           ...migratable.map(

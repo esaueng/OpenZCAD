@@ -613,6 +613,87 @@ describe('cloud project autosave — refusals', () => {
     controller.dispose();
   });
 
+  it('keeps a queued edit unsent while the project is encrypted elsewhere, and sends it once that is abandoned', async () => {
+    // ADR-024 Phase 7: another tab or device began staging the project.
+    // The workspace learns of it before any write (its room closed, or its
+    // migration status said so): nothing queued is sent meanwhile, and the
+    // edit is shown as not saved rather than saving.
+    const { controller, saves, statuses, conflicts } = harness();
+    const document = documentAt(2);
+    controller.openProject(document.projectId, 2);
+    controller.schedule(documentAt(3, document));
+    controller.haltForMigration(document.projectId);
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_MAX_WAIT_MS * 2);
+    await controller.flushPending();
+    await controller.whenIdle();
+    expect(saves).toHaveLength(0);
+    expect(conflicts).toEqual([]);
+    expect(controller.isHalted).toBe(true);
+    expect(controller.hasPendingChanges).toBe(true);
+    expect(statuses.at(-1)).toMatchObject({
+      state: 'refused',
+      projectId: document.projectId,
+      error: { code: PROJECT_MIGRATING_CODE }
+    });
+    // Another project's lift changes nothing.
+    controller.resumeAfterMigration('proj_other');
+    expect(controller.isHalted).toBe(true);
+
+    // The staging was abandoned: the plaintext takes writes again.
+    controller.resumeAfterMigration(document.projectId);
+    await vi.advanceTimersByTimeAsync(0);
+    await controller.whenIdle();
+    expect(saves).toEqual([{ expectedVersion: 2, version: 3 }]);
+    expect(controller.isHalted).toBe(false);
+    expect(statuses.at(-1)?.state).toBe('synced');
+    controller.dispose();
+  });
+
+  it('resumes after an abandon from a save refused while it was encrypted', async () => {
+    let refuse = true;
+    const { controller, saves, statuses } = harness({
+      respond: (input) =>
+        refuse
+          ? Promise.reject(
+              new ApiError(409, 'Being encrypted.', PROJECT_MIGRATING_CODE)
+            )
+          : Promise.resolve({
+              projectId: input.document.projectId,
+              version: input.document.version,
+              updatedAt: '2026-01-01T00:00:00.000Z'
+            })
+    });
+    const document = documentAt(2);
+    controller.openProject(document.projectId, 2);
+    controller.schedule(documentAt(3, document));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(statuses.at(-1)?.state).toBe('refused');
+    // Learned again from the room or the status: no second report.
+    const reported = statuses.length;
+    controller.haltForMigration(document.projectId);
+    expect(statuses).toHaveLength(reported);
+    refuse = false;
+    controller.resumeAfterMigration(document.projectId);
+    await vi.advanceTimersByTimeAsync(0);
+    await controller.whenIdle();
+    expect(saves).toEqual([{ expectedVersion: 2, version: 3 }]);
+    controller.dispose();
+  });
+
+  it('leaves a conflict halt alone when the project is then found being encrypted', async () => {
+    const { controller, statuses } = harness();
+    const document = documentAt(2);
+    controller.openProject(document.projectId, 2);
+    controller.haltForConflict(document.projectId);
+    controller.schedule(documentAt(3, document));
+    controller.haltForMigration(document.projectId);
+    controller.resumeAfterMigration(document.projectId);
+    expect(controller.isHalted).toBe(true);
+    expect(statuses.at(-1)?.state).toBe('conflict');
+    controller.dispose();
+  });
+
   it('halts a queued edit when a poll finds the account copy needs repair', async () => {
     // ADR-024 Phase 1: a freshness poll that meets an account version this
     // browser cannot open must stop the edit already queued from writing.

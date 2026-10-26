@@ -25,6 +25,43 @@ export function shareTokenFromHash(hash: string): string | null {
   return /^[A-Za-z0-9_-]{43}$/.test(token) ? token : null;
 }
 
+/**
+ * An end-to-end encrypted link's fragment payload, `<token>.<key>.<owner>`
+ * (ADR-024 Phase 5, slice 5-11): three unpadded base64url parts of 32 bytes.
+ * The plaintext reader above never accepts it, and this one never accepts a
+ * plaintext token, so neither form is mistaken for the other.
+ */
+const ENCRYPTED_SHARE_LINK =
+  /^[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}$/;
+
+/**
+ * What a `#share=` fragment opens: the plaintext token, or an encrypted
+ * link's whole payload (see `isEncryptedShareLink`); null when the hash is
+ * neither.
+ */
+export function shareLinkFromHash(hash: string): string | null {
+  const token = shareTokenFromHash(hash);
+  if (token !== null) return token;
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
+  if (!raw.startsWith(PROJECT_SHARE_HASH_PREFIX)) return null;
+  const payload = raw.slice(PROJECT_SHARE_HASH_PREFIX.length).trim();
+  return ENCRYPTED_SHARE_LINK.test(payload) ? payload : null;
+}
+
+/** Whether a `shareLinkFromHash` value is an encrypted link's payload. */
+export function isEncryptedShareLink(link: string): boolean {
+  return ENCRYPTED_SHARE_LINK.test(link);
+}
+
+/** The plaintext token or encrypted payload in the current URL, if any. */
+export function captureProjectShareLink(): string | null {
+  try {
+    return shareLinkFromHash(globalThis.location?.hash ?? '');
+  } catch {
+    return null;
+  }
+}
+
 export function captureProjectShareToken(): string | null {
   try {
     return shareTokenFromHash(globalThis.location?.hash ?? '');
@@ -39,7 +76,7 @@ export function captureProjectShareToken(): string | null {
  */
 export function clearProjectShareFragment(): void {
   try {
-    if (shareTokenFromHash(globalThis.location?.hash ?? '') !== null) {
+    if (shareLinkFromHash(globalThis.location?.hash ?? '') !== null) {
       globalThis.history.replaceState(null, '', projectLinkPath());
     }
   } catch {
