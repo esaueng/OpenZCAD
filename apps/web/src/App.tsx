@@ -7226,10 +7226,7 @@ export function App() {
     const scope = exportScope(
       Object.values(doc.derived.bodyRepresentations).map((body) => ({
         bodyId: body.bodyId,
-        exportable:
-          body.exportableStep &&
-          !body.consumed &&
-          !parameterHiddenBodyIds.has(body.bodyId),
+        exportable: body.exportableStep && !body.consumed,
         hidden: hiddenBodyIds.has(body.bodyId),
         withheld: failedHistoryBodies.has(body.bodyId)
       })),
@@ -7248,7 +7245,6 @@ export function App() {
     failedHistoryBodies,
     doc,
     selectedBody,
-    parameterHiddenBodyIds,
     hiddenBodyIds,
     tweakMode,
     parameterModelError,

@@ -40,6 +40,7 @@ test('STEP and every mesh format export only visible result bodies through hide,
   for (const name of ['Plate source', 'Union source']) {
     document = addPrimitiveFeature(document, {
       name,
+      bodyName: name === 'Plate source' ? 'Plate' : 'Union source',
       primitiveKind: 'box',
       dimensions: { width: 20, height: 10, depth: 5 }
     });
@@ -155,7 +156,7 @@ test('STEP and every mesh format export only visible result bodies through hide,
     await openFileMenu();
     await fileMenu.getByRole('button', { name: /Export mesh/ }).click();
     const dialog = page.getByRole('dialog', { name: 'Export mesh' });
-    await expect(dialog).toContainText('visible bodies (1, 1 hidden left out)');
+    await expect(dialog).toContainText('visible bodies (1, 2 hidden left out)');
     await expect(
       dialog.getByRole('checkbox', { name: /Include.*hidden/ })
     ).toHaveCount(0);
@@ -185,6 +186,35 @@ test('STEP and every mesh format export only visible result bodies through hide,
   await checkFile('step', await exportStep(), 1000, 20);
   await upper.getByRole('button', { name: 'Show body Upper' }).click();
   await checkFile('step', await exportStep(), 1192, 68, 2);
+
+  // Parameter-off bodies use the same scope count and recovery as local eyes.
+  await fileMenu.locator('summary').click();
+  await page.getByLabel('New parameter type').selectOption('toggle');
+  await page.getByLabel('New parameter name').fill('show_parts');
+  for (const name of ['Plate', 'Upper']) {
+    await page.getByRole('checkbox', { name, exact: true }).check();
+  }
+  await page
+    .getByRole('button', { name: 'Add parameter', exact: true })
+    .click();
+  const showParts = page.getByRole('switch', { name: 'Toggle show_parts' });
+  await showParts.click();
+  await expect(showParts).not.toBeChecked();
+  await openFileMenu();
+  const parameterHiddenExport = fileMenu.getByRole('button', {
+    name: /Export STEP/
+  });
+  await expect(parameterHiddenExport).toBeDisabled();
+  await expect(parameterHiddenExport).toHaveAttribute(
+    'title',
+    'Show a body before exporting.'
+  );
+  await expect(parameterHiddenExport).toContainText(
+    'visible bodies (0, 3 hidden left out)'
+  );
+  await fileMenu.locator('summary').click();
+  await showParts.click();
+  await expect(showParts).toBeChecked();
 
   // View's isolate control uses the same visibility policy as the Objects eye.
   await page.getByRole('button', { name: 'View', exact: true }).click();
