@@ -4623,6 +4623,14 @@ export class D1R2PersistenceService implements PersistenceService {
     try {
       await this.refuseIfUploadLeaseLost(session);
     } catch (error) {
+      // Only a confirmed lease loss releases the session: a failed lease
+      // query proves nothing, and the completed object may be another
+      // request's success (#933 review).
+      const leaseLost =
+        error instanceof DecryptStagingLeaseError ||
+        (error instanceof EncryptedBlobError &&
+          error.code === E2EE_MIGRATION_CODES.leaseLost);
+      if (!leaseLost) throw error;
       try {
         const released = await this.env
           .DB!.prepare(

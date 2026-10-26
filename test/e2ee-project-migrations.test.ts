@@ -1168,6 +1168,96 @@ describe('staging beside the plaintext', () => {
     expect(freshStarted.status).toBe(201);
   });
 
+  it('keeps a completed upload when only the lease check fails, not the lease (#933 review)', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    const laptop = await startStaging(srv, plain.projectId);
+    const blobId = 'd'.repeat(32);
+    const objectKey = `e2ee/${plain.projectId}/${blobId}`;
+    const opened = await laptop.d.fetcher(
+      `/api/e2ee/projects/${plain.projectId}/blobs/uploads`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ blobId, kind: 'import-source' })
+      }
+    );
+    const session = (
+      (await opened.json()) as { session: { uploadSessionId: string } }
+    ).session.uploadSessionId;
+    const started = await laptop.d.fetcher(
+      `/api/uploads/${session}/multipart`,
+      { method: 'POST' }
+    );
+    const uploadId = ((await started.json()) as { uploadId: string }).uploadId;
+    await laptop.d.fetcher(
+      `/api/uploads/${session}/parts/1?uploadId=${uploadId}`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/octet-stream' },
+        body: text('ciphertext')
+      }
+    );
+    const { etag } = srv.db
+      .prepare(
+        'SELECT etag FROM artifact_upload_parts WHERE upload_session_id = ?'
+      )
+      .get(session) as { etag: string };
+
+    // A concurrent retry finished the session while R2 completed, so this
+    // request's move to `completed` lands nothing; its lease check then
+    // fails on the database, not on the lease, which is still live.
+    interface ResumedUpload {
+      complete(parts: unknown[]): Promise<unknown>;
+    }
+    const original = srv.bucket.resumeMultipartUpload;
+    const resume = original as unknown as (
+      key: string,
+      id: string
+    ) => ResumedUpload;
+    const prepare = srv.db.prepare.bind(srv.db);
+    let failLeaseCheck = false;
+    srv.db.prepare = ((sql: string) => {
+      if (failLeaseCheck && /m\.lease_expires_at > \?/.test(sql)) {
+        throw new Error('D1 is briefly unavailable');
+      }
+      return prepare(sql);
+    }) as typeof srv.db.prepare;
+    srv.bucket.resumeMultipartUpload = vi.fn((key: string, id: string) => {
+      const upload = resume(key, id);
+      return {
+        ...upload,
+        complete: async (parts: unknown[]) => {
+          const completed = await upload.complete(parts);
+          prepare(
+            "UPDATE upload_sessions SET reservation_state = 'completed' WHERE id = ?"
+          ).run(session);
+          failLeaseCheck = true;
+          return completed;
+        }
+      };
+    });
+    const answer = await laptop.d.fetcher(
+      `/api/uploads/${session}/multipart/complete`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ uploadId, parts: [{ partNumber: 1, etag }] })
+      }
+    );
+    srv.bucket.resumeMultipartUpload = original;
+    srv.db.prepare = prepare;
+    expect(answer.status).not.toBe(409);
+    expect(answer.status).toBeGreaterThanOrEqual(500);
+    // Nothing destructive happened: the session and its object remain.
+    expect(
+      srv.db
+        .prepare('SELECT reservation_state FROM upload_sessions WHERE id = ?')
+        .get(session)
+    ).toEqual({ reservation_state: 'completed' });
+    expect(srv.bucket.objects.has(objectKey)).toBe(true);
+  });
+
   it('reconciles no completion for the stale holder once the lease moved (#918 follow-up)', async () => {
     const srv = server();
     const plain = await plaintextProject(srv);
