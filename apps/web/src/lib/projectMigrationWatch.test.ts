@@ -1,3 +1,4 @@
+import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   E2eeMigrationState,
@@ -11,6 +12,7 @@ import {
 } from './migrationStatus';
 import {
   MIGRATION_WATCH_INTERVAL_MS,
+  useOpenProjectMigrationWatch,
   watchProjectMigration
 } from './projectMigrationWatch';
 
@@ -249,5 +251,110 @@ describe('watching an open plaintext project for a migration elsewhere', () => {
     expect([...migrationLockedProjects()]).toEqual([PROJECT]);
     stop();
     expect([...migrationLockedProjects()]).toEqual([]);
+  });
+});
+
+describe('the open workspace’s watch follows the document it loaded (#924 review)', () => {
+  interface Opened {
+    projectId: string | null;
+    /** What the page's format cache says now. */
+    encryptedNow: boolean;
+  }
+
+  function workspace(state: () => E2eeMigrationState | null, opened: Opened) {
+    const source = {
+      status: vi.fn(async (_projectId: string) => answer(state())),
+      migrationOpen: vi.fn(async (_userId: string) => true)
+    };
+    const autosave = {
+      current: {
+        haltForMigration: vi.fn((_projectId: string) => undefined),
+        resumeAfterMigration: vi.fn((_projectId: string) => undefined)
+      }
+    };
+    const hook = renderHook(
+      (props: Opened) =>
+        useOpenProjectMigrationWatch({
+          ...props,
+          ownedCloudProject: true,
+          userId: 'user_alice',
+          autosave,
+          source
+        }),
+      { initialProps: opened }
+    );
+    return { ...hook, source, autosave: autosave.current };
+  }
+
+  const settle = () => act(() => vi.advanceTimersByTimeAsync(0));
+
+  it('keeps the stale plaintext locked, and its autosave halted, once a listing says the project is encrypted', async () => {
+    let state: E2eeMigrationState | null = 'purging';
+    const { result, rerender, unmount, source, autosave } = workspace(
+      () => state,
+      { projectId: PROJECT, encryptedNow: false }
+    );
+    await settle();
+    expect([...migrationLockedProjects()]).toEqual([PROJECT]);
+    expect(autosave.haltForMigration).toHaveBeenCalledWith(PROJECT);
+    autosave.resumeAfterMigration.mockClear();
+
+    // The other device's purge finishes, and the freshness poll's listing
+    // records the project as encrypted without loading anything: the
+    // workspace still holds the plaintext it opened.
+    state = 'done';
+    rerender({ projectId: PROJECT, encryptedNow: true });
+    await settle();
+    expect(result.current).toBe(false);
+    expect([...migrationLockedProjects()]).toEqual([PROJECT]);
+    expect(autosave.resumeAfterMigration).not.toHaveBeenCalled();
+    // Still watched: the next poll asks, and the lock holds.
+    const asked = source.status.mock.calls.length;
+    await act(() => vi.advanceTimersByTimeAsync(MIGRATION_WATCH_INTERVAL_MS));
+    expect(source.status.mock.calls.length).toBe(asked + 1);
+    expect([...migrationLockedProjects()]).toEqual([PROJECT]);
+    expect(autosave.resumeAfterMigration).not.toHaveBeenCalled();
+    unmount();
+    expect([...migrationLockedProjects()]).toEqual([]);
+  });
+
+  it('never holds a project loaded encrypted: reopened after its cutover, or encrypted all along', async () => {
+    const { result, rerender, unmount, source, autosave } = workspace(
+      () => 'done',
+      { projectId: PROJECT, encryptedNow: false }
+    );
+    await settle();
+    rerender({ projectId: PROJECT, encryptedNow: true });
+    await settle();
+    expect([...migrationLockedProjects()]).toEqual([PROJECT]);
+
+    // Closed, then reopened: it loads from the encrypted copy.
+    rerender({ projectId: null, encryptedNow: false });
+    await settle();
+    expect([...migrationLockedProjects()]).toEqual([]);
+    const asked = source.status.mock.calls.length;
+    rerender({ projectId: PROJECT, encryptedNow: true });
+    await settle();
+    await act(() =>
+      vi.advanceTimersByTimeAsync(MIGRATION_WATCH_INTERVAL_MS * 2)
+    );
+    expect(result.current).toBe(true);
+    expect(source.status.mock.calls.length).toBe(asked);
+    expect([...migrationLockedProjects()]).toEqual([]);
+    expect(autosave.haltForMigration).toHaveBeenCalledTimes(1);
+    unmount();
+
+    // Encrypted when it opened: never asked about, never locked.
+    const always = workspace(() => 'done', {
+      projectId: 'proj_always',
+      encryptedNow: true
+    });
+    await settle();
+    await act(() => vi.advanceTimersByTimeAsync(MIGRATION_WATCH_INTERVAL_MS));
+    expect(always.result.current).toBe(true);
+    expect(always.source.status).not.toHaveBeenCalled();
+    expect([...migrationLockedProjects()]).toEqual([]);
+    expect(always.autosave.haltForMigration).not.toHaveBeenCalled();
+    always.unmount();
   });
 });
