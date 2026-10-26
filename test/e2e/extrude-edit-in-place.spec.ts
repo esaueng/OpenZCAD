@@ -471,3 +471,40 @@ test("an open keypad goes with its extrude's edit when another extrude is re-arm
     { distance: '5 * 2' }
   );
 });
+
+test("a pick on the extrude's own result leaves its open edit in charge", async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await stubApi(page);
+  await openDocument(page, postDocument('Extrude edit owns picks'));
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '2', {
+    timeout: 30_000
+  });
+  await revealModelPanel(page, 'History');
+  const edit = await editExtrudeFromHistory(
+    page,
+    page.locator('.feature-row-main[title^="Post — "]'),
+    'Post'
+  );
+  // The post's top face, picked as a click would pick it.
+  const picked = await canvas.evaluate(
+    (element) =>
+      new Promise<unknown>((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-select-planar-face', {
+            detail: { normal: { x: 0, y: 0, z: 1 }, resolve }
+          })
+        );
+      })
+  );
+  expect(picked).not.toBeUndefined();
+  // Nothing else starts: no face operation, no selection under the edit.
+  await expect(edit).toBeVisible();
+  await expect(page.getByRole('region', { name: /operation$/ })).toHaveCount(0);
+  await expect(canvas).not.toHaveAttribute('data-e2e-selected-face', /.+/);
+  await expect(page.getByTestId('direct-manipulation-value')).toBeHidden();
+  await page.keyboard.press('Escape');
+  await expect(edit).toHaveCount(0);
+});

@@ -16064,6 +16064,12 @@ export function App() {
       }
       return false;
     }
+    // An extrude edit is a running command too: the model's clicks are its
+    // own (its To face pick), and a stray pick never selects under it or
+    // starts another operation on its result.
+    if (extrudeEditRef.current && !toFacePick) {
+      return false;
+    }
     if (selection && currentGeometrySnapshot !== null) {
       setStatus(
         'The model is still updating. Try that selection again when it finishes.'
@@ -16642,6 +16648,8 @@ export function App() {
    */
   function handleSelectEdgeChainFromViewer(selections: TopologySelection[]) {
     if (selections.length === 0) return;
+    // An open extrude edit owns the model's picks (see the click's gate).
+    if (extrudeEditRef.current) return;
     if (
       deferMoveSelection({
         kind: 'edge-chain',
@@ -16693,6 +16701,7 @@ export function App() {
   const emptyBoxSelectExplainedRef = useRef(false);
 
   function handleBoxSelectFromViewer(bodyIds: string[]) {
+    if (extrudeEditRef.current) return;
     if (
       bodyIds.length > 0 &&
       deferMoveSelection({ kind: 'box', bodyIds: [...bodyIds] as BodyId[] })
@@ -16767,6 +16776,7 @@ export function App() {
     selections: TopologySelection[],
     kind: 'face' | 'edge'
   ) {
+    if (extrudeEditRef.current) return;
     if (selections.length === 0) {
       // A sweep during an in-place Fillet or Chamfer only adds edges, so
       // one that caught none leaves its edges, and their highlight, as
