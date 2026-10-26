@@ -258,8 +258,10 @@ OpenZCAD can encrypt project data in the browser before it reaches your
 Worker ([ADR-024](adrs/ADR-024-end-to-end-encrypted-projects.md)). Every
 encryption flag ships closed, in the official deployment and in
 `wrangler.selfhost.example.jsonc`. Read this section before turning any of
-them on: once an account encrypts a project, neither you nor anyone else can
-recover it for a user who loses every unlock method.
+them on: you cannot recover encrypted content from server storage for a user
+who loses every unlock method. Solo projects are then lost apart from local
+copies; a shared project's remaining members can still open and export it
+for the user.
 
 ### What the server still sees
 
@@ -358,11 +360,39 @@ After each deployment, sign in and open `/api/e2ee/config`. It reports
 `enabled` (the key routes) and `projectsEnabled`, and adds `migrationEnabled`
 and `reverseEnabled` once each is on and its migration is installed.
 
-Turning flags off again, in the reverse order, deletes nothing. While
-`E2EE_PROJECTS_ENABLED` is off, encrypted projects cannot be opened. While
-`E2EE_MIGRATION_ENABLED` is off, the hourly sweep of project migrations stops,
-so a project whose plaintext purge had not finished keeps that leftover
-plaintext until the flag is on again.
+Turning flags off deletes nothing, but clear account opt-ins before closing
+the project routes:
+
+1. While `E2EE_KEYS_ENABLED` and `E2EE_PROJECTS_ENABLED` are still on, have
+   every opted-in account turn off Settings › Encryption › Encrypt new
+   projects. This saves an authenticated preference; turning off a deployment
+   flag does not clear it. Confirm that no opt-ins remain with this read-only
+   query against your self-host configuration:
+
+   ```bash
+   pnpm --filter @openzcad/web exec wrangler d1 execute DB --remote --config ../../wrangler.selfhost.jsonc \
+     --command "SELECT COUNT(*) AS opted_in_accounts FROM e2ee_project_preferences WHERE encrypt_new_projects = 1"
+   ```
+
+   Wait for the count to reach zero before disabling project encryption. Keep
+   it enabled if an opted-in account has not cleared its preference.
+
+2. Turn off `E2EE_REVERSE_ENABLED`, then `E2EE_MIGRATION_ENABLED`, then
+   `E2EE_PROJECTS_ENABLED`, and finally `E2EE_KEYS_ENABLED`, checking the
+   configuration before deploying. While project encryption is off, encrypted
+   projects cannot be opened. Turning off migration also stops its hourly
+   sweep: any unfinished plaintext purge keeps that leftover plaintext until
+   migration is enabled again.
+
+**If project encryption was already turned off with opt-ins remaining:**
+migration 0031's database trigger still refuses plaintext creates for those
+accounts (`ENCRYPTED_PROJECTS_REQUIRED`), and the preference route is closed,
+so they cannot opt out. Re-enable `E2EE_KEYS_ENABLED`, then
+`E2EE_PROJECTS_ENABLED`, check `/api/e2ee/config`, and have those accounts
+unlock encryption and clear their opt-ins as in step 1. Migration and reverse
+can stay off during this recovery. Confirm the count is zero, then resume the
+shutdown order. Do not drop the trigger or edit the MAC-protected preference
+rows directly.
 
 ### Recovery and data loss
 
