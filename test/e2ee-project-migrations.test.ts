@@ -1222,7 +1222,7 @@ describe('staging beside the plaintext', () => {
         throw new Error('D1 is briefly unavailable');
       }
       return prepare(sql);
-    }) as typeof srv.db.prepare;
+    });
     srv.bucket.resumeMultipartUpload = vi.fn((key: string, id: string) => {
       const upload = resume(key, id);
       return {
