@@ -12,7 +12,8 @@ import {
   stubApi,
   expectBodyCount,
   MODEL_ONLY,
-  waitForStillViewport
+  waitForStillViewport,
+  openMoveOptions
 } from './openzcad-fixtures';
 
 /**
@@ -318,6 +319,7 @@ test('an unapplied Move is asked about before Revolve starts', async ({
   });
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
   const move = page.getByRole('form', { name: 'Move controls' });
+  await openMoveOptions(move);
   await move.getByLabel('Move X in mm').fill('5');
 
   const moreTools = page.getByRole('button', { name: /^More tools/ });

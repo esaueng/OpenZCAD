@@ -12,7 +12,8 @@ import {
   locateEdge,
   setSelectionFilter,
   stubApi,
-  test
+  test,
+  openMoveOptions
 } from './openzcad-fixtures';
 
 /**
@@ -735,6 +736,7 @@ test('a pending Move copy follows X-ray opacity and edge styling', async ({
   await toggleXray(page);
   await page.keyboard.press('m');
   const controls = page.getByRole('form', { name: 'Move controls' });
+  await openMoveOptions(controls);
   await controls.getByLabel('Move X in mm').fill('40');
   await controls
     .getByRole('checkbox', { name: 'Copy (keep the original)' })

@@ -25,7 +25,8 @@ import {
   finishInPlaceCommand,
   pickObjectsBody,
   pickPlanarFace,
-  blendEdgesInPlace
+  blendEdgesInPlace,
+  openMoveOptions
 } from './openzcad-fixtures';
 
 test('suppresses features and rolls the timeline back as one undoable edit', async ({
@@ -2342,9 +2343,10 @@ test('rejects a disconnected Union proposed by the assistant before commit', asy
 
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
   const separateMove = page.getByRole('form', { name: 'Move controls' });
+  await openMoveOptions(separateMove);
   await separateMove.getByLabel('Name').fill('Separate upper');
   await separateMove.getByLabel('Move Z in mm').fill('32');
-  await separateMove.getByRole('button', { name: /Apply move/ }).click();
+  await separateMove.getByRole('button', { name: 'Done' }).click();
 
   await askAssistant(page, 'Union the two bodies');
   const failure = page.locator('.assistant-card.message.error');
@@ -2928,9 +2930,10 @@ test('models a parametric part and exports a true STEP file', async ({
   // origin corner, which is a deliberately degenerate boolean setup.
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
   const moveOverlay = page.getByRole('form', { name: 'Move controls' });
+  await openMoveOptions(moveOverlay);
   await moveOverlay.getByLabel('Move X in mm').fill('30');
   await moveOverlay.getByLabel('Move Y in mm').fill('9');
-  await moveOverlay.getByRole('button', { name: /Apply move/ }).click();
+  await moveOverlay.getByRole('button', { name: 'Done' }).click();
   await expect(
     page.locator('.feature-row-main', { hasText: 'Move' })
   ).toBeVisible();
@@ -3280,9 +3283,10 @@ test('rejects a disconnected Union and succeeds after the gap is closed', async 
 
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
   const liftMove = page.getByRole('form', { name: 'Move controls' });
+  await openMoveOptions(liftMove);
   await liftMove.getByLabel('Name').fill('Lift upper');
   await liftMove.getByLabel('Move Z in mm').fill('12');
-  await liftMove.getByRole('button', { name: /Apply move/ }).click();
+  await liftMove.getByRole('button', { name: 'Done' }).click();
 
   // U09: Union runs in place. Two bodies with a gap between them: the
   // preview is refused, in the bar, and Done stays off.
@@ -3337,9 +3341,10 @@ test('M opens the move gizmo overlay and applies an exact move', async ({
   await expect(page.getByText(/Drag an arrow to move/)).toBeVisible();
 
   // Exact values through the overlay commit one undoable Move feature.
+  await openMoveOptions(overlay);
   await overlay.getByLabel('Move X in mm').fill('12');
   await overlay.getByLabel('Rotate Z in degrees').fill('45');
-  await overlay.getByRole('button', { name: /Apply move/ }).click();
+  await overlay.getByRole('button', { name: 'Done' }).click();
 
   const moveRow = page.locator('.feature-row', { hasText: 'Move' });
   await expect(moveRow).toBeVisible();
@@ -3383,6 +3388,7 @@ test('opening a tool over an unapplied Move asks once and never stacks two cards
   const moveRows = page.locator('.feature-row', { hasText: 'Move' });
   const openPendingMove = async () => {
     await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+    await openMoveOptions(move);
     await move.getByLabel('Move X in mm').fill('60');
     await page.getByRole('button', { name: /^Union \(U\)/ }).click();
     await expect(ask).toBeVisible();
@@ -3452,6 +3458,7 @@ test('opening a history editor preserves an unapplied Move until its choice is s
   const selectedRows = page.locator('.feature-row-main[aria-pressed="true"]');
   const openPendingEdit = async () => {
     await moveTool.click();
+    await openMoveOptions(move);
     await move.getByLabel('Move X in mm').fill('3');
     await expect(moveTool).toHaveAttribute('aria-pressed', 'true');
     await expect(canvas).toHaveAttribute('data-e2e-move-gizmo-x', /.+/);
@@ -3548,6 +3555,7 @@ test('opening a primitive history editor settles an unapplied Move before changi
   const selectedRows = page.locator('.feature-row-main[aria-pressed="true"]');
   const openPendingEdit = async () => {
     await moveTool.click();
+    await openMoveOptions(move);
     await move.getByLabel('Move X in mm').fill('4');
     const target = await move
       .getByRole('combobox', { name: 'Body', exact: true })
@@ -3626,6 +3634,7 @@ test('opening Measure over an unapplied Move settles the card from the ruler and
   const moveRows = page.locator('.feature-row', { hasText: /^Move/ });
   const openMove = async () => {
     await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+    await openMoveOptions(move);
     await move.getByLabel('Move X in mm').fill('7');
   };
   const measureFromPalette = async () => {
@@ -3684,8 +3693,9 @@ test('Remus resolves the former face-plane tangent-union refusal', async ({
   await createPrimitiveInPlace(page, 'cylinder');
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
   const shift = page.getByRole('form', { name: 'Move controls' });
+  await openMoveOptions(shift);
   await shift.getByLabel('Move X in mm').fill('15');
-  await shift.getByRole('button', { name: /Apply move/ }).click();
+  await shift.getByRole('button', { name: 'Done' }).click();
 
   // U09: Union runs in place: two bodies, then Done.
   await page.getByRole('button', { name: /^Union \(U\)/ }).click();
@@ -3716,8 +3726,9 @@ test('Remus resolves the former small-radius tangent-union fallback', async ({
   // Moving along X keeps the axis in the y = 0 face plane.
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
   const shiftX = page.getByRole('form', { name: 'Move controls' });
+  await openMoveOptions(shiftX);
   await shiftX.getByLabel('Move X in mm').fill('15');
-  await shiftX.getByRole('button', { name: /Apply move/ }).click();
+  await shiftX.getByRole('button', { name: 'Done' }).click();
 
   // U09: Union runs in place: two bodies, then Done.
   await page.getByRole('button', { name: /^Union \(U\)/ }).click();
@@ -3923,10 +3934,11 @@ test('Move is one UI: the gizmo names the feature and picks the body', async ({
 
   // Both things the retired form carried now live here: a Name and a body
   // picker. Choosing a body from the picker is what the form existed for.
+  await openMoveOptions(move);
   await move.getByLabel('Body').selectOption({ label: 'Upper 1' });
   await move.getByLabel('Name').fill('Lift upper');
   await move.getByLabel('Move Z in mm').fill('40');
-  await move.getByRole('button', { name: /Apply move/ }).click();
+  await move.getByRole('button', { name: 'Done' }).click();
 
   // The name reaches the document, which is the capability whose loss kept
   // this unification unshipped.
@@ -4121,7 +4133,7 @@ test('dragging the move gizmo streams live values and commits what was dragged',
   // mid-drag is what a commit applies.
   expect(await draggedValues()).toEqual(liveValues);
 
-  await overlay.getByRole('button', { name: /Apply move/ }).click();
+  await overlay.getByRole('button', { name: 'Done' }).click();
   await revealModelPanel(page, 'History');
   await expect(page.locator('.feature-row', { hasText: 'Move' })).toHaveCount(
     1
@@ -4635,8 +4647,9 @@ test('a refused boolean never lands in history and says why in the form', async 
     .click();
   await page.keyboard.press('m');
   const overlay = page.getByRole('form', { name: 'Move controls' });
+  await openMoveOptions(overlay);
   await overlay.getByLabel('Move X in mm').fill('300');
-  await overlay.getByRole('button', { name: /Apply move/ }).click();
+  await overlay.getByRole('button', { name: 'Done' }).click();
   await expect(overlay).toBeHidden();
 
   await page.keyboard.press('Escape');
