@@ -572,7 +572,7 @@ describe('migrating a shared plaintext project (slice 7-4)', () => {
   it('refuses the cutover until every member is re-added, and an abandon drops the Adds', async () => {
     const w = world();
     const { srv } = w;
-    const { projectId } = await sharedPlaintext(w);
+    const { projectId, head: plainHead } = await sharedPlaintext(w);
     for (const [a, b] of [
       [OWNER, OTHER],
       [OTHER, OWNER],
@@ -601,6 +601,41 @@ describe('migrating a shared plaintext project (slice 7-4)', () => {
     await publishKeys(w, memberDevice(w, third, 'third_laptop'));
     await failure(ownerSide.migrate(projectId));
     expect(lease).not.toBe(null);
+    // Staged: the members' plaintext copy is read-only too (main's 7-1
+    // gate, which #922's editor lock answers in their open workspaces),
+    // and their room stays closed; reads keep working.
+    const opened = await srv.call('GET', `/api/projects/${projectId}`, {
+      user: OTHER
+    });
+    expect(opened.status).toBe(200);
+    for (const [method, path, body] of [
+      [
+        'PUT',
+        `/api/projects/${projectId}/document`,
+        {
+          projectId,
+          expectedVersion: plainHead.version,
+          document: edited(plainHead, 'An editor edit while encrypting')
+        }
+      ],
+      [
+        'POST',
+        `/api/projects/${projectId}/revisions`,
+        {
+          projectId,
+          reason: 'An editor save while encrypting',
+          expectedVersion: plainHead.version,
+          document: plainHead
+        }
+      ],
+      ['POST', `/api/projects/${projectId}/collaboration/ticket`, {}]
+    ] as const) {
+      const answer = await srv.call(method, path, { user: OTHER, body });
+      expect(answer.status, path).toBe(409);
+      expect(((await answer.json()) as { code?: string }).code, path).toBe(
+        'PROJECT_MIGRATING'
+      );
+    }
     // Staged, nobody re-added: the cutover refuses, naming both.
     const api = createProjectMigrationsApi(ownerSide.d.fetcher);
     const refused = await failure(api.cutover(projectId, lease!));
