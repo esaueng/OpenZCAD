@@ -395,9 +395,11 @@ describe('desktop bridge', () => {
   it('streams only encrypted blob reads; everything else stays buffered', async () => {
     markDesktopRuntime();
     mockNativeBlobStream([new Uint8Array([9])]);
-    await desktopFetch(`/api/e2ee/projects/proj_1/blobs/${BLOB_ID}`, {
-      credentials: 'same-origin'
-    });
+    const streamed = await desktopFetch(
+      `/api/e2ee/projects/proj_1/blobs/${BLOB_ID}`,
+      { credentials: 'same-origin' }
+    );
+    await streamed.arrayBuffer();
     expect(invoke).toHaveBeenCalledWith('desktop_blob_stream_open', {
       path: `/api/e2ee/projects/proj_1/blobs/${BLOB_ID}`
     });
@@ -582,5 +584,95 @@ describe('desktop bridge', () => {
     expect(invoke).toHaveBeenCalledWith('desktop_blob_stream_cancel', {
       streamId: 'stream-1'
     });
+  });
+
+  /** Each native stream answers its own number, then its end. */
+  function mockNumberedNativeStreams() {
+    let opened = 0;
+    const served = new Set<string>();
+    vi.mocked(invoke).mockImplementation(
+      async (command: string, args?: unknown) => {
+        if (command === 'desktop_blob_stream_open') {
+          opened += 1;
+          return { status: 200, streamId: `stream-${opened}`, body: [] };
+        }
+        const { streamId } = args as { streamId: string };
+        if (command === 'desktop_blob_stream_read') {
+          if (served.has(streamId)) return new ArrayBuffer(0);
+          served.add(streamId);
+          return new Uint8Array([Number(streamId.slice(7))]).buffer;
+        }
+        return undefined;
+      }
+    );
+    return () => opened;
+  }
+
+  /** Lets queued native calls run (the bridge imports Tauri lazily). */
+  async function settle() {
+    for (let turn = 0; turn < 20; turn += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+
+  it('queues blob reads past the native stream limit instead of failing them', async () => {
+    markDesktopRuntime();
+    const opened = mockNumberedNativeStreams();
+    const fetches = Array.from({ length: 6 }, (_, index) =>
+      desktopFetch(sharedBlobUrl(`token-${index}`, BLOB_ID))
+    );
+    await settle();
+    // Four streams run; the rest wait for a slot rather than being refused.
+    expect(opened()).toBe(4);
+
+    const bodies: number[][] = [];
+    for (const pending of fetches) {
+      const response = await pending;
+      bodies.push(Array.from(new Uint8Array(await response.arrayBuffer())));
+    }
+    expect(bodies).toHaveLength(6);
+    expect(bodies.every((body) => body.length === 1)).toBe(true);
+    expect(opened()).toBe(6);
+  });
+
+  it('drops a queued blob read whose request is aborted', async () => {
+    markDesktopRuntime();
+    const opened = mockNumberedNativeStreams();
+    const held = await Promise.all(
+      Array.from({ length: 4 }, (_, index) =>
+        desktopFetch(sharedBlobUrl(`token-${index}`, BLOB_ID))
+      )
+    );
+    const controller = new AbortController();
+    const queued = desktopFetch(sharedBlobUrl('token-queued', BLOB_ID), {
+      signal: controller.signal
+    });
+    await settle();
+    controller.abort();
+    await expect(queued).rejects.toMatchObject({ name: 'AbortError' });
+    expect(opened()).toBe(4);
+
+    // The aborted caller took no slot: the next one opens once a body ends.
+    const next = desktopFetch(sharedBlobUrl('token-next', BLOB_ID));
+    await settle();
+    expect(opened()).toBe(4);
+    await held[0]!.arrayBuffer();
+    const response = await next;
+    expect(opened()).toBe(5);
+    expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual([
+      5
+    ]);
+
+    // A cancelled body frees its slot too.
+    await held[1]!.body!.cancel();
+    await held[2]!.arrayBuffer();
+    await held[3]!.arrayBuffer();
+    const later = await Promise.all(
+      Array.from({ length: 4 }, (_, index) =>
+        desktopFetch(sharedBlobUrl(`token-later-${index}`, BLOB_ID))
+      )
+    );
+    expect(opened()).toBe(9);
+    await Promise.all(later.map((each) => each.arrayBuffer()));
   });
 });
