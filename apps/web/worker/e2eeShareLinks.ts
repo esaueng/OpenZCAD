@@ -97,6 +97,7 @@ import {
   refuse,
   refuseDeviceListMoved,
   requireCertifiedDevice,
+  requireCertifiedSigner,
   requireEncryptedProjectAccess,
   requireOwnedEncryptedProject,
   runBatch,
@@ -912,6 +913,18 @@ async function putAuthority(
       { sequence: link.authority_sequence }
     );
   }
+  // The delegation the statement verified against may still name a device
+  // the owner since removed, until it is renewed. Each stored sequence only
+  // climbs, so a removed device's statement at the top of the range would
+  // leave the link unusable for good: only a device the owner's newest
+  // device list certifies may sign one (#912 review)...
+  const signer = await requireCertifiedSigner(
+    ctx.db,
+    ctx.userId,
+    statement.signerKeyHash
+  );
+  // ...and a removal of that device landing first makes the write refuse.
+  const signerList = deviceListUnchanged(ctx.userId, signer);
   let results;
   try {
     results = await runBatch(ctx.db, [
@@ -922,7 +935,8 @@ async function putAuthority(
                authority_expires_at = ?
            WHERE project_id = ? AND share_id = ? AND revoked_at IS NULL
              AND (authority_sequence IS NULL OR authority_sequence < ?)
-             AND ${ctx.authorization.sql} AND ${PROJECT_FENCE}`
+             AND ${ctx.authorization.sql} AND ${PROJECT_FENCE}
+             AND ${signerList.sql}`
         )
         .bind(
           signed.text.statement,
@@ -934,7 +948,8 @@ async function putAuthority(
           statement.sequence,
           ...ctx.authorization.binds,
           projectId,
-          ctx.userId
+          ctx.userId,
+          ...signerList.binds
         )
     ]);
   } catch (error) {
@@ -966,6 +981,9 @@ async function putAuthority(
         'A newer statement is already stored for this link.',
         { sequence: after.authority_sequence }
       );
+    }
+    if (await deviceListMoved(ctx.db, ctx.userId, signer)) {
+      refuseDeviceListMoved();
     }
     sessionRequired();
   }

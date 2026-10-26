@@ -9,7 +9,7 @@
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import worker from '../apps/web/worker/index';
 import {
   ShareLinkError,
@@ -199,10 +199,11 @@ async function integrity(promise: Promise<unknown>, reason: string) {
 const linkRow = (srv: Server, projectId: string, shareId: string) =>
   rows<{
     revoked_at: string | null;
+    authority: string | null;
     authority_sequence: number | null;
   }>(
     srv,
-    `SELECT revoked_at, authority_sequence FROM e2ee_share_links
+    `SELECT revoked_at, authority, authority_sequence FROM e2ee_share_links
      WHERE project_id = ? AND share_id = ?`,
     projectId,
     shareId
@@ -1469,6 +1470,148 @@ describe('an owner device removal (slice 5-10)', { timeout: 120_000 }, () => {
     }
   });
 });
+
+describe(
+  'who may store a link statement (#912 review)',
+  { timeout: 120_000 },
+  () => {
+    /**
+     * `PUT …/authority` as OWNER's session: the stored statement re-signed by
+     * OWNER's `deviceId` at `sequence`.
+     */
+    // Taken while both devices are listed: a removed one drops out of it.
+    const signerHashes = new Map<string, Uint8Array>();
+    beforeEach(async () => {
+      signerHashes.clear();
+      for (const d of owner.list.devices) {
+        signerHashes.set(d.deviceId, await publicKeyHash(d.signingKey));
+      }
+    });
+
+    async function authorityAs(
+      srv: Server,
+      projectId: string,
+      shareId: string,
+      deviceId: string,
+      sequence: number
+    ) {
+      const stored = decodeShareAuthority(
+        fromBase64Url(linkRow(srv, projectId, shareId)!.authority!)
+      );
+      const signed = await signShareAuthority(
+        owner.devices.get(deviceId)!.signing.privateKey,
+        { ...stored, sequence, signerKeyHash: signerHashes.get(deviceId)! }
+      );
+      const response = await srv.call(
+        'PUT',
+        `/api/e2ee/projects/${projectId}/share-links/${shareId}/authority`,
+        {
+          user: OWNER,
+          body: {
+            statement: toBase64Url(signed.statement),
+            signature: toBase64Url(signed.signature)
+          }
+        }
+      );
+      return {
+        status: response.status,
+        code: ((await response.json()) as { code?: string }).code
+      };
+    }
+
+    it('refuses a removed owner device the old delegation still names, and the certified device renews', async () => {
+      const { srv, laptop, projectId } = await linkedProject();
+      await delegate(laptop);
+      const created = await createShareLink(
+        laptop.shareLinks,
+        projectId,
+        'view'
+      );
+      const before = linkRow(
+        srv,
+        projectId,
+        created.shareId
+      )!.authority_sequence;
+      await owner.revoke(srv.db, 'owner_desktop');
+      try {
+        // The delegation still names the removed device, whose session stays
+        // signed in: a statement at the top of the sequence range would leave
+        // the link unrenewable for good.
+        expect(
+          await authorityAs(
+            srv,
+            projectId,
+            created.shareId,
+            'owner_desktop',
+            0xffffffff
+          )
+        ).toEqual({ status: 403, code: 'E2EE_DEVICE_NOT_CERTIFIED' });
+        expect(
+          linkRow(srv, projectId, created.shareId)!.authority_sequence
+        ).toBe(before);
+        // The owner's certified device still states the link.
+        expect(
+          await authorityAs(
+            srv,
+            projectId,
+            created.shareId,
+            'owner_laptop',
+            before! + 1
+          )
+        ).toEqual({ status: 200, code: undefined });
+        expect((await visit(srv, created.url)).verified.shareId).toBe(
+          created.shareId
+        );
+      } finally {
+        owner = await makeAccount(OWNER, ['owner_laptop', 'owner_desktop']);
+      }
+    });
+
+    it('a device-list change between the signer check and the write stores nothing', async () => {
+      const { srv, laptop, projectId } = await linkedProject();
+      await delegate(laptop);
+      const created = await createShareLink(
+        laptop.shareLinks,
+        projectId,
+        'view'
+      );
+      const before = linkRow(srv, projectId, created.shareId)!;
+      const push = srv.statements.push.bind(srv.statements);
+      srv.statements.push = (...sql: string[]) => {
+        if (
+          sql.some((s) =>
+            /^\s*UPDATE e2ee_share_links\s+SET authority = \?/.test(s)
+          )
+        ) {
+          srv.statements.push = push;
+          srv.db
+            .prepare(
+              `INSERT INTO e2ee_device_list_entries
+             SELECT user_id, generation, sequence + 1, entry, signature,
+                    substr(entry_hash, 2) || '0', created_at
+             FROM e2ee_device_list_entries WHERE user_id = ?
+             ORDER BY sequence DESC LIMIT 1`
+            )
+            .run(OWNER);
+        }
+        return push(...sql);
+      };
+      expect(
+        await authorityAs(
+          srv,
+          projectId,
+          created.shareId,
+          'owner_laptop',
+          before.authority_sequence! + 1
+        )
+      ).toEqual({ status: 409, code: 'E2EE_DEVICE_LIST_CHANGED' });
+      expect(srv.statements.push).toBe(push);
+      expect(linkRow(srv, projectId, created.shareId)!.authority).toBe(
+        before.authority
+      );
+    });
+  }
+);
 
 describe('what a visitor refuses (slice 5-10)', { timeout: 120_000 }, () => {
   it('refuses a stale or forged snapshot, statement, delegation or owner key', async () => {
