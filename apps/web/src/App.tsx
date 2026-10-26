@@ -20493,9 +20493,11 @@ export function App() {
   const panelFeature = selectedFeatureNode
     ? doc?.nodes[selectedFeatureNode.id]
     : null;
+  // Plane selection and the entered sketch belong to one editing session.
+  const sketchPanelSession = interaction.mode === 'sketch' || tool === 'sketch';
   const panels = usePanelSuspension(panelState, {
     workspaceMode: resolvedWorkspaceMode,
-    sketching: interaction.mode === 'sketch',
+    sketching: sketchPanelSession,
     editing:
       movePreview === null &&
       ((tool !== null && tool !== 'transform') ||
@@ -20505,7 +20507,7 @@ export function App() {
             panelFeature.featureId === inPlaceEditing?.featureId ||
             panelFeature.featureId === extrudeEditFeatureId))),
     sessionId:
-      interaction.mode === 'sketch'
+      sketchPanelSession
         // Acquiring a canonical sketch ID is still the same editing session.
         ? 'active'
         : `${tool ?? 'edit'}:${featureSelectionSource === 'pinned' ? selectedFeatureNode?.id ?? '' : ''}`

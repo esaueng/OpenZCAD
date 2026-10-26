@@ -106,6 +106,22 @@ test('read-only imported mesh details keep History visible', async ({
   await page.screenshot({ path: testInfo.outputPath('mesh-history-details.png') });
 });
 
+test('an explicit panel release survives choosing a sketch plane', async ({ page }) => {
+  await plate(page);
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await expect(page.locator('.model-panel')).toHaveCount(0);
+  await revealModelPanel(page, 'History');
+  const history = page.getByRole('heading', { name: 'History 1' });
+  await expect(history).toBeVisible();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  await expect(page.getByRole('toolbar', { name: 'Sketch tools' })).toBeVisible();
+  await expect(history).toBeVisible();
+  await page.getByRole('button', { name: 'Finish Sketch', exact: true }).click();
+  await expect(history).toBeVisible();
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await expect(page.locator('.model-panel')).toHaveCount(0);
+});
+
 test('precise hole creation, honest properties, recoverable errors and compact editing', async ({
   page
 }, testInfo) => {
