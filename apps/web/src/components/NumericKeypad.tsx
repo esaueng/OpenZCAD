@@ -33,7 +33,9 @@ export interface KeypadRequest {
     | 'sketch-dimension'
     | 'sketch-edit'
     /** U09: an in-place command's handle value. */
-    | 'command';
+    | 'command'
+    /** U09: a value of the in-place Extrude (`commandValueId` names it). */
+    | 'extrude';
   /** Short label over the value field ('Offset', 'Radius', 'Height'). */
   label: string;
   /** Prefill; may be a typed digit captured mid-gesture. */
@@ -165,6 +167,21 @@ function dockedPanelBands(host: HTMLElement): KeypadExclusion[] {
 }
 
 /**
+ * How far down the host the keypad may reach: to the top of the bottom lane
+ * (the guidance row and the search bar, where a command's Done stands),
+ * which is drawn over the stage and would take the keypad's own clicks.
+ */
+function keypadFloor(host: HTMLElement): number {
+  const lane = host
+    .closest('.viewer-area')
+    ?.querySelector<HTMLElement>('.command-bar-lane');
+  if (!lane) return host.clientHeight;
+  const top =
+    lane.getBoundingClientRect().top - host.getBoundingClientRect().top;
+  return top > 0 ? Math.min(host.clientHeight, top) : host.clientHeight;
+}
+
+/**
  * Floating exact-value entry anchored at the point of action — the keyboard
  * companion of every drag handle. One instance serves offsets, radii,
  * extrude heights, and sketch dimensions.
@@ -254,7 +271,7 @@ export function NumericKeypad({
           width: root.offsetWidth || 232,
           height: root.offsetHeight || 280
         },
-        { width: host.clientWidth, height: host.clientHeight },
+        { width: host.clientWidth, height: keypadFloor(host) },
         dockedPanelBands(host)
       );
       root.style.visibility = 'visible';
@@ -275,7 +292,14 @@ export function NumericKeypad({
     } else {
       const host = root.parentElement;
       if (host) {
-        const chip = host.querySelector<HTMLElement>('.handle-value-chip');
+        // The chip the entry was opened from: a command value's own, else
+        // the drag handle's; any value chip when neither is drawn.
+        const chip =
+          host.querySelector<HTMLElement>(
+            request.commandValueId
+              ? `[data-testid="command-handle-${request.commandValueId}"]`
+              : '[data-testid="direct-manipulation-value"]'
+          ) ?? host.querySelector<HTMLElement>('.handle-value-chip');
         const chipRect = chip?.getBoundingClientRect();
         const chipAnchor = {
           x: Number.parseFloat(chip?.style.left ?? ''),
@@ -302,7 +326,7 @@ export function NumericKeypad({
     return () => {
       anchorRef.current = null;
     };
-  }, [anchorRef, request.fixedClientAnchor]);
+  }, [anchorRef, request.fixedClientAnchor, request.commandValueId]);
 
   useLayoutEffect(() => {
     inputRef.current?.focus();

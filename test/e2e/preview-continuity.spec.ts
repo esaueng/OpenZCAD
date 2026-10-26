@@ -9,7 +9,8 @@ import {
   test,
   expect,
   stubApi,
-  expectBodyCount
+  expectBodyCount,
+  setInPlaceOptionValues
 } from './openzcad-fixtures';
 
 /**
@@ -127,11 +128,7 @@ test('typing a new extrude distance keeps the preview until the new one lands', 
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '0');
   await page.keyboard.press('e');
-  const distance = page
-    .getByRole('region', { name: 'Extrude operation' })
-    .getByRole('textbox', { name: 'Distance', exact: true });
-  await expect(distance).toBeEnabled();
-  await distance.fill('10');
+  await setInPlaceOptionValues(page, 'Extrude', { Distance: '10' });
   await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
     timeout: 30_000
   });
@@ -139,7 +136,7 @@ test('typing a new extrude distance keeps the preview until the new one lands', 
   await page.evaluate(() => {
     window.__exactReplies!.delayMs = 800;
   });
-  await distance.fill('14');
+  await setInPlaceOptionValues(page, 'Extrude', { Distance: '14' });
   await expect
     .poll(() => page.evaluate(() => window.__exactReplies!.held))
     .toBeGreaterThan(0);

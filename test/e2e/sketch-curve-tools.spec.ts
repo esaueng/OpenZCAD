@@ -4,7 +4,13 @@ import {
   type ProjectDocument,
   type SketchObjectData
 } from '@openzcad/shared';
-import { expect, stubApi, test } from './openzcad-fixtures';
+import {
+  expect,
+  stubApi,
+  test,
+  setInPlaceOptionValues,
+  extrudeBar
+} from './openzcad-fixtures';
 
 /**
  * I01 curve entities through the real rail, canvas and keyboard: the curve
@@ -172,8 +178,7 @@ test('the curve slot draws ellipses, elliptical arcs and both splines', async ({
   // The full ellipse and the closed spline each bound a region that
   // extrudes as an exact new body.
   await page.keyboard.press('e');
-  const distance = page.getByLabel('Distance', { exact: true });
-  await distance.fill('10');
-  await page.getByRole('button', { name: 'Create', exact: true }).click();
+  await setInPlaceOptionValues(page, 'Extrude', { Distance: '10' });
+  await extrudeBar(page).getByRole('button', { name: 'Done' }).click();
   await expect(status).toContainText('Extruded', READ_TIMEOUT);
 });

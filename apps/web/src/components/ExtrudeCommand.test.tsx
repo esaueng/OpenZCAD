@@ -1,0 +1,184 @@
+import { createRef, type MutableRefObject } from 'react';
+import { act, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  toBodyId,
+  toSketchId,
+  type ExtrudeToFaceTarget,
+  type ParamValue
+} from '@openzcad/shared';
+import { ExtrudeCommand, type ExtrudeCommandHandle } from './ExtrudeCommand';
+import type { ExtrudeToFacePicking } from '../lib/extrudeDraft';
+
+const sketchId = toSketchId('layout');
+const plate = toBodyId('plate');
+
+function setup(overrides: Partial<Parameters<typeof ExtrudeCommand>[0]> = {}) {
+  const distanceSetterRef = createRef<
+    (value: ParamValue) => void
+  >() as MutableRefObject<((value: ParamValue) => void) | null>;
+  const commandRef = createRef<ExtrudeCommandHandle>();
+  const props = {
+    scope: { thickness: 8 },
+    units: 'mm' as const,
+    bodies: [{ bodyId: plate, name: 'Plate' }],
+    initial: { name: 'Extrude', sketchId, distance: 0 },
+    profileCount: 1,
+    disabled: false,
+    distanceSetterRef,
+    commandRef,
+    onOpenValue: vi.fn(),
+    onDraft: vi.fn(),
+    onPreview: vi.fn(),
+    onSubmit: vi.fn(),
+    onCancel: vi.fn(),
+    ...overrides
+  };
+  render(<ExtrudeCommand {...props} />);
+  return { ...props, distanceSetterRef, commandRef };
+}
+
+async function openOptions(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByLabelText('Extrude options'));
+}
+
+function choice(group: string, label: string) {
+  return within(screen.getByRole('radiogroup', { name: group })).getByRole(
+    'radio',
+    { name: label }
+  );
+}
+
+describe('in-place Extrude bar', () => {
+  it('finishes only once the arrow sets a distance, then creates that draft', async () => {
+    const user = userEvent.setup();
+    const { distanceSetterRef, commandRef, onSubmit, onPreview } = setup();
+    const done = screen.getByRole('button', { name: 'Done' });
+    expect(done).toBeDisabled();
+    expect(commandRef.current?.submit()).toBe(false);
+    act(() => distanceSetterRef.current?.(12));
+    expect(onPreview).toHaveBeenLastCalledWith(
+      expect.objectContaining({ distance: 12, endCondition: 'blind' })
+    );
+    expect(done).toBeEnabled();
+    await user.click(done);
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        name: 'Extrude',
+        distance: 12,
+        symmetric: false,
+        backDistance: 0,
+        choice: { operation: 'automatic' }
+      })
+    );
+  });
+
+  it('keeps every card setting under Options: operation, target, sides, values, Reverse', async () => {
+    const user = userEvent.setup();
+    const { distanceSetterRef, commandRef, onPreview, onOpenValue } = setup();
+    act(() => distanceSetterRef.current?.(10));
+    await openOptions(user);
+    await user.click(choice('Operation', 'Cut'));
+    expect(choice('Target body', 'Plate')).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+    expect(onPreview).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        choice: { operation: 'cut', targetBodyId: plate }
+      })
+    );
+    // Values open the keypad; a typed expression is kept as typed.
+    await user.click(screen.getByRole('button', { name: 'Back distance' }));
+    expect(onOpenValue).toHaveBeenCalledWith(
+      'backDistance',
+      expect.any(Object)
+    );
+    act(() => commandRef.current?.setValue('backDistance', 'thickness / 2'));
+    expect(onPreview).toHaveBeenLastCalledWith(
+      expect.objectContaining({ backDistance: 'thickness / 2' })
+    );
+    // Symmetric drops the back distance, and its row.
+    await user.click(choice('Sides', 'Symmetric'));
+    expect(onPreview).toHaveBeenLastCalledWith(
+      expect.objectContaining({ symmetric: true, backDistance: 0 })
+    );
+    expect(screen.queryByRole('button', { name: 'Back distance' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Reverse direction' }));
+    expect(onPreview).toHaveBeenLastCalledWith(
+      expect.objectContaining({ distance: -10 })
+    );
+  });
+
+  it('refuses a draft beside Symmetric by name and holds Done', async () => {
+    const user = userEvent.setup();
+    const { distanceSetterRef, commandRef } = setup();
+    act(() => distanceSetterRef.current?.(10));
+    await openOptions(user);
+    await user.click(choice('Sides', 'Symmetric'));
+    act(() => commandRef.current?.setValue('draftAngle', '4'));
+    expect(
+      screen.getByText(
+        'Draft tapers a one-sided extrusion; turn off Symmetric to draft it.'
+      )
+    ).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Done' })).toBeDisabled();
+  });
+
+  it('offers Through all on Cut only, with its direction, and no draft', async () => {
+    const user = userEvent.setup();
+    const { distanceSetterRef, onSubmit } = setup();
+    act(() => distanceSetterRef.current?.(10));
+    await openOptions(user);
+    expect(screen.queryByRole('radiogroup', { name: 'Extent' })).toBeNull();
+    await user.click(choice('Operation', 'Cut'));
+    await user.click(choice('Extent', 'Through all'));
+    await user.click(choice('Direction', 'Both sides'));
+    expect(screen.queryByRole('button', { name: 'Draft angle' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        endCondition: 'through-all',
+        throughAllSide: 'both'
+      })
+    );
+  });
+
+  it('arms the face pick for To face and creates up to the picked face', async () => {
+    const user = userEvent.setup();
+    const target = { type: 'face' } as unknown as ExtrudeToFaceTarget;
+    const onPick = vi.fn();
+    const setterRef = createRef<
+      (target: ExtrudeToFaceTarget) => void
+    >() as MutableRefObject<((target: ExtrudeToFaceTarget) => void) | null>;
+    const toFacePicking: ExtrudeToFacePicking = {
+      armed: false,
+      onPick,
+      cancel: vi.fn(),
+      describe: () => ({ label: 'Ceiling', distance: 6 }),
+      setterRef
+    };
+    const { onSubmit } = setup({ toFacePicking });
+    await openOptions(user);
+    await user.click(choice('Extent', 'To face'));
+    expect(onPick).toHaveBeenCalledOnce();
+    act(() => setterRef.current?.(target));
+    expect(screen.getByText(/Up to Ceiling/)).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        endCondition: 'to-face',
+        toFace: target,
+        distance: 6
+      })
+    );
+  });
+
+  it('cancels from its Cancel button', async () => {
+    const user = userEvent.setup();
+    const { onCancel } = setup();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+});

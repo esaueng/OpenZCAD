@@ -1592,6 +1592,46 @@ export async function setInPlaceOptionValues(
 }
 
 /**
+ * Picks `choice` in one row of an in-place command's Options (the
+ * Extrude's Operation, Extent, Sides…), opening Options for it and closing
+ * them again, so the model under them takes the next click.
+ */
+export async function chooseInPlaceOption(
+  page: Page,
+  title: string,
+  row: string,
+  choice: string
+) {
+  const bar = page.getByRole('group', { name: `${title} command` });
+  const options = bar.locator('details.in-place-command-options');
+  if ((await options.getAttribute('open')) === null) {
+    await options.locator('summary').click();
+  }
+  const button = bar
+    .getByRole('radiogroup', { name: row, exact: true })
+    .getByRole('radio', { name: choice, exact: true });
+  await button.click();
+  await expect(button).toHaveAttribute('aria-checked', 'true');
+  if ((await options.getAttribute('open')) !== null) {
+    await options.locator('summary').click();
+  }
+}
+
+/** The in-place Extrude's bar (U09): its Options, Cancel and Done. */
+export function extrudeBar(page: Page) {
+  return page.getByRole('group', { name: 'Extrude command' });
+}
+
+/**
+ * Finishes the running in-place Extrude at `distance`: typed on the keypad
+ * behind its Options (an expression stays one), then Done.
+ */
+export async function finishExtrude(page: Page, distance: string) {
+  await setInPlaceOptionValues(page, 'Extrude', { Distance: distance });
+  await finishInPlaceCommand(page, 'Extrude');
+}
+
+/**
  * Names the last primitive as the card's Name field did: its History row
  * becomes `name` and its Objects row `name 1`.
  */

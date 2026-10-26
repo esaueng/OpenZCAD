@@ -5,7 +5,14 @@ import {
   extrudeSketch
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
-import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  stubApi,
+  expectBodyCount,
+  chooseInPlaceOption,
+  extrudeBar
+} from './openzcad-fixtures';
 
 /**
  * F01 through-all, first slice: an existing blind cut is switched to Through
@@ -161,14 +168,17 @@ test('creates a cut through all straight from a sketch', async ({ page }) => {
 
   await page.locator('.feature-row-main', { hasText: 'Slot sketch' }).click();
   await page.keyboard.press('e');
-  const card = page.getByRole('region', { name: 'Extrude operation' });
-  await page
-    .getByRole('combobox', { name: 'Extrude operation', exact: true })
-    .selectOption('cut');
-  await card.getByLabel('Extent').selectOption('through-all');
-  await card.getByLabel('Through-all direction').selectOption('backward');
+  const bar = extrudeBar(page);
+  await chooseInPlaceOption(page, 'Extrude', 'Operation', 'Cut');
+  await chooseInPlaceOption(page, 'Extrude', 'Extent', 'Through all');
+  await chooseInPlaceOption(
+    page,
+    'Extrude',
+    'Direction',
+    'Against the sketch normal'
+  );
   // No distance was typed: through all needs none.
-  await card.getByRole('button', { name: 'Create', exact: true }).click();
+  await bar.getByRole('button', { name: 'Done' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
     'Cut the region through all of the target.',
     { timeout: 30_000 }

@@ -8,7 +8,13 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import type { Locator, Page } from '@playwright/test';
-import { expect, stubApi, test } from './openzcad-fixtures';
+import {
+  expect,
+  stubApi,
+  test,
+  extrudeBar,
+  setInPlaceOptionValues
+} from './openzcad-fixtures';
 
 /**
  * F05/U01: the viewport and History sketch editors, both extrusion distances,
@@ -21,8 +27,10 @@ const READ_TIMEOUT = { timeout: 30_000 };
 // mean the device write finished; saving and device-failed must not pass.
 const SAVED_ON_DEVICE = /\bis-(?:local|synced)(?:\s|$)/;
 const WIDTH = '5.4 mm + 2 cm';
-const DISTANCE = '12.7 mm';
-const BACK = '2.54 mm';
+// Expressions, so the in-place Extrude's keypad keeps them as typed (a bare
+// quantity such as `12.7 mm` it converts into the document's unit).
+const DISTANCE = '10 mm + 2.7 mm';
+const BACK = '2 mm + 0.54 mm';
 
 async function sketchObjects(canvas: Locator) {
   return canvas.evaluate(
@@ -253,6 +261,14 @@ for (const [units, mmPerUnit] of [
 
     await outline.click();
     await page.keyboard.press('e');
+    // Typed on the bar's keypad, each unit expression is kept as typed.
+    const bar = extrudeBar(page);
+    await setInPlaceOptionValues(page, 'Extrude', {
+      Distance: DISTANCE,
+      'Back distance': BACK
+    });
+    await expect(bar.getByRole('button', { name: 'Done' })).toBeEnabled();
+    // The History editor the extrusion reopens in, below.
     const extrude = page.getByRole('form', { name: 'Extrude settings' });
     const distance = extrude.getByRole('textbox', {
       name: 'Distance',
@@ -262,13 +278,6 @@ for (const [units, mmPerUnit] of [
       name: 'Back distance',
       exact: true
     });
-    await distance.fill(DISTANCE);
-    await back.fill(BACK);
-    await expect(distance).toHaveAccessibleDescription(`= ${12.7 / mmPerUnit}`);
-    await expect(back).toHaveAccessibleDescription(`= ${2.54 / mmPerUnit}`);
-    await expect(
-      extrude.getByRole('button', { name: 'Create', exact: true })
-    ).toBeEnabled();
     await expectPlate(canvas, mmPerUnit);
     const extrusion = page.locator('.feature-row-main', { hasText: 'Extrude' });
     const extrusionSummary = page
@@ -282,10 +291,10 @@ for (const [units, mmPerUnit] of [
       }),
       contentType: 'image/png'
     });
-    await distance.press('Enter');
+    await page.keyboard.press('Enter');
     await expect(extrusion).toHaveCount(1);
     await expect(extrusionSummary).toHaveText(expectedSummary);
-    await expect(extrude).toHaveCount(0);
+    await expect(bar).toHaveCount(0);
     await expectPlate(canvas, mmPerUnit);
 
     // Editing refuses a mismatched dimension without replacing the last valid

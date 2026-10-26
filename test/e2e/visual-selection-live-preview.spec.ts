@@ -7,7 +7,8 @@ import {
   expectConsumedBodyCount,
   revealModelPanel,
   waitForStillViewport,
-  blendEdgesInPlace
+  blendEdgesInPlace,
+  extrudeBar
 } from './openzcad-fixtures';
 
 // Streamed preview frames arrive much later on the 2-core CI runners under
@@ -1036,10 +1037,7 @@ test('streams an exact extrude preview while a region drag is held', async ({
   await expect(
     page.locator('.feature-row-main', { hasText: 'Extrude' })
   ).toHaveCount(0);
-  await page
-    .getByRole('form', { name: 'Extrude settings' })
-    .getByRole('button', { name: 'Create', exact: true })
-    .click();
+  await extrudeBar(page).getByRole('button', { name: 'Done' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
     /Extruded region by \d+(\.\d+)? mm/,
     { timeout: PREVIEW_BUDGET_MS }
