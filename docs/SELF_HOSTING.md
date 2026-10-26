@@ -336,18 +336,23 @@ unquoted JSON `true` reaches the Worker as a boolean, which it reads as off.
    refuses new plaintext projects for that account.
 3. `E2EE_MIGRATION_ENABLED`: owners move their existing plaintext projects to
    encrypted storage.
-4. `E2EE_DEFAULT_ON` (planned, not in this release): new projects encrypted for
-   every account.
+4. `E2EE_DEFAULT_ON`: the Worker requires encrypted new projects for every
+   eligible account, refuses opting out and new plaintext sharing, and closes
+   reverse migration. It requires step 3. Keep it off until the browser's
+   default-on migration flow and the outside review are complete.
 5. `E2EE_PLAINTEXT_FROZEN` (planned, not in this release): plaintext writes
    refused.
 
-This version does not read the two planned flags, so the preflight accepts
-them only as `"false"`. A later Phase 8 release adds them after the outside
-review of the cryptography and key flows.
+This version does not read `E2EE_PLAINTEXT_FROZEN`, so the preflight accepts it
+only as `"false"`. The default-on Worker gate is implemented behind its flag;
+that is not completion of the browser rollout or the outside review of the
+cryptography, key flows and pinned MLS version. Preflight checks configuration
+consistency; it cannot certify that the outside review is complete.
 
 `E2EE_REVERSE_ENABLED` is an optional, beta-only path that needs step 3. It
 lets an owner turn an encrypted project back into plaintext while nobody else
-holds it and the owner's "Encrypt new projects" opt-in is off. A later release
+holds it and the owner's "Encrypt new projects" opt-in is off. Keep this flag
+off while default-on is enabled; the preflight rejects enabling both. A later release
 removes it; after that the only way out is the export described below.
 
 `E2EE_CANARY_EMAILS` is a Worker secret, never a `var`. It opens the key routes
@@ -357,13 +362,19 @@ so it does not accept `E2EE_PROJECTS_ENABLED` while `E2EE_KEYS_ENABLED` is off;
 try encryption on a separate test instance instead.
 
 After each deployment, sign in and open `/api/e2ee/config`. It reports
-`enabled` (the key routes) and `projectsEnabled`, and adds `migrationEnabled`
-and `reverseEnabled` once each is on and its migration is installed.
+`enabled` (the key routes) and `projectsEnabled`, and adds `migrationEnabled`,
+`reverseEnabled` and `defaultOn` once each is on and its required migrations
+are installed.
 
 Turning flags off deletes nothing, but clear account opt-ins before closing
 the project routes:
 
-1. While `E2EE_KEYS_ENABLED` and `E2EE_PROJECTS_ENABLED` are still on, have
+1. If `E2EE_DEFAULT_ON` is on, set it to `"false"` and deploy with
+   `E2EE_KEYS_ENABLED` and `E2EE_PROJECTS_ENABLED` still on. Check that
+   `/api/e2ee/config` no longer reports `defaultOn: true`; the default-on gate
+   otherwise refuses the account opt-out required next.
+
+2. While `E2EE_KEYS_ENABLED` and `E2EE_PROJECTS_ENABLED` are still on, have
    every opted-in account turn off Settings › Encryption › Encrypt new
    projects. This saves an authenticated preference; turning off a deployment
    flag does not clear it. Confirm that no opt-ins remain with this read-only
@@ -377,7 +388,7 @@ the project routes:
    Wait for the count to reach zero before disabling project encryption. Keep
    it enabled if an opted-in account has not cleared its preference.
 
-2. Turn off `E2EE_REVERSE_ENABLED`, then `E2EE_MIGRATION_ENABLED`, then
+3. Turn off `E2EE_REVERSE_ENABLED`, then `E2EE_MIGRATION_ENABLED`, then
    `E2EE_PROJECTS_ENABLED`, and finally `E2EE_KEYS_ENABLED`, checking the
    configuration before deploying. While project encryption is off, encrypted
    projects cannot be opened. Turning off migration also stops its hourly
@@ -389,7 +400,8 @@ migration 0031's database trigger still refuses plaintext creates for those
 accounts (`ENCRYPTED_PROJECTS_REQUIRED`), and the preference route is closed,
 so they cannot opt out. Re-enable `E2EE_KEYS_ENABLED`, then
 `E2EE_PROJECTS_ENABLED`, check `/api/e2ee/config`, and have those accounts
-unlock encryption and clear their opt-ins as in step 1. Migration and reverse
+unlock encryption and clear their opt-ins as in step 2, with `E2EE_DEFAULT_ON`
+off. Migration and reverse
 can stay off during this recovery. Confirm the count is zero, then resume the
 shutdown order. Do not drop the trigger or edit the MAC-protected preference
 rows directly.

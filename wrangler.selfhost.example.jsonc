@@ -49,13 +49,13 @@
     // 2. Encrypted projects: the per-account "Encrypt new projects" opt-in.
     "E2EE_PROJECTS_ENABLED": "false",
     // 3. Owners encrypt their existing plaintext projects from Settings.
-    "E2EE_MIGRATION_ENABLED": "false"
+    "E2EE_MIGRATION_ENABLED": "false",
+    // Phase 8 server gate. Keep off until browser rollout and outside review finish.
+    "E2EE_DEFAULT_ON": "false"
     // Optional and beta-only: "E2EE_REVERSE_ENABLED": "true" (needs step 3)
     // lets an owner turn an unshared encrypted project back into plaintext.
     // A later release removes it.
-    // Planned for later Phase 8 releases, not read by this version, so do not
-    // add them yet: E2EE_DEFAULT_ON (encrypt every account's new projects) and
-    // E2EE_PLAINTEXT_FROZEN (refuse plaintext writes).
+    // Planned and not read yet: E2EE_PLAINTEXT_FROZEN (refuse plaintext writes).
   },
   "d1_databases": [
     {

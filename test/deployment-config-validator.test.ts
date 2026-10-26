@@ -178,6 +178,12 @@ describe('deployment configuration preflight', () => {
           E2EE_PROJECTS_ENABLED: 'true',
           E2EE_MIGRATION_ENABLED: 'true',
           E2EE_REVERSE_ENABLED: 'true'
+        },
+        {
+          E2EE_KEYS_ENABLED: 'true',
+          E2EE_PROJECTS_ENABLED: 'true',
+          E2EE_MIGRATION_ENABLED: 'true',
+          E2EE_DEFAULT_ON: 'true'
         }
       ]) {
         expect(
@@ -199,7 +205,8 @@ describe('deployment configuration preflight', () => {
       expect(config.vars).toMatchObject({
         E2EE_KEYS_ENABLED: 'false',
         E2EE_PROJECTS_ENABLED: 'false',
-        E2EE_MIGRATION_ENABLED: 'false'
+        E2EE_MIGRATION_ENABLED: 'false',
+        E2EE_DEFAULT_ON: 'false'
       });
       expect(config.vars).not.toHaveProperty('E2EE_REVERSE_ENABLED');
     });
@@ -285,7 +292,41 @@ describe('deployment configuration preflight', () => {
       );
     });
 
-    it('accepts the planned Phase 8 flags only while off', () => {
+    it('requires migration for default-on and rejects the conflicting reverse flag', () => {
+      expect(
+        validateDeploymentConfig(
+          withFlags({
+            E2EE_KEYS_ENABLED: 'true',
+            E2EE_PROJECTS_ENABLED: 'true',
+            E2EE_DEFAULT_ON: 'true'
+          }),
+          { target: 'selfhost' }
+        )
+      ).toEqual([
+        'vars.E2EE_DEFAULT_ON requires vars.E2EE_MIGRATION_ENABLED to be "true"'
+      ]);
+      expect(
+        validateDeploymentConfig(
+          withFlags({
+            E2EE_KEYS_ENABLED: 'true',
+            E2EE_PROJECTS_ENABLED: 'true',
+            E2EE_MIGRATION_ENABLED: 'true',
+            E2EE_DEFAULT_ON: 'on',
+            E2EE_REVERSE_ENABLED: 'yes'
+          }),
+          { target: 'selfhost' }
+        )
+      ).toEqual([
+        'vars.E2EE_REVERSE_ENABLED must be "false" while vars.E2EE_DEFAULT_ON is "true"'
+      ]);
+      expect(
+        validateDeploymentConfig(withFlags({ E2EE_DEFAULT_ON: true }), {
+          target: 'selfhost'
+        })
+      ).toContain('vars.E2EE_DEFAULT_ON must be the string "true" or "false"');
+    });
+
+    it('accepts the remaining planned Phase 8 flag only while off', () => {
       expect(
         validateDeploymentConfig(
           withFlags({
@@ -296,12 +337,10 @@ describe('deployment configuration preflight', () => {
         )
       ).toEqual([]);
       expect(
-        validateDeploymentConfig(
-          withFlags({ E2EE_DEFAULT_ON: 'true', E2EE_PLAINTEXT_FROZEN: false }),
-          { target: 'selfhost' }
-        )
+        validateDeploymentConfig(withFlags({ E2EE_PLAINTEXT_FROZEN: false }), {
+          target: 'selfhost'
+        })
       ).toEqual([
-        'vars.E2EE_DEFAULT_ON is planned and not read by this release; set it to "false" or remove it',
         'vars.E2EE_PLAINTEXT_FROZEN is planned and not read by this release; set it to "false" or remove it'
       ]);
     });
