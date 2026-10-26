@@ -1,4 +1,10 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState, type ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -18,9 +24,17 @@ import {
   type AppSettingsResponse,
   type HealthResponse
 } from '@openzcad/shared';
+import { openExternalUrl } from '../lib/desktopBridge';
+import type * as DesktopBridge from '../lib/desktopBridge';
 import { SettingsPage } from './SettingsPage';
 import { POINTER_CONTROL_GROUPS } from '../lib/controlReference';
 import { api } from '../lib/api';
+
+// The desktop app opens external links through native code.
+vi.mock('../lib/desktopBridge', async (importOriginal) => ({
+  ...(await importOriginal<typeof DesktopBridge>()),
+  openExternalUrl: vi.fn()
+}));
 
 // Account loads storage usage for a signed-in profile; no test reaches a server.
 const storageUsage = {
@@ -1203,18 +1217,30 @@ describe('settings privacy and data section', () => {
     expect(link).toHaveAttribute('href', '/privacy');
     expect(link).toHaveAttribute('target', '_blank');
     expect(link).toHaveAttribute('rel', 'noreferrer');
+    // In a browser the anchor itself opens the new tab; no native call.
+    link.addEventListener('click', (event) => event.preventDefault(), {
+      once: true
+    });
+    fireEvent.click(link);
+    expect(openExternalUrl).not.toHaveBeenCalled();
     expect(screen.getByText('Privacy policy')).toBeInTheDocument();
   });
 
-  it('links the hosted privacy policy from the desktop app', () => {
+  it('opens the hosted privacy policy in the system browser from the desktop app', async () => {
+    vi.mocked(openExternalUrl).mockResolvedValue(true);
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ =
       {};
     try {
       renderSettings(null, { initialSection: 'privacy', session });
-      expect(
-        screen.getByRole('link', { name: 'Read the policy' })
-      ).toHaveAttribute('href', 'https://zcad.app/privacy');
+      const link = screen.getByRole('link', { name: 'Read the policy' });
+      expect(link).toHaveAttribute('href', 'https://zcad.app/privacy');
+      // WKWebView ignores target="_blank"; the native shell opens the page.
+      expect(fireEvent.click(link)).toBe(false);
+      await waitFor(() =>
+        expect(openExternalUrl).toHaveBeenCalledWith('https://zcad.app/privacy')
+      );
     } finally {
+      vi.mocked(openExternalUrl).mockReset();
       delete (window as Window & { __TAURI_INTERNALS__?: unknown })
         .__TAURI_INTERNALS__;
     }

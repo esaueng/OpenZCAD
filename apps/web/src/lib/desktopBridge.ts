@@ -184,6 +184,22 @@ export async function pollDesktopSignIn(): Promise<DesktopAuthPollResult> {
   return result;
 }
 
+/**
+ * Opens an external page in the system browser from the desktop app.
+ * WKWebView ignores `target="_blank"` (the shell has no new-window handler),
+ * so links the desktop app must follow go through native code, which opens
+ * only an exact allowlisted URL (apps/desktop/src-tauri/src/external_links.rs).
+ * Returns false outside the desktop app, where a plain anchor works.
+ */
+export async function openExternalUrl(url: string): Promise<boolean> {
+  if (!isDesktopApp()) {
+    return false;
+  }
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('open_external_url', { url });
+  return true;
+}
+
 export async function cancelDesktopSignIn(): Promise<void> {
   if (!isDesktopApp()) {
     return;

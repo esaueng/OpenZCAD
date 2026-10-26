@@ -59,6 +59,7 @@ import { countLabel } from '../lib/toasts';
 import { fetchEncryptionAvailability } from '../lib/e2ee/availability';
 import { lazyWithStaleChunkNotice } from '../lib/staleChunk';
 import { ErrorBoundary } from './ErrorBoundary';
+import { ExternalAnchor } from './ExternalAnchor';
 import { api } from '../lib/api';
 import { APP_SETTINGS_NUMBER_BOUNDS } from '../lib/appSettings';
 import { isDesktopApp } from '../lib/desktopBridge';
@@ -1582,13 +1583,9 @@ export function SettingsPage({
                     another model; that provider’s data policies and charges
                     apply.{' '}
                     {builtInDataPolicy.href ? (
-                      <a
-                        href={builtInDataPolicy.href}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
+                      <ExternalAnchor href={builtInDataPolicy.href}>
                         {builtInDataPolicy.label}
-                      </a>
+                      </ExternalAnchor>
                     ) : null}
                   </Notice>
                 </Group>
@@ -2196,13 +2193,9 @@ export function SettingsPage({
                             <strong>Email sign-in</strong>
                             <small>
                               No password. We email you a code.{' '}
-                              <a
-                                href={privacyPolicyHref()}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
+                              <ExternalAnchor href={privacyPolicyHref()}>
                                 Privacy policy
-                              </a>
+                              </ExternalAnchor>
                             </small>
                           </span>
                           <div className="settings-auth-controls">
@@ -2349,15 +2342,13 @@ export function SettingsPage({
                   title="Privacy policy"
                   hint="What the hosted service collects, stores and shares."
                 >
-                  <a
+                  <ExternalAnchor
                     className="secondary"
                     href={privacyPolicyHref()}
-                    target="_blank"
-                    rel="noreferrer"
                   >
                     <ExternalLink size={14} aria-hidden="true" />
                     Read the policy
-                  </a>
+                  </ExternalAnchor>
                 </SettingRow>
               </Group>
               <Group title="Analytics">
