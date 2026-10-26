@@ -247,6 +247,8 @@ export function ExtrudeCommand({
   }
 
   function setValue(valueId: ExtrudeValueId, text: string) {
+    // A keypad left open across a Done must not change what it commits.
+    if (disabled) return;
     if (valueId === 'distance') {
       change({
         distance: text,
@@ -444,6 +446,9 @@ export function ExtrudeCommand({
       hint={hint}
       refusal={toFacePicking?.armed ? null : refusal}
       canFinish={canFinish}
+      // While a Done is checked (or an exact operation holds the model) the
+      // draft it captured is the one shown: only Cancel takes input.
+      locked={disabled}
       options={options}
       onOption={setOption}
       values={values}

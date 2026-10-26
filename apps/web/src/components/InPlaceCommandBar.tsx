@@ -30,6 +30,11 @@ export interface InPlaceCommandBarProps {
   hint: string;
   /** False until every required slot is filled and the preview is valid. */
   canFinish: boolean;
+  /**
+   * Nothing but Cancel takes input (a Done being validated): what the bar
+   * shows must stay what is being committed.
+   */
+  locked?: boolean;
   /** Shown instead of the hint while a refusal stands, in the warning tone. */
   refusal?: string | null;
   /**
@@ -67,6 +72,7 @@ export function InPlaceCommandBar({
   title,
   hint,
   canFinish,
+  locked = false,
   refusal = null,
   options = [],
   onOption,
@@ -124,7 +130,7 @@ export function InPlaceCommandBar({
                             ? `${title} needs at least ${picks.minimum}`
                             : 'Remove'
                         }
-                        disabled={picks.items.length <= picks.minimum}
+                        disabled={locked || picks.items.length <= picks.minimum}
                         onClick={() => onRemovePick?.(item.id)}
                       >
                         <X size={12} aria-hidden="true" />
@@ -153,6 +159,7 @@ export function InPlaceCommandBar({
                       role="radio"
                       aria-checked={choice.value === option.value}
                       className="in-place-option-choice"
+                      disabled={locked}
                       onClick={() => onOption?.(option.id, choice.value)}
                     >
                       {choice.label}
@@ -173,6 +180,7 @@ export function InPlaceCommandBar({
                 <button
                   type="button"
                   className="in-place-option-choice in-place-option-value"
+                  disabled={locked}
                   aria-labelledby={`in-place-value-${value.id}`}
                   onClick={(event) => {
                     const box = event.currentTarget.getBoundingClientRect();
@@ -190,6 +198,7 @@ export function InPlaceCommandBar({
                     key={action.id}
                     type="button"
                     className="in-place-option-choice"
+                    disabled={locked}
                     onClick={() => onAction?.(action.id)}
                   >
                     {action.label}
@@ -214,7 +223,7 @@ export function InPlaceCommandBar({
         type="button"
         className="in-place-command-done"
         onClick={onDone}
-        disabled={!canFinish}
+        disabled={locked || !canFinish}
         aria-keyshortcuts="Enter"
       >
         <Check size={14} aria-hidden="true" />

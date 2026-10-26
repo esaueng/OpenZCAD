@@ -175,6 +175,48 @@ describe('in-place Extrude bar', () => {
     );
   });
 
+  it('locks the draft a Done is checking: nothing but Cancel changes it', async () => {
+    const user = userEvent.setup();
+    const distanceSetterRef = createRef<
+      (value: ParamValue) => void
+    >() as MutableRefObject<((value: ParamValue) => void) | null>;
+    const commandRef =
+      createRef<ExtrudeCommandHandle>();
+    const onPreview = vi.fn();
+    const onCancel = vi.fn();
+    const props = {
+      scope: {},
+      units: 'mm' as const,
+      bodies: [{ bodyId: plate, name: 'Plate' }],
+      initial: { name: 'Extrude', sketchId, distance: 0 },
+      profileCount: 1,
+      distanceSetterRef,
+      commandRef,
+      onOpenValue: vi.fn(),
+      onDraft: vi.fn(),
+      onPreview,
+      onSubmit: vi.fn(),
+      onCancel
+    };
+    const { rerender } = render(<ExtrudeCommand {...props} disabled={false} />);
+    act(() => distanceSetterRef.current?.(10));
+    // Done pressed: App holds the bar disabled while it validates.
+    rerender(<ExtrudeCommand {...props} disabled />);
+    onPreview.mockClear();
+    await openOptions(user);
+    expect(choice('Operation', 'Cut')).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Reverse direction' })
+    ).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Distance' })).toBeDisabled();
+    // A keypad left open across the Done commits nothing either.
+    act(() => commandRef.current?.setValue('distance', '20'));
+    expect(onPreview).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Done' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+
   it('cancels from its Cancel button', async () => {
     const user = userEvent.setup();
     const { onCancel } = setup();

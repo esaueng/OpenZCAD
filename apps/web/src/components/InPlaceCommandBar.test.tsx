@@ -44,6 +44,52 @@ describe('InPlaceCommandBar', () => {
     expect(onDone).toHaveBeenCalledTimes(1);
   });
 
+  it('takes nothing but Cancel while locked', () => {
+    const onOption = vi.fn();
+    const onValue = vi.fn();
+    const onAction = vi.fn();
+    const onCancel = vi.fn();
+    render(
+      <InPlaceCommandBar
+        title="Extrude"
+        hint="Checking"
+        canFinish
+        locked
+        options={[
+          {
+            id: 'operation',
+            label: 'Operation',
+            value: 'automatic',
+            choices: [
+              { value: 'automatic', label: 'Automatic' },
+              { value: 'cut', label: 'Cut' }
+            ]
+          }
+        ]}
+        onOption={onOption}
+        values={[{ id: 'distance', label: 'Distance', text: '10 mm' }]}
+        onValue={onValue}
+        actions={[{ id: 'reverse', label: 'Reverse direction' }]}
+        onAction={onAction}
+        onDone={vi.fn()}
+        onCancel={onCancel}
+      />
+    );
+    for (const name of ['Cut', 'Distance', 'Reverse direction', 'Done']) {
+      const control = screen.getByRole(name === 'Cut' ? 'radio' : 'button', {
+        name: new RegExp(name),
+        hidden: true
+      });
+      expect(control).toHaveProperty('disabled', true);
+      fireEvent.click(control);
+    }
+    expect(onOption).not.toHaveBeenCalled();
+    expect(onValue).not.toHaveBeenCalled();
+    expect(onAction).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /Cancel/ }));
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+
   it('shows a refusal in place of the hint and still cancels', () => {
     const onCancel = vi.fn();
     render(
