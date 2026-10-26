@@ -10,6 +10,9 @@ jobs:
   apple-silicon:
     runs-on: macos-26
     timeout-minutes: 60
+    # The whole-repo typecheck and lint outgrew Node's default heap here.
+    env:
+      NODE_OPTIONS: --max-old-space-size=6144
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
