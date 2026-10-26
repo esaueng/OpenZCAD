@@ -650,6 +650,38 @@ async function expectOpensAsPlaintext(srv: Server, encrypted: Encrypted) {
   return opened;
 }
 
+/** A live encrypted share link row (slice 5-10), as stored. */
+function insertEncryptedShareLink(
+  srv: Server,
+  projectId: string,
+  shareId = 'share_1'
+): void {
+  srv.db
+    .prepare(
+      `INSERT INTO e2ee_share_links
+         (project_id, share_id, token_hash, mode, share_key_hash,
+          owner_identity_hash, created_by_user_id, created_at)
+       VALUES (?, ?, ?, 'view', ?, ?, ?, 'now')`
+    )
+    .run(
+      projectId,
+      shareId,
+      createHash('sha256').update(shareId).digest('hex'),
+      'k'.repeat(43),
+      'o'.repeat(43),
+      OWNER
+    );
+}
+
+/** Revokes every encrypted share link of the project, as 5-10 does. */
+function revokeEncryptedShareLinks(srv: Server, projectId: string): void {
+  srv.db
+    .prepare(
+      "UPDATE e2ee_share_links SET revoked_at = 'now' WHERE project_id = ?"
+    )
+    .run(projectId);
+}
+
 // --- Turning encryption off --------------------------------------------------------
 
 describe('turning an encrypted project back into plaintext', () => {
@@ -1930,6 +1962,46 @@ describe('who may turn encryption off', () => {
     expect(
       decryptionErrorOf({ code: E2EE_MIGRATION_CODES.shared })
     ).toMatchObject({ retryable: false });
+  });
+
+  it('refuses to start or cut over while a live encrypted share link names the project, and goes ahead once it is revoked', async () => {
+    const srv = roomServer();
+    const encrypted = await encryptedProject(srv, { revisions: 1 });
+    const { projectId } = encrypted;
+    insertEncryptedShareLink(srv, projectId);
+    const laptop = device(srv, owner, 'owner_laptop');
+    expect(await start(srv, laptop, projectId)).toMatchObject({
+      status: 409,
+      code: E2EE_MIGRATION_CODES.shared
+    });
+    expect(migrationRow(srv, projectId)).toMatchObject({
+      direction: 'encrypt',
+      state: 'done'
+    });
+    revokeEncryptedShareLinks(srv, projectId);
+    // Started, then a link goes live before the cutover: it refuses.
+    let linked = false;
+    const desktop = reverseOn(srv, owner, 'owner_desktop', {
+      beforeStep: (step) => {
+        if (step !== 'cutover' || linked) return;
+        linked = true;
+        insertEncryptedShareLink(srv, projectId, 'share_2');
+      }
+    });
+    expect(await errorOf(decryptFully(desktop, projectId))).toMatchObject({
+      status: 409,
+      code: E2EE_MIGRATION_CODES.shared
+    });
+    expect(formatOf(srv, projectId)).toBe(2);
+    expect(migrationRow(srv, projectId)).toMatchObject({
+      direction: 'decrypt',
+      state: 'staging'
+    });
+    // Revoked, the same run resumes and cuts over.
+    revokeEncryptedShareLinks(srv, projectId);
+    await decryptFully(desktop, projectId);
+    expect(formatOf(srv, projectId)).toBe(1);
+    expect(migrationRow(srv, projectId)).toMatchObject({ state: 'done' });
   });
 
   it('refuses while the account encrypts new projects (decision D2)', async () => {
