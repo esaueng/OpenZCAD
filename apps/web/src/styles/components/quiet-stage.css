@@ -2465,6 +2465,18 @@ button.model-panel-grip[aria-expanded='true'] {
   background: var(--color-surface-hover);
 }
 
+/* Rounded paint must not cut corners off a header control's 24px target. */
+.model-panel-header > button {
+  position: relative;
+}
+
+.model-panel-header > button::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 0;
+}
+
 .model-panel-pin.is-pinned {
   color: var(--color-accent-hi);
   background: var(--color-accent-dim);
@@ -2876,6 +2888,10 @@ button.model-panel-grip[aria-expanded='true'] {
   flex-direction: column;
   gap: var(--island-gap);
   overflow-y: auto;
+  /* Leave scroll-to-focus room inside fractional-pixel scrollport edges. */
+  box-sizing: border-box;
+  padding-bottom: 2px;
+  scroll-padding-block: 2px;
   pointer-events: auto;
 }
 

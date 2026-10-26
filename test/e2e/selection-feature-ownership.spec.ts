@@ -1,3 +1,4 @@
+import { revealModelPanel } from './openzcad-fixtures';
 import type { Locator } from '@playwright/test';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import { twoFilletCylinder } from '../fixtures/two-fillet-cylinder';
@@ -104,9 +105,11 @@ for (const filter of ['Face', 'Any'] as const) {
     // row opens the owner's editor.
     const openOwner = async (row: number) => {
       await expect(inspector).toHaveCount(0);
+      await revealModelPanel(page, 'History');
       const owner = page.locator('.feature-row').nth(row);
       await expect(owner).toHaveClass(/selected/);
       await owner.locator('.feature-row-main').click();
+      await revealModelPanel(page, 'History');
     };
     await expect
       .poll(async () => (await blend(canvas, 3))?.blendRadius, {

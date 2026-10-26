@@ -3,6 +3,43 @@ import { describe, expect, it, vi } from 'vitest';
 import { InPlaceCommandBar } from './InPlaceCommandBar';
 
 describe('InPlaceCommandBar', () => {
+  it('explains a body-removing cut and preserves its diagnostic behind details', () => {
+    const diagnostic = 'Empty result: cut target fully contained in tool';
+    render(
+      <InPlaceCommandBar
+        title="Hole"
+        hint="Drag the diameter"
+        refusal={diagnostic}
+        canFinish={false}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('status').textContent).toContain(
+      'This cut would remove the entire target body'
+    );
+    const disclosure = screen.getByText('Technical details').closest('details');
+    expect(disclosure).toHaveProperty('open', false);
+    expect(disclosure?.textContent).toContain(diagnostic);
+  });
+
+  it('offers precise values before Done without committing', () => {
+    const precise = vi.fn();
+    const done = vi.fn();
+    render(
+      <InPlaceCommandBar
+        title="Hole"
+        hint="Drag the diameter"
+        canFinish
+        onPreciseValues={precise}
+        onDone={done}
+        onCancel={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Precise values…' }));
+    expect(precise).toHaveBeenCalledTimes(1);
+    expect(done).not.toHaveBeenCalled();
+  });
   it('names the command and its step, with no fields', () => {
     render(
       <InPlaceCommandBar

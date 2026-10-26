@@ -1,3 +1,4 @@
+import { revealModelPanel } from './openzcad-fixtures';
 import { deflateSync } from 'node:zlib';
 import type { Locator, Page } from '@playwright/test';
 import {
@@ -286,6 +287,7 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
       })
     ]);
   const objects = page.getByRole('list', { name: 'Objects' });
+  await revealModelPanel(page, 'Objects');
   await expect(
     objects.getByRole('button', { name: /^Bracket plan/ })
   ).toHaveCount(0);

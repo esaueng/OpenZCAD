@@ -378,12 +378,15 @@ export function BodyStats({
   body,
   units,
   document,
-  worker
+  worker,
+  lastApplied = false
 }: {
   body: BodyRepresentation;
   units: UnitSystem;
   document?: ProjectDocument | null;
   worker?: InspectorProps['massPropertiesWorker'];
+  /** A form's draft is not the geometry these properties measure. */
+  lastApplied?: boolean;
 }) {
   const projectId = document?.projectId ?? null;
   const [massOpen, setMassOpen] = useState(false);
@@ -560,7 +563,10 @@ export function BodyStats({
   }
   return (
     <>
-      <CollapsibleSection title="Measurements" defaultOpen>
+      <CollapsibleSection
+        title={lastApplied ? 'Measurements (last applied)' : 'Measurements'}
+        defaultOpen
+      >
         <div className="kv-grid">
           <b>volume</b>
           <span>
@@ -575,7 +581,11 @@ export function BodyStats({
           <span>{body.faceCount}</span>
           <b>status</b>
           <span>
-            {body.consumed ? 'combined into a later feature' : 'live'}
+            {body.consumed
+              ? 'combined into a later feature'
+              : lastApplied
+                ? 'last applied model'
+                : 'live'}
           </span>
         </div>
       </CollapsibleSection>
@@ -1187,8 +1197,10 @@ export function Inspector(props: InspectorProps) {
     const editKey = `edit-${selectedFeature.id}-${props.documentVersion ?? 0}`;
     const data = selectedFeature.data;
     let form: ReactNode = null;
+    let editableFormOpen = false;
 
     if (data.featureKind === 'primitive') {
+      editableFormOpen = true;
       const placement = primitivePlacement(props.document, selectedFeature);
       form = (
         <PrimitiveForm
@@ -1224,7 +1236,8 @@ export function Inspector(props: InspectorProps) {
     ) {
       // Text sketches get their own form: the closed-shape form below would
       // present them as a rectangle, and applying it would replace the text.
-      form = isValidTextSketchObject(selectedSketchObject) ? (
+      editableFormOpen = isValidTextSketchObject(selectedSketchObject);
+      form = editableFormOpen ? (
         <>
           <TextSketchForm
             key={editKey}
@@ -1268,6 +1281,7 @@ export function Inspector(props: InspectorProps) {
       selectedSketchObject &&
       selectedSketch.planeRef.type === 'canonical'
     ) {
+      editableFormOpen = true;
       form = (
         <SketchForm
           key={editKey}
@@ -1296,6 +1310,7 @@ export function Inspector(props: InspectorProps) {
         />
       );
     } else if (data.featureKind === 'transform') {
+      editableFormOpen = true;
       form = (
         <TransformForm
           key={editKey}
@@ -1510,15 +1525,30 @@ export function Inspector(props: InspectorProps) {
     const inPlaceTool =
       inPlaceToolForFeature(data) ??
       (data.featureKind === 'extrude' ? ('extrude' as const) : null);
-    if (inPlaceTool) form = null;
+    if (inPlaceTool) {
+      form = null;
+      editableFormOpen = false;
+    }
     const editingInPlace =
       inPlaceTool !== null &&
       props.inPlaceEditFeatureId === selectedFeature.featureId;
-    // As the first half is: from the document on screen, so an edit's
-    // preview (a moved split plane) shows both halves as they will be.
+    const measureLastApplied =
+      editingInPlace || (!objectReadout && editableFormOpen);
+    // The viewport may already show a valid uncommitted preview. These
+    // readouts promise last-applied values, including on-demand mass queries,
+    // so take both the representation and its document from the committed one.
+    const statsDocument =
+      measureLastApplied && props.document
+        ? props.document
+        : props.massPropertiesDocument;
+    const statsBody =
+      measureLastApplied && props.document && selectedBody
+        ? (props.document.derived.bodyRepresentations[selectedBody.bodyId] ??
+          null)
+        : selectedBody;
     const splitHalf =
       data.featureKind === 'split'
-        ? (props.massPropertiesDocument?.derived.bodyRepresentations[
+        ? (statsDocument?.derived.bodyRepresentations[
             data.secondBodyId
           ] ?? props.bodyRepresentations?.[data.secondBodyId])
         : undefined;
@@ -1602,28 +1632,30 @@ export function Inspector(props: InspectorProps) {
               recognitionWorker={props.recognitionWorker}
             />
           )}
-        {selectedBody && (
+        {statsBody && (
           <>
             {splitHalf && (
-              <h3 className="section-title">{selectedBody.name}</h3>
+              <h3 className="section-title">{statsBody.name}</h3>
             )}
             <BodyStats
-              body={selectedBody}
+              body={statsBody}
               units={units}
-              document={props.massPropertiesDocument}
+              document={statsDocument}
               worker={props.massPropertiesWorker}
+              lastApplied={measureLastApplied}
             />
           </>
         )}
         {/* A split leaves two halves, and its row is where both are read. */}
-        {selectedBody && splitHalf && (
+        {statsBody && splitHalf && (
           <>
             <h3 className="section-title">{splitHalf.name}</h3>
             <BodyStats
               body={splitHalf}
               units={units}
-              document={props.massPropertiesDocument}
+              document={statsDocument}
               worker={props.massPropertiesWorker}
+              lastApplied={measureLastApplied}
             />
           </>
         )}
@@ -1685,12 +1717,13 @@ export function Inspector(props: InspectorProps) {
               recognitionWorker={props.recognitionWorker}
             />
           )}
-        {selectedBody && (
+        {statsBody && (
           <BodyStats
-            body={selectedBody}
+            body={statsBody}
             units={units}
-            document={props.massPropertiesDocument}
+            document={statsDocument}
             worker={props.massPropertiesWorker}
+            lastApplied={measureLastApplied}
           />
         )}
         <div className="object-definition-row">

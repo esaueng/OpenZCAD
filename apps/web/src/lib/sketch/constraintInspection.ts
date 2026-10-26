@@ -1,6 +1,7 @@
 import { findSketch } from '@openzcad/document-core';
 import type { ProjectDocument, SketchNode } from '@openzcad/shared';
 import { constraintReferencesObject } from './constraints';
+import { sketchObjectLabels } from './objectLabels';
 
 export interface ConstraintInspectionTarget {
   objectId: string;
@@ -24,8 +25,9 @@ export function constraintInspectionTargets(
   if (!currentSketch || !constraint) return [];
 
   const suppliedObjectIds = new Set(sketch.objectIds);
+  const labels = sketchObjectLabels(document, currentSketch);
   const seen = new Set<string>();
-  const targets = currentSketch.objectIds.flatMap((objectId, index) => {
+  return currentSketch.objectIds.flatMap((objectId) => {
     if (
       seen.has(objectId) ||
       !suppliedObjectIds.has(objectId) ||
@@ -36,18 +38,12 @@ export function constraintInspectionTargets(
     seen.add(objectId);
     const node = document.nodes[objectId];
     return node?.kind === 'sketch-object'
-      ? [{ objectId, label: node.name || node.data.objectKind, index }]
+      ? [
+          {
+            objectId,
+            label: labels.get(objectId) ?? (node.name || node.data.objectKind)
+          }
+        ]
       : [];
   });
-  const labelCounts = new Map<string, number>();
-  for (const { label } of targets) {
-    labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
-  }
-  return targets.map(({ objectId, label, index }) => ({
-    objectId,
-    label:
-      (labelCounts.get(label) ?? 0) > 1
-        ? `${label} (position ${index + 1})`
-        : label
-  }));
 }

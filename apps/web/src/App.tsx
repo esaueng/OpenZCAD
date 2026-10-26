@@ -1642,6 +1642,7 @@ import {
   shouldAdoptAccountSettings
 } from './lib/appSettings';
 import { usePanelSuspension } from './hooks/usePanelSuspension';
+import { sketchObjectLabels } from './lib/sketch/objectLabels';
 import {
   loadPanelState,
   savePanelState,
@@ -3390,12 +3391,6 @@ export function App() {
     }
     sketchPickingRef.current = sketchPicking;
   }, [sketchPicking, retireStatusMessage]);
-  // A sketch takes the stage: the panels and the "More tools" fold step
-  // aside for it and return when it ends, the preference untouched. A drag
-  // on the model leaves them in place (see `effectivePanels`).
-  const panels = usePanelSuspension(panelState, {
-    sketching: interaction.mode === 'sketch'
-  });
   const toolRef = useRef(tool);
   toolRef.current = tool;
   /** Open exact-value entry (anchored keypad) for the armed handle. */
@@ -5227,6 +5222,13 @@ export function App() {
     return false;
   }
 
+  // Saving a revision preserves the document; it does not model in Draw.
+  function ensureCanSave(action = 'save a revision'): boolean {
+    return workspaceModeRef.current === 'drawing'
+      ? ensureCanEditDrawings(action)
+      : ensureCanEdit(action);
+  }
+
   function ensureCanEditParameters(action = 'change this parameter'): boolean {
     const reason = parameterEditDisabledReasonRef.current;
     if (!reason) {
@@ -7052,10 +7054,14 @@ export function App() {
       modelingEditFeatureId: modelingEditFeature?.id ?? null
     }
   );
-  function validateSelectionEdit(): boolean {
+  function validateSelectionEdit(
+    { acceptCompleteCommit = false }: { acceptCompleteCommit?: boolean } = {}
+  ): boolean {
     if (
       managerRef.current?.document.version !== doc?.version ||
-      !requireExactGeometryReady()
+      !(acceptCompleteCommit
+        ? requireDisplayedGeometryComplete()
+        : requireExactGeometryReady())
     ) {
       setStatus(
         'The model changed. Select the feature again before editing it.'
@@ -13715,7 +13721,7 @@ export function App() {
       );
       return;
     }
-    if (!ensureCanEdit('save a named revision')) {
+    if (!ensureCanSave('save a named revision')) {
       return;
     }
     setNamingSave(true);
@@ -13743,7 +13749,7 @@ export function App() {
       );
       return;
     }
-    if (!ensureCanEdit('save a shared revision')) return;
+    if (!ensureCanSave()) return;
     accountSavePendingRef.current = true;
     let sourceWarning: string | null = null;
     let savedOnDevice = false;
@@ -13803,7 +13809,7 @@ export function App() {
       if (
         !isCurrentProject() ||
         projectOpenElsewhereRef.current ||
-        !ensureCanEdit('save a shared revision')
+        !ensureCanSave()
       )
         return;
       savingDocument = savingManager.document;
@@ -13820,7 +13826,7 @@ export function App() {
         await retryUnavailableAccountProject(savingDocument);
         return;
       }
-      if (!ensureCanEdit('save a shared revision')) {
+      if (!ensureCanSave()) {
         setSaveState(
           collaboration.conflict || accountConflict ? 'conflict' : 'local'
         );
@@ -13916,7 +13922,7 @@ export function App() {
       const readDocument = () =>
         isCurrentProject() &&
         !projectOpenElsewhereRef.current &&
-        ensureCanEdit('save a shared revision')
+        ensureCanSave()
           ? savingManager.document
           : null;
       const writeCheckpoint = async (input: {
@@ -18437,12 +18443,26 @@ export function App() {
     ]
   );
 
+  const sketchLabels = useMemo(
+    () =>
+      editingSketchNode && sketchReadDocument
+        ? sketchObjectLabels(sketchReadDocument, editingSketchNode)
+        : new Map<string, string>(),
+    [editingSketchNode, sketchReadDocument]
+  );
+
   const sketchOverview = useMemo(() => {
     const objects =
       editingSketchNode?.objectIds.flatMap((id) => {
         const node = sketchReadDocument?.nodes[id];
         return node?.kind === 'sketch-object'
-          ? [{ id, data: node.data, label: node.name || node.data.objectKind }]
+          ? [
+              {
+                id,
+                data: node.data,
+                label: sketchLabels.get(id) ?? node.name ?? node.data.objectKind
+              }
+            ]
           : [];
       }) ?? [];
     try {
@@ -18468,7 +18488,12 @@ export function App() {
         error: errorMessage(error, 'Unable to analyze this sketch.')
       };
     }
-  }, [editingSketchNode, resolveDocumentValue, sketchReadDocument]);
+  }, [
+    editingSketchNode,
+    resolveDocumentValue,
+    sketchReadDocument,
+    sketchLabels
+  ]);
 
   useEffect(() => {
     setSketchDiagnosticPoints([]);
@@ -18484,10 +18509,7 @@ export function App() {
       return [];
     }
     const nameOf = (objectId: EntityId) => {
-      const node = doc.nodes[objectId];
-      return node?.kind === 'sketch-object'
-        ? node.name || node.data.objectKind
-        : 'entity';
+      return sketchLabels.get(objectId) ?? 'entity';
     };
     const conflicting = new Set(
       sketchSolveStatus?.conflictingConstraintIds ?? []
@@ -18510,7 +18532,7 @@ export function App() {
           data.constraintKind === 'angle' ||
           data.constraintKind === 'radius'
       }));
-  }, [editingSketchNode, doc, sketchSolveStatus]);
+  }, [editingSketchNode, doc, sketchSolveStatus, sketchLabels]);
 
   /** The selected entity's own constraints, for the entity editor's list. */
   const selectedEntityConstraints = useMemo(() => {
@@ -18518,10 +18540,7 @@ export function App() {
       return [];
     }
     const nameOf = (objectId: EntityId) => {
-      const node = doc.nodes[objectId];
-      return node?.kind === 'sketch-object'
-        ? node.name || node.data.objectKind
-        : 'entity';
+      return sketchLabels.get(objectId) ?? 'entity';
     };
     return (editingSketchNode.constraints ?? [])
       .filter(({ origin }) => origin !== 'promotion-structure')
@@ -18537,7 +18556,7 @@ export function App() {
           data.constraintKind === 'angle' ||
           data.constraintKind === 'radius'
       }));
-  }, [editingSketchNode, doc, selectedSketchEntity]);
+  }, [editingSketchNode, doc, selectedSketchEntity, sketchLabels]);
 
   /**
    * The rectangle or polygon the selected line is a side of (S04), as its
@@ -20472,6 +20491,31 @@ export function App() {
   const narrowWindow = useMediaQuery(NARROW_WINDOW_QUERY);
   const inPlaceEditing = inPlace.editing;
   const extrudeEditFeatureId = extrudeEdit?.featureId ?? null;
+  // Only an editor takes the stage. Pinned imported/direct-edit details are
+  // read-only, so inspecting them must leave History and other panels open.
+  // Read the active command here rather than inferring it from feature kind.
+  const panelFeature = selectedFeatureNode
+    ? doc?.nodes[selectedFeatureNode.id]
+    : null;
+  // Plane selection and the entered sketch belong to one editing session.
+  const sketchPanelSession = interaction.mode === 'sketch' || tool === 'sketch';
+  const panels = usePanelSuspension(panelState, {
+    workspaceMode: resolvedWorkspaceMode,
+    sketching: sketchPanelSession,
+    editing:
+      movePreview === null &&
+      ((tool !== null && tool !== 'transform') ||
+        (featureSelectionSource === 'pinned' &&
+          panelFeature?.kind === 'feature' &&
+          (panelFeature.data.featureKind === 'primitive' ||
+            panelFeature.featureId === inPlaceEditing?.featureId ||
+            panelFeature.featureId === extrudeEditFeatureId))),
+    sessionId:
+      sketchPanelSession
+        // Acquiring a canonical sketch ID is still the same editing session.
+        ? 'active'
+        : `${tool ?? 'edit'}:${featureSelectionSource === 'pinned' ? selectedFeatureNode?.id ?? '' : ''}`
+  });
   useEffect(() => {
     setInPlaceEditFeatureId(
       inPlaceEditing?.featureId ?? extrudeEditFeatureId ?? null
@@ -25982,7 +26026,9 @@ export function App() {
               interaction.phase !== 'armed' &&
               interaction.phase !== 'failed'
             ) &&
-            validateSelectionEdit()
+            // Deleting a document feature can use a complete validated commit
+            // while its worker catches up, just as picking its face can.
+            validateSelectionEdit({ acceptCompleteCommit: true })
           ) {
             event.preventDefault();
             handleDeleteFeature(
@@ -26451,11 +26497,10 @@ export function App() {
    * mode, like a rail press.
    */
   const showModelPanel = (id: 'history' | 'parameters' | 'revisions') => {
-    const suspended = panels.panelsHidden;
     setPanelLayout((current) =>
       presentPanel(current, id, panelStageOrUndefined)
     );
-    if (suspended) panels.release('panels');
+    panels.release('panels');
   };
   const panelControls = (
     id: PanelId,
@@ -29213,6 +29258,16 @@ export function App() {
                     value: inPlace.options[option.id] ?? option.initial
                   }))}
                   onOption={inPlace.setOption}
+                  onPreciseValues={
+                    inPlace.tool === 'hole'
+                      ? () => {
+                          openInPlaceKeypad(
+                            'diameter',
+                            inPlace.values.diameter ?? 6
+                          );
+                        }
+                      : undefined
+                  }
                   actions={inPlaceActions}
                   onAction={runInPlaceAction}
                   picks={inPlacePicks}

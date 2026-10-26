@@ -1,3 +1,4 @@
+import { revealModelPanel } from './openzcad-fixtures';
 import {
   expect,
   finishInPlaceCommand,
@@ -61,8 +62,10 @@ test('places a cylinder on a box from the position its Options name', async ({
     .filter({ hasText: /^Cylinder/ })
     .first();
   const selectCylinder = async () => {
+    await revealModelPanel(page, 'History');
     if ((await cylinderRow.getAttribute('aria-pressed')) !== 'true')
       await cylinderRow.click();
+    await revealModelPanel(page, 'History');
     await expect(cylinderRow).toHaveAttribute('aria-pressed', 'true');
   };
   const mass = inspector.locator('details.panel-section').filter({

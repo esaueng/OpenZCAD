@@ -381,6 +381,7 @@ test('an extrude edit ends cleanly: Cancel leaves no profile picked, and a renam
   // the card: nothing can write the old name back.
   edit = await editExtrudeFromHistory(page, row, 'Post');
   await setBarValues(page, edit, { Distance: '12' });
+  await revealModelPanel(page, 'History');
   await row.click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Rename' }).click();
   const field = page.getByRole('textbox', { name: 'Rename Post' });
@@ -445,6 +446,7 @@ test("an open keypad goes with its extrude's edit when another extrude is re-arm
     page.locator('.feature-row-main[title^="Post — "]'),
     'Post'
   );
+  await revealModelPanel(page, 'History');
   await post.locator('details.in-place-command-options summary').click();
   await post.getByRole('button', { name: 'Distance', exact: true }).click();
   const keypad = page.locator('.numeric-keypad');

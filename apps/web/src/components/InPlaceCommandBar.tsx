@@ -1,5 +1,6 @@
 import { Check, MoreHorizontal, X } from 'lucide-react';
 import { ownedTopologyName } from '../lib/topologyLabels';
+import { modelingRefusalSummary } from '../lib/modelingRefusal';
 
 /**
  * The only chrome an in-place command has: its name, the one-line step it
@@ -43,6 +44,8 @@ export interface InPlaceCommandBarProps {
    */
   options?: readonly InPlaceOption[];
   onOption?(optionId: string, value: string): void;
+  /** Opens exact numeric entry on the current draft before committing. */
+  onPreciseValues?(): void;
   /**
    * One-off actions beside the choices (a fillet's Select all edges, a
    * chamfer's Swap the two faces), under the same disclosure.
@@ -76,6 +79,7 @@ export function InPlaceCommandBar({
   refusal = null,
   options = [],
   onOption,
+  onPreciseValues,
   actions = [],
   onAction,
   picks = null,
@@ -85,6 +89,7 @@ export function InPlaceCommandBar({
   onDone,
   onCancel
 }: InPlaceCommandBarProps) {
+  const refusalSummary = refusal ? modelingRefusalSummary(refusal) : null;
   return (
     <div
       className={`in-place-command${refusal ? ' refused' : ''}`}
@@ -92,9 +97,33 @@ export function InPlaceCommandBar({
       aria-label={`${title} command`}
     >
       <span className="in-place-command-title">{title}</span>
-      <span className="in-place-command-hint" role="status" aria-live="polite">
-        {refusal ?? hint}
+      <span
+        className="in-place-command-hint"
+        role="status"
+        aria-live="polite"
+        title={refusalSummary ?? refusal ?? undefined}
+      >
+        {refusalSummary ?? refusal ?? hint}
       </span>
+      {refusalSummary && (
+        <details className="in-place-command-options">
+          <summary>Technical details</summary>
+          <div className="in-place-command-options-panel">
+            <p>{refusalSummary}</p>
+            <p>{refusal}</p>
+          </div>
+        </details>
+      )}
+      {onPreciseValues && (
+        <button
+          type="button"
+          className="in-place-command-cancel"
+          onClick={onPreciseValues}
+          disabled={locked}
+        >
+          Precise values…
+        </button>
+      )}
       {options.length > 0 ||
       values.length > 0 ||
       actions.length > 0 ||

@@ -9,6 +9,7 @@ import {
   modelPanel,
   promptField,
   railPanelButton,
+  revealModelPanel,
   stubApi,
   test,
   type PanelTitle,
@@ -540,6 +541,7 @@ test('the inspector and the right lane stay clear of the dock, inside the rail',
   // A new box runs in place (U09); its History edit card takes the lane.
   await createPrimitiveInPlace(page, 'box');
   await page.locator('.feature-row-main', { hasText: /^Box/ }).click();
+  await revealModelPanel(page, 'History');
   const inspector = page.locator('.stage-right > .inspector-float');
   await expect(inspector).toBeVisible();
   const lane = await box(inspector);
@@ -570,6 +572,7 @@ test('on a stage too narrow for both, an unpinned panel covers the lane instead 
   // A new box runs in place (U09); its History edit card takes the lane.
   await createPrimitiveInPlace(page, 'box');
   await page.locator('.feature-row-main', { hasText: /^Box/ }).click();
+  await revealModelPanel(page, 'History');
   const inspector = page.locator('.stage-right > .inspector-float');
   await expect(inspector).toBeVisible();
   const full = await box(inspector);
@@ -1168,6 +1171,7 @@ test('a command card heads the right lane, and a tool card keeps its actions in 
   // so a Box's edit card, opened from its History row, stands in.
   await createPrimitiveInPlace(page, 'box');
   await page.locator('.feature-row-main', { hasText: /^Box/ }).click();
+  await revealModelPanel(page, 'History');
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   const submit = inspector.getByRole('button', { name: 'Apply', exact: true });
   await expect(submit).toBeVisible();
@@ -1189,6 +1193,10 @@ test('a command card heads the right lane, and a tool card keeps its actions in 
       cardRight: card.right,
       columnLeft: column.left,
       cubeTop: cube.top,
+      bodyTop: body.top,
+      bodyBottom: body.bottom,
+      actionsTop: actions.top,
+      actionsBottom: actions.bottom,
       actionsInside: actions.top >= body.top && actions.bottom <= body.bottom
     };
   });
@@ -1209,6 +1217,7 @@ test('a command card heads the right lane, and a tool card keeps its actions in 
   await page.keyboard.press('m');
   const move = page.getByRole('form', { name: 'Move controls' });
   await expect(move).toBeVisible();
+  await revealModelPanel(page, 'History');
   await expect(
     page
       .locator('.command-bar-lane')
@@ -1272,6 +1281,7 @@ for (const theme of ['dark', 'light'] as const) {
       for (const control of await controls.all()) {
         const target = await control.evaluate((button) => {
           const bounds = button.getBoundingClientRect();
+          const misses: { x: number; y: number; hit: string }[] = [];
           const points = [0.5, bounds.width / 2, bounds.width - 0.5].flatMap(
             (x) =>
               [0.5, bounds.height / 2, bounds.height - 0.5].map((y) => {
@@ -1279,19 +1289,27 @@ for (const theme of ['dark', 'light'] as const) {
                   bounds.left + x,
                   bounds.top + y
                 );
-                return hit !== null && button.contains(hit);
+                const owns = hit !== null && button.contains(hit);
+                if (!owns)
+                  misses.push({
+                    x,
+                    y,
+                    hit: hit?.tagName + '.' + hit?.getAttribute('class')
+                  });
+                return owns;
               })
           );
           return {
             name: button.getAttribute('aria-label') ?? '',
             width: bounds.width,
             height: bounds.height,
-            ownsEveryPoint: points.every(Boolean)
+            ownsEveryPoint: points.every(Boolean),
+            misses
           };
         });
         expect(target.width, target.name).toBeGreaterThanOrEqual(24);
         expect(target.height, target.name).toBeGreaterThanOrEqual(24);
-        expect(target.ownsEveryPoint, target.name).toBe(true);
+        expect(target.ownsEveryPoint, JSON.stringify(target)).toBe(true);
       }
     }
   });

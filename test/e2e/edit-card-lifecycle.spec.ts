@@ -8,7 +8,8 @@ import {
   enterCommandValue,
   finishInPlaceCommand,
   blendEdgesInPlace,
-  openMoveOptions
+  openMoveOptions,
+  revealModelPanel
 } from './openzcad-fixtures';
 
 /**
@@ -224,6 +225,7 @@ test('Fillet: Done closes the edit, a refused size keeps it armed with the reaso
   await expect(edit).toHaveCount(0);
   await row(page, /^Fillet/).click();
   await expect(chip).toHaveText('R 2 mm');
+  await revealModelPanel(page, 'History');
   await expect(page.locator('.feature-row')).toHaveCount(2);
 });
 

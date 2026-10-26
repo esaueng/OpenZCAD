@@ -1,3 +1,4 @@
+import { revealModelPanel } from './openzcad-fixtures';
 import {
   createPrimitiveInPlace,
   test,
@@ -30,6 +31,7 @@ test('explains a failed downstream edit and opens the exact feature for repair',
     page.locator('.feature-row-main', { hasText: 'Extrude base' }),
     'Extrude base'
   );
+  await revealModelPanel(page, 'History');
   const details = page.getByRole('region', { name: 'History details' });
   await expect(
     details.getByRole('button', { name: 'Inspect Base corner fillets' })
@@ -47,6 +49,7 @@ test('explains a failed downstream edit and opens the exact feature for repair',
   await details
     .getByRole('button', { name: 'Edit Base corner fillets' })
     .click();
+  await revealModelPanel(page, 'History');
   await expect(
     inspector.getByRole('heading', { name: 'Base corner fillets' })
   ).toBeVisible();
@@ -339,12 +342,14 @@ test('names a deleted sketch input and restores the dependent model with undo', 
   await expect(confirm.getByText('Extrude base')).toBeVisible();
   await confirm.getByRole('button', { name: 'Delete' }).click();
   await page.locator('.feature-row-main', { hasText: 'Extrude base' }).click();
+  await revealModelPanel(page, 'History');
   await expect(
     details.getByText(/An input sketch is missing from history/)
   ).toBeVisible();
   await page.keyboard.press('Control+z');
   await expectBodyCount(page, 1);
   await page.locator('.feature-row-main', { hasText: 'Extrude base' }).click();
+  await revealModelPanel(page, 'History');
   await expect(
     details.getByRole('button', { name: 'Inspect Base profile' })
   ).toBeVisible();
@@ -425,6 +430,7 @@ test('renaming a modeling feature closes its stale editor and keeps the new name
   // U09 phase 7: the row re-arms the Shell command in place.
   const editBar = page.getByRole('group', { name: /^Edit .* command$/ });
   await expect(editBar).toHaveAccessibleName('Edit Shell command');
+  await revealModelPanel(page, 'History');
   // Reach the history action through the keyboard while the command holds
   // the viewport.
   const actions = row.getByRole('button', { name: 'More actions for Shell' });
@@ -460,6 +466,7 @@ test('a failed edit brings a closed History panel forward with its record', asyn
     'Extrude base'
   );
   // The record and its dismiss control live only in History.
+  await revealModelPanel(page, 'History');
   await page.getByRole('button', { name: 'Close History' }).click();
   await expect(railPanelButton(page, 'History')).toHaveAttribute(
     'aria-pressed',

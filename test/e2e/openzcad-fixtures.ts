@@ -1210,6 +1210,9 @@ export async function bodyCardFromHistory(page: Page) {
   );
   await rows.last().click();
   await expect(inspector).toBeVisible();
+  // Reading from History is an explicit request to keep it alongside the
+  // form; feature forms otherwise give the model the stage.
+  await revealModelPanel(page, 'History');
   return inspector;
 }
 

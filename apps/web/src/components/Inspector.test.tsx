@@ -30,7 +30,7 @@ import {
 import { edgeTopologyWitnessHash, toUserId } from '@openzcad/shared';
 import type { MassPropertiesRead } from '@openzcad/kernel-adapter/exact';
 import { MASS_DENSITY_STORAGE_KEY } from '../lib/massDensityPreference';
-import { Inspector } from './Inspector';
+import { BodyStats, Inspector } from './Inspector';
 import {
   createPrimitiveCommand,
   primitivePlacement
@@ -167,6 +167,12 @@ function makeProps(
 }
 
 describe('direct pick details', () => {
+  it('identifies committed measurements when a form has unapplied values', () => {
+    render(<BodyStats body={body} units="mm" lastApplied />);
+    expect(screen.getByText('Measurements (last applied)')).toBeVisible();
+    expect(screen.getByText('last applied model')).toBeVisible();
+    expect(screen.queryByText('live')).toBeNull();
+  });
   it('draws no card for an inferred face, edge or body until asked', () => {
     const picks: Array<Partial<ComponentProps<typeof Inspector>>> = [
       { selectedTopology: frontFace },
@@ -324,6 +330,9 @@ describe('Inspector feature provenance', () => {
     });
     expect(inspector).not.toHaveClass('object-readout');
     expect(within(inspector).getByLabelText('Move X in mm')).toHaveValue('2');
+    expect(
+      within(inspector).getByText('Measurements (last applied)')
+    ).toBeVisible();
     fireEvent.click(within(inspector).getByLabelText('More actions'));
     expect(
       within(inspector).getByRole('button', { name: /Delete feature/ })
@@ -409,6 +418,7 @@ describe('Inspector feature provenance', () => {
     const inspector = screen.getByRole('region', {
       name: 'Feature inspector'
     });
+    expect(within(inspector).getByText('Measurements')).toBeVisible();
     expect(
       within(inspector).queryByLabelText('Radius')
     ).not.toBeInTheDocument();
@@ -419,6 +429,7 @@ describe('Inspector feature provenance', () => {
     expect(onEditModelingFeature).toHaveBeenCalledWith(feature);
     // While its in-place command edits it, there is nothing to re-arm.
     rerender(<Inspector {...props} inPlaceEditFeatureId={feature.featureId} />);
+    expect(screen.getByText('Measurements (last applied)')).toBeVisible();
     expect(
       screen.queryByRole('button', { name: 'Edit fillet' })
     ).not.toBeInTheDocument();
@@ -668,6 +679,48 @@ describe('imported face recognition display', () => {
 
 describe('on-demand mass properties in Inspector', () => {
   const lazyBody = { ...body, massProperties: undefined };
+
+  it('measures the committed body and document during an in-place preview', async () => {
+    const committed = createProjectDocument(
+      'Applied properties',
+      toUserId('mass-ui')
+    );
+    committed.derived.bodyRepresentations[bodyId] = lazyBody;
+    const previewBody = { ...lazyBody, volume: 121 };
+    const preview = {
+      ...committed,
+      derived: {
+        ...committed.derived,
+        bodyRepresentations: { [bodyId]: previewBody }
+      }
+    };
+    const worker = {
+      massProperties: vi.fn().mockResolvedValue({
+        status: 'ready',
+        properties: body.massProperties!,
+        epoch: 1
+      })
+    };
+    render(
+      <Inspector
+        {...makeProps({
+          featureSelectionSource: 'pinned',
+          inPlaceEditFeatureId: feature.featureId,
+          selectedBody: previewBody,
+          document: committed,
+          massPropertiesDocument: preview,
+          massPropertiesWorker: worker
+        })}
+      />
+    );
+    expect(screen.getByText('Measurements (last applied)')).toBeVisible();
+    expect(screen.getByText('120 mm³')).toBeVisible();
+    expect(screen.queryByText('121 mm³')).toBeNull();
+    fireEvent.click(screen.getByText('Mass properties (at unit density)'));
+    await waitFor(() => expect(worker.massProperties).toHaveBeenCalledOnce());
+    expect(worker.massProperties.mock.calls[0]?.[0]).toBe(committed);
+    expect(worker.massProperties.mock.calls[0]?.[1]).toBe(bodyId);
+  });
 
   it('replaces a committed measurement with the matching preview document', async () => {
     const committed = createProjectDocument(
@@ -1022,6 +1075,38 @@ describe('mass properties tensor, axes and density', () => {
 });
 
 describe('direct-edit readout', () => {
+  it('keeps imported mesh details labeled as current measurements', () => {
+    const meshFeature: FeatureNode = {
+      ...feature,
+      featureKind: 'imported-mesh',
+      name: 'Imported mesh',
+      data: {
+        featureKind: 'imported-mesh',
+        artifactId: 'artifact-mesh' as Extract<
+          FeatureNode['data'],
+          { featureKind: 'imported-mesh' }
+        >['artifactId'],
+        sourceName: 'bracket.stl',
+        triangleCount: 12,
+        vertices: [],
+        indices: []
+      }
+    };
+    render(
+      <Inspector
+        {...makeProps({
+          selectedFeature: meshFeature,
+          selectedTopology: null,
+          commandSession: null,
+          featureSelectionSource: 'pinned'
+        })}
+      />
+    );
+    expect(screen.getByText('bracket.stl')).toBeVisible();
+    expect(screen.getByText('Measurements')).toBeVisible();
+    expect(screen.getByText('live')).toBeVisible();
+    expect(screen.queryByText('last applied model')).toBeNull();
+  });
   /*
     The readout printed `String()` of each stored value: raw floats with no
     unit, and the countersink angle as 1.5707963267948966 "(rad)" while the
@@ -1068,6 +1153,9 @@ describe('direct-edit readout', () => {
     expect(within(inspector).getByText('10.123 in')).toBeVisible();
     expect(within(inspector).getByText('included angle')).toBeVisible();
     expect(within(inspector).getByText('90°')).toBeVisible();
+    expect(within(inspector).getByText('Measurements')).toBeVisible();
+    expect(within(inspector).getByText('live')).toBeVisible();
+    expect(within(inspector).queryByText('last applied model')).toBeNull();
   });
 });
 

@@ -1,3 +1,4 @@
+import { revealModelPanel } from './openzcad-fixtures';
 import { readFile } from 'node:fs/promises';
 import type { Page } from '@playwright/test';
 import {
@@ -7,7 +8,8 @@ import {
   stubApi,
   expectBodyCount,
   locateEdge,
-  finishInPlaceCommand
+  finishInPlaceCommand,
+  enterCommandValue
 } from './openzcad-fixtures';
 
 /**
@@ -76,6 +78,79 @@ async function installAnalysisGate(page: Page) {
   });
 }
 
+test('Delete accepts the complete displayed fillet while its worker analysis catches up', async ({
+  page
+}) => {
+  await stubApi(page);
+  await installAnalysisGate(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Delete complete fillet');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '10', height: '20' }
+  });
+  await expectBodyCount(page, 1);
+  await page.getByRole('button', { name: /^Fillet/ }).click();
+  const bar = page.getByRole('group', { name: 'Fillet command' });
+  await bar.locator('summary').click();
+  await bar.getByRole('button', { name: 'Select all 2 edges' }).click();
+  await bar.locator('summary').click();
+  await enterCommandValue(page, 'radius', '1');
+  await expect(bar.getByRole('button', { name: 'Done' })).toBeEnabled();
+  await page.evaluate(() => {
+    (window as typeof window & { holdAnalysis: boolean }).holdAnalysis = true;
+  });
+  await finishInPlaceCommand(page, 'Fillet');
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as typeof window & { heldAnalysis: number }).heldAnalysis
+      )
+    )
+    .toBeGreaterThan(0);
+  const canvas = page.locator('.viewer-host canvas');
+  const pickBlend = () =>
+    canvas.evaluate(
+      (element) =>
+        new Promise<boolean>((resolve) => {
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-select-blend', {
+              detail: {
+                select: true,
+                resolve: (selection: unknown) => resolve(selection !== null)
+              }
+            })
+          );
+        })
+    );
+  await expect.poll(pickBlend).toBe(true);
+  await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
+    'Edit Fillet · R 1 mm'
+  );
+  await page.keyboard.press('Delete');
+  await expect(page.locator('.toast')).toContainText('Deleted Fillet');
+  await expect(page.getByRole('heading', { name: 'History 1' })).toBeVisible();
+  await page.evaluate(() =>
+    (
+      window as typeof window & { releaseAnalysis: () => void }
+    ).releaseAnalysis()
+  );
+  await expect
+    .poll(() =>
+      canvas.evaluate(
+        (element) =>
+          new Promise<unknown>((resolve) => {
+            element.dispatchEvent(
+              new CustomEvent('openzcad:e2e-select-blend', {
+                detail: { select: false, inspectOnly: true, resolve }
+              })
+            );
+          })
+      )
+    )
+    .toBeNull();
+});
+
 test('suspends saved measurements while a resized body waits for analysis', async ({
   page
 }) => {
@@ -102,7 +177,7 @@ test('suspends saved measurements while a resized body waits for analysis', asyn
     .locator('.measurement-row-value')
     .innerText();
   await modes.getByRole('button', { name: 'Build', exact: true }).click();
-  await page.locator('.feature-row').first().dblclick();
+  await page.locator('.feature-row-main').first().click();
   for (const label of ['Width (X)', 'Depth (Y)', 'Height (Z)']) {
     const field = inspector.getByLabel(label);
     await field.fill(String(Number(await field.inputValue()) * 2));
@@ -351,6 +426,7 @@ test('acknowledges appearance edits without reinstalling on later selection', as
   const installs = await page.evaluate(
     () => performance.getEntriesByName('oz:viewer.bodies').length
   );
+  await revealModelPanel(page, 'Objects');
   await page.locator('.body-row-main').first().click();
   await expect(page.locator('.selection-callout-chip')).toBeVisible();
   await page.keyboard.press('Escape');
