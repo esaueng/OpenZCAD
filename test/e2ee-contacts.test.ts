@@ -1324,6 +1324,76 @@ describe('contacts heads in device approval', () => {
     expect((await phone.pins.readList(ALICE))?.confirmed).toBe(false);
   });
 
+  it.each(['matching', 'forked'] as const)(
+    'retains a concurrently added %s approval head until checked',
+    async (kind) => {
+      const { srv, alice } = await aliceVerifiedBob();
+      const phone = browser(srv, ALICE);
+      const account = ready(
+        await enrollWithRecoveryKey(
+          phone.keys,
+          ready(await loadEncryption(phone.keys)),
+          alice.recovery.secret,
+          'Phone'
+        )
+      );
+      await loadContacts(phone.contacts, account);
+      const anchor = (await phone.pins.readList(ALICE))!;
+      await untrustContact(
+        alice.contacts,
+        alice.account,
+        await loadContacts(alice.contacts, alice.account),
+        BOB,
+        alice.recovery.secret
+      );
+      const head = (await alice.pins.readList(ALICE))!;
+      const approval = {
+        sequence: head.sequence,
+        entryHash: kind === 'matching' ? head.entryHash : 'e'.repeat(64),
+        confirmed: true
+      };
+      const advance = phone.pins.advanceList.bind(phone.pins);
+      const context = {
+        ...phone.contacts,
+        pins: {
+          ...phone.pins,
+          advanceList: async (
+            ...args: Parameters<ContactPinStore['advanceList']>
+          ) => {
+            await advance(
+              ALICE,
+              { ...anchor, ...approval },
+              { fromApproval: true }
+            );
+            return advance(...args);
+          }
+        }
+      };
+      await expect(loadContacts(context, account)).rejects.toBeInstanceOf(
+        ContactsError
+      );
+      expect(await phone.pins.readList(ALICE)).toEqual({
+        ...anchor,
+        pendingApproval: approval
+      });
+      if (kind === 'forked') {
+        await expect(
+          loadContacts(phone.contacts, account)
+        ).rejects.toMatchObject({ code: 'fork' });
+        expect((await phone.pins.readList(ALICE))?.pendingApproval).toEqual(
+          approval
+        );
+      } else {
+        const book = await loadContacts(phone.contacts, account);
+        expect(book.listConfirmed).toBe(true);
+        expect(await phone.pins.readList(ALICE)).toEqual({
+          ...head,
+          confirmed: true
+        });
+      }
+    }
+  );
+
   it('counts a contact verified again on an unconfirmed device', async () => {
     const { srv, alice } = await aliceVerifiedBob();
     const phone = browser(srv, ALICE);

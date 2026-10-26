@@ -64,6 +64,12 @@ export interface ApprovalHeadRecord {
   readonly confirmed: boolean;
 }
 
+export interface ListPinAdvanceOptions {
+  readonly fromApproval?: boolean;
+  /** The exact pending head verified against the accepted list. */
+  readonly checkedApproval?: ApprovalHeadRecord;
+}
+
 /** What this browser has been shown of one contact's keys. */
 export interface ContactPin {
   readonly contactUserId: string;
@@ -106,7 +112,7 @@ export interface ContactPinStore {
   advanceList(
     userId: string,
     next: ContactsListPinRecord,
-    options?: { readonly fromApproval?: boolean }
+    options?: ListPinAdvanceOptions
   ): Promise<boolean>;
   readContact(
     userId: string,
@@ -224,7 +230,7 @@ function follows(
 export function advancedListPin(
   current: ContactsListPinRecord | null,
   next: ContactsListPinRecord,
-  options: { readonly fromApproval?: boolean } = {}
+  options: ListPinAdvanceOptions = {}
 ): ContactsListPinRecord | null {
   const valid = readListPin(next, false);
   if (!valid) return null;
@@ -254,9 +260,17 @@ export function advancedListPin(
   }
   if (!follows(current, valid)) return null;
   const pendingHead = current.pendingApproval ?? null;
-  // A list reaching the pending head was checked against it by the caller.
+  // Another tab may have changed the pending head after the caller read it.
+  // Consume only the exact head the caller checked, inside this transaction.
   const resolved =
     pendingHead !== null && valid.sequence >= pendingHead.sequence;
+  if (
+    resolved &&
+    (options.checkedApproval?.sequence !== pendingHead.sequence ||
+      options.checkedApproval.entryHash !== pendingHead.entryHash ||
+      options.checkedApproval.confirmed !== pendingHead.confirmed)
+  )
+    return null;
   const confirmed = current.confirmed || valid.confirmed;
   return withPending(valid, confirmed, resolved ? null : pendingHead);
 }

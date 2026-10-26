@@ -286,12 +286,18 @@ async function acceptList(
   requireActive(ctx);
   // The store keeps a confirmed pin confirmed as it moves forward; what
   // the server shows on its own never confirms one.
-  const advanced = await ctx.pins.advanceList(userId, {
-    identityKeyHash: identityHash,
-    sequence: list.pin.sequence,
-    entryHash: toHex(list.pin.entryHash),
-    confirmed: confirmedNow
-  });
+  const advanced = await ctx.pins.advanceList(
+    userId,
+    {
+      identityKeyHash: identityHash,
+      sequence: list.pin.sequence,
+      entryHash: toHex(list.pin.entryHash),
+      confirmed: confirmedNow
+    },
+    pendingHead && pendingHead.sequence <= list.pin.sequence
+      ? { checkedApproval: pendingHead }
+      : undefined
+  );
   // Another tab pinned a newer list meanwhile: this one is stale.
   if (!advanced) staleAnswer('contacts list');
   return { list, confirmed: confirmedNow };
@@ -460,11 +466,7 @@ export async function inspectContact(
   // A different identity was already seen for this contact: the verified
   // one coming back is a rollback, not a reason to trust it again. Only a
   // signed key change or a new verification moves on from there.
-  if (
-    verifiedSame &&
-    pin?.keyChanged &&
-    pin.identityKeyHash !== identityHash
-  ) {
+  if (verifiedSame && pin?.keyChanged && pin.identityKeyHash !== identityHash) {
     staleAnswer('device list');
   }
   // Fork consistency: the list must extend the signed verification and

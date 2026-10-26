@@ -30,6 +30,85 @@ const seen = (overrides: Partial<ContactPin> = {}): ContactPin => ({
 });
 
 describe('contact pins', () => {
+  it('refuses to consume an approval head the caller did not check', async () => {
+    for (const [name, pins] of await stores()) {
+      const pin = {
+        identityKeyHash: H('a'),
+        sequence: 1,
+        entryHash: H('1'),
+        confirmed: false
+      };
+      const approval = { sequence: 2, entryHash: H('2'), confirmed: true };
+      await pins.advanceList('me', pin);
+      await pins.advanceList(
+        'me',
+        { ...pin, ...approval },
+        { fromApproval: true }
+      );
+      const before = await pins.readList('me');
+      for (const sequence of [2, 3]) {
+        expect(
+          await pins.advanceList('me', { ...pin, sequence, entryHash: H('3') }),
+          name
+        ).toBe(false);
+        expect(await pins.readList('me'), name).toEqual(before);
+      }
+    }
+  });
+
+  it('compares all checked approval fields before resolving and keeps future heads', async () => {
+    for (const [name, pins] of await stores()) {
+      const pin = {
+        identityKeyHash: H('a'),
+        sequence: 1,
+        entryHash: H('1'),
+        confirmed: false
+      };
+      const approval = { sequence: 2, entryHash: H('2'), confirmed: true };
+      await pins.advanceList('me', pin);
+      await pins.advanceList(
+        'me',
+        { ...pin, ...approval },
+        { fromApproval: true }
+      );
+      const before = await pins.readList('me');
+      const next = { ...pin, sequence: 3, entryHash: H('3'), confirmed: true };
+      for (const checkedApproval of [
+        { ...approval, sequence: 0 },
+        { ...approval, entryHash: H('f') },
+        { ...approval, confirmed: false }
+      ]) {
+        expect(
+          await pins.advanceList('me', next, { checkedApproval }),
+          name
+        ).toBe(false);
+        expect(await pins.readList('me'), name).toEqual(before);
+      }
+      expect(
+        await pins.advanceList('me', next, { checkedApproval: approval }),
+        name
+      ).toBe(true);
+      expect(await pins.readList('me'), name).toEqual(next);
+      const future = { sequence: 5, entryHash: H('5'), confirmed: false };
+      await pins.advanceList(
+        'me',
+        { ...next, ...future },
+        { fromApproval: true }
+      );
+      expect(
+        await pins.advanceList('me', {
+          ...next,
+          sequence: 4,
+          entryHash: H('4')
+        }),
+        name
+      ).toBe(true);
+      expect((await pins.readList('me'))?.pendingApproval, name).toEqual(
+        future
+      );
+    }
+  });
+
   it('move the own list pin forward only, and restart for a new identity', async () => {
     for (const [name, pins] of await stores()) {
       const pin = {
@@ -189,7 +268,13 @@ describe('contact pins', () => {
       );
       const reached = { ...passkey, sequence: 9, entryHash: H('9') };
       expect(
-        await pins.advanceList('pk', { ...reached, confirmed: true }),
+        await pins.advanceList(
+          'pk',
+          { ...reached, confirmed: true },
+          {
+            checkedApproval: { sequence: 9, entryHash: H('9'), confirmed: true }
+          }
+        ),
         name
       ).toBe(true);
       expect(await pins.readList('pk'), name).toEqual({
