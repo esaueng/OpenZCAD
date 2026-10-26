@@ -30,6 +30,54 @@ const seen = (overrides: Partial<ContactPin> = {}): ContactPin => ({
 });
 
 describe('contact pins', () => {
+  it('requires the checked main anchor before inheriting confirmation or replacing an identity', async () => {
+    for (const [name, pins] of await stores()) {
+      const anchor = {
+        identityKeyHash: H('a'),
+        sequence: 1,
+        entryHash: H('1'),
+        confirmed: false
+      };
+      const next = { ...anchor, sequence: 3, entryHash: H('3') };
+      const changed = [
+        { ...anchor, sequence: 2, entryHash: H('b'), confirmed: true },
+        { ...anchor, identityKeyHash: H('b') },
+        { ...anchor, sequence: 2 },
+        { ...anchor, entryHash: H('b') },
+        { ...anchor, confirmed: true }
+      ];
+      for (const [index, current] of changed.entries()) {
+        const userId = `changed-${index}`;
+        await pins.advanceList(userId, current);
+        expect(
+          await pins.advanceList(userId, next, { checkedAnchor: anchor }),
+          name
+        ).toBe(false);
+        expect(await pins.readList(userId), name).toEqual(current);
+      }
+      await pins.advanceList('created', anchor);
+      expect(
+        await pins.advanceList('created', next, { checkedAnchor: null }),
+        name
+      ).toBe(false);
+      expect(await pins.readList('created'), name).toEqual(anchor);
+      expect(
+        await pins.advanceList('absent', next, { checkedAnchor: anchor }),
+        name
+      ).toBe(false);
+      expect(await pins.readList('absent'), name).toBeNull();
+      expect(
+        await pins.advanceList('fresh', anchor, { checkedAnchor: null }),
+        name
+      ).toBe(true);
+      expect(
+        await pins.advanceList('fresh', next, { checkedAnchor: anchor }),
+        name
+      ).toBe(true);
+      expect(await pins.readList('fresh'), name).toEqual(next);
+    }
+  });
+
   it('refuses to consume an approval head the caller did not check', async () => {
     for (const [name, pins] of await stores()) {
       const pin = {

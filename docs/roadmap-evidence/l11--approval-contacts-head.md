@@ -2,6 +2,8 @@
 row: L11
 ---
 
+Main-anchor concurrency follow-up: `acceptList` supplies the exact observed identity, sequence, hash and confirmation state (including an absent pin), checked atomically before either identity replacement or confirmation inheritance. A concurrently replaced main pin refuses a stale advance without touching its evidence. Memory and IndexedDB regressions cover each changed field and absent/created pins; real contacts flows cover a concurrently confirmed fork, preserved pins, a refused fork retry and a successful same-chain retry.
+
 Concurrent approval follow-up: consuming a pending approval now requires the exact sequence, hash and confirmation state checked by the caller, compared within the pin-store transaction. An unobserved or changed head refuses the advance without changing either pin or pending evidence; future heads remain pending. Both memory and IndexedDB stores and real contacts flows cover matching and forked concurrent heads, retry, each changed token field, and continuation beyond the approved sequence.
 
 The contacts UI offers confirmation whenever its list is unconfirmed, including empty or entirely untrusted server responses. Approval polling forwards errors to the settings error handler and stops polling a deterministic invalid-grant conflict while retaining the request. Rendered regressions cover both list forms and both scan and already-confirmed compare polling paths (`EncryptionContacts.test.tsx`, `EncryptionEnrollment.test.tsx`).

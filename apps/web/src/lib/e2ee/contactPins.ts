@@ -66,6 +66,11 @@ export interface ApprovalHeadRecord {
 
 export interface ListPinAdvanceOptions {
   readonly fromApproval?: boolean;
+  /** The main pin against which the caller checked ancestry; null if absent. */
+  readonly checkedAnchor?: Omit<
+    ContactsListPinRecord,
+    'pendingApproval'
+  > | null;
   /** The exact pending head verified against the accepted list. */
   readonly checkedApproval?: ApprovalHeadRecord;
 }
@@ -234,6 +239,22 @@ export function advancedListPin(
 ): ContactsListPinRecord | null {
   const valid = readListPin(next, false);
   if (!valid) return null;
+  // A sequence comparison cannot prove descent from a pin installed by a
+  // concurrent tab. Compare the main anchor before replacing an identity or
+  // inheriting confirmation; pending approvals have their own check below.
+  if (options.checkedAnchor !== undefined) {
+    const checked = options.checkedAnchor;
+    if (
+      checked === null
+        ? current !== null
+        : current === null ||
+          current.identityKeyHash !== checked.identityKeyHash ||
+          current.sequence !== checked.sequence ||
+          current.entryHash !== checked.entryHash ||
+          current.confirmed !== checked.confirmed
+    )
+      return null;
+  }
   // Nothing to protect under this identity: a fresh browser pins the head.
   if (!current || current.identityKeyHash !== valid.identityKeyHash) {
     return withPending(valid, valid.confirmed, null);

@@ -1325,6 +1325,74 @@ describe('contacts heads in device approval', () => {
   });
 
   it.each(['matching', 'forked'] as const)(
+    'refuses a concurrently replaced %s main anchor before carrying confirmation forward',
+    async (kind) => {
+      const { srv, alice } = await aliceVerifiedBob();
+      const phone = browser(srv, ALICE);
+      const account = ready(
+        await enrollWithRecoveryKey(
+          phone.keys,
+          ready(await loadEncryption(phone.keys)),
+          alice.recovery.secret,
+          'Phone'
+        )
+      );
+      await loadContacts(phone.contacts, account);
+      const anchor = (await phone.pins.readList(ALICE))!;
+      let book = await untrustContact(
+        alice.contacts,
+        alice.account,
+        await loadContacts(alice.contacts, alice.account),
+        BOB,
+        alice.recovery.secret
+      );
+      const intermediate = (await alice.pins.readList(ALICE))!;
+      book = await verifyContact(
+        alice.contacts,
+        alice.account,
+        book,
+        await inspectContact(alice.contacts, book, BOB),
+        alice.recovery.secret
+      );
+      expect(book.list?.pin.sequence).toBe(2);
+      const concurrent = {
+        ...intermediate,
+        entryHash:
+          kind === 'matching' ? intermediate.entryHash : 'e'.repeat(64),
+        confirmed: true
+      };
+      const advance = phone.pins.advanceList.bind(phone.pins);
+      const context = {
+        ...phone.contacts,
+        pins: {
+          ...phone.pins,
+          advanceList: async (
+            ...args: Parameters<ContactPinStore['advanceList']>
+          ) => {
+            expect(await phone.pins.readList(ALICE)).toEqual(anchor);
+            await advance(ALICE, concurrent);
+            return advance(...args);
+          }
+        }
+      };
+      await expect(loadContacts(context, account)).rejects.toMatchObject({
+        code: 'fork'
+      });
+      expect(await phone.pins.readList(ALICE)).toEqual(concurrent);
+      if (kind === 'forked') {
+        await expect(
+          loadContacts(phone.contacts, account)
+        ).rejects.toMatchObject({ code: 'fork' });
+        expect(await phone.pins.readList(ALICE)).toEqual(concurrent);
+      } else {
+        const retry = await loadContacts(phone.contacts, account);
+        expect(retry.listConfirmed).toBe(true);
+        expect((await phone.pins.readList(ALICE))?.sequence).toBe(2);
+      }
+    }
+  );
+
+  it.each(['matching', 'forked'] as const)(
     'retains a concurrently added %s approval head until checked',
     async (kind) => {
       const { srv, alice } = await aliceVerifiedBob();

@@ -294,9 +294,12 @@ async function acceptList(
       entryHash: toHex(list.pin.entryHash),
       confirmed: confirmedNow
     },
-    pendingHead && pendingHead.sequence <= list.pin.sequence
-      ? { checkedApproval: pendingHead }
-      : undefined
+    {
+      checkedAnchor: stored,
+      ...(pendingHead && pendingHead.sequence <= list.pin.sequence
+        ? { checkedApproval: pendingHead }
+        : {})
+    }
   );
   // Another tab pinned a newer list meanwhile: this one is stale.
   if (!advanced) staleAnswer('contacts list');
