@@ -2756,6 +2756,12 @@ async function approverContactsHead(
   if (!stored || stored.identityKeyHash !== toHex(list.identityKeyHash)) {
     return { head: null, confirmed: false };
   }
+  if (stored.pendingApproval) {
+    throw new EncryptionFlowError(
+      'grant-invalid',
+      'Check the newest contacts list in Settings › Encryption › Contacts before approving another device. An earlier approval head is still unresolved.'
+    );
+  }
   return {
     head:
       stored.sequence === EMPTY_CONTACTS_SEQUENCE

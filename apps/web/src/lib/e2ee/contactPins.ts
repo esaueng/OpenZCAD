@@ -273,14 +273,22 @@ export function advancedListPin(
       return withPending(current, confirmed, current.pendingApproval ?? null);
     }
     if (valid.sequence === current.sequence) return null;
+    const pending = current.pendingApproval;
+    if (
+      pending &&
+      (pending.sequence !== valid.sequence ||
+        pending.entryHash !== valid.entryHash)
+    )
+      return null;
     return withPending(current, current.confirmed, {
       sequence: valid.sequence,
       entryHash: valid.entryHash,
-      confirmed: valid.confirmed
+      confirmed: valid.confirmed || pending?.confirmed === true
     });
   }
   if (!follows(current, valid)) return null;
   const pendingHead = current.pendingApproval ?? null;
+  if (pendingHead && valid.sequence < pendingHead.sequence) return null;
   // Another tab may have changed the pending head after the caller read it.
   // Consume only the exact head the caller checked, inside this transaction.
   const resolved =

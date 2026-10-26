@@ -254,7 +254,8 @@ async function acceptList(
   const confirmed = anchor?.confirmed ?? false;
   if (response.entries.length === 0) {
     // An empty list under the pinned identity hides every entry.
-    if (pin) refused(new E2eeError('chain-broken', 'empty'), 'contacts list');
+    if (pin || anchor?.pendingApproval)
+      refused(new E2eeError('chain-broken', 'empty'), 'contacts list');
     return { list: null, confirmed };
   }
   let list: VerifiedContactsList;
@@ -276,6 +277,8 @@ async function acceptList(
   // as a fork, keeping both. Only a matching head lends its confirmation.
   let confirmedNow = confirmed;
   const pendingHead = anchor?.pendingApproval;
+  if (pendingHead && list.pin.sequence < pendingHead.sequence)
+    staleAnswer('contacts list');
   if (pendingHead && pendingHead.sequence <= list.pin.sequence) {
     const entry = list.entries[pendingHead.sequence];
     if (!entry || toHex(entry.hash) !== pendingHead.entryHash) {
@@ -304,6 +307,26 @@ async function acceptList(
   // Another tab pinned a newer list meanwhile: this one is stale.
   if (!advanced) staleAnswer('contacts list');
   return { list, confirmed: confirmedNow };
+}
+
+/** A retained book must still contain every head learned since it was loaded. */
+async function requireCurrentBook(
+  ctx: ContactsContext,
+  book: ContactsBook
+): Promise<void> {
+  if (book.userId !== ctx.keys.userId) staleAnswer('contacts list');
+  const pin = await ctx.pins.readList(ctx.keys.userId);
+  if (!pin) return;
+  const list = book.list;
+  if (list && toHex(list.pin.identityKeyHash) !== pin.identityKeyHash)
+    staleAnswer('contacts list');
+  for (const head of [pin, pin.pendingApproval]) {
+    if (!head || head.sequence === EMPTY_CONTACTS_SEQUENCE) continue;
+    const entry = list?.entries[head.sequence];
+    if (!entry || toHex(entry.hash) !== head.entryHash)
+      staleAnswer('contacts list');
+  }
+  requireActive(ctx);
 }
 
 /**
@@ -363,7 +386,7 @@ export async function loadContacts(
     ...seen.keys()
   ]);
   ids.delete(ctx.keys.userId);
-  return {
+  const book: ContactsBook = {
     userId: ctx.keys.userId,
     generation: response.generation,
     list,
@@ -375,6 +398,8 @@ export async function loadContacts(
       standing: standingOf(list, confirmed, seen.get(id), id)
     }))
   };
+  await requireCurrentBook(ctx, book);
+  return book;
 }
 
 /** What this account's contacts compare about it: its identity and head. */
@@ -519,6 +544,8 @@ export async function inspectContact(
   // An unconfirmed list's verification counts only once compared here.
   const trusted =
     verifiedSame && trustedHere(book.listConfirmed, pin, identityHash);
+  const fingerprint = (await identityFingerprint(identityKey)).code;
+  await requireCurrentBook(ctx, book);
   return {
     userId: contactUserId,
     email,
@@ -528,7 +555,7 @@ export async function inspectContact(
     list,
     code,
     codeHash: hash,
-    fingerprint: (await identityFingerprint(identityKey)).code
+    fingerprint
   };
 }
 

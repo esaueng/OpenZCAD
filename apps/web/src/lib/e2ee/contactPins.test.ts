@@ -30,6 +30,68 @@ const seen = (overrides: Partial<ContactPin> = {}): ContactPin => ({
 });
 
 describe('contact pins', () => {
+  it('retains pending ancestry against prefixes, empty lists and incompatible later approvals', async () => {
+    for (const [name, pins] of await stores()) {
+      const pin = {
+        identityKeyHash: H('a'),
+        sequence: -1,
+        entryHash: H('0'),
+        confirmed: true
+      };
+      const head = { sequence: 2, entryHash: H('2'), confirmed: true };
+      await pins.advanceList('me', pin);
+      await pins.advanceList('me', { ...pin, ...head }, { fromApproval: true });
+      const before = await pins.readList('me');
+      for (const sequence of [-1, 0, 1]) {
+        expect(
+          await pins.advanceList(
+            'me',
+            { ...pin, sequence },
+            {
+              checkedAnchor: pin,
+              checkedApproval: head
+            }
+          ),
+          name
+        ).toBe(false);
+        expect(await pins.readList('me'), name).toEqual(before);
+      }
+      for (const other of [
+        { sequence: 1, entryHash: H('1'), confirmed: false },
+        { sequence: 2, entryHash: H('f'), confirmed: true },
+        { sequence: 3, entryHash: H('3'), confirmed: true }
+      ]) {
+        expect(
+          await pins.advanceList(
+            'me',
+            { ...pin, ...other },
+            { fromApproval: true }
+          ),
+          name
+        ).toBe(false);
+        expect(await pins.readList('me'), name).toEqual(before);
+      }
+      expect(
+        await pins.advanceList(
+          'me',
+          { ...pin, ...head, confirmed: false },
+          { fromApproval: true }
+        ),
+        name
+      ).toBe(true);
+      expect(await pins.readList('me'), name).toEqual(before);
+      expect(
+        await pins.advanceList(
+          'me',
+          { ...pin, ...head },
+          { checkedAnchor: pin, checkedApproval: head }
+        ),
+        name
+      ).toBe(true);
+      expect(await pins.readList('me'), name).toEqual({ ...pin, ...head });
+    }
+  });
+
   it('requires the checked main anchor before inheriting confirmation or replacing an identity', async () => {
     for (const [name, pins] of await stores()) {
       const anchor = {
@@ -150,7 +212,7 @@ describe('contact pins', () => {
           entryHash: H('4')
         }),
         name
-      ).toBe(true);
+      ).toBe(false);
       expect((await pins.readList('me'))?.pendingApproval, name).toEqual(
         future
       );
@@ -298,19 +360,33 @@ describe('contact pins', () => {
         confirmed: false,
         pendingApproval: { sequence: 3, entryHash: H('3'), confirmed: true }
       });
+      // A second approval cannot discard an unchecked ancestry obligation.
+      expect(
+        await approve({ sequence: 9, entryHash: H('9'), confirmed: true }),
+        name
+      ).toBe(false);
+      expect(
+        await pins.advanceList(
+          'pk',
+          { ...passkey, confirmed: true },
+          {
+            checkedApproval: { sequence: 3, entryHash: H('3'), confirmed: true }
+          }
+        ),
+        name
+      ).toBe(true);
       expect(
         await approve({ sequence: 9, entryHash: H('9'), confirmed: true }),
         name
       ).toBe(true);
       expect(await pins.readList('pk'), name).toEqual({
         ...passkey,
-        confirmed: false,
+        confirmed: true,
         pendingApproval: { sequence: 9, entryHash: H('9'), confirmed: true }
       });
-      // A list that has not reached it keeps it pending; one that has
-      // resolves it with whatever the caller checked.
+      // A list must reach the authenticated head before it is usable.
       const later = { ...passkey, sequence: 6, entryHash: H('6') };
-      expect(await pins.advanceList('pk', later), name).toBe(true);
+      expect(await pins.advanceList('pk', later), name).toBe(false);
       expect((await pins.readList('pk'))?.pendingApproval?.sequence, name).toBe(
         9
       );

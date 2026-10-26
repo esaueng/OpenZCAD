@@ -1270,14 +1270,13 @@ describe('contacts heads in device approval', () => {
       (error: unknown) =>
         error instanceof ContactsError && error.code === 'fork'
     );
-    // The original chain is still accepted, confirmed, Bob untrusted.
+    // The known newer head is an ancestry obligation even when its approver
+    // was unconfirmed. Retain both heads and report the fork; no old prefix
+    // is usable until all authenticated evidence can be reconciled.
     serve(srv, honest);
-    const book = await loadContacts(alice.contacts, after);
-    expect(book.listConfirmed).toBe(true);
-    expect(book.list?.pin.sequence).toBe(1);
-    expect(book.contacts.find((c) => c.userId === BOB)?.standing).toBe(
-      'untrusted'
-    );
+    await expect(loadContacts(alice.contacts, after)).rejects.toMatchObject({
+      code: 'fork'
+    });
     expect(await alice.pins.readList(ALICE)).toMatchObject({
       sequence: 1,
       confirmed: true
@@ -1323,6 +1322,169 @@ describe('contacts heads in device approval', () => {
     );
     expect((await phone.pins.readList(ALICE))?.confirmed).toBe(false);
   });
+
+  it('does not approve another device with a head older than unresolved approval evidence', async () => {
+    const { srv, alice } = await aliceVerifiedBob();
+    const phone = browser(srv, ALICE);
+    const account = ready(
+      await enrollWithRecoveryKey(
+        phone.keys,
+        ready(await loadEncryption(phone.keys)),
+        alice.recovery.secret,
+        'Phone'
+      )
+    );
+    await loadContacts(phone.contacts, account);
+    await untrustContact(
+      alice.contacts,
+      alice.account,
+      await loadContacts(alice.contacts, alice.account),
+      BOB,
+      alice.recovery.secret
+    );
+    const head = (await alice.pins.readList(ALICE))!;
+    await phone.pins.advanceList(ALICE, head, { fromApproval: true });
+    const third = browser(srv, ALICE);
+    const request = await requestApproval(third.keys, null, 'Third');
+    if (request.step !== 'waiting') throw new Error('Expected request');
+    const approveThird = async () =>
+      approveDevice(
+        phone.keys,
+        ready(await loadEncryption(phone.keys)),
+        await phone.keys.api.getApproval(request.approval.id),
+        { kind: 'scan', code: request.scanCode },
+        null
+      );
+    await expect(approveThird()).rejects.toMatchObject({
+      code: 'grant-invalid'
+    });
+    expect((await phone.pins.readList(ALICE))?.pendingApproval?.entryHash).toBe(
+      head.entryHash
+    );
+    expect(
+      (await third.keys.api.getApproval(request.approval.id)).grant
+    ).toBeNull();
+    await loadContacts(phone.contacts, ready(await loadEncryption(phone.keys)));
+    await approveThird();
+    expect((await advanceApprovalAsNewDevice(third.keys)).step).toBe('done');
+    const older = {
+      ...third.contacts,
+      api: createContactsApi(olderContacts(srv, ALICE, 1))
+    };
+    await expect(
+      loadContacts(older, ready(await loadEncryption(third.keys)))
+    ).rejects.toMatchObject({ code: 'fork' });
+  });
+
+  it('refuses an empty response when an empty anchor has a newer approved head', async () => {
+    const { srv, alice } = await aliceVerifiedBob();
+    const phone = browser(srv, ALICE);
+    const account = ready(
+      await enrollWithRecoveryKey(
+        phone.keys,
+        ready(await loadEncryption(phone.keys)),
+        alice.recovery.secret,
+        'Phone'
+      )
+    );
+    // The browser previously saw no contacts under this identity.
+    await phone.pins.advanceList(ALICE, {
+      identityKeyHash: toHex(account.list.identityKeyHash),
+      sequence: -1,
+      entryHash: '0'.repeat(64),
+      confirmed: false
+    });
+    const head = (await alice.pins.readList(ALICE))!;
+    await phone.pins.advanceList(ALICE, head, { fromApproval: true });
+    const before = await phone.pins.readList(ALICE);
+    const empty = {
+      ...phone.contacts,
+      api: createContactsApi(olderContacts(srv, ALICE, 0))
+    };
+    await expect(loadContacts(empty, account)).rejects.toMatchObject({
+      code: 'fork'
+    });
+    expect(await phone.pins.readList(ALICE)).toEqual(before);
+    expect((await loadContacts(phone.contacts, account)).listConfirmed).toBe(
+      true
+    );
+  });
+
+  it.each(['before', 'during-inspection'] as const)(
+    'refuses a prefix and cached local verification after a newer approval arrives %s',
+    async (timing) => {
+      const { srv, alice } = await aliceVerifiedBob();
+      const phone = browser(srv, ALICE);
+      const account = ready(
+        await enrollWithRecoveryKey(
+          phone.keys,
+          ready(await loadEncryption(phone.keys)),
+          alice.recovery.secret,
+          'Phone'
+        )
+      );
+      let book = await loadContacts(phone.contacts, account);
+      book = await verifyContact(
+        phone.contacts,
+        account,
+        book,
+        await inspectContact(phone.contacts, book, BOB),
+        alice.recovery.secret
+      );
+      expect(
+        verifiedEncryptionKey(await inspectContact(phone.contacts, book, BOB))
+      ).not.toBeNull();
+      await untrustContact(
+        alice.contacts,
+        alice.account,
+        await loadContacts(alice.contacts, alice.account),
+        BOB,
+        alice.recovery.secret
+      );
+      const head = (await alice.pins.readList(ALICE))!;
+      const approve = async () => {
+        expect(
+          await phone.pins.advanceList(ALICE, head, { fromApproval: true })
+        ).toBe(true);
+      };
+      if (timing === 'before') await approve();
+      const context =
+        timing === 'before'
+          ? phone.contacts
+          : {
+              ...phone.contacts,
+              api: {
+                ...phone.contacts.api,
+                deviceList: async (userId: string) => {
+                  const response = await phone.contacts.api.deviceList(userId);
+                  await approve();
+                  return response;
+                }
+              }
+            };
+      await expect(inspectContact(context, book, BOB)).rejects.toMatchObject({
+        code: 'fork'
+      });
+      const older = {
+        ...phone.contacts,
+        api: createContactsApi(olderContacts(srv, ALICE, 1))
+      };
+      await expect(loadContacts(older, account)).rejects.toMatchObject({
+        code: 'fork'
+      });
+      expect((await phone.pins.readList(ALICE))?.pendingApproval).toMatchObject(
+        { sequence: head.sequence, entryHash: head.entryHash }
+      );
+      const honest = await loadContacts(phone.contacts, account);
+      expect(honest.listConfirmed).toBe(true);
+      expect(
+        honest.contacts.find((contact) => contact.userId === BOB)?.standing
+      ).toBe('untrusted');
+      expect(
+        verifiedEncryptionKey(await inspectContact(phone.contacts, honest, BOB))
+      ).toBeNull();
+    }
+  );
 
   it.each(['matching', 'forked'] as const)(
     'refuses a concurrently replaced %s main anchor before carrying confirmation forward',
