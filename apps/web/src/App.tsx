@@ -25425,9 +25425,15 @@ export function App() {
         event.preventDefault();
         return;
       }
-      // An extrude edit: Esc closes an open entry first, then the edit.
+      // An extrude edit: Esc disarms its face pick, then closes an open
+      // entry, then the edit, one press each (as a new extrude does).
       if (extrudeEditRef.current && event.key === 'Escape') {
         event.preventDefault();
+        if (toFacePick) {
+          setToFacePick(null);
+          setStatus('Face pick canceled · the feature is unchanged.');
+          return;
+        }
         if (!cancelOpenKeypad()) cancelExtrudeEdit();
         return;
       }

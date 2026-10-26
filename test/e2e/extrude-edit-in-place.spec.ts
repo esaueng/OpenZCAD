@@ -15,6 +15,8 @@ import {
   test,
   expect,
   stubApi,
+  barChoice,
+  chooseBarOption,
   chooseInPlaceOption,
   editExtrudeFromHistory,
   enterCommandValue,
@@ -241,3 +243,61 @@ test('Esc leaves an extrude edit with the feature as it was', async ({
   await expect(bar).toHaveCount(0);
   expect(storedPost(await exportedDocument(page)).data).toEqual(before.data);
 });
+
+for (const command of ['an edit', 'a new extrude'] as const) {
+  test(`Esc disarms ${command}'s face pick first, and only then leaves it`, async ({
+    page
+  }) => {
+    test.setTimeout(120_000);
+    await stubApi(page);
+    await openDocument(page, postDocument(`Extrude face pick Esc ${command}`));
+    const canvas = page.locator('.viewer-host canvas');
+    await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '2', {
+      timeout: 30_000
+    });
+    let bar: Locator;
+    if (command === 'an edit') {
+      await revealModelPanel(page, 'History');
+      bar = await editExtrudeFromHistory(
+        page,
+        page.locator('.feature-row-main[title^="Post — "]'),
+        'Post'
+      );
+    } else {
+      // The post's sketch is consumed; a second sketch gives a region.
+      await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+      await page.getByRole('button', { name: 'Top (XY)' }).click();
+      const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+      const bounds = (await canvas.boundingBox())!;
+      const centre = {
+        x: bounds.x + bounds.width * 0.3,
+        y: bounds.y + bounds.height * 0.7
+      };
+      await sketchTools.getByRole('button', { name: /^Circle/ }).click();
+      await page.mouse.move(centre.x, centre.y);
+      await page.mouse.down();
+      await page.mouse.move(centre.x + 30, centre.y, { steps: 6 });
+      await page.mouse.up();
+      await sketchTools.getByRole('button', { name: 'Extrude' }).click();
+      bar = page.getByRole('group', { name: 'Extrude command' });
+      await expect(bar).toBeVisible();
+    }
+    await chooseBarOption(bar, 'Extent', 'To face');
+    await expect(bar).toContainText(
+      'Click a planar face parallel to the sketch'
+    );
+    // One press disarms the pick; the command and its extent stay.
+    await page.keyboard.press('Escape');
+    await expect(bar).toBeVisible();
+    await expect(bar).not.toContainText(
+      'Click a planar face parallel to the sketch'
+    );
+    await expect(barChoice(bar, 'Extent', 'To face')).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+    // The next leaves the command.
+    await page.keyboard.press('Escape');
+    await expect(bar).toHaveCount(0);
+  });
+}
