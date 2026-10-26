@@ -1116,6 +1116,43 @@ describe('settings desktop account section', () => {
     }
   });
 
+  it('links the privacy policy from the email sign-in form', () => {
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      value: {
+        render: vi.fn(() => 'widget-1'),
+        remove: vi.fn(),
+        reset: vi.fn()
+      }
+    });
+    // Stands in for the loaded Turnstile script so the widget does not fetch it.
+    const script = document.createElement('script');
+    script.dataset.openzcadTurnstile = 'true';
+    document.head.append(script);
+    try {
+      renderSettings(null, {
+        initialSection: 'account',
+        authConfig: {
+          mode: 'email-code',
+          emailCodeEnabled: true,
+          turnstileSiteKey: 'site-key'
+        },
+        authConfigStatus: 'ready'
+      });
+      const form = screen
+        .getByRole('button', { name: 'Email me a code' })
+        .closest('form')!;
+      const link = within(form).getByRole('link', { name: 'Privacy policy' });
+      expect(link).toHaveAttribute('href', '/privacy');
+      // A new tab: following it must not drop an unsaved workspace.
+      expect(link).toHaveAttribute('target', '_blank');
+      expect(link).toHaveAttribute('rel', 'noreferrer');
+    } finally {
+      script.remove();
+      delete (window as Window & { turnstile?: unknown }).turnstile;
+    }
+  });
+
   it('requires an explicit approval before connecting the desktop app', async () => {
     const onApproveDesktopLogin = vi.fn().mockResolvedValue(undefined);
 
@@ -1159,6 +1196,38 @@ describe('settings privacy and data section', () => {
     accountErasureReady: true,
     projectErasureReady: true
   };
+
+  it('links the privacy policy while signed out', () => {
+    renderSettings(null, { initialSection: 'privacy' });
+    const link = screen.getByRole('link', { name: 'Read the policy' });
+    expect(link).toHaveAttribute('href', '/privacy');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noreferrer');
+    expect(screen.getByText('Privacy policy')).toBeInTheDocument();
+  });
+
+  it('links the hosted privacy policy from the desktop app', () => {
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ =
+      {};
+    try {
+      renderSettings(null, { initialSection: 'privacy', session });
+      expect(
+        screen.getByRole('link', { name: 'Read the policy' })
+      ).toHaveAttribute('href', 'https://zcad.app/privacy');
+    } finally {
+      delete (window as Window & { __TAURI_INTERNALS__?: unknown })
+        .__TAURI_INTERNALS__;
+    }
+  });
+
+  it('finds the privacy policy from the settings search', async () => {
+    const user = userEvent.setup();
+    renderSettings(null, { initialSection: 'general' });
+    await user.type(screen.getByLabelText('Find a setting'), 'privacy policy');
+    expect(
+      await screen.findByRole('link', { name: 'Read the policy' })
+    ).toHaveAttribute('href', '/privacy');
+  });
 
   it('starts profile details hidden and keeps the choice when settings reopen', async () => {
     const user = userEvent.setup();

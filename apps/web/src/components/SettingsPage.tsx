@@ -25,6 +25,7 @@ import {
   Database,
   Eye,
   EyeOff,
+  ExternalLink,
   HardDrive,
   LockKeyhole,
   LogIn,
@@ -61,6 +62,7 @@ import { ErrorBoundary } from './ErrorBoundary';
 import { api } from '../lib/api';
 import { APP_SETTINGS_NUMBER_BOUNDS } from '../lib/appSettings';
 import { isDesktopApp } from '../lib/desktopBridge';
+import { privacyPolicyHref } from '../lib/privacyPolicy';
 import {
   KERNEL_BUILD,
   kernelBuildDetail,
@@ -2192,7 +2194,16 @@ export function SettingsPage({
                         >
                           <span>
                             <strong>Email sign-in</strong>
-                            <small>No password. We email you a code.</small>
+                            <small>
+                              No password. We email you a code.{' '}
+                              <a
+                                href={privacyPolicyHref()}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Privacy policy
+                              </a>
+                            </small>
                           </span>
                           <div className="settings-auth-controls">
                             <label>
@@ -2333,6 +2344,22 @@ export function SettingsPage({
 
           {active === 'privacy' && anyMatch && (
             <Section title="Privacy & data" intro="What leaves this device.">
+              <Group title="Policy">
+                <SettingRow
+                  title="Privacy policy"
+                  hint="What the hosted service collects, stores and shares."
+                >
+                  <a
+                    className="secondary"
+                    href={privacyPolicyHref()}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <ExternalLink size={14} aria-hidden="true" />
+                    Read the policy
+                  </a>
+                </SettingRow>
+              </Group>
               <Group title="Analytics">
                 <AnalyticsConsent />
                 {session && !desktopApp ? (

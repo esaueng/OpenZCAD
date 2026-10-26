@@ -24,7 +24,8 @@ interface NativeApiResponse {
   body: number[];
 }
 
-const CLOUD_API_ORIGIN = 'https://zcad.app';
+/** The hosted service the desktop app talks to; it has no origin of its own. */
+export const CLOUD_API_ORIGIN = 'https://zcad.app';
 const CLOUD_SOCKET_ORIGIN = 'wss://zcad.app';
 
 export interface DesktopAuthPollResult {

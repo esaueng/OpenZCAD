@@ -1,0 +1,819 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Privacy policy · OpenZCAD</title>
+    <meta
+      name="description"
+      content="What the hosted OpenZCAD service at zcad.app collects, stores and shares, and what end-to-end encrypted projects keep from the server."
+    />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!--
+      A static page: no script, nothing loaded from another origin, and no
+      sign-in, so it renders for anyone and costs the app bundle nothing.
+      Served at /privacy (Cloudflare's asset HTML handling maps the path to
+      this file). Every statement describes what the code does; re-check the
+      code before changing one. Text in square capitals is a placeholder the
+      operator must fill in: privacyPolicyPlaceholders.test.ts fails until
+      none remain.
+    -->
+    <style>
+      :root {
+        --bg: #101215;
+        --surface: #181b1f;
+        --border: #282d33;
+        --text: #ebedef;
+        --muted: #9ba2ab;
+        --accent: #6798ff;
+        --mark: #3b3418;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: #f2f2f2;
+          --surface: #fafafa;
+          --border: #d6d6d6;
+          --text: #1d1d1f;
+          --muted: #56565b;
+          --accent: #1c64c2;
+          --mark: #fff1b8;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        background: var(--bg);
+        color: var(--text);
+        font:
+          15px/1.6 -apple-system,
+          BlinkMacSystemFont,
+          'Segoe UI',
+          Helvetica,
+          Arial,
+          sans-serif;
+      }
+      body {
+        margin: 0;
+        padding: 32px 16px 64px;
+      }
+      main {
+        max-width: 760px;
+        margin: 0 auto;
+      }
+      a {
+        color: var(--accent);
+      }
+      a:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+      h1 {
+        font-size: 28px;
+        line-height: 1.25;
+        margin: 24px 0 4px;
+      }
+      h2 {
+        font-size: 19px;
+        line-height: 1.3;
+        margin: 40px 0 8px;
+        padding-top: 16px;
+        border-top: 1px solid var(--border);
+      }
+      h3 {
+        font-size: 15px;
+        margin: 24px 0 4px;
+      }
+      p,
+      ul {
+        margin: 8px 0;
+      }
+      li + li {
+        margin-top: 4px;
+      }
+      .muted {
+        color: var(--muted);
+      }
+      .summary {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 4px 20px;
+        margin-top: 20px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 12px 0;
+        font-size: 14px;
+      }
+      th,
+      td {
+        text-align: left;
+        vertical-align: top;
+        padding: 8px 10px 8px 0;
+        border-bottom: 1px solid var(--border);
+      }
+      th {
+        color: var(--muted);
+        font-weight: 600;
+      }
+      code {
+        font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+        font-size: 13px;
+      }
+      nav ol {
+        columns: 2;
+        column-gap: 32px;
+        padding-left: 20px;
+      }
+      @media (max-width: 560px) {
+        nav ol {
+          columns: 1;
+        }
+        table,
+        thead,
+        tbody,
+        tr,
+        th,
+        td {
+          display: block;
+        }
+        thead {
+          display: none;
+        }
+        td:first-child {
+          font-weight: 600;
+          border-bottom: 0;
+          padding-bottom: 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p><a href="/">← Back to OpenZCAD</a></p>
+      <h1>Privacy policy</h1>
+      <p class="muted">Effective [EFFECTIVE DATE]</p>
+
+      <section class="summary" aria-labelledby="summary">
+        <h2 id="summary" style="border-top: 0; margin-top: 12px">In short</h2>
+        <ul>
+          <li>
+            You can model without an account. Your projects then stay in your
+            browser and we do not receive them, unless you use the AI assistant,
+            which sends your request to us and to an outside AI provider.
+          </li>
+          <li>
+            If you sign in, we store your email address and the projects you
+            save to your account.
+          </li>
+          <li>
+            <strong
+              >Cloud projects are stored in readable form unless they are
+              end-to-end encrypted.</strong
+            >
+            End-to-end encryption is opt-in per account during the beta and may
+            not yet be available to your account. Even for encrypted projects,
+            the server sees metadata such as sizes, timestamps, who the members
+            are and which device saved each version.
+          </li>
+          <li>
+            There is no way for us to recover encryption keys. If you lose every
+            device and your recovery key, your encrypted cloud projects are
+            lost; copies on your devices remain.
+          </li>
+          <li>
+            Optional usage analytics are off until you turn them on. We do not
+            sell your data and show no advertising.
+          </li>
+          <li>
+            You can delete your cloud projects, your profile, or both, from
+            Settings.
+          </li>
+        </ul>
+      </section>
+
+      <nav aria-label="Contents">
+        <h2 id="contents">Contents</h2>
+        <ol>
+          <li><a href="#who-we-are">Who we are</a></li>
+          <li><a href="#without-an-account">Without an account</a></li>
+          <li><a href="#account">Your account</a></li>
+          <li><a href="#projects">Projects in the cloud</a></li>
+          <li>
+            <a href="#encrypted-projects">End-to-end encrypted projects</a>
+          </li>
+          <li><a href="#keys">Keys and recovery</a></li>
+          <li><a href="#sharing">Sharing and share links</a></li>
+          <li><a href="#collaboration">Live collaboration</a></li>
+          <li><a href="#assistant">The AI assistant</a></li>
+          <li><a href="#analytics">Analytics</a></li>
+          <li><a href="#cookies">Cookies and browser storage</a></li>
+          <li><a href="#email">Emails we send</a></li>
+          <li><a href="#processors">Who else processes your data</a></li>
+          <li><a href="#retention">How long we keep data</a></li>
+          <li><a href="#deletion">Deleting data and your rights</a></li>
+          <li><a href="#desktop">The macOS desktop app</a></li>
+          <li><a href="#security">Security</a></li>
+          <li><a href="#self-hosted">Self-hosted deployments</a></li>
+          <li><a href="#transfers">International transfers</a></li>
+          <li><a href="#children">Children</a></li>
+          <li><a href="#changes">Changes to this policy</a></li>
+          <li><a href="#contact">Contact</a></li>
+        </ol>
+      </nav>
+
+      <h2 id="who-we-are">1. Who we are</h2>
+      <p>
+        OpenZCAD is a browser-based CAD application. This policy covers the
+        hosted OpenZCAD service at <a href="https://zcad.app">zcad.app</a> and
+        the OpenZCAD desktop app for macOS when it is connected to that service.
+        The service is operated by Esau Engineering LLC (“we”, “us”). Contact us
+        by email at <a href="mailto:help@zcad.app">help@zcad.app</a>.
+      </p>
+      <p>
+        This policy is governed by the laws of the State of Michigan, United
+        States. It does not cover OpenZCAD instances that other people run; see
+        <a href="#self-hosted">Self-hosted deployments</a>.
+      </p>
+
+      <h2 id="without-an-account">2. Using OpenZCAD without an account</h2>
+      <p>
+        Modeling, imports, exports, drawings and thumbnails are computed on your
+        device. Without an account, your projects, their history, imported
+        files, settings and assistant conversations are kept in your browser’s
+        storage (IndexedDB and local storage), and we do not receive them.
+        Anyone with access to your device or browser profile can read that data.
+      </p>
+      <p>
+        The app also keeps a small local log of recent direct edits for
+        diagnostics, which can include a copy of the project being edited. It
+        holds the newest 40 entries, is never sent automatically, and is removed
+        when you clear the site’s data in your browser.
+      </p>
+      <p>
+        <strong>Cloud features switch.</strong> Settings → Account → Cloud
+        features turns this device’s sign-in, sync, sharing, assistant and
+        optional analytics on or off. It is on by default. Your browser still
+        downloads the app itself from our servers either way.
+      </p>
+      <p>
+        <strong>Project files.</strong> Export project writes an
+        <code>.openzcad</code> backup file to your device. We do not receive it,
+        and it is not encrypted.
+      </p>
+
+      <h2 id="account">3. Your account</h2>
+      <p>
+        You sign in with an email address and a one-time code; there are no
+        passwords. For your account we store:
+      </p>
+      <ul>
+        <li>
+          <strong>Your email address.</strong> Your account ID is derived from
+          it, and your display name is the part before the “@”.
+        </li>
+        <li>
+          <strong>Sign-in codes.</strong> A six-digit code we email you. We
+          store only a keyed hash of it, with the number of attempts. It works
+          once and expires after 10 minutes.
+        </li>
+        <li>
+          <strong>Sessions.</strong> A random session token in a cookie; we
+          store only a hash of it. A session lasts 30 days unless you sign out
+          first.
+        </li>
+        <li>
+          <strong>Abuse protection.</strong> The sign-in form uses Cloudflare
+          Turnstile, and we pass your IP address to that check. Sign-in rate
+          limits are counted under keyed hashes of your email and IP address,
+          not the raw values.
+        </li>
+        <li>
+          <strong>Synced settings</strong>, so your preferences follow you
+          between devices.
+        </li>
+        <li>
+          <strong>A personal AI key</strong>, if you add one. We store it
+          encrypted under a key held by the server, with a short hint so you can
+          recognise it.
+        </li>
+      </ul>
+      <p>
+        We use this data to sign you in, keep you signed in, protect the service
+        from abuse, and provide the features you use.
+      </p>
+
+      <h2 id="projects">4. Projects in the cloud</h2>
+      <p>
+        When you are signed in with cloud features on, projects you create are
+        saved to your account and kept up to date by cloud autosave (Settings →
+        Saving). A project you made while signed out stays on that device until
+        you choose to add it to your account. Cloud data is held on Cloudflare:
+        records in a D1 database, files in R2 object storage, and live
+        collaboration state in Durable Objects. Connections use HTTPS.
+      </p>
+      <p>A cloud project is stored in one of two ways.</p>
+      <h3>Standard projects (readable by the server)</h3>
+      <p>
+        Unless a project is end-to-end encrypted, its document, name,
+        parameters, sketches and text, feature history, saved revisions,
+        imported files, meshes, thumbnails, measurements and workspace view
+        state are stored in readable form. Cloudflare encrypts stored data at
+        rest, which protects against lost disks but not against us, anyone who
+        gains control of our Cloudflare account or server code, Cloudflare staff
+        with access, or legal demands. The server reads these projects to check
+        and convert them, merge live edits, serve share links and name the
+        project in invitation emails.
+      </p>
+      <h3>End-to-end encrypted projects</h3>
+      <p>
+        An encrypted project is encrypted on your device before it is uploaded,
+        and only devices holding its keys can read it. See the next section for
+        what that does and does not hide.
+      </p>
+      <p>
+        We also store, for every project, its sharing state (members, roles,
+        invitations, share links and a history of sharing changes), its place on
+        your shelf (pinned, archived, in the Trash, order) and the sizes and
+        counts used for storage quotas.
+      </p>
+
+      <h2 id="encrypted-projects">5. End-to-end encrypted projects</h2>
+      <p>
+        End-to-end encryption is <strong>opt-in per account</strong> during the
+        beta, and it is being made available gradually, so your account may not
+        have it yet; Settings → Encryption appears when it does. Once you turn
+        on <em>Encrypt new projects</em>, the server accepts only encrypted new
+        projects from your account. Projects you already have stay as they are
+        until you choose to encrypt them; when you do, your browser encrypts the
+        project, its save states and its files, and the readable copy is then
+        deleted from your account (see <a href="#retention">backups</a>).
+      </p>
+      <h3>What the server cannot read</h3>
+      <p>
+        For an encrypted project, the server stores only encrypted data for the
+        project document and every saved version, its name, save-state names and
+        reasons, imported files and meshes, thumbnails, measurements, workspace
+        view state, archived exports and share-link snapshots. Invitation emails
+        for encrypted projects do not name the project.
+      </p>
+      <h3>What the server still sees</h3>
+      <ul>
+        <li>account email addresses and display names;</li>
+        <li>
+          which accounts are members of a project, their roles, and invitations;
+        </li>
+        <li>
+          how many projects and versions you have, the size of each stored item,
+          timestamps, version numbers and how often you save;
+        </li>
+        <li>
+          which account and which device signed each saved version, and which
+          encryption key generation it uses;
+        </li>
+        <li>presence (active or idle) during live editing;</li>
+        <li>
+          your device list: device labels, their public keys, and when devices
+          and unlock methods were added or removed;
+        </li>
+        <li>your contacts list: whose keys you have verified, and when;</li>
+        <li>
+          the format fields of each encrypted item (its kind, size, format and
+          schema version), your shelf state, and whether you allowed the
+          assistant on a project.
+        </li>
+      </ul>
+      <h3>What encryption does not protect against</h3>
+      <ul>
+        <li>
+          Altered application code. On the web, our server delivers the app’s
+          code, so a compromised deployment could ship code that reads your
+          keys. The signed desktop app is the stronger client.
+        </li>
+        <li>
+          The AI assistant, which must send what it reads to an AI provider in
+          readable form; it asks first (see
+          <a href="#assistant">The AI assistant</a>).
+        </li>
+        <li>
+          Copies a member made before being removed; removal protects only later
+          versions.
+        </li>
+        <li>
+          A compromised device, or the project copies kept in your browser,
+          which are as safe as your device.
+        </li>
+        <li>
+          Deletion or withholding of data by someone with access to storage.
+          Encryption makes tampering detectable, not impossible.
+        </li>
+      </ul>
+
+      <h2 id="keys">6. Keys and recovery</h2>
+      <p>
+        Your encryption keys are created on your devices. Setting up encryption
+        gives you a recovery key, and you can add passkeys and approve further
+        devices from one you already use. In a browser, a device’s private keys
+        are stored as non-extractable keys in IndexedDB; in the desktop app they
+        are kept in the macOS Keychain. The server stores your public keys, your
+        signed device list, and copies of your keys that are themselves
+        encrypted to your devices, recovery key or passkeys, which it cannot
+        open.
+      </p>
+      <p>
+        <strong>There is no server-held recovery key.</strong> We cannot recover
+        your keys or read your encrypted projects, and support cannot restore
+        them. If you lose every device and your recovery key, your encrypted
+        cloud projects cannot be recovered by you or by us. Copies on your
+        devices and any <code>.openzcad</code> backups you exported remain.
+      </p>
+
+      <h2 id="sharing">7. Sharing and share links</h2>
+      <ul>
+        <li>
+          Members you invite can see the project, its history and who else
+          belongs to it. An invitation email shows the person you invite your
+          email address and, for a standard project, the project name.
+          Invitations expire after 7 days.
+        </li>
+        <li>
+          <strong>Standard share links</strong> let anyone who has the link open
+          the project without an account, for 30 days after the link is created
+          or until you revoke it.
+        </li>
+        <li>
+          <strong>Encrypted share links</strong> carry the key to a snapshot of
+          the project in the part of the link after “#”, which browsers never
+          send to a server. The server keeps only a hash of the link’s access
+          token and the encrypted snapshot, so it cannot read the shared
+          project. Anyone who has the full link can. Visitors’ browsers trust a
+          link only while its owner has confirmed sharing within the last 30
+          days, and you can revoke it at any time.
+        </li>
+      </ul>
+
+      <h2 id="collaboration">8. Live collaboration</h2>
+      <p>
+        An open cloud project sends edits to a collaboration room on our server,
+        even when nobody else is present, unless you turn off Settings → Account
+        → Project sharing. Members see when you are active or idle. For a
+        standard project, the room keeps the latest document and up to 20
+        earlier snapshots, in readable form, for the life of the project. For an
+        encrypted project, the room passes on and stores only encrypted
+        versions.
+      </p>
+
+      <h2 id="assistant">9. The AI assistant</h2>
+      <p>
+        The assistant runs only when you send it a request, and needs cloud
+        features on. The built-in assistant also works while you are signed out;
+        for those requests we derive a pseudonym from your IP address with a
+        secret key, and use it, not the address, for usage limits.
+      </p>
+      <p><strong>What is sent.</strong> Each request carries:</p>
+      <ul>
+        <li>your prompt and up to 12 earlier turns of the conversation;</li>
+        <li>
+          the project’s ID, name, units and version, and a summary of the model:
+          every parameter, every feature’s full definition including sketches
+          and any text in them, each body’s name, volume, bounding box and
+          measured faces and edges, the dimensions the app found editable, and
+          warnings;
+        </li>
+        <li>your current selection;</li>
+        <li>any images or drawing pages you attach, with their file names;</li>
+        <li>
+          the list of edits the app can apply, and whether the request is an
+          automatic retry.
+        </li>
+      </ul>
+      <p>
+        Our server reads each request to pass it on, and adds its own
+        instructions, any custom instructions from your settings, and a
+        pseudonymous identifier derived from your account (or from the
+        signed-out pseudonym) with a secret key, not your email address or IP
+        address. Imported STEP files and meshes are not sent.
+      </p>
+      <p>
+        <strong>Who receives it.</strong> The built-in assistant sends requests
+        to the AI provider our deployment is configured with. Today that is
+        OpenRouter, which passes them to the provider of the selected model; the
+        provider or model can change, and Settings → AI Assistant shows which
+        one applies, with a link to its data policy.
+        <strong
+          >The AI provider may keep this data, or use it for training and
+          service improvement, under its own policies.</strong
+        >
+        Do not send sensitive or confidential designs. If you add your own API
+        key, requests go through our server to the provider and model you chose,
+        under that provider’s terms.
+      </p>
+      <p>
+        <strong>Encrypted projects.</strong> On an end-to-end encrypted project,
+        the assistant sends nothing until you allow it for that project. It
+        first shows you exactly what each request contains and which provider
+        and model it goes to, and asks again if that changes. The choice is
+        yours alone and per project; you can stop it from the assistant, the
+        project’s properties or Settings → Encryption.
+      </p>
+      <p>
+        <strong>What we keep.</strong> We do not store your prompts,
+        conversations or the assistant’s replies on the server; your
+        conversation history stays in your browser. We keep request and cost
+        counters for usage limits. What has been sent to a provider cannot be
+        recalled.
+      </p>
+
+      <h2 id="analytics">10. Analytics</h2>
+      <p>
+        Analytics go to Glimpse, our own analytics service on Cloudflare, which
+        keeps only aggregate counters, with no record per person. None of the
+        levels below sends model contents, geometry, file or project names,
+        email addresses, IP addresses, URLs, error text, or account or device
+        identifiers.
+      </p>
+      <ul>
+        <li>
+          <strong>Basic statistics</strong> (always on for the hosted service):
+          the server counts API requests, server errors and response times in
+          fixed ranges.
+        </li>
+        <li>
+          <strong>Optional usage analytics</strong> (off unless you turn them on
+          in Settings → Privacy &amp; data): fixed event names with fixed value
+          ranges, such as which kind of feature was used and size and timing
+          ranges. The choice applies to that browser only. Do Not Track and
+          Global Privacy Control turn them off, the desktop app never sends
+          them, and turning them off stops sending immediately.
+        </li>
+        <li>
+          <strong>Cloud account statistics</strong> (off unless you allow them):
+          your account’s project, revision and storage-size counts are included
+          in hourly service-wide totals for 30 days, or until you withdraw. The
+          permission record holds your account ID and its expiry.
+        </li>
+      </ul>
+      <p>
+        Totals already received cannot be traced to you, so they cannot be
+        removed after you withdraw.
+      </p>
+
+      <h2 id="cookies">11. Cookies and browser storage</h2>
+      <p>
+        The app sets one cookie, <code>__Host-openzcad_session</code>, when you
+        sign in. It keeps you signed in, is sent only to our server over HTTPS,
+        cannot be read by the page’s scripts, and expires after 30 days or when
+        you sign out. We use no advertising or cross-site tracking cookies.
+      </p>
+      <p>
+        The app’s own code loads no third-party scripts except Cloudflare
+        Turnstile on the sign-in form, which processes information about your
+        browser and network to check that a person is signing in, under
+        Cloudflare’s terms. Our security policy also allows Cloudflare Web
+        Analytics, a cookieless page-view counter that Cloudflare can add to the
+        pages it serves for us.
+      </p>
+      <p>
+        Everything else the app keeps — local projects and files, settings, your
+        analytics choice, the cloud features switch, a random device ID used to
+        sync your workspace, assistant conversations and, if you set up
+        encryption, your device keys — stays in your browser’s storage unless a
+        feature described here sends part of it.
+      </p>
+
+      <h2 id="email">12. Emails we send</h2>
+      <p>
+        We send sign-in codes to your address, and invitation emails to the
+        people you invite. We send no marketing email. Emails are sent through
+        Cloudflare’s email service.
+      </p>
+
+      <h2 id="processors">13. Who else processes your data</h2>
+      <p>
+        We do not sell personal data or share it for advertising. These
+        providers process data for us:
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Provider</th>
+            <th scope="col">What it does</th>
+            <th scope="col">Data</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Cloudflare</td>
+            <td>
+              Hosting and network (Workers), database (D1), file storage (R2),
+              collaboration rooms (Durable Objects), email sending, Turnstile
+              and logs
+            </td>
+            <td>
+              Everything the service stores or receives, including IP addresses
+              in transit
+            </td>
+          </tr>
+          <tr>
+            <td>
+              The configured AI provider (today OpenRouter and the model’s
+              provider)
+            </td>
+            <td>The built-in AI assistant</td>
+            <td>Assistant requests, as described above</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        We disclose data when the law requires it. For standard projects we are
+        able to read stored contents; for encrypted projects we can provide only
+        what the server holds, described in section 5.
+      </p>
+
+      <h2 id="retention">14. How long we keep data</h2>
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Data</th>
+            <th scope="col">How long</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Your profile, settings and personal AI key</td>
+            <td>Until you change or delete them</td>
+          </tr>
+          <tr>
+            <td>Cloud projects</td>
+            <td>
+              Until you delete them. Projects in the Trash become eligible for
+              permanent deletion, with their files, revisions and room, after 30
+              days; the clean-up runs when the project list is next loaded
+            </td>
+          </tr>
+          <tr>
+            <td>Saved revisions</td>
+            <td>
+              The newest 50 per project. An encrypted project’s version history
+              also keeps up to the latest 2,000 versions
+            </td>
+          </tr>
+          <tr>
+            <td>Collaboration room</td>
+            <td>
+              The latest document and up to 20 earlier snapshots, for the life
+              of the project
+            </td>
+          </tr>
+          <tr>
+            <td>Sign-in codes and sessions</td>
+            <td>
+              Codes are valid for 10 minutes and sessions for 30 days; expired
+              records are removed by later clean-up passes, so they can remain
+              for some time after they stop working
+            </td>
+          </tr>
+          <tr>
+            <td>Invitations and share links</td>
+            <td>
+              Kept for the life of the project or until the relevant account is
+              deleted; sharing history keeps the newest 1,000 changes per
+              project
+            </td>
+          </tr>
+          <tr>
+            <td>Assistant usage counters</td>
+            <td>
+              Signed in: until you delete your profile. Signed out: kept without
+              a set expiry; they hold only a pseudonym derived from your IP
+              address with a secret key, not the address
+            </td>
+          </tr>
+          <tr>
+            <td>Cloud account statistics permission</td>
+            <td>
+              30 days or until withdrawn; published totals remain for up to 90
+              days
+            </td>
+          </tr>
+          <tr>
+            <td>Basic and optional analytics totals</td>
+            <td>
+              Aggregate totals identify no one and may be kept indefinitely
+            </td>
+          </tr>
+          <tr>
+            <td>Server logs</td>
+            <td>
+              For as long as Cloudflare’s Workers Logs keep them for our account
+            </td>
+          </tr>
+          <tr>
+            <td>Backups</td>
+            <td>
+              Database point-in-time recovery and collaboration-room recovery
+              can keep deleted data, including the readable copy of a project
+              you encrypted, for up to 30 days
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2 id="deletion">15. Deleting data and your rights</h2>
+      <p>
+        Signed in, open Settings → Privacy &amp; data → Delete cloud data. Each
+        choice asks you to confirm.
+      </p>
+      <ul>
+        <li>
+          <strong>Delete all cloud projects:</strong> every project you own,
+          with its revisions, files and collaboration room. Your profile stays.
+        </li>
+        <li>
+          <strong>Delete cloud profile:</strong> your email address, synced
+          settings, personal AI key, sessions, invitations sent to your address,
+          and your encryption key records (public keys, device list and
+          encrypted key copies). Your projects stay in the cloud under your
+          account ID, with no email address attached.
+        </li>
+        <li>
+          <strong>Delete all cloud data:</strong> your profile and every project
+          you own. Collaborators lose access to your projects, and your
+          memberships, invitations and share links are removed.
+        </li>
+      </ul>
+      <p>
+        Deleting cloud data does not touch projects stored in your browser;
+        delete those from the Trash on the start screen, or clear the site’s
+        data. Data already sent to an AI provider and analytics totals cannot be
+        recalled, and backups may keep data for the period in section 14.
+      </p>
+      <p>
+        Depending on where you live, you may have the right to access, correct,
+        delete or take a copy of your personal data, to object to or restrict
+        some processing, to withdraw consent, and to complain to a data
+        protection authority. Export project gives you an
+        <code>.openzcad</code> copy of any project at any time. For anything the
+        app does not cover, email
+        <a href="mailto:help@zcad.app">help@zcad.app</a>.
+      </p>
+
+      <h2 id="desktop">16. The macOS desktop app</h2>
+      <p>
+        The desktop app works on projects on your Mac. When you sign in, it
+        connects to the hosted service at zcad.app, and this policy applies. You
+        approve the sign-in in your browser; the app keeps its sign-in
+        credential and, if you set up encryption, its device keys in the macOS
+        Keychain, and the app’s web view never receives the private key bytes.
+        The desktop app never sends optional usage analytics.
+      </p>
+
+      <h2 id="security">17. Security</h2>
+      <p>
+        We use HTTPS, store sign-in codes and session tokens only as hashes,
+        encrypt personal AI keys, rate-limit sign-in and the API, and check that
+        each request may reach the project it names. No system is perfectly
+        secure, and standard projects are readable by anyone who controls the
+        hosting account. If a breach affects your data, we will tell you as the
+        law requires.
+      </p>
+
+      <h2 id="self-hosted">18. Self-hosted deployments</h2>
+      <p>
+        OpenZCAD is open source, and anyone can run their own instance. Its
+        operator controls its data, chooses its AI provider and sets its
+        retention. This policy does not apply to self-hosted instances, and we
+        receive no data from them.
+      </p>
+
+      <h2 id="transfers">19. International transfers</h2>
+      <p>
+        Your data may be processed in the United States and in other countries
+        where Cloudflare and the AI provider operate.
+      </p>
+
+      <h2 id="children">20. Children</h2>
+      <p>
+        OpenZCAD is not directed at children under 13, and we do not knowingly
+        collect their personal data.
+      </p>
+
+      <h2 id="changes">21. Changes to this policy</h2>
+      <p>
+        We will update this policy when the service changes what it collects or
+        how it protects it. The current version is always on this page, with its
+        effective date at the top.
+      </p>
+
+      <h2 id="contact">22. Contact</h2>
+      <p>
+        Esau Engineering LLC, by email at
+        <a href="mailto:help@zcad.app">help@zcad.app</a>. We do not take
+        requests by post.
+      </p>
+    </main>
+  </body>
+</html>
