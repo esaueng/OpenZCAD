@@ -1184,9 +1184,12 @@ describe('turning an encrypted project back into plaintext', () => {
     // The staging is abandoned after the session was checked and before
     // its claim lands: the claim carries the decrypt staging fence, so it
     // lands nothing, and the lease holder hears that its lease is gone.
-    const create = srv.bucket.createMultipartUpload;
+    const create = srv.bucket.createMultipartUpload as unknown as (
+      key: string,
+      options: unknown
+    ) => Promise<unknown>;
     srv.bucket.createMultipartUpload = vi.fn(
-      async (...args: Parameters<typeof create>) => {
+      async (key: string, options: unknown) => {
         srv.db
           .prepare(
             `UPDATE e2ee_project_migrations
@@ -1195,7 +1198,7 @@ describe('turning an encrypted project back into plaintext', () => {
              WHERE project_id = ?`
           )
           .run(projectId);
-        return create(...args);
+        return create(key, options);
       }
     );
     const put = await leased(session.uploadUrl, {
