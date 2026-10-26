@@ -4577,6 +4577,74 @@ export class D1R2PersistenceService implements PersistenceService {
   }
 
   /**
+   * ` AND <fence>` on a row `upload_sessions` for a statement that
+   * advances `session` under the lease it was opened with, of either
+   * staging direction: a staged encrypted-blob session's staging lease
+   * (`stagingLeaseFence`), or a decrypt staging's file session's decrypt
+   * lease (`uploadDecryptLeaseSql`); '' for any other session.
+   */
+  private uploadLeaseFence(session: CheckedUploadSession): string {
+    return session.decryptStaged
+      ? ` AND ${uploadDecryptLeaseSql('upload_sessions', Date.now())}`
+      : this.stagingLeaseFence(session);
+  }
+
+  /**
+   * Refuses with 409 E2EE_MIGRATION_LEASE_LOST once the lease `session`
+   * was opened under, of either direction, is no longer live
+   * (`refuseIfDecryptLeaseLost`, `refuseIfStagingLeaseLost`); a no-op for
+   * any other session.
+   */
+  private async refuseIfUploadLeaseLost(
+    session: CheckedUploadSession
+  ): Promise<void> {
+    if (session.decryptStaged) {
+      await this.refuseIfDecryptLeaseLost(session);
+    } else {
+      await this.refuseIfStagingLeaseLost(session);
+    }
+  }
+
+  /**
+   * After a move to `completed` landed nothing (#918 follow-up): when the
+   * lease the session was opened under is no longer live, releases the
+   * session and refuses with 409 E2EE_MIGRATION_LEASE_LOST
+   * (`refuseIfUploadLeaseLost`); otherwise returns. Call it only once R2
+   * has no completion of the session in flight (R2's `complete()`
+   * returned, or the object is already there): the release then drops the
+   * stale object and reservation at once, so the new holder's upload of
+   * the same blob need not wait out the completion window
+   * (`cleanupUploadSession`).
+   */
+  private async refuseIfCompletionLeaseLost(
+    uploadSessionId: string,
+    session: CheckedUploadSession
+  ): Promise<void> {
+    try {
+      await this.refuseIfUploadLeaseLost(session);
+    } catch (error) {
+      try {
+        const released = await this.env
+          .DB!.prepare(
+            `UPDATE upload_sessions
+             SET reservation_state = 'aborting', completion_started_at = NULL
+             WHERE id = ? AND reservation_state IN ('completing', 'completed')
+               AND multipart_upload_id = ?`
+          )
+          .bind(uploadSessionId, session.multipartUploadId)
+          .run();
+        if (released.meta?.changes === 1) {
+          const current = await this.loadUploadSession(uploadSessionId);
+          if (current) await this.cleanupUploadSession(current);
+        }
+      } catch {
+        // The new holder's own cleanup drops it once the window passed.
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Whether a plaintext upload (`upload` absent, or one without an
    * encrypted-blob marker) must respect the migration state (slice 7-1):
    * only while E2EE_MIGRATION_ENABLED is on, as the Worker's
@@ -5054,14 +5122,17 @@ export class D1R2PersistenceService implements PersistenceService {
     if (session.reservationState === 'completing' && !frozeCompletion) {
       const stored = await this.env.ARTIFACTS!.head(session.objectKey);
       if (stored?.size === session.reservedBytes) {
-        await this.env.DB.prepare(
+        const reconciled = await this.env.DB.prepare(
           `UPDATE upload_sessions
            SET reservation_state = 'completed', completion_started_at = NULL
            WHERE id = ? AND reservation_state = 'completing'
-             AND multipart_upload_id = ? AND reserved_bytes = ?`
+             AND multipart_upload_id = ? AND reserved_bytes = ?${this.uploadLeaseFence(session)}`
         )
           .bind(uploadSessionId, request.uploadId, session.reservedBytes)
           .run();
+        if (reconciled.meta?.changes !== 1) {
+          await this.refuseIfCompletionLeaseLost(uploadSessionId, session);
+        }
         await this.cleanupClaimedUpload(uploadSessionId, session);
         return;
       }
@@ -5145,15 +5216,19 @@ export class D1R2PersistenceService implements PersistenceService {
         throw error;
       }
     }
+    // The last move carries the lease fence too (#918 follow-up): a
+    // takeover while R2 completed the object lets the stale holder finish
+    // nothing, and releases the session for the new holder.
     const completed = await this.env.DB.prepare(
       `UPDATE upload_sessions
        SET reservation_state = 'completed', completion_started_at = NULL
        WHERE id = ? AND reservation_state = 'completing'
-         AND multipart_upload_id = ? AND reserved_bytes = ?`
+         AND multipart_upload_id = ? AND reserved_bytes = ?${this.uploadLeaseFence(session)}`
     )
       .bind(uploadSessionId, request.uploadId, session.reservedBytes)
       .run();
     if (completed.meta?.changes !== 1) {
+      await this.refuseIfCompletionLeaseLost(uploadSessionId, session);
       const current = await this.requireUploadSession(userId, uploadSessionId);
       if (
         current.reservationState !== 'completed' ||
