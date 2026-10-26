@@ -50,6 +50,8 @@ export interface ExtrudeCommandState {
   distance: number;
   backDistance: number;
   draftAngle: number;
+  /** Each value as its text holds it (a typed expression as typed). */
+  texts: Record<ExtrudeValueId, string>;
 }
 
 export interface ExtrudeCommandHandle {
@@ -178,7 +180,12 @@ export function ExtrudeCommand({
       symmetric: value.symmetric,
       distance: evaluated(next.distance, 'length'),
       backDistance: evaluated(next.backDistance, 'length'),
-      draftAngle: evaluated(next.draftAngle, 'angle')
+      draftAngle: evaluated(next.draftAngle, 'angle'),
+      texts: {
+        distance: next.distance,
+        backDistance: next.backDistance,
+        draftAngle: next.draftAngle
+      }
     };
   }
 

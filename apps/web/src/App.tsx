@@ -4192,6 +4192,11 @@ export function App() {
    * it is rebuilt (a new choice), rather than back at its last drag.
    */
   const regionDraftDistance = useRef<number | null>(null);
+  /** The text the open Extrude keypad last left its value at. */
+  const regionKeypadText = useRef<{
+    valueId: ExtrudeValueId;
+    text: string;
+  } | null>(null);
   /** Why the open Extrude keypad's entry does not evaluate (Done waits). */
   const [regionExtrudeEntryError, setRegionExtrudeEntryError] = useState<
     string | null
@@ -16844,22 +16849,24 @@ export function App() {
     setLastValidPreview(null);
   }, [offsetInteractionKey, offsetPreview]);
 
-  // An Extrude keypad on a value the extrude stops offering (Distance once
-  // the extent is To face) is closed as it stands: applied or canceled, it
-  // would set that value and take the extent back to Distance.
-  const regionExtrudeExtent = regionExtrudeState?.extent ?? 'blind';
-  const regionExtrudeSymmetric = regionExtrudeState?.symmetric ?? false;
+  // An Extrude keypad belongs to the value as it left it. Once anything else
+  // changes that value (Reverse, a drag, the arrow) or stops offering it (an
+  // extent or Sides choice), the keypad is closed as it stands: its stale
+  // entry, applied or canceled, would write over the change, and setting
+  // Distance would take the extent back to Distance.
   useEffect(() => {
     const open = keypadRef.current;
-    if (open?.kind !== 'extrude' || !open.commandValueId) return;
-    const shown = extrudeShownValues({
-      extent: regionExtrudeExtent,
-      symmetric: regionExtrudeSymmetric
-    });
-    if (!shown.includes(open.commandValueId as ExtrudeValueId)) {
+    const state = regionExtrudeState;
+    if (open?.kind !== 'extrude' || !open.commandValueId || !state) return;
+    const valueId = open.commandValueId as ExtrudeValueId;
+    const own = regionKeypadText.current;
+    const changedElsewhere =
+      own?.valueId === valueId && state.texts[valueId] !== own.text;
+    if (changedElsewhere || !extrudeShownValues(state).includes(valueId)) {
+      regionKeypadText.current = null;
       setKeypad(null);
     }
-  }, [regionExtrudeExtent, regionExtrudeSymmetric]);
+  }, [regionExtrudeState]);
   const regionSketchKey =
     interaction.mode === 'region' ? interaction.target.sketchId : null;
   useEffect(() => {
@@ -20308,6 +20315,7 @@ export function App() {
     const command = regionExtrudeCommandRef.current;
     if (!command || interactionRef.current.mode !== 'region') return false;
     const text = command.text(valueId);
+    regionKeypadText.current = { valueId, text };
     const shown = regionExtrudeState?.[valueId];
     const value =
       shown !== undefined && Number.isFinite(shown)
@@ -20338,8 +20346,17 @@ export function App() {
     if (valueId === 'distance') offsetSetterRef.current?.(value);
     else commandSetterRef.current?.(valueId, value);
   }
-  /** A value the Extrude's handles or keypad set: typed text kept as typed. */
-  function setRegionExtrudeValue(valueId: string, value: number, raw?: string) {
+  /**
+   * A value the Extrude's handles or keypad set: typed text kept as typed.
+   * The keypad's own writes are remembered, so only someone else's change
+   * to its value closes it.
+   */
+  function setRegionExtrudeValue(
+    valueId: string,
+    value: number,
+    raw?: string,
+    fromKeypad = false
+  ) {
     if (
       valueId !== 'distance' &&
       valueId !== 'backDistance' &&
@@ -20347,10 +20364,9 @@ export function App() {
     ) {
       return;
     }
-    regionExtrudeCommandRef.current?.setValue(
-      valueId,
-      raw ?? extrudeValueText(value)
-    );
+    const text = raw ?? extrudeValueText(value);
+    if (fromKeypad) regionKeypadText.current = { valueId, text };
+    regionExtrudeCommandRef.current?.setValue(valueId, text);
   }
   /**
    * Opens the keypad on an in-place command's value: from its chip, or from
@@ -22853,7 +22869,8 @@ export function App() {
       setRegionExtrudeValue(
         open.commandValueId,
         baseline,
-        open.baselineRaw
+        open.baselineRaw,
+        true
       );
     } else if (open.kind === 'sketch-dimension') {
       setSketchDimensionDraft(null);
@@ -28063,7 +28080,7 @@ export function App() {
                           // pressed with the keypad still open stores it.
                           const valueId = keypad.commandValueId ?? '';
                           moveRegionExtrudeHandle(valueId, value);
-                          setRegionExtrudeValue(valueId, value, raw);
+                          setRegionExtrudeValue(valueId, value, raw, true);
                           return;
                         }
                         offsetSetterRef.current?.(value);
@@ -28121,7 +28138,8 @@ export function App() {
                           setRegionExtrudeValue(
                             valueId,
                             value,
-                            isExpression ? raw : undefined
+                            isExpression ? raw : undefined,
+                            true
                           );
                           return;
                         }

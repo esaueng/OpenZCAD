@@ -342,34 +342,44 @@ test('Extrude in place: the arrow chip sets the distance, and Done keeps an open
   const distance = bar.getByRole('button', { name: 'Distance', exact: true });
   await expect(distance).toHaveText('12 mm');
 
-  // A keypad on a value the extent stops offering closes as it stands:
-  // through all keeps its extent rather than going back to Distance.
+  // A keypad belongs to its value as it left it: once anything else changes
+  // that value, or stops offering it, the keypad closes as it stands, and
+  // the change stands rather than the keypad's stale entry.
+  const radio = (row: string, choice: string) =>
+    bar
+      .getByRole('radiogroup', { name: row, exact: true })
+      .getByRole('radio', { name: choice, exact: true });
+  const back = bar.getByRole('button', { name: 'Back distance', exact: true });
+  // Reverse flips the distance under an open Distance entry.
   await distance.click();
   await keypad.getByRole('textbox').fill('30');
-  await bar
-    .getByRole('radiogroup', { name: 'Operation', exact: true })
-    .getByRole('radio', { name: 'Cut', exact: true })
-    .click();
-  await bar
-    .getByRole('radiogroup', { name: 'Extent', exact: true })
-    .getByRole('radio', { name: 'Through all', exact: true })
-    .click();
+  await bar.getByRole('button', { name: 'Reverse direction' }).click();
+  await expect(keypad).toHaveCount(0);
+  await expect(distance).toHaveText('-30 mm');
+  // Symmetric stops offering Back distance under an open Back entry.
+  await back.click();
+  await keypad.getByRole('textbox').fill('3');
+  await radio('Sides', 'Symmetric').click();
+  await expect(keypad).toHaveCount(0);
+  await expect(radio('Sides', 'Symmetric')).toHaveAttribute(
+    'aria-checked',
+    'true'
+  );
+  // Through all stops offering Distance: its extent stays Through all.
+  await distance.click();
+  await keypad.getByRole('textbox').fill('12');
+  await radio('Operation', 'Cut').click();
+  await radio('Extent', 'Through all').click();
   await expect(keypad).toHaveCount(0);
   await expect(bar).toContainText('Through the whole target');
-  await expect(
-    bar
-      .getByRole('radiogroup', { name: 'Extent', exact: true })
-      .getByRole('radio', { name: 'Through all', exact: true })
-  ).toHaveAttribute('aria-checked', 'true');
-  // Back to Distance and New body for the rest.
-  await bar
-    .getByRole('radiogroup', { name: 'Extent', exact: true })
-    .getByRole('radio', { name: 'Distance', exact: true })
-    .click();
-  await bar
-    .getByRole('radiogroup', { name: 'Operation', exact: true })
-    .getByRole('radio', { name: 'New body', exact: true })
-    .click();
+  await expect(radio('Extent', 'Through all')).toHaveAttribute(
+    'aria-checked',
+    'true'
+  );
+  // Back to a one-sided blind new body for the rest.
+  await radio('Extent', 'Distance').click();
+  await radio('Operation', 'New body').click();
+  await radio('Sides', 'One side').click();
 
   // An expression still in the open keypad is what Done stores.
   await distance.click();
