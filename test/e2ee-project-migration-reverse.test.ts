@@ -1330,6 +1330,38 @@ describe('turning an encrypted project back into plaintext', () => {
     expect(count(srv, 'revisions', projectId)).toBe(0);
     expect(formatOf(srv, projectId)).toBe(2);
   });
+
+  it('abandons a leased decrypt staging on the sweep once encryption is the default (ADR-024 8-1)', async () => {
+    const srv = roomServer();
+    const { projectId } = await encryptedProject(srv, { revisions: 1 });
+    const desktop = reverseOn(srv, owner, 'owner_desktop', {
+      beforeStep: (step) => {
+        if (step === 'cutover') throw new Error('Stop here.');
+      }
+    });
+    await expect(decryptFully(desktop, projectId)).rejects.toThrow('Stop');
+    expect(count(srv, 'artifacts', projectId)).toBe(3);
+    // Its lease is live: the sweep leaves it while the reverse path is open.
+    expect(migrationRow(srv, projectId)!.lease_expires_at).toBeGreaterThan(
+      Date.now()
+    );
+    await worker.scheduled({}, srv.env);
+    expect(migrationRow(srv, projectId)).toMatchObject({ state: 'staging' });
+    // Default-on closes the reverse path for good: the cutover is refused,
+    // and the sweep abandons the staging, lease or not, and drops the
+    // plaintext it staged. The project stays encrypted.
+    srv.env.E2EE_DEFAULT_ON = 'true';
+    await worker.scheduled({}, srv.env);
+    expect(migrationRow(srv, projectId)).toMatchObject({
+      direction: 'decrypt',
+      state: 'abandoned',
+      lease_id: null,
+      purge_cursor: null
+    });
+    expect(count(srv, 'artifacts', projectId)).toBe(0);
+    expect(count(srv, 'revisions', projectId)).toBe(0);
+    expect(formatOf(srv, projectId)).toBe(2);
+  });
 });
 
 // --- The owner's limits at the cutover ----------------------------------------------

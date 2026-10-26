@@ -3142,19 +3142,37 @@ export async function projectMigrationErasureStatements(
  * them. Otherwise nothing could finish or abandon it either: its staged
  * plaintext, exempt from quota, would linger beside the ciphertext, and
  * while the global flags stay on its encrypted writes stay refused.
+ *
+ * Phase 8, slice 8-1: `defaultOn` (the account-scoped `isE2eeDefaultOn`,
+ * given only while E2EE_DEFAULT_ON is on) names the owners for whom the
+ * reverse path is closed for good. Their decrypt stagings are abandoned
+ * whatever their lease, since nothing could finish them: the cutover and
+ * the staging writes refuse them already, so a lease holder could only
+ * renew it.
  */
 export async function sweepProjectMigrations(
   env: MigrationEnv,
   enabled: boolean,
   eligible: (email: string | undefined, direction: string) => boolean = () =>
     true,
-  now = Date.now()
+  now = Date.now(),
+  defaultOn?: (email: string | undefined) => boolean
 ): Promise<void> {
   const db = env.DB;
   if (!enabled || !db) return;
   try {
     if (!(await isE2eeProjectMigrationStorageReady(db))) return;
     const withdrawn = await abandonWithdrawnStagings(db, eligible, now);
+    if (defaultOn && withdrawn.length < MIGRATION_SWEEP_ROWS) {
+      withdrawn.push(
+        ...(await abandonClosedDecryptStagings(
+          db,
+          defaultOn,
+          now,
+          MIGRATION_SWEEP_ROWS - withdrawn.length
+        ))
+      );
+    }
     const { results } = await db
       .prepare(
         `SELECT project_id, state, direction FROM e2ee_project_migrations
@@ -3266,6 +3284,81 @@ async function abandonWithdrawnStagings(
     ).all<SweepCandidate>();
     const candidates = results ?? [];
     await abandonIneligible(db, candidates, eligible, now, abandoned);
+    if (candidates.length < MIGRATION_SWEEP_CANDIDATES) break;
+    after = candidates[candidates.length - 1];
+  }
+  return abandoned;
+}
+
+/**
+ * Abandons, a few per sweep, the decrypt stagings whose owner `defaultOn`
+ * admits (slice 8-1), leased or not. The abandon is fenced on the row still
+ * being a decrypt staging, so a staging that cut over meanwhile is kept.
+ * Candidates are read oldest first, keyset-paged like
+ * {@link abandonWithdrawnStagings}. Returns the rows it abandoned, for the
+ * sweep to drop their staged plaintext.
+ */
+async function abandonClosedDecryptStagings(
+  db: D1Database,
+  defaultOn: (email: string | undefined) => boolean,
+  now: number,
+  limit: number
+): Promise<{ project_id: string; state: string; direction: string }[]> {
+  const select = `SELECT m.project_id, m.direction, m.updated_at, u.email
+       FROM e2ee_project_migrations m
+       LEFT JOIN users u ON u.id = m.owner_user_id
+       WHERE m.state = 'staging' AND m.direction = 'decrypt'`;
+  const order = 'ORDER BY m.updated_at, m.project_id LIMIT ?';
+  const abandoned: { project_id: string; state: string; direction: string }[] =
+    [];
+  let after: SweepCandidate | undefined;
+  for (
+    let page = 0;
+    page < MIGRATION_SWEEP_CANDIDATE_PAGES && abandoned.length < limit;
+    page++
+  ) {
+    const { results } = await (
+      after
+        ? db
+            .prepare(
+              `${select}
+         AND (m.updated_at > ? OR (m.updated_at = ? AND m.project_id > ?))
+       ${order}`
+            )
+            .bind(
+              after.updated_at,
+              after.updated_at,
+              after.project_id,
+              MIGRATION_SWEEP_CANDIDATES
+            )
+        : db.prepare(`${select} ${order}`).bind(MIGRATION_SWEEP_CANDIDATES)
+    ).all<SweepCandidate>();
+    const candidates = results ?? [];
+    for (const row of candidates) {
+      if (abandoned.length >= limit) break;
+      if (!defaultOn(row.email ?? undefined)) continue;
+      try {
+        const result = await db
+          .prepare(
+            `UPDATE e2ee_project_migrations
+             SET state = 'abandoned', lease_id = NULL, lease_expires_at = NULL,
+                 purge_cursor = 'cleanup', updated_at = ?
+             WHERE project_id = ? AND state = 'staging'
+               AND direction = 'decrypt'`
+          )
+          .bind(new Date(now).toISOString(), row.project_id)
+          .run();
+        if ((result.meta?.changes ?? 0) === 1) {
+          abandoned.push({
+            project_id: row.project_id,
+            state: 'abandoned',
+            direction: 'decrypt'
+          });
+        }
+      } catch {
+        // An account being erased, say: its erasure abandons it instead.
+      }
+    }
     if (candidates.length < MIGRATION_SWEEP_CANDIDATES) break;
     after = candidates[candidates.length - 1];
   }

@@ -17,9 +17,10 @@ import {
   decodeProjectPreferences,
   fromBase64Url
 } from '@openzcad/crypto';
-import type {
-  E2eeProjectPreferenceRecord,
-  E2eeProjectPreferenceResponse
+import {
+  E2EE_DEFAULT_ON_CODE,
+  type E2eeProjectPreferenceRecord,
+  type E2eeProjectPreferenceResponse
 } from '@openzcad/shared';
 import { cachedSchemaProbe } from '@openzcad/cloudflare-adapters';
 
@@ -132,13 +133,19 @@ function base64UrlBytes(value: unknown, maxBytes: number): Uint8Array | null {
  * caller has already checked the flag, readiness and, for PUT, the write
  * authorization whose SQL predicate binds the write to a live session and
  * the erasure fence.
+ *
+ * ADR-024 slice 8-1: with `defaultOn` (`isE2eeDefaultOn` for the account)
+ * the opt-out is closed: a well-formed record turning "Encrypt new
+ * projects" off answers 409 E2EE_DEFAULT_ON and stores nothing. Turning it
+ * on still works.
  */
 export async function handleProjectPreferenceRequest(
   request: Request,
   db: D1Database,
   userId: string,
   authorization: { sql: string; binds: readonly unknown[] },
-  body: () => Promise<Record<string, unknown>>
+  body: () => Promise<Record<string, unknown>>,
+  defaultOn = false
 ): Promise<Response> {
   if (request.method === 'GET') {
     const row = await storedRow(db, userId);
@@ -177,6 +184,13 @@ export async function handleProjectPreferenceRequest(
       400,
       'E2EE_REQUEST_INVALID',
       'The preference record names another account.'
+    );
+  }
+  if (defaultOn && !decoded.encryptNewProjects) {
+    return refusal(
+      409,
+      E2EE_DEFAULT_ON_CODE,
+      'New projects are always end-to-end encrypted now. This setting can no longer be turned off.'
     );
   }
   const now = new Date().toISOString();

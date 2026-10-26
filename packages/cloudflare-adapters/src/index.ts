@@ -253,6 +253,16 @@ export interface CloudflareEnv {
    * Phase 8 deletes it.
    */
   E2EE_REVERSE_ENABLED?: string;
+  /**
+   * Makes end-to-end encryption the default (ADR-024 Phase 8, slice 8-1):
+   * no plaintext project creation, adoption or duplication for anyone,
+   * no plaintext share links or invitations on plaintext projects, the
+   * "Encrypt new projects" opt-out and the reverse path closed, and the
+   * hourly sweep abandons any live decrypt staging. Closed unless set to a
+   * true value, and only for accounts migration is open to
+   * (E2EE_MIGRATION_ENABLED). Held until the outside review is done.
+   */
+  E2EE_DEFAULT_ON?: string;
   AI_PATCH_DIRECT_EDIT_ENABLED?: string;
   AI_PATCH_GROWING_HOLDER_ENABLED?: string;
   AI_PATCH_HOLE_CONTROL_ENABLED?: string;
@@ -342,6 +352,7 @@ export const CLOUDFLARE_BOOLEAN_FLAGS = [
   'E2EE_PROJECTS_ENABLED',
   'E2EE_MIGRATION_ENABLED',
   'E2EE_REVERSE_ENABLED',
+  'E2EE_DEFAULT_ON',
   'AI_PATCH_DIRECT_EDIT_ENABLED',
   'AI_PATCH_GROWING_HOLDER_ENABLED',
   'AI_PATCH_HOLE_CONTROL_ENABLED',
@@ -473,6 +484,11 @@ export function isE2eeMigrationEnabled(
  * plaintext (ADR-024 Phase 7, slice 7-3, the beta-only reverse path):
  * migration must be open to it (`isE2eeMigrationEnabled`) and
  * E2EE_REVERSE_ENABLED itself must be on. All default closed.
+ *
+ * Phase 8, slice 8-1: closed again wherever encryption is the default
+ * (`isE2eeDefaultOn`), as if E2EE_REVERSE_ENABLED were off for the account:
+ * no decrypt start, cutover or staging write, and the sweep abandons the
+ * account's decrypt stagings.
  */
 export function isE2eeReverseEnabled(
   env: CloudflareEnv,
@@ -480,6 +496,21 @@ export function isE2eeReverseEnabled(
 ): boolean {
   return (
     isCloudflareFeatureEnabled(env, 'E2EE_REVERSE_ENABLED') &&
+    isE2eeMigrationEnabled(env, email) &&
+    !isE2eeDefaultOn(env, email)
+  );
+}
+
+/**
+ * Whether end-to-end encryption is the default for one authenticated account
+ * (ADR-024 Phase 8, slice 8-1): E2EE_DEFAULT_ON must be on and migration must
+ * be open to the account (`isE2eeMigrationEnabled`), so the key routes,
+ * encrypted projects and migration are all available before plaintext
+ * creation closes. All default closed.
+ */
+export function isE2eeDefaultOn(env: CloudflareEnv, email?: string): boolean {
+  return (
+    isCloudflareFeatureEnabled(env, 'E2EE_DEFAULT_ON') &&
     isE2eeMigrationEnabled(env, email)
   );
 }
