@@ -1453,7 +1453,15 @@ const previousKeysOf = (
  */
 export async function createProjectGroup(
   ctx: ProjectGroupContext,
-  projectId: string
+  projectId: string,
+  options: {
+    /**
+     * Replace this device's stored state for the project: a migration
+     * staged again after an abandon (slice 7-2), whose old group the
+     * account dropped.
+     */
+    readonly replace?: boolean;
+  } = {}
 ): Promise<ProjectGroupState> {
   const device = requireDevice(ctx);
   const ref = refOf(ctx, device, projectId);
@@ -1463,11 +1471,16 @@ export async function createProjectGroup(
   // The server has no group, so nothing stored here belongs to one.
   const stale = await ctx.sessions.leaf(ref);
   if (stale) await ctx.sessions.discardSession(ref, stale.signatureKey);
-  const change = await ctx.sessions.createGroup(ref, device, {
-    lists: [ctx.account.list],
-    certifications: [],
-    revocationCutoffs: newGroupCutoffs(ctx)
-  });
+  const change = await ctx.sessions.createGroup(
+    ref,
+    device,
+    {
+      lists: [ctx.account.list],
+      certifications: [],
+      revocationCutoffs: newGroupCutoffs(ctx)
+    },
+    options.replace ? { replace: true } : {}
+  );
   const leaf = (await ctx.sessions.leaf(ref))!;
   let groupInfo: string | null = null;
   try {
@@ -3262,6 +3275,18 @@ const rolesId = (
   projectId: string,
   keyEpoch: number
 ) => JSON.stringify([ctx.account.userId, projectId, keyEpoch]);
+
+/**
+ * Forgets the roles this page verified for one project: a migration's
+ * staged group the account dropped (slice 7-2), whose key epochs a new
+ * staging reuses.
+ */
+export function forgetEpochRoles(userId: string, projectId: string): void {
+  for (const id of [...knownRoles.keys()]) {
+    const [user, project] = JSON.parse(id) as [string, string];
+    if (user === userId && project === projectId) knownRoles.delete(id);
+  }
+}
 
 /**
  * The MLS roles the project's group held in `keyEpoch` (slice 5-2): what

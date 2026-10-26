@@ -95,6 +95,12 @@ export interface VersionPinStore {
     projectId: string,
     shareIds: readonly string[]
   ): Promise<void>;
+  /**
+   * Forgets one project's pins: only for a migration's staged ciphertext
+   * the account dropped (an abandon, slice 7-2), whose project is still
+   * plaintext, so the next staging is not taken for a rollback.
+   */
+  forget?(userId: string, projectId: string): Promise<void>;
 }
 
 /** Most tombstoned link ids one pin keeps (`MAX_SHARE_TOMBSTONES`). */
@@ -312,6 +318,9 @@ export function memoryVersionPins(): VersionPinStore {
       ),
     addTombstones: async (userId, projectId, shareIds) => {
       update(userId, projectId, (current) => withTombstones(current, shareIds));
+    },
+    forget: async (userId, projectId) => {
+      pins.delete(id(userId, projectId));
     }
   };
 }
@@ -398,6 +407,16 @@ export function indexedDbVersionPins(): VersionPinStore {
       await transact(userId, projectId, (current) =>
         withTombstones(current, shareIds)
       );
+    },
+    forget: async (userId, projectId) => {
+      const db = await openDatabase();
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(PINS, 'readwrite');
+        tx.oncomplete = () => resolve();
+        tx.onabort = tx.onerror = () =>
+          reject(tx.error ?? new Error('IndexedDB version pin delete failed'));
+        tx.objectStore(PINS).delete([userId, projectId]);
+      });
     }
   };
 }

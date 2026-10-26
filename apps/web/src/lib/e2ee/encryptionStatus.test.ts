@@ -204,7 +204,10 @@ describe('encryption status reports from the encrypted store', () => {
       replaced: {},
       roomAccess: () => room,
       shareHead: outcome(head),
-      writeShareLinks: outcome(head)
+      writeShareLinks: outcome(head),
+      stageMigratedProject: outcome({ project: { projectId: 'proj_staged' } }),
+      revisionMap: outcome(new Map<string, string>()),
+      forgetStagedProject: outcome(undefined)
     } as unknown as EncryptedProjectStore;
     return { store, room };
   }
@@ -272,6 +275,38 @@ describe('encryption status reports from the encrypted store', () => {
     await expect(
       reporting.roomAccess().restoreBlobs('proj_d', ['blob_1'])
     ).rejects.toBe(error);
+    expect(encryptionStatusOf('proj_d').state).toBe('problem');
+  });
+
+  it('reports what a migration stages and the journal it reads (slice 7-2)', async () => {
+    const { store } = fakeStore();
+    const reporting = reportingEncryptedProjectStore(store, () => true);
+    await reporting.stageMigratedProject({
+      document: { projectId: 'proj_staged' } as unknown as ProjectDocument,
+      info: { name: 'Staged', exports: [] }
+    });
+    expect(encryptionStatusOf('proj_staged').state).toBe('verified');
+    await reporting.revisionMap('proj_a');
+    expect(encryptionStatusOf('proj_a').state).toBe('verified');
+    // Forgetting a dropped staging reaches the store and verifies nothing.
+    resetEncryptionStatus();
+    await reporting.forgetStagedProject('proj_b');
+    expect(store.forgetStagedProject).toHaveBeenCalledWith('proj_b');
+    expect(encryptionStatusOf('proj_b').state).toBe('unverified');
+
+    const error = integrityError();
+    const failing = reportingEncryptedProjectStore(
+      fakeStore(error).store,
+      () => true
+    );
+    await expect(
+      failing.stageMigratedProject({
+        document: { projectId: 'proj_c' } as unknown as ProjectDocument,
+        info: { name: 'Staged', exports: [] }
+      })
+    ).rejects.toBe(error);
+    expect(encryptionStatusOf('proj_c').state).toBe('problem');
+    await expect(failing.revisionMap('proj_d')).rejects.toBe(error);
     expect(encryptionStatusOf('proj_d').state).toBe('problem');
   });
 

@@ -9727,7 +9727,12 @@ export class ProjectCollaborationRoom extends DurableObject {
           ROOM_SOCKET_TICKETS_KEY,
           ROOM_EDIT_LEASE_KEY
         ]);
-        return new Response(null, { status: 204 });
+        // The version the room holds (slice 7-2): one newer than the
+        // account's head is an edit no checkpoint saved yet, which a
+        // migration must not leave behind.
+        return Response.json({
+          latestVersion: this.latestDocument?.version ?? null
+        });
       }
       const history = new Set<number>([
         ...this.historyVersions,
