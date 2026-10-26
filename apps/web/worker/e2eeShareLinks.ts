@@ -1732,6 +1732,8 @@ export async function handleEncryptedSharedSnapshot(
 export interface SharedBlobGuard {
   /** A request that names no link the route serves. */
   unbudgeted(): Promise<void>;
+  /** Before any R2 read, an independent repetition cap across project links. */
+  blob(blobKey: string): Promise<void>;
   /**
    * Before the link's snapshot is read (#935 review): true when this
    * address already went over its load budget for `linkKey` this minute.
@@ -1881,6 +1883,9 @@ export interface SharedBlobBucket {
  * its header names come from a per-isolate cache, or once per snapshot
  * and isolate from ranged reads of its prefix, which count against their
  * own per-address budget (`snapshotRead`).
+ * An independent per-address, per-project-blob budget (`blob`) applies
+ * before either path, so repeating one file cannot consume the whole
+ * link allowance or bypass the cap through another link to the project.
  */
 export async function handleEncryptedSharedBlob(
   pathname: string,
@@ -1913,6 +1918,15 @@ ${row.share_id}`)
   // without it (#935 review): once this address is past both budgets, a
   // request reads nothing from R2 and parses no envelope.
   charged = (await guard?.spent(linkKey)) ?? false;
+  // Project-scoped rather than link-scoped: another token for the same
+  // object must not buy another repetition allowance. Both ordinary and
+  // fallback requests pass this cap before any R2 read. Check `spent`
+  // first so an exhausted address cannot create more per-blob counters.
+  await guard?.blob(
+    (
+      await sha256Hex(new TextEncoder().encode(`${row.project_id}\n${blobId}`))
+    ).slice(0, 32)
+  );
   const named = await snapshotBlobIds(row, snapshots, guard);
   if (!named) return notServed();
   if (!charged) await guard?.load(linkKey, named.length);

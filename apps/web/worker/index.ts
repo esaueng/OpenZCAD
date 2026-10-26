@@ -293,6 +293,9 @@ const SHARED_PROJECT_SOURCE_ROUTE = /^\/api\/share\/([^/]+)\/sources\/([^/]+)$/;
  */
 const ENCRYPTED_SHARED_SNAPSHOT_RATE_LIMIT = 60;
 const ENCRYPTED_SHARED_BLOB_RATE_LIMIT = 300;
+// Two loads plus two retries of each blob per address and minute, across
+// links to its project. The snapshot's blob count cannot amplify this cap.
+const ENCRYPTED_SHARED_BLOB_REPETITION_RATE_LIMIT = 4;
 /**
  * Snapshot prefix reads by the blob route per client address and minute,
  * across every link (#935 review): a read happens only when an isolate has
@@ -991,6 +994,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const blobGuard: SharedBlobGuard | null = address
       ? {
           unbudgeted: perAddress,
+          blob: async (blobKey) =>
+            enforceApiRateLimit(
+              env,
+              `${address}:blob:${blobKey}`,
+              ENCRYPTED_SHARED_BLOB_REPETITION_RATE_LIMIT
+            ),
           spent: async (linkKey) => {
             if (!(await isApiRateLimitSpent(env, spentMark(linkKey)))) {
               return false;
