@@ -49,7 +49,13 @@ export interface E2eeSignedStatement {
   signature: string;
 }
 
-/** `POST /api/e2ee/projects/:id/share-links` (owner only). */
+/**
+ * `POST /api/e2ee/projects/:id/share-links` (owner only), signed by the
+ * sending owner device (`signShareLinkRegistration`, "OZN") over every
+ * other field. The server registers the link only while `deviceId` is
+ * certified in the owner's newest device list, so an owner device removed
+ * while its session stays signed in cannot register links.
+ */
 export interface E2eeCreateShareLinkRequest {
   /** The grant's link id. */
   shareId: string;
@@ -62,6 +68,10 @@ export interface E2eeCreateShareLinkRequest {
   ownerIdentityHash: string;
   /** The share key under the current key epoch's project key. */
   key: E2eeShareKeyWrap;
+  /** The sending device, certified in the owner's device list. */
+  deviceId: string;
+  /** 65 bytes: `u8 1 | r || s` by `deviceId`'s certified signing key. */
+  signature: string;
 }
 
 /** The share key wrapped under one key epoch's project key (41 bytes). */

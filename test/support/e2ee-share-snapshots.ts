@@ -87,7 +87,9 @@ export function putRawSnapshot(
     `/api/e2ee/projects/${projectId}/share-links/${shareId}/snapshot`,
     {
       user: d.account.userId,
-      raw: new Uint8Array(encodeE2eeFrame(snapshot.metadata, snapshot.envelope)),
+      raw: new Uint8Array(
+        encodeE2eeFrame(snapshot.metadata, snapshot.envelope)
+      ),
       contentType: E2EE_FRAME_CONTENT_TYPE
     }
   );

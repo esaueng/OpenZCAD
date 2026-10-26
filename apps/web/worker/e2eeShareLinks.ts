@@ -12,9 +12,10 @@
  * snapshot; per account, the newest identity-signed share delegation.
  *
  * It still checks what it can, as defense in depth: the owner registers
- * and states links and forgets them (signed by a device the owner's newest
- * device list certifies over the link and the current key epoch, fenced on
- * that list's head); the owner and editors post key wraps (for the
+ * links and forgets them (signed by a device the owner's newest device list
+ * certifies over the link and the current key epoch, fenced on that list's
+ * head; a registration's signature covers every field stored) and states
+ * them; the owner and editors post key wraps (for the
  * group's current key epoch only, signed by a device the caller's newest
  * device list certifies and fenced on that list's head; the first stored
  * wins) and snapshots (a
@@ -54,6 +55,7 @@ import {
   decodeShareDelegation,
   decodeDeviceListEntry,
   fromBase64Url,
+  fromHex,
   parseEnvelope,
   publicKeyHash,
   toBase64Url,
@@ -63,6 +65,7 @@ import {
   verifyShareDelegation,
   verifyShareKeyWrap,
   verifyShareLinkForget,
+  verifyShareLinkRegistration,
   versionHash,
   type ShareDelegation
 } from '@openzcad/crypto';
@@ -518,10 +521,7 @@ async function putDelegation(
   } catch {
     certified = new Set();
   }
-  if (
-    !head ||
-    !delegation.deviceKeys.every((key) => certified.has(b64(key)))
-  ) {
+  if (!head || !delegation.deviceKeys.every((key) => certified.has(b64(key)))) {
     invalid('A delegation names only devices your device list certifies');
   }
   // ...and only while that list is still the head (#912 review): a stale
@@ -593,19 +593,22 @@ async function createLink(
   }
   const tokenHash = body.tokenHash;
   const mode = modeField(body.mode);
-  const shareKeyHash = bytesField(body.shareKeyHash, 'shareKeyHash', {
+  const keyHash = bytesField(body.shareKeyHash, 'shareKeyHash', {
     exact: HASH_BYTES
-  }).text;
-  const ownerIdentityHash = bytesField(
-    body.ownerIdentityHash,
-    'ownerIdentityHash',
-    { exact: HASH_BYTES }
-  ).text;
+  });
+  const shareKeyHash = keyHash.text;
+  const ownerHash = bytesField(body.ownerIdentityHash, 'ownerIdentityHash', {
+    exact: HASH_BYTES
+  });
+  const ownerIdentityHash = ownerHash.text;
   const key = record(body.key, 'key');
   const keyEpoch = uintField(key.keyEpoch, 'key.keyEpoch');
-  const wrapped = bytesField(key.wrapped, 'key.wrapped', {
-    exact: WRAP_BYTES
-  }).text;
+  const wrap = bytesField(key.wrapped, 'key.wrapped', { exact: WRAP_BYTES });
+  const wrapped = wrap.text;
+  const deviceId = idField(body.deviceId, 'deviceId');
+  const signature = bytesField(body.signature, 'signature', {
+    exact: STATEMENT_SIGNATURE_BYTES
+  }).bytes;
   const identity = await currentIdentity(ctx.db, ctx.userId);
   if (identity?.hash !== ownerIdentityHash) {
     refuse(
@@ -616,20 +619,57 @@ async function createLink(
   }
   const current = await currentKeyEpoch(ctx.db, projectId);
   if (keyEpoch !== current) stale(current);
-  const live = await ctx.db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM e2ee_share_links
-       WHERE project_id = ? AND revoked_at IS NULL`
-    )
-    .bind(projectId)
-    .first<{ n: number }>();
-  if ((live?.n ?? 0) >= MAX_LIVE_SHARE_LINKS) {
+  // A link serves for as long as it lives, so the owner account is not
+  // enough (#912 review): only a device the owner's newest device list
+  // certifies may register one, proven by its signature over everything
+  // stored here. An owner device removed while its session stays signed in
+  // cannot register links, nor fill the project's live-link limit...
+  const device = await requireCertifiedDevice(ctx.db, ctx.userId, deviceId);
+  let verified: boolean;
+  try {
+    verified = await verifyShareLinkRegistration(
+      device.signingKey,
+      {
+        projectId,
+        shareId,
+        tokenHash: fromHex(tokenHash),
+        mode,
+        shareKeyHash: keyHash.bytes,
+        ownerIdentityKeyHash: ownerHash.bytes,
+        keyEpoch,
+        wrapped: wrap.bytes
+      },
+      signature
+    );
+  } catch {
+    verified = false;
+  }
+  if (!verified) {
+    refuse(
+      400,
+      'E2EE_SIGNATURE_INVALID',
+      'The link registration is not signed by the device it names.'
+    );
+  }
+  // ...and a removal of that device landing first makes the insert refuse.
+  const signerList = deviceListUnchanged(ctx.userId, device);
+  const linkLimit: () => never = () =>
     refuse(
       409,
       'E2EE_SHARE_LINK_LIMIT',
       `A project keeps at most ${MAX_LIVE_SHARE_LINKS} share links. Revoke one first.`
     );
-  }
+  const liveLinks = async () =>
+    (
+      await ctx.db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM e2ee_share_links
+           WHERE project_id = ? AND revoked_at IS NULL`
+        )
+        .bind(projectId)
+        .first<{ n: number }>()
+    )?.n ?? 0;
+  if ((await liveLinks()) >= MAX_LIVE_SHARE_LINKS) linkLimit();
   const now = new Date().toISOString();
   const results = await runBatch(ctx.db, [
     ctx.db
@@ -640,7 +680,10 @@ async function createLink(
          SELECT ?, ?, ?, ?, ?, ?, ?, ?
          WHERE ${ctx.authorization.sql} AND ${PROJECT_FENCE}
            AND EXISTS (SELECT 1 FROM e2ee_project_groups
-             WHERE project_id = ? AND key_epoch_base + epoch = ?)`
+             WHERE project_id = ? AND key_epoch_base + epoch = ?)
+           AND (SELECT COUNT(*) FROM e2ee_share_links
+             WHERE project_id = ? AND revoked_at IS NULL) < ?
+           AND ${signerList.sql}`
       )
       .bind(
         projectId,
@@ -655,7 +698,10 @@ async function createLink(
         projectId,
         ctx.userId,
         projectId,
-        keyEpoch
+        keyEpoch,
+        projectId,
+        MAX_LIVE_SHARE_LINKS,
+        ...signerList.binds
       ),
     ctx.db
       .prepare(
@@ -667,8 +713,12 @@ async function createLink(
       .bind(projectId, shareId, keyEpoch, wrapped, ctx.userId, now)
   ]);
   if (!changed(results[0]) || !changed(results[1])) {
+    if (await deviceListMoved(ctx.db, ctx.userId, device)) {
+      refuseDeviceListMoved();
+    }
     const after = await currentKeyEpoch(ctx.db, projectId);
     if (after !== keyEpoch) stale(after);
+    if ((await liveLinks()) >= MAX_LIVE_SHARE_LINKS) linkLimit();
     sessionRequired();
   }
   return json(await oneLink(ctx.db, projectId, shareId), 201);

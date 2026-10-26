@@ -9,7 +9,15 @@
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type Mock
+} from 'vitest';
 import worker from '../apps/web/worker/index';
 import {
   ShareLinkError,
@@ -23,6 +31,7 @@ import {
   signShareDelegation,
   signShareKeyWrap,
   signShareLinkForget,
+  signShareLinkRegistration,
   toBase64Url,
   toHex,
   wrapKey,
@@ -521,6 +530,144 @@ describe('creating a link (slice 5-10)', { timeout: 120_000 }, () => {
       published: [],
       failed: []
     });
+  });
+});
+
+describe('registering a link (slice 8-C1)', { timeout: 120_000 }, () => {
+  /**
+   * `POST …/share-links` as OWNER's session for a fresh link, naming
+   * `deviceId` and signed by OWNER's `signer` over the body (`signed`
+   * overrides what was signed, `body` what is sent).
+   */
+  async function registerAs(
+    srv: Server,
+    projectId: string,
+    signer: string,
+    deviceId: string,
+    options: {
+      signed?: Partial<{ tokenHash: string; mode: 'view' | 'tweak' }>;
+      body?: Record<string, unknown>;
+    } = {}
+  ) {
+    const shareId = `shr_${toBase64Url(randomBytes(16))}`;
+    const tokenHash = toHex(randomBytes(32));
+    const keyHash = randomBytes(32);
+    const keyEpoch = serverKeyEpoch(srv, projectId);
+    const wrapped = randomBytes(41);
+    const signature = await signShareLinkRegistration(
+      owner.devices.get(signer)!.signing.privateKey,
+      {
+        projectId,
+        shareId,
+        tokenHash: fromHex(options.signed?.tokenHash ?? tokenHash),
+        mode: options.signed?.mode ?? 'view',
+        shareKeyHash: keyHash,
+        ownerIdentityKeyHash: owner.list.identityKeyHash,
+        keyEpoch,
+        wrapped
+      }
+    );
+    const response = await srv.call(
+      'POST',
+      `/api/e2ee/projects/${projectId}/share-links`,
+      {
+        user: OWNER,
+        body: {
+          shareId,
+          tokenHash,
+          mode: 'view',
+          shareKeyHash: toBase64Url(keyHash),
+          ownerIdentityHash: toBase64Url(owner.list.identityKeyHash),
+          key: { keyEpoch, wrapped: toBase64Url(wrapped) },
+          deviceId,
+          signature: toBase64Url(signature),
+          ...options.body
+        }
+      }
+    );
+    return {
+      shareId,
+      status: response.status,
+      code: ((await response.json()) as { code?: string }).code
+    };
+  }
+
+  const randomBytes = (length: number) =>
+    crypto.getRandomValues(new Uint8Array(length));
+
+  it('refuses a removed owner device whose session stays signed in, and a signature over anything else', async () => {
+    const { srv, laptop, projectId } = await linkedProject();
+    await delegate(laptop);
+    const links = () => countFor(srv, 'e2ee_share_links', projectId);
+    await owner.revoke(srv.db, 'owner_desktop');
+    try {
+      // The removed device names itself...
+      expect(
+        await registerAs(srv, projectId, 'owner_desktop', 'owner_desktop')
+      ).toMatchObject({ status: 403, code: 'E2EE_DEVICE_NOT_CERTIFIED' });
+      // ...or a sibling it cannot sign for...
+      expect(
+        await registerAs(srv, projectId, 'owner_desktop', 'owner_laptop')
+      ).toMatchObject({ status: 400, code: 'E2EE_SIGNATURE_INVALID' });
+      // ...or registers as the owner account alone, as before.
+      expect(
+        await registerAs(srv, projectId, 'owner_laptop', 'owner_laptop', {
+          body: { deviceId: undefined, signature: undefined }
+        })
+      ).toMatchObject({ status: 400 });
+      // A certified device's signature over another token or mode.
+      expect(
+        await registerAs(srv, projectId, 'owner_laptop', 'owner_laptop', {
+          signed: { tokenHash: toHex(randomBytes(32)) }
+        })
+      ).toMatchObject({ status: 400, code: 'E2EE_SIGNATURE_INVALID' });
+      expect(
+        await registerAs(srv, projectId, 'owner_laptop', 'owner_laptop', {
+          signed: { mode: 'tweak' }
+        })
+      ).toMatchObject({ status: 400, code: 'E2EE_SIGNATURE_INVALID' });
+      expect(links()).toBe(0);
+      // The certified device's own registration lands, and the page's too.
+      expect(
+        await registerAs(srv, projectId, 'owner_laptop', 'owner_laptop')
+      ).toMatchObject({ status: 201 });
+      const created = await createShareLink(
+        laptop.shareLinks,
+        projectId,
+        'view'
+      );
+      expect((await served(srv, created.fragment.token)).status).toBe(200);
+      expect(links()).toBe(2);
+    } finally {
+      owner = await makeAccount(OWNER, ['owner_laptop', 'owner_desktop']);
+    }
+  });
+
+  it('a device-list change between the device check and the insert registers nothing', async () => {
+    const { srv, laptop, projectId } = await linkedProject();
+    await delegate(laptop);
+    const push = srv.statements.push.bind(srv.statements);
+    srv.statements.push = (...sql: string[]) => {
+      if (sql.some((s) => /^\s*INSERT INTO e2ee_share_links/.test(s))) {
+        srv.statements.push = push;
+        srv.db
+          .prepare(
+            `INSERT INTO e2ee_device_list_entries
+             SELECT user_id, generation, sequence + 1, entry, signature,
+                    substr(entry_hash, 2) || '0', created_at
+             FROM e2ee_device_list_entries WHERE user_id = ?
+             ORDER BY sequence DESC LIMIT 1`
+          )
+          .run(OWNER);
+      }
+      return push(...sql);
+    };
+    expect(
+      await registerAs(srv, projectId, 'owner_laptop', 'owner_laptop')
+    ).toMatchObject({ status: 409, code: 'E2EE_DEVICE_LIST_CHANGED' });
+    expect(srv.statements.push).toBe(push);
+    expect(countFor(srv, 'e2ee_share_links', projectId)).toBe(0);
+    expect(countFor(srv, 'e2ee_share_keys', projectId)).toBe(0);
   });
 });
 
@@ -1408,7 +1555,11 @@ describe('the delegation (slice 5-10)', { timeout: 120_000 }, () => {
     const { srv, laptop } = await linkedProject();
     await delegate(laptop);
     const stored = () =>
-      rows(srv, 'SELECT * FROM e2ee_share_delegations WHERE user_id = ?', OWNER);
+      rows(
+        srv,
+        'SELECT * FROM e2ee_share_delegations WHERE user_id = ?',
+        OWNER
+      );
     const before = stored();
     // A delegation still naming the owner's desktop, whose removal lands
     // after the devices were checked and before the delegation is written.
@@ -1996,28 +2147,25 @@ describe('share snapshot objects (slice 8-C1)', { timeout: 120_000 }, () => {
       document,
       padding: R2_PADDING
     });
-    const second = await sealRawSnapshot(
-      srv,
-      member,
-      projectId,
-      link.shareId,
-      { document, padding: R2_PADDING }
-    );
+    const second = await sealRawSnapshot(srv, member, projectId, link.shareId, {
+      document,
+      padding: R2_PADDING
+    });
     // The owner's write stores its object; the editor's write of the same
     // version then lands whole before the owner's row does.
-    const put = srv.bucket.put.getMockImplementation()!;
-    srv.bucket.put.mockImplementationOnce(
-      async (key: string, body: Uint8Array) => {
-        await put(key, body);
-        expect(
-          (await putRawSnapshot(srv, member, projectId, link.shareId, second))
-            .status
-        ).toBe(200);
-      }
-    );
+    const bucketPut = srv.bucket.put as Mock<
+      (key: string, body: Uint8Array) => Promise<void>
+    >;
+    const put = bucketPut.getMockImplementation()!;
+    bucketPut.mockImplementationOnce(async (key: string, body: Uint8Array) => {
+      await put(key, body);
+      expect(
+        (await putRawSnapshot(srv, member, projectId, link.shareId, second))
+          .status
+      ).toBe(200);
+    });
     expect(
-      (await putRawSnapshot(srv, laptop, projectId, link.shareId, first))
-        .status
+      (await putRawSnapshot(srv, laptop, projectId, link.shareId, first)).status
     ).toBe(200);
     // The owner's row won, and the editor's object it replaced is gone.
     const key = envelopeKey(srv, projectId, link.shareId)!;
@@ -2039,8 +2187,11 @@ describe('share snapshot objects (slice 8-C1)', { timeout: 120_000 }, () => {
       (await putRawSnapshot(srv, laptop, projectId, a.shareId, await big()))
         .status
     ).toBe(200);
-    const del = srv.bucket.delete.getMockImplementation()!;
-    srv.bucket.delete.mockImplementation(async () => {
+    const bucketDelete = srv.bucket.delete as Mock<
+      (key: string) => Promise<void>
+    >;
+    const del = bucketDelete.getMockImplementation()!;
+    bucketDelete.mockImplementation(async () => {
       throw new Error('R2 is unavailable');
     });
     // A replacement whose delete fails leaves its old object under the
@@ -2064,7 +2215,7 @@ describe('share snapshot objects (slice 8-C1)', { timeout: 120_000 }, () => {
     ).json()) as { links: { shareId: string }[] };
     expect(listed.links.map((link) => link.shareId)).toEqual([b.shareId]);
     // R2 recovers: the next forget deletes both, then the row.
-    srv.bucket.delete.mockImplementation(del);
+    bucketDelete.mockImplementation(del);
     await revokeShareLink(laptop.shareLinks, projectId, b.shareId);
     expect(snapshotObjects(srv, projectId)).toEqual([]);
     expect(countFor(srv, 'e2ee_share_snapshots', projectId)).toBe(0);

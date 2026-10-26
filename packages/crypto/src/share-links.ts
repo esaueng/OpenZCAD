@@ -59,6 +59,7 @@ export const SHARE_LINK_GRANT_VERSION_1 = 1;
 export const SHARE_LINK_TOMBSTONE_VERSION_1 = 1;
 export const SHARE_KEY_WRAP_VERSION_1 = 1;
 export const SHARE_LINK_FORGET_VERSION_1 = 1;
+export const SHARE_LINK_REGISTRATION_VERSION_1 = 1;
 
 const DELEGATION_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x53); // "OZS"
 const AUTHORITY_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x41); // "OZA"
@@ -66,6 +67,7 @@ const GRANT_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x4c); // "OZL"
 const TOMBSTONE_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x59); // "OZY"
 const KEY_WRAP_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x57); // "OZW"
 const FORGET_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x46); // "OZF"
+const REGISTRATION_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x4e); // "OZN"
 
 const MAX_U32 = 0xffffffff;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -1260,6 +1262,111 @@ export async function verifyShareLinkForget(
     key,
     'share link forget',
     encodeShareLinkForget(value),
+    signature
+  );
+}
+
+// --- Link registrations -----------------------------------------------------
+
+/**
+ * An owner device's request that the server register a link it granted:
+ * serve the token's snapshots and keep the share key under the current key
+ * epoch's project key. The server takes it only signed by a device the
+ * owner's current device list certifies, so an owner device removed while
+ * its session stays signed in cannot register links (and fill the
+ * project's live-link limit). It binds every field the server stores.
+ */
+export interface ShareLinkRegistrationStatement {
+  readonly projectId: string;
+  readonly shareId: string;
+  /** SHA-256 of the link token's bytes (32 bytes), as the server keeps it. */
+  readonly tokenHash: Uint8Array;
+  readonly mode: ShareLinkMode;
+  /** `shareKeyHash` of the link's share key. */
+  readonly shareKeyHash: Uint8Array;
+  /** The owner identity fingerprint the link names. */
+  readonly ownerIdentityKeyHash: Uint8Array;
+  /** The project's current key epoch, which `wrapped` is under. */
+  readonly keyEpoch: number;
+  /** The share key wrapped under that epoch's project key, 1 to 255 bytes. */
+  readonly wrapped: Uint8Array;
+}
+
+/**
+ * Canonical bytes: `"OZN" | u8 1 | u8 length + project id | u8 length +
+ * link id | 32-byte token hash | u8 mode | 32-byte share key hash | 32-byte
+ * owner identity key hash | u32 key epoch | u8 length + wrap`. Never
+ * stored: the signer sends the fields and the signature, and the server
+ * rebuilds these bytes.
+ */
+export function encodeShareLinkRegistration(
+  value: ShareLinkRegistrationStatement
+): Bytes {
+  const fail = (message: string): never => {
+    throw new E2eeError('invalid-argument', message);
+  };
+  if (value === null || typeof value !== 'object') {
+    fail('Expected a link registration');
+  }
+  if (!isEnvelopeId(value.projectId)) fail('projectId is not an id');
+  if (!isEnvelopeId(value.shareId)) fail('shareId is not an id');
+  if (!isHash(value.tokenHash)) fail('tokenHash must be 32 bytes');
+  if (!SHARE_LINK_MODES.includes(value.mode))
+    fail('mode must be view or tweak');
+  if (!isHash(value.shareKeyHash)) fail('shareKeyHash must be 32 bytes');
+  if (!isHash(value.ownerIdentityKeyHash)) {
+    fail('ownerIdentityKeyHash must be 32 bytes');
+  }
+  if (!isUint(value.keyEpoch, MAX_U32)) fail('keyEpoch must be a u32');
+  if (
+    !(value.wrapped instanceof Uint8Array) ||
+    value.wrapped.byteLength === 0 ||
+    value.wrapped.byteLength > 255
+  ) {
+    fail('wrapped must be 1 to 255 bytes');
+  }
+  const writer = new ByteWriter()
+    .bytes(REGISTRATION_MAGIC)
+    .u8(SHARE_LINK_REGISTRATION_VERSION_1);
+  writeId(writer, value.projectId);
+  writeId(writer, value.shareId);
+  return writer
+    .bytes(value.tokenHash)
+    .u8(MODE_CODES[value.mode])
+    .bytes(value.shareKeyHash)
+    .bytes(value.ownerIdentityKeyHash)
+    .u32(value.keyEpoch)
+    .u8(value.wrapped.byteLength)
+    .bytes(value.wrapped)
+    .finish();
+}
+
+/** An owner device signs a link registration: `u8 1 | r || s`. */
+export async function signShareLinkRegistration(
+  deviceKey: SigningPrivateKey,
+  value: ShareLinkRegistrationStatement
+): Promise<Bytes> {
+  return signStatement(
+    deviceKey,
+    'share link registration',
+    encodeShareLinkRegistration(value)
+  );
+}
+
+/**
+ * Whether `signature` is `signerKey`'s over this registration. Throws for
+ * a malformed signature or an unknown signature version.
+ */
+export async function verifyShareLinkRegistration(
+  signerKey: Uint8Array | CryptoKey,
+  value: ShareLinkRegistrationStatement,
+  signature: Uint8Array
+): Promise<boolean> {
+  const { key } = await verifyingKey(signerKey);
+  return statementValid(
+    key,
+    'share link registration',
+    encodeShareLinkRegistration(value),
     signature
   );
 }
