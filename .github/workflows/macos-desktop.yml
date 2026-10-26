@@ -26,7 +26,10 @@ jobs:
           rustup target add aarch64-apple-darwin
           rustup component add clippy rustfmt
       - run: pnpm install --frozen-lockfile
+      # The whole-repo typecheck outgrew Node's default heap on the macOS runner.
       - run: pnpm typecheck
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
       - run: pnpm --filter @openzcad/web lint
       - run: pnpm --filter @openzcad/web exec vitest run src/lib/desktopBridge.test.ts
       - name: Check native host
