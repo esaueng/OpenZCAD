@@ -50,7 +50,7 @@ describe('imageSizeProblem on the desktop', () => {
 
 describe('viewImageScope', () => {
   it('draws a selected body alone, as the mesh export writes it alone', () => {
-    const scope = exportScope([body('a'), body('b')], 'b', true);
+    const scope = exportScope([body('a'), body('b')], 'b');
     expect(viewImageScope(scope, 'Boss')).toEqual({
       bodyIds: ['b'],
       label: 'Boss'
@@ -60,8 +60,7 @@ describe('viewImageScope', () => {
   it('keeps a selected body whose history step failed: the view draws it', () => {
     const scope = exportScope(
       [body('a'), { ...body('b'), withheld: true }],
-      'b',
-      true
+      'b'
     );
     expect(scope.bodyIds).toEqual([]);
     expect(viewImageScope(scope, 'Boss')).toEqual({
@@ -71,19 +70,11 @@ describe('viewImageScope', () => {
   });
 
   it('draws the view otherwise, counting hidden bodies as left out', () => {
-    // Whatever the mesh export's include-hidden choice, the view never draws
-    // a hidden body, so the image reports it as left out either way.
-    for (const includeHidden of [true, false]) {
-      const scope = exportScope(
-        [body('a'), body('b'), body('c', true)],
-        null,
-        includeHidden
-      );
-      expect(viewImageScope(scope, null)).toEqual({
-        label: 'visible bodies (2, 1 hidden left out)'
-      });
-    }
-    expect(viewImageScope(exportScope([body('a')], null, true), null)).toEqual({
+    const scope = exportScope([body('a'), body('b'), body('c', true)], null);
+    expect(viewImageScope(scope, null)).toEqual({
+      label: 'visible bodies (2, 1 hidden left out)'
+    });
+    expect(viewImageScope(exportScope([body('a')], null), null)).toEqual({
       label: 'visible bodies (1)'
     });
   });
@@ -95,15 +86,14 @@ describe('viewImageScope', () => {
         { ...body('b'), withheld: true },
         { ...body('c', true), withheld: true }
       ],
-      null,
-      true
+      null
     );
-    expect(scope.withheldHidden).toBe(1);
+    expect(scope.withheldIds).toEqual(['b']);
     expect(viewImageScope(scope, null).label).toBe('visible bodies (2)');
   });
 
   it('names the current view when there are no bodies or no scope', () => {
-    expect(viewImageScope(exportScope([], null, true), null).label).toBe(
+    expect(viewImageScope(exportScope([], null), null).label).toBe(
       'the current view'
     );
     expect(viewImageScope(null, null).label).toBe('the current view');

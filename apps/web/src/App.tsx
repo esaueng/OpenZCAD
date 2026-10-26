@@ -74,6 +74,7 @@ import { toggleBodyIsolation, type BodyIsolation } from './lib/bodyIsolation';
 import { failedFeatureIds } from './lib/featureRepair';
 import { featureHistory, relatedFeatureIds } from './lib/featureHistory';
 import {
+  emptyExportMessage,
   exportScope,
   exportScopeLabel,
   type ExportScope
@@ -3052,8 +3053,7 @@ export function App() {
     [localHiddenBodyIds, parameterHiddenBodyIds]
   );
   // D01: a new drawing sheet shows the live bodies on screen. Deliberately
-  // not the export scope, which follows the Build selection and the mesh
-  // dialog's include-hidden choice.
+  // not the export scope, which follows the Build selection.
   const drawingDefaultBodyIds = useMemo(
     () =>
       doc
@@ -7204,9 +7204,6 @@ export function App() {
         : new Set<FeatureId>(),
     [doc, featureAttribution]
   );
-  // Viewport-hidden bodies export unless this is switched off; the dialog
-  // reports the count either way, so the choice is never silent.
-  const [exportIncludesHidden, setExportIncludesHidden] = useState(true);
   const { exportBodyIds, exportWithheldMessage, exportScopeInfo } = useMemo<{
     exportBodyIds: BodyId[];
     exportWithheldMessage: string | null;
@@ -7229,15 +7226,11 @@ export function App() {
     const scope = exportScope(
       Object.values(doc.derived.bodyRepresentations).map((body) => ({
         bodyId: body.bodyId,
-        exportable:
-          body.exportableStep &&
-          !body.consumed &&
-          !parameterHiddenBodyIds.has(body.bodyId),
-        hidden: localHiddenBodyIds.has(body.bodyId),
+        exportable: body.exportableStep && !body.consumed,
+        hidden: hiddenBodyIds.has(body.bodyId),
         withheld: failedHistoryBodies.has(body.bodyId)
       })),
-      selectedBody?.bodyId ?? null,
-      exportIncludesHidden
+      selectedBody?.bodyId ?? null
     );
     const withheld = scope.withheldIds.flatMap((bodyId) => {
       const entry = failedHistoryBodies.get(bodyId as BodyId);
@@ -7252,24 +7245,21 @@ export function App() {
     failedHistoryBodies,
     doc,
     selectedBody,
-    parameterHiddenBodyIds,
-    localHiddenBodyIds,
-    exportIncludesHidden,
+    hiddenBodyIds,
     tweakMode,
     parameterModelError,
     currentGeometrySnapshot,
     currentFaceGeometryPreview
   ]);
   // What the one-click STEP controls name: the selected body, or the
-  // all-bodies scope whenever hidden bodies are in it or left out of it.
+  // visible-body scope whenever hidden bodies are left out of it.
   const exportControlScope =
     exportScopeInfo?.selection && selectedBody
       ? selectedBody.name
-      : exportScopeInfo &&
-          (exportScopeInfo.hiddenIncluded > 0 ||
-            exportScopeInfo.hiddenExcluded > 0)
+      : exportScopeInfo && exportScopeInfo.hiddenExcluded > 0
         ? exportScopeLabel(exportScopeInfo)
         : null;
+  const emptyExportReason = emptyExportMessage(exportScopeInfo);
 
   /**
    * What the current selection is, and the figure that goes with it.
@@ -15422,7 +15412,7 @@ export function App() {
     }): Promise<{ body: Blob; save(): Promise<boolean>; warnings: number }>;
   }) {
     if (!doc || exportBodyIds.length === 0) {
-      setStatus('Create a body before exporting.');
+      setStatus(emptyExportReason);
       return;
     }
     const sink = createImportProgressSink();
@@ -15499,11 +15489,9 @@ export function App() {
         });
         return;
       }
-      const hiddenNote = exportScopeInfo?.hiddenIncluded
-        ? ` (${exportScopeInfo.hiddenIncluded} hidden)`
-        : exportScopeInfo?.hiddenExcluded
-          ? ` (${exportScopeInfo.hiddenExcluded} hidden left out)`
-          : '';
+      const hiddenNote = exportScopeInfo?.hiddenExcluded
+        ? ` (${exportScopeInfo.hiddenExcluded} hidden left out)`
+        : '';
       const bodies = `${countLabel(exportBodyIds.length, 'body', 'bodies')}${hiddenNote}`;
       const outcome =
         produced.warnings > 0
@@ -15549,7 +15537,7 @@ export function App() {
       return;
     }
     if (!doc || exportBodyIds.length === 0) {
-      setStatus('Create a body before exporting.');
+      setStatus(emptyExportReason);
       return;
     }
     const fileName = `${exportFileStem(doc.name)}.step`;
@@ -15601,7 +15589,7 @@ export function App() {
       return;
     }
     if (!doc || exportBodyIds.length === 0) {
-      setStatus('Create a body before exporting.');
+      setStatus(emptyExportReason);
       return;
     }
     const info = MESH_EXPORT_FILE_INFO[format];
@@ -15654,7 +15642,7 @@ export function App() {
   ) {
     if (!doc || exportBodyIds.length === 0) {
       return Promise.reject(
-        new Error('Create a body before checking printability.')
+        new Error(emptyExportMessage(exportScopeInfo, 'checking printability'))
       );
     }
     return geometry.meshQuality(doc, exportBodyIds, deflection, {
@@ -15736,7 +15724,7 @@ export function App() {
         if (exportBodyIds.length > 0) {
           setMeshExportOpen(true);
         } else {
-          setStatus('Create a body before exporting.');
+          setStatus(emptyExportReason);
         }
         break;
       case 'undo':
@@ -26724,7 +26712,7 @@ export function App() {
         currentGeometrySnapshot !== null
           ? 'Wait for the model to finish updating'
           : exportBodyIds.length === 0
-            ? 'Create a body first'
+            ? emptyExportReason
             : null,
       run: () => void handleExportStep()
     },
@@ -26740,7 +26728,7 @@ export function App() {
         currentGeometrySnapshot !== null
           ? 'Wait for the model to finish updating'
           : exportBodyIds.length === 0
-            ? 'Create a body first'
+            ? emptyExportReason
             : null,
       run: () => setMeshExportOpen(true)
     },
@@ -27537,6 +27525,7 @@ export function App() {
           }
           exportScope={exportControlScope}
           exportWithheld={exportWithheldMessage}
+          exportUnavailableReason={emptyExportReason}
           saveState={presentedSaveState}
           saveToAccount={
             cloudFunctionsEnabled && !!session && !activeProjectIsCloud
@@ -27661,6 +27650,7 @@ export function App() {
             }
             exportScope={exportControlScope}
             exportWithheld={exportWithheldMessage}
+            exportUnavailableReason={emptyExportReason}
             onPreviewParameter={handlePreviewParameter}
             onSetParameter={(name, expression) =>
               handleSetParameter(name, expression)
@@ -29746,8 +29736,7 @@ export function App() {
           )}
           {meshExportOpen &&
             doc &&
-            // Stays open while hidden bodies are switched off, even when
-            // nothing visible is left, so the choice can be undone here.
+            // Keep the dialog open if the last visible body is hidden.
             (exportBodyIds.length > 0 ||
               (exportScopeInfo?.hiddenExcluded ?? 0) > 0) && (
               <ExportDialog
@@ -29758,25 +29747,12 @@ export function App() {
                       ? exportScopeLabel(exportScopeInfo)
                       : `all bodies (${exportBodyIds.length})`
                 }
-                hiddenBodies={
-                  exportScopeInfo && !exportScopeInfo.selection
-                    ? exportScopeInfo.hiddenIncluded +
-                      exportScopeInfo.hiddenExcluded
-                    : 0
-                }
-                includeHidden={exportIncludesHidden}
-                onIncludeHiddenChange={setExportIncludesHidden}
                 bodies={exportBodyIds.map((bodyId) => ({
                   bodyId,
                   name: doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId
                 }))}
                 revision={doc.version}
-                onClose={() => {
-                  setMeshExportOpen(false);
-                  // Leaving with every body hidden and left out would leave no
-                  // export to reopen this dialog from; hidden bodies come back.
-                  if (exportBodyIds.length === 0) setExportIncludesHidden(true);
-                }}
+                onClose={() => setMeshExportOpen(false)}
                 onExport={handleExportMesh}
                 onCheckQuality={handleCheckMeshQuality}
                 exportUnits={appSettings.files.exportUnits}

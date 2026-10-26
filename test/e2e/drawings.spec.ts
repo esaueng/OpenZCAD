@@ -342,8 +342,8 @@ test('starts a sheet from the bodies on screen, not the export scope', async ({
       page.locator('.feature-row-main', { hasText: name })
     ).toBeVisible();
   }
-  // Hide Upper. The export scope still includes hidden bodies by default
-  // (the mesh dialog's choice); a new drawing shows what is on screen.
+  // Hide Upper. A new drawing shows the visible bodies regardless of the
+  // selected body used by model exports.
   await selectBodyFromObjects(page, 'Upper');
   await page
     .locator('.body-row', { hasText: 'Upper' })
