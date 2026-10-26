@@ -4146,6 +4146,11 @@ export function App() {
   /** The bar's settings as numbers, for the back arrow and the draft rig. */
   const [regionExtrudeState, setRegionExtrudeState] =
     useState<ExtrudeCommandState | null>(null);
+  /**
+   * The bar's distance as a number, for the region arrow to stand at when
+   * it is rebuilt (a new choice), rather than back at its last drag.
+   */
+  const regionDraftDistance = useRef<number | null>(null);
   /** Why the open Extrude keypad's entry does not evaluate (Done waits). */
   const [regionExtrudeEntryError, setRegionExtrudeEntryError] = useState<
     string | null
@@ -16643,6 +16648,7 @@ export function App() {
     interaction.mode === 'region' ? interaction.target.sketchId : null;
   useEffect(() => {
     regionExtrudeSettings.current = null;
+    regionDraftDistance.current = null;
     setRegionExtrudeState(null);
   }, [regionSketchKey]);
   useEffect(() => {
@@ -21114,7 +21120,7 @@ export function App() {
       regionFingerprint: anchor.regionFingerprint,
       samplePoint: anchor.samplePoint,
       area: anchor.area,
-      initialValue: interaction.lastValue ?? 0,
+      initialValue: regionDraftDistance.current ?? interaction.lastValue ?? 0,
       followers: interaction.targets
         .filter((target) => target !== anchor)
         .map((target) => ({
@@ -22410,18 +22416,18 @@ export function App() {
     ) {
       return false;
     }
+    // U09: the region's arrow is the in-place Extrude's distance, entered
+    // as its other values are: Enter sets it, Done (or Enter) extrudes.
+    if (interaction.mode === 'region') {
+      return openRegionExtrudeKeypad('distance');
+    }
     // Reopened in place by the chip's Total/Offset switch: a refused preview
     // stays refused (`keypad-open` would clear the failure and re-enable
     // Apply for the value the kernel just turned down).
     if (!keypadRef.current) dispatchInteraction({ type: 'keypad-open' });
     setKeypad({
       kind: 'offset',
-      label:
-        totalBaseline === undefined
-          ? interaction.mode === 'region'
-            ? 'Height'
-            : 'Offset'
-          : 'Total',
+      label: totalBaseline === undefined ? 'Offset' : 'Total',
       initial:
         totalBaseline !== undefined || currentOffset !== 0
           ? String(
@@ -27822,7 +27828,7 @@ export function App() {
                       {...(keypad.kind === 'extrude'
                         ? { onEntryError: setRegionExtrudeEntryError }
                         : {})}
-                      onPreview={(value) => {
+                      onPreview={(value, raw) => {
                         if (
                           keypad.kind === 'sketch-dimension' ||
                           keypad.kind === 'sketch-edit'
@@ -27830,9 +27836,11 @@ export function App() {
                           return;
                         }
                         if (keypad.kind === 'extrude') {
+                          // An expression previews as itself, so a Done
+                          // pressed with the keypad still open stores it.
                           const valueId = keypad.commandValueId ?? '';
                           moveRegionExtrudeHandle(valueId, value);
-                          setRegionExtrudeValue(valueId, value);
+                          setRegionExtrudeValue(valueId, value, raw);
                           return;
                         }
                         offsetSetterRef.current?.(value);
@@ -28661,11 +28669,27 @@ export function App() {
                   }
                   onDraft={(state) => {
                     regionExtrudeSettings.current = state.value;
+                    regionDraftDistance.current = Number.isFinite(
+                      state.distance
+                    )
+                      ? state.distance
+                      : null;
                     setRegionExtrudeState(state);
-                    dispatchInteraction({
-                      type: 'set-extrude-choice',
-                      choice: state.value.choice
-                    });
+                    // A new choice is the region's to infer from, and any
+                    // change clears a refusal; a value alone is neither,
+                    // and must not rebuild the region's arrow under a drag.
+                    const current = interactionRef.current;
+                    if (
+                      current.mode !== 'region' ||
+                      current.phase === 'failed' ||
+                      JSON.stringify(current.extrudeChoice) !==
+                        JSON.stringify(state.value.choice)
+                    ) {
+                      dispatchInteraction({
+                        type: 'set-extrude-choice',
+                        choice: state.value.choice
+                      });
+                    }
                   }}
                   onPreview={(value) => {
                     setLastValidPreview(null);

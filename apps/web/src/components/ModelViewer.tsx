@@ -6669,6 +6669,16 @@ export function ModelViewer({
       const chipWidth = chip.offsetWidth;
       const labelWidth = radiusLabelChip.offsetWidth;
       const laneLeft = rightLaneLeft();
+      // Above the bottom lane, where a command's bar stands (the in-place
+      // Extrude's, under the region arrow it extrudes): a chip held there
+      // sat under the bar and could not be tapped.
+      const footTop = bottomLaneTop();
+      const footLimit = (element: HTMLElement) =>
+        footTop === null
+          ? Infinity
+          : footTop - COMMAND_CHIP_MARGIN_PX - element.offsetHeight / 2;
+      const chipFloor = footLimit(chip);
+      const labelFloor = footLimit(radiusLabelChip);
       // Every other panel over the stage — a floating window, the left dock —
       // the value chip and its tag come out from under as one, measured
       // where they showed last frame less the move made then.
@@ -6705,7 +6715,11 @@ export function ModelViewer({
             )
           : { dx: 0, dy: 0 };
       const place = (element: HTMLElement, x: number, y: number) =>
-        hud.showAt(element, x + chipDodge.dx, y + chipDodge.dy);
+        hud.showAt(
+          element,
+          x + chipDodge.dx,
+          Math.min(y + chipDodge.dy, element === chip ? chipFloor : labelFloor)
+        );
       // Either rig answers the same two questions; only the label differs.
       // In a multi-region extrude the chip rides the arrow last grabbed.
       const regionChipRig =

@@ -90,7 +90,10 @@ for (const moveKeyboard of [false, true]) {
     await page.keyboard.press('7');
     const keypad = page.locator('.numeric-keypad');
     await expect(keypad.locator('input')).toHaveValue('7');
+    // Enter sets the distance; Done extrudes it.
     await keypad.locator('input').press('Enter');
+    await expect(keypad).toHaveCount(0);
+    await bar.getByRole('button', { name: 'Done' }).click();
     await expect(
       page.locator('.feature-row-main', { hasText: 'Extrude' })
     ).toHaveCount(1, { timeout: 30_000 });

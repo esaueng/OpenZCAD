@@ -306,6 +306,16 @@ describe('the converted value under the field', () => {
   });
 });
 
+describe('a previewed expression', () => {
+  it('is handed over as typed, a plain number as a value alone', () => {
+    const { input, onPreview } = setup('');
+    fireEvent.change(input, { target: { value: '4 + 8' } });
+    expect(onPreview).toHaveBeenLastCalledWith(12, '4 + 8');
+    fireEvent.change(input, { target: { value: '7' } });
+    expect(onPreview).toHaveBeenLastCalledWith(7);
+  });
+});
+
 describe('an entry that does not evaluate', () => {
   it('says so to the host until it does, and clears when the keypad closes', () => {
     const onEntryError = vi.fn();

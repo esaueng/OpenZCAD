@@ -289,3 +289,71 @@ test('Extrude in place: the back arrow, Symmetric under Options, and Enter to fi
   await expect(row).toContainText('10 + 4 mm');
   expect(errors).toEqual([]);
 });
+
+test('Extrude in place: the arrow chip sets the distance, and Done keeps an open entry as typed', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await stubApi(page);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await openDocument(page, plateDocument('In-place extrude entry'));
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
+    timeout: 30_000
+  });
+  await page.keyboard.press('f');
+  await waitForStillViewport(page);
+  const moreTools = page.getByRole('button', { name: /^More tools/ });
+  if ((await moreTools.getAttribute('aria-expanded')) === 'true') {
+    await moreTools.click();
+  }
+  const bar = extrudeBar(page);
+  await expect
+    .poll(async () => {
+      await canvas.evaluate((element) =>
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-select-profile', {
+            detail: { index: 0, additive: false }
+          })
+        )
+      );
+      return bar.count();
+    })
+    .toBe(1);
+  const extrusion = page.locator('.feature-row-main', { hasText: 'Extrude' });
+
+  // The region arrow's chip is the same Distance as the bar's: Enter sets
+  // it and leaves the command open for Options and Done.
+  await page.getByTestId('direct-manipulation-value').click();
+  const keypad = page.getByRole('dialog', { name: 'Distance value' });
+  await keypad.getByRole('textbox').fill('12');
+  await keypad.getByRole('textbox').press('Enter');
+  await expect(keypad).toHaveCount(0);
+  await expect(bar).toBeVisible();
+  await expect(extrusion).toHaveCount(0);
+  // The arrow still stands at the value, to drag on from there.
+  await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
+    /12 mm/,
+    { timeout: 30_000 }
+  );
+  const options = bar.locator('details.in-place-command-options');
+  await options.locator('summary').click();
+  const distance = bar.getByRole('button', { name: 'Distance', exact: true });
+  await expect(distance).toHaveText('12 mm');
+
+  // An expression still in the open keypad is what Done stores.
+  await distance.click();
+  await keypad.getByRole('textbox').fill('4 + 8');
+  await expect(distance).toHaveText('4 + 8');
+  await bar.getByRole('button', { name: 'Done' }).click();
+  await expect(bar).toHaveCount(0, { timeout: 30_000 });
+  await revealModelPanel(page, 'History');
+  await extrusion.last().click();
+  await expect(
+    page
+      .getByRole('form', { name: 'Extrude settings' })
+      .getByRole('textbox', { name: 'Distance', exact: true })
+  ).toHaveValue('4 + 8');
+  expect(errors).toEqual([]);
+});

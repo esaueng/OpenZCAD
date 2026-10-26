@@ -282,9 +282,10 @@ test('refuses regions that would not extrude the same way', async ({
   await expect(editor).toContainText('2 profiles');
 
   await page.getByTestId('direct-manipulation-value').click();
-  const keypad = page.getByRole('dialog', { name: 'Height value' });
+  const keypad = page.getByRole('dialog', { name: 'Distance value' });
   await keypad.getByRole('textbox').fill('-4');
-  await keypad.getByRole('button', { name: 'Apply height' }).click();
+  await keypad.getByRole('button', { name: 'Apply distance' }).click();
+  await extrudeBar(page).getByRole('button', { name: 'Done' }).click();
   // Together they would measure as one add and lose the pocket; apart one
   // cuts and one makes a new body, so the command refuses in one sentence.
   await expect(page.getByRole('contentinfo')).toContainText(
@@ -346,9 +347,10 @@ test('refuses regions over two different bodies', async ({ page }) => {
   await expect(editor).toContainText('2 profiles');
 
   await page.getByTestId('direct-manipulation-value').click();
-  const keypad = page.getByRole('dialog', { name: 'Height value' });
+  const keypad = page.getByRole('dialog', { name: 'Distance value' });
   await keypad.getByRole('textbox').fill('-4');
-  await keypad.getByRole('button', { name: 'Apply height' }).click();
+  await keypad.getByRole('button', { name: 'Apply distance' }).click();
+  await extrudeBar(page).getByRole('button', { name: 'Done' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
     'The selected profiles sit over different bodies; extrude them separately.',
     { timeout: 30_000 }
@@ -405,9 +407,10 @@ test('a glyph pick selects, arms and builds the whole word', async ({
   await expect(editor).toContainText('3 profiles');
 
   await page.getByTestId('direct-manipulation-value').click();
-  const keypad = page.getByRole('dialog', { name: 'Height value' });
+  const keypad = page.getByRole('dialog', { name: 'Distance value' });
   await keypad.getByRole('textbox').fill('2');
-  await keypad.getByRole('button', { name: 'Apply height' }).click();
+  await keypad.getByRole('button', { name: 'Apply distance' }).click();
+  await extrudeBar(page).getByRole('button', { name: 'Done' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
     'Extruded region by 2 mm as a new body.',
     { timeout: 30_000 }

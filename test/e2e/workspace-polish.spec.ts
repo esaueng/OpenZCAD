@@ -5,7 +5,8 @@ import {
   revealModelPanel,
   modelPanel,
   seedOpenCommandFold,
-  seedPanelLayout
+  seedPanelLayout,
+  finishInPlaceCommand
 } from './openzcad-fixtures';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId, type SketchObjectData } from '@openzcad/shared';
@@ -984,9 +985,10 @@ test('shows profile readiness and preserves exact entity edits through extrude a
   await expect(editor.getByLabel('Width', { exact: true })).toHaveValue('50');
   await rail.getByRole('button', { name: 'Extrude', exact: true }).click();
   await page.getByTestId('direct-manipulation-value').click();
-  const keypad = page.getByRole('dialog', { name: 'Height value' });
+  const keypad = page.getByRole('dialog', { name: 'Distance value' });
   await keypad.getByRole('textbox').fill('4');
-  await keypad.getByRole('button', { name: 'Apply height' }).click();
+  await keypad.getByRole('button', { name: 'Apply distance' }).click();
+  await finishInPlaceCommand(page, 'Extrude');
   await expect(page.getByRole('contentinfo')).toContainText(
     'Extruded region by 4 mm'
   );

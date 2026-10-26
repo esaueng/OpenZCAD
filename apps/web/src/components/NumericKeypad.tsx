@@ -72,8 +72,11 @@ interface NumericKeypadProps {
   anchorRef: MutableRefObject<
     ((point: { x: number; y: number } | null) => void) | null
   >;
-  /** Live preview as the value changes; only called with valid values. */
-  onPreview(value: number): void;
+  /**
+   * Live preview as the value changes; only called with valid values.
+   * `raw` is the entry as it would be stored, when it is an expression.
+   */
+  onPreview(value: number, raw?: string): void;
   /**
    * Why the entry as it stands does not evaluate, or null once it does:
    * a host whose own Done stands beside the keypad holds it meanwhile.
@@ -301,11 +304,15 @@ export function NumericKeypad({
         // The chip the entry was opened from: a command value's own, else
         // the drag handle's; any value chip when neither is drawn.
         const chip =
+          (request.commandValueId
+            ? host.querySelector<HTMLElement>(
+                `[data-testid="command-handle-${request.commandValueId}"]`
+              )
+            : null) ??
           host.querySelector<HTMLElement>(
-            request.commandValueId
-              ? `[data-testid="command-handle-${request.commandValueId}"]`
-              : '[data-testid="direct-manipulation-value"]'
-          ) ?? host.querySelector<HTMLElement>('.handle-value-chip');
+            '[data-testid="direct-manipulation-value"]'
+          ) ??
+          host.querySelector<HTMLElement>('.handle-value-chip');
         const chipRect = chip?.getBoundingClientRect();
         const chipAnchor = {
           x: Number.parseFloat(chip?.style.left ?? ''),
@@ -346,9 +353,20 @@ export function NumericKeypad({
   useEffect(() => {
     if (selectInitial.current || initialPreviewed.current) return;
     initialPreviewed.current = true;
-    if (evaluation.ok && normalizedValue !== undefined)
-      onPreview(normalizedValue);
-  }, [evaluation.ok, normalizedValue, onPreview]);
+    if (evaluation.ok && normalizedValue !== undefined) {
+      if (evaluation.isExpression && normalizedRaw !== undefined) {
+        onPreview(normalizedValue, normalizedRaw);
+      } else {
+        onPreview(normalizedValue);
+      }
+    }
+  }, [
+    evaluation.ok,
+    evaluation.isExpression,
+    normalizedValue,
+    normalizedRaw,
+    onPreview
+  ]);
 
   const entryError = evaluation.ok ? null : (evaluation.error ?? 'invalid');
   useEffect(() => {
@@ -367,7 +385,16 @@ export function NumericKeypad({
     setValue(next);
     const result = evaluateKeypadInput(next, entryUnit, units, scope, nextMode);
     if (result.ok && result.value !== undefined) {
-      onPreview(offsetFromTotal(result.value, request));
+      const previewed = offsetFromTotal(result.value, request);
+      if (
+        result.isExpression &&
+        request.totalBaseline === undefined &&
+        result.normalizedRaw !== undefined
+      ) {
+        onPreview(previewed, result.normalizedRaw);
+      } else {
+        onPreview(previewed);
+      }
     }
     // Keep the value field focused so Enter/Escape always land on the pad.
     inputRef.current?.focus();
