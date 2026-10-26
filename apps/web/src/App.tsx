@@ -9812,6 +9812,14 @@ export function App() {
       setStatus('Could not apply Move: enter finite values before applying.');
       return false;
     }
+    // The bar's Done is off until something changed; Enter from anywhere
+    // else must not commit the empty Move it refuses either.
+    if (!moveHasUnappliedChange(preview)) {
+      setStatus(
+        'Nothing to apply yet: drag the gizmo, or type a value under Options.'
+      );
+      return false;
+    }
     if (preview.target === 'sketch') {
       return confirmSketchMove(preview);
     }

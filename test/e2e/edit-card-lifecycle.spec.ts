@@ -146,6 +146,15 @@ test('Move: the edit card uses the gizmo card labels and closes after Apply', as
   await expect(options).toHaveAttribute('open', '');
   await expect(gizmo).toBeVisible();
   await expect(row(page, /^Move/)).toHaveCount(0);
+  // Nor does Enter from anywhere else commit the untouched Move its Done
+  // refuses.
+  await page.evaluate(() => (document.activeElement as HTMLElement)?.blur());
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Nothing to apply yet'
+  );
+  await expect(gizmo).toBeVisible();
+  await expect(row(page, /^Move/)).toHaveCount(0);
   await openMoveOptions(gizmo);
   await expect(gizmo.getByText('dX', { exact: true })).toBeVisible();
   await gizmo.getByLabel('Move X in mm').fill('10');
