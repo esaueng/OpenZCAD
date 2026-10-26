@@ -29,3 +29,4 @@ export function validateDeploymentConfig(
 
 export const E2EE_FLAGS: readonly string[];
 export const E2EE_FLAG_PREREQUISITES: readonly (readonly [string, string])[];
+export const E2EE_PLANNED_FLAGS: readonly string[];

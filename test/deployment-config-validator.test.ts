@@ -264,6 +264,48 @@ describe('deployment configuration preflight', () => {
       );
     });
 
+    it('rejects an E2EE name the Worker does not read, naming the closest flag', () => {
+      expect(
+        validateDeploymentConfig(
+          withFlags({
+            E2EE_KEYS_ENABLED: 'true',
+            E2EE_PROJETCS_ENABLED: 'true'
+          }),
+          { target: 'selfhost' }
+        )
+      ).toEqual([
+        'vars.E2EE_PROJETCS_ENABLED is not an end-to-end encryption flag this release reads; did you mean E2EE_PROJECTS_ENABLED?'
+      ]);
+      expect(
+        validateDeploymentConfig(withFlags({ E2EE_KEY_ENABLED: 'false' }), {
+          target: 'official'
+        })
+      ).toContain(
+        'vars.E2EE_KEY_ENABLED is not an end-to-end encryption flag this release reads; did you mean E2EE_KEYS_ENABLED?'
+      );
+    });
+
+    it('accepts the planned Phase 8 flags only while off', () => {
+      expect(
+        validateDeploymentConfig(
+          withFlags({
+            E2EE_DEFAULT_ON: 'false',
+            E2EE_PLAINTEXT_FROZEN: 'false'
+          }),
+          { target: 'selfhost' }
+        )
+      ).toEqual([]);
+      expect(
+        validateDeploymentConfig(
+          withFlags({ E2EE_DEFAULT_ON: 'true', E2EE_PLAINTEXT_FROZEN: false }),
+          { target: 'selfhost' }
+        )
+      ).toEqual([
+        'vars.E2EE_DEFAULT_ON is planned and not read by this release; set it to "false" or remove it',
+        'vars.E2EE_PLAINTEXT_FROZEN is planned and not read by this release; set it to "false" or remove it'
+      ]);
+    });
+
     it('rejects canary accounts committed to vars', () => {
       expect(
         validateDeploymentConfig(

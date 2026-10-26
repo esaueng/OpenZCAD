@@ -322,9 +322,10 @@ request reaches the AI provider you configured.
 Set each flag in `vars` as the string `"true"` or `"false"`, and turn them on
 one deployment at a time in this order. A flag opens nothing unless the one
 before it is on. `pnpm selfhost:check` refuses a configuration in which a flag
-is on while its predecessor is off, and any value that is not a recognised
-string: an unquoted JSON `true` reaches the Worker as a boolean, which it reads
-as off.
+is on while its predecessor is off, any `E2EE_` name this release does not
+read (a misspelled flag would otherwise stay off without a word; the error
+names the closest flag), and any value that is not a recognised string: an
+unquoted JSON `true` reaches the Worker as a boolean, which it reads as off.
 
 1. `E2EE_KEYS_ENABLED`: account keys, device lists, passkeys, the required
    recovery key and device approval, under Settings › Encryption.
@@ -338,9 +339,9 @@ as off.
 5. `E2EE_PLAINTEXT_FROZEN` (planned, not in this release): plaintext writes
    refused.
 
-Do not add the two planned flags yet: this version does not read them. A
-later Phase 8 release adds them after the outside review of the cryptography
-and key flows.
+This version does not read the two planned flags, so the preflight accepts
+them only as `"false"`. A later Phase 8 release adds them after the outside
+review of the cryptography and key flows.
 
 `E2EE_REVERSE_ENABLED` is an optional, beta-only path that needs step 3. It
 lets an owner turn an encrypted project back into plaintext while nobody else
