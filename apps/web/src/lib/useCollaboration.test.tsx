@@ -20,7 +20,14 @@ import {
   readUnresolvedConflict,
   rememberUnresolvedConflict
 } from './conflictRecovery';
-import { useCollaboration } from './useCollaboration';
+import {
+  migrationLockedProjects,
+  setMigrationElsewhere
+} from './migrationStatus';
+import {
+  ROOM_MIGRATING_CLOSE_CODE,
+  useCollaboration
+} from './useCollaboration';
 import { parseServerMessage } from './useCollaboration';
 
 vi.mock('react', async (importOriginal) => {
@@ -38,7 +45,7 @@ class FakeWebSocket {
   readonly sent: string[] = [];
   private readonly listeners = new Map<
     string,
-    Array<(event: { data?: string }) => void>
+    Array<(event: { data?: string; code?: number }) => void>
   >();
 
   constructor(readonly url: string) {
@@ -47,7 +54,7 @@ class FakeWebSocket {
 
   addEventListener(
     type: string,
-    listener: (event: { data?: string }) => void
+    listener: (event: { data?: string; code?: number }) => void
   ): void {
     const listeners = this.listeners.get(type) ?? [];
     listeners.push(listener);
@@ -61,6 +68,12 @@ class FakeWebSocket {
   close(): void {
     this.readyState = FakeWebSocket.CLOSED;
     this.emit('close', {});
+  }
+
+  /** The room closes the connection with its own code. */
+  closeFromRoom(code: number): void {
+    this.readyState = FakeWebSocket.CLOSED;
+    this.emit('close', { code });
   }
 
   open(): void {
@@ -82,7 +95,7 @@ class FakeWebSocket {
     );
   }
 
-  private emit(type: string, event: { data?: string }): void {
+  private emit(type: string, event: { data?: string; code?: number }): void {
     for (const listener of this.listeners.get(type) ?? []) {
       listener(event);
     }
@@ -1255,6 +1268,49 @@ describe('useCollaboration lease ordering', () => {
     // Without a room wanted, the status is plainly offline.
     rerender({ document: second, enabled: false });
     expect(result.current.status).toBe('offline');
+  });
+
+  it('locks the project for editing when the room closes for its move to encrypted storage', () => {
+    // ADR-024 Phase 7: another tab or device began staging the project, so
+    // the room closed every plaintext connection (code 4003). The open
+    // workspace locks itself at once rather than after a refused save.
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const owner = toUserId('user_migrating_owner');
+    const document = createProjectDocument('Moving project', owner);
+    const other = createProjectDocument('Other project', owner);
+    try {
+      const { rerender } = renderHook(
+        ({ document: current }: { document: ProjectDocument }) =>
+          useCollaboration({
+            enabled: true,
+            document: current,
+            session: session(owner),
+            onRemoteDocument: vi.fn(),
+            onConflict: vi.fn()
+          }),
+        { initialProps: { document } }
+      );
+      const socket = FakeWebSocket.instances[0]!;
+      grantLease(socket, document);
+      // An ordinary drop locks nothing.
+      act(() => socket.close());
+      expect(migrationLockedProjects().has(document.projectId)).toBe(false);
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      const reconnected = FakeWebSocket.instances.at(-1)!;
+      expect(reconnected).not.toBe(socket);
+      reconnected.open();
+      act(() => reconnected.closeFromRoom(ROOM_MIGRATING_CLOSE_CODE));
+      expect([...migrationLockedProjects()]).toEqual([document.projectId]);
+      // A room this page has left says nothing about the open project.
+      rerender({ document: other });
+      act(() => reconnected.closeFromRoom(ROOM_MIGRATING_CLOSE_CODE));
+      expect(migrationLockedProjects().has(other.projectId)).toBe(false);
+    } finally {
+      setMigrationElsewhere(document.projectId, false);
+    }
   });
 
   it('does not open a room while cloud functions are disabled', () => {

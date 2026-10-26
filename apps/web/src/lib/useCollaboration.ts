@@ -31,6 +31,7 @@ import {
 } from './desktopBridge';
 import { cloudFunctionsAreEnabled } from './cloudMode';
 import { listLocalOnlyImportSources } from './importArchival';
+import { noteProjectMigrating } from './migrationStatus';
 import {
   chooseProjectDocument,
   projectPreservesLocalWork,
@@ -125,6 +126,11 @@ const MAX_EPOCH_RETRIES = 2;
  */
 const MAX_BLOB_RESTORES = 1;
 const ROOM_CHANGED_MESSAGE = 'The room changed.';
+/**
+ * The room's close code when a plaintext project begins moving to
+ * encrypted storage (`acceptInternalMigration`, cloudflare-adapters).
+ */
+export const ROOM_MIGRATING_CLOSE_CODE = 4003;
 
 export function useCollaboration({
   enabled,
@@ -1119,8 +1125,15 @@ export function useCollaboration({
           setStatus(rejected);
         }
       };
-      socket.addEventListener('close', () => {
+      socket.addEventListener('close', (event: { code?: number }) => {
         if (!isCurrentRoom()) return;
+        // The project began moving to encrypted storage (ADR-024 Phase 7):
+        // the room closed every plaintext connection and refuses new ones
+        // while it is staged. The workspace locks editing at once, before
+        // any save is refused (`projectMigrationWatch.ts`).
+        if (event.code === ROOM_MIGRATING_CLOSE_CODE && !encrypted) {
+          noteProjectMigrating(projectId);
+        }
         if (socketRef.current === socket) {
           settleCheckpointDrain(
             new Error('The room disconnected before confirmation.')
