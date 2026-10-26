@@ -110,9 +110,16 @@ function memoryR2() {
       const bytes = objects.get(key);
       return bytes ? { size: bytes.length } : null;
     },
-    delete: async (key: string) => {
-      objects.delete(key);
+    delete: async (key: string | string[]) => {
+      for (const item of typeof key === 'string' ? [key] : key)
+        objects.delete(item);
     },
+    list: async ({ prefix = '' } = {}) => ({
+      objects: [...objects.keys()]
+        .filter((key) => key.startsWith(prefix))
+        .map((key) => ({ key })),
+      truncated: false
+    }),
     createMultipartUpload: async (key: string) => {
       const uploadId = `multipart-${++ids}`;
       multipart.set(uploadId, { key, parts: new Map() });

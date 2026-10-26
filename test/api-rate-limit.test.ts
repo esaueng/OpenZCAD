@@ -3,6 +3,7 @@ import { expect, it, vi } from 'vitest';
 import type { CloudflareEnv } from '@openzcad/cloudflare-adapters';
 import { startEmailLogin } from '../apps/web/worker/auth';
 import {
+  assertApiRateLimitAvailable,
   enforceApiRateLimit,
   publicRequestBucket
 } from '../apps/web/worker/apiRateLimit';
@@ -32,6 +33,10 @@ it('counts concurrent callers atomically, isolates buckets, and resets at the ne
   } as unknown as CloudflareEnv;
   const now = vi.spyOn(Date, 'now').mockReturnValue(60_000);
   try {
+    await assertApiRateLimitAvailable(env, 'never-created', 3);
+    expect(
+      db.prepare('SELECT COUNT(*) AS count FROM auth_rate_limits').get()
+    ).toEqual({ count: 0 });
     const results = await Promise.allSettled(
       Array.from({ length: 4 }, () => enforceApiRateLimit(env, 'one', 3))
     );
@@ -43,7 +48,19 @@ it('counts concurrent callers atomically, isolates buckets, and resets at the ne
       reason: { status: 429 }
     });
     await expect(enforceApiRateLimit(env, 'two', 3)).resolves.toBeUndefined();
+    await expect(
+      assertApiRateLimitAvailable(env, 'one', 3)
+    ).rejects.toMatchObject({ status: 429 });
+    await expect(
+      assertApiRateLimitAvailable(env, 'two', 1)
+    ).rejects.toMatchObject({ status: 429 });
+    await expect(
+      assertApiRateLimitAvailable(env, 'two', 2)
+    ).resolves.toBeUndefined();
     now.mockReturnValue(120_000);
+    await expect(
+      assertApiRateLimitAvailable(env, 'one', 3)
+    ).resolves.toBeUndefined();
     await expect(enforceApiRateLimit(env, 'one', 3)).resolves.toBeUndefined();
   } finally {
     now.mockRestore();
@@ -127,6 +144,9 @@ it('prunes at most 100 stale buckets without resetting current, login, or hourly
 });
 it('fails closed without its database and keeps anonymous buckets opaque', async () => {
   await expect(
+    assertApiRateLimitAvailable({ ENVIRONMENT: 'beta' }, 'one', 3)
+  ).rejects.toMatchObject({ status: 503 });
+  await expect(
     enforceApiRateLimit({ ENVIRONMENT: 'beta' }, 'one', 3)
   ).rejects.toMatchObject({ status: 503 });
   const request = new Request('https://zcad.app/api/health', {
@@ -172,15 +192,13 @@ it('login cleanup preserves the same active hourly invitation counters', async (
       Promise.all(statements.map((statement) => statement.run()))
   };
   const now = vi.spyOn(Date, 'now').mockReturnValue(10_740_000);
-  const fetchMock = vi
-    .spyOn(globalThis, 'fetch')
-    .mockResolvedValue(
-      Response.json({
-        success: true,
-        action: 'email-code',
-        hostname: 'example.com'
-      })
-    );
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    Response.json({
+      success: true,
+      action: 'email-code',
+      hostname: 'example.com'
+    })
+  );
   try {
     await startEmailLogin(
       new Request('https://example.com/api/auth/email/start'),

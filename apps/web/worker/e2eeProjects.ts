@@ -465,6 +465,8 @@ export async function requireEncryptedProjectAccess(
  */
 const fenceOf = (roles: string) => `EXISTS (SELECT 1 FROM projects fp
   WHERE fp.id = ? AND fp.storage_format = 2 AND fp.status <> 'deleted'
+    AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims cleanup
+      WHERE cleanup.project_id = fp.id)
     AND (fp.user_id = ? OR EXISTS (SELECT 1 FROM project_members fm
          WHERE fm.project_id = fp.id AND fm.user_id = ?${roles})))`;
 export const MEMBER_FENCE = fenceOf('');

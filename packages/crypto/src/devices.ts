@@ -527,6 +527,7 @@ export type StatementKind =
   | 'share link tombstone'
   | 'share key wrap'
   | 'share link forget'
+  | 'share link registration'
   | 'project invitation';
 
 /** @internal `u8 1 | r || s` over `label "v1 <kind> signature" | statement`. */
