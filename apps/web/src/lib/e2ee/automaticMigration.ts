@@ -112,6 +112,7 @@ export function automaticProjectMigration(
     const revision = getKeySessionRevision();
     const current = () =>
       !disposed && !stop.signal.aborted && isCurrentKeySession(revision);
+    let required = false;
     try {
       const config = await deps.config(stop.signal);
       if (
@@ -122,6 +123,7 @@ export function automaticProjectMigration(
         config.defaultOn !== true
       )
         return;
+      required = true;
       const prepared = await deps.prepare(stop.signal, scope);
       if (!current()) return;
       if (typeof prepared === 'string') {
@@ -152,7 +154,7 @@ export function automaticProjectMigration(
       // Explicit ids also resume an unfinished purge discovered after reload.
       await prepared.run(ids, stop.signal);
     } catch (error) {
-      if (current())
+      if (required && current())
         attention(
           error instanceof Error
             ? error.message

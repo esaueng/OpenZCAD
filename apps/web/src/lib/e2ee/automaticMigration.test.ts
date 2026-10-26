@@ -35,6 +35,20 @@ function fixture() {
 }
 
 describe('default-on automatic migration', () => {
+  it('stays idle when an older or unavailable server cannot report default-on', async () => {
+    const { automaticProjectMigration } = await import('./automaticMigration');
+    const f = fixture();
+    vi.mocked(f.deps.config).mockRejectedValue(
+      new Error('Older Worker has no config route')
+    );
+    const migration = automaticProjectMigration('account', f.attention, f.deps);
+    await migration.check();
+    expect(f.attention).not.toHaveBeenCalled();
+    expect(f.deps.prepare).not.toHaveBeenCalled();
+    expect(f.controller.run).not.toHaveBeenCalled();
+    migration.dispose();
+  });
+
   it.each([
     { ...ON, defaultOn: false },
     { ...ON, defaultOn: undefined },
