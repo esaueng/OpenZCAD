@@ -158,6 +158,23 @@ export function decryptionErrorOf(error: unknown): MigrationError {
         retryable: false,
         message: 'Turning encryption off is not available for this account.'
       };
+    // The cutover (or a further staged file) would take the account over
+    // its limits: retrying cannot help until space is freed. Nothing was
+    // changed; the staging stays until it is cancelled.
+    case 'ARTIFACT_QUOTA_EXCEEDED':
+      return {
+        code: 'ARTIFACT_QUOTA_EXCEEDED',
+        retryable: false,
+        message:
+          'Your account does not have room for this project’s files as plaintext. Nothing was changed; the project stays encrypted. Cancel, free up file storage, then try again.'
+      };
+    case 'PROJECT_STORAGE_QUOTA':
+      return {
+        code: 'PROJECT_STORAGE_QUOTA',
+        retryable: false,
+        message:
+          'Your account does not have project storage left for this project as plaintext. Nothing was changed; the project stays encrypted. Cancel, free up project storage, then try again.'
+      };
   }
   return migrationErrorOf(error);
 }
@@ -520,11 +537,13 @@ export function createProjectDecryptionEngine(
       const document = await store.loadRevision(projectId, revision.revisionId);
       // Retention dropped it: the cutover no longer asks for it either.
       if (!document) continue;
+      // Who saved it, a former collaborator's say, stays its author.
       await target.stageRevision(
         projectId,
         await plaintextDocument(document),
         revision.reason,
-        revision.revisionId
+        revision.revisionId,
+        revision.authorUserId
       );
       staged.add(revision.revisionId);
       done++;

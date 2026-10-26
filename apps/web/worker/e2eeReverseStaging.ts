@@ -164,13 +164,47 @@ async function translated<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-/** `POST /api/projects/:id/revisions` under a decrypt lease. */
+/** The longest user id a staged save state's author may name. */
+const MAX_AUTHOR_ID_LENGTH = 256;
+
+/**
+ * The author a staged save state's request names (`authorUserId`), who
+ * saved the encrypted save state it decrypts; undefined when absent.
+ */
+export function stagedRevisionAuthor(body: unknown): string | undefined {
+  const value =
+    body && typeof body === 'object'
+      ? (body as Record<string, unknown>).authorUserId
+      : undefined;
+  if (value === undefined || value === null) return undefined;
+  if (
+    typeof value !== 'string' ||
+    value.length < 1 ||
+    value.length > MAX_AUTHOR_ID_LENGTH
+  ) {
+    throw new SharingRequestError(
+      400,
+      'SAVE_POINT_INVALID',
+      'A staged save state names its author by user id.'
+    );
+  }
+  return value;
+}
+
+/**
+ * `POST /api/projects/:id/revisions` under a decrypt lease. The save state
+ * keeps who saved it (`authorUserId`, a former collaborator's say) only
+ * when the encrypted save state under the same id records that author and
+ * the account still exists; otherwise the owner staging it is its author,
+ * as for any save state whose author is unknown.
+ */
 export async function stageDecryptedRevision(
   persistence: PersistenceService,
   userId: UserId,
   payload: SaveRevisionRequest,
   storage: ClientProjectStorage | undefined,
-  staging: DecryptStaging
+  staging: DecryptStaging,
+  authorUserId?: string
 ): Promise<ProjectDocument> {
   if (payload.savedRevisionId === undefined) {
     throw new SharingRequestError(
@@ -185,14 +219,23 @@ export async function stageDecryptedRevision(
       projectId: staging.projectId,
       document: payload.document,
       ...(storage ? { storage } : {}),
-      revision: { revisionId, reason: payload.reason.trim() },
+      revision: {
+        revisionId,
+        reason: payload.reason.trim(),
+        ...(authorUserId ? { authorUserId } : {})
+      },
       fence: staging.fence
     })
   );
   return payload.document;
 }
 
-/** `PUT /api/projects/:id/document` under a decrypt lease: the head. */
+/**
+ * `PUT /api/projects/:id/document` under a decrypt lease: the head. A
+ * resumed run that stages the head it already staged (the same version
+ * and object checksum the migration row journals) reuses that object, so
+ * no unreferenced copy is left beside it.
+ */
 export async function stageDecryptedHead(
   persistence: PersistenceService,
   db: D1Database,
@@ -201,11 +244,26 @@ export async function stageDecryptedHead(
   storage: ClientProjectStorage | undefined,
   staging: DecryptStaging
 ): Promise<SaveProjectDocumentResponse> {
+  const journal = await db
+    .prepare(
+      `SELECT staged_version, staged_hash FROM e2ee_project_migrations
+       WHERE project_id = ? AND direction = 'decrypt' AND state = 'staging'`
+    )
+    .bind(staging.projectId)
+    .first<{ staged_version: number; staged_hash: string | null }>();
+  const journaledHead =
+    journal?.staged_hash && journal.staged_version > 0
+      ? {
+          version: journal.staged_version,
+          checksumSha256: journal.staged_hash
+        }
+      : undefined;
   const stored = await translated(() =>
     stagingService(persistence).stageDecryptedDocument(userId, {
       projectId: staging.projectId,
       document: payload.document,
       ...(storage ? { storage } : {}),
+      ...(journaledHead ? { journaledHead } : {}),
       fence: staging.fence
     })
   );

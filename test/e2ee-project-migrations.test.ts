@@ -8,6 +8,7 @@
  * client store, whose single create request the test splits into the
  * staged group, first version and project info routes.
  */
+import { createHash } from 'node:crypto';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   E2EE_FRAME_CONTENT_TYPE,
@@ -82,6 +83,38 @@ function insertEncryptedInvitation(srv: Server, projectId: string): void {
       's'.repeat(87),
       Date.now() + 3_600_000
     );
+}
+
+/** A live encrypted share link row (slice 5-10), as stored. */
+function insertEncryptedShareLink(
+  srv: Server,
+  projectId: string,
+  shareId = 'share_1'
+): void {
+  srv.db
+    .prepare(
+      `INSERT INTO e2ee_share_links
+         (project_id, share_id, token_hash, mode, share_key_hash,
+          owner_identity_hash, created_by_user_id, created_at)
+       VALUES (?, ?, ?, 'view', ?, ?, ?, 'now')`
+    )
+    .run(
+      projectId,
+      shareId,
+      createHash('sha256').update(shareId).digest('hex'),
+      'k'.repeat(43),
+      'o'.repeat(43),
+      OWNER
+    );
+}
+
+/** Revokes every encrypted share link of the project, as 5-10 does. */
+function revokeEncryptedShareLinks(srv: Server, projectId: string): void {
+  srv.db
+    .prepare(
+      "UPDATE e2ee_share_links SET revoked_at = 'now' WHERE project_id = ?"
+    )
+    .run(projectId);
 }
 
 // --- Plaintext side ------------------------------------------------------------
@@ -1214,6 +1247,37 @@ describe('the cutover', () => {
       state: 'cutover',
       revisionCount: ids.length
     });
+  });
+
+  it('refuses to start or cut over while a live encrypted share link names the project, and goes ahead once it is revoked', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    const d = device(srv, owner, 'owner_laptop');
+    const api = createProjectMigrationsApi(d.fetcher);
+    // A link left from an encrypted stint of the project (slice 5-10).
+    insertEncryptedShareLink(srv, plain.projectId);
+    expect(
+      await errorOf(
+        api.start(plain.projectId, {
+          direction: 'encrypt',
+          deviceId: 'owner_laptop'
+        })
+      )
+    ).toMatchObject({ status: 409, code: 'E2EE_MIGRATION_SHARED' });
+    expect(migrationRow(srv, plain.projectId)).toBeUndefined();
+    revokeEncryptedShareLinks(srv, plain.projectId);
+    const s = await startStaging(srv, plain.projectId);
+    await stage(s, plain, []);
+    // One goes live while staging: the cutover refuses, in its own batch.
+    insertEncryptedShareLink(srv, plain.projectId, 'share_2');
+    expect(
+      await errorOf(s.api.cutover(plain.projectId, s.lease))
+    ).toMatchObject({ status: 409, code: 'E2EE_MIGRATION_SHARED' });
+    expect(formatOf(srv, plain.projectId).storage_format).toBe(1);
+    revokeEncryptedShareLinks(srv, plain.projectId);
+    expect(
+      (await s.api.cutover(plain.projectId, s.lease)).migration
+    ).toMatchObject({ state: 'cutover' });
   });
 
   it('refuses a staged head that is not newer than the plaintext head', async () => {
