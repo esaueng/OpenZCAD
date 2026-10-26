@@ -7,7 +7,8 @@ import {
   createHoleInPlace,
   enterCommandValue,
   finishInPlaceCommand,
-  blendEdgesInPlace
+  blendEdgesInPlace,
+  openMoveOptions
 } from './openzcad-fixtures';
 
 /**
@@ -137,9 +138,11 @@ test('Move: the edit card uses the gizmo card labels and closes after Apply', as
   await createBox(page);
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
   const gizmo = page.getByRole('form', { name: 'Move controls' });
+  // The numbers sit behind the bar's Options (U09), under the same names.
+  await openMoveOptions(gizmo);
   await expect(gizmo.getByText('dX', { exact: true })).toBeVisible();
   await gizmo.getByLabel('Move X in mm').fill('10');
-  await gizmo.getByRole('button', { name: /Apply move/ }).click();
+  await gizmo.getByRole('button', { name: 'Done' }).click();
   await expect(row(page, /^Move/)).toBeVisible();
 
   await row(page, /^Move/).click();

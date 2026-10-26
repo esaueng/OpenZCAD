@@ -850,6 +850,73 @@ describe('review: values the cards accepted stay expressible', () => {
     expect(neutral('point')).toEqual({ x: '12', y: '6', z: '4' });
     expect(neutral('origin')).toEqual({ x: '0', y: '0', z: '0' });
   });
+
+  describe('the draft angle rig', () => {
+    const ctx: InPlaceContext = {
+      ...CTX,
+      bodyBounds: () => ({
+        min: { x: 0, y: 0, z: 0 },
+        max: { x: 10, y: 10, z: 10 }
+      })
+    };
+    // The +X wall of a 10 mm box standing on the ground.
+    const side: FacePick = {
+      bodyId: 'body_a' as BodyId,
+      hash: 21,
+      topologyId: 'f21',
+      surfaceType: 'plane',
+      normal: { x: 1, y: 0, z: 0 },
+      centroid: { x: 10, y: 5, z: 5 }
+    };
+    const handle = (options: Record<string, string>, face = side) =>
+      IN_PLACE_TOOL_SPECS.draft.handles(
+        { ...EMPTY, faces: [face] },
+        { angle: 3 },
+        ctx,
+        options
+      )[0]!;
+
+    it('hinges on the line where the face meets the neutral plane', () => {
+      const rig = handle({ pull: '+Z', neutral: 'base' });
+      expect(rig.kind).toBe('angle');
+      if (rig.kind !== 'angle') return;
+      expect(rig.params.center).toEqual({ x: 10, y: 5, z: 0 });
+      // Up the wall to its middle, turning about the hinge so that a
+      // positive drag leans the wall out of the body (+X), as a positive
+      // draft does above its neutral plane.
+      expect(rig.params.startDirection).toEqual({ x: 0, y: 0, z: 1 });
+      expect(rig.params.axis.y).toBeCloseTo(1);
+      expect(rig.params.radius).toBeCloseTo(5);
+    });
+
+    it('runs down the face from a hinge above it', () => {
+      const rig = handle({ pull: '+Z', neutral: 'top' });
+      if (rig.kind !== 'angle') throw new Error('expected an angle rig');
+      expect(rig.params.center).toEqual({ x: 10, y: 5, z: 10 });
+      expect(rig.params.startDirection.z).toBeCloseTo(-1);
+      // Same turn sense: below its hinge a positive draft leans the wall in.
+      expect(rig.params.axis.y).toBeCloseTo(1);
+    });
+
+    it('rebuilds when the hinge moves, never for the angle alone', () => {
+      const base = handle({ pull: '+Z', neutral: 'base' });
+      const top = handle({ pull: '+Z', neutral: 'top' });
+      expect(base.key).not.toBe(top.key);
+      const steeper = IN_PLACE_TOOL_SPECS.draft.handles(
+        { ...EMPTY, faces: [side] },
+        { angle: 12 },
+        ctx,
+        { pull: '+Z', neutral: 'base' }
+      )[0]!;
+      expect(steeper.key).toBe(base.key);
+    });
+
+    it('keeps a chip for a face square to the pull or with no normal', () => {
+      expect(handle({ pull: '+Z', neutral: 'base' }, TOP).kind).toBe('chip');
+      const curved = { ...side, normal: undefined, surfaceType: 'cylinder' };
+      expect(handle({ pull: '+Z', neutral: 'base' }, curved).kind).toBe('chip');
+    });
+  });
 });
 
 describe('review: rotate about axis', () => {

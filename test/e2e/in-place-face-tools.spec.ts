@@ -326,3 +326,93 @@ test('Draft in place: a side face, the angle from its chip', async ({
   const [draft] = await featureData(page, 'draft');
   expect(draft).toMatchObject({ angleDeg: 5 });
 });
+
+/** Where `point` is drawn, in page pixels. */
+async function projected(
+  canvas: Locator,
+  point: [number, number, number]
+): Promise<{ x: number; y: number }> {
+  return canvas.evaluate(
+    (element, points) =>
+      new Promise<{ x: number; y: number }>((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-project-points', {
+            detail: {
+              points,
+              resolve: (state: { points: { x: number; y: number }[] }) =>
+                resolve(state.points[0]!)
+            }
+          })
+        );
+      }),
+    [point]
+  );
+}
+
+/** A command handle's ball on screen, and the value it stands at. */
+async function commandHandle(
+  canvas: Locator,
+  valueId: string
+): Promise<{ x: number; y: number; value: number } | null> {
+  return canvas.evaluate(
+    (element, id) =>
+      element.dataset.e2eCommandHandles
+        ? ((
+            JSON.parse(element.dataset.e2eCommandHandles) as Record<
+              string,
+              { x: number; y: number; value: number }
+            >
+          )[id] ?? null)
+        : null,
+    valueId
+  );
+}
+
+test('Draft in place: the angle turns the face on its hinge at the base', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  const canvas = await openBox(page, 'Draft hinge');
+  await startTool(page, /^Draft/, 'Draft');
+  // The Block runs 0–40 × 0–30 × 0–20: its front wall stands on y = 0 and
+  // its hinge, at the default base, is the wall's bottom edge.
+  await expect.poll(() => pickPlanarFace(page, FRONT)).not.toBeNull();
+  const bar = page.getByRole('group', { name: 'Draft command' });
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  const chip = page.getByTestId('command-handle-angle');
+  await expect(chip).toHaveText('3°');
+  await expect.poll(() => commandHandle(canvas, 'angle')).not.toBeNull();
+
+  // The arm runs up the wall from the hinge to its middle, 10 mm: drag its
+  // ball out of the body, to 20° off the wall. Out is a positive draft.
+  const handle = (await commandHandle(canvas, 'angle'))!;
+  const lean = (20 * Math.PI) / 180;
+  const out = await projected(canvas, [
+    20,
+    -10 * Math.sin(lean),
+    10 * Math.cos(lean)
+  ]);
+  await page.mouse.move(handle.x, handle.y);
+  await page.mouse.down();
+  await page.mouse.move(out.x, out.y, { steps: 16 });
+  await page.mouse.up();
+  await expect
+    .poll(async () => (await commandHandle(canvas, 'angle'))?.value ?? 0)
+    .toBeGreaterThan(10);
+  expect((await commandHandle(canvas, 'angle'))!.value).toBeLessThan(30);
+  await expect(chip).not.toHaveText('3°');
+
+  // The chip still takes an exact angle from the keypad.
+  await enterCommandValue(page, 'angle', '7');
+  await expect(chip).toHaveText('7°');
+  await finishInPlaceCommand(page, 'Draft');
+  const [draft] = await featureData(page, 'draft');
+  expect(draft).toMatchObject({
+    angleDeg: 7,
+    pullDirection: { x: 0, y: 0, z: 1 },
+    neutralPoint: { z: 0 }
+  });
+});

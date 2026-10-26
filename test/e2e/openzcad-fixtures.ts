@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import {
   adoptProjectDocument,
   createCheckpoint,
@@ -1551,6 +1551,18 @@ export async function createPrimitiveInPlace(
   }
   await finishInPlaceCommand(page, title);
   if (options.name) await renamePrimitive(page, title, options.name);
+}
+
+/**
+ * Opens a Move bar's Options (U09), where its exact numbers, name, body and
+ * Copy sit behind the gizmo; a no-op while they are open.
+ */
+export async function openMoveOptions(move: Locator) {
+  const options = move.locator('details.in-place-command-options');
+  if ((await options.getAttribute('open')) === null) {
+    await options.locator('summary').click();
+  }
+  await expect(options).toHaveAttribute('open', '');
 }
 
 /**

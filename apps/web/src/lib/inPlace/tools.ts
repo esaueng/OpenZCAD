@@ -1849,6 +1849,101 @@ function clickedFace(slots: InPlaceSlots): FacePick | undefined {
   return slots.faces.find((face) => face.point !== undefined);
 }
 
+/** A draft's pull and the point its neutral plane passes through. */
+function draftFrame(
+  slots: InPlaceSlots,
+  numbers: Record<string, number>,
+  options: Record<string, string>,
+  ctx: InPlaceContext
+): { pull: Vector3; neutral: Vector3 } | null {
+  const first = slots.faces[0];
+  if (!first) return null;
+  const clicked = clickedFace(slots);
+  const pull =
+    options.pull === 'custom'
+      ? typedNumbers(numbers, 'pull', { x: 0, y: 0, z: 1 })
+      : (PULL_DIRECTIONS[options.pull ?? '+Z'] ?? PULL_DIRECTIONS['+Z']!);
+  if (Math.hypot(pull.x, pull.y, pull.z) === 0) return null;
+  const neutral =
+    options.neutral === 'custom'
+      ? typedNumbers(numbers, 'neutral', { x: 0, y: 0, z: 0 })
+      : draftNeutralPoint(
+          options.neutral,
+          pull,
+          options.neutral === 'point' && clicked ? clicked : first,
+          ctx
+        );
+  return { pull, neutral };
+}
+
+/**
+ * The angle rig a drafted face turns on: hinged where the face meets the
+ * neutral plane, its arm running up the face from there toward the face's
+ * middle. Zero is the face as it stands; a positive drag leans the face out
+ * of the body away from the neutral plane, as a positive draft angle does.
+ * Null for a face with no normal to tilt (a curved one) or one square to the
+ * pull, which a draft cannot lean.
+ */
+export function draftHingeRig(
+  face: FacePick,
+  pull: Vector3,
+  neutral: Vector3,
+  size: number
+): {
+  center: Vector3;
+  axis: Vector3;
+  startDirection: Vector3;
+  radius: number;
+} | null {
+  const middle = face.centroid ?? face.center ?? face.point;
+  if (!face.normal || !middle) return null;
+  const normal = unit(face.normal);
+  const along = unit(pull);
+  // The pull's part in the face: the way up the face from its hinge.
+  const across = dot(along, normal);
+  const up = {
+    x: along.x - normal.x * across,
+    y: along.y - normal.y * across,
+    z: along.z - normal.z * across
+  };
+  const climb = dot(up, along);
+  if (climb < 1e-6) return null;
+  // Slide the face's middle down (or up) the face onto the neutral plane.
+  const rise =
+    dot(
+      {
+        x: middle.x - neutral.x,
+        y: middle.y - neutral.y,
+        z: middle.z - neutral.z
+      },
+      along
+    ) / climb;
+  const center = {
+    x: middle.x - up.x * rise,
+    y: middle.y - up.y * rise,
+    z: middle.z - up.z * rise
+  };
+  const upward = unit(up);
+  const reach = Math.hypot(
+    middle.x - center.x,
+    middle.y - center.y,
+    middle.z - center.z
+  );
+  // Below the hinge the arm runs down the face: the same turn leans that
+  // part of it inward, as the kernel's draft does.
+  const startDirection = reach > 1e-9 && rise < 0 ? scaled(upward, -1) : upward;
+  return {
+    center,
+    axis: unit({
+      x: upward.y * normal.z - upward.z * normal.y,
+      y: upward.z * normal.x - upward.x * normal.z,
+      z: upward.x * normal.y - upward.y * normal.x
+    }),
+    startDirection,
+    radius: Math.max(reach, size / 2, 1e-3)
+  };
+}
+
 const draft: InPlaceToolSpec = {
   id: 'draft',
   title: 'Draft',
@@ -1948,7 +2043,7 @@ const draft: InPlaceToolSpec = {
       }
     };
   },
-  handles(slots, _values, ctx, options) {
+  handles(slots, values, ctx, options) {
     const face = slots.faces[0];
     const anchor = face ? (face.centroid ?? face.center ?? face.point) : null;
     if (!face || !anchor) return [];
@@ -1962,13 +2057,39 @@ const draft: InPlaceToolSpec = {
       ...anchor,
       z: anchor.z + spread * index
     });
+    // The angle turns the face on its hinge; a face it cannot lean (curved,
+    // or square to the pull) keeps a typed chip.
+    const frame = draftFrame(slots, values, options, ctx);
+    const rig = frame
+      ? draftHingeRig(face, frame.pull, frame.neutral, spread * 2)
+      : null;
     return [
-      {
-        valueId: 'angle',
-        kind: 'chip',
-        key: `${faceKey(face)}:angle`,
-        params: { anchor }
-      },
+      rig
+        ? {
+            valueId: 'angle',
+            kind: 'angle',
+            key: keyOf(
+              faceKey(face),
+              'angle',
+              rig.center.x,
+              rig.center.y,
+              rig.center.z,
+              rig.axis.x,
+              rig.axis.y,
+              rig.axis.z,
+              rig.startDirection.x,
+              rig.startDirection.y,
+              rig.startDirection.z,
+              rig.radius
+            ),
+            params: rig
+          }
+        : {
+            valueId: 'angle',
+            kind: 'chip',
+            key: `${faceKey(face)}:angle`,
+            params: { anchor }
+          },
       ...(options.pull === 'custom'
         ? vectorChips('pull', faceKey(face), row(1), spread)
         : []),

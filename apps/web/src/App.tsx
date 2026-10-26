@@ -27608,9 +27608,11 @@ export function App() {
       }
       // Every command card anchors at the top of the right lane, a panel in
       // the phone lane yielding below it. The same precedence as the viewport's
-      // mode overlays: a live operation first, then the Move panel (unless
-      // the revert pill is up), and the closed-profile quick action only
-      // when no plane prompt, Move or revert pill is up.
+      // mode overlays: a live operation first, then a Move (unless the revert
+      // pill is up), and the closed-profile quick action only when no plane
+      // prompt, Move or revert pill is up. A Move's bar is not a card: it
+      // takes the command row, as every in-place command's does, so here it
+      // only holds the lane empty.
       command={
         modelingLocked ? null : measurementDock ? (
           measurementDock
@@ -27743,77 +27745,7 @@ export function App() {
               }}
             />
           )
-        ) : revertPill ? null : movePreview ? (
-          <MoveOverlay
-            bodyName={
-              movePreview.target === 'sketch'
-                ? (findSketch(doc, movePreview.bodyId as SketchId)?.name ??
-                  'Selected sketch')
-                : (representations[movePreview.bodyId as BodyId]?.name ??
-                  'Selected body')
-            }
-            hideRotation={movePreview.target === 'sketch'}
-            // A sketch move commits as a sketch translation, not a named
-            // feature, so it gets neither a name nor a body picker.
-            name={movePreview.target === 'sketch' ? undefined : moveName}
-            onName={movePreview.target === 'sketch' ? undefined : setMoveName}
-            targets={
-              movePreview.target === 'sketch'
-                ? undefined
-                : viewerBodies.map((body) => ({
-                    bodyId: body.bodyId,
-                    name: representations[body.bodyId]?.name ?? body.bodyId
-                  }))
-            }
-            targetBodyId={movePreview.bodyId}
-            onTargetBody={(bodyId) => {
-              setSelectedBodyIds([bodyId as BodyId]);
-              setMoveSnap(null);
-              setMovePreview((current) =>
-                current
-                  ? {
-                      ...current,
-                      bodyId,
-                      // Values are relative to the body's own centre, so
-                      // carrying them to a different body would apply a
-                      // move nobody asked for.
-                      translation: { x: 0, y: 0, z: 0 },
-                      rotationDeg: { x: 0, y: 0, z: 0 }
-                    }
-                  : current
-              );
-            }}
-            values={{
-              translation: movePreview.translation,
-              rotationDeg: movePreview.rotationDeg
-            }}
-            units={doc.units}
-            snap={moveSnap}
-            onChange={(values) =>
-              setMovePreview((current) =>
-                current
-                  ? {
-                      ...current,
-                      translation: values.translation,
-                      rotationDeg: values.rotationDeg
-                    }
-                  : current
-              )
-            }
-            onConfirm={confirmMove}
-            onCancel={cancelPanel}
-            copy={
-              movePreview.target === 'sketch' ? undefined : !!movePreview.copy
-            }
-            onCopy={(copy) =>
-              setMovePreview((current) =>
-                current ? { ...current, copy } : current
-              )
-            }
-            liveValuesRef={moveValuesSetterRef}
-            liveSnapRef={moveSnapSetterRef}
-          />
-        ) : tool === 'sketch' ? (
+        ) : revertPill ? null : movePreview ? null : tool === 'sketch' ? (
           <SketchPlanePrompt
             document={doc}
             offsetText={sketchPlaneOffsetText}
@@ -28337,6 +28269,85 @@ export function App() {
                   }}
                   onDone={() => inPlace.done()}
                   onCancel={cancelInPlaceCommand}
+                />
+              ) : movePreview &&
+                !modelingLocked &&
+                !measurementDock &&
+                !contextualToolCard &&
+                !revertPill ? (
+                <MoveOverlay
+                  bodyName={
+                    movePreview.target === 'sketch'
+                      ? (findSketch(doc, movePreview.bodyId as SketchId)
+                          ?.name ?? 'Selected sketch')
+                      : (representations[movePreview.bodyId as BodyId]
+                          ?.name ?? 'Selected body')
+                  }
+                  hideRotation={movePreview.target === 'sketch'}
+                  // A sketch move commits as a sketch translation, not a named
+                  // feature, so it gets neither a name nor a body picker.
+                  name={movePreview.target === 'sketch' ? undefined : moveName}
+                  onName={
+                    movePreview.target === 'sketch' ? undefined : setMoveName
+                  }
+                  targets={
+                    movePreview.target === 'sketch'
+                      ? undefined
+                      : viewerBodies.map((body) => ({
+                          bodyId: body.bodyId,
+                          name:
+                            representations[body.bodyId]?.name ?? body.bodyId
+                        }))
+                  }
+                  targetBodyId={movePreview.bodyId}
+                  onTargetBody={(bodyId) => {
+                    setSelectedBodyIds([bodyId as BodyId]);
+                    setMoveSnap(null);
+                    setMovePreview((current) =>
+                      current
+                        ? {
+                            ...current,
+                            bodyId,
+                            // Values are relative to the body's own centre, so
+                            // carrying them to a different body would apply a
+                            // move nobody asked for.
+                            translation: { x: 0, y: 0, z: 0 },
+                            rotationDeg: { x: 0, y: 0, z: 0 }
+                          }
+                        : current
+                    );
+                  }}
+                  values={{
+                    translation: movePreview.translation,
+                    rotationDeg: movePreview.rotationDeg
+                  }}
+                  units={doc.units}
+                  snap={moveSnap}
+                  onChange={(values) =>
+                    setMovePreview((current) =>
+                      current
+                        ? {
+                            ...current,
+                            translation: values.translation,
+                            rotationDeg: values.rotationDeg
+                          }
+                        : current
+                    )
+                  }
+                  onConfirm={confirmMove}
+                  onCancel={cancelPanel}
+                  copy={
+                    movePreview.target === 'sketch'
+                      ? undefined
+                      : !!movePreview.copy
+                  }
+                  onCopy={(copy) =>
+                    setMovePreview((current) =>
+                      current ? { ...current, copy } : current
+                    )
+                  }
+                  liveValuesRef={moveValuesSetterRef}
+                  liveSnapRef={moveSnapSetterRef}
                 />
               ) : null
             }
