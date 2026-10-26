@@ -20366,6 +20366,13 @@ export function App() {
   useEffect(() => {
     setKeypad((current) => (current?.kind === 'command' ? null : current));
   }, [inPlaceSessionTool, inPlaceSessionEdit]);
+  // So does the in-place Extrude's: a new extrude, an edit, another arming
+  // of either is another command, and the keypad goes with the one it was
+  // opened on.
+  useEffect(() => {
+    regionKeypadText.current = null;
+    setKeypad((current) => (current?.kind === 'extrude' ? null : current));
+  }, [extrudeSessionKey]);
   const narrowWindow = useMediaQuery(NARROW_WINDOW_QUERY);
   const inPlaceEditing = inPlace.editing;
   const extrudeEditFeatureId = extrudeEdit?.featureId ?? null;

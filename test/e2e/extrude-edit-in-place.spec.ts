@@ -406,3 +406,68 @@ test('an extrude edit ends cleanly: Cancel leaves no profile picked, and a renam
     )!.name
   ).toBe('Tall post');
 });
+
+test("an open keypad goes with its extrude's edit when another extrude is re-armed", async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await stubApi(page);
+  // A second extrude beside the post.
+  const sketched = addSketchFeature(postDocument('Extrude keypad session'), {
+    name: 'Rail sketch',
+    plane: 'XY',
+    offset: 0,
+    objects: [
+      {
+        objectKind: 'rectangle',
+        width: 4,
+        height: 12,
+        centerX: -30,
+        centerY: 0
+      }
+    ]
+  });
+  const document = extrudeSketch(sketched.document, {
+    name: 'Rail',
+    sketchId: sketched.sketchId,
+    // The very text about to be typed for the Post, so only the session
+    // tells the two entries apart.
+    distance: 40
+  }).document;
+  await openDocument(page, document);
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '3', {
+    timeout: 30_000
+  });
+  await revealModelPanel(page, 'History');
+  const post = await editExtrudeFromHistory(
+    page,
+    page.locator('.feature-row-main[title^="Post — "]'),
+    'Post'
+  );
+  await post.locator('details.in-place-command-options summary').click();
+  await post.getByRole('button', { name: 'Distance', exact: true }).click();
+  const keypad = page.locator('.numeric-keypad');
+  await keypad.locator('input').fill('40');
+  // The Rail's row re-arms the command on the Rail (a click with no press
+  // on the canvas or the keypad, as from the keyboard): the Post's entry
+  // goes with the Post's edit.
+  await page
+    .locator('.feature-row-main[title^="Rail — "]')
+    .dispatchEvent('click');
+  const rail = page.getByRole('group', { name: 'Edit Rail command' });
+  await expect(rail).toBeVisible();
+  await expect(keypad).toHaveCount(0);
+  await rail.locator('details.in-place-command-options summary').click();
+  await expect(
+    rail.getByRole('button', { name: 'Distance', exact: true })
+  ).toHaveText('40 mm');
+  await rail.getByRole('button', { name: 'Cancel' }).click();
+  const stored = listFeaturesInOrder(await exportedDocument(page));
+  expect(stored.find((feature) => feature.name === 'Rail')!.data).toMatchObject(
+    { distance: 40 }
+  );
+  expect(stored.find((feature) => feature.name === 'Post')!.data).toMatchObject(
+    { distance: '5 * 2' }
+  );
+});
