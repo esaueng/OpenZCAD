@@ -51,6 +51,7 @@ import type { RemovalOutcome } from '../lib/e2ee/deviceRemoval';
 import { createE2eeApi, E2eeApiError } from '../lib/e2ee/e2eeApi';
 import { projectRemovalStep } from '../lib/e2ee/projectRemovalStep';
 import { DeviceListPinConflict } from '../lib/e2ee/deviceStore';
+import { notifyContactsChanged } from '../lib/e2ee/contactFocus';
 import {
   deviceKeyFactory,
   deviceKeyStore
@@ -258,6 +259,24 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
               keys={ctx}
               account={state.account}
               Scanner={QrScanner}
+              onConfirmFromDevice={
+                state.account.device &&
+                (state.account.deviceStatus === 'certified' ||
+                  state.account.deviceStatus === 'approved')
+                  ? () =>
+                      void run(async () => {
+                        // The approval exchange hands this device the
+                        // approver's contacts head (ADR-024).
+                        const next = await requestApproval(
+                          ctx,
+                          state.account,
+                          state.account.device?.label ??
+                            defaultDeviceLabel(navigator.userAgent)
+                        );
+                        setFlow({ kind: 'request', step: next });
+                      })
+                  : undefined
+              }
             />
           ) : null}
         </>
@@ -420,6 +439,11 @@ function AccountPanel({
       </Group>
 
       {!identityChanged &&
+      // A certified device asking another to confirm its contacts list.
+      !(
+        flow?.kind === 'request' &&
+        (flow.step.step === 'waiting' || flow.step.step === 'compare')
+      ) &&
       (account.deviceStatus === 'certified' ||
         account.deviceStatus === 'approved') ? null : (
         <EnrollPanel {...shared} account={account} />
@@ -778,11 +802,24 @@ function EnrollPanel({
           if (next.step === 'done') {
             setFlow(null);
             void run(async () => next.state);
+            // The grant may have confirmed this device's contacts list.
+            notifyContactsChanged();
           } else {
             setFlow({ kind: 'request', step: next });
           }
         })
-        .catch(() => undefined);
+        .catch((caught: unknown) => {
+          if (stopped) return;
+          if (
+            caught instanceof EncryptionFlowError &&
+            caught.code === 'grant-invalid'
+          ) {
+            window.clearInterval(timer);
+          }
+          void run(async () => {
+            throw caught;
+          });
+        });
     }, 2000);
     return () => {
       stopped = true;
@@ -823,6 +860,7 @@ function EnrollPanel({
                       const next = await confirmApprovalCode(ctx);
                       if (next.step === 'done') {
                         setFlow(null);
+                        notifyContactsChanged();
                         return next.state;
                       }
                       setFlow({ kind: 'request', step: next });
@@ -897,6 +935,8 @@ function EnrollPanel({
     </Group>
   );
 }
+
+export { EnrollPanel };
 
 function ScanCodeDisplay({ code }: { code: string }) {
   const { path, size } = useMemo(() => qrSvgPath(encodeQr(code)), [code]);

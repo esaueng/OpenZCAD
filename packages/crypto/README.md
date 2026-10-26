@@ -423,7 +423,22 @@ the old identity hash, the new identity key and its first entry's hash, and
 is signed by the old identity or a device it certified; it proves nothing to
 contacts. A device approval grant (`"OZG"`) is signed by the approving
 device's key and names the approved device's `pk_new`, the identity and the
-device-list head the new device should pin, and whether it was certified.
+device-list head the new device should pin, and whether it was certified
+(`"OZG" | u8 version | u8 length + user id | 32-byte pk_new | u8 length +
+device id | 32-byte identity key hash | u32 head sequence | 32-byte head hash
+| u8 certified | 32-byte approver key hash | u64 issuedAt`, signed with `v1
+device approval grant signature`). Version 2 appends the approver's newest
+contacts head, which the approved device pins so a server cannot show it an
+older contacts list (ADR-024, verified pins): `u8 flags (1 head present, 2
+confirmed) | head present only: u32 contacts sequence | 32-byte contacts
+entry hash`. No head means the approver has seen the list only empty;
+confirmed means the approver's own pin descends from a trusted start
+(setting up the identity, or an earlier approval) rather than only from the
+server, and the approved device inherits it. Version 1 grants from older
+builds still decode, with no contacts head; a grant built without one is
+encoded as version 1, byte for byte. Builds that know only version 1 refuse
+a version 2 grant (`unsupported-version`), so an approving device on this
+build cannot approve one still running an older page until it reloads.
 Revocation cutoffs (`"OZR" | u8 1 | u8 length + user id | u32 generation |
 u32 entry sequence | 32-byte entry hash | u64 issuedAt | u16 count + (u8
 length + project id, u64 cutoff epoch) by project id`, signed with `v1

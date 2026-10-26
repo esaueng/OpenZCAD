@@ -14,6 +14,7 @@ import {
   formatComparisonCode,
   fromBase32,
   fromBase64Url,
+  fromHex,
   generateEncryptionKeyPair,
   generateSigningKeyPair,
   generateSymmetricKey,
@@ -40,6 +41,7 @@ import {
   verifyScannedDeviceKey,
   wrapKey,
   type Bytes,
+  type DeviceApprovalContactsHead,
   type DeviceListEntry,
   type DeviceListPin,
   type ListedDevice,
@@ -63,6 +65,12 @@ import type {
 } from '@openzcad/shared';
 import type { E2eeApi } from './e2eeApi';
 import { confirmApprovalCancellation } from './approvalCancellation';
+import {
+  EMPTY_CONTACTS_HASH,
+  EMPTY_CONTACTS_SEQUENCE,
+  contactPins,
+  type ContactPinStore
+} from './contactPins';
 import {
   browserPasskeys,
   failedPasskeyEnrollment,
@@ -149,6 +157,30 @@ export interface E2eeContext {
    * Playwright fixtures inject extractable pairs to seed a browser.
    */
   readonly createDeviceKeys?: () => Promise<DeviceKeyPairs>;
+  /**
+   * This browser's contact pins (`contactPins()` by default): setup and
+   * device approval write where its contacts-list trust starts.
+   */
+  readonly contactPins?: ContactPinStore;
+}
+
+const contactPinsOf = (ctx: E2eeContext): ContactPinStore =>
+  ctx.contactPins ?? contactPins();
+
+/**
+ * A browser that creates an identity saw its contacts list empty, so its
+ * contacts pin starts confirmed: nothing could have been signed before.
+ */
+async function pinEmptyContacts(
+  ctx: E2eeContext,
+  list: VerifiedDeviceList
+): Promise<void> {
+  await contactPinsOf(ctx).advanceList(ctx.userId, {
+    identityKeyHash: toHex(list.identityKeyHash),
+    sequence: EMPTY_CONTACTS_SEQUENCE,
+    entryHash: EMPTY_CONTACTS_HASH,
+    confirmed: true
+  });
 }
 
 export type DeviceStatus =
@@ -1148,11 +1180,12 @@ async function setUpEncryptionLocked(
     signature: b64(created.signed.signature),
     wraps: created.wraps
   });
-  await acceptWrite(ctx, response, {
+  const list = await acceptWrite(ctx, response, {
     identityKey: created.identityKey,
     replaceIdentityFrom: persistedPin,
     written: created.signed.entry
   });
+  await pinEmptyContacts(ctx, list);
   return loadEncryption(ctx);
 }
 
@@ -1853,11 +1886,13 @@ async function replaceRecoveryKeyLocked(
     },
     history: created.history!
   });
-  await acceptWrite(ctx, response, {
+  const list = await acceptWrite(ctx, response, {
     identityKey: created.identityKey,
     replaceIdentityFrom: account.persistedPin,
     written: created.signed.entry
   });
+  // The new identity starts a new, empty contacts list.
+  await pinEmptyContacts(ctx, list);
   return loadEncryption(ctx);
 }
 
@@ -2394,6 +2429,29 @@ async function finishApproval(
   await persistDeviceList(ctx, list, {
     replaceIdentityFrom: device.approval?.pinAtRequest
   });
+  // ADR-024: the approver's newest contacts head arrives inside the
+  // authenticated exchange, so this device cannot be shown an older list.
+  // A version 1 grant (an older build) carries none: this device then
+  // starts from the server's list, unconfirmed, like a passkey enrolment.
+  if (grant.contacts) {
+    const head = grant.contacts.head;
+    const accepted = await contactPinsOf(ctx).advanceList(
+      ctx.userId,
+      {
+        identityKeyHash: toHex(grant.identityKeyHash),
+        sequence: head ? head.sequence : EMPTY_CONTACTS_SEQUENCE,
+        entryHash: head ? toHex(head.entryHash) : EMPTY_CONTACTS_HASH,
+        confirmed: grant.contacts.confirmed
+      },
+      { fromApproval: true }
+    );
+    if (!accepted) {
+      throw new EncryptionFlowError(
+        'grant-invalid',
+        'This device and the approving device have conflicting contacts lists. Approval could not be completed. Keep your existing keys and compare contacts on both devices.'
+      );
+    }
+  }
   await ctx.store.clearApprovalIfCurrent(ctx.userId, device.approval!.id);
   await ctx.api.cancelApproval(approval.id).catch(() => undefined);
   return loadEncryption(ctx);
@@ -2566,6 +2624,21 @@ export async function approveDevice(
   let list = account.list;
   let certified = false;
   let sealedAccountKey: string | undefined;
+  // A device already certified with exactly these keys asks again to have
+  // its contacts head confirmed (ADR-024, verified pins): approve it as
+  // certified, with no new certification and no sealed account key. (With
+  // the recovery key the branch below finds it in the current list.)
+  if (
+    !recoverySecret &&
+    list.devices.some(
+      (d) =>
+        d.deviceId === approval.deviceId &&
+        sameBytes(d.signingKey, signingKey) &&
+        sameBytes(d.unlockKey, unlockKey)
+    )
+  ) {
+    certified = true;
+  }
   if (recoverySecret) {
     // An earlier attempt may have certified the device and then failed
     // before `completeApproval` reached the Worker. Resume from the current
@@ -2658,7 +2731,8 @@ export async function approveDevice(
     headHash: list.headHash,
     certified,
     approverKeyHash: await publicKeyHash(device.signingPublicKey),
-    issuedAt: now(ctx)
+    issuedAt: now(ctx),
+    contacts: await approverContactsHead(ctx, list)
   });
   await ctx.api.completeApproval(approval.id, {
     grant: { statement: b64(grant.statement), signature: b64(grant.signature) },
@@ -2666,6 +2740,35 @@ export async function approveDevice(
   });
   approverNonces.delete(approval.id);
   return loadEncryption(ctx);
+}
+
+/**
+ * The newest contacts head this approving browser accepted under `list`'s
+ * identity, for the grant. With none (it never loaded the list under this
+ * identity) the grant says so, unconfirmed: the approved device then
+ * starts from the server's list, as a passkey enrolment does.
+ */
+async function approverContactsHead(
+  ctx: E2eeContext,
+  list: VerifiedDeviceList
+): Promise<DeviceApprovalContactsHead> {
+  const stored = await contactPinsOf(ctx).readList(ctx.userId);
+  if (!stored || stored.identityKeyHash !== toHex(list.identityKeyHash)) {
+    return { head: null, confirmed: false };
+  }
+  if (stored.pendingApproval) {
+    throw new EncryptionFlowError(
+      'grant-invalid',
+      'Check the newest contacts list in Settings › Encryption › Contacts before approving another device. An earlier approval head is still unresolved.'
+    );
+  }
+  return {
+    head:
+      stored.sequence === EMPTY_CONTACTS_SEQUENCE
+        ? null
+        : { sequence: stored.sequence, entryHash: fromHex(stored.entryHash) },
+    confirmed: stored.confirmed
+  };
 }
 
 /** Refuses a pending request from the approving side. */
