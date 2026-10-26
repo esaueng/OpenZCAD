@@ -23,7 +23,8 @@ import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   fromBase64Url,
   signShareDelegation,
-  toBase64Url
+  toBase64Url,
+  type ContentBlobReference
 } from '@openzcad/crypto';
 import {
   adoptProjectDocument,
@@ -38,6 +39,7 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import worker from '../apps/web/worker/index';
+import { forgetSnapshotBlobIds } from '../apps/web/worker/e2eeShareLinks';
 import { rememberProjectFormats } from '../apps/web/src/lib/api';
 import type { ArchiveArtifactInput } from '../apps/web/src/lib/archiveArtifact';
 import { archiveAccountImportSources } from '../apps/web/src/lib/accountImportSources';
@@ -80,6 +82,11 @@ import {
   type Server
 } from './support/e2ee-documents';
 import { sharedProject } from './support/e2ee-members';
+import {
+  putRawSnapshot,
+  R2_PADDING,
+  sealRawSnapshot
+} from './support/e2ee-share-snapshots';
 
 const THIRD = 'user_third';
 const DAY = 86_400_000;
@@ -567,6 +574,506 @@ describe('the anonymous blob route (slice 5-11)', { timeout: 120_000 }, () => {
     expect(
       (await anonymous(srv, `/api/e2ee/share/${token}`, off, from)).status
     ).toBe(404);
+  });
+
+  it('counts blobs per link load: a model with more imports than the address budget loads at once, and nothing else gains (slice 8-C1)', async () => {
+    const { srv, laptop, projectId, document, blobId } =
+      await sharedWithImport();
+    const large = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const small = await createShareLink(laptop.shareLinks, projectId, 'view');
+    // A snapshot of the large link naming 400 committed blobs.
+    const many = 400;
+    const references: ContentBlobReference[] = [];
+    const insert = srv.db.prepare(
+      `INSERT INTO e2ee_content_blobs
+         (project_id, blob_id, kind, object_key, ciphertext_bytes, created_at)
+       VALUES (?, ?, 'import-source', ?, 16, ?)`
+    );
+    for (let i = 0; i < many; i += 1) {
+      const id = randomBytes(16).toString('hex');
+      const key = `e2ee/${projectId}/${id}`;
+      srv.bucket.objects.set(key, new Uint8Array(16).buffer);
+      insert.run(projectId, id, key, new Date().toISOString());
+      references.push({
+        blobId: id,
+        kind: 'import-source',
+        key: new Uint8Array(randomBytes(32)),
+        ciphertextHash: new Uint8Array(randomBytes(32)),
+        plaintextLength: 1
+      });
+    }
+    const sealed = await sealRawSnapshot(
+      srv,
+      laptop,
+      projectId,
+      large.shareId,
+      {
+        document,
+        blobs: references
+      }
+    );
+    expect(
+      (await putRawSnapshot(srv, laptop, projectId, large.shareId, sealed))
+        .status
+    ).toBe(200);
+    const env = {
+      ...srv.env,
+      ENVIRONMENT: 'beta',
+      AUTH_MODE: 'email-code',
+      AUTH_OTP_PEPPER: 'pepper-for-tests'
+    };
+    const minute = vi.spyOn(Date, 'now').mockReturnValue(Date.now());
+    onTestFinished(() => minute.mockRestore());
+    const from = { 'cf-connecting-ip': '203.0.113.9' };
+    const fetchBlob = async (token: string, id: string) =>
+      (await anonymous(srv, sharedBlobUrl(token, id), env, from)).status;
+    // One load of the large link: every blob, within one minute.
+    for (const reference of references) {
+      expect(await fetchBlob(large.fragment.token, reference.blobId)).toBe(200);
+    }
+    // Unknown ids get only the fixed address budget, regardless of the
+    // link's load allowance. The 400 named blobs above still load at once.
+    const statuses: number[] = [];
+    for (let i = 0; i < 301; i += 1) {
+      statuses.push(
+        await fetchBlob(small.fragment.token, randomBytes(16).toString('hex'))
+      );
+    }
+    expect(statuses.slice(0, 300).every((status) => status === 404)).toBe(true);
+    expect(statuses[300]).toBe(429);
+    // Requests naming no servable link spend the address's budget: spent.
+    expect(await fetchBlob('x'.repeat(43), blobId)).toBe(429);
+    // Another address still gets its own.
+    expect(
+      (
+        await anonymous(srv, sharedBlobUrl('x'.repeat(43), blobId), env, {
+          'cf-connecting-ip': '203.0.113.10'
+        })
+      ).status
+    ).toBe(404);
+  });
+
+  /**
+   * An R2-backed snapshot of a new link naming `references` (#935 review),
+   * with counters of the R2 reads of its object: whole-body reads and
+   * ranged ones, and a limited deployment's anonymous blob fetch.
+   */
+  async function r2Snapshot(
+    shared: Awaited<ReturnType<typeof sharedWithImport>>,
+    references: ContentBlobReference[],
+    address: string
+  ) {
+    const { srv, laptop, projectId, document } = shared;
+    forgetSnapshotBlobIds();
+    const link = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const sealed = await sealRawSnapshot(srv, laptop, projectId, link.shareId, {
+      document,
+      padding: R2_PADDING,
+      blobs: references
+    });
+    expect(
+      (await putRawSnapshot(srv, laptop, projectId, link.shareId, sealed))
+        .status
+    ).toBe(200);
+    const { envelope_key: envelopeKey } = srv.db
+      .prepare(
+        `SELECT envelope_key FROM e2ee_share_snapshots
+         WHERE project_id = ? AND share_id = ?`
+      )
+      .get(projectId, link.shareId) as { envelope_key: string | null };
+    expect(envelopeKey).not.toBe(null);
+    const reads = (ranged: boolean) =>
+      srv.bucket.get.mock.calls.filter(
+        ([key, options]) =>
+          key === envelopeKey &&
+          ((options as { range?: unknown } | undefined)?.range !==
+            undefined) ===
+            ranged
+      ).length;
+    const env = {
+      ...srv.env,
+      ENVIRONMENT: 'beta',
+      AUTH_MODE: 'email-code',
+      AUTH_OTP_PEPPER: 'pepper-for-tests'
+    };
+    const now = Date.now();
+    const minute = vi.spyOn(Date, 'now').mockReturnValue(now);
+    onTestFinished(() => minute.mockRestore());
+    const fetchBlob = async (id: string, from = address) =>
+      (
+        await anonymous(srv, sharedBlobUrl(link.fragment.token, id), env, {
+          'cf-connecting-ip': from
+        })
+      ).status;
+    return {
+      bodyReads: () => reads(false),
+      rangedReads: () => reads(true),
+      fetchBlob,
+      nextMinute: () => minute.mockReturnValue(now + 60_000)
+    };
+  }
+
+  function committedBlobs(
+    srv: Server,
+    projectId: string,
+    count: number
+  ): ContentBlobReference[] {
+    const insert = srv.db.prepare(
+      `INSERT INTO e2ee_content_blobs
+         (project_id, blob_id, kind, object_key, ciphertext_bytes, created_at)
+       VALUES (?, ?, 'import-source', ?, 16, ?)`
+    );
+    return Array.from({ length: count }, () => {
+      const id = randomBytes(16).toString('hex');
+      const key = `e2ee/${projectId}/${id}`;
+      srv.bucket.objects.set(key, new Uint8Array(16).buffer);
+      insert.run(projectId, id, key, new Date().toISOString());
+      return {
+        blobId: id,
+        kind: 'import-source' as const,
+        key: new Uint8Array(randomBytes(32)),
+        ciphertextHash: new Uint8Array(randomBytes(32)),
+        plaintextLength: 1
+      };
+    });
+  }
+
+  it('loads a 400-blob model without downloading its snapshot per blob: only its prefix, once (#935 review)', async () => {
+    const shared = await sharedWithImport();
+    const references = committedBlobs(shared.srv, shared.projectId, 400);
+    const snapshot = await r2Snapshot(shared, references, '203.0.113.12');
+    for (const reference of references) {
+      expect(await snapshot.fetchBlob(reference.blobId)).toBe(200);
+    }
+    expect(snapshot.bodyReads()).toBe(0);
+    expect(snapshot.rangedReads()).toBeLessThanOrEqual(2);
+    expect(snapshot.rangedReads()).toBeGreaterThan(0);
+  });
+
+  it.each(['named', 'unnamed'] as const)(
+    'caps cold %s snapshot prefix reads before a 61st read (#935 review)',
+    async (kind) => {
+      const shared = await sharedWithImport();
+      const references = committedBlobs(shared.srv, shared.projectId, 61);
+      const snapshot = await r2Snapshot(shared, references, '203.0.113.13');
+      // Every request in a fresh isolate (nothing cached): 60 prefix reads,
+      // then refused before a 61st.
+      for (let i = 0; i < 60; i += 1) {
+        forgetSnapshotBlobIds();
+        expect(
+          await snapshot.fetchBlob(
+            kind === 'named'
+              ? references[i]!.blobId
+              : randomBytes(16).toString('hex')
+          )
+        ).toBe(kind === 'named' ? 200 : 404);
+      }
+      const read = snapshot.rangedReads();
+      expect(read).toBeGreaterThanOrEqual(60);
+      forgetSnapshotBlobIds();
+      expect(await snapshot.fetchBlob(references[60]!.blobId)).toBe(429);
+      expect(snapshot.rangedReads()).toBe(read);
+      expect(snapshot.bodyReads()).toBe(0);
+      if (kind === 'unnamed')
+        expect(
+          rows(
+            shared.srv,
+            "SELECT bucket FROM auth_rate_limits WHERE bucket LIKE '%:blob:%'"
+          )
+        ).toHaveLength(0);
+    }
+  );
+
+  it('refuses a request past both budgets before reading the snapshot from R2 (#935 review)', async () => {
+    const shared = await sharedWithImport();
+    const references = committedBlobs(shared.srv, shared.projectId, 17);
+    const snapshot = await r2Snapshot(shared, references, '203.0.113.11');
+    const reads = () => snapshot.bodyReads() + snapshot.rangedReads();
+    // 68 named reads exceed the load allowance of 66 while respecting each
+    // blob's cap of four. The last two consume the fixed address bucket.
+    for (const reference of references) {
+      for (let i = 0; i < 4; i += 1)
+        expect(await snapshot.fetchBlob(reference.blobId)).toBe(200);
+    }
+    for (let i = 0; i < 298; i += 1) {
+      expect(await snapshot.fetchBlob(randomBytes(16).toString('hex'))).toBe(
+        404
+      );
+    }
+    // Past both, even in an isolate that has not cached the snapshot:
+    // refused, and nothing more is read from R2.
+    const spent = reads();
+    const counters = () =>
+      (
+        shared.srv.db
+          .prepare('SELECT COUNT(*) AS count FROM auth_rate_limits')
+          .get() as {
+          count: number;
+        }
+      ).count;
+    const spentCounters = counters();
+    for (let i = 0; i < 20; i += 1) {
+      forgetSnapshotBlobIds();
+      expect(await snapshot.fetchBlob(randomBytes(16).toString('hex'))).toBe(
+        429
+      );
+    }
+    expect(reads()).toBe(spent);
+    expect(counters()).toBe(spentCounters);
+    // The next minute the link loads again.
+    snapshot.nextMinute();
+    expect(await snapshot.fetchBlob(references[0]!.blobId)).toBe(200);
+    expect(reads()).toBe(spent + 1);
+  });
+
+  it('bounds unknown-id counter cardinality independently of a 4096-blob allowance (#935 review)', async () => {
+    const shared = await sharedWithImport();
+    const references = committedBlobs(shared.srv, shared.projectId, 4096);
+    const snapshot = await r2Snapshot(shared, references, '203.0.113.20');
+    for (let i = 0; i < 300; i += 1) {
+      expect(await snapshot.fetchBlob(randomBytes(16).toString('hex'))).toBe(
+        404
+      );
+    }
+    const blobCounters = () =>
+      rows(
+        shared.srv,
+        "SELECT bucket FROM auth_rate_limits WHERE bucket LIKE '%:blob:%'"
+      );
+    expect(blobCounters()).toHaveLength(0);
+    const count = rows(
+      shared.srv,
+      'SELECT bucket FROM auth_rate_limits'
+    ).length;
+    const reads = shared.srv.bucket.get.mock.calls.length;
+    for (let i = 0; i < 20; i += 1) {
+      expect(await snapshot.fetchBlob(randomBytes(16).toString('hex'))).toBe(
+        429
+      );
+    }
+    expect(
+      rows(shared.srv, 'SELECT bucket FROM auth_rate_limits')
+    ).toHaveLength(count);
+    expect(shared.srv.bucket.get.mock.calls.length).toBe(reads);
+    expect(blobCounters()).toHaveLength(0);
+    // A valid link retains its own allowance after the fixed bucket is spent.
+    const untouched = await r2Snapshot(shared, references, '203.0.113.20');
+    expect(await untouched.fetchBlob(references[0]!.blobId)).toBe(200);
+    expect(blobCounters()).toHaveLength(1);
+    expect(
+      await untouched.fetchBlob(references[0]!.blobId, '203.0.113.21')
+    ).toBe(200);
+    expect(blobCounters()).toHaveLength(2);
+    untouched.nextMinute();
+    expect(await untouched.fetchBlob(references[0]!.blobId)).toBe(200);
+  });
+
+  it('keeps admission atomic when named-blob requests pass the read-only check concurrently', async () => {
+    const shared = await sharedWithImport();
+    const references = committedBlobs(shared.srv, shared.projectId, 2);
+    const snapshot = await r2Snapshot(shared, references, '203.0.113.22');
+    expect(await snapshot.fetchBlob(randomBytes(16).toString('hex'))).toBe(404);
+    const before = shared.srv.bucket.get.mock.calls.length;
+    const statuses = await Promise.all(
+      Array.from({ length: 20 }, () =>
+        snapshot.fetchBlob(references[0]!.blobId)
+      )
+    );
+    expect(statuses.filter((status) => status === 200)).toHaveLength(4);
+    expect(statuses.filter((status) => status === 429)).toHaveLength(16);
+    expect(shared.srv.bucket.get.mock.calls.length - before).toBe(4);
+    const loadCounters = rows<{ bucket: string; request_count: number }>(
+      shared.srv,
+      'SELECT bucket, request_count FROM auth_rate_limits'
+    ).filter(({ bucket }) =>
+      /^[a-z0-9-]+:[a-f0-9]{64}:[a-f0-9]{32}$/.test(bucket)
+    );
+    expect(loadCounters.map(({ request_count }) => request_count)).toEqual([4]);
+    expect(await snapshot.fetchBlob(references[1]!.blobId)).toBe(200);
+  });
+
+  it('caps repeats across links before any R2 read even with a 4096-blob allowance (#935 review)', async () => {
+    const shared = await sharedWithImport();
+    const references = committedBlobs(shared.srv, shared.projectId, 4096);
+    const id = references[0]!.blobId;
+    const snapshot = await r2Snapshot(shared, references, '203.0.113.14');
+    for (let i = 0; i < 4; i += 1) {
+      expect(await snapshot.fetchBlob(id)).toBe(200);
+    }
+    const before = shared.srv.bucket.get.mock.calls.length;
+    for (let i = 0; i < 20; i += 1) {
+      forgetSnapshotBlobIds();
+      expect(await snapshot.fetchBlob(id)).toBe(429);
+    }
+    expect(shared.srv.bucket.get.mock.calls.length).toBe(before);
+    expect(await snapshot.fetchBlob(references[1]!.blobId)).toBe(200);
+    expect(await snapshot.fetchBlob(id, '203.0.113.15')).toBe(200);
+    snapshot.nextMinute();
+    expect(await snapshot.fetchBlob(id)).toBe(200);
+    for (let i = 0; i < 3; i += 1) {
+      expect(await snapshot.fetchBlob(id)).toBe(200);
+    }
+    // A different token to the same project cannot multiply the cap.
+    const sibling = await r2Snapshot(shared, references, '203.0.113.14');
+    const siblingBefore = shared.srv.bucket.get.mock.calls.length;
+    expect(await sibling.fetchBlob(id)).toBe(429);
+    expect(shared.srv.bucket.get.mock.calls.length).toBe(siblingBefore);
+  });
+
+  async function inlineSnapshot(address: string) {
+    const { srv, laptop, projectId, blobId } = await sharedWithImport();
+    const link = await createShareLink(laptop.shareLinks, projectId, 'view');
+    expect(
+      srv.db
+        .prepare(
+          'SELECT envelope_inline IS NOT NULL AS inline FROM e2ee_share_snapshots WHERE share_id = ?'
+        )
+        .get(link.shareId)
+    ).toEqual({ inline: 1 });
+    const env = {
+      ...srv.env,
+      ENVIRONMENT: 'beta',
+      AUTH_MODE: 'email-code',
+      AUTH_OTP_PEPPER: 'pepper-for-tests'
+    };
+    const now = Date.now();
+    const minute = vi.spyOn(Date, 'now').mockReturnValue(now);
+    onTestFinished(() => minute.mockRestore());
+    const fetchBlob = (id = blobId) =>
+      anonymous(srv, sharedBlobUrl(link.fragment.token, id), env, {
+        'cf-connecting-ip': address
+      });
+    const bodyReads = () =>
+      srv.statements.filter(
+        (sql) =>
+          /\b(?:FROM|JOIN)\s+e2ee_share_snapshots\b/i.test(sql) &&
+          /\benvelope_inline\b|\*/.test(
+            /^\s*SELECT\s+([\s\S]*?)\bFROM\b/i.exec(sql)?.[1] ?? ''
+          )
+      ).length;
+    srv.statements.length = 0;
+    forgetSnapshotBlobIds();
+    return {
+      srv,
+      link,
+      fetchBlob,
+      bodyReads,
+      nextMinute: () => minute.mockReturnValue(now + 60_000)
+    };
+  }
+
+  it('refuses repeated inline downloads before selecting the snapshot body from D1 (#935 review)', async () => {
+    const { srv, fetchBlob, bodyReads } = await inlineSnapshot('203.0.113.17');
+    for (let i = 0; i < 4; i += 1) {
+      expect((await fetchBlob()).status).toBe(200);
+    }
+    const before = bodyReads();
+    for (let i = 0; i < 20; i += 1) {
+      forgetSnapshotBlobIds();
+      expect((await fetchBlob()).status).toBe(429);
+    }
+    expect(bodyReads()).toBe(before);
+    // An allowed load needs the inline body only once, even with warm reads.
+    expect(before).toBe(1);
+    const lookup = srv.statements.find((sql) =>
+      /FROM e2ee_share_links l/.test(sql)
+    );
+    expect(lookup).toBeDefined();
+    // The pre-limit lookup must omit both large fields, including the
+    // authority's potentially 2,048 authors, even though it gates on one.
+    const projection = /^\s*SELECT\s+([\s\S]*?)\bFROM\b/i.exec(lookup!)?.[1];
+    expect(projection).not.toMatch(/\benvelope_inline\b|\bauthority\b|\*/);
+    // Unknown ids use only the address's fixed 300, with no per-id rows.
+    for (let i = 0; i < 300; i += 1) {
+      expect((await fetchBlob(randomBytes(16).toString('hex'))).status).toBe(
+        404
+      );
+    }
+    const spent = bodyReads();
+    for (let i = 0; i < 20; i += 1) {
+      forgetSnapshotBlobIds();
+      expect((await fetchBlob()).status).toBe(429);
+    }
+    expect(bodyReads()).toBe(spent);
+  });
+
+  it('caps cold inline snapshot reads before the 61st D1 body selection (#935 review)', async () => {
+    const { srv, fetchBlob, bodyReads, nextMinute } =
+      await inlineSnapshot('203.0.113.18');
+    for (let i = 0; i < 60; i += 1) {
+      forgetSnapshotBlobIds();
+      expect((await fetchBlob(randomBytes(16).toString('hex'))).status).toBe(
+        404
+      );
+    }
+    expect(bodyReads()).toBe(60);
+    expect(
+      rows(
+        srv,
+        "SELECT bucket FROM auth_rate_limits WHERE bucket LIKE '%:blob:%'"
+      )
+    ).toHaveLength(0);
+    forgetSnapshotBlobIds();
+    expect((await fetchBlob()).status).toBe(429);
+    expect(bodyReads()).toBe(60);
+    nextMinute();
+    expect((await fetchBlob()).status).toBe(200);
+    expect(bodyReads()).toBe(61);
+  });
+
+  it('fences a lazy inline body to the metadata hash and does not cache a missing read (#935 review)', async () => {
+    const { srv, link, fetchBlob, bodyReads } =
+      await inlineSnapshot('203.0.113.19');
+    const stored = srv.db
+      .prepare(
+        'SELECT snapshot_hash FROM e2ee_share_snapshots WHERE share_id = ?'
+      )
+      .get(link.shareId) as { snapshot_hash: string };
+    const push = srv.statements.push.bind(srv.statements);
+    srv.statements.push = (...sql: string[]) => {
+      if (
+        sql.some((text) =>
+          /SELECT envelope_inline FROM e2ee_share_snapshots/.test(text)
+        )
+      ) {
+        srv.statements.push = push;
+        // A publication replaces the row after authorization metadata was
+        // read but before the lazy body selection executes.
+        srv.db
+          .prepare(
+            'UPDATE e2ee_share_snapshots SET snapshot_hash = ? WHERE share_id = ?'
+          )
+          .run('f'.repeat(64), link.shareId);
+      }
+      return push(...sql);
+    };
+    onTestFinished(() => {
+      srv.statements.push = push;
+    });
+    expect((await fetchBlob()).status).toBe(404);
+    expect(srv.statements.push).toBe(push);
+    expect(bodyReads()).toBe(1);
+    srv.db
+      .prepare(
+        'UPDATE e2ee_share_snapshots SET snapshot_hash = ? WHERE share_id = ?'
+      )
+      .run(stored.snapshot_hash, link.shareId);
+    expect((await fetchBlob()).status).toBe(200);
+    expect(bodyReads()).toBe(2);
+  });
+
+  it('keeps the repetition cap when a spent link falls back to the address budget (#935 review)', async () => {
+    const shared = await sharedWithImport();
+    const references = committedBlobs(shared.srv, shared.projectId, 17);
+    const snapshot = await r2Snapshot(shared, references, '203.0.113.16');
+    for (const reference of references) {
+      for (let i = 0; i < 4; i += 1)
+        expect(await snapshot.fetchBlob(reference.blobId)).toBe(200);
+    }
+    forgetSnapshotBlobIds();
+    const before = shared.srv.bucket.get.mock.calls.length;
+    expect(await snapshot.fetchBlob(references[0]!.blobId)).toBe(429);
+    expect(shared.srv.bucket.get.mock.calls.length).toBe(before);
   });
 });
 

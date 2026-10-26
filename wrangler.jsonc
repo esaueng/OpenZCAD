@@ -64,6 +64,11 @@
     // encrypted project back into plaintext, stays closed too. It needs
     // migration open and D1 migration 0043; Phase 8 deletes it.
     "E2EE_REVERSE_ENABLED": "false",
+    // Encryption by default (ADR-024 Phase 8, slice 8-1) stays closed: no
+    // plaintext project creation, plaintext sharing, opt-out or reverse path.
+    // It needs the outside review confirmed done, and E2EE_KEYS_ENABLED,
+    // E2EE_PROJECTS_ENABLED and E2EE_MIGRATION_ENABLED on, before it is set.
+    "E2EE_DEFAULT_ON": "false",
     // Assistant rollout flags live here, not in the dashboard: a deploy
     // replaces dashboard variables with this block. Each one exposes its
     // operation in the model's output schema, and every one compiles to a

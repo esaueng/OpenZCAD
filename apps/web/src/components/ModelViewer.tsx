@@ -1082,6 +1082,14 @@ export interface ModelViewerProps {
   onCommandHandleRelease?(valueId: string, value: number): void;
   /** A handle's chip was tapped; true when a keypad opened. */
   onOpenCommandKeypad?(valueId: string, value: number): boolean;
+  /**
+   * Which chip the open keypad rides, where an offset arrow and command
+   * handles stand together (the in-place Extrude): `offset` the arrow's,
+   * `{ command }` that handle's, `none` neither (a keypad opened from the
+   * command bar stays where it opened). Absent: the arrow's chip and the
+   * command chip dragged last (else the first) each anchor it, as before.
+   */
+  keypadAnchorOwner?: 'offset' | 'none' | { command: string };
   /** Filled with a setter the keypad uses to move a command handle. */
   commandSetterRef?: MutableRefObject<
     ((valueId: string, value: number) => void) | null
@@ -2159,6 +2167,7 @@ export function ModelViewer({
   onCommandHandleRelease,
   onOpenCommandKeypad,
   commandSetterRef: commandSetterRefProp,
+  keypadAnchorOwner,
   curvePicker = null,
   onPickCurve,
   onPickDatum,
@@ -2456,6 +2465,8 @@ export function ModelViewer({
   onCommandHandleReleaseRef.current = onCommandHandleRelease;
   const onOpenCommandKeypadRef = useRef(onOpenCommandKeypad);
   onOpenCommandKeypadRef.current = onOpenCommandKeypad;
+  const keypadAnchorOwnerRef = useRef(keypadAnchorOwner);
+  keypadAnchorOwnerRef.current = keypadAnchorOwner;
   const ownCommandSetterRef = useRef<
     ((valueId: string, value: number) => void) | null
   >(null);
@@ -4141,9 +4152,15 @@ export function ModelViewer({
     /** Places each command chip at its handle; hides any off screen. */
     function updateCommandChips() {
       const rigs = commandRigsRef.current;
+      const owner = keypadAnchorOwnerRef.current;
+      // A keypad another chip owns (or none does) is never moved from here.
       const activeId =
-        commandDragRef.current?.valueId ??
-        (rigs.size > 0 ? [...rigs.keys()][0]! : null);
+        owner === undefined
+          ? (commandDragRef.current?.valueId ??
+            (rigs.size > 0 ? [...rigs.keys()][0]! : null))
+          : typeof owner === 'object'
+            ? owner.command
+            : null;
       let anchored = false;
       const e2eHandles: Record<
         string,
@@ -4253,7 +4270,13 @@ export function ModelViewer({
           };
         }
       }
-      if (rigs.size > 0 && !anchored) keypadAnchorRef.current?.(null);
+      if (
+        rigs.size > 0 &&
+        !anchored &&
+        (owner === undefined || typeof owner === 'object')
+      ) {
+        keypadAnchorRef.current?.(null);
+      }
       if (E2E_CANVAS_HOOKS_ENABLED) {
         if (rigs.size > 0) {
           renderer.domElement.dataset.e2eCommandHandles =
@@ -6628,6 +6651,11 @@ export function ModelViewer({
         : null;
     }
 
+    /** Whether the arrow's chip places the open keypad (see the prop). */
+    function offsetOwnsKeypad() {
+      const owner = keypadAnchorOwnerRef.current;
+      return owner === undefined || owner === 'offset';
+    }
     function updateOffsetChip() {
       const chip = offsetChipRef.current;
       if (!chip) {
@@ -6641,6 +6669,16 @@ export function ModelViewer({
       const chipWidth = chip.offsetWidth;
       const labelWidth = radiusLabelChip.offsetWidth;
       const laneLeft = rightLaneLeft();
+      // Above the bottom lane, where a command's bar stands (the in-place
+      // Extrude's, under the region arrow it extrudes): a chip held there
+      // sat under the bar and could not be tapped.
+      const footTop = bottomLaneTop();
+      const footLimit = (element: HTMLElement) =>
+        footTop === null
+          ? Infinity
+          : footTop - COMMAND_CHIP_MARGIN_PX - element.offsetHeight / 2;
+      const chipFloor = footLimit(chip);
+      const labelFloor = footLimit(radiusLabelChip);
       // Every other panel over the stage — a floating window, the left dock —
       // the value chip and its tag come out from under as one, measured
       // where they showed last frame less the move made then.
@@ -6677,7 +6715,11 @@ export function ModelViewer({
             )
           : { dx: 0, dy: 0 };
       const place = (element: HTMLElement, x: number, y: number) =>
-        hud.showAt(element, x + chipDodge.dx, y + chipDodge.dy);
+        hud.showAt(
+          element,
+          x + chipDodge.dx,
+          Math.min(y + chipDodge.dy, element === chip ? chipFloor : labelFloor)
+        );
       // Either rig answers the same two questions; only the label differs.
       // In a multi-region extrude the chip rides the arrow last grabbed.
       const regionChipRig =
@@ -6726,7 +6768,7 @@ export function ModelViewer({
         chipLayoutKey = null;
         chip.hidden = true;
         radiusLabelChip.hidden = true;
-        keypadAnchorRef.current?.(null);
+        if (offsetOwnsKeypad()) keypadAnchorRef.current?.(null);
         if (E2E_CANVAS_HOOKS_ENABLED) {
           delete renderer.domElement.dataset.e2eHandleX;
           delete renderer.domElement.dataset.e2eHandleY;
@@ -6753,7 +6795,7 @@ export function ModelViewer({
         chipLayoutKey = null;
         chip.hidden = true;
         radiusLabelChip.hidden = true;
-        keypadAnchorRef.current?.(null);
+        if (offsetOwnsKeypad()) keypadAnchorRef.current?.(null);
         if (E2E_CANVAS_HOOKS_ENABLED) {
           delete renderer.domElement.dataset.e2eChipAnchorX;
           delete renderer.domElement.dataset.e2eChipAnchorY;
@@ -7137,7 +7179,7 @@ export function ModelViewer({
       ].join('|');
       if (layoutKey !== chipLayoutKey) requestRender();
       chipLayoutKey = layoutKey;
-      keypadAnchorRef.current?.(screen);
+      if (offsetOwnsKeypad()) keypadAnchorRef.current?.(screen);
     }
 
     function positionDragHud(

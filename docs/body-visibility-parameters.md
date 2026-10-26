@@ -14,7 +14,7 @@ backup, and collaboration retain bindings by stable body ID.
 
 Off bodies disappear from the viewport and STEP/mesh exports. The exact export
 adapter enforces this even if a caller passes stale body IDs. The local body eye
-and isolate settings for unbound bodies keep their existing view-only behavior.
+and isolate settings also exclude hidden bodies from STEP/mesh exports.
 Bodies remain in the exact history: switching an operand off does not undo a
 union, subtraction, or other feature that already consumed it. Select separate
 result bodies when creating the switch.

@@ -64,6 +64,7 @@ import {
   signShareDelegation,
   signShareKeyWrap,
   signShareLinkForget,
+  signShareLinkRegistration,
   signShareLinkGrant,
   signShareLinkTombstone,
   toBase64Url,
@@ -788,24 +789,39 @@ export async function createShareLink(
     }
   );
   const list = ctx.groups.account.list;
-  const register = async (keyEpoch: number) =>
-    ctx.api.create(projectId, {
+  // Signed by this device ("OZN", `signShareLinkRegistration`) over every
+  // field: the server registers a link only for a certified owner device.
+  const register = async (keyEpoch: number) => {
+    const tokenHash = await shareLinkTokenHash(token);
+    const wrapped = await wrapKey(
+      await projectKeyForEpoch(ctx.groups, projectId, keyEpoch),
+      shareKey,
+      { purpose: 'share-key', projectId, keyEpoch, shareId }
+    );
+    const signature = await signShareLinkRegistration(
+      device.signing.privateKey,
+      {
+        projectId,
+        shareId,
+        tokenHash: fromHex(tokenHash),
+        mode,
+        shareKeyHash: keyHash,
+        ownerIdentityKeyHash: list.identityKeyHash,
+        keyEpoch,
+        wrapped
+      }
+    );
+    return ctx.api.create(projectId, {
       shareId,
-      tokenHash: await shareLinkTokenHash(token),
+      tokenHash,
       mode,
       shareKeyHash: b64(keyHash),
       ownerIdentityHash: b64(list.identityKeyHash),
-      key: {
-        keyEpoch,
-        wrapped: b64(
-          await wrapKey(
-            await projectKeyForEpoch(ctx.groups, projectId, keyEpoch),
-            shareKey,
-            { purpose: 'share-key', projectId, keyEpoch, shareId }
-          )
-        )
-      }
+      key: { keyEpoch, wrapped: b64(wrapped) },
+      deviceId: device.deviceId,
+      signature: b64(signature)
     });
+  };
   try {
     await register(head.keyEpoch);
   } catch (error) {

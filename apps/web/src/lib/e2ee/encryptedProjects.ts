@@ -56,7 +56,11 @@ import {
   type EncryptedProjectWarning
 } from './encryptedProjectStore';
 import { deviceKeyStore } from './keychainDeviceKeys';
-import { getKeySessionRevision, subscribeKeySession } from './keySession';
+import {
+  getKeySessionRevision,
+  isCurrentKeySession,
+  subscribeKeySession
+} from './keySession';
 import { mlsProjectSessions } from './mls/projectSessions';
 import {
   createProjectGroupsApi,
@@ -399,15 +403,22 @@ type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
  * fetcher `open` is given, which names the migration lease. Their blob keys stay in a registry of
  * their own until the project's verified documents hand them to the page.
  */
-export async function openMigrationStaging(): Promise<{
+export async function openMigrationStaging(expectedUserId?: string): Promise<{
   deviceId: string;
   open: (fetcher: Fetch) => MigrationStagingClients;
 }> {
+  const revision = getKeySessionRevision();
   const { userId, email } = await pageSession();
+  if (
+    (expectedUserId !== undefined && expectedUserId !== userId) ||
+    !isCurrentKeySession(revision)
+  )
+    throw locked();
   const e2ee: E2eeContext = {
     userId,
     api: createE2eeApi(),
-    store: deviceKeyStore()
+    store: deviceKeyStore(),
+    isCurrent: () => isCurrentKeySession(revision)
   };
   const state = await loadEncryption(e2ee);
   if (state.kind !== 'ready' || !state.account.unlocked) throw locked();

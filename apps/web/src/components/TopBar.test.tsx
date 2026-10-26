@@ -15,6 +15,7 @@ function renderTopBar(
     geometryFailed?: boolean;
     canExport?: boolean;
     exportWithheld?: string | null;
+    exportUnavailableReason?: string | null;
     projectName?: string;
     encryption?: EncryptionIndicatorProps | null;
   } = {}
@@ -35,6 +36,7 @@ function renderTopBar(
       canExport={options.canExport ?? false}
       exportScope={null}
       exportWithheld={options.exportWithheld ?? null}
+      exportUnavailableReason={options.exportUnavailableReason ?? null}
       saveState={options.saveState ?? 'local'}
       geometryPending={options.geometryPending}
       geometryFailed={options.geometryFailed}
@@ -249,6 +251,16 @@ describe('TopBar File menu', () => {
     const exportStep = screen.getByRole('button', { name: /Export STEP/ });
     expect(exportStep).toBeDisabled();
     expect(exportStep).toHaveAttribute('title', reason);
+  });
+
+  it('tells users to show a hidden body before exporting', () => {
+    renderTopBar({ exportUnavailableReason: 'Show a body before exporting.' });
+    fileMenu().open = true;
+    for (const name of [/Export STEP/, /Export mesh/]) {
+      const button = screen.getByRole('button', { name });
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute('title', 'Show a body before exporting.');
+    }
   });
 
   it('keeps a partial export available and says what it leaves out', () => {

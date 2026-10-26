@@ -8,6 +8,7 @@ use tauri::{
 
 mod desktop_auth;
 mod device_keys;
+mod external_links;
 
 use desktop_auth::{
     cancel_desktop_sign_in, desktop_api_request, desktop_collaboration_url, poll_desktop_sign_in,
@@ -293,6 +294,7 @@ pub fn run() {
             desktop_auth::desktop_blob_stream_read,
             desktop_auth::desktop_blob_stream_cancel,
             desktop_collaboration_url,
+            external_links::open_external_url,
             device_keys::create_device_keys,
             device_keys::sign_with_device_key,
             device_keys::derive_with_device_key,

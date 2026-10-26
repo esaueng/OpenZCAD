@@ -178,6 +178,179 @@ async function clickEncryptProjects() {
 }
 
 describe('the migration controller', () => {
+  it.each(['paused', 'error'] as const)(
+    'automatic coordination preserves a manual %s until an explicit retry',
+    async (phase) => {
+      const { automaticProjectMigration } =
+        await import('../lib/e2ee/automaticMigration');
+      let tries = 0;
+      const fake = fakeEngine(async (_summary, report) => {
+        report({ phase: ++tries === 1 ? phase : 'done' });
+      });
+      const controller = controllerWith(fake, null, {
+        plaintext: { listProjects: async () => [PROJECTS[1]!] } as never
+      });
+      await controller.run(['proj_old']);
+      expect(controller.getState().projects[0]?.phase).toBe(phase);
+      const automatic = automaticProjectMigration('user_alice', vi.fn(), {
+        config: async () => ({
+          enabled: true,
+          projectsEnabled: true,
+          migrationEnabled: true,
+          defaultOn: true
+        }),
+        prepare: async () => controller
+      });
+      try {
+        await automatic.check();
+        expect(fake.migrated).toEqual(['proj_old']);
+        expect(controller.getState().projects[0]?.phase).toBe(phase);
+        await controller.run(['proj_old']);
+        expect(fake.migrated).toEqual(['proj_old', 'proj_old']);
+        expect(controller.getState().projects[0]?.phase).toBe('done');
+      } finally {
+        automatic.dispose();
+      }
+    }
+  );
+
+  it.each([
+    { storageFormat: 1, status: 'staging', phase: 'paused' },
+    { storageFormat: 2, status: 'purging', phase: 'error' }
+  ] as const)(
+    'automatically resumes discovered $status work even after Settings listed it',
+    async ({ storageFormat, status, phase }) => {
+      const { automaticProjectMigration } =
+        await import('../lib/e2ee/automaticMigration');
+      const fake = fakeEngine(async (_summary, report) =>
+        report({ phase: 'done' })
+      );
+      const controller = controllerWith(fake, null, {
+        plaintext: {
+          listProjects: async () => [{ ...PROJECTS[1]!, storageFormat }]
+        } as never,
+        migrations: {
+          status: async () => ({ migration: { state: status } })
+        } as never
+      });
+      await controller.refresh();
+      expect(controller.getState().projects[0]?.phase).toBe(phase);
+      const automatic = automaticProjectMigration('user_alice', vi.fn(), {
+        config: async () => ({
+          enabled: true,
+          projectsEnabled: true,
+          migrationEnabled: true,
+          defaultOn: true
+        }),
+        prepare: async () => controller
+      });
+      try {
+        await automatic.check();
+        expect(fake.migrated).toEqual(['proj_old']);
+        expect(controller.getState().projects[0]?.phase).toBe('done');
+      } finally {
+        automatic.dispose();
+      }
+    }
+  );
+
+  it('preserves a manual pause made while automatic migration waits for its lock', async () => {
+    const { automaticProjectMigration } =
+      await import('../lib/e2ee/automaticMigration');
+    let release!: () => Promise<void>;
+    let first = true;
+    const locks: MigrationLocks = {
+      request: (_name, _options, callback) => {
+        if (!first) return callback({});
+        first = false;
+        return new Promise((resolve, reject) => {
+          release = async () => {
+            try {
+              resolve(await callback({}));
+            } catch (error) {
+              reject(error instanceof Error ? error : new Error(String(error)));
+            }
+          };
+        });
+      }
+    };
+    const fake = fakeEngine(async (_summary, report) =>
+      report({ phase: 'paused' })
+    );
+    const controller = controllerWith(fake, locks, {
+      plaintext: { listProjects: async () => [PROJECTS[1]!] } as never
+    });
+    const automatic = automaticProjectMigration('user_alice', vi.fn(), {
+      config: async () => ({
+        enabled: true,
+        projectsEnabled: true,
+        migrationEnabled: true,
+        defaultOn: true
+      }),
+      prepare: async () => controller
+    });
+    const checking = automatic.check();
+    try {
+      await waitFor(() => expect(release).toBeDefined());
+      await controller.run(['proj_old']);
+      expect(fake.migrated).toEqual(['proj_old']);
+      await release();
+      await checking;
+      expect(fake.migrated).toEqual(['proj_old']);
+      expect(controller.getState().projects[0]?.phase).toBe('paused');
+    } finally {
+      automatic.dispose();
+    }
+  });
+
+  it('does not start from a delayed lock callback after its account lifetime ends', async () => {
+    let release!: () => Promise<void>;
+    const locks: MigrationLocks = {
+      request: (_name, _options, callback) =>
+        new Promise((resolve, reject) => {
+          release = async () => {
+            try {
+              resolve(await callback({}));
+            } catch (error) {
+              reject(error instanceof Error ? error : new Error(String(error)));
+            }
+          };
+        })
+    };
+    const fake = fakeEngine(async () => undefined);
+    const controller = controllerWith(fake, locks);
+    const lifetime = new AbortController();
+    const running = controller.run(undefined, lifetime.signal);
+    lifetime.abort();
+    await release();
+    await running;
+    expect(fake.migrated).toEqual([]);
+    expect(controller.getState().running).toBe(false);
+  });
+
+  it('forwards account teardown to an in-flight migration and stops before the next project', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fake = fakeEngine(async (_summary, report, signal) => {
+      report({ phase: 'revisions' });
+      await gate;
+      expect(signal?.aborted).toBe(true);
+      report({ phase: 'paused' });
+      throw new MigrationPausedError();
+    });
+    const controller = controllerWith(fake);
+    const lifetime = new AbortController();
+    const running = controller.run(undefined, lifetime.signal);
+    await waitFor(() => expect(fake.migrated).toEqual(['proj_old']));
+    lifetime.abort();
+    release();
+    await running;
+    expect(fake.migrated).toEqual(['proj_old']);
+    expect(controller.getState().projects[0]?.phase).toBe('paused');
+  });
+
   it('encrypts plaintext projects oldest first and moves on past a failure', async () => {
     const fake = fakeEngine(async (summary, report) => {
       if (summary.projectId === 'proj_old') {

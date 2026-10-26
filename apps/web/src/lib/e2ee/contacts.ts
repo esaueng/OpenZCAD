@@ -37,8 +37,10 @@ import {
 } from './accountKeys';
 import { callE2eeRoute, type E2eeFetch } from './e2eeApi';
 import {
+  EMPTY_CONTACTS_SEQUENCE,
   contactPins,
   type ContactPin,
+  type ContactsListPinRecord,
   type ContactPinStore
 } from './contactPins';
 
@@ -62,6 +64,14 @@ import {
  * to seen at once (`keyChanged`); the browser keeps that downgrade until the
  * user signs the key change, and only a verified contact yields a key to
  * wrap to (`verifiedEncryptionKey`).
+ *
+ * A browser whose list pin is unconfirmed (enrolled with only a passkey or
+ * the recovery key, or approved by an older build) started from the newest
+ * list the server showed it, which a server hiding the latest entry could
+ * have rolled back. It treats every verified pin as seen until another of
+ * the user's devices confirms the head (the approval exchange, which also
+ * re-confirms an already certified device) or the user compares codes with
+ * that contact again on this browser (ADR-024, verified pins).
  */
 
 export interface ContactsApi {
@@ -118,7 +128,7 @@ export interface ContactsContext {
 export function contactsContext(
   keys: E2eeContext,
   api: ContactsApi = createContactsApi(),
-  pins: ContactPinStore = contactPins()
+  pins: ContactPinStore = keys.contactPins ?? contactPins()
 ): ContactsContext {
   return { keys, api, pins };
 }
@@ -139,6 +149,12 @@ export interface ContactsBook {
   readonly generation: number | null;
   /** Null until the first entry is signed. */
   readonly list: VerifiedContactsList | null;
+  /**
+   * This browser's list pin descends from a trusted start (setup, or an
+   * approving device's grant). When false, verified entries count as seen
+   * unless the user compared codes with that contact on this browser.
+   */
+  readonly listConfirmed: boolean;
   readonly people: readonly E2eeContactPerson[];
   readonly contacts: readonly ContactSummary[];
 }
@@ -208,12 +224,14 @@ function refused(error: unknown, what: string): never {
 /**
  * Verifies the server's copy of this account's contacts list against the
  * account's identity and this browser's pin, then moves the pin forward.
+ * With no pin (a browser enrolled with only a passkey or the recovery key)
+ * the newest validly signed list is accepted, but unconfirmed.
  */
 async function acceptList(
   ctx: ContactsContext,
   account: AccountView,
   response: E2eeContactsResponse
-): Promise<VerifiedContactsList | null> {
+): Promise<{ list: VerifiedContactsList | null; confirmed: boolean }> {
   const userId = ctx.keys.userId;
   if (response.generation !== account.generation) {
     throw new ContactsError(
@@ -223,18 +241,23 @@ async function acceptList(
   }
   const identityHash = toHex(account.list.identityKeyHash);
   const stored = await ctx.pins.readList(userId);
+  const anchor =
+    stored && stored.identityKeyHash === identityHash ? stored : null;
+  // A list this browser trusted while it was still empty pins no entry.
   const pin =
-    stored && stored.identityKeyHash === identityHash
+    anchor && anchor.sequence !== EMPTY_CONTACTS_SEQUENCE
       ? {
           identityKeyHash: account.list.identityKeyHash,
-          sequence: stored.sequence,
-          entryHash: fromHex(stored.entryHash)
+          sequence: anchor.sequence,
+          entryHash: fromHex(anchor.entryHash)
         }
       : undefined;
+  const confirmed = anchor?.confirmed ?? false;
   if (response.entries.length === 0) {
     // An empty list under the pinned identity hides every entry.
-    if (pin) refused(new E2eeError('chain-broken', 'empty'), 'contacts list');
-    return null;
+    if (pin || anchor?.pendingApproval)
+      refused(new E2eeError('chain-broken', 'empty'), 'contacts list');
+    return { list: null, confirmed };
   }
   let list: VerifiedContactsList;
   try {
@@ -249,28 +272,94 @@ async function acceptList(
   if (list.userId !== userId) {
     throw new ContactsError('invalid', 'The contacts list names another user.');
   }
+  // An approving device's head waits beside the pin. This list extends
+  // the pin; once it reaches the head it must hold exactly that entry, or
+  // the approver and this browser were shown different chains: refuse it
+  // as a fork, keeping both. Only a matching head lends its confirmation.
+  let confirmedNow = confirmed;
+  const pendingHead = anchor?.pendingApproval;
+  if (pendingHead && list.pin.sequence < pendingHead.sequence)
+    staleAnswer('contacts list');
+  if (pendingHead && pendingHead.sequence <= list.pin.sequence) {
+    const entry = list.entries[pendingHead.sequence];
+    if (!entry || toHex(entry.hash) !== pendingHead.entryHash) {
+      refused(new E2eeError('chain-broken', 'approval head'), 'contacts list');
+    }
+    confirmedNow = confirmed || pendingHead.confirmed;
+  }
   requireActive(ctx);
-  const advanced = await ctx.pins.advanceList(userId, {
-    identityKeyHash: identityHash,
-    sequence: list.pin.sequence,
-    entryHash: toHex(list.pin.entryHash)
-  });
+  // The store keeps a confirmed pin confirmed as it moves forward; what
+  // the server shows on its own never confirms one.
+  const advanced = await ctx.pins.advanceList(
+    userId,
+    {
+      identityKeyHash: identityHash,
+      sequence: list.pin.sequence,
+      entryHash: toHex(list.pin.entryHash),
+      confirmed: confirmedNow
+    },
+    {
+      checkedAnchor: stored,
+      ...(pendingHead && pendingHead.sequence <= list.pin.sequence
+        ? { checkedApproval: pendingHead }
+        : {})
+    }
+  );
   // Another tab pinned a newer list meanwhile: this one is stale.
   if (!advanced) staleAnswer('contacts list');
-  return list;
+  return { list, confirmed: confirmedNow };
+}
+
+/** A retained book must still contain every head learned since it was loaded. */
+async function requireCurrentBook(
+  ctx: ContactsContext,
+  book: ContactsBook
+): Promise<ContactsListPinRecord | null> {
+  if (book.userId !== ctx.keys.userId) staleAnswer('contacts list');
+  const pin = await ctx.pins.readList(ctx.keys.userId);
+  if (!pin) {
+    requireActive(ctx);
+    return null;
+  }
+  const list = book.list;
+  if (list && toHex(list.pin.identityKeyHash) !== pin.identityKeyHash)
+    staleAnswer('contacts list');
+  for (const head of [pin, pin.pendingApproval]) {
+    if (!head || head.sequence === EMPTY_CONTACTS_SEQUENCE) continue;
+    const entry = list?.entries[head.sequence];
+    if (!entry || toHex(entry.hash) !== head.entryHash)
+      staleAnswer('contacts list');
+  }
+  requireActive(ctx);
+  return pin;
+}
+
+/**
+ * Whether a verified contacts record counts as verified on this browser:
+ * always when its list pin is confirmed, otherwise only when the user
+ * compared codes for that identity here.
+ */
+function trustedHere(
+  confirmed: boolean,
+  pin: ContactPin | null | undefined,
+  identityKeyHash: string
+): boolean {
+  return confirmed || pin?.verifiedHere === identityKeyHash;
 }
 
 function standingOf(
   list: VerifiedContactsList | null,
+  confirmed: boolean,
   pin: ContactPin | undefined,
   contactUserId: string
 ): ContactStanding {
   const record = list?.contacts.get(contactUserId);
   if (record?.status === 'verified') {
-    return pin?.keyChanged &&
-      pin.identityKeyHash !== toHex(record.identityKeyHash)
-      ? 'key-changed'
-      : 'verified';
+    const identity = toHex(record.identityKeyHash);
+    if (pin?.keyChanged && pin.identityKeyHash !== identity) {
+      return 'key-changed';
+    }
+    return trustedHere(confirmed, pin, identity) ? 'verified' : 'seen';
   }
   if (record?.status === 'key-changed' || pin?.keyChanged) return 'key-changed';
   if (record?.status === 'untrusted') return 'untrusted';
@@ -288,7 +377,7 @@ export async function loadContacts(
   requireActive(ctx);
   const response = await ctx.api.contacts();
   requireActive(ctx);
-  const list = await acceptList(ctx, account, response);
+  const { list, confirmed } = await acceptList(ctx, account, response);
   const seen = new Map(
     (await ctx.pins.listContacts(ctx.keys.userId)).map((pin) => [
       pin.contactUserId,
@@ -302,17 +391,20 @@ export async function loadContacts(
     ...seen.keys()
   ]);
   ids.delete(ctx.keys.userId);
-  return {
+  const book: ContactsBook = {
     userId: ctx.keys.userId,
     generation: response.generation,
     list,
+    listConfirmed: confirmed,
     people: response.people,
     contacts: [...ids].sort().map((id) => ({
       userId: id,
       email: emails.get(id) ?? null,
-      standing: standingOf(list, seen.get(id), id)
+      standing: standingOf(list, confirmed, seen.get(id), id)
     }))
   };
+  await requireCurrentBook(ctx, book);
+  return book;
 }
 
 /** What this account's contacts compare about it: its identity and head. */
@@ -407,11 +499,7 @@ export async function inspectContact(
   // A different identity was already seen for this contact: the verified
   // one coming back is a rollback, not a reason to trust it again. Only a
   // signed key change or a new verification moves on from there.
-  if (
-    verifiedSame &&
-    pin?.keyChanged &&
-    pin.identityKeyHash !== identityHash
-  ) {
+  if (verifiedSame && pin?.keyChanged && pin.identityKeyHash !== identityHash) {
     staleAnswer('device list');
   }
   // Fork consistency: the list must extend the signed verification and
@@ -439,6 +527,7 @@ export async function inspectContact(
       record?.status === 'key-changed' ||
       Boolean(pin?.keyChanged) ||
       (pin !== null && pin.identityKeyHash !== identityHash));
+  const checkedList = await requireCurrentBook(ctx, book);
   requireActive(ctx);
   const advanced = await ctx.pins.advanceContact(
     userId,
@@ -451,23 +540,28 @@ export async function inspectContact(
       seenAt: now(ctx)
     },
     // A replaced identity is surfaced as `keyChanged` before it is pinned.
-    { replaceIdentity: true }
+    { replaceIdentity: true, checkedList }
   );
   if (!advanced) staleAnswer('device list');
   const { hash, code } = await contactVerificationCode(
     identityKey,
     list.headHash
   );
+  // An unconfirmed list's verification counts only once compared here.
+  const trusted =
+    verifiedSame && trustedHere(book.listConfirmed, pin, identityHash);
+  const fingerprint = (await identityFingerprint(identityKey)).code;
+  await requireCurrentBook(ctx, book);
   return {
     userId: contactUserId,
     email,
-    status: verifiedSame ? 'verified' : 'seen',
+    status: trusted ? 'verified' : 'seen',
     keyChanged,
     keyChangeUnsigned: replacedVerified,
     list,
     code,
     codeHash: hash,
-    fingerprint: (await identityFingerprint(identityKey)).code
+    fingerprint
   };
 }
 
@@ -516,7 +610,7 @@ async function signEntries(
         signature: toBase64Url(signed.signature)
       });
       requireActive(ctx);
-      const accepted = await acceptList(ctx, account, response);
+      const accepted = (await acceptList(ctx, account, response)).list;
       const written = accepted?.entries[entry.sequence];
       if (
         !accepted ||
@@ -593,12 +687,13 @@ export async function verifyContact(
       deviceListHead: head
     });
   }
-  const next =
-    changes.length > 0
-      ? await signEntries(ctx, account, book, changes, authorization)
-      : book;
-  // The comparison covered this identity and head: clear the downgrade.
-  await ctx.pins.advanceContact(
+  if (changes.length > 0) {
+    await signEntries(ctx, account, book, changes, authorization);
+  }
+  // The comparison covered this identity and head: clear the downgrade,
+  // and remember it was made here, where it counts even while this
+  // browser's list pin is unconfirmed.
+  const recorded = await ctx.pins.advanceContact(
     ctx.keys.userId,
     {
       contactUserId: view.userId,
@@ -606,11 +701,14 @@ export async function verifyContact(
       sequence: head.sequence,
       entryHash: toHex(head.entryHash),
       keyChanged: false,
-      seenAt: now(ctx)
+      seenAt: now(ctx),
+      verifiedHere: toHex(identityKeyHash)
     },
     { replaceIdentity: true }
   );
-  return next === book ? loadContacts(ctx, account) : next;
+  if (!recorded) staleAnswer('device list');
+  // Read again after the pin: the comparison made here counts now.
+  return loadContacts(ctx, account);
 }
 
 /** Signs that a verified contact's key was replaced; they become unverified. */

@@ -1,5 +1,10 @@
 # OpenZCAD privacy policy (draft)
 
+> **Superseded.** The policy to publish is now the page
+> `apps/web/public/privacy.html`; see [privacy-policy.md](privacy-policy.md)
+> for its status. This draft stays only for its reviewer traces and
+> open questions, and can be deleted once the page is published.
+
 > **Draft for review. Not published.** The owner and a legal reviewer must
 > approve this text before it is published or linked from the app. It is not
 > legal advice. It describes what the code on `main` does as of 2026-10-22;
@@ -15,9 +20,9 @@ read from the code.
 
 1. **Operator.** The legal entity that runs the hosted service:
    `[OPERATOR LEGAL NAME]`, `[REGISTERED ADDRESS]`, `[COMPANY NUMBER, IF ANY]`.
-2. **Contact.** A privacy contact address for requests and complaints:
-   `[PRIVACY CONTACT EMAIL]`. The app has no privacy contact today. If GDPR
-   or UK GDPR applies, also `[EU/UK REPRESENTATIVE, IF REQUIRED]` and
+2. **Contact roles.** The support and privacy contact is
+   [help@zcad.app](mailto:help@zcad.app). Confirm whether GDPR or UK GDPR
+   requires `[EU/UK REPRESENTATIVE, IF REQUIRED]` and
    `[DATA PROTECTION OFFICER, IF REQUIRED]`.
 3. **Jurisdiction.** `[GOVERNING LAW]` and the audiences the service is
    offered to (EU/EEA, UK, US states with privacy laws, elsewhere). This
@@ -64,7 +69,7 @@ read from the code.
 OpenZCAD is a browser-first CAD application. This policy covers the hosted
 OpenZCAD service at `[SERVICE URL]` and the OpenZCAD desktop app when it is
 signed in to that service. The service is run by `[OPERATOR LEGAL NAME]`
-("we"). Contact us at `[PRIVACY CONTACT EMAIL]`.
+("we"). Contact us at [help@zcad.app](mailto:help@zcad.app).
 
 If you use an OpenZCAD instance that someone else runs, this policy does not
 apply to it. See [section 14](#14-self-hosted-deployments).
@@ -478,7 +483,7 @@ under the unverified retention arrangements described in
   project at any time;
 - complain to your data protection authority.
 
-To use a right the app does not cover, email `[PRIVACY CONTACT EMAIL]`. We
+To use a right the app does not cover, email [help@zcad.app](mailto:help@zcad.app). We
 answer within `[RESPONSE PERIOD]`. `[OWNER: verification process.]`
 
 ## 13. Security
@@ -519,4 +524,9 @@ Effective date: `[EFFECTIVE DATE]`.
 
 ## 18. Contact
 
-`[OPERATOR LEGAL NAME]`, `[POSTAL ADDRESS]`, `[PRIVACY CONTACT EMAIL]`.
+`[OPERATOR LEGAL NAME]`, `[POSTAL ADDRESS]`.
+
+Email [help@zcad.app](mailto:help@zcad.app) for support and privacy questions,
+including data handling, encryption and account deletion. For projects
+protected by end-to-end encryption, support cannot see or recover their
+content.

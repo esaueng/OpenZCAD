@@ -12,9 +12,13 @@ export type SharedLinkCopyDestination = 'account' | 'device';
  */
 export function SharedLinkCopyDialog({
   accountEncrypts,
+  error,
+  onRetry,
   onChoose
 }: {
   accountEncrypts: boolean | null;
+  error?: string | null;
+  onRetry?(): void;
   onChoose(destination: SharedLinkCopyDestination | null): void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -42,13 +46,20 @@ export function SharedLinkCopyDialog({
           opens in Build mode. Later changes the owner makes don&apos;t reach
           it.
         </p>
-        <p id="shared-link-copy-account">
-          {accountEncrypts === null
-            ? 'Checking your account…'
-            : accountEncrypts
-              ? 'Your account encrypts new projects, so a copy in your account is end-to-end encrypted under your keys.'
-              : "Your account doesn't encrypt new projects, so a copy in your account is stored without end-to-end encryption."}
+        <p id="shared-link-copy-account" role={error ? 'alert' : undefined}>
+          {error
+            ? error
+            : accountEncrypts === null
+              ? 'Checking your account…'
+              : accountEncrypts
+                ? 'Your account encrypts new projects, so a copy in your account is end-to-end encrypted under your keys.'
+                : "Your account doesn't encrypt new projects, so a copy in your account is stored without end-to-end encryption."}
         </p>
+        {error && onRetry ? (
+          <button type="button" className="secondary" onClick={onRetry}>
+            Retry account check
+          </button>
+        ) : null}
         <div className="save-revision-actions">
           <button
             type="button"

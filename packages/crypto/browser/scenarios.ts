@@ -1382,6 +1382,22 @@ const signingSteps: CryptoScenario[] = [
         verifiedGrant.deviceId === 'dev_new' && verifiedGrant.certified,
         'grant fields differ'
       );
+      const withContacts = await verifyDeviceApprovalGrant(
+        await signDeviceApprovalGrant(approver.privateKey, {
+          ...grant,
+          contacts: {
+            head: { sequence: 5, entryHash: patternBytes(32, 6) },
+            confirmed: true
+          }
+        }),
+        approverRaw
+      );
+      assert(
+        withContacts.contacts?.head?.sequence === 5 &&
+          withContacts.contacts.confirmed &&
+          verifiedGrant.contacts === undefined,
+        'grant contacts head differs'
+      );
       const old = await generateSigningKeyPair(false);
       const oldRaw = await exportPublicKey(old.publicKey);
       const transition = {

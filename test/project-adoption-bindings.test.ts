@@ -74,9 +74,16 @@ for (const useR2 of [false, true])
           const body = objects.get(key);
           return body ? { arrayBuffer: async () => body.slice(0) } : null;
         },
-        delete: async (key: string) => {
-          objects.delete(key);
-        }
+        delete: async (key: string | string[]) => {
+          for (const item of typeof key === 'string' ? [key] : key)
+            objects.delete(item);
+        },
+        list: async ({ prefix = '' } = {}) => ({
+          objects: [...objects.keys()]
+            .filter((key) => key.startsWith(prefix))
+            .map((key) => ({ key })),
+          truncated: false
+        })
       };
       return {
         ...fixture,

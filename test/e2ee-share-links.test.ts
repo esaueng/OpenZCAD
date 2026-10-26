@@ -9,7 +9,15 @@
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type Mock
+} from 'vitest';
 import worker from '../apps/web/worker/index';
 import {
   ShareLinkError,
@@ -23,16 +31,21 @@ import {
   signShareDelegation,
   signShareKeyWrap,
   signShareLinkForget,
+  signShareLinkRegistration,
   toBase64Url,
   toHex,
   wrapKey,
   type ShareLinkSet
 } from '@openzcad/crypto';
-import { isE2eeShareLinkStorageReady } from '@openzcad/cloudflare-adapters';
+import {
+  D1R2PersistenceService,
+  isE2eeShareLinkStorageReady
+} from '@openzcad/cloudflare-adapters';
 import {
   E2eeShareLinkApiError,
   createE2eeShareLinksApi,
   decodeE2eeFrame,
+  toUserId,
   type E2eeSharedSnapshotMetadata,
   type E2eeShareLinkForgetRequest,
   type ProjectDocument
@@ -84,6 +97,7 @@ import {
   edited,
   makeAccount,
   newServer,
+  objectBucket,
   reload,
   rows,
   type Account,
@@ -97,6 +111,12 @@ import {
   serverKeyEpoch,
   sharedProject
 } from './support/e2ee-members';
+import {
+  R2_PADDING,
+  putRawSnapshot,
+  sealRawSnapshot,
+  snapshotObjects
+} from './support/e2ee-share-snapshots';
 
 const THIRD = 'user_third';
 const DAY = 86_400_000;
@@ -515,6 +535,144 @@ describe('creating a link (slice 5-10)', { timeout: 120_000 }, () => {
       published: [],
       failed: []
     });
+  });
+});
+
+describe('registering a link (slice 8-C1)', { timeout: 120_000 }, () => {
+  /**
+   * `POST …/share-links` as OWNER's session for a fresh link, naming
+   * `deviceId` and signed by OWNER's `signer` over the body (`signed`
+   * overrides what was signed, `body` what is sent).
+   */
+  async function registerAs(
+    srv: Server,
+    projectId: string,
+    signer: string,
+    deviceId: string,
+    options: {
+      signed?: Partial<{ tokenHash: string; mode: 'view' | 'tweak' }>;
+      body?: Record<string, unknown>;
+    } = {}
+  ) {
+    const shareId = `shr_${toBase64Url(randomBytes(16))}`;
+    const tokenHash = toHex(randomBytes(32));
+    const keyHash = randomBytes(32);
+    const keyEpoch = serverKeyEpoch(srv, projectId);
+    const wrapped = randomBytes(41);
+    const signature = await signShareLinkRegistration(
+      owner.devices.get(signer)!.signing.privateKey,
+      {
+        projectId,
+        shareId,
+        tokenHash: fromHex(options.signed?.tokenHash ?? tokenHash),
+        mode: options.signed?.mode ?? 'view',
+        shareKeyHash: keyHash,
+        ownerIdentityKeyHash: owner.list.identityKeyHash,
+        keyEpoch,
+        wrapped
+      }
+    );
+    const response = await srv.call(
+      'POST',
+      `/api/e2ee/projects/${projectId}/share-links`,
+      {
+        user: OWNER,
+        body: {
+          shareId,
+          tokenHash,
+          mode: 'view',
+          shareKeyHash: toBase64Url(keyHash),
+          ownerIdentityHash: toBase64Url(owner.list.identityKeyHash),
+          key: { keyEpoch, wrapped: toBase64Url(wrapped) },
+          deviceId,
+          signature: toBase64Url(signature),
+          ...options.body
+        }
+      }
+    );
+    return {
+      shareId,
+      status: response.status,
+      code: ((await response.json()) as { code?: string }).code
+    };
+  }
+
+  const randomBytes = (length: number) =>
+    crypto.getRandomValues(new Uint8Array(length));
+
+  it('refuses a removed owner device whose session stays signed in, and a signature over anything else', async () => {
+    const { srv, laptop, projectId } = await linkedProject();
+    await delegate(laptop);
+    const links = () => countFor(srv, 'e2ee_share_links', projectId);
+    await owner.revoke(srv.db, 'owner_desktop');
+    try {
+      // The removed device names itself...
+      expect(
+        await registerAs(srv, projectId, 'owner_desktop', 'owner_desktop')
+      ).toMatchObject({ status: 403, code: 'E2EE_DEVICE_NOT_CERTIFIED' });
+      // ...or a sibling it cannot sign for...
+      expect(
+        await registerAs(srv, projectId, 'owner_desktop', 'owner_laptop')
+      ).toMatchObject({ status: 400, code: 'E2EE_SIGNATURE_INVALID' });
+      // ...or registers as the owner account alone, as before.
+      expect(
+        await registerAs(srv, projectId, 'owner_laptop', 'owner_laptop', {
+          body: { deviceId: undefined, signature: undefined }
+        })
+      ).toMatchObject({ status: 400 });
+      // A certified device's signature over another token or mode.
+      expect(
+        await registerAs(srv, projectId, 'owner_laptop', 'owner_laptop', {
+          signed: { tokenHash: toHex(randomBytes(32)) }
+        })
+      ).toMatchObject({ status: 400, code: 'E2EE_SIGNATURE_INVALID' });
+      expect(
+        await registerAs(srv, projectId, 'owner_laptop', 'owner_laptop', {
+          signed: { mode: 'tweak' }
+        })
+      ).toMatchObject({ status: 400, code: 'E2EE_SIGNATURE_INVALID' });
+      expect(links()).toBe(0);
+      // The certified device's own registration lands, and the page's too.
+      expect(
+        await registerAs(srv, projectId, 'owner_laptop', 'owner_laptop')
+      ).toMatchObject({ status: 201 });
+      const created = await createShareLink(
+        laptop.shareLinks,
+        projectId,
+        'view'
+      );
+      expect((await served(srv, created.fragment.token)).status).toBe(200);
+      expect(links()).toBe(2);
+    } finally {
+      owner = await makeAccount(OWNER, ['owner_laptop', 'owner_desktop']);
+    }
+  });
+
+  it('a device-list change between the device check and the insert registers nothing', async () => {
+    const { srv, laptop, projectId } = await linkedProject();
+    await delegate(laptop);
+    const push = srv.statements.push.bind(srv.statements);
+    srv.statements.push = (...sql: string[]) => {
+      if (sql.some((s) => /^\s*INSERT INTO e2ee_share_links/.test(s))) {
+        srv.statements.push = push;
+        srv.db
+          .prepare(
+            `INSERT INTO e2ee_device_list_entries
+             SELECT user_id, generation, sequence + 1, entry, signature,
+                    substr(entry_hash, 2) || '0', created_at
+             FROM e2ee_device_list_entries WHERE user_id = ?
+             ORDER BY sequence DESC LIMIT 1`
+          )
+          .run(OWNER);
+      }
+      return push(...sql);
+    };
+    expect(
+      await registerAs(srv, projectId, 'owner_laptop', 'owner_laptop')
+    ).toMatchObject({ status: 409, code: 'E2EE_DEVICE_LIST_CHANGED' });
+    expect(srv.statements.push).toBe(push);
+    expect(countFor(srv, 'e2ee_share_links', projectId)).toBe(0);
+    expect(countFor(srv, 'e2ee_share_keys', projectId)).toBe(0);
   });
 });
 
@@ -1397,6 +1555,55 @@ describe('the delegation (slice 5-10)', { timeout: 120_000 }, () => {
       'stale-devices'
     );
   });
+
+  it('a device-list change between the device check and the write stores nothing (slice 8-C1)', async () => {
+    const { srv, laptop } = await linkedProject();
+    await delegate(laptop);
+    const stored = () =>
+      rows(
+        srv,
+        'SELECT * FROM e2ee_share_delegations WHERE user_id = ?',
+        OWNER
+      );
+    const before = stored();
+    // A delegation still naming the owner's desktop, whose removal lands
+    // after the devices were checked and before the delegation is written.
+    const stale = await signShareDelegation(owner.identityPrivateKey, {
+      identityKeyHash: owner.list.identityKeyHash,
+      sequence: 50,
+      issuedAt: Date.now(),
+      expiresAt: Date.now() + 20 * DAY,
+      deviceKeys: owner.list.devices.map((device) => device.signingKey)
+    });
+    const push = srv.statements.push.bind(srv.statements);
+    srv.statements.push = (...sql: string[]) => {
+      if (sql.some((s) => /^\s*INSERT INTO e2ee_share_delegations/.test(s))) {
+        srv.statements.push = push;
+        srv.db
+          .prepare(
+            `INSERT INTO e2ee_device_list_entries
+             SELECT user_id, generation, sequence + 1, entry, signature,
+                    substr(entry_hash, 2) || '0', created_at
+             FROM e2ee_device_list_entries WHERE user_id = ?
+             ORDER BY sequence DESC LIMIT 1`
+          )
+          .run(OWNER);
+      }
+      return push(...sql);
+    };
+    const response = await srv.call('PUT', '/api/e2ee/share-delegation', {
+      body: {
+        statement: toBase64Url(stale.statement),
+        signature: toBase64Url(stale.signature)
+      }
+    });
+    expect(srv.statements.push).toBe(push);
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { code: string }).code).toBe(
+      'E2EE_DEVICE_LIST_CHANGED'
+    );
+    expect(stored()).toEqual(before);
+  });
 });
 
 describe('an owner device removal (slice 5-10)', { timeout: 120_000 }, () => {
@@ -1884,3 +2091,421 @@ describe(
     });
   }
 );
+
+describe('share snapshot objects (slice 8-C1)', { timeout: 120_000 }, () => {
+  const envelopeKey = (srv: Server, projectId: string, shareId: string) =>
+    rows<{ envelope_key: string | null }>(
+      srv,
+      `SELECT envelope_key FROM e2ee_share_snapshots
+       WHERE project_id = ? AND share_id = ?`,
+      projectId,
+      shareId
+    )[0]?.envelope_key ?? null;
+
+  async function orphanedSnapshot() {
+    const shared = await linkedProject();
+    const { srv, laptop, projectId, document } = shared;
+    await delegate(laptop);
+    const link = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const publish = async () =>
+      putRawSnapshot(
+        srv,
+        laptop,
+        projectId,
+        link.shareId,
+        await sealRawSnapshot(srv, laptop, projectId, link.shareId, {
+          document,
+          padding: R2_PADDING
+        })
+      );
+    expect((await publish()).status).toBe(200);
+    const orphan = envelopeKey(srv, projectId, link.shareId)!;
+    const bucketDelete = srv.bucket.delete as Mock<
+      (key: string | string[]) => Promise<void>
+    >;
+    const del = bucketDelete.getMockImplementation()!;
+    bucketDelete.mockImplementation(async (key) => {
+      if (key === orphan) throw new Error('Replacement delete failed');
+      await del(key);
+    });
+    expect((await publish()).status).toBe(200);
+    bucketDelete.mockImplementation(del);
+    expect(snapshotObjects(srv, projectId)).toHaveLength(2);
+    return { ...shared, link, orphan };
+  }
+
+  it.each(['project', 'projects', 'all', 'retention'] as const)(
+    'sweeps unreferenced snapshot objects on %s deletion without forgetting a link',
+    async (scope) => {
+      const { srv, projectId } = await orphanedSnapshot();
+      if (scope === 'project') {
+        await new D1R2PersistenceService(srv.env).deleteProject(
+          toUserId(OWNER),
+          projectId
+        );
+      } else if (scope === 'retention') {
+        srv.db
+          .prepare(
+            "UPDATE projects SET status = 'deleted', deleted_at = '2000-01-01T00:00:00.000Z' WHERE id = ?"
+          )
+          .run(projectId);
+        expect((await srv.call('POST', '/api/projects/purge')).status).toBe(
+          200
+        );
+      } else {
+        expect(
+          (
+            await srv.call('POST', '/api/account/delete-data', {
+              user: OWNER,
+              body: {
+                scope,
+                confirmation:
+                  scope === 'all'
+                    ? 'DELETE ALL CLOUD DATA'
+                    : 'DELETE CLOUD PROJECTS'
+              }
+            })
+          ).status
+        ).toBe(200);
+      }
+      expect(snapshotObjects(srv, projectId)).toEqual([]);
+      expect(
+        rows(srv, 'SELECT id FROM projects WHERE id = ?', projectId)
+      ).toEqual([]);
+    }
+  );
+
+  it.each(['separate', 'fallback'] as const)(
+    'pages the project snapshot prefix in the %s bucket without touching other namespaces',
+    async (storage) => {
+      const { srv, projectId } = await orphanedSnapshot();
+      const artifacts = storage === 'separate' ? objectBucket() : srv.bucket;
+      srv.env.ARTIFACTS = artifacts;
+      if (storage === 'fallback') srv.env.PROJECT_STORAGE = undefined;
+      const prefix = `e2ee/${projectId}/s/`;
+      for (let i = 0; i < 1005; i += 1)
+        srv.bucket.objects.set(`${prefix}old-${i}`, new ArrayBuffer(1));
+      const neighbors = [
+        `e2ee/${projectId}-other/s/keep`,
+        `e2ee/other-project/s/keep`,
+        `e2ee/${projectId}/v/keep`
+      ];
+      for (const key of neighbors)
+        srv.bucket.objects.set(key, new ArrayBuffer(1));
+      const artifactSentinel = `${prefix}artifact-bucket-only`;
+      if (storage === 'separate')
+        artifacts.objects.set(artifactSentinel, new ArrayBuffer(1));
+      await new D1R2PersistenceService(srv.env).deleteProject(
+        toUserId(OWNER),
+        projectId
+      );
+      expect(snapshotObjects(srv, projectId)).toEqual([]);
+      for (const key of neighbors)
+        expect(srv.bucket.objects.has(key)).toBe(true);
+      if (storage === 'separate')
+        expect(artifacts.objects.has(artifactSentinel)).toBe(true);
+      const pages = srv.bucket.list.mock.calls.map(
+        ([options]) => options as { prefix: string; cursor?: string }
+      );
+      expect(pages.filter((page) => page.prefix === prefix)).toHaveLength(2);
+      expect(pages.every((page) => page.cursor === undefined)).toBe(true);
+    }
+  );
+
+  it.each(['list', 'delete', 'incomplete', 'wrong-prefix'] as const)(
+    'keeps project rows retryable when snapshot cleanup has a %s failure',
+    async (failure) => {
+      const { srv, projectId } = await orphanedSnapshot();
+      const service = new D1R2PersistenceService(srv.env);
+      const bucketList = srv.bucket.list as Mock<
+        (options?: {
+          prefix?: string;
+          cursor?: string;
+          limit?: number;
+        }) => Promise<{
+          objects: { key: string }[];
+          truncated: boolean;
+          cursor?: string;
+        }>
+      >;
+      const bucketDelete = srv.bucket.delete as Mock<
+        (keys: string | string[]) => Promise<void>
+      >;
+      const list = bucketList.getMockImplementation()!;
+      const del = bucketDelete.getMockImplementation()!;
+      if (failure === 'list')
+        bucketList.mockRejectedValueOnce(new Error('list unavailable'));
+      else if (failure === 'delete') {
+        bucketDelete.mockImplementation(async (keys: string | string[]) => {
+          if (Array.isArray(keys)) throw new Error('delete unavailable');
+          await del(keys);
+        });
+      } else if (failure === 'incomplete') {
+        bucketList.mockImplementation(async () => ({
+          objects: [],
+          truncated: true,
+          cursor: 'stuck'
+        }));
+      } else {
+        bucketList.mockImplementation(async () => ({
+          objects: [{ key: 'e2ee/another-project/s/keep' }],
+          truncated: false
+        }));
+      }
+      await expect(
+        service.deleteProject(toUserId(OWNER), projectId)
+      ).rejects.toThrow();
+      expect(
+        rows(srv, 'SELECT id FROM projects WHERE id = ?', projectId)
+      ).toHaveLength(1);
+      expect(countFor(srv, 'e2ee_share_snapshots', projectId)).toBe(1);
+      if (failure === 'incomplete')
+        expect(srv.bucket.list).toHaveBeenCalledTimes(10);
+      bucketList.mockImplementation(list);
+      bucketDelete.mockImplementation(del);
+      await service.deleteProject(toUserId(OWNER), projectId);
+      expect(snapshotObjects(srv, projectId)).toEqual([]);
+      expect(
+        rows(srv, 'SELECT id FROM projects WHERE id = ?', projectId)
+      ).toEqual([]);
+    }
+  );
+
+  it('fences a publication that races the last snapshot prefix listing', async () => {
+    const { srv, laptop, projectId, document, link } = await orphanedSnapshot();
+    const replacement = await sealRawSnapshot(
+      srv,
+      laptop,
+      projectId,
+      link.shareId,
+      { document, padding: R2_PADDING }
+    );
+    const bucketList = srv.bucket.list as Mock<
+      (options?: {
+        prefix?: string;
+        limit?: number;
+      }) => Promise<{ objects: { key: string }[]; truncated: boolean }>
+    >;
+    const list = bucketList.getMockImplementation()!;
+    let published: number | null = null;
+    bucketList.mockImplementationOnce(async (options) => {
+      const page = await list(options);
+      await expect(
+        new D1R2PersistenceService(srv.env).updateProject(toUserId(OWNER), {
+          projectId,
+          status: 'active'
+        })
+      ).rejects.toThrow();
+      published = (
+        await putRawSnapshot(srv, laptop, projectId, link.shareId, replacement)
+      ).status;
+      return page;
+    });
+    await new D1R2PersistenceService(srv.env).deleteProject(
+      toUserId(OWNER),
+      projectId
+    );
+    expect(published).toBe(401);
+    expect(snapshotObjects(srv, projectId)).toEqual([]);
+  });
+
+  it('preserves deletion of snapshots stored entirely inline without a bucket', async () => {
+    const { srv, laptop, projectId, document } = await linkedProject();
+    srv.env.PROJECT_STORAGE = undefined;
+    srv.env.ARTIFACTS = undefined;
+    await delegate(laptop);
+    const link = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const inline = await sealRawSnapshot(srv, laptop, projectId, link.shareId, {
+      document
+    });
+    expect(
+      (await putRawSnapshot(srv, laptop, projectId, link.shareId, inline))
+        .status
+    ).toBe(200);
+    expect(envelopeKey(srv, projectId, link.shareId)).toBe(null);
+    expect(snapshotObjects(srv, projectId)).toHaveLength(0);
+    await new D1R2PersistenceService(srv.env).deleteProject(
+      toUserId(OWNER),
+      projectId
+    );
+    expect(countFor(srv, 'e2ee_share_snapshots', projectId)).toBe(0);
+  });
+
+  it('keys each object by its link, so replacing or forgetting one link never deletes what another serves', async () => {
+    const { srv, laptop, projectId, document } = await linkedProject();
+    await delegate(laptop);
+    const a = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const b = await createShareLink(laptop.shareLinks, projectId, 'view');
+    // The same envelope bytes stored for both links, as a client may send.
+    const same = await sealRawSnapshot(srv, laptop, projectId, a.shareId, {
+      document,
+      padding: R2_PADDING
+    });
+    for (const link of [a, b]) {
+      expect(
+        (await putRawSnapshot(srv, laptop, projectId, link.shareId, same))
+          .status
+      ).toBe(200);
+    }
+    const aKey = envelopeKey(srv, projectId, a.shareId)!;
+    expect(aKey).not.toBe(envelopeKey(srv, projectId, b.shareId));
+    expect(snapshotObjects(srv, projectId)).toHaveLength(2);
+    // Replacing b's snapshot (the same version) leaves a's object alone...
+    const replacement = await sealRawSnapshot(
+      srv,
+      laptop,
+      projectId,
+      b.shareId,
+      { document, padding: R2_PADDING }
+    );
+    expect(
+      (await putRawSnapshot(srv, laptop, projectId, b.shareId, replacement))
+        .status
+    ).toBe(200);
+    expect((await served(srv, a.fragment.token)).status).toBe(200);
+    expect(snapshotObjects(srv, projectId)).toEqual(
+      [aKey, envelopeKey(srv, projectId, b.shareId)!].sort()
+    );
+    // ...and so does forgetting b.
+    await revokeShareLink(laptop.shareLinks, projectId, b.shareId);
+    expect((await served(srv, b.fragment.token)).status).toBe(404);
+    expect((await served(srv, a.fragment.token)).status).toBe(200);
+    expect(snapshotObjects(srv, projectId)).toEqual([aKey]);
+  });
+
+  it('deletes the object a concurrent write at the same version replaced', async () => {
+    const { srv, laptop, member, projectId, document } = await linkedProject();
+    await delegate(laptop);
+    const link = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const first = await sealRawSnapshot(srv, laptop, projectId, link.shareId, {
+      document,
+      padding: R2_PADDING
+    });
+    const second = await sealRawSnapshot(srv, member, projectId, link.shareId, {
+      document,
+      padding: R2_PADDING
+    });
+    // The owner's write stores its object; the editor's write of the same
+    // version then lands whole before the owner's row does.
+    const bucketPut = srv.bucket.put as Mock<
+      (key: string, body: Uint8Array) => Promise<void>
+    >;
+    const put = bucketPut.getMockImplementation()!;
+    bucketPut.mockImplementationOnce(async (key: string, body: Uint8Array) => {
+      await put(key, body);
+      expect(
+        (await putRawSnapshot(srv, member, projectId, link.shareId, second))
+          .status
+      ).toBe(200);
+    });
+    expect(
+      (await putRawSnapshot(srv, laptop, projectId, link.shareId, first)).status
+    ).toBe(200);
+    // The owner's row won, and the editor's object it replaced is gone.
+    const key = envelopeKey(srv, projectId, link.shareId)!;
+    expect(snapshotObjects(srv, projectId)).toEqual([key]);
+    expect((await served(srv, link.fragment.token)).status).toBe(200);
+  });
+
+  it('keeps a forgotten link’s row naming its object until R2 deletes it, and retries on the next forget', async () => {
+    const { srv, laptop, projectId, document } = await linkedProject();
+    await delegate(laptop);
+    const a = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const b = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const big = () =>
+      sealRawSnapshot(srv, laptop, projectId, a.shareId, {
+        document,
+        padding: R2_PADDING
+      });
+    expect(
+      (await putRawSnapshot(srv, laptop, projectId, a.shareId, await big()))
+        .status
+    ).toBe(200);
+    const bucketDelete = srv.bucket.delete as Mock<
+      (key: string) => Promise<void>
+    >;
+    const del = bucketDelete.getMockImplementation()!;
+    bucketDelete.mockImplementation(async () => {
+      throw new Error('R2 is unavailable');
+    });
+    // A replacement whose delete fails leaves its old object under the
+    // link's prefix...
+    expect(
+      (await putRawSnapshot(srv, laptop, projectId, a.shareId, await big()))
+        .status
+    ).toBe(200);
+    const key = envelopeKey(srv, projectId, a.shareId)!;
+    expect(snapshotObjects(srv, projectId)).toHaveLength(2);
+    // ...and a forget whose delete fails keeps the row naming the object.
+    await revokeShareLink(laptop.shareLinks, projectId, a.shareId);
+    expect((await served(srv, a.fragment.token)).status).toBe(404);
+    expect(linkRow(srv, projectId, a.shareId)!.revoked_at).not.toBe(null);
+    expect(envelopeKey(srv, projectId, a.shareId)).toBe(key);
+    expect(countFor(srv, 'e2ee_share_keys', projectId)).toBe(1);
+    expect(snapshotObjects(srv, projectId)).toHaveLength(2);
+    // The listing names only the live link.
+    const listed = (await (
+      await srv.call('GET', `/api/e2ee/projects/${projectId}/share-links`)
+    ).json()) as { links: { shareId: string }[] };
+    expect(listed.links.map((link) => link.shareId)).toEqual([b.shareId]);
+    // R2 recovers: the next forget deletes both, then the row.
+    bucketDelete.mockImplementation(del);
+    await revokeShareLink(laptop.shareLinks, projectId, b.shareId);
+    expect(snapshotObjects(srv, projectId)).toEqual([]);
+    expect(countFor(srv, 'e2ee_share_snapshots', projectId)).toBe(0);
+    expect(countFor(srv, 'e2ee_share_keys', projectId)).toBe(0);
+  });
+
+  it('a device-list change between the signer check and the snapshot write stores nothing', async () => {
+    const { srv, laptop, projectId, document } = await linkedProject();
+    await delegate(laptop);
+    const link = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const before = rows(
+      srv,
+      'SELECT * FROM e2ee_share_snapshots WHERE share_id = ?',
+      link.shareId
+    );
+    const sealed = await sealRawSnapshot(srv, laptop, projectId, link.shareId, {
+      document,
+      padding: R2_PADDING
+    });
+    // The owner's list moves on (a removal of the signer, say) after the
+    // signer was checked and before the snapshot lands.
+    const push = srv.statements.push.bind(srv.statements);
+    srv.statements.push = (...sql: string[]) => {
+      if (sql.some((s) => /^\s*INSERT INTO e2ee_share_snapshots/.test(s))) {
+        srv.statements.push = push;
+        srv.db
+          .prepare(
+            `INSERT INTO e2ee_device_list_entries
+             SELECT user_id, generation, sequence + 1, entry, signature,
+                    substr(entry_hash, 2) || '0', created_at
+             FROM e2ee_device_list_entries WHERE user_id = ?
+             ORDER BY sequence DESC LIMIT 1`
+          )
+          .run(OWNER);
+      }
+      return push(...sql);
+    };
+    const response = await putRawSnapshot(
+      srv,
+      laptop,
+      projectId,
+      link.shareId,
+      sealed
+    );
+    expect(srv.statements.push).toBe(push);
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { code: string }).code).toBe(
+      'E2EE_DEVICE_LIST_CHANGED'
+    );
+    expect(
+      rows(
+        srv,
+        'SELECT * FROM e2ee_share_snapshots WHERE share_id = ?',
+        link.shareId
+      )
+    ).toEqual(before);
+    expect(snapshotObjects(srv, projectId)).toEqual([]);
+  });
+});

@@ -6,7 +6,8 @@ import {
   handleEncryptedSharedBlob,
   handleEncryptedSharedSnapshot,
   isEncryptedSharedBlobPath,
-  isEncryptedSharedSnapshotPath
+  isEncryptedSharedSnapshotPath,
+  type SharedBlobGuard
 } from './e2eeShareLinks';
 import { blobBucket } from './e2eeContentBlobs';
 import type { E2eeInvitationHost } from './e2eeInvitations';
@@ -25,10 +26,17 @@ import {
   decryptStagingFor,
   decryptStagingRouteProject,
   stageDecryptedHead,
-  stageDecryptedRevision
+  stageDecryptedRevision,
+  stagedRevisionAuthor
 } from './e2eeReverseStaging';
 import { encryptedRoomHeaders, notifyEncryptedRoom } from './e2eeRoom';
-import { enforceApiRateLimit, publicRequestBucket } from './apiRateLimit';
+import {
+  assertApiRateLimitAvailable,
+  enforceApiRateLimit,
+  isApiRateLimitSpent,
+  markApiRateLimitSpent,
+  publicRequestBucket
+} from './apiRateLimit';
 import {
   FREECAD_WORKER_PATH,
   serveFreecadWorkerAsset
@@ -47,6 +55,7 @@ import {
   ProjectObjectStorageError,
   createPersistenceService,
   isCloudflareFeatureEnabled,
+  isE2eeDefaultOn,
   isE2eeKeysEnabled,
   isE2eeMigrationEnabled,
   isE2eeProjectsEnabled,
@@ -175,6 +184,7 @@ import {
 } from './projectMeasurements';
 import {
   assistantConsentRoute,
+  E2EE_DEFAULT_ON_CODE,
   E2EE_MIGRATION_CODES,
   ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE,
   ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE_CODE,
@@ -287,6 +297,26 @@ const SHARED_PROJECT_SOURCE_ROUTE = /^\/api\/share\/([^/]+)\/sources\/([^/]+)$/;
  */
 const ENCRYPTED_SHARED_SNAPSHOT_RATE_LIMIT = 60;
 const ENCRYPTED_SHARED_BLOB_RATE_LIMIT = 300;
+// Two loads plus two retries of each blob per address and minute, across
+// links to its project. The snapshot's blob count cannot amplify this cap.
+const ENCRYPTED_SHARED_BLOB_REPETITION_RATE_LIMIT = 4;
+/**
+ * Uncached snapshot reads by the blob route per client address and minute,
+ * across every link (#935 review): a read happens only when an isolate has
+ * not cached that snapshot's blob ids, so a load needs one or a few. This
+ * bounds D1 inline-body and R2 prefix reads independently of the link
+ * budgets below (R2 reads take only the envelope header).
+ */
+const ENCRYPTED_SHARED_BLOB_SNAPSHOT_READ_RATE_LIMIT = 60;
+/**
+ * Blob reads count per link load instead (slice 8-C1, #923 review): per
+ * address, link and minute, twice the blobs the link's snapshot names plus
+ * a few, so a model with more imports than the address budget loads at
+ * once (and again on a reload). Past that, and for every request naming no
+ * servable link, the address's own budget above applies.
+ */
+const ENCRYPTED_SHARED_LOAD_BLOB_FACTOR = 2;
+const ENCRYPTED_SHARED_LOAD_BLOB_SLACK = 32;
 const INVITATION_ACCEPT_ROUTE = '/api/project-invitations/accept';
 const PROJECT_ARTIFACTS_ROUTE = /^\/api\/projects\/([^/]+)\/artifacts$/;
 const UPLOAD_CONTENT_ROUTE = /^\/api\/uploads\/([^/]+)\/content$/;
@@ -712,11 +742,19 @@ function emailDeliveryErrorCode(error: unknown): string {
  * Decision D2: once an account opts in to encrypting new projects, the
  * Worker stores no new plaintext project for it — create, adopt or copy.
  * Only while encrypted projects are open to the account.
+ *
+ * ADR-024 slice 8-1: where encryption is the default (`isE2eeDefaultOn`),
+ * none is stored whatever the account's preference.
  */
 async function assertPlaintextCreationAllowed(
   env: Env,
   session: { userId: string; email?: string | null }
 ): Promise<void> {
+  if (isE2eeDefaultOn(env, session.email ?? undefined)) {
+    throw new EncryptedProjectsRequiredError(
+      'New projects are end-to-end encrypted. Update OpenZCAD to create encrypted projects.'
+    );
+  }
   if (
     isE2eeProjectsEnabled(env, session.email ?? undefined) &&
     (await accountRequiresEncryptedProjects(env.DB, session.userId))
@@ -736,6 +774,25 @@ async function assertPlaintextCreationAllowed(
  * caller owns or is a member of is looked up, so the answer reveals nothing
  * about other accounts' projects.
  */
+/**
+ * ADR-024 slice 8-1: where encryption is the default, no plaintext share
+ * link or invitation is created. Called once the project is known to be
+ * the caller's own plaintext project, so an outsider still meets 404 and an
+ * encrypted project still meets its own sharing refusal.
+ */
+function assertPlaintextSharingAllowed(
+  env: Env,
+  session: { email?: string | null }
+): void {
+  if (isE2eeDefaultOn(env, session.email ?? undefined)) {
+    throw new SharingRequestError(
+      409,
+      E2EE_DEFAULT_ON_CODE,
+      'Projects are end-to-end encrypted now. Encrypt this project first, then share it.'
+    );
+  }
+}
+
 async function assertAssistantProjectAllowed(
   env: Env,
   identity: { userId: string; email?: string | null },
@@ -948,26 +1005,81 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const open =
       isCloudflareFeatureEnabled(env, 'E2EE_PROJECTS_ENABLED') &&
       projectCollaborationRollout(env).sharingEnabled;
-    if (open && env.ENVIRONMENT !== 'development') {
+    const limited = open && env.ENVIRONMENT !== 'development';
+    if (limited && !encryptedSharedBlob) {
       await enforceApiRateLimit(
         env,
-        await publicRequestBucket(
-          request,
-          env,
-          encryptedSharedBlob ? 'e2ee-share-blob' : 'e2ee-share'
-        ),
-        encryptedSharedBlob
-          ? ENCRYPTED_SHARED_BLOB_RATE_LIMIT
-          : ENCRYPTED_SHARED_SNAPSHOT_RATE_LIMIT
+        await publicRequestBucket(request, env, 'e2ee-share'),
+        ENCRYPTED_SHARED_SNAPSHOT_RATE_LIMIT
       );
     }
+    // A blob counts within a load of its link, or else per address (#923).
+    const address = limited
+      ? await publicRequestBucket(request, env, 'e2ee-share-blob')
+      : null;
+    const perAddress = () =>
+      enforceApiRateLimit(env, address!, ENCRYPTED_SHARED_BLOB_RATE_LIMIT);
+    // A load over its budget is marked so later requests skip the snapshot
+    // read that sizes it (#935 review): they go to the address's budget.
+    const spentMark = (linkKey: string) => `${address}:${linkKey}:spent`;
+    const blobGuard: SharedBlobGuard | null = address
+      ? {
+          unbudgeted: perAddress,
+          blobAvailable: async (blobKey) =>
+            assertApiRateLimitAvailable(
+              env,
+              `${address}:blob:${blobKey}`,
+              ENCRYPTED_SHARED_BLOB_REPETITION_RATE_LIMIT
+            ),
+          blob: async (blobKey) =>
+            enforceApiRateLimit(
+              env,
+              `${address}:blob:${blobKey}`,
+              ENCRYPTED_SHARED_BLOB_REPETITION_RATE_LIMIT
+            ),
+          spent: async (linkKey) => {
+            if (!(await isApiRateLimitSpent(env, spentMark(linkKey)))) {
+              return false;
+            }
+            await perAddress();
+            return true;
+          },
+          snapshotRead: async () =>
+            enforceApiRateLimit(
+              env,
+              await publicRequestBucket(
+                request,
+                env,
+                'e2ee-share-blob-snapshot'
+              ),
+              ENCRYPTED_SHARED_BLOB_SNAPSHOT_READ_RATE_LIMIT
+            ),
+          load: async (linkKey, blobs) => {
+            try {
+              await enforceApiRateLimit(
+                env,
+                `${address}:${linkKey}`,
+                blobs * ENCRYPTED_SHARED_LOAD_BLOB_FACTOR +
+                  ENCRYPTED_SHARED_LOAD_BLOB_SLACK
+              );
+            } catch (error) {
+              if (!(error instanceof HttpError) || error.status !== 429) {
+                throw error;
+              }
+              await markApiRateLimitSpent(env, spentMark(linkKey));
+              await perAddress();
+            }
+          }
+        }
+      : null;
     return encryptedSharedBlob
       ? handleEncryptedSharedBlob(
           pathname,
           env.DB,
           projectBucket(env),
           blobBucket(env),
-          open
+          open,
+          blobGuard
         )
       : handleEncryptedSharedSnapshot(
           pathname,
@@ -1369,7 +1481,8 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         isE2eeReverseEnabled(env, session.email),
         // Slice 7-3: as for plaintext writes, the global flags decide.
         isCloudflareFeatureEnabled(env, 'E2EE_MIGRATION_ENABLED') &&
-          isCloudflareFeatureEnabled(env, 'E2EE_REVERSE_ENABLED')
+          isCloudflareFeatureEnabled(env, 'E2EE_REVERSE_ENABLED'),
+        isE2eeDefaultOn(env, session.email)
       );
       // A Commit or an account write the project's room should hear about.
       await notifyEncryptedRoom(env, request, response);
@@ -1705,6 +1818,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     assertShareableProject(
       await persistence.requireProjectOwner(userId, projectId)
     );
+    assertPlaintextSharingAllowed(env, session);
     const project = await persistence.loadProject(userId, projectId);
     if (!project) {
       throw new ProjectNotFoundError(projectId);
@@ -1766,6 +1880,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'POST' && shareLinksMatch) {
+    if (isE2eeDefaultOn(env, session.email)) {
+      assertShareableProject(
+        await persistence.requireProjectOwner(userId, shareLinksMatch[1]!)
+      );
+      assertPlaintextSharingAllowed(env, session);
+    }
     return json(
       await createShareLink(
         persistence,
@@ -2089,7 +2209,8 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
           userId,
           payload,
           opened.storage,
-          decryptStaging
+          decryptStaging,
+          stagedRevisionAuthor(opened.body)
         )
       );
     }
@@ -2166,7 +2287,10 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     if (uploadStaging) {
       return json(
         await persistence.createUploadSession(userId, payload, {
-          decryptStaging: uploadStaging.fence
+          decryptStaging: {
+            ...uploadStaging.fence,
+            leaseId: uploadStaging.lease.leaseId
+          }
         }),
         201
       );
@@ -2379,14 +2503,19 @@ export default {
     await createPersistenceService(env).purgeExpiredUploadSessions();
     // Purges and abandons of project migrations a browser left behind, and
     // of stagings whose owner may no longer migrate (or, for a decrypt
-    // staging, no longer use the reverse path, slice 7-3).
+    // staging, no longer use the reverse path, slice 7-3). Where encryption
+    // is the default (slice 8-1), every decrypt staging, leased or not.
     await sweepProjectMigrations(
       env,
       isCloudflareFeatureEnabled(env, 'E2EE_MIGRATION_ENABLED'),
       (email, direction) =>
         direction === 'decrypt'
           ? isE2eeReverseEnabled(env, email)
-          : isE2eeMigrationEnabled(env, email)
+          : isE2eeMigrationEnabled(env, email),
+      Date.now(),
+      isCloudflareFeatureEnabled(env, 'E2EE_DEFAULT_ON')
+        ? (email) => isE2eeDefaultOn(env, email)
+        : undefined
     );
     await publishCensus(env);
   },

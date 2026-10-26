@@ -2,6 +2,8 @@
 row: L11
 ---
 
+The final candidate also merges current main's desktop host and renderer changes, so Linux verifies their combined source with the expiry fix. Full required checks and native compilation/tests must pass again on that integrated head before the protected stack merge.
+
 Linux run on cbfa5c0a completed green: native host formatting, strict Clippy and all 30 Rust tests passed, including both expiry regressions. Its prerequisite step finished in under a minute. The integrated head retains the exact manifest, lockfile and checksum files from main's already-approved Remus update #863, avoiding an unintended stale-pin rollback; full checks rerun on that head. macOS platform/distribution verification remains deferred.
 
 Native CI recovery: the preceding run completed formatting, strict Clippy and all 30 host tests, then timed out after prerequisites had consumed 27 minutes. Prerequisite installation now has a ten-minute step limit, bounded request retries/timeouts, noninteractive package configuration and no recommended packages. The overall native job allows 45 minutes. Security-workflow and desktop-release privacy tests pass; a green native run remains required before merging.

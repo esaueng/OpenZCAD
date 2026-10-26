@@ -1,4 +1,10 @@
-import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  stubApi,
+  expectBodyCount,
+  finishExtrude
+} from './openzcad-fixtures';
 
 /**
  * D04: a DXF drawing imports as one sketch on Top, its units converted and
@@ -77,10 +83,6 @@ test('imports a DXF as an extrudable sketch, converting its units', async ({
   // The slot and its hole bound one region; extruding it makes a body.
   await row.click();
   await page.keyboard.press('e');
-  const distance = page
-    .getByRole('region', { name: 'Extrude operation' })
-    .getByRole('textbox', { name: 'Distance', exact: true });
-  await distance.fill('5');
-  await distance.press('Enter');
+  await finishExtrude(page, '5');
   await expectBodyCount(page, 1);
 });

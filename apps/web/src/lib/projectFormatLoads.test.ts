@@ -445,12 +445,17 @@ describe('the encrypt-new-projects decision fails closed (D2)', () => {
   /** The signed-in session, the Worker's config and the stored opt-in. */
   function account({
     open = true,
+    defaultOn = false,
     preference = () => json({ preference: null })
-  }: { open?: boolean; preference?: () => Response } = {}) {
+  }: {
+    open?: boolean;
+    defaultOn?: boolean;
+    preference?: () => Response;
+  } = {}) {
     vi.mocked(desktopFetch).mockImplementation(async (input) => {
       if (input === '/api/session') return json({ userId: 'user_1' });
       if (input === '/api/e2ee/config') {
-        return json({ enabled: open, projectsEnabled: open });
+        return json({ enabled: open, projectsEnabled: open, defaultOn });
       }
       if (input === '/api/e2ee/project-preferences') return preference();
       return json({ project: created.project }, 201);
@@ -467,6 +472,66 @@ describe('the encrypt-new-projects decision fails closed (D2)', () => {
     expect(sentPlaintextTo('/api/projects')).toBe(false);
   }
 
+  it.each(['unset', 'off', 'unreachable'] as const)(
+    'routes default-on creates and adoptions to encryption with an %s beta preference',
+    async (preference) => {
+      account({
+        defaultOn: true,
+        preference: () =>
+          preference === 'unreachable'
+            ? json({ error: 'down' }, 503)
+            : json({
+                preference:
+                  preference === 'unset' ? null : { encryptNewProjects: false }
+              })
+      });
+      encryptedModule.createEncryptedProject.mockResolvedValue(created);
+      await expect(
+        api.createProject({ name: 'Secret', initialDocument: device() })
+      ).resolves.toBe(created);
+      await expect(api.adoptProject(device(), 'user_1' as never)).resolves.toBe(
+        created
+      );
+      expect(sentPlaintextTo('/api/projects')).toBe(false);
+      expect(encryptedModule.createEncryptedProject).toHaveBeenCalledTimes(2);
+      expect(
+        vi
+          .mocked(desktopFetch)
+          .mock.calls.some(([path]) => path === '/api/e2ee/project-preferences')
+      ).toBe(false);
+    }
+  );
+
+  it('never falls back to plaintext when default-on encryption cannot open', async () => {
+    account({ open: false, defaultOn: true });
+    encryptedModule.createEncryptedProject.mockRejectedValue(
+      new ApiError(403, 'Unlock encryption.', 'E2EE_KEYS_LOCKED')
+    );
+    await sendsNothing('E2EE_KEYS_LOCKED');
+  });
+
+  it('refuses a plaintext duplicate or branch before sending its document when encryption is required', async () => {
+    account({ defaultOn: true });
+    for (const revisionId of [undefined, 'rev_saved']) {
+      await expect(
+        api.duplicateProject('proj_plain_default', {
+          document: device(),
+          ...(revisionId ? { revisionId: revisionId as never } : {})
+        })
+      ).rejects.toMatchObject({ code: ENCRYPTED_PROJECTS_REQUIRED_CODE });
+    }
+    expect(sentPlaintextTo('/api/projects/proj_plain_default/duplicate')).toBe(
+      false
+    );
+    account();
+    await expect(
+      api.duplicateProject('proj_plain_default', { document: device() })
+    ).resolves.toMatchObject({ project: created.project });
+    expect(sentPlaintextTo('/api/projects/proj_plain_default/duplicate')).toBe(
+      true
+    );
+  });
+
   it('keeps an opt-in this device verified when the account omits it', async () => {
     pinned.optedIn = true;
     encryptedModule.createEncryptedProject.mockResolvedValue(created);
@@ -477,9 +542,9 @@ describe('the encrypt-new-projects decision fails closed (D2)', () => {
       api.createProject({ name: 'Secret', initialDocument: device() })
     ).resolves.toBe(created);
     // A device project is saved encrypted too (4-8).
-    await expect(
-      api.adoptProject(device(), 'user_1' as never)
-    ).resolves.toBe(created);
+    await expect(api.adoptProject(device(), 'user_1' as never)).resolves.toBe(
+      created
+    );
     expect(encryptedModule.createEncryptedProject).toHaveBeenCalledTimes(2);
     expect(sentPlaintextTo('/api/projects')).toBe(false);
 

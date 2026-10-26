@@ -1574,7 +1574,19 @@ export async function setInPlaceOptionValues(
   title: string,
   values: Record<string, string>
 ) {
-  const bar = page.getByRole('group', { name: `${title} command` });
+  await setBarValues(
+    page,
+    page.getByRole('group', { name: `${title} command` }),
+    values
+  );
+}
+
+/** `setInPlaceOptionValues` on a bar already found (an edit's, say). */
+export async function setBarValues(
+  page: Page,
+  bar: Locator,
+  values: Record<string, string>
+) {
   const options = bar.locator('details.in-place-command-options');
   // An open More tools fold stands over the bar on a narrow window: fold it
   // while Options are typed, and open it again after.
@@ -1601,6 +1613,86 @@ export async function setInPlaceOptionValues(
     await options.locator('summary').click();
   }
   if (folded) await moreTools.click();
+}
+
+/**
+ * Picks `choice` in one row of an in-place command's Options (the
+ * Extrude's Operation, Extent, Sides…), opening Options for it and closing
+ * them again, so the model under them takes the next click.
+ */
+export async function chooseInPlaceOption(
+  page: Page,
+  title: string,
+  row: string,
+  choice: string
+) {
+  await chooseBarOption(
+    page.getByRole('group', { name: `${title} command` }),
+    row,
+    choice
+  );
+}
+
+/** `chooseInPlaceOption` on a bar already found (an edit's, say). */
+export async function chooseBarOption(
+  bar: Locator,
+  row: string,
+  choice: string
+) {
+  const options = bar.locator('details.in-place-command-options');
+  if ((await options.getAttribute('open')) === null) {
+    await options.locator('summary').click();
+  }
+  const button = barChoice(bar, row, choice);
+  await button.click();
+  await expect(button).toHaveAttribute('aria-checked', 'true');
+  if ((await options.getAttribute('open')) !== null) {
+    await options.locator('summary').click();
+  }
+}
+
+/**
+ * One choice in a row of a command bar's Options, found whether or not
+ * Options are open (to read which is chosen).
+ */
+export function barChoice(bar: Locator, row: string, choice: string) {
+  return bar
+    .getByRole('radiogroup', { name: row, exact: true, includeHidden: true })
+    .getByRole('radio', { name: choice, exact: true, includeHidden: true });
+}
+
+/** The in-place Extrude's bar (U09): its Options, Cancel and Done. */
+export function extrudeBar(page: Page) {
+  return page.getByRole('group', { name: 'Extrude command' });
+}
+
+/**
+ * Re-arms the in-place Extrude on a stored extrude from its History row
+ * (U09) and returns its bar, titled for the feature ("Edit Extrude").
+ */
+export async function editExtrudeFromHistory(
+  page: Page,
+  row: Locator,
+  name: string | RegExp = /.+/
+) {
+  await row.click();
+  const bar = page.getByRole('group', {
+    name:
+      typeof name === 'string'
+        ? `Edit ${name} command`
+        : new RegExp(`^Edit ${name.source} command$`)
+  });
+  await expect(bar).toBeVisible();
+  return bar;
+}
+
+/**
+ * Finishes the running in-place Extrude at `distance`: typed on the keypad
+ * behind its Options (an expression stays one), then Done.
+ */
+export async function finishExtrude(page: Page, distance: string) {
+  await setInPlaceOptionValues(page, 'Extrude', { Distance: distance });
+  await finishInPlaceCommand(page, 'Extrude');
 }
 
 /**

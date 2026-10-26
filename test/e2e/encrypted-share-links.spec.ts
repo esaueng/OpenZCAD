@@ -5,11 +5,59 @@ import {
   SYNC_BUDGET_MS
 } from './encrypted-members-fixtures';
 import {
+  installAnonymousShareRoutes,
   openAsVisitor,
   ownerWithShareLink
 } from './encrypted-share-links-fixtures';
 
 const DAY = 86_400_000;
+
+test('a signed-in visitor can retry an unavailable account encryption check', async ({
+  browser
+}) => {
+  test.setTimeout(240_000);
+  const owner = await ownerWithShareLink(browser);
+  const page = owner.alice;
+  await installAnonymousShareRoutes(owner.context, owner.server);
+  await page.goto(owner.link);
+  await expect(
+    page.getByRole('button', { name: 'Make a copy', exact: true })
+  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  let checks = 0;
+  await page.route('**/api/e2ee/project-preferences', async (route) => {
+    checks++;
+    if (checks === 1)
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Unavailable' })
+      });
+    else await route.fallback();
+  });
+  await page.getByRole('button', { name: 'Make a copy', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Make a copy', exact: true });
+  await expect(
+    dialog.getByRole('button', { name: 'Retry account check' })
+  ).toBeVisible();
+  await expect(
+    dialog.getByRole('button', { name: 'Copy to your account' })
+  ).toBeDisabled();
+  await expect(
+    dialog.getByRole('button', { name: 'Keep on this device only' })
+  ).toBeEnabled();
+  await dialog.getByRole('button', { name: 'Retry account check' }).click();
+  await expect(dialog).toContainText('end-to-end encrypted under your keys');
+  await expect(
+    dialog.getByRole('button', { name: 'Copy to your account' })
+  ).toBeEnabled();
+  await dialog
+    .getByRole('button', { name: 'Keep on this device only' })
+    .click();
+  await expect(dialog).toHaveCount(0);
+  await expectBodyCount(page, 1);
+  expect(owner.errors).toEqual([]);
+  await owner.context.close();
+});
 
 /**
  * ADR-024 Phase 5, slice 5-11: the visitor page of an end-to-end encrypted

@@ -11,6 +11,7 @@ import {
   WORKSPACE_SESSION_STORAGE_KEY,
   revealModelPanel,
   finishInPlaceCommand,
+  extrudeBar,
   openMoveOptions
 } from './openzcad-fixtures';
 import type { Locator, Page } from '@playwright/test';
@@ -90,7 +91,7 @@ test('keeps undo and redo in the quick-actions rail', async ({ page }) => {
   await expectBodyCount(page, 1);
 });
 
-test('viewport context menu hides a body and the sidebar eye restores it', async ({
+test('viewport context menu isolates or hides a body and the sidebar eye restores it', async ({
   page
 }) => {
   await stubApi(page);
@@ -121,6 +122,26 @@ test('viewport context menu hides a body and the sidebar eye restores it', async
   await expect(
     menu.getByRole('menuitem', { name: /Move \/ Rotate/ })
   ).toBeVisible();
+  await menu
+    .getByRole('menuitem', { name: 'Isolate body', exact: true })
+    .click();
+  await expect(
+    page.getByRole('button', { name: /^Exit isolation of / })
+  ).toBeVisible();
+  await canvas.click({
+    button: 'right',
+    position: { x: bounds.width / 2, y: bounds.height / 2 }
+  });
+  await menu
+    .getByRole('menuitem', { name: 'Exit isolation', exact: true })
+    .click();
+  await expect(
+    page.getByRole('button', { name: /^Exit isolation of / })
+  ).toHaveCount(0);
+  await canvas.click({
+    button: 'right',
+    position: { x: bounds.width / 2, y: bounds.height / 2 }
+  });
   await menu.getByRole('menuitem', { name: 'Hide body' }).click();
   await expect(menu).toBeHidden();
 
@@ -1835,24 +1856,13 @@ test('view keys still work after returning from the Extrude distance field', asy
   await expect(page.getByRole('contentinfo')).toContainText(
     'profiles selected · drag the arrow'
   );
-  const distance = page
-    .getByRole('region', { name: 'Extrude operation' })
-    .getByRole('textbox', { name: 'Distance', exact: true });
-  await expect(distance).toBeFocused();
-
+  // The in-place Extrude takes no field: the keys stay the workspace's.
   const displayButton = page.getByRole('button', {
     name: /^Display mode \(W\)/
   });
-  // An explicit Extrude command hands Distance the keyboard. Return it to
-  // the viewport through its real display control: Escape in this form
-  // cancels the extrusion, so it cannot preserve the armed profiles here.
   await displayButton.click();
   await expect(displayButton).toBeFocused();
-  await expect(distance).not.toBeFocused();
-  await expect(distance).toHaveValue('0');
-  await expect(
-    page.getByRole('form', { name: 'Extrude settings' })
-  ).toContainText('2 selected profiles');
+  await expect(extrudeBar(page)).toContainText('2 profiles');
   const displayBefore = await displayButton.getAttribute('aria-label');
   await page.keyboard.press('w');
   await expect(displayButton).not.toHaveAttribute(

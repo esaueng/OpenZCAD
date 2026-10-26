@@ -1,5 +1,6 @@
 import {
   useState,
+  useRef,
   type CSSProperties,
   type DragEvent,
   type ReactNode
@@ -23,6 +24,7 @@ import {
   Pencil,
   PenLine,
   RotateCw,
+  Scan,
   Search,
   SquareDashed,
   Trash2
@@ -37,6 +39,7 @@ import {
 } from '@openzcad/document-core';
 import {
   createId,
+  DEFAULT_BODY_COLOR,
   type BodyId,
   type BodyRepresentation,
   type ObjectFolder,
@@ -53,6 +56,7 @@ import {
 import type { ModelPanelSource } from './modelPanelProps';
 import type { ObjectsView } from './panelViews';
 import { ObjectRenameField } from './ObjectRenameField';
+import { BodyAppearanceEditor } from './BodyAppearanceEditor';
 
 /** What the Objects list is built from, and all its header count needs. */
 export type ObjectsSource = Pick<
@@ -79,8 +83,13 @@ export type ObjectsPanelProps = ObjectsSource &
     | 'onSelectFeature'
     | 'onSelectBody'
     | 'onToggleBodyVisibility'
+    | 'onIsolateBody'
+    | 'isolatedBodyId'
     | 'onToggleSketchVisibility'
     | 'onRenameBody'
+    | 'bodyAppearancePreview'
+    | 'onPreviewBodyAppearance'
+    | 'onCommitBodyAppearance'
     | 'objectFolderActions'
   > & { view: ObjectsView };
 
@@ -263,14 +272,21 @@ export function ObjectsPanel({
   onSelectFeature,
   onSelectBody,
   onToggleBodyVisibility,
+  onIsolateBody,
+  isolatedBodyId = null,
   onToggleSketchVisibility,
   onRenameBody,
+  bodyAppearancePreview,
+  onPreviewBodyAppearance,
+  onCommitBodyAppearance,
   objectFolderActions,
   view
 }: ObjectsPanelProps) {
   const foldersEditable = objectFolderActions?.editable ?? false;
   // The body whose name is a field right now (ZC-127): double-click or F2.
   const [renamingBodyId, setRenamingBodyId] = useState<string | null>(null);
+  const [appearanceBodyId, setAppearanceBodyId] = useState<BodyId | null>(null);
+  const appearanceAnchorRef = useRef<HTMLButtonElement>(null);
   const {
     filter: objectFilter,
     setFilter: setObjectFilter,
@@ -588,11 +604,24 @@ export function ObjectsPanel({
   function renderBodyRow(body: BodyRepresentation, depth = 0) {
     const hidden = hiddenBodyIds.has(body.bodyId);
     const selected = selectedBodyIds.includes(body.bodyId);
+    const isolated = isolatedBodyId === body.bodyId;
     // A consumed body is history's input, not a thing the user still has:
     // it keeps the name it had when it was combined.
     const renamable = Boolean(onRenameBody) && !body.consumed;
+    const appearanceOpen =
+      appearanceBodyId === body.bodyId &&
+      Boolean(onPreviewBodyAppearance && onCommitBodyAppearance) &&
+      !body.consumed;
+    const preview =
+      bodyAppearancePreview?.bodyId === body.bodyId
+        ? bodyAppearancePreview
+        : null;
+    const color = preview?.color ?? body.color ?? DEFAULT_BODY_COLOR;
     const draggable =
-      foldersEditable && !body.consumed && renamingBodyId !== body.bodyId;
+      foldersEditable &&
+      !body.consumed &&
+      renamingBodyId !== body.bodyId &&
+      !appearanceOpen;
     return (
       <div
         key={body.bodyId}
@@ -632,12 +661,13 @@ export function ObjectsPanel({
             aria-pressed={selected}
             aria-keyshortcuts={renamable ? 'F2' : undefined}
             title={`${body.name}${body.consumed ? ' — combined into a later feature' : ''} — click to select, ⇧click to add${draggable ? ', drag into a folder' : ''}${renamable ? ', double-click or F2 to rename' : ''}`}
-            onClick={(event) =>
+            onClick={(event) => {
+              setAppearanceBodyId(null);
               onSelectBody(
                 body.bodyId,
                 event.shiftKey || event.metaKey || event.ctrlKey
-              )
-            }
+              );
+            }}
             onDoubleClick={() => {
               if (renamable) setRenamingBodyId(body.bodyId);
             }}
@@ -652,6 +682,25 @@ export function ObjectsPanel({
             <span className="feature-name">{body.name}</span>
           </button>
         )}
+        {!body.consumed && (
+          <button
+            type="button"
+            className="object-color-swatch"
+            ref={appearanceOpen ? appearanceAnchorRef : undefined}
+            data-body-color={body.bodyId}
+            aria-label={`Change color of ${body.name}`}
+            aria-expanded={appearanceOpen}
+            aria-controls={
+              appearanceOpen ? `body-appearance-${body.bodyId}` : undefined
+            }
+            disabled={!onPreviewBodyAppearance || !onCommitBodyAppearance}
+            title={`${body.name}: ${color}${!onCommitBodyAppearance ? ' — editing unavailable' : ' — color and opacity'}`}
+            style={{ '--body-color': color } as CSSProperties}
+            onClick={() =>
+              setAppearanceBodyId(appearanceOpen ? null : body.bodyId)
+            }
+          />
+        )}
         {renamable && renamingBodyId !== body.bodyId && (
           // Double-click alone is not enough: the first click selects, and
           // the Inspector that opens for the selection can move the row
@@ -664,6 +713,22 @@ export function ObjectsPanel({
             onClick={() => setRenamingBodyId(body.bodyId)}
           >
             <Pencil size={12} aria-hidden="true" />
+          </button>
+        )}
+        {!body.consumed && onIsolateBody && (
+          <button
+            type="button"
+            className={`row-visibility${isolated ? ' is-active' : ''}`}
+            title={isolated ? 'Exit isolation' : `Isolate ${body.name}`}
+            aria-label={
+              isolated
+                ? `Exit isolation of ${body.name}`
+                : `Isolate body ${body.name}`
+            }
+            aria-pressed={isolated}
+            onClick={() => onIsolateBody(body.bodyId)}
+          >
+            <Scan size={12} aria-hidden="true" />
           </button>
         )}
         {!body.consumed && (
@@ -684,6 +749,21 @@ export function ObjectsPanel({
             )}
           </button>
         )}
+        {appearanceOpen &&
+          onPreviewBodyAppearance &&
+          onCommitBodyAppearance && (
+            <BodyAppearanceEditor
+              body={body}
+              anchorRef={appearanceAnchorRef}
+              onPreview={onPreviewBodyAppearance}
+              onCommit={(patch) => onCommitBodyAppearance(body.bodyId, patch)}
+              onDismiss={(restoreFocus) => {
+                setAppearanceBodyId(null);
+                if (restoreFocus)
+                  focusRow(`[data-body-color="${CSS.escape(body.bodyId)}"]`);
+              }}
+            />
+          )}
       </div>
     );
   }

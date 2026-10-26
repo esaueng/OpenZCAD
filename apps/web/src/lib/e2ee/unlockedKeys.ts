@@ -20,18 +20,27 @@ export interface UnlockedAccount {
 }
 
 const unlockedAccounts = new Map<string, UnlockedAccount>();
-const pendingReads = new Map<string, object>();
+const pendingReads = new Map<string, { scopes: WeakMap<object, object> }>();
 
 /** Capture before any await, including when no unlocked cache entry exists. */
-export function captureAccountKeyRead(userId: string): () => boolean {
-  const token = pendingReads.get(userId) ?? {};
-  pendingReads.set(userId, token);
-  return () => pendingReads.get(userId) === token;
+export function captureAccountKeyRead(
+  userId: string,
+  scope?: object
+): () => boolean {
+  const reads = pendingReads.get(userId) ?? {
+    scopes: new WeakMap<object, object>()
+  };
+  pendingReads.set(userId, reads);
+  const token = scope ? (reads.scopes.get(scope) ?? {}) : null;
+  if (scope) reads.scopes.set(scope, token!);
+  return () =>
+    pendingReads.get(userId) === reads &&
+    (!scope || reads.scopes.get(scope) === token);
 }
 
 /** A pending passkey prompt cannot outlive view or cross-tab session teardown. */
-export function keyOperationGuard(userId: string): () => void {
-  const readCurrent = captureAccountKeyRead(userId);
+export function keyOperationGuard(userId: string, scope?: object): () => void {
+  const readCurrent = captureAccountKeyRead(userId, scope);
   const revision = getKeySessionRevision();
   return () => {
     if (!readCurrent() || !isCurrentKeySession(revision)) {
@@ -44,8 +53,12 @@ export function keyOperationGuard(userId: string): () => void {
 }
 
 /** Closing the settings view cancels its loads without locking a valid cache. */
-export function invalidateAccountKeyReads(userId: string): void {
-  pendingReads.delete(userId);
+export function invalidateAccountKeyReads(
+  userId: string,
+  scope?: object
+): void {
+  if (scope) pendingReads.get(userId)?.scopes.delete(scope);
+  else pendingReads.delete(userId);
 }
 
 /** A verification failure clears cached secrets without ending a live session. */

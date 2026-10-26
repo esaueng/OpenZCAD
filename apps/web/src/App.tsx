@@ -70,10 +70,15 @@ import type { AdoptLocalProjectResult } from './lib/projectIdentityTransfer';
 import { LatestTask } from './lib/latestTask';
 import { prepareSaveStateRestore } from './lib/saveStateRestore';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
-import { toggleBodyIsolation, type BodyIsolation } from './lib/bodyIsolation';
+import {
+  activeIsolatedBodyId,
+  toggleBodyIsolation,
+  type BodyIsolation
+} from './lib/bodyIsolation';
 import { failedFeatureIds } from './lib/featureRepair';
 import { featureHistory, relatedFeatureIds } from './lib/featureHistory';
 import {
+  emptyExportMessage,
   exportScope,
   exportScopeLabel,
   type ExportScope
@@ -143,6 +148,7 @@ import {
   Redo2,
   Ruler,
   Save,
+  Scan,
   ScanEye,
   Settings as SettingsIcon,
   Scissors,
@@ -805,11 +811,21 @@ import {
   reuseRunningExtrudePreview,
   type ResolvedExtrudePreview
 } from './lib/resolvedExtrudePreview';
+import type {
+  ExtrudeFormValue,
+  ExtrudeToFacePicking
+} from './lib/extrudeDraft';
 import {
-  ExtrudeForm,
-  type ExtrudeFormValue,
-  type ExtrudeToFacePicking
-} from './components/forms/ExtrudeForm';
+  ExtrudeCommand,
+  extrudeShownValues,
+  type ExtrudeCommandHandle,
+  type ExtrudeCommandState,
+  type ExtrudeValueId
+} from './components/ExtrudeCommand';
+import {
+  DRAFT_DRAG_LIMIT_DEG,
+  extrudeHandles
+} from './lib/inPlace/extrude';
 import {
   extrudeToFaceRepair,
   extrudeHistoryDocument,
@@ -819,6 +835,7 @@ import {
 } from './lib/extrudeToFace';
 import {
   extrudeEditCommand,
+  extrudeEditInitial,
   extrudePreviewMagnitude,
   extrudeEditTargets,
   extrudePreviewError
@@ -1459,6 +1476,7 @@ import {
   displayedValue,
   isInPlaceTool,
   keypadText,
+  profileRegionLoops,
   requestNewAxis,
   resolveNewAxis,
   valueInRange,
@@ -2511,6 +2529,8 @@ export function App() {
   /** The export dialog has been opened this session — the tour's last signal. */
   const [tourExportSeen, setTourExportSeen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
+  const [automaticMigrationLoadError, setAutomaticMigrationLoadError] =
+    useState<string | null>(null);
   const [settingsMessage, setSettingsMessage] = useState(
     pendingInvitationToken
       ? 'Sign in to open the shared project automatically.'
@@ -3038,8 +3058,7 @@ export function App() {
     [localHiddenBodyIds, parameterHiddenBodyIds]
   );
   // D01: a new drawing sheet shows the live bodies on screen. Deliberately
-  // not the export scope, which follows the Build selection and the mesh
-  // dialog's include-hidden choice.
+  // not the export scope, which follows the Build selection.
   const drawingDefaultBodyIds = useMemo(
     () =>
       doc
@@ -3052,8 +3071,7 @@ export function App() {
         : [],
     [doc, hiddenBodyIds]
   );
-  // Not persisted: isolation is a temporary view, and a reload shows the
-  // user's own hidden set.
+  // The view's hidden set persists; the prior isolation snapshot is session-local.
   const [bodyIsolation, setBodyIsolation] = useState<
     (BodyIsolation & { projectId: string }) | null
   >(null);
@@ -3236,6 +3254,35 @@ export function App() {
   useEffect(() => {
     lockAccountsExcept(sessionUserId);
   }, [sessionUserId]);
+  useEffect(() => {
+    setAutomaticMigrationLoadError(null);
+    if (!sessionUserId || !cloudFunctionsEnabled) return;
+    let stopped = false;
+    let migration: { dispose(): void } | undefined;
+    void import('./lib/e2ee/automaticMigration')
+      .then(({ automaticProjectMigration }) => {
+        if (stopped) return;
+        const current = automaticProjectMigration(sessionUserId, (message) => {
+          if (stopped || sessionRef.current?.userId !== sessionUserId) return;
+          setSettingsMessage(message);
+          updateSettingsViewState({ open: true, activeSection: 'encryption' });
+          setSettingsOpen(true);
+        });
+        migration = current;
+        void current.check();
+      })
+      .catch(() => {
+        if (stopped || sessionRef.current?.userId !== sessionUserId) return;
+        setAutomaticMigrationLoadError(
+          'Automatic encryption could not load. Reload to try again.'
+        );
+        setSettingsOpen(true);
+      });
+    return () => {
+      stopped = true;
+      migration?.dispose();
+    };
+  }, [sessionUserId, cloudFunctionsEnabled]);
   useEffect(() => {
     const online = () => organizationBackground.resume();
     const changed = (event: StorageEvent) => {
@@ -3491,13 +3538,15 @@ export function App() {
     launchTool,
     validateSelectionEdit,
     handleSelectFeatureFromTree,
-    toggleBodyVisibility
+    toggleBodyVisibility,
+    isolateBody
   });
   viewportMenuHandlersRef.current = {
     launchTool,
     validateSelectionEdit,
     handleSelectFeatureFromTree,
-    toggleBodyVisibility
+    toggleBodyVisibility,
+    isolateBody
   };
   const managerRef = useRef<CommandManager | null>(null);
   const parameterEditRequest = useRef(0);
@@ -4168,12 +4217,55 @@ export function App() {
   const regionDistanceSetter = useRef<((value: ParamValue) => void) | null>(
     null
   );
+  /** U09: the in-place Extrude's bar, for Enter, its keypad and handles. */
+  const regionExtrudeCommandRef = useRef<ExtrudeCommandHandle | null>(null);
   /**
-   * The profiles the Extrude command selected. While they are still the
-   * selection, the region card asks for its Distance field to hold the
-   * keyboard; a canvas pick replaces them and leaves it with the workspace.
+   * U09: the extrude a History row re-armed the in-place Extrude on, by its
+   * feature; each arming is its own session (`generation`).
    */
-  const extrudeCommandProfiles = useRef<RegionPickData[]>([]);
+  const [extrudeEdit, setExtrudeEdit] = useState<{
+    featureId: FeatureId;
+    generation: number;
+  } | null>(null);
+  const extrudeEditRef = useRef(extrudeEdit);
+  extrudeEditRef.current = extrudeEdit;
+  /**
+   * The in-place Extrude session running now: a new extrude (by its sketch)
+   * or an edit (by its feature and arming), whichever bar is up.
+   */
+  const extrudeSessionKey = extrudeEdit
+    ? `edit:${extrudeEdit.featureId}:${extrudeEdit.generation}`
+    : interaction.mode === 'region'
+      ? `create:${interaction.target.sketchId}`
+      : null;
+  /**
+   * The bar's settings as numbers, for the back arrow and the draft rig,
+   * owned by the session that published them: one session's leftovers are
+   * never another's, and no effect clearing them on a switch can wipe what
+   * the next session's bar has just published.
+   */
+  const [extrudeDraftState, setExtrudeDraftState] = useState<{
+    session: string;
+    state: ExtrudeCommandState;
+  } | null>(null);
+  const regionExtrudeState =
+    extrudeDraftState && extrudeDraftState.session === extrudeSessionKey
+      ? extrudeDraftState.state
+      : null;
+  /**
+   * The bar's distance as a number, for the region arrow to stand at when
+   * it is rebuilt (a new choice), rather than back at its last drag.
+   */
+  const regionDraftDistance = useRef<number | null>(null);
+  /** The text the open Extrude keypad last left its value at. */
+  const regionKeypadText = useRef<{
+    valueId: ExtrudeValueId;
+    text: string;
+  } | null>(null);
+  /** Why the open Extrude keypad's entry does not evaluate (Done waits). */
+  const [regionExtrudeEntryError, setRegionExtrudeEntryError] = useState<
+    string | null
+  >(null);
   const extrudeEditRequest = useRef(0);
   const reusableRegionExtrudePreview = useRef<ResolvedExtrudePreview | null>(
     null
@@ -6738,6 +6830,25 @@ export function App() {
     () => partBodies.filter((body) => !hiddenBodyIds.has(body.bodyId)),
     [partBodies, hiddenBodyIds]
   );
+  const isolatedBodyId = useMemo(
+    () =>
+      activeIsolatedBodyId(
+        partBodies.map((body) => body.bodyId),
+        hiddenBodyIds,
+        localHiddenBodyIds,
+        bodyIsolation?.projectId === doc?.projectId ? bodyIsolation : null
+      ),
+    [
+      partBodies,
+      hiddenBodyIds,
+      localHiddenBodyIds,
+      bodyIsolation,
+      doc?.projectId
+    ]
+  );
+  // End the session permanently when its view changes. Merely hiding the
+  // indicator would let an old snapshot revive if the same set returns later.
+  if (bodyIsolation && isolatedBodyId === null) setBodyIsolation(null);
   // Only whether a face offset is in progress matters to the bodies: keyed on
   // the whole interaction, every drag, keypad or selection event handed the
   // viewer a new bodies array and re-ran each of its bodies effects.
@@ -6954,10 +7065,24 @@ export function App() {
     return true;
   }
 
+  /** The extrude being edited in place, as the document has it now. */
+  const extrudeEditFeature = useMemo(() => {
+    const feature = doc && extrudeEdit ? findFeature(doc, extrudeEdit.featureId) : null;
+    return feature?.data.featureKind === 'extrude' ? feature : null;
+  }, [doc, extrudeEdit]);
+  /** What it opens on: memoized, so its to-face target keeps its identity. */
+  const extrudeEditInitialDraft = useMemo(
+    () => (extrudeEditFeature ? extrudeEditInitial(extrudeEditFeature) : null),
+    // Opened once per arming; a later change to the feature is the edit's.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [extrudeEdit]
+  );
   const availableExtrudeTargets = useMemo(
     () =>
-      doc && selectedFeature ? extrudeEditTargets(doc, selectedFeature) : [],
-    [doc, selectedFeature]
+      doc && extrudeEditFeature
+        ? extrudeEditTargets(doc, extrudeEditFeature)
+        : [],
+    [doc, extrudeEditFeature]
   );
 
   const selectedSketch = useMemo<SketchNode | null>(() => {
@@ -7104,9 +7229,6 @@ export function App() {
         : new Set<FeatureId>(),
     [doc, featureAttribution]
   );
-  // Viewport-hidden bodies export unless this is switched off; the dialog
-  // reports the count either way, so the choice is never silent.
-  const [exportIncludesHidden, setExportIncludesHidden] = useState(true);
   const { exportBodyIds, exportWithheldMessage, exportScopeInfo } = useMemo<{
     exportBodyIds: BodyId[];
     exportWithheldMessage: string | null;
@@ -7129,15 +7251,11 @@ export function App() {
     const scope = exportScope(
       Object.values(doc.derived.bodyRepresentations).map((body) => ({
         bodyId: body.bodyId,
-        exportable:
-          body.exportableStep &&
-          !body.consumed &&
-          !parameterHiddenBodyIds.has(body.bodyId),
-        hidden: localHiddenBodyIds.has(body.bodyId),
+        exportable: body.exportableStep && !body.consumed,
+        hidden: hiddenBodyIds.has(body.bodyId),
         withheld: failedHistoryBodies.has(body.bodyId)
       })),
-      selectedBody?.bodyId ?? null,
-      exportIncludesHidden
+      selectedBody?.bodyId ?? null
     );
     const withheld = scope.withheldIds.flatMap((bodyId) => {
       const entry = failedHistoryBodies.get(bodyId as BodyId);
@@ -7152,24 +7270,21 @@ export function App() {
     failedHistoryBodies,
     doc,
     selectedBody,
-    parameterHiddenBodyIds,
-    localHiddenBodyIds,
-    exportIncludesHidden,
+    hiddenBodyIds,
     tweakMode,
     parameterModelError,
     currentGeometrySnapshot,
     currentFaceGeometryPreview
   ]);
   // What the one-click STEP controls name: the selected body, or the
-  // all-bodies scope whenever hidden bodies are in it or left out of it.
+  // visible-body scope whenever hidden bodies are left out of it.
   const exportControlScope =
     exportScopeInfo?.selection && selectedBody
       ? selectedBody.name
-      : exportScopeInfo &&
-          (exportScopeInfo.hiddenIncluded > 0 ||
-            exportScopeInfo.hiddenExcluded > 0)
+      : exportScopeInfo && exportScopeInfo.hiddenExcluded > 0
         ? exportScopeLabel(exportScopeInfo)
         : null;
+  const emptyExportReason = emptyExportMessage(exportScopeInfo);
 
   /**
    * What the current selection is, and the figure that goes with it.
@@ -8527,7 +8642,6 @@ export function App() {
     setSelectedEdges([]);
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(sketchId);
-    extrudeCommandProfiles.current = chosen;
     setSelectedProfiles(chosen);
     setTool(null);
     if (activeSketch) {
@@ -9098,6 +9212,61 @@ export function App() {
     inPlaceRef.current.edit(armed.tool, armed.seed);
     if (armed.seed.notice) setStatus(armed.seed.notice);
     return true;
+  }
+
+  /**
+   * U09: re-arms the in-place Extrude on a stored extrude, seeded from it,
+   * instead of opening its card; the feature stays pinned, as other edits'.
+   */
+  function startExtrudeEdit(feature: FeatureNode): boolean {
+    if (feature.data.featureKind !== 'extrude') return false;
+    const reason = toolDisabledReason('extrude', {
+      ...availability,
+      sketchCount: Number.POSITIVE_INFINITY,
+      closedProfileSketchCount: Number.POSITIVE_INFINITY
+    });
+    if (reason) {
+      setStatus(`${TOOL_META.extrude.label}: ${reason}.`);
+      return false;
+    }
+    inPlaceRef.current.cancel(true);
+    retireStatusMessage();
+    if (editCardSessionRef.current) {
+      editCardSessionRef.current = {
+        ...editCardSessionRef.current,
+        generation: editCardSessionRef.current.generation + 1
+      };
+    }
+    edgeFormPreview.clear();
+    setFeatureFormError(null);
+    setExtrudeEdit((current) => ({
+      featureId: feature.featureId,
+      generation: (current?.generation ?? 0) + 1
+    }));
+    return true;
+  }
+
+  /** Ends an extrude edit, its preview with it. */
+  function endExtrudeEdit() {
+    if (!extrudeEditRef.current) return;
+    extrudeEditRequest.current += 1;
+    edgeFormPreview.clear();
+    setFeatureFormError(null);
+    setKeypad((current) => (current?.kind === 'extrude' ? null : current));
+    setExtrudeEdit(null);
+  }
+
+  const endExtrudeEditRef = useRef(endExtrudeEdit);
+  endExtrudeEditRef.current = endExtrudeEdit;
+
+  /** Esc or the bar's Cancel: the extrude stays as it was, nothing selected. */
+  function cancelExtrudeEdit() {
+    endExtrudeEdit();
+    setSelectedFeatureNode(null);
+    setSelectedBodyIds([]);
+    // The profiles its History row lit go too, as an in-place edit's do.
+    setSelectedProfiles([]);
+    setSelectedSketchProfileId(null);
   }
 
   /** Done on an in-place edit: the feature's update, validated as the card's was. */
@@ -9803,7 +9972,10 @@ export function App() {
   function openModelingFeatureEditor(feature: FeatureNode) {
     // An in-place command's feature re-arms that command from its row, as a
     // click on the row does (an unapplied Move is asked about first).
-    if (inPlaceToolForFeature(feature.data)) {
+    if (
+      inPlaceToolForFeature(feature.data) ||
+      feature.data.featureKind === 'extrude'
+    ) {
       handleSelectFeatureFromTree(feature.id, false);
       return;
     }
@@ -9843,6 +10015,7 @@ export function App() {
     // (another tool, a workspace switch, Measure) ends it too, quietly,
     // since the action that closed it says what happened.
     inPlaceRef.current.cancel(true);
+    endExtrudeEdit();
     extrudeEditRequest.current += 1;
     // The mode hint the panel set ("Move/Rotate: drag the arrows…") describes
     // a state the user has just left; it must not outlive the panel.
@@ -10816,6 +10989,7 @@ export function App() {
     if (!doc) {
       return;
     }
+    if (!ensureCanEdit('change body appearance')) return;
     const bodyNode = findBodyNode(doc, bodyId);
     if (!bodyNode) {
       return;
@@ -10859,6 +11033,22 @@ export function App() {
    * than showing everything.
    */
   function isolateBody(bodyId: string) {
+    const body = partBodies.find((candidate) => candidate.bodyId === bodyId);
+    if (!body) {
+      setStatus('Select a result body to isolate.');
+      return;
+    }
+    if (parameterHiddenBodyIds.has(bodyId as BodyId)) {
+      const parameter =
+        doc &&
+        listParameters(doc).find((entry) =>
+          entry.toggle?.bodyIds.includes(bodyId as BodyId)
+        );
+      setStatus(
+        `Turn on ${parameter?.name ?? 'its visibility parameter'} before isolating ${body.name}.`
+      );
+      return;
+    }
     const isolation =
       bodyIsolation && bodyIsolation.projectId === doc?.projectId
         ? bodyIsolation
@@ -12449,6 +12639,7 @@ export function App() {
    */
   const [shareCopyChoice, setShareCopyChoice] = useState<{
     accountEncrypts: boolean | null;
+    error: string | null;
   } | null>(null);
   function requestShareCopy() {
     const active = shareSessionRef.current;
@@ -12457,10 +12648,34 @@ export function App() {
       void handleMakeShareCopy();
       return;
     }
-    setShareCopyChoice({ accountEncrypts: null });
-    void encryptsNewProjects().then((accountEncrypts) =>
-      setShareCopyChoice((current) => current && { accountEncrypts })
-    );
+    const choice = { accountEncrypts: null, error: null };
+    const userId = session.userId;
+    const revision = getKeySessionRevision();
+    const currentSession = () =>
+      sessionRef.current?.userId === userId &&
+      shareSessionRef.current === active &&
+      getKeySessionRevision() === revision;
+    setShareCopyChoice(choice);
+    void encryptsNewProjects()
+      .then((accountEncrypts) =>
+        setShareCopyChoice((current) => {
+          if (current !== choice) return current;
+          return currentSession() ? { accountEncrypts, error: null } : null;
+        })
+      )
+      .catch((error: unknown) =>
+        setShareCopyChoice((current) => {
+          if (current !== choice) return current;
+          if (!currentSession()) return null;
+          return {
+            accountEncrypts: null,
+            error: errorMessage(
+              error,
+              'Your account encryption setting could not be checked. Retry, or keep a copy on this device.'
+            )
+          };
+        })
+      );
   }
 
   useEffect(() => {
@@ -15239,7 +15454,7 @@ export function App() {
     }): Promise<{ body: Blob; save(): Promise<boolean>; warnings: number }>;
   }) {
     if (!doc || exportBodyIds.length === 0) {
-      setStatus('Create a body before exporting.');
+      setStatus(emptyExportReason);
       return;
     }
     const sink = createImportProgressSink();
@@ -15316,11 +15531,9 @@ export function App() {
         });
         return;
       }
-      const hiddenNote = exportScopeInfo?.hiddenIncluded
-        ? ` (${exportScopeInfo.hiddenIncluded} hidden)`
-        : exportScopeInfo?.hiddenExcluded
-          ? ` (${exportScopeInfo.hiddenExcluded} hidden left out)`
-          : '';
+      const hiddenNote = exportScopeInfo?.hiddenExcluded
+        ? ` (${exportScopeInfo.hiddenExcluded} hidden left out)`
+        : '';
       const bodies = `${countLabel(exportBodyIds.length, 'body', 'bodies')}${hiddenNote}`;
       const outcome =
         produced.warnings > 0
@@ -15366,7 +15579,7 @@ export function App() {
       return;
     }
     if (!doc || exportBodyIds.length === 0) {
-      setStatus('Create a body before exporting.');
+      setStatus(emptyExportReason);
       return;
     }
     const fileName = `${exportFileStem(doc.name)}.step`;
@@ -15418,7 +15631,7 @@ export function App() {
       return;
     }
     if (!doc || exportBodyIds.length === 0) {
-      setStatus('Create a body before exporting.');
+      setStatus(emptyExportReason);
       return;
     }
     const info = MESH_EXPORT_FILE_INFO[format];
@@ -15471,7 +15684,7 @@ export function App() {
   ) {
     if (!doc || exportBodyIds.length === 0) {
       return Promise.reject(
-        new Error('Create a body before checking printability.')
+        new Error(emptyExportMessage(exportScopeInfo, 'checking printability'))
       );
     }
     return geometry.meshQuality(doc, exportBodyIds, deflection, {
@@ -15553,7 +15766,7 @@ export function App() {
         if (exportBodyIds.length > 0) {
           setMeshExportOpen(true);
         } else {
-          setStatus('Create a body before exporting.');
+          setStatus(emptyExportReason);
         }
         break;
       case 'undo':
@@ -15935,6 +16148,12 @@ export function App() {
         const body = shown ? inPlaceBodyPick(shown) : null;
         if (body) return command.pickBody(body);
       }
+      return false;
+    }
+    // An extrude edit is a running command too: the model's clicks are its
+    // own (its To face pick), and a stray pick never selects under it or
+    // starts another operation on its result.
+    if (extrudeEditRef.current && !toFacePick) {
       return false;
     }
     if (selection && currentGeometrySnapshot !== null) {
@@ -16515,6 +16734,8 @@ export function App() {
    */
   function handleSelectEdgeChainFromViewer(selections: TopologySelection[]) {
     if (selections.length === 0) return;
+    // An open extrude edit owns the model's picks (see the click's gate).
+    if (extrudeEditRef.current) return;
     if (
       deferMoveSelection({
         kind: 'edge-chain',
@@ -16566,6 +16787,7 @@ export function App() {
   const emptyBoxSelectExplainedRef = useRef(false);
 
   function handleBoxSelectFromViewer(bodyIds: string[]) {
+    if (extrudeEditRef.current) return;
     if (
       bodyIds.length > 0 &&
       deferMoveSelection({ kind: 'box', bodyIds: [...bodyIds] as BodyId[] })
@@ -16640,6 +16862,7 @@ export function App() {
     selections: TopologySelection[],
     kind: 'face' | 'edge'
   ) {
+    if (extrudeEditRef.current) return;
     if (selections.length === 0) {
       // A sweep during an in-place Fillet or Chamfer only adds edges, so
       // one that caught none leaves its edges, and their highlight, as
@@ -16773,11 +16996,18 @@ export function App() {
       (interaction.mode !== 'idle' &&
         interaction.mode !== 'sketch' &&
         (interaction.phase === 'exact-entry' ||
-          interaction.phase === 'failed'));
+          interaction.phase === 'failed')) ||
+      // The in-place Extrude's own values: each keystroke previews, which
+      // sets the region's choice again; leaving the region closes it, and so
+      // does a Done being checked, which commits the value it previewed.
+      (keypadRef.current?.kind === 'extrude' &&
+        ((interaction.mode === 'region' &&
+          interaction.phase !== 'validating') ||
+          (extrudeEditRef.current !== null && !geometryBusy)));
     if (!open) {
       setKeypad(null);
     }
-  }, [interaction]);
+  }, [interaction, geometryBusy, extrudeEdit]);
 
   // Leaving either edge creation or face-backed fillet editing abandons its
   // in-flight exact preview document.
@@ -16810,10 +17040,29 @@ export function App() {
     setLastValidPreview(null);
   }, [offsetInteractionKey, offsetPreview]);
 
+  // An Extrude keypad belongs to the value as it left it. Once anything else
+  // changes that value (Reverse, a drag, the arrow) or stops offering it (an
+  // extent or Sides choice), the keypad is closed as it stands: its stale
+  // entry, applied or canceled, would write over the change, and setting
+  // Distance would take the extent back to Distance.
+  useEffect(() => {
+    const open = keypadRef.current;
+    const state = regionExtrudeState;
+    if (open?.kind !== 'extrude' || !open.commandValueId || !state) return;
+    const valueId = open.commandValueId as ExtrudeValueId;
+    const own = regionKeypadText.current;
+    const changedElsewhere =
+      own?.valueId === valueId && state.texts[valueId] !== own.text;
+    if (changedElsewhere || !extrudeShownValues(state).includes(valueId)) {
+      regionKeypadText.current = null;
+      setKeypad(null);
+    }
+  }, [regionExtrudeState]);
   const regionSketchKey =
     interaction.mode === 'region' ? interaction.target.sketchId : null;
   useEffect(() => {
     regionExtrudeSettings.current = null;
+    regionDraftDistance.current = null;
   }, [regionSketchKey]);
   useEffect(() => {
     extrudeEditRequest.current += 1;
@@ -20200,7 +20449,11 @@ export function App() {
   }, [keypadWithinReach]);
   const inPlaceRef = useRef(inPlace);
   inPlaceRef.current = inPlace;
-  cancelInPlaceRef.current = () => inPlaceRef.current.cancel(true);
+  // Every open edit: an in-place command's, and the in-place Extrude's.
+  cancelInPlaceRef.current = () => {
+    inPlaceRef.current.cancel(true);
+    endExtrudeEditRef.current();
+  };
   // A command's keypad belongs to the command it opened on: another one
   // taking over (a History row re-arming, a new tool) closes it, or its
   // value would be entered into the new command.
@@ -20209,11 +20462,73 @@ export function App() {
   useEffect(() => {
     setKeypad((current) => (current?.kind === 'command' ? null : current));
   }, [inPlaceSessionTool, inPlaceSessionEdit]);
+  // So does the in-place Extrude's: a new extrude, an edit, another arming
+  // of either is another command, and the keypad goes with the one it was
+  // opened on.
+  useEffect(() => {
+    regionKeypadText.current = null;
+    setKeypad((current) => (current?.kind === 'extrude' ? null : current));
+  }, [extrudeSessionKey]);
   const narrowWindow = useMediaQuery(NARROW_WINDOW_QUERY);
   const inPlaceEditing = inPlace.editing;
+  const extrudeEditFeatureId = extrudeEdit?.featureId ?? null;
   useEffect(() => {
-    setInPlaceEditFeatureId(inPlaceEditing?.featureId ?? null);
-  }, [inPlaceEditing]);
+    setInPlaceEditFeatureId(
+      inPlaceEditing?.featureId ?? extrudeEditFeatureId ?? null
+    );
+  }, [inPlaceEditing, extrudeEditFeatureId]);
+  // The stored extrude changing under an open edit (an undo or redo, a
+  // collaborator) reseeds an untouched edit from it, as an in-place edit's
+  // untouched values follow the live feature; a changed draft stands.
+  const extrudeEditArmedData = useRef<FeatureNode['data'] | null>(null);
+  const extrudeEditData = extrudeEditFeature?.data ?? null;
+  useEffect(() => {
+    if (!extrudeEdit || !extrudeEditData) {
+      extrudeEditArmedData.current = null;
+      return;
+    }
+    const armed = extrudeEditArmedData.current;
+    extrudeEditArmedData.current = extrudeEditData;
+    if (
+      !armed ||
+      armed === extrudeEditData ||
+      JSON.stringify(armed) === JSON.stringify(extrudeEditData)
+    ) {
+      return;
+    }
+    if (regionExtrudeCommandRef.current?.touched()) return;
+    setExtrudeEdit((current) =>
+      current ? { ...current, generation: current.generation + 1 } : current
+    );
+    // A new arming per generation; the data it opens on is this one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [extrudeEditData]);
+  // An extrude edit lasts while its feature is the pinned selection and
+  // nothing else runs: another row, Esc, a tool, a new extrude or the
+  // feature's deletion ends it, its preview with it.
+  const extrudeEditNodeId = extrudeEditFeature?.id ?? null;
+  useEffect(() => {
+    if (!extrudeEdit) return;
+    if (
+      !extrudeEditNodeId ||
+      selectedFeatureNodeId !== extrudeEditNodeId ||
+      inPlace.active ||
+      tool !== null ||
+      interaction.mode === 'region' ||
+      interaction.mode === 'sketch'
+    ) {
+      endExtrudeEdit();
+    }
+    // endExtrudeEdit reads refs only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    extrudeEdit,
+    extrudeEditNodeId,
+    selectedFeatureNodeId,
+    inPlace.active,
+    tool,
+    interaction.mode
+  ]);
   // An Image canceled (or replaced by another command) lets its stored
   // bytes go again, unless something else already uses them.
   useEffect(() => {
@@ -20240,6 +20555,84 @@ export function App() {
     () => (doc ? [...doc.bodyOrder] : []),
     [doc]
   );
+  /** U09: a dragged or previewed Extrude value as its field's text. */
+  function extrudeValueText(value: number): string {
+    return String(Math.round(value * 1e6) / 1e6);
+  }
+  /**
+   * U09: the keypad for one of the in-place Extrude's values, from its bar
+   * row (`at`, where the row is) or its handle's chip. It opens on the text
+   * the value holds, so an expression is edited as an expression.
+   */
+  function openRegionExtrudeKeypad(
+    valueId: ExtrudeValueId,
+    at?: { x: number; y: number }
+  ): boolean {
+    const command = regionExtrudeCommandRef.current;
+    if (
+      !command ||
+      (interactionRef.current.mode !== 'region' && !extrudeEditRef.current)
+    ) {
+      return false;
+    }
+    const text = command.text(valueId);
+    regionKeypadText.current = { valueId, text };
+    const shown = regionExtrudeState?.[valueId];
+    const value =
+      shown !== undefined && Number.isFinite(shown)
+        ? shown
+        : Number.isFinite(Number(text))
+          ? Number(text)
+          : 0;
+    setKeypad({
+      kind: 'extrude',
+      commandValueId: valueId,
+      label:
+        valueId === 'distance'
+          ? 'Distance'
+          : valueId === 'backDistance'
+            ? 'Back distance'
+            : 'Draft angle',
+      initial: text,
+      selectInitial: true,
+      unitKind: valueId === 'draftAngle' ? 'angle' : 'length',
+      baseline: value,
+      baselineRaw: text,
+      ...(at ? { fixedClientAnchor: at } : {})
+    });
+    return true;
+  }
+  /** Moves the Extrude handle a value drives, without a render. */
+  function moveRegionExtrudeHandle(valueId: string, value: number) {
+    // A new extrude's distance is the region's arrow; an edit's, its own.
+    if (valueId === 'distance' && !extrudeEditRef.current) {
+      offsetSetterRef.current?.(value);
+    } else {
+      commandSetterRef.current?.(valueId, value);
+    }
+  }
+  /**
+   * A value the Extrude's handles or keypad set: typed text kept as typed.
+   * The keypad's own writes are remembered, so only someone else's change
+   * to its value closes it.
+   */
+  function setRegionExtrudeValue(
+    valueId: string,
+    value: number,
+    raw?: string,
+    fromKeypad = false
+  ) {
+    if (
+      valueId !== 'distance' &&
+      valueId !== 'backDistance' &&
+      valueId !== 'draftAngle'
+    ) {
+      return;
+    }
+    const text = raw ?? extrudeValueText(value);
+    if (fromKeypad) regionKeypadText.current = { valueId, text };
+    regionExtrudeCommandRef.current?.setValue(valueId, text);
+  }
   /**
    * Opens the keypad on an in-place command's value: from its chip, or from
    * the bar's Options at `at` (a position, which has no handle).
@@ -20318,6 +20711,111 @@ export function App() {
     // a chip-only value's text; it never rebuilds a rig.
     [inPlace.handles, inPlace.values, inPlaceSpec, inPlaceUnits]
   );
+  /**
+   * U09: the in-place Extrude's back arrow and draft rig, beside the
+   * region's own arrow, on the region the arrow stands on.
+   */
+  const regionExtrudeTarget =
+    interaction.mode === 'region' && interaction.phase !== 'validating'
+      ? interaction.target
+      : null;
+  const regionExtrudeLastValue =
+    interaction.mode === 'region' ? (interaction.lastValue ?? 0) : 0;
+  const regionExtrudeHandles = useMemo(() => {
+    if (inPlace.active) return [];
+    // An edit's region is its stored profile (the sketch's first region for
+    // one stored before profiles); a new extrude's, the one its arrow is on.
+    const edited = extrudeEditFeature?.data.featureKind === 'extrude'
+      ? extrudeEditFeature.data
+      : null;
+    const stored = edited ? (edited.profiles?.[0] ?? edited.profile) : null;
+    const pick: ProfilePick | null = edited
+      ? stored
+        ? {
+            sketchId: edited.sketchId,
+            reference: stored,
+            regionFingerprint: stored.all === true ? 0 : stored.regionFingerprint
+          }
+        : {
+            sketchId: edited.sketchId,
+            reference: { all: true, sourceEntityIds: [] },
+            regionFingerprint: 0,
+            implicit: true
+          }
+      : regionExtrudeTarget
+        ? {
+            sketchId: regionExtrudeTarget.sketchId as SketchId,
+            regionFingerprint: regionExtrudeTarget.regionFingerprint,
+            reference: {
+              regionFingerprint: regionExtrudeTarget.regionFingerprint,
+              samplePoint: regionExtrudeTarget.samplePoint,
+              sourceArea: regionExtrudeTarget.area,
+              sourceEntityIds: regionExtrudeTarget.sourceEntityIds
+            }
+          }
+        : null;
+    if (!pick) return [];
+    const view = availableSketchViews.find(
+      (candidate) => candidate.sketchId === pick.sketchId
+    );
+    const loops = profileRegionLoops(
+      { sketchViews: availableSketchViews },
+      pick
+    );
+    if (!view || !loops) return [];
+    const finite = (value: number | undefined, fallback: number) =>
+      value !== undefined && Number.isFinite(value) ? value : fallback;
+    const state = {
+      extent: regionExtrudeState?.extent ?? ('blind' as const),
+      symmetric: regionExtrudeState?.symmetric ?? false,
+      distance: finite(regionExtrudeState?.distance, regionExtrudeLastValue),
+      backDistance: finite(regionExtrudeState?.backDistance, 0),
+      draftAngle: finite(regionExtrudeState?.draftAngle, 0)
+    };
+    // An edit has no region arrow: its distance gets one of its own.
+    if (edited && !regionExtrudeState) return [];
+    return extrudeHandles(
+      loops.outline,
+      view.basis.normal,
+      edited
+        ? `edit:${extrudeEditFeature!.featureId}`
+        : `${pick.sketchId}:${pick.regionFingerprint}`,
+      state,
+      loops.holes,
+      edited !== null
+    ).map((handle) =>
+      handle.valueId === 'draftAngle'
+        ? {
+            ...handle,
+            value: state.draftAngle,
+            min: -DRAFT_DRAG_LIMIT_DEG,
+            max: DRAFT_DRAG_LIMIT_DEG,
+            format: (value: number) => `Draft ${formatNumber(value)}°`
+          }
+        : handle.valueId === 'distance'
+          ? {
+              ...handle,
+              value: state.distance,
+              format: (value: number) =>
+                `${formatNumber(value)} ${inPlaceUnits}`
+            }
+          : {
+              ...handle,
+              value: state.backDistance,
+              min: 0,
+              format: (value: number) =>
+                `Back ${formatNumber(value)} ${inPlaceUnits}`
+            }
+    );
+  }, [
+    regionExtrudeTarget,
+    regionExtrudeLastValue,
+    regionExtrudeState,
+    extrudeEditFeature,
+    inPlace.active,
+    availableSketchViews,
+    inPlaceUnits
+  ]);
   // A new fillet's or chamfer's picked edges are the selection, lit as the
   // card's list was. An edit leaves the selection alone: History already
   // lights the feature's blend faces, through its preview as edges change.
@@ -21152,7 +21650,7 @@ export function App() {
       regionFingerprint: anchor.regionFingerprint,
       samplePoint: anchor.samplePoint,
       area: anchor.area,
-      initialValue: interaction.lastValue ?? 0,
+      initialValue: regionDraftDistance.current ?? interaction.lastValue ?? 0,
       followers: interaction.targets
         .filter((target) => target !== anchor)
         .map((target) => ({
@@ -22448,18 +22946,18 @@ export function App() {
     ) {
       return false;
     }
+    // U09: the region's arrow is the in-place Extrude's distance, entered
+    // as its other values are: Enter sets it, Done (or Enter) extrudes.
+    if (interaction.mode === 'region') {
+      return openRegionExtrudeKeypad('distance');
+    }
     // Reopened in place by the chip's Total/Offset switch: a refused preview
     // stays refused (`keypad-open` would clear the failure and re-enable
     // Apply for the value the kernel just turned down).
     if (!keypadRef.current) dispatchInteraction({ type: 'keypad-open' });
     setKeypad({
       kind: 'offset',
-      label:
-        totalBaseline === undefined
-          ? interaction.mode === 'region'
-            ? 'Height'
-            : 'Offset'
-          : 'Total',
+      label: totalBaseline === undefined ? 'Offset' : 'Total',
       initial:
         totalBaseline !== undefined || currentOffset !== 0
           ? String(
@@ -22661,6 +23159,16 @@ export function App() {
         baseline,
         open.baselineRaw,
         commandKeypadTouchedRef.current
+      );
+    } else if (open.kind === 'extrude' && open.commandValueId) {
+      // Back to what the value held, typed expression and all.
+      const baseline = open.baseline ?? 0;
+      moveRegionExtrudeHandle(open.commandValueId, baseline);
+      setRegionExtrudeValue(
+        open.commandValueId,
+        baseline,
+        open.baselineRaw,
+        true
       );
     } else if (open.kind === 'sketch-dimension') {
       setSketchDimensionDraft(null);
@@ -23467,6 +23975,11 @@ export function App() {
       startInPlaceEdit(node);
       return;
     }
+    // So does an extrude, on the in-place Extrude.
+    if (node?.kind === 'feature' && node.data.featureKind === 'extrude') {
+      startExtrudeEdit(node);
+      return;
+    }
     // F19: an edit card opens already editable. The Inspector's own forms do;
     // a modeling feature's card is its creation form, so selecting the
     // feature opens that form rather than a panel with an "Edit hole" button
@@ -23689,7 +24202,8 @@ export function App() {
     if (
       renamed &&
       (modelingEditFeature?.featureId === featureId ||
-        inPlaceRef.current.editing?.featureId === featureId)
+        inPlaceRef.current.editing?.featureId === featureId ||
+        extrudeEditRef.current?.featureId === featureId)
     ) {
       closeFeaturePanel();
     }
@@ -24247,6 +24761,19 @@ export function App() {
           },
           run: runCurrent((handlers) =>
             handlers.toggleBodyVisibility(menuSelection.selection.bodyId)
+          )
+        },
+        {
+          item: {
+            id: 'isolate',
+            label:
+              isolatedBodyId === selection.bodyId
+                ? 'Exit isolation'
+                : 'Isolate body',
+            icon: <Scan size={13} aria-hidden="true" />
+          },
+          run: runCurrent((handlers) =>
+            handlers.isolateBody(menuSelection.selection.bodyId)
           )
         },
         {
@@ -25054,6 +25581,34 @@ export function App() {
           return;
         }
       }
+      // U09: Enter finishes the in-place Extrude once it can create; until
+      // then it opens the distance's exact entry, as it always has.
+      if (
+        (interaction.mode === 'region' || extrudeEditRef.current) &&
+        event.key === 'Enter' &&
+        !typing &&
+        !(
+          target instanceof Element &&
+          target.closest('[aria-haspopup], [role="menu"], .in-place-command') !==
+            null
+        ) &&
+        regionExtrudeCommandRef.current?.submit() === true
+      ) {
+        event.preventDefault();
+        return;
+      }
+      // An extrude edit: Esc disarms its face pick, then closes an open
+      // entry, then the edit, one press each (as a new extrude does).
+      if (extrudeEditRef.current && event.key === 'Escape') {
+        event.preventDefault();
+        if (toFacePick) {
+          setToFacePick(null);
+          setStatus('Face pick canceled · the feature is unchanged.');
+          return;
+        }
+        if (!cancelOpenKeypad()) cancelExtrudeEdit();
+        return;
+      }
       if (movePreview) {
         if (event.key === 'Escape') {
           event.preventDefault();
@@ -25618,7 +26173,7 @@ export function App() {
           health={deploymentHealth}
           session={session}
           busy={settingsBusy}
-          message={settingsMessage}
+          message={automaticMigrationLoadError ?? settingsMessage}
           initialSection={
             pendingInvitationToken || desktopAuthorizationAttempt
               ? 'account'
@@ -26111,6 +26666,24 @@ export function App() {
       run: showAllBodies
     },
     {
+      id: 'view-isolate-body',
+      label: isolatedBodyId ? 'Exit isolation' : 'Isolate selected body',
+      group: 'View',
+      keywords: ['isolate', 'solo', 'body', 'export'],
+      icon: <Scan size={16} aria-hidden="true" />,
+      disabledReason: isolatedBodyId
+        ? null
+        : !selectedBody || selectedBody.consumed
+          ? 'Select a result body first'
+          : parameterHiddenBodyIds.has(selectedBody.bodyId)
+            ? 'Turn on its visibility parameter first'
+            : null,
+      run: () => {
+        const bodyId = isolatedBodyId ?? selectedBody?.bodyId;
+        if (bodyId) isolateBody(bodyId);
+      }
+    },
+    {
       // The dock's section toggle had no palette entry: "section" found
       // nothing, so the only way in was an unlabelled dock icon.
       id: 'view-section',
@@ -26212,7 +26785,7 @@ export function App() {
         currentGeometrySnapshot !== null
           ? 'Wait for the model to finish updating'
           : exportBodyIds.length === 0
-            ? 'Create a body first'
+            ? emptyExportReason
             : null,
       run: () => void handleExportStep()
     },
@@ -26228,7 +26801,7 @@ export function App() {
         currentGeometrySnapshot !== null
           ? 'Wait for the model to finish updating'
           : exportBodyIds.length === 0
-            ? 'Create a body first'
+            ? emptyExportReason
             : null,
       run: () => setMeshExportOpen(true)
     },
@@ -26851,7 +27424,12 @@ export function App() {
       onSelectBody={handleSelectBodyFromTree}
       selectedBodyIds={selectedBodyIds}
       onToggleBodyVisibility={toggleBodyVisibility}
+      onIsolateBody={isolateBody}
+      isolatedBodyId={isolatedBodyId}
       onRenameBody={editDisabledReason ? undefined : handleRenameBody}
+      bodyAppearancePreview={bodyAppearancePreview}
+      onPreviewBodyAppearance={previewBodyAppearance}
+      onCommitBodyAppearance={editDisabledReason ? undefined : commitBodyAppearance}
       objectFolderActions={objectFolderActions}
       onToggleSketchVisibility={toggleSketchVisibility}
       onFeatureContextMenu={handleFeatureContextMenu}
@@ -27025,6 +27603,7 @@ export function App() {
           }
           exportScope={exportControlScope}
           exportWithheld={exportWithheldMessage}
+          exportUnavailableReason={emptyExportReason}
           saveState={presentedSaveState}
           saveToAccount={
             cloudFunctionsEnabled && !!session && !activeProjectIsCloud
@@ -27149,6 +27728,7 @@ export function App() {
             }
             exportScope={exportControlScope}
             exportWithheld={exportWithheldMessage}
+            exportUnavailableReason={emptyExportReason}
             onPreviewParameter={handlePreviewParameter}
             onSetParameter={(name, expression) =>
               handleSetParameter(name, expression)
@@ -27412,7 +27992,7 @@ export function App() {
                 regionDistanceSetter.current?.(Math.round(value * 1000) / 1000);
                 dispatchInteraction({ type: 'drag-release' });
                 setStatus(
-                  'Extrude preview · adjust the settings, then Create to save.'
+                  'Extrude preview · Enter to finish, or adjust it under Options.'
                 );
                 return true;
               }
@@ -27718,14 +28298,44 @@ export function App() {
               if (curve) inPlace.pickCurve(curve);
             }}
             commandHandles={
-              modelingLocked || footprintDragging ? undefined : inPlaceHandles
+              modelingLocked || footprintDragging
+                ? undefined
+                : inPlace.active
+                  ? inPlaceHandles
+                  : regionExtrudeHandles
             }
-            onCommandHandlePreview={inPlace.previewValue}
-            onCommandHandleRelease={inPlace.previewValue}
+            onCommandHandlePreview={(valueId, value) =>
+              inPlace.active
+                ? inPlace.previewValue(valueId, value)
+                : setRegionExtrudeValue(valueId, value)
+            }
+            onCommandHandleRelease={(valueId, value) =>
+              inPlace.active
+                ? inPlace.previewValue(valueId, value)
+                : setRegionExtrudeValue(valueId, value)
+            }
             onOpenCommandKeypad={(valueId, value) =>
-              openInPlaceKeypad(valueId, value)
+              inPlace.active
+                ? openInPlaceKeypad(valueId, value)
+                : openRegionExtrudeKeypad(valueId as ExtrudeValueId)
             }
             commandSetterRef={commandSetterRef}
+            // The in-place Extrude's keypad rides the chip it opened from:
+            // the region arrow's, a handle's, or none from its bar.
+            {...((interaction.mode === 'region' || extrudeEditFeature) &&
+            !inPlace.active
+              ? {
+                  keypadAnchorOwner:
+                    keypad?.kind !== 'extrude' || !keypad.commandValueId
+                      ? ('offset' as const)
+                      : keypad.fixedClientAnchor
+                        ? ('none' as const)
+                        : keypad.commandValueId === 'distance' &&
+                            !extrudeEditFeature
+                          ? ('offset' as const)
+                          : { command: keypad.commandValueId }
+                }
+              : {})}
             facePickOnly={toFacePick !== null}
             modeOverlay={
               modelingLocked ? (
@@ -27796,6 +28406,36 @@ export function App() {
                     onCancel={cancelOpenKeypad}
                   />
                 ) : null
+              ) : extrudeEditFeature ? (
+                keypad?.kind === 'extrude' && keypad.commandValueId ? (
+                  <NumericKeypad
+                    key={`${keypad.kind}:${keypad.label}`}
+                    request={keypad}
+                    units={doc.units}
+                    scope={parameterScope.scope}
+                    anchorRef={keypadAnchorRef}
+                    onEntryError={setRegionExtrudeEntryError}
+                    onPreview={(value, raw) => {
+                      // An expression previews as itself, so a Done
+                      // pressed with the keypad still open stores it.
+                      const valueId = keypad.commandValueId!;
+                      moveRegionExtrudeHandle(valueId, value);
+                      setRegionExtrudeValue(valueId, value, raw, true);
+                    }}
+                    onCommit={(value, raw) => {
+                      const valueId = keypad.commandValueId!;
+                      setKeypad(null);
+                      moveRegionExtrudeHandle(valueId, value);
+                      setRegionExtrudeValue(
+                        valueId,
+                        value,
+                        Number.isFinite(Number(raw)) ? undefined : raw,
+                        true
+                      );
+                    }}
+                    onCancel={cancelOpenKeypad}
+                  />
+                ) : null
               ) : contextualToolCard ? (
                 <>
                   {/* The tool card itself rides the right lane (`command` below);
@@ -27811,11 +28451,22 @@ export function App() {
                       scope={parameterScope.scope}
                       anchorRef={keypadAnchorRef}
                       onDimensionModeChange={setCylinderDimensionMode}
-                      onPreview={(value) => {
+                      {...(keypad.kind === 'extrude'
+                        ? { onEntryError: setRegionExtrudeEntryError }
+                        : {})}
+                      onPreview={(value, raw) => {
                         if (
                           keypad.kind === 'sketch-dimension' ||
                           keypad.kind === 'sketch-edit'
                         ) {
+                          return;
+                        }
+                        if (keypad.kind === 'extrude') {
+                          // An expression previews as itself, so a Done
+                          // pressed with the keypad still open stores it.
+                          const valueId = keypad.commandValueId ?? '';
+                          moveRegionExtrudeHandle(valueId, value);
+                          setRegionExtrudeValue(valueId, value, raw, true);
                           return;
                         }
                         offsetSetterRef.current?.(value);
@@ -27865,6 +28516,19 @@ export function App() {
                         }
                         // Expressions stay parametric in the stored feature.
                         const isExpression = !Number.isFinite(Number(raw));
+                        if (keypad.kind === 'extrude') {
+                          // A value of the Extrude's bar: Enter sets it, and
+                          // Done (or Enter again) creates the extrusion.
+                          const valueId = keypad.commandValueId ?? '';
+                          moveRegionExtrudeHandle(valueId, value);
+                          setRegionExtrudeValue(
+                            valueId,
+                            value,
+                            isExpression ? raw : undefined,
+                            true
+                          );
+                          return;
+                        }
                         if (keypad.kind === 'edge') {
                           handleEdgeCommit(
                             value,
@@ -28026,15 +28690,6 @@ export function App() {
           hideSketchToolCard || calloutOperationModel ? null : (
             <ToolCard
               model={contextualToolCard}
-              focusRequest={
-                selectedProfiles === extrudeCommandProfiles.current &&
-                selectedProfiles
-              }
-              focusReady={
-                !geometryBusy &&
-                (interaction.mode !== 'region' ||
-                  interaction.phase !== 'validating')
-              }
               selectAllEdges={
                 interaction.mode === 'edges' &&
                 edgeModifierBody?.topology &&
@@ -28061,75 +28716,6 @@ export function App() {
                   : undefined
               }
               onVerb={(id) => launchTool(id.slice('tool:'.length) as ToolId)}
-              children={
-                interaction.mode === 'region' ? (
-                  <ExtrudeForm
-                    key={`extrude-${interaction.target.sketchId}`}
-                    creating
-                    initial={{
-                      name: 'Extrude',
-                      sketchId: interaction.target.sketchId as SketchId,
-                      distance: 0
-                    }}
-                    sketches={sketchOptions}
-                    scope={parameterScope.scope}
-                    units={doc.units}
-                    profileCount={Math.max(1, selectedProfiles.length)}
-                    bodies={doc.bodyOrder.flatMap((bodyId) => {
-                      const body = doc.derived.bodyRepresentations[bodyId];
-                      return body && !body.consumed
-                        ? [{ bodyId, name: body.name }]
-                        : [];
-                    })}
-                    disabled={
-                      geometryBusy || interaction.phase === 'validating'
-                    }
-                    submitLabel="Create"
-                    distanceSetterRef={regionDistanceSetter}
-                    toFacePicking={extrudeToFacePicking(
-                      'create',
-                      interaction.target.sketchId as SketchId
-                    )}
-                    onDraft={(value) => {
-                      regionExtrudeSettings.current = value;
-                      dispatchInteraction({
-                        type: 'set-extrude-choice',
-                        choice: value.choice
-                      });
-                    }}
-                    onPreview={(value) => {
-                      setLastValidPreview(null);
-                      if (!value) {
-                        regionExtrudePreview.clear();
-                        return;
-                      }
-                      const distance = resolveDocumentValue(value.distance);
-                      offsetSetterRef.current?.(distance);
-                      dispatchInteraction({
-                        type: 'set-extrude-choice',
-                        choice: value.choice
-                      });
-                      // The last preview stays up until this one lands:
-                      // clearing first showed the bare sketch for a whole
-                      // rebuild on every keystroke.
-                      regionExtrudePreview.replace(distance);
-                    }}
-                    onSubmit={(value) => {
-                      regionExtrudeSettings.current = value;
-                      handleRegionExtrudeCommit(
-                        resolveDocumentValue(value.distance),
-                        value.distance
-                      );
-                    }}
-                    onCancel={() => {
-                      if (cancelPendingRegionExtrusion()) return;
-                      regionExtrudePreview.clear();
-                      dispatchInteraction({ type: 'clear' });
-                      cancelPanel();
-                    }}
-                  />
-                ) : undefined
-              }
               onAction={handleSelectionAction}
               onEditCulprit={handleEditCulpritFeature}
               onViewDetails={() => setActivityLogOpen(true)}
@@ -28300,7 +28886,6 @@ export function App() {
                 }
                 bodyRepresentations={representations}
                 scope={parameterScope.scope}
-                sketches={sketchOptions}
                 bodies={bodyOptions}
                 units={doc.units}
                 commandSession={commandSession}
@@ -28313,8 +28898,6 @@ export function App() {
                 massPropertiesDocument={previewDoc ?? doc}
                 massPropertiesWorker={geometry}
                 onLaunchTool={launchTool}
-                onPreviewBodyAppearance={previewBodyAppearance}
-                onCommitBodyAppearance={commitBodyAppearance}
                 onCancel={cancelPanel}
                 onClose={() => {
                   // Close keeps the pick but drops Edit face's request, or the
@@ -28442,7 +29025,9 @@ export function App() {
                   );
                 }}
                 onEditModelingFeature={openModelingFeatureEditor}
-                inPlaceEditFeatureId={inPlace.editing?.featureId ?? null}
+                inPlaceEditFeatureId={
+                  inPlace.editing?.featureId ?? extrudeEdit?.featureId ?? null
+                }
                 onEditSketchInViewport={(feature) => {
                   if (feature.data.featureKind !== 'sketch' || !doc) {
                     return;
@@ -28464,23 +29049,6 @@ export function App() {
                     );
                   }
                 }}
-                extrudeBusy={geometryBusy}
-                onApplyExtrude={applyExtrudeForm}
-                onPreviewExtrude={previewExtrudeForm}
-                extrudeTargets={availableExtrudeTargets}
-                extrudeToFacePicking={(feature) =>
-                  extrudeToFacePicking(
-                    'edit',
-                    feature.data.featureKind === 'extrude'
-                      ? feature.data.sketchId
-                      : ('' as SketchId),
-                    extrudeToFaceUnresolved(
-                      feature,
-                      attributedFeatureWarnings()
-                    ),
-                    feature.featureId
-                  )
-                }
                 onApplyTransform={(feature, value) =>
                   applyValidatedFeature(
                     commandFactories.updateFeature(
@@ -28676,6 +29244,153 @@ export function App() {
                   onDone={() => inPlace.done()}
                   onCancel={cancelInPlaceCommand}
                 />
+              ) : extrudeEditFeature &&
+                extrudeEditInitialDraft &&
+                extrudeEdit &&
+                !modelingLocked ? (
+                <ExtrudeCommand
+                  key={`extrude-edit-${extrudeEdit.featureId}-${extrudeEdit.generation}`}
+                  editing
+                  initial={extrudeEditInitialDraft}
+                  scope={parameterScope.scope}
+                  units={doc.units}
+                  profileCount={Math.max(
+                    1,
+                    extrudeEditFeature.data.featureKind === 'extrude'
+                      ? (extrudeEditFeature.data.profiles?.length ?? 1)
+                      : 1
+                  )}
+                  bodies={availableExtrudeTargets}
+                  disabled={geometryBusy}
+                  note={featureFormError}
+                  entryRefusal={
+                    keypad?.kind === 'extrude' && regionExtrudeEntryError
+                      ? `${keypad.label}: ${regionExtrudeEntryError}.`
+                      : null
+                  }
+                  distanceSetterRef={regionDistanceSetter}
+                  commandRef={regionExtrudeCommandRef}
+                  toFacePicking={extrudeToFacePicking(
+                    'edit',
+                    extrudeEditInitialDraft.sketchId,
+                    extrudeToFaceUnresolved(
+                      extrudeEditFeature,
+                      attributedFeatureWarnings()
+                    ),
+                    extrudeEditFeature.featureId
+                  )}
+                  onOpenValue={(valueId, at) =>
+                    openRegionExtrudeKeypad(valueId, at)
+                  }
+                  onDraft={(state) =>
+                    setExtrudeDraftState({
+                      session: `edit:${extrudeEdit.featureId}:${extrudeEdit.generation}`,
+                      state
+                    })
+                  }
+                  name={extrudeEditFeature.name}
+                  // The feature's name as it is now: a rename since the
+                  // edit opened is never written back over.
+                  onPreview={(value) =>
+                    previewExtrudeForm(
+                      extrudeEditFeature,
+                      value && { ...value, name: extrudeEditFeature.name }
+                    )
+                  }
+                  onSubmit={(value) =>
+                    applyExtrudeForm(extrudeEditFeature, {
+                      ...value,
+                      name: extrudeEditFeature.name
+                    })
+                  }
+                  onCancel={cancelExtrudeEdit}
+                />
+              ) : interaction.mode === 'region' && !modelingLocked ? (
+                <ExtrudeCommand
+                  key={`extrude-${interaction.target.sketchId}`}
+                  initial={{
+                    name: 'Extrude',
+                    sketchId: interaction.target.sketchId as SketchId,
+                    distance: 0
+                  }}
+                  scope={parameterScope.scope}
+                  units={doc.units}
+                  profileCount={Math.max(1, selectedProfiles.length)}
+                  bodies={doc.bodyOrder.flatMap((bodyId) => {
+                    const body = doc.derived.bodyRepresentations[bodyId];
+                    return body && !body.consumed
+                      ? [{ bodyId, name: body.name }]
+                      : [];
+                  })}
+                  disabled={geometryBusy || interaction.phase === 'validating'}
+                  entryRefusal={
+                    keypad?.kind === 'extrude' && regionExtrudeEntryError
+                      ? `${keypad.label}: ${regionExtrudeEntryError}.`
+                      : null
+                  }
+                  distanceSetterRef={regionDistanceSetter}
+                  commandRef={regionExtrudeCommandRef}
+                  toFacePicking={extrudeToFacePicking(
+                    'create',
+                    interaction.target.sketchId as SketchId
+                  )}
+                  onOpenValue={(valueId, at) =>
+                    openRegionExtrudeKeypad(valueId, at)
+                  }
+                  onDraft={(state) => {
+                    regionExtrudeSettings.current = state.value;
+                    regionDraftDistance.current = Number.isFinite(
+                      state.distance
+                    )
+                      ? state.distance
+                      : null;
+                    setExtrudeDraftState({
+                      session: `create:${interaction.target.sketchId}`,
+                      state
+                    });
+                    // A new choice is the region's to infer from, and any
+                    // change clears a refusal; a value alone is neither,
+                    // and must not rebuild the region's arrow under a drag.
+                    const current = interactionRef.current;
+                    if (
+                      current.mode !== 'region' ||
+                      current.phase === 'failed' ||
+                      JSON.stringify(current.extrudeChoice) !==
+                        JSON.stringify(state.value.choice)
+                    ) {
+                      dispatchInteraction({
+                        type: 'set-extrude-choice',
+                        choice: state.value.choice
+                      });
+                    }
+                  }}
+                  onPreview={(value) => {
+                    setLastValidPreview(null);
+                    if (!value) {
+                      regionExtrudePreview.clear();
+                      return;
+                    }
+                    const distance = resolveDocumentValue(value.distance);
+                    offsetSetterRef.current?.(distance);
+                    // The last preview stays up until this one lands:
+                    // clearing first showed the bare sketch for a whole
+                    // rebuild on every keystroke.
+                    regionExtrudePreview.replace(distance);
+                  }}
+                  onSubmit={(value) => {
+                    regionExtrudeSettings.current = value;
+                    handleRegionExtrudeCommit(
+                      resolveDocumentValue(value.distance),
+                      value.distance
+                    );
+                  }}
+                  onCancel={() => {
+                    if (cancelPendingRegionExtrusion()) return;
+                    regionExtrudePreview.clear();
+                    dispatchInteraction({ type: 'clear' });
+                    cancelPanel();
+                  }}
+                />
               ) : movePreview &&
                 !modelingLocked &&
                 !measurementDock &&
@@ -28825,7 +29540,13 @@ export function App() {
           {shareCopyChoice && (
             <SharedLinkCopyDialog
               accountEncrypts={shareCopyChoice.accountEncrypts}
+              error={shareCopyChoice.error}
+              onRetry={requestShareCopy}
               onChoose={(destination) => {
+                if (
+                  destination === 'account' &&
+                  shareCopyChoice.accountEncrypts === null
+                ) return;
                 setShareCopyChoice(null);
                 if (destination) void handleMakeShareCopy(destination);
               }}
@@ -29091,8 +29812,7 @@ export function App() {
           )}
           {meshExportOpen &&
             doc &&
-            // Stays open while hidden bodies are switched off, even when
-            // nothing visible is left, so the choice can be undone here.
+            // Keep the dialog open if the last visible body is hidden.
             (exportBodyIds.length > 0 ||
               (exportScopeInfo?.hiddenExcluded ?? 0) > 0) && (
               <ExportDialog
@@ -29103,25 +29823,12 @@ export function App() {
                       ? exportScopeLabel(exportScopeInfo)
                       : `all bodies (${exportBodyIds.length})`
                 }
-                hiddenBodies={
-                  exportScopeInfo && !exportScopeInfo.selection
-                    ? exportScopeInfo.hiddenIncluded +
-                      exportScopeInfo.hiddenExcluded
-                    : 0
-                }
-                includeHidden={exportIncludesHidden}
-                onIncludeHiddenChange={setExportIncludesHidden}
                 bodies={exportBodyIds.map((bodyId) => ({
                   bodyId,
                   name: doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId
                 }))}
                 revision={doc.version}
-                onClose={() => {
-                  setMeshExportOpen(false);
-                  // Leaving with every body hidden and left out would leave no
-                  // export to reopen this dialog from; hidden bodies come back.
-                  if (exportBodyIds.length === 0) setExportIncludesHidden(true);
-                }}
+                onClose={() => setMeshExportOpen(false)}
                 onExport={handleExportMesh}
                 onCheckQuality={handleCheckMeshQuality}
                 exportUnits={appSettings.files.exportUnits}

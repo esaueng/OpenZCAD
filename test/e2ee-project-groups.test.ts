@@ -182,9 +182,16 @@ function objectBucket() {
       const body = objects.get(key);
       return body ? { size: body.byteLength } : null;
     }),
-    delete: vi.fn(async (key: string) => {
-      objects.delete(key);
-    })
+    delete: vi.fn(async (key: string | string[]) => {
+      for (const item of typeof key === 'string' ? [key] : key)
+        objects.delete(item);
+    }),
+    list: vi.fn(async ({ prefix = '' }: { prefix?: string } = {}) => ({
+      objects: [...objects.keys()]
+        .filter((key) => key.startsWith(prefix))
+        .map((key) => ({ key })),
+      truncated: false
+    }))
   };
 }
 

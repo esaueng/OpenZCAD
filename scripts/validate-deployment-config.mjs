@@ -33,6 +33,131 @@ export const OFFICIAL = Object.freeze({
   sender: 'noreply@zcad.esau.app'
 });
 
+// End-to-end encryption flags (ADR-024), each with the flag the Worker also
+// requires before it opens anything (packages/cloudflare-adapters:
+// isE2eeProjectsEnabled, isE2eeMigrationEnabled, isE2eeReverseEnabled). A flag
+// whose prerequisite is off is inert or half-on, so the preflight refuses it.
+export const E2EE_FLAGS = Object.freeze([
+  'E2EE_KEYS_ENABLED',
+  'E2EE_PROJECTS_ENABLED',
+  'E2EE_MIGRATION_ENABLED',
+  'E2EE_REVERSE_ENABLED',
+  'E2EE_DEFAULT_ON'
+]);
+export const E2EE_FLAG_PREREQUISITES = Object.freeze([
+  ['E2EE_PROJECTS_ENABLED', 'E2EE_KEYS_ENABLED'],
+  ['E2EE_MIGRATION_ENABLED', 'E2EE_PROJECTS_ENABLED'],
+  ['E2EE_REVERSE_ENABLED', 'E2EE_MIGRATION_ENABLED'],
+  ['E2EE_DEFAULT_ON', 'E2EE_MIGRATION_ENABLED']
+]);
+// Planned Phase 8 flags (ADR-024) this release does not read. They are accepted
+// only while off, so a config prepared ahead of the release that reads them
+// passes, and one that expects them to do something now fails. The slice that
+// implements a flag moves it into E2EE_FLAGS.
+export const E2EE_PLANNED_FLAGS = Object.freeze(['E2EE_PLAINTEXT_FROZEN']);
+// The Worker's ENABLED_BOOLEAN_ENV_VALUES; any other string reads as off.
+const ENABLED_FLAG_VALUES = new Set(['1', 'true', 'yes', 'on']);
+const DISABLED_FLAG_VALUES = new Set(['0', 'false', 'no', 'off']);
+
+function editDistance(a, b) {
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i++) {
+    const current = [i];
+    for (let j = 1; j <= b.length; j++) {
+      current[j] = Math.min(
+        previous[j] + 1,
+        current[j - 1] + 1,
+        previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+    previous = current;
+  }
+  return previous[b.length];
+}
+
+function closestE2eeName(name) {
+  let best;
+  for (const candidate of [
+    ...E2EE_FLAGS,
+    ...E2EE_PLANNED_FLAGS,
+    'E2EE_CANARY_EMAILS'
+  ]) {
+    const distance = editDistance(name, candidate);
+    if (!best || distance < best.distance) best = { candidate, distance };
+  }
+  return best.candidate;
+}
+
+function flagEnabled(value) {
+  return (
+    typeof value === 'string' &&
+    ENABLED_FLAG_VALUES.has(value.trim().toLowerCase())
+  );
+}
+
+/**
+ * Refuses E2EE flag values the Worker would misread, names it does not read
+ * (a misspelled flag would otherwise stay silently off), and combinations it
+ * would never open. A JSON boolean (`true` without quotes) reaches the Worker as a
+ * boolean, which it reads as off. With `canaryAllowed` (the official
+ * deployment), encrypted projects may be on while E2EE_KEYS_ENABLED is off:
+ * the Worker then opens them only to accounts on the E2EE_CANARY_EMAILS
+ * secret, which this offline check cannot see.
+ */
+function validateE2eeFlags(config, { canaryAllowed }) {
+  const errors = [];
+  const vars = config.vars ?? {};
+  for (const name of Object.keys(vars)) {
+    if (!name.startsWith('E2EE_') || E2EE_FLAGS.includes(name)) continue;
+    if (name === 'E2EE_CANARY_EMAILS') continue;
+    if (E2EE_PLANNED_FLAGS.includes(name)) {
+      const value = vars[name];
+      const normalized =
+        typeof value === 'string' ? value.trim().toLowerCase() : '';
+      if (!DISABLED_FLAG_VALUES.has(normalized)) {
+        errors.push(
+          `vars.${name} is planned and not read by this release; set it to "false" or remove it`
+        );
+      }
+      continue;
+    }
+    errors.push(
+      `vars.${name} is not an end-to-end encryption flag this release reads; did you mean ${closestE2eeName(name)}?`
+    );
+  }
+  for (const flag of E2EE_FLAGS) {
+    if (!Object.hasOwn(vars, flag)) continue;
+    const value = vars[flag];
+    const normalized =
+      typeof value === 'string' ? value.trim().toLowerCase() : '';
+    if (
+      !ENABLED_FLAG_VALUES.has(normalized) &&
+      !DISABLED_FLAG_VALUES.has(normalized)
+    ) {
+      errors.push(`vars.${flag} must be the string "true" or "false"`);
+    }
+  }
+  for (const [flag, prerequisite] of E2EE_FLAG_PREREQUISITES) {
+    if (!flagEnabled(vars[flag]) || flagEnabled(vars[prerequisite])) continue;
+    if (canaryAllowed && prerequisite === 'E2EE_KEYS_ENABLED') continue;
+    errors.push(`vars.${flag} requires vars.${prerequisite} to be "true"`);
+  }
+  if (
+    flagEnabled(vars.E2EE_DEFAULT_ON) &&
+    flagEnabled(vars.E2EE_REVERSE_ENABLED)
+  ) {
+    errors.push(
+      'vars.E2EE_REVERSE_ENABLED must be "false" while vars.E2EE_DEFAULT_ON is "true"'
+    );
+  }
+  if (Object.hasOwn(vars, 'E2EE_CANARY_EMAILS')) {
+    errors.push(
+      'vars.E2EE_CANARY_EMAILS must not list accounts in the config; set it with wrangler secret put'
+    );
+  }
+  return errors;
+}
+
 function parseConfig(path) {
   let source;
   try {
@@ -244,7 +369,10 @@ export function validateDeploymentConfig(
     return errors;
   }
   const allowPlaceholders = target === 'example';
-  const errors = validateCommon(config, { allowPlaceholders });
+  const errors = [
+    ...validateCommon(config, { allowPlaceholders }),
+    ...validateE2eeFlags(config, { canaryAllowed: target === 'official' })
+  ];
   const db = binding(config, 'd1_databases', 'DB');
   const bucket = binding(config, 'r2_buckets', 'ARTIFACTS');
   const email = binding(config, 'send_email', 'EMAIL', 'name');

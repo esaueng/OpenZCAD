@@ -32,6 +32,7 @@ import {
   encodeShareDelegation,
   encodeShareKeyWrap,
   encodeShareLinkForget,
+  encodeShareLinkRegistration,
   encodeShareLinkGrant,
   encodeShareLinkTombstone,
   openShareKey,
@@ -41,12 +42,14 @@ import {
   signShareDelegation,
   signShareKeyWrap,
   signShareLinkForget,
+  signShareLinkRegistration,
   signShareLinkGrant,
   signShareLinkTombstone,
   verifyShareAuthority,
   verifyShareDelegation,
   verifyShareKeyWrap,
   verifyShareLinkForget,
+  verifyShareLinkRegistration,
   verifyShareLinkSet,
   verifySharedSnapshot,
   type ShareAuthorityStatement,
@@ -1077,5 +1080,82 @@ describe('link forgets', () => {
       () => encodeShareLinkForget({ ...value, shareId: '' }),
       'invalid-argument'
     );
+  });
+});
+
+describe('link registrations', () => {
+  it('signs a registration for one device and every field the server stores', async () => {
+    const w = await world();
+    const value = {
+      projectId: 'proj_1',
+      shareId: 'share_1',
+      tokenHash: patternBytes(32, 3),
+      mode: 'view' as const,
+      shareKeyHash: w.shareKeyHash,
+      ownerIdentityKeyHash: w.identity.hash,
+      keyEpoch: 4,
+      wrapped: patternBytes(41)
+    };
+    // "OZN" | 1 | u8 6 "proj_1" | u8 7 "share_1" | 32 token hash | u8 mode
+    // | 32 key hash | 32 owner hash | u32 4 | u8 41 + wrap
+    const encoded = encodeShareLinkRegistration(value);
+    expect(encoded.subarray(0, 4)).toEqual(Uint8Array.of(0x4f, 0x5a, 0x4e, 1));
+    expect(encoded.byteLength).toBe(4 + 7 + 8 + 32 + 1 + 32 + 32 + 4 + 42);
+    expect(encoded[4 + 7 + 8 + 32]).toBe(1);
+    expect(
+      encodeShareLinkRegistration({ ...value, mode: 'tweak' })[4 + 7 + 8 + 32]
+    ).toBe(2);
+    const signature = await signShareLinkRegistration(
+      w.ownerDevice.pair.privateKey,
+      value
+    );
+    expect(signature.byteLength).toBe(65);
+    expect(
+      await verifyShareLinkRegistration(w.ownerDevice.raw, value, signature)
+    ).toBe(true);
+    // Another device or any other field: not this signature.
+    expect(
+      await verifyShareLinkRegistration(w.stranger.raw, value, signature)
+    ).toBe(false);
+    for (const changed of [
+      { ...value, projectId: 'proj_2' },
+      { ...value, shareId: 'share_2' },
+      { ...value, tokenHash: patternBytes(32, 4) },
+      { ...value, mode: 'tweak' as const },
+      { ...value, shareKeyHash: patternBytes(32, 5) },
+      { ...value, ownerIdentityKeyHash: patternBytes(32, 6) },
+      { ...value, keyEpoch: 5 },
+      { ...value, wrapped: patternBytes(41, 7) }
+    ]) {
+      expect(
+        await verifyShareLinkRegistration(w.ownerDevice.raw, changed, signature)
+      ).toBe(false);
+    }
+    // A key-wrap or forget signature over the same link does not count.
+    const wrap = await signShareKeyWrap(w.ownerDevice.pair.privateKey, {
+      projectId: 'proj_1',
+      shareId: 'share_1',
+      keyEpoch: 4,
+      wrapped: patternBytes(41)
+    });
+    const forget = await signShareLinkForget(w.ownerDevice.pair.privateKey, {
+      projectId: 'proj_1',
+      shareId: 'share_1',
+      keyEpoch: 4
+    });
+    for (const other of [wrap, forget]) {
+      expect(
+        await verifyShareLinkRegistration(w.ownerDevice.raw, value, other)
+      ).toBe(false);
+    }
+    for (const bad of [
+      { ...value, tokenHash: patternBytes(31) },
+      { ...value, mode: 'edit' as never },
+      { ...value, keyEpoch: -1 },
+      { ...value, wrapped: new Uint8Array(0) },
+      { ...value, shareId: '' }
+    ]) {
+      throwsCode(() => encodeShareLinkRegistration(bad), 'invalid-argument');
+    }
   });
 });

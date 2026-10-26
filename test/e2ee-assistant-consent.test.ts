@@ -78,7 +78,8 @@ async function seed(
     put: vi.fn(async () => undefined),
     get: vi.fn(async () => null),
     head: vi.fn(async () => null),
-    delete: vi.fn(async () => undefined)
+    delete: vi.fn(async () => undefined),
+    list: vi.fn(async () => ({ objects: [], truncated: false }))
   };
   const env = {
     ENVIRONMENT: 'development',

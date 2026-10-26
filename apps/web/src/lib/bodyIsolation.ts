@@ -17,9 +17,27 @@ export interface IsolationStep {
   readonly entered: boolean;
 }
 
+/** An isolation remains active only while its body is alone in its own view. */
+export function activeIsolatedBodyId(
+  bodyIds: readonly string[],
+  hidden: ReadonlySet<string>,
+  localHidden: ReadonlySet<string>,
+  recorded: BodyIsolation | null
+): string | null {
+  if (
+    !recorded ||
+    !sameSet(recorded.appliedHidden, localHidden) ||
+    !bodyIds.includes(recorded.bodyId) ||
+    hidden.has(recorded.bodyId) ||
+    bodyIds.some((id) => id !== recorded.bodyId && !hidden.has(id))
+  )
+    return null;
+  return recorded.bodyId;
+}
+
 /**
- * Isolate `bodyId`, or leave isolation when it is already the only visible
- * body. `hidden` is the effective hidden set (it decides whether the body is
+ * Isolate `bodyId`, or leave its recorded isolation when it is alone.
+ * `hidden` is the effective hidden set (it decides whether the body is
  * already alone); `localHidden` is the user-owned set being replaced.
  */
 export function toggleBodyIsolation(
@@ -37,7 +55,7 @@ export function toggleBodyIsolation(
   const others = bodyIds.filter((id) => id !== bodyId);
   const alreadyAlone =
     !hidden.has(bodyId) && others.every((id) => hidden.has(id));
-  if (alreadyAlone) {
+  if (alreadyAlone && isolation?.bodyId === bodyId) {
     return {
       hidden: new Set(isolation?.priorHidden ?? []),
       isolation: null,

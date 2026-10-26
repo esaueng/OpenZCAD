@@ -527,6 +527,7 @@ export type StatementKind =
   | 'share link tombstone'
   | 'share key wrap'
   | 'share link forget'
+  | 'share link registration'
   | 'project invitation';
 
 /** @internal `u8 1 | r || s` over `label "v1 <kind> signature" | statement`. */
@@ -1269,12 +1270,36 @@ export async function verifyIdentityTransition(
 
 // --- Device approval grant ------------------------------------------------
 
+export const DEVICE_APPROVAL_GRANT_VERSION_1 = 1;
+/** Version 1 plus the approver's contacts head (ADR-024, verified pins). */
+export const DEVICE_APPROVAL_GRANT_VERSION_2 = 2;
+
+/**
+ * The approver's newest contacts head, carried by a version 2 grant: the
+ * entry of the account's identity-signed contacts list the approved device
+ * pins, so a server cannot show it an older list.
+ */
+export interface DeviceApprovalContactsHead {
+  /** Null when the approver has seen the list only empty. */
+  readonly head: {
+    readonly sequence: number;
+    readonly entryHash: Uint8Array;
+  } | null;
+  /**
+   * True when the approver's own pin descends from a trusted start (setting
+   * up the identity, or another approval) rather than only from what the
+   * server showed it. The approved device inherits it.
+   */
+  readonly confirmed: boolean;
+}
+
 /**
  * What an approving device tells the device it approved, signed with its
  * own device key: which identity and device-list head the new device
- * should pin, and whether it was certified there. In the compare form the
- * approver's key is authenticated by the six-digit code, so the new device
- * pins this head without trusting the server for it.
+ * should pin, whether it was certified there and, from version 2, the
+ * approver's newest contacts head. In the compare form the approver's key
+ * is authenticated by the six-digit code, so the new device pins these
+ * heads without trusting the server for them.
  */
 export interface DeviceApprovalGrant {
   readonly userId: string;
@@ -1289,6 +1314,27 @@ export interface DeviceApprovalGrant {
   /** `publicKeyHash` of the approver's signing key. */
   readonly approverKeyHash: Uint8Array;
   readonly issuedAt: number;
+  /**
+   * The approver's contacts head. Present exactly in version 2 grants;
+   * version 1 grants (older builds) carry none.
+   */
+  readonly contacts?: DeviceApprovalContactsHead;
+}
+
+const GRANT_CONTACTS_HEAD = 1;
+const GRANT_CONTACTS_CONFIRMED = 2;
+
+function isGrantContacts(value: unknown): value is DeviceApprovalContactsHead {
+  const contacts = value as DeviceApprovalContactsHead | null;
+  return (
+    typeof contacts === 'object' &&
+    contacts !== null &&
+    typeof contacts.confirmed === 'boolean' &&
+    (contacts.head === null ||
+      (typeof contacts.head === 'object' &&
+        isUint(contacts.head.sequence, MAX_U32) &&
+        isHash(contacts.head.entryHash)))
+  );
 }
 
 function encodeGrant(value: DeviceApprovalGrant): Bytes {
@@ -1301,22 +1347,40 @@ function encodeGrant(value: DeviceApprovalGrant): Bytes {
     !isHash(value.headHash) ||
     typeof value.certified !== 'boolean' ||
     !isHash(value.approverKeyHash) ||
-    !isUint(value.issuedAt, Number.MAX_SAFE_INTEGER)
+    !isUint(value.issuedAt, Number.MAX_SAFE_INTEGER) ||
+    (value.contacts !== undefined && !isGrantContacts(value.contacts))
   ) {
     throw new E2eeError('invalid-argument', 'Not a device approval grant');
   }
-  const writer = new ByteWriter().bytes(GRANT_MAGIC).u8(1);
+  const contacts = value.contacts;
+  // A grant without a contacts head keeps version 1, byte for byte.
+  const writer = new ByteWriter()
+    .bytes(GRANT_MAGIC)
+    .u8(
+      contacts
+        ? DEVICE_APPROVAL_GRANT_VERSION_2
+        : DEVICE_APPROVAL_GRANT_VERSION_1
+    );
   writeId(writer, value.userId);
   writer.bytes(value.deviceKeysHash);
   writeId(writer, value.deviceId);
-  return writer
+  writer
     .bytes(value.identityKeyHash)
     .u32(value.headSequence)
     .bytes(value.headHash)
     .u8(value.certified ? 1 : 0)
     .bytes(value.approverKeyHash)
-    .u64(value.issuedAt)
-    .finish();
+    .u64(value.issuedAt);
+  if (contacts) {
+    writer.u8(
+      (contacts.head ? GRANT_CONTACTS_HEAD : 0) |
+        (contacts.confirmed ? GRANT_CONTACTS_CONFIRMED : 0)
+    );
+    if (contacts.head) {
+      writer.u32(contacts.head.sequence).bytes(contacts.head.entryHash);
+    }
+  }
+  return writer.finish();
 }
 
 export function decodeDeviceApprovalGrant(
@@ -1327,7 +1391,10 @@ export function decodeDeviceApprovalGrant(
     throw new E2eeError('malformed', 'Not a device approval grant');
   }
   const version = reader.u8();
-  if (version !== 1) {
+  if (
+    version !== DEVICE_APPROVAL_GRANT_VERSION_1 &&
+    version !== DEVICE_APPROVAL_GRANT_VERSION_2
+  ) {
     throw new E2eeError(
       'unsupported-version',
       `Device approval grant version ${version} is not supported`
@@ -1342,6 +1409,21 @@ export function decodeDeviceApprovalGrant(
   const certifiedCode = reader.u8();
   const approverKeyHash = copyBytes(reader.bytes(HASH_BYTES));
   const issuedAt = reader.u64();
+  let contacts: DeviceApprovalContactsHead | undefined;
+  if (version === DEVICE_APPROVAL_GRANT_VERSION_2) {
+    const flags = reader.u8();
+    if (flags & ~(GRANT_CONTACTS_HEAD | GRANT_CONTACTS_CONFIRMED)) {
+      throw new E2eeError('malformed', 'Unknown grant contacts flags');
+    }
+    const head =
+      flags & GRANT_CONTACTS_HEAD
+        ? {
+            sequence: reader.u32(),
+            entryHash: copyBytes(reader.bytes(HASH_BYTES))
+          }
+        : null;
+    contacts = { head, confirmed: (flags & GRANT_CONTACTS_CONFIRMED) !== 0 };
+  }
   reader.end();
   if (certifiedCode > 1) {
     throw new E2eeError('malformed', 'Grant certified flag is not 0 or 1');
@@ -1355,7 +1437,8 @@ export function decodeDeviceApprovalGrant(
     headHash,
     certified: certifiedCode === 1,
     approverKeyHash,
-    issuedAt
+    issuedAt,
+    ...(contacts ? { contacts } : {})
   };
   try {
     encodeGrant(value);

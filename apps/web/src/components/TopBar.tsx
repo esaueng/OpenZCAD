@@ -59,6 +59,8 @@ interface TopBarProps {
   canExport: boolean;
   /** Name of the body the export will target, or null for "all bodies". */
   exportScope: string | null;
+  /** Recovery guidance when no bodies are available in the export scope. */
+  exportUnavailableReason?: string | null;
   /**
    * Why export is holding bodies back: they stand in for a feature that
    * failed to rebuild. Shown in the File menu beside the export items.
@@ -142,6 +144,7 @@ export function TopBar({
   canExport,
   exportScope,
   exportWithheld = null,
+  exportUnavailableReason = null,
   saveState,
   geometryPending = false,
   geometryFailed = false,
@@ -376,7 +379,9 @@ export function TopBar({
   const exportTitle = (format: string) =>
     canExport
       ? `Export ${exportScope ?? 'all bodies'} as ${format}${exportWithheld ? `. ${exportWithheld}` : ''}`
-      : (exportWithheld ?? 'Create a body before exporting');
+      : (exportWithheld ??
+        exportUnavailableReason ??
+        'Create a body before exporting');
   // A project that is not in the account has no room to join, so its room
   // status is `offline` — which, beside "Save to my account", read as a
   // connection problem rather than the plain fact that nothing is shared yet.
@@ -680,7 +685,9 @@ export function TopBar({
               >
                 <Upload size={13} aria-hidden="true" />
                 <span>Import CAD files…</span>
-                <small>FreeCAD · STEP · STL · 3MF · OBJ · GLB · PLY · DXF</small>
+                <small>
+                  FreeCAD · STEP · STL · 3MF · OBJ · GLB · PLY · DXF
+                </small>
               </button>
               <input
                 ref={importInputRef}

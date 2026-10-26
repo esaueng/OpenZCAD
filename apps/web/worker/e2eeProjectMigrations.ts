@@ -5,9 +5,10 @@
  * role is a state machine and a janitor. It never transforms content:
  *
  * - `POST …/migration` starts (or resumes, once a lease lapsed) a staging:
- *   owner only, a live plaintext project with no members and no pending
- *   invitations (plaintext, or encrypted ones of slice 5-3a) (decision
- *   M7), nothing staged left over. It hands the owner's device a lease. While staging, the plaintext routes refuse
+ *   owner only, a live plaintext project with no members, no pending
+ *   invitations (plaintext, or encrypted ones of slice 5-3a) and no live
+ *   encrypted share link (slice 5-10) (decision M7), nothing staged left
+ *   over. It hands the owner's device a lease. While staging, the plaintext routes refuse
  *   writes, named saves and the room with 409 PROJECT_MIGRATING
  *   (`projectFormatGate.ts`), reads keep working, and the encrypted-project
  *   routes take ciphertext for this format-1 project from the lease holder
@@ -38,7 +39,7 @@
  * Slice 7-3, the beta-only reverse path (E2EE_REVERSE_ENABLED, migration
  * 0043), runs the same machine with direction `decrypt` for an encrypted
  * project only its owner holds (no members, share links or pending
- * invitations, plaintext or encrypted, slice 5-3a) on an account whose
+ * invitations, plaintext or encrypted, slices 5-3a and 5-10) on an account whose
  * "Encrypt new projects" opt-in is off (decision D2):
  *
  * - The start locks the encrypted room; while staging, encrypted content
@@ -54,10 +55,16 @@
  *   staged plaintext save state under its id, the staged head is newer
  *   than the encrypted head, which did not move; it flips `storage_format`
  *   to 1 at the staged head, and moves the account's artifact usage from
- *   the encrypted blobs to the staged files.
+ *   the encrypted blobs to the staged files. It refuses (413, the quota
+ *   codes) when the owner's usage after it would exceed their artifact or
+ *   project storage limit, in the same statement that ends the staging's
+ *   quota exemption.
  * - The purge clears the room's encrypted ledger, then drops the groups,
  *   versions, envelopes, blobs and their R2 objects, wraps and archives a
- *   bounded step at a time, as an abandoned encrypt staging's cleanup does.
+ *   bounded step at a time, as an abandoned encrypt staging's cleanup does,
+ *   and last any staged head document the cutover left unreferenced. (A
+ *   resumed staging reuses a head equal to the journaled one rather than
+ *   staging another, `e2eeReverseStaging.ts`.)
  * - An abandon drops the staged plaintext the same way.
  *
  * Served by `handleE2eeRequest` after the key rollout gate, key-table
@@ -91,6 +98,7 @@ import {
   isE2eeProjectMigrationStorageReady,
   isE2eeProjectVersionStorageReady,
   isE2eeReverseStorageReady,
+  isE2eeShareLinkStorageReady,
   isProjectStorageFormatReady,
   type CloudflareEnv
 } from '@openzcad/cloudflare-adapters';
@@ -338,22 +346,27 @@ async function requireOwnedProject(
 
 /**
  * Which of Phase 5's sharing tables exist: encrypted invitations (slice
- * 5-3a, migration 0038). A shared check names only the ones installed.
- * Encrypted share links (slice 5-10, migration 0040) join this set when
- * that slice lands.
+ * 5-3a, migration 0038) and encrypted share links (slice 5-10, migration
+ * 0040). A shared check names only the ones installed.
  */
 interface SharingTables {
   readonly invitations: boolean;
+  readonly shareLinks: boolean;
 }
 
 async function sharingTables(db: D1Database): Promise<SharingTables> {
-  return { invitations: await isE2eeInvitationStorageReady(db) };
+  const [invitations, shareLinks] = await Promise.all([
+    isE2eeInvitationStorageReady(db),
+    isE2eeShareLinkStorageReady(db)
+  ]);
+  return { invitations, shareLinks };
 }
 
 /**
- * Pending encrypted invitations, as extra `OR` terms of a shared check
- * (aliases prefixed with `alias`). Binds: the project id and the time in
- * milliseconds for invitations.
+ * Pending encrypted invitations and live encrypted share links, as extra
+ * `OR` terms of a shared check (aliases prefixed with `alias`). Binds:
+ * the project id and the time in milliseconds for invitations, then the
+ * project id for links.
  *
  * `unboundOnly` (the encrypt direction, slice 7-4) leaves out re-add
  * invitations, which are bound to an existing member at once
@@ -365,8 +378,9 @@ function encryptedSharingSql(
   tables: SharingTables,
   options: { readonly unboundOnly?: boolean } = {}
 ): string {
-  return tables.invitations
-    ? `
+  return `${
+    tables.invitations
+      ? `
     OR EXISTS (SELECT 1 FROM e2ee_invitations ${alias}ei
                WHERE ${alias}ei.project_id = ? AND ${alias}ei.completed_at IS NULL
                  AND ${alias}ei.revoked_at IS NULL AND ${alias}ei.expires_at > ?${
@@ -375,7 +389,14 @@ function encryptedSharingSql(
                  AND ${alias}ei.accepted_by_user_id IS NULL`
                      : ''
                  })`
-    : '';
+      : ''
+  }${
+    tables.shareLinks
+      ? `
+    OR EXISTS (SELECT 1 FROM e2ee_share_links ${alias}el
+               WHERE ${alias}el.project_id = ? AND ${alias}el.revoked_at IS NULL)`
+      : ''
+  }`;
 }
 
 function encryptedSharingBinds(
@@ -383,7 +404,10 @@ function encryptedSharingBinds(
   now: number,
   tables: SharingTables
 ): unknown[] {
-  return tables.invitations ? [projectId, now] : [];
+  return [
+    ...(tables.invitations ? [projectId, now] : []),
+    ...(tables.shareLinks ? [projectId] : [])
+  ];
 }
 
 /**
@@ -421,7 +445,7 @@ async function requireUnshared(
     refuse(
       409,
       E2EE_MIGRATION_CODES.shared,
-      'This project is shared in a way encrypting it cannot carry over, such as a pending encrypted invitation. Revoke that first.'
+      'This project is shared in a way encrypting it cannot carry over, such as a pending encrypted invitation or a live encrypted share link. Revoke that first.'
     );
   }
 }
@@ -1739,7 +1763,8 @@ async function purge(ctx: Context, projectId: string): Promise<Response> {
  * Who else can open an encrypted project, by the same SQL in the checks and
  * the fences: members, pending plaintext invitations, live plaintext share
  * links and, where installed, pending encrypted invitations (migration
- * 0038). Binds: the project id three times and the time in seconds, then
+ * 0038) and live encrypted share links (migration 0040). Binds: the
+ * project id three times and the time in seconds, then
  * {@link encryptedSharingBinds}.
  */
 function decryptSharedSql(tables: SharingTables): string {
@@ -1800,8 +1825,12 @@ const DECRYPT_PURGING_FENCE = `EXISTS (SELECT 1 FROM e2ee_project_migrations dpm
   WHERE dpm.project_id = ? AND dpm.direction = 'decrypt'
     AND dpm.state = 'purging' AND dpp.storage_format = 1)`;
 
-/** The purge steps of a project turned back into plaintext, in order. */
-const DECRYPT_PURGE_STEPS = ['room', 'encrypted'] as const;
+/**
+ * The purge steps of a project turned back into plaintext, in order: the
+ * room's encrypted ledger, the encrypted rows and objects, then any staged
+ * plaintext document object the cutover left unreferenced.
+ */
+const DECRYPT_PURGE_STEPS = ['room', 'encrypted', 'superseded'] as const;
 type DecryptPurgeStep = (typeof DECRYPT_PURGE_STEPS)[number];
 
 /** Retained encrypted save states without a staged plaintext one. */
@@ -2063,6 +2092,114 @@ async function stagedPlaintextCounts(
   };
 }
 
+/** A SQL condition with its binds. */
+interface Condition {
+  readonly sql: string;
+  readonly binds: readonly unknown[];
+}
+
+/**
+ * The owner's limits as a decrypt cutover leaves them. Staged files and
+ * documents count toward nothing while staging (migration 0043), so a lease
+ * holder could stage more than the encrypted project held; the cutover,
+ * which ends that exemption, must not publish it over quota. Each condition
+ * holds when the cutover would go over a limit; the cutover's own statement
+ * carries their negation, so nothing between the check and the batch can
+ * move them, and the refusal names which one held.
+ *
+ * - Files: the account's artifact usage after the cutover (its finalized
+ *   and reserved bytes, plus the staged files, less the encrypted blobs it
+ *   stops counting, as the cutover's usage update computes it) over the
+ *   limit, when the cutover raises it (migration 0022's rule: what does
+ *   not grow the usage passes).
+ * - Documents: the owner's project storage once this project leaves the
+ *   staged view (every document object and storage asset of their projects
+ *   not staged for decryption, this one's included) over the limit, as
+ *   migration 0043's insert triggers sum it.
+ *
+ * Defaults as the triggers': 2 GiB for an account without its own limit.
+ */
+function decryptCutoverQuota(
+  projectId: string,
+  userId: string
+): { files: Condition; storage: Condition } {
+  const stagedFiles = `(SELECT COALESCE(SUM(qa.bytes), 0) FROM artifacts qa
+    WHERE qa.project_id = ?)`;
+  const blobs = `(SELECT COALESCE(SUM(qb.ciphertext_bytes), 0)
+    FROM e2ee_content_blobs qb WHERE qb.project_id = ?)`;
+  const counted = (table: string, alias: string) =>
+    `COALESCE((SELECT SUM(${alias}.stored_bytes) FROM ${table} ${alias}
+      JOIN projects ${alias}p ON ${alias}p.id = ${alias}.project_id
+      WHERE ${alias}p.user_id = ?
+        AND (${alias}p.id = ? OR ${alias}p.id NOT IN (
+          SELECT project_id FROM e2ee_decrypt_staged_projects))), 0)`;
+  return {
+    files: {
+      sql: `(${stagedFiles} > ${blobs}
+        AND COALESCE((SELECT qu.finalized_bytes + qu.reserved_bytes
+                      FROM artifact_account_usage qu
+                      WHERE qu.owner_user_id = ?), 0)
+            + ${stagedFiles} - ${blobs}
+          > COALESCE((SELECT artifact_limit_bytes FROM users WHERE id = ?),
+                     2147483648))`,
+      binds: [projectId, projectId, userId, projectId, projectId, userId]
+    },
+    storage: {
+      sql: `(${counted('project_document_objects', 'qo')}
+        + ${counted('project_storage_assets', 'qs')}
+        > COALESCE((SELECT project_storage_limit_bytes FROM users WHERE id = ?),
+                   2147483648))`,
+      binds: [userId, projectId, userId, projectId, userId]
+    }
+  };
+}
+
+/**
+ * Refuses with the account's quota code when a decrypt cutover would go
+ * over the owner's limits (`decryptCutoverQuota`), as an ordinary upload
+ * or save over them is refused: 413 ARTIFACT_QUOTA_EXCEEDED or
+ * PROJECT_STORAGE_QUOTA with the limit. Nothing is changed: the project
+ * stays encrypted, and its staging stays in place to be abandoned.
+ */
+async function refuseOverQuota(
+  db: D1Database,
+  projectId: string,
+  userId: string
+): Promise<void> {
+  const quota = decryptCutoverQuota(projectId, userId);
+  const row = await db
+    .prepare(
+      `SELECT ${quota.files.sql} AS files, ${quota.storage.sql} AS storage,
+              (SELECT artifact_limit_bytes FROM users WHERE id = ?)
+                AS artifact_limit,
+              (SELECT project_storage_limit_bytes FROM users WHERE id = ?)
+                AS storage_limit`
+    )
+    .bind(...quota.files.binds, ...quota.storage.binds, userId, userId)
+    .first<{
+      files: number;
+      storage: number;
+      artifact_limit: number | null;
+      storage_limit: number | null;
+    }>();
+  if (row?.files) {
+    refuse(
+      413,
+      'ARTIFACT_QUOTA_EXCEEDED',
+      'Your account does not have room for this project’s files as plaintext. Nothing was changed; the project stays encrypted.',
+      { limitBytes: row.artifact_limit ?? 2147483648 }
+    );
+  }
+  if (row?.storage) {
+    refuse(
+      413,
+      'PROJECT_STORAGE_QUOTA',
+      'Your account does not have project storage left for this project as plaintext. Nothing was changed; the project stays encrypted.',
+      { limitBytes: row.storage_limit ?? 2147483648 }
+    );
+  }
+}
+
 async function cutoverDecrypt(
   ctx: Context,
   projectId: string,
@@ -2144,6 +2281,8 @@ async function cutoverDecrypt(
       }
     );
   }
+  await refuseOverQuota(ctx.db, projectId, ctx.userId);
+  const quota = decryptCutoverQuota(projectId, ctx.userId);
   const counts = await stagedPlaintextCounts(ctx.db, projectId);
   const nowIso = new Date(now).toISOString();
   const cut = {
@@ -2175,7 +2314,9 @@ async function cutoverDecrypt(
            AND EXISTS (SELECT 1 FROM project_document_objects
                        WHERE id = ? AND project_id = ? AND state = 'committed')
            AND NOT EXISTS (${UNCOVERED_DECRYPT_SQL})
-           AND ${device.sql}`
+           AND ${device.sql}
+           AND NOT ${quota.files.sql}
+           AND NOT ${quota.storage.sql}`
       )
       .bind(
         counts.revisions,
@@ -2199,7 +2340,9 @@ async function cutoverDecrypt(
         head.objectId,
         projectId,
         projectId,
-        ...device.binds
+        ...device.binds,
+        ...quota.files.binds,
+        ...quota.storage.binds
       ),
     // The format flips with the staged head; the encrypted rows go in the
     // purge.
@@ -2264,6 +2407,8 @@ async function cutoverDecrypt(
     if (await deviceListMoved(ctx.db, ctx.userId, device.key)) {
       refuseDeviceListMoved();
     }
+    // A file or document landed meanwhile that takes the owner over a limit.
+    await refuseOverQuota(ctx.db, projectId, ctx.userId);
     refuse(
       409,
       E2EE_MIGRATION_CODES.stale,
@@ -2353,12 +2498,82 @@ async function dropStagedPlaintext(
   return { complete: true, objects };
 }
 
+/**
+ * A document object of a decrypted project (as `o`) that a staging wrote and
+ * the cutover left unreferenced: a head staged before a newer one replaced
+ * it. Neither the project row nor a save state names it, and it predates
+ * the cutover, so no plaintext save made since is touched. No binds.
+ */
+const SUPERSEDED_STAGED_OBJECT_SQL = `NOT EXISTS (
+    SELECT 1 FROM projects sp WHERE sp.document_object_id = o.id)
+  AND NOT EXISTS (
+    SELECT 1 FROM revisions sr WHERE sr.document_object_id = o.id)
+  AND o.created_at <= (SELECT sm.cutover_at FROM e2ee_project_migrations sm
+                       WHERE sm.project_id = o.project_id)`;
+
+/**
+ * One bounded step of dropping a decrypted project's superseded staged
+ * document objects (`SUPERSEDED_STAGED_OBJECT_SQL`), which would otherwise
+ * count toward the owner's project storage with nothing reading them:
+ * their R2 objects first (one another project names is kept), then rows.
+ */
+async function dropSupersededStagedObjects(
+  db: D1Database,
+  env: MigrationEnv,
+  projectId: string
+): Promise<StepOutcome> {
+  const { results } = await db
+    .prepare(
+      `SELECT o.id, o.object_key FROM project_document_objects o
+       WHERE o.project_id = ? AND ${SUPERSEDED_STAGED_OBJECT_SQL}
+       ORDER BY o.id LIMIT ?`
+    )
+    .bind(projectId, MIGRATION_STEP_OBJECTS + 1)
+    .all<{ id: string; object_key: string }>();
+  const rows = (results ?? []).slice(0, MIGRATION_STEP_OBJECTS);
+  if (rows.length === 0) return { more: false, rows: 0, objects: 0 };
+  const bucket = projectStorageBucket(env);
+  if (!bucket) {
+    refuse(
+      503,
+      'PROJECT_STORAGE_UNAVAILABLE',
+      'Project storage is unavailable.'
+    );
+  }
+  const shared = await keysInUseElsewhere(
+    db,
+    projectId,
+    rows.map((row) => row.object_key)
+  );
+  const owned = rows.filter((row) => !shared.has(row.object_key));
+  // Objects first: a failed delete keeps the rows, so a retry finds them.
+  await Promise.all(owned.map((row) => bucket.delete(row.object_key)));
+  await runBatch(db, [
+    db
+      .prepare(
+        `DELETE FROM project_document_objects AS o
+         WHERE o.project_id = ? AND o.id IN (SELECT value FROM json_each(?))
+           AND ${SUPERSEDED_STAGED_OBJECT_SQL}
+           AND ${DECRYPT_PURGING_FENCE}`
+      )
+      .bind(projectId, JSON.stringify(rows.map((row) => row.id)), projectId)
+  ]);
+  return {
+    more: (results ?? []).length > MIGRATION_STEP_OBJECTS,
+    rows: rows.length,
+    objects: owned.length
+  };
+}
+
 async function decryptPurgeStep(
   db: D1Database,
   env: MigrationEnv,
   projectId: string,
   step: DecryptPurgeStep
 ): Promise<StepOutcome> {
+  if (step === 'superseded') {
+    return dropSupersededStagedObjects(db, env, projectId);
+  }
   if (step === 'room') {
     let cleared: boolean;
     try {
@@ -2927,19 +3142,37 @@ export async function projectMigrationErasureStatements(
  * them. Otherwise nothing could finish or abandon it either: its staged
  * plaintext, exempt from quota, would linger beside the ciphertext, and
  * while the global flags stay on its encrypted writes stay refused.
+ *
+ * Phase 8, slice 8-1: `defaultOn` (the account-scoped `isE2eeDefaultOn`,
+ * given only while E2EE_DEFAULT_ON is on) names the owners for whom the
+ * reverse path is closed for good. Their decrypt stagings are abandoned
+ * whatever their lease, since nothing could finish them: the cutover and
+ * the staging writes refuse them already, so a lease holder could only
+ * renew it.
  */
 export async function sweepProjectMigrations(
   env: MigrationEnv,
   enabled: boolean,
   eligible: (email: string | undefined, direction: string) => boolean = () =>
     true,
-  now = Date.now()
+  now = Date.now(),
+  defaultOn?: (email: string | undefined) => boolean
 ): Promise<void> {
   const db = env.DB;
   if (!enabled || !db) return;
   try {
     if (!(await isE2eeProjectMigrationStorageReady(db))) return;
     const withdrawn = await abandonWithdrawnStagings(db, eligible, now);
+    if (defaultOn && withdrawn.length < MIGRATION_SWEEP_ROWS) {
+      withdrawn.push(
+        ...(await abandonClosedDecryptStagings(
+          db,
+          defaultOn,
+          now,
+          MIGRATION_SWEEP_ROWS - withdrawn.length
+        ))
+      );
+    }
     const { results } = await db
       .prepare(
         `SELECT project_id, state, direction FROM e2ee_project_migrations
@@ -2985,8 +3218,22 @@ export async function sweepProjectMigrations(
   }
 }
 
-/** Staging rows with a lapsed lease one sweep weighs for eligibility. */
+/** Staging rows with a lapsed lease one page of the sweep weighs. */
 const MIGRATION_SWEEP_CANDIDATES = 50;
+/**
+ * Pages of {@link MIGRATION_SWEEP_CANDIDATES} one sweep reads at most
+ * (#914 follow-up). A staging whose owner may still migrate stays lapsed
+ * until the owner's browser returns, so a full page of those must not
+ * hide a withdrawn one behind it: the sweep pages past them.
+ */
+const MIGRATION_SWEEP_CANDIDATE_PAGES = 10;
+
+type SweepCandidate = {
+  project_id: string;
+  direction: string;
+  updated_at: string;
+  email: string | null;
+};
 
 /**
  * Abandons, a few per sweep, the stagings with a lapsed lease whose owner
@@ -2994,24 +3241,139 @@ const MIGRATION_SWEEP_CANDIDATES = 50;
  * the route's own move, fenced on the row still staging with its lease
  * lapsed, so an owner admitted again who took a fresh lease meanwhile
  * keeps it. Returns the rows it abandoned, for the sweep to clean up.
+ *
+ * Candidates are read oldest first, keyset-paged on (`updated_at`,
+ * `project_id`) for at most {@link MIGRATION_SWEEP_CANDIDATE_PAGES} pages,
+ * until {@link MIGRATION_SWEEP_ROWS} are abandoned or none are left.
  */
 async function abandonWithdrawnStagings(
   db: D1Database,
   eligible: (email: string | undefined, direction: string) => boolean,
   now: number
 ): Promise<{ project_id: string; state: string; direction: string }[]> {
-  const { results } = await db
-    .prepare(
-      `SELECT m.project_id, m.direction, u.email FROM e2ee_project_migrations m
+  const select = `SELECT m.project_id, m.direction, m.updated_at, u.email
+       FROM e2ee_project_migrations m
        LEFT JOIN users u ON u.id = m.owner_user_id
-       WHERE m.state = 'staging' AND COALESCE(m.lease_expires_at, 0) <= ?
-       ORDER BY m.updated_at LIMIT ?`
-    )
-    .bind(now, MIGRATION_SWEEP_CANDIDATES)
-    .all<{ project_id: string; direction: string; email: string | null }>();
+       WHERE m.state = 'staging' AND COALESCE(m.lease_expires_at, 0) <= ?`;
+  const order = 'ORDER BY m.updated_at, m.project_id LIMIT ?';
   const abandoned: { project_id: string; state: string; direction: string }[] =
     [];
-  for (const row of results ?? []) {
+  let after: SweepCandidate | undefined;
+  for (
+    let page = 0;
+    page < MIGRATION_SWEEP_CANDIDATE_PAGES &&
+    abandoned.length < MIGRATION_SWEEP_ROWS;
+    page++
+  ) {
+    const { results } = await (
+      after
+        ? db
+            .prepare(
+              `${select}
+         AND (m.updated_at > ? OR (m.updated_at = ? AND m.project_id > ?))
+       ${order}`
+            )
+            .bind(
+              now,
+              after.updated_at,
+              after.updated_at,
+              after.project_id,
+              MIGRATION_SWEEP_CANDIDATES
+            )
+        : db.prepare(`${select} ${order}`).bind(now, MIGRATION_SWEEP_CANDIDATES)
+    ).all<SweepCandidate>();
+    const candidates = results ?? [];
+    await abandonIneligible(db, candidates, eligible, now, abandoned);
+    if (candidates.length < MIGRATION_SWEEP_CANDIDATES) break;
+    after = candidates[candidates.length - 1];
+  }
+  return abandoned;
+}
+
+/**
+ * Abandons, a few per sweep, the decrypt stagings whose owner `defaultOn`
+ * admits (slice 8-1), leased or not. The abandon is fenced on the row still
+ * being a decrypt staging, so a staging that cut over meanwhile is kept.
+ * Candidates are read oldest first, keyset-paged like
+ * {@link abandonWithdrawnStagings}. Returns the rows it abandoned, for the
+ * sweep to drop their staged plaintext.
+ */
+async function abandonClosedDecryptStagings(
+  db: D1Database,
+  defaultOn: (email: string | undefined) => boolean,
+  now: number,
+  limit: number
+): Promise<{ project_id: string; state: string; direction: string }[]> {
+  const select = `SELECT m.project_id, m.direction, m.updated_at, u.email
+       FROM e2ee_project_migrations m
+       LEFT JOIN users u ON u.id = m.owner_user_id
+       WHERE m.state = 'staging' AND m.direction = 'decrypt'`;
+  const order = 'ORDER BY m.updated_at, m.project_id LIMIT ?';
+  const abandoned: { project_id: string; state: string; direction: string }[] =
+    [];
+  let after: SweepCandidate | undefined;
+  for (
+    let page = 0;
+    page < MIGRATION_SWEEP_CANDIDATE_PAGES && abandoned.length < limit;
+    page++
+  ) {
+    const { results } = await (
+      after
+        ? db
+            .prepare(
+              `${select}
+         AND (m.updated_at > ? OR (m.updated_at = ? AND m.project_id > ?))
+       ${order}`
+            )
+            .bind(
+              after.updated_at,
+              after.updated_at,
+              after.project_id,
+              MIGRATION_SWEEP_CANDIDATES
+            )
+        : db.prepare(`${select} ${order}`).bind(MIGRATION_SWEEP_CANDIDATES)
+    ).all<SweepCandidate>();
+    const candidates = results ?? [];
+    for (const row of candidates) {
+      if (abandoned.length >= limit) break;
+      if (!defaultOn(row.email ?? undefined)) continue;
+      try {
+        const result = await db
+          .prepare(
+            `UPDATE e2ee_project_migrations
+             SET state = 'abandoned', lease_id = NULL, lease_expires_at = NULL,
+                 purge_cursor = 'cleanup', updated_at = ?
+             WHERE project_id = ? AND state = 'staging'
+               AND direction = 'decrypt'`
+          )
+          .bind(new Date(now).toISOString(), row.project_id)
+          .run();
+        if ((result.meta?.changes ?? 0) === 1) {
+          abandoned.push({
+            project_id: row.project_id,
+            state: 'abandoned',
+            direction: 'decrypt'
+          });
+        }
+      } catch {
+        // An account being erased, say: its erasure abandons it instead.
+      }
+    }
+    if (candidates.length < MIGRATION_SWEEP_CANDIDATES) break;
+    after = candidates[candidates.length - 1];
+  }
+  return abandoned;
+}
+
+/** One page of {@link abandonWithdrawnStagings}: appends to `abandoned`. */
+async function abandonIneligible(
+  db: D1Database,
+  candidates: SweepCandidate[],
+  eligible: (email: string | undefined, direction: string) => boolean,
+  now: number,
+  abandoned: { project_id: string; state: string; direction: string }[]
+): Promise<void> {
+  for (const row of candidates) {
     if (abandoned.length >= MIGRATION_SWEEP_ROWS) break;
     if (eligible(row.email ?? undefined, row.direction)) continue;
     try {
@@ -3036,5 +3398,4 @@ async function abandonWithdrawnStagings(
       // An account being erased, say: its erasure abandons it instead.
     }
   }
-  return abandoned;
 }

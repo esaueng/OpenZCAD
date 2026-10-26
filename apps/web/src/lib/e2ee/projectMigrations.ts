@@ -106,7 +106,12 @@ export interface MigrationController {
   /** Lists the account's plaintext projects. */
   refresh(): Promise<void>;
   /** Encrypts every listed project, or only `projectIds`, oldest first. */
-  run(projectIds?: readonly string[]): Promise<void>;
+  run(
+    projectIds?: readonly string[],
+    signal?: AbortSignal,
+    /** Automatic starts leave stops from this page's own runs to the user. */
+    options?: { readonly resumeStopped?: boolean }
+  ): Promise<void>;
   pause(): void;
   /** Drops a project's staging and unlocks its plaintext. */
   cancel(projectId: string): Promise<void>;
@@ -501,8 +506,16 @@ export function createMigrationController(
     }
   }
 
-  async function work(projectIds?: readonly string[]) {
-    const signal = (pause = new AbortController()).signal;
+  async function work(
+    projectIds?: readonly string[],
+    external?: AbortSignal,
+    options?: { readonly resumeStopped?: boolean }
+  ) {
+    if (external?.aborted) return;
+    const stop = (pause = new AbortController());
+    const signal = stop.signal;
+    const abort = () => stop.abort();
+    external?.addEventListener('abort', abort, { once: true });
     set({ running: true, pausing: false, otherTab: false });
     try {
       await refresh();
@@ -514,6 +527,15 @@ export function createMigrationController(
           (p) => p.projectId === project.projectId
         );
         if (progress?.phase === 'done') continue;
+        // Recheck after the lock and refresh: a manual run may have stopped
+        // since automatic discovery. Rows merely discovered after reload are
+        // not driven here and still resume their staging or unfinished purge.
+        if (
+          options?.resumeStopped === false &&
+          driven.has(project.projectId) &&
+          (progress?.phase === 'paused' || progress?.phase === 'error')
+        )
+          continue;
         // A project that failed waits for its own retry (one waiting for
         // its members is checked again on every run).
         if (!wanted && progress?.phase === 'error') continue;
@@ -536,6 +558,7 @@ export function createMigrationController(
         }
       }
     } finally {
+      external?.removeEventListener('abort', abort);
       pause = null;
       set({ running: false, pausing: false });
     }
@@ -565,18 +588,19 @@ export function createMigrationController(
       return () => listeners.delete(listener);
     },
     refresh,
-    async run(projectIds) {
-      if (state.running) return;
-      if (!locks) return work(projectIds);
+    async run(projectIds, signal, options) {
+      if (state.running || signal?.aborted) return;
+      if (!locks) return work(projectIds, signal, options);
       await locks.request(
         `openzcad-e2ee-migration:${deps.userId}`,
         { ifAvailable: true },
         async (lock) => {
+          if (signal?.aborted) return;
           if (!lock) {
             set({ otherTab: true });
             return;
           }
-          await work(projectIds);
+          await work(projectIds, signal, options);
         }
       );
     },
@@ -658,7 +682,7 @@ export function pageMigrationController(userId: string): MigrationController {
     controller = createMigrationController({
       userId,
       openStaging: async () =>
-        (await import('./encryptedProjects')).openMigrationStaging()
+        (await import('./encryptedProjects')).openMigrationStaging(userId)
     });
     controllers.set(userId, { controller, revision });
   }

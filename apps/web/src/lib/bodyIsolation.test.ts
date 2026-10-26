@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { toggleBodyIsolation } from './bodyIsolation';
+import { activeIsolatedBodyId, toggleBodyIsolation } from './bodyIsolation';
 
 const bodies = ['a', 'b', 'c', 'd'];
 
@@ -88,23 +88,68 @@ describe('toggleBodyIsolation', () => {
     // A restored view happens to hide every other body, but not through
     // this isolation: its set differs from the one isolation applied.
     const restored = new Set(['b', 'c', 'd', 'e']);
-    const leave = toggleBodyIsolation(
+    const enterAgain = toggleBodyIsolation(
       bodies,
       'a',
       restored,
       restored,
       enter.isolation
     );
-    expect(leave.entered).toBe(false);
-    expect(leave.hidden.size).toBe(0);
+    expect(enterAgain.entered).toBe(true);
+    expect(enterAgain.isolation?.priorHidden).toEqual(restored);
   });
 
-  it('shows everything when leaving without a recorded isolation', () => {
+  it('does not unhide other bodies when isolating one already alone', () => {
     // A body that is alone for another reason (e.g. after a reload) has no
     // prior set to restore.
     const alone = new Set(['b', 'c', 'd']);
-    const leave = toggleBodyIsolation(bodies, 'a', alone, alone, null);
-    expect(leave.entered).toBe(false);
-    expect(leave.hidden.size).toBe(0);
+    const enter = toggleBodyIsolation(bodies, 'a', alone, alone, null);
+    expect(enter.entered).toBe(true);
+    expect(enter.hidden).toEqual(alone);
+    const leave = toggleBodyIsolation(
+      bodies,
+      'a',
+      enter.hidden,
+      enter.hidden,
+      enter.isolation
+    );
+    expect(leave.hidden).toEqual(alone);
+  });
+
+  it('reports an active isolation only while its body is alone in its own view', () => {
+    const start = new Set<string>();
+    const step = toggleBodyIsolation(bodies, 'a', start, start, null);
+    expect(
+      activeIsolatedBodyId(bodies, step.hidden, step.hidden, step.isolation)
+    ).toBe('a');
+    // A manual Show, a newly created body, an off parameter or a removed body
+    // must not leave an Exit isolation control attached to the wrong view.
+    expect(
+      activeIsolatedBodyId(
+        bodies,
+        new Set(['c', 'd']),
+        new Set(['c', 'd']),
+        step.isolation
+      )
+    ).toBeNull();
+    expect(
+      activeIsolatedBodyId(
+        [...bodies, 'new'],
+        step.hidden,
+        step.hidden,
+        step.isolation
+      )
+    ).toBeNull();
+    expect(
+      activeIsolatedBodyId(bodies, new Set(bodies), step.hidden, step.isolation)
+    ).toBeNull();
+    expect(
+      activeIsolatedBodyId(
+        ['b', 'c', 'd'],
+        step.hidden,
+        step.hidden,
+        step.isolation
+      )
+    ).toBeNull();
   });
 });
