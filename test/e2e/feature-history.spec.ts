@@ -8,7 +8,9 @@ import {
   railPanelButton,
   createShellInPlace,
   enterCommandValue,
-  finishInPlaceCommand
+  finishInPlaceCommand,
+  editExtrudeFromHistory,
+  setBarValues
 } from './openzcad-fixtures';
 
 test('explains a failed downstream edit and opens the exact feature for repair', async ({
@@ -22,20 +24,22 @@ test('explains a failed downstream edit and opens the exact feature for repair',
   await expect(page).toHaveTitle(/OpenZCAD/);
   await page.getByRole('button', { name: /Heat Sink/ }).click();
   await expectBodyCount(page, 1);
-  await page.locator('.feature-row-main', { hasText: 'Extrude base' }).click();
+  // The extrude's edit runs in place; its refusals are said in its bar.
+  const extrudeEdit = await editExtrudeFromHistory(
+    page,
+    page.locator('.feature-row-main', { hasText: 'Extrude base' }),
+    'Extrude base'
+  );
   const details = page.getByRole('region', { name: 'History details' });
   await expect(
     details.getByRole('button', { name: 'Inspect Base corner fillets' })
   ).toBeVisible();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector
-    .getByRole('textbox', { name: 'Distance', exact: true })
-    .fill('base_t + 1');
-  await expect(inspector.getByRole('alert')).toContainText(
-    'Base corner fillets',
-    { timeout: 30_000 }
-  );
-  await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
+  await setBarValues(page, extrudeEdit, { Distance: 'base_t + 1' });
+  await expect(extrudeEdit).toContainText('Base corner fillets', {
+    timeout: 30_000
+  });
+  await extrudeEdit.getByRole('button', { name: 'Done' }).click();
   await expect(details.getByRole('alert')).toContainText(
     'The previous model is intact',
     { timeout: 30_000 }
@@ -450,23 +454,22 @@ test('a failed edit brings a closed History panel forward with its record', asyn
   await page.goto('/');
   await page.getByRole('button', { name: /Heat Sink/ }).click();
   await expectBodyCount(page, 1);
-  await page.locator('.feature-row-main', { hasText: 'Extrude base' }).click();
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await expect(inspector).toBeVisible();
+  const edit = await editExtrudeFromHistory(
+    page,
+    page.locator('.feature-row-main', { hasText: 'Extrude base' }),
+    'Extrude base'
+  );
   // The record and its dismiss control live only in History.
   await page.getByRole('button', { name: 'Close History' }).click();
   await expect(railPanelButton(page, 'History')).toHaveAttribute(
     'aria-pressed',
     'false'
   );
-  await inspector
-    .getByRole('textbox', { name: 'Distance', exact: true })
-    .fill('base_t + 1');
-  await expect(inspector.getByRole('alert')).toContainText(
-    'Base corner fillets',
-    { timeout: 30_000 }
-  );
-  await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
+  await setBarValues(page, edit, { Distance: 'base_t + 1' });
+  await expect(edit).toContainText('Base corner fillets', {
+    timeout: 30_000
+  });
+  await edit.getByRole('button', { name: 'Done' }).click();
   await expect(railPanelButton(page, 'History')).toHaveAttribute(
     'aria-pressed',
     'true',

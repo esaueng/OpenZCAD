@@ -8,7 +8,14 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import type { Locator, Page } from '@playwright/test';
-import { expect, stubApi, test } from './openzcad-fixtures';
+import {
+  expect,
+  stubApi,
+  test,
+  setInPlaceOptionValues,
+  editExtrudeFromHistory,
+  extrudeBar
+} from './openzcad-fixtures';
 
 /**
  * F05/U01: the viewport and History sketch editors, both extrusion distances,
@@ -21,8 +28,10 @@ const READ_TIMEOUT = { timeout: 30_000 };
 // mean the device write finished; saving and device-failed must not pass.
 const SAVED_ON_DEVICE = /\bis-(?:local|synced)(?:\s|$)/;
 const WIDTH = '5.4 mm + 2 cm';
-const DISTANCE = '12.7 mm';
-const BACK = '2.54 mm';
+// Expressions, so the in-place Extrude's keypad keeps them as typed (a bare
+// quantity such as `12.7 mm` it converts into the document's unit).
+const DISTANCE = '10 mm + 2.7 mm';
+const BACK = '2 mm + 0.54 mm';
 
 async function sketchObjects(canvas: Locator) {
   return canvas.evaluate(
@@ -253,22 +262,24 @@ for (const [units, mmPerUnit] of [
 
     await outline.click();
     await page.keyboard.press('e');
-    const extrude = page.getByRole('form', { name: 'Extrude settings' });
-    const distance = extrude.getByRole('textbox', {
-      name: 'Distance',
-      exact: true
+    // Typed on the bar's keypad, each unit expression is kept as typed.
+    const bar = extrudeBar(page);
+    await setInPlaceOptionValues(page, 'Extrude', {
+      Distance: DISTANCE,
+      'Back distance': BACK
     });
-    const back = extrude.getByRole('textbox', {
-      name: 'Back distance',
-      exact: true
-    });
-    await distance.fill(DISTANCE);
-    await back.fill(BACK);
-    await expect(distance).toHaveAccessibleDescription(`= ${12.7 / mmPerUnit}`);
-    await expect(back).toHaveAccessibleDescription(`= ${2.54 / mmPerUnit}`);
-    await expect(
-      extrude.getByRole('button', { name: 'Create', exact: true })
-    ).toBeEnabled();
+    await expect(bar.getByRole('button', { name: 'Done' })).toBeEnabled();
+    // Reopened from History, the edit shows both as they were typed, with
+    // its Options open on them.
+    const expectStoredValues = async (edit: Locator) => {
+      await edit.locator('details.in-place-command-options summary').click();
+      await expect(
+        edit.getByRole('button', { name: 'Distance', exact: true })
+      ).toHaveText(DISTANCE);
+      await expect(
+        edit.getByRole('button', { name: 'Back distance', exact: true })
+      ).toHaveText(BACK);
+    };
     await expectPlate(canvas, mmPerUnit);
     const extrusion = page.locator('.feature-row-main', { hasText: 'Extrude' });
     const extrusionSummary = page
@@ -282,26 +293,26 @@ for (const [units, mmPerUnit] of [
       }),
       contentType: 'image/png'
     });
-    await distance.press('Enter');
+    await page.keyboard.press('Enter');
     await expect(extrusion).toHaveCount(1);
     await expect(extrusionSummary).toHaveText(expectedSummary);
-    await expect(extrude).toHaveCount(0);
+    await expect(bar).toHaveCount(0);
     await expectPlate(canvas, mmPerUnit);
 
     // Editing refuses a mismatched dimension without replacing the last valid
     // body. Escape drops the refused draft and adds no undo entry.
-    await extrusion.click();
-    await expect(distance).toHaveValue(DISTANCE);
-    await expect(back).toHaveValue(BACK);
-    await distance.fill('30 deg');
-    await expect(distance).toHaveAttribute('aria-invalid', 'true');
-    await expect(
-      extrude.getByRole('button', { name: 'Apply', exact: true })
-    ).toBeDisabled();
-    await distance.press('Enter');
+    let edit = await editExtrudeFromHistory(page, extrusion);
+    await expectStoredValues(edit);
+    await edit.getByRole('button', { name: 'Distance', exact: true }).click();
+    const keypad = page.locator('.numeric-keypad');
+    await keypad.locator('input').fill('30 deg');
+    await expect(edit.getByRole('button', { name: 'Done' })).toBeDisabled();
+    await keypad.locator('input').press('Enter');
     await expectPlate(canvas, mmPerUnit);
-    await distance.press('Escape');
-    await expect(extrude).toHaveCount(0);
+    await keypad.locator('input').press('Escape');
+    await expect(keypad).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(edit).toHaveCount(0);
     await page.getByRole('button', { name: 'Undo', exact: true }).click();
     await expect(extrusion).toHaveCount(0);
     await expect(canvas).toHaveAttribute(
@@ -318,16 +329,16 @@ for (const [units, mmPerUnit] of [
     await page.reload();
     await expectPlate(canvas, mmPerUnit);
     await expect(extrusionSummary).toHaveText(expectedSummary);
-    await extrusion.click();
-    await expect(distance).toHaveValue(DISTANCE);
-    await expect(back).toHaveValue(BACK);
+    edit = await editExtrudeFromHistory(page, extrusion);
+    await expectStoredValues(edit);
     await testInfo.attach(`${units}-unit-expression-reopen`, {
       body: await page.screenshot({
         path: testInfo.outputPath(`${units}-reopened.png`)
       }),
       contentType: 'image/png'
     });
-    await distance.press('Escape');
+    await page.keyboard.press('Escape');
+    await expect(edit).toHaveCount(0);
     sketch = await editSketch(page, canvas);
     width = sketch.getByRole('textbox', { name: 'Width', exact: true });
     await expect(width).toHaveValue(WIDTH);

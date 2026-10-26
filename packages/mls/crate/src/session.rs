@@ -571,12 +571,14 @@ impl Session {
             .ok_or_else(|| Error::state("no Welcome join is pending"))?;
         let result = (|| {
             let group = self.group()?;
+            let directory = self.policy.directory.get();
             let verified = crate::archive::verify(
                 initial_group_info,
                 records,
                 group.context(),
                 &group.export_tree().to_bytes()?,
                 &pending.extensions,
+                directory.as_ref(),
             )?;
             self.policy.removals.lock().unwrap().merge(&verified);
             self.join_pending = None;
@@ -947,6 +949,7 @@ impl Session {
                     info.group_context(),
                     &tree.tree_data.to_bytes()?,
                     info.extensions(),
+                    self.policy.directory.get().as_ref(),
                 )?;
             }
             self.rejoin_provisional(group_info, psk_epoch, psk, remove)
@@ -983,6 +986,14 @@ impl Session {
             .clone()
             .ok_or_else(|| Error::state("no rejoin is pending"))?;
         let group = self.group()?;
+        // The anchor (initial GroupInfo or checkpoint) must precede the
+        // rejoin's own epoch: the request is rechecked against the history
+        // before it.
+        let Some((_, before_rejoin)) = records.split_last() else {
+            return Err(Error::input(
+                "removal archive: the records must include the rejoin's own epoch",
+            ));
+        };
         // An accepted Commit cannot be resubmitted after a bad download. Keep
         // its provisional state retryable even after the original PSK expires.
         let verified = crate::archive::replay(
@@ -990,6 +1001,7 @@ impl Session {
             records,
             group.context(),
             &group.export_tree().to_bytes()?,
+            self.policy.directory.get().as_ref(),
         )?;
         let result: Res<()> = (|| {
             let mut validation = Session::import(&backup, &self.project_id)?;
@@ -1000,7 +1012,7 @@ impl Session {
                 &request.psk,
                 request.remove,
                 initial_group_info,
-                &records[..records.len() - 1],
+                before_rejoin,
             )?;
             Ok(())
         })();
@@ -1726,5 +1738,302 @@ mod archive_tests {
             assert_eq!(f.joiner.export().unwrap(), before);
         }
         f.joiner.join(&welcome, &f.initial, &archive).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod checkpoint_tests {
+    //! Replay from an owner-signed checkpoint (ADR-024, "Historical
+    //! authority") instead of the project's initial GroupInfo.
+    use super::*;
+    use crate::directory::DeviceDirectory;
+    use std::sync::Arc;
+
+    fn record(change: EpochChange) -> Vec<u8> {
+        hex::decode(change.epoch_record.unwrap()).unwrap()
+    }
+
+    fn device(user: &[u8], device: &[u8]) -> Session {
+        let mut session = Session::generate(b"checkpoint-test", user, device).unwrap();
+        session.certify(b"verified device certification").unwrap();
+        session
+    }
+
+    /// Every session's user and leaf key, `revoked` revoked at epoch 4 and
+    /// `uncertified` without its leaf key.
+    fn directory(sessions: &[&Session], revoked: &[&[u8]], uncertified: &[&[u8]]) -> Arc<DeviceDirectory> {
+        let mut users: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
+        for s in sessions {
+            let keys = if uncertified.contains(&s.device_id.as_slice()) {
+                serde_json::json!([])
+            } else {
+                serde_json::json!([{"key": h(&s.signature_key()), "certifiedEpoch": 5}])
+            };
+            let mut entry = serde_json::json!({
+                "deviceId": display_id(&s.device_id), "status": "active", "leafKeys": keys
+            });
+            if revoked.contains(&s.device_id.as_slice()) {
+                entry["status"] = "revoked".into();
+                entry["revocationCutoffEpoch"] = 4.into();
+            }
+            users.entry(display_id(&s.user_id)).or_default().push(entry);
+        }
+        let users: Vec<_> = users
+            .into_iter()
+            .map(|(user, devices)| serde_json::json!({"userId": user, "devices": devices}))
+            .collect();
+        let json = serde_json::json!({ "users": users }).to_string();
+        Arc::new(DeviceDirectory::from_json(&json).unwrap())
+    }
+
+    struct Fixture {
+        owner: Session,
+        joiner: Session,
+        rejoiner: Session,
+        others: Vec<Session>,
+        initial: Vec<u8>,
+        /// `records[i]` is the record of epoch `i + 1`, through epoch 5.
+        records: Vec<Vec<u8>>,
+        /// The owner identity's `second` device's GroupInfo of epoch 3.
+        checkpoint: Vec<u8>,
+        /// The same, signed without its removal records.
+        omitting: Vec<u8>,
+        /// The editor's GroupInfo of epoch 3.
+        editor_info: Vec<u8>,
+        /// The joiner's Welcome into epoch 5.
+        welcome: Vec<u8>,
+    }
+
+    fn commit_bytes(pending: &PendingCommit) -> Vec<u8> {
+        hex::decode(&pending.commit).unwrap()
+    }
+
+    /// Epoch 1 adds two more devices of the owner, epoch 2 one of them
+    /// leaves by SelfRemove (a removal only the checkpoint vouches for),
+    /// epoch 3 adds an editor and is checkpointed, epoch 4 removes the
+    /// checkpoint's signer (a removal the replay derives), epoch 5 adds the
+    /// joiner.
+    fn fixture() -> Fixture {
+        let mut owner = device(b"A", b"owner");
+        let mut second = device(b"A", b"second");
+        let mut removed = device(b"A", b"removed");
+        let mut editor = device(b"B", b"editor");
+        let joiner = device(b"A", b"joiner");
+        let rejoiner = device(b"A", b"rejoiner");
+        let verified = directory(&[&owner, &second, &removed, &editor, &joiner, &rejoiner], &[], &[]);
+        for s in [&owner, &second, &removed, &editor, &joiner, &rejoiner] {
+            s.policy.directory.set(verified.clone());
+        }
+        owner.create_group(16).unwrap();
+        let initial = owner.group_info().unwrap();
+
+        let add = owner
+            .commit(
+                CommitSpec::default(),
+                vec![second.key_package().unwrap(), removed.key_package().unwrap()],
+            )
+            .unwrap();
+        let mut records = vec![record(owner.confirm_commit().unwrap())];
+        let welcome = hex::decode(add.welcome.unwrap()).unwrap();
+        second.join(&welcome, &initial, &records).unwrap();
+        removed.join(&welcome, &initial, &records).unwrap();
+
+        let leave = removed.propose_self_remove().unwrap();
+        owner.process(&leave).unwrap();
+        second.process(&leave).unwrap();
+        let pending = owner.commit(CommitSpec::default(), vec![]).unwrap();
+        records.push(record(owner.confirm_commit().unwrap()));
+        second.process(&commit_bytes(&pending)).unwrap();
+
+        let spec: CommitSpec =
+            serde_json::from_value(serde_json::json!({"setRoles": [{"userId": "B", "role": "editor"}]})).unwrap();
+        let add = owner.commit(spec, vec![editor.key_package().unwrap()]).unwrap();
+        records.push(record(owner.confirm_commit().unwrap()));
+        second.process(&commit_bytes(&add)).unwrap();
+        editor
+            .join(&hex::decode(add.welcome.unwrap()).unwrap(), &initial, &records)
+            .unwrap();
+
+        let checkpoint = second.group_info().unwrap();
+        let kept = second.policy.removals.lock().unwrap().clone();
+        assert_eq!(kept.records.len(), 1);
+        second.policy.removals.lock().unwrap().records.clear();
+        let omitting = second.group_info().unwrap();
+        *second.policy.removals.lock().unwrap() = kept;
+        let editor_info = editor.group_info().unwrap();
+
+        let index = owner
+            .status()
+            .unwrap()
+            .members
+            .iter()
+            .find(|m| m.device_id == "second")
+            .unwrap()
+            .index;
+        let spec = CommitSpec {
+            remove: vec![index],
+            ..Default::default()
+        };
+        let pending = owner.commit(spec, vec![]).unwrap();
+        records.push(record(owner.confirm_commit().unwrap()));
+        editor.process(&commit_bytes(&pending)).unwrap();
+
+        let add = owner
+            .commit(CommitSpec::default(), vec![joiner.key_package().unwrap()])
+            .unwrap();
+        records.push(record(owner.confirm_commit().unwrap()));
+        editor.process(&commit_bytes(&add)).unwrap();
+        assert_eq!(owner.policy.removals.lock().unwrap().records.len(), 2);
+        Fixture {
+            owner,
+            joiner,
+            rejoiner,
+            others: vec![second, removed, editor],
+            initial,
+            records,
+            checkpoint,
+            omitting,
+            editor_info,
+            welcome: hex::decode(add.welcome.unwrap()).unwrap(),
+        }
+    }
+
+    impl Fixture {
+        fn everyone(&self) -> Vec<&Session> {
+            let mut all = vec![&self.owner, &self.joiner, &self.rejoiner];
+            all.extend(self.others.iter());
+            all
+        }
+
+        fn owner_removals(&self) -> LeafRemovals {
+            self.owner.policy.removals.lock().unwrap().clone()
+        }
+
+        fn copy_of_rejoiner(&mut self) -> Session {
+            let copy = Session::import(&self.rejoiner.export().unwrap(), b"checkpoint-test").unwrap();
+            copy.policy.directory.set(self.rejoiner.policy.directory.get());
+            copy
+        }
+    }
+
+    fn reason(error: &Error) -> &'static str {
+        error.reasons.first().map(|r| r.code).unwrap_or("")
+    }
+
+    #[test]
+    fn welcome_joins_from_an_owner_checkpoint_with_its_removals() {
+        let mut f = fixture();
+        let after = f.records[3..].to_vec();
+        assert_eq!(after.len(), 2);
+        f.joiner.join(&f.welcome, &f.checkpoint, &after).unwrap();
+        // The epoch-2 removal reached the joiner only through the checkpoint.
+        assert_eq!(f.joiner.policy.removals.lock().unwrap().clone(), f.owner_removals());
+        assert_eq!(f.joiner.project_key().unwrap(), f.owner.project_key().unwrap());
+
+        let mut full = fixture();
+        full.joiner.join(&full.welcome, &full.initial, &full.records).unwrap();
+        assert_eq!(
+            full.joiner.policy.removals.lock().unwrap().clone(),
+            full.owner_removals()
+        );
+    }
+
+    #[test]
+    fn checkpoint_requires_exactly_the_epochs_after_it() {
+        let mut f = fixture();
+        let before = f.joiner.export().unwrap();
+        for records in [
+            f.records.clone(),       // from epoch 1, as from the initial GroupInfo
+            f.records[2..].to_vec(), // includes the checkpoint's own epoch
+            f.records[4..].to_vec(), // misses epoch 4
+            Vec::new(),
+        ] {
+            assert!(f.joiner.join(&f.welcome, &f.checkpoint, &records).is_err());
+            assert_eq!(f.joiner.export().unwrap(), before);
+        }
+        // The initial GroupInfo still needs every epoch.
+        assert!(f.joiner.join(&f.welcome, &f.initial, &f.records[3..]).is_err());
+        assert_eq!(f.joiner.export().unwrap(), before);
+        f.joiner.join(&f.welcome, &f.checkpoint, &f.records[3..]).unwrap();
+    }
+
+    #[test]
+    fn checkpoint_signed_by_a_non_owner_is_refused() {
+        let mut f = fixture();
+        let before = f.joiner.export().unwrap();
+        let error = f
+            .joiner
+            .join(&f.welcome, &f.editor_info, &f.records[3..])
+            .err()
+            .unwrap();
+        assert_eq!(reason(&error), "checkpoint-invalid");
+        assert_eq!(f.joiner.export().unwrap(), before);
+        f.joiner.join(&f.welcome, &f.checkpoint, &f.records[3..]).unwrap();
+    }
+
+    #[test]
+    fn checkpoint_from_a_revoked_or_uncertified_owner_leaf_is_refused() {
+        let second: &[u8] = b"second";
+        for (revoked, uncertified) in [(vec![second], vec![]), (vec![], vec![second])] {
+            let mut f = fixture();
+            let narrowed = directory(&f.everyone(), &revoked, &uncertified);
+            f.joiner.policy.directory.set(narrowed);
+            let before = f.joiner.export().unwrap();
+            let error = f.joiner.join(&f.welcome, &f.checkpoint, &f.records[3..]).err().unwrap();
+            assert_eq!(reason(&error), "checkpoint-invalid");
+            assert_eq!(f.joiner.export().unwrap(), before);
+            // Full replay does not depend on the checkpoint's signer.
+            f.joiner.join(&f.welcome, &f.initial, &f.records).unwrap();
+            assert_eq!(f.joiner.policy.removals.lock().unwrap().clone(), f.owner_removals());
+        }
+    }
+
+    #[test]
+    fn checkpoint_omitting_earlier_removals_is_refused() {
+        let mut f = fixture();
+        let before = f.joiner.export().unwrap();
+        let error = f.joiner.join(&f.welcome, &f.omitting, &f.records[3..]).err().unwrap();
+        assert_eq!(reason(&error), "removal-history-mismatch");
+        assert_eq!(f.joiner.export().unwrap(), before);
+        f.joiner.join(&f.welcome, &f.checkpoint, &f.records[3..]).unwrap();
+    }
+
+    #[test]
+    fn checkpoint_of_another_chain_is_refused() {
+        let mut f = fixture();
+        let other = fixture(); // same project id and epochs, different chain
+        let before = f.joiner.export().unwrap();
+        assert!(f.joiner.join(&f.welcome, &other.checkpoint, &f.records[3..]).is_err());
+        assert_eq!(f.joiner.export().unwrap(), before);
+        assert!(f.joiner.join(&f.welcome, &f.checkpoint, &other.records[3..]).is_err());
+        assert_eq!(f.joiner.export().unwrap(), before);
+        f.joiner.join(&f.welcome, &f.checkpoint, &f.records[3..]).unwrap();
+    }
+
+    #[test]
+    fn rejoins_replay_from_a_checkpoint() {
+        let mut f = fixture();
+        let info = f.owner.group_info().unwrap();
+        let psk = f.owner.rejoin_psk().unwrap();
+        let secret = hex::decode(&psk.secret).unwrap();
+
+        let mut direct = f.copy_of_rejoiner();
+        direct
+            .rejoin(&info, psk.epoch, &secret, None, &f.checkpoint, &f.records[3..])
+            .unwrap();
+        direct.confirm_rejoin().unwrap();
+        assert_eq!(direct.policy.removals.lock().unwrap().clone(), f.owner_removals());
+
+        // Without the archive at hand: the accepted rejoin's own record ends it.
+        let mut provisional = f.copy_of_rejoiner();
+        let result = provisional.begin_rejoin(&info, psk.epoch, &secret, None).unwrap();
+        let mut records = f.records[3..].to_vec();
+        records.push(record(result.change));
+        // No records at all is refused without panicking, and stays retryable.
+        assert!(provisional.complete_rejoin(&f.checkpoint, &[]).is_err());
+        assert!(provisional.status().unwrap().pending_archive);
+        provisional.complete_rejoin(&f.checkpoint, &records).unwrap();
+        provisional.confirm_rejoin().unwrap();
+        assert_eq!(provisional.policy.removals.lock().unwrap().clone(), f.owner_removals());
     }
 }

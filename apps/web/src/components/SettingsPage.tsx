@@ -25,6 +25,7 @@ import {
   Database,
   Eye,
   EyeOff,
+  ExternalLink,
   HardDrive,
   LockKeyhole,
   LogIn,
@@ -58,9 +59,11 @@ import { countLabel } from '../lib/toasts';
 import { fetchEncryptionAvailability } from '../lib/e2ee/availability';
 import { lazyWithStaleChunkNotice } from '../lib/staleChunk';
 import { ErrorBoundary } from './ErrorBoundary';
+import { ExternalAnchor } from './ExternalAnchor';
 import { api } from '../lib/api';
 import { APP_SETTINGS_NUMBER_BOUNDS } from '../lib/appSettings';
 import { isDesktopApp } from '../lib/desktopBridge';
+import { privacyPolicyHref } from '../lib/privacyPolicy';
 import {
   KERNEL_BUILD,
   kernelBuildDetail,
@@ -1580,13 +1583,9 @@ export function SettingsPage({
                     another model; that provider’s data policies and charges
                     apply.{' '}
                     {builtInDataPolicy.href ? (
-                      <a
-                        href={builtInDataPolicy.href}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
+                      <ExternalAnchor href={builtInDataPolicy.href}>
                         {builtInDataPolicy.label}
-                      </a>
+                      </ExternalAnchor>
                     ) : null}
                   </Notice>
                 </Group>
@@ -2192,7 +2191,12 @@ export function SettingsPage({
                         >
                           <span>
                             <strong>Email sign-in</strong>
-                            <small>No password. We email you a code.</small>
+                            <small>
+                              No password. We email you a code.{' '}
+                              <ExternalAnchor href={privacyPolicyHref()}>
+                                Privacy policy
+                              </ExternalAnchor>
+                            </small>
                           </span>
                           <div className="settings-auth-controls">
                             <label>
@@ -2333,6 +2337,20 @@ export function SettingsPage({
 
           {active === 'privacy' && anyMatch && (
             <Section title="Privacy & data" intro="What leaves this device.">
+              <Group title="Policy">
+                <SettingRow
+                  title="Privacy policy"
+                  hint="What the hosted service collects, stores and shares."
+                >
+                  <ExternalAnchor
+                    className="secondary"
+                    href={privacyPolicyHref()}
+                  >
+                    <ExternalLink size={14} aria-hidden="true" />
+                    Read the policy
+                  </ExternalAnchor>
+                </SettingRow>
+              </Group>
               <Group title="Analytics">
                 <AnalyticsConsent />
                 {session && !desktopApp ? (

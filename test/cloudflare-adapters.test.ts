@@ -5,6 +5,8 @@ import {
   D1R2PersistenceService,
   E2eeRoomLedger,
   isCloudflareFeatureEnabled,
+  isE2eeDefaultOn,
+  isE2eeReverseEnabled,
   MAX_E2EE_ROOM_RETAINED,
   orderE2eeSubmission,
   projectCollaborationRollout,
@@ -84,6 +86,7 @@ describe('cloudflare adapters', () => {
       'E2EE_PROJECTS_ENABLED',
       'E2EE_MIGRATION_ENABLED',
       'E2EE_REVERSE_ENABLED',
+      'E2EE_DEFAULT_ON',
       'AI_PATCH_DIRECT_EDIT_ENABLED',
       'AI_PATCH_GROWING_HOLDER_ENABLED',
       'AI_PATCH_HOLE_CONTROL_ENABLED',
@@ -121,6 +124,40 @@ describe('cloudflare adapters', () => {
         )
       ).toBe(false);
     }
+  });
+
+  it('makes encryption the default only with E2EE_DEFAULT_ON and migration open (ADR-024 8-1)', () => {
+    const open = {
+      E2EE_KEYS_ENABLED: 'true',
+      E2EE_PROJECTS_ENABLED: 'true',
+      E2EE_MIGRATION_ENABLED: 'true',
+      E2EE_REVERSE_ENABLED: 'true'
+    };
+    expect(isE2eeDefaultOn(open, 'a@example.com')).toBe(false);
+    expect(isE2eeReverseEnabled(open, 'a@example.com')).toBe(true);
+    const on = { ...open, E2EE_DEFAULT_ON: 'true' };
+    expect(isE2eeDefaultOn(on, 'a@example.com')).toBe(true);
+    // Default-on closes the reverse path, as if its flag were off.
+    expect(isE2eeReverseEnabled(on, 'a@example.com')).toBe(false);
+    // Each dependency missing keeps it off, and the reverse path as it was.
+    for (const missing of [
+      'E2EE_KEYS_ENABLED',
+      'E2EE_PROJECTS_ENABLED',
+      'E2EE_MIGRATION_ENABLED'
+    ] as const) {
+      const env = { ...on, [missing]: 'false' };
+      expect(isE2eeDefaultOn(env, 'a@example.com'), missing).toBe(false);
+      expect(isE2eeReverseEnabled(env, 'a@example.com'), missing).toBe(false);
+    }
+    // The key canary scopes it like the other E2EE gates.
+    const canary = {
+      ...on,
+      E2EE_KEYS_ENABLED: 'false',
+      E2EE_CANARY_EMAILS: 'canary@example.com'
+    };
+    expect(isE2eeDefaultOn(canary, 'Canary@example.com')).toBe(true);
+    expect(isE2eeDefaultOn(canary, 'other@example.com')).toBe(false);
+    expect(isE2eeDefaultOn(canary)).toBe(false);
   });
 
   it('resolves collaboration canaries by normalized authenticated email', () => {

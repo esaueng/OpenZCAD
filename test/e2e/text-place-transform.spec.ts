@@ -17,7 +17,8 @@ import {
   test,
   waitForStillViewport,
   MODEL_ONLY,
-  bodyCardFromHistory
+  bodyCardFromHistory,
+  extrudeBar
 } from './openzcad-fixtures';
 import {
   OPEN_SANS_AREA_AT_10,
@@ -376,8 +377,8 @@ test('text placed on a face engraves exactly, and a re-entry edit rebuilds it', 
       })
     )
   );
-  const extrude = page.getByRole('form', { name: 'Extrude settings' });
-  await expect(extrude).toContainText('3 selected profiles');
+  const extrude = extrudeBar(page);
+  await expect(extrude).toContainText('3 profiles');
   await expect
     .poll(
       async () =>
@@ -406,7 +407,7 @@ test('text placed on a face engraves exactly, and a re-entry edit rebuilds it', 
   );
   await expect(page.getByTestId('direct-manipulation-value')).toHaveText(/-\d/);
   await page.mouse.up();
-  await extrude.getByRole('button', { name: 'Create', exact: true }).click();
+  await extrude.getByRole('button', { name: 'Done' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
     /Extruded region by -[\d.]+ mm, cut into the body\./,
     { timeout: 60_000 }

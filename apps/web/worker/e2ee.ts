@@ -2045,7 +2045,14 @@ export async function handleE2eeRequest(
    * being turned back into plaintext (refused with 409 PROJECT_MIGRATING).
    * The global flags decide, not the account's, as for plaintext writes.
    */
-  reverseWritesGated = false
+  reverseWritesGated = false,
+  /**
+   * Phase 8, slice 8-1: end-to-end encryption is the default for this
+   * account (`isE2eeDefaultOn`, E2EE_DEFAULT_ON with migration open):
+   * reported once migration is, and the "Encrypt new projects" opt-out is
+   * refused.
+   */
+  defaultOn = false
 ): Promise<Response> {
   const { pathname } = new URL(request.url);
   const method = request.method;
@@ -2075,7 +2082,8 @@ export async function handleE2eeRequest(
         enabled: keysReady,
         projectsEnabled: projectsReady,
         ...(migrationReady ? { migrationEnabled: true } : {}),
-        ...(reverseReady ? { reverseEnabled: true } : {})
+        ...(reverseReady ? { reverseEnabled: true } : {}),
+        ...(migrationReady && defaultOn ? { defaultOn: true } : {})
       });
     }
     if (!enabled) {
@@ -2136,7 +2144,8 @@ export async function handleE2eeRequest(
         rawDb,
         userId,
         db.authorization,
-        () => readBody(request)
+        () => readBody(request),
+        defaultOn
       );
     }
     // Slice 7-1: the staging lease, only while migration is open.

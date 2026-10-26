@@ -32,12 +32,17 @@ export interface StagedFileInput {
 }
 
 export interface MigrationPlaintextTarget {
-  /** Stages one save state under its own revision id. */
+  /**
+   * Stages one save state under its own revision id, naming who saved it
+   * (`authorUserId`; the Worker keeps it only as the encrypted history
+   * records it).
+   */
   stageRevision(
     projectId: string,
     document: ProjectDocument,
     reason: string,
-    revisionId: string
+    revisionId: string,
+    authorUserId?: string
   ): Promise<void>;
   /** Stages the head, at the version it carries. */
   stageHead(projectId: string, document: ProjectDocument): Promise<void>;
@@ -137,7 +142,7 @@ export function createMigrationPlaintextTarget(
     }
   };
   return {
-    async stageRevision(projectId, document, reason, revisionId) {
+    async stageRevision(projectId, document, reason, revisionId, authorUserId) {
       const split = await splitProjectStorageUpload(document);
       await send(`${project(projectId)}/revisions`, 'POST', {
         projectId,
@@ -145,7 +150,8 @@ export function createMigrationPlaintextTarget(
         expectedVersion: Math.max(0, document.version - 1),
         document: split.document,
         storageAssets: split.storageAssets,
-        savedRevisionId: revisionId
+        savedRevisionId: revisionId,
+        ...(authorUserId ? { authorUserId } : {})
       });
     },
     async stageHead(projectId, document) {

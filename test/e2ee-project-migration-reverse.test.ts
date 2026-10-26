@@ -21,12 +21,19 @@ import {
   type ProjectSummary,
   type ProjectWorkspaceSession
 } from '@openzcad/shared';
+import { signShareDelegation } from '@openzcad/crypto';
 import { forgetAllProjectKeys } from '../apps/web/src/lib/e2ee/unlockedProjectKeys';
+import {
+  createShareLink,
+  renewShareDelegation,
+  revokeShareLink
+} from '../apps/web/src/lib/e2ee/shareLinks';
 import {
   createProjectMigrationsApi,
   withMigrationLease
 } from '../apps/web/src/lib/e2ee/projectMigrationsApi';
 import { createMigrationPlaintextSource } from '../apps/web/src/lib/e2ee/migrationPlaintextSource';
+import { createMigrationPlaintextTarget } from '../apps/web/src/lib/e2ee/migrationPlaintextTarget';
 import {
   createProjectMigrationEngine,
   memoryLeaseStore,
@@ -649,6 +656,38 @@ async function expectOpensAsPlaintext(srv: Server, encrypted: Encrypted) {
   return opened;
 }
 
+/** A live encrypted share link row (slice 5-10), as stored. */
+function insertEncryptedShareLink(
+  srv: Server,
+  projectId: string,
+  shareId = 'share_1'
+): void {
+  srv.db
+    .prepare(
+      `INSERT INTO e2ee_share_links
+         (project_id, share_id, token_hash, mode, share_key_hash,
+          owner_identity_hash, created_by_user_id, created_at)
+       VALUES (?, ?, ?, 'view', ?, ?, ?, 'now')`
+    )
+    .run(
+      projectId,
+      shareId,
+      createHash('sha256').update(shareId).digest('hex'),
+      'k'.repeat(43),
+      'o'.repeat(43),
+      OWNER
+    );
+}
+
+/** Revokes every encrypted share link of the project, as 5-10 does. */
+function revokeEncryptedShareLinks(srv: Server, projectId: string): void {
+  srv.db
+    .prepare(
+      "UPDATE e2ee_share_links SET revoked_at = 'now' WHERE project_id = ?"
+    )
+    .run(projectId);
+}
+
 // --- Turning encryption off --------------------------------------------------------
 
 describe('turning an encrypted project back into plaintext', () => {
@@ -711,6 +750,49 @@ describe('turning an encrypted project back into plaintext', () => {
     expectNoCiphertext(srv, projectId);
     const opened = await expectOpensAsPlaintext(srv, encrypted);
     expect(opened.version).toBe(encryptedVersion + 1);
+  });
+
+  it('reads save states whose bodies carry a share-link set (body v2, slice 5-10)', async () => {
+    const srv = roomServer();
+    const encrypted = await encryptedProject(srv, { revisions: 1 });
+    const { projectId } = encrypted;
+    const laptop = device(srv, owner, 'owner_laptop', {
+      mls: encrypted.encryptor.mls,
+      pins: encrypted.encryptor.pins
+    });
+    await renewShareDelegation(laptop.shareLinks, (value) =>
+      signShareDelegation(owner.identityPrivateKey, value)
+    );
+    const created = await createShareLink(laptop.shareLinks, projectId, 'view');
+    // A save state taken while the link is active, then the revocation:
+    // both bodies are version 2, one with a grant, one with a tombstone.
+    const linked = await laptop.store.shareHead(projectId);
+    expect(linked.shareLinks?.links.map((l) => l.shareId)).toEqual([
+      created.shareId
+    ]);
+    await laptop.store.saveRevision({
+      projectId: linked.document.projectId,
+      reason: 'Secret linked',
+      expectedVersion: linked.version,
+      document: linked.document
+    });
+    await revokeShareLink(laptop.shareLinks, projectId, created.shareId);
+    // Only a revoked link remains, so the project may stop being encrypted.
+    const desktop = reverseOn(srv, owner, 'owner_desktop', { from: laptop });
+    await decryptFully(desktop, projectId);
+    expect(migrationRow(srv, projectId)).toMatchObject({
+      direction: 'decrypt',
+      state: 'done',
+      revision_count: 2
+    });
+    expect(formatOf(srv, projectId)).toBe(1);
+    expectNoCiphertext(srv, projectId);
+    const reasons = rows<{ reason: string }>(
+      srv,
+      'SELECT reason FROM revisions WHERE project_id = ? ORDER BY created_at',
+      projectId
+    ).map((r) => r.reason);
+    expect(reasons).toEqual(['Secret one', 'Secret linked']);
   });
 
   it('refuses encrypted writes and the room while staging, and counts staged plaintext toward nothing', async () => {
@@ -1248,6 +1330,769 @@ describe('turning an encrypted project back into plaintext', () => {
     expect(count(srv, 'revisions', projectId)).toBe(0);
     expect(formatOf(srv, projectId)).toBe(2);
   });
+
+  it('abandons a leased decrypt staging on the sweep once encryption is the default (ADR-024 8-1)', async () => {
+    const srv = roomServer();
+    const { projectId } = await encryptedProject(srv, { revisions: 1 });
+    const desktop = reverseOn(srv, owner, 'owner_desktop', {
+      beforeStep: (step) => {
+        if (step === 'cutover') throw new Error('Stop here.');
+      }
+    });
+    await expect(decryptFully(desktop, projectId)).rejects.toThrow('Stop');
+    expect(count(srv, 'artifacts', projectId)).toBe(3);
+    // Its lease is live: the sweep leaves it while the reverse path is open.
+    expect(migrationRow(srv, projectId)!.lease_expires_at).toBeGreaterThan(
+      Date.now()
+    );
+    await worker.scheduled({}, srv.env);
+    expect(migrationRow(srv, projectId)).toMatchObject({ state: 'staging' });
+    // Default-on closes the reverse path for good: the cutover is refused,
+    // and the sweep abandons the staging, lease or not, and drops the
+    // plaintext it staged. The project stays encrypted.
+    srv.env.E2EE_DEFAULT_ON = 'true';
+    await worker.scheduled({}, srv.env);
+    expect(migrationRow(srv, projectId)).toMatchObject({
+      direction: 'decrypt',
+      state: 'abandoned',
+      lease_id: null,
+      purge_cursor: null
+    });
+    expect(count(srv, 'artifacts', projectId)).toBe(0);
+    expect(count(srv, 'revisions', projectId)).toBe(0);
+    expect(formatOf(srv, projectId)).toBe(2);
+  });
+});
+
+// --- The owner's limits at the cutover ----------------------------------------------
+
+/** The ciphertext bytes of a project's encrypted blobs. */
+function blobBytesOf(srv: Server, projectId: string): number {
+  return (
+    rows<{ bytes: number | null }>(
+      srv,
+      'SELECT SUM(ciphertext_bytes) AS bytes FROM e2ee_content_blobs WHERE project_id = ?',
+      projectId
+    )[0]!.bytes ?? 0
+  );
+}
+
+/** The bytes of a project's (staged) files. */
+function fileBytesOf(srv: Server, projectId: string): number {
+  return (
+    rows<{ bytes: number | null }>(
+      srv,
+      'SELECT SUM(bytes) AS bytes FROM artifacts WHERE project_id = ?',
+      projectId
+    )[0]!.bytes ?? 0
+  );
+}
+
+/** The owner's document objects and storage assets, every project's. */
+function storedBytesOf(srv: Server): number {
+  const sum = (table: string) =>
+    (
+      srv.db
+        .prepare(
+          `SELECT COALESCE(SUM(t.stored_bytes), 0) AS bytes FROM ${table} t
+           JOIN projects p ON p.id = t.project_id WHERE p.user_id = ?`
+        )
+        .get(OWNER) as { bytes: number }
+    ).bytes;
+  return sum('project_document_objects') + sum('project_storage_assets');
+}
+
+function setLimit(
+  srv: Server,
+  column: 'artifact_limit_bytes' | 'project_storage_limit_bytes',
+  bytes: number
+) {
+  srv.db
+    .prepare(`UPDATE users SET ${column} = ? WHERE id = ?`)
+    .run(bytes, OWNER);
+}
+
+/** Stages a file no encrypted blob names, under the decrypt lease. */
+async function stageExtraFile(
+  r: ReverseDevice,
+  srv: Server,
+  projectId: string,
+  name: string,
+  bytes: Uint8Array
+): Promise<string> {
+  const lease = migrationRow(srv, projectId)!.lease_id as string;
+  return createMigrationPlaintextTarget(
+    withMigrationLease(r.d.fetcher, lease)
+  ).stageFile(projectId, {
+    fileName: name,
+    contentType: 'model/stl',
+    kind: 'stl-export',
+    body: new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'model/stl' })
+  });
+}
+
+describe('the owner’s limits at the cutover', () => {
+  it('refuses a cutover that would publish staged files over the artifact limit; the project stays encrypted and can be abandoned', async () => {
+    const srv = roomServer();
+    const { projectId } = await encryptedProject(srv, { revisions: 1 });
+    const before = usage(srv);
+    const blobBytes = blobBytesOf(srv, projectId);
+    const objectsBefore = new Set(srv.bucket.objects.keys());
+    // Each extra file alone outweighs every encrypted blob of the project.
+    const extra = new Uint8Array(blobBytes + 4096).fill(7);
+    let staged = false;
+    const desktop: ReverseDevice = reverseOn(srv, owner, 'owner_desktop', {
+      beforeStep: async (step) => {
+        if (step !== 'cutover' || staged) return;
+        staged = true;
+        // The lease holder stages files no blob names: while staging they
+        // count toward nothing (migration 0043).
+        for (const index of [1, 2, 3]) {
+          await stageExtraFile(
+            desktop,
+            srv,
+            projectId,
+            `extra-${index}.stl`,
+            extra
+          );
+        }
+        expect(count(srv, 'artifacts', projectId)).toBe(6);
+        expect(usage(srv)).toBe(before);
+        // Once the files staged so far would already leave the account at
+        // its limit after the cutover, a further staged file is refused.
+        const room =
+          2147483648 - (before + fileBytesOf(srv, projectId) - blobBytes);
+        const bump = (bytes: number) =>
+          srv.db
+            .prepare(
+              'UPDATE artifact_account_usage SET finalized_bytes = finalized_bytes + ? WHERE owner_user_id = ?'
+            )
+            .run(bytes, OWNER);
+        bump(room);
+        expect(
+          await errorOf(
+            stageExtraFile(desktop, srv, projectId, 'extra-4.stl', extra)
+          )
+        ).toMatchObject({ status: 413, code: 'ARTIFACT_QUOTA_EXCEEDED' });
+        bump(-room);
+        expect(count(srv, 'artifacts', projectId)).toBe(6);
+        // The owner has room for one more file of that size, not three.
+        setLimit(srv, 'artifact_limit_bytes', before + extra.byteLength);
+      }
+    });
+    expect(await errorOf(decryptFully(desktop, projectId))).toMatchObject({
+      status: 413,
+      code: 'ARTIFACT_QUOTA_EXCEEDED'
+    });
+    expect(staged).toBe(true);
+    expect(desktop.progress.at(-1)).toMatchObject({
+      phase: 'error',
+      error: { code: 'ARTIFACT_QUOTA_EXCEEDED', retryable: false }
+    });
+    // Nothing moved: still encrypted, still staging, usage as before.
+    expect(formatOf(srv, projectId)).toBe(2);
+    expect(migrationRow(srv, projectId)).toMatchObject({
+      direction: 'decrypt',
+      state: 'staging'
+    });
+    expect(usage(srv)).toBe(before);
+    expect(desktop.cutover).toEqual([]);
+    // Abandoned: every staged file goes, and the usage stays as it was.
+    await desktop.engine.cancel(projectId);
+    expect(migrationRow(srv, projectId)).toMatchObject({
+      state: 'abandoned',
+      purge_cursor: null
+    });
+    expect(count(srv, 'artifacts', projectId)).toBe(0);
+    expect(new Set(srv.bucket.objects.keys())).toEqual(objectsBefore);
+    expect(usage(srv)).toBe(before);
+    expect(formatOf(srv, projectId)).toBe(2);
+  });
+
+  it('completes a reverse whose staged files fit the artifact limit exactly', async () => {
+    const srv = roomServer();
+    const { projectId } = await encryptedProject(srv, { revisions: 1 });
+    const before = usage(srv);
+    const blobBytes = blobBytesOf(srv, projectId);
+    let after = 0;
+    const desktop: ReverseDevice = reverseOn(srv, owner, 'owner_desktop', {
+      beforeStep: async (step) => {
+        if (step !== 'cutover' || after) return;
+        await stageExtraFile(
+          desktop,
+          srv,
+          projectId,
+          'extra.stl',
+          new Uint8Array(blobBytes + 4096).fill(7)
+        );
+        after = before + fileBytesOf(srv, projectId) - blobBytes;
+        expect(after).toBeGreaterThan(before);
+        setLimit(srv, 'artifact_limit_bytes', after);
+      }
+    });
+    await decryptFully(desktop, projectId);
+    expect(formatOf(srv, projectId)).toBe(1);
+    expect(migrationRow(srv, projectId)).toMatchObject({ state: 'done' });
+    expect(usage(srv)).toBe(after);
+    expectNoCiphertext(srv, projectId);
+  });
+
+  it('refuses a cutover over the project storage limit, in its own batch, then completes once there is room', async () => {
+    const srv = roomServer();
+    const { projectId } = await encryptedProject(srv, { revisions: 1 });
+    // The staged documents count toward nothing yet; at the cutover they
+    // all would. The limit drops to one byte short of them after the
+    // cutover's checks and before its batch lands: the batch refuses.
+    const db = srv.env.DB as D1Database;
+    const batch = db.batch.bind(db);
+    let armed = true;
+    db.batch = async (statements: D1PreparedStatement[]) => {
+      const cut = statements.some((statement) =>
+        /SET state = 'cutover'/.test(
+          (statement as unknown as { sql?: string }).sql ?? ''
+        )
+      );
+      if (armed && cut) {
+        armed = false;
+        setLimit(srv, 'project_storage_limit_bytes', storedBytesOf(srv) - 1);
+      }
+      return batch(statements);
+    };
+    const desktop = reverseOn(srv, owner, 'owner_desktop');
+    expect(await errorOf(decryptFully(desktop, projectId))).toMatchObject({
+      status: 413,
+      code: 'PROJECT_STORAGE_QUOTA'
+    });
+    expect(desktop.progress.at(-1)).toMatchObject({
+      phase: 'error',
+      error: { code: 'PROJECT_STORAGE_QUOTA', retryable: false }
+    });
+    expect(formatOf(srv, projectId)).toBe(2);
+    expect(migrationRow(srv, projectId)).toMatchObject({ state: 'staging' });
+    // With exactly enough room, a retry resumes (reusing the staged head,
+    // so it needs no more) and cuts over.
+    setLimit(srv, 'project_storage_limit_bytes', storedBytesOf(srv));
+    await decryptFully(desktop, projectId);
+    expect(formatOf(srv, projectId)).toBe(1);
+    expect(migrationRow(srv, projectId)).toMatchObject({ state: 'done' });
+    expectNoCiphertext(srv, projectId);
+  });
+});
+
+// --- Staged heads ----------------------------------------------------------------------
+
+/** The project's document objects: their ids, keys, and which rows name them. */
+function documentObjectsOf(srv: Server, projectId: string) {
+  return rows<{ id: string; object_key: string; named: number }>(
+    srv,
+    `SELECT o.id, o.object_key,
+            (EXISTS (SELECT 1 FROM projects p WHERE p.document_object_id = o.id)
+             OR EXISTS (SELECT 1 FROM revisions r
+                        WHERE r.document_object_id = o.id)) AS named
+     FROM project_document_objects o WHERE o.project_id = ? ORDER BY o.id`,
+    projectId
+  );
+}
+
+/** Every document object of the project is named, and R2 holds just those. */
+function expectOnlyReferencedDocuments(
+  srv: Server,
+  projectId: string,
+  revisions: number
+) {
+  const objects = documentObjectsOf(srv, projectId);
+  expect(objects.filter((o) => !o.named)).toEqual([]);
+  // One per save state, and the head.
+  expect(objects).toHaveLength(revisions + 1);
+  const prefix = `project-storage/${projectId}/documents/`;
+  expect(
+    [...srv.bucket.objects.keys()].filter((key) => key.startsWith(prefix)).sort()
+  ).toEqual(objects.map((o) => o.object_key).sort());
+}
+
+describe('staged heads', () => {
+  it('reuses the staged head on a resume, so the cutover leaves no second head behind', async () => {
+    const srv = roomServer();
+    const encrypted = await encryptedProject(srv, { revisions: 2 });
+    const { projectId } = encrypted;
+    const leases = memoryLeaseStore();
+    // The tab closes after the head is staged, before the cutover.
+    const first = reverseOn(srv, owner, 'owner_desktop', {
+      leases,
+      beforeStep: (step) => {
+        if (step === 'info') throw new Error('The tab was closed.');
+      }
+    });
+    await expect(decryptFully(first, projectId)).rejects.toThrow('closed');
+    const journaled = migrationRow(srv, projectId)!;
+    expect(journaled).toMatchObject({ state: 'staging' });
+    expect(journaled.staged_version).toBeGreaterThan(0);
+    expect(documentObjectsOf(srv, projectId)).toHaveLength(3);
+
+    // Reloaded: the resume stages the same head, which answers from the
+    // journal instead of storing another object.
+    let atCutover = -1;
+    const second = reverseOn(srv, owner, 'owner_desktop', {
+      from: first.d,
+      leases,
+      beforeStep: (step) => {
+        if (step === 'cutover') {
+          atCutover = documentObjectsOf(srv, projectId).length;
+        }
+      }
+    });
+    await decryptFully(second, projectId);
+    expect(atCutover).toBe(3);
+    expect(migrationRow(srv, projectId)).toMatchObject({
+      state: 'done',
+      staged_hash: journaled.staged_hash
+    });
+    expectOnlyReferencedDocuments(srv, projectId, 2);
+    // What counts toward the owner's storage is what the project names.
+    const named = rows<{ bytes: number }>(
+      srv,
+      `SELECT COALESCE(SUM(stored_bytes), 0) AS bytes
+       FROM project_document_objects WHERE project_id = ?`,
+      projectId
+    )[0]!.bytes;
+    const assets = rows<{ bytes: number }>(
+      srv,
+      `SELECT COALESCE(SUM(stored_bytes), 0) AS bytes
+       FROM project_storage_assets WHERE project_id = ?`,
+      projectId
+    )[0]!.bytes;
+    expect(storedBytesOf(srv)).toBe(named + assets);
+    expectNoCiphertext(srv, projectId);
+    await expectOpensAsPlaintext(srv, encrypted);
+  });
+
+  it('drops a superseded staged head in the purge', async () => {
+    const srv = roomServer();
+    const encrypted = await encryptedProject(srv, { revisions: 1 });
+    const { projectId } = encrypted;
+    let decoyed = false;
+    const desktop: ReverseDevice = reverseOn(srv, owner, 'owner_desktop', {
+      beforeStep: async (step) => {
+        if (step === 'head' && !decoyed) {
+          decoyed = true;
+          // Another head at the same version, then the engine's own: the
+          // first is superseded, and nothing names it after the cutover.
+          const row = migrationRow(srv, projectId)!;
+          await createMigrationPlaintextTarget(
+            withMigrationLease(desktop.d.fetcher, row.lease_id as string)
+          ).stageHead(projectId, {
+            ...initialDocument('Decoy head'),
+            projectId: projectId as ProjectDocument['projectId'],
+            version: (row.source_version as number) + 1
+          });
+        }
+        if (step === 'purge') {
+          // Cut over: the decoy is still there, unreferenced.
+          expect(
+            documentObjectsOf(srv, projectId).filter((o) => !o.named)
+          ).toHaveLength(1);
+        }
+      }
+    });
+    await decryptFully(desktop, projectId);
+    expect(decoyed).toBe(true);
+    expect(migrationRow(srv, projectId)).toMatchObject({ state: 'done' });
+    expectOnlyReferencedDocuments(srv, projectId, 1);
+    const opened = await expectOpensAsPlaintext(srv, encrypted);
+    expect(opened.name).toBe('Secret bracket');
+  });
+});
+
+// --- Staged upload sessions ----------------------------------------------------------
+
+/** Opens a staged file's upload session under the current decrypt lease. */
+async function openStagedUpload(
+  r: ReverseDevice,
+  srv: Server,
+  projectId: string,
+  metadata: Record<string, string> = {}
+) {
+  const lease = migrationRow(srv, projectId)!.lease_id as string;
+  const created = await withMigrationLease(r.d.fetcher, lease)('/api/uploads', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      projectId,
+      fileName: 'staged.stl',
+      contentType: 'model/stl',
+      kind: 'stl-export',
+      metadata
+    })
+  });
+  expect(created.status).toBe(201);
+  return (
+    (await created.json()) as {
+      session: {
+        uploadSessionId: string;
+        uploadUrl: string;
+        artifactId: string;
+      };
+    }
+  ).session;
+}
+
+async function codeOf(response: Response) {
+  return ((await response.json()) as { code?: string }).code;
+}
+
+describe('staged upload sessions', () => {
+  it('advance only under the decrypt lease that opened them, not one that took over', async () => {
+    const srv = roomServer();
+    const { projectId } = await encryptedProject(srv, { revisions: 1 });
+    const desktop = reverseOn(srv, owner, 'owner_desktop', {
+      beforeStep: (step) => {
+        if (step === 'cutover') throw new Error('Stop here.');
+      }
+    });
+    await expect(decryptFully(desktop, projectId)).rejects.toThrow('Stop');
+    const opener = migrationRow(srv, projectId)!.lease_id;
+    const session = await openStagedUpload(desktop, srv, projectId);
+    // The lease lapses and another start takes the staging over.
+    srv.db
+      .prepare(
+        'UPDATE e2ee_project_migrations SET lease_expires_at = 1 WHERE project_id = ?'
+      )
+      .run(projectId);
+    const taken = await createProjectMigrationsApi(desktop.d.fetcher).start(
+      projectId,
+      { direction: 'decrypt', deviceId: 'owner_laptop' },
+      null
+    );
+    expect(migrationRow(srv, projectId)).toMatchObject({
+      state: 'staging',
+      lease_id: taken.leaseId
+    });
+    // The old session writes nothing, whichever lease the request names.
+    for (const fetcher of [
+      desktop.d.fetcher,
+      withMigrationLease(desktop.d.fetcher, taken.leaseId)
+    ]) {
+      const put = await fetcher(session.uploadUrl, {
+        method: 'PUT',
+        body: text('Stale staged file')
+      });
+      expect(put.status).toBe(409);
+      expect(await codeOf(put)).toBe(E2EE_MIGRATION_CODES.leaseLost);
+    }
+    expect(
+      srv.db
+        .prepare('SELECT reservation_state FROM upload_sessions WHERE id = ?')
+        .get(session.uploadSessionId)
+    ).toMatchObject({ reservation_state: 'open' });
+    // A session the new lease opens works.
+    const fresh = await openStagedUpload(desktop, srv, projectId);
+    const put = await desktop.d.fetcher(fresh.uploadUrl, {
+      method: 'PUT',
+      body: text('Fresh staged file')
+    });
+    expect(put.status).toBe(204);
+    // Each session records the lease that opened it.
+    const leaseOf = (id: string) =>
+      (
+        JSON.parse(
+          (
+            srv.db
+              .prepare('SELECT metadata_json FROM upload_sessions WHERE id = ?')
+              .get(id) as { metadata_json: string }
+          ).metadata_json
+        ) as { decryptLease?: string }
+      ).decryptLease;
+    expect(leaseOf(session.uploadSessionId)).toBe(opener);
+    expect(leaseOf(fresh.uploadSessionId)).toBe(taken.leaseId);
+  });
+
+  it('complete nothing when the decrypt lease moves during R2’s own completion (#918 follow-up)', async () => {
+    const srv = roomServer();
+    const { projectId } = await encryptedProject(srv, { revisions: 1 });
+    const desktop = reverseOn(srv, owner, 'owner_desktop', {
+      beforeStep: (step) => {
+        if (step === 'cutover') throw new Error('Stop here.');
+      }
+    });
+    await expect(decryptFully(desktop, projectId)).rejects.toThrow('Stop');
+    const session = await openStagedUpload(desktop, srv, projectId);
+    const { object_key: objectKey } = srv.db
+      .prepare('SELECT object_key FROM upload_sessions WHERE id = ?')
+      .get(session.uploadSessionId) as { object_key: string };
+    // The lease lapses and another start takes the staging over while R2
+    // completes the single-part object.
+    let taken: string | undefined;
+    interface ResumedUpload {
+      complete(parts: unknown[]): Promise<unknown>;
+    }
+    const original = srv.bucket.resumeMultipartUpload;
+    const resume = original as unknown as (
+      key: string,
+      id: string
+    ) => ResumedUpload;
+    srv.bucket.resumeMultipartUpload = vi.fn((key: string, id: string) => {
+      const upload = resume(key, id);
+      return {
+        ...upload,
+        complete: async (parts: unknown[]) => {
+          const completed = await upload.complete(parts);
+          srv.db
+            .prepare(
+              'UPDATE e2ee_project_migrations SET lease_expires_at = 1 WHERE project_id = ?'
+            )
+            .run(projectId);
+          taken = (
+            await createProjectMigrationsApi(desktop.d.fetcher).start(
+              projectId,
+              { direction: 'decrypt', deviceId: 'owner_laptop' },
+              null
+            )
+          ).leaseId;
+          return completed;
+        }
+      };
+    });
+    const put = await desktop.d.fetcher(session.uploadUrl, {
+      method: 'PUT',
+      body: text('Staged file')
+    });
+    srv.bucket.resumeMultipartUpload = original;
+    expect(taken).toBeDefined();
+    expect(put.status).toBe(409);
+    expect(await codeOf(put)).toBe(E2EE_MIGRATION_CODES.leaseLost);
+    // The stale session is released at once: no reservation, no object.
+    expect(
+      srv.db
+        .prepare('SELECT id FROM upload_sessions WHERE id = ?')
+        .get(session.uploadSessionId)
+    ).toBeUndefined();
+    expect(srv.bucket.objects.has(objectKey)).toBe(false);
+  });
+
+  it('reserve no part once the decrypt lease moved after the session check (#925 follow-up)', async () => {
+    const srv = roomServer();
+    const { projectId } = await encryptedProject(srv, { revisions: 1 });
+    const desktop = reverseOn(srv, owner, 'owner_desktop', {
+      beforeStep: (step) => {
+        if (step === 'cutover') throw new Error('Stop here.');
+      }
+    });
+    await expect(decryptFully(desktop, projectId)).rejects.toThrow('Stop');
+    const session = await openStagedUpload(desktop, srv, projectId);
+    // Another device takes the staging over between the part's session
+    // check and its reservation.
+    // (The Worker keeps the env it first saw, so the D1 binding is patched
+    // in place.)
+    const d1 = srv.env.DB as { prepare(sql: string): unknown };
+    const prepare = d1.prepare.bind(d1);
+    let tookOver = false;
+    d1.prepare = (sql: string) => {
+      if (!tookOver && sql.includes('INSERT INTO artifact_upload_parts')) {
+        tookOver = true;
+        srv.db
+          .prepare(
+            `UPDATE e2ee_project_migrations
+             SET lease_id = ?, lease_expires_at = ?
+             WHERE project_id = ?`
+          )
+          .run('T'.repeat(43), Date.now() + 60_000, projectId);
+      }
+      return prepare(sql);
+    };
+    const uploadPart = vi.fn();
+    const original = srv.bucket.resumeMultipartUpload;
+    const resume = original as unknown as (
+      key: string,
+      id: string
+    ) => { uploadPart(part: number, body: ArrayBuffer): Promise<unknown> };
+    srv.bucket.resumeMultipartUpload = vi.fn((key: string, id: string) => {
+      const upload = resume(key, id);
+      return {
+        ...upload,
+        uploadPart: (part: number, body: ArrayBuffer) => {
+          uploadPart(part);
+          return upload.uploadPart(part, body);
+        }
+      };
+    });
+    const put = await desktop.d.fetcher(session.uploadUrl, {
+      method: 'PUT',
+      body: text('Stale staged file')
+    });
+    d1.prepare = prepare;
+    srv.bucket.resumeMultipartUpload = original;
+    expect(tookOver).toBe(true);
+    expect(put.status).toBe(409);
+    expect(await codeOf(put)).toBe(E2EE_MIGRATION_CODES.leaseLost);
+    // Nothing reserved, nothing sent to R2.
+    expect(
+      srv.db
+        .prepare(
+          'SELECT COUNT(*) AS n FROM artifact_upload_parts WHERE upload_session_id = ?'
+        )
+        .get(session.uploadSessionId)
+    ).toEqual({ n: 0 });
+    expect(uploadPart).not.toHaveBeenCalled();
+  });
+
+  it('do not carry on as ordinary plaintext uploads after the cutover', async () => {
+    const srv = roomServer();
+    const { projectId } = await encryptedProject(srv, { revisions: 1 });
+    const leases = memoryLeaseStore();
+    const first = reverseOn(srv, owner, 'owner_desktop', {
+      leases,
+      beforeStep: (step) => {
+        if (step === 'cutover') throw new Error('Stop here.');
+      }
+    });
+    await expect(decryptFully(first, projectId)).rejects.toThrow('Stop');
+    const pending = await openStagedUpload(first, srv, projectId);
+    const written = await openStagedUpload(first, srv, projectId);
+    expect(
+      (
+        await first.d.fetcher(written.uploadUrl, {
+          method: 'PUT',
+          body: text('Staged, not finalized')
+        })
+      ).status
+    ).toBe(204);
+    // The same browser resumes and cuts over: the project is plaintext.
+    await decryptFully(
+      reverseOn(srv, owner, 'owner_desktop', { from: first.d, leases }),
+      projectId
+    );
+    expect(formatOf(srv, projectId)).toBe(1);
+    const before = count(srv, 'artifacts', projectId);
+    // Neither session opened under the decrypt lease lands anything now.
+    const put = await first.d.fetcher(pending.uploadUrl, {
+      method: 'PUT',
+      body: text('Late staged file')
+    });
+    expect(put.status).toBe(409);
+    expect(await codeOf(put)).toBe(E2EE_MIGRATION_CODES.leaseLost);
+    const finalized = await first.d.fetcher('/api/artifacts/finalize', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        projectId,
+        uploadSessionId: written.uploadSessionId,
+        artifactId: written.artifactId
+      })
+    });
+    expect(finalized.status).toBe(409);
+    expect(await codeOf(finalized)).toBe(E2EE_MIGRATION_CODES.leaseLost);
+    expect(count(srv, 'artifacts', projectId)).toBe(before);
+    // An ordinary upload cannot claim a decrypt lease: the key is dropped.
+    const spoofed = await srv.call('POST', '/api/uploads', {
+      body: {
+        projectId,
+        fileName: 'after.stl',
+        contentType: 'model/stl',
+        kind: 'stl-export',
+        metadata: { decryptLease: 'spoofed', note: 'kept' }
+      }
+    });
+    expect(spoofed.status).toBe(201);
+    const { session } = (await spoofed.json()) as {
+      session: { uploadSessionId: string; uploadUrl: string; artifactId: string };
+    };
+    expect(
+      JSON.parse(
+        (
+          srv.db
+            .prepare('SELECT metadata_json FROM upload_sessions WHERE id = ?')
+            .get(session.uploadSessionId) as { metadata_json: string }
+        ).metadata_json
+      )
+    ).toEqual({ note: 'kept' });
+    expect(
+      (
+        await srv.call('PUT', session.uploadUrl, {
+          raw: text('After the cutover')
+        })
+      ).status
+    ).toBe(204);
+    expect(
+      (
+        await srv.call('POST', '/api/artifacts/finalize', {
+          body: {
+            projectId,
+            uploadSessionId: session.uploadSessionId,
+            artifactId: session.artifactId
+          }
+        })
+      ).status
+    ).toBe(200);
+    expect(count(srv, 'artifacts', projectId)).toBe(before + 1);
+  });
+});
+
+// --- Save state authors -----------------------------------------------------------------
+
+describe('save state authors', () => {
+  it('keeps who saved each save state, as the encrypted history records them', async () => {
+    const srv = roomServer();
+    const encrypted = await encryptedProject(srv);
+    const { projectId } = encrypted;
+    const [byOther, byGone, spoofed] = encrypted.revisionIds as [
+      string,
+      string,
+      string
+    ];
+    // A former collaborator saved one, an account since deleted another
+    // (the project is no longer shared); the owner saved the third.
+    const recordAuthor = (revisionId: string, author: string) =>
+      srv.db
+        .prepare(
+          'UPDATE e2ee_project_revisions SET author_user_id = ? WHERE project_id = ? AND revision_id = ?'
+        )
+        .run(author, projectId, revisionId);
+    recordAuthor(byOther, OTHER);
+    recordAuthor(byGone, 'user_deleted_since');
+    recordAuthor(spoofed, OWNER);
+    const desktop = reverseOn(srv, owner, 'owner_desktop');
+    const sent: Record<string, unknown> = {};
+    // The browser names each save state's author; one request names
+    // another account than the encrypted history records.
+    desktop.d.before = async (path, init) => {
+      if (!path.endsWith('/revisions') || init.method !== 'POST') return;
+      const body = JSON.parse(init.body as string) as {
+        savedRevisionId: string;
+        authorUserId?: string;
+      };
+      sent[body.savedRevisionId] = body.authorUserId;
+      if (body.savedRevisionId === spoofed) {
+        init.body = JSON.stringify({ ...body, authorUserId: OTHER });
+      }
+    };
+    await decryptFully(desktop, projectId);
+    expect(sent).toEqual({
+      [byOther]: OTHER,
+      [byGone]: 'user_deleted_since',
+      [spoofed]: OWNER
+    });
+    const authors = Object.fromEntries(
+      rows<{ id: string; author_user_id: string }>(
+        srv,
+        'SELECT id, author_user_id FROM revisions WHERE project_id = ?',
+        projectId
+      ).map((r) => [r.id, r.author_user_id])
+    );
+    expect(authors).toEqual({
+      [byOther]: OTHER,
+      // An account that no longer exists, or one the history does not
+      // record for that save state: the owner who staged it.
+      [byGone]: OWNER,
+      [spoofed]: OWNER
+    });
+    // The history panel shows them.
+    const listed = (await (
+      await srv.call('GET', `/api/projects/${projectId}/revisions`)
+    ).json()) as { revisions: { revisionId: string; authorUserId?: string }[] };
+    expect(
+      listed.revisions.find((r) => r.revisionId === byOther)?.authorUserId
+    ).toBe(OTHER);
+  });
 });
 
 // --- Refusals -----------------------------------------------------------------------
@@ -1327,6 +2172,46 @@ describe('who may turn encryption off', () => {
     expect(
       decryptionErrorOf({ code: E2EE_MIGRATION_CODES.shared })
     ).toMatchObject({ retryable: false });
+  });
+
+  it('refuses to start or cut over while a live encrypted share link names the project, and goes ahead once it is revoked', async () => {
+    const srv = roomServer();
+    const encrypted = await encryptedProject(srv, { revisions: 1 });
+    const { projectId } = encrypted;
+    insertEncryptedShareLink(srv, projectId);
+    const laptop = device(srv, owner, 'owner_laptop');
+    expect(await start(srv, laptop, projectId)).toMatchObject({
+      status: 409,
+      code: E2EE_MIGRATION_CODES.shared
+    });
+    expect(migrationRow(srv, projectId)).toMatchObject({
+      direction: 'encrypt',
+      state: 'done'
+    });
+    revokeEncryptedShareLinks(srv, projectId);
+    // Started, then a link goes live before the cutover: it refuses.
+    let linked = false;
+    const desktop = reverseOn(srv, owner, 'owner_desktop', {
+      beforeStep: (step) => {
+        if (step !== 'cutover' || linked) return;
+        linked = true;
+        insertEncryptedShareLink(srv, projectId, 'share_2');
+      }
+    });
+    expect(await errorOf(decryptFully(desktop, projectId))).toMatchObject({
+      status: 409,
+      code: E2EE_MIGRATION_CODES.shared
+    });
+    expect(formatOf(srv, projectId)).toBe(2);
+    expect(migrationRow(srv, projectId)).toMatchObject({
+      direction: 'decrypt',
+      state: 'staging'
+    });
+    // Revoked, the same run resumes and cuts over.
+    revokeEncryptedShareLinks(srv, projectId);
+    await decryptFully(desktop, projectId);
+    expect(formatOf(srv, projectId)).toBe(1);
+    expect(migrationRow(srv, projectId)).toMatchObject({ state: 'done' });
   });
 
   it('refuses while the account encrypts new projects (decision D2)', async () => {

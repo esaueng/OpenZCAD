@@ -36,10 +36,11 @@ export class EncryptedProjectSharingError extends Error {
 /** Decision D2: an account that opted in may not store new plaintext projects. */
 export class EncryptedProjectsRequiredError extends Error {
   readonly code = ENCRYPTED_PROJECTS_REQUIRED_CODE;
-  constructor() {
-    super(
-      'This account encrypts new projects. Update OpenZCAD to create encrypted projects, or turn off "Encrypt new projects" in Settings › Encryption.'
-    );
+  /** ADR-024 slice 8-1 passes its own message under E2EE_DEFAULT_ON. */
+  constructor(
+    message = 'This account encrypts new projects. Update OpenZCAD to create encrypted projects, or turn off "Encrypt new projects" in Settings › Encryption.'
+  ) {
+    super(message);
     this.name = 'EncryptedProjectsRequiredError';
   }
 }

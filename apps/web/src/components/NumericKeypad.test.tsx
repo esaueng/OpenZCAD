@@ -305,3 +305,46 @@ describe('the converted value under the field', () => {
     expect(screen.getByText('= 0.394 in')).toBeTruthy();
   });
 });
+
+describe('a previewed expression', () => {
+  it('is handed over as typed, a plain number as a value alone', () => {
+    const { input, onPreview } = setup('');
+    fireEvent.change(input, { target: { value: '4 + 8' } });
+    expect(onPreview).toHaveBeenLastCalledWith(12, '4 + 8');
+    fireEvent.change(input, { target: { value: '7' } });
+    expect(onPreview).toHaveBeenLastCalledWith(7);
+  });
+});
+
+describe('an entry that does not evaluate', () => {
+  it('says so to the host until it does, and clears when the keypad closes', () => {
+    const onEntryError = vi.fn();
+    const view = render(
+      <NumericKeypad
+        request={{
+          kind: 'extrude',
+          commandValueId: 'distance',
+          label: 'Distance',
+          initial: '10',
+          unitKind: 'length'
+        }}
+        units="mm"
+        scope={{}}
+        anchorRef={{ current: null }}
+        onPreview={vi.fn()}
+        onEntryError={onEntryError}
+        onCommit={vi.fn()}
+        onCancel={() => undefined}
+      />
+    );
+    expect(onEntryError).toHaveBeenLastCalledWith(null);
+    const input = screen.getByRole('textbox', { name: 'Distance' });
+    fireEvent.change(input, { target: { value: '10+' } });
+    expect(onEntryError).toHaveBeenLastCalledWith(expect.any(String));
+    fireEvent.change(input, { target: { value: '12' } });
+    expect(onEntryError).toHaveBeenLastCalledWith(null);
+    fireEvent.change(input, { target: { value: '10+' } });
+    view.unmount();
+    expect(onEntryError).toHaveBeenLastCalledWith(null);
+  });
+});
