@@ -63,6 +63,27 @@ const server = (extra: Record<string, unknown> = {}) =>
   newServer([owner, other], undefined, { ...MIGRATION_ON, ...extra });
 const text = (value: string) => new TextEncoder().encode(value);
 
+/** A pending encrypted invitation row (slice 5-3a), as stored. */
+function insertEncryptedInvitation(srv: Server, projectId: string): void {
+  srv.db
+    .prepare(
+      `INSERT INTO e2ee_invitations
+         (invitation_id, project_id, invited_by_user_id, email_hash, role,
+          token_hash, statement, signature, signer_device_id, created_at,
+          expires_at)
+       VALUES ('einv_1', ?, ?, ?, 'viewer', ?, 'statement', ?, 'owner_laptop',
+               'now', ?)`
+    )
+    .run(
+      projectId,
+      OWNER,
+      'e'.repeat(64),
+      't'.repeat(64),
+      's'.repeat(87),
+      Date.now() + 3_600_000
+    );
+}
+
 // --- Plaintext side ------------------------------------------------------------
 
 async function plaintextProject(
@@ -616,6 +637,18 @@ describe('the migration lease', () => {
       )
     ).toMatchObject({ status: 409, code: 'E2EE_MIGRATION_SHARED' });
     srv.db.prepare('DELETE FROM project_invitations').run();
+    // So does a pending encrypted invitation (slice 5-3a), should one name
+    // the project.
+    insertEncryptedInvitation(srv, plain.projectId);
+    expect(
+      await errorOf(
+        api.start(plain.projectId, {
+          direction: 'encrypt',
+          deviceId: 'owner_laptop'
+        })
+      )
+    ).toMatchObject({ status: 409, code: 'E2EE_MIGRATION_SHARED' });
+    srv.db.prepare('DELETE FROM e2ee_invitations').run();
     // Not from the recycle bin.
     srv.db
       .prepare("UPDATE projects SET status = 'deleted' WHERE id = ?")

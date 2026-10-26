@@ -104,12 +104,36 @@ import {
   handleE2eeProjectMigrationRequest,
   isE2eeProjectMigrationPath
 } from './e2eeProjectMigrations';
-import { migrationLeaseOf } from './e2eeMigrationLease';
+import {
+  isProjectDecryptStaging,
+  migrationLeaseOf
+} from './e2eeMigrationLease';
+import { PROJECT_MIGRATING_CODE } from '@openzcad/shared';
 import {
   isE2eeProjectGroupStorageReady,
   isE2eeProjectMigrationStorageReady,
-  isE2eeProjectVersionStorageReady
+  isE2eeProjectVersionStorageReady,
+  isE2eeReverseStorageReady
 } from '@openzcad/cloudflare-adapters';
+
+/**
+ * Slice 7-3: the encrypted content routes (documents, versions, revisions,
+ * project info, measurements, view state and blobs) a project being turned
+ * back into plaintext refuses writes on. Its MLS key management (Commits,
+ * wraps, resets) keeps working: it changes no content.
+ */
+const ENCRYPTED_CONTENT_WRITE_ROUTE =
+  /^\/api\/e2ee\/projects\/([^/]+)\/(?:document|versions|revisions(?:\/[^/]+)?|info|measurements|view-states(?:\/[^/]+)?|blobs(?:\/.*)?)$/;
+/**
+ * Writes that would share an encrypted project, or settle a member's
+ * departure, while its plaintext is staged (slice 7-3 with Phase 5): share
+ * links and their keys, authority and snapshots (5-10; matched before that
+ * slice's routes exist, so they arrive covered), proposals (5-5), new
+ * invitations and KeyPackages (5-3a). Revoking an invitation stays open. The reverse cutover refuses a shared project anyway; this keeps a
+ * staging from being undone by a write it cannot see.
+ */
+const ENCRYPTED_SHARING_WRITE_ROUTE =
+  /^\/api\/e2ee\/projects\/([^/]+)\/(?:share-links(?:\/.*)?|mls\/proposals|invitations|key-packages(?:\/claim)?)$/;
 
 interface WriteDatabase extends D1Database {
   authorization: E2eeWriteAuthorization;
@@ -2004,7 +2028,19 @@ export async function handleE2eeRequest(
   /** The invitation routes' email, sender and sharing rollout (5-3a). */
   invitations: E2eeInvitationHost = CLOSED_INVITATIONS,
   /** Moving plaintext projects to encrypted storage (slice 7-1). */
-  migrationEnabled = false
+  migrationEnabled = false,
+  /**
+   * Slice 7-3: the beta-only reverse path is open to this account
+   * (E2EE_REVERSE_ENABLED with migration), reported once migration 0043 is
+   * installed.
+   */
+  reverseEnabled = false,
+  /**
+   * Slice 7-3: whether encrypted content writes ask if their project is
+   * being turned back into plaintext (refused with 409 PROJECT_MIGRATING).
+   * The global flags decide, not the account's, as for plaintext writes.
+   */
+  reverseWritesGated = false
 ): Promise<Response> {
   const { pathname } = new URL(request.url);
   const method = request.method;
@@ -2026,10 +2062,15 @@ export async function handleE2eeRequest(
         projectsReady &&
         migrationEnabled &&
         (await isE2eeProjectMigrationStorageReady(env.DB));
+      const reverseReady =
+        migrationReady &&
+        reverseEnabled &&
+        (await isE2eeReverseStorageReady(env.DB));
       return json({
         enabled: keysReady,
         projectsEnabled: projectsReady,
-        ...(migrationReady ? { migrationEnabled: true } : {})
+        ...(migrationReady ? { migrationEnabled: true } : {}),
+        ...(reverseReady ? { reverseEnabled: true } : {})
       });
     }
     if (!enabled) {
@@ -2103,8 +2144,32 @@ export async function handleE2eeRequest(
         userId,
         migrationEnabled,
         db.authorization,
-        migrationLease
+        migrationLease,
+        reverseEnabled
       );
+    }
+    // Slice 7-3: while its plaintext is staged, an encrypted project's
+    // content and sharing stay as the staging read them.
+    if (reverseWritesGated && !['GET', 'HEAD'].includes(method)) {
+      const content =
+        ENCRYPTED_CONTENT_WRITE_ROUTE.exec(pathname) ??
+        ENCRYPTED_SHARING_WRITE_ROUTE.exec(pathname);
+      let projectId: string | null = null;
+      try {
+        projectId = content ? decodeURIComponent(content[1]!) : null;
+      } catch {
+        projectId = null;
+      }
+      if (
+        projectId &&
+        (await isProjectDecryptStaging(rawDb, projectId, true))
+      ) {
+        refuse(
+          409,
+          PROJECT_MIGRATING_CODE,
+          'This project is leaving encrypted storage. It opens read-only until that finishes.'
+        );
+      }
     }
     if (isE2eeDeviceRemovalPath(pathname)) {
       // Revocation cutoffs and solo group resets (e2eeDeviceRemoval.ts).

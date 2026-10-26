@@ -102,7 +102,8 @@ export async function assertProjectNotMigrating(
   },
   userId: UserId,
   projectId: string,
-  migrationEnabled: boolean
+  migrationEnabled: boolean,
+  message = 'This project is being moved to encrypted storage. It opens read-only until that finishes.'
 ): Promise<void> {
   if (!(await isProjectMigrating(db, projectId, migrationEnabled))) return;
   try {
@@ -111,11 +112,7 @@ export async function assertProjectNotMigrating(
     if (error instanceof ProjectNotFoundError) return;
     throw error;
   }
-  throw new SharingRequestError(
-    409,
-    PROJECT_MIGRATING_CODE,
-    'This project is being moved to encrypted storage. It opens read-only until that finishes.'
-  );
+  throw new SharingRequestError(409, PROJECT_MIGRATING_CODE, message);
 }
 
 /** Room access on a project that is not plaintext. */
@@ -179,6 +176,18 @@ export async function assertProjectRouteFormat(
       );
     }
     return;
+  }
+  // Slice 7-3: an encrypted project being turned back into plaintext keeps
+  // its room closed (409 PROJECT_MIGRATING) while its plaintext is staged.
+  if (route.rule === 'room') {
+    await assertProjectNotMigrating(
+      db,
+      persistence,
+      userId,
+      route.projectId,
+      migrationEnabled,
+      'This project is leaving encrypted storage. It opens read-only until that finishes.'
+    );
   }
   let access: ProjectAccess;
   try {

@@ -245,6 +245,14 @@ export interface CloudflareEnv {
    * encrypted projects are open to; requires migration 0042 in D1 first.
    */
   E2EE_MIGRATION_ENABLED?: string;
+  /**
+   * Opens the beta-only reverse path (ADR-024 Phase 7, slice 7-3): turning
+   * an encrypted project the owner alone holds back into plaintext. Closed
+   * unless set to a true value, only for accounts migration is open to
+   * (E2EE_MIGRATION_ENABLED), and it requires migration 0043 in D1 first.
+   * Phase 8 deletes it.
+   */
+  E2EE_REVERSE_ENABLED?: string;
   AI_PATCH_DIRECT_EDIT_ENABLED?: string;
   AI_PATCH_GROWING_HOLDER_ENABLED?: string;
   AI_PATCH_HOLE_CONTROL_ENABLED?: string;
@@ -333,6 +341,7 @@ export const CLOUDFLARE_BOOLEAN_FLAGS = [
   'E2EE_KEYS_ENABLED',
   'E2EE_PROJECTS_ENABLED',
   'E2EE_MIGRATION_ENABLED',
+  'E2EE_REVERSE_ENABLED',
   'AI_PATCH_DIRECT_EDIT_ENABLED',
   'AI_PATCH_GROWING_HOLDER_ENABLED',
   'AI_PATCH_HOLE_CONTROL_ENABLED',
@@ -456,6 +465,22 @@ export function isE2eeMigrationEnabled(
   return (
     isCloudflareFeatureEnabled(env, 'E2EE_MIGRATION_ENABLED') &&
     isE2eeProjectsEnabled(env, email)
+  );
+}
+
+/**
+ * Whether one authenticated account may turn an encrypted project back into
+ * plaintext (ADR-024 Phase 7, slice 7-3, the beta-only reverse path):
+ * migration must be open to it (`isE2eeMigrationEnabled`) and
+ * E2EE_REVERSE_ENABLED itself must be on. All default closed.
+ */
+export function isE2eeReverseEnabled(
+  env: CloudflareEnv,
+  email?: string
+): boolean {
+  return (
+    isCloudflareFeatureEnabled(env, 'E2EE_REVERSE_ENABLED') &&
+    isE2eeMigrationEnabled(env, email)
   );
 }
 
@@ -683,6 +708,20 @@ export const isE2eeProjectMigrationStorageReady = cachedSchemaProbe(
 );
 
 /**
+ * Whether migration 0043 is installed: the reverse path's quota treatment
+ * (ADR-024 Phase 7, slice 7-3). Its view `e2ee_decrypt_staged_projects`
+ * names the encrypted projects whose plaintext is being staged beside them
+ * (or dropped after an abandon); their plaintext rows count toward nothing
+ * until the cutover. Only the reverse routes and the usage reads that must
+ * agree with its triggers name it, each after asking this.
+ */
+export const isE2eeReverseStorageReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM sqlite_master WHERE type = 'view'
+   AND name = 'e2ee_decrypt_staged_projects'`,
+  (row) => row?.ready === 1
+);
+
+/**
  * The SQL that names a project (as `<alias>`) whose plaintext is being
  * staged for encryption under one live lease (migration 0042). Its binds
  * are the lease id and the current time in milliseconds.
@@ -701,11 +740,69 @@ export function stagedForEncryptionSql(alias: string): string {
  * session carries it, so a session opened before staging began lands
  * nothing after (slice 7-1): the cutover checks no artifact, and the purge
  * would delete a late one unencrypted. No binds.
+ *
+ * Any staging refuses, whatever its direction. A cutover or purge refuses
+ * only when it moved the project to encrypted storage: one that turned an
+ * encrypted project back into plaintext (slice 7-3) purges ciphertext,
+ * never a file, and the project takes plaintext files again from its
+ * cutover on.
  */
 export function projectNotMigratingSql(projectIdSql: string): string {
   return `NOT EXISTS (SELECT 1 FROM e2ee_project_migrations migrating
     WHERE migrating.project_id = ${projectIdSql}
-      AND migrating.state IN ('staging', 'cutover', 'purging'))`;
+      AND (migrating.state = 'staging'
+        OR (migrating.direction = 'encrypt'
+          AND migrating.state IN ('cutover', 'purging'))))`;
+}
+
+/**
+ * The SQL that holds while the encrypted project whose id is
+ * `projectIdSql` is being turned back into plaintext (slice 7-3,
+ * migration 0042's direction `decrypt`): what a decrypt staging's own
+ * upload statements carry in place of `projectNotMigratingSql`, which
+ * refuses every staging. The session was opened under the live decrypt
+ * lease (`DecryptStagingFence`); this keeps it from landing anything once
+ * that staging was cut over or abandoned. No binds.
+ */
+function projectStagedForDecryptionSql(projectIdSql: string): string {
+  return `EXISTS (SELECT 1 FROM e2ee_project_migrations decrypting
+    JOIN projects decrypting_project ON decrypting_project.id = decrypting.project_id
+    WHERE decrypting.project_id = ${projectIdSql}
+      AND decrypting.direction = 'decrypt' AND decrypting.state = 'staging'
+      AND decrypting_project.storage_format = 2)`;
+}
+
+/**
+ * A fence a decrypted (plaintext) staging write carries in its own SQL
+ * (ADR-024 Phase 7, slice 7-3): the owner's live decrypt lease.
+ */
+export interface DecryptStagingFence {
+  readonly sql: string;
+  readonly binds: readonly unknown[];
+}
+
+/**
+ * A plaintext staging write landed nothing: the decrypt lease it ran under
+ * lapsed or moved meanwhile (slice 7-3).
+ */
+export class DecryptStagingLeaseError extends Error {
+  constructor() {
+    super(
+      'This project’s migration lease lapsed or moved to another device. Start the migration again to resume.'
+    );
+    this.name = 'DecryptStagingLeaseError';
+  }
+}
+
+/** What the cutover of a decrypting project points the project row at. */
+export interface DecryptStagedHead {
+  readonly objectId: string;
+  readonly envelope: string;
+  readonly version: number;
+  readonly name: string;
+  readonly lastRevisionId: string | null;
+  readonly revisionCount: number;
+  readonly documentBytes: number;
 }
 
 /** A staging lease an encrypted-blob write runs under (slice 7-1). */
@@ -814,6 +911,22 @@ interface DurableUploadSession {
   stagingLease: string | null;
 }
 
+/** An upload session `requireUploadSession` let through, and on what. */
+interface CheckedUploadSession extends DurableUploadSession {
+  /**
+   * Slice 7-3: a plaintext session of an encrypted project being turned
+   * back into plaintext (a decrypt staging's file, which only its lease
+   * holder could open). Its statements carry the decrypt staging fence
+   * instead of the not-migrating one, which would refuse them.
+   */
+  decryptStaged: boolean;
+}
+
+/** What the upload fences need to know of a session (slices 7-1, 7-3). */
+type FencedUpload = Pick<DurableUploadSession, 'e2eeBlobKind'> & {
+  readonly decryptStaged?: boolean;
+};
+
 interface DurableUploadPart {
   partNumber: number;
   bytes: number;
@@ -863,6 +976,21 @@ export class D1R2PersistenceService implements PersistenceService {
   private async storageFormatColumn(prefix: string): Promise<string> {
     return (await isProjectStorageFormatReady(this.env.DB))
       ? `, ${prefix}storage_format`
+      : '';
+  }
+
+  /**
+   * ` AND <column> NOT IN (staged projects)` while the reverse path is open
+   * (E2EE_MIGRATION_ENABLED and E2EE_REVERSE_ENABLED) and migration 0043 is
+   * installed: plaintext staged beside an encrypted project (slice 7-3)
+   * counts toward no quota until its cutover, as 0043's triggers say.
+   * Nothing otherwise, so ordinary traffic names no encrypted table.
+   */
+  private async notStagedForDecryption(column: string): Promise<string> {
+    return isCloudflareFeatureEnabled(this.env, 'E2EE_MIGRATION_ENABLED') &&
+      isCloudflareFeatureEnabled(this.env, 'E2EE_REVERSE_ENABLED') &&
+      (await isE2eeReverseStorageReady(this.env.DB))
+      ? ` AND ${column} NOT IN (SELECT project_id FROM e2ee_decrypt_staged_projects)`
       : '';
   }
 
@@ -3250,6 +3378,9 @@ export class D1R2PersistenceService implements PersistenceService {
           binds: [ownerUserId]
         }
       : { bytes: '', count: '', binds: [] };
+    // Since migration 0043, a decrypting project's staged files count only
+    // from its cutover on (slice 7-3), as its accounting triggers do.
+    const unstaged = await this.notStagedForDecryption('projects.id');
     const row = await this.env
       .DB!.prepare(
         `SELECT usage.finalized_bytes AS accounted_total,
@@ -3257,13 +3388,13 @@ export class D1R2PersistenceService implements PersistenceService {
                   SELECT SUM(COALESCE(artifacts.bytes, 0))
                   FROM artifacts
                   JOIN projects ON projects.id = artifacts.project_id
-                  WHERE projects.user_id = ?
+                  WHERE projects.user_id = ?${unstaged}
                 ), 0)${blobs.bytes} AS actual_total,
                 (
                   SELECT COUNT(*)
                   FROM artifacts
                   JOIN projects ON projects.id = artifacts.project_id
-                  WHERE projects.user_id = ?
+                  WHERE projects.user_id = ?${unstaged}
                 )${blobs.count} AS count
          FROM artifact_account_usage usage
          WHERE usage.owner_user_id = ?`
@@ -3375,6 +3506,245 @@ export class D1R2PersistenceService implements PersistenceService {
       artifactCount: artifacts.count,
       artifactLimitBytes: entitlements.artifactLimitBytes,
       entitlements
+    };
+  }
+
+  /**
+   * Slice 7-3 (ADR-024 Phase 7, the beta-only reverse path): stores one
+   * decrypted document of an encrypted project beside its ciphertext, under
+   * the owner's live decrypt lease, which every statement carries
+   * (`fence`): its R2 object and storage assets, and with `revision` the
+   * save state's row under its own id. The project row is not touched; the
+   * cutover points it at the staged head. Staged bytes count toward no
+   * quota until then (migration 0043), so no capacity check runs. A save
+   * state already staged under its id answers as staged.
+   */
+  async stageDecryptedDocument(
+    userId: UserId,
+    input: {
+      projectId: string;
+      document: ProjectDocument;
+      storage?: ClientProjectStorage;
+      revision?: { revisionId: string; reason: string };
+      fence: DecryptStagingFence;
+    }
+  ): Promise<{
+    objectId: string;
+    checksumSha256: string;
+    version: number;
+    staged: boolean;
+  }> {
+    if (!this.env.DB || !this.projectStorageBucket()) {
+      throw new ProjectObjectStorageError(
+        'Project object storage is not configured.'
+      );
+    }
+    const document = withoutDerivedProjection(input.document);
+    if (
+      document.projectId !== input.projectId ||
+      document.ownerUserId !== userId
+    ) {
+      throw new ProjectNotFoundError(input.projectId);
+    }
+    const revision = input.revision;
+    if (revision) {
+      // A save state as it was saved, possibly long ago and at another
+      // version than its staged copy: it names itself as its newest
+      // revision, once. (`assertClientSavePoint` is for a save made now.)
+      const latest = document.revisions.at(-1);
+      if (
+        !latest ||
+        latest.revisionId !== revision.revisionId ||
+        document.revisions.filter(
+          (record) => record.revisionId === revision.revisionId
+        ).length !== 1
+      ) {
+        throw new SavePointRequestError(
+          'The newest revision is not the save point this request names.'
+        );
+      }
+      const existing = await this.env.DB.prepare(
+        `SELECT r.project_id, o.id AS object_id, o.checksum_sha256
+         FROM revisions r
+         LEFT JOIN project_document_objects o ON o.id = r.document_object_id
+         WHERE r.id = ?`
+      )
+        .bind(revision.revisionId)
+        .first<{
+          project_id: string;
+          object_id: string | null;
+          checksum_sha256: string | null;
+        }>();
+      if (existing) {
+        if (
+          existing.project_id !== input.projectId ||
+          !existing.object_id ||
+          !existing.checksum_sha256
+        ) {
+          throw new RevisionIdCollisionError();
+        }
+        return {
+          objectId: existing.object_id,
+          checksumSha256: existing.checksum_sha256,
+          version: document.version,
+          staged: true
+        };
+      }
+    }
+    this.assertCloudDocumentWithinCeiling(document);
+    const write = await this.putProjectStorageObjects(document, {
+      ...(input.storage ? { storage: input.storage } : {}),
+      stagedForDecryption: true
+    });
+    const envelope = projectObjectEnvelope(document, write.objectId);
+    const fence = input.fence;
+    const objectFence = `EXISTS (SELECT 1 FROM project_document_objects
+      WHERE id = ? AND project_id = ?)`;
+    const latest = document.revisions.at(-1);
+    const statements: D1PreparedStatement[] = [
+      this.env.DB.prepare(
+        `INSERT INTO project_document_objects
+           (id, project_id, object_key, checksum_sha256, logical_bytes,
+            stored_bytes, content_encoding, state, created_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, 'committed', ? WHERE ${fence.sql}`
+      ).bind(
+        write.objectId,
+        input.projectId,
+        write.objectKey,
+        write.prepared.checksumSha256,
+        write.prepared.logicalBytes,
+        write.prepared.storedBytes,
+        write.prepared.contentEncoding,
+        write.createdAt,
+        ...fence.binds
+      ),
+      ...write.prepared.assets.map((asset) =>
+        this.env
+          .DB!.prepare(
+            `INSERT OR IGNORE INTO project_storage_assets
+               (id, project_id, kind, object_key, checksum_sha256,
+                logical_bytes, stored_bytes, content_encoding, created_at)
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${objectFence}`
+          )
+          .bind(
+            `project_asset_${crypto.randomUUID()}`,
+            input.projectId,
+            asset.kind,
+            asset.objectKey,
+            asset.checksumSha256,
+            asset.logicalBytes,
+            asset.storedBytes,
+            asset.contentEncoding,
+            write.createdAt,
+            write.objectId,
+            input.projectId
+          )
+      ),
+      ...(revision && latest
+        ? [
+            this.env.DB.prepare(
+              `INSERT INTO revisions
+                 (id, project_id, reason, document_json, document_object_id,
+                  document_bytes, created_at, author_user_id)
+               SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE ${objectFence}`
+            ).bind(
+              revision.revisionId,
+              input.projectId,
+              revision.reason,
+              envelope,
+              write.objectId,
+              persistedDocumentBytes(document),
+              latest.createdAt,
+              userId,
+              write.objectId,
+              input.projectId
+            )
+          ]
+        : [])
+    ];
+    let results: Awaited<ReturnType<D1Database['batch']>>;
+    try {
+      results = await this.env.DB.batch(statements);
+    } catch (error) {
+      await this.discardStagedWrite(input.projectId, write);
+      throw error;
+    }
+    if ((results[0]?.meta?.changes ?? 0) !== 1) {
+      await this.discardStagedWrite(input.projectId, write);
+      throw new DecryptStagingLeaseError();
+    }
+    return {
+      objectId: write.objectId,
+      checksumSha256: write.prepared.checksumSha256,
+      version: document.version,
+      staged: false
+    };
+  }
+
+  /** Removes a staged write's objects that no row names (slice 7-3). */
+  private async discardStagedWrite(
+    projectId: string,
+    write: ProjectStorageWrite
+  ): Promise<void> {
+    const bucket = this.projectStorageBucket();
+    if (!bucket) return;
+    try {
+      const named = await this.env
+        .DB!.prepare(
+          'SELECT 1 AS named FROM project_document_objects WHERE id = ?'
+        )
+        .bind(write.objectId)
+        .first<{ named: number }>();
+      if (named) return;
+      const orphans = await Promise.all(
+        write.missingAssets.map(async (asset) =>
+          (await this.env
+            .DB!.prepare(
+              'SELECT 1 AS named FROM project_storage_assets WHERE project_id = ? AND object_key = ?'
+            )
+            .bind(projectId, asset.objectKey)
+            .first<{ named: number }>())
+            ? null
+            : asset.objectKey
+        )
+      );
+      await Promise.allSettled([
+        bucket.delete(write.objectKey),
+        ...orphans.flatMap((key) => (key ? [bucket.delete(key)] : []))
+      ]);
+    } catch {
+      // An orphaned object is harmless; the project's purge sweeps it.
+    }
+  }
+
+  /**
+   * The staged plaintext head of a decrypting project (slice 7-3): the
+   * newest committed document object of the project with this checksum,
+   * read back and verified, summarized for the cutover's project row.
+   */
+  async decryptStagedHead(
+    projectId: string,
+    checksumSha256: string
+  ): Promise<DecryptStagedHead | null> {
+    if (!this.env.DB) return null;
+    const row = await this.env.DB.prepare(
+      `SELECT id FROM project_document_objects
+       WHERE project_id = ? AND checksum_sha256 = ? AND state = 'committed'
+       ORDER BY created_at DESC, id DESC LIMIT 1`
+    )
+      .bind(projectId, checksumSha256)
+      .first<{ id: string }>();
+    if (!row) return null;
+    const document = await this.loadProjectObject(projectId, row.id);
+    if (document.projectId !== projectId) return null;
+    return {
+      objectId: row.id,
+      envelope: projectObjectEnvelope(document, row.id),
+      version: document.version,
+      name: document.name,
+      lastRevisionId: (document.revisions.at(-1)?.revisionId as string) ?? null,
+      revisionCount: document.revisions.length,
+      documentBytes: persistedDocumentBytes(document)
     };
   }
 
@@ -3603,26 +3973,50 @@ export class D1R2PersistenceService implements PersistenceService {
 
   async createUploadSession(
     userId: UserId,
-    request: CreateUploadSessionRequest
+    request: CreateUploadSessionRequest,
+    options?: {
+      /**
+       * Slice 7-3: a decrypted file of an encrypted project its owner is
+       * turning back into plaintext, under the live decrypt lease this
+       * fence names (the route checked it; the insert carries it).
+       */
+      decryptStaging?: DecryptStagingFence;
+    }
   ): Promise<CreateUploadSessionResponse> {
     if (!this.env.DB) {
       return getInMemoryPersistence().createUploadSession(userId, request);
     }
     const access = await this.requireProjectEdit(userId, request.projectId);
-    // Artifact and upload routes are not under /api/projects/:id, so the
-    // Worker's format gate does not see them: refuse here too.
-    assertPlaintextProject(access);
+    const staging = options?.decryptStaging;
+    if (staging) {
+      if (
+        access.role !== 'owner' ||
+        isPlaintextStorageFormat(access.storageFormat)
+      ) {
+        throw new ProjectNotFoundError(request.projectId);
+      }
+    } else {
+      // Artifact and upload routes are not under /api/projects/:id, so the
+      // Worker's format gate does not see them: refuse here too. An
+      // encrypted project's files are encrypted blobs (their own route).
+      assertPlaintextProject(access);
+    }
     if (!this.env.ARTIFACTS) {
       throw new ArtifactStorageError();
     }
     // Slice 7-1: a project staged for encryption takes no new plaintext
-    // files, whatever the Worker checked before.
-    await this.refuseIfMigrating(request.projectId);
+    // files, whatever the Worker checked before. A decrypt staging's own
+    // file (slice 7-3) is the one plaintext upload a migrating project
+    // takes: it carries the decrypt lease instead of the not-migrating
+    // fence, which would refuse it.
+    if (!staging) await this.refuseIfMigrating(request.projectId);
     // Expired cross-account uploads are reclaimed by the scheduled sweeper.
     await this.purgeExpiredUploadSessionsForOwner(userId);
     await this.refreshAccountQuota(access.ownerUserId);
     const session = createUploadSessionRecord(request);
-    const notMigrating = await this.plaintextUploadFence('projects.id');
+    const notMigrating = staging
+      ? ''
+      : await this.plaintextUploadFence('projects.id');
     try {
       const inserted = await this.env.DB.prepare(
         `INSERT INTO upload_sessions
@@ -3635,7 +4029,7 @@ export class D1R2PersistenceService implements PersistenceService {
            SELECT 1 FROM projects
            WHERE id = ? AND (user_id = ? OR status != 'deleted')
              AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id)${notMigrating}
-         )`
+         )${staging ? ` AND ${staging.sql}` : ''}`
       )
         .bind(
           session.uploadSessionId,
@@ -3649,10 +4043,12 @@ export class D1R2PersistenceService implements PersistenceService {
           session.expiresAt,
           access.ownerUserId,
           request.projectId,
-          userId
+          userId,
+          ...(staging?.binds ?? [])
         )
         .run();
       if (inserted.meta?.changes === 0) {
+        if (staging) throw new DecryptStagingLeaseError();
         await this.refuseIfMigrating(request.projectId);
         throw new ProjectNotFoundError(request.projectId);
       }
@@ -3884,7 +4280,7 @@ export class D1R2PersistenceService implements PersistenceService {
   private async requireUploadSession(
     userId: UserId,
     uploadSessionId: string
-  ): Promise<DurableUploadSession> {
+  ): Promise<CheckedUploadSession> {
     const upload = await this.loadUploadSession(uploadSessionId);
     const expiresAt = upload ? Date.parse(upload.expiresAt) : Number.NaN;
     if (!upload || !Number.isFinite(expiresAt) || expiresAt < Date.now()) {
@@ -3908,9 +4304,19 @@ export class D1R2PersistenceService implements PersistenceService {
     // lease that opened it is the live one, so after a takeover the browser
     // left behind writes nothing more to the upload or its reservation
     // (#914 review; `stagingLeaseFence` in each advancing statement).
+    let decryptStaged = false;
     if (upload.e2eeBlobKind === null) {
-      assertPlaintextProject(access);
-      await this.refuseIfMigrating(upload.projectId);
+      // Slice 7-3: the decrypted files of an encrypted project being turned
+      // back into plaintext, whose session only the lease holder opened.
+      // They are not refused as migrating: the decrypt staging is the
+      // migration they belong to, and their statements carry its fence.
+      decryptStaged =
+        !isPlaintextStorageFormat(access.storageFormat) &&
+        (await this.isStagedForDecryption(upload.projectId));
+      if (!decryptStaged) {
+        assertPlaintextProject(access);
+        await this.refuseIfMigrating(upload.projectId);
+      }
     } else if (upload.stagingLease !== null) {
       await this.refuseIfStagingLeaseLost(upload);
     } else if (isPlaintextStorageFormat(access.storageFormat)) {
@@ -3929,13 +4335,32 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     await this.refreshAccountQuota(access.ownerUserId);
-    return upload;
+    return { ...upload, decryptStaged };
   }
 
   /**
    * Whether a plaintext project is being staged for encryption (slice 7-1,
    * migration 0042), so its plaintext uploads refuse (`refuseIfMigrating`).
    */
+  /**
+   * Whether an encrypted project is being turned back into plaintext
+   * (slice 7-3, migration 0043 on 0042): its plaintext upload sessions,
+   * which only the lease holder could open, carry decrypted files.
+   */
+  private async isStagedForDecryption(projectId: string): Promise<boolean> {
+    if (!(await isE2eeReverseStorageReady(this.env.DB))) return false;
+    const row = await this.env
+      .DB!.prepare(
+        `SELECT 1 AS staged FROM e2ee_project_migrations m
+         JOIN projects p ON p.id = m.project_id
+         WHERE m.project_id = ? AND m.direction = 'decrypt'
+           AND m.state = 'staging' AND p.storage_format = 2`
+      )
+      .bind(projectId)
+      .first<{ staged: number }>();
+    return row?.staged === 1;
+  }
+
   private async isStagedForEncryption(projectId: string): Promise<boolean> {
     if (!(await isE2eeProjectMigrationStorageReady(this.env.DB))) return false;
     const row = await this.env
@@ -4000,9 +4425,7 @@ export class D1R2PersistenceService implements PersistenceService {
    * PROJECT_MIGRATING refusals, and once migration 0042 is installed, so
    * with the flag off no upload statement names its table.
    */
-  private async plaintextUploadFenced(
-    upload?: Pick<DurableUploadSession, 'e2eeBlobKind'>
-  ): Promise<boolean> {
+  private async plaintextUploadFenced(upload?: FencedUpload): Promise<boolean> {
     return (
       (!upload || upload.e2eeBlobKind === null) &&
       isCloudflareFeatureEnabled(this.env, 'E2EE_MIGRATION_ENABLED') &&
@@ -4013,12 +4436,19 @@ export class D1R2PersistenceService implements PersistenceService {
   /**
    * Slice 7-1: refuses a plaintext upload to a project staged for
    * encryption with PROJECT_MIGRATING. Call it only after access was
-   * resolved.
+   * resolved. A decrypt staging's own session (slice 7-3) is refused with
+   * DecryptStagingLeaseError once that staging is over instead.
    */
   private async refuseIfMigrating(
     projectId: string,
-    upload?: Pick<DurableUploadSession, 'e2eeBlobKind'>
+    upload?: FencedUpload
   ): Promise<void> {
+    if (upload?.decryptStaged) {
+      if (!(await this.isStagedForDecryption(projectId))) {
+        throw new DecryptStagingLeaseError();
+      }
+      return;
+    }
     if (
       (await this.plaintextUploadFenced(upload)) &&
       (await this.isStagedForEncryption(projectId))
@@ -4033,11 +4463,17 @@ export class D1R2PersistenceService implements PersistenceService {
    * once that project's move to encrypted storage began
    * (`projectNotMigratingSql`); '' for an encrypted-blob session, which a
    * staging writes, and while the fence is closed (`plaintextUploadFenced`).
+   * A decrypt staging's own session (slice 7-3) carries
+   * `projectStagedForDecryptionSql` instead: it lands only while that
+   * staging lasts, never after its cutover or abandon.
    */
   private async plaintextUploadFence(
     projectIdSql: string,
-    upload?: Pick<DurableUploadSession, 'e2eeBlobKind'>
+    upload?: FencedUpload
   ): Promise<string> {
+    if (upload?.decryptStaged) {
+      return ` AND ${projectStagedForDecryptionSql(projectIdSql)}`;
+    }
     return (await this.plaintextUploadFenced(upload))
       ? ` AND ${projectNotMigratingSql(projectIdSql)}`
       : '';
@@ -5109,9 +5545,19 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().finalizeArtifact(userId, request);
     }
-    assertPlaintextProject(
-      await this.requireProjectEdit(userId, request.projectId)
+    // An encrypted project commits encrypted blobs, never artifacts; but
+    // one being turned back into plaintext (slice 7-3) commits the
+    // decrypted files its lease holder uploaded.
+    const finalizeAccess = await this.requireProjectEdit(
+      userId,
+      request.projectId
     );
+    if (
+      isPlaintextStorageFormat(finalizeAccess.storageFormat) ||
+      !(await this.isStagedForDecryption(request.projectId))
+    ) {
+      assertPlaintextProject(finalizeAccess);
+    }
     const existingArtifact = await this.env.DB.prepare(
       `SELECT id, project_id, kind, name, object_key, content_type, bytes,
               metadata_json, created_at
@@ -5200,7 +5646,8 @@ export class D1R2PersistenceService implements PersistenceService {
     // Slice 7-1: nothing lands once the project's move to encrypted storage
     // began, though the session was checked just before.
     const notMigrating = await this.plaintextUploadFence(
-      'upload_sessions.project_id'
+      'upload_sessions.project_id',
+      upload
     );
     const validSessionSql = `EXISTS (
       SELECT 1 FROM upload_sessions
@@ -5311,7 +5758,7 @@ export class D1R2PersistenceService implements PersistenceService {
         .bind(request.artifactId, request.projectId)
         .first<ArtifactRow>();
       if (existing) return artifactFromRow(existing);
-      await this.refuseIfMigrating(request.projectId);
+      await this.refuseIfMigrating(request.projectId, upload);
       return null;
     }
 
@@ -5639,6 +6086,11 @@ export class D1R2PersistenceService implements PersistenceService {
       reuseExistingAssetsOnly?: boolean;
       /** The browser already split the document (ADR-024 Phase 1). */
       storage?: ClientProjectStorage;
+      /**
+       * Slice 7-3: plaintext staged beside an encrypted project counts
+       * toward no quota until the cutover (migration 0043).
+       */
+      stagedForDecryption?: boolean;
     }
   ): Promise<ProjectStorageWrite> {
     const bucket = this.projectStorageBucket();
@@ -5711,10 +6163,12 @@ export class D1R2PersistenceService implements PersistenceService {
       }
     }
 
-    await this.assertAccountProjectStorageCapacity(
-      document.ownerUserId,
-      prepared.storedBytes + newAssetBytes
-    );
+    if (!options?.stagedForDecryption) {
+      await this.assertAccountProjectStorageCapacity(
+        document.ownerUserId,
+        prepared.storedBytes + newAssetBytes
+      );
+    }
 
     await Promise.all(
       missingAssets.map((asset) =>
@@ -5760,6 +6214,9 @@ export class D1R2PersistenceService implements PersistenceService {
     userId: UserId,
     incomingBytes: number
   ): Promise<void> {
+    // Since migration 0043, plaintext staged beside an encrypted project
+    // (slice 7-3) counts only from its cutover on, as its triggers do.
+    const unstaged = await this.notStagedForDecryption('projects.id');
     const row = await this.env
       .DB!.prepare(
         `SELECT
@@ -5767,13 +6224,13 @@ export class D1R2PersistenceService implements PersistenceService {
            SELECT SUM(objects.stored_bytes)
            FROM project_document_objects objects
            JOIN projects ON projects.id = objects.project_id
-           WHERE projects.user_id = ?
+           WHERE projects.user_id = ?${unstaged}
          ), 0) AS object_bytes,
          COALESCE((
            SELECT SUM(assets.stored_bytes)
            FROM project_storage_assets assets
            JOIN projects ON projects.id = assets.project_id
-           WHERE projects.user_id = ?
+           WHERE projects.user_id = ?${unstaged}
          ), 0) AS asset_bytes`
       )
       .bind(userId, userId)
@@ -6366,12 +6823,15 @@ export class D1R2PersistenceService implements PersistenceService {
     if (await isE2eeDeviceRemovalStorageReady(this.env.DB)) {
       groupTables.push('DELETE FROM e2ee_group_resets WHERE project_id IN');
     }
-    // Migration state (migration 0042), only once the table exists.
-    if (await isE2eeProjectMigrationStorageReady(this.env.DB)) {
-      groupTables.push(
-        'DELETE FROM e2ee_project_migrations WHERE project_id IN'
-      );
-    }
+    // Migration state (migration 0042), only once the table exists. It
+    // goes last: since migration 0043 a decrypting project's staged files
+    // are exempt from artifact usage while its row says so, so their rows
+    // must go while it still does.
+    const migrationTables = (await isE2eeProjectMigrationStorageReady(
+      this.env.DB
+    ))
+      ? ['DELETE FROM e2ee_project_migrations WHERE project_id IN']
+      : [];
     // Encrypted content blobs (migration 0034): their objects first, the
     // same way. Their rows then go references first, through the claim
     // migration 0034 requires of every committed blob, before the project
@@ -6465,7 +6925,8 @@ export class D1R2PersistenceService implements PersistenceService {
         'DELETE FROM revisions WHERE project_id IN',
         'DELETE FROM project_document_objects WHERE project_id IN',
         'DELETE FROM project_storage_assets WHERE project_id IN',
-        'DELETE FROM project_adoptions WHERE cloud_project_id IN'
+        'DELETE FROM project_adoptions WHERE cloud_project_id IN',
+        ...migrationTables
       ]
         .map((statement) =>
           this.env
@@ -9813,6 +10274,15 @@ export class ProjectCollaborationRoom extends DurableObject {
    * the copied-source journal, edit leases, tickets, the legacy layout and
    * the index), so the room can relay the encrypted project's ciphertext.
    * Both are idempotent; an encrypted room has no plaintext to drop.
+   *
+   * Slice 7-3, the beta-only reverse path, sends `format: 2`: an encrypted
+   * project turning back into plaintext. `lock` then closes the encrypted
+   * room's connections and drops its tickets and edit leases (its writes go
+   * to the account's version log as they happen, so it holds nothing
+   * unsaved); `purge`, after that cutover, drops every key of the room's
+   * encrypted ledger and its format, so it can serve the plaintext project.
+   * A plaintext room asked either with `format: 2` has nothing encrypted
+   * to drop.
    */
   private async acceptInternalMigration(request: Request): Promise<Response> {
     const projectId = new URL(request.url).searchParams.get('projectId');
@@ -9826,13 +10296,22 @@ export class ProjectCollaborationRoom extends DurableObject {
     }
     const body = await readSnapshotBody(request, 1024);
     let action: unknown;
+    let format: unknown;
     try {
-      action = (JSON.parse(body ?? '') as { action?: unknown }).action;
+      ({ action, format } = JSON.parse(body ?? '') as {
+        action?: unknown;
+        format?: unknown;
+      });
     } catch {
       action = null;
     }
     if (action !== 'lock' && action !== 'purge') {
       return new Response('Invalid room migration request.', { status: 400 });
+    }
+    if (format === 2) {
+      return this.enqueueLeaseOperation(() =>
+        this.reverseEncryptedRoom(action)
+      );
     }
     return this.enqueueLeaseOperation(async () => {
       if (this.roomFormat === 2) return new Response(null, { status: 204 });
@@ -9876,6 +10355,44 @@ export class ProjectCollaborationRoom extends DurableObject {
       await this.roomContext.storage.delete(ROOM_META_KEY);
       return new Response(null, { status: 204 });
     });
+  }
+
+  /**
+   * Slice 7-3: locks or purges an encrypted room whose project turns back
+   * into plaintext. The caller holds the room queue.
+   */
+  private async reverseEncryptedRoom(
+    action: 'lock' | 'purge'
+  ): Promise<Response> {
+    if (this.roomFormat !== 2) {
+      return action === 'lock'
+        ? Response.json({ latestVersion: null })
+        : new Response(null, { status: 204 });
+    }
+    for (const socket of this.roomContext.getWebSockets()) {
+      socket.close(4003, 'This project is leaving encrypted storage.');
+    }
+    this.sockets.clear();
+    this.presence.clear();
+    this.editLeases = [];
+    if (action === 'lock') {
+      await this.roomContext.storage.delete([
+        ROOM_SOCKET_TICKETS_KEY,
+        ROOM_EDIT_LEASE_KEY
+      ]);
+      return Response.json({ latestVersion: null });
+    }
+    // Every key the encrypted room wrote: its ledger, index, tickets and
+    // leases. Nothing plaintext lives here, and the next plaintext
+    // connection starts the room afresh.
+    this.latestDocument = null;
+    this.documentHistory.clear();
+    this.historyVersions = [];
+    this.historyLoaded = false;
+    this.roomFormat = null;
+    this.e2eeLedgerState = null;
+    await this.roomContext.storage.deleteAll();
+    return new Response(null, { status: 204 });
   }
 
   /**

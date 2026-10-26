@@ -3843,6 +3843,13 @@ export interface E2eeConfigResponse {
    * absent while closed and from older Workers.
    */
   migrationEnabled?: boolean;
+  /**
+   * The beta-only reverse path (E2EE_REVERSE_ENABLED with migration open,
+   * ADR-024 Phase 7, slice 7-3): an encrypted project may be turned back
+   * into plaintext, and its storage (migration 0043) is installed. Present
+   * (true) only then.
+   */
+  reverseEnabled?: boolean;
 }
 
 /**

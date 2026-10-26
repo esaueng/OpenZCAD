@@ -5,9 +5,9 @@
  * role is a state machine and a janitor. It never transforms content:
  *
  * - `POST …/migration` starts (or resumes, once a lease lapsed) a staging:
- *   owner only, a live plaintext project with no members or pending
- *   invitations (decision M7), nothing staged left over. It hands the
- *   owner's device a lease. While staging, the plaintext routes refuse
+ *   owner only, a live plaintext project with no members and no pending
+ *   invitations (plaintext, or encrypted ones of slice 5-3a) (decision
+ *   M7), nothing staged left over. It hands the owner's device a lease. While staging, the plaintext routes refuse
  *   writes, named saves and the room with 409 PROJECT_MIGRATING
  *   (`projectFormatGate.ts`), reads keep working, and the encrypted-project
  *   routes take ciphertext for this format-1 project from the lease holder
@@ -35,15 +35,44 @@
  *   and abandons a browser left behind, and abandons a staging whose
  *   owner may no longer migrate (`sweepProjectMigrations`).
  *
+ * Slice 7-3, the beta-only reverse path (E2EE_REVERSE_ENABLED, migration
+ * 0043), runs the same machine with direction `decrypt` for an encrypted
+ * project only its owner holds (no members, share links or pending
+ * invitations, plaintext or encrypted, slice 5-3a) on an account whose
+ * "Encrypt new projects" opt-in is off (decision D2):
+ *
+ * - The start locks the encrypted room; while staging, encrypted content
+ *   writes and the room refuse with 409 PROJECT_MIGRATING (`e2ee.ts`,
+ *   `projectFormatGate.ts`), and the owner's lease holder writes the
+ *   decrypted plaintext beside the ciphertext under the same project id:
+ *   save states and the head through the plaintext document routes, files
+ *   through the plaintext uploads (`e2eeReverseStaging.ts`), measurements
+ *   and view state through `…/migration/plaintext/details`. The project
+ *   row is not touched; `…/migration/plaintext` lists what is staged.
+ *   Staged plaintext counts toward no quota until the cutover (0043).
+ * - The cutover is one batch: every retained encrypted save state has a
+ *   staged plaintext save state under its id, the staged head is newer
+ *   than the encrypted head, which did not move; it flips `storage_format`
+ *   to 1 at the staged head, and moves the account's artifact usage from
+ *   the encrypted blobs to the staged files.
+ * - The purge clears the room's encrypted ledger, then drops the groups,
+ *   versions, envelopes, blobs and their R2 objects, wraps and archives a
+ *   bounded step at a time, as an abandoned encrypt staging's cleanup does.
+ * - An abandon drops the staged plaintext the same way.
+ *
  * Served by `handleE2eeRequest` after the key rollout gate, key-table
  * readiness and, for writes, the session/erasure write authorization.
  * Here: E2EE_MIGRATION_ENABLED (with encrypted projects) and migrations
- * 0031–0034 and 0042, 503 without them.
+ * 0031–0034 and 0042, 503 without them; the reverse path also needs
+ * E2EE_REVERSE_ENABLED and migration 0043.
  */
 import { toBase64Url } from '@openzcad/crypto';
 import {
+  DECRYPT_STAGED_BLOB_METADATA_KEY,
   E2EE_MIGRATION_CODES,
   E2EE_MIGRATION_LEASE_TTL_MS,
+  MAX_DECRYPT_STAGED_SESSIONS,
+  type E2eeDecryptStagingResponse,
   type E2eeMigrationCutoverResponse,
   type E2eeMigrationLeaseResponse,
   type E2eeMigrationStepResponse,
@@ -52,14 +81,30 @@ import {
 } from '@openzcad/shared';
 import {
   D1R2PersistenceService,
+  E2EE_INVITATION_TABLES,
+  isE2eeAssistantConsentStorageReady,
   isE2eeContentBlobStorageReady,
   isE2eeDeviceRemovalStorageReady,
+  isE2eeInvitationStorageReady,
+  isE2eeMlsProposalStorageReady,
   isE2eeProjectGroupStorageReady,
   isE2eeProjectMigrationStorageReady,
   isE2eeProjectVersionStorageReady,
+  isE2eeReverseStorageReady,
   isProjectStorageFormatReady,
   type CloudflareEnv
 } from '@openzcad/cloudflare-adapters';
+import {
+  checkStagingLease,
+  decryptStagingFence,
+  type StagingLease
+} from './e2eeMigrationLease';
+import {
+  ProjectMeasurementRequestError,
+  parseSaveProjectMeasurementsRequest
+} from './projectMeasurements';
+import { parseWorkspaceSession } from './workspaceSessions';
+import { HttpError } from './validation';
 import {
   RouteError,
   idField,
@@ -67,6 +112,9 @@ import {
   json,
   record,
   refuse,
+  deviceListMoved,
+  deviceListUnchanged,
+  refuseDeviceListMoved,
   requireCertifiedDevice,
   runBatch,
   type Authorization
@@ -74,7 +122,7 @@ import {
 import { ENCRYPTED_DOCUMENT_MARKER } from './e2eeProjectDocuments';
 
 const ROUTE =
-  /^\/api\/e2ee\/projects\/([^/]+)\/migration(?:\/(lease|cutover|abandon|purge))?$/;
+  /^\/api\/e2ee\/projects\/([^/]+)\/migration(?:\/(lease|cutover|abandon|purge|plaintext|plaintext\/details))?$/;
 
 /** The migration routes this module serves. */
 export function isE2eeProjectMigrationPath(pathname: string): boolean {
@@ -129,6 +177,8 @@ interface Context {
   env: MigrationEnv;
   userId: string;
   authorization: Authorization;
+  /** Slice 7-3: the reverse path is open and migration 0043 installed. */
+  reverseEnabled: boolean;
 }
 
 interface MigrationRow {
@@ -277,26 +327,79 @@ async function requireOwnedProject(
   return row;
 }
 
-/** Decision M7: members and pending invitations, by the same SQL as the fences. */
-const SHARED_SQL = `(EXISTS (SELECT 1 FROM project_members sm
+/**
+ * Which of Phase 5's sharing tables exist: encrypted invitations (slice
+ * 5-3a, migration 0038). A shared check names only the ones installed.
+ * Encrypted share links (slice 5-10, migration 0040) join this set when
+ * that slice lands.
+ */
+interface SharingTables {
+  readonly invitations: boolean;
+}
+
+async function sharingTables(db: D1Database): Promise<SharingTables> {
+  return { invitations: await isE2eeInvitationStorageReady(db) };
+}
+
+/**
+ * Pending encrypted invitations, as extra `OR` terms of a shared check
+ * (aliases prefixed with `alias`). Binds: the project id and the time in
+ * milliseconds for invitations.
+ */
+function encryptedSharingSql(alias: string, tables: SharingTables): string {
+  return tables.invitations
+    ? `
+    OR EXISTS (SELECT 1 FROM e2ee_invitations ${alias}ei
+               WHERE ${alias}ei.project_id = ? AND ${alias}ei.completed_at IS NULL
+                 AND ${alias}ei.revoked_at IS NULL AND ${alias}ei.expires_at > ?)`
+    : '';
+}
+
+function encryptedSharingBinds(
+  projectId: string,
+  now: number,
+  tables: SharingTables
+): unknown[] {
+  return tables.invitations ? [projectId, now] : [];
+}
+
+/**
+ * Decision M7: members and pending invitations (plaintext, and encrypted
+ * ones where installed), by the same SQL in the checks and the fences.
+ * Live plaintext share links do not block: the cutover revokes them
+ * (decision M8).
+ */
+function sharedSql(tables: SharingTables): string {
+  return `(EXISTS (SELECT 1 FROM project_members sm
                      WHERE sm.project_id = ?)
   OR EXISTS (SELECT 1 FROM project_invitations si
              WHERE si.project_id = ? AND si.accepted_at IS NULL
-               AND si.revoked_at IS NULL AND si.expires_at >= ?))`;
-const sharedBinds = (projectId: string, nowSeconds: number) => [
+               AND si.revoked_at IS NULL AND si.expires_at >= ?)${encryptedSharingSql(
+                 's',
+                 tables
+               )})`;
+}
+
+const sharedBinds = (
+  projectId: string,
+  now: number,
+  tables: SharingTables
+): unknown[] => [
   projectId,
   projectId,
-  nowSeconds
+  Math.floor(now / 1000),
+  ...encryptedSharingBinds(projectId, now, tables)
 ];
 
 async function requireUnshared(
   db: D1Database,
   projectId: string,
-  nowSeconds: number
+  now: number,
+  tables: SharingTables
 ): Promise<void> {
   const shared = await db
-    .prepare(`SELECT ${SHARED_SQL} AS shared`)
-    .bind(...sharedBinds(projectId, nowSeconds))
+    .prepare(`SELECT ${sharedSql(tables)} AS shared`)
+    .bind(...sharedBinds(projectId, now, tables))
     .first<{ shared: number }>();
   if (shared?.shared) {
     refuse(
@@ -337,11 +440,13 @@ async function readBody(request: Request): Promise<Record<string, unknown>> {
   }
 }
 
-/** Tells the project's room to purge; true when there is none. */
+/** Tells the project's room to lock or purge; true when there is none. */
 async function tellRoom(
   env: MigrationEnv,
   projectId: string,
-  action: 'purge'
+  action: 'lock' | 'purge',
+  /** Slice 7-3: the room's encrypted state, for the reverse path. */
+  encrypted = false
 ): Promise<boolean> {
   const rooms = env.PROJECT_ROOM as RoomNamespace | undefined;
   if (!rooms || typeof rooms.getByName !== 'function') return true;
@@ -354,7 +459,7 @@ async function tellRoom(
         'x-openzcad-internal-migration': 'v1',
         'content-type': 'application/json'
       },
-      body: JSON.stringify({ action })
+      body: JSON.stringify(encrypted ? { action, format: 2 } : { action })
     })
   );
   return response.ok;
@@ -451,11 +556,14 @@ async function start(
   lease: string | null
 ): Promise<Response> {
   if (body.direction === 'decrypt') {
-    refuse(
-      501,
-      'FEATURE_DISABLED',
-      'Turning encryption off for a project is not available yet.'
-    );
+    if (!ctx.reverseEnabled) {
+      refuse(
+        501,
+        'FEATURE_DISABLED',
+        'Turning encryption off for a project is not available yet.'
+      );
+    }
+    return startDecrypt(ctx, projectId, body, lease);
   }
   if (body.direction !== 'encrypt') invalid('direction must be encrypt');
   const deviceId = idField(body.deviceId, 'deviceId');
@@ -477,13 +585,15 @@ async function start(
     refuse(
       409,
       E2EE_MIGRATION_CODES.state,
-      'This project is already end-to-end encrypted.'
+      project.storage_format === 1 && existing?.direction === 'decrypt'
+        ? 'This project is still leaving encrypted storage. Try again once that finishes.'
+        : 'This project is already end-to-end encrypted.'
     );
   }
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
-  const nowSeconds = Math.floor(now / 1000);
-  await requireUnshared(ctx.db, projectId, nowSeconds);
+  const sharing = await sharingTables(ctx.db);
+  await requireUnshared(ctx.db, projectId, now, sharing);
   const leaseId = newLeaseId();
   const expiresAt = now + E2EE_MIGRATION_LEASE_TTL_MS;
   if (existing?.state === 'staging') {
@@ -570,7 +680,7 @@ async function start(
            FROM projects p
            WHERE p.id = ? AND p.user_id = ? AND p.storage_format = 1
              AND p.status <> 'deleted' AND ${ctx.authorization.sql}
-             AND NOT ${SHARED_SQL} AND NOT ${STAGED_ROWS_SQL}
+             AND NOT ${sharedSql(sharing)} AND NOT ${STAGED_ROWS_SQL}
            ON CONFLICT (project_id) DO UPDATE SET
              direction = excluded.direction, state = 'staging',
              device_id = excluded.device_id, lease_id = excluded.lease_id,
@@ -596,7 +706,7 @@ async function start(
           projectId,
           ctx.userId,
           ...ctx.authorization.binds,
-          ...sharedBinds(projectId, nowSeconds),
+          ...sharedBinds(projectId, now, sharing),
           ...stagedRowsBinds(projectId)
         )
     ]);
@@ -609,7 +719,7 @@ async function start(
           'Another device is encrypting this project.'
         );
       }
-      await requireUnshared(ctx.db, projectId, nowSeconds);
+      await requireUnshared(ctx.db, projectId, now, sharing);
       refuse(
         401,
         'E2EE_SESSION_REQUIRED',
@@ -744,6 +854,16 @@ async function cutover(
 ): Promise<Response> {
   const project = await requireOwnedProject(ctx.db, ctx.userId, projectId);
   const row = await migrationRow(ctx.db, projectId);
+  if (row?.state === 'staging' && row.direction === 'decrypt') {
+    if (!ctx.reverseEnabled) {
+      refuse(
+        501,
+        'FEATURE_DISABLED',
+        'Turning encryption off for a project is not available yet.'
+      );
+    }
+    return cutoverDecrypt(ctx, projectId, lease, row, project);
+  }
   if (!row || row.state !== 'staging' || row.direction !== 'encrypt') {
     refuse(
       409,
@@ -777,7 +897,8 @@ async function cutover(
     );
   }
   const nowSeconds = Math.floor(now / 1000);
-  await requireUnshared(ctx.db, projectId, nowSeconds);
+  const sharing = await sharingTables(ctx.db);
+  await requireUnshared(ctx.db, projectId, now, sharing);
   const stagedBinds = [
     projectId,
     row.staged_version,
@@ -853,7 +974,7 @@ async function cutover(
            AND COALESCE((SELECT revision FROM project_measurements
                          WHERE project_id = ?), 0)
                = e2ee_project_migrations.source_measurement_revision
-           AND NOT ${SHARED_SQL}
+           AND NOT ${sharedSql(sharing)}
            AND ${STAGED_SQL}
            AND NOT EXISTS (${UNCOVERED_SQL})`
       )
@@ -873,7 +994,7 @@ async function cutover(
         projectId,
         ctx.userId,
         projectId,
-        ...sharedBinds(projectId, nowSeconds),
+        ...sharedBinds(projectId, now, sharing),
         ...stagedBinds,
         projectId,
         row.staged_version
@@ -982,14 +1103,22 @@ const ABANDONED_FENCE = `EXISTS (SELECT 1 FROM e2ee_project_migrations am
     AND am.purge_cursor = 'cleanup' AND ap.storage_format = 1)`;
 
 /**
- * One bounded step of dropping an abandoned staging's rows and objects:
- * its encrypted upload sessions, its blobs, its R2 bodies, then every
- * staged row. True once nothing is left.
+ * One bounded step of dropping a project's encrypted rows and objects (an
+ * abandoned staging's, or since slice 7-3 a decrypted project's): its
+ * encrypted upload sessions, its blobs, its R2 bodies, then every row of
+ * the group, versions, envelopes, wraps and archives. True once nothing is
+ * left.
  */
 async function dropStaged(
   db: D1Database,
   env: MigrationEnv,
-  projectId: string
+  projectId: string,
+  /**
+   * What every delete is fenced on (one bind, the project id): an
+   * abandoned encrypt staging by default; slice 7-3 passes the purge of a
+   * project turned back into plaintext.
+   */
+  fence: string = ABANDONED_FENCE
 ): Promise<{ complete: boolean; objects: number }> {
   let objects = 0;
   const sessions = await persistence(env).discardProjectUploadSessions(
@@ -1021,7 +1150,7 @@ async function dropStaged(
         .prepare(
           `DELETE FROM e2ee_version_blobs WHERE project_id = ?
              AND blob_id IN (SELECT value FROM json_each(?))
-             AND ${ABANDONED_FENCE}`
+             AND ${fence}`
         )
         .bind(projectId, ids, projectId),
       db
@@ -1029,7 +1158,7 @@ async function dropStaged(
           `UPDATE e2ee_content_blobs SET state = 'deleting'
            WHERE project_id = ? AND state = 'committed'
              AND blob_id IN (SELECT value FROM json_each(?))
-             AND ${ABANDONED_FENCE}`
+             AND ${fence}`
         )
         .bind(projectId, ids, projectId),
       db
@@ -1037,7 +1166,7 @@ async function dropStaged(
           `DELETE FROM e2ee_content_blobs WHERE project_id = ?
              AND state = 'deleting'
              AND blob_id IN (SELECT value FROM json_each(?))
-             AND ${ABANDONED_FENCE}`
+             AND ${fence}`
         )
         .bind(projectId, ids, projectId)
     ]);
@@ -1068,7 +1197,7 @@ async function dropStaged(
            SET envelope_key = NULL, envelope_inline = NULL
            WHERE project_id = ?
              AND document_version IN (SELECT value FROM json_each(?))
-             AND ${ABANDONED_FENCE}`
+             AND ${fence}`
         )
         .bind(
           projectId,
@@ -1098,9 +1227,7 @@ async function dropStaged(
     db,
     tables.map((table) =>
       db
-        .prepare(
-          `DELETE FROM ${table} WHERE project_id = ? AND ${ABANDONED_FENCE}`
-        )
+        .prepare(`DELETE FROM ${table} WHERE project_id = ? AND ${fence}`)
         .bind(projectId, projectId)
     )
   );
@@ -1182,7 +1309,10 @@ async function abandon(
       complete: true
     } satisfies E2eeMigrationStepResponse);
   }
-  const step = await dropStaged(ctx.db, ctx.env, projectId);
+  const step =
+    row.direction === 'decrypt'
+      ? await dropStagedPlaintext(ctx.db, ctx.env, projectId)
+      : await dropStaged(ctx.db, ctx.env, projectId);
   await finishCleanup(ctx.db, projectId, step.objects, step.complete);
   return json({
     migration: await currentRecord(ctx, projectId, null),
@@ -1251,7 +1381,13 @@ async function purgeObjects(
   projectId: string,
   bucket: ObjectBucket | null,
   table: 'project_document_objects' | 'project_storage_assets' | 'artifacts',
-  extraDeletes: readonly string[] = []
+  extraDeletes: readonly string[] = [],
+  /**
+   * What every delete is fenced on (one bind, the project id): the purge
+   * of a cut-over project by default; slice 7-3 passes the cleanup of an
+   * abandoned decrypt staging.
+   */
+  fence: string = PURGING_FENCE
 ): Promise<StepOutcome> {
   const { results } = await db
     .prepare(
@@ -1281,15 +1417,13 @@ async function purgeObjects(
   await runBatch(db, [
     ...extraDeletes.map((sql) =>
       db
-        .prepare(
-          `${sql} IN (SELECT value FROM json_each(?)) AND ${PURGING_FENCE}`
-        )
+        .prepare(`${sql} IN (SELECT value FROM json_each(?)) AND ${fence}`)
         .bind(ids, projectId)
     ),
     db
       .prepare(
         `DELETE FROM ${table} WHERE project_id = ?
-           AND id IN (SELECT value FROM json_each(?)) AND ${PURGING_FENCE}`
+           AND id IN (SELECT value FROM json_each(?)) AND ${fence}`
       )
       .bind(projectId, ids, projectId)
   ]);
@@ -1451,17 +1585,22 @@ export async function purgeMigratedProject(
       'This project has not been cut over to encrypted storage.'
     );
   }
-  let index = Math.max(
-    0,
-    PURGE_STEPS.indexOf((row.purge_cursor ?? PURGE_STEPS[0]) as PurgeStep)
-  );
+  // Slice 7-3: a project turned back into plaintext purges its encrypted
+  // rows instead.
+  const decrypt = row.direction === 'decrypt';
+  const steps: readonly string[] = decrypt ? DECRYPT_PURGE_STEPS : PURGE_STEPS;
+  const runStep = (step: string) =>
+    decrypt
+      ? decryptPurgeStep(db, env, projectId, step as DecryptPurgeStep)
+      : purgeStep(db, env, projectId, step as PurgeStep);
+  let index = Math.max(0, steps.indexOf(row.purge_cursor ?? steps[0]!));
   let spent = 0;
-  while (index < PURGE_STEPS.length && spent < MIGRATION_STEP_OBJECTS) {
-    const step = PURGE_STEPS[index]!;
-    const outcome = await purgeStep(db, env, projectId, step);
+  while (index < steps.length && spent < MIGRATION_STEP_OBJECTS) {
+    const step = steps[index]!;
+    const outcome = await runStep(step);
     spent += Math.max(outcome.objects, outcome.rows > 0 ? 1 : 0);
     const next = outcome.more ? index : index + 1;
-    const done = next >= PURGE_STEPS.length;
+    const done = next >= steps.length;
     const now = new Date().toISOString();
     const previousCursor = row.purge_cursor;
     const moved = await runBatch(db, [
@@ -1475,13 +1614,13 @@ export async function purgeMigratedProject(
              AND ${authorization.sql}`
         )
         .bind(
-          done ? null : PURGE_STEPS[next]!,
+          done ? null : steps[next]!,
           outcome.rows,
           outcome.objects,
           now,
           ...(done ? [now] : []),
           projectId,
-          row.purge_cursor ?? PURGE_STEPS[0],
+          row.purge_cursor ?? steps[0]!,
           ...authorization.binds
         )
     ]);
@@ -1500,10 +1639,7 @@ export async function purgeMigratedProject(
       );
     }
     row = current;
-    index = Math.max(
-      0,
-      PURGE_STEPS.indexOf((row.purge_cursor ?? PURGE_STEPS[0]) as PurgeStep)
-    );
+    index = Math.max(0, steps.indexOf(row.purge_cursor ?? steps[0]!));
     if (outcome.more && outcome.objects === 0 && outcome.rows === 0) break;
   }
   return false;
@@ -1512,7 +1648,9 @@ export async function purgeMigratedProject(
 async function purge(ctx: Context, projectId: string): Promise<Response> {
   const project = await requireOwnedProject(ctx.db, ctx.userId, projectId);
   const row = await migrationRow(ctx.db, projectId);
-  if (!row || project.storage_format !== 2) {
+  // A project turned back into plaintext (slice 7-3) is format 1 by now.
+  const cutFormat = row?.direction === 'decrypt' ? 1 : 2;
+  if (!row || project.storage_format !== cutFormat) {
     refuse(
       409,
       E2EE_MIGRATION_CODES.state,
@@ -1531,6 +1669,1001 @@ async function purge(ctx: Context, projectId: string): Promise<Response> {
   } satisfies E2eeMigrationStepResponse);
 }
 
+// --- Slice 7-3: the beta-only reverse path ------------------------------------
+
+/**
+ * Who else can open an encrypted project, by the same SQL in the checks and
+ * the fences: members, pending plaintext invitations, live plaintext share
+ * links and, where installed, pending encrypted invitations (migration
+ * 0038). Binds: the project id three times and the time in seconds, then
+ * {@link encryptedSharingBinds}.
+ */
+function decryptSharedSql(tables: SharingTables): string {
+  return `(EXISTS (SELECT 1 FROM project_members dsm WHERE dsm.project_id = ?)
+    OR EXISTS (SELECT 1 FROM project_invitations dsi
+               WHERE dsi.project_id = ? AND dsi.accepted_at IS NULL
+                 AND dsi.revoked_at IS NULL AND dsi.expires_at >= ?)
+    OR EXISTS (SELECT 1 FROM project_share_links dsl
+               WHERE dsl.project_id = ? AND dsl.revoked_at IS NULL)${encryptedSharingSql(
+                 'd',
+                 tables
+               )})`;
+}
+
+function decryptSharedBinds(
+  projectId: string,
+  now: number,
+  tables: SharingTables
+): unknown[] {
+  const seconds = Math.floor(now / 1000);
+  return [
+    projectId,
+    projectId,
+    seconds,
+    projectId,
+    ...encryptedSharingBinds(projectId, now, tables)
+  ];
+}
+
+/** Decision D2: an account that opted in cannot hold new plaintext. */
+const OPTED_IN_SQL = `EXISTS (SELECT 1 FROM e2ee_project_preferences dop
+  WHERE dop.user_id = ? AND dop.encrypt_new_projects = 1)`;
+
+/** Anything plaintext of the project a fresh decrypt staging must not mix with. */
+const PLAINTEXT_ROWS_SQL = `(EXISTS (SELECT 1 FROM revisions WHERE project_id = ?)
+  OR EXISTS (SELECT 1 FROM project_document_objects WHERE project_id = ?)
+  OR EXISTS (SELECT 1 FROM project_storage_assets WHERE project_id = ?)
+  OR EXISTS (SELECT 1 FROM artifacts WHERE project_id = ?)
+  OR EXISTS (SELECT 1 FROM project_measurements WHERE project_id = ?)
+  OR EXISTS (SELECT 1 FROM project_workspace_sessions WHERE project_id = ?))`;
+const plaintextRowsBinds = (projectId: string) =>
+  Array.from({ length: 6 }, () => projectId);
+
+/** The encrypted measurements' sequence, which a cutover checks. */
+const ENCRYPTED_MEASUREMENTS_SQL = `COALESCE((SELECT sequence FROM e2ee_project_envelopes
+  WHERE project_id = ? AND kind = 'measurements' AND scope = ''), 0)`;
+
+/** An abandoned decrypt staging, inside a cleanup statement. */
+const DECRYPT_ABANDONED_FENCE = `EXISTS (SELECT 1 FROM e2ee_project_migrations dam
+  JOIN projects dap ON dap.id = dam.project_id
+  WHERE dam.project_id = ? AND dam.direction = 'decrypt'
+    AND dam.state = 'abandoned' AND dam.purge_cursor = 'cleanup'
+    AND dap.storage_format = 2)`;
+
+/** A decrypted project's purge, inside a purge statement. */
+const DECRYPT_PURGING_FENCE = `EXISTS (SELECT 1 FROM e2ee_project_migrations dpm
+  JOIN projects dpp ON dpp.id = dpm.project_id
+  WHERE dpm.project_id = ? AND dpm.direction = 'decrypt'
+    AND dpm.state = 'purging' AND dpp.storage_format = 1)`;
+
+/** The purge steps of a project turned back into plaintext, in order. */
+const DECRYPT_PURGE_STEPS = ['room', 'encrypted'] as const;
+type DecryptPurgeStep = (typeof DECRYPT_PURGE_STEPS)[number];
+
+/** Retained encrypted save states without a staged plaintext one. */
+const UNCOVERED_DECRYPT_SQL = `SELECT er.revision_id FROM e2ee_project_revisions er
+  JOIN e2ee_project_versions ev
+    ON ev.project_id = er.project_id
+   AND ev.document_version = er.document_version
+  WHERE er.project_id = ?
+    AND (ev.envelope_key IS NOT NULL OR ev.envelope_inline IS NOT NULL)
+    AND NOT EXISTS (SELECT 1 FROM revisions pr
+                    WHERE pr.project_id = er.project_id
+                      AND pr.id = er.revision_id)`;
+
+const decryptShared = (): never =>
+  refuse(
+    409,
+    E2EE_MIGRATION_CODES.shared,
+    'Only a project nobody else can open can stop being encrypted. Remove its members, pending invitations and share links first.'
+  );
+
+const decryptOptedIn = (): never =>
+  refuse(
+    409,
+    E2EE_MIGRATION_CODES.optedIn,
+    'Your account encrypts new projects, so it cannot hold a plaintext one. Turn off “Encrypt new projects” in Settings › Encryption first.'
+  );
+
+async function requireDecryptable(
+  ctx: Context,
+  projectId: string,
+  now: number
+): Promise<SharingTables> {
+  const sharing = await sharingTables(ctx.db);
+  const row = await ctx.db
+    .prepare(
+      `SELECT ${decryptSharedSql(sharing)} AS shared,
+              ${OPTED_IN_SQL} AS opted_in`
+    )
+    .bind(...decryptSharedBinds(projectId, now, sharing), ctx.userId)
+    .first<{ shared: number; opted_in: number }>();
+  if (row?.opted_in) decryptOptedIn();
+  if (row?.shared) decryptShared();
+  return sharing;
+}
+
+async function startDecrypt(
+  ctx: Context,
+  projectId: string,
+  body: Record<string, unknown>,
+  lease: string | null
+): Promise<Response> {
+  const deviceId = idField(body.deviceId, 'deviceId');
+  await requireCertifiedDevice(ctx.db, ctx.userId, deviceId);
+  const project = await requireOwnedProject(ctx.db, ctx.userId, projectId);
+  if (project.status === 'deleted') {
+    refuse(
+      409,
+      E2EE_MIGRATION_CODES.state,
+      'Restore this project from the recycle bin before turning its encryption off.'
+    );
+  }
+  if (project.storage_format !== 2) {
+    refuse(
+      409,
+      E2EE_MIGRATION_CODES.state,
+      'This project is not end-to-end encrypted.'
+    );
+  }
+  const existing = await migrationRow(ctx.db, projectId);
+  if (
+    existing &&
+    (existing.state === 'cutover' ||
+      existing.state === 'purging' ||
+      (existing.state === 'staging' && existing.direction !== 'decrypt'))
+  ) {
+    refuse(
+      409,
+      E2EE_MIGRATION_CODES.state,
+      'This project’s encryption is still finishing. Try again once it is done.'
+    );
+  }
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const sharing = await requireDecryptable(ctx, projectId, now);
+  const leaseId = newLeaseId();
+  const expiresAt = now + E2EE_MIGRATION_LEASE_TTL_MS;
+  if (existing?.state === 'staging') {
+    // Resume, as an encrypt staging does: the same lease renews, a lapsed
+    // one is taken over and the new holder carries on from the journal.
+    const own = lease !== null && existing.lease_id === lease;
+    if (!own && (existing.lease_expires_at ?? 0) > now) {
+      refuse(
+        409,
+        E2EE_MIGRATION_CODES.leased,
+        'Another device is turning this project’s encryption off.',
+        {
+          deviceId: existing.device_id,
+          leaseExpiresAt: existing.lease_expires_at
+        }
+      );
+    }
+    const results = await runBatch(ctx.db, [
+      ctx.db
+        .prepare(
+          `UPDATE e2ee_project_migrations
+           SET device_id = ?, lease_id = ?, lease_expires_at = ?, updated_at = ?
+           WHERE project_id = ? AND state = 'staging' AND direction = 'decrypt'
+             AND owner_user_id = ? AND (lease_id IS ? OR lease_expires_at <= ?)
+             AND ${ctx.authorization.sql}`
+        )
+        .bind(
+          deviceId,
+          leaseId,
+          expiresAt,
+          nowIso,
+          projectId,
+          ctx.userId,
+          existing.lease_id,
+          now,
+          ...ctx.authorization.binds
+        )
+    ]);
+    if ((results[0]?.meta?.changes ?? 0) !== 1) {
+      const current = await migrationRow(ctx.db, projectId);
+      if (current?.state === 'staging') {
+        refuse(
+          409,
+          E2EE_MIGRATION_CODES.leased,
+          'Another device is turning this project’s encryption off.'
+        );
+      }
+      refuse(
+        401,
+        'E2EE_SESSION_REQUIRED',
+        'Sign in again before turning this project’s encryption off.'
+      );
+    }
+  } else {
+    if (existing?.purge_cursor === CLEANUP) {
+      refuse(
+        409,
+        E2EE_MIGRATION_CODES.cleanupPending,
+        'An earlier attempt is still being cleaned up. Finish abandoning it first.'
+      );
+    }
+    const leftover = await ctx.db
+      .prepare(`SELECT ${PLAINTEXT_ROWS_SQL} AS staged`)
+      .bind(...plaintextRowsBinds(projectId))
+      .first<{ staged: number }>();
+    if (leftover?.staged) {
+      refuse(
+        409,
+        E2EE_MIGRATION_CODES.cleanupPending,
+        'Plaintext rows of an earlier attempt remain. Finish abandoning it first.'
+      );
+    }
+    // One statement, fenced on everything checked above.
+    const results = await runBatch(ctx.db, [
+      ctx.db
+        .prepare(
+          `INSERT INTO e2ee_project_migrations
+             (project_id, direction, state, owner_user_id, device_id, lease_id,
+              lease_expires_at, source_version, source_measurement_revision,
+              started_at, updated_at)
+           SELECT ?, 'decrypt', 'staging', ?, ?, ?, ?, p.document_version,
+                  COALESCE((SELECT sequence FROM e2ee_project_envelopes
+                            WHERE project_id = p.id AND kind = 'measurements'
+                              AND scope = ''), 0), ?, ?
+           FROM projects p
+           WHERE p.id = ? AND p.user_id = ? AND p.storage_format = 2
+             AND p.status <> 'deleted' AND ${ctx.authorization.sql}
+             AND NOT ${decryptSharedSql(sharing)}
+             AND NOT ${OPTED_IN_SQL}
+             AND NOT ${PLAINTEXT_ROWS_SQL}
+           ON CONFLICT (project_id) DO UPDATE SET
+             direction = excluded.direction, state = 'staging',
+             device_id = excluded.device_id, lease_id = excluded.lease_id,
+             lease_expires_at = excluded.lease_expires_at,
+             source_version = excluded.source_version,
+             source_measurement_revision = excluded.source_measurement_revision,
+             staged_version = 0, staged_hash = NULL, revision_count = 0,
+             blob_count = 0, blob_bytes = 0, purge_cursor = NULL,
+             purged_rows = 0, purged_objects = 0,
+             started_at = excluded.started_at, updated_at = excluded.updated_at,
+             cutover_at = NULL, finished_at = NULL
+           WHERE e2ee_project_migrations.state IN ('abandoned', 'done')
+             AND e2ee_project_migrations.purge_cursor IS NULL`
+        )
+        .bind(
+          projectId,
+          ctx.userId,
+          deviceId,
+          leaseId,
+          expiresAt,
+          nowIso,
+          nowIso,
+          projectId,
+          ctx.userId,
+          ...ctx.authorization.binds,
+          ...decryptSharedBinds(projectId, now, sharing),
+          ctx.userId,
+          ...plaintextRowsBinds(projectId)
+        )
+    ]);
+    if ((results[0]?.meta?.changes ?? 0) !== 1) {
+      const current = await migrationRow(ctx.db, projectId);
+      if (current?.state === 'staging') {
+        refuse(
+          409,
+          E2EE_MIGRATION_CODES.leased,
+          'Another device is turning this project’s encryption off.'
+        );
+      }
+      await requireDecryptable(ctx, projectId, now);
+      refuse(
+        401,
+        'E2EE_SESSION_REQUIRED',
+        'Sign in again before turning this project’s encryption off.'
+      );
+    }
+  }
+  // The encrypted room's connections close, so nothing it relays moves the
+  // head on while the browser stages; its writes reach the account's log
+  // as they happen, so it holds nothing unsaved. A room that cannot be
+  // told still meets the cutover's check that the head did not move.
+  try {
+    await tellRoom(ctx.env, projectId, 'lock', true);
+  } catch {
+    // Best effort; see above.
+  }
+  return json(
+    {
+      migration: await currentRecord(ctx, projectId, leaseId),
+      leaseId
+    } satisfies E2eeMigrationLeaseResponse,
+    201
+  );
+}
+
+/** Staged plaintext counts of a decrypting project: save states and files. */
+async function stagedPlaintextCounts(
+  db: D1Database,
+  projectId: string
+): Promise<{ revisions: number; files: number; fileBytes: number }> {
+  const row = await db
+    .prepare(
+      `SELECT
+         (SELECT COUNT(*) FROM revisions WHERE project_id = ?) AS revisions,
+         (SELECT COUNT(*) FROM artifacts WHERE project_id = ?) AS files,
+         (SELECT COALESCE(SUM(bytes), 0) FROM artifacts WHERE project_id = ?)
+           AS file_bytes`
+    )
+    .bind(projectId, projectId, projectId)
+    .first<{ revisions: number; files: number; file_bytes: number }>();
+  return {
+    revisions: row?.revisions ?? 0,
+    files: row?.files ?? 0,
+    fileBytes: row?.file_bytes ?? 0
+  };
+}
+
+async function cutoverDecrypt(
+  ctx: Context,
+  projectId: string,
+  lease: string | null,
+  row: MigrationRow,
+  project: OwnedProject
+): Promise<Response> {
+  const now = Date.now();
+  if (!lease || row.lease_id !== lease || (row.lease_expires_at ?? 0) <= now) {
+    leaseLost();
+  }
+  if (project.status === 'deleted' || project.storage_format !== 2) {
+    refuse(
+      409,
+      E2EE_MIGRATION_CODES.state,
+      'Restore this project from the recycle bin before turning its encryption off.'
+    );
+  }
+  // The lease holder's device is still certified, atomically below.
+  const device = await decryptLeaseDeviceFence(
+    ctx.db,
+    ctx.userId,
+    row.device_id
+  );
+  const measurements = await ctx.db
+    .prepare(`SELECT ${ENCRYPTED_MEASUREMENTS_SQL} AS sequence`)
+    .bind(projectId)
+    .first<{ sequence: number }>();
+  if (
+    project.document_version !== row.source_version ||
+    (measurements?.sequence ?? 0) !== row.source_measurement_revision
+  ) {
+    refuse(
+      409,
+      E2EE_MIGRATION_CODES.stale,
+      'This project changed after turning its encryption off began. Abandon it and start again.'
+    );
+  }
+  const sharing = await requireDecryptable(ctx, projectId, now);
+  if (row.staged_version < 1 || !row.staged_hash) {
+    refuse(
+      409,
+      E2EE_MIGRATION_CODES.notStaged,
+      'Stage the plaintext head first.'
+    );
+  }
+  if (row.staged_version <= project.document_version) {
+    refuse(
+      409,
+      E2EE_MIGRATION_CODES.headBehind,
+      'The staged head must be newer than the encrypted head it replaces.',
+      { sourceVersion: project.document_version }
+    );
+  }
+  const head = await persistence(ctx.env).decryptStagedHead(
+    projectId,
+    row.staged_hash
+  );
+  if (!head || head.version !== row.staged_version) {
+    refuse(
+      409,
+      E2EE_MIGRATION_CODES.notStaged,
+      'The staged plaintext head is missing. Stage it again.'
+    );
+  }
+  const uncovered = await ctx.db
+    .prepare(`${UNCOVERED_DECRYPT_SQL} LIMIT 65`)
+    .bind(projectId)
+    .all<{ revision_id: string }>();
+  if ((uncovered.results ?? []).length) {
+    refuse(
+      409,
+      E2EE_MIGRATION_CODES.revisionsIncomplete,
+      'Every save state must be staged before the cutover.',
+      {
+        revisionIds: (uncovered.results ?? [])
+          .slice(0, 64)
+          .map((r) => r.revision_id)
+      }
+    );
+  }
+  const counts = await stagedPlaintextCounts(ctx.db, projectId);
+  const nowIso = new Date(now).toISOString();
+  const cut = {
+    sql: `EXISTS (SELECT 1 FROM e2ee_project_migrations
+                  WHERE project_id = ? AND state = 'cutover'
+                    AND direction = 'decrypt' AND cutover_at = ?)`,
+    binds: [projectId, nowIso]
+  };
+  const statements: D1PreparedStatement[] = [
+    ctx.db
+      .prepare(
+        `UPDATE e2ee_project_migrations
+         SET state = 'cutover', lease_id = NULL, lease_expires_at = NULL,
+             revision_count = ?, blob_count = ?, blob_bytes = ?,
+             purge_cursor = ?, cutover_at = ?, updated_at = ?
+         WHERE project_id = ? AND state = 'staging' AND direction = 'decrypt'
+           AND owner_user_id = ? AND lease_id = ? AND lease_expires_at > ?
+           AND staged_version = ? AND staged_hash = ?
+           AND ${ctx.authorization.sql}
+           AND EXISTS (SELECT 1 FROM projects cp
+                       WHERE cp.id = ? AND cp.user_id = ?
+                         AND cp.storage_format = 2 AND cp.status <> 'deleted'
+                         AND cp.document_version = e2ee_project_migrations.source_version
+                         AND cp.document_version < e2ee_project_migrations.staged_version)
+           AND ${ENCRYPTED_MEASUREMENTS_SQL}
+               = e2ee_project_migrations.source_measurement_revision
+           AND NOT ${decryptSharedSql(sharing)}
+           AND NOT ${OPTED_IN_SQL}
+           AND EXISTS (SELECT 1 FROM project_document_objects
+                       WHERE id = ? AND project_id = ? AND state = 'committed')
+           AND NOT EXISTS (${UNCOVERED_DECRYPT_SQL})
+           AND ${device.sql}`
+      )
+      .bind(
+        counts.revisions,
+        counts.files,
+        counts.fileBytes,
+        DECRYPT_PURGE_STEPS[0],
+        nowIso,
+        nowIso,
+        projectId,
+        ctx.userId,
+        lease,
+        now,
+        row.staged_version,
+        row.staged_hash,
+        ...ctx.authorization.binds,
+        projectId,
+        ctx.userId,
+        projectId,
+        ...decryptSharedBinds(projectId, now, sharing),
+        ctx.userId,
+        head.objectId,
+        projectId,
+        projectId,
+        ...device.binds
+      ),
+    // The format flips with the staged head; the encrypted rows go in the
+    // purge.
+    ctx.db
+      .prepare(
+        `UPDATE projects
+         SET storage_format = 1, document_json = ?, document_object_id = ?,
+             document_version = ?, document_bytes = ?, name = ?,
+             last_revision_id = ?, revision_count = ?, updated_at = ?
+         WHERE id = ? AND storage_format = 2 AND ${cut.sql}`
+      )
+      .bind(
+        head.envelope,
+        head.objectId,
+        head.version,
+        head.documentBytes,
+        head.name,
+        head.lastRevisionId,
+        head.revisionCount,
+        nowIso,
+        projectId,
+        ...cut.binds
+      ),
+    // From now on the staged files count as artifact usage (they left
+    // migration 0043's exemption with the state above) and the encrypted
+    // blobs no longer do (migration 0042 counts only a format-2 project's,
+    // and their deletion in the purge leaves the usage alone).
+    ctx.db
+      .prepare(
+        `INSERT OR IGNORE INTO artifact_account_usage
+           (owner_user_id, finalized_bytes, reserved_bytes, active_sessions)
+         SELECT ?, 0, 0, 0 WHERE ${cut.sql}`
+      )
+      .bind(ctx.userId, ...cut.binds),
+    ctx.db
+      .prepare(
+        `UPDATE artifact_account_usage
+         SET finalized_bytes = finalized_bytes
+           + (SELECT COALESCE(SUM(bytes), 0) FROM artifacts WHERE project_id = ?)
+           - (SELECT COALESCE(SUM(ciphertext_bytes), 0) FROM e2ee_content_blobs
+              WHERE project_id = ?)
+         WHERE owner_user_id = ? AND ${cut.sql}`
+      )
+      .bind(projectId, projectId, ctx.userId, ...cut.binds)
+  ];
+  const results = await runBatch(ctx.db, statements);
+  if (
+    (results[0]?.meta?.changes ?? 0) !== 1 ||
+    (results[1]?.meta?.changes ?? 0) !== 1
+  ) {
+    const current = await migrationRow(ctx.db, projectId);
+    if (current?.state !== 'staging') {
+      refuse(
+        409,
+        E2EE_MIGRATION_CODES.state,
+        'This project is not being turned back into plaintext.'
+      );
+    }
+    if (current.lease_id !== lease || (current.lease_expires_at ?? 0) <= now) {
+      leaseLost();
+    }
+    if (await deviceListMoved(ctx.db, ctx.userId, device.key)) {
+      refuseDeviceListMoved();
+    }
+    refuse(
+      409,
+      E2EE_MIGRATION_CODES.stale,
+      'This project changed during the cutover. Check it and try again.'
+    );
+  }
+  return json({
+    migration: await currentRecord(ctx, projectId, null),
+    revokedShareLinks: 0,
+    revokedInvitations: 0
+  } satisfies E2eeMigrationCutoverResponse);
+}
+
+/**
+ * One bounded step of dropping an abandoned decrypt staging's plaintext:
+ * its upload sessions, files, save states, document objects and storage
+ * assets (with their R2 objects, an object another project names kept),
+ * measurements and view state. True once nothing is left.
+ */
+async function dropStagedPlaintext(
+  db: D1Database,
+  env: MigrationEnv,
+  projectId: string
+): Promise<{ complete: boolean; objects: number }> {
+  let objects = 0;
+  const sessions = await persistence(env).discardProjectUploadSessions(
+    projectId,
+    false,
+    MIGRATION_STEP_OBJECTS
+  );
+  objects += sessions.discarded;
+  if (sessions.remaining) return { complete: false, objects };
+  const artifacts = await purgeObjects(
+    db,
+    projectId,
+    artifactBucket(env),
+    'artifacts',
+    [
+      'DELETE FROM project_copy_source_archives WHERE artifact_id',
+      'DELETE FROM artifact_mesh_discards WHERE artifact_id'
+    ],
+    DECRYPT_ABANDONED_FENCE
+  );
+  objects += artifacts.objects;
+  if (artifacts.more) return { complete: false, objects };
+  const revisions = await runBatch(db, [
+    db
+      .prepare(
+        `DELETE FROM revisions WHERE id IN (
+           SELECT id FROM revisions WHERE project_id = ? LIMIT ?)
+           AND ${DECRYPT_ABANDONED_FENCE}`
+      )
+      .bind(projectId, MIGRATION_STEP_ROWS, projectId)
+  ]);
+  if ((revisions[0]?.meta?.changes ?? 0) >= MIGRATION_STEP_ROWS) {
+    return { complete: false, objects };
+  }
+  for (const table of [
+    'project_document_objects',
+    'project_storage_assets'
+  ] as const) {
+    const step = await purgeObjects(
+      db,
+      projectId,
+      projectStorageBucket(env),
+      table,
+      [],
+      DECRYPT_ABANDONED_FENCE
+    );
+    objects += step.objects;
+    if (step.more) return { complete: false, objects };
+  }
+  await runBatch(
+    db,
+    [
+      'project_measurements',
+      'project_workspace_sessions',
+      'artifact_mesh_discards'
+    ].map((table) =>
+      db
+        .prepare(
+          `DELETE FROM ${table} WHERE project_id = ? AND ${DECRYPT_ABANDONED_FENCE}`
+        )
+        .bind(projectId, projectId)
+    )
+  );
+  return { complete: true, objects };
+}
+
+async function decryptPurgeStep(
+  db: D1Database,
+  env: MigrationEnv,
+  projectId: string,
+  step: DecryptPurgeStep
+): Promise<StepOutcome> {
+  if (step === 'room') {
+    let cleared: boolean;
+    try {
+      cleared = await tellRoom(env, projectId, 'purge', true);
+    } catch {
+      cleared = false;
+    }
+    if (!cleared) {
+      refuse(
+        503,
+        'PROJECT_ROOM_UNAVAILABLE',
+        'The project’s room could not be cleared right now. Try again.'
+      );
+    }
+    return { more: false, rows: 0, objects: 0 };
+  }
+  const outcome = await dropStaged(db, env, projectId, DECRYPT_PURGING_FENCE);
+  if (outcome.complete) {
+    // What Phase 5 and 6 keep about an encrypted project beside its group,
+    // as a project purge drops it: assistant consents (6-1, migration 0041),
+    // stored MLS proposals (5-5, 0039), and encrypted invitations with their
+    // KeyPackages and Welcomes (5-3a, 0038), each only once its table
+    // exists. A consent left behind would let the assistant read the
+    // project again were it ever encrypted anew, without being asked.
+    const tables = [
+      ...((await isE2eeAssistantConsentStorageReady(db))
+        ? ['e2ee_assistant_consents']
+        : []),
+      ...((await isE2eeMlsProposalStorageReady(db))
+        ? ['e2ee_mls_proposals']
+        : []),
+      ...((await isE2eeInvitationStorageReady(db))
+        ? E2EE_INVITATION_TABLES
+        : [])
+    ];
+    if (tables.length) {
+      await runBatch(
+        db,
+        tables.map((table) =>
+          db
+            .prepare(
+              `DELETE FROM ${table} WHERE project_id = ? AND ${DECRYPT_PURGING_FENCE}`
+            )
+            .bind(projectId, projectId)
+        )
+      );
+    }
+  }
+  return {
+    more: !outcome.complete,
+    rows: outcome.complete ? 1 : 0,
+    objects: outcome.objects
+  };
+}
+
+/**
+ * The device-list fence of a decrypt staging's writes and cutover: the
+ * lease holder's device (`deviceId`, the migration row's) is still
+ * certified in the owner's newest device list, and the fence holds only
+ * while that list is the one read here. It is the reverse path's
+ * counterpart of a staged encrypted version's signer fence
+ * (`writeStagedVersion`): a device removed while it holds the lease stages
+ * nothing more and cannot cut the project over. (The other fence those
+ * versions carry, a pending member rotation, guards ciphertext sealed
+ * under a key a removed device may hold; plaintext staged beside the
+ * project is sealed under none, and the purge drops the group.)
+ */
+export interface DecryptLeaseDevice {
+  readonly sql: string;
+  readonly binds: readonly unknown[];
+  /** The device-list position the fence holds at. */
+  readonly key: { generation: number; headSequence: number };
+}
+
+export async function decryptLeaseDeviceFence(
+  db: D1Database,
+  userId: string,
+  deviceId: string | null
+): Promise<DecryptLeaseDevice> {
+  if (!deviceId) {
+    refuse(
+      403,
+      'E2EE_DEVICE_NOT_CERTIFIED',
+      'Turn encryption off from a device listed in Settings › Encryption.'
+    );
+  }
+  const key = await requireCertifiedDevice(db, userId, deviceId);
+  return { ...deviceListUnchanged(userId, key), key };
+}
+
+/** The lease holder of a decrypt staging, or a refusal. */
+async function requireDecryptLease(
+  ctx: Context,
+  projectId: string,
+  lease: string | null
+): Promise<{ lease: StagingLease; deviceId: string | null }> {
+  if (!lease) return leaseLost();
+  const check = await checkStagingLease(
+    ctx.db,
+    projectId,
+    ctx.userId,
+    lease,
+    Date.now(),
+    'decrypt'
+  );
+  if (check?.kind === 'held') {
+    return { lease: check.lease, deviceId: check.deviceId };
+  }
+  if (check?.kind === 'lost') leaseLost();
+  refuse(
+    409,
+    E2EE_MIGRATION_CODES.state,
+    'This project is not being turned back into plaintext.'
+  );
+}
+
+/** `GET …/migration/plaintext`: what the lease holder staged so far. */
+async function stagedPlaintext(
+  ctx: Context,
+  projectId: string,
+  lease: string | null
+): Promise<Response> {
+  await requireDecryptLease(ctx, projectId, lease);
+  const [revisions, artifacts, row, measurements, sessions] = await Promise.all(
+    [
+      ctx.db
+        .prepare(
+          `SELECT id, reason, created_at FROM revisions WHERE project_id = ?
+           ORDER BY created_at, id`
+        )
+        .bind(projectId)
+        .all<{ id: string; reason: string; created_at: string }>(),
+      ctx.db
+        .prepare(
+          `SELECT id, kind, name, bytes, metadata_json FROM artifacts
+           WHERE project_id = ? ORDER BY created_at, id`
+        )
+        .bind(projectId)
+        .all<{
+          id: string;
+          kind: string;
+          name: string;
+          bytes: number | null;
+          metadata_json: string;
+        }>(),
+      migrationRow(ctx.db, projectId),
+      ctx.db
+        .prepare(
+          'SELECT revision FROM project_measurements WHERE project_id = ?'
+        )
+        .bind(projectId)
+        .first<{ revision: number }>(),
+      ctx.db
+        .prepare(
+          'SELECT COUNT(*) AS sessions FROM project_workspace_sessions WHERE project_id = ?'
+        )
+        .bind(projectId)
+        .first<{ sessions: number }>()
+    ]
+  );
+  const blobIdOf = (metadata: string): string | null => {
+    try {
+      const value = (JSON.parse(metadata) as Record<string, unknown>)[
+        DECRYPT_STAGED_BLOB_METADATA_KEY
+      ];
+      return typeof value === 'string' ? value : null;
+    } catch {
+      return null;
+    }
+  };
+  return json({
+    revisions: (revisions.results ?? []).map((r) => ({
+      revisionId: r.id,
+      reason: r.reason,
+      createdAt: r.created_at
+    })),
+    artifacts: (artifacts.results ?? []).map((a) => ({
+      artifactId: a.id,
+      kind: a.kind,
+      name: a.name,
+      bytes: a.bytes ?? 0,
+      blobId: blobIdOf(a.metadata_json)
+    })),
+    head:
+      row?.staged_hash && row.staged_version > 0
+        ? { version: row.staged_version, checksumSha256: row.staged_hash }
+        : null,
+    measurementsRevision: measurements?.revision ?? 0,
+    workspaceSessions: sessions?.sessions ?? 0
+  } satisfies E2eeDecryptStagingResponse);
+}
+
+/** The details body's ceiling: measurements plus twenty view states. */
+const MAX_DETAILS_BODY_CHARS = 1_536 * 1024;
+
+/**
+ * `PUT …/migration/plaintext/details`: the decrypted measurements and view
+ * state, validated as the plaintext routes validate them, in one batch
+ * fenced on the lease. Staging them again replaces them.
+ */
+async function stageDetails(
+  ctx: Context,
+  projectId: string,
+  request: Request,
+  lease: string | null
+): Promise<Response> {
+  const held = await requireDecryptLease(ctx, projectId, lease);
+  const text = await request.text();
+  if (text.length > MAX_DETAILS_BODY_CHARS) {
+    refuse(413, 'E2EE_REQUEST_TOO_LARGE', 'Request body is too large.');
+  }
+  let body: Record<string, unknown>;
+  try {
+    body = record(JSON.parse(text), 'Body');
+  } catch (error) {
+    if (error instanceof RouteError) throw error;
+    invalid('Body must be JSON');
+  }
+  let measurements: ReturnType<
+    typeof parseSaveProjectMeasurementsRequest
+  > | null = null;
+  const sessions: ReturnType<typeof parseWorkspaceSession>[] = [];
+  try {
+    if (body.measurements !== null && body.measurements !== undefined) {
+      measurements = parseSaveProjectMeasurementsRequest(
+        { expectedRevision: 0, record: body.measurements },
+        projectId
+      );
+    }
+    const listed = Array.isArray(body.workspaceSessions)
+      ? body.workspaceSessions
+      : [];
+    if (listed.length > MAX_DECRYPT_STAGED_SESSIONS) {
+      invalid(`At most ${MAX_DECRYPT_STAGED_SESSIONS} workspace sessions`);
+    }
+    for (const session of listed) {
+      sessions.push(parseWorkspaceSession(session, projectId));
+    }
+  } catch (error) {
+    if (error instanceof ProjectMeasurementRequestError) {
+      refuse(error.status, 'E2EE_INVALID_REQUEST', error.message);
+    }
+    if (error instanceof HttpError) {
+      refuse(error.status, 'E2EE_INVALID_REQUEST', error.message);
+    }
+    throw error;
+  }
+  const device = await decryptLeaseDeviceFence(
+    ctx.db,
+    ctx.userId,
+    held.deviceId
+  );
+  const fence = decryptStagingFence(projectId, ctx.userId, held.lease, device);
+  const nowIso = new Date().toISOString();
+  const statements: D1PreparedStatement[] = [
+    // The fence itself, so a call with nothing to stage still proves the
+    // lease.
+    ctx.db
+      .prepare(
+        `UPDATE e2ee_project_migrations SET updated_at = ?
+         WHERE project_id = ? AND ${fence.sql}`
+      )
+      .bind(nowIso, projectId, ...fence.binds)
+  ];
+  if (measurements) {
+    statements.push(
+      ctx.db
+        .prepare(
+          `INSERT INTO project_measurements
+             (project_id, record_version, revision, payload_json, updated_at)
+           SELECT ?, ?, 1, ?, ? WHERE ${fence.sql}
+           ON CONFLICT(project_id) DO UPDATE SET
+             record_version = excluded.record_version,
+             payload_json = excluded.payload_json,
+             updated_at = excluded.updated_at`
+        )
+        .bind(
+          projectId,
+          measurements.record.version,
+          JSON.stringify(measurements.record),
+          measurements.record.updatedAt,
+          ...fence.binds
+        )
+    );
+  }
+  for (const session of sessions) {
+    statements.push(
+      ctx.db
+        .prepare(
+          `INSERT INTO project_workspace_sessions
+             (user_id, project_id, session_id, device_id, sequence,
+              record_json, updated_at)
+           SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${fence.sql}
+           ON CONFLICT(user_id, project_id, session_id) DO UPDATE SET
+             device_id = excluded.device_id, sequence = excluded.sequence,
+             record_json = excluded.record_json,
+             updated_at = excluded.updated_at`
+        )
+        .bind(
+          ctx.userId,
+          projectId,
+          session.sessionId,
+          session.deviceId,
+          session.sequence,
+          JSON.stringify(session),
+          nowIso,
+          ...fence.binds
+        )
+    );
+  }
+  const results = await runBatch(ctx.db, statements);
+  if ((results[0]?.meta?.changes ?? 0) !== 1) {
+    if (await deviceListMoved(ctx.db, ctx.userId, device.key)) {
+      refuseDeviceListMoved();
+    }
+    leaseLost();
+  }
+  return new Response(null, { status: 204 });
+}
+
+/**
+ * Slice 7-3: records the staged plaintext head of a decrypting project on
+ * its migration row (its document version and its object's checksum),
+ * fenced on the lease and its holder's device. Called by the plaintext
+ * document route after the head is stored (`e2eeReverseStaging.ts`).
+ */
+export async function recordDecryptStagedHead(
+  db: D1Database,
+  projectId: string,
+  userId: string,
+  lease: StagingLease,
+  device: DecryptLeaseDevice,
+  version: number,
+  checksumSha256: string
+): Promise<void> {
+  const fence = decryptStagingFence(projectId, userId, lease, device);
+  const results = await runBatch(db, [
+    db
+      .prepare(
+        `UPDATE e2ee_project_migrations
+         SET staged_version = ?, staged_hash = ?, updated_at = ?
+         WHERE project_id = ? AND source_version < ? AND ${fence.sql}`
+      )
+      .bind(
+        version,
+        checksumSha256,
+        new Date().toISOString(),
+        projectId,
+        version,
+        ...fence.binds
+      )
+  ]);
+  if ((results[0]?.meta?.changes ?? 0) !== 1) {
+    const row = await migrationRow(db, projectId);
+    if (row?.state === 'staging' && row.source_version >= version) {
+      refuse(
+        409,
+        E2EE_MIGRATION_CODES.headBehind,
+        'The staged head must be newer than the encrypted head it replaces.',
+        { sourceVersion: row.source_version }
+      );
+    }
+    if (await deviceListMoved(db, userId, device.key)) {
+      refuseDeviceListMoved();
+    }
+    leaseLost();
+  }
+}
+
 // --- Dispatch ----------------------------------------------------------------
 
 /**
@@ -1545,7 +2678,12 @@ export async function handleE2eeProjectMigrationRequest(
   userId: string,
   migrationEnabled: boolean,
   authorization: Authorization,
-  lease: string | null
+  lease: string | null,
+  /**
+   * Slice 7-3: the account's E2EE_REVERSE_ENABLED decision (with
+   * migration open). The reverse routes also need migration 0043.
+   */
+  reverseEnabled = false
 ): Promise<Response> {
   try {
     if (!migrationEnabled) {
@@ -1581,7 +2719,30 @@ export async function handleE2eeProjectMigrationRequest(
     }
     const action = match[2] ?? null;
     const method = request.method;
-    const ctx: Context = { db, env, userId, authorization };
+    const ctx: Context = {
+      db,
+      env,
+      userId,
+      authorization,
+      reverseEnabled: reverseEnabled && (await isE2eeReverseStorageReady(db))
+    };
+    if (action === 'plaintext' || action === 'plaintext/details') {
+      if (!ctx.reverseEnabled) {
+        refuse(
+          501,
+          'FEATURE_DISABLED',
+          'Turning encryption off for a project is not available yet.'
+        );
+      }
+      await requireOwnedProject(db, userId, projectId);
+      if (action === 'plaintext' && method === 'GET') {
+        return await stagedPlaintext(ctx, projectId, lease);
+      }
+      if (action === 'plaintext/details' && method === 'PUT') {
+        return await stageDetails(ctx, projectId, request, lease);
+      }
+      refuse(404, 'NOT_FOUND', 'Not found.');
+    }
     if (action === null && method === 'GET') {
       await requireOwnedProject(db, userId, projectId);
       const row = await migrationRow(db, projectId);
@@ -1664,11 +2825,19 @@ export async function projectMigrationErasureStatements(
  * a staged project, while the migration routes no longer answer that
  * account, so nothing else could finish or abandon it. Only a `staging`
  * row moves; a cutover or purge is never touched.
+ *
+ * `eligible` is asked with the staging's direction: a decrypt staging
+ * (slice 7-3) stays only while the reverse path is open to its owner
+ * (`isE2eeReverseEnabled`), since only then do the reverse routes answer
+ * them. Otherwise nothing could finish or abandon it either: its staged
+ * plaintext, exempt from quota, would linger beside the ciphertext, and
+ * while the global flags stay on its encrypted writes stay refused.
  */
 export async function sweepProjectMigrations(
   env: MigrationEnv,
   enabled: boolean,
-  eligible: (email: string | undefined) => boolean = () => true,
+  eligible: (email: string | undefined, direction: string) => boolean = () =>
+    true,
   now = Date.now()
 ): Promise<void> {
   const db = env.DB;
@@ -1678,7 +2847,7 @@ export async function sweepProjectMigrations(
     const withdrawn = await abandonWithdrawnStagings(db, eligible, now);
     const { results } = await db
       .prepare(
-        `SELECT project_id, state FROM e2ee_project_migrations
+        `SELECT project_id, state, direction FROM e2ee_project_migrations
          WHERE (state IN ('cutover', 'purging')
                 OR (state = 'abandoned' AND purge_cursor = 'cleanup'))
            AND updated_at < ?
@@ -1688,13 +2857,17 @@ export async function sweepProjectMigrations(
         new Date(now - MIGRATION_SWEEP_IDLE_MS).toISOString(),
         MIGRATION_SWEEP_ROWS
       )
-      .all<{ project_id: string; state: string }>();
+      .all<{ project_id: string; state: string; direction: string }>();
     const always: Authorization = { sql: '1', binds: [] };
     for (const row of [...withdrawn, ...(results ?? [])]) {
       try {
         for (let step = 0; step < MIGRATION_SWEEP_STEPS; step++) {
           if (row.state === 'abandoned') {
-            const outcome = await dropStaged(db, env, row.project_id);
+            // Slice 7-3: an abandoned decrypt staging drops plaintext.
+            const outcome =
+              row.direction === 'decrypt'
+                ? await dropStagedPlaintext(db, env, row.project_id)
+                : await dropStaged(db, env, row.project_id);
             await finishCleanup(
               db,
               row.project_id,
@@ -1729,22 +2902,23 @@ const MIGRATION_SWEEP_CANDIDATES = 50;
  */
 async function abandonWithdrawnStagings(
   db: D1Database,
-  eligible: (email: string | undefined) => boolean,
+  eligible: (email: string | undefined, direction: string) => boolean,
   now: number
-): Promise<{ project_id: string; state: string }[]> {
+): Promise<{ project_id: string; state: string; direction: string }[]> {
   const { results } = await db
     .prepare(
-      `SELECT m.project_id, u.email FROM e2ee_project_migrations m
+      `SELECT m.project_id, m.direction, u.email FROM e2ee_project_migrations m
        LEFT JOIN users u ON u.id = m.owner_user_id
        WHERE m.state = 'staging' AND COALESCE(m.lease_expires_at, 0) <= ?
        ORDER BY m.updated_at LIMIT ?`
     )
     .bind(now, MIGRATION_SWEEP_CANDIDATES)
-    .all<{ project_id: string; email: string | null }>();
-  const abandoned: { project_id: string; state: string }[] = [];
+    .all<{ project_id: string; direction: string; email: string | null }>();
+  const abandoned: { project_id: string; state: string; direction: string }[] =
+    [];
   for (const row of results ?? []) {
     if (abandoned.length >= MIGRATION_SWEEP_ROWS) break;
-    if (eligible(row.email ?? undefined)) continue;
+    if (eligible(row.email ?? undefined, row.direction)) continue;
     try {
       const result = await db
         .prepare(
@@ -1757,7 +2931,11 @@ async function abandonWithdrawnStagings(
         .bind(new Date(now).toISOString(), row.project_id, now)
         .run();
       if ((result.meta?.changes ?? 0) === 1) {
-        abandoned.push({ project_id: row.project_id, state: 'abandoned' });
+        abandoned.push({
+          project_id: row.project_id,
+          state: 'abandoned',
+          direction: row.direction
+        });
       }
     } catch {
       // An account being erased, say: its erasure abandons it instead.
