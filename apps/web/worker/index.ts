@@ -31,6 +31,7 @@ import {
 } from './e2eeReverseStaging';
 import { encryptedRoomHeaders, notifyEncryptedRoom } from './e2eeRoom';
 import {
+  assertApiRateLimitAvailable,
   enforceApiRateLimit,
   isApiRateLimitSpent,
   markApiRateLimitSpent,
@@ -1024,6 +1025,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const blobGuard: SharedBlobGuard | null = address
       ? {
           unbudgeted: perAddress,
+          blobAvailable: async (blobKey) =>
+            assertApiRateLimitAvailable(
+              env,
+              `${address}:blob:${blobKey}`,
+              ENCRYPTED_SHARED_BLOB_REPETITION_RATE_LIMIT
+            ),
           blob: async (blobKey) =>
             enforceApiRateLimit(
               env,

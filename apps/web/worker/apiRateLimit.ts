@@ -2,6 +2,24 @@ import type { CloudflareEnv } from '@openzcad/cloudflare-adapters';
 import { PROJECT_INVITATION_RATE_WINDOW_SECONDS } from '@openzcad/persistence';
 import { HttpError } from './validation';
 
+/** Refuses an exhausted bucket without allocating or incrementing one. */
+export async function assertApiRateLimitAvailable(
+  env: CloudflareEnv,
+  bucket: string,
+  limit: number
+): Promise<void> {
+  if (env.ENVIRONMENT === 'development' && env.PRODUCTION_GUARD === undefined)
+    return;
+  if (!env.DB) throw new HttpError(503, 'API request guard is unavailable.');
+  const usage = await env.DB.prepare(
+    'SELECT request_count FROM auth_rate_limits WHERE bucket = ? AND window_start = ?'
+  )
+    .bind(bucket, currentWindowStart())
+    .first<{ request_count: number }>();
+  if (usage && usage.request_count >= limit)
+    throw new HttpError(429, 'API request limit reached. Try again later.');
+}
+
 /** Atomic fixed-window buckets share the existing expiring auth accounting table. */
 export async function enforceApiRateLimit(
   env: CloudflareEnv,

@@ -631,17 +631,16 @@ describe('the anonymous blob route (slice 5-11)', { timeout: 120_000 }, () => {
     for (const reference of references) {
       expect(await fetchBlob(large.fragment.token, reference.blobId)).toBe(200);
     }
-    // The small link's load budget (one blob: 2 + 32), then the address's
-    // own 300, then nothing. Use distinct, unnamed ids so the independent
-    // per-blob repetition cap does not mask this aggregate boundary.
+    // Unknown ids get only the fixed address budget, regardless of the
+    // link's load allowance. The 400 named blobs above still load at once.
     const statuses: number[] = [];
-    for (let i = 0; i < 335; i += 1) {
+    for (let i = 0; i < 301; i += 1) {
       statuses.push(
         await fetchBlob(small.fragment.token, randomBytes(16).toString('hex'))
       );
     }
-    expect(statuses.slice(0, 334).every((status) => status === 404)).toBe(true);
-    expect(statuses[334]).toBe(429);
+    expect(statuses.slice(0, 300).every((status) => status === 404)).toBe(true);
+    expect(statuses[300]).toBe(429);
     // Requests naming no servable link spend the address's budget: spent.
     expect(await fetchBlob('x'.repeat(43), blobId)).toBe(429);
     // Another address still gets its own.
@@ -751,44 +750,52 @@ describe('the anonymous blob route (slice 5-11)', { timeout: 120_000 }, () => {
     expect(snapshot.rangedReads()).toBeGreaterThan(0);
   });
 
-  it('caps snapshot prefix reads per address across links, before any read (#935 review)', async () => {
-    const shared = await sharedWithImport();
-    const references = committedBlobs(shared.srv, shared.projectId, 61);
-    const snapshot = await r2Snapshot(shared, references, '203.0.113.13');
-    // Every request in a fresh isolate (nothing cached): 60 prefix reads,
-    // then refused before a 61st.
-    for (let i = 0; i < 60; i += 1) {
+  it.each(['named', 'unnamed'] as const)(
+    'caps cold %s snapshot prefix reads before a 61st read (#935 review)',
+    async (kind) => {
+      const shared = await sharedWithImport();
+      const references = committedBlobs(shared.srv, shared.projectId, 61);
+      const snapshot = await r2Snapshot(shared, references, '203.0.113.13');
+      // Every request in a fresh isolate (nothing cached): 60 prefix reads,
+      // then refused before a 61st.
+      for (let i = 0; i < 60; i += 1) {
+        forgetSnapshotBlobIds();
+        expect(
+          await snapshot.fetchBlob(
+            kind === 'named'
+              ? references[i]!.blobId
+              : randomBytes(16).toString('hex')
+          )
+        ).toBe(kind === 'named' ? 200 : 404);
+      }
+      const read = snapshot.rangedReads();
+      expect(read).toBeGreaterThanOrEqual(60);
       forgetSnapshotBlobIds();
-      expect(await snapshot.fetchBlob(references[i]!.blobId)).toBe(200);
+      expect(await snapshot.fetchBlob(references[60]!.blobId)).toBe(429);
+      expect(snapshot.rangedReads()).toBe(read);
+      expect(snapshot.bodyReads()).toBe(0);
+      if (kind === 'unnamed')
+        expect(
+          rows(
+            shared.srv,
+            "SELECT bucket FROM auth_rate_limits WHERE bucket LIKE '%:blob:%'"
+          )
+        ).toHaveLength(0);
     }
-    const read = snapshot.rangedReads();
-    expect(read).toBeGreaterThanOrEqual(60);
-    forgetSnapshotBlobIds();
-    expect(await snapshot.fetchBlob(references[60]!.blobId)).toBe(429);
-    expect(snapshot.rangedReads()).toBe(read);
-    expect(snapshot.bodyReads()).toBe(0);
-  });
+  );
 
   it('refuses a request past both budgets before reading the snapshot from R2 (#935 review)', async () => {
     const shared = await sharedWithImport();
-    // An R2-backed snapshot naming the one import: a load budget of 34.
-    const snapshot = await r2Snapshot(
-      shared,
-      [
-        {
-          blobId: shared.blobId,
-          kind: 'import-source',
-          key: new Uint8Array(randomBytes(32)),
-          ciphertextHash: new Uint8Array(randomBytes(32)),
-          plaintextLength: 1
-        }
-      ],
-      '203.0.113.11'
-    );
+    const references = committedBlobs(shared.srv, shared.projectId, 17);
+    const snapshot = await r2Snapshot(shared, references, '203.0.113.11');
     const reads = () => snapshot.bodyReads() + snapshot.rangedReads();
-    // The load's 34, then the address's own 300. Distinct, unnamed ids
-    // exercise these budgets independently of the per-blob cap.
-    for (let i = 0; i < 334; i += 1) {
+    // 68 named reads exceed the load allowance of 66 while respecting each
+    // blob's cap of four. The last two consume the fixed address bucket.
+    for (const reference of references) {
+      for (let i = 0; i < 4; i += 1)
+        expect(await snapshot.fetchBlob(reference.blobId)).toBe(200);
+    }
+    for (let i = 0; i < 298; i += 1) {
       expect(await snapshot.fetchBlob(randomBytes(16).toString('hex'))).toBe(
         404
       );
@@ -815,8 +822,74 @@ describe('the anonymous blob route (slice 5-11)', { timeout: 120_000 }, () => {
     expect(counters()).toBe(spentCounters);
     // The next minute the link loads again.
     snapshot.nextMinute();
-    expect(await snapshot.fetchBlob(shared.blobId)).toBe(200);
+    expect(await snapshot.fetchBlob(references[0]!.blobId)).toBe(200);
     expect(reads()).toBe(spent + 1);
+  });
+
+  it('bounds unknown-id counter cardinality independently of a 4096-blob allowance (#935 review)', async () => {
+    const shared = await sharedWithImport();
+    const references = committedBlobs(shared.srv, shared.projectId, 4096);
+    const snapshot = await r2Snapshot(shared, references, '203.0.113.20');
+    for (let i = 0; i < 300; i += 1) {
+      expect(await snapshot.fetchBlob(randomBytes(16).toString('hex'))).toBe(
+        404
+      );
+    }
+    const blobCounters = () =>
+      rows(
+        shared.srv,
+        "SELECT bucket FROM auth_rate_limits WHERE bucket LIKE '%:blob:%'"
+      );
+    expect(blobCounters()).toHaveLength(0);
+    const count = rows(
+      shared.srv,
+      'SELECT bucket FROM auth_rate_limits'
+    ).length;
+    const reads = shared.srv.bucket.get.mock.calls.length;
+    for (let i = 0; i < 20; i += 1) {
+      expect(await snapshot.fetchBlob(randomBytes(16).toString('hex'))).toBe(
+        429
+      );
+    }
+    expect(
+      rows(shared.srv, 'SELECT bucket FROM auth_rate_limits')
+    ).toHaveLength(count);
+    expect(shared.srv.bucket.get.mock.calls.length).toBe(reads);
+    expect(blobCounters()).toHaveLength(0);
+    // A valid link retains its own allowance after the fixed bucket is spent.
+    const untouched = await r2Snapshot(shared, references, '203.0.113.20');
+    expect(await untouched.fetchBlob(references[0]!.blobId)).toBe(200);
+    expect(blobCounters()).toHaveLength(1);
+    expect(
+      await untouched.fetchBlob(references[0]!.blobId, '203.0.113.21')
+    ).toBe(200);
+    expect(blobCounters()).toHaveLength(2);
+    untouched.nextMinute();
+    expect(await untouched.fetchBlob(references[0]!.blobId)).toBe(200);
+  });
+
+  it('keeps admission atomic when named-blob requests pass the read-only check concurrently', async () => {
+    const shared = await sharedWithImport();
+    const references = committedBlobs(shared.srv, shared.projectId, 2);
+    const snapshot = await r2Snapshot(shared, references, '203.0.113.22');
+    expect(await snapshot.fetchBlob(randomBytes(16).toString('hex'))).toBe(404);
+    const before = shared.srv.bucket.get.mock.calls.length;
+    const statuses = await Promise.all(
+      Array.from({ length: 20 }, () =>
+        snapshot.fetchBlob(references[0]!.blobId)
+      )
+    );
+    expect(statuses.filter((status) => status === 200)).toHaveLength(4);
+    expect(statuses.filter((status) => status === 429)).toHaveLength(16);
+    expect(shared.srv.bucket.get.mock.calls.length - before).toBe(4);
+    const loadCounters = rows<{ bucket: string; request_count: number }>(
+      shared.srv,
+      'SELECT bucket, request_count FROM auth_rate_limits'
+    ).filter(({ bucket }) =>
+      /^[a-z0-9-]+:[a-f0-9]{64}:[a-f0-9]{32}$/.test(bucket)
+    );
+    expect(loadCounters.map(({ request_count }) => request_count)).toEqual([4]);
+    expect(await snapshot.fetchBlob(references[1]!.blobId)).toBe(200);
   });
 
   it('caps repeats across links before any R2 read even with a 4096-blob allowance (#935 review)', async () => {
@@ -910,9 +983,8 @@ describe('the anonymous blob route (slice 5-11)', { timeout: 120_000 }, () => {
     // authority's potentially 2,048 authors, even though it gates on one.
     const projection = /^\s*SELECT\s+([\s\S]*?)\bFROM\b/i.exec(lookup!)?.[1];
     expect(projection).not.toMatch(/\benvelope_inline\b|\bauthority\b|\*/);
-    // Four valid requests already used the load budget. Thirty more plus
-    // the address's 300 exhaust it using ids not masked by the repeat cap.
-    for (let i = 0; i < 330; i += 1) {
+    // Unknown ids use only the address's fixed 300, with no per-id rows.
+    for (let i = 0; i < 300; i += 1) {
       expect((await fetchBlob(randomBytes(16).toString('hex'))).status).toBe(
         404
       );
@@ -920,15 +992,13 @@ describe('the anonymous blob route (slice 5-11)', { timeout: 120_000 }, () => {
     const spent = bodyReads();
     for (let i = 0; i < 20; i += 1) {
       forgetSnapshotBlobIds();
-      expect((await fetchBlob(randomBytes(16).toString('hex'))).status).toBe(
-        429
-      );
+      expect((await fetchBlob()).status).toBe(429);
     }
     expect(bodyReads()).toBe(spent);
   });
 
   it('caps cold inline snapshot reads before the 61st D1 body selection (#935 review)', async () => {
-    const { fetchBlob, bodyReads, nextMinute } =
+    const { srv, fetchBlob, bodyReads, nextMinute } =
       await inlineSnapshot('203.0.113.18');
     for (let i = 0; i < 60; i += 1) {
       forgetSnapshotBlobIds();
@@ -937,6 +1007,12 @@ describe('the anonymous blob route (slice 5-11)', { timeout: 120_000 }, () => {
       );
     }
     expect(bodyReads()).toBe(60);
+    expect(
+      rows(
+        srv,
+        "SELECT bucket FROM auth_rate_limits WHERE bucket LIKE '%:blob:%'"
+      )
+    ).toHaveLength(0);
     forgetSnapshotBlobIds();
     expect((await fetchBlob()).status).toBe(429);
     expect(bodyReads()).toBe(60);
@@ -988,15 +1064,11 @@ describe('the anonymous blob route (slice 5-11)', { timeout: 120_000 }, () => {
 
   it('keeps the repetition cap when a spent link falls back to the address budget (#935 review)', async () => {
     const shared = await sharedWithImport();
-    const references = committedBlobs(shared.srv, shared.projectId, 1);
+    const references = committedBlobs(shared.srv, shared.projectId, 17);
     const snapshot = await r2Snapshot(shared, references, '203.0.113.16');
-    for (let i = 0; i < 35; i += 1) {
-      expect(await snapshot.fetchBlob(randomBytes(16).toString('hex'))).toBe(
-        404
-      );
-    }
-    for (let i = 0; i < 4; i += 1) {
-      expect(await snapshot.fetchBlob(references[0]!.blobId)).toBe(200);
+    for (const reference of references) {
+      for (let i = 0; i < 4; i += 1)
+        expect(await snapshot.fetchBlob(reference.blobId)).toBe(200);
     }
     forgetSnapshotBlobIds();
     const before = shared.srv.bucket.get.mock.calls.length;

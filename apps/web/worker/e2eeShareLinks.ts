@@ -1770,7 +1770,9 @@ export async function handleEncryptedSharedSnapshot(
 export interface SharedBlobGuard {
   /** A request that names no link the route serves. */
   unbudgeted(): Promise<void>;
-  /** Before a snapshot body or blob read, a repetition cap across project links. */
+  /** Read-only early refusal; unknown ids must never allocate a counter. */
+  blobAvailable(blobKey: string): Promise<void>;
+  /** Atomic admission of a snapshot-named blob, before reading its content. */
   blob(blobKey: string): Promise<void>;
   /**
    * Before the link's snapshot is read (#935 review): true when this
@@ -1923,9 +1925,10 @@ export interface SharedBlobBucket {
  * D1 body read or ranged R2 prefix reads, counted against an independent
  * per-address budget (`snapshotRead`). The pre-limit lookup selects only
  * small metadata, never an inline envelope or the authority's author list.
- * An independent per-address, per-project-blob budget (`blob`) applies
- * before either path, so repeating one file cannot consume the whole
- * link allowance or bypass the cap through another link to the project.
+ * An independent per-address, per-project-blob budget rejects repeats before
+ * membership reads with a read-only lookup (`blobAvailable`). Only ids the
+ * snapshot names allocate that counter (`blob`), so attacker-chosen unnamed
+ * ids cannot create unbounded rows; those use the fixed address budget.
  */
 export async function handleEncryptedSharedBlob(
   pathname: string,
@@ -1960,17 +1963,19 @@ ${row.share_id}`)
   charged = (await guard?.spent(linkKey)) ?? false;
   // Project-scoped rather than link-scoped: another token for the same
   // object must not buy another repetition allowance. Both ordinary and
-  // fallback requests pass this cap before any R2 read. Check `spent`
-  // first so an exhausted address cannot create more per-blob counters.
-  await guard?.blob(
-    (
-      await sha256Hex(new TextEncoder().encode(`${row.project_id}\n${blobId}`))
-    ).slice(0, 32)
-  );
+  // fallback requests check existing usage before any R2 read; no row is
+  // allocated for an id before snapshot membership has been verified.
+  const blobKey = (
+    await sha256Hex(new TextEncoder().encode(`${row.project_id}\n${blobId}`))
+  ).slice(0, 32);
+  await guard?.blobAvailable(blobKey);
   const named = await snapshotBlobIds(db, row, snapshots, guard);
-  if (!named) return notServed();
+  if (!named?.includes(blobId)) return notServed();
+  // The atomic increment remains after the read-only check: concurrent
+  // requests cannot all pass the fourth-download boundary or consume the
+  // link/address allowance for downloads rejected by that boundary.
+  await guard?.blob(blobKey);
   if (!charged) await guard?.load(linkKey, named.length);
-  if (!named.includes(blobId)) return anonymousNotFound();
   const blob = await db
     .prepare(
       `SELECT object_key, ciphertext_bytes FROM e2ee_content_blobs
