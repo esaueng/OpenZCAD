@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Vector3 } from '@openzcad/shared';
 import {
+  extrudeBackArrowOrigin,
   extrudeDraftHinge,
   extrudeHandles,
   extrudeTakesBackDistance,
@@ -51,9 +52,13 @@ describe('in-place Extrude handles', () => {
     expect(back).toMatchObject({
       valueId: 'backDistance',
       kind: 'linear',
-      // Clear of the region's own arrow (the middle) and the draft rig.
-      params: { origin: { x: 15, y: 7.5, z: 0 }, direction: { z: -1 } }
+      params: { direction: { z: -1 } }
     });
+    // Inside, clear of the region's own arrow (the middle) and the draft rig.
+    const origin = back?.kind === 'linear' ? back.params.origin : null;
+    expect(origin?.x).toBeCloseTo(5);
+    expect(origin?.y).toBeGreaterThan(5);
+    expect(origin?.y).toBeLessThan(10);
     const [reversed] = extrudeHandles(outline, up, 'region', {
       ...blind,
       distance: -8
@@ -161,6 +166,43 @@ describe('in-place Extrude handles', () => {
       const roof = extrudeDraftHinge(outline, up)!;
       expect(roof.foot).toEqual({ x: 20, y: 8, z: 0 });
       expect(roof.inward.y).toBeCloseTo(1);
+    }
+  });
+
+  it('stands the back arrow inside a concave profile, never in its notch', () => {
+    // A C open to +X: its vertex mean and the old average with the farthest
+    // corner both land in the notch (x > 4, 2 < y < 28).
+    const c: Vector3[] = [
+      { x: 0, y: 0, z: 0 },
+      { x: 20, y: 0, z: 0 },
+      { x: 20, y: 2, z: 0 },
+      { x: 4, y: 2, z: 0 },
+      { x: 4, y: 28, z: 0 },
+      { x: 20, y: 28, z: 0 },
+      { x: 20, y: 30, z: 0 },
+      { x: 0, y: 30, z: 0 }
+    ];
+    const inside = (point: Vector3) => {
+      let crossings = 0;
+      for (let index = 0; index < c.length; index += 1) {
+        const a = c[index]!;
+        const b = c[(index + 1) % c.length]!;
+        if (a.y <= point.y !== b.y <= point.y) {
+          const x = a.x + ((point.y - a.y) / (b.y - a.y)) * (b.x - a.x);
+          if (x > point.x) crossings += 1;
+        }
+      }
+      return crossings % 2 === 1;
+    };
+    for (const outline of [c, [...c].reverse()]) {
+      const hinge = extrudeDraftHinge(outline, up);
+      const origin = extrudeBackArrowOrigin(
+        outline,
+        up,
+        hinge?.foot ?? null,
+        hinge?.along
+      );
+      expect(inside(origin)).toBe(true);
     }
   });
 

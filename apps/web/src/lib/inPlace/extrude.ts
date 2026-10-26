@@ -51,18 +51,6 @@ function unit(a: Vector3): Vector3 {
   return scaled(a, 1 / size);
 }
 
-function mean(points: readonly Vector3[]): Vector3 {
-  const sum = points.reduce(
-    (total, point) => ({
-      x: total.x + point.x,
-      y: total.y + point.y,
-      z: total.z + point.z
-    }),
-    { x: 0, y: 0, z: 0 }
-  );
-  return scaled(sum, 1 / points.length);
-}
-
 function keyOf(...parts: (string | number)[]): string {
   return parts
     .map((part) => (typeof part === 'number' ? part.toFixed(6) : part))
@@ -150,24 +138,83 @@ export function extrudeDraftHinge(
 }
 
 /**
- * Where the back arrow stands: half-way from the profile's middle to the
- * outline point farthest from the draft rig's hinge, so it shares a grip with
- * neither the region's own arrow (at the middle) nor the draft rig.
+ * Where the back arrow stands: inside the profile, a quarter of the way
+ * along its widest interior span (of equal ones, the farthest from the
+ * draft rig's hinge) from the end farther from the hinge, so it shares a
+ * grip with neither the region's own arrow (in the middle) nor the rig. Any vertex average can lie outside a
+ * concave profile (in a C's notch); a span between two crossings of the
+ * outline cannot. The spans are cut by lines across the profile, square to
+ * `along` (the hinge's side, else the first side).
  */
 export function extrudeBackArrowOrigin(
   outline: readonly Vector3[],
-  foot: Vector3 | null
+  normal: Vector3,
+  foot: Vector3 | null,
+  along?: Vector3
 ): Vector3 {
-  const middle = mean(outline);
-  if (!foot) return middle;
-  let far = outline[0]!;
-  for (const point of outline) {
-    if (length(sub(point, foot)) > length(sub(far, foot)) + 1e-9) far = point;
+  const n = unit(normal);
+  const origin = outline[0]!;
+  const first = outline.find((point) => length(sub(point, origin)) > 1e-9);
+  if (!first) return origin;
+  const u = unit(along ?? sub(first, origin));
+  const v = unit(cross(n, u));
+  const flat = outline.map((point) => {
+    const offset = sub(point, origin);
+    return { x: dot(offset, u), y: dot(offset, v) };
+  });
+  const ys = flat.map((point) => point.y);
+  const low = Math.min(...ys);
+  const high = Math.max(...ys);
+  const footFlat = foot
+    ? { x: dot(sub(foot, origin), u), y: dot(sub(foot, origin), v) }
+    : null;
+  const spanScore = (y: number, start: number, end: number) =>
+    footFlat
+      ? Math.hypot((start + end) / 2 - footFlat.x, y - footFlat.y)
+      : -Math.abs(y - (low + high) / 2);
+  let best: { y: number; start: number; end: number } | null = null;
+  for (let line = 1; line < 16; line += 1) {
+    // Off every vertex's height, so a crossing is never counted twice.
+    const y = low + ((high - low) * line) / 16 + (high - low) * 1e-7;
+    const xs: number[] = [];
+    for (let index = 0; index < flat.length; index += 1) {
+      const a = flat[index]!;
+      const b = flat[(index + 1) % flat.length]!;
+      if (a.y <= y !== b.y <= y) {
+        xs.push(a.x + ((y - a.y) / (b.y - a.y)) * (b.x - a.x));
+      }
+    }
+    xs.sort((left, right) => left - right);
+    for (let index = 0; index + 1 < xs.length; index += 2) {
+      const start = xs[index]!;
+      const end = xs[index + 1]!;
+      // The widest; of equal ones, the one standing farthest from the
+      // hinge (else nearest the profile's mid-height).
+      const width = end - start;
+      const bestWidth = best ? best.end - best.start : -Infinity;
+      if (
+        width > bestWidth + 1e-9 ||
+        (width > bestWidth - 1e-9 &&
+          best !== null &&
+          spanScore(y, start, end) > spanScore(best.y, best.start, best.end))
+      ) {
+        best = { y, start, end };
+      }
+    }
   }
-  return scaled(
-    { x: middle.x + far.x, y: middle.y + far.y, z: middle.z + far.z },
-    0.5
-  );
+  if (!best) return origin;
+  const at = (x: number): Vector3 => ({
+    x: origin.x + u.x * x + v.x * best.y,
+    y: origin.y + u.y * x + v.y * best.y,
+    z: origin.z + u.z * x + v.z * best.y
+  });
+  const width = best.end - best.start;
+  const nearStart = at(best.start + width * 0.25);
+  const nearEnd = at(best.end - width * 0.25);
+  if (!foot) return nearStart;
+  return length(sub(nearStart, foot)) >= length(sub(nearEnd, foot))
+    ? nearStart
+    : nearEnd;
 }
 
 /**
@@ -195,7 +242,12 @@ export function extrudeHandles(
       kind: 'linear',
       key: keyOf('back', key, sense),
       params: {
-        origin: extrudeBackArrowOrigin(outline, hinge?.foot ?? null),
+        origin: extrudeBackArrowOrigin(
+          outline,
+          n,
+          hinge?.foot ?? null,
+          hinge?.along
+        ),
         direction: scaled(n, -sense)
       }
     });
