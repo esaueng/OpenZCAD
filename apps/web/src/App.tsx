@@ -2,7 +2,10 @@ import {
   repairLegacyBracketModel,
   repairLegacyBracketRecipe
 } from '@openzcad/document-core';
-import { registerProjectFlush } from './lib/migrationStatus';
+import {
+  registerProjectFlush,
+  useMigrationLockedProjects
+} from './lib/migrationStatus';
 import {
   repairLegacyBracketDemo,
   repairLegacyBracketSaveState
@@ -16,12 +19,13 @@ import {
   isAnalyticsEnabled,
   durationBucket
 } from './lib/analytics';
-import type {
-  GeometryBodyRepresentation,
-  GeometryReadyState,
-  ParameterKind,
-  PrimitiveKind,
-  UserId
+import {
+  PROJECT_MIGRATING_CODE,
+  type GeometryBodyRepresentation,
+  type GeometryReadyState,
+  type ParameterKind,
+  type PrimitiveKind,
+  type UserId
 } from '@openzcad/shared';
 import { clearAssistantHistory } from './lib/assistant/historyStorage';
 import { exactWarningBaseline } from './lib/exactWarnings';
@@ -1741,6 +1745,13 @@ const NARROW_WINDOW_QUERY = '(max-width: 960px)';
  * one is its own gesture (Ctrl+Shift+S).
  */
 const DEFAULT_SAVE_REASON = 'Manual save';
+/**
+ * The lane's notice while the open project is moved to encrypted storage
+ * (ADR-024 Phase 7): its plaintext takes no writes meanwhile, and an edit
+ * made here would be missing from the encrypted copy that replaces it.
+ */
+const PROJECT_MIGRATING_NOTICE =
+  'Editing is locked: this project is being end-to-end encrypted. It opens read-only until that finishes.';
 /** The lane's one notice for a tab that opened a project another tab owns. */
 const PROJECT_OPEN_ELSEWHERE_NOTICE =
   'Editing is locked: this project is open in another tab.';
@@ -3853,6 +3864,17 @@ export function App() {
    * to check it is not a render.
    */
   const [projectOpenElsewhere, setProjectOpenElsewhere] = useState(false);
+  /**
+   * The open project whose cloud autosave was refused because it is being
+   * encrypted (PROJECT_MIGRATING), by this tab's run or another tab's or
+   * device's: read-only until another project opens or the page reloads.
+   */
+  const [migrationRefusedProjectId, setMigrationRefusedProjectId] = useState<
+    string | null
+  >(null);
+  // This tab's own runs: read-only while encrypting, or while a paused or
+  // stopped staging keeps the plaintext locked.
+  const migrationLockedProjectIds = useMigrationLockedProjects();
   const projectOpenElsewhereRef = useRef(projectOpenElsewhere);
   projectOpenElsewhereRef.current = projectOpenElsewhere;
   /**
@@ -4838,11 +4860,36 @@ export function App() {
     session &&
     doc.ownerUserId !== session.userId
   );
+  // Being moved to encrypted storage (ADR-024 Phase 7): held in View like a
+  // read-only seat, since the account refuses its writes meanwhile and the
+  // encrypted copy that replaces it would not carry them.
+  const projectMigrating = Boolean(
+    doc &&
+    (migrationLockedProjectIds.has(doc.projectId) ||
+      migrationRefusedProjectId === doc.projectId)
+  );
+  const migrationEditReason = projectMigrating
+    ? 'This project is being end-to-end encrypted'
+    : null;
+  // Said once, where the eye goes, and kept for as long as it lasts, as the
+  // second tab's notice is.
+  const migrationNoticeShownRef = useRef(false);
+  useEffect(() => {
+    if (projectMigrating && !projectOpenElsewhere) {
+      migrationNoticeShownRef.current = true;
+      setStatus(PROJECT_MIGRATING_NOTICE, { sticky: true });
+    } else if (!projectMigrating && migrationNoticeShownRef.current) {
+      migrationNoticeShownRef.current = false;
+      setStatus(
+        'Editing is unlocked: this project is no longer being encrypted.'
+      );
+    }
+  }, [projectMigrating, projectOpenElsewhere, setStatus]);
   // A read-only share has no build workspace to offer, so the mode switch is
   // pinned to View rather than presenting a Build mode that refuses every
   // edit. A shared-link session locks Build for its own reason: the visitor's
   // workspace is the parameters, and Make a copy is the road to Build.
-  const buildModeDisabledReason = shareSession
+  const seatBuildModeDisabledReason = shareSession
     ? 'This is a shared link — Make a copy to open Build mode'
     : !sharedProjectDisabled && encryptedMemberEditReason
       ? // An encrypted member who may not edit (a viewer, or one whose role
@@ -4857,6 +4904,10 @@ export function App() {
             collaboration.status === 'read-only')
         ? 'This shared project is read-only'
         : null;
+  const buildModeDisabledReason =
+    !shareSession && migrationEditReason
+      ? migrationEditReason
+      : seatBuildModeDisabledReason;
   // A parameter change is still a document edit, so a read-only seat locks
   // Tweak exactly as it locks Build. A shared link is the opposite: Tweak is
   // the whole point of the visit.
@@ -4932,7 +4983,7 @@ export function App() {
   // Conditions that lock the document whatever workspace is showing. Tweak's
   // parameter edits answer to these too: a second tab or a read-only
   // collaboration seat locks parameters as firmly as features.
-  const projectEditDisabledReason = projectOpenElsewhere
+  const seatEditDisabledReason = projectOpenElsewhere
     ? 'This project is open in another tab'
     : shareSession
       ? // A shared-link session has no account seat, no lease and no second
@@ -4960,6 +5011,12 @@ export function App() {
                       ? 'Another collaborator holds the edit lease'
                       : 'Waiting for the project edit lease'
                     : null;
+  // Being encrypted locks the document as firmly as a second tab does; the
+  // second tab keeps its own notice.
+  const projectEditDisabledReason =
+    !projectOpenElsewhere && !shareSession && migrationEditReason
+      ? migrationEditReason
+      : seatEditDisabledReason;
   // View mode joins the same guard every other modeling edit uses. Project
   // rename has its own mode-aware guard below because it is workspace metadata:
   // owners may change it from either mode, while editors remain Build-only.
@@ -5336,6 +5393,14 @@ export function App() {
           );
         } else if (status.state === 'refused') {
           setStatus(errorMessage(status.error, PROJECT_TOO_LARGE_FOR_ACCOUNT));
+          // Being encrypted (ADR-024 Phase 7): the workspace locks editing.
+          if (
+            status.projectId &&
+            status.error instanceof ApiError &&
+            status.error.code === PROJECT_MIGRATING_CODE
+          ) {
+            setMigrationRefusedProjectId(status.projectId);
+          }
           // A write refused as read-only: an encrypted member was demoted
           // (slice 5-4). Its page re-reads the role and locks editing.
           if (
@@ -5489,6 +5554,11 @@ export function App() {
    */
   useLayoutEffect(() => {
     const projectId = doc?.projectId ?? null;
+    // A refusal while encrypting is the open project's; another one opening
+    // asks the account afresh.
+    setMigrationRefusedProjectId((current) =>
+      current === projectId ? current : null
+    );
     if (!projectId || shareSession) {
       // A shared-link session never writes device storage, so it has no
       // claim to make — and must not contest one. The owner opening their

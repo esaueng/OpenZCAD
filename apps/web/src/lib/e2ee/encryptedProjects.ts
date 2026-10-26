@@ -11,6 +11,9 @@
  * resolver through the decode worker. Slice 4-7 adds the project info's
  * thumbnail and archived exports, encrypted measurements and view state
  * (`replacedEnvelopes.ts`), and the restore of blobs the account lost.
+ * Slice 5-10 adds share links (`shareLinks.ts`): after each save this page
+ * republishes every active link's snapshot and, on the owner's page,
+ * renews statements that are due; a removal issues new ones at once.
  * Everything is dropped when the key session ends (sign-out, expiry,
  * another account).
  */
@@ -37,7 +40,12 @@ import {
 import { createEncryptedDocumentsApi } from './encryptedDocumentsApi';
 import type { MigrationStagingClients } from './projectMigrationEngine';
 import { desktopFetch } from '../desktopBridge';
-import { loadEncryption, type E2eeContext } from './accountKeys';
+import {
+  loadEncryption,
+  withIdentityKey,
+  type E2eeContext,
+  type UnlockAuthorization
+} from './accountKeys';
 import { createE2eeDecoder, type E2eeDecoder } from './decodeWorker';
 import { createE2eeApi } from './e2eeApi';
 import {
@@ -53,6 +61,7 @@ import { mlsProjectSessions } from './mls/projectSessions';
 import {
   createProjectGroupsApi,
   projectGroupAccount,
+  type MemberDevicesRemoved,
   type MembersRemoved
 } from './projectGroups';
 import {
@@ -84,7 +93,11 @@ import {
 } from './deviceRemoval';
 import { contactsContext } from './contacts';
 import { contactMemberLists } from './memberLists';
-import { createE2eeInvitationsApi } from '@openzcad/shared';
+import {
+  createE2eeInvitationsApi,
+  createE2eeShareLinksApi
+} from '@openzcad/shared';
+import type { ShareDelegationState, ShareLinksContext } from './shareLinks';
 import { contactInvitationPeople, type InvitationContext } from './invitations';
 import { invitationStore } from './invitationStore';
 
@@ -98,6 +111,19 @@ interface Opened {
   readonly measurements: Promise<EncryptedMeasurements>;
   readonly viewStates: Promise<EncryptedViewStates>;
   readonly invitations: Promise<InvitationContext>;
+  readonly sharing: Promise<PageShareLinks>;
+}
+
+/** The page's share links of encrypted projects (slice 5-10). */
+export interface PageShareLinks {
+  readonly ctx: ShareLinksContext;
+  /**
+   * Renews this account's share delegation with the identity key, opened by
+   * a fresh passkey ceremony or the recovery key for this one signature.
+   */
+  renewDelegation(
+    authorization: UnlockAuthorization
+  ): Promise<ShareDelegationState>;
 }
 
 let opened: Opened | null = null;
@@ -179,6 +205,7 @@ async function openStore(
   measurements: EncryptedMeasurements;
   viewStates: EncryptedViewStates;
   invitations: InvitationContext;
+  sharing: PageShareLinks;
 }> {
   const e2ee: E2eeContext = {
     userId,
@@ -227,8 +254,14 @@ async function openStore(
       account,
       leaves: (projectId) => groupsApi.leaves(projectId)
     }),
-    // The share-link reissue hook (slice 5-5, for slice 5-10).
+    // The share-link reissue hook (slice 5-5, for slice 5-10): the owner's
+    // page issues new statements at once, and the dialog offers reissue.
     onMembersRemoved: (removal: MembersRemoved) => {
+      void import('./shareLinks')
+        .then(({ shareLinksAfterRemoval }) =>
+          shareCtx ? shareLinksAfterRemoval(shareCtx, removal) : null
+        )
+        .catch(() => undefined);
       for (const listener of removalListeners) {
         try {
           listener(removal);
@@ -236,6 +269,15 @@ async function openStore(
           // Every listener still hears it.
         }
       }
+    },
+    // A co-member's device removal rotated a project (slice 5-7): the
+    // owner's page states its share links again without that device.
+    onMemberDevicesRemoved: (removal: MemberDevicesRemoved) => {
+      void import('./shareLinks')
+        .then(({ shareLinksAfterDeviceRemoval }) =>
+          shareCtx ? shareLinksAfterDeviceRemoval(shareCtx, removal) : null
+        )
+        .catch(() => undefined);
     },
     // A Commit refused because this account's devices changed elsewhere
     // (#908 review): `account` is stale, so the next operation opens the
@@ -260,6 +302,7 @@ async function openStore(
     blobs.read(projectId, blobId, signal, onProgress)
   );
   const pins = versionPins();
+  let shareCtx: ShareLinksContext | null = null;
   // The editor's encryption indicator hears what this key session verifies.
   const sessionCurrent = () => getKeySessionRevision() === revision;
   const verifying = createEncryptedProjectStore({
@@ -269,6 +312,16 @@ async function openStore(
     restoreBlobs: (projectId, blobIds) => blobs.restore(projectId, blobIds),
     open: (job) => pageDecoder.decodeProjectEnvelope(job),
     seal: (job) => pageDecoder.sealDocument(job),
+    // Share links (slice 5-10): every active link's snapshot follows the
+    // save, and the owner's page renews statements that are due.
+    onVersionWritten: async (projectId, head) => {
+      if (!shareCtx || !head.shareLinks?.links.length) return;
+      const links = await import('./shareLinks');
+      await links.publishShareSnapshots(shareCtx, projectId, head);
+      await links
+        .issueShareAuthorities(shareCtx, projectId, { head })
+        .catch(() => undefined);
+    },
     // Geometry workers resolve sources from this device's blob store: put
     // the document's encrypted sources there before it is rebuilt.
     onDocument: async (_projectId, document) => {
@@ -294,9 +347,27 @@ async function openStore(
     }
   });
   const store = reportingEncryptedProjectStore(verifying, sessionCurrent);
+  shareCtx = {
+    groups,
+    store,
+    api: createE2eeShareLinksApi(desktopFetch),
+    blobReferences: pageBlobReferences
+  };
+  const sharingCtx = shareCtx;
+  const sharing: PageShareLinks = {
+    ctx: sharingCtx,
+    renewDelegation: async (authorization) => {
+      const { renewShareDelegation, signWithIdentityKey } =
+        await import('./shareLinks');
+      return withIdentityKey(e2ee, account, authorization, (key) =>
+        renewShareDelegation(sharingCtx, signWithIdentityKey(key))
+      );
+    }
+  };
   return {
     store,
     blobs,
+    sharing,
     measurements: createEncryptedMeasurements({
       userId,
       kit: store.replaced,
@@ -422,7 +493,8 @@ async function openedForSession(): Promise<Opened> {
       blobs: both.then(({ blobs }) => blobs),
       measurements: both.then(({ measurements }) => measurements),
       viewStates: both.then(({ viewStates }) => viewStates),
-      invitations: both.then(({ invitations }) => invitations)
+      invitations: both.then(({ invitations }) => invitations),
+      sharing: both.then(({ sharing }) => sharing)
     };
     opened = current;
     both.then(
@@ -441,6 +513,7 @@ async function openedForSession(): Promise<Opened> {
     current.measurements.catch(() => undefined);
     current.viewStates.catch(() => undefined);
     current.invitations.catch(() => undefined);
+    current.sharing.catch(() => undefined);
   }
   return opened;
 }
@@ -505,6 +578,11 @@ export async function publishEncryptedThumbnail(
  */
 export async function encryptedInvitations(): Promise<InvitationContext> {
   return (await openedForSession()).invitations;
+}
+
+/** The page's share links of encrypted projects (slice 5-10). */
+export async function encryptedShareLinks(): Promise<PageShareLinks> {
+  return (await openedForSession()).sharing;
 }
 
 /** The page's encrypted measurements client (`measurementCloudSync.ts`). */

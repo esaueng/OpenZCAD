@@ -32,6 +32,10 @@ import {
 import type { CollaborationStatus } from '../lib/useCollaboration';
 import { useModalFocus } from '../lib/useModalFocus';
 import { StableLabel } from './StableLabel';
+import {
+  EncryptedShareLinks,
+  type EncryptedShareLinkClient
+} from './EncryptedShareLinks';
 import type { OwnerInvitation } from '../lib/e2ee/invitations';
 import {
   PrivateEmailInput,
@@ -162,12 +166,14 @@ export interface ProjectSharingDialogProps {
   /**
    * The project is end-to-end encrypted (slice 5-3b): invitations are
    * signed and members added through MLS, and roles change by the owner's
-   * MLS Commit (slice 5-4); share links are not offered yet, and plaintext
-   * sharing is untouched. Editors need no edit-lease rollout here: an
+   * MLS Commit (slice 5-4); the owner's share links are encrypted ones
+   * (slice 5-10, `EncryptedShareLinks`), and plaintext sharing is untouched. Editors need no edit-lease rollout here: an
    * encrypted project's editors write only on top of the head they read.
    */
   encrypted?: boolean;
   encryptedClient?: EncryptedSharingClient;
+  /** Share links of the encrypted project (slice 5-10). */
+  encryptedShareLinkClient?: EncryptedShareLinkClient;
   /** Opens Settings › Encryption at this person's code comparison. */
   onVerifyContact?(userId: string): void;
   /** This account left the encrypted project (slice 5-5). */
@@ -310,6 +316,7 @@ export function ProjectSharingDialog({
   editorInvitationsEnabled = true,
   encrypted = false,
   encryptedClient = pageEncryptedSharingClient,
+  encryptedShareLinkClient,
   onVerifyContact,
   onLeft,
   onClose
@@ -362,7 +369,7 @@ export function ProjectSharingDialog({
       try {
         if (encrypted) {
           // Encrypted: members from the metadata route, invitations (and
-          // the Adds of verified invitees) through MLS; no share links.
+          // the Adds of verified invitees) through MLS; share links in EncryptedShareLinks.
           const nextSharing = await client.getProjectSharing(projectId);
           setSharing(nextSharing);
           setShareLinks([]);
@@ -1079,6 +1086,15 @@ export function ProjectSharingDialog({
                 </p>
               )}
             </section>
+          ) : null}
+
+          {isOwner && encrypted ? (
+            <EncryptedShareLinks
+              projectId={projectId}
+              {...(encryptedShareLinkClient
+                ? { client: encryptedShareLinkClient }
+                : {})}
+            />
           ) : null}
 
           {!localProject && !isOwner ? (

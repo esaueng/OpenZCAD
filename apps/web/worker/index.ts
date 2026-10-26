@@ -1,7 +1,11 @@
 import { releaseDevelopmentE2eeWrite } from './e2eeWriteAuthorization';
 import { accountConsent, publishCensus } from './glimpseCensus';
 import { handleGlimpseUsage, countApi, type GlimpseEnv } from './glimpse';
-import { handleE2eeRequest } from './e2ee';
+import { handleE2eeRequest, projectBucket } from './e2ee';
+import {
+  handleEncryptedSharedSnapshot,
+  isEncryptedSharedSnapshotPath
+} from './e2eeShareLinks';
 import type { E2eeInvitationHost } from './e2eeInvitations';
 import { withEncryptedProjectInfo } from './e2eeProjectDocuments';
 import { accountRequiresEncryptedProjects } from './e2eeProjectPreferences';
@@ -911,6 +915,22 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       },
       200,
       { 'cache-control': 'no-store' }
+    );
+  }
+
+  // Anonymous reads of encrypted projects' share links (ADR-024 slice
+  // 5-10): the token is the whole authorization, as above, and the route
+  // serves only a signed share-snapshot envelope with what a visitor checks
+  // it with, never a plaintext project. It needs the deployment-wide
+  // E2EE_PROJECTS_ENABLED flag and sharing rollout (an anonymous caller has
+  // no email for the canaries); everything else is one opaque 404.
+  if (request.method === 'GET' && isEncryptedSharedSnapshotPath(pathname)) {
+    return handleEncryptedSharedSnapshot(
+      pathname,
+      env.DB,
+      projectBucket(env),
+      isCloudflareFeatureEnabled(env, 'E2EE_PROJECTS_ENABLED') &&
+        projectCollaborationRollout(env).sharingEnabled
     );
   }
 

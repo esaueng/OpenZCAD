@@ -47,6 +47,7 @@ import {
   type ProjectEnvelopeHeaderInit,
   type ProjectEnvelopeKind,
   type ProjectInfoBody,
+  type ShareLinkSet,
   type ViewStateBody
 } from '@openzcad/crypto';
 import {
@@ -91,6 +92,11 @@ export interface SealDocumentJob {
   /** The content blobs the document names (ADR-024 content blobs). */
   readonly blobs?: readonly ContentBlobReference[];
   readonly revisionVersionHashes: ReadonlyMap<string, Uint8Array>;
+  /**
+   * The active share-link set the version carries (slice 5-10): present,
+   * even empty, makes the body version 2.
+   */
+  readonly shareLinks?: ShareLinkSet;
 }
 
 export interface SealDocumentResult {
@@ -386,7 +392,8 @@ export async function sealDocumentJob(
     {
       document: job.document,
       blobs,
-      revisionVersionHashes: job.revisionVersionHashes
+      revisionVersionHashes: job.revisionVersionHashes,
+      ...(job.shareLinks ? { shareLinks: job.shareLinks } : {})
     },
     header
   );

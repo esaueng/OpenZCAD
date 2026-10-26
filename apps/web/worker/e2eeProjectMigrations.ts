@@ -472,6 +472,14 @@ async function tellRoom(
 }
 
 /**
+ * What locking the project's room confirmed: the plaintext version it
+ * holds (null when it holds none, is already encrypted, or the deployment
+ * binds no rooms at all), or that nothing could be confirmed.
+ */
+type RoomLock =
+  { confirmed: true; version: number | null } | { confirmed: false };
+
+/**
  * Takes back a lease the start issued but never handed out, because the
  * room did not confirm its lock. A fresh staging with nothing staged goes
  * back to `abandoned` with no cleanup due, so the plaintext unlocks and a
@@ -513,37 +521,48 @@ async function withdrawLease(
 }
 
 /**
- * Locks the project's room and answers the plaintext version it holds:
- * null when there is no room or it holds none. A room that does not
- * confirm the lock throws, so no lease leaves on its silence.
+ * Locks the project's room and answers the plaintext version it holds.
+ * Only an explicit answer counts: a room that refused, failed, answered
+ * something unreadable or could not be reached is unconfirmed, never "no
+ * room", since edits it holds unsaved would be lost to the purge.
  */
 async function lockRoom(
   env: MigrationEnv,
   projectId: string
-): Promise<number | null> {
+): Promise<RoomLock> {
   const rooms = env.PROJECT_ROOM as RoomNamespace | undefined;
-  if (!rooms || typeof rooms.getByName !== 'function') return null;
+  if (!rooms || typeof rooms.getByName !== 'function') {
+    return { confirmed: true, version: null };
+  }
   const url = new URL('https://project-room.internal/_internal/migration');
   url.searchParams.set('projectId', projectId);
-  const response = await rooms.getByName(projectId).fetch(
-    new Request(url, {
-      method: 'POST',
-      headers: {
-        'x-openzcad-internal-migration': 'v1',
-        'content-type': 'application/json'
-      },
-      body: JSON.stringify({ action: 'lock' })
-    })
-  );
-  if (!response.ok) throw new Error(`Room lock answered ${response.status}`);
-  if (response.status !== 200) return null;
+  let response: Response;
+  try {
+    response = await rooms.getByName(projectId).fetch(
+      new Request(url, {
+        method: 'POST',
+        headers: {
+          'x-openzcad-internal-migration': 'v1',
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({ action: 'lock' })
+      })
+    );
+  } catch {
+    return { confirmed: false };
+  }
+  // An encrypted room holds no plaintext to lose.
+  if (response.status === 204) return { confirmed: true, version: null };
+  if (response.status !== 200) return { confirmed: false };
   const answer = (await response.json().catch(() => null)) as {
     latestVersion?: unknown;
   } | null;
-  return typeof answer?.latestVersion === 'number' &&
+  if (!answer || typeof answer !== 'object') return { confirmed: false };
+  if (answer.latestVersion === null) return { confirmed: true, version: null };
+  return typeof answer.latestVersion === 'number' &&
     Number.isSafeInteger(answer.latestVersion)
-    ? answer.latestVersion
-    : null;
+    ? { confirmed: true, version: answer.latestVersion }
+    : { confirmed: false };
 }
 
 const leaseLost = (): never =>
@@ -736,16 +755,10 @@ async function start(
   // Nothing the room holds may move on while the browser stages. The
   // cutover checks D1's head and measurements, not the room's, so a room
   // that kept its sockets could persist plaintext edits only it holds,
-  // which the purge then deletes: no lease leaves here unless the room
-  // confirmed the lock (#914 review).
-  let locked = true;
-  let roomVersion: number | null = null;
-  try {
-    roomVersion = await lockRoom(ctx.env, projectId);
-  } catch {
-    locked = false;
-  }
-  if (!locked) {
+  // which the purge then deletes. Only an explicit answer confirms the
+  // lock: no lease leaves here otherwise (#914 and #916 review).
+  const room = await lockRoom(ctx.env, projectId);
+  if (!room.confirmed) {
     try {
       await withdrawLease(
         ctx.db,
@@ -759,7 +772,7 @@ async function start(
     refuse(
       503,
       'PROJECT_ROOM_UNAVAILABLE',
-      'The project’s room could not be locked right now. Try again.'
+      'The project’s live session could not be locked right now, so nothing was staged. Try again in a moment.'
     );
   }
   // Slice 7-2: a room holding edits no checkpoint saved yet (its version
@@ -768,8 +781,8 @@ async function start(
   // the project first. A resumed staging locked the room when it began.
   if (
     existing?.state !== 'staging' &&
-    roomVersion !== null &&
-    roomVersion > project.document_version
+    room.version !== null &&
+    room.version > project.document_version
   ) {
     await runBatch(ctx.db, [
       ctx.db
@@ -786,7 +799,7 @@ async function start(
       409,
       E2EE_MIGRATION_CODES.roomAhead,
       'This project has edits from a live session that your account has not saved yet. Open it and save it, then try again.',
-      { roomVersion, accountVersion: project.document_version }
+      { roomVersion: room.version, accountVersion: project.document_version }
     );
   }
   return json(
