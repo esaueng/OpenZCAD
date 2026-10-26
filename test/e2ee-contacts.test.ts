@@ -21,6 +21,7 @@ import {
 } from '@openzcad/crypto';
 import type { E2eeContactsResponse } from '@openzcad/shared';
 import {
+  EncryptionFlowError,
   advanceApprovalAsNewDevice,
   approveDevice,
   enrollWithRecoveryKey,
@@ -1084,10 +1085,12 @@ describe('contacts heads in device approval', () => {
     const cancel = vi.spyOn(phone.keys.api, 'cancelApproval');
     await expect(
       advanceApprovalAsNewDevice(phone.keys).then((result) => result.step)
-    ).rejects.toMatchObject({
-      code: 'grant-invalid',
-      message: expect.stringContaining('conflicting contacts lists')
-    });
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof EncryptionFlowError &&
+        error.code === 'grant-invalid' &&
+        error.message.includes('conflicting contacts lists')
+    );
     expect(await phone.pins.readList(ALICE)).toEqual(fork);
     expect((await phone.keys.store.loadDevice(ALICE))?.approval?.id).toBe(
       request.approval.id
