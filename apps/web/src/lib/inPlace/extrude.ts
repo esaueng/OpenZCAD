@@ -154,10 +154,33 @@ export function extrudeBackArrowOrigin(
   along?: Vector3,
   holes: readonly (readonly Vector3[])[] = []
 ): Vector3 {
+  const span = widestInteriorSpan(outline, normal, foot, along, holes);
+  if (!span) return outline[0]!;
+  const width = span.end - span.start;
+  const nearStart = span.at(span.start + width * 0.25);
+  const nearEnd = span.at(span.end - width * 0.25);
+  if (!foot) return nearStart;
+  return length(sub(nearStart, foot)) >= length(sub(nearEnd, foot))
+    ? nearStart
+    : nearEnd;
+}
+
+/**
+ * The profile's widest interior span (see `extrudeBackArrowOrigin`): its two
+ * ends along the cutting line, and the world point at a place along it.
+ */
+function widestInteriorSpan(
+  outline: readonly Vector3[],
+  normal: Vector3,
+  foot: Vector3 | null,
+  along: Vector3 | undefined,
+  holes: readonly (readonly Vector3[])[]
+): { start: number; end: number; at(x: number): Vector3 } | null {
   const n = unit(normal);
-  const origin = outline[0]!;
+  const origin = outline[0];
+  if (!origin) return null;
   const first = outline.find((point) => length(sub(point, origin)) > 1e-9);
-  if (!first) return origin;
+  if (!first) return null;
   const u = unit(along ?? sub(first, origin));
   const v = unit(cross(n, u));
   const project = (point: Vector3) => {
@@ -210,19 +233,17 @@ export function extrudeBackArrowOrigin(
       }
     }
   }
-  if (!best) return origin;
-  const at = (x: number): Vector3 => ({
-    x: origin.x + u.x * x + v.x * best.y,
-    y: origin.y + u.y * x + v.y * best.y,
-    z: origin.z + u.z * x + v.z * best.y
-  });
-  const width = best.end - best.start;
-  const nearStart = at(best.start + width * 0.25);
-  const nearEnd = at(best.end - width * 0.25);
-  if (!foot) return nearStart;
-  return length(sub(nearStart, foot)) >= length(sub(nearEnd, foot))
-    ? nearStart
-    : nearEnd;
+  if (!best) return null;
+  const line = best.y;
+  return {
+    start: best.start,
+    end: best.end,
+    at: (x: number): Vector3 => ({
+      x: origin.x + u.x * x + v.x * line,
+      y: origin.y + u.y * x + v.y * line,
+      z: origin.z + u.z * x + v.z * line
+    })
+  };
 }
 
 /**
@@ -236,16 +257,43 @@ export function extrudeHandles(
   key: string,
   state: ExtrudeHandleState,
   /** The region's inner loops, which the back arrow keeps out of. */
-  holes: readonly (readonly Vector3[])[] = []
+  holes: readonly (readonly Vector3[])[] = [],
+  /**
+   * Draw the distance's own arrow too: an edit has no region arrow, so its
+   * distance stands in the middle of the profile, on the face it moves (half
+   * way up a symmetric extrude).
+   */
+  withDistance = false
 ): HandleSpec[] {
   if (outline.length === 0) return [];
-  // Nothing has left the sketch yet: there is no back face and no wall, and
-  // the region's own arrow is the one thing to drag.
-  if (state.extent === 'blind' && !(Math.abs(state.distance) > 0)) return [];
   const n = unit(normal);
-  const sense = state.distance < 0 ? -1 : 1;
   const handles: HandleSpec[] = [];
   const hinge = extrudeDraftHinge(outline, n);
+  if (withDistance && state.extent === 'blind') {
+    const span = widestInteriorSpan(
+      outline,
+      n,
+      hinge?.foot ?? null,
+      hinge?.along,
+      holes
+    );
+    handles.push({
+      valueId: 'distance',
+      kind: 'linear',
+      key: keyOf('distance', key, state.symmetric ? 'symmetric' : 'one-side'),
+      params: {
+        origin: span ? span.at((span.start + span.end) / 2) : outline[0]!,
+        direction: n,
+        ...(state.symmetric ? { scale: 0.5 } : {})
+      }
+    });
+  }
+  // Nothing has left the sketch yet: there is no back face and no wall, and
+  // the region's own arrow is the one thing to drag.
+  if (state.extent === 'blind' && !(Math.abs(state.distance) > 0)) {
+    return handles;
+  }
+  const sense = state.distance < 0 ? -1 : 1;
   if (extrudeTakesBackDistance(state)) {
     handles.push({
       valueId: 'backDistance',
