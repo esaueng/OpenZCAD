@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { Anchor } from 'lucide-react';
 import type { OperationPhase, ToolCardModel } from '../lib/interaction/machine';
 import type { SelectionActionId } from '../lib/interaction/capabilities';
@@ -51,19 +51,6 @@ interface ToolCardProps {
    */
   verbs?: readonly SelectionCalloutVerb[];
   onVerb?(id: SelectionCalloutVerbId): void;
-  /**
-   * Set by the command that opened this card, never by a pick on the canvas:
-   * each new value hands the card's first value field the keyboard, its
-   * value selected, as a create card's first field takes it — so E then "10"
-   * types the extrude distance. A pick leaves the keyboard with the
-   * workspace, whose status line offers E and where a digit opens the
-   * handle's exact entry. A request waits for its field to be enabled, but
-   * lapses on a drag or a later pointer/focus change rather than pulling the
-   * keyboard out from under that gesture or another control.
-   */
-  focusRequest?: unknown;
-  /** Whether the requested field's form is currently enabled. */
-  focusReady?: boolean;
   onClose(): void;
 }
 
@@ -85,52 +72,8 @@ export function ToolCard({
   selectAllEdges,
   verbs = [],
   onVerb,
-  focusRequest,
-  focusReady = true,
   onClose
 }: ToolCardProps) {
-  const bodyRef = useRef<HTMLDivElement | null>(null);
-  const previousFocusRequest = useRef<unknown>(undefined);
-  const pendingFocus = useRef<{ owner: Element | null } | null>(null);
-  // Check after each render: the child form may become enabled even when
-  // the request and operation phase have not changed.
-  useEffect(() => {
-    const body = bodyRef.current;
-    if (!body) return;
-    const doc = body.ownerDocument;
-    if (focusRequest !== previousFocusRequest.current) {
-      previousFocusRequest.current = focusRequest;
-      pendingFocus.current = focusRequest ? { owner: doc.activeElement } : null;
-    }
-    const pending = pendingFocus.current;
-    if (!pending) return;
-    if (model.phase === 'dragging' || doc.activeElement !== pending.owner) {
-      pendingFocus.current = null;
-      return;
-    }
-    const input = body.querySelector<HTMLInputElement>('.expr-field input');
-    if (
-      focusReady &&
-      input &&
-      !input.closest(':disabled, fieldset[disabled]')
-    ) {
-      pendingFocus.current = null;
-      // Focusing an expression field selects its value.
-      input.focus();
-      return;
-    }
-    // A canvas click can leave focus on <body>; focus ownership alone would
-    // miss it and steal the keyboard when the operation later completes.
-    const cancel = () => {
-      pendingFocus.current = null;
-    };
-    doc.addEventListener('pointerdown', cancel, true);
-    doc.addEventListener('focusin', cancel, true);
-    return () => {
-      doc.removeEventListener('pointerdown', cancel, true);
-      doc.removeEventListener('focusin', cancel, true);
-    };
-  });
   const status = (
     <>
       {model.phase === 'dragging' ? (
@@ -190,7 +133,7 @@ export function ToolCard({
         }
         onClose={onClose}
       />
-      <div ref={bodyRef} className="tool-card-body">
+      <div className="tool-card-body">
         <div className="tool-card-copy">
           {model.error ? (
             <span className="tool-card-diagnostic" role="alert">

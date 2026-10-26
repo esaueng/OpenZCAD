@@ -10,6 +10,9 @@ import {
   expect,
   stubApi,
   expectBodyCount,
+  barChoice,
+  chooseBarOption,
+  editExtrudeFromHistory,
   chooseInPlaceOption,
   extrudeBar
 } from './openzcad-fixtures';
@@ -85,32 +88,42 @@ test('switches a blind cut to through all and back through undo', async ({
     .locator('.feature-row-main', { hasText: 'Pocket' })
     .last();
   const panel = page.locator('.panel-body');
-  await pocket.click();
+  let edit = await editExtrudeFromHistory(page, pocket);
   await expect(panel).toContainText('15700');
 
-  await page.getByLabel('Extent').selectOption('through-all');
+  await chooseBarOption(edit, 'Extent', 'Through all');
+  // Through all takes no distance.
   await expect(
-    page.getByRole('textbox', { name: 'Distance', exact: true })
+    edit.getByRole('button', {
+      name: 'Distance',
+      exact: true,
+      includeHidden: true
+    })
   ).toHaveCount(0);
-  await page.getByLabel('Through-all direction').selectOption('backward');
-  const apply = page.getByRole('button', { name: 'Apply', exact: true });
-  await apply.click();
-  // A successful edit closes its card; reopen it to read what was committed.
-  await expect(apply).toHaveCount(0, { timeout: 30_000 });
+  await chooseBarOption(edit, 'Direction', 'Against the sketch normal');
+  await edit.getByRole('button', { name: 'Done' }).click();
+  // A successful edit closes; reopen it to read what was committed.
+  await expect(edit).toHaveCount(0, { timeout: 30_000 });
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
-  await pocket.click();
-  // 40 × 40 × 10 less a 10 × 10 hole through all 10, and the card reopens
+  edit = await editExtrudeFromHistory(page, pocket);
+  // 40 × 40 × 10 less a 10 × 10 hole through all 10, and the edit reopens
   // on what was stored rather than the dormant distance.
   await expect(panel).toContainText('15000', { timeout: 30_000 });
-  await expect(page.getByLabel('Extent')).toHaveValue('through-all');
-  await expect(page.getByLabel('Through-all direction')).toHaveValue(
-    'backward'
+  await expect(barChoice(edit, 'Extent', 'Through all')).toHaveAttribute(
+    'aria-checked',
+    'true'
   );
+  await expect(
+    barChoice(edit, 'Direction', 'Against the sketch normal')
+  ).toHaveAttribute('aria-checked', 'true');
 
-  await page.getByRole('button', { name: 'Close panel' }).click();
+  await edit.getByRole('button', { name: 'Cancel' }).click();
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
-  await pocket.click();
-  await expect(page.getByLabel('Extent')).toHaveValue('blind');
+  edit = await editExtrudeFromHistory(page, pocket);
+  await expect(barChoice(edit, 'Extent', 'Distance')).toHaveAttribute(
+    'aria-checked',
+    'true'
+  );
   await expect(panel).toContainText('15700', { timeout: 30_000 });
 });
 
@@ -185,9 +198,12 @@ test('creates a cut through all straight from a sketch', async ({ page }) => {
   );
   await expectBodyCount(page, 1);
   const cut = page.locator('.feature-row-main', { hasText: 'Extrude' });
-  await cut.click();
+  const edit = await editExtrudeFromHistory(page, cut);
   await expect(page.locator('.panel-body')).toContainText('15000', {
     timeout: 30_000
   });
-  await expect(page.getByLabel('Extent')).toHaveValue('through-all');
+  await expect(barChoice(edit, 'Extent', 'Through all')).toHaveAttribute(
+    'aria-checked',
+    'true'
+  );
 });

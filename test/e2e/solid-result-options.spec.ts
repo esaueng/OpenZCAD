@@ -12,7 +12,10 @@ import {
   expect,
   stubApi,
   finishInPlaceCommand,
-  pickObjectsBody
+  pickObjectsBody,
+  barChoice,
+  chooseBarOption,
+  editExtrudeFromHistory
 } from './openzcad-fixtures';
 
 /**
@@ -148,25 +151,22 @@ test('switches an extrude to Intersect with the block it crosses', async ({
     .locator('.feature-row-main', { hasText: 'Column' })
     .last();
   const panel = page.locator('.panel-body');
-  await column.click();
+  let edit = await editExtrudeFromHistory(page, column);
   // 10 × 10 × 20 as a new body.
   await expect(panel).toContainText('2000', { timeout: 30_000 });
-  await page.getByLabel('Stored extrude operation').selectOption('intersect');
-  await expect(page.getByLabel('Extrude target body')).toBeVisible();
-  await page
-    .getByLabel('Extrude target body')
-    .selectOption({ label: 'Block Body' });
-  const apply = page.getByRole('button', { name: 'Apply', exact: true });
-  await apply.click();
-  await expect(apply).toHaveCount(0, { timeout: 30_000 });
+  await chooseBarOption(edit, 'Operation', 'Intersect');
+  await chooseBarOption(edit, 'Target body', 'Block Body');
+  await edit.getByRole('button', { name: 'Done' }).click();
+  await expect(edit).toHaveCount(0, { timeout: 30_000 });
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   // Only the shared 10 × 10 × 10 column is left, and the block is consumed.
   await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
     timeout: 30_000
   });
-  await column.click();
+  edit = await editExtrudeFromHistory(page, column);
   await expect(panel).toContainText('1000', { timeout: 30_000 });
-  await expect(page.getByLabel('Stored extrude operation')).toHaveValue(
-    'intersect'
+  await expect(barChoice(edit, 'Operation', 'Intersect')).toHaveAttribute(
+    'aria-checked',
+    'true'
   );
 });
