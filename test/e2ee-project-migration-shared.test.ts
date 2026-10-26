@@ -7,12 +7,24 @@
  * `joinWelcomedProjects`). Who verified whom (slice 5-1's mutual
  * comparison, covered by its own tests) is the one input given directly.
  */
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi
+} from 'vitest';
+import { addPrimitiveFeature } from '@openzcad/document-core';
 import {
   E2EE_MIGRATION_CODES,
   createE2eeInvitationsApi,
+  type CollaborationServerMessage,
   type ProjectDocument
 } from '@openzcad/shared';
+import worker from '../apps/web/worker/index';
+import { createEncryptedRoomCodec } from '../apps/web/src/lib/e2ee/encryptedRoomCodec';
 import { handleE2eeRequest } from '../apps/web/worker/e2ee';
 import type { E2eeInvitationHost } from '../apps/web/worker/e2eeInvitations';
 import {
@@ -42,7 +54,11 @@ import {
   reinviteToEncryptedProject,
   reissuePlaintextShareLinks
 } from '../apps/web/src/lib/e2ee/migrationMembers';
-import { createRoomContext } from './collaboration-room-harness';
+import {
+  createRoomContext,
+  installWorkerSocketGlobals,
+  type FakeWebSocket
+} from './collaboration-room-harness';
 import {
   OTHER,
   OWNER,
@@ -92,14 +108,17 @@ interface World {
   mail: { to: string; role: string }[];
 }
 
-function world(): World {
+function world(
+  /** Each room's Durable Object storage before its first request. */
+  seed: (name: string) => Map<string, unknown> = () => new Map()
+): World {
   const rooms = new Map<string, ProjectCollaborationRoom>();
   let env: Record<string, unknown> = {};
   const namespace = {
     getByName: (name: string) => {
       let room = rooms.get(name);
       if (!room) {
-        const { context } = createRoomContext(new Map());
+        const { context } = createRoomContext(seed(name));
         room = new ProjectCollaborationRoom(context, env);
         context.activate(room);
         rooms.set(name, room);
@@ -670,6 +689,203 @@ describe('migrating a shared plaintext project (slice 7-4)', () => {
     expect(formatOf(srv, projectId)).toBe(2);
   });
 });
+
+// --- The room after the cutover (slice 7-4 with slice 5-6) ----------------------------
+
+/** One device's live encrypted room, as the collaboration hook drives it. */
+interface LiveRoom {
+  socket: FakeWebSocket;
+  next<T extends CollaborationServerMessage['type']>(
+    type: T
+  ): Promise<Extract<CollaborationServerMessage, { type: T }>>;
+  send(document: ProjectDocument, baseVersion: number): Promise<void>;
+}
+
+async function liveRoom(
+  w: World,
+  serverSockets: FakeWebSocket[],
+  d: Device,
+  projectId: string,
+  clientId: string
+): Promise<LiveRoom> {
+  const response = await worker.fetch(
+    new Request(`https://example.com/api/projects/${projectId}/collaboration`, {
+      headers: {
+        upgrade: 'websocket',
+        origin: 'https://example.com',
+        'x-openzcad-development-user': d.account.userId
+      }
+    }),
+    w.srv.env
+  );
+  expect(response.status).toBe(101);
+  const socket = serverSockets.at(-1)!;
+  const codec = createEncryptedRoomCodec(d.store.roomAccess(), projectId);
+  let seen = 0;
+  const room: LiveRoom = {
+    socket,
+    async next(type) {
+      const deadline = Date.now() + 15_000;
+      for (;;) {
+        while (seen < socket.sent.length) {
+          const { message } = await codec.decode(socket.sent[seen++]!);
+          if (message?.type === type) return message as never;
+        }
+        if (Date.now() > deadline) throw new Error(`No ${type} frame.`);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    },
+    async send(document, baseVersion) {
+      const encoded = await codec.encode(document, baseVersion);
+      if (encoded.kind !== 'sealed') throw new Error('nothing to send');
+      await socket.receive(
+        JSON.stringify({
+          type: 'e2ee-document',
+          clientId,
+          version: encoded.submission
+        })
+      );
+    }
+  };
+  await socket.receive(
+    JSON.stringify({
+      type: 'hello',
+      clientId,
+      displayName: clientId,
+      baseVersion: null,
+      document: null
+    })
+  );
+  await socket.receive(JSON.stringify({ type: 'lease-acquire', clientId }));
+  return room;
+}
+
+const featureNames = (document: ProjectDocument) =>
+  Object.values(document.nodes)
+    .filter((node) => node.kind === 'feature')
+    .map((node) => node.name);
+
+const withBox = (document: ProjectDocument, name: string) =>
+  addPrimitiveFeature(document, {
+    name,
+    primitiveKind: 'box',
+    dimensions: { width: 1, height: 2, depth: 3 }
+  });
+
+describe(
+  'the room of a migrated shared project (slice 7-4 with slice 5-6)',
+  { timeout: 60_000 },
+  () => {
+    let globals: ReturnType<typeof installWorkerSocketGlobals>;
+    beforeAll(() => {
+      globals = installWorkerSocketGlobals();
+    });
+    afterAll(() => {
+      globals.restore();
+    });
+
+    it('lets the re-added editor write through the room and the viewer follow', async () => {
+      // The members collaborated in the plaintext room before the migration.
+      let plain: ProjectDocument | null = null;
+      const w = world((name) =>
+        plain && name === plain.projectId
+          ? new Map<string, unknown>([
+              [
+                'room:meta',
+                {
+                  schema: 1,
+                  projectId: name,
+                  latestVersion: plain.version,
+                  historyVersions: []
+                }
+              ],
+              ['room:latest', plain]
+            ])
+          : new Map()
+      );
+      const { srv } = w;
+      const { projectId, head } = await sharedPlaintext(w);
+      plain = head;
+      const ownerSide = ownerEngine(w);
+      const editor = memberDevice(w, other, 'other_laptop');
+      const viewer = memberDevice(w, third, 'third_laptop');
+      for (const [a, b] of [
+        [OWNER, OTHER],
+        [OTHER, OWNER],
+        [OWNER, THIRD],
+        [THIRD, OWNER]
+      ] as const) {
+        verify(w, a, b);
+      }
+      await failure(ownerSide.migrate(projectId));
+      await publishKeys(w, editor);
+      await publishKeys(w, viewer);
+      await ownerSide.migrate(projectId);
+      expect(formatOf(srv, projectId)).toBe(2);
+      await joinWelcomedProjects(invitationsOf(w, editor));
+      await joinWelcomedProjects(invitationsOf(w, viewer));
+
+      // The owner's browser after the migration: the same MLS state, its
+      // ordinary (unleased) requests.
+      const ownerPage = device(srv, owner, 'owner_laptop', {
+        mls: ownerSide.d.mls,
+        pins: ownerSide.d.pins,
+        members: othersOf(owner)
+      });
+      const opened = await ownerPage.store.loadProject(projectId);
+      await editor.store.loadProject(projectId);
+      await viewer.store.loadProject(projectId);
+      const sockets = globals.serverSockets;
+      const o = await liveRoom(
+        w,
+        sockets,
+        ownerPage,
+        projectId,
+        'client_owner'
+      );
+      const e = await liveRoom(w, sockets, editor, projectId, 'client_editor');
+      const v = await liveRoom(w, sockets, viewer, projectId, 'client_viewer');
+      // Each gets the encrypted head, with the role the cutover mirrored.
+      expect(await o.next('state')).toMatchObject({
+        role: 'owner',
+        document: { version: opened.version }
+      });
+      expect(await e.next('state')).toMatchObject({
+        role: 'editor',
+        document: { version: opened.version }
+      });
+      expect((await v.next('state')).role).toBe('viewer');
+
+      const next = withBox(opened, 'Editor box');
+      await e.send(next, opened.version);
+      expect(await e.next('ack')).toEqual({
+        type: 'ack',
+        version: next.version
+      });
+      for (const peer of [o, v]) {
+        const relayed = await peer.next('document');
+        expect(relayed.clientId).toBe('client_editor');
+        expect(featureNames(relayed.document)).toContain('Editor box');
+      }
+      // The account holds the editor's version, signed by its device.
+      expect(
+        rows<{ signer_user_id: string }>(
+          srv,
+          `SELECT signer_user_id FROM e2ee_project_versions
+           WHERE project_id = ? ORDER BY document_version DESC LIMIT 1`,
+          projectId
+        )[0]!.signer_user_id
+      ).toBe(OTHER);
+      // The viewer's browser seals nothing.
+      await expect(
+        createEncryptedRoomCodec(viewer.store.roomAccess(), projectId).encode(
+          withBox(next, 'Viewer box'),
+          next.version
+        )
+      ).rejects.toMatchObject({ readOnly: true });
+    });
+  }
+);
 
 describe('with migration closed', () => {
   it('serves no member routes and takes no KeyPackage for a plaintext project', async () => {
