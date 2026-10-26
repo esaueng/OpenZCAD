@@ -180,8 +180,7 @@ describe('in-place Extrude bar', () => {
     const distanceSetterRef = createRef<
       (value: ParamValue) => void
     >() as MutableRefObject<((value: ParamValue) => void) | null>;
-    const commandRef =
-      createRef<ExtrudeCommandHandle>();
+    const commandRef = createRef<ExtrudeCommandHandle>();
     const onPreview = vi.fn();
     const onCancel = vi.fn();
     const props = {
@@ -215,6 +214,20 @@ describe('in-place Extrude bar', () => {
     expect(screen.getByRole('button', { name: 'Done' })).toBeDisabled();
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(onCancel).toHaveBeenCalledOnce();
+  });
+
+  it('holds Done while the open keypad holds an entry that does not evaluate', () => {
+    const { distanceSetterRef, commandRef, onSubmit } = setup({
+      entryRefusal: 'Distance: Unexpected end of expression.'
+    });
+    act(() => distanceSetterRef.current?.(10));
+    expect(screen.getByRole('button', { name: 'Done' })).toBeDisabled();
+    expect(
+      screen.getByText('Distance: Unexpected end of expression.')
+    ).toBeVisible();
+    // Nor does Enter create the last valid value behind it.
+    expect(commandRef.current?.submit()).toBe(false);
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
   it('cancels from its Cancel button', async () => {

@@ -4146,6 +4146,10 @@ export function App() {
   /** The bar's settings as numbers, for the back arrow and the draft rig. */
   const [regionExtrudeState, setRegionExtrudeState] =
     useState<ExtrudeCommandState | null>(null);
+  /** Why the open Extrude keypad's entry does not evaluate (Done waits). */
+  const [regionExtrudeEntryError, setRegionExtrudeEntryError] = useState<
+    string | null
+  >(null);
   const extrudeEditRequest = useRef(0);
   const reusableRegionExtrudePreview = useRef<ResolvedExtrudePreview | null>(
     null
@@ -27815,6 +27819,9 @@ export function App() {
                       scope={parameterScope.scope}
                       anchorRef={keypadAnchorRef}
                       onDimensionModeChange={setCylinderDimensionMode}
+                      {...(keypad.kind === 'extrude'
+                        ? { onEntryError: setRegionExtrudeEntryError }
+                        : {})}
                       onPreview={(value) => {
                         if (
                           keypad.kind === 'sketch-dimension' ||
@@ -28638,6 +28645,11 @@ export function App() {
                       : [];
                   })}
                   disabled={geometryBusy || interaction.phase === 'validating'}
+                  entryRefusal={
+                    keypad?.kind === 'extrude' && regionExtrudeEntryError
+                      ? `${keypad.label}: ${regionExtrudeEntryError}.`
+                      : null
+                  }
                   distanceSetterRef={regionDistanceSetter}
                   commandRef={regionExtrudeCommandRef}
                   toFacePicking={extrudeToFacePicking(

@@ -73,6 +73,11 @@ interface ExtrudeCommandProps {
   profileCount: number;
   disabled: boolean;
   toFacePicking?: ExtrudeToFacePicking;
+  /**
+   * The open keypad's entry for one of these values does not evaluate
+   * (`Distance: …`): Done waits, or it would create the last valid value.
+   */
+  entryRefusal?: string | null;
   /** The region's arrow (and its keypad) set the distance through this. */
   distanceSetterRef: MutableRefObject<((value: ParamValue) => void) | null>;
   commandRef: MutableRefObject<ExtrudeCommandHandle | null>;
@@ -119,6 +124,7 @@ export function ExtrudeCommand({
   initial,
   profileCount,
   disabled,
+  entryRefusal = null,
   toFacePicking,
   distanceSetterRef,
   commandRef,
@@ -241,7 +247,7 @@ export function ExtrudeCommand({
   function submit(): boolean {
     setDistanceEdited(true);
     const value = extrudeDraftValue(draftRef.current, ctx);
-    if (!value || disabled) return false;
+    if (!value || disabled || entryRefusal) return false;
     onSubmit(value);
     return true;
   }
@@ -281,8 +287,10 @@ export function ExtrudeCommand({
     };
   }, [commandRef]);
 
-  const refusal = extrudeDraftRefusal(draft, ctx, distanceEdited) || null;
-  const canFinish = !disabled && extrudeDraftValue(draft, ctx) !== null;
+  const refusal =
+    entryRefusal ?? (extrudeDraftRefusal(draft, ctx, distanceEdited) || null);
+  const canFinish =
+    !disabled && !entryRefusal && extrudeDraftValue(draft, ctx) !== null;
   const toFaceInfo =
     toFace && draft.toFace ? toFacePicking!.describe(draft.toFace) : null;
   const regions = profileCount > 1 ? ` · ${profileCount} profiles` : '';

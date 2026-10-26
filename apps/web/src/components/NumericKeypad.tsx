@@ -74,6 +74,11 @@ interface NumericKeypadProps {
   >;
   /** Live preview as the value changes; only called with valid values. */
   onPreview(value: number): void;
+  /**
+   * Why the entry as it stands does not evaluate, or null once it does:
+   * a host whose own Done stands beside the keypad holds it meanwhile.
+   */
+  onEntryError?(error: string | null): void;
   /** Commit: evaluated value in document units, plus the raw text. */
   onCommit(value: number, raw: string): void;
   /** Exact preview refused the current value; entry stays editable. */
@@ -200,6 +205,7 @@ export function NumericKeypad({
   scope,
   anchorRef,
   onPreview,
+  onEntryError,
   onCommit,
   commitDisabled = false,
   commitDisabledReason,
@@ -343,6 +349,13 @@ export function NumericKeypad({
     if (evaluation.ok && normalizedValue !== undefined)
       onPreview(normalizedValue);
   }, [evaluation.ok, normalizedValue, onPreview]);
+
+  const entryError = evaluation.ok ? null : (evaluation.error ?? 'invalid');
+  useEffect(() => {
+    onEntryError?.(entryError);
+  }, [entryError, onEntryError]);
+  // Closed, it leaves nothing pending.
+  useEffect(() => () => onEntryError?.(null), [onEntryError]);
 
   const previewIfValid = (next: string, requestedMode = dimensionMode) => {
     const typedMode = dimensionModeForInput(next, scope);

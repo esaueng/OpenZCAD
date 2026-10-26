@@ -229,6 +229,20 @@ test('Extrude in place: the back arrow, Symmetric under Options, and Enter to fi
   const canvas = page.locator('.viewer-host canvas');
   const bar = await startExtrude(page, canvas);
 
+  // An entry that does not evaluate holds Done, rather than leaving it to
+  // create the last valid distance; Escape restores that distance.
+  const options = bar.locator('details.in-place-command-options');
+  await options.locator('summary').click();
+  await bar.getByRole('button', { name: 'Distance', exact: true }).click();
+  const keypad = page.locator('.numeric-keypad');
+  await keypad.locator('input').fill('10+');
+  await expect(bar.getByRole('button', { name: 'Done' })).toBeDisabled();
+  await expect(bar).toContainText('Distance:');
+  await keypad.locator('input').press('Escape');
+  await expect(keypad).toHaveCount(0);
+  await expect(bar.getByRole('button', { name: 'Done' })).toBeEnabled();
+  await options.locator('summary').click();
+
   // The back arrow leaves the profile's middle the other way: drag it down.
   await expect
     .poll(async () => (await handles(canvas)).backDistance !== undefined)
