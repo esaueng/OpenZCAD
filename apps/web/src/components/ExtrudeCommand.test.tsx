@@ -8,7 +8,11 @@ import {
   type ExtrudeToFaceTarget,
   type ParamValue
 } from '@openzcad/shared';
-import { ExtrudeCommand, type ExtrudeCommandHandle } from './ExtrudeCommand';
+import {
+  ExtrudeCommand,
+  extrudeShownValues,
+  type ExtrudeCommandHandle
+} from './ExtrudeCommand';
 import type { ExtrudeToFacePicking } from '../lib/extrudeDraft';
 
 const sketchId = toSketchId('layout');
@@ -228,6 +232,24 @@ describe('in-place Extrude bar', () => {
     // Nor does Enter create the last valid value behind it.
     expect(commandRef.current?.submit()).toBe(false);
     expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('offers each value only where the extent takes it', () => {
+    expect(extrudeShownValues({ extent: 'blind', symmetric: false })).toEqual([
+      'distance',
+      'backDistance',
+      'draftAngle'
+    ]);
+    expect(extrudeShownValues({ extent: 'blind', symmetric: true })).toEqual([
+      'distance',
+      'draftAngle'
+    ]);
+    expect(extrudeShownValues({ extent: 'to-face', symmetric: false })).toEqual(
+      ['draftAngle']
+    );
+    expect(
+      extrudeShownValues({ extent: 'through-all', symmetric: false })
+    ).toEqual([]);
   });
 
   it('cancels from its Cancel button', async () => {

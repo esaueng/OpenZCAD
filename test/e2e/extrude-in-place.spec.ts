@@ -342,6 +342,35 @@ test('Extrude in place: the arrow chip sets the distance, and Done keeps an open
   const distance = bar.getByRole('button', { name: 'Distance', exact: true });
   await expect(distance).toHaveText('12 mm');
 
+  // A keypad on a value the extent stops offering closes as it stands:
+  // through all keeps its extent rather than going back to Distance.
+  await distance.click();
+  await keypad.getByRole('textbox').fill('30');
+  await bar
+    .getByRole('radiogroup', { name: 'Operation', exact: true })
+    .getByRole('radio', { name: 'Cut', exact: true })
+    .click();
+  await bar
+    .getByRole('radiogroup', { name: 'Extent', exact: true })
+    .getByRole('radio', { name: 'Through all', exact: true })
+    .click();
+  await expect(keypad).toHaveCount(0);
+  await expect(bar).toContainText('Through the whole target');
+  await expect(
+    bar
+      .getByRole('radiogroup', { name: 'Extent', exact: true })
+      .getByRole('radio', { name: 'Through all', exact: true })
+  ).toHaveAttribute('aria-checked', 'true');
+  // Back to Distance and New body for the rest.
+  await bar
+    .getByRole('radiogroup', { name: 'Extent', exact: true })
+    .getByRole('radio', { name: 'Distance', exact: true })
+    .click();
+  await bar
+    .getByRole('radiogroup', { name: 'Operation', exact: true })
+    .getByRole('radio', { name: 'New body', exact: true })
+    .click();
+
   // An expression still in the open keypad is what Done stores.
   await distance.click();
   await keypad.getByRole('textbox').fill('4 + 8');

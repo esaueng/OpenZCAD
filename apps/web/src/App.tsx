@@ -812,6 +812,7 @@ import type {
 } from './lib/extrudeDraft';
 import {
   ExtrudeCommand,
+  extrudeShownValues,
   type ExtrudeCommandHandle,
   type ExtrudeCommandState,
   type ExtrudeValueId
@@ -16840,6 +16841,22 @@ export function App() {
     setLastValidPreview(null);
   }, [offsetInteractionKey, offsetPreview]);
 
+  // An Extrude keypad on a value the extrude stops offering (Distance once
+  // the extent is To face) is closed as it stands: applied or canceled, it
+  // would set that value and take the extent back to Distance.
+  const regionExtrudeExtent = regionExtrudeState?.extent ?? 'blind';
+  const regionExtrudeSymmetric = regionExtrudeState?.symmetric ?? false;
+  useEffect(() => {
+    const open = keypadRef.current;
+    if (open?.kind !== 'extrude' || !open.commandValueId) return;
+    const shown = extrudeShownValues({
+      extent: regionExtrudeExtent,
+      symmetric: regionExtrudeSymmetric
+    });
+    if (!shown.includes(open.commandValueId as ExtrudeValueId)) {
+      setKeypad(null);
+    }
+  }, [regionExtrudeExtent, regionExtrudeSymmetric]);
   const regionSketchKey =
     interaction.mode === 'region' ? interaction.target.sketchId : null;
   useEffect(() => {

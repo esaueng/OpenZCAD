@@ -117,6 +117,22 @@ const VALUE_LABELS: Record<ExtrudeValueId, string> = {
 
 const FINISH = 'Enter to finish · Esc cancels';
 
+/**
+ * The values an extrude in this extent offers to type: Distance only for a
+ * blind one, Back distance only one-sided, a draft except through all.
+ */
+export function extrudeShownValues(state: {
+  extent: ExtrudeCommandState['extent'];
+  symmetric: boolean;
+}): ExtrudeValueId[] {
+  const blind = state.extent === 'blind';
+  return [
+    ...(blind ? (['distance'] as const) : []),
+    ...(blind && !state.symmetric ? (['backDistance'] as const) : []),
+    ...(state.extent !== 'through-all' ? (['draftAngle'] as const) : [])
+  ];
+}
+
 export function ExtrudeCommand({
   scope,
   units,
@@ -415,13 +431,10 @@ export function ExtrudeCommand({
     }
   }
 
-  const values = (
-    [
-      ...(blind ? (['distance'] as const) : []),
-      ...(blind && !draft.symmetric ? (['backDistance'] as const) : []),
-      ...(!throughAll ? (['draftAngle'] as const) : [])
-    ] as ExtrudeValueId[]
-  ).map((valueId) => {
+  const values = extrudeShownValues({
+    extent: throughAll ? 'through-all' : toFace ? 'to-face' : 'blind',
+    symmetric: draft.symmetric
+  }).map((valueId) => {
     const text = draft[valueId];
     const plain = Number(text.trim());
     const unit = valueId === 'draftAngle' ? '°' : ` ${units}`;
