@@ -210,4 +210,17 @@ describe('a project being encrypted', () => {
     expect(within(card).queryByRole('img', { name: 'Encrypting' })).toBeNull();
     unmount();
   });
+
+  it('keeps the badge while a paused or stopped staging locks it', () => {
+    // Not in progress, but its plaintext stays locked: it opens read-only.
+    setMigratingProjects([], [plaintext.projectId]);
+    const { unmount } = render(<StartScreen {...props()} />);
+    const card = screen
+      .getByText(plaintext.name)
+      .closest('.start-tile-project') as HTMLElement;
+    expect(within(card).getByRole('img', { name: 'Encrypting' })).toBeTruthy();
+    act(() => setMigratingProjects([]));
+    expect(within(card).queryByRole('img', { name: 'Encrypting' })).toBeNull();
+    unmount();
+  });
 });

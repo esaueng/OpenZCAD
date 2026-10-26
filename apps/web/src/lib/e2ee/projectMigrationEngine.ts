@@ -14,8 +14,10 @@
  *    (`flushProject`), then the Worker starts staging (or resumes it, with
  *    this page's own lease or a lapsed one), locks the plaintext and closes
  *    its room. A room still holding edits the account never saved answers
- *    E2EE_MIGRATION_ROOM_AHEAD, and nothing is staged. The lease is renewed
- *    in the background for as long as the engine works on the project.
+ *    E2EE_MIGRATION_ROOM_AHEAD, and one that cannot confirm what it holds
+ *    503 PROJECT_ROOM_UNAVAILABLE; either way nothing is staged and the
+ *    owner retries the start. The lease is renewed in the background for
+ *    as long as the engine works on the project.
  * 2. **Save states** (decision M9), oldest first: each retained plaintext
  *    revision becomes an encrypted version and a named save under its own
  *    revision id; its body is the revision's document, so its name and
@@ -127,6 +129,18 @@ export interface MigrationProgress {
   /** Plaintext bytes encrypted so far: documents and files. */
   readonly bytesDone: number;
   readonly bytesTotal: number;
+  /**
+   * The project is cut over to encrypted storage, and its plaintext copy
+   * is deleted only once the purge completes: until then a stop is
+   * retried (the purge resumes), never cancelled.
+   */
+  readonly cutOver?: boolean;
+  /**
+   * A staging began, so the Worker holds the plaintext locked (writes
+   * refused with PROJECT_MIGRATING) until it is cut over or abandoned:
+   * this page keeps the project read-only meanwhile, paused or stopped.
+   */
+  readonly plaintextLocked?: boolean;
   readonly error?: MigrationError;
 }
 
@@ -185,6 +199,9 @@ const statusOf = (error: unknown): number | undefined => {
   return typeof status === 'number' ? status : undefined;
 };
 
+/** The Worker could not reach, or have confirmed by, the project's room. */
+const ROOM_UNAVAILABLE = 'PROJECT_ROOM_UNAVAILABLE';
+
 /** Plain words for what went wrong, and whether a retry may help. */
 export function migrationErrorOf(error: unknown): MigrationError {
   const code = codeOf(error);
@@ -212,6 +229,10 @@ export function migrationErrorOf(error: unknown): MigrationError {
           'This project has edits from a live session that your account has not saved yet. Open it, save it, then retry.'
       };
     case 'PROJECT_MIGRATING':
+      return { code, retryable: true, message };
+    case ROOM_UNAVAILABLE:
+      // The room could not confirm its lock (a start: nothing was staged)
+      // or its purge (after the cutover): either way, retrying helps.
       return { code, retryable: true, message };
     case 'E2EE_LOCAL_ONLY':
     case 'E2EE_BLOB_TOO_LARGE':
@@ -352,11 +373,25 @@ export function createProjectMigrationEngine(
       // Nothing of this page's may stay behind in its tab: flushed first.
       await deps.flushProject?.(projectId);
     }
-    const started = await migrations.start(
-      projectId,
-      { direction: 'encrypt', deviceId: deps.deviceId },
-      stored
-    );
+    const started = await migrations
+      .start(
+        projectId,
+        { direction: 'encrypt', deviceId: deps.deviceId },
+        stored
+      )
+      .catch((error: unknown) => {
+        // The room could not confirm what it holds, so the Worker staged
+        // nothing (a room's unsaved edits must not be purged): a failed
+        // start the owner retries.
+        if (codeOf(error) === ROOM_UNAVAILABLE) {
+          throw new ApiError(
+            503,
+            'This project’s live session could not be locked right now, so encryption did not start and nothing changed. Retry in a moment.',
+            ROOM_UNAVAILABLE
+          );
+        }
+        throw error;
+      });
     leases.set(projectId, started.leaseId);
     currentLease = started.leaseId;
     return { lease: started.leaseId, migration: started.migration };
@@ -374,7 +409,9 @@ export function createProjectMigrationEngine(
       revisionsDone: 0,
       revisionsTotal: project.revisionCount,
       bytesDone: 0,
-      bytesTotal: 0
+      bytesTotal: 0,
+      // Listed as encrypted already: only its purge can remain.
+      ...(project.storageFormat === 2 ? { cutOver: true } : {})
     };
     const report = (change: Partial<MigrationProgress>) => {
       progress = { ...progress, ...change };
@@ -433,7 +470,7 @@ export function createProjectMigrationEngine(
     if (status?.state === 'cutover' || status?.state === 'purging') {
       leases.delete(projectId);
       deps.onCutover?.(projectId);
-      return purgeAll(projectId, (phase) => report({ phase }));
+      return purgeAll(projectId, (phase) => report({ phase, cutOver: true }));
     }
     if (status?.state === 'done' && (project.storageFormat ?? 1) === 2) {
       return report({ phase: 'done' });
@@ -442,8 +479,15 @@ export function createProjectMigrationEngine(
       // An earlier attempt's cleanup is unfinished: finish it first.
       await stepAll(() => migrations.abandon(projectId));
     }
-    report({ phase: 'starting', error: undefined });
+    report({
+      phase: 'starting',
+      error: undefined,
+      // A staging left over (resumed, or another device's) holds it locked;
+      // an abandoned one no longer does.
+      plaintextLocked: status?.state === 'staging'
+    });
     const { lease, migration } = await acquire(projectId, status);
+    report({ plaintextLocked: true });
     const resuming = status?.state === 'staging';
     if (resuming && migration.stagedVersion === 0) {
       // A start that may have left a group without a version: nothing
@@ -466,7 +510,7 @@ export function createProjectMigrationEngine(
     currentLease = null;
     deps.onCutover?.(projectId);
     await check('purge');
-    await purgeAll(projectId, (phase) => report({ phase }));
+    await purgeAll(projectId, (phase) => report({ phase, cutOver: true }));
   }
 
   function renewLease(projectId: string, lease: string) {

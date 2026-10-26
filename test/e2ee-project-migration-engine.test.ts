@@ -82,6 +82,10 @@ interface RoomServer extends Server {
   storage: Map<string, Map<string, unknown>>;
   /** What each project's room starts with: its plaintext latest, if any. */
   roomSeed: Map<string, ProjectDocument>;
+  /** Answers the rooms' internal migration requests instead, while set. */
+  roomFault:
+    | ((request: Request, room: ProjectCollaborationRoom) => Promise<Response>)
+    | null;
 }
 
 /** The real room class behind PROJECT_ROOM, seeded per project. */
@@ -118,15 +122,26 @@ function roomServer(accounts: readonly Account[] = [owner, other]): RoomServer {
         context.activate(room);
         rooms.set(name, room);
       }
-      return room;
+      const fault = srv.roomFault;
+      if (!fault) return room;
+      const real = room;
+      return {
+        fetch: (request: Request) =>
+          new URL(request.url).pathname === '/_internal/migration'
+            ? fault(request, real)
+            : real.fetch(request)
+      };
     }
   };
-  const srv = newServer(accounts, undefined, {
-    E2EE_MIGRATION_ENABLED: 'true',
-    PROJECT_ROOM: namespace
-  });
+  const srv: RoomServer = Object.assign(
+    newServer(accounts, undefined, {
+      E2EE_MIGRATION_ENABLED: 'true',
+      PROJECT_ROOM: namespace
+    }),
+    { storage, roomSeed, roomFault: null }
+  );
   env = srv.env;
-  return Object.assign(srv, { storage, roomSeed });
+  return srv;
 }
 
 // --- The plaintext project ------------------------------------------------------
@@ -624,6 +639,43 @@ describe('encrypting an existing project', () => {
     await expectOpensWithHistory(srv, plain);
   });
 
+  it('marks a project cut over whose purge stopped, and resumes the purge after', async () => {
+    const srv = roomServer();
+    const plain = await plaintextProject(srv, { revisions: 1 });
+    const projectId = plain.head.projectId;
+    // The room cannot be cleared once: the purge stops after the cutover.
+    let purgeFails = true;
+    srv.roomFault = async (request, room) => {
+      const { action } = (await request.clone().json()) as { action: string };
+      if (action === 'purge' && purgeFails) {
+        purgeFails = false;
+        return new Response('Overloaded.', { status: 500 });
+      }
+      return room.fetch(request);
+    };
+    const laptop = engineOn(srv, owner, 'owner_laptop');
+    expect(await codeOfCall(migrateFully(laptop, projectId))).toBe(
+      'PROJECT_ROOM_UNAVAILABLE'
+    );
+    expect(formatOf(srv, projectId)).toBe(2);
+    expect(migrationRow(srv, projectId)).toMatchObject({ state: 'purging' });
+    expect(laptop.progress.at(-1)).toMatchObject({
+      phase: 'error',
+      cutOver: true,
+      error: { code: 'PROJECT_ROOM_UNAVAILABLE', retryable: true }
+    });
+    // Retried with the listing's (now encrypted) summary: the purge
+    // resumes and finishes.
+    const summary = await laptop.summary(projectId);
+    expect(summary.storageFormat).toBe(2);
+    await laptop.engine.migrate(summary);
+    expect(laptop.progress.at(-1)).toMatchObject({
+      phase: 'done',
+      cutOver: true
+    });
+    expect(migrationRow(srv, projectId)).toMatchObject({ state: 'done' });
+  });
+
   it('refuses a shared project and leaves it as it was', async () => {
     const srv = roomServer();
     const plain = await plaintextProject(srv, { revisions: 1 });
@@ -679,6 +731,67 @@ describe('encrypting an existing project', () => {
         .version
     ).toBe(plain.head.version + 2);
   });
+
+  it('fails closed, staging nothing, while the room cannot confirm what it holds', async () => {
+    const faults: [string, (request: Request) => Promise<Response>][] = [
+      [
+        'unreachable',
+        async () => {
+          throw new Error('The room is unreachable.');
+        }
+      ],
+      ['failing', async () => new Response('Overloaded.', { status: 500 })],
+      ['unreadable', async () => new Response('not json', { status: 200 })]
+    ];
+    const srv = roomServer();
+    const plain = await plaintextProject(srv, { revisions: 1 });
+    const projectId = plain.head.projectId;
+    // The room holds an edit the account never saved: had the start gone
+    // on, the purge would have deleted it.
+    srv.roomSeed.set(projectId, {
+      ...plain.head,
+      version: plain.head.version + 1
+    });
+    const laptop = engineOn(srv, owner, 'owner_laptop');
+    for (const [label, fault] of faults) {
+      srv.roomFault = fault;
+      const error = await laptop.engine
+        .migrate(await laptop.summary(projectId))
+        .catch((caught: unknown) => caught);
+      expect((error as { code?: string }).code, label).toBe(
+        'PROJECT_ROOM_UNAVAILABLE'
+      );
+      expect(laptop.progress.at(-1), label).toMatchObject({
+        phase: 'error',
+        error: {
+          code: 'PROJECT_ROOM_UNAVAILABLE',
+          retryable: true
+        }
+      });
+      expect(laptop.progress.at(-1)?.error?.message, label).toContain(
+        'nothing changed'
+      );
+      // Nothing locked: the project stays editable.
+      expect(laptop.progress.at(-1)?.plaintextLocked, label).toBeFalsy();
+      // Nothing was staged, and the plaintext is not locked.
+      expect(migrationRow(srv, projectId), label).toMatchObject({
+        state: 'abandoned',
+        lease_id: null,
+        staged_version: 0
+      });
+      expect(count(srv, 'e2ee_project_groups', projectId), label).toBe(0);
+      expect(formatOf(srv, projectId), label).toBe(1);
+    }
+    // Reachable again, it answers the edit it holds: still nothing staged.
+    srv.roomFault = null;
+    expect(await codeOfCall(migrateFully(laptop, projectId))).toBe(
+      E2EE_MIGRATION_CODES.roomAhead
+    );
+    expect(
+      (srv.storage.get(projectId)!.get('room:latest') as ProjectDocument)
+        .version
+    ).toBe(plain.head.version + 1);
+  });
 });
 
 // --- Resuming --------------------------------------------------------------------
@@ -703,6 +816,11 @@ describe('resuming', () => {
       'The tab was closed.'
     );
     expect(migrationRow(srv, projectId)).toMatchObject({ state: 'staging' });
+    // Stopped mid-staging, its plaintext stays locked: still read-only.
+    expect(first.progress.at(-1)).toMatchObject({
+      phase: 'error',
+      plaintextLocked: true
+    });
     expect(count(srv, 'e2ee_project_revisions', projectId)).toBe(2);
     const blobsBefore = count(srv, 'e2ee_content_blobs', projectId);
     expect(blobsBefore).toBe(1);
