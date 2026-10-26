@@ -782,7 +782,7 @@ function DeviceStatusBadge({ account }: { account: AccountView }) {
   }
 }
 
-function EnrollPanel({
+export function EnrollPanel({
   account,
   ...shared
 }: Shared & { account: AccountView }) {
@@ -808,7 +808,18 @@ function EnrollPanel({
             setFlow({ kind: 'request', step: next });
           }
         })
-        .catch(() => undefined);
+        .catch((caught: unknown) => {
+          if (stopped) return;
+          if (
+            caught instanceof EncryptionFlowError &&
+            caught.code === 'grant-invalid'
+          ) {
+            window.clearInterval(timer);
+          }
+          void run(async () => {
+            throw caught;
+          });
+        });
     }, 2000);
     return () => {
       stopped = true;

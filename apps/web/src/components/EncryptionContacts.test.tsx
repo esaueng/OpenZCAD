@@ -30,12 +30,12 @@ const account = {
 } as unknown as AccountView;
 const keys = { userId: 'user_alice' } as unknown as E2eeContext;
 
-function book(listConfirmed: boolean): ContactsBook {
+function book(listConfirmed: boolean, status = 'verified'): ContactsBook {
   return {
     userId: 'user_alice',
     generation: 1,
     list: {
-      contacts: new Map([['user_bob', { status: 'verified' }]])
+      contacts: new Map([['user_bob', { status }]])
     } as unknown as ContactsBook['list'],
     listConfirmed,
     people: [{ userId: 'user_bob', email: 'bob@example.com' }],
@@ -54,6 +54,33 @@ beforeEach(() => {
 });
 
 describe('EncryptionContacts', () => {
+  it.each(['empty', 'untrusted'] as const)(
+    'offers confirmation for an unconfirmed %s list',
+    async (kind) => {
+      const baseline = book(false, 'untrusted');
+      const answer: ContactsBook = {
+        ...baseline,
+        list: kind === 'empty' ? null : baseline.list,
+        contacts: []
+      };
+      loadContacts.mockResolvedValue(answer);
+      const confirm = vi.fn();
+      render(
+        <EncryptionContacts
+          keys={keys}
+          account={account}
+          onConfirmFromDevice={confirm}
+        />
+      );
+      fireEvent.click(
+        await screen.findByRole('button', {
+          name: 'Confirm from another device'
+        })
+      );
+      expect(confirm).toHaveBeenCalledOnce();
+    }
+  );
+
   it('shows verified contacts as seen on an unconfirmed device and offers confirmation', async () => {
     loadContacts.mockResolvedValue(book(false));
     const confirm = vi.fn();

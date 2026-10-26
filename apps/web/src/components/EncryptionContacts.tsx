@@ -140,12 +140,7 @@ export function EncryptionContacts({
   const verified =
     book?.contacts.filter((contact) => contact.standing === 'verified')
       .length ?? 0;
-  const unconfirmed =
-    book !== null &&
-    !book.listConfirmed &&
-    [...(book.list?.contacts.values() ?? [])].some(
-      (record) => record.status === 'verified'
-    );
+  const unconfirmed = book !== null && !book.listConfirmed;
 
   return (
     <>
