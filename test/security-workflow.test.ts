@@ -14,6 +14,7 @@ describe('workflow runner policy', () => {
       'fleet-ci-v5.yml': Array(6).fill('*fleet-runner'),
       'cloudflare.yml': ['ubuntu-latest', 'ubuntu-latest'],
       'macos-desktop.yml': ['macos-26'],
+      'desktop-native.yml': ['ubuntu-latest'],
       'mls-wasm.yml': ['ubuntu-latest'],
       'production-health.yml': ['ubuntu-latest'],
       'update-remus.yml': ['ubuntu-latest', 'ubuntu-latest'],
