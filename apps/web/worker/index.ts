@@ -294,6 +294,14 @@ const SHARED_PROJECT_SOURCE_ROUTE = /^\/api\/share\/([^/]+)\/sources\/([^/]+)$/;
 const ENCRYPTED_SHARED_SNAPSHOT_RATE_LIMIT = 60;
 const ENCRYPTED_SHARED_BLOB_RATE_LIMIT = 300;
 /**
+ * Snapshot prefix reads by the blob route per client address and minute,
+ * across every link (#935 review): a read happens only when an isolate has
+ * not cached that snapshot's blob ids, so a load needs one or a few. This
+ * bounds what any address can make R2 read for the route independently of
+ * the link budgets below (each read is a prefix: at most a header).
+ */
+const ENCRYPTED_SHARED_BLOB_SNAPSHOT_READ_RATE_LIMIT = 60;
+/**
  * Blob reads count per link load instead (slice 8-C1, #923 review): per
  * address, link and minute, twice the blobs the link's snapshot names plus
  * a few, so a model with more imports than the address budget loads at
@@ -990,6 +998,16 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
             await perAddress();
             return true;
           },
+          snapshotRead: async () =>
+            enforceApiRateLimit(
+              env,
+              await publicRequestBucket(
+                request,
+                env,
+                'e2ee-share-blob-snapshot'
+              ),
+              ENCRYPTED_SHARED_BLOB_SNAPSHOT_READ_RATE_LIMIT
+            ),
           load: async (linkKey, blobs) => {
             try {
               await enforceApiRateLimit(

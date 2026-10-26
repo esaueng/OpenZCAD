@@ -55,8 +55,10 @@ import {
   decodeShareDelegation,
   decodeDeviceListEntry,
   fromBase64Url,
+  envelopePrefixLength,
   fromHex,
   parseEnvelope,
+  parseEnvelopeShape,
   publicKeyHash,
   toBase64Url,
   toHex,
@@ -157,7 +159,11 @@ const TOKEN = /^[A-Za-z0-9_-]{43}$/;
 /** What `handleE2eeShareLinkRequest` needs of the R2 project bucket. */
 export interface ShareSnapshotBucket {
   put(key: string, body: ArrayBuffer | Uint8Array): Promise<unknown>;
-  get(key: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>;
+  /** `range`: R2's ranged read (the blob route reads only the prefix). */
+  get(
+    key: string,
+    options?: { range?: { offset: number; length: number } }
+  ): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>;
   delete(key: string): Promise<void>;
   /** R2's listing; a forgotten link's prefix is swept with it. */
   list?(options: { prefix: string }): Promise<{
@@ -1582,6 +1588,8 @@ interface ServedLink {
   key_epoch: number;
   envelope_inline: string | null;
   envelope_key: string | null;
+  envelope_bytes: number;
+  snapshot_hash: string;
   signature: string;
   wrapped_for_link_visitors: string;
   author_key: string;
@@ -1618,8 +1626,8 @@ async function servedLink(
       `SELECT l.project_id, l.share_id, l.mode, l.authority,
               l.authority_signature, p.user_id AS owner_user_id,
               s.document_version, s.key_epoch, s.envelope_inline,
-              s.envelope_key, s.signature, s.wrapped_for_link_visitors,
-              s.author_key
+              s.envelope_key, s.envelope_bytes, s.snapshot_hash,
+              s.signature, s.wrapped_for_link_visitors, s.author_key
        FROM e2ee_share_links l
        JOIN projects p ON p.id = l.project_id
        JOIN e2ee_share_snapshots s
@@ -1732,10 +1740,113 @@ export interface SharedBlobGuard {
    */
   spent(linkKey: string): Promise<boolean>;
   /**
+   * Before a snapshot's prefix is read from storage, which happens once
+   * per snapshot and isolate (`snapshotBlobIds`): its own fixed budget per
+   * address and minute, across every link.
+   */
+  snapshotRead(): Promise<void>;
+  /**
    * A request within a load of the link `linkKey` names, of `blobs` blobs;
    * going over that load's budget is what `spent` reports afterwards.
    */
   load(linkKey: string, blobs: number): Promise<void>;
+}
+
+/**
+ * The blob ids each share snapshot's header names, or null for a snapshot
+ * the blob route cannot serve from (#935 review), per isolate. A snapshot
+ * is immutable under its hash (a new write is a new hash), so an entry
+ * never goes stale; the cache is bounded by the ids it holds (a header
+ * names at most 4,096), least recently used first out.
+ */
+const SNAPSHOT_BLOB_ID_CACHE_IDS = 32_768;
+const snapshotBlobIdCache = new Map<string, readonly string[] | null>();
+let snapshotBlobIdCacheIds = 0;
+
+/** Empties the cache above: a fresh isolate (tests). */
+export function forgetSnapshotBlobIds(): void {
+  snapshotBlobIdCache.clear();
+  snapshotBlobIdCacheIds = 0;
+}
+
+/** The first ranged read of an R2 snapshot's prefix (most fit in it). */
+const SNAPSHOT_PREFIX_GUESS_BYTES = 16 * 1024;
+
+/**
+ * What the blob route needs of a link's snapshot, its header's `blobIds`,
+ * without its body: from the cache, else from the prefix alone (inline in
+ * the row the route already read, or by ranged reads of the R2 object,
+ * never the whole body), checked as `parseEnvelope` would against the
+ * stored length. Null when the snapshot is not a share snapshot or its
+ * prefix does not parse; a read that fails is not cached.
+ */
+async function snapshotBlobIds(
+  row: ServedLink,
+  bucket: ShareSnapshotBucket | null,
+  guard: SharedBlobGuard | null
+): Promise<readonly string[] | null> {
+  const cacheKey = `${row.project_id}
+${row.share_id}
+${row.snapshot_hash}`;
+  const cached = snapshotBlobIdCache.get(cacheKey);
+  if (cached !== undefined) {
+    snapshotBlobIdCache.delete(cacheKey);
+    snapshotBlobIdCache.set(cacheKey, cached);
+    return cached;
+  }
+  let head: Uint8Array;
+  let length: number;
+  if (row.envelope_inline !== null) {
+    head = fromBase64Url(row.envelope_inline);
+    length = head.byteLength;
+  } else {
+    if (row.envelope_key === null || !bucket) return null;
+    await guard?.snapshotRead();
+    const key = row.envelope_key;
+    length = row.envelope_bytes;
+    const read = async (bytes: number) => {
+      const stored = await bucket.get(key, {
+        range: { offset: 0, length: bytes }
+      });
+      if (!stored) return null;
+      // A bucket that ignores the range still yields the whole object.
+      const all = new Uint8Array(await stored.arrayBuffer());
+      return all.byteLength > bytes ? all.subarray(0, bytes) : all;
+    };
+    const first = await read(Math.min(length, SNAPSHOT_PREFIX_GUESS_BYTES));
+    if (!first) return null;
+    let prefix: number | null = null;
+    try {
+      prefix = envelopePrefixLength(first);
+    } catch {
+      // Not an envelope: parsed (and refused) below.
+    }
+    if (prefix !== null && prefix > first.byteLength && prefix <= length) {
+      const whole = await read(prefix);
+      if (!whole) return null;
+      head = whole;
+    } else {
+      head = first;
+    }
+  }
+  let named: readonly string[] | null;
+  try {
+    const { header } = parseEnvelopeShape(head, length);
+    named =
+      header.class === 'project' && header.kind === 'share-snapshot'
+        ? header.blobIds
+        : null;
+  } catch {
+    named = null;
+  }
+  snapshotBlobIdCache.set(cacheKey, named);
+  snapshotBlobIdCacheIds += Math.max(1, named?.length ?? 0);
+  for (const [oldest, ids] of snapshotBlobIdCache) {
+    if (snapshotBlobIdCacheIds <= SNAPSHOT_BLOB_ID_CACHE_IDS) break;
+    snapshotBlobIdCache.delete(oldest);
+    snapshotBlobIdCacheIds -= Math.max(1, ids?.length ?? 0);
+  }
+  return named;
 }
 
 /** Where the owner's encrypted content blobs live (the artifact bucket). */
@@ -1766,6 +1877,10 @@ export interface SharedBlobBucket {
  * Once that load budget is spent (`spent`, checked before the snapshot is
  * read), requests count against the address's budget without reading the
  * snapshot first, so past both budgets a request costs no R2 read or parse.
+ * Within budget, a request never downloads the snapshot's body: the ids
+ * its header names come from a per-isolate cache, or once per snapshot
+ * and isolate from ranged reads of its prefix, which count against their
+ * own per-address budget (`snapshotRead`).
  */
 export async function handleEncryptedSharedBlob(
   pathname: string,
@@ -1798,18 +1913,8 @@ ${row.share_id}`)
   // without it (#935 review): once this address is past both budgets, a
   // request reads nothing from R2 and parses no envelope.
   charged = (await guard?.spent(linkKey)) ?? false;
-  const envelope = await servedEnvelope(row, snapshots);
-  if (!envelope) return notServed();
-  let named: readonly string[];
-  try {
-    const { header } = parseEnvelope(envelope);
-    if (header.class !== 'project' || header.kind !== 'share-snapshot') {
-      return notServed();
-    }
-    named = header.blobIds;
-  } catch {
-    return notServed();
-  }
+  const named = await snapshotBlobIds(row, snapshots, guard);
+  if (!named) return notServed();
   if (!charged) await guard?.load(linkKey, named.length);
   if (!named.includes(blobId)) return anonymousNotFound();
   const blob = await db

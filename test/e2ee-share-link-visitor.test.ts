@@ -39,6 +39,7 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import worker from '../apps/web/worker/index';
+import { forgetSnapshotBlobIds } from '../apps/web/worker/e2eeShareLinks';
 import { rememberProjectFormats } from '../apps/web/src/lib/api';
 import type { ArchiveArtifactInput } from '../apps/web/src/lib/archiveArtifact';
 import { archiveAccountImportSources } from '../apps/web/src/lib/accountImportSources';
@@ -650,23 +651,23 @@ describe('the anonymous blob route (slice 5-11)', { timeout: 120_000 }, () => {
     ).toBe(404);
   });
 
-  it('refuses a request past both budgets before reading the snapshot from R2 (#935 review)', async () => {
-    const { srv, laptop, projectId, document, blobId } =
-      await sharedWithImport();
+  /**
+   * An R2-backed snapshot of a new link naming `references` (#935 review),
+   * with counters of the R2 reads of its object: whole-body reads and
+   * ranged ones, and a limited deployment's anonymous blob fetch.
+   */
+  async function r2Snapshot(
+    shared: Awaited<ReturnType<typeof sharedWithImport>>,
+    references: ContentBlobReference[],
+    address: string
+  ) {
+    const { srv, laptop, projectId, document } = shared;
+    forgetSnapshotBlobIds();
     const link = await createShareLink(laptop.shareLinks, projectId, 'view');
-    // An R2-backed snapshot naming the one import: a load budget of 34.
     const sealed = await sealRawSnapshot(srv, laptop, projectId, link.shareId, {
       document,
       padding: R2_PADDING,
-      blobs: [
-        {
-          blobId,
-          kind: 'import-source',
-          key: new Uint8Array(randomBytes(32)),
-          ciphertextHash: new Uint8Array(randomBytes(32)),
-          plaintextLength: 1
-        }
-      ]
+      blobs: references
     });
     expect(
       (await putRawSnapshot(srv, laptop, projectId, link.shareId, sealed))
@@ -679,8 +680,13 @@ describe('the anonymous blob route (slice 5-11)', { timeout: 120_000 }, () => {
       )
       .get(projectId, link.shareId) as { envelope_key: string | null };
     expect(envelopeKey).not.toBe(null);
-    const snapshotReads = () =>
-      srv.bucket.get.mock.calls.filter(([key]) => key === envelopeKey).length;
+    const reads = (ranged: boolean) =>
+      srv.bucket.get.mock.calls.filter(
+        ([key, options]) =>
+          key === envelopeKey &&
+          (options as { range?: unknown } | undefined)?.range !== undefined ===
+            ranged
+      ).length;
     const env = {
       ...srv.env,
       ENVIRONMENT: 'beta',
@@ -690,28 +696,108 @@ describe('the anonymous blob route (slice 5-11)', { timeout: 120_000 }, () => {
     const now = Date.now();
     const minute = vi.spyOn(Date, 'now').mockReturnValue(now);
     onTestFinished(() => minute.mockRestore());
-    const from = { 'cf-connecting-ip': '203.0.113.11' };
-    const fetchBlob = async () =>
+    const fetchBlob = async (id: string) =>
       (
-        await anonymous(
-          srv,
-          sharedBlobUrl(link.fragment.token, blobId),
-          env,
-          from
-        )
+        await anonymous(srv, sharedBlobUrl(link.fragment.token, id), env, {
+          'cf-connecting-ip': address
+        })
       ).status;
-    // The load's 34, then the address's own 300: each reads the snapshot.
-    const before = snapshotReads();
-    for (let i = 0; i < 334; i += 1) expect(await fetchBlob()).toBe(200);
-    expect(snapshotReads() - before).toBe(334);
-    // Past both: refused, and nothing more is read from R2.
-    const spent = snapshotReads();
-    for (let i = 0; i < 20; i += 1) expect(await fetchBlob()).toBe(429);
-    expect(snapshotReads()).toBe(spent);
+    return {
+      bodyReads: () => reads(false),
+      rangedReads: () => reads(true),
+      fetchBlob,
+      nextMinute: () => minute.mockReturnValue(now + 60_000)
+    };
+  }
+
+  function committedBlobs(
+    srv: Server,
+    projectId: string,
+    count: number
+  ): ContentBlobReference[] {
+    const insert = srv.db.prepare(
+      `INSERT INTO e2ee_content_blobs
+         (project_id, blob_id, kind, object_key, ciphertext_bytes, created_at)
+       VALUES (?, ?, 'import-source', ?, 16, ?)`
+    );
+    return Array.from({ length: count }, () => {
+      const id = randomBytes(16).toString('hex');
+      const key = `e2ee/${projectId}/${id}`;
+      srv.bucket.objects.set(key, new Uint8Array(16).buffer);
+      insert.run(projectId, id, key, new Date().toISOString());
+      return {
+        blobId: id,
+        kind: 'import-source' as const,
+        key: new Uint8Array(randomBytes(32)),
+        ciphertextHash: new Uint8Array(randomBytes(32)),
+        plaintextLength: 1
+      };
+    });
+  }
+
+  it('loads a 400-blob model without downloading its snapshot per blob: only its prefix, once (#935 review)', async () => {
+    const shared = await sharedWithImport();
+    const references = committedBlobs(shared.srv, shared.projectId, 400);
+    const snapshot = await r2Snapshot(shared, references, '203.0.113.12');
+    for (const reference of references) {
+      expect(await snapshot.fetchBlob(reference.blobId)).toBe(200);
+    }
+    expect(snapshot.bodyReads()).toBe(0);
+    expect(snapshot.rangedReads()).toBeLessThanOrEqual(2);
+    expect(snapshot.rangedReads()).toBeGreaterThan(0);
+  });
+
+  it('caps snapshot prefix reads per address across links, before any read (#935 review)', async () => {
+    const shared = await sharedWithImport();
+    const references = committedBlobs(shared.srv, shared.projectId, 1);
+    const snapshot = await r2Snapshot(shared, references, '203.0.113.13');
+    // Every request in a fresh isolate (nothing cached): 60 prefix reads,
+    // then refused before a 61st.
+    for (let i = 0; i < 60; i += 1) {
+      forgetSnapshotBlobIds();
+      expect(await snapshot.fetchBlob(references[0]!.blobId)).toBe(200);
+    }
+    const read = snapshot.rangedReads();
+    expect(read).toBeGreaterThanOrEqual(60);
+    forgetSnapshotBlobIds();
+    expect(await snapshot.fetchBlob(references[0]!.blobId)).toBe(429);
+    expect(snapshot.rangedReads()).toBe(read);
+    expect(snapshot.bodyReads()).toBe(0);
+  });
+
+  it('refuses a request past both budgets before reading the snapshot from R2 (#935 review)', async () => {
+    const shared = await sharedWithImport();
+    // An R2-backed snapshot naming the one import: a load budget of 34.
+    const snapshot = await r2Snapshot(
+      shared,
+      [
+        {
+          blobId: shared.blobId,
+          kind: 'import-source',
+          key: new Uint8Array(randomBytes(32)),
+          ciphertextHash: new Uint8Array(randomBytes(32)),
+          plaintextLength: 1
+        }
+      ],
+      '203.0.113.11'
+    );
+    const reads = () => snapshot.bodyReads() + snapshot.rangedReads();
+    // The load's 34, then the address's own 300.
+    for (let i = 0; i < 334; i += 1) {
+      expect(await snapshot.fetchBlob(shared.blobId)).toBe(200);
+    }
+    // Past both, even in an isolate that has not cached the snapshot:
+    // refused, and nothing more is read from R2.
+    const spent = reads();
+    for (let i = 0; i < 20; i += 1) {
+      forgetSnapshotBlobIds();
+      expect(await snapshot.fetchBlob(shared.blobId)).toBe(429);
+    }
+    expect(reads()).toBe(spent);
     // The next minute the link loads again.
-    minute.mockReturnValue(now + 60_000);
-    expect(await fetchBlob()).toBe(200);
-    expect(snapshotReads()).toBe(spent + 1);
+    snapshot.nextMinute();
+    expect(await snapshot.fetchBlob(shared.blobId)).toBe(200);
+    expect(reads()).toBe(spent + 1);
   });
 });
 
