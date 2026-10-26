@@ -60,7 +60,16 @@ declare interface R2Bucket {
     key: string,
     options?: { range?: { offset?: number; length?: number } }
   ): Promise<R2ObjectBody | null>;
-  delete(key: string): Promise<void>;
+  delete(key: string | string[]): Promise<void>;
+  list(options?: {
+    prefix?: string;
+    cursor?: string;
+    limit?: number;
+  }): Promise<{
+    objects: { key: string }[];
+    truncated: boolean;
+    cursor?: string;
+  }>;
   createMultipartUpload(
     key: string,
     options?: { httpMetadata?: { contentType?: string } }

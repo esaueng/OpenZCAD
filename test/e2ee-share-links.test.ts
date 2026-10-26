@@ -37,11 +37,15 @@ import {
   wrapKey,
   type ShareLinkSet
 } from '@openzcad/crypto';
-import { isE2eeShareLinkStorageReady } from '@openzcad/cloudflare-adapters';
+import {
+  D1R2PersistenceService,
+  isE2eeShareLinkStorageReady
+} from '@openzcad/cloudflare-adapters';
 import {
   E2eeShareLinkApiError,
   createE2eeShareLinksApi,
   decodeE2eeFrame,
+  toUserId,
   type E2eeSharedSnapshotMetadata,
   type E2eeShareLinkForgetRequest,
   type ProjectDocument
@@ -93,6 +97,7 @@ import {
   edited,
   makeAccount,
   newServer,
+  objectBucket,
   reload,
   rows,
   type Account,
@@ -2096,6 +2101,235 @@ describe('share snapshot objects (slice 8-C1)', { timeout: 120_000 }, () => {
       projectId,
       shareId
     )[0]?.envelope_key ?? null;
+
+  async function orphanedSnapshot() {
+    const shared = await linkedProject();
+    const { srv, laptop, projectId, document } = shared;
+    await delegate(laptop);
+    const link = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const publish = async () =>
+      putRawSnapshot(
+        srv,
+        laptop,
+        projectId,
+        link.shareId,
+        await sealRawSnapshot(srv, laptop, projectId, link.shareId, {
+          document,
+          padding: R2_PADDING
+        })
+      );
+    expect((await publish()).status).toBe(200);
+    const orphan = envelopeKey(srv, projectId, link.shareId)!;
+    const bucketDelete = srv.bucket.delete as Mock<
+      (key: string | string[]) => Promise<void>
+    >;
+    const del = bucketDelete.getMockImplementation()!;
+    bucketDelete.mockImplementation(async (key) => {
+      if (key === orphan) throw new Error('Replacement delete failed');
+      await del(key);
+    });
+    expect((await publish()).status).toBe(200);
+    bucketDelete.mockImplementation(del);
+    expect(snapshotObjects(srv, projectId)).toHaveLength(2);
+    return { ...shared, link, orphan };
+  }
+
+  it.each(['project', 'projects', 'all', 'retention'] as const)(
+    'sweeps unreferenced snapshot objects on %s deletion without forgetting a link',
+    async (scope) => {
+      const { srv, projectId } = await orphanedSnapshot();
+      if (scope === 'project') {
+        await new D1R2PersistenceService(srv.env).deleteProject(
+          toUserId(OWNER),
+          projectId
+        );
+      } else if (scope === 'retention') {
+        srv.db
+          .prepare(
+            "UPDATE projects SET status = 'deleted', deleted_at = '2000-01-01T00:00:00.000Z' WHERE id = ?"
+          )
+          .run(projectId);
+        expect((await srv.call('POST', '/api/projects/purge')).status).toBe(
+          200
+        );
+      } else {
+        expect(
+          (
+            await srv.call('POST', '/api/account/delete-data', {
+              user: OWNER,
+              body: {
+                scope,
+                confirmation:
+                  scope === 'all'
+                    ? 'DELETE ALL CLOUD DATA'
+                    : 'DELETE CLOUD PROJECTS'
+              }
+            })
+          ).status
+        ).toBe(200);
+      }
+      expect(snapshotObjects(srv, projectId)).toEqual([]);
+      expect(
+        rows(srv, 'SELECT id FROM projects WHERE id = ?', projectId)
+      ).toEqual([]);
+    }
+  );
+
+  it.each(['separate', 'fallback'] as const)(
+    'pages the project snapshot prefix in the %s bucket without touching other namespaces',
+    async (storage) => {
+      const { srv, projectId } = await orphanedSnapshot();
+      const artifacts = storage === 'separate' ? objectBucket() : srv.bucket;
+      srv.env.ARTIFACTS = artifacts;
+      if (storage === 'fallback') srv.env.PROJECT_STORAGE = undefined;
+      const prefix = `e2ee/${projectId}/s/`;
+      for (let i = 0; i < 1005; i += 1)
+        srv.bucket.objects.set(`${prefix}old-${i}`, new ArrayBuffer(1));
+      const neighbors = [
+        `e2ee/${projectId}-other/s/keep`,
+        `e2ee/other-project/s/keep`,
+        `e2ee/${projectId}/v/keep`
+      ];
+      for (const key of neighbors)
+        srv.bucket.objects.set(key, new ArrayBuffer(1));
+      const artifactSentinel = `${prefix}artifact-bucket-only`;
+      if (storage === 'separate')
+        artifacts.objects.set(artifactSentinel, new ArrayBuffer(1));
+      await new D1R2PersistenceService(srv.env).deleteProject(
+        toUserId(OWNER),
+        projectId
+      );
+      expect(snapshotObjects(srv, projectId)).toEqual([]);
+      for (const key of neighbors)
+        expect(srv.bucket.objects.has(key)).toBe(true);
+      if (storage === 'separate')
+        expect(artifacts.objects.has(artifactSentinel)).toBe(true);
+      const pages = srv.bucket.list.mock.calls.map(
+        ([options]) => options as { prefix: string; cursor?: string }
+      );
+      expect(pages.filter((page) => page.prefix === prefix)).toHaveLength(2);
+      expect(pages.every((page) => page.cursor === undefined)).toBe(true);
+    }
+  );
+
+  it.each(['list', 'delete', 'incomplete', 'wrong-prefix'] as const)(
+    'keeps project rows retryable when snapshot cleanup has a %s failure',
+    async (failure) => {
+      const { srv, projectId } = await orphanedSnapshot();
+      const service = new D1R2PersistenceService(srv.env);
+      const bucketList = srv.bucket.list as Mock<
+        (options?: {
+          prefix?: string;
+          cursor?: string;
+          limit?: number;
+        }) => Promise<{
+          objects: { key: string }[];
+          truncated: boolean;
+          cursor?: string;
+        }>
+      >;
+      const bucketDelete = srv.bucket.delete as Mock<
+        (keys: string | string[]) => Promise<void>
+      >;
+      const list = bucketList.getMockImplementation()!;
+      const del = bucketDelete.getMockImplementation()!;
+      if (failure === 'list')
+        bucketList.mockRejectedValueOnce(new Error('list unavailable'));
+      else if (failure === 'delete') {
+        bucketDelete.mockImplementation(async (keys: string | string[]) => {
+          if (Array.isArray(keys)) throw new Error('delete unavailable');
+          await del(keys);
+        });
+      } else if (failure === 'incomplete') {
+        bucketList.mockImplementation(async () => ({
+          objects: [],
+          truncated: true,
+          cursor: 'stuck'
+        }));
+      } else {
+        bucketList.mockImplementation(async () => ({
+          objects: [{ key: 'e2ee/another-project/s/keep' }],
+          truncated: false
+        }));
+      }
+      await expect(
+        service.deleteProject(toUserId(OWNER), projectId)
+      ).rejects.toThrow();
+      expect(
+        rows(srv, 'SELECT id FROM projects WHERE id = ?', projectId)
+      ).toHaveLength(1);
+      expect(countFor(srv, 'e2ee_share_snapshots', projectId)).toBe(1);
+      if (failure === 'incomplete')
+        expect(srv.bucket.list).toHaveBeenCalledTimes(10);
+      bucketList.mockImplementation(list);
+      bucketDelete.mockImplementation(del);
+      await service.deleteProject(toUserId(OWNER), projectId);
+      expect(snapshotObjects(srv, projectId)).toEqual([]);
+      expect(
+        rows(srv, 'SELECT id FROM projects WHERE id = ?', projectId)
+      ).toEqual([]);
+    }
+  );
+
+  it('fences a publication that races the last snapshot prefix listing', async () => {
+    const { srv, laptop, projectId, document, link } = await orphanedSnapshot();
+    const replacement = await sealRawSnapshot(
+      srv,
+      laptop,
+      projectId,
+      link.shareId,
+      { document, padding: R2_PADDING }
+    );
+    const bucketList = srv.bucket.list as Mock<
+      (options?: {
+        prefix?: string;
+        limit?: number;
+      }) => Promise<{ objects: { key: string }[]; truncated: boolean }>
+    >;
+    const list = bucketList.getMockImplementation()!;
+    let published: number | null = null;
+    bucketList.mockImplementationOnce(async (options) => {
+      const page = await list(options);
+      await expect(
+        new D1R2PersistenceService(srv.env).updateProject(toUserId(OWNER), {
+          projectId,
+          status: 'active'
+        })
+      ).rejects.toThrow();
+      published = (
+        await putRawSnapshot(srv, laptop, projectId, link.shareId, replacement)
+      ).status;
+      return page;
+    });
+    await new D1R2PersistenceService(srv.env).deleteProject(
+      toUserId(OWNER),
+      projectId
+    );
+    expect(published).toBe(401);
+    expect(snapshotObjects(srv, projectId)).toEqual([]);
+  });
+
+  it('preserves deletion of snapshots stored entirely inline without a bucket', async () => {
+    const { srv, laptop, projectId, document } = await linkedProject();
+    srv.env.PROJECT_STORAGE = undefined;
+    srv.env.ARTIFACTS = undefined;
+    await delegate(laptop);
+    const link = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const inline = await sealRawSnapshot(srv, laptop, projectId, link.shareId, {
+      document
+    });
+    expect(
+      (await putRawSnapshot(srv, laptop, projectId, link.shareId, inline))
+        .status
+    ).toBe(200);
+    expect(envelopeKey(srv, projectId, link.shareId)).toBe(null);
+    expect(snapshotObjects(srv, projectId)).toHaveLength(0);
+    await new D1R2PersistenceService(srv.env).deleteProject(
+      toUserId(OWNER),
+      projectId
+    );
+    expect(countFor(srv, 'e2ee_share_snapshots', projectId)).toBe(0);
+  });
 
   it('keys each object by its link, so replacing or forgetting one link never deletes what another serves', async () => {
     const { srv, laptop, projectId, document } = await linkedProject();

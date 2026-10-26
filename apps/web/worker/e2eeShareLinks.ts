@@ -89,6 +89,7 @@ import {
   type E2eeSharedSnapshotMetadata
 } from '@openzcad/shared';
 import {
+  e2eeShareSnapshotPrefix,
   isE2eeContentBlobStorageReady,
   isE2eeProjectGroupStorageReady,
   isE2eeShareLinkStorageReady,
@@ -1311,7 +1312,7 @@ async function snapshotObjectPrefix(
     0,
     32
   );
-  return `e2ee/${projectId}/s/${link}/`;
+  return `${e2eeShareSnapshotPrefix(projectId)}${link}/`;
 }
 
 /**

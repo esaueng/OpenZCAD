@@ -293,8 +293,9 @@ export function objectBucket(): Bucket {
       const body = objects.get(key);
       return body ? { size: body.byteLength } : null;
     }),
-    delete: vi.fn(async (key: string) => {
-      objects.delete(key);
+    delete: vi.fn(async (key: string | string[]) => {
+      for (const item of typeof key === 'string' ? [key] : key)
+        objects.delete(item);
     }),
     // R2's listing, in key order, a page of `limit` (at most 1000) keys.
     list: vi.fn(

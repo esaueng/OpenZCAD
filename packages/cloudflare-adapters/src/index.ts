@@ -671,6 +671,11 @@ export const isE2eeMlsProposalStorageReady = cachedSchemaProbe(
   (row) => row?.ready === 10
 );
 
+/** All share snapshots of one project, including unreferenced replacements. */
+export function e2eeShareSnapshotPrefix(projectId: string): string {
+  return `e2ee/${projectId}/s/`;
+}
+
 /** The tables migration 0040 adds, children before the links. */
 export const E2EE_SHARE_LINK_TABLES = Object.freeze([
   'e2ee_share_snapshots',
@@ -6719,6 +6724,18 @@ export class D1R2PersistenceService implements PersistenceService {
     if (projectIds.length === 0) {
       return;
     }
+    const placeholders = projectIds.map(() => '?').join(', ');
+    // The existing durable cleanup claim fences restoration and writers.
+    // Shelf status alone is reversible while object cleanup is in flight.
+    if (await isE2eeShareLinkStorageReady(this.env.DB)) {
+      await this.env
+        .DB!.prepare(
+          `INSERT OR IGNORE INTO project_copy_cleanup_claims (project_id, claimed_at)
+           SELECT id, ? FROM projects WHERE id IN (${placeholders})`
+        )
+        .bind(new Date().toISOString(), ...projectIds)
+        .run();
+    }
     // Collaboration rooms keep the latest document and bounded snapshot
     // history in Durable Object storage that no D1/R2 sweep reaches. Erase
     // them before anything else: a failure keeps every database row, so the
@@ -6741,7 +6758,6 @@ export class D1R2PersistenceService implements PersistenceService {
         }
       }
     }
-    const placeholders = projectIds.map(() => '?').join(', ');
     if (this.env.ARTIFACTS) {
       const uploads = await this.env
         .DB!.prepare(
@@ -6891,6 +6907,34 @@ export class D1R2PersistenceService implements PersistenceService {
       await Promise.all(
         (snapshots.results ?? []).map((row) => bucket!.delete(row.envelope_key))
       );
+      if (bucket) {
+        for (const projectId of projectIds) {
+          const prefix = e2eeShareSnapshotPrefix(projectId);
+          // Restart each page after deletion: a storage cursor can otherwise
+          // skip keys when the preceding page has just disappeared. Bound
+          // one request's work; keep D1 rows on failure so a retry continues.
+          let complete = false;
+          for (let page = 0; page < 10; page += 1) {
+            const listed = await bucket.list({ prefix, limit: 1000 });
+            const keys = listed.objects.map((object) => object.key);
+            if (keys.some((key) => !key.startsWith(prefix))) {
+              throw new ProjectObjectStorageError(
+                'Snapshot storage returned an invalid prefix.'
+              );
+            }
+            if (keys.length) await bucket.delete(keys);
+            if (!listed.truncated) {
+              complete = true;
+              break;
+            }
+          }
+          if (!complete) {
+            throw new ProjectObjectStorageError(
+              'Snapshot cleanup must be retried.'
+            );
+          }
+        }
+      }
       groupTables.unshift(
         ...E2EE_SHARE_LINK_TABLES.map(
           (table) => `DELETE FROM ${table} WHERE project_id IN`
