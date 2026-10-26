@@ -26,3 +26,6 @@ export function validateDeploymentConfig(
     environment?: Record<string, string | undefined>;
   }
 ): string[];
+
+export const E2EE_FLAGS: readonly string[];
+export const E2EE_FLAG_PREREQUISITES: readonly (readonly [string, string])[];

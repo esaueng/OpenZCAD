@@ -6,6 +6,19 @@ import {
   validateDeploymentConfig
 } from '../scripts/validate-deployment-config.mjs';
 
+function officialConfig() {
+  return ts.parseConfigFileTextToJson(
+    'wrangler.jsonc',
+    readFileSync('wrangler.jsonc', 'utf8')
+  ).config as ReturnType<typeof hostedConfig>;
+}
+
+const officialOptions = {
+  target: 'official' as const,
+  originUrl: 'https://github.com/esaueng/OpenZCAD.git',
+  configOnly: true
+};
+
 function hostedConfig() {
   return {
     account_id: '11111111111111111111111111111111',
@@ -141,5 +154,145 @@ describe('deployment configuration preflight', () => {
     expect(
       validateDeploymentConfig(config, { ...options, configOnly: true })
     ).toContain('vars.AUTH_MODE must be email-code for a hosted deployment');
+  });
+
+  describe('end-to-end encryption flags', () => {
+    function withFlags(flags: Record<string, unknown>) {
+      const config = hostedConfig();
+      Object.assign(config.vars, flags);
+      return config;
+    }
+
+    it('accepts the recommended rollout steps in order', () => {
+      for (const flags of [
+        { E2EE_KEYS_ENABLED: 'false', E2EE_PROJECTS_ENABLED: 'false' },
+        { E2EE_KEYS_ENABLED: 'true', E2EE_PROJECTS_ENABLED: 'false' },
+        { E2EE_KEYS_ENABLED: 'true', E2EE_PROJECTS_ENABLED: 'true' },
+        {
+          E2EE_KEYS_ENABLED: 'true',
+          E2EE_PROJECTS_ENABLED: 'true',
+          E2EE_MIGRATION_ENABLED: 'true'
+        },
+        {
+          E2EE_KEYS_ENABLED: 'true',
+          E2EE_PROJECTS_ENABLED: 'true',
+          E2EE_MIGRATION_ENABLED: 'true',
+          E2EE_REVERSE_ENABLED: 'true'
+        }
+      ]) {
+        expect(
+          validateDeploymentConfig(withFlags(flags), { target: 'selfhost' })
+        ).toEqual([]);
+      }
+    });
+
+    it('accepts the shipped self-hosting example', () => {
+      const config = ts.parseConfigFileTextToJson(
+        'wrangler.selfhost.example.jsonc',
+        readFileSync('wrangler.selfhost.example.jsonc', 'utf8')
+      ).config as ReturnType<typeof hostedConfig>;
+      expect(validateDeploymentConfig(config, { target: 'example' })).toEqual(
+        []
+      );
+      // Shipped closed: an operator turns them on in order after reading the
+      // End-to-end encryption section of docs/SELF_HOSTING.md.
+      expect(config.vars).toMatchObject({
+        E2EE_KEYS_ENABLED: 'false',
+        E2EE_PROJECTS_ENABLED: 'false',
+        E2EE_MIGRATION_ENABLED: 'false'
+      });
+      expect(config.vars).not.toHaveProperty('E2EE_REVERSE_ENABLED');
+    });
+
+    it('rejects a flag whose prerequisite is off', () => {
+      expect(
+        validateDeploymentConfig(withFlags({ E2EE_PROJECTS_ENABLED: 'true' }), {
+          target: 'selfhost'
+        })
+      ).toContain(
+        'vars.E2EE_PROJECTS_ENABLED requires vars.E2EE_KEYS_ENABLED to be "true"'
+      );
+      expect(
+        validateDeploymentConfig(
+          withFlags({
+            E2EE_KEYS_ENABLED: 'true',
+            E2EE_PROJECTS_ENABLED: 'false',
+            E2EE_MIGRATION_ENABLED: 'true'
+          }),
+          { target: 'selfhost' }
+        )
+      ).toEqual([
+        'vars.E2EE_MIGRATION_ENABLED requires vars.E2EE_PROJECTS_ENABLED to be "true"'
+      ]);
+      expect(
+        validateDeploymentConfig(
+          withFlags({
+            E2EE_KEYS_ENABLED: 'true',
+            E2EE_PROJECTS_ENABLED: 'true',
+            E2EE_REVERSE_ENABLED: 'on'
+          }),
+          { target: 'example' }
+        )
+      ).toEqual([
+        'vars.E2EE_REVERSE_ENABLED requires vars.E2EE_MIGRATION_ENABLED to be "true"'
+      ]);
+    });
+
+    it('reads flag values the way the Worker does', () => {
+      expect(
+        validateDeploymentConfig(
+          withFlags({
+            E2EE_KEYS_ENABLED: ' Yes ',
+            E2EE_PROJECTS_ENABLED: '1',
+            E2EE_MIGRATION_ENABLED: 'OFF'
+          }),
+          { target: 'selfhost' }
+        )
+      ).toEqual([]);
+      const errors = validateDeploymentConfig(
+        withFlags({
+          E2EE_KEYS_ENABLED: true,
+          E2EE_PROJECTS_ENABLED: 'enabled'
+        }),
+        { target: 'selfhost' }
+      );
+      expect(errors).toContain(
+        'vars.E2EE_KEYS_ENABLED must be the string "true" or "false"'
+      );
+      expect(errors).toContain(
+        'vars.E2EE_PROJECTS_ENABLED must be the string "true" or "false"'
+      );
+    });
+
+    it('rejects canary accounts committed to vars', () => {
+      expect(
+        validateDeploymentConfig(
+          withFlags({ E2EE_CANARY_EMAILS: 'someone@example.test' }),
+          { target: 'selfhost' }
+        )
+      ).toContain(
+        'vars.E2EE_CANARY_EMAILS must not list accounts in the config; set it with wrangler secret put'
+      );
+    });
+
+    it('lets the official deployment run the canary but keeps the rest of the order', () => {
+      const canary = officialConfig();
+      Object.assign(canary.vars, {
+        E2EE_KEYS_ENABLED: 'false',
+        E2EE_PROJECTS_ENABLED: 'true'
+      });
+      expect(validateDeploymentConfig(canary, officialOptions)).toEqual([]);
+      expect(
+        validateDeploymentConfig(canary, { target: 'selfhost' })
+      ).toContain(
+        'vars.E2EE_PROJECTS_ENABLED requires vars.E2EE_KEYS_ENABLED to be "true"'
+      );
+
+      const migration = officialConfig();
+      Object.assign(migration.vars, { E2EE_MIGRATION_ENABLED: 'true' });
+      expect(validateDeploymentConfig(migration, officialOptions)).toEqual([
+        'vars.E2EE_MIGRATION_ENABLED requires vars.E2EE_PROJECTS_ENABLED to be "true"'
+      ]);
+    });
   });
 });

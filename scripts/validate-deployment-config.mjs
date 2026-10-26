@@ -33,6 +33,68 @@ export const OFFICIAL = Object.freeze({
   sender: 'noreply@zcad.esau.app'
 });
 
+// End-to-end encryption flags (ADR-024), each with the flag the Worker also
+// requires before it opens anything (packages/cloudflare-adapters:
+// isE2eeProjectsEnabled, isE2eeMigrationEnabled, isE2eeReverseEnabled). A flag
+// whose prerequisite is off is inert or half-on, so the preflight refuses it.
+export const E2EE_FLAGS = Object.freeze([
+  'E2EE_KEYS_ENABLED',
+  'E2EE_PROJECTS_ENABLED',
+  'E2EE_MIGRATION_ENABLED',
+  'E2EE_REVERSE_ENABLED'
+]);
+export const E2EE_FLAG_PREREQUISITES = Object.freeze([
+  ['E2EE_PROJECTS_ENABLED', 'E2EE_KEYS_ENABLED'],
+  ['E2EE_MIGRATION_ENABLED', 'E2EE_PROJECTS_ENABLED'],
+  ['E2EE_REVERSE_ENABLED', 'E2EE_MIGRATION_ENABLED']
+]);
+// The Worker's ENABLED_BOOLEAN_ENV_VALUES; any other string reads as off.
+const ENABLED_FLAG_VALUES = new Set(['1', 'true', 'yes', 'on']);
+const DISABLED_FLAG_VALUES = new Set(['0', 'false', 'no', 'off']);
+
+function flagEnabled(value) {
+  return (
+    typeof value === 'string' &&
+    ENABLED_FLAG_VALUES.has(value.trim().toLowerCase())
+  );
+}
+
+/**
+ * Refuses E2EE flag values the Worker would misread and combinations it would
+ * never open. A JSON boolean (`true` without quotes) reaches the Worker as a
+ * boolean, which it reads as off. With `canaryAllowed` (the official
+ * deployment), encrypted projects may be on while E2EE_KEYS_ENABLED is off:
+ * the Worker then opens them only to accounts on the E2EE_CANARY_EMAILS
+ * secret, which this offline check cannot see.
+ */
+function validateE2eeFlags(config, { canaryAllowed }) {
+  const errors = [];
+  const vars = config.vars ?? {};
+  for (const flag of E2EE_FLAGS) {
+    if (!Object.hasOwn(vars, flag)) continue;
+    const value = vars[flag];
+    const normalized =
+      typeof value === 'string' ? value.trim().toLowerCase() : '';
+    if (
+      !ENABLED_FLAG_VALUES.has(normalized) &&
+      !DISABLED_FLAG_VALUES.has(normalized)
+    ) {
+      errors.push(`vars.${flag} must be the string "true" or "false"`);
+    }
+  }
+  for (const [flag, prerequisite] of E2EE_FLAG_PREREQUISITES) {
+    if (!flagEnabled(vars[flag]) || flagEnabled(vars[prerequisite])) continue;
+    if (canaryAllowed && prerequisite === 'E2EE_KEYS_ENABLED') continue;
+    errors.push(`vars.${flag} requires vars.${prerequisite} to be "true"`);
+  }
+  if (Object.hasOwn(vars, 'E2EE_CANARY_EMAILS')) {
+    errors.push(
+      'vars.E2EE_CANARY_EMAILS must not list accounts in the config; set it with wrangler secret put'
+    );
+  }
+  return errors;
+}
+
 function parseConfig(path) {
   let source;
   try {
@@ -244,7 +306,10 @@ export function validateDeploymentConfig(
     return errors;
   }
   const allowPlaceholders = target === 'example';
-  const errors = validateCommon(config, { allowPlaceholders });
+  const errors = [
+    ...validateCommon(config, { allowPlaceholders }),
+    ...validateE2eeFlags(config, { canaryAllowed: target === 'official' })
+  ];
   const db = binding(config, 'd1_databases', 'DB');
   const bucket = binding(config, 'r2_buckets', 'ARTIFACTS');
   const email = binding(config, 'send_email', 'EMAIL', 'name');

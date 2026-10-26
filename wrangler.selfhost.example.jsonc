@@ -37,7 +37,25 @@
     "AI_DEPLOYMENT_FREE_ENABLED": "true",
     "PROJECT_SHARING_ENABLED": "true",
     "PROJECT_EDIT_LEASES_ENFORCED": "true",
-    "PROJECT_PERSONAL_SYNC_ENABLED": "true"
+    "PROJECT_PERSONAL_SYNC_ENABLED": "true",
+    // End-to-end encryption (ADR-024). Read "End-to-end encryption" in
+    // docs/SELF_HOSTING.md first: nobody, operator included, can recover an
+    // encrypted project whose owner loses every unlock method. Every flag
+    // ships closed. Apply D1 migrations 0029-0043 (pnpm deploy:selfhost does),
+    // then turn them on one deploy at a time, in this order; pnpm
+    // selfhost:check refuses a flag whose predecessor is off.
+    // 1. Account keys, devices, passkeys and the recovery key.
+    "E2EE_KEYS_ENABLED": "false",
+    // 2. Encrypted projects: the per-account "Encrypt new projects" opt-in.
+    "E2EE_PROJECTS_ENABLED": "false",
+    // 3. Owners encrypt their existing plaintext projects from Settings.
+    "E2EE_MIGRATION_ENABLED": "false"
+    // Optional and beta-only: "E2EE_REVERSE_ENABLED": "true" (needs step 3)
+    // lets an owner turn an unshared encrypted project back into plaintext.
+    // A later release removes it.
+    // Planned for later Phase 8 releases, not read by this version, so do not
+    // add them yet: E2EE_DEFAULT_ON (encrypt every account's new projects) and
+    // E2EE_PLAINTEXT_FROZEN (refuse plaintext writes).
   },
   "d1_databases": [
     {
