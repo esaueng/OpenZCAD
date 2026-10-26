@@ -1056,6 +1056,111 @@ describe('contacts heads in device approval', () => {
     );
   });
 
+  it('never rolls the pin back to an older approval head (#936 review)', async () => {
+    // The laptop's pin stays at entry 0 (Bob verified): it never reloads.
+    const { srv, alice } = await aliceVerifiedBob();
+    const phone = browser(srv, ALICE);
+    const account = ready(
+      await enrollWithRecoveryKey(
+        phone.keys,
+        ready(await loadEncryption(phone.keys)),
+        alice.recovery.secret,
+        'Phone'
+      )
+    );
+    // The unconfirmed phone signs an untrust at entry 1.
+    let book = await loadContacts(phone.contacts, account);
+    book = await untrustContact(
+      phone.contacts,
+      account,
+      book,
+      BOB,
+      alice.recovery.secret
+    );
+    expect(book.list?.pin.sequence).toBe(1);
+    expect(book.listConfirmed).toBe(false);
+
+    // It asks the stale laptop to confirm: the grant names entry 0.
+    const request = await requestApproval(phone.keys, account, 'Phone');
+    if (request.step !== 'waiting') throw new Error('Expected a request');
+    await approveDevice(
+      alice.keys,
+      ready(await loadEncryption(alice.keys)),
+      await alice.keys.api.getApproval(request.approval.id),
+      { kind: 'scan', code: request.scanCode },
+      null
+    );
+    expect((await advanceApprovalAsNewDevice(phone.keys)).step).toBe('done');
+    const pinned = await phone.pins.readList(ALICE);
+    expect(pinned).toMatchObject({ sequence: 1, confirmed: false });
+    expect(pinned?.confirmAt?.sequence).toBe(0);
+
+    // A server serving only through entry 0 would revive Bob: refused.
+    const after = ready(await loadEncryption(phone.keys));
+    const older: ContactsContext = {
+      ...phone.contacts,
+      api: createContactsApi(olderContacts(srv, ALICE, 1))
+    };
+    await expect(loadContacts(older, after)).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof ContactsError && error.code === 'fork'
+    );
+    expect(await phone.pins.readList(ALICE)).toMatchObject({ sequence: 1 });
+    // The honest list holds the laptop's entry 0 under entry 1: confirmed,
+    // and Bob stays untrusted.
+    book = await loadContacts(phone.contacts, after);
+    expect(book.listConfirmed).toBe(true);
+    expect(await phone.pins.readList(ALICE)).toEqual({
+      identityKeyHash: pinned!.identityKeyHash,
+      sequence: 1,
+      entryHash: pinned!.entryHash,
+      confirmed: true
+    });
+    expect(book.contacts.find((c) => c.userId === BOB)?.standing).toBe(
+      'untrusted'
+    );
+  });
+
+  it('refuses a list whose entry differs from an older approval head', async () => {
+    const { srv, alice } = await aliceVerifiedBob();
+    const phone = browser(srv, ALICE);
+    const account = ready(
+      await enrollWithRecoveryKey(
+        phone.keys,
+        ready(await loadEncryption(phone.keys)),
+        alice.recovery.secret,
+        'Phone'
+      )
+    );
+    const book = await loadContacts(phone.contacts, account);
+    await untrustContact(
+      phone.contacts,
+      account,
+      book,
+      BOB,
+      alice.recovery.secret
+    );
+    // An approver on a fork vouches for a different entry 0.
+    const stored = (await phone.pins.readList(ALICE))!;
+    expect(
+      await phone.pins.advanceList(
+        ALICE,
+        {
+          identityKeyHash: stored.identityKeyHash,
+          sequence: 0,
+          entryHash: 'e'.repeat(64),
+          confirmed: true
+        },
+        { fromApproval: true }
+      )
+    ).toBe(true);
+    await expect(loadContacts(phone.contacts, account)).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof ContactsError && error.code === 'fork'
+    );
+    expect((await phone.pins.readList(ALICE))?.confirmed).toBe(false);
+  });
+
   it('counts a contact verified again on an unconfirmed device', async () => {
     const { srv, alice } = await aliceVerifiedBob();
     const phone = browser(srv, ALICE);

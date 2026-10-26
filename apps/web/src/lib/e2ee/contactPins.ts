@@ -45,6 +45,16 @@ export interface ContactsListPinRecord {
    * this existed read as confirmed.
    */
   readonly confirmed: boolean;
+  /**
+   * An approving device's confirmed head older than this pin, waiting to be
+   * checked: the pin becomes confirmed once a list this browser accepts
+   * (which must extend the pin) holds exactly this entry at this sequence.
+   * The pin itself never moves back to it.
+   */
+  readonly confirmAt?: {
+    readonly sequence: number;
+    readonly entryHash: string;
+  } | null;
 }
 
 /** What this browser has been shown of one contact's keys. */
@@ -79,9 +89,10 @@ export interface ContactPinStore {
    * replaces it (the caller already accepted the account's new identity).
    * False, writing nothing, when the stored pin is newer. A confirmed pin
    * stays confirmed as it moves forward. With `fromApproval` (a head an
-   * approving device signed) a confirmed head also replaces an unconfirmed
-   * pin under the same identity, newer or not: the next list accepted must
-   * then contain the approver's head.
+   * approving device signed) the pin never moves backward either: a newer
+   * or equal head is adopted, and a confirmed head older than an
+   * unconfirmed pin is kept beside it as `confirmAt`, to be checked against
+   * the next list this browser accepts.
    */
   advanceList(
     userId: string,
@@ -133,12 +144,24 @@ function readListPin(
     pin.sequence === EMPTY_CONTACTS_SEQUENCE &&
     pin.entryHash === EMPTY_CONTACTS_HASH;
   if (!empty && !isSequence(pin.sequence)) return null;
+  const at = pin.confirmAt;
+  const confirmAt =
+    typeof at === 'object' &&
+    at !== null &&
+    isSequence(at.sequence) &&
+    typeof at.entryHash === 'string' &&
+    HASH.test(at.entryHash) &&
+    at.sequence < pin.sequence
+      ? { sequence: at.sequence, entryHash: at.entryHash }
+      : null;
+  const confirmed =
+    pin.confirmed === undefined ? legacyConfirmed : pin.confirmed === true;
   return {
     identityKeyHash: pin.identityKeyHash,
     sequence: pin.sequence,
     entryHash: pin.entryHash,
-    confirmed:
-      pin.confirmed === undefined ? legacyConfirmed : pin.confirmed === true
+    confirmed,
+    ...(confirmed || !confirmAt ? {} : { confirmAt })
   };
 }
 
@@ -191,13 +214,42 @@ export function advancedListPin(
   if (!current || current.identityKeyHash !== valid.identityKeyHash) {
     return valid;
   }
-  // An approving device's signed head outranks what the server alone
-  // showed this browser: the next accepted list must contain it.
-  if (options.fromApproval && valid.confirmed && !current.confirmed) {
-    return valid;
+  if (
+    options.fromApproval &&
+    valid.confirmed &&
+    !current.confirmed &&
+    valid.sequence < current.sequence
+  ) {
+    // This browser already accepted (or wrote) newer entries than the
+    // approver has seen. Rolling the pin back to the approver's head would
+    // let a server hide them again, so keep the pin and confirm it only
+    // once an accepted list shows the approver's head is its ancestor. An
+    // approver that saw the list only empty is an ancestor of any chain.
+    return valid.sequence === EMPTY_CONTACTS_SEQUENCE
+      ? pending(current, true, null)
+      : pending(current, false, {
+          sequence: valid.sequence,
+          entryHash: valid.entryHash
+        });
   }
   if (!follows(current, valid)) return null;
-  return { ...valid, confirmed: current.confirmed || valid.confirmed };
+  const confirmed = current.confirmed || valid.confirmed;
+  return pending(valid, confirmed, confirmed ? null : current.confirmAt);
+}
+
+/** `record` as `confirmed`, carrying `confirmAt` only while one is pending. */
+function pending(
+  record: ContactsListPinRecord,
+  confirmed: boolean,
+  confirmAt: ContactsListPinRecord['confirmAt']
+): ContactsListPinRecord {
+  const base = {
+    identityKeyHash: record.identityKeyHash,
+    sequence: record.sequence,
+    entryHash: record.entryHash,
+    confirmed
+  };
+  return confirmed || !confirmAt ? base : { ...base, confirmAt };
 }
 
 /** The contact pin to store, or null to refuse. */

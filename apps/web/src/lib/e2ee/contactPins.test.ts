@@ -158,8 +158,8 @@ describe('contact pins', () => {
         await pins.advanceList('pk', { ...claimed, confirmed: true }),
         name
       ).toBe(false);
-      // An approving device's signed head replaces it, even an older one:
-      // the next list must then contain that head.
+      // An approving device's older head never moves the pin back: it
+      // waits beside it until an accepted list shows it is an ancestor.
       expect(
         await pins.advanceList(
           'pk',
@@ -169,11 +169,41 @@ describe('contact pins', () => {
         name
       ).toBe(true);
       expect(await pins.readList('pk'), name).toEqual({
-        ...claimed,
+        ...passkey,
+        confirmed: false,
+        confirmAt: { sequence: 3, entryHash: H('3') }
+      });
+      // The server moving the pin forward keeps it pending.
+      const later = { ...passkey, sequence: 6, entryHash: H('6') };
+      expect(await pins.advanceList('pk', later), name).toBe(true);
+      expect((await pins.readList('pk'))?.confirmAt, name).toEqual({
+        sequence: 3,
+        entryHash: H('3')
+      });
+      // The same height with another hash is a fork: refused.
+      expect(
+        await pins.advanceList(
+          'pk',
+          { ...later, entryHash: H('7'), confirmed: true },
+          { fromApproval: true }
+        ),
+        name
+      ).toBe(false);
+      // An equal or newer approval head is adopted, confirmed.
+      expect(
+        await pins.advanceList(
+          'pk',
+          { ...later, confirmed: true },
+          { fromApproval: true }
+        ),
+        name
+      ).toBe(true);
+      expect(await pins.readList('pk'), name).toEqual({
+        ...later,
         confirmed: true
       });
-      // But never rolls a confirmed pin back, and an unconfirmed approver
-      // confirms nothing.
+      // A confirmed pin is never rolled back, and an approver that saw the
+      // list only empty confirms an unconfirmed one in place.
       expect(
         await pins.advanceList(
           'pk',
@@ -182,6 +212,21 @@ describe('contact pins', () => {
         ),
         name
       ).toBe(false);
+      await pins.advanceList('pk2', passkey);
+      expect(
+        await pins.advanceList(
+          'pk2',
+          { ...empty, confirmed: true },
+          {
+            fromApproval: true
+          }
+        ),
+        name
+      ).toBe(true);
+      expect(await pins.readList('pk2'), name).toEqual({
+        ...passkey,
+        confirmed: true
+      });
       expect(
         await pins.advanceList(
           'other',

@@ -270,6 +270,18 @@ async function acceptList(
   if (list.userId !== userId) {
     throw new ContactsError('invalid', 'The contacts list names another user.');
   }
+  // An approving device confirmed a head older than this browser's pin.
+  // This list extends the pin, so it is the chain this browser accepted:
+  // the approver's head must be in it, or one of the two was on a fork.
+  let confirmedNow = confirmed;
+  const confirmAt = anchor?.confirmed ? null : anchor?.confirmAt;
+  if (confirmAt) {
+    const entry = list.entries[confirmAt.sequence];
+    if (!entry || toHex(entry.hash) !== confirmAt.entryHash) {
+      refused(new E2eeError('chain-broken', 'approval head'), 'contacts list');
+    }
+    confirmedNow = true;
+  }
   requireActive(ctx);
   // The store keeps a confirmed pin confirmed as it moves forward; what
   // the server shows on its own never confirms one.
@@ -277,11 +289,11 @@ async function acceptList(
     identityKeyHash: identityHash,
     sequence: list.pin.sequence,
     entryHash: toHex(list.pin.entryHash),
-    confirmed: false
+    confirmed: confirmedNow
   });
   // Another tab pinned a newer list meanwhile: this one is stale.
   if (!advanced) staleAnswer('contacts list');
-  return { list, confirmed };
+  return { list, confirmed: confirmedNow };
 }
 
 /**
