@@ -6,14 +6,15 @@ use std::{
     collections::HashMap,
     future::Future,
     process::Command,
-    sync::{Arc, Mutex},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    sync::{Arc, Mutex, Weak},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::State;
 use tokio::sync::{
     mpsc::{self, error::TryRecvError},
     Mutex as AsyncMutex,
 };
+use tokio::time::Instant;
 
 const API_ORIGIN: &str = "https://zcad.app";
 const DESKTOP_CLIENT_ID: &str = "openzcad-macos";
@@ -35,6 +36,7 @@ const NATIVE_BLOB_BUFFERED_CHUNKS: usize = 16;
 const MAX_NATIVE_BLOB_STREAMS: usize = 4;
 // A stream the renderer stopped reading (a reloaded page) is let go after this.
 const NATIVE_BLOB_STREAM_UNREAD: Duration = Duration::from_secs(60);
+const NATIVE_BLOB_REAP_INTERVAL: Duration = Duration::from_secs(5);
 // No progress for this long fails a download, as the renderer's idle budget
 // does (`SOURCE_DOWNLOAD_IDLE_MS`); a slow but live transfer still completes.
 const NATIVE_BLOB_IDLE: Duration = Duration::from_secs(30);
@@ -65,11 +67,13 @@ pub struct DesktopAuthState {
     pending: Mutex<Option<PendingAuthorization>>,
     access: Mutex<Option<AccessCredential>>,
     refresh_guard: AsyncMutex<()>,
-    blob_streams: Mutex<HashMap<String, BlobStream>>,
+    blob_streams: Arc<Mutex<HashMap<String, BlobStream>>>,
 }
 
 impl DesktopAuthState {
     pub fn new() -> Self {
+        let blob_streams = Arc::new(Mutex::new(HashMap::new()));
+        tauri::async_runtime::spawn(reap_blob_streams(Arc::downgrade(&blob_streams)));
         Self {
             client: Client::builder()
                 .timeout(Duration::from_secs(30))
@@ -85,7 +89,7 @@ impl DesktopAuthState {
             pending: Mutex::new(None),
             access: Mutex::new(None),
             refresh_guard: AsyncMutex::new(()),
-            blob_streams: Mutex::new(HashMap::new()),
+            blob_streams,
         }
     }
 }
@@ -914,6 +918,25 @@ fn admit_blob_stream(
     Ok(())
 }
 
+/// WebView reload loses the renderer's cleanup timers. Expire unread streams
+/// independently of future commands, including pumps blocked on a full queue.
+/// Hold only a Weak reference across each sleep so teardown releases the table.
+async fn reap_blob_streams(streams: Weak<Mutex<HashMap<String, BlobStream>>>) {
+    loop {
+        tokio::time::sleep(NATIVE_BLOB_REAP_INTERVAL).await;
+        let Some(streams) = streams.upgrade() else {
+            return;
+        };
+        let Ok(mut streams) = streams.lock() else {
+            return;
+        };
+        let now = Instant::now();
+        streams.retain(|_, stream| {
+            now.saturating_duration_since(stream.touched) < NATIVE_BLOB_STREAM_UNREAD
+        });
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeBlobStreamStart {
@@ -1151,9 +1174,10 @@ mod tests {
             atomic::{AtomicUsize, Ordering},
             Arc,
         },
-        time::{Duration, Instant},
+        time::Duration,
     };
     use tokio::sync::{mpsc, oneshot, Mutex as AsyncMutex};
+    use tokio::time::Instant;
 
     #[test]
     fn rejects_renderer_lifecycle_requests_before_native_credentials() {
@@ -1645,6 +1669,100 @@ mod tests {
 
         drop(streams);
         assert!(observers.iter_mut().all(aborted));
+    }
+
+    #[test]
+    fn timer_expires_abandoned_full_queues_without_another_command() {
+        runtime().block_on(async {
+            tokio::time::pause();
+            let streams = Arc::new(std::sync::Mutex::new(HashMap::new()));
+            let (sender, receiver) = mpsc::channel(1);
+            let (alive, mut observer) = oneshot::channel::<()>();
+            let pump = tauri::async_runtime::spawn(async move {
+                let _alive = alive;
+                loop {
+                    if sender.send(BlobStreamEvent::Data(vec![1])).await.is_err() {
+                        return;
+                    }
+                }
+            });
+            streams.lock().unwrap().insert(
+                "abandoned".into(),
+                BlobStream {
+                    reader: Arc::new(AsyncMutex::new(BlobStreamReader {
+                        receiver,
+                        ended: false,
+                    })),
+                    pump,
+                    touched: Instant::now(),
+                },
+            );
+            let reaper = tokio::spawn(super::reap_blob_streams(Arc::downgrade(&streams)));
+            tokio::task::yield_now().await;
+            tokio::time::advance(NATIVE_BLOB_STREAM_UNREAD - Duration::from_secs(1)).await;
+            tokio::task::yield_now().await;
+            assert_eq!(streams.lock().unwrap().len(), 1);
+            tokio::time::advance(super::NATIVE_BLOB_REAP_INTERVAL).await;
+            tokio::task::yield_now().await;
+            assert!(streams.lock().unwrap().is_empty());
+            assert!(aborted(&mut observer));
+            drop(streams);
+            tokio::time::advance(super::NATIVE_BLOB_REAP_INTERVAL).await;
+            reaper.await.unwrap();
+        });
+    }
+
+    #[test]
+    fn timer_renews_reads_then_expires_a_pending_reader_and_stops_with_state() {
+        runtime().block_on(async {
+            tokio::time::pause();
+            let state = DesktopAuthState::new();
+            let (sender, receiver) = mpsc::channel(1);
+            sender.try_send(BlobStreamEvent::Data(vec![7])).unwrap();
+            let (alive, mut observer) = oneshot::channel::<()>();
+            let pump = tauri::async_runtime::spawn(async move {
+                let _alive = alive;
+                let _sender = sender;
+                std::future::pending::<()>().await;
+            });
+            state.blob_streams.lock().unwrap().insert(
+                "reading".into(),
+                BlobStream {
+                    reader: Arc::new(AsyncMutex::new(BlobStreamReader {
+                        receiver,
+                        ended: false,
+                    })),
+                    pump,
+                    touched: Instant::now(),
+                },
+            );
+            let weak = Arc::downgrade(&state.blob_streams);
+            let reaper = tokio::spawn(super::reap_blob_streams(weak.clone()));
+            tokio::task::yield_now().await;
+            tokio::time::advance(Duration::from_secs(50)).await;
+            assert_eq!(read_blob_stream(&state, "reading").await.unwrap(), vec![7]);
+            tokio::time::advance(Duration::from_secs(50)).await;
+            tokio::task::yield_now().await;
+            assert_eq!(state.blob_streams.lock().unwrap().len(), 1);
+            // A read waiting on the network must also wake when expiry aborts
+            // its pump; no renderer cancel or subsequent open is involved.
+            {
+                let read = read_blob_stream(&state, "reading");
+                tokio::pin!(read);
+                assert!(tokio::time::timeout(Duration::from_secs(1), &mut read)
+                    .await
+                    .is_err());
+                tokio::time::advance(NATIVE_BLOB_STREAM_UNREAD + super::NATIVE_BLOB_REAP_INTERVAL)
+                    .await;
+                assert_eq!(read.await, Err(BLOB_STREAM_STOPPED.to_string()));
+            }
+            assert!(state.blob_streams.lock().unwrap().is_empty());
+            assert!(aborted(&mut observer));
+            drop(state);
+            assert!(weak.upgrade().is_none());
+            tokio::time::advance(super::NATIVE_BLOB_REAP_INTERVAL).await;
+            reaper.await.unwrap();
+        });
     }
 
     #[test]
