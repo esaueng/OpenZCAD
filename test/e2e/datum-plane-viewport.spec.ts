@@ -213,6 +213,9 @@ test('drags a selected datum plane along its normal and picks it in the viewport
   // Starting a new plane from the Plane tool (U09: in place) keeps the old
   // selection but is not editing it: its pin must not arm, or a drag would
   // move the old plane instead of offsetting the new one.
+  const moreTools = page.getByRole('button', { name: /^More tools/ });
+  if ((await moreTools.getAttribute('aria-expanded')) === 'false')
+    await moreTools.click();
   await page.getByRole('button', { name: /^Plane — / }).click();
   const planeBar = page.getByRole('group', { name: 'Plane command' });
   await expect(planeBar).toBeVisible();

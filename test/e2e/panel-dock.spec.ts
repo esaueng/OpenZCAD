@@ -541,6 +541,7 @@ test('the inspector and the right lane stay clear of the dock, inside the rail',
   // A new box runs in place (U09); its History edit card takes the lane.
   await createPrimitiveInPlace(page, 'box');
   await page.locator('.feature-row-main', { hasText: /^Box/ }).click();
+  await revealModelPanel(page, 'History');
   const inspector = page.locator('.stage-right > .inspector-float');
   await expect(inspector).toBeVisible();
   const lane = await box(inspector);
@@ -571,6 +572,7 @@ test('on a stage too narrow for both, an unpinned panel covers the lane instead 
   // A new box runs in place (U09); its History edit card takes the lane.
   await createPrimitiveInPlace(page, 'box');
   await page.locator('.feature-row-main', { hasText: /^Box/ }).click();
+  await revealModelPanel(page, 'History');
   const inspector = page.locator('.stage-right > .inspector-float');
   await expect(inspector).toBeVisible();
   const full = await box(inspector);
@@ -1169,6 +1171,7 @@ test('a command card heads the right lane, and a tool card keeps its actions in 
   // so a Box's edit card, opened from its History row, stands in.
   await createPrimitiveInPlace(page, 'box');
   await page.locator('.feature-row-main', { hasText: /^Box/ }).click();
+  await revealModelPanel(page, 'History');
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   const submit = inspector.getByRole('button', { name: 'Apply', exact: true });
   await expect(submit).toBeVisible();

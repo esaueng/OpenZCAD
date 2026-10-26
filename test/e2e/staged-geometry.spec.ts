@@ -103,7 +103,7 @@ test('suspends saved measurements while a resized body waits for analysis', asyn
     .locator('.measurement-row-value')
     .innerText();
   await modes.getByRole('button', { name: 'Build', exact: true }).click();
-  await page.locator('.feature-row').first().dblclick();
+  await page.locator('.feature-row-main').first().click();
   for (const label of ['Width (X)', 'Depth (Y)', 'Height (Z)']) {
     const field = inspector.getByLabel(label);
     await field.fill(String(Number(await field.inputValue()) * 2));

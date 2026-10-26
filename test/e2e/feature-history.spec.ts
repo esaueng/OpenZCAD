@@ -31,6 +31,7 @@ test('explains a failed downstream edit and opens the exact feature for repair',
     page.locator('.feature-row-main', { hasText: 'Extrude base' }),
     'Extrude base'
   );
+  await revealModelPanel(page, 'History');
   const details = page.getByRole('region', { name: 'History details' });
   await expect(
     details.getByRole('button', { name: 'Inspect Base corner fillets' })
@@ -429,6 +430,7 @@ test('renaming a modeling feature closes its stale editor and keeps the new name
   // U09 phase 7: the row re-arms the Shell command in place.
   const editBar = page.getByRole('group', { name: /^Edit .* command$/ });
   await expect(editBar).toHaveAccessibleName('Edit Shell command');
+  await revealModelPanel(page, 'History');
   // Reach the history action through the keyboard while the command holds
   // the viewport.
   const actions = row.getByRole('button', { name: 'More actions for Shell' });
