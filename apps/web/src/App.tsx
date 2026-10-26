@@ -647,6 +647,7 @@ import {
 import { effectiveSelectionFilter } from './lib/selectionFilter';
 import {
   bodyFeature,
+  deleteKeyRemovesFeature,
   resolveSelectionTopology,
   selectionFeature,
   selectionSetFeature
@@ -25166,9 +25167,20 @@ export function App() {
             }
             return;
           }
+          // A drag or a commit still in flight owns the selection; Delete
+          // waits for it rather than removing the feature under it.
           if (
             selectedFeature &&
-            featureSelectionSource !== 'inferred' &&
+            deleteKeyRemovesFeature({
+              source: featureSelectionSource,
+              topology: selectedTopology,
+              edgeCount: selectedEdges.length
+            }) &&
+            !(
+              isOperationState(interaction) &&
+              interaction.phase !== 'armed' &&
+              interaction.phase !== 'failed'
+            ) &&
             validateSelectionEdit()
           ) {
             event.preventDefault();

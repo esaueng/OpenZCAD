@@ -50,9 +50,7 @@ import {
   isProjectStorageFormatReady
 } from '@openzcad/cloudflare-adapters';
 import {
-  MEMBER_FENCE,
   RouteError,
-  WRITER_FENCE,
   bytesField,
   deviceListMoved,
   deviceListUnchanged,
@@ -63,11 +61,12 @@ import {
   refuse,
   refuseDeviceListMoved,
   requireCertifiedDevice,
-  fenceBinds,
+  projectFence,
   requireEncryptedProjectAccess,
   runBatch,
   uintField,
-  type Authorization
+  type Authorization,
+  type EncryptedProjectAccess
 } from './e2eeProjects';
 
 const ROUTE =
@@ -98,6 +97,8 @@ interface Context {
   db: D1Database;
   userId: string;
   authorization: Authorization;
+  /** The caller's access; staged under a lease in slice 7-1. */
+  access?: EncryptedProjectAccess;
 }
 
 async function readJson(request: Request): Promise<Record<string, unknown>> {
@@ -267,6 +268,12 @@ function upsert(
   extra: { sql: string; binds: readonly unknown[] } = { sql: '1', binds: [] }
 ): D1PreparedStatement {
   const signer = deviceListUnchanged(ctx.userId, input.signerList);
+  const fence = projectFence(
+    ctx.access,
+    projectId,
+    ctx.userId,
+    kind === 'measurements' ? 'writer' : 'member'
+  );
   return ctx.db
     .prepare(
       `INSERT INTO e2ee_project_envelopes
@@ -274,7 +281,7 @@ function upsert(
           wrapped_version_key, signature, signer_device_id, updated_at)
        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
        WHERE ${ctx.authorization.sql}
-         AND ${kind === 'measurements' ? WRITER_FENCE : MEMBER_FENCE}
+         AND ${fence.sql}
          AND EXISTS (SELECT 1 FROM e2ee_project_groups
                      WHERE project_id = ? AND key_epoch_base + epoch = ?)
          AND ${extra.sql}
@@ -301,7 +308,7 @@ function upsert(
       input.signerDeviceId,
       now,
       ...ctx.authorization.binds,
-      ...fenceBinds(projectId, ctx.userId),
+      ...fence.binds,
       projectId,
       input.header.keyEpoch,
       ...extra.binds,
@@ -557,7 +564,9 @@ export async function handleE2eeProjectEnvelopeRequest(
   db: D1Database,
   userId: string,
   projectsEnabled: boolean,
-  authorization: Authorization
+  authorization: Authorization,
+  /** Slice 7-1: the request's migration lease, while migration is open. */
+  migrationLease: string | null = null
 ): Promise<Response> {
   try {
     if (!projectsEnabled) {
@@ -602,12 +611,12 @@ export async function handleE2eeProjectEnvelopeRequest(
     // Any member reads, and keeps its own view state; the owner and editors
     // write measurements (slice 5-2), as the plaintext routes' read and edit
     // access. The owner reads a project in the recycle bin (4-8).
-    await requireEncryptedProjectAccess(
+    ctx.access = await requireEncryptedProjectAccess(
       db,
       userId,
       projectId,
       method === 'PUT' && route === 'measurements' ? 'write' : 'read',
-      { allowDeleted: method === 'GET' }
+      { allowDeleted: method === 'GET', migrationLease }
     );
     if (route === 'measurements') {
       return method === 'GET'
