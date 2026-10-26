@@ -2305,11 +2305,15 @@ export default {
     assertSafeRuntimeConfiguration(env);
     await createPersistenceService(env).purgeExpiredUploadSessions();
     // Purges and abandons of project migrations a browser left behind, and
-    // of stagings whose owner may no longer migrate.
+    // of stagings whose owner may no longer migrate (or, for a decrypt
+    // staging, no longer use the reverse path, slice 7-3).
     await sweepProjectMigrations(
       env,
       isCloudflareFeatureEnabled(env, 'E2EE_MIGRATION_ENABLED'),
-      (email) => isE2eeMigrationEnabled(env, email)
+      (email, direction) =>
+        direction === 'decrypt'
+          ? isE2eeReverseEnabled(env, email)
+          : isE2eeMigrationEnabled(env, email)
     );
     await publishCensus(env);
   },

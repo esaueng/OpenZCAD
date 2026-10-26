@@ -2766,11 +2766,19 @@ export async function projectMigrationErasureStatements(
  * a staged project, while the migration routes no longer answer that
  * account, so nothing else could finish or abandon it. Only a `staging`
  * row moves; a cutover or purge is never touched.
+ *
+ * `eligible` is asked with the staging's direction: a decrypt staging
+ * (slice 7-3) stays only while the reverse path is open to its owner
+ * (`isE2eeReverseEnabled`), since only then do the reverse routes answer
+ * them. Otherwise nothing could finish or abandon it either: its staged
+ * plaintext, exempt from quota, would linger beside the ciphertext, and
+ * while the global flags stay on its encrypted writes stay refused.
  */
 export async function sweepProjectMigrations(
   env: MigrationEnv,
   enabled: boolean,
-  eligible: (email: string | undefined) => boolean = () => true,
+  eligible: (email: string | undefined, direction: string) => boolean = () =>
+    true,
   now = Date.now()
 ): Promise<void> {
   const db = env.DB;
@@ -2835,22 +2843,23 @@ const MIGRATION_SWEEP_CANDIDATES = 50;
  */
 async function abandonWithdrawnStagings(
   db: D1Database,
-  eligible: (email: string | undefined) => boolean,
+  eligible: (email: string | undefined, direction: string) => boolean,
   now: number
-): Promise<{ project_id: string; state: string }[]> {
+): Promise<{ project_id: string; state: string; direction: string }[]> {
   const { results } = await db
     .prepare(
-      `SELECT m.project_id, u.email FROM e2ee_project_migrations m
+      `SELECT m.project_id, m.direction, u.email FROM e2ee_project_migrations m
        LEFT JOIN users u ON u.id = m.owner_user_id
        WHERE m.state = 'staging' AND COALESCE(m.lease_expires_at, 0) <= ?
        ORDER BY m.updated_at LIMIT ?`
     )
     .bind(now, MIGRATION_SWEEP_CANDIDATES)
-    .all<{ project_id: string; email: string | null }>();
-  const abandoned: { project_id: string; state: string }[] = [];
+    .all<{ project_id: string; direction: string; email: string | null }>();
+  const abandoned: { project_id: string; state: string; direction: string }[] =
+    [];
   for (const row of results ?? []) {
     if (abandoned.length >= MIGRATION_SWEEP_ROWS) break;
-    if (eligible(row.email ?? undefined)) continue;
+    if (eligible(row.email ?? undefined, row.direction)) continue;
     try {
       const result = await db
         .prepare(
@@ -2863,7 +2872,11 @@ async function abandonWithdrawnStagings(
         .bind(new Date(now).toISOString(), row.project_id, now)
         .run();
       if ((result.meta?.changes ?? 0) === 1) {
-        abandoned.push({ project_id: row.project_id, state: 'abandoned' });
+        abandoned.push({
+          project_id: row.project_id,
+          state: 'abandoned',
+          direction: row.direction
+        });
       }
     } catch {
       // An account being erased, say: its erasure abandons it instead.

@@ -1126,6 +1126,39 @@ describe('turning an encrypted project back into plaintext', () => {
     expect(count(srv, 'revisions', projectId)).toBe(0);
     expect(count(srv, 'artifacts', projectId)).toBe(0);
   });
+
+  it('abandons a decrypt staging on the sweep once the reverse path is closed to its owner', async () => {
+    const srv = roomServer();
+    const { projectId } = await encryptedProject(srv, { revisions: 1 });
+    const desktop = reverseOn(srv, owner, 'owner_desktop', {
+      beforeStep: (step) => {
+        if (step === 'cutover') throw new Error('Stop here.');
+      }
+    });
+    await expect(decryptFully(desktop, projectId)).rejects.toThrow('Stop');
+    expect(count(srv, 'artifacts', projectId)).toBe(3);
+    srv.db
+      .prepare(
+        'UPDATE e2ee_project_migrations SET lease_expires_at = 1 WHERE project_id = ?'
+      )
+      .run(projectId);
+    // Lapsed, while the owner may still use the reverse path: it resumes.
+    await worker.scheduled({}, srv.env);
+    expect(migrationRow(srv, projectId)).toMatchObject({ state: 'staging' });
+    // Migration stays open, the reverse path does not: the reverse routes
+    // no longer answer, so the sweep abandons it and drops what it staged.
+    srv.env.E2EE_REVERSE_ENABLED = 'false';
+    await worker.scheduled({}, srv.env);
+    expect(migrationRow(srv, projectId)).toMatchObject({
+      direction: 'decrypt',
+      state: 'abandoned',
+      lease_id: null,
+      purge_cursor: null
+    });
+    expect(count(srv, 'artifacts', projectId)).toBe(0);
+    expect(count(srv, 'revisions', projectId)).toBe(0);
+    expect(formatOf(srv, projectId)).toBe(2);
+  });
 });
 
 // --- Refusals -----------------------------------------------------------------------
