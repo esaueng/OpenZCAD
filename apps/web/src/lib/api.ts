@@ -370,9 +370,11 @@ export async function encryptsNewProjects(): Promise<boolean> {
     let verified: boolean | null = null;
     try {
       const preferences = await import('./e2ee/projectPreferences');
+      const currentAccount = unlockedAccount(userId);
+      if (!currentAccount) throw preferenceUnverified();
       const state = await preferences.loadProjectPreference({
         userId,
-        accountKey: account.accountKey,
+        accountKey: currentAccount.accountKey,
         api: preferences.createProjectPreferenceApi(),
         pins
       });

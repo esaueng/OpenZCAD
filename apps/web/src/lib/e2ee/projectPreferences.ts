@@ -203,6 +203,17 @@ async function verify(
 export async function loadProjectPreference(
   ctx: ProjectPreferenceContext
 ): Promise<ProjectPreferenceState> {
+  const accountKey = ctx.accountKey.slice();
+  try {
+    return await loadOwnedProjectPreference({ ...ctx, accountKey });
+  } finally {
+    accountKey.fill(0);
+  }
+}
+
+async function loadOwnedProjectPreference(
+  ctx: ProjectPreferenceContext
+): Promise<ProjectPreferenceState> {
   const [{ preference }, pinned] = await Promise.all([
     ctx.api.load(),
     ctx.pins.read(ctx.userId)
@@ -228,6 +239,23 @@ export async function loadProjectPreference(
  * written; it is verified and pinned like a load.
  */
 export async function saveProjectPreference(
+  ctx: ProjectPreferenceContext,
+  encryptNewProjects: boolean,
+  floor: number
+): Promise<ProjectPreferenceState> {
+  const accountKey = ctx.accountKey.slice();
+  try {
+    return await saveOwnedProjectPreference(
+      { ...ctx, accountKey },
+      encryptNewProjects,
+      floor
+    );
+  } finally {
+    accountKey.fill(0);
+  }
+}
+
+async function saveOwnedProjectPreference(
   ctx: ProjectPreferenceContext,
   encryptNewProjects: boolean,
   floor: number

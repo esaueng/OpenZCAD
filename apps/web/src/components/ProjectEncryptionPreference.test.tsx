@@ -109,6 +109,29 @@ function renderToggle(
 }
 
 describe('Settings › Encryption › Encrypt new projects (ADR-024 D2)', () => {
+  it('lets required encryption repair an untrusted preference with a fresh true-only record', async () => {
+    unlock();
+    const { api, current } = fakeApi(
+      { ...OPEN, defaultOn: true },
+      await stored(7, false, new Uint8Array(32).fill(1))
+    );
+    renderToggle(api);
+    const confirm = await screen.findByRole('button', {
+      name: 'Confirm encryption'
+    });
+    expect(
+      screen.getByRole('checkbox', { name: 'Encrypt new projects' })
+    ).toBeDisabled();
+    fireEvent.click(confirm);
+    await waitFor(() => expect(current()?.sequence).toBe(8));
+    expect(current()?.encryptNewProjects).toBe(true);
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', { name: 'Confirm encryption' })
+      ).toBeNull()
+    );
+  });
+
   it.each(['unset', 'off'] as const)(
     'shows required encryption instead of an opt-out for an %s beta preference',
     async (preference) => {
