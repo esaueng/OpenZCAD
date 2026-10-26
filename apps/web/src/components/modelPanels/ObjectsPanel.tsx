@@ -23,6 +23,7 @@ import {
   Pencil,
   PenLine,
   RotateCw,
+  Scan,
   Search,
   SquareDashed,
   Trash2
@@ -79,6 +80,8 @@ export type ObjectsPanelProps = ObjectsSource &
     | 'onSelectFeature'
     | 'onSelectBody'
     | 'onToggleBodyVisibility'
+    | 'onIsolateBody'
+    | 'isolatedBodyId'
     | 'onToggleSketchVisibility'
     | 'onRenameBody'
     | 'objectFolderActions'
@@ -263,6 +266,8 @@ export function ObjectsPanel({
   onSelectFeature,
   onSelectBody,
   onToggleBodyVisibility,
+  onIsolateBody,
+  isolatedBodyId = null,
   onToggleSketchVisibility,
   onRenameBody,
   objectFolderActions,
@@ -588,6 +593,7 @@ export function ObjectsPanel({
   function renderBodyRow(body: BodyRepresentation, depth = 0) {
     const hidden = hiddenBodyIds.has(body.bodyId);
     const selected = selectedBodyIds.includes(body.bodyId);
+    const isolated = isolatedBodyId === body.bodyId;
     // A consumed body is history's input, not a thing the user still has:
     // it keeps the name it had when it was combined.
     const renamable = Boolean(onRenameBody) && !body.consumed;
@@ -664,6 +670,22 @@ export function ObjectsPanel({
             onClick={() => setRenamingBodyId(body.bodyId)}
           >
             <Pencil size={12} aria-hidden="true" />
+          </button>
+        )}
+        {!body.consumed && onIsolateBody && (
+          <button
+            type="button"
+            className={`row-visibility${isolated ? ' is-active' : ''}`}
+            title={isolated ? 'Exit isolation' : `Isolate ${body.name}`}
+            aria-label={
+              isolated
+                ? `Exit isolation of ${body.name}`
+                : `Isolate body ${body.name}`
+            }
+            aria-pressed={isolated}
+            onClick={() => onIsolateBody(body.bodyId)}
+          >
+            <Scan size={12} aria-hidden="true" />
           </button>
         )}
         {!body.consumed && (
