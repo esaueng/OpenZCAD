@@ -1323,6 +1323,87 @@ describe('contacts heads in device approval', () => {
     expect((await phone.pins.readList(ALICE))?.confirmed).toBe(false);
   });
 
+  it('refuses an empty-head approval from a stale setup device instead of trusting a withheld prefix', async () => {
+    const srv = serverWith();
+    const approver = await person(srv, ALICE);
+    await person(srv, BOB);
+    share(srv);
+    const writer = browser(srv, ALICE);
+    const writerAccount = ready(
+      await enrollWithRecoveryKey(
+        writer.keys,
+        ready(await loadEncryption(writer.keys)),
+        approver.recovery.secret,
+        'Writer'
+      )
+    );
+    let book = await loadContacts(writer.contacts, writerAccount);
+    book = await verifyContact(
+      writer.contacts,
+      writerAccount,
+      book,
+      await inspectContact(writer.contacts, book, BOB),
+      approver.recovery.secret
+    );
+    await untrustContact(
+      writer.contacts,
+      writerAccount,
+      book,
+      BOB,
+      approver.recovery.secret
+    );
+    expect((await approver.pins.readList(ALICE))?.sequence).toBe(-1);
+    const phone = browser(srv, ALICE, olderContacts(srv, ALICE, 1));
+    const account = ready(
+      await enrollWithRecoveryKey(
+        phone.keys,
+        ready(await loadEncryption(phone.keys)),
+        approver.recovery.secret,
+        'Phone'
+      )
+    );
+    const beforeBook = await loadContacts(phone.contacts, account);
+    const before = await phone.pins.readList(ALICE);
+    expect(before).toMatchObject({ sequence: 0, confirmed: false });
+    expect(
+      verifiedEncryptionKey(
+        await inspectContact(phone.contacts, beforeBook, BOB)
+      )
+    ).toBeNull();
+    const request = await requestApproval(phone.keys, account, 'Phone');
+    if (request.step !== 'waiting') throw new Error('Expected request');
+    await approveDevice(
+      approver.keys,
+      ready(await loadEncryption(approver.keys)),
+      await approver.keys.api.getApproval(request.approval.id),
+      { kind: 'scan', code: request.scanCode },
+      null
+    );
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await advanceApprovalAsNewDevice(phone.keys).then(
+        () => 'unexpected-success',
+        (error: unknown) =>
+          error instanceof EncryptionFlowError ? error.code : 'unexpected-error'
+      );
+      expect(result).toBe('grant-invalid');
+      expect(await phone.pins.readList(ALICE)).toEqual(before);
+      expect((await phone.keys.store.loadDevice(ALICE))?.approval?.id).toBe(
+        request.approval.id
+      );
+      expect(
+        (await phone.keys.api.getApproval(request.approval.id)).grant
+      ).not.toBeNull();
+    }
+    const after = await loadContacts(
+      phone.contacts,
+      ready(await loadEncryption(phone.keys))
+    );
+    expect(after.listConfirmed).toBe(false);
+    expect(
+      verifiedEncryptionKey(await inspectContact(phone.contacts, after, BOB))
+    ).toBeNull();
+  });
+
   it('reports a local comparison superseded by another contact-pin advance', async () => {
     const { srv, alice, bob } = await aliceVerifiedBob();
     const phone = browser(srv, ALICE);

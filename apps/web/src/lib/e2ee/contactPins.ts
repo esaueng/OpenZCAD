@@ -111,7 +111,8 @@ export interface ContactPinStore {
    * With `fromApproval` (a head an approving device signed) a browser with
    * no pin under this identity adopts the head; otherwise the pin never
    * moves: the head is recorded as `pendingApproval` (or, when it equals
-   * the pin or is the empty list, its confirmation applies at once), and a
+   * the pin, its confirmation applies at once). An empty head cannot
+   * confirm a nonempty pin, and a
    * head at the pin's sequence with another hash is refused.
    */
   advanceList(
@@ -264,10 +265,17 @@ export function advancedListPin(
     return withPending(valid, valid.confirmed, null);
   }
   if (options.fromApproval) {
+    // An empty approver supplies no authenticated entry in this browser's
+    // nonempty chain. It cannot promote that chain's trust.
+    if (
+      valid.sequence === EMPTY_CONTACTS_SEQUENCE &&
+      current.sequence !== EMPTY_CONTACTS_SEQUENCE
+    )
+      return null;
     // A grant never discards this browser's pin, whichever side is newer:
     // a server can show an unconfirmed approver a longer fork, or a stale
     // one an older head. It confirms at once only what needs no list: the
-    // pin itself, or an approver that saw the list only empty.
+    // pin itself, including when both devices saw only the empty list.
     if (
       valid.sequence === EMPTY_CONTACTS_SEQUENCE ||
       (valid.sequence === current.sequence &&

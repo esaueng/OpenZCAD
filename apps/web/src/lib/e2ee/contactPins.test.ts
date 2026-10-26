@@ -34,6 +34,59 @@ const seen = (overrides: Partial<ContactPin> = {}): ContactPin => ({
 });
 
 describe('contact pins', () => {
+  it('does not confirm a nonempty pin from an empty approval', async () => {
+    const { EMPTY_CONTACTS_SEQUENCE, EMPTY_CONTACTS_HASH } =
+      await import('./contactPins');
+    for (const [name, pins] of await stores()) {
+      for (const sequence of [0, 3])
+        for (const confirmed of [false, true]) {
+          const user = `empty-${sequence}-${confirmed}`;
+          const current = {
+            identityKeyHash: H('a'),
+            sequence,
+            entryHash: H('3'),
+            confirmed: false
+          };
+          await pins.advanceList(user, current);
+          await pins.advanceList(
+            user,
+            { ...current, sequence: 5, entryHash: H('5'), confirmed: true },
+            { fromApproval: true }
+          );
+          const before = await pins.readList(user);
+          const empty = {
+            ...current,
+            sequence: EMPTY_CONTACTS_SEQUENCE,
+            entryHash: EMPTY_CONTACTS_HASH,
+            confirmed
+          };
+          expect(
+            await pins.advanceList(user, empty, { fromApproval: true }),
+            name
+          ).toBe(false);
+          expect(await pins.readList(user), name).toEqual(before);
+        }
+      const empty = {
+        identityKeyHash: H('a'),
+        sequence: EMPTY_CONTACTS_SEQUENCE,
+        entryHash: EMPTY_CONTACTS_HASH,
+        confirmed: true
+      };
+      expect(
+        await pins.advanceList('fresh-empty', empty, { fromApproval: true }),
+        name
+      ).toBe(true);
+      await pins.advanceList('matching-empty', { ...empty, confirmed: false });
+      expect(
+        await pins.advanceList('matching-empty', empty, { fromApproval: true }),
+        name
+      ).toBe(true);
+      expect((await pins.readList('matching-empty'))?.confirmed, name).toBe(
+        true
+      );
+    }
+  });
+
   it('fences contact identity replacements to the checked own-list snapshot', async () => {
     for (const [name, pins] of await stores()) {
       const anchor = {
@@ -507,10 +560,10 @@ describe('contact pins', () => {
           { fromApproval: true }
         ),
         name
-      ).toBe(true);
+      ).toBe(false);
       expect(await pins.readList('pk3'), name).toEqual({
         ...passkey,
-        confirmed: true
+        confirmed: false
       });
       // A browser with no pin adopts the head; an unconfirmed approver's
       // head stays unconfirmed.
