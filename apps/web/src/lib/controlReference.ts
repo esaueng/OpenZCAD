@@ -292,7 +292,8 @@ export const KEYBOARD_CONTROL_GROUPS = [
         id: 'delete-selection',
         keys: ['Delete', 'Backspace'],
         action: 'Delete the current selection',
-        detail: 'Deletes a selected feature or sketch entity when supported.'
+        detail:
+          'Deletes the selected History feature, the feature that defines a picked face or edge, or a sketch entity.'
       },
       {
         id: 'escape-ladder',

@@ -337,11 +337,11 @@ async function readBody(request: Request): Promise<Record<string, unknown>> {
   }
 }
 
-/** Tells the project's room to lock or purge; true when there is none. */
+/** Tells the project's room to purge; true when there is none. */
 async function tellRoom(
   env: MigrationEnv,
   projectId: string,
-  action: 'lock' | 'purge'
+  action: 'purge'
 ): Promise<boolean> {
   const rooms = env.PROJECT_ROOM as RoomNamespace | undefined;
   if (!rooms || typeof rooms.getByName !== 'function') return true;
@@ -399,6 +399,40 @@ async function withdrawLease(
       .bind(now, nowIso, projectId, leaseId)
   );
   await runBatch(db, statements);
+}
+
+/**
+ * Locks the project's room and answers the plaintext version it holds:
+ * null when there is no room or it holds none. A room that does not
+ * confirm the lock throws, so no lease leaves on its silence.
+ */
+async function lockRoom(
+  env: MigrationEnv,
+  projectId: string
+): Promise<number | null> {
+  const rooms = env.PROJECT_ROOM as RoomNamespace | undefined;
+  if (!rooms || typeof rooms.getByName !== 'function') return null;
+  const url = new URL('https://project-room.internal/_internal/migration');
+  url.searchParams.set('projectId', projectId);
+  const response = await rooms.getByName(projectId).fetch(
+    new Request(url, {
+      method: 'POST',
+      headers: {
+        'x-openzcad-internal-migration': 'v1',
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({ action: 'lock' })
+    })
+  );
+  if (!response.ok) throw new Error(`Room lock answered ${response.status}`);
+  if (response.status !== 200) return null;
+  const answer = (await response.json().catch(() => null)) as {
+    latestVersion?: unknown;
+  } | null;
+  return typeof answer?.latestVersion === 'number' &&
+    Number.isSafeInteger(answer.latestVersion)
+    ? answer.latestVersion
+    : null;
 }
 
 const leaseLost = (): never =>
@@ -588,9 +622,10 @@ async function start(
   // that kept its sockets could persist plaintext edits only it holds,
   // which the purge then deletes: no lease leaves here unless the room
   // confirmed the lock (#914 review).
-  let locked: boolean;
+  let locked = true;
+  let roomVersion: number | null = null;
   try {
-    locked = await tellRoom(ctx.env, projectId, 'lock');
+    roomVersion = await lockRoom(ctx.env, projectId);
   } catch {
     locked = false;
   }
@@ -609,6 +644,33 @@ async function start(
       503,
       'PROJECT_ROOM_UNAVAILABLE',
       'The project’s room could not be locked right now. Try again.'
+    );
+  }
+  // Slice 7-2: a room holding edits no checkpoint saved yet (its version
+  // is ahead of the account's head) would lose them to the purge. A fresh
+  // start stages nothing then: it is undone at once, and the owner saves
+  // the project first. A resumed staging locked the room when it began.
+  if (
+    existing?.state !== 'staging' &&
+    roomVersion !== null &&
+    roomVersion > project.document_version
+  ) {
+    await runBatch(ctx.db, [
+      ctx.db
+        .prepare(
+          `UPDATE e2ee_project_migrations
+           SET state = 'abandoned', device_id = NULL, lease_id = NULL,
+               lease_expires_at = NULL, updated_at = ?, finished_at = ?
+           WHERE project_id = ? AND state = 'staging' AND lease_id = ?
+             AND staged_version = 0`
+        )
+        .bind(nowIso, nowIso, projectId, leaseId)
+    ]);
+    refuse(
+      409,
+      E2EE_MIGRATION_CODES.roomAhead,
+      'This project has edits from a live session that your account has not saved yet. Open it and save it, then try again.',
+      { roomVersion, accountVersion: project.document_version }
     );
   }
   return json(

@@ -73,9 +73,13 @@ for (const directManipulation of [true, false]) {
     });
     if (directManipulation) await expect(operation).toBeVisible();
     else await expect(operation).toHaveCount(0);
-    // An inferred feature is never deleted from a pick.
+    // Delete removes the feature that defines the picked face, and Undo
+    // brings it back.
     await page.keyboard.press('Delete');
-    await page.keyboard.press('Backspace');
+    await expect(page.locator('.feature-row')).toHaveCount(0);
+    const toast = page.locator('.toast');
+    await expect(toast).toContainText(`Deleted ${featureName}`);
+    await toast.getByRole('button', { name: 'Undo' }).click();
     await expect(page.locator('.feature-row')).toHaveCount(1);
 
     // The feature's details and form open from its History row.

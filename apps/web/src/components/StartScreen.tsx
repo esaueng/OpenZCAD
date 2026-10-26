@@ -51,6 +51,7 @@ import {
   projectNeedsUpdate
 } from '../lib/projectShelf';
 import { syncRunTotals, type SyncEntry } from '../lib/syncRun';
+import { useMigratingProjects } from '../lib/migrationStatus';
 import type { DemoDefinition } from '../lib/demoDefinitions';
 import { BrandMark } from './BrandMark';
 import { DemoModelIcon } from './DemoModelIcon';
@@ -404,6 +405,7 @@ export function StartScreen({
         )
       : [];
 
+  const migratingProjectIds = useMigratingProjects();
   const syncEntryById = new Map(
     (syncRun ?? []).map((entry) => [entry.projectId, entry] as const)
   );
@@ -608,6 +610,8 @@ export function StartScreen({
     // An encrypted project this build opens (ADR-024 Phase 4); it is
     // duplicated in the browser like any other (slice 4-8).
     const encrypted = project.storageFormat === 2;
+    // Being encrypted in this tab (ADR-024 Phase 7): read-only meanwhile.
+    const migrating = migratingProjectIds.has(project.projectId);
 
     const preview = (
       <>
@@ -717,6 +721,17 @@ export function StartScreen({
                 <CloudOff size={12} aria-hidden="true" />
               </span>
             )
+          )}
+          {migrating && !encrypted && (
+            <span
+              className="start-tile-badge is-locked"
+              role="img"
+              aria-label="Encrypting"
+              title="Being end-to-end encrypted. It opens read-only until that finishes."
+            >
+              <Lock size={12} aria-hidden="true" />
+              <span className="start-tile-badge-text">Encrypting</span>
+            </span>
           )}
           {(locked || encrypted) && (
             <span
