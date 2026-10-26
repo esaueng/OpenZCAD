@@ -60,7 +60,10 @@
  *   quota exemption.
  * - The purge clears the room's encrypted ledger, then drops the groups,
  *   versions, envelopes, blobs and their R2 objects, wraps and archives a
- *   bounded step at a time, as an abandoned encrypt staging's cleanup does.
+ *   bounded step at a time, as an abandoned encrypt staging's cleanup does,
+ *   and last any staged head document the cutover left unreferenced. (A
+ *   resumed staging reuses a head equal to the journaled one rather than
+ *   staging another, `e2eeReverseStaging.ts`.)
  * - An abandon drops the staged plaintext the same way.
  *
  * Served by `handleE2eeRequest` after the key rollout gate, key-table
@@ -1680,8 +1683,12 @@ const DECRYPT_PURGING_FENCE = `EXISTS (SELECT 1 FROM e2ee_project_migrations dpm
   WHERE dpm.project_id = ? AND dpm.direction = 'decrypt'
     AND dpm.state = 'purging' AND dpp.storage_format = 1)`;
 
-/** The purge steps of a project turned back into plaintext, in order. */
-const DECRYPT_PURGE_STEPS = ['room', 'encrypted'] as const;
+/**
+ * The purge steps of a project turned back into plaintext, in order: the
+ * room's encrypted ledger, the encrypted rows and objects, then any staged
+ * plaintext document object the cutover left unreferenced.
+ */
+const DECRYPT_PURGE_STEPS = ['room', 'encrypted', 'superseded'] as const;
 type DecryptPurgeStep = (typeof DECRYPT_PURGE_STEPS)[number];
 
 /** Retained encrypted save states without a staged plaintext one. */
@@ -2352,12 +2359,82 @@ async function dropStagedPlaintext(
   return { complete: true, objects };
 }
 
+/**
+ * A document object of a decrypted project (as `o`) that a staging wrote and
+ * the cutover left unreferenced: a head staged before a newer one replaced
+ * it. Neither the project row nor a save state names it, and it predates
+ * the cutover, so no plaintext save made since is touched. No binds.
+ */
+const SUPERSEDED_STAGED_OBJECT_SQL = `NOT EXISTS (
+    SELECT 1 FROM projects sp WHERE sp.document_object_id = o.id)
+  AND NOT EXISTS (
+    SELECT 1 FROM revisions sr WHERE sr.document_object_id = o.id)
+  AND o.created_at <= (SELECT sm.cutover_at FROM e2ee_project_migrations sm
+                       WHERE sm.project_id = o.project_id)`;
+
+/**
+ * One bounded step of dropping a decrypted project's superseded staged
+ * document objects (`SUPERSEDED_STAGED_OBJECT_SQL`), which would otherwise
+ * count toward the owner's project storage with nothing reading them:
+ * their R2 objects first (one another project names is kept), then rows.
+ */
+async function dropSupersededStagedObjects(
+  db: D1Database,
+  env: MigrationEnv,
+  projectId: string
+): Promise<StepOutcome> {
+  const { results } = await db
+    .prepare(
+      `SELECT o.id, o.object_key FROM project_document_objects o
+       WHERE o.project_id = ? AND ${SUPERSEDED_STAGED_OBJECT_SQL}
+       ORDER BY o.id LIMIT ?`
+    )
+    .bind(projectId, MIGRATION_STEP_OBJECTS + 1)
+    .all<{ id: string; object_key: string }>();
+  const rows = (results ?? []).slice(0, MIGRATION_STEP_OBJECTS);
+  if (rows.length === 0) return { more: false, rows: 0, objects: 0 };
+  const bucket = projectStorageBucket(env);
+  if (!bucket) {
+    refuse(
+      503,
+      'PROJECT_STORAGE_UNAVAILABLE',
+      'Project storage is unavailable.'
+    );
+  }
+  const shared = await keysInUseElsewhere(
+    db,
+    projectId,
+    rows.map((row) => row.object_key)
+  );
+  const owned = rows.filter((row) => !shared.has(row.object_key));
+  // Objects first: a failed delete keeps the rows, so a retry finds them.
+  await Promise.all(owned.map((row) => bucket.delete(row.object_key)));
+  await runBatch(db, [
+    db
+      .prepare(
+        `DELETE FROM project_document_objects AS o
+         WHERE o.project_id = ? AND o.id IN (SELECT value FROM json_each(?))
+           AND ${SUPERSEDED_STAGED_OBJECT_SQL}
+           AND ${DECRYPT_PURGING_FENCE}`
+      )
+      .bind(projectId, JSON.stringify(rows.map((row) => row.id)), projectId)
+  ]);
+  return {
+    more: (results ?? []).length > MIGRATION_STEP_OBJECTS,
+    rows: rows.length,
+    objects: owned.length
+  };
+}
+
 async function decryptPurgeStep(
   db: D1Database,
   env: MigrationEnv,
   projectId: string,
   step: DecryptPurgeStep
 ): Promise<StepOutcome> {
+  if (step === 'superseded') {
+    return dropSupersededStagedObjects(db, env, projectId);
+  }
   if (step === 'room') {
     let cleared: boolean;
     try {

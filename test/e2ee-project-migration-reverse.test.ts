@@ -1456,12 +1456,137 @@ describe('the owner’s limits at the cutover', () => {
     });
     expect(formatOf(srv, projectId)).toBe(2);
     expect(migrationRow(srv, projectId)).toMatchObject({ state: 'staging' });
-    // With room again, a retry resumes and cuts over.
-    setLimit(srv, 'project_storage_limit_bytes', 2147483648);
+    // With exactly enough room, a retry resumes (reusing the staged head,
+    // so it needs no more) and cuts over.
+    setLimit(srv, 'project_storage_limit_bytes', storedBytesOf(srv));
     await decryptFully(desktop, projectId);
     expect(formatOf(srv, projectId)).toBe(1);
     expect(migrationRow(srv, projectId)).toMatchObject({ state: 'done' });
     expectNoCiphertext(srv, projectId);
+  });
+});
+
+// --- Staged heads ----------------------------------------------------------------------
+
+/** The project's document objects: their ids, keys, and which rows name them. */
+function documentObjectsOf(srv: Server, projectId: string) {
+  return rows<{ id: string; object_key: string; named: number }>(
+    srv,
+    `SELECT o.id, o.object_key,
+            (EXISTS (SELECT 1 FROM projects p WHERE p.document_object_id = o.id)
+             OR EXISTS (SELECT 1 FROM revisions r
+                        WHERE r.document_object_id = o.id)) AS named
+     FROM project_document_objects o WHERE o.project_id = ? ORDER BY o.id`,
+    projectId
+  );
+}
+
+/** Every document object of the project is named, and R2 holds just those. */
+function expectOnlyReferencedDocuments(
+  srv: Server,
+  projectId: string,
+  revisions: number
+) {
+  const objects = documentObjectsOf(srv, projectId);
+  expect(objects.filter((o) => !o.named)).toEqual([]);
+  // One per save state, and the head.
+  expect(objects).toHaveLength(revisions + 1);
+  const prefix = `project-storage/${projectId}/documents/`;
+  expect(
+    [...srv.bucket.objects.keys()].filter((key) => key.startsWith(prefix)).sort()
+  ).toEqual(objects.map((o) => o.object_key).sort());
+}
+
+describe('staged heads', () => {
+  it('reuses the staged head on a resume, so the cutover leaves no second head behind', async () => {
+    const srv = roomServer();
+    const encrypted = await encryptedProject(srv, { revisions: 2 });
+    const { projectId } = encrypted;
+    const leases = memoryLeaseStore();
+    // The tab closes after the head is staged, before the cutover.
+    const first = reverseOn(srv, owner, 'owner_desktop', {
+      leases,
+      beforeStep: (step) => {
+        if (step === 'info') throw new Error('The tab was closed.');
+      }
+    });
+    await expect(decryptFully(first, projectId)).rejects.toThrow('closed');
+    const journaled = migrationRow(srv, projectId)!;
+    expect(journaled).toMatchObject({ state: 'staging' });
+    expect(journaled.staged_version).toBeGreaterThan(0);
+    expect(documentObjectsOf(srv, projectId)).toHaveLength(3);
+
+    // Reloaded: the resume stages the same head, which answers from the
+    // journal instead of storing another object.
+    let atCutover = -1;
+    const second = reverseOn(srv, owner, 'owner_desktop', {
+      from: first.d,
+      leases,
+      beforeStep: (step) => {
+        if (step === 'cutover') {
+          atCutover = documentObjectsOf(srv, projectId).length;
+        }
+      }
+    });
+    await decryptFully(second, projectId);
+    expect(atCutover).toBe(3);
+    expect(migrationRow(srv, projectId)).toMatchObject({
+      state: 'done',
+      staged_hash: journaled.staged_hash
+    });
+    expectOnlyReferencedDocuments(srv, projectId, 2);
+    // What counts toward the owner's storage is what the project names.
+    const named = rows<{ bytes: number }>(
+      srv,
+      `SELECT COALESCE(SUM(stored_bytes), 0) AS bytes
+       FROM project_document_objects WHERE project_id = ?`,
+      projectId
+    )[0]!.bytes;
+    const assets = rows<{ bytes: number }>(
+      srv,
+      `SELECT COALESCE(SUM(stored_bytes), 0) AS bytes
+       FROM project_storage_assets WHERE project_id = ?`,
+      projectId
+    )[0]!.bytes;
+    expect(storedBytesOf(srv)).toBe(named + assets);
+    expectNoCiphertext(srv, projectId);
+    await expectOpensAsPlaintext(srv, encrypted);
+  });
+
+  it('drops a superseded staged head in the purge', async () => {
+    const srv = roomServer();
+    const encrypted = await encryptedProject(srv, { revisions: 1 });
+    const { projectId } = encrypted;
+    let decoyed = false;
+    const desktop: ReverseDevice = reverseOn(srv, owner, 'owner_desktop', {
+      beforeStep: async (step) => {
+        if (step === 'head' && !decoyed) {
+          decoyed = true;
+          // Another head at the same version, then the engine's own: the
+          // first is superseded, and nothing names it after the cutover.
+          const row = migrationRow(srv, projectId)!;
+          await createMigrationPlaintextTarget(
+            withMigrationLease(desktop.d.fetcher, row.lease_id as string)
+          ).stageHead(projectId, {
+            ...initialDocument('Decoy head'),
+            projectId: projectId as ProjectDocument['projectId'],
+            version: (row.source_version as number) + 1
+          });
+        }
+        if (step === 'purge') {
+          // Cut over: the decoy is still there, unreferenced.
+          expect(
+            documentObjectsOf(srv, projectId).filter((o) => !o.named)
+          ).toHaveLength(1);
+        }
+      }
+    });
+    await decryptFully(desktop, projectId);
+    expect(decoyed).toBe(true);
+    expect(migrationRow(srv, projectId)).toMatchObject({ state: 'done' });
+    expectOnlyReferencedDocuments(srv, projectId, 1);
+    const opened = await expectOpensAsPlaintext(srv, encrypted);
+    expect(opened.name).toBe('Secret bracket');
   });
 });
 

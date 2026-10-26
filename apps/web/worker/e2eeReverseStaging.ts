@@ -192,7 +192,12 @@ export async function stageDecryptedRevision(
   return payload.document;
 }
 
-/** `PUT /api/projects/:id/document` under a decrypt lease: the head. */
+/**
+ * `PUT /api/projects/:id/document` under a decrypt lease: the head. A
+ * resumed run that stages the head it already staged (the same version
+ * and object checksum the migration row journals) reuses that object, so
+ * no unreferenced copy is left beside it.
+ */
 export async function stageDecryptedHead(
   persistence: PersistenceService,
   db: D1Database,
@@ -201,11 +206,26 @@ export async function stageDecryptedHead(
   storage: ClientProjectStorage | undefined,
   staging: DecryptStaging
 ): Promise<SaveProjectDocumentResponse> {
+  const journal = await db
+    .prepare(
+      `SELECT staged_version, staged_hash FROM e2ee_project_migrations
+       WHERE project_id = ? AND direction = 'decrypt' AND state = 'staging'`
+    )
+    .bind(staging.projectId)
+    .first<{ staged_version: number; staged_hash: string | null }>();
+  const journaledHead =
+    journal?.staged_hash && journal.staged_version > 0
+      ? {
+          version: journal.staged_version,
+          checksumSha256: journal.staged_hash
+        }
+      : undefined;
   const stored = await translated(() =>
     stagingService(persistence).stageDecryptedDocument(userId, {
       projectId: staging.projectId,
       document: payload.document,
       ...(storage ? { storage } : {}),
+      ...(journaledHead ? { journaledHead } : {}),
       fence: staging.fence
     })
   );

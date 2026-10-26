@@ -3500,8 +3500,11 @@ export class D1R2PersistenceService implements PersistenceService {
    * (`fence`): its R2 object and storage assets, and with `revision` the
    * save state's row under its own id. The project row is not touched; the
    * cutover points it at the staged head. Staged bytes count toward no
-   * quota until then (migration 0043), so no capacity check runs. A save
-   * state already staged under its id answers as staged.
+   * quota until then (migration 0043), so no capacity check runs; the
+   * cutover checks the owner's limits. A save state already staged under
+   * its id answers as staged, and so does a head equal to the journaled
+   * one (`journaledHead`: the same version and object checksum), which the
+   * caller still records under the lease.
    */
   async stageDecryptedDocument(
     userId: UserId,
@@ -3510,6 +3513,8 @@ export class D1R2PersistenceService implements PersistenceService {
       document: ProjectDocument;
       storage?: ClientProjectStorage;
       revision?: { revisionId: string; reason: string };
+      /** The head the migration row journals, if any. */
+      journaledHead?: { version: number; checksumSha256: string };
       fence: DecryptStagingFence;
     }
   ): Promise<{
@@ -3576,6 +3581,31 @@ export class D1R2PersistenceService implements PersistenceService {
       }
     }
     this.assertCloudDocumentWithinCeiling(document);
+    const journaled = input.journaledHead;
+    if (!revision && journaled && journaled.version === document.version) {
+      // A resumed run stages the same head again: the journal's object
+      // answers for it, and no second object is left beside it.
+      const prepared = input.storage
+        ? await prepareClientProjectStorageSnapshot(document, input.storage)
+        : await prepareProjectStorageSnapshot(document);
+      if (prepared.checksumSha256 === journaled.checksumSha256) {
+        const existing = await this.env.DB.prepare(
+          `SELECT id FROM project_document_objects
+           WHERE project_id = ? AND checksum_sha256 = ? AND state = 'committed'
+           ORDER BY created_at DESC, id DESC LIMIT 1`
+        )
+          .bind(input.projectId, journaled.checksumSha256)
+          .first<{ id: string }>();
+        if (existing) {
+          return {
+            objectId: existing.id,
+            checksumSha256: journaled.checksumSha256,
+            version: document.version,
+            staged: true
+          };
+        }
+      }
+    }
     const write = await this.putProjectStorageObjects(document, {
       ...(input.storage ? { storage: input.storage } : {}),
       stagedForDecryption: true
