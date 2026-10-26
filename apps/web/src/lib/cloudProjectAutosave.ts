@@ -4,6 +4,7 @@ import {
   documentStructureError,
   MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
   persistedDocumentBytes,
+  PROJECT_MIGRATING_CODE,
   type ProjectDocument,
   type SaveProjectDocumentResponse
 } from '@openzcad/shared';
@@ -708,6 +709,21 @@ export class CloudProjectAutosave {
       if (this.#pending && this.#pending.editEpoch > next.editEpoch) {
         this.schedule(this.#pending.document);
       }
+      return { state: 'halted' };
+    }
+
+    // The project is being moved to encrypted storage (ADR-024 Phase 7): its
+    // plaintext takes no writes until that finishes or is cancelled, and no
+    // copy diverged, so this is no conflict to resolve. The edit stays queued
+    // on the device; the workspace locks editing (`onStatus`).
+    if (
+      status === 409 &&
+      error instanceof ApiError &&
+      error.code === PROJECT_MIGRATING_CODE
+    ) {
+      this.#requeue(next);
+      this.#halted = 'refused';
+      this.#emit('refused', error);
       return { state: 'halted' };
     }
 

@@ -1,0 +1,1480 @@
+/**
+ * Share links of end-to-end encrypted projects (ADR-024 Phase 5, slice
+ * 5-10; roadmap L11; migration 0040), under `/api/e2ee/projects/:id/
+ * share-links…`, `/api/e2ee/share-delegation` and the anonymous
+ * `GET /api/e2ee/share/:token`.
+ *
+ * Which links are active is project state, inside the encrypted, signed
+ * document (owner-signed grants and permanent tombstones): the Worker keeps
+ * what serving a link needs and cannot add one back. It stores, per link,
+ * the hash of its capability token, the share key wrapped under each key
+ * epoch's project key, the newest share-authority statement and the newest
+ * snapshot; per account, the newest identity-signed share delegation.
+ *
+ * It still checks what it can, as defense in depth: the owner registers
+ * and states links and forgets them (signed by a device the owner's newest
+ * device list certifies over the link and the current key epoch, fenced on
+ * that list's head); the owner and editors post key wraps (for the
+ * group's current key epoch only, signed by a device the caller's newest
+ * device list certifies and fenced on that list's head; the first stored
+ * wins) and snapshots (a
+ * share-snapshot envelope of this project under the current key epoch,
+ * signed by a device the caller's newest device list certifies, never
+ * older than the link's stored snapshot nor newer than the project's
+ * head); a delegation verifies under the account's current identity key,
+ * is valid now and names only devices that list certifies; a statement
+ * verifies against the owner's stored delegation, names the link, its key
+ * hash and owner fingerprint, is valid now and raises the link's sequence.
+ * Browsers and visitors verify all of it themselves.
+ *
+ * The anonymous route serves a link's snapshot envelope with everything a
+ * visitor checks it with (`verifySharedSnapshot`): the statement, the
+ * owner's delegation, the author's signing key and the owner's identity
+ * key. It reads only these tables and format-2 projects, so it can never
+ * serve a plaintext project, and answers every other case (unknown or
+ * revoked token, nothing published yet, a trashed project, the owner's
+ * sharing switched off, the flags or the migration missing) with one
+ * opaque 404. The plaintext `/api/share/:token` route is untouched and
+ * keeps refusing format 2.
+ *
+ * Served by `handleE2eeRequest` after the key rollout gate and, for writes,
+ * the session/erasure write authorization; here: E2EE_PROJECTS_ENABLED,
+ * migrations 0031, 0032 and 0040 (503 without them), format-2 projects
+ * only. Creating a link also needs the sharing rollout.
+ */
+import {
+  MAX_SHARE_AUTHORITY_BYTES,
+  MAX_SHARE_DELEGATION_BYTES,
+  ShareLinkError,
+  decodeShareDelegation,
+  decodeDeviceListEntry,
+  fromBase64Url,
+  parseEnvelope,
+  publicKeyHash,
+  toBase64Url,
+  toHex,
+  verifyProjectEnvelopeSignature,
+  verifyShareAuthority,
+  verifyShareDelegation,
+  verifyShareKeyWrap,
+  verifyShareLinkForget,
+  versionHash,
+  type ShareDelegation
+} from '@openzcad/crypto';
+import {
+  MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
+  decodeE2eeFrame,
+  encodeE2eeFrame,
+  E2EE_FRAME_CONTENT_TYPE,
+  shareSnapshotVersionId,
+  type E2eeShareAuthorityRecord,
+  type E2eeShareDelegationRecord,
+  type E2eeShareDelegationResponse,
+  type E2eeShareKeyResponse,
+  type E2eeShareLinkMode,
+  type E2eeShareLinkRecord,
+  type E2eeShareLinkResponse,
+  type E2eeShareLinksResponse,
+  type E2eeSharedSnapshotMetadata
+} from '@openzcad/shared';
+import {
+  isE2eeProjectGroupStorageReady,
+  isE2eeShareLinkStorageReady,
+  isProjectStorageFormatReady
+} from '@openzcad/cloudflare-adapters';
+import {
+  PROJECT_FENCE,
+  RouteError,
+  WRITER_FENCE,
+  bytesField,
+  deviceListMoved,
+  deviceListUnchanged,
+  fenceBinds,
+  idField,
+  invalid,
+  json,
+  record,
+  refuse,
+  refuseDeviceListMoved,
+  requireCertifiedDevice,
+  requireCertifiedSigner,
+  requireEncryptedProjectAccess,
+  requireOwnedEncryptedProject,
+  runBatch,
+  uintField,
+  type Authorization
+} from './e2eeProjects';
+
+const LINKS_ROUTE =
+  /^\/api\/e2ee\/projects\/([^/]+)\/share-links(?:\/([^/]+)(?:\/(keys|authority|snapshot))?)?$/;
+const DELEGATION_ROUTE = '/api/e2ee/share-delegation';
+const SHARED_ROUTE = /^\/api\/e2ee\/share\/([^/]+)$/;
+
+/** The owner-side share-link routes and the delegation route. */
+export function isE2eeShareLinkPath(pathname: string): boolean {
+  return pathname === DELEGATION_ROUTE || LINKS_ROUTE.test(pathname);
+}
+
+/** The anonymous encrypted share route. */
+export function isEncryptedSharedSnapshotPath(pathname: string): boolean {
+  return SHARED_ROUTE.test(pathname);
+}
+
+const WRAP_BYTES = 41;
+const HASH_BYTES = 32;
+const STATEMENT_SIGNATURE_BYTES = 65;
+const VERSION_SIGNATURE_BYTES = 73;
+const MAX_JSON_BODY_CHARS = 200_000;
+const MAX_FRAME_METADATA_BYTES = 64 * 1024;
+/** A snapshot envelope: the document ceiling plus framing (judgment). */
+const MAX_SNAPSHOT_ENVELOPE_BYTES =
+  MAX_CLOUD_PROJECT_DOCUMENT_BYTES + 512 * 1024;
+/** Bodies up to this size stay inline in D1, as versions do. */
+const INLINE_SNAPSHOT_BYTES = 256 * 1024;
+/** Without an R2 bucket, the most a snapshot may be inline. */
+const INLINE_SNAPSHOT_LIMIT = 1024 * 1024;
+/** Live links per project (judgment; each holds one snapshot). */
+export const MAX_LIVE_SHARE_LINKS = 50;
+const TOKEN_HASH = /^[0-9a-f]{64}$/;
+const TOKEN = /^[A-Za-z0-9_-]{43}$/;
+
+/** What `handleE2eeShareLinkRequest` needs of the R2 project bucket. */
+export interface ShareSnapshotBucket {
+  put(key: string, body: ArrayBuffer | Uint8Array): Promise<unknown>;
+  get(key: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>;
+  delete(key: string): Promise<void>;
+}
+
+interface Context {
+  db: D1Database;
+  bucket: ShareSnapshotBucket | null;
+  userId: string;
+  authorization: Authorization;
+}
+
+// --- Input -----------------------------------------------------------------
+
+async function readJson(request: Request): Promise<Record<string, unknown>> {
+  if (
+    Number(request.headers.get('content-length') ?? '0') > MAX_JSON_BODY_CHARS
+  ) {
+    refuse(413, 'E2EE_REQUEST_TOO_LARGE', 'Request body is too large.');
+  }
+  const text = await request.text();
+  if (text.length > MAX_JSON_BODY_CHARS) {
+    refuse(413, 'E2EE_REQUEST_TOO_LARGE', 'Request body is too large.');
+  }
+  try {
+    return record(JSON.parse(text), 'Body');
+  } catch (error) {
+    if (error instanceof RouteError) throw error;
+    invalid('Body must be JSON');
+  }
+}
+
+async function readFrame(
+  request: Request
+): Promise<{ metadata: Record<string, unknown>; payload: Uint8Array }> {
+  const max = 4 + MAX_FRAME_METADATA_BYTES + MAX_SNAPSHOT_ENVELOPE_BYTES;
+  const tooLarge = (): never =>
+    refuse(413, 'DOCUMENT_TOO_LARGE', 'This snapshot is too large to store.', {
+      limitBytes: MAX_CLOUD_PROJECT_DOCUMENT_BYTES
+    });
+  if (Number(request.headers.get('content-length') ?? '0') > max) tooLarge();
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (bytes.byteLength > max) tooLarge();
+  let frame: ReturnType<typeof decodeE2eeFrame>;
+  try {
+    frame = decodeE2eeFrame(bytes, MAX_FRAME_METADATA_BYTES);
+  } catch {
+    invalid('Body must be an encrypted-project frame');
+  }
+  if (frame.payload.byteLength > MAX_SNAPSHOT_ENVELOPE_BYTES) tooLarge();
+  if (frame.payload.byteLength === 0) invalid('The frame carries no envelope');
+  return {
+    metadata: record(frame.metadata, 'Frame metadata'),
+    payload: frame.payload
+  };
+}
+
+function modeField(value: unknown): E2eeShareLinkMode {
+  if (value !== 'view' && value !== 'tweak')
+    invalid('mode must be view or tweak');
+  return value;
+}
+
+function signedField(
+  body: Record<string, unknown>,
+  max: number
+): {
+  statement: Uint8Array;
+  signature: Uint8Array;
+  text: { statement: string; signature: string };
+} {
+  const statement = bytesField(body.statement, 'statement', { max });
+  const signature = bytesField(body.signature, 'signature', {
+    exact: STATEMENT_SIGNATURE_BYTES
+  });
+  return {
+    statement: statement.bytes,
+    signature: signature.bytes,
+    text: { statement: statement.text, signature: signature.text }
+  };
+}
+
+const b64 = toBase64Url;
+
+// --- Rows ------------------------------------------------------------------
+
+interface LinkRow {
+  share_id: string;
+  mode: E2eeShareLinkMode;
+  share_key_hash: string;
+  owner_identity_hash: string;
+  created_at: string;
+  revoked_at: string | null;
+  authority: string | null;
+  authority_signature: string | null;
+  authority_sequence: number | null;
+  authority_expires_at: number | null;
+}
+
+interface SnapshotRow {
+  share_id: string;
+  document_version: number;
+  key_epoch: number;
+  snapshot_hash: string;
+  envelope_inline: string | null;
+  envelope_key: string | null;
+  signature: string;
+  wrapped_for_link_visitors: string;
+  author_key: string;
+  signer_device_id: string;
+  updated_at: string;
+}
+
+interface DelegationRow {
+  generation: number;
+  sequence: number;
+  statement: string;
+  signature: string;
+  expires_at: number;
+}
+
+const LINK_COLUMNS = `share_id, mode, share_key_hash, owner_identity_hash,
+  created_at, revoked_at, authority, authority_signature, authority_sequence,
+  authority_expires_at`;
+
+const authorityOf = (row: LinkRow): E2eeShareAuthorityRecord | null =>
+  row.authority === null
+    ? null
+    : {
+        statement: row.authority,
+        signature: row.authority_signature!,
+        sequence: row.authority_sequence!,
+        expiresAt: row.authority_expires_at!
+      };
+
+const delegationOf = (
+  row: DelegationRow | null
+): E2eeShareDelegationRecord | null =>
+  row
+    ? {
+        statement: row.statement,
+        signature: row.signature,
+        sequence: row.sequence,
+        expiresAt: row.expires_at,
+        generation: row.generation
+      }
+    : null;
+
+async function linkRow(
+  db: D1Database,
+  projectId: string,
+  shareId: string
+): Promise<LinkRow | null> {
+  return db
+    .prepare(
+      `SELECT ${LINK_COLUMNS} FROM e2ee_share_links
+       WHERE project_id = ? AND share_id = ?`
+    )
+    .bind(projectId, shareId)
+    .first<LinkRow>();
+}
+
+async function liveLink(
+  db: D1Database,
+  projectId: string,
+  shareId: string
+): Promise<LinkRow> {
+  const row = await linkRow(db, projectId, shareId);
+  if (!row || row.revoked_at !== null) {
+    refuse(404, 'E2EE_SHARE_LINK_NOT_FOUND', 'This share link does not exist.');
+  }
+  return row;
+}
+
+async function linkRecords(
+  db: D1Database,
+  projectId: string,
+  only?: string
+): Promise<E2eeShareLinkRecord[]> {
+  const filter = only === undefined ? '' : ' AND share_id = ?';
+  const binds = only === undefined ? [projectId] : [projectId, only];
+  const links = await db
+    .prepare(
+      `SELECT ${LINK_COLUMNS} FROM e2ee_share_links
+       WHERE project_id = ? AND revoked_at IS NULL${filter}
+       ORDER BY created_at, share_id`
+    )
+    .bind(...binds)
+    .all<LinkRow>();
+  const keys = await db
+    .prepare(
+      `SELECT share_id, key_epoch, wrapped FROM e2ee_share_keys
+       WHERE project_id = ?${filter} ORDER BY share_id, key_epoch`
+    )
+    .bind(...binds)
+    .all<{ share_id: string; key_epoch: number; wrapped: string }>();
+  const snapshots = await db
+    .prepare(
+      `SELECT share_id, document_version, key_epoch, snapshot_hash,
+              signer_device_id, updated_at
+       FROM e2ee_share_snapshots WHERE project_id = ?${filter}`
+    )
+    .bind(...binds)
+    .all<SnapshotRow>();
+  return (links.results ?? []).map((row) => {
+    const snapshot = (snapshots.results ?? []).find(
+      (s) => s.share_id === row.share_id
+    );
+    return {
+      shareId: row.share_id,
+      mode: row.mode,
+      shareKeyHash: row.share_key_hash,
+      ownerIdentityHash: row.owner_identity_hash,
+      createdAt: row.created_at,
+      keys: (keys.results ?? [])
+        .filter((k) => k.share_id === row.share_id)
+        .map((k) => ({ keyEpoch: k.key_epoch, wrapped: k.wrapped })),
+      authority: authorityOf(row),
+      snapshot: snapshot
+        ? {
+            documentVersion: snapshot.document_version,
+            keyEpoch: snapshot.key_epoch,
+            snapshotHash: snapshot.snapshot_hash,
+            signerDeviceId: snapshot.signer_device_id,
+            updatedAt: snapshot.updated_at
+          }
+        : null
+    };
+  });
+}
+
+async function oneLink(
+  db: D1Database,
+  projectId: string,
+  shareId: string
+): Promise<E2eeShareLinkResponse> {
+  const [link] = await linkRecords(db, projectId, shareId);
+  if (!link) {
+    refuse(404, 'E2EE_SHARE_LINK_NOT_FOUND', 'This share link does not exist.');
+  }
+  return { link };
+}
+
+async function delegationRow(
+  db: D1Database,
+  userId: string
+): Promise<DelegationRow | null> {
+  return db
+    .prepare(
+      `SELECT generation, sequence, statement, signature, expires_at
+       FROM e2ee_share_delegations WHERE user_id = ?`
+    )
+    .bind(userId)
+    .first<DelegationRow>();
+}
+
+async function currentIdentity(
+  db: D1Database,
+  userId: string
+): Promise<{ generation: number; key: Uint8Array; hash: string } | null> {
+  const row = await db
+    .prepare(
+      `SELECT generation, identity_key FROM e2ee_identities
+       WHERE user_id = ? ORDER BY generation DESC LIMIT 1`
+    )
+    .bind(userId)
+    .first<{ generation: number; identity_key: string }>();
+  if (!row) return null;
+  const key = fromBase64Url(row.identity_key);
+  return {
+    generation: row.generation,
+    key,
+    hash: b64(await publicKeyHash(key))
+  };
+}
+
+async function currentKeyEpoch(
+  db: D1Database,
+  projectId: string
+): Promise<number> {
+  const row = await db
+    .prepare(
+      `SELECT key_epoch_base + epoch AS key_epoch FROM e2ee_project_groups
+       WHERE project_id = ?`
+    )
+    .bind(projectId)
+    .first<{ key_epoch: number }>();
+  if (!row) {
+    refuse(
+      404,
+      'E2EE_GROUP_NOT_FOUND',
+      'This encrypted project has no MLS group yet.'
+    );
+  }
+  return row.key_epoch;
+}
+
+const stale: (keyEpoch: number) => never = (keyEpoch) =>
+  refuse(
+    409,
+    'E2EE_EPOCH_STALE',
+    `The project is at key epoch ${keyEpoch}; catch up and try again.`,
+    { keyEpoch }
+  );
+
+const sessionRequired: () => never = () =>
+  refuse(
+    401,
+    'E2EE_SESSION_REQUIRED',
+    'Sign in again before changing encryption keys.'
+  );
+
+const changed = (result: { meta?: { changes?: number } } | undefined) =>
+  (result?.meta?.changes ?? 0) > 0;
+
+// --- Delegation --------------------------------------------------------------
+
+async function putDelegation(
+  ctx: Context,
+  body: Record<string, unknown>
+): Promise<Response> {
+  const signed = signedField(body, MAX_SHARE_DELEGATION_BYTES);
+  const identity = await currentIdentity(ctx.db, ctx.userId);
+  if (!identity) {
+    refuse(409, 'E2EE_IDENTITY_REQUIRED', 'Set up encryption first.');
+  }
+  let delegation: ShareDelegation;
+  try {
+    delegation = await verifyShareDelegation(
+      { statement: signed.statement, signature: signed.signature },
+      identity.key,
+      { now: Date.now() }
+    );
+  } catch (error) {
+    invalid(
+      error instanceof ShareLinkError
+        ? `The delegation does not verify (${error.reason})`
+        : 'The delegation is not a share delegation'
+    );
+  }
+  // Only devices the newest device list certifies may be delegated.
+  const head = await ctx.db
+    .prepare(
+      `SELECT entry FROM e2ee_device_list_entries
+       WHERE user_id = ? AND generation = ? ORDER BY sequence DESC LIMIT 1`
+    )
+    .bind(ctx.userId, identity.generation)
+    .first<{ entry: string }>();
+  let certified: Set<string>;
+  try {
+    certified = new Set(
+      head
+        ? decodeDeviceListEntry(fromBase64Url(head.entry)).devices.map(
+            (device) => b64(device.signingKey)
+          )
+        : []
+    );
+  } catch {
+    certified = new Set();
+  }
+  if (!delegation.deviceKeys.every((key) => certified.has(b64(key)))) {
+    invalid('A delegation names only devices your device list certifies');
+  }
+  const now = new Date().toISOString();
+  try {
+    const results = await runBatch(ctx.db, [
+      ctx.db
+        .prepare(
+          `INSERT INTO e2ee_share_delegations
+             (user_id, generation, sequence, statement, signature, expires_at,
+              updated_at)
+           SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${ctx.authorization.sql}
+           ON CONFLICT (user_id) DO UPDATE SET
+             generation = excluded.generation, sequence = excluded.sequence,
+             statement = excluded.statement, signature = excluded.signature,
+             expires_at = excluded.expires_at, updated_at = excluded.updated_at`
+        )
+        .bind(
+          ctx.userId,
+          identity.generation,
+          delegation.sequence,
+          signed.text.statement,
+          signed.text.signature,
+          delegation.expiresAt,
+          now,
+          ...ctx.authorization.binds
+        )
+    ]);
+    if (!changed(results[0])) sessionRequired();
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.includes('E2EE_SHARE_DELEGATION_STALE')
+    ) {
+      refuse(
+        409,
+        'E2EE_SHARE_DELEGATION_STALE',
+        'A newer share delegation is already stored. Reload and try again.'
+      );
+    }
+    throw error;
+  }
+  return json({
+    delegation: delegationOf(await delegationRow(ctx.db, ctx.userId))
+  } satisfies E2eeShareDelegationResponse);
+}
+
+// --- Links -------------------------------------------------------------------
+
+async function createLink(
+  ctx: Context,
+  projectId: string,
+  body: Record<string, unknown>
+): Promise<Response> {
+  const shareId = idField(body.shareId, 'shareId');
+  if (typeof body.tokenHash !== 'string' || !TOKEN_HASH.test(body.tokenHash)) {
+    invalid('tokenHash must be a lowercase hex SHA-256');
+  }
+  const tokenHash = body.tokenHash;
+  const mode = modeField(body.mode);
+  const shareKeyHash = bytesField(body.shareKeyHash, 'shareKeyHash', {
+    exact: HASH_BYTES
+  }).text;
+  const ownerIdentityHash = bytesField(
+    body.ownerIdentityHash,
+    'ownerIdentityHash',
+    { exact: HASH_BYTES }
+  ).text;
+  const key = record(body.key, 'key');
+  const keyEpoch = uintField(key.keyEpoch, 'key.keyEpoch');
+  const wrapped = bytesField(key.wrapped, 'key.wrapped', {
+    exact: WRAP_BYTES
+  }).text;
+  const identity = await currentIdentity(ctx.db, ctx.userId);
+  if (identity?.hash !== ownerIdentityHash) {
+    refuse(
+      409,
+      'E2EE_SHARE_OWNER_MISMATCH',
+      'The link names another identity than your current one. Reload and try again.'
+    );
+  }
+  const current = await currentKeyEpoch(ctx.db, projectId);
+  if (keyEpoch !== current) stale(current);
+  const live = await ctx.db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM e2ee_share_links
+       WHERE project_id = ? AND revoked_at IS NULL`
+    )
+    .bind(projectId)
+    .first<{ n: number }>();
+  if ((live?.n ?? 0) >= MAX_LIVE_SHARE_LINKS) {
+    refuse(
+      409,
+      'E2EE_SHARE_LINK_LIMIT',
+      `A project keeps at most ${MAX_LIVE_SHARE_LINKS} share links. Revoke one first.`
+    );
+  }
+  const now = new Date().toISOString();
+  const results = await runBatch(ctx.db, [
+    ctx.db
+      .prepare(
+        `INSERT INTO e2ee_share_links
+           (project_id, share_id, token_hash, mode, share_key_hash,
+            owner_identity_hash, created_by_user_id, created_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?
+         WHERE ${ctx.authorization.sql} AND ${PROJECT_FENCE}
+           AND EXISTS (SELECT 1 FROM e2ee_project_groups
+             WHERE project_id = ? AND key_epoch_base + epoch = ?)`
+      )
+      .bind(
+        projectId,
+        shareId,
+        tokenHash,
+        mode,
+        shareKeyHash,
+        ownerIdentityHash,
+        ctx.userId,
+        now,
+        ...ctx.authorization.binds,
+        projectId,
+        ctx.userId,
+        projectId,
+        keyEpoch
+      ),
+    ctx.db
+      .prepare(
+        `INSERT INTO e2ee_share_keys
+           (project_id, share_id, key_epoch, wrapped, created_by_user_id,
+            created_at)
+         SELECT ?, ?, ?, ?, ?, ? WHERE changes() = 1`
+      )
+      .bind(projectId, shareId, keyEpoch, wrapped, ctx.userId, now)
+  ]);
+  if (!changed(results[0]) || !changed(results[1])) {
+    const after = await currentKeyEpoch(ctx.db, projectId);
+    if (after !== keyEpoch) stale(after);
+    sessionRequired();
+  }
+  return json(await oneLink(ctx.db, projectId, shareId), 201);
+}
+
+async function forgetLink(
+  ctx: Context,
+  projectId: string,
+  shareId: string,
+  body: Record<string, unknown>
+): Promise<Response> {
+  const keyEpoch = uintField(body.keyEpoch, 'keyEpoch');
+  const deviceId = idField(body.deviceId, 'deviceId');
+  const signature = bytesField(body.signature, 'signature', {
+    exact: STATEMENT_SIGNATURE_BYTES
+  }).bytes;
+  const row = await linkRow(ctx.db, projectId, shareId);
+  if (!row) {
+    refuse(404, 'E2EE_SHARE_LINK_NOT_FOUND', 'This share link does not exist.');
+  }
+  if (row.revoked_at !== null) return json({ ok: true });
+  const current = await currentKeyEpoch(ctx.db, projectId);
+  if (keyEpoch !== current) stale(current);
+  // Forgetting is permanent and breaks every URL of the link, so the owner
+  // account is not enough: only a device the owner's newest device list
+  // certifies may ask, proven by its signature over this link and the
+  // current key epoch. An owner device removed while its session stays
+  // signed in cannot forget the links.
+  const device = await requireCertifiedDevice(ctx.db, ctx.userId, deviceId);
+  let verified: boolean;
+  try {
+    verified = await verifyShareLinkForget(
+      device.signingKey,
+      { projectId, shareId, keyEpoch },
+      signature
+    );
+  } catch {
+    verified = false;
+  }
+  if (!verified) {
+    refuse(
+      400,
+      'E2EE_SIGNATURE_INVALID',
+      'The forget request is not signed by the device it names.'
+    );
+  }
+  // ...and a removal of that device landing first makes the batch refuse.
+  const signerList = deviceListUnchanged(ctx.userId, device);
+  const snapshot = await ctx.db
+    .prepare(
+      `SELECT envelope_key FROM e2ee_share_snapshots
+       WHERE project_id = ? AND share_id = ?`
+    )
+    .bind(projectId, shareId)
+    .first<{ envelope_key: string | null }>();
+  const now = new Date().toISOString();
+  const results = await runBatch(ctx.db, [
+    ctx.db
+      .prepare(
+        `UPDATE e2ee_share_links
+         SET revoked_at = ?, authority = NULL, authority_signature = NULL,
+             authority_sequence = NULL, authority_expires_at = NULL
+         WHERE project_id = ? AND share_id = ? AND revoked_at IS NULL
+           AND ${ctx.authorization.sql} AND ${PROJECT_FENCE}
+           AND EXISTS (SELECT 1 FROM e2ee_project_groups
+             WHERE project_id = ? AND key_epoch_base + epoch = ?)
+           AND ${signerList.sql}`
+      )
+      .bind(
+        now,
+        projectId,
+        shareId,
+        ...ctx.authorization.binds,
+        projectId,
+        ctx.userId,
+        projectId,
+        keyEpoch,
+        ...signerList.binds
+      ),
+    ctx.db
+      .prepare(
+        `DELETE FROM e2ee_share_snapshots
+         WHERE project_id = ? AND share_id = ? AND EXISTS (
+           SELECT 1 FROM e2ee_share_links WHERE project_id = ? AND share_id = ?
+             AND revoked_at = ?)`
+      )
+      .bind(projectId, shareId, projectId, shareId, now),
+    ctx.db
+      .prepare(
+        `DELETE FROM e2ee_share_keys
+         WHERE project_id = ? AND share_id = ? AND EXISTS (
+           SELECT 1 FROM e2ee_share_links WHERE project_id = ? AND share_id = ?
+             AND revoked_at = ?)`
+      )
+      .bind(projectId, shareId, projectId, shareId, now)
+  ]);
+  if (!changed(results[0])) {
+    const after = await linkRow(ctx.db, projectId, shareId);
+    if (after?.revoked_at) return json({ ok: true });
+    if (await deviceListMoved(ctx.db, ctx.userId, device)) {
+      refuseDeviceListMoved();
+    }
+    const epoch = await currentKeyEpoch(ctx.db, projectId);
+    if (epoch !== keyEpoch) stale(epoch);
+    sessionRequired();
+  }
+  if (snapshot?.envelope_key && ctx.bucket) {
+    await ctx.bucket.delete(snapshot.envelope_key).catch(() => undefined);
+  }
+  return json({ ok: true });
+}
+
+async function postKey(
+  ctx: Context,
+  projectId: string,
+  shareId: string,
+  body: Record<string, unknown>
+): Promise<Response> {
+  const keyEpoch = uintField(body.keyEpoch, 'keyEpoch');
+  const wrap = bytesField(body.wrapped, 'wrapped', { exact: WRAP_BYTES });
+  const wrapped = wrap.text;
+  const deviceId = idField(body.deviceId, 'deviceId');
+  const signature = bytesField(body.signature, 'signature', {
+    exact: STATEMENT_SIGNATURE_BYTES
+  }).bytes;
+  await liveLink(ctx.db, projectId, shareId);
+  const current = await currentKeyEpoch(ctx.db, projectId);
+  if (keyEpoch !== current) stale(current);
+  // The first wrap per epoch wins, so only a device the caller's newest
+  // device list certifies may store one, proven by its signature: a revoked
+  // device of an account that stays an editor cannot plant a wrap no member
+  // can open and so break publication for the link.
+  const device = await requireCertifiedDevice(ctx.db, ctx.userId, deviceId);
+  let verified: boolean;
+  try {
+    verified = await verifyShareKeyWrap(
+      device.signingKey,
+      { projectId, shareId, keyEpoch, wrapped: wrap.bytes },
+      signature
+    );
+  } catch {
+    verified = false;
+  }
+  if (!verified) {
+    refuse(
+      400,
+      'E2EE_SIGNATURE_INVALID',
+      'The key wrap is not signed by the device it names.'
+    );
+  }
+  // ...and a removal of that device landing first makes the insert refuse.
+  const signerList = deviceListUnchanged(ctx.userId, device);
+  const results = await runBatch(ctx.db, [
+    ctx.db
+      .prepare(
+        `INSERT INTO e2ee_share_keys
+           (project_id, share_id, key_epoch, wrapped, created_by_user_id,
+            created_at)
+         SELECT ?, ?, ?, ?, ?, ?
+         WHERE ${ctx.authorization.sql} AND ${WRITER_FENCE}
+           AND EXISTS (SELECT 1 FROM e2ee_share_links
+             WHERE project_id = ? AND share_id = ? AND revoked_at IS NULL)
+           AND EXISTS (SELECT 1 FROM e2ee_project_groups
+             WHERE project_id = ? AND key_epoch_base + epoch = ?)
+           AND ${signerList.sql}
+         ON CONFLICT (project_id, share_id, key_epoch) DO NOTHING`
+      )
+      .bind(
+        projectId,
+        shareId,
+        keyEpoch,
+        wrapped,
+        ctx.userId,
+        new Date().toISOString(),
+        ...ctx.authorization.binds,
+        ...fenceBinds(projectId, ctx.userId),
+        projectId,
+        shareId,
+        projectId,
+        keyEpoch,
+        ...signerList.binds
+      )
+  ]);
+  if (
+    !changed(results[0]) &&
+    (await deviceListMoved(ctx.db, ctx.userId, device))
+  ) {
+    refuseDeviceListMoved();
+  }
+  const stored = await ctx.db
+    .prepare(
+      `SELECT key_epoch, wrapped FROM e2ee_share_keys
+       WHERE project_id = ? AND share_id = ? AND key_epoch = ?`
+    )
+    .bind(projectId, shareId, keyEpoch)
+    .first<{ key_epoch: number; wrapped: string }>();
+  if (!stored) {
+    const after = await currentKeyEpoch(ctx.db, projectId);
+    if (after !== keyEpoch) stale(after);
+    sessionRequired();
+  }
+  return json({
+    key: { keyEpoch: stored.key_epoch, wrapped: stored.wrapped }
+  } satisfies E2eeShareKeyResponse);
+}
+
+async function putAuthority(
+  ctx: Context,
+  projectId: string,
+  shareId: string,
+  body: Record<string, unknown>
+): Promise<Response> {
+  const signed = signedField(body, MAX_SHARE_AUTHORITY_BYTES);
+  const link = await liveLink(ctx.db, projectId, shareId);
+  const stored = await delegationRow(ctx.db, ctx.userId);
+  if (!stored) {
+    refuse(
+      409,
+      'E2EE_SHARE_DELEGATION_REQUIRED',
+      'Confirm sharing with your passkey or recovery key first.'
+    );
+  }
+  let delegation: ShareDelegation;
+  try {
+    delegation = decodeShareDelegation(fromBase64Url(stored.statement));
+  } catch {
+    refuse(
+      409,
+      'E2EE_SHARE_DELEGATION_REQUIRED',
+      'Confirm sharing with your passkey or recovery key first.'
+    );
+  }
+  let statement;
+  try {
+    statement = await verifyShareAuthority(
+      { statement: signed.statement, signature: signed.signature },
+      delegation,
+      {
+        now: Date.now(),
+        expected: {
+          projectId,
+          shareId,
+          shareKeyHash: fromBase64Url(link.share_key_hash)
+        }
+      }
+    );
+  } catch (error) {
+    if (
+      error instanceof ShareLinkError &&
+      error.reason === 'signer-not-delegated'
+    ) {
+      refuse(
+        409,
+        'E2EE_SHARE_DELEGATION_REQUIRED',
+        'This device is not in your current share delegation. Confirm sharing again.'
+      );
+    }
+    invalid(
+      error instanceof ShareLinkError
+        ? `The statement does not verify (${error.reason})`
+        : 'The statement is not a share-authority statement'
+    );
+  }
+  if (b64(statement.ownerIdentityKeyHash) !== link.owner_identity_hash) {
+    invalid('The statement names another owner than the link');
+  }
+  if (
+    link.authority_sequence !== null &&
+    statement.sequence <= link.authority_sequence
+  ) {
+    refuse(
+      409,
+      'E2EE_SHARE_AUTHORITY_STALE',
+      'A newer statement is already stored for this link.',
+      { sequence: link.authority_sequence }
+    );
+  }
+  // The delegation the statement verified against may still name a device
+  // the owner since removed, until it is renewed. Each stored sequence only
+  // climbs, so a removed device's statement at the top of the range would
+  // leave the link unusable for good: only a device the owner's newest
+  // device list certifies may sign one (#912 review)...
+  const signer = await requireCertifiedSigner(
+    ctx.db,
+    ctx.userId,
+    statement.signerKeyHash
+  );
+  // ...and a removal of that device landing first makes the write refuse.
+  const signerList = deviceListUnchanged(ctx.userId, signer);
+  let results;
+  try {
+    results = await runBatch(ctx.db, [
+      ctx.db
+        .prepare(
+          `UPDATE e2ee_share_links
+           SET authority = ?, authority_signature = ?, authority_sequence = ?,
+               authority_expires_at = ?
+           WHERE project_id = ? AND share_id = ? AND revoked_at IS NULL
+             AND (authority_sequence IS NULL OR authority_sequence < ?)
+             AND ${ctx.authorization.sql} AND ${PROJECT_FENCE}
+             AND ${signerList.sql}`
+        )
+        .bind(
+          signed.text.statement,
+          signed.text.signature,
+          statement.sequence,
+          statement.expiresAt,
+          projectId,
+          shareId,
+          statement.sequence,
+          ...ctx.authorization.binds,
+          projectId,
+          ctx.userId,
+          ...signerList.binds
+        )
+    ]);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.includes('E2EE_SHARE_LINK_IMMUTABLE')
+    ) {
+      refuse(
+        409,
+        'E2EE_SHARE_AUTHORITY_STALE',
+        'A newer statement is already stored for this link.'
+      );
+    }
+    throw error;
+  }
+  if (!changed(results[0])) {
+    const after = await linkRow(ctx.db, projectId, shareId);
+    if (!after || after.revoked_at !== null) {
+      refuse(
+        404,
+        'E2EE_SHARE_LINK_NOT_FOUND',
+        'This share link does not exist.'
+      );
+    }
+    if ((after.authority_sequence ?? -1) >= statement.sequence) {
+      refuse(
+        409,
+        'E2EE_SHARE_AUTHORITY_STALE',
+        'A newer statement is already stored for this link.',
+        { sequence: after.authority_sequence }
+      );
+    }
+    if (await deviceListMoved(ctx.db, ctx.userId, signer)) {
+      refuseDeviceListMoved();
+    }
+    sessionRequired();
+  }
+  return json(await oneLink(ctx.db, projectId, shareId));
+}
+
+async function putSnapshot(
+  ctx: Context,
+  projectId: string,
+  shareId: string,
+  request: Request
+): Promise<Response> {
+  const { metadata, payload } = await readFrame(request);
+  const signature = bytesField(metadata.signature, 'signature', {
+    exact: VERSION_SIGNATURE_BYTES
+  });
+  const signerDeviceId = idField(metadata.signerDeviceId, 'signerDeviceId');
+  const forVisitors = bytesField(
+    metadata.wrappedForLinkVisitors,
+    'wrappedForLinkVisitors',
+    { exact: WRAP_BYTES }
+  ).text;
+  const forMembers = bytesField(
+    metadata.wrappedForMembers,
+    'wrappedForMembers',
+    { exact: WRAP_BYTES }
+  ).text;
+  let header;
+  try {
+    header = parseEnvelope(payload).header;
+  } catch {
+    invalid('The body is not an envelope');
+  }
+  if (
+    header.class !== 'project' ||
+    header.kind !== 'share-snapshot' ||
+    header.projectId !== projectId ||
+    header.documentVersion < 1
+  ) {
+    invalid('The body must be a share snapshot of this project');
+  }
+  const device = await requireCertifiedDevice(
+    ctx.db,
+    ctx.userId,
+    signerDeviceId
+  );
+  let verified: boolean;
+  try {
+    verified =
+      (await verifyProjectEnvelopeSignature(
+        device.signingKey,
+        payload,
+        signature.bytes
+      )) !== null;
+  } catch {
+    verified = false;
+  }
+  if (!verified) {
+    refuse(
+      400,
+      'E2EE_SIGNATURE_INVALID',
+      'The envelope is not signed by the device it names.'
+    );
+  }
+  await liveLink(ctx.db, projectId, shareId);
+  const current = await currentKeyEpoch(ctx.db, projectId);
+  if (header.keyEpoch !== current) stale(current);
+  const project = await ctx.db
+    .prepare('SELECT document_version FROM projects WHERE id = ?')
+    .bind(projectId)
+    .first<{ document_version: number }>();
+  if (!project || header.documentVersion > project.document_version) {
+    invalid('A snapshot names no version the project has');
+  }
+  const previous = await ctx.db
+    .prepare(
+      `SELECT document_version, envelope_key FROM e2ee_share_snapshots
+       WHERE project_id = ? AND share_id = ?`
+    )
+    .bind(projectId, shareId)
+    .first<{ document_version: number; envelope_key: string | null }>();
+  const snapshotStale: () => never = () =>
+    refuse(
+      409,
+      'E2EE_SHARE_SNAPSHOT_STALE',
+      'A snapshot of a newer version is already published for this link.'
+    );
+  if (previous && previous.document_version > header.documentVersion) {
+    snapshotStale();
+  }
+  const hash = toHex(await versionHash(payload));
+  let inline: string | null = null;
+  let objectKey: string | null = null;
+  if (payload.byteLength <= INLINE_SNAPSHOT_BYTES || !ctx.bucket) {
+    if (payload.byteLength > INLINE_SNAPSHOT_LIMIT) {
+      refuse(
+        413,
+        'DOCUMENT_TOO_LARGE',
+        'This snapshot is too large to store without project storage.',
+        { limitBytes: INLINE_SNAPSHOT_LIMIT }
+      );
+    }
+    inline = b64(payload);
+  } else {
+    // Opaque: the project id the row names and the envelope's hash.
+    objectKey = `e2ee/${projectId}/s/${hash}`;
+    await ctx.bucket.put(objectKey, payload);
+  }
+  const now = new Date().toISOString();
+  const discard = async () => {
+    if (objectKey && objectKey !== previous?.envelope_key && ctx.bucket) {
+      await ctx.bucket.delete(objectKey).catch(() => undefined);
+    }
+  };
+  let results;
+  try {
+    results = await runBatch(ctx.db, [
+      ctx.db
+        .prepare(
+          `INSERT INTO e2ee_share_snapshots
+             (project_id, share_id, document_version, key_epoch, snapshot_hash,
+              envelope_inline, envelope_key, envelope_bytes, signature,
+              wrapped_for_link_visitors, wrapped_for_members, author_key,
+              signer_user_id, signer_device_id, updated_at)
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+           WHERE ${ctx.authorization.sql} AND ${WRITER_FENCE}
+             AND EXISTS (SELECT 1 FROM e2ee_share_links
+               WHERE project_id = ? AND share_id = ? AND revoked_at IS NULL)
+             AND EXISTS (SELECT 1 FROM e2ee_project_groups
+               WHERE project_id = ? AND key_epoch_base + epoch = ?)
+           ON CONFLICT (project_id, share_id) DO UPDATE SET
+             document_version = excluded.document_version,
+             key_epoch = excluded.key_epoch,
+             snapshot_hash = excluded.snapshot_hash,
+             envelope_inline = excluded.envelope_inline,
+             envelope_key = excluded.envelope_key,
+             envelope_bytes = excluded.envelope_bytes,
+             signature = excluded.signature,
+             wrapped_for_link_visitors = excluded.wrapped_for_link_visitors,
+             wrapped_for_members = excluded.wrapped_for_members,
+             author_key = excluded.author_key,
+             signer_user_id = excluded.signer_user_id,
+             signer_device_id = excluded.signer_device_id,
+             updated_at = excluded.updated_at
+           WHERE excluded.document_version >= e2ee_share_snapshots.document_version`
+        )
+        .bind(
+          projectId,
+          shareId,
+          header.documentVersion,
+          header.keyEpoch,
+          hash,
+          inline,
+          objectKey,
+          payload.byteLength,
+          signature.text,
+          forVisitors,
+          forMembers,
+          b64(device.signingKey),
+          ctx.userId,
+          signerDeviceId,
+          now,
+          ...ctx.authorization.binds,
+          ...fenceBinds(projectId, ctx.userId),
+          projectId,
+          shareId,
+          projectId,
+          header.keyEpoch
+        )
+    ]);
+  } catch (error) {
+    await discard();
+    throw error;
+  }
+  if (!changed(results[0])) {
+    await discard();
+    await liveLink(ctx.db, projectId, shareId);
+    const after = await currentKeyEpoch(ctx.db, projectId);
+    if (after !== header.keyEpoch) stale(after);
+    const now2 = await ctx.db
+      .prepare(
+        `SELECT document_version FROM e2ee_share_snapshots
+         WHERE project_id = ? AND share_id = ?`
+      )
+      .bind(projectId, shareId)
+      .first<{ document_version: number }>();
+    if (now2 && now2.document_version > header.documentVersion) snapshotStale();
+    sessionRequired();
+  }
+  if (
+    previous?.envelope_key &&
+    previous.envelope_key !== objectKey &&
+    ctx.bucket
+  ) {
+    await ctx.bucket.delete(previous.envelope_key).catch(() => undefined);
+  }
+  return json(await oneLink(ctx.db, projectId, shareId));
+}
+
+// --- Dispatch ----------------------------------------------------------------
+
+/**
+ * Handles the owner-side routes. `projectsEnabled` is the account's
+ * E2EE_PROJECTS_ENABLED decision, `sharingEnabled` its sharing rollout;
+ * `authorization` is the session/erasure write predicate (an always-false
+ * one for reads).
+ */
+export async function handleE2eeShareLinkRequest(
+  request: Request,
+  db: D1Database,
+  bucket: ShareSnapshotBucket | null,
+  userId: string,
+  projectsEnabled: boolean,
+  sharingEnabled: boolean,
+  authorization: Authorization
+): Promise<Response> {
+  try {
+    if (!projectsEnabled) {
+      refuse(
+        501,
+        'FEATURE_DISABLED',
+        'Encrypted projects are not available for this account yet.'
+      );
+    }
+    if (
+      !(await isProjectStorageFormatReady(db)) ||
+      !(await isE2eeProjectGroupStorageReady(db)) ||
+      !(await isE2eeShareLinkStorageReady(db))
+    ) {
+      refuse(
+        503,
+        'E2EE_UNAVAILABLE',
+        'Share links of encrypted projects are unavailable until the database is updated.'
+      );
+    }
+    const ctx: Context = { db, bucket, userId, authorization };
+    const url = new URL(request.url);
+    const method = request.method;
+    if (url.pathname === DELEGATION_ROUTE) {
+      if (method === 'GET') {
+        return json({
+          delegation: delegationOf(await delegationRow(db, userId))
+        } satisfies E2eeShareDelegationResponse);
+      }
+      if (method === 'PUT')
+        return await putDelegation(ctx, await readJson(request));
+      refuse(404, 'NOT_FOUND', 'Not found.');
+    }
+    const match = LINKS_ROUTE.exec(url.pathname)!;
+    let projectId: string;
+    let shareId: string | null;
+    try {
+      projectId = decodeURIComponent(match[1]!);
+      shareId = match[2] === undefined ? null : decodeURIComponent(match[2]);
+    } catch {
+      refuse(404, 'NOT_FOUND', 'Not found.');
+    }
+    const action = match[3] ?? null;
+    if (shareId === null) {
+      if (method === 'GET') {
+        const access = await requireEncryptedProjectAccess(
+          db,
+          userId,
+          projectId,
+          'read'
+        );
+        return json({
+          links: await linkRecords(db, projectId),
+          delegation: delegationOf(await delegationRow(db, access.ownerUserId))
+        } satisfies E2eeShareLinksResponse);
+      }
+      if (method === 'POST') {
+        await requireOwnedEncryptedProject(db, userId, projectId);
+        if (!sharingEnabled) {
+          refuse(
+            403,
+            'FEATURE_DISABLED',
+            'Project sharing is not available for this account yet.'
+          );
+        }
+        return await createLink(ctx, projectId, await readJson(request));
+      }
+      refuse(404, 'NOT_FOUND', 'Not found.');
+    }
+    idField(shareId, 'shareId');
+    if (action === null && method === 'DELETE') {
+      await requireOwnedEncryptedProject(db, userId, projectId);
+      return await forgetLink(ctx, projectId, shareId, await readJson(request));
+    }
+    if (action === 'keys' && method === 'POST') {
+      await requireEncryptedProjectAccess(db, userId, projectId, 'write');
+      return await postKey(ctx, projectId, shareId, await readJson(request));
+    }
+    if (action === 'authority' && method === 'PUT') {
+      await requireOwnedEncryptedProject(db, userId, projectId);
+      return await putAuthority(
+        ctx,
+        projectId,
+        shareId,
+        await readJson(request)
+      );
+    }
+    if (action === 'snapshot' && method === 'PUT') {
+      await requireEncryptedProjectAccess(db, userId, projectId, 'write');
+      return await putSnapshot(ctx, projectId, shareId, request);
+    }
+    refuse(404, 'NOT_FOUND', 'Not found.');
+  } catch (error) {
+    if (error instanceof RouteError) {
+      return json(
+        { error: error.message, code: error.code, ...error.extra },
+        error.status
+      );
+    }
+    throw error;
+  }
+}
+
+// --- The anonymous route -----------------------------------------------------
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  return toHex(
+    new Uint8Array(
+      await crypto.subtle.digest('SHA-256', bytes as Uint8Array<ArrayBuffer>)
+    )
+  );
+}
+
+/** The token hash the server stores: SHA-256 of the token's 32 bytes. */
+export async function shareLinkTokenHash(token: string): Promise<string> {
+  return sha256Hex(fromBase64Url(token));
+}
+
+/**
+ * `GET /api/e2ee/share/:token`, anonymous: the capability token in the path
+ * is the whole authorization. `open` is the deployment's decision (the
+ * E2EE_PROJECTS_ENABLED flag and the global sharing rollout); anything that
+ * cannot be served is one opaque 404, as on the plaintext route.
+ */
+export async function handleEncryptedSharedSnapshot(
+  pathname: string,
+  db: D1Database | undefined,
+  bucket: ShareSnapshotBucket | null,
+  open: boolean
+): Promise<Response> {
+  const notFound = () =>
+    new Response(JSON.stringify({ error: 'Share link not found.' }), {
+      status: 404,
+      headers: {
+        'content-type': 'application/json',
+        'cache-control': 'no-store'
+      }
+    });
+  if (!open || !db) return notFound();
+  const match = SHARED_ROUTE.exec(pathname);
+  let token: string;
+  try {
+    token = decodeURIComponent(match?.[1] ?? '');
+  } catch {
+    return notFound();
+  }
+  if (!TOKEN.test(token)) return notFound();
+  if (
+    !(await isProjectStorageFormatReady(db)) ||
+    !(await isE2eeProjectGroupStorageReady(db)) ||
+    !(await isE2eeShareLinkStorageReady(db))
+  ) {
+    return notFound();
+  }
+  // Format-2 projects only, never trashed, and only while the owner's own
+  // sharing switch is on (re-evaluated per read, as for plaintext links).
+  const row = await db
+    .prepare(
+      `SELECT l.project_id, l.share_id, l.mode, l.authority,
+              l.authority_signature, p.user_id AS owner_user_id,
+              s.document_version, s.key_epoch, s.envelope_inline,
+              s.envelope_key, s.signature, s.wrapped_for_link_visitors,
+              s.author_key
+       FROM e2ee_share_links l
+       JOIN projects p ON p.id = l.project_id
+       JOIN e2ee_share_snapshots s
+         ON s.project_id = l.project_id AND s.share_id = l.share_id
+       LEFT JOIN user_settings owner_settings
+         ON owner_settings.user_id = p.user_id
+       WHERE l.token_hash = ? AND l.revoked_at IS NULL
+         AND l.authority IS NOT NULL
+         AND p.storage_format = 2 AND p.status <> 'deleted'
+         AND COALESCE(
+           CASE WHEN json_valid(owner_settings.settings_json)
+             THEN json_extract(
+               owner_settings.settings_json,
+               '$.collaboration.enabled'
+             )
+           END,
+           1
+         ) = 1`
+    )
+    .bind(await shareLinkTokenHash(token))
+    .first<{
+      project_id: string;
+      share_id: string;
+      mode: E2eeShareLinkMode;
+      authority: string;
+      authority_signature: string;
+      owner_user_id: string;
+      document_version: number;
+      key_epoch: number;
+      envelope_inline: string | null;
+      envelope_key: string | null;
+      signature: string;
+      wrapped_for_link_visitors: string;
+      author_key: string;
+    }>();
+  if (!row) return notFound();
+  const [delegation, identity] = await Promise.all([
+    delegationRow(db, row.owner_user_id),
+    currentIdentity(db, row.owner_user_id)
+  ]);
+  if (!delegation || !identity) return notFound();
+  let envelope: Uint8Array | null = null;
+  if (row.envelope_inline !== null) {
+    envelope = fromBase64Url(row.envelope_inline);
+  } else if (row.envelope_key !== null && bucket) {
+    const stored = await bucket.get(row.envelope_key);
+    if (stored) envelope = new Uint8Array(await stored.arrayBuffer());
+  }
+  if (!envelope) return notFound();
+  const metadata: E2eeSharedSnapshotMetadata = {
+    shareId: row.share_id,
+    mode: row.mode,
+    documentVersion: row.document_version,
+    keyEpoch: row.key_epoch,
+    versionId: shareSnapshotVersionId(row.document_version),
+    snapshotSignature: row.signature,
+    wrappedVersionKey: row.wrapped_for_link_visitors,
+    authorKey: row.author_key,
+    authority: { statement: row.authority, signature: row.authority_signature },
+    delegation: {
+      statement: delegation.statement,
+      signature: delegation.signature
+    },
+    ownerIdentityKey: b64(identity.key)
+  };
+  return new Response(encodeE2eeFrame(metadata, envelope), {
+    status: 200,
+    headers: {
+      'content-type': E2EE_FRAME_CONTENT_TYPE,
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+      'referrer-policy': 'no-referrer'
+    }
+  });
+}
+
+// --- Erasure -----------------------------------------------------------------
+
+/**
+ * Account erasure (migration 0040): the account's share delegation is
+ * profile data (its identity goes too). With `all`, the account's owned
+ * projects and their links are already gone, and rows it wrote in other
+ * owners' projects keep their bytes but lose its user id. Empty until the
+ * tables exist.
+ */
+export async function shareLinkErasureStatements(
+  db: D1Database,
+  userId: string,
+  scope: 'profile' | 'all'
+): Promise<D1PreparedStatement[]> {
+  if (!(await isE2eeShareLinkStorageReady(db))) return [];
+  return [
+    db
+      .prepare('DELETE FROM e2ee_share_delegations WHERE user_id = ?')
+      .bind(userId),
+    ...(scope === 'all'
+      ? [
+          db
+            .prepare(
+              'UPDATE e2ee_share_links SET created_by_user_id = NULL WHERE created_by_user_id = ?'
+            )
+            .bind(userId),
+          db
+            .prepare(
+              'UPDATE e2ee_share_keys SET created_by_user_id = NULL WHERE created_by_user_id = ?'
+            )
+            .bind(userId),
+          db
+            .prepare(
+              'UPDATE e2ee_share_snapshots SET signer_user_id = NULL WHERE signer_user_id = ?'
+            )
+            .bind(userId)
+        ]
+      : [])
+  ];
+}

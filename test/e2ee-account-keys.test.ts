@@ -604,6 +604,17 @@ describe('a new device with the recovery key', () => {
   });
 });
 
+/** `deviceId` of USER holds a leaf in 'proj_staged''s MLS group. */
+function joinStagedGroup(srv: Server, deviceId: string) {
+  srv.db
+    .prepare(
+      `INSERT INTO e2ee_project_leaves (project_id, user_id, device_id,
+         leaf_key, certification, created_at)
+       VALUES ('proj_staged', ?, ?, ?, ?, '2026-10-25T00:00:00.000Z')`
+    )
+    .run(USER, deviceId, deviceId.padEnd(87, 'k').slice(0, 87), 'c'.repeat(98));
+}
+
 describe('removing a device', () => {
   it('revokes it and rotates the account and encryption keys for the survivors', async () => {
     const srv = server();
@@ -689,6 +700,8 @@ describe('removing a device', () => {
              VALUES ('proj_staged', 'project-info', '', 1, 0, 'e', ?, ?, ?, ?)`
           )
           .run('w'.repeat(55), 's'.repeat(98), deviceId, now),
+      // `joiner` joins the staged MLS group: a leaf, and nothing signed.
+      join: (joiner: string) => joinStagedGroup(srv, joiner),
       setState: (state: string, storageFormat: 1 | 2) => {
         srv.db
           .prepare(
@@ -744,6 +757,51 @@ describe('removing a device', () => {
     ready(await remove(tablet.account.device!.deviceId));
     expect(entries()).toBe(before + 1);
     // An abandoned staging is never cut over: its leftovers hold nothing up.
+    staging.setState('abandoned', 1);
+    ready(await remove(phoneId));
+    expect(entries()).toBe(before + 2);
+  });
+
+  it('waits while the device joined the group of a project staged for encryption (#914 review)', async () => {
+    const srv = server();
+    const { recovery, laptop, account } = await setUp(srv);
+    const phone = await enrolled(srv, recovery.secret, 'Phone');
+    const tablet = await enrolled(srv, recovery.secret, 'Tablet');
+    const phoneId = phone.account.device!.deviceId;
+    // The laptop stages and signs; the phone only joins the staged group.
+    const staging = stagedProject(srv, account.device!.deviceId);
+    staging.stageInfo();
+    const entries = () =>
+      count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_device_list_entries');
+    const remove = async (deviceId: string) =>
+      removeDevice(
+        laptop,
+        ready(await loadEncryption(laptop)),
+        deviceId,
+        recovery.secret
+      );
+    const before = entries();
+    // The phone joins between the check and the append's batch: the
+    // batch's fence refuses it.
+    srv.beforeWrite = async (sql) => {
+      if (!sql.includes('INSERT INTO e2ee_device_list_entries')) return;
+      srv.beforeWrite = undefined;
+      staging.join(phoneId);
+    };
+    expect((await refusal(remove(phoneId))).code).toBe(
+      'E2EE_DEVICE_SIGNED_PROJECTS'
+    );
+    expect(srv.beforeWrite).toBeUndefined();
+    expect(entries()).toBe(before);
+    // Joined before the request: the check refuses it.
+    expect((await refusal(remove(phoneId))).code).toBe(
+      'E2EE_DEVICE_SIGNED_PROJECTS'
+    );
+    expect(entries()).toBe(before);
+    // A device with no staged leaf is removed as before.
+    ready(await remove(tablet.account.device!.deviceId));
+    expect(entries()).toBe(before + 1);
+    // Once abandoned, the staged group never becomes the project's.
     staging.setState('abandoned', 1);
     ready(await remove(phoneId));
     expect(entries()).toBe(before + 2);
@@ -990,6 +1048,74 @@ describe('replacing the recovery key', () => {
     expect((await refusal(replace())).code).toBe('E2EE_DEVICE_SIGNED_PROJECTS');
     expect(generation()).toMatchObject({ generation: 1 });
     // An abandoned staging is never cut over: its leftovers hold nothing up.
+    srv.db
+      .prepare(
+        `UPDATE e2ee_project_migrations
+         SET state = 'abandoned', lease_id = NULL, lease_expires_at = NULL
+         WHERE project_id = 'proj_staged'`
+      )
+      .run();
+    ready(await replace());
+    expect(generation()).toMatchObject({ generation: 2 });
+  });
+
+  it('keeps a device that joined the group of a project staged for encryption out of a replacement (#914 review)', async () => {
+    const srv = server();
+    const { laptop, recovery, account } = await setUp(srv);
+    const phone = await enrolled(srv, recovery.secret, 'Phone');
+    const phoneId = phone.account.device!.deviceId;
+    // The laptop stages and signs; the phone only joins the staged group,
+    // so it holds the key the cutover exposes ciphertext under.
+    const now = '2026-10-25T00:00:00.000Z';
+    srv.db
+      .prepare(
+        `INSERT INTO projects (id, user_id, name, document_json,
+           document_version, updated_at, storage_format)
+         VALUES ('proj_staged', ?, '', '{}', 1, ?, 1)`
+      )
+      .run(USER, now);
+    srv.db
+      .prepare(
+        `INSERT INTO e2ee_project_migrations (project_id, direction, state,
+           owner_user_id, device_id, lease_id, lease_expires_at,
+           source_version, started_at, updated_at)
+         VALUES ('proj_staged', 'encrypt', 'staging', ?, ?, ?, ?, 1, ?, ?)`
+      )
+      .run(
+        USER,
+        account.device!.deviceId,
+        'l'.repeat(43),
+        Date.now() + 60_000,
+        now,
+        now
+      );
+    const replace = async () =>
+      replaceRecoveryKey(
+        laptop,
+        ready(await loadEncryption(laptop)),
+        (await generateRecoveryKey()).secret,
+        recovery.secret
+      );
+    const generation = () =>
+      srv.db
+        .prepare(
+          'SELECT MAX(generation) AS generation FROM e2ee_identities WHERE user_id = ?'
+        )
+        .get(USER);
+    // The phone joins between the check and the identity write: the
+    // write's fence refuses it.
+    srv.beforeWrite = async (sql) => {
+      if (!sql.includes('INSERT INTO e2ee_identities')) return;
+      srv.beforeWrite = undefined;
+      joinStagedGroup(srv, phoneId);
+    };
+    expect((await refusal(replace())).code).toBe('E2EE_DEVICE_SIGNED_PROJECTS');
+    expect(srv.beforeWrite).toBeUndefined();
+    expect(generation()).toMatchObject({ generation: 1 });
+    // Joined before the request: the check refuses it.
+    expect((await refusal(replace())).code).toBe('E2EE_DEVICE_SIGNED_PROJECTS');
+    expect(generation()).toMatchObject({ generation: 1 });
+    // Once abandoned, the staged group never becomes the project's.
     srv.db
       .prepare(
         `UPDATE e2ee_project_migrations

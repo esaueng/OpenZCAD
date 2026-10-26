@@ -13,6 +13,8 @@
  */
 import {
   E2EE_MIGRATION_LEASE_HEADER,
+  type E2eeDecryptDetailsRequest,
+  type E2eeDecryptStagingResponse,
   type E2eeMigrationCutoverResponse,
   type E2eeMigrationLeaseResponse,
   type E2eeMigrationStartRequest,
@@ -51,6 +53,20 @@ export interface ProjectMigrationsApi {
   ): Promise<E2eeMigrationStepResponse>;
   /** One bounded step; call again while `complete` is false. */
   purge(projectId: string): Promise<E2eeMigrationStepResponse>;
+  /**
+   * Slice 7-3: what the lease holder staged so far beside an encrypted
+   * project it is turning back into plaintext (its journal).
+   */
+  stagedPlaintext(
+    projectId: string,
+    leaseId: string
+  ): Promise<E2eeDecryptStagingResponse>;
+  /** Slice 7-3: stages the decrypted measurements and view state. */
+  stageDetails(
+    projectId: string,
+    leaseId: string,
+    details: E2eeDecryptDetailsRequest
+  ): Promise<void>;
 }
 
 /** A fetcher whose every request names the migration lease. */
@@ -93,7 +109,8 @@ export function createProjectMigrationsApi(
     url: string,
     method: string,
     leaseId?: string | null,
-    body?: unknown
+    body?: unknown,
+    empty = false
   ): Promise<T> => {
     const headers: Record<string, string> = {};
     if (body !== undefined) headers['content-type'] = 'application/json';
@@ -105,6 +122,7 @@ export function createProjectMigrationsApi(
       ...(body === undefined ? {} : { body: JSON.stringify(body) })
     });
     if (!response.ok) throw await refusal(response);
+    if (empty) return undefined as T;
     try {
       return (await response.json()) as T;
     } catch {
@@ -121,6 +139,10 @@ export function createProjectMigrationsApi(
       send(path(projectId, 'cutover'), 'POST', leaseId),
     abandon: (projectId, leaseId) =>
       send(path(projectId, 'abandon'), 'POST', leaseId),
-    purge: (projectId) => send(path(projectId, 'purge'), 'POST')
+    purge: (projectId) => send(path(projectId, 'purge'), 'POST'),
+    stagedPlaintext: (projectId, leaseId) =>
+      send(path(projectId, 'plaintext'), 'GET', leaseId),
+    stageDetails: (projectId, leaseId, details) =>
+      send(path(projectId, 'plaintext/details'), 'PUT', leaseId, details, true)
   };
 }

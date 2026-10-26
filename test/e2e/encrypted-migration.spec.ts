@@ -269,6 +269,26 @@ test('encrypts an existing project, resumes after a reload, and opens it', async
       .locator('.start-tile-project', { hasText: 'Secret migrated' })
       .getByRole('img', { name: 'Encrypting' })
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  // Opened meanwhile, it is read-only: held in View, every edit refused
+  // with the reason, so nothing is edited that the encrypted copy would
+  // not carry.
+  await page
+    .locator('.start-tile-project', { hasText: 'Secret migrated' })
+    .locator('.start-tile-open')
+    .click();
+  await expectBodyCount(page, 1);
+  const workspaceMode = page.getByRole('group', { name: 'Workspace mode' });
+  await expect(
+    workspaceMode.getByRole('button', { name: 'Build' })
+  ).toBeDisabled();
+  await expect(
+    workspaceMode.getByRole('button', { name: 'View' })
+  ).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('b');
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Cannot use Box: This project is being end-to-end encrypted.'
+  );
+  await page.getByTitle('Back to projects').click();
   // Mid-way: the staged group, versions and the first save state only.
   expect(
     count(
@@ -355,6 +375,10 @@ test('encrypts an existing project, resumes after a reload, and opens it', async
   const card = page.locator('.start-tile-project', {
     hasText: 'Secret migrated'
   });
+  // The page reopens the project it last opened (above, read-only).
+  const back = page.getByTitle('Back to projects');
+  await expect(card.or(back).first()).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  if (await back.isVisible()) await back.click();
   await expect(card).toBeVisible({ timeout: SYNC_BUDGET_MS });
   await expect(
     card.getByRole('img', { name: 'End-to-end encrypted' })

@@ -203,6 +203,8 @@ describe('encryption status reports from the encrypted store', () => {
       info: {},
       replaced: {},
       roomAccess: () => room,
+      shareHead: outcome(head),
+      writeShareLinks: outcome(head),
       stageMigratedProject: outcome({ project: { projectId: 'proj_staged' } }),
       revisionMap: outcome(new Map<string, string>()),
       forgetStagedProject: outcome(undefined)
@@ -242,6 +244,13 @@ describe('encryption status reports from the encrypted store', () => {
     expect(encryptionStatusOf('proj_a').state).toBe('verified');
     resetEncryptionStatus();
     await reporting.roomAccess().accepted('proj_a', sealed, head, record);
+    expect(encryptionStatusOf('proj_a').state).toBe('verified');
+    // Share links read and write the head (slice 5-10).
+    resetEncryptionStatus();
+    await reporting.shareHead('proj_a');
+    expect(encryptionStatusOf('proj_a').state).toBe('verified');
+    resetEncryptionStatus();
+    await reporting.writeShareLinks('proj_a', {} as never);
     expect(encryptionStatusOf('proj_a').state).toBe('verified');
     // A historical read verifies a revision, not the head.
     resetEncryptionStatus();

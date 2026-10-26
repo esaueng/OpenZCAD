@@ -136,5 +136,65 @@ export const E2EE_MIGRATION_CODES = Object.freeze({
   /** Staged rows of an earlier attempt remain; finish the abandon first. */
   cleanupPending: 'E2EE_MIGRATION_CLEANUP_PENDING',
   /** The request does not fit the migration's state. */
-  state: 'E2EE_MIGRATION_STATE'
+  state: 'E2EE_MIGRATION_STATE',
+  /**
+   * Slice 7-3: the account's "Encrypt new projects" opt-in is on, so it
+   * cannot hold a new plaintext project (decision D2); turn it off first.
+   */
+  optedIn: 'E2EE_MIGRATION_OPTED_IN'
 } as const);
+
+// --- Slice 7-3: the beta-only reverse path ------------------------------------
+
+/**
+ * One plaintext save state staged for a project being turned back into
+ * plaintext (direction `decrypt`), as `GET …/migration/plaintext` lists it.
+ */
+export interface E2eeDecryptStagedRevision {
+  revisionId: string;
+  reason: string;
+  createdAt: string;
+}
+
+/** One plaintext file staged for a decrypting project. */
+export interface E2eeDecryptStagedArtifact {
+  artifactId: string;
+  kind: string;
+  name: string;
+  bytes: number;
+  /**
+   * The encrypted blob it was decrypted from, as the staging browser named
+   * it in the artifact's metadata (`e2eeBlobId`), so a resumed run finds it.
+   */
+  blobId: string | null;
+}
+
+/**
+ * `GET /api/e2ee/projects/:id/migration/plaintext`: what the lease holder
+ * staged so far beside the encrypted project, its journal on a resume.
+ */
+export interface E2eeDecryptStagingResponse {
+  revisions: E2eeDecryptStagedRevision[];
+  artifacts: E2eeDecryptStagedArtifact[];
+  /** The staged plaintext head (document version), or null before it. */
+  head: { version: number; checksumSha256: string } | null;
+  /** 0 until measurements are staged, then their revision. */
+  measurementsRevision: number;
+  workspaceSessions: number;
+}
+
+/**
+ * `PUT /api/e2ee/projects/:id/migration/plaintext/details`: the decrypted
+ * measurements and view state, staged in one call. Each workspace session
+ * is the plaintext route's shape without `updatedAt`.
+ */
+export interface E2eeDecryptDetailsRequest {
+  measurements: unknown;
+  workspaceSessions: unknown[];
+}
+
+/** Workspace sessions one details call stages at most (the route keeps 20). */
+export const MAX_DECRYPT_STAGED_SESSIONS = 20;
+
+/** The artifact metadata key that names the blob a staged file came from. */
+export const DECRYPT_STAGED_BLOB_METADATA_KEY = 'e2eeBlobId';

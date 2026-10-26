@@ -1,7 +1,11 @@
 import { releaseDevelopmentE2eeWrite } from './e2eeWriteAuthorization';
 import { accountConsent, publishCensus } from './glimpseCensus';
 import { handleGlimpseUsage, countApi, type GlimpseEnv } from './glimpse';
-import { handleE2eeRequest } from './e2ee';
+import { handleE2eeRequest, projectBucket } from './e2ee';
+import {
+  handleEncryptedSharedSnapshot,
+  isEncryptedSharedSnapshotPath
+} from './e2eeShareLinks';
 import type { E2eeInvitationHost } from './e2eeInvitations';
 import { withEncryptedProjectInfo } from './e2eeProjectDocuments';
 import { accountRequiresEncryptedProjects } from './e2eeProjectPreferences';
@@ -14,6 +18,12 @@ import {
   assertProjectRouteFormat
 } from './projectFormatGate';
 import { sweepProjectMigrations } from './e2eeProjectMigrations';
+import {
+  decryptStagingFor,
+  decryptStagingRouteProject,
+  stageDecryptedHead,
+  stageDecryptedRevision
+} from './e2eeReverseStaging';
 import { encryptedRoomHeaders, notifyEncryptedRoom } from './e2eeRoom';
 import { enforceApiRateLimit, publicRequestBucket } from './apiRateLimit';
 import {
@@ -29,12 +39,15 @@ import {
 } from './workspaceSessions';
 import type { ProjectCollaborationRoom } from '@openzcad/cloudflare-adapters';
 import {
+  DecryptStagingLeaseError,
+  EncryptedBlobError,
   ProjectObjectStorageError,
   createPersistenceService,
   isCloudflareFeatureEnabled,
   isE2eeKeysEnabled,
   isE2eeMigrationEnabled,
   isE2eeProjectsEnabled,
+  isE2eeReverseEnabled,
   isProjectStorageFormatReady,
   projectCollaborationRollout,
   type ProjectCollaborationRollout,
@@ -159,6 +172,7 @@ import {
 } from './projectMeasurements';
 import {
   assistantConsentRoute,
+  E2EE_MIGRATION_CODES,
   ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE,
   ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE_CODE,
   MAX_ARTIFACT_PART_BYTES,
@@ -650,8 +664,8 @@ function encryptedInvitationHost(
     },
     emailConfigured: Boolean(
       env.EMAIL &&
-        env.PROJECT_INVITATION_EMAIL_FROM?.trim() &&
-        env.PUBLIC_APP_ORIGIN?.trim()
+      env.PROJECT_INVITATION_EMAIL_FROM?.trim() &&
+      env.PUBLIC_APP_ORIGIN?.trim()
     ),
     sendInvitationEmail: async (details) => {
       const config = projectInvitationEmailConfig(env);
@@ -720,15 +734,16 @@ async function assertAssistantProjectAllowed(
   const userId = identity.userId;
   // Before migration 0031 every project is plaintext.
   if (!(await isProjectStorageFormatReady(env.DB))) return null;
-  const row = await env.DB!.prepare(
-    `SELECT p.storage_format FROM projects p
+  const row = await env
+    .DB!.prepare(
+      `SELECT p.storage_format FROM projects p
      WHERE p.id = ? AND (
        p.user_id = ? OR EXISTS (
          SELECT 1 FROM project_members pm
          WHERE pm.project_id = p.id AND pm.user_id = ?
        )
      )`
-  )
+    )
     .bind(projectId, userId, userId)
     .first<{ storage_format: number | null }>();
   if (row && row.storage_format !== null && row.storage_format !== 1) {
@@ -899,6 +914,22 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       },
       200,
       { 'cache-control': 'no-store' }
+    );
+  }
+
+  // Anonymous reads of encrypted projects' share links (ADR-024 slice
+  // 5-10): the token is the whole authorization, as above, and the route
+  // serves only a signed share-snapshot envelope with what a visitor checks
+  // it with, never a plaintext project. It needs the deployment-wide
+  // E2EE_PROJECTS_ENABLED flag and sharing rollout (an anonymous caller has
+  // no email for the canaries); everything else is one opaque 404.
+  if (request.method === 'GET' && isEncryptedSharedSnapshotPath(pathname)) {
+    return handleEncryptedSharedSnapshot(
+      pathname,
+      env.DB,
+      projectBucket(env),
+      isCloudflareFeatureEnabled(env, 'E2EE_PROJECTS_ENABLED') &&
+        projectCollaborationRollout(env).sharingEnabled
     );
   }
 
@@ -1290,7 +1321,11 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         isE2eeKeysEnabled(env, session.email),
         isE2eeProjectsEnabled(env, session.email),
         encryptedInvitationHost(env, session),
-        isE2eeMigrationEnabled(env, session.email)
+        isE2eeMigrationEnabled(env, session.email),
+        isE2eeReverseEnabled(env, session.email),
+        // Slice 7-3: as for plaintext writes, the global flags decide.
+        isCloudflareFeatureEnabled(env, 'E2EE_MIGRATION_ENABLED') &&
+          isCloudflareFeatureEnabled(env, 'E2EE_REVERSE_ENABLED')
       );
       // A Commit or an account write the project's room should hear about.
       await notifyEncryptedRoom(env, request, response);
@@ -1397,19 +1432,39 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     );
   }
 
+  // ADR-024 slice 7-3: a save state or the head of an encrypted project
+  // its owner is turning back into plaintext, written under the decrypt
+  // lease beside the ciphertext. Null for every other request (and while
+  // the reverse path is closed), which meets the gate below as before.
+  const reverseOpen = isE2eeReverseEnabled(env, session.email);
+  const stagingProjectId = reverseOpen
+    ? decryptStagingRouteProject(request.method, pathname)
+    : null;
+  const decryptStaging = stagingProjectId
+    ? await decryptStagingFor(
+        env.DB,
+        request,
+        userId,
+        stagingProjectId,
+        reverseOpen
+      )
+    : null;
+
   // ADR-024 Phase 4: every /api/projects/:id route meets the storage-format
   // gate before its handler parses a body or reads anything.
-  await assertProjectRouteFormat(
-    env.DB,
-    persistence,
-    userId,
-    request.method,
-    pathname,
-    isE2eeProjectsEnabled(env, session.email),
-    // ADR-024 slice 7-1: every caller of a staged project (members too)
-    // meets the refusal, so the global flag decides, not the account's.
-    isCloudflareFeatureEnabled(env, 'E2EE_MIGRATION_ENABLED')
-  );
+  if (!decryptStaging) {
+    await assertProjectRouteFormat(
+      env.DB,
+      persistence,
+      userId,
+      request.method,
+      pathname,
+      isE2eeProjectsEnabled(env, session.email),
+      // ADR-024 slice 7-1: every caller of a staged project (members too)
+      // meets the refusal, so the global flag decides, not the account's.
+      isCloudflareFeatureEnabled(env, 'E2EE_MIGRATION_ENABLED')
+    );
+  }
 
   if (request.method === 'GET' && pathname === '/api/settings') {
     return json(await getAppSettings(userId, env, session.email));
@@ -1947,7 +2002,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const expectedRevision = parseDeleteProjectMeasurementsRequest(
       await readJsonBody(request, 1024)
     );
-    await deleteProjectMeasurements(env.DB!, projectId, userId, expectedRevision);
+    await deleteProjectMeasurements(
+      env.DB!,
+      projectId,
+      userId,
+      expectedRevision
+    );
     return new Response(null, { status: 204 });
   }
 
@@ -1978,6 +2038,17 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       revisionsMatch[1]
     );
     const payload = parseSaveRevisionRequest(opened.body, revisionsMatch[1]!);
+    if (decryptStaging) {
+      return json(
+        await stageDecryptedRevision(
+          persistence,
+          userId,
+          payload,
+          opened.storage,
+          decryptStaging
+        )
+      );
+    }
     return json(
       await persistence.saveRevision(userId, payload, {
         storage: opened.storage
@@ -2014,6 +2085,18 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       opened.body,
       documentMatch[1]!
     );
+    if (decryptStaging) {
+      return json(
+        await stageDecryptedHead(
+          persistence,
+          env.DB!,
+          userId,
+          payload,
+          opened.storage,
+          decryptStaging
+        )
+      );
+    }
     return json(
       await persistence.saveDocument(userId, payload, {
         storage: opened.storage
@@ -2025,6 +2108,25 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const payload = parseCreateUploadSessionRequest(
       await readJsonBody(request)
     );
+    // Slice 7-3: a decrypted file of an encrypted project its owner is
+    // turning back into plaintext, under the decrypt lease.
+    const uploadStaging = reverseOpen
+      ? await decryptStagingFor(
+          env.DB,
+          request,
+          userId,
+          payload.projectId,
+          reverseOpen
+        )
+      : null;
+    if (uploadStaging) {
+      return json(
+        await persistence.createUploadSession(userId, payload, {
+          decryptStaging: uploadStaging.fence
+        }),
+        201
+      );
+    }
     // A project staged for encryption takes no new plaintext files (7-1).
     await assertProjectNotMigrating(
       env.DB,
@@ -2232,11 +2334,15 @@ export default {
     assertSafeRuntimeConfiguration(env);
     await createPersistenceService(env).purgeExpiredUploadSessions();
     // Purges and abandons of project migrations a browser left behind, and
-    // of stagings whose owner may no longer migrate.
+    // of stagings whose owner may no longer migrate (or, for a decrypt
+    // staging, no longer use the reverse path, slice 7-3).
     await sweepProjectMigrations(
       env,
       isCloudflareFeatureEnabled(env, 'E2EE_MIGRATION_ENABLED'),
-      (email) => isE2eeMigrationEnabled(env, email)
+      (email, direction) =>
+        direction === 'decrypt'
+          ? isE2eeReverseEnabled(env, email)
+          : isE2eeMigrationEnabled(env, email)
     );
     await publishCensus(env);
   },
@@ -2337,6 +2443,18 @@ async function dispatchApiRequest(
       error instanceof ProjectMigratingError
     ) {
       return json({ error: error.message, code: error.code }, 409);
+    }
+    if (error instanceof DecryptStagingLeaseError) {
+      // Slice 7-3: a decrypt staging's upload (create, parts, completion,
+      // finalize) landed nothing; its lease lapsed or its staging ended.
+      return json(
+        { error: error.message, code: E2EE_MIGRATION_CODES.leaseLost },
+        409
+      );
+    }
+    // Slice 7-1: a staged encrypted-blob upload whose lease moved on.
+    if (error instanceof EncryptedBlobError) {
+      return json({ error: error.message, code: error.code }, error.status);
     }
     if (error instanceof RevisionNotFoundError) {
       return json({ error: error.message, code: 'REVISION_NOT_FOUND' }, 404);

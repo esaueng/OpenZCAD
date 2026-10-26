@@ -131,6 +131,21 @@ const ACTIVE = new Set([
   'purging'
 ]);
 
+/**
+ * Read-only in the editor: being encrypted, or paused or stopped while the
+ * Worker holds its plaintext locked, or cut over with its purge unfinished.
+ * Edits made meanwhile would be refused by the account and missing from
+ * the encrypted copy that replaces it.
+ */
+function lockedForEditing(progress: MigrationProgress): boolean {
+  return (
+    progress.phase !== 'done' &&
+    (ACTIVE.has(progress.phase) ||
+      progress.plaintextLocked === true ||
+      progress.cutOver === true)
+  );
+}
+
 function waiting(project: ProjectSummary): MigrationProgress {
   return {
     projectId: project.projectId,
@@ -172,6 +187,9 @@ export function createMigrationController(
     setMigratingProjects(
       state.projects
         .filter((progress) => ACTIVE.has(progress.phase))
+        .map((progress) => progress.projectId),
+      state.projects
+        .filter(lockedForEditing)
         .map((progress) => progress.projectId)
     );
     for (const listener of listeners) listener();
@@ -211,15 +229,56 @@ export function createMigrationController(
     return engine;
   }
 
+  /**
+   * Projects this page worked on that left the plaintext listing (cut
+   * over, so no longer format 1) while their migration is unfinished: the
+   * plaintext copy stays until the purge completes, so they stay listed
+   * and a retry resumes the purge instead of reading as encrypted.
+   */
+  async function unfinishedCutovers(
+    listed: readonly ProjectSummary[],
+    migratable: readonly ProjectSummary[],
+    known: ReadonlyMap<string, MigrationProgress>
+  ): Promise<ProjectSummary[]> {
+    const plaintextIds = new Set(migratable.map((p) => p.projectId));
+    const candidates = listed.filter((project) => {
+      const progress = known.get(project.projectId);
+      return (
+        !plaintextIds.has(project.projectId) &&
+        progress !== undefined &&
+        progress.phase !== 'done' &&
+        progress.phase !== 'waiting'
+      );
+    });
+    const unfinished = await Promise.all(
+      candidates.map(async (project) => {
+        try {
+          const { migration } = await migrations.status(project.projectId);
+          return (
+            migration?.state === 'cutover' || migration?.state === 'purging'
+          );
+        } catch {
+          // Kept while it may be unfinished: a retry finds out.
+          return known.get(project.projectId)?.cutOver === true;
+        }
+      })
+    );
+    return candidates.filter((_project, index) => unfinished[index]);
+  }
+
   async function refresh() {
     try {
-      summaries = migratableProjects(await plaintext.listProjects());
+      const listed = await plaintext.listProjects();
+      const migratable = migratableProjects(listed);
       const known = new Map(state.projects.map((p) => [p.projectId, p]));
+      const finishing = await unfinishedCutovers(listed, migratable, known);
+      // Unfinished purges first: their plaintext copies still remain.
+      summaries = [...finishing, ...migratable];
       // A staging this page does not know of (a reload, another device's
       // lapsed one) reads as paused: resuming carries on from its journal.
       const staged = new Set<string>();
       await Promise.all(
-        summaries
+        migratable
           .filter((project) => !known.has(project.projectId))
           .map(async (project) => {
             try {
@@ -232,13 +291,23 @@ export function createMigrationController(
       );
       set({
         error: null,
-        projects: summaries.map(
-          (project) =>
-            known.get(project.projectId) ??
-            (staged.has(project.projectId)
-              ? { ...waiting(project), phase: 'paused' as const }
-              : waiting(project))
-        )
+        projects: [
+          ...finishing.map((project) => ({
+            ...(known.get(project.projectId) ?? waiting(project)),
+            cutOver: true
+          })),
+          ...migratable.map(
+            (project) =>
+              known.get(project.projectId) ??
+              (staged.has(project.projectId)
+                ? {
+                    ...waiting(project),
+                    phase: 'paused' as const,
+                    plaintextLocked: true
+                  }
+                : waiting(project))
+          )
+        ]
       });
     } catch (error) {
       set({ error: migrationErrorOf(error).message });

@@ -109,6 +109,20 @@ export function reportingEncryptedProjectStore(
     info: store.info,
     replaced: store.replaced,
     roomAccess,
+    // Share links (slice 5-10): both read the verified head, and a change
+    // writes a version, so both report like a load or save.
+    shareHead: (projectId) =>
+      verifiedHead(
+        () => store.shareHead(projectId),
+        () => projectId,
+        projectId
+      ),
+    writeShareLinks: (projectId, change) =>
+      verifiedHead(
+        () => store.writeShareLinks(projectId, change),
+        () => projectId,
+        projectId
+      ),
     // A migration (slice 7-2): the staged first version is a head this
     // page wrote, and the journal is read from a head this page verified.
     stageMigratedProject: (request) =>

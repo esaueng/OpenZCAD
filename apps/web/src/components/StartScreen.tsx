@@ -51,7 +51,7 @@ import {
   projectNeedsUpdate
 } from '../lib/projectShelf';
 import { syncRunTotals, type SyncEntry } from '../lib/syncRun';
-import { useMigratingProjects } from '../lib/migrationStatus';
+import { useMigrationLockedProjects } from '../lib/migrationStatus';
 import type { DemoDefinition } from '../lib/demoDefinitions';
 import { BrandMark } from './BrandMark';
 import { DemoModelIcon } from './DemoModelIcon';
@@ -405,7 +405,9 @@ export function StartScreen({
         )
       : [];
 
-  const migratingProjectIds = useMigratingProjects();
+  // Being encrypted in this tab, or paused or stopped with its plaintext
+  // still locked: badged, and opened read-only (App.tsx).
+  const migratingProjectIds = useMigrationLockedProjects();
   const syncEntryById = new Map(
     (syncRun ?? []).map((entry) => [entry.projectId, entry] as const)
   );
@@ -610,7 +612,7 @@ export function StartScreen({
     // An encrypted project this build opens (ADR-024 Phase 4); it is
     // duplicated in the browser like any other (slice 4-8).
     const encrypted = project.storageFormat === 2;
-    // Being encrypted in this tab (ADR-024 Phase 7): read-only meanwhile.
+    // Being encrypted in this tab (ADR-024 Phase 7): it opens read-only.
     const migrating = migratingProjectIds.has(project.projectId);
 
     const preview = (

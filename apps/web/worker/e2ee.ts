@@ -69,6 +69,10 @@ import {
   handleE2eeProjectRequest,
   isE2eeProjectPath
 } from './e2eeProjects';
+import {
+  handleE2eeShareLinkRequest,
+  isE2eeShareLinkPath
+} from './e2eeShareLinks';
 import { handleE2eeContactsRequest, isE2eeContactsPath } from './e2eeContacts';
 import {
   handleE2eeInvitationRequest,
@@ -100,12 +104,36 @@ import {
   handleE2eeProjectMigrationRequest,
   isE2eeProjectMigrationPath
 } from './e2eeProjectMigrations';
-import { migrationLeaseOf } from './e2eeMigrationLease';
+import {
+  isProjectDecryptStaging,
+  migrationLeaseOf
+} from './e2eeMigrationLease';
+import { PROJECT_MIGRATING_CODE } from '@openzcad/shared';
 import {
   isE2eeProjectGroupStorageReady,
   isE2eeProjectMigrationStorageReady,
-  isE2eeProjectVersionStorageReady
+  isE2eeProjectVersionStorageReady,
+  isE2eeReverseStorageReady
 } from '@openzcad/cloudflare-adapters';
+
+/**
+ * Slice 7-3: the encrypted content routes (documents, versions, revisions,
+ * project info, measurements, view state and blobs) a project being turned
+ * back into plaintext refuses writes on. Its MLS key management (Commits,
+ * wraps, resets) keeps working: it changes no content.
+ */
+const ENCRYPTED_CONTENT_WRITE_ROUTE =
+  /^\/api\/e2ee\/projects\/([^/]+)\/(?:document|versions|revisions(?:\/[^/]+)?|info|measurements|view-states(?:\/[^/]+)?|blobs(?:\/.*)?)$/;
+/**
+ * Writes that would share an encrypted project, or settle a member's
+ * departure, while its plaintext is staged (slice 7-3 with Phase 5): share
+ * links and their keys, authority and snapshots (5-10; matched before that
+ * slice's routes exist, so they arrive covered), proposals (5-5), new
+ * invitations and KeyPackages (5-3a). Revoking an invitation stays open. The reverse cutover refuses a shared project anyway; this keeps a
+ * staging from being undone by a write it cannot see.
+ */
+const ENCRYPTED_SHARING_WRITE_ROUTE =
+  /^\/api\/e2ee\/projects\/([^/]+)\/(?:share-links(?:\/.*)?|mls\/proposals|invitations|key-packages(?:\/claim)?)$/;
 
 interface WriteDatabase extends D1Database {
   authorization: E2eeWriteAuthorization;
@@ -1018,7 +1046,9 @@ function removedDevices(
  * counts as encrypted here: its staged versions, project info and key
  * archives become the encrypted project at the cutover, which checks no
  * signer itself, so a replacement that drops their signer would leave the
- * migrated project unreadable. An abandoned staging is never cut over.
+ * migrated project unreadable. Nor may it drop a device that joined the
+ * staged group (an MLS leaf), which signs nothing yet holds the key the
+ * cutover exposes ciphertext under. An abandoned staging is never cut over.
  *
  * Returns a fence for the identity write itself, so a version such a
  * device signs meanwhile makes the write refuse; encrypted writes, staged
@@ -1036,13 +1066,12 @@ async function projectSignerFence(
   ) {
     return { sql: '1 = 1', binds: [] };
   }
-  const staged = (await isE2eeProjectMigrationStorageReady(db))
-    ? ` OR ${STAGED_FOR_ENCRYPTION_SQL}`
-    : '';
+  const migrations = await isE2eeProjectMigrationStorageReady(db);
   const fence = signedProjectsFence(
     userId,
-    `p.storage_format = 2${staged}`,
-    removedDeviceIds
+    `p.storage_format = 2${migrations ? ` OR ${STAGED_FOR_ENCRYPTION_SQL}` : ''}`,
+    removedDeviceIds,
+    migrations ? STAGED_FOR_ENCRYPTION_SQL : undefined
   );
   await refuseIfSigned(db, fence);
   return fence;
@@ -1055,14 +1084,28 @@ const STAGED_FOR_ENCRYPTION_SQL = `EXISTS (SELECT 1 FROM e2ee_project_migrations
 
 /**
  * Holds while no project `p` of the user matching `projects` has a
- * version, envelope or key archive signed by one of `deviceIds`.
+ * version, envelope or key archive signed by one of `deviceIds`, nor,
+ * among those also matching `leavesIn`, an MLS leaf of one of them.
+ *
+ * A leaf matters only for a project staged for encryption: a device that
+ * joined the staged group holds its key without signing anything, and no
+ * cutoff or rotation can reach the project before the cutover (format-2
+ * projects get both, so their leaves hold nothing up).
  */
 function signedProjectsFence(
   userId: string,
   projects: string,
-  deviceIds: readonly string[]
+  deviceIds: readonly string[],
+  leavesIn?: string
 ): { sql: string; binds: string[] } {
   const marks = deviceIds.map(() => '?').join(', ');
+  const leaves = leavesIn
+    ? `
+           OR ((${leavesIn})
+               AND EXISTS (SELECT 1 FROM e2ee_project_leaves l
+                           WHERE l.project_id = p.id AND l.user_id = p.user_id
+                             AND l.device_id IN (${marks})))`
+    : '';
   return {
     sql: `NOT EXISTS (SELECT 1 FROM projects p
        WHERE p.user_id = ? AND (${projects})
@@ -1074,8 +1117,14 @@ function signedProjectsFence(
                         AND e.signer_device_id IN (${marks}))
            OR EXISTS (SELECT 1 FROM e2ee_key_archives a
                       WHERE a.project_id = p.id
-                        AND a.signer_device_id IN (${marks}))))`,
-    binds: [userId, ...deviceIds, ...deviceIds, ...deviceIds]
+                        AND a.signer_device_id IN (${marks}))${leaves}))`,
+    binds: [
+      userId,
+      ...deviceIds,
+      ...deviceIds,
+      ...deviceIds,
+      ...(leavesIn ? deviceIds : [])
+    ]
   };
 }
 
@@ -1088,15 +1137,20 @@ function signedProjectsFence(
  * migrated project holding records by a revoked signer without a cutoff,
  * which browsers refuse. So such a revocation waits until the staging is
  * cut over (its project is then format 2 and gets a cutoff) or abandoned.
- * A device that signed nothing staged is revoked as before.
+ * The same holds for a device that joined a staged group (an MLS leaf):
+ * it signs nothing, but holds the key the cutover exposes ciphertext
+ * under, and only a format-2 project gets the rotation that would drop it.
+ * A device that signed nothing staged and holds no staged leaf is revoked
+ * as before.
  *
  * Returns a fence for the device-list entry's insert. `signed` refuses a
- * record the device stages meanwhile; staged writes are fenced on the
- * device list in turn (`deviceListUnchanged`). `encrypted` holds while the
- * account owns as many format-2 projects as when checked, so a cutover
- * landing in between, which the cutoffs' own fence misses when there were
- * none to name, makes the append refuse and the browser sign cutoffs
- * again. Nothing to check before migration 0042.
+ * record the device stages, or a leaf it adds, meanwhile; staged writes and
+ * group joins are fenced on the device list in turn
+ * (`deviceListUnchanged`). `encrypted` holds while the account owns as
+ * many format-2 projects as when checked, so a cutover landing in between,
+ * which the cutoffs' own fence misses when there were none to name, makes
+ * the append refuse and the browser sign cutoffs again. Nothing to check
+ * before migration 0042.
  */
 async function stagedSignerFence(
   db: D1Database,
@@ -1119,7 +1173,8 @@ async function stagedSignerFence(
   const signed = signedProjectsFence(
     userId,
     STAGED_FOR_ENCRYPTION_SQL,
-    revokedDeviceIds
+    revokedDeviceIds,
+    STAGED_FOR_ENCRYPTION_SQL
   );
   await refuseIfSigned(db, signed, STAGED_SIGNER_MESSAGE);
   const countEncrypted = `(SELECT COUNT(*) FROM projects
@@ -1141,7 +1196,7 @@ async function stagedSignerFence(
 }
 
 const STAGED_SIGNER_MESSAGE =
-  'This device helped encrypt a project that is still being encrypted. Finish or cancel that encryption, then remove the device. Nothing was changed.';
+  'This device holds keys to a project that is still being encrypted. Finish or cancel that encryption, then remove the device. Nothing was changed.';
 
 async function refuseIfSigned(
   db: D1Database,
@@ -1973,7 +2028,19 @@ export async function handleE2eeRequest(
   /** The invitation routes' email, sender and sharing rollout (5-3a). */
   invitations: E2eeInvitationHost = CLOSED_INVITATIONS,
   /** Moving plaintext projects to encrypted storage (slice 7-1). */
-  migrationEnabled = false
+  migrationEnabled = false,
+  /**
+   * Slice 7-3: the beta-only reverse path is open to this account
+   * (E2EE_REVERSE_ENABLED with migration), reported once migration 0043 is
+   * installed.
+   */
+  reverseEnabled = false,
+  /**
+   * Slice 7-3: whether encrypted content writes ask if their project is
+   * being turned back into plaintext (refused with 409 PROJECT_MIGRATING).
+   * The global flags decide, not the account's, as for plaintext writes.
+   */
+  reverseWritesGated = false
 ): Promise<Response> {
   const { pathname } = new URL(request.url);
   const method = request.method;
@@ -1995,10 +2062,15 @@ export async function handleE2eeRequest(
         projectsReady &&
         migrationEnabled &&
         (await isE2eeProjectMigrationStorageReady(env.DB));
+      const reverseReady =
+        migrationReady &&
+        reverseEnabled &&
+        (await isE2eeReverseStorageReady(env.DB));
       return json({
         enabled: keysReady,
         projectsEnabled: projectsReady,
-        ...(migrationReady ? { migrationEnabled: true } : {})
+        ...(migrationReady ? { migrationEnabled: true } : {}),
+        ...(reverseReady ? { reverseEnabled: true } : {})
       });
     }
     if (!enabled) {
@@ -2072,8 +2144,32 @@ export async function handleE2eeRequest(
         userId,
         migrationEnabled,
         db.authorization,
-        migrationLease
+        migrationLease,
+        reverseEnabled
       );
+    }
+    // Slice 7-3: while its plaintext is staged, an encrypted project's
+    // content and sharing stay as the staging read them.
+    if (reverseWritesGated && !['GET', 'HEAD'].includes(method)) {
+      const content =
+        ENCRYPTED_CONTENT_WRITE_ROUTE.exec(pathname) ??
+        ENCRYPTED_SHARING_WRITE_ROUTE.exec(pathname);
+      let projectId: string | null = null;
+      try {
+        projectId = content ? decodeURIComponent(content[1]!) : null;
+      } catch {
+        projectId = null;
+      }
+      if (
+        projectId &&
+        (await isProjectDecryptStaging(rawDb, projectId, true))
+      ) {
+        refuse(
+          409,
+          PROJECT_MIGRATING_CODE,
+          'This project is leaving encrypted storage. It opens read-only until that finishes.'
+        );
+      }
     }
     if (isE2eeDeviceRemovalPath(pathname)) {
       // Revocation cutoffs and solo group resets (e2eeDeviceRemoval.ts).
@@ -2152,6 +2248,19 @@ export async function handleE2eeRequest(
         projectsEnabled,
         db.authorization,
         migrationLease
+      );
+    }
+    if (isE2eeShareLinkPath(pathname)) {
+      // Share links of encrypted projects and share delegations
+      // (e2eeShareLinks.ts, slice 5-10).
+      return await handleE2eeShareLinkRequest(
+        request,
+        rawDb,
+        projectBucket(env),
+        userId,
+        projectsEnabled,
+        invitations.sharingEnabled,
+        db.authorization
       );
     }
     if (isE2eeInvitationPath(pathname)) {
