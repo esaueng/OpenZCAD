@@ -1102,8 +1102,11 @@ this decision rests on is
   omitted or fabricated history is refused before admission; a failed join
   restores the previous session and KeyPackages. This keeps the existing
   role, credential, PSK and removal rules and the V1 archive format.
-  Callers must retain the initial GroupInfo and supply the
-  complete archive; checkpoints are not yet supported by this verifier.
+  Callers supply either the initial GroupInfo and the complete archive,
+  or an owner checkpoint (a GroupInfo of epoch K signed by a leaf its own
+  roles list as owner and that a currently certified device certifies)
+  and exactly the records after K; the app does not produce checkpoints
+  yet (slice 8-C5b).
 
   Encrypted archives use provisional admission: a Welcome join can export
   only the key needed to decrypt its archive until verification completes.
