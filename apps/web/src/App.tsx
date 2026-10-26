@@ -24677,7 +24677,12 @@ export function App() {
           cancelPanel();
           return;
         }
-        if (event.key === 'Enter' && !typing) {
+        // As for an in-place command: Enter on the Move bar's own controls
+        // (Options, Cancel, Done) acts for that control, not the Move.
+        const moveControl =
+          target instanceof Element &&
+          target.closest('.move-command') !== null;
+        if (event.key === 'Enter' && !typing && !moveControl) {
           event.preventDefault();
           confirmMove();
           return;
