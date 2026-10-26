@@ -9210,11 +9210,17 @@ export function App() {
     setExtrudeEdit(null);
   }
 
+  const endExtrudeEditRef = useRef(endExtrudeEdit);
+  endExtrudeEditRef.current = endExtrudeEdit;
+
   /** Esc or the bar's Cancel: the extrude stays as it was, nothing selected. */
   function cancelExtrudeEdit() {
     endExtrudeEdit();
     setSelectedFeatureNode(null);
     setSelectedBodyIds([]);
+    // The profiles its History row lit go too, as an in-place edit's do.
+    setSelectedProfiles([]);
+    setSelectedSketchProfileId(null);
   }
 
   /** Done on an in-place edit: the feature's update, validated as the card's was. */
@@ -9963,6 +9969,7 @@ export function App() {
     // (another tool, a workspace switch, Measure) ends it too, quietly,
     // since the action that closed it says what happened.
     inPlaceRef.current.cancel(true);
+    endExtrudeEdit();
     extrudeEditRequest.current += 1;
     // The mode hint the panel set ("Move/Rotate: drag the arrows…") describes
     // a state the user has just left; it must not outlive the panel.
@@ -20346,7 +20353,11 @@ export function App() {
   }, [keypadWithinReach]);
   const inPlaceRef = useRef(inPlace);
   inPlaceRef.current = inPlace;
-  cancelInPlaceRef.current = () => inPlaceRef.current.cancel(true);
+  // Every open edit: an in-place command's, and the in-place Extrude's.
+  cancelInPlaceRef.current = () => {
+    inPlaceRef.current.cancel(true);
+    endExtrudeEditRef.current();
+  };
   // A command's keypad belongs to the command it opened on: another one
   // taking over (a History row re-arming, a new tool) closes it, or its
   // value would be entered into the new command.
@@ -20363,6 +20374,32 @@ export function App() {
       inPlaceEditing?.featureId ?? extrudeEditFeatureId ?? null
     );
   }, [inPlaceEditing, extrudeEditFeatureId]);
+  // The stored extrude changing under an open edit (an undo or redo, a
+  // collaborator) reseeds an untouched edit from it, as an in-place edit's
+  // untouched values follow the live feature; a changed draft stands.
+  const extrudeEditArmedData = useRef<FeatureNode['data'] | null>(null);
+  const extrudeEditData = extrudeEditFeature?.data ?? null;
+  useEffect(() => {
+    if (!extrudeEdit || !extrudeEditData) {
+      extrudeEditArmedData.current = null;
+      return;
+    }
+    const armed = extrudeEditArmedData.current;
+    extrudeEditArmedData.current = extrudeEditData;
+    if (
+      !armed ||
+      armed === extrudeEditData ||
+      JSON.stringify(armed) === JSON.stringify(extrudeEditData)
+    ) {
+      return;
+    }
+    if (regionExtrudeCommandRef.current?.touched()) return;
+    setExtrudeEdit((current) =>
+      current ? { ...current, generation: current.generation + 1 } : current
+    );
+    // A new arming per generation; the data it opens on is this one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [extrudeEditData]);
   // An extrude edit lasts while its feature is the pinned selection and
   // nothing else runs: another row, Esc, a tool, a new extrude or the
   // feature's deletion ends it, its preview with it.
@@ -24062,7 +24099,8 @@ export function App() {
     if (
       renamed &&
       (modelingEditFeature?.featureId === featureId ||
-        inPlaceRef.current.editing?.featureId === featureId)
+        inPlaceRef.current.editing?.featureId === featureId ||
+        extrudeEditRef.current?.featureId === featureId)
     ) {
       closeFeaturePanel();
     }
@@ -29111,11 +29149,20 @@ export function App() {
                       state
                     })
                   }
+                  name={extrudeEditFeature.name}
+                  // The feature's name as it is now: a rename since the
+                  // edit opened is never written back over.
                   onPreview={(value) =>
-                    previewExtrudeForm(extrudeEditFeature, value)
+                    previewExtrudeForm(
+                      extrudeEditFeature,
+                      value && { ...value, name: extrudeEditFeature.name }
+                    )
                   }
                   onSubmit={(value) =>
-                    applyExtrudeForm(extrudeEditFeature, value)
+                    applyExtrudeForm(extrudeEditFeature, {
+                      ...value,
+                      name: extrudeEditFeature.name
+                    })
                   }
                   onCancel={cancelExtrudeEdit}
                 />

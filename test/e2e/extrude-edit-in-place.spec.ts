@@ -351,3 +351,58 @@ test('an edit armed over a new extrude stands its handles at once', async ({
   await expect(page.getByTestId('command-handle-distance')).toHaveText('10 mm');
   await edit.getByRole('button', { name: 'Cancel' }).click();
 });
+
+test('an extrude edit ends cleanly: Cancel leaves no profile picked, and a rename is never written back', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await stubApi(page);
+  await openDocument(page, postDocument('Extrude edit cancel and rename'));
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '2', {
+    timeout: 30_000
+  });
+  await revealModelPanel(page, 'History');
+  const row = page.locator('.feature-row-main[title^="Post — "]');
+
+  // Cancel: nothing selected, the post's profile included (no Extrude
+  // quick action offered on it).
+  let edit = await editExtrudeFromHistory(page, row, 'Post');
+  await edit.getByRole('button', { name: 'Cancel' }).click();
+  await expect(edit).toHaveCount(0);
+  await expect(
+    page.getByRole('region', { name: 'Selected closed profile' })
+  ).toHaveCount(0);
+  await expect(
+    page.locator('button.body-row-main[title^="Post sketch"]')
+  ).toHaveAttribute('aria-pressed', 'false');
+
+  // A rename from History while the edit is open closes it, as it closed
+  // the card: nothing can write the old name back.
+  edit = await editExtrudeFromHistory(page, row, 'Post');
+  await setBarValues(page, edit, { Distance: '12' });
+  await row.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Rename' }).click();
+  const field = page.getByRole('textbox', { name: 'Rename Post' });
+  await field.fill('Tall post');
+  await field.press('Enter');
+  await expect(edit).toHaveCount(0);
+  const renamed = listFeaturesInOrder(await exportedDocument(page)).find(
+    (feature) => feature.featureKind === 'extrude'
+  )!;
+  expect(renamed.name).toBe('Tall post');
+  expect(renamed.data).toMatchObject({ distance: '5 * 2' });
+  // Re-armed, the edit is titled for the new name and Done keeps it.
+  const tall = await editExtrudeFromHistory(
+    page,
+    page.locator('.feature-row-main[title^="Tall post — "]'),
+    'Tall post'
+  );
+  await tall.getByRole('button', { name: 'Done' }).click();
+  await expect(tall).toHaveCount(0, { timeout: 30_000 });
+  expect(
+    listFeaturesInOrder(await exportedDocument(page)).find(
+      (feature) => feature.featureKind === 'extrude'
+    )!.name
+  ).toBe('Tall post');
+});

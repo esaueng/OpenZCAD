@@ -65,6 +65,8 @@ export interface ExtrudeCommandHandle {
   setValue(valueId: ExtrudeValueId, text: string): void;
   /** The text a value holds now, as the keypad opens on it. */
   text(valueId: ExtrudeValueId): string;
+  /** Whether anything has changed since the command opened. */
+  touched(): boolean;
 }
 
 interface ExtrudeCommandProps {
@@ -82,6 +84,8 @@ interface ExtrudeCommandProps {
   editing?: boolean;
   /** Why the last preview or Done was refused, said where the hint is. */
   note?: string | null;
+  /** The edited feature's name as it is now (a rename since it opened). */
+  name?: string;
   toFacePicking?: ExtrudeToFacePicking;
   /**
    * The open keypad's entry for one of these values does not evaluate
@@ -152,6 +156,7 @@ export function ExtrudeCommand({
   disabled,
   editing = false,
   note = null,
+  name,
   entryRefusal = null,
   toFacePicking,
   distanceSetterRef,
@@ -168,6 +173,7 @@ export function ExtrudeCommand({
   // Changes read the draft as the last one left it, not as this render saw
   // it: two drag frames can land before a render.
   const draftRef = useRef(draft);
+  const openedDraft = useRef(draft);
   // A new extrude opens at zero until the user drags or types a distance,
   // so the zero-distance refusal waits for that edit (or a Done).
   const [distanceEdited, setDistanceEdited] = useState(false);
@@ -316,13 +322,16 @@ export function ExtrudeCommand({
   handle.current = {
     submit,
     setValue,
-    text: (valueId) => draftRef.current[valueId]
+    text: (valueId) => draftRef.current[valueId],
+    touched: () =>
+      JSON.stringify(draftRef.current) !== JSON.stringify(openedDraft.current)
   };
   useEffect(() => {
     commandRef.current = {
       submit: () => handle.current?.submit() ?? false,
       setValue: (valueId, text) => handle.current?.setValue(valueId, text),
-      text: (valueId) => handle.current?.text(valueId) ?? ''
+      text: (valueId) => handle.current?.text(valueId) ?? '',
+      touched: () => handle.current?.touched() ?? false
     };
     return () => {
       commandRef.current = null;
@@ -494,7 +503,7 @@ export function ExtrudeCommand({
 
   return (
     <InPlaceCommandBar
-      title={editing ? `Edit ${initial.name}` : 'Extrude'}
+      title={editing ? `Edit ${name ?? initial.name}` : 'Extrude'}
       hint={hint}
       refusal={toFacePicking?.armed ? null : refusal}
       canFinish={canFinish}
