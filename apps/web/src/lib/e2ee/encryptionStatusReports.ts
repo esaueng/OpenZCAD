@@ -2,8 +2,9 @@
  * Reports what the encrypted-project store verifies to the editor's
  * encryption indicator (`encryptionStatus.ts`): every head the page opens
  * or writes — an account load or save, a new project or copy, a head the
- * live room relays or accepts — and every verification failure. Loaded
- * with the store, never by the entry chunk.
+ * live room relays or accepts, a migration's staged first version and the
+ * head its journal is read from (slice 7-2) — and every verification
+ * failure. Loaded with the store, never by the entry chunk.
  */
 import type {
   EncryptedProjectStore,
@@ -107,6 +108,22 @@ export function reportingEncryptedProjectStore(
     projectName: (record) => store.projectName(record),
     info: store.info,
     replaced: store.replaced,
-    roomAccess
+    roomAccess,
+    // A migration (slice 7-2): the staged first version is a head this
+    // page wrote, and the journal is read from a head this page verified.
+    stageMigratedProject: (request) =>
+      verifiedHead(
+        () => store.stageMigratedProject(request),
+        (created) => created.project.projectId,
+        request.document.projectId
+      ),
+    revisionMap: (projectId) =>
+      verifiedHead(
+        () => store.revisionMap(projectId),
+        () => projectId,
+        projectId
+      ),
+    // Forgetting a staging the account dropped verifies nothing.
+    forgetStagedProject: (projectId) => store.forgetStagedProject(projectId)
   };
 }
