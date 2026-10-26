@@ -782,7 +782,7 @@ function DeviceStatusBadge({ account }: { account: AccountView }) {
   }
 }
 
-export function EnrollPanel({
+function EnrollPanel({
   account,
   ...shared
 }: Shared & { account: AccountView }) {
@@ -935,6 +935,8 @@ export function EnrollPanel({
     </Group>
   );
 }
+
+export { EnrollPanel };
 
 function ScanCodeDisplay({ code }: { code: string }) {
   const { path, size } = useMemo(() => qrSvgPath(encodeQr(code)), [code]);
