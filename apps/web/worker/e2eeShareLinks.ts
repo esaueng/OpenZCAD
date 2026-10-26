@@ -754,8 +754,8 @@ async function forgetLink(
     if (epoch !== keyEpoch) stale(epoch);
     sessionRequired();
   }
-  if (snapshot?.envelope_key && ctx.bucket) {
-    await ctx.bucket.delete(snapshot.envelope_key).catch(() => undefined);
+  if (snapshot?.envelope_key) {
+    await deleteSnapshotObject(ctx, projectId, shareId, snapshot.envelope_key);
   }
   return json({ ok: true });
 }
@@ -1072,11 +1072,11 @@ async function putSnapshot(
   }
   const previous = await ctx.db
     .prepare(
-      `SELECT document_version, envelope_key FROM e2ee_share_snapshots
+      `SELECT document_version FROM e2ee_share_snapshots
        WHERE project_id = ? AND share_id = ?`
     )
     .bind(projectId, shareId)
-    .first<{ document_version: number; envelope_key: string | null }>();
+    .first<{ document_version: number }>();
   const snapshotStale: () => never = () =>
     refuse(
       409,
@@ -1100,19 +1100,32 @@ async function putSnapshot(
     }
     inline = b64(payload);
   } else {
-    // Opaque: the project id the row names and the envelope's hash.
-    objectKey = `e2ee/${projectId}/s/${hash}`;
+    // Under this link and this write alone (#912 review): no other link's
+    // row, and no other write of this link, ever names the object, so
+    // replacing or forgetting one link cannot delete what another serves.
+    objectKey = await snapshotObjectKey(projectId, shareId, hash);
     await ctx.bucket.put(objectKey, payload);
   }
   const now = new Date().toISOString();
+  // Only this request's own object, which no row names unless the write
+  // below committed.
   const discard = async () => {
-    if (objectKey && objectKey !== previous?.envelope_key && ctx.bucket) {
+    if (objectKey && ctx.bucket) {
       await ctx.bucket.delete(objectKey).catch(() => undefined);
     }
   };
   let results;
   try {
     results = await runBatch(ctx.db, [
+      // The object the write replaces, read in the same transaction: a
+      // concurrent write at the same (or another) version that landed after
+      // `previous` was read is what this one replaces, and is deleted.
+      ctx.db
+        .prepare(
+          `SELECT envelope_key FROM e2ee_share_snapshots
+           WHERE project_id = ? AND share_id = ?`
+        )
+        .bind(projectId, shareId),
       ctx.db
         .prepare(
           `INSERT INTO e2ee_share_snapshots
@@ -1170,7 +1183,7 @@ async function putSnapshot(
     await discard();
     throw error;
   }
-  if (!changed(results[0])) {
+  if (!changed(results[1])) {
     await discard();
     await liveLink(ctx.db, projectId, shareId);
     const after = await currentKeyEpoch(ctx.db, projectId);
@@ -1185,14 +1198,74 @@ async function putSnapshot(
     if (now2 && now2.document_version > header.documentVersion) snapshotStale();
     sessionRequired();
   }
-  if (
-    previous?.envelope_key &&
-    previous.envelope_key !== objectKey &&
-    ctx.bucket
-  ) {
-    await ctx.bucket.delete(previous.envelope_key).catch(() => undefined);
+  const replaced =
+    (results[0]?.results?.[0] as { envelope_key: string | null } | undefined)
+      ?.envelope_key ?? null;
+  if (replaced && replaced !== objectKey) {
+    await deleteSnapshotObject(ctx, projectId, shareId, replaced);
   }
   return json(await oneLink(ctx.db, projectId, shareId));
+}
+
+// --- Snapshot objects ----------------------------------------------------------
+
+/**
+ * Where a snapshot body above the inline size lives in R2:
+ * `e2ee/<project>/s/<link>/<envelope hash>-<nonce>`. `<link>` is the first
+ * 128 bits of SHA-256 of the link id, so the key stays opaque and every
+ * object of one link shares a prefix; the nonce makes each write's object
+ * its own. Rows written before #912's review name `e2ee/<project>/s/<hash>`,
+ * which two links could share.
+ */
+async function snapshotObjectKey(
+  projectId: string,
+  shareId: string,
+  hash: string
+): Promise<string> {
+  const nonce = toHex(crypto.getRandomValues(new Uint8Array(16)));
+  return `${await snapshotObjectPrefix(projectId, shareId)}${hash}-${nonce}`;
+}
+
+async function snapshotObjectPrefix(
+  projectId: string,
+  shareId: string
+): Promise<string> {
+  const link = (await sha256Hex(new TextEncoder().encode(shareId))).slice(
+    0,
+    32
+  );
+  return `e2ee/${projectId}/s/${link}/`;
+}
+
+/**
+ * Deletes a snapshot object no row names any more, once retried. Never one
+ * another link's row still names (an object stored before #912's review,
+ * keyed by envelope hash alone). Whether it is gone.
+ */
+async function deleteSnapshotObject(
+  ctx: Context,
+  projectId: string,
+  shareId: string,
+  key: string
+): Promise<boolean> {
+  if (!ctx.bucket) return false;
+  const shared = await ctx.db
+    .prepare(
+      `SELECT 1 AS named FROM e2ee_share_snapshots
+       WHERE project_id = ? AND share_id <> ? AND envelope_key = ? LIMIT 1`
+    )
+    .bind(projectId, shareId, key)
+    .first<{ named: number }>();
+  if (shared) return true;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await ctx.bucket.delete(key);
+      return true;
+    } catch {
+      // Retried once; a later forget of the link sweeps its prefix.
+    }
+  }
+  return false;
 }
 
 // --- Dispatch ----------------------------------------------------------------

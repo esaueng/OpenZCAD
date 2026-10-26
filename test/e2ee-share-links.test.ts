@@ -97,6 +97,12 @@ import {
   serverKeyEpoch,
   sharedProject
 } from './support/e2ee-members';
+import {
+  R2_PADDING,
+  putRawSnapshot,
+  sealRawSnapshot,
+  snapshotObjects
+} from './support/e2ee-share-snapshots';
 
 const THIRD = 'user_third';
 const DAY = 86_400_000;
@@ -1884,3 +1890,93 @@ describe(
     });
   }
 );
+
+describe('share snapshot objects (slice 8-C1)', { timeout: 120_000 }, () => {
+  const envelopeKey = (srv: Server, projectId: string, shareId: string) =>
+    rows<{ envelope_key: string | null }>(
+      srv,
+      `SELECT envelope_key FROM e2ee_share_snapshots
+       WHERE project_id = ? AND share_id = ?`,
+      projectId,
+      shareId
+    )[0]?.envelope_key ?? null;
+
+  it('keys each object by its link, so replacing or forgetting one link never deletes what another serves', async () => {
+    const { srv, laptop, projectId, document } = await linkedProject();
+    await delegate(laptop);
+    const a = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const b = await createShareLink(laptop.shareLinks, projectId, 'view');
+    // The same envelope bytes stored for both links, as a client may send.
+    const same = await sealRawSnapshot(srv, laptop, projectId, a.shareId, {
+      document,
+      padding: R2_PADDING
+    });
+    for (const link of [a, b]) {
+      expect(
+        (await putRawSnapshot(srv, laptop, projectId, link.shareId, same))
+          .status
+      ).toBe(200);
+    }
+    const aKey = envelopeKey(srv, projectId, a.shareId)!;
+    expect(aKey).not.toBe(envelopeKey(srv, projectId, b.shareId));
+    expect(snapshotObjects(srv, projectId)).toHaveLength(2);
+    // Replacing b's snapshot (the same version) leaves a's object alone...
+    const replacement = await sealRawSnapshot(
+      srv,
+      laptop,
+      projectId,
+      b.shareId,
+      { document, padding: R2_PADDING }
+    );
+    expect(
+      (await putRawSnapshot(srv, laptop, projectId, b.shareId, replacement))
+        .status
+    ).toBe(200);
+    expect((await served(srv, a.fragment.token)).status).toBe(200);
+    expect(snapshotObjects(srv, projectId)).toEqual(
+      [aKey, envelopeKey(srv, projectId, b.shareId)!].sort()
+    );
+    // ...and so does forgetting b.
+    await revokeShareLink(laptop.shareLinks, projectId, b.shareId);
+    expect((await served(srv, b.fragment.token)).status).toBe(404);
+    expect((await served(srv, a.fragment.token)).status).toBe(200);
+    expect(snapshotObjects(srv, projectId)).toEqual([aKey]);
+  });
+
+  it('deletes the object a concurrent write at the same version replaced', async () => {
+    const { srv, laptop, member, projectId, document } = await linkedProject();
+    await delegate(laptop);
+    const link = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const first = await sealRawSnapshot(srv, laptop, projectId, link.shareId, {
+      document,
+      padding: R2_PADDING
+    });
+    const second = await sealRawSnapshot(
+      srv,
+      member,
+      projectId,
+      link.shareId,
+      { document, padding: R2_PADDING }
+    );
+    // The owner's write stores its object; the editor's write of the same
+    // version then lands whole before the owner's row does.
+    const put = srv.bucket.put.getMockImplementation()!;
+    srv.bucket.put.mockImplementationOnce(
+      async (key: string, body: Uint8Array) => {
+        await put(key, body);
+        expect(
+          (await putRawSnapshot(srv, member, projectId, link.shareId, second))
+            .status
+        ).toBe(200);
+      }
+    );
+    expect(
+      (await putRawSnapshot(srv, laptop, projectId, link.shareId, first))
+        .status
+    ).toBe(200);
+    // The owner's row won, and the editor's object it replaced is gone.
+    const key = envelopeKey(srv, projectId, link.shareId)!;
+    expect(snapshotObjects(srv, projectId)).toEqual([key]);
+    expect((await served(srv, link.fragment.token)).status).toBe(200);
+  });
+});

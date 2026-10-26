@@ -209,6 +209,7 @@ export interface Bucket {
   get: ReturnType<typeof vi.fn>;
   head: ReturnType<typeof vi.fn>;
   delete: ReturnType<typeof vi.fn>;
+  list: ReturnType<typeof vi.fn>;
   createMultipartUpload: ReturnType<typeof vi.fn>;
   resumeMultipartUpload: ReturnType<typeof vi.fn>;
 }
@@ -294,7 +295,30 @@ export function objectBucket(): Bucket {
     }),
     delete: vi.fn(async (key: string) => {
       objects.delete(key);
-    })
+    }),
+    // R2's listing, in key order, a page of `limit` (at most 1000) keys.
+    list: vi.fn(
+      async (
+        options: { prefix?: string; cursor?: string; limit?: number } = {}
+      ) => {
+        const keys = [...objects.keys()]
+          .filter((key) => key.startsWith(options.prefix ?? ''))
+          .sort();
+        const start = options.cursor ? Number(options.cursor) : 0;
+        const limit = Math.min(options.limit ?? 1000, 1000);
+        const page = keys.slice(start, start + limit);
+        const truncated = start + limit < keys.length;
+        return {
+          objects: page.map((key) => ({
+            key,
+            size: objects.get(key)!.byteLength,
+            uploaded: new Date(0)
+          })),
+          truncated,
+          ...(truncated ? { cursor: String(start + limit) } : {})
+        };
+      }
+    )
   };
 }
 
