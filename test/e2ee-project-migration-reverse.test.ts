@@ -1590,6 +1590,199 @@ describe('staged heads', () => {
   });
 });
 
+// --- Staged upload sessions ----------------------------------------------------------
+
+/** Opens a staged file's upload session under the current decrypt lease. */
+async function openStagedUpload(
+  r: ReverseDevice,
+  srv: Server,
+  projectId: string,
+  metadata: Record<string, string> = {}
+) {
+  const lease = migrationRow(srv, projectId)!.lease_id as string;
+  const created = await withMigrationLease(r.d.fetcher, lease)('/api/uploads', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      projectId,
+      fileName: 'staged.stl',
+      contentType: 'model/stl',
+      kind: 'stl-export',
+      metadata
+    })
+  });
+  expect(created.status).toBe(201);
+  return (
+    (await created.json()) as {
+      session: {
+        uploadSessionId: string;
+        uploadUrl: string;
+        artifactId: string;
+      };
+    }
+  ).session;
+}
+
+async function codeOf(response: Response) {
+  return ((await response.json()) as { code?: string }).code;
+}
+
+describe('staged upload sessions', () => {
+  it('advance only under the decrypt lease that opened them, not one that took over', async () => {
+    const srv = roomServer();
+    const { projectId } = await encryptedProject(srv, { revisions: 1 });
+    const desktop = reverseOn(srv, owner, 'owner_desktop', {
+      beforeStep: (step) => {
+        if (step === 'cutover') throw new Error('Stop here.');
+      }
+    });
+    await expect(decryptFully(desktop, projectId)).rejects.toThrow('Stop');
+    const opener = migrationRow(srv, projectId)!.lease_id;
+    const session = await openStagedUpload(desktop, srv, projectId);
+    // The lease lapses and another start takes the staging over.
+    srv.db
+      .prepare(
+        'UPDATE e2ee_project_migrations SET lease_expires_at = 1 WHERE project_id = ?'
+      )
+      .run(projectId);
+    const taken = await createProjectMigrationsApi(desktop.d.fetcher).start(
+      projectId,
+      { direction: 'decrypt', deviceId: 'owner_laptop' },
+      null
+    );
+    expect(migrationRow(srv, projectId)).toMatchObject({
+      state: 'staging',
+      lease_id: taken.leaseId
+    });
+    // The old session writes nothing, whichever lease the request names.
+    for (const fetcher of [
+      desktop.d.fetcher,
+      withMigrationLease(desktop.d.fetcher, taken.leaseId)
+    ]) {
+      const put = await fetcher(session.uploadUrl, {
+        method: 'PUT',
+        body: text('Stale staged file')
+      });
+      expect(put.status).toBe(409);
+      expect(await codeOf(put)).toBe(E2EE_MIGRATION_CODES.leaseLost);
+    }
+    expect(
+      srv.db
+        .prepare('SELECT reservation_state FROM upload_sessions WHERE id = ?')
+        .get(session.uploadSessionId)
+    ).toMatchObject({ reservation_state: 'open' });
+    // A session the new lease opens works.
+    const fresh = await openStagedUpload(desktop, srv, projectId);
+    const put = await desktop.d.fetcher(fresh.uploadUrl, {
+      method: 'PUT',
+      body: text('Fresh staged file')
+    });
+    expect(put.status).toBe(204);
+    // Each session records the lease that opened it.
+    const leaseOf = (id: string) =>
+      JSON.parse(
+        (
+          srv.db
+            .prepare('SELECT metadata_json FROM upload_sessions WHERE id = ?')
+            .get(id) as { metadata_json: string }
+        ).metadata_json
+      ).decryptLease;
+    expect(leaseOf(session.uploadSessionId)).toBe(opener);
+    expect(leaseOf(fresh.uploadSessionId)).toBe(taken.leaseId);
+  });
+
+  it('do not carry on as ordinary plaintext uploads after the cutover', async () => {
+    const srv = roomServer();
+    const { projectId } = await encryptedProject(srv, { revisions: 1 });
+    const leases = memoryLeaseStore();
+    const first = reverseOn(srv, owner, 'owner_desktop', {
+      leases,
+      beforeStep: (step) => {
+        if (step === 'cutover') throw new Error('Stop here.');
+      }
+    });
+    await expect(decryptFully(first, projectId)).rejects.toThrow('Stop');
+    const pending = await openStagedUpload(first, srv, projectId);
+    const written = await openStagedUpload(first, srv, projectId);
+    expect(
+      (
+        await first.d.fetcher(written.uploadUrl, {
+          method: 'PUT',
+          body: text('Staged, not finalized')
+        })
+      ).status
+    ).toBe(204);
+    // The same browser resumes and cuts over: the project is plaintext.
+    await decryptFully(
+      reverseOn(srv, owner, 'owner_desktop', { from: first.d, leases }),
+      projectId
+    );
+    expect(formatOf(srv, projectId)).toBe(1);
+    const before = count(srv, 'artifacts', projectId);
+    // Neither session opened under the decrypt lease lands anything now.
+    const put = await first.d.fetcher(pending.uploadUrl, {
+      method: 'PUT',
+      body: text('Late staged file')
+    });
+    expect(put.status).toBe(409);
+    expect(await codeOf(put)).toBe(E2EE_MIGRATION_CODES.leaseLost);
+    const finalized = await first.d.fetcher('/api/artifacts/finalize', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        projectId,
+        uploadSessionId: written.uploadSessionId,
+        artifactId: written.artifactId
+      })
+    });
+    expect(finalized.status).toBe(409);
+    expect(await codeOf(finalized)).toBe(E2EE_MIGRATION_CODES.leaseLost);
+    expect(count(srv, 'artifacts', projectId)).toBe(before);
+    // An ordinary upload cannot claim a decrypt lease: the key is dropped.
+    const spoofed = await srv.call('POST', '/api/uploads', {
+      body: {
+        projectId,
+        fileName: 'after.stl',
+        contentType: 'model/stl',
+        kind: 'stl-export',
+        metadata: { decryptLease: 'spoofed', note: 'kept' }
+      }
+    });
+    expect(spoofed.status).toBe(201);
+    const { session } = (await spoofed.json()) as {
+      session: { uploadSessionId: string; uploadUrl: string; artifactId: string };
+    };
+    expect(
+      JSON.parse(
+        (
+          srv.db
+            .prepare('SELECT metadata_json FROM upload_sessions WHERE id = ?')
+            .get(session.uploadSessionId) as { metadata_json: string }
+        ).metadata_json
+      )
+    ).toEqual({ note: 'kept' });
+    expect(
+      (
+        await srv.call('PUT', session.uploadUrl, {
+          raw: text('After the cutover') as Uint8Array<ArrayBuffer>
+        })
+      ).status
+    ).toBe(204);
+    expect(
+      (
+        await srv.call('POST', '/api/artifacts/finalize', {
+          body: {
+            projectId,
+            uploadSessionId: session.uploadSessionId,
+            artifactId: session.artifactId
+          }
+        })
+      ).status
+    ).toBe(200);
+    expect(count(srv, 'artifacts', projectId)).toBe(before + 1);
+  });
+});
+
 // --- Refusals -----------------------------------------------------------------------
 
 describe('who may turn encryption off', () => {

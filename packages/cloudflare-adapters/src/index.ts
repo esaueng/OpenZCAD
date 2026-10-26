@@ -734,20 +734,40 @@ export function projectNotMigratingSql(projectIdSql: string): string {
 }
 
 /**
- * The SQL that holds while the encrypted project whose id is
- * `projectIdSql` is being turned back into plaintext (slice 7-3,
- * migration 0042's direction `decrypt`): what a decrypt staging's own
- * upload statements carry in place of `projectNotMigratingSql`, which
- * refuses every staging. The session was opened under the live decrypt
- * lease (`DecryptStagingFence`); this keeps it from landing anything once
- * that staging was cut over or abandoned. No binds.
+ * The upload-session metadata key that names the decrypt lease a decrypt
+ * staging's file session was opened under (slice 7-3). Only the server
+ * writes it: `createUploadSession` drops it from what a browser sends, and
+ * finalize leaves it out of the artifact's metadata.
  */
-function projectStagedForDecryptionSql(projectIdSql: string): string {
+const DECRYPT_LEASE_METADATA_KEY = 'decryptLease';
+
+/** Upload metadata as a browser may set it: without the server's keys. */
+function clientUploadMetadata<T>(
+  metadata: Record<string, T>
+): Record<string, T> {
+  const { [DECRYPT_LEASE_METADATA_KEY]: _lease, ...rest } = metadata;
+  return rest;
+}
+
+/**
+ * The SQL that holds while the upload session `<alias>` (a row of
+ * upload_sessions) was opened under its encrypted project's live decrypt
+ * lease, read from its own metadata (slice 7-3, migration 0042's
+ * direction `decrypt`): what a decrypt staging's own upload statements
+ * carry in place of `projectNotMigratingSql`, which refuses every staging.
+ * Once that lease lapses or moves to another device, or the staging was
+ * cut over or abandoned, the session lands nothing more: not under the
+ * lease that replaced it, nor as an ordinary plaintext session after the
+ * cutover. `now` is in milliseconds; no binds.
+ */
+export function uploadDecryptLeaseSql(alias: string, now: number): string {
   return `EXISTS (SELECT 1 FROM e2ee_project_migrations decrypting
     JOIN projects decrypting_project ON decrypting_project.id = decrypting.project_id
-    WHERE decrypting.project_id = ${projectIdSql}
+    WHERE decrypting.project_id = ${alias}.project_id
       AND decrypting.direction = 'decrypt' AND decrypting.state = 'staging'
-      AND decrypting_project.storage_format = 2)`;
+      AND decrypting_project.storage_format = 2
+      AND decrypting.lease_id = json_extract(${alias}.metadata_json, '$.${DECRYPT_LEASE_METADATA_KEY}')
+      AND decrypting.lease_expires_at > ${Math.floor(now)})`;
 }
 
 /**
@@ -887,15 +907,21 @@ interface DurableUploadSession {
    * project staged for encryption was opened under; null otherwise.
    */
   stagingLease: string | null;
+  /**
+   * Slice 7-3: the decrypt lease a plaintext session of an encrypted
+   * project being turned back into plaintext was opened under (a decrypt
+   * staging's file); null for any other session.
+   */
+  decryptLease: string | null;
 }
 
 /** An upload session `requireUploadSession` let through, and on what. */
 interface CheckedUploadSession extends DurableUploadSession {
   /**
-   * Slice 7-3: a plaintext session of an encrypted project being turned
-   * back into plaintext (a decrypt staging's file, which only its lease
-   * holder could open). Its statements carry the decrypt staging fence
-   * instead of the not-migrating one, which would refuse them.
+   * Slice 7-3: a decrypt staging's file session (`decryptLease` set), let
+   * through only while that exact lease is live. Its statements carry the
+   * decrypt lease fence instead of the not-migrating one, which would
+   * refuse them.
    */
   decryptStaged: boolean;
 }
@@ -903,6 +929,7 @@ interface CheckedUploadSession extends DurableUploadSession {
 /** What the upload fences need to know of a session (slices 7-1, 7-3). */
 type FencedUpload = Pick<DurableUploadSession, 'e2eeBlobKind'> & {
   readonly decryptStaged?: boolean;
+  readonly decryptLease?: string | null;
 };
 
 interface DurableUploadPart {
@@ -4021,9 +4048,10 @@ export class D1R2PersistenceService implements PersistenceService {
       /**
        * Slice 7-3: a decrypted file of an encrypted project its owner is
        * turning back into plaintext, under the live decrypt lease this
-       * fence names (the route checked it; the insert carries it).
+       * fence names (the route checked it; the insert carries it). The
+       * session records that lease (`leaseId`) and advances only under it.
        */
-      decryptStaging?: DecryptStagingFence;
+      decryptStaging?: DecryptStagingFence & { readonly leaseId: string };
     }
   ): Promise<CreateUploadSessionResponse> {
     if (!this.env.DB) {
@@ -4062,7 +4090,15 @@ export class D1R2PersistenceService implements PersistenceService {
         request.projectId
       );
     }
-    const session = createUploadSessionRecord(request);
+    const session = createUploadSessionRecord({
+      ...request,
+      ...(request.metadata
+        ? { metadata: clientUploadMetadata(request.metadata) }
+        : {})
+    });
+    const storedMetadata = staging
+      ? { ...session.metadata, [DECRYPT_LEASE_METADATA_KEY]: staging.leaseId }
+      : session.metadata;
     const notMigrating = staging
       ? ''
       : await this.plaintextUploadFence('projects.id');
@@ -4088,7 +4124,7 @@ export class D1R2PersistenceService implements PersistenceService {
           session.fileName,
           session.contentType,
           session.kind,
-          JSON.stringify(session.metadata),
+          JSON.stringify(storedMetadata),
           session.expiresAt,
           access.ownerUserId,
           request.projectId,
@@ -4304,6 +4340,9 @@ export class D1R2PersistenceService implements PersistenceService {
     const stagingLease = upload.e2ee_blob_kind
       ? metadata[STAGING_LEASE_METADATA_KEY]
       : undefined;
+    const decryptLease = upload.e2ee_blob_kind
+      ? undefined
+      : metadata[DECRYPT_LEASE_METADATA_KEY];
     return {
       uploadSessionId: upload.id,
       artifactId: upload.artifact_id,
@@ -4312,7 +4351,8 @@ export class D1R2PersistenceService implements PersistenceService {
       fileName: upload.file_name,
       contentType: upload.content_type,
       kind: upload.kind,
-      metadata,
+      // The decrypt lease is the server's, never the file's.
+      metadata: clientUploadMetadata(metadata),
       ownerUserId: toUserId(upload.owner_user_id),
       reservedBytes: upload.reserved_bytes,
       reservationState: upload.reservation_state,
@@ -4322,7 +4362,8 @@ export class D1R2PersistenceService implements PersistenceService {
       completionStartedAt: upload.completion_started_at,
       expiresAt: upload.expires_at,
       e2eeBlobKind: upload.e2ee_blob_kind ?? null,
-      stagingLease: typeof stagingLease === 'string' ? stagingLease : null
+      stagingLease: typeof stagingLease === 'string' ? stagingLease : null,
+      decryptLease: typeof decryptLease === 'string' ? decryptLease : null
     };
   }
 
@@ -4355,14 +4396,16 @@ export class D1R2PersistenceService implements PersistenceService {
     // (#914 review; `stagingLeaseFence` in each advancing statement).
     let decryptStaged = false;
     if (upload.e2eeBlobKind === null) {
-      // Slice 7-3: the decrypted files of an encrypted project being turned
-      // back into plaintext, whose session only the lease holder opened.
-      // They are not refused as migrating: the decrypt staging is the
-      // migration they belong to, and their statements carry its fence.
-      decryptStaged =
-        !isPlaintextStorageFormat(access.storageFormat) &&
-        (await this.isStagedForDecryption(upload.projectId));
-      if (!decryptStaged) {
+      // Slice 7-3: a decrypted file of an encrypted project being turned
+      // back into plaintext, opened under the decrypt lease its session
+      // names. It advances only while that exact lease is live (409
+      // E2EE_MIGRATION_LEASE_LOST otherwise): not under a lease that took
+      // over, nor as an ordinary plaintext session after the cutover. Its
+      // statements carry that fence (`uploadDecryptLeaseSql`).
+      decryptStaged = upload.decryptLease !== null;
+      if (decryptStaged) {
+        await this.refuseIfDecryptLeaseLost(upload);
+      } else {
         assertPlaintextProject(access);
         await this.refuseIfMigrating(upload.projectId);
       }
@@ -4408,6 +4451,33 @@ export class D1R2PersistenceService implements PersistenceService {
       .bind(projectId)
       .first<{ staged: number }>();
     return row?.staged === 1;
+  }
+
+  /**
+   * Slice 7-3: refuses a decrypt staging's file session (`decryptLease`
+   * set) unless the decrypt lease it was opened under is still the live
+   * one of its encrypted project's staging: once it lapsed, moved to
+   * another device, or the staging was cut over or abandoned, with
+   * DecryptStagingLeaseError (409 E2EE_MIGRATION_LEASE_LOST). A no-op for
+   * any other session.
+   */
+  private async refuseIfDecryptLeaseLost(
+    upload: Pick<DurableUploadSession, 'projectId' | 'decryptLease'>
+  ): Promise<void> {
+    if (upload.decryptLease === null) return;
+    const row = (await isE2eeReverseStorageReady(this.env.DB))
+      ? await this.env
+          .DB!.prepare(
+            `SELECT 1 AS held FROM e2ee_project_migrations m
+             JOIN projects p ON p.id = m.project_id
+             WHERE m.project_id = ? AND m.direction = 'decrypt'
+               AND m.state = 'staging' AND m.lease_id = ?
+               AND m.lease_expires_at > ? AND p.storage_format = 2`
+          )
+          .bind(upload.projectId, upload.decryptLease, Date.now())
+          .first<{ held: number }>()
+      : null;
+    if (row?.held !== 1) throw new DecryptStagingLeaseError();
   }
 
   private async isStagedForEncryption(projectId: string): Promise<boolean> {
@@ -4493,9 +4563,10 @@ export class D1R2PersistenceService implements PersistenceService {
     upload?: FencedUpload
   ): Promise<void> {
     if (upload?.decryptStaged) {
-      if (!(await this.isStagedForDecryption(projectId))) {
-        throw new DecryptStagingLeaseError();
-      }
+      await this.refuseIfDecryptLeaseLost({
+        projectId,
+        decryptLease: upload.decryptLease ?? null
+      });
       return;
     }
     if (
@@ -4513,15 +4584,22 @@ export class D1R2PersistenceService implements PersistenceService {
    * (`projectNotMigratingSql`); '' for an encrypted-blob session, which a
    * staging writes, and while the fence is closed (`plaintextUploadFenced`).
    * A decrypt staging's own session (slice 7-3) carries
-   * `projectStagedForDecryptionSql` instead: it lands only while that
-   * staging lasts, never after its cutover or abandon.
+   * `uploadDecryptLeaseSql` on its row instead (`projectIdSql` names that
+   * row's project_id): it lands only while the decrypt lease it was opened
+   * under is live, never under another lease or after the cutover.
    */
   private async plaintextUploadFence(
     projectIdSql: string,
     upload?: FencedUpload
   ): Promise<string> {
     if (upload?.decryptStaged) {
-      return ` AND ${projectStagedForDecryptionSql(projectIdSql)}`;
+      const alias = projectIdSql.endsWith('.project_id')
+        ? projectIdSql.slice(0, -'.project_id'.length)
+        : null;
+      if (!alias) {
+        throw new ArtifactStorageError('Upload session fence is invalid.');
+      }
+      return ` AND ${uploadDecryptLeaseSql(alias, Date.now())}`;
     }
     return (await this.plaintextUploadFenced(upload))
       ? ` AND ${projectNotMigratingSql(projectIdSql)}`

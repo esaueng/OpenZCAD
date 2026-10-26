@@ -2102,7 +2102,10 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     if (uploadStaging) {
       return json(
         await persistence.createUploadSession(userId, payload, {
-          decryptStaging: uploadStaging.fence
+          decryptStaging: {
+            ...uploadStaging.fence,
+            leaseId: uploadStaging.lease.leaseId
+          }
         }),
         201
       );
