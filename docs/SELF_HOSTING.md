@@ -366,11 +366,13 @@ plaintext until the flag is on again.
 
 ### Recovery and data loss
 
-- **No escrow.** The server never holds a key that decrypts a project. A user
-  who loses their recovery key, every passkey and every approved device loses
-  their encrypted cloud projects. You cannot recover them, inspect them, or
-  answer a support request from the stored data; local copies on the user's
-  devices remain.
+- **No escrow.** The server never holds a key that decrypts a project, so you
+  cannot recover, inspect or answer a support request from the stored data. A
+  user who loses their recovery key, every passkey and every approved device
+  loses access to their encrypted cloud projects. Projects nobody else is a
+  member of are then gone, apart from local copies on the user's devices. A
+  shared project's remaining members still hold its key: one of them can open
+  it and export an `.openzcad` backup for the user.
 - **Leaving encryption.** During the beta an owner can use the reverse path if
   you enable it. Otherwise, and always once it is removed, the exit is to
   export each project as an `.openzcad` file (a plaintext file the user keeps)
