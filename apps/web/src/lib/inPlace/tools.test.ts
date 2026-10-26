@@ -1507,6 +1507,10 @@ describe('axes and directions picked in the model', () => {
       options: { axis: 'custom' },
       values: { dirX: -1, dirY: 0, dirZ: 0 }
     });
+    // A slight tilt off X is kept, not snapped onto X.
+    const slight = spec.takeDirection?.({ x: 1, y: 1e-5, z: 0 });
+    expect(slight?.options).toEqual({ axis: 'custom' });
+    expect(slight?.values.dirY).toBeCloseTo(1e-5, 12);
     const tilted = spec.takeDirection?.({ x: 1, y: 1, z: 1e-12 });
     expect(tilted?.options).toEqual({ axis: 'custom' });
     expect(tilted?.values.dirX).toBeCloseTo(Math.SQRT1_2);

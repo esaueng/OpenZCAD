@@ -198,6 +198,29 @@ test('Revolve turns about a body edge in its sketch plane', async ({
     angleDeg: 90,
     axisRef: { type: 'datum-axis', datumFeatureId: axis!.featureId }
   });
+
+  // Re-armed from History, its own result is no axis: a datum before the
+  // revolve could not find the ring it makes. The edge refuses by name and
+  // the axis stays.
+  await revealModelPanel(page, 'History');
+  await page
+    .locator('.feature-row', { hasText: 'Revolve' })
+    .locator('.feature-row-main')
+    .click();
+  const edit = page.getByRole('group', { name: /^Edit Revolve.* command$/ });
+  await expect(edit).toContainText('Drag the angle');
+  await expect(edit.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  // The ring's outer face, halfway round (the profile hangs below the
+  // Front plane's origin: z −10..0).
+  await clickWorldPoint(page, [-12.4, -18.4, -5]);
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'can only turn about a line on what is built before it'
+  );
+  await expect(edit).toContainText('Drag the angle');
+  await edit.getByRole('button', { name: /Cancel/ }).click();
+  await setSelectionFilter(page, 'Any');
 });
 
 test('Rotate about axis turns a body about a cylinder, no datum made first', async ({

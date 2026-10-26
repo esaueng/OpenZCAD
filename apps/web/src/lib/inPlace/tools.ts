@@ -2900,9 +2900,12 @@ const linearPattern: InPlaceToolSpec = {
       const value = direction[part] / (length || 1);
       return Math.abs(value) <= DIRECTION_QUANTUM ? 0 : value;
     });
-    // Along a world axis, it is that axis, as the card would have stored it.
+    // Along a world axis, it is that axis, as the card would have stored it:
+    // only when nothing is left across it (a slight tilt is still a tilt).
     const world = (['x', 'y', 'z'] as const).find(
-      (_axis, index) => Math.abs(parts[index]! - 1) <= DIRECTION_QUANTUM
+      (_axis, index) =>
+        Math.abs(parts[index]! - 1) <= DIRECTION_QUANTUM &&
+        parts.every((part, other) => other === index || part === 0)
     );
     if (world) return { options: { axis: world }, values: {} };
     return {

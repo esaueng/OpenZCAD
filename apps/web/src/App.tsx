@@ -8638,6 +8638,10 @@ export function App() {
    * pattern's direction, once what it acts on is picked. False leaves the
    * click to name a body as before.
    */
+  /** Why an edit's picked line is refused: it is built after the feature. */
+  function refusedLine(editing: InPlaceEditSeed): string {
+    return `${editing.name} can only turn about a line on what is built before it in History.`;
+  }
   function pickInPlaceLine(selection: TopologySelection): boolean {
     const command = inPlaceRef.current;
     const spec = command.spec;
@@ -8647,6 +8651,20 @@ export function App() {
       command.slots.profiles.length === 0
     ) {
       return false;
+    }
+    // An edit's new axis is a datum just before the feature: a body made by
+    // it or later is not there yet (its result is on screen where its input
+    // was). A direction is numbers and reads anything shown.
+    if (
+      command.editing &&
+      !spec.takeDirection &&
+      !inPlaceEditMayUse(
+        producingFeatureOf({ bodyId: selection.bodyId }),
+        command.editing
+      )
+    ) {
+      setStatus(refusedLine(command.editing));
+      return true;
     }
     // A direction is stored as its numbers, so it may be read off the
     // preview (a pattern's copies stand over the body); an axis is a datum
@@ -8678,6 +8696,24 @@ export function App() {
       if (!(turns && spec.axisPicks) && !(planar && spec.takeDirection)) {
         return false;
       }
+    }
+    // Its topology must be built by then too: a later feature's reshaping of
+    // an earlier body is not.
+    const editing = command.editing;
+    const reference =
+      selection.kind === 'edge'
+        ? topology?.edges.find((edge) => edge.hash === selection.hash)
+            ?.reference
+        : topology?.faces.find((face) => face.hash === selection.hash)
+            ?.reference;
+    if (
+      editing &&
+      !spec.takeDirection &&
+      reference &&
+      !inPlaceEditMayUse(reference.producingFeatureId, editing)
+    ) {
+      setStatus(refusedLine(editing));
+      return true;
     }
     const picked = { ...selection };
     const tool = command.tool;
