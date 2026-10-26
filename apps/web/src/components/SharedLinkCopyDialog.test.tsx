@@ -5,6 +5,32 @@ import { SharedLinkCopyDialog } from './SharedLinkCopyDialog';
 import { ViewModeRail } from './ViewModeRail';
 
 describe('SharedLinkCopyDialog (ADR-024 slice 5-11)', () => {
+  it('shows a failed account check with retry while preserving the device-only choice', async () => {
+    const onChoose = vi.fn(),
+      onRetry = vi.fn();
+    render(
+      <SharedLinkCopyDialog
+        accountEncrypts={null}
+        error="Could not verify the encryption setting."
+        onRetry={onRetry}
+        onChoose={onChoose}
+      />
+    );
+    expect(screen.queryByText('Checking your account…')).toBeNull();
+    expect(screen.getByRole('dialog')).toHaveTextContent('Could not verify');
+    expect(
+      screen.getByRole('button', { name: 'Copy to your account' })
+    ).toBeDisabled();
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Retry account check' })
+    );
+    expect(onRetry).toHaveBeenCalledOnce();
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Keep on this device only' })
+    );
+    expect(onChoose).toHaveBeenCalledWith('device');
+  });
+
   it('holds the account copy until the account has answered', async () => {
     const onChoose = vi.fn();
     render(<SharedLinkCopyDialog accountEncrypts={null} onChoose={onChoose} />);

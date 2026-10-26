@@ -12576,6 +12576,7 @@ export function App() {
    */
   const [shareCopyChoice, setShareCopyChoice] = useState<{
     accountEncrypts: boolean | null;
+    error: string | null;
   } | null>(null);
   function requestShareCopy() {
     const active = shareSessionRef.current;
@@ -12584,10 +12585,34 @@ export function App() {
       void handleMakeShareCopy();
       return;
     }
-    setShareCopyChoice({ accountEncrypts: null });
-    void encryptsNewProjects().then((accountEncrypts) =>
-      setShareCopyChoice((current) => current && { accountEncrypts })
-    );
+    const choice = { accountEncrypts: null, error: null };
+    const userId = session.userId;
+    const revision = getKeySessionRevision();
+    const currentSession = () =>
+      sessionRef.current?.userId === userId &&
+      shareSessionRef.current === active &&
+      getKeySessionRevision() === revision;
+    setShareCopyChoice(choice);
+    void encryptsNewProjects()
+      .then((accountEncrypts) =>
+        setShareCopyChoice((current) => {
+          if (current !== choice) return current;
+          return currentSession() ? { accountEncrypts, error: null } : null;
+        })
+      )
+      .catch((error: unknown) =>
+        setShareCopyChoice((current) => {
+          if (current !== choice) return current;
+          if (!currentSession()) return null;
+          return {
+            accountEncrypts: null,
+            error: errorMessage(
+              error,
+              'Your account encryption setting could not be checked. Retry, or keep a copy on this device.'
+            )
+          };
+        })
+      );
   }
 
   useEffect(() => {
@@ -29418,7 +29443,13 @@ export function App() {
           {shareCopyChoice && (
             <SharedLinkCopyDialog
               accountEncrypts={shareCopyChoice.accountEncrypts}
+              error={shareCopyChoice.error}
+              onRetry={requestShareCopy}
               onChoose={(destination) => {
+                if (
+                  destination === 'account' &&
+                  shareCopyChoice.accountEncrypts === null
+                ) return;
                 setShareCopyChoice(null);
                 if (destination) void handleMakeShareCopy(destination);
               }}
