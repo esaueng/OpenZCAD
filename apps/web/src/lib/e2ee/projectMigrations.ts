@@ -131,6 +131,21 @@ const ACTIVE = new Set([
   'purging'
 ]);
 
+/**
+ * Read-only in the editor: being encrypted, or paused or stopped while the
+ * Worker holds its plaintext locked, or cut over with its purge unfinished.
+ * Edits made meanwhile would be refused by the account and missing from
+ * the encrypted copy that replaces it.
+ */
+function lockedForEditing(progress: MigrationProgress): boolean {
+  return (
+    progress.phase !== 'done' &&
+    (ACTIVE.has(progress.phase) ||
+      progress.plaintextLocked === true ||
+      progress.cutOver === true)
+  );
+}
+
 function waiting(project: ProjectSummary): MigrationProgress {
   return {
     projectId: project.projectId,
@@ -172,6 +187,9 @@ export function createMigrationController(
     setMigratingProjects(
       state.projects
         .filter((progress) => ACTIVE.has(progress.phase))
+        .map((progress) => progress.projectId),
+      state.projects
+        .filter(lockedForEditing)
         .map((progress) => progress.projectId)
     );
     for (const listener of listeners) listener();
@@ -282,7 +300,11 @@ export function createMigrationController(
             (project) =>
               known.get(project.projectId) ??
               (staged.has(project.projectId)
-                ? { ...waiting(project), phase: 'paused' as const }
+                ? {
+                    ...waiting(project),
+                    phase: 'paused' as const,
+                    plaintextLocked: true
+                  }
                 : waiting(project))
           )
         ]

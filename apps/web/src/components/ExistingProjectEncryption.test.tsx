@@ -22,6 +22,7 @@ import type { MigrationPlaintextSource } from '../lib/e2ee/migrationPlaintextSou
 import type { ProjectMigrationsApi } from '../lib/e2ee/projectMigrationsApi';
 import {
   migratingProjects,
+  migrationLockedProjects,
   setMigratingProjects
 } from '../lib/migrationStatus';
 import { ExistingProjectEncryption } from './ExistingProjectEncryption';
@@ -186,6 +187,57 @@ describe('the migration controller', () => {
     expect(fake.migrated).toEqual(['proj_old']);
     expect(controller.getState().projects[0]?.phase).toBe('paused');
     expect([...migratingProjects()]).toEqual([]);
+  });
+});
+
+describe('editing a project while it is encrypted', () => {
+  it('keeps it read-only while its staging holds the plaintext, stopped or not', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fake = fakeEngine(async (summary, report) => {
+      if (summary.projectId === 'proj_new') {
+        // Refused before anything was staged (a room ahead, say): the
+        // plaintext stays writable, so the owner can open and save it.
+        report({
+          phase: 'error',
+          error: { message: 'Save it first.', retryable: true }
+        });
+        throw new Error('room ahead');
+      }
+      // Starting: this page's edits are flushed, then the Worker locks it.
+      await gate;
+      report({ phase: 'revisions', plaintextLocked: true });
+      report({
+        phase: 'error',
+        error: { message: 'Broke.', retryable: true }
+      });
+      throw new Error('Broke.');
+    });
+    const controller = controllerWith(fake);
+    const running = controller.run();
+    await waitFor(() =>
+      expect(controller.getState().projects[0]?.phase).toBe('starting')
+    );
+    // Read-only from the start, before the flush.
+    expect([...migrationLockedProjects()]).toEqual(['proj_old']);
+    release();
+    await running;
+    expect(
+      controller.getState().projects.map((p) => [p.projectId, p.phase])
+    ).toEqual([
+      ['proj_old', 'error'],
+      ['proj_new', 'error']
+    ]);
+    // Stopped, its staging still locks the plaintext: still read-only,
+    // though no longer badged as in progress. The one refused before
+    // staging is editable.
+    expect([...migratingProjects()]).toEqual([]);
+    expect([...migrationLockedProjects()]).toEqual(['proj_old']);
+    // Cancelled, the plaintext unlocks.
+    await controller.cancel('proj_old');
+    expect([...migrationLockedProjects()]).toEqual([]);
   });
 });
 

@@ -135,6 +135,12 @@ export interface MigrationProgress {
    * retried (the purge resumes), never cancelled.
    */
   readonly cutOver?: boolean;
+  /**
+   * A staging began, so the Worker holds the plaintext locked (writes
+   * refused with PROJECT_MIGRATING) until it is cut over or abandoned:
+   * this page keeps the project read-only meanwhile, paused or stopped.
+   */
+  readonly plaintextLocked?: boolean;
   readonly error?: MigrationError;
 }
 
@@ -473,8 +479,15 @@ export function createProjectMigrationEngine(
       // An earlier attempt's cleanup is unfinished: finish it first.
       await stepAll(() => migrations.abandon(projectId));
     }
-    report({ phase: 'starting', error: undefined });
+    report({
+      phase: 'starting',
+      error: undefined,
+      // A staging left over (resumed, or another device's) holds it locked;
+      // an abandoned one no longer does.
+      plaintextLocked: status?.state === 'staging'
+    });
     const { lease, migration } = await acquire(projectId, status);
+    report({ plaintextLocked: true });
     const resuming = status?.state === 'staging';
     if (resuming && migration.stagedVersion === 0) {
       // A start that may have left a group without a version: nothing

@@ -771,6 +771,8 @@ describe('encrypting an existing project', () => {
       expect(laptop.progress.at(-1)?.error?.message, label).toContain(
         'nothing changed'
       );
+      // Nothing locked: the project stays editable.
+      expect(laptop.progress.at(-1)?.plaintextLocked, label).toBeFalsy();
       // Nothing was staged, and the plaintext is not locked.
       expect(migrationRow(srv, projectId), label).toMatchObject({
         state: 'abandoned',
@@ -814,6 +816,11 @@ describe('resuming', () => {
       'The tab was closed.'
     );
     expect(migrationRow(srv, projectId)).toMatchObject({ state: 'staging' });
+    // Stopped mid-staging, its plaintext stays locked: still read-only.
+    expect(first.progress.at(-1)).toMatchObject({
+      phase: 'error',
+      plaintextLocked: true
+    });
     expect(count(srv, 'e2ee_project_revisions', projectId)).toBe(2);
     const blobsBefore = count(srv, 'e2ee_content_blobs', projectId);
     expect(blobsBefore).toBe(1);
