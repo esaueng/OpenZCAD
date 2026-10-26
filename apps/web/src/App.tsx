@@ -5,10 +5,9 @@ import {
 import {
   noteProjectMigrating,
   registerProjectFlush,
-  useMigrationElsewhere,
   useMigrationLockedProjects
 } from './lib/migrationStatus';
-import { useProjectMigrationWatch } from './lib/projectMigrationWatch';
+import { useOpenProjectMigrationWatch } from './lib/projectMigrationWatch';
 import {
   repairLegacyBracketDemo,
   repairLegacyBracketSaveState
@@ -3903,7 +3902,6 @@ export function App() {
   // closed for the move, a save was refused with PROJECT_MIGRATING, or the
   // migration watch below asked), until the account says it was abandoned.
   const migrationLockedProjectIds = useMigrationLockedProjects();
-  const migrationElsewhereProjectIds = useMigrationElsewhere();
   const projectOpenElsewhereRef = useRef(projectOpenElsewhere);
   projectOpenElsewhereRef.current = projectOpenElsewhere;
   /**
@@ -4912,31 +4910,24 @@ export function App() {
   // another tab or device starts encrypting it, not only once a save is
   // refused (none is, with cloud autosave off, and one is only after the
   // debounce with it on): its room closing for the move, and its migration
-  // status asked on open, on focus and now and then
-  // (`projectMigrationWatch.ts`).
-  useProjectMigrationWatch(
-    doc &&
+  // status asked on open, on focus and now and then; meanwhile its cloud
+  // autosave sends nothing (`projectMigrationWatch.ts`). Whether it is
+  // plaintext is the document the workspace loaded, not the format cache:
+  // a listing that learned of a finished cutover leaves the stale plaintext
+  // locked until the project is closed or reopened (#924 review).
+  useOpenProjectMigrationWatch({
+    projectId: openProjectId,
+    ownedCloudProject: Boolean(
+      doc &&
       session &&
       !shareSession &&
       activeProjectIsCloud &&
-      !encryptedProjectOpen &&
       doc.ownerUserId === session.userId
-      ? doc.projectId
-      : null,
-    session?.userId ?? null
-  );
-  // Meanwhile nothing this page queued is sent (the plaintext takes no
-  // writes), and it stays shown as not saved; it is sent once the account
-  // says the staging was abandoned.
-  const migratingElsewhere = Boolean(
-    doc && migrationElsewhereProjectIds.has(doc.projectId)
-  );
-  useEffect(() => {
-    const autosave = cloudProjectAutosaveRef.current;
-    if (!openProjectId || !autosave) return;
-    if (migratingElsewhere) autosave.haltForMigration(openProjectId);
-    else autosave.resumeAfterMigration(openProjectId);
-  }, [migratingElsewhere, openProjectId]);
+    ),
+    encryptedNow: encryptedProjectOpen,
+    userId: session?.userId ?? null,
+    autosave: cloudProjectAutosaveRef
+  });
   const migrationEditReason = projectMigrating
     ? 'This project is being end-to-end encrypted'
     : null;

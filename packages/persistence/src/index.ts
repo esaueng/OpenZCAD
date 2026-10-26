@@ -645,10 +645,15 @@ export interface PersistenceService {
     /**
      * ADR-024 Phase 7, slice 7-3: a decrypted file of an encrypted project
      * its owner is turning back into plaintext, under the decrypt lease this
-     * SQL fence names. Stores without D1 ignore it.
+     * SQL fence names; the session records that lease (`leaseId`) and
+     * advances only under it. Stores without D1 ignore it.
      */
     options?: {
-      decryptStaging?: { sql: string; binds: readonly unknown[] };
+      decryptStaging?: {
+        sql: string;
+        binds: readonly unknown[];
+        leaseId: string;
+      };
     }
   ): Promise<CreateUploadSessionResponse>;
   putUpload(

@@ -431,6 +431,100 @@ describe('a cut-over project this page has no record of', () => {
     expect([...migrationLockedProjects()]).toEqual([]);
   });
 
+  it('asks again about one listed as waiting that another device cut over, and lists it for a retry (#924 review)', async () => {
+    // The first refresh lists it as plaintext, waiting. Another device
+    // then cuts it over and stops during its purge: the next refresh finds
+    // it gone from the plaintext listing, encrypted.
+    let storageFormat: 1 | 2 = 1;
+    const plaintext = {
+      listProjects: async () => [
+        project('proj_other', 'Other device', '2026-10-02T00:00:00.000Z', {
+          storageFormat
+        })
+      ]
+    } as unknown as MigrationPlaintextSource;
+    let purged = false;
+    const status = vi.fn(async (_projectId: string) => ({
+      migration: {
+        state: storageFormat === 1 ? null : purged ? 'done' : 'purging'
+      }
+    }));
+    const migrations = { status } as unknown as ProjectMigrationsApi;
+    const fake = fakeEngine(async (summary, report) => {
+      expect(summary.projectId).toBe('proj_other');
+      report({ phase: 'purging', cutOver: true });
+      purged = true;
+      report({ phase: 'done' });
+    });
+    const controller = controllerWith(fake, null, { plaintext, migrations });
+    render(
+      <ExistingProjectEncryption
+        userId="user_alice"
+        unlocked
+        controller={controller}
+        isOpen={async () => true}
+      />
+    );
+    await screen.findByRole('listitem', { name: 'Other device' });
+    expect(controller.getState().projects).toMatchObject([
+      { projectId: 'proj_other', phase: 'waiting' }
+    ]);
+
+    storageFormat = 2;
+    status.mockClear();
+    await act(() => controller.refresh());
+    expect(status.mock.calls.map(([id]) => id)).toEqual(['proj_other']);
+    expect(controller.getState().projects).toMatchObject([
+      { projectId: 'proj_other', phase: 'error', cutOver: true }
+    ]);
+    const row = screen.getByRole('listitem', { name: 'Other device' });
+    expect(
+      within(row).getByText('Stopped before the plaintext copy was deleted')
+    ).toBeTruthy();
+    expect([...migrationLockedProjects()]).toEqual(['proj_other']);
+    // Still there on the refresh after (a Settings reopen).
+    await act(() => controller.refresh());
+    expect(controller.getState().projects).toMatchObject([
+      { projectId: 'proj_other', phase: 'error', cutOver: true }
+    ]);
+
+    fireEvent.click(within(row).getByRole('button', { name: 'Retry' }));
+    await waitFor(() =>
+      expect(within(row).getByText('Encrypted')).toBeTruthy()
+    );
+    expect(fake.migrated).toEqual(['proj_other']);
+    expect([...migrationLockedProjects()]).toEqual([]);
+  });
+
+  it('retries a staging it found paused once another device cut it over (#924 review)', async () => {
+    let storageFormat: 1 | 2 = 1;
+    const plaintext = {
+      listProjects: async () => [
+        project('proj_staged', 'Staged elsewhere', '2026-10-02T00:00:00.000Z', {
+          storageFormat
+        })
+      ]
+    } as unknown as MigrationPlaintextSource;
+    const status = vi.fn(async (_projectId: string) => ({
+      migration: { state: storageFormat === 1 ? 'staging' : 'cutover' }
+    }));
+    const migrations = { status } as unknown as ProjectMigrationsApi;
+    const controller = controllerWith(
+      fakeEngine(async () => undefined),
+      null,
+      { plaintext, migrations }
+    );
+    await controller.refresh();
+    expect(controller.getState().projects).toMatchObject([
+      { projectId: 'proj_staged', phase: 'paused', plaintextLocked: true }
+    ]);
+    storageFormat = 2;
+    await controller.refresh();
+    expect(controller.getState().projects).toMatchObject([
+      { projectId: 'proj_staged', phase: 'error', cutOver: true }
+    ]);
+  });
+
   it('asks about a large shelf a few at a time, a bounded number per refresh', async () => {
     const shelf = Array.from({ length: 30 }, (_, index) =>
       project(

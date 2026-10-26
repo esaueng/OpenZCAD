@@ -237,7 +237,15 @@ export function createMigrationController(
     for (const listener of listeners) listener();
   }
 
+  /**
+   * Projects this page's runs reported on (its engine, a run that failed
+   * before the engine started, a cancel), as opposed to rows a refresh
+   * only listed.
+   */
+  const driven = new Set<string>();
+
   function update(progress: MigrationProgress) {
+    driven.add(progress.projectId);
     const projects = state.projects.some(
       (p) => p.projectId === progress.projectId
     )
@@ -278,13 +286,30 @@ export function createMigrationController(
   const settled = new Set<string>();
 
   /**
+   * What this page's own runs know of a project's migration: a row its
+   * runs reported, unless it only waits. A row a refresh listed (waiting,
+   * a staging found paused, a cutover found unfinished) is no record: what
+   * happens to that project happens elsewhere (#924 review).
+   */
+  function recordOf(
+    known: ReadonlyMap<string, MigrationProgress>,
+    projectId: string
+  ): MigrationProgress | undefined {
+    const progress = known.get(projectId);
+    return progress && driven.has(projectId) && progress.phase !== 'waiting'
+      ? progress
+      : undefined;
+  }
+
+  /**
    * Whether a project's migration is cut over with its purge unfinished;
-   * null when that could not be found out for one this page never worked
-   * on (asked again on the next refresh).
+   * null when that could not be found out for one this page's runs have no
+   * record of (asked again on the next refresh).
    */
   async function cutOverUnpurged(
     projectId: string,
-    known: MigrationProgress | undefined
+    record: MigrationProgress | undefined,
+    listedRow: MigrationProgress | undefined
   ): Promise<boolean | null> {
     try {
       const { migration } = await migrations.status(projectId);
@@ -294,13 +319,14 @@ export function createMigrationController(
       return unfinished;
     } catch (error) {
       const status = (error as { status?: unknown } | null)?.status;
-      if (known === undefined && (status === 404 || status === 403)) {
+      if (record === undefined && (status === 404 || status === 403)) {
         // Someone else's project (a share), or gone: nothing to finish.
         settled.add(projectId);
         return false;
       }
       // Kept while it may be unfinished: a retry finds out.
-      return known === undefined ? null : known.cutOver === true;
+      if ((record ?? listedRow)?.cutOver === true) return true;
+      return record === undefined ? null : false;
     }
   }
 
@@ -308,12 +334,14 @@ export function createMigrationController(
    * Projects that left the plaintext listing (cut over, so no longer
    * format 1) while their migration is unfinished: the plaintext copy
    * stays until the purge completes, so they stay listed and a retry
-   * resumes the purge instead of reading as encrypted. Those this page
-   * worked on are known. Any other encrypted project of the account may be
-   * one a reloaded or crashed page, or another device, left cut over, so
-   * those are asked about too: newest first, {@link DISCOVERY_CONCURRENCY}
-   * at a time and at most {@link DISCOVERY_CAP} per refresh, each until
-   * its answer settles.
+   * resumes the purge instead of reading as encrypted. Those this page's
+   * runs worked on are known. Any other encrypted project of the account
+   * may be one a reloaded or crashed page, or another device, left cut
+   * over, so those are asked about too, including one an earlier refresh
+   * listed as waiting or found unfinished (it left the plaintext listing,
+   * or is still unfinished, by another's hand): those first, then newest
+   * first, {@link DISCOVERY_CONCURRENCY} at a time and at most
+   * {@link DISCOVERY_CAP} per refresh, each until its answer settles.
    */
   async function unfinishedCutovers(
     listed: readonly ProjectSummary[],
@@ -322,12 +350,11 @@ export function createMigrationController(
   ): Promise<ProjectSummary[]> {
     const plaintextIds = new Set(migratable.map((p) => p.projectId));
     const worked = listed.filter((project) => {
-      const progress = known.get(project.projectId);
+      const record = recordOf(known, project.projectId);
       return (
         !plaintextIds.has(project.projectId) &&
-        progress !== undefined &&
-        progress.phase !== 'done' &&
-        progress.phase !== 'waiting'
+        record !== undefined &&
+        record.phase !== 'done'
       );
     });
     const unrecorded = listed
@@ -335,11 +362,12 @@ export function createMigrationController(
         (project) =>
           project.storageFormat === 2 &&
           (project.organization?.status ?? 'active') !== 'deleted' &&
-          !known.has(project.projectId) &&
+          recordOf(known, project.projectId) === undefined &&
           !settled.has(project.projectId)
       )
       .sort(
         (a, b) =>
+          Number(known.has(b.projectId)) - Number(known.has(a.projectId)) ||
           b.updatedAt.localeCompare(a.updatedAt) ||
           a.projectId.localeCompare(b.projectId)
       )
@@ -356,6 +384,7 @@ export function createMigrationController(
             const { projectId } = candidates[index]!;
             unfinished[index] = await cutOverUnpurged(
               projectId,
+              recordOf(known, projectId),
               known.get(projectId)
             );
           }
@@ -392,10 +421,10 @@ export function createMigrationController(
         error: null,
         projects: [
           ...finishing.map((project) => ({
-            // One this page has no record of stopped before its purge
-            // finished (a reload, a crash, another device): it is retried,
-            // as a stop this page saw is.
-            ...(known.get(project.projectId) ?? {
+            // One this page's runs have no record of stopped before its
+            // purge finished (a reload, a crash, another device): it is
+            // retried, as a stop this page saw is.
+            ...(recordOf(known, project.projectId) ?? {
               ...waiting(project),
               phase: 'error' as const
             }),

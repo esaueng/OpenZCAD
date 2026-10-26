@@ -24,7 +24,7 @@
  * A staging, cutover or purge locks; anything else (none, abandoned, or a
  * staging abandoned since) lifts a lock this watch set. No crypto.
  */
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import type {
   E2eeConfigResponse,
   E2eeProjectMigrationRecord,
@@ -37,7 +37,8 @@ import {
   migrationRunLockedProjects,
   setMigrationElsewhere,
   subscribeMigratingProjects,
-  subscribeProjectMigrating
+  subscribeProjectMigrating,
+  useMigrationElsewhere
 } from './migrationStatus';
 
 /** How often a visible workspace asks (judgment: a modest half minute). */
@@ -225,21 +226,121 @@ function accountMigrationOpen(userId: string): Promise<boolean> {
   return asked.catch(() => false);
 }
 
+/** What a watch asks through; the page's own by default (tests pass theirs). */
+export interface ProjectMigrationWatchSource {
+  status(projectId: string): Promise<E2eeProjectMigrationResponse>;
+  migrationOpen(userId: string): Promise<boolean>;
+}
+
+const pageWatchSource: ProjectMigrationWatchSource = {
+  status: (projectId) => createProjectMigrationsApi().status(projectId),
+  migrationOpen: accountMigrationOpen
+};
+
 /**
  * Watches the open project while it is a plaintext cloud project the
  * signed-in account owns (`projectId` null otherwise).
  */
 export function useProjectMigrationWatch(
   projectId: string | null,
-  userId: string | null
+  userId: string | null,
+  source: ProjectMigrationWatchSource = pageWatchSource
 ): void {
   useEffect(() => {
     if (!projectId || !userId) return;
-    const migrations = createProjectMigrationsApi();
     return watchProjectMigration({
       projectId,
-      status: (id) => migrations.status(id),
-      migrationOpen: () => accountMigrationOpen(userId)
+      status: (id) => source.status(id),
+      migrationOpen: () => source.migrationOpen(userId)
     });
-  }, [projectId, userId]);
+  }, [projectId, userId, source]);
+}
+
+/** The format of the document a workspace loaded, as it was loaded. */
+export interface LoadedProjectFormat {
+  readonly projectId: string;
+  readonly encrypted: boolean;
+}
+
+/**
+ * Keeps the format the open project had when the workspace loaded it
+ * (#924 review): the page's format cache (`rememberProjectFormats`) also
+ * learns of a cutover from a listing, such as the freshness poll's,
+ * without loading anything, while the workspace still holds the plaintext
+ * document it opened. That document stays plaintext until the project is
+ * closed (`projectId` null) or another one opens; reopened, it loads
+ * from the encrypted copy and is recorded as encrypted then.
+ */
+export function latchLoadedProjectFormat(
+  previous: LoadedProjectFormat | null,
+  projectId: string | null,
+  encryptedNow: boolean
+): LoadedProjectFormat | null {
+  if (!projectId) return null;
+  if (previous?.projectId === projectId) return previous;
+  return { projectId, encrypted: encryptedNow };
+}
+
+/** The halts the watch holds on the open project's cloud autosave. */
+export interface MigrationHaltable {
+  haltForMigration(projectId: string): void;
+  resumeAfterMigration(projectId: string): void;
+}
+
+export interface OpenProjectMigrationWatchOptions {
+  /** The project open in the workspace; null when none is. */
+  readonly projectId: string | null;
+  /**
+   * A cloud project the signed-in account owns, opened outside a shared
+   * link: the only kind its owner's migration can move.
+   */
+  readonly ownedCloudProject: boolean;
+  /** The page's format cache says it is stored encrypted now. */
+  readonly encryptedNow: boolean;
+  readonly userId: string | null;
+  readonly autosave: { readonly current: MigrationHaltable | null };
+  readonly source?: ProjectMigrationWatchSource;
+}
+
+/**
+ * The open workspace's migration watch (ADR-024 Phase 7, slice 7-2): kept
+ * while the document the workspace loaded is plaintext, whatever the
+ * format cache has learned since, so a cutover finished elsewhere keeps
+ * that stale document read-only, and its cloud autosave halted, until the
+ * project is closed or reopened (#924 review). A project loaded encrypted
+ * (always encrypted, or reopened after its cutover) is never watched, so
+ * never held read-only by it. Returns whether that document is encrypted.
+ */
+export function useOpenProjectMigrationWatch(
+  options: OpenProjectMigrationWatchOptions
+): boolean {
+  const { projectId, autosave } = options;
+  // Adjusted while rendering, as state derived from the previous render.
+  const [latched, setLatched] = useState<LoadedProjectFormat | null>(null);
+  const loaded = latchLoadedProjectFormat(
+    latched,
+    projectId,
+    options.encryptedNow
+  );
+  if (loaded !== latched) setLatched(loaded);
+  const loadedEncrypted = loaded?.encrypted ?? false;
+  useProjectMigrationWatch(
+    projectId && options.ownedCloudProject && !loadedEncrypted
+      ? projectId
+      : null,
+    options.userId,
+    options.source
+  );
+  // Meanwhile nothing this page queued is sent (the plaintext takes no
+  // writes), and it stays shown as not saved; it is sent once the account
+  // says the staging was abandoned.
+  const elsewhere = useMigrationElsewhere();
+  const migratingElsewhere = Boolean(projectId && elsewhere.has(projectId));
+  useEffect(() => {
+    const controller = autosave.current;
+    if (!projectId || !controller) return;
+    if (migratingElsewhere) controller.haltForMigration(projectId);
+    else controller.resumeAfterMigration(projectId);
+  }, [migratingElsewhere, projectId, autosave]);
+  return loadedEncrypted;
 }
