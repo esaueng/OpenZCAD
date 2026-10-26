@@ -2435,7 +2435,7 @@ async function finishApproval(
   // starts from the server's list, unconfirmed, like a passkey enrolment.
   if (grant.contacts) {
     const head = grant.contacts.head;
-    await contactPinsOf(ctx).advanceList(
+    const accepted = await contactPinsOf(ctx).advanceList(
       ctx.userId,
       {
         identityKeyHash: toHex(grant.identityKeyHash),
@@ -2445,6 +2445,12 @@ async function finishApproval(
       },
       { fromApproval: true }
     );
+    if (!accepted) {
+      throw new EncryptionFlowError(
+        'grant-invalid',
+        'This device and the approving device have conflicting contacts lists. Approval could not be completed. Keep your existing keys and compare contacts on both devices.'
+      );
+    }
   }
   await ctx.store.clearApprovalIfCurrent(ctx.userId, device.approval!.id);
   await ctx.api.cancelApproval(approval.id).catch(() => undefined);

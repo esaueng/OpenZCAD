@@ -1056,6 +1056,54 @@ describe('contacts heads in device approval', () => {
     );
   });
 
+  it('reports a same-sequence contacts conflict without completing approval (#936 review)', async () => {
+    const { srv, alice } = await aliceVerifiedBob();
+    const phone = browser(srv, ALICE);
+    const account = ready(
+      await enrollWithRecoveryKey(
+        phone.keys,
+        ready(await loadEncryption(phone.keys)),
+        alice.recovery.secret,
+        'Phone'
+      )
+    );
+    // The phone has seen a different chain at the same sequence as the
+    // laptop's head. Confirming must expose that conflict and keep the pin.
+    const head = (await alice.pins.readList(ALICE))!;
+    const fork = { ...head, entryHash: 'e'.repeat(64), confirmed: false };
+    expect(await phone.pins.advanceList(ALICE, fork)).toBe(true);
+    const request = await requestApproval(phone.keys, account, 'Phone');
+    if (request.step !== 'waiting') throw new Error('Expected a request');
+    await approveDevice(
+      alice.keys,
+      ready(await loadEncryption(alice.keys)),
+      await alice.keys.api.getApproval(request.approval.id),
+      { kind: 'scan', code: request.scanCode },
+      null
+    );
+    const cancel = vi.spyOn(phone.keys.api, 'cancelApproval');
+    await expect(
+      advanceApprovalAsNewDevice(phone.keys).then((result) => result.step)
+    ).rejects.toMatchObject({
+      code: 'grant-invalid',
+      message: expect.stringContaining('conflicting contacts lists')
+    });
+    expect(await phone.pins.readList(ALICE)).toEqual(fork);
+    expect((await phone.keys.store.loadDevice(ALICE))?.approval?.id).toBe(
+      request.approval.id
+    );
+    expect(cancel).not.toHaveBeenCalled();
+    expect((await phone.keys.api.getApproval(request.approval.id)).state).toBe(
+      'completed'
+    );
+    // Retrying cannot silently turn the conflict into success.
+    await expect(
+      advanceApprovalAsNewDevice(phone.keys).then((result) => result.step)
+    ).rejects.toMatchObject({
+      code: 'grant-invalid'
+    });
+  });
+
   it('never rolls the pin back to an older approval head (#936 review)', async () => {
     // The laptop's pin stays at entry 0 (Bob verified): it never reloads.
     const { srv, alice } = await aliceVerifiedBob();
