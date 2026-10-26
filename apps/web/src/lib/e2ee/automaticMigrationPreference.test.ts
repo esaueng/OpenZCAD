@@ -19,7 +19,7 @@ const fakes = vi.hoisted(() => ({
   load: vi.fn(),
   run: vi.fn(),
   refresh: vi.fn(),
-  fetch: vi.fn(),
+  fetch: vi.fn<(path: string, init?: RequestInit) => Promise<Response>>(),
   state: {
     running: false,
     error: null,
@@ -108,6 +108,38 @@ async function record(sequence: number, enabled: boolean, key = KEY) {
 }
 
 describe('automatic migration preference prerequisite', () => {
+  it.each(['unset', 'off'] as const)(
+    'keeps its key across the full %s load-to-save prerequisite when the cache is replaced',
+    async (kind) => {
+      if (kind === 'off') await record(4, false);
+      const fetch = fakes.fetch.getMockImplementation()!;
+      fakes.fetch.mockImplementation(
+        async (path: string, init?: RequestInit) => {
+          const response = await fetch(path, init);
+          if (
+            path === '/api/e2ee/project-preferences' &&
+            init?.method !== 'PUT'
+          ) {
+            rememberUnlockedAccount('account', {
+              generation: 1,
+              commitment: 'test',
+              accountKey: KEY.slice(),
+              encryptionPrivateKey: {} as CryptoKey
+            });
+          }
+          return response;
+        }
+      );
+      const attention = vi.fn();
+      const migration = automaticProjectMigration('account', attention);
+      await migration.check();
+      expect(writes).toBe(1);
+      expect(fakes.run).toHaveBeenCalledTimes(1);
+      expect(stored?.encryptNewProjects).toBe(true);
+      migration.dispose();
+    }
+  );
+
   it.each(['unset', 'off', 'on'] as const)(
     'verifies and pins encryption before migration from %s',
     async (kind) => {

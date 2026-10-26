@@ -69,27 +69,32 @@ function pageDependencies(userId: string): AutomaticMigrationDeps {
       const account = unlockedAccount(userId);
       if (!account)
         throw new Error('Unlock encryption before migrating projects.');
-      const ctx = {
-        userId,
-        accountKey: account.accountKey,
-        api: preferences.createProjectPreferenceApi(fetcher),
-        pins: preferences.localStoragePreferencePins()
-      };
-      let preference = await preferences.loadProjectPreference(ctx);
-      if (preference.kind === 'refused') return preference.message;
-      if (preference.kind !== 'verified' || !preference.encryptNewProjects) {
-        preference = await preferences.saveProjectPreference(
-          ctx,
-          true,
-          preferences.preferenceFloor(preference)
-        );
+      const accountKey = account.accountKey.slice();
+      try {
+        const ctx = {
+          userId,
+          accountKey,
+          api: preferences.createProjectPreferenceApi(fetcher),
+          pins: preferences.localStoragePreferencePins()
+        };
+        let preference = await preferences.loadProjectPreference(ctx);
+        if (preference.kind === 'refused') return preference.message;
+        if (preference.kind !== 'verified' || !preference.encryptNewProjects) {
+          preference = await preferences.saveProjectPreference(
+            ctx,
+            true,
+            preferences.preferenceFloor(preference)
+          );
+        }
+        if (!current())
+          throw new DOMException('Encryption session ended.', 'AbortError');
+        if (preference.kind !== 'verified' || !preference.encryptNewProjects) {
+          return 'Confirm encryption for new projects before migrating existing projects.';
+        }
+        return migrations.pageMigrationController(userId);
+      } finally {
+        accountKey.fill(0);
       }
-      if (!current())
-        throw new DOMException('Encryption session ended.', 'AbortError');
-      if (preference.kind !== 'verified' || !preference.encryptNewProjects) {
-        return 'Confirm encryption for new projects before migrating existing projects.';
-      }
-      return migrations.pageMigrationController(userId);
     }
   };
 }
