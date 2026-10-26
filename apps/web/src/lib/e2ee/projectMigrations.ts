@@ -244,8 +244,19 @@ export function createMigrationController(
    */
   const driven = new Set<string>();
 
+  /**
+   * A sequence bumped on every {@link update}, and its value when each
+   * project's row last changed: a refresh that began before a row changed
+   * answers with what it found then, which must not overwrite the newer
+   * row (a slow status that still said "staging" turning a run's later
+   * cut-over stop back into "paused").
+   */
+  let updates = 0;
+  const updatedAt = new Map<string, number>();
+
   function update(progress: MigrationProgress) {
     driven.add(progress.projectId);
+    updatedAt.set(progress.projectId, ++updates);
     const projects = state.projects.some(
       (p) => p.projectId === progress.projectId
     )
@@ -394,14 +405,30 @@ export function createMigrationController(
     return candidates.filter((_project, index) => unfinished[index] === true);
   }
 
+  /** Refreshes begun, and the latest one whose answer was applied. */
+  let refreshesBegun = 0;
+  let refreshApplied = 0;
+
   async function refresh() {
+    const refreshId = ++refreshesBegun;
+    const since = updates;
+    /**
+     * Whether this refresh's answer is still the newest one: an answer
+     * from a refresh that began before one already applied is dropped.
+     */
+    const newest = () => {
+      if (refreshId < refreshApplied) return false;
+      refreshApplied = refreshId;
+      return true;
+    };
+    /** A row this page's runs changed after this refresh began. */
+    const changedSince = (projectId: string) =>
+      (updatedAt.get(projectId) ?? 0) > since;
     try {
       const listed = await plaintext.listProjects();
       const migratable = migratableProjects(listed);
       const known = new Map(state.projects.map((p) => [p.projectId, p]));
       const finishing = await unfinishedCutovers(listed, migratable, known);
-      // Unfinished purges first: their plaintext copies still remain.
-      summaries = [...finishing, ...migratable];
       // A staging this page does not know of (a reload, another device's
       // lapsed one) reads as paused: resuming carries on from its journal.
       const staged = new Set<string>();
@@ -417,43 +444,60 @@ export function createMigrationController(
             }
           })
       );
-      set({
-        error: null,
-        projects: [
-          ...finishing.map((project) => ({
-            // One this page's runs have no record of stopped before its
-            // purge finished (a reload, a crash, another device): it is
-            // retried, as a stop this page saw is.
-            ...(recordOf(known, project.projectId) ?? {
-              ...waiting(project),
-              phase: 'error' as const
-            }),
-            cutOver: true
-          })),
-          ...migratable.map(
-            (project) =>
-              known.get(project.projectId) ??
-              (staged.has(project.projectId)
-                ? {
-                    ...waiting(project),
-                    phase: 'paused' as const,
-                    plaintextLocked: true
-                  }
-                : waiting(project))
-          ),
-          // Slice 7-4: an encrypted project keeps its row while it still
-          // offers encrypted links or invitations in place of revoked ones.
-          ...state.projects.filter(
-            (progress) =>
-              progress.phase === 'done' &&
-              !summaries.some((p) => p.projectId === progress.projectId) &&
-              ((progress.revoked?.shareLinks.length ?? 0) > 0 ||
-                (progress.revoked?.invitations.length ?? 0) > 0)
-          )
-        ]
-      });
+      if (!newest()) return;
+      // Unfinished purges first: their plaintext copies still remain.
+      summaries = [...finishing, ...migratable];
+      const found: MigrationProgress[] = [
+        ...finishing.map((project) => ({
+          // One this page's runs have no record of stopped before its
+          // purge finished (a reload, a crash, another device): it is
+          // retried, as a stop this page saw is.
+          ...(recordOf(known, project.projectId) ?? {
+            ...waiting(project),
+            phase: 'error' as const
+          }),
+          cutOver: true
+        })),
+        ...migratable.map(
+          (project) =>
+            known.get(project.projectId) ??
+            (staged.has(project.projectId)
+              ? {
+                  ...waiting(project),
+                  phase: 'paused' as const,
+                  plaintextLocked: true
+                }
+              : waiting(project))
+        ),
+        // Slice 7-4: an encrypted project keeps its row while it still
+        // offers encrypted links or invitations in place of revoked ones.
+        ...state.projects.filter(
+          (progress) =>
+            progress.phase === 'done' &&
+            !summaries.some((p) => p.projectId === progress.projectId) &&
+            ((progress.revoked?.shareLinks.length ?? 0) > 0 ||
+              (progress.revoked?.invitations.length ?? 0) > 0)
+        )
+      ];
+      // A row a run changed while this refresh was out is newer than
+      // what the refresh found: it stays as it is now, listed or not.
+      const now = new Map(state.projects.map((p) => [p.projectId, p]));
+      const projects = found.map((progress) =>
+        changedSince(progress.projectId)
+          ? (now.get(progress.projectId) ?? progress)
+          : progress
+      );
+      for (const progress of state.projects) {
+        if (
+          changedSince(progress.projectId) &&
+          !projects.some((p) => p.projectId === progress.projectId)
+        ) {
+          projects.push(progress);
+        }
+      }
+      set({ error: null, projects });
     } catch (error) {
-      set({ error: migrationErrorOf(error).message });
+      if (newest()) set({ error: migrationErrorOf(error).message });
     }
   }
 

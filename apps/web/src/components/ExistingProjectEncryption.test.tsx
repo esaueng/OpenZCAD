@@ -161,6 +161,22 @@ function controllerWith(
   return controller;
 }
 
+/**
+ * Clicks Encrypt projects once the panel's refresh on mount has listed
+ * something to encrypt: until then the button is disabled, and a click
+ * does nothing.
+ */
+async function clickEncryptProjects() {
+  const button = await waitFor(() => {
+    const found = screen.getByRole<HTMLButtonElement>('button', {
+      name: 'Encrypt projects'
+    });
+    expect(found.disabled).toBe(false);
+    return found;
+  });
+  fireEvent.click(button);
+}
+
 describe('the migration controller', () => {
   it('encrypts plaintext projects oldest first and moves on past a failure', async () => {
     const fake = fakeEngine(async (summary, report) => {
@@ -322,10 +338,13 @@ describe('a project cut over before its purge finished', () => {
         isOpen={async () => true}
       />
     );
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'Encrypt projects' })
-    );
+    // The panel's refresh on mount lists it first, its staging found
+    // paused (as after a reload). Clicking before that answer lands hit
+    // the button while it was still disabled, with no project listed: the
+    // run never started and the row stayed paused (the flake in CI).
     const row = await screen.findByRole('listitem', { name: 'Older bracket' });
+    expect(await within(row).findByText('Paused')).toBeTruthy();
+    fireEvent.click(within(row).getByRole('button', { name: 'Resume' }));
     expect(
       await within(row).findByText(
         'Stopped before the plaintext copy was deleted'
@@ -354,6 +373,124 @@ describe('a project cut over before its purge finished', () => {
     );
     expect(fake.migrated).toEqual(['proj_old', 'proj_old']);
     expect(screen.getByText('All your projects are encrypted')).toBeTruthy();
+  });
+});
+
+describe('a refresh answered after a run reported on the project', () => {
+  /** A promise and the function that settles it. */
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((settle) => {
+      resolve = settle;
+    });
+    return { promise, resolve };
+  }
+
+  /**
+   * proj_old, plaintext until the fake engine cuts it over and stops
+   * before its purge finished; the engine first waits for `gate`.
+   */
+  function cutOverStop(gate: Promise<void> = Promise.resolve()) {
+    let storageFormat: 1 | 2 = 1;
+    const listed = () => [
+      project('proj_old', 'Older bracket', '2026-10-01T00:00:00.000Z', {
+        storageFormat
+      })
+    ];
+    const fake = fakeEngine(async (_summary, report) => {
+      await gate;
+      report({ phase: 'cutover' });
+      storageFormat = 2;
+      report({ phase: 'purging', cutOver: true });
+      report({
+        phase: 'error',
+        error: { message: 'Purge failed.', retryable: true }
+      });
+      throw new Error('purge failed');
+    });
+    return { listed, fake };
+  }
+
+  it('does not turn a cut-over stop back into "paused" when a status asked before it answers after it', async () => {
+    const { listed, fake } = cutOverStop();
+    // The first status asked (by the slow refresh, as the panel's mount
+    // does) is held until the run has reported; later ones answer at once.
+    const held = deferred<{ migration: { state: string } }>();
+    let asked = 0;
+    const status = vi.fn(async () =>
+      asked++ === 0 ? held.promise : { migration: { state: 'staging' } }
+    );
+    const controller = controllerWith(fake, null, {
+      plaintext: {
+        listProjects: async () => listed()
+      } as unknown as MigrationPlaintextSource,
+      migrations: { status } as unknown as ProjectMigrationsApi
+    });
+
+    const slow = controller.refresh();
+    await waitFor(() => expect(status).toHaveBeenCalledTimes(1));
+    await controller.run(['proj_old']);
+    expect(controller.getState().projects).toMatchObject([
+      { projectId: 'proj_old', phase: 'error', cutOver: true }
+    ]);
+
+    // The slow refresh answers what the server said before the cutover.
+    held.resolve({ migration: { state: 'staging' } });
+    await slow;
+    expect(controller.getState().projects).toMatchObject([
+      { projectId: 'proj_old', phase: 'error', cutOver: true }
+    ]);
+    expect([...migrationLockedProjects()]).toEqual(['proj_old']);
+  });
+
+  it('keeps a row the run changed while the newest refresh was out', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { listed, fake } = cutOverStop(gate);
+    // Another encrypted project, asked about on every refresh until its
+    // answer settles: the run's refresh fails to find out, and the next
+    // refresh's question is held until the run has reported.
+    const enc = project('proj_enc', 'Encrypted', '2026-09-01T00:00:00.000Z', {
+      storageFormat: 2
+    });
+    const held = deferred<{ migration: null }>();
+    let encAsked = 0;
+    const status = vi.fn(async (projectId: string) => {
+      if (projectId !== 'proj_enc') return { migration: null };
+      if (encAsked++ === 0)
+        throw Object.assign(new Error('500'), { status: 500 });
+      return held.promise;
+    });
+    const controller = controllerWith(fake, null, {
+      plaintext: {
+        listProjects: async () => [...listed(), enc]
+      } as unknown as MigrationPlaintextSource,
+      migrations: { status } as unknown as ProjectMigrationsApi
+    });
+
+    const running = controller.run(['proj_old']);
+    await waitFor(() =>
+      expect(controller.getState().projects).toMatchObject([
+        { projectId: 'proj_old', phase: 'starting' }
+      ])
+    );
+    // Begun while the run is under way: it sees the project starting.
+    const slow = controller.refresh();
+    await waitFor(() => expect(encAsked).toBe(2));
+    release();
+    await running;
+    expect(controller.getState().projects).toMatchObject([
+      { projectId: 'proj_old', phase: 'error', cutOver: true }
+    ]);
+
+    held.resolve({ migration: null });
+    await slow;
+    expect(controller.getState().projects).toMatchObject([
+      { projectId: 'proj_old', phase: 'error', cutOver: true }
+    ]);
+    expect([...migrationLockedProjects()]).toEqual(['proj_old']);
   });
 });
 
@@ -617,7 +754,7 @@ describe('Settings › Encryption › Encrypt existing projects', () => {
       screen.getByText(/added back with their current roles/)
     ).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Encrypt projects' }));
+    await clickEncryptProjects();
     const older = await screen.findByRole('listitem', {
       name: 'Older bracket'
     });
@@ -654,9 +791,7 @@ describe('Settings › Encryption › Encrypt existing projects', () => {
         isOpen={async () => true}
       />
     );
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'Encrypt projects' })
-    );
+    await clickEncryptProjects();
     const older = await screen.findByRole('listitem', {
       name: 'Older bracket'
     });
@@ -735,9 +870,7 @@ describe('a shared project (slice 7-4)', () => {
         isOpen={async () => true}
       />
     );
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'Encrypt projects' })
-    );
+    await clickEncryptProjects();
     const older = await screen.findByRole('listitem', {
       name: 'Older bracket'
     });
@@ -831,9 +964,7 @@ describe('a shared project (slice 7-4)', () => {
         isOpen={async () => true}
       />
     );
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'Encrypt projects' })
-    );
+    await clickEncryptProjects();
     const older = await screen.findByRole('listitem', {
       name: 'Older bracket'
     });
