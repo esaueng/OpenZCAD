@@ -82,8 +82,9 @@ describe('contact pins', () => {
         name
       ).toBe(true);
       expect((await pins.readList('matching-empty'))?.confirmed, name).toBe(
-        true
+        false
       );
+      expect((await pins.readList('fresh-empty'))?.confirmed, name).toBe(false);
     }
   });
 

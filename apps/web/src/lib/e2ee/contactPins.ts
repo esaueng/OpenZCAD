@@ -262,24 +262,33 @@ export function advancedListPin(
   }
   // Nothing to protect under this identity: a fresh browser pins the head.
   if (!current || current.identityKeyHash !== valid.identityKeyHash) {
-    return withPending(valid, valid.confirmed, null);
+    return withPending(
+      valid,
+      valid.confirmed &&
+        !(options.fromApproval && valid.sequence === EMPTY_CONTACTS_SEQUENCE),
+      null
+    );
   }
   if (options.fromApproval) {
     // An empty approver supplies no authenticated entry in this browser's
     // nonempty chain. It cannot promote that chain's trust.
-    if (
-      valid.sequence === EMPTY_CONTACTS_SEQUENCE &&
-      current.sequence !== EMPTY_CONTACTS_SEQUENCE
-    )
-      return null;
+    if (valid.sequence === EMPTY_CONTACTS_SEQUENCE) {
+      if (current.sequence !== EMPTY_CONTACTS_SEQUENCE) return null;
+      // Device approval without a contacts entry transfers no trust to a
+      // future server-selected chain. Local setup alone trusts an empty root.
+      return withPending(
+        current,
+        current.confirmed,
+        current.pendingApproval ?? null
+      );
+    }
     // A grant never discards this browser's pin, whichever side is newer:
     // a server can show an unconfirmed approver a longer fork, or a stale
     // one an older head. It confirms at once only what needs no list: the
-    // pin itself, including when both devices saw only the empty list.
+    // nonempty pin itself.
     if (
-      valid.sequence === EMPTY_CONTACTS_SEQUENCE ||
-      (valid.sequence === current.sequence &&
-        valid.entryHash === current.entryHash)
+      valid.sequence === current.sequence &&
+      valid.entryHash === current.entryHash
     ) {
       const confirmed = current.confirmed || valid.confirmed;
       return withPending(current, confirmed, current.pendingApproval ?? null);

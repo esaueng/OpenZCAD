@@ -2,7 +2,7 @@
 row: L11
 ---
 
-Empty-head approval follow-up: an empty approver supplies no authenticated entry in an already nonempty local chain, so that grant refuses without promoting trust or altering pending evidence. Both stores cover empty grants with either confirmation flag at sequence zero and later heads. A real stale setup device approves a browser shown a withheld verified prefix; approval and retry refuse, local/server requests remain, and the contact stays seen with no key usable for wrapping. Fresh/matching empty pins, exact nonempty heads and v1 grants remain covered. The store and real-flow regressions fail before the guard and pass after it.
+Empty-head approval follow-up: an empty grant transfers no contacts-list trust. An existing nonempty recipient refuses it without altering its pin or pending evidence; a fresh or matching-empty recipient can finish device certification but remains unconfirmed. Local setup retains its own trusted empty root. Both stores cover each empty representation and confirmation flag. Real stale-setup approvals cover recipients before and after their first contacts load: a withheld verified prefix stays seen with no key usable for wrapping. Nonempty conflicts and retries retain local/server requests; exact nonempty heads and v1 grants retain their established paths. The store and real-flow regressions fail before the guard and pass after it.
 
 Local contact comparisons now check the contact pin store's result. If another inspection accepted a newer device-list head meanwhile, the comparison reports the race rather than reporting success without a local verification marker. A real second-device enrollment regression verifies the refused stale comparison and successful retry after inspecting the newer head.
 
