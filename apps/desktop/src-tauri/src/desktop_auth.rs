@@ -18,7 +18,9 @@ use tokio::time::Instant;
 
 const API_ORIGIN: &str = "https://zcad.app";
 const DESKTOP_CLIENT_ID: &str = "openzcad-macos";
+#[cfg(target_os = "macos")]
 const KEYCHAIN_SERVICE: &str = "app.esau.openzcad";
+#[cfg(target_os = "macos")]
 const KEYCHAIN_ACCOUNT: &str = "desktop-refresh";
 // At least `MAX_CLOUD_PROJECT_WRITE_BYTES` (packages/shared): a browser-split
 // document write carries its payloads base64-encoded beside the document.
@@ -43,6 +45,7 @@ const NATIVE_BLOB_IDLE: Duration = Duration::from_secs(30);
 const BLOB_STREAM_TOO_LARGE: &str = "The OpenZCAD cloud download is too large.";
 const BLOB_STREAM_STOPPED: &str = "The OpenZCAD cloud download stopped.";
 const TOKEN_REFRESH_SKEW_SECONDS: u64 = 30;
+#[cfg(target_os = "macos")]
 const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
 
 #[derive(Clone)]
