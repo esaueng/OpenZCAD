@@ -337,11 +337,11 @@ async function readBody(request: Request): Promise<Record<string, unknown>> {
   }
 }
 
-/** Tells the project's room to lock or purge; true when there is none. */
+/** Tells the project's room to purge; true when there is none. */
 async function tellRoom(
   env: MigrationEnv,
   projectId: string,
-  action: 'lock' | 'purge'
+  action: 'purge'
 ): Promise<boolean> {
   const rooms = env.PROJECT_ROOM as RoomNamespace | undefined;
   if (!rooms || typeof rooms.getByName !== 'function') return true;
@@ -361,8 +361,50 @@ async function tellRoom(
 }
 
 /**
+ * Takes back a lease the start issued but never handed out, because the
+ * room did not confirm its lock. A fresh staging with nothing staged goes
+ * back to `abandoned` with no cleanup due, so the plaintext unlocks and a
+ * retry starts afresh; a resumed one keeps its staged rows under a lease
+ * that lapses at once, which the retry takes over.
+ */
+async function withdrawLease(
+  db: D1Database,
+  projectId: string,
+  leaseId: string,
+  fresh: boolean
+): Promise<void> {
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const statements: D1PreparedStatement[] = [];
+  if (fresh) {
+    statements.push(
+      db
+        .prepare(
+          `UPDATE e2ee_project_migrations
+           SET state = 'abandoned', device_id = NULL, lease_id = NULL,
+               lease_expires_at = NULL, updated_at = ?, finished_at = ?
+           WHERE project_id = ? AND state = 'staging' AND lease_id = ?
+             AND NOT ${STAGED_ROWS_SQL}`
+        )
+        .bind(nowIso, nowIso, projectId, leaseId, ...stagedRowsBinds(projectId))
+    );
+  }
+  statements.push(
+    db
+      .prepare(
+        `UPDATE e2ee_project_migrations
+         SET lease_expires_at = ?, updated_at = ?
+         WHERE project_id = ? AND state = 'staging' AND lease_id = ?`
+      )
+      .bind(now, nowIso, projectId, leaseId)
+  );
+  await runBatch(db, statements);
+}
+
+/**
  * Locks the project's room and answers the plaintext version it holds:
- * null when there is no room, it holds none, or it could not be told.
+ * null when there is no room or it holds none. A room that does not
+ * confirm the lock throws, so no lease leaves on its silence.
  */
 async function lockRoom(
   env: MigrationEnv,
@@ -382,6 +424,7 @@ async function lockRoom(
       body: JSON.stringify({ action: 'lock' })
     })
   );
+  if (!response.ok) throw new Error(`Room lock answered ${response.status}`);
   if (response.status !== 200) return null;
   const answer = (await response.json().catch(() => null)) as {
     latestVersion?: unknown;
@@ -574,14 +617,34 @@ async function start(
       );
     }
   }
-  // Nothing the room holds may move on while the browser stages. A room
-  // that cannot be told still meets the cutover's check that the
-  // plaintext did not move.
+  // Nothing the room holds may move on while the browser stages. The
+  // cutover checks D1's head and measurements, not the room's, so a room
+  // that kept its sockets could persist plaintext edits only it holds,
+  // which the purge then deletes: no lease leaves here unless the room
+  // confirmed the lock (#914 review).
+  let locked = true;
   let roomVersion: number | null = null;
   try {
     roomVersion = await lockRoom(ctx.env, projectId);
   } catch {
-    // Best effort; see above.
+    locked = false;
+  }
+  if (!locked) {
+    try {
+      await withdrawLease(
+        ctx.db,
+        projectId,
+        leaseId,
+        existing?.state !== 'staging'
+      );
+    } catch {
+      // The lease still never leaves here, and lapses on its own.
+    }
+    refuse(
+      503,
+      'PROJECT_ROOM_UNAVAILABLE',
+      'The project’s room could not be locked right now. Try again.'
+    );
   }
   // Slice 7-2: a room holding edits no checkpoint saved yet (its version
   // is ahead of the account's head) would lose them to the purge. A fresh
