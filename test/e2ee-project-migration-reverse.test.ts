@@ -1783,6 +1783,74 @@ describe('staged upload sessions', () => {
   });
 });
 
+// --- Save state authors -----------------------------------------------------------------
+
+describe('save state authors', () => {
+  it('keeps who saved each save state, as the encrypted history records them', async () => {
+    const srv = roomServer();
+    const encrypted = await encryptedProject(srv);
+    const { projectId } = encrypted;
+    const [byOther, byGone, spoofed] = encrypted.revisionIds as [
+      string,
+      string,
+      string
+    ];
+    // A former collaborator saved one, an account since deleted another
+    // (the project is no longer shared); the owner saved the third.
+    const recordAuthor = (revisionId: string, author: string) =>
+      srv.db
+        .prepare(
+          'UPDATE e2ee_project_revisions SET author_user_id = ? WHERE project_id = ? AND revision_id = ?'
+        )
+        .run(author, projectId, revisionId);
+    recordAuthor(byOther, OTHER);
+    recordAuthor(byGone, 'user_deleted_since');
+    recordAuthor(spoofed, OWNER);
+    const desktop = reverseOn(srv, owner, 'owner_desktop');
+    const sent: Record<string, unknown> = {};
+    // The browser names each save state's author; one request names
+    // another account than the encrypted history records.
+    desktop.d.before = async (path, init) => {
+      if (!path.endsWith('/revisions') || init.method !== 'POST') return;
+      const body = JSON.parse(init.body as string) as {
+        savedRevisionId: string;
+        authorUserId?: string;
+      };
+      sent[body.savedRevisionId] = body.authorUserId;
+      if (body.savedRevisionId === spoofed) {
+        init.body = JSON.stringify({ ...body, authorUserId: OTHER });
+      }
+    };
+    await decryptFully(desktop, projectId);
+    expect(sent).toEqual({
+      [byOther]: OTHER,
+      [byGone]: 'user_deleted_since',
+      [spoofed]: OWNER
+    });
+    const authors = Object.fromEntries(
+      rows<{ id: string; author_user_id: string }>(
+        srv,
+        'SELECT id, author_user_id FROM revisions WHERE project_id = ?',
+        projectId
+      ).map((r) => [r.id, r.author_user_id])
+    );
+    expect(authors).toEqual({
+      [byOther]: OTHER,
+      // An account that no longer exists, or one the history does not
+      // record for that save state: the owner who staged it.
+      [byGone]: OWNER,
+      [spoofed]: OWNER
+    });
+    // The history panel shows them.
+    const listed = (await (
+      await srv.call('GET', `/api/projects/${projectId}/revisions`)
+    ).json()) as { revisions: { revisionId: string; authorUserId?: string }[] };
+    expect(
+      listed.revisions.find((r) => r.revisionId === byOther)?.authorUserId
+    ).toBe(OTHER);
+  });
+});
+
 // --- Refusals -----------------------------------------------------------------------
 
 describe('who may turn encryption off', () => {

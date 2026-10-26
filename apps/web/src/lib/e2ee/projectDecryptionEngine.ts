@@ -537,11 +537,13 @@ export function createProjectDecryptionEngine(
       const document = await store.loadRevision(projectId, revision.revisionId);
       // Retention dropped it: the cutover no longer asks for it either.
       if (!document) continue;
+      // Who saved it, a former collaborator's say, stays its author.
       await target.stageRevision(
         projectId,
         await plaintextDocument(document),
         revision.reason,
-        revision.revisionId
+        revision.revisionId,
+        revision.authorUserId
       );
       staged.add(revision.revisionId);
       done++;

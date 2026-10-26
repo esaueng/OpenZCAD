@@ -3568,7 +3568,13 @@ export class D1R2PersistenceService implements PersistenceService {
       projectId: string;
       document: ProjectDocument;
       storage?: ClientProjectStorage;
-      revision?: { revisionId: string; reason: string };
+      /**
+       * A save state, under its own id. `authorUserId` is who saved it, as
+       * the request names them: kept only when the encrypted save state
+       * under the same id records that author and the account still exists,
+       * else the owner staging it.
+       */
+      revision?: { revisionId: string; reason: string; authorUserId?: string };
       /** The head the migration row journals, if any. */
       journaledHead?: { version: number; checksumSha256: string };
       fence: DecryptStagingFence;
@@ -3716,7 +3722,14 @@ export class D1R2PersistenceService implements PersistenceService {
               `INSERT INTO revisions
                  (id, project_id, reason, document_json, document_object_id,
                   document_bytes, created_at, author_user_id)
-               SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE ${objectFence}`
+               SELECT ?, ?, ?, ?, ?, ?, ?,
+                      COALESCE((SELECT author.id FROM users author
+                                JOIN e2ee_project_revisions saved
+                                  ON saved.author_user_id = author.id
+                                WHERE saved.project_id = ?
+                                  AND saved.revision_id = ?
+                                  AND author.id = ?), ?)
+               WHERE ${objectFence}`
             ).bind(
               revision.revisionId,
               input.projectId,
@@ -3725,6 +3738,10 @@ export class D1R2PersistenceService implements PersistenceService {
               write.objectId,
               persistedDocumentBytes(document),
               latest.createdAt,
+              // Who saved it, as the encrypted history records them.
+              input.projectId,
+              revision.revisionId,
+              revision.authorUserId ?? null,
               userId,
               write.objectId,
               input.projectId

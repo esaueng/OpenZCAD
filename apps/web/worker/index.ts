@@ -18,7 +18,8 @@ import {
   decryptStagingFor,
   decryptStagingRouteProject,
   stageDecryptedHead,
-  stageDecryptedRevision
+  stageDecryptedRevision,
+  stagedRevisionAuthor
 } from './e2eeReverseStaging';
 import { encryptedRoomHeaders, notifyEncryptedRoom } from './e2eeRoom';
 import { enforceApiRateLimit, publicRequestBucket } from './apiRateLimit';
@@ -2025,7 +2026,8 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
           userId,
           payload,
           opened.storage,
-          decryptStaging
+          decryptStaging,
+          stagedRevisionAuthor(opened.body)
         )
       );
     }

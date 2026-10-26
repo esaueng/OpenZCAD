@@ -164,13 +164,47 @@ async function translated<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-/** `POST /api/projects/:id/revisions` under a decrypt lease. */
+/** The longest user id a staged save state's author may name. */
+const MAX_AUTHOR_ID_LENGTH = 256;
+
+/**
+ * The author a staged save state's request names (`authorUserId`), who
+ * saved the encrypted save state it decrypts; undefined when absent.
+ */
+export function stagedRevisionAuthor(body: unknown): string | undefined {
+  const value =
+    body && typeof body === 'object'
+      ? (body as Record<string, unknown>).authorUserId
+      : undefined;
+  if (value === undefined || value === null) return undefined;
+  if (
+    typeof value !== 'string' ||
+    value.length < 1 ||
+    value.length > MAX_AUTHOR_ID_LENGTH
+  ) {
+    throw new SharingRequestError(
+      400,
+      'SAVE_POINT_INVALID',
+      'A staged save state names its author by user id.'
+    );
+  }
+  return value;
+}
+
+/**
+ * `POST /api/projects/:id/revisions` under a decrypt lease. The save state
+ * keeps who saved it (`authorUserId`, a former collaborator's say) only
+ * when the encrypted save state under the same id records that author and
+ * the account still exists; otherwise the owner staging it is its author,
+ * as for any save state whose author is unknown.
+ */
 export async function stageDecryptedRevision(
   persistence: PersistenceService,
   userId: UserId,
   payload: SaveRevisionRequest,
   storage: ClientProjectStorage | undefined,
-  staging: DecryptStaging
+  staging: DecryptStaging,
+  authorUserId?: string
 ): Promise<ProjectDocument> {
   if (payload.savedRevisionId === undefined) {
     throw new SharingRequestError(
@@ -185,7 +219,11 @@ export async function stageDecryptedRevision(
       projectId: staging.projectId,
       document: payload.document,
       ...(storage ? { storage } : {}),
-      revision: { revisionId, reason: payload.reason.trim() },
+      revision: {
+        revisionId,
+        reason: payload.reason.trim(),
+        ...(authorUserId ? { authorUserId } : {})
+      },
       fence: staging.fence
     })
   );
