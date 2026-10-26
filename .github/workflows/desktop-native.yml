@@ -1,0 +1,40 @@
+name: Desktop native tests
+
+on:
+  pull_request:
+    paths:
+      - apps/desktop/src-tauri/**
+      - apps/desktop/device-keys/**
+      - .github/workflows/desktop-native.yml
+
+permissions:
+  contents: read
+
+jobs:
+  native-tests:
+    # Exercise portable host logic, including native download lifetimes.
+    # Real WKWebView, Keychain and macOS distribution remain in the manual
+    # Apple Silicon workflow; this job never packages or publishes an app.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install native build prerequisites
+        timeout-minutes: 10
+        run: |
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends build-essential libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - name: Prepare Rust toolchain
+        run: rustup toolchain install 1.96.0 --profile minimal --component rustfmt --component clippy
+      - name: Check native host
+        working-directory: apps/desktop/src-tauri
+        run: |
+          cargo +1.96.0 fmt --all -- --check
+          cargo +1.96.0 clippy --locked --all-targets --no-default-features -- -D warnings
+          cargo +1.96.0 test --locked --lib --no-default-features
