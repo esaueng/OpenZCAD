@@ -1,0 +1,7 @@
+---
+row: L11
+---
+
+Phase 8, slice 8-C3: in the packaged macOS app, encrypted content blobs (anonymous share-link and authenticated member downloads) use `desktop_blob_stream_open`, `_read` and `_cancel` instead of the buffered bridge's 50 MiB cap. The native allowlist preserves credential routing, the bounded pump holds at most 16 chunks, reads return about 1 MiB of raw bytes, the total ciphertext ceiling is 168 MiB, and connect/read idle timeouts are 30 seconds. Four streams run at once; further WebView requests wait for a slot. Renderer timers cancel bodies unread for a minute while that WebView remains alive. Size, progress and idle limits remain enforced by the existing callers. Evidence: `apps/web/src/lib/desktopBridge.test.ts` (including a 60 MiB blob, cancellation, failures, member downloads and queued admission) and Rust tests in `apps/desktop/src-tauri/src/desktop_auth.rs` for route classification, pump bounds, limits, short bodies and release. No new flag, migration or dependency.
+
+Review follow-up: native blob admission checks an already-aborted signal before taking a slot or registering a waiter. `desktopBridge.test.ts` holds all four streams open, aborts a fifth request during the Tauri import await, and verifies prompt rejection with no native open or leftover waiter. The native stream lifetime after a WebView reload remains a deferred P2: stale entries are reclaimed only when another native open checks their age; independent native expiry or renderer teardown cancellation still needs implementation and native validation.
