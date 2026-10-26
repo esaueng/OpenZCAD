@@ -1717,6 +1717,17 @@ export async function handleEncryptedSharedSnapshot(
   });
 }
 
+/**
+ * The anonymous blob route's rate limit (`worker/index.ts`). Each may
+ * throw the limiter's 429.
+ */
+export interface SharedBlobGuard {
+  /** A request that names no link the route serves. */
+  unbudgeted(): Promise<void>;
+  /** A request within a load of the link `linkKey` names, of `blobs` blobs. */
+  load(linkKey: string, blobs: number): Promise<void>;
+}
+
 /** Where the owner's encrypted content blobs live (the artifact bucket). */
 export interface SharedBlobBucket {
   get(key: string): Promise<{
@@ -1736,36 +1747,53 @@ export interface SharedBlobBucket {
  * authenticates its ciphertext hash and length. Everything else is the
  * same opaque 404; a blob row whose object is missing is 503, as for
  * members.
+ *
+ * `guard` is the deployment's rate limit (#923 review): a request that
+ * names no servable link counts against the address's own budget
+ * (`unbudgeted`); one that does counts as part of a load of that link
+ * (`load`), whose budget is sized to the blobs its snapshot names, so a
+ * model with more imports than the address budget still loads at once.
  */
 export async function handleEncryptedSharedBlob(
   pathname: string,
   db: D1Database | undefined,
   snapshots: ShareSnapshotBucket | null,
   blobs: SharedBlobBucket | null,
-  open: boolean
+  open: boolean,
+  guard: SharedBlobGuard | null = null
 ): Promise<Response> {
   if (!open || !db || !blobs) return anonymousNotFound();
+  const notServed = async () => {
+    await guard?.unbudgeted();
+    return anonymousNotFound();
+  };
   const match = SHARED_BLOB_ROUTE.exec(pathname);
   const blobId = match?.[2] ?? '';
-  if (!match || !E2EE_BLOB_ID_PATTERN.test(blobId)) {
-    return anonymousNotFound();
-  }
+  if (!match || !E2EE_BLOB_ID_PATTERN.test(blobId)) return notServed();
   const row = await servedLink(db, match[1] ?? '');
-  if (!row || !(await isE2eeContentBlobStorageReady(db))) {
-    return anonymousNotFound();
-  }
+  if (!row || !(await isE2eeContentBlobStorageReady(db))) return notServed();
   const envelope = await servedEnvelope(row, snapshots);
-  if (!envelope) return anonymousNotFound();
+  if (!envelope) return notServed();
   let named: readonly string[];
   try {
     const { header } = parseEnvelope(envelope);
     if (header.class !== 'project' || header.kind !== 'share-snapshot') {
-      return anonymousNotFound();
+      return notServed();
     }
     named = header.blobIds;
   } catch {
-    return anonymousNotFound();
+    return notServed();
   }
+  // Opaque: neither the project nor the link id reaches the limiter.
+  await guard?.load(
+    (
+      await sha256Hex(
+        new TextEncoder().encode(`${row.project_id}
+${row.share_id}`)
+      )
+    ).slice(0, 32),
+    named.length
+  );
   if (!named.includes(blobId)) return anonymousNotFound();
   const blob = await db
     .prepare(

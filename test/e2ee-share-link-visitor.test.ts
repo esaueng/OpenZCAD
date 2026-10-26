@@ -23,7 +23,8 @@ import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   fromBase64Url,
   signShareDelegation,
-  toBase64Url
+  toBase64Url,
+  type ContentBlobReference
 } from '@openzcad/crypto';
 import {
   adoptProjectDocument,
@@ -80,6 +81,10 @@ import {
   type Server
 } from './support/e2ee-documents';
 import { sharedProject } from './support/e2ee-members';
+import {
+  putRawSnapshot,
+  sealRawSnapshot
+} from './support/e2ee-share-snapshots';
 
 const THIRD = 'user_third';
 const DAY = 86_400_000;
@@ -566,6 +571,81 @@ describe('the anonymous blob route (slice 5-11)', { timeout: 120_000 }, () => {
     const off = { ...env, E2EE_PROJECTS_ENABLED: 'false' };
     expect(
       (await anonymous(srv, `/api/e2ee/share/${token}`, off, from)).status
+    ).toBe(404);
+  });
+
+  it('counts blobs per link load: a model with more imports than the address budget loads at once, and nothing else gains (slice 8-C1)', async () => {
+    const { srv, laptop, projectId, document, blobId } =
+      await sharedWithImport();
+    const large = await createShareLink(laptop.shareLinks, projectId, 'view');
+    const small = await createShareLink(laptop.shareLinks, projectId, 'view');
+    // A snapshot of the large link naming 400 committed blobs.
+    const many = 400;
+    const references: ContentBlobReference[] = [];
+    const insert = srv.db.prepare(
+      `INSERT INTO e2ee_content_blobs
+         (project_id, blob_id, kind, object_key, ciphertext_bytes, created_at)
+       VALUES (?, ?, 'import-source', ?, 16, ?)`
+    );
+    for (let i = 0; i < many; i += 1) {
+      const id = randomBytes(16).toString('hex');
+      const key = `e2ee/${projectId}/${id}`;
+      srv.bucket.objects.set(key, new Uint8Array(16).buffer);
+      insert.run(projectId, id, key, new Date().toISOString());
+      references.push({
+        blobId: id,
+        kind: 'import-source',
+        key: new Uint8Array(randomBytes(32)),
+        ciphertextHash: new Uint8Array(randomBytes(32)),
+        plaintextLength: 1
+      });
+    }
+    const sealed = await sealRawSnapshot(
+      srv,
+      laptop,
+      projectId,
+      large.shareId,
+      {
+        document,
+        blobs: references
+      }
+    );
+    expect(
+      (await putRawSnapshot(srv, laptop, projectId, large.shareId, sealed))
+        .status
+    ).toBe(200);
+    const env = {
+      ...srv.env,
+      ENVIRONMENT: 'beta',
+      AUTH_MODE: 'email-code',
+      AUTH_OTP_PEPPER: 'pepper-for-tests'
+    };
+    const minute = vi.spyOn(Date, 'now').mockReturnValue(Date.now());
+    onTestFinished(() => minute.mockRestore());
+    const from = { 'cf-connecting-ip': '203.0.113.9' };
+    const fetchBlob = async (token: string, id: string) =>
+      (await anonymous(srv, sharedBlobUrl(token, id), env, from)).status;
+    // One load of the large link: every blob, within one minute.
+    for (const reference of references) {
+      expect(await fetchBlob(large.fragment.token, reference.blobId)).toBe(200);
+    }
+    // The small link's load budget (one blob: 2 + 32), then the address's
+    // own 300, then nothing.
+    const statuses: number[] = [];
+    for (let i = 0; i < 335; i += 1) {
+      statuses.push(await fetchBlob(small.fragment.token, blobId));
+    }
+    expect(statuses.slice(0, 334).every((status) => status === 200)).toBe(true);
+    expect(statuses[334]).toBe(429);
+    // Requests naming no servable link spend the address's budget: spent.
+    expect(await fetchBlob('x'.repeat(43), blobId)).toBe(429);
+    // Another address still gets its own.
+    expect(
+      (
+        await anonymous(srv, sharedBlobUrl('x'.repeat(43), blobId), env, {
+          'cf-connecting-ip': '203.0.113.10'
+        })
+      ).status
     ).toBe(404);
   });
 });
