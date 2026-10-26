@@ -5059,30 +5059,6 @@ export function App() {
         ? 'drawing'
         : 'view'
       : panelState.workspaceMode;
-  // A sketch or feature form takes the stage: model panels and "More tools"
-  // step aside and return when it ends, the preference untouched. A drag
-  // on the model leaves them in place (see `effectivePanels`).
-  const panelFeature = selectedFeatureNode
-    ? doc?.nodes[selectedFeatureNode.id]
-    : null;
-  const panels = usePanelSuspension(panelState, {
-    workspaceMode: resolvedWorkspaceMode,
-    sketching: interaction.mode === 'sketch',
-    editing:
-      movePreview === null &&
-      ((tool !== null && tool !== 'transform') ||
-        (selectedFeatureNode !== null &&
-          featureSelectionSource !== 'inferred' &&
-          panelFeature?.kind === 'feature' &&
-          panelFeature.data.featureKind !== 'sketch' &&
-          panelFeature.data.featureKind !== 'transform')),
-    sessionId:
-      interaction.mode === 'sketch'
-        // A new sketch acquires its canonical ID on the first entity; that
-        // is still the same editing session and must keep a manual release.
-        ? 'active'
-        : `${tool ?? 'edit'}:${featureSelectionSource !== 'inferred' ? selectedFeatureNode?.id ?? '' : ''}`
-  });
   const viewMode = resolvedWorkspaceMode === 'view';
   const tweakMode = resolvedWorkspaceMode === 'tweak';
   const drawingMode = resolvedWorkspaceMode === 'drawing';
@@ -20511,6 +20487,29 @@ export function App() {
   const narrowWindow = useMediaQuery(NARROW_WINDOW_QUERY);
   const inPlaceEditing = inPlace.editing;
   const extrudeEditFeatureId = extrudeEdit?.featureId ?? null;
+  // Only an editor takes the stage. Pinned imported/direct-edit details are
+  // read-only, so inspecting them must leave History and other panels open.
+  // Read the active command here rather than inferring it from feature kind.
+  const panelFeature = selectedFeatureNode
+    ? doc?.nodes[selectedFeatureNode.id]
+    : null;
+  const panels = usePanelSuspension(panelState, {
+    workspaceMode: resolvedWorkspaceMode,
+    sketching: interaction.mode === 'sketch',
+    editing:
+      movePreview === null &&
+      ((tool !== null && tool !== 'transform') ||
+        (featureSelectionSource === 'pinned' &&
+          panelFeature?.kind === 'feature' &&
+          (panelFeature.data.featureKind === 'primitive' ||
+            panelFeature.featureId === inPlaceEditing?.featureId ||
+            panelFeature.featureId === extrudeEditFeatureId))),
+    sessionId:
+      interaction.mode === 'sketch'
+        // Acquiring a canonical sketch ID is still the same editing session.
+        ? 'active'
+        : `${tool ?? 'edit'}:${featureSelectionSource === 'pinned' ? selectedFeatureNode?.id ?? '' : ''}`
+  });
   useEffect(() => {
     setInPlaceEditFeatureId(
       inPlaceEditing?.featureId ?? extrudeEditFeatureId ?? null

@@ -81,6 +81,31 @@ async function preciseHole(page: Page) {
   });
 }
 
+test('read-only imported mesh details keep History visible', async ({
+  page
+}, testInfo) => {
+  await stubApi(page);
+  await page.route('**/api/session', (route) => route.fulfill({ json: null }));
+  await createProject(page, 'Read-only feature details');
+  await page
+    .getByLabel(/^Import FreeCAD, STEP or /)
+    .setInputFiles('samples/simple-block.stl');
+  await page
+    .getByRole('dialog', { name: 'Units for simple-block.stl' })
+    .getByRole('button', { name: /^Import in/ })
+    .click();
+  await expectBodyCount(page, 1);
+  await revealModelPanel(page, 'History');
+  await page
+    .locator('.feature-row-main', { hasText: 'simple-block.stl' })
+    .click();
+  await expect(inspector(page)).toBeVisible();
+  await expect(inspector(page)).toContainText('Measurements');
+  await expect(inspector(page)).not.toContainText('last applied');
+  await expect(page.getByRole('heading', { name: 'History 1' })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('mesh-history-details.png') });
+});
+
 test('precise hole creation, honest properties, recoverable errors and compact editing', async ({
   page
 }, testInfo) => {
