@@ -6846,6 +6846,9 @@ export function App() {
       doc?.projectId
     ]
   );
+  // End the session permanently when its view changes. Merely hiding the
+  // indicator would let an old snapshot revive if the same set returns later.
+  if (bodyIsolation && isolatedBodyId === null) setBodyIsolation(null);
   // Only whether a face offset is in progress matters to the bodies: keyed on
   // the whole interaction, every drag, keypad or selection event handed the
   // viewer a new bodies array and re-ran each of its bodies effects.

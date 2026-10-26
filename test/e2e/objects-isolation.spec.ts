@@ -211,6 +211,18 @@ for (const viewport of [
     await promptField(page).fill('isolate');
     await page.getByRole('option', { name: /Exit isolation/ }).click();
     await expect(objects.locator('.hidden-body')).toHaveCount(2);
+    // A manual visibility change ends isolation permanently, even if the
+    // user restores the same hidden set before starting a fresh session.
+    await objects.getByRole('button', { name: 'Isolate body Plate' }).click();
+    await objects.getByRole('button', { name: 'Show body Upper' }).click();
+    await expect(exit).toHaveCount(0);
+    await objects.getByRole('button', { name: 'Hide body Upper' }).click();
+    await expect(exit).toHaveCount(0);
+    await objects.getByRole('button', { name: 'Isolate body Plate' }).click();
+    await exit.click();
+    await expect(objects.locator('.hidden-body')).toHaveCount(3);
+    await objects.getByRole('button', { name: 'Show body Upper' }).click();
+    await expect(objects.locator('.hidden-body')).toHaveCount(2);
     await page.screenshot({
       path: testInfo.outputPath('restored-visibility.png')
     });
