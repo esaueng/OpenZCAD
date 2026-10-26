@@ -71,6 +71,8 @@ import {
   PROJECT_FENCE,
   RouteError,
   bytesField,
+  deviceListMoved,
+  deviceListUnchanged,
   idField,
   invalid,
   json,
@@ -80,6 +82,7 @@ import {
   requireCertifiedDevice,
   requireEncryptedProjectAccess,
   requireOwnedEncryptedProject,
+  projectFence,
   runBatch,
   type Authorization
 } from './e2eeProjects';
@@ -152,7 +155,7 @@ export interface E2eeInvitationHost {
 
 // --- Rows ------------------------------------------------------------------
 
-interface InvitationRow {
+export interface InvitationRow {
   invitation_id: string;
   project_id: string;
   invited_by_user_id: string;
@@ -175,12 +178,12 @@ interface InvitationRow {
   group_epoch?: number | null;
 }
 
-const INVITATION_COLUMNS = `invitation_id, project_id, invited_by_user_id,
+export const INVITATION_COLUMNS = `invitation_id, project_id, invited_by_user_id,
   email_hash, role, statement, signature, signer_device_id, created_at,
   expires_at, accepted_by_user_id, accepted_at, completed_at,
   completed_epoch, revoked_at`;
 
-const invitationRecord = (row: InvitationRow): E2eeInvitationRecord => ({
+export const invitationRecord = (row: InvitationRow): E2eeInvitationRecord => ({
   invitationId: row.invitation_id,
   projectId: row.project_id,
   inviterUserId: row.invited_by_user_id,
@@ -210,7 +213,7 @@ const invitationRecord = (row: InvitationRow): E2eeInvitationRecord => ({
  * and unclaimed, and claimed but not consumed. Counts only, never the
  * KeyPackages: those go out once, through a claim.
  */
-const KEY_PACKAGE_COUNTS = `,
+export const KEY_PACKAGE_COUNTS = `,
   (SELECT COUNT(*) FROM e2ee_key_packages k
     WHERE k.invitation_id = e2ee_invitations.invitation_id
       AND k.claimed_at IS NULL AND k.consumed_at IS NULL) AS key_packages,
@@ -716,7 +719,8 @@ async function publishKeyPackage(
   userId: string,
   projectId: string,
   authorization: Authorization,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  migrationOpen: boolean
 ): Promise<Response> {
   const invitationId = idField(body.invitationId, 'invitationId');
   const deviceId = idField(body.deviceId, 'deviceId');
@@ -801,7 +805,10 @@ async function publishKeyPackage(
              WHERE invitation_id = ? AND project_id = ? AND accepted_by_user_id = ?
                AND ${OPEN_ACCEPTED})
            AND EXISTS (SELECT 1 FROM projects p WHERE p.id = ?
-             AND p.storage_format = 2 AND p.status <> 'deleted')
+             AND p.status <> 'deleted' AND (p.storage_format = 2
+               OR (? = 1 AND p.storage_format = 1 AND EXISTS (
+                 SELECT 1 FROM project_members pm
+                 WHERE pm.project_id = p.id AND pm.user_id = ?))))
          ON CONFLICT (project_id, user_id, device_id) DO UPDATE SET
            invitation_id = excluded.invitation_id,
            key_package = excluded.key_package,
@@ -828,7 +835,9 @@ async function publishKeyPackage(
         projectId,
         userId,
         nowMs,
-        projectId
+        projectId,
+        migrationOpen ? 1 : 0,
+        userId
       )
   ]);
   if ((stored?.meta?.changes ?? 0) !== 1) {
@@ -856,9 +865,19 @@ async function claimKeyPackages(
   userId: string,
   projectId: string,
   authorization: Authorization,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  migrationLease: string | null
 ): Promise<Response> {
-  await requireOwnedEncryptedProject(db, userId, projectId);
+  // Slice 7-4: a shared plaintext project being staged for encryption,
+  // whose existing members the owner's lease holder re-adds.
+  const staged = migrationLease
+    ? await requireEncryptedProjectAccess(db, userId, projectId, 'write', {
+        migrationLease
+      })
+    : undefined;
+  if (!staged?.staging)
+    await requireOwnedEncryptedProject(db, userId, projectId);
+  const fence = projectFence(staged, projectId, userId, 'owner');
   const invitationId = idField(body.invitationId, 'invitationId');
   const nowMs = Date.now();
   const invitation = await invitationRow(db, invitationId);
@@ -879,7 +898,7 @@ async function claimKeyPackages(
       `UPDATE e2ee_key_packages SET claimed_by_user_id = ?, claimed_at = ?
        WHERE project_id = ? AND invitation_id = ? AND user_id = ?
          AND claimed_at IS NULL AND consumed_at IS NULL
-         AND ${authorization.sql} AND ${PROJECT_FENCE}
+         AND ${authorization.sql} AND ${fence.sql}
          AND EXISTS (SELECT 1 FROM e2ee_invitations
            WHERE invitation_id = ? AND ${OPEN_ACCEPTED})
        RETURNING ${KEY_PACKAGE_COLUMNS}`
@@ -891,8 +910,7 @@ async function claimKeyPackages(
       invitationId,
       invitation.accepted_by_user_id,
       ...authorization.binds,
-      projectId,
-      userId,
+      ...fence.binds,
       invitationId,
       nowMs
     )
@@ -1010,6 +1028,14 @@ export async function prepareAddCommit(
     readonly epoch: number;
     readonly kind: 'commit' | 'external';
     readonly add: unknown;
+    /**
+     * Slice 7-4: the Commit re-adds an existing member of a shared
+     * plaintext project being staged for encryption. Its batch leaves
+     * `project_members` and the access log as they are: the cutover's
+     * batch mirrors every re-add with the format flip, and an abandoned
+     * staging leaves the plaintext membership untouched.
+     */
+    readonly staged?: boolean;
   }
 ): Promise<PreparedAdd> {
   const { userId, projectId, epoch } = input;
@@ -1092,6 +1118,19 @@ export async function prepareAddCommit(
   };
   const invitation = await check();
   const invitee = invitation.accepted_by_user_id!;
+  // Slice 7-4: a staged re-add's leaves are fenced on the member's device
+  // list. Nothing but the owner's lease holder commits to a staged group,
+  // so a member's device removed after its leaf landed there is refused
+  // until the cutover or an abandon (`e2ee.ts`'s staged-leaf fence); one
+  // removed before must not land a leaf either, so each added device must
+  // be certified in the member's newest list, which must still be theirs
+  // when the batch runs.
+  const inviteeList = input.staged
+    ? await certifiedInviteeList(db, invitee, stated)
+    : null;
+  const inviteeFence = inviteeList
+    ? deviceListUnchanged(invitee, inviteeList)
+    : null;
   const nowMs = Date.now();
   const pairs = stated
     .map(() => '(device_id = ? AND key_package_hash = ?)')
@@ -1108,7 +1147,12 @@ export async function prepareAddCommit(
     AND (SELECT COUNT(*) ${claimedRows}) = ?
     AND (SELECT COUNT(*) ${claimedRows} AND (${pairs})) = ?
     AND (EXISTS (SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?)
-      OR (SELECT COUNT(*) FROM project_members WHERE project_id = ?) < ?)`;
+      OR (SELECT COUNT(*) FROM project_members WHERE project_id = ?) < ?)${
+        inviteeFence
+          ? `
+    AND ${inviteeFence.sql}`
+          : ''
+      }`;
   const gateBinds = [
     projectId,
     userId,
@@ -1124,7 +1168,8 @@ export async function prepareAddCommit(
     projectId,
     invitee,
     projectId,
-    PROJECT_MEMBER_CAP
+    PROJECT_MEMBER_CAP,
+    ...(inviteeFence?.binds ?? [])
   ];
   return {
     invitee: { userId: invitee, role: invitation.role },
@@ -1176,49 +1221,61 @@ export async function prepareAddCommit(
             now
           )
       ]),
-      // The server's mirror of the role the Add's roles extension sets.
-      db
-        .prepare(
-          `INSERT INTO project_members
+      // The server's mirror of the role the Add's roles extension sets
+      // (for a staged re-add, the cutover's).
+      ...(input.staged
+        ? []
+        : [
+            db
+              .prepare(
+                `INSERT INTO project_members
              (project_id, user_id, role, added_by_user_id, created_at, updated_at)
            SELECT ?, ?, role, ?, ?, ? FROM e2ee_invitations
            WHERE invitation_id = ? AND ${CHAINED}
            ON CONFLICT (project_id, user_id) DO UPDATE SET
              role = excluded.role, updated_at = excluded.updated_at`
-        )
-        .bind(
-          projectId,
-          invitee,
-          userId,
-          Math.floor(nowMs / 1000),
-          Math.floor(nowMs / 1000),
-          invitationId
-        ),
+              )
+              .bind(
+                projectId,
+                invitee,
+                userId,
+                Math.floor(nowMs / 1000),
+                Math.floor(nowMs / 1000),
+                invitationId
+              )
+          ]),
       db
         .prepare(
           `UPDATE e2ee_invitations SET completed_at = ?, completed_epoch = ?
            WHERE invitation_id = ? AND completed_at IS NULL AND ${CHAINED}`
         )
         .bind(now, epoch, invitationId),
-      db
-        .prepare(
-          `INSERT INTO project_access_events
+      ...(input.staged
+        ? []
+        : [
+            db
+              .prepare(
+                `INSERT INTO project_access_events
              (project_id, actor_user_id, subject_user_id, event_type,
               next_role, created_at, metadata_json)
            SELECT ?, ?, ?, 'invitation-accepted', role, ?, ?
            FROM e2ee_invitations WHERE invitation_id = ? AND ${CHAINED}`
-        )
-        .bind(
-          projectId,
-          userId,
-          invitee,
-          Math.floor(nowMs / 1000),
-          JSON.stringify({ encryptedInvitationId: invitationId, epoch }),
-          invitationId
-        )
+              )
+              .bind(
+                projectId,
+                userId,
+                invitee,
+                Math.floor(nowMs / 1000),
+                JSON.stringify({ encryptedInvitationId: invitationId, epoch }),
+                invitationId
+              )
+          ])
     ],
     explain: async () => {
       await check();
+      if (inviteeList && (await deviceListMoved(db, invitee, inviteeList))) {
+        refuseInviteeDevicesMoved();
+      }
       refuse(
         409,
         'E2EE_ADD_MISMATCH',
@@ -1226,6 +1283,54 @@ export async function prepareAddCommit(
       );
     }
   };
+}
+
+/**
+ * Slice 7-4: the member's newest device-list head, in which every device a
+ * staged re-add adds is certified. Refused like any stale claim
+ * (`E2EE_ADD_MISMATCH`), so the owner's browser drops it.
+ */
+async function certifiedInviteeList(
+  db: D1Database,
+  invitee: string,
+  stated: readonly { readonly deviceId: string }[]
+): Promise<{ generation: number; headSequence: number }> {
+  let head: { generation: number; headSequence: number } | null = null;
+  for (const entry of stated) {
+    let current: { generation: number; headSequence: number };
+    try {
+      current = await requireCertifiedDevice(db, invitee, entry.deviceId);
+    } catch (error) {
+      if (
+        error instanceof RouteError &&
+        error.code === 'E2EE_DEVICE_NOT_CERTIFIED'
+      ) {
+        refuseInviteeDevicesMoved();
+      }
+      throw error;
+    }
+    if (
+      head &&
+      (head.generation !== current.generation ||
+        head.headSequence !== current.headSequence)
+    ) {
+      refuseInviteeDevicesMoved();
+    }
+    head = {
+      generation: current.generation,
+      headSequence: current.headSequence
+    };
+  }
+  if (!head) invalid('An Add carries at least one KeyPackage');
+  return head;
+}
+
+function refuseInviteeDevicesMoved(): never {
+  refuse(
+    409,
+    'E2EE_ADD_MISMATCH',
+    'A device this Commit adds is no longer in the member’s device list. Nothing was changed.'
+  );
 }
 
 // --- Dispatch ----------------------------------------------------------------------
@@ -1237,7 +1342,16 @@ export async function handleE2eeInvitationRequest(
   projectsEnabled: boolean,
   authorization: Authorization,
   host: E2eeInvitationHost,
-  readBody: () => Promise<Record<string, unknown>>
+  readBody: () => Promise<Record<string, unknown>>,
+  /**
+   * Slice 7-4 (only while E2EE_MIGRATION_ENABLED is on): a member of a
+   * shared plaintext project publishes KeyPackages for its re-add
+   * invitation, and the owner's lease holder claims them.
+   */
+  migration: { readonly open: boolean; readonly lease: string | null } = {
+    open: false,
+    lease: null
+  }
 ): Promise<Response> {
   try {
     if (!projectsEnabled) {
@@ -1326,7 +1440,8 @@ export async function handleE2eeInvitationRequest(
         userId,
         projectId,
         authorization,
-        await readBody()
+        await readBody(),
+        migration.open
       );
     } else if (rest === 'key-packages/claim' && method === 'POST') {
       return await claimKeyPackages(
@@ -1334,7 +1449,8 @@ export async function handleE2eeInvitationRequest(
         userId,
         projectId,
         authorization,
-        await readBody()
+        await readBody(),
+        migration.open ? migration.lease : null
       );
     } else if (rest === 'welcome' && method === 'GET') {
       return await readWelcome(db, userId, projectId, url);

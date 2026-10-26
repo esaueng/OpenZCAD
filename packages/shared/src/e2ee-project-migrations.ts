@@ -7,6 +7,7 @@
  * holder, flips the storage format in one batch and then purges the
  * plaintext a bounded step at a time. It never transforms content.
  */
+import type { E2eeInvitationRecord } from './e2ee-invitations';
 
 /**
  * The request header that carries the migration lease. While a plaintext
@@ -113,8 +114,20 @@ export const E2EE_MIGRATION_CODES = Object.freeze({
   leased: 'E2EE_MIGRATION_LEASED',
   /** The request's lease lapsed or was taken over; start again to resume. */
   leaseLost: 'E2EE_MIGRATION_LEASE_LOST',
-  /** The project has members or pending invitations (decision M7). */
+  /**
+   * The project is shared in a way a migration cannot carry over: since
+   * slice 7-4 a pending encrypted invitation to someone who is not a member,
+   * or a live encrypted share link; before it, any member or pending
+   * invitation (decision M7).
+   */
   shared: 'E2EE_MIGRATION_SHARED',
+  /**
+   * Slice 7-4 (decision M7(a)): a member is not ready to be re-added (no
+   * encryption set up, no re-add invitation, no KeyPackage published) or,
+   * at the cutover, was not re-added by an Add Commit with their current
+   * role. `members` lists each one with the reason.
+   */
+  membersNotReady: 'E2EE_MIGRATION_MEMBERS_NOT_READY',
   /** The plaintext changed after staging began. */
   stale: 'E2EE_MIGRATION_STALE',
   /** Retained plaintext revisions have no staged named save (decision M9). */
@@ -143,6 +156,63 @@ export const E2EE_MIGRATION_CODES = Object.freeze({
    */
   optedIn: 'E2EE_MIGRATION_OPTED_IN'
 } as const);
+
+// --- Slice 7-4: shared plaintext projects -------------------------------------
+
+/**
+ * Why the Worker holds a member back from a shared project's migration
+ * (409 `E2EE_MIGRATION_MEMBERS_NOT_READY`): no encryption set up, no live
+ * re-add invitation with their current role, no KeyPackage published for
+ * it, or (at the cutover) not re-added by an Add Commit of this staging.
+ */
+export type E2eeMigrationMemberReason =
+  'no-keys' | 'not-invited' | 'waiting-for-keys' | 'not-readded';
+
+/** One member of a shared plaintext project, as its migration sees them. */
+export interface E2eeMigrationMemberRecord {
+  userId: string;
+  email: string | null;
+  role: 'editor' | 'viewer';
+  /** Their account has set up encryption. */
+  hasKeys: boolean;
+  /**
+   * Their newest re-add invitation for this project (an owner-signed
+   * encrypted invitation, accepted on their behalf), with its KeyPackage
+   * counts; null before the owner's browser made one.
+   */
+  invitation: E2eeInvitationRecord | null;
+  /** An Add Commit of the current staging re-added them. */
+  readded: boolean;
+}
+
+/**
+ * `GET /api/e2ee/projects/:id/migration/members` (owner): the members to
+ * re-add, and the plaintext links and invitations the cutover will revoke
+ * (decision M8), so the owner's browser can offer encrypted ones after.
+ */
+export interface E2eeMigrationMembersResponse {
+  members: E2eeMigrationMemberRecord[];
+  shareLinks: { shareLinkId: string; mode: 'view' | 'tweak' }[];
+  invitations: {
+    invitationId: string;
+    email: string;
+    role: 'editor' | 'viewer';
+  }[];
+}
+
+/**
+ * `POST /api/e2ee/projects/:id/migration/invitations` (owner): a re-add
+ * invitation for an existing member, an owner-signed statement ("OZI")
+ * naming the member's email hash and current role. The Worker binds it to
+ * the member at once (they are already a member: no email, no token) and
+ * revokes any older open one of theirs.
+ */
+export interface E2eeMigrationInvitationRequest {
+  memberUserId: string;
+  /** base64url of the canonical statement and its 65-byte signature. */
+  statement: string;
+  signature: string;
+}
 
 // --- Slice 7-3: the beta-only reverse path ------------------------------------
 

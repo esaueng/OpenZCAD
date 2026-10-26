@@ -1064,7 +1064,10 @@ async function submitCommit(
           projectId,
           epoch,
           kind,
-          add: body.add
+          add: body.add,
+          // Slice 7-4: a shared plaintext project's member, re-added while
+          // it is staged; the cutover mirrors the membership.
+          staged: Boolean(access?.staging)
         });
   // The roles of the new epoch, and any role change it states (slice 5-4).
   const membership = await prepareMembershipCommit(db, {

@@ -15,8 +15,11 @@ import {
   E2EE_MIGRATION_LEASE_HEADER,
   type E2eeDecryptDetailsRequest,
   type E2eeDecryptStagingResponse,
+  type E2eeInvitationResponse,
   type E2eeMigrationCutoverResponse,
+  type E2eeMigrationInvitationRequest,
   type E2eeMigrationLeaseResponse,
+  type E2eeMigrationMembersResponse,
   type E2eeMigrationStartRequest,
   type E2eeMigrationStepResponse,
   type E2eeProjectMigrationResponse
@@ -61,6 +64,20 @@ export interface ProjectMigrationsApi {
     projectId: string,
     leaseId: string
   ): Promise<E2eeDecryptStagingResponse>;
+  /**
+   * Slice 7-4: a shared project's members, where each stands for being
+   * re-added, and the plaintext links and invitations the cutover revokes.
+   */
+  members(
+    projectId: string,
+    leaseId?: string | null
+  ): Promise<E2eeMigrationMembersResponse>;
+  /** Slice 7-4: stores a re-add invitation for an existing member. */
+  invite(
+    projectId: string,
+    request: E2eeMigrationInvitationRequest,
+    leaseId?: string | null
+  ): Promise<E2eeInvitationResponse>;
   /** Slice 7-3: stages the decrypted measurements and view state. */
   stageDetails(
     projectId: string,
@@ -140,6 +157,10 @@ export function createProjectMigrationsApi(
     abandon: (projectId, leaseId) =>
       send(path(projectId, 'abandon'), 'POST', leaseId),
     purge: (projectId) => send(path(projectId, 'purge'), 'POST'),
+    members: (projectId, leaseId) =>
+      send(path(projectId, 'members'), 'GET', leaseId),
+    invite: (projectId, request, leaseId) =>
+      send(path(projectId, 'invitations'), 'POST', leaseId, request),
     stagedPlaintext: (projectId, leaseId) =>
       send(path(projectId, 'plaintext'), 'GET', leaseId),
     stageDetails: (projectId, leaseId, details) =>

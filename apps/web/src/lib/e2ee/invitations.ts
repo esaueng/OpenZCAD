@@ -241,6 +241,35 @@ export async function inviteToEncryptedProject(
   email: string,
   role: E2eeInvitationRole
 ): Promise<E2eeInvitationRecord> {
+  const address = email.trim().toLowerCase();
+  const signed = await signInvitationStatement(ctx, projectId, address, role);
+  const { invitation } = await ctx.api.create(projectId, {
+    email: address,
+    statement: signed.statement,
+    signature: signed.signature
+  });
+  await ctx.store
+    .rememberEmail(ctx.groups.account.userId, {
+      projectId,
+      invitationId: invitation.invitationId,
+      email: address
+    })
+    .catch(() => undefined);
+  return invitation;
+}
+
+/**
+ * This device signs an invitation statement for `email` as `role` (seven
+ * days of validity), base64url-encoded with its signature. Shared by
+ * {@link inviteToEncryptedProject} and slice 7-4's re-add invitations of
+ * a shared plaintext project's existing members.
+ */
+export async function signInvitationStatement(
+  ctx: InvitationContext,
+  projectId: string,
+  email: string,
+  role: E2eeInvitationRole
+): Promise<{ invitationId: string; statement: string; signature: string }> {
   const { device, listed } = certifiedDevice(ctx);
   const address = email.trim().toLowerCase();
   const issuedAt = now(ctx);
@@ -256,19 +285,11 @@ export async function inviteToEncryptedProject(
     signerKeyHash: await publicKeyHash(listed.signingKey)
   };
   const signed = await signProjectInvitation(device.signing.privateKey, value);
-  const { invitation } = await ctx.api.create(projectId, {
-    email: address,
+  return {
+    invitationId: value.invitationId,
     statement: toBase64Url(signed.statement),
     signature: toBase64Url(signed.signature)
-  });
-  await ctx.store
-    .rememberEmail(ctx.groups.account.userId, {
-      projectId,
-      invitationId: invitation.invitationId,
-      email: address
-    })
-    .catch(() => undefined);
-  return invitation;
+  };
 }
 
 /** Where an invitation stands, as the owner's sharing dialog shows it. */

@@ -676,7 +676,7 @@ describe('encrypting an existing project', () => {
     expect(migrationRow(srv, projectId)).toMatchObject({ state: 'done' });
   });
 
-  it('refuses a shared project and leaves it as it was', async () => {
+  it('refuses a shared project whose members are not ready, and leaves it as it was', async () => {
     const srv = roomServer();
     const plain = await plaintextProject(srv, { revisions: 1 });
     const projectId = plain.head.projectId;
@@ -688,12 +688,13 @@ describe('encrypting an existing project', () => {
       )
       .run(projectId, OTHER, OWNER);
     const laptop = engineOn(srv, owner, 'owner_laptop');
+    // Slice 7-4: without the member handling, the Worker holds it back.
     expect(await codeOfCall(migrateFully(laptop, projectId))).toBe(
-      E2EE_MIGRATION_CODES.shared
+      E2EE_MIGRATION_CODES.membersNotReady
     );
     expect(laptop.progress.at(-1)).toMatchObject({
       phase: 'error',
-      error: { code: E2EE_MIGRATION_CODES.shared, retryable: false }
+      error: { code: E2EE_MIGRATION_CODES.membersNotReady, retryable: true }
     });
     expect(migrationRow(srv, projectId)).toBeUndefined();
     expect(count(srv, 'e2ee_project_versions', projectId)).toBe(0);
