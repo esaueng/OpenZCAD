@@ -1080,6 +1080,29 @@ describe('turning an encrypted project back into plaintext', () => {
     await expectOpensAsPlaintext(srv, encrypted);
   });
 
+  it('takes plaintext files once cut over, while its ciphertext is still purged (#914 fence)', async () => {
+    const srv = roomServer();
+    const { projectId } = await encryptedProject(srv, { revisions: 1 });
+    const desktop = reverseOn(srv, owner, 'owner_desktop', {
+      beforeStep: (step) => {
+        if (step === 'purge') throw new Error('The tab was closed.');
+      }
+    });
+    await expect(decryptFully(desktop, projectId)).rejects.toThrow('closed');
+    expect(migrationRow(srv, projectId)).toMatchObject({ state: 'cutover' });
+    // The project is plaintext again: an ordinary upload lands at once,
+    // though its encrypted rows wait for the purge (they are not files).
+    const before = count(srv, 'artifacts', projectId);
+    await upload(srv, projectId, {
+      fileName: 'after-cutover.stl',
+      contentType: 'model/stl',
+      kind: 'stl-export',
+      bytes: text('After the cutover')
+    });
+    expect(count(srv, 'artifacts', projectId)).toBe(before + 1);
+    expect(count(srv, 'e2ee_project_versions', projectId)).toBeGreaterThan(0);
+  });
+
   it('deletes a project mid-staging without leaving its account usage behind', async () => {
     const srv = roomServer();
     const { projectId } = await encryptedProject(srv, { revisions: 1 });

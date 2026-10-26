@@ -717,11 +717,19 @@ export function stagedForEncryptionSql(alias: string): string {
  * session carries it, so a session opened before staging began lands
  * nothing after (slice 7-1): the cutover checks no artifact, and the purge
  * would delete a late one unencrypted. No binds.
+ *
+ * Any staging refuses, whatever its direction. A cutover or purge refuses
+ * only when it moved the project to encrypted storage: one that turned an
+ * encrypted project back into plaintext (slice 7-3) purges ciphertext,
+ * never a file, and the project takes plaintext files again from its
+ * cutover on.
  */
 export function projectNotMigratingSql(projectIdSql: string): string {
   return `NOT EXISTS (SELECT 1 FROM e2ee_project_migrations migrating
     WHERE migrating.project_id = ${projectIdSql}
-      AND migrating.state IN ('staging', 'cutover', 'purging'))`;
+      AND (migrating.state = 'staging'
+        OR (migrating.direction = 'encrypt'
+          AND migrating.state IN ('cutover', 'purging'))))`;
 }
 
 /**
