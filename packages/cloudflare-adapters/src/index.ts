@@ -4970,8 +4970,9 @@ export class D1R2PersistenceService implements PersistenceService {
       throw new ArtifactStorageError('Upload part is invalid or too large.');
     }
     const reservationToken = crypto.randomUUID();
-    // A staged session reserves the part only under its live lease.
-    const leaseFence = this.stagingLeaseFence(session);
+    // A staged session reserves the part only under its live lease, of
+    // either direction (#925 follow-up: a decrypt staging's session too).
+    const leaseFence = this.uploadLeaseFence(session);
     let reserved: number | undefined;
     try {
       const result = await this.env.DB.prepare(
@@ -5005,7 +5006,7 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     if (leaseFence && reserved !== 1) {
-      await this.refuseIfStagingLeaseLost(session);
+      await this.refuseIfUploadLeaseLost(session);
       throw new ArtifactStorageError('Upload part could not be reserved.');
     }
     const upload = this.env.ARTIFACTS!.resumeMultipartUpload(
