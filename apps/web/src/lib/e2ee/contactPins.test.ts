@@ -1,7 +1,11 @@
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ContactPin, ContactPinStore } from './contactPins';
+import type {
+  ContactPin,
+  ContactPinStore,
+  ContactsListPinRecord
+} from './contactPins';
 
 const H = (digit: string) => digit.repeat(64);
 
@@ -30,6 +34,68 @@ const seen = (overrides: Partial<ContactPin> = {}): ContactPin => ({
 });
 
 describe('contact pins', () => {
+  it('fences contact identity replacements to the checked own-list snapshot', async () => {
+    for (const [name, pins] of await stores()) {
+      const anchor = {
+        identityKeyHash: H('a'),
+        sequence: 1,
+        entryHash: H('1'),
+        confirmed: true
+      };
+      const replacement = seen({
+        identityKeyHash: H('c'),
+        sequence: 0,
+        entryHash: H('c'),
+        keyChanged: true
+      });
+      const changes: ContactsListPinRecord[] = [
+        { ...anchor, sequence: 2, entryHash: H('2') },
+        {
+          ...anchor,
+          pendingApproval: { sequence: 2, entryHash: H('2'), confirmed: true }
+        },
+        { ...anchor, confirmed: false },
+        { ...anchor, identityKeyHash: H('b') }
+      ];
+      for (const [index, changed] of changes.entries()) {
+        const userId = `fence-${index}`;
+        await pins.advanceList(userId, changed);
+        if (changed.pendingApproval)
+          await pins.advanceList(
+            userId,
+            { ...changed, ...changed.pendingApproval },
+            { fromApproval: true }
+          );
+        await pins.advanceContact(userId, seen());
+        expect(
+          await pins.advanceContact(userId, replacement, {
+            replaceIdentity: true,
+            checkedList: anchor
+          }),
+          name
+        ).toBe(false);
+        expect(await pins.readContact(userId, 'bob'), name).toEqual(seen());
+        expect(
+          await pins.advanceContact(userId, replacement, {
+            replaceIdentity: true,
+            checkedList: changed
+          }),
+          name
+        ).toBe(true);
+      }
+      await pins.advanceList('created', anchor);
+      expect(
+        await pins.advanceContact('created', seen(), { checkedList: null }),
+        name
+      ).toBe(false);
+      expect(await pins.readContact('created', 'bob'), name).toBeNull();
+      expect(
+        await pins.advanceContact('absent', seen(), { checkedList: null }),
+        name
+      ).toBe(true);
+    }
+  });
+
   it('retains pending ancestry against prefixes, empty lists and incompatible later approvals', async () => {
     for (const [name, pins] of await stores()) {
       const pin = {

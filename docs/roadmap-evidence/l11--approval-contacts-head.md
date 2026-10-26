@@ -2,6 +2,8 @@
 row: L11
 ---
 
+Contact-pin writes compare the full own-list snapshot (main pin and pending approval) in the same memory operation or IndexedDB transaction as the contact update. A replacement identity from an inspection invalidated by a newer approval cannot poison the contact pin before the request reports a fork. Store and real-flow regressions cover directory-response and pre-write races, each changed authority field, absent pins, preserved contact state and a subsequent honest response.
+
 Authenticated pending heads now impose a minimum usable contacts history, including when the approver was unconfirmed. Prefix and empty responses are refused, as are transactional advances below a concurrently added pending head. A second incompatible approval cannot erase unchecked evidence, and confirmation of the same pending head never downgrades it. Retained contacts books are checked against the current main and pending pins before exposing verified contact keys, including approvals arriving during a directory read. Matching complete ancestry consumes the obligation normally. Older assertions accepting a prefix below a pending head now require a visible fork refusal while retaining both heads.
 
 Outgoing device approval also refuses unresolved pending contacts evidence, so an intermediate device cannot pass an older confirmed head to a new browser. A real three-browser flow verifies the refusal, retained evidence and unsigned grant, then resolves the full list and successfully approves the new browser, which rejects the older server prefix.

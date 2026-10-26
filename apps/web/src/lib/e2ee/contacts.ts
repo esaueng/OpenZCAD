@@ -40,6 +40,7 @@ import {
   EMPTY_CONTACTS_SEQUENCE,
   contactPins,
   type ContactPin,
+  type ContactsListPinRecord,
   type ContactPinStore
 } from './contactPins';
 
@@ -313,10 +314,13 @@ async function acceptList(
 async function requireCurrentBook(
   ctx: ContactsContext,
   book: ContactsBook
-): Promise<void> {
+): Promise<ContactsListPinRecord | null> {
   if (book.userId !== ctx.keys.userId) staleAnswer('contacts list');
   const pin = await ctx.pins.readList(ctx.keys.userId);
-  if (!pin) return;
+  if (!pin) {
+    requireActive(ctx);
+    return null;
+  }
   const list = book.list;
   if (list && toHex(list.pin.identityKeyHash) !== pin.identityKeyHash)
     staleAnswer('contacts list');
@@ -327,6 +331,7 @@ async function requireCurrentBook(
       staleAnswer('contacts list');
   }
   requireActive(ctx);
+  return pin;
 }
 
 /**
@@ -522,6 +527,7 @@ export async function inspectContact(
       record?.status === 'key-changed' ||
       Boolean(pin?.keyChanged) ||
       (pin !== null && pin.identityKeyHash !== identityHash));
+  const checkedList = await requireCurrentBook(ctx, book);
   requireActive(ctx);
   const advanced = await ctx.pins.advanceContact(
     userId,
@@ -534,7 +540,7 @@ export async function inspectContact(
       seenAt: now(ctx)
     },
     // A replaced identity is surfaced as `keyChanged` before it is pinned.
-    { replaceIdentity: true }
+    { replaceIdentity: true, checkedList }
   );
   if (!advanced) staleAnswer('device list');
   const { hash, code } = await contactVerificationCode(

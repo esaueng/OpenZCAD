@@ -920,7 +920,7 @@ describe('contacts heads in device approval', () => {
   async function aliceVerifiedBob() {
     const srv = serverWith();
     const alice = await person(srv, ALICE);
-    await person(srv, BOB);
+    const bob = await person(srv, BOB);
     share(srv);
     const book = await loadContacts(alice.contacts, alice.account);
     await verifyContact(
@@ -930,7 +930,7 @@ describe('contacts heads in device approval', () => {
       await inspectContact(alice.contacts, book, BOB),
       alice.recovery.secret
     );
-    return { srv, alice };
+    return { srv, alice, bob };
   }
 
   /** The server's contacts answers, cut to the first `keep` entries. */
@@ -1322,6 +1322,79 @@ describe('contacts heads in device approval', () => {
     );
     expect((await phone.pins.readList(ALICE))?.confirmed).toBe(false);
   });
+
+  it.each(['during-directory', 'during-pin-write'] as const)(
+    'does not persist a replacement identity from a stale contacts book %s',
+    async (timing) => {
+      const { srv, alice, bob } = await aliceVerifiedBob();
+      const phone = browser(srv, ALICE);
+      const account = ready(
+        await enrollWithRecoveryKey(
+          phone.keys,
+          ready(await loadEncryption(phone.keys)),
+          alice.recovery.secret,
+          'Phone'
+        )
+      );
+      const book = await loadContacts(phone.contacts, account);
+      await inspectContact(phone.contacts, book, BOB);
+      const before = await phone.pins.readContact(ALICE, BOB);
+      const honestResponse = await phone.contacts.api.deviceList(BOB);
+      const replacement = await generateRecoveryKey();
+      await replaceRecoveryKey(
+        bob.keys,
+        bob.account,
+        replacement.secret,
+        bob.recovery.secret
+      );
+      await untrustContact(
+        alice.contacts,
+        alice.account,
+        await loadContacts(alice.contacts, alice.account),
+        BOB,
+        alice.recovery.secret
+      );
+      const head = (await alice.pins.readList(ALICE))!;
+      const approve = async () =>
+        phone.pins.advanceList(ALICE, head, { fromApproval: true });
+      const advance = phone.pins.advanceContact.bind(phone.pins);
+      const context = {
+        ...phone.contacts,
+        api: {
+          ...phone.contacts.api,
+          deviceList: async (userId: string) => {
+            const response = await phone.contacts.api.deviceList(userId);
+            if (timing === 'during-directory') await approve();
+            return response;
+          }
+        },
+        pins: {
+          ...phone.pins,
+          advanceContact: async (
+            ...args: Parameters<ContactPinStore['advanceContact']>
+          ) => {
+            if (timing === 'during-pin-write') await approve();
+            return advance(...args);
+          }
+        }
+      };
+      await expect(inspectContact(context, book, BOB)).rejects.toMatchObject({
+        code: 'fork'
+      });
+      expect(await phone.pins.readContact(ALICE, BOB)).toEqual(before);
+      const current = await loadContacts(
+        phone.contacts,
+        ready(await loadEncryption(phone.keys))
+      );
+      const honest = {
+        ...phone.contacts,
+        api: { ...phone.contacts.api, deviceList: async () => honestResponse }
+      };
+      await expect(inspectContact(honest, current, BOB)).resolves.toMatchObject(
+        { status: 'seen', keyChanged: false }
+      );
+    }
+  );
 
   it('does not approve another device with a head older than unresolved approval evidence', async () => {
     const { srv, alice } = await aliceVerifiedBob();

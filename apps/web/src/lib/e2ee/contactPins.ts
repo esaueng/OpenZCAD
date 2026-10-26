@@ -131,7 +131,11 @@ export interface ContactPinStore {
   advanceContact(
     userId: string,
     next: ContactPin,
-    options?: { readonly replaceIdentity?: boolean }
+    options?: {
+      readonly replaceIdentity?: boolean;
+      /** Fence the write to the own-list authority checked by the caller. */
+      readonly checkedList?: ContactsListPinRecord | null;
+    }
   ): Promise<boolean>;
 }
 
@@ -343,6 +347,22 @@ export function advancedContactPin(
   };
 }
 
+function sameListPin(
+  a: ContactsListPinRecord | null,
+  b: ContactsListPinRecord | null
+): boolean {
+  if (!a || !b) return a === b;
+  return (
+    a.identityKeyHash === b.identityKeyHash &&
+    a.sequence === b.sequence &&
+    a.entryHash === b.entryHash &&
+    a.confirmed === b.confirmed &&
+    a.pendingApproval?.sequence === b.pendingApproval?.sequence &&
+    a.pendingApproval?.entryHash === b.pendingApproval?.entryHash &&
+    a.pendingApproval?.confirmed === b.pendingApproval?.confirmed
+  );
+}
+
 export function memoryContactPins(): ContactPinStore {
   const lists = new Map<string, ContactsListPinRecord>();
   const contacts = new Map<string, ContactPin>();
@@ -363,6 +383,11 @@ export function memoryContactPins(): ContactPinStore {
         .map(([, pin]) => pin)
         .sort((a, b) => (a.contactUserId < b.contactUserId ? -1 : 1)),
     advanceContact: async (userId, next, options = {}) => {
+      if (
+        options.checkedList !== undefined &&
+        !sameListPin(lists.get(userId) ?? null, options.checkedList)
+      )
+        return false;
       const key = id(userId, next.contactUserId);
       const stored = advancedContactPin(
         contacts.get(key) ?? null,
@@ -413,11 +438,15 @@ async function transact<T>(
   store: string,
   key: IDBValidKey,
   read: (value: unknown) => T | null,
-  change: ((current: T | null) => T | null) | null
+  change: ((current: T | null) => T | null) | null,
+  fence?: { userId: string; expected: ContactsListPinRecord | null }
 ): Promise<{ current: T | null; changed: boolean }> {
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(store, change ? 'readwrite' : 'readonly');
+    const tx = db.transaction(
+      fence ? [store, LISTS] : store,
+      change ? 'readwrite' : 'readonly'
+    );
     const objects = tx.objectStore(store);
     let result = { current: null as T | null, changed: false };
     tx.oncomplete = () => resolve(result);
@@ -426,9 +455,18 @@ async function transact<T>(
     const request = objects.get(key);
     request.onsuccess = () => {
       const current = read(request.result);
-      const next = change ? change(current) : null;
-      if (next) objects.put(next, key);
-      result = { current: next ?? current, changed: next !== null };
+      const apply = () => {
+        const next = change ? change(current) : null;
+        if (next) objects.put(next, key);
+        result = { current: next ?? current, changed: next !== null };
+      };
+      if (!fence) apply();
+      else {
+        const anchor = tx.objectStore(LISTS).get(fence.userId);
+        anchor.onsuccess = () => {
+          if (sameListPin(readListPin(anchor.result), fence.expected)) apply();
+        };
+      }
     };
   });
 }
@@ -478,7 +516,10 @@ export function indexedDbContactPins(): ContactPinStore {
           [userId, next.contactUserId],
           readContactPin,
           (current) =>
-            advancedContactPin(current, next, options.replaceIdentity)
+            advancedContactPin(current, next, options.replaceIdentity),
+          options.checkedList === undefined
+            ? undefined
+            : { userId, expected: options.checkedList }
         )
       ).changed
   };
