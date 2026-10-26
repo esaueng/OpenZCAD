@@ -206,6 +206,42 @@ describe('in-place Extrude handles', () => {
     }
   });
 
+  it('keeps the back arrow out of a hole in the region', () => {
+    // A 20 × 20 washer with a 16 × 17.5 bore: the span the back arrow would
+    // take, far from the hinge, runs over the bore unless its sides end it.
+    const square: Vector3[] = [
+      { x: 0, y: 0, z: 0 },
+      { x: 20, y: 0, z: 0 },
+      { x: 20, y: 20, z: 0 },
+      { x: 0, y: 20, z: 0 }
+    ];
+    const bore: Vector3[] = [
+      { x: 2, y: 2, z: 0 },
+      { x: 2, y: 19.5, z: 0 },
+      { x: 18, y: 19.5, z: 0 },
+      { x: 18, y: 2, z: 0 }
+    ];
+    const inBore = (point: Vector3) =>
+      point.x > 2 && point.x < 18 && point.y > 2 && point.y < 19.5;
+    const hinge = extrudeDraftHinge(square, up)!;
+    expect(
+      inBore(extrudeBackArrowOrigin(square, up, hinge.foot, hinge.along))
+    ).toBe(true);
+    const origin = extrudeBackArrowOrigin(square, up, hinge.foot, hinge.along, [
+      bore
+    ]);
+    expect(inBore(origin)).toBe(false);
+    expect(origin.x).toBeGreaterThan(0);
+    expect(origin.x).toBeLessThan(20);
+    expect(origin.y).toBeGreaterThan(0);
+    expect(origin.y).toBeLessThan(20);
+    // And through the handles, which take the holes the same way.
+    const back = extrudeHandles(square, up, 'washer', blind, [bore]).find(
+      (handle) => handle.valueId === 'backDistance'
+    );
+    expect(back?.kind === 'linear' && inBore(back.params.origin)).toBe(false);
+  });
+
   it('has no hinge on a degenerate outline', () => {
     expect(extrudeDraftHinge(outline.slice(0, 2), up)).toBeNull();
     expect(

@@ -144,13 +144,15 @@ export function extrudeDraftHinge(
  * grip with neither the region's own arrow (in the middle) nor the rig. Any vertex average can lie outside a
  * concave profile (in a C's notch); a span between two crossings of the
  * outline cannot. The spans are cut by lines across the profile, square to
- * `along` (the hinge's side, else the first side).
+ * `along` (the hinge's side, else the first side). A crossing of an inner
+ * loop (`holes`, a washer's bore) ends a span too, so none runs over a void.
  */
 export function extrudeBackArrowOrigin(
   outline: readonly Vector3[],
   normal: Vector3,
   foot: Vector3 | null,
-  along?: Vector3
+  along?: Vector3,
+  holes: readonly (readonly Vector3[])[] = []
 ): Vector3 {
   const n = unit(normal);
   const origin = outline[0]!;
@@ -158,10 +160,14 @@ export function extrudeBackArrowOrigin(
   if (!first) return origin;
   const u = unit(along ?? sub(first, origin));
   const v = unit(cross(n, u));
-  const flat = outline.map((point) => {
+  const project = (point: Vector3) => {
     const offset = sub(point, origin);
     return { x: dot(offset, u), y: dot(offset, v) };
-  });
+  };
+  const flat = outline.map(project);
+  // Every loop's sides, the outer one's and each hole's: even-odd pairing
+  // over all of them leaves a hole out of the spans.
+  const loops = [flat, ...holes.map((loop) => loop.map(project))];
   const ys = flat.map((point) => point.y);
   const low = Math.min(...ys);
   const high = Math.max(...ys);
@@ -177,11 +183,13 @@ export function extrudeBackArrowOrigin(
     // Off every vertex's height, so a crossing is never counted twice.
     const y = low + ((high - low) * line) / 16 + (high - low) * 1e-7;
     const xs: number[] = [];
-    for (let index = 0; index < flat.length; index += 1) {
-      const a = flat[index]!;
-      const b = flat[(index + 1) % flat.length]!;
-      if (a.y <= y !== b.y <= y) {
-        xs.push(a.x + ((y - a.y) / (b.y - a.y)) * (b.x - a.x));
+    for (const loop of loops) {
+      for (let index = 0; index < loop.length; index += 1) {
+        const a = loop[index]!;
+        const b = loop[(index + 1) % loop.length]!;
+        if (a.y <= y !== b.y <= y) {
+          xs.push(a.x + ((y - a.y) / (b.y - a.y)) * (b.x - a.x));
+        }
       }
     }
     xs.sort((left, right) => left - right);
@@ -226,7 +234,9 @@ export function extrudeHandles(
   outline: readonly Vector3[],
   normal: Vector3,
   key: string,
-  state: ExtrudeHandleState
+  state: ExtrudeHandleState,
+  /** The region's inner loops, which the back arrow keeps out of. */
+  holes: readonly (readonly Vector3[])[] = []
 ): HandleSpec[] {
   if (outline.length === 0) return [];
   // Nothing has left the sketch yet: there is no back face and no wall, and
@@ -246,7 +256,8 @@ export function extrudeHandles(
           outline,
           n,
           hinge?.foot ?? null,
-          hinge?.along
+          hinge?.along,
+          holes
         ),
         direction: scaled(n, -sense)
       }

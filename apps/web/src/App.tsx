@@ -1454,6 +1454,7 @@ import {
   displayedValue,
   isInPlaceTool,
   keypadText,
+  profileHoles,
   profileOutline,
   requestNewAxis,
   resolveNewAxis,
@@ -20300,23 +20301,22 @@ export function App() {
       (candidate) => candidate.sketchId === regionExtrudeTarget.sketchId
     );
     if (!view) return [];
-    const outline = profileOutline(
-      {
-        sketchViews: availableSketchViews,
-        datumAxes: undefined,
-        datumLabel: () => ''
-      },
-      {
-        sketchId: regionExtrudeTarget.sketchId as SketchId,
+    const profileContext = {
+      sketchViews: availableSketchViews,
+      datumAxes: undefined,
+      datumLabel: () => ''
+    };
+    const profilePick = {
+      sketchId: regionExtrudeTarget.sketchId as SketchId,
+      regionFingerprint: regionExtrudeTarget.regionFingerprint,
+      reference: {
         regionFingerprint: regionExtrudeTarget.regionFingerprint,
-        reference: {
-          regionFingerprint: regionExtrudeTarget.regionFingerprint,
-          samplePoint: regionExtrudeTarget.samplePoint,
-          sourceArea: regionExtrudeTarget.area,
-          sourceEntityIds: regionExtrudeTarget.sourceEntityIds
-        }
+        samplePoint: regionExtrudeTarget.samplePoint,
+        sourceArea: regionExtrudeTarget.area,
+        sourceEntityIds: regionExtrudeTarget.sourceEntityIds
       }
-    );
+    };
+    const outline = profileOutline(profileContext, profilePick);
     const finite = (value: number | undefined, fallback: number) =>
       value !== undefined && Number.isFinite(value) ? value : fallback;
     const state = {
@@ -20330,7 +20330,8 @@ export function App() {
       outline,
       view.basis.normal,
       `${regionExtrudeTarget.sketchId}:${regionExtrudeTarget.regionFingerprint}`,
-      state
+      state,
+      profileHoles(profileContext, profilePick)
     ).map((handle) =>
       handle.valueId === 'draftAngle'
         ? {
